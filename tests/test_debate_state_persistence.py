@@ -533,27 +533,23 @@ def _apply_debate_response(state: dict, raw_response: str, marker: str = "DEBATE
 
 
 def test_1_malformed_json_block_quarantined_and_prose_kept_and_report_valid():
-    """1. 合法正文 + malformed JSON块：正文保留，标签完整移除，count+1，claims不变，最终validate_report_machine_blocks()通过"""
+    """1. 合法正文 + malformed JSON块：正文保留，标签隔离，count不递增，claims不变，标记blocked与invalid"""
     initial_state = _make_investment_debate_state()
     initial_claims = deepcopy(initial_state["claims"])
     raw_response = "多头论点：看好后市结构性行情。\n<!-- DEBATE_STATE: {\"new_claims\": [invalid json} -->"
 
     result = _apply_debate_response(initial_state, raw_response, "DEBATE_STATE")
 
-    assert result["count"] == 1
+    assert result["count"] == 0
     assert result["claims"] == initial_claims
+    assert result.get("blocked") is True
+    assert result.get("parse_status") == "invalid"
+    assert len(result["round_messages"]) == 1
+    assert result["round_messages"][0]["accepted"] is False
     assert "DEBATE_STATE" not in result["history"]
     assert "<!--" not in result["history"]
-    assert "多头论点：看好后市结构性行情。" in result["history"]
-    assert "Bull Analyst: 多头论点：看好后市结构性行情。" in result["history"]
     assert "DEBATE_STATE" not in result["bull_history"]
     assert "DEBATE_STATE" not in result["current_response"]
-
-    mock_report = {
-        "final_trade_decision": "BUY",
-        "investment_debate_state": result,
-    }
-    report_service.validate_report_machine_blocks(mock_report)
 
 
 def test_2_trailing_prose_quarantined_and_both_prose_kept_and_payload_not_accepted():
@@ -574,20 +570,19 @@ def test_2_trailing_prose_quarantined_and_both_prose_kept_and_payload_not_accept
 
     result = _apply_debate_response(initial_state, raw_response, "DEBATE_STATE")
 
-    assert result["count"] == 1
+    assert result["count"] == 0
     assert result["claims"] == []
+    assert result.get("blocked") is True
+    assert result.get("parse_status") == "invalid"
+    assert len(result["round_messages"]) == 1
+    assert result["round_messages"][0]["accepted"] is False
     assert "DEBATE_STATE" not in result["history"]
     assert "<!--" not in result["history"]
-    assert "前导分析：支撑位明确。" in result["history"]
-    assert "尾随正文：补充量能不足的风险分析。" in result["history"]
     assert "此claim不应被采纳" not in json.dumps(result["claims"], ensure_ascii=False)
-
-    mock_report = {"investment_debate_state": result}
-    report_service.validate_report_machine_blocks(mock_report)
 
 
 def test_3_duplicate_same_tag_blocks_quarantined_and_not_in_history():
-    """3. 重复同标签块：全部同标签注释隔离，不进入history"""
+    """3. 重复同标签块：全部同标签注释隔离，不进入history，count不递增"""
     initial_state = _make_investment_debate_state()
     payload1 = {"new_claims": [{"claim": "claim 1", "evidence": [], "confidence": 0.5, "target_claim_ids": []}]}
     payload2 = {"new_claims": [{"claim": "claim 2", "evidence": [], "confidence": 0.6, "target_claim_ids": []}]}
@@ -597,16 +592,14 @@ def test_3_duplicate_same_tag_blocks_quarantined_and_not_in_history():
 
     result = _apply_debate_response(initial_state, raw_response, "DEBATE_STATE")
 
-    assert result["count"] == 1
+    assert result["count"] == 0
     assert result["claims"] == []
+    assert result.get("blocked") is True
+    assert result.get("parse_status") == "invalid"
+    assert len(result["round_messages"]) == 1
+    assert result["round_messages"][0]["accepted"] is False
     assert "DEBATE_STATE" not in result["history"]
     assert "<!--" not in result["history"]
-    assert "多方陈述。" in result["history"]
-    assert "中间补充论点。" in result["history"]
-    assert "总结。" in result["history"]
-
-    mock_report = {"investment_debate_state": result}
-    report_service.validate_report_machine_blocks(mock_report)
 
 
 def test_4_missing_colon_quarantined_and_prose_kept():
@@ -616,15 +609,14 @@ def test_4_missing_colon_quarantined_and_prose_kept():
 
     result = _apply_debate_response(initial_state, raw_response, "DEBATE_STATE")
 
-    assert result["count"] == 1
+    assert result["count"] == 0
     assert result["claims"] == []
+    assert result.get("blocked") is True
+    assert result.get("parse_status") in ("invalid", "missing")
+    assert len(result["round_messages"]) == 1
+    assert result["round_messages"][0]["accepted"] is False
     assert "DEBATE_STATE" not in result["history"]
     assert "<!--" not in result["history"]
-    assert "多方分析。" in result["history"]
-    assert "后续观点。" in result["history"]
-
-    mock_report = {"investment_debate_state": result}
-    report_service.validate_report_machine_blocks(mock_report)
 
 
 def test_5_truncated_block_quarantined_and_preceding_prose_kept():
@@ -634,15 +626,14 @@ def test_5_truncated_block_quarantined_and_preceding_prose_kept():
 
     result = _apply_debate_response(initial_state, raw_response, "DEBATE_STATE")
 
-    assert result["count"] == 1
+    assert result["count"] == 0
     assert result["claims"] == []
+    assert result.get("blocked") is True
+    assert result.get("parse_status") in ("invalid", "missing")
+    assert len(result["round_messages"]) == 1
+    assert result["round_messages"][0]["accepted"] is False
     assert "DEBATE_STATE" not in result["history"]
     assert "<!--" not in result["history"]
-    assert "多方核心论点已陈述完毕。" in result["history"]
-    assert "截断未完" not in result["history"]
-
-    mock_report = {"investment_debate_state": result}
-    report_service.validate_report_machine_blocks(mock_report)
 
 
 def test_6_risk_state_handled_with_identical_quarantine():

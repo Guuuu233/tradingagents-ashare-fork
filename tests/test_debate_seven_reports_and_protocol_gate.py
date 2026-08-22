@@ -14,6 +14,7 @@ from tradingagents.agents.researchers.bull_researcher import create_bull_researc
 from tradingagents.agents.researchers.bear_researcher import create_bear_researcher
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.utils.debate_utils import (
+    DebateProtocolError,
     build_debate_report_manifest,
     update_debate_state_with_payload,
 )
@@ -463,12 +464,13 @@ class TestProtocolGateNegativeCases:
             speaker_field="current_speaker",
         )
 
-        assert res["count"] == 2
+        assert res["count"] == 1
         assert res.get("blocked") is True
         assert res.get("parse_status") == "invalid_protocol"
         assert res["claims"] == initial_claims  # Claims unchanged
         assert len(res["round_messages"]) == 2
         assert res["round_messages"][1]["parse_status"] == "invalid_protocol"
+        assert res["round_messages"][1]["accepted"] is False
 
     def test_subsequent_round_responding_to_own_claim_is_rejected(self):
         """Responding only to own camp's claims fails protocol."""
@@ -506,11 +508,12 @@ class TestProtocolGateNegativeCases:
             speaker_field="current_speaker",
         )
 
-        assert res["count"] == 3
+        assert res["count"] == 2
         assert res.get("blocked") is True
         assert res.get("parse_status") == "invalid_protocol"
         assert len(res["round_messages"]) == 1
         assert res["round_messages"][0]["parse_status"] == "invalid_protocol"
+        assert res["round_messages"][0]["accepted"] is False
 
     def test_subsequent_round_new_claims_without_opponent_target_is_rejected(self):
         """New claims having target_claim_ids=[] or targeting own claims fails protocol on round >= 2."""
@@ -552,10 +555,11 @@ class TestProtocolGateNegativeCases:
             speaker_field="current_speaker",
         )
 
-        assert res["count"] == 2
+        assert res["count"] == 1
         assert res.get("blocked") is True
         assert res.get("parse_status") == "invalid_protocol"
         assert res["claims"][0]["status"] == "open"  # Not changed
+        assert res["round_messages"][0]["accepted"] is False
 
     def test_unauthorized_resolve_opponent_claim_is_rejected(self):
         """One camp resolving opponent's claim is an unauthorized permission violation."""
@@ -591,10 +595,11 @@ class TestProtocolGateNegativeCases:
             speaker_field="current_speaker",
         )
 
-        assert res["count"] == 2
+        assert res["count"] == 1
         assert res.get("blocked") is True
         assert res.get("parse_status") == "invalid_protocol"
         assert res["claims"][0]["status"] == "open"  # INV-1 remains open
+        assert res["round_messages"][0]["accepted"] is False
 
     def test_malformed_and_missing_blocks_recorded_with_correct_parse_status(self):
         """Malformed and missing machine blocks record parse_status='invalid' or 'missing'."""
@@ -614,11 +619,12 @@ class TestProtocolGateNegativeCases:
             domain="investment",
             speaker_field="current_speaker",
         )
-        assert res1["count"] == 1
+        assert res1["count"] == 0
         assert res1.get("blocked") is True
         assert res1.get("parse_status") == "missing"
         assert len(res1["round_messages"]) == 1
         assert res1["round_messages"][0]["parse_status"] == "missing"
+        assert res1["round_messages"][0]["accepted"] is False
 
         # Malformed JSON block
         raw_invalid = "多头正文。\n<!-- DEBATE_STATE: {broken json} -->"
@@ -634,9 +640,12 @@ class TestProtocolGateNegativeCases:
             domain="investment",
             speaker_field="current_speaker",
         )
-        assert res2["count"] == 1
+        assert res2["count"] == 0
         assert res2.get("blocked") is True
         assert res2.get("parse_status") == "invalid"
+        assert len(res2["round_messages"]) == 1
+        assert res2["round_messages"][0]["parse_status"] == "invalid"
+        assert res2["round_messages"][0]["accepted"] is False
         assert len(res2["round_messages"]) == 1
         assert res2["round_messages"][0]["parse_status"] == "invalid"
 
@@ -687,3 +696,119 @@ class TestRoundMessagesStatePersistence:
         assert "round_messages" in new_inv_state
         assert len(new_inv_state["round_messages"]) == 2
         assert new_inv_state["round_messages"] == round_messages
+
+
+class TestDebateResearcherRetryMechanisms:
+    """Test researcher single-round retry on invalid machine block and terminal failure."""
+
+    def test_researcher_first_attempt_invalid_second_attempt_valid_succeeds(self):
+        """Mock LLM: 首次坏块、第二次合法 → count只增1、accepted一条、attempt两条."""
+        state = _make_initial_state()
+        state["investment_debate_state"]["count"] = 1
+        state["investment_debate_state"]["current_speaker"] = "Bull"
+        state["investment_debate_state"]["claims"] = [
+            {
+                "claim_id": "INV-1",
+                "speaker": "Bull Analyst",
+                "speaker_key": "Bull",
+                "stance": "bullish",
+                "claim": "多头首轮立论",
+                "evidence": ["央行降息25bp"],
+                "confidence": 0.85,
+                "status": "open",
+            }
+        ]
+        state["investment_debate_state"]["round_messages"] = [
+            {
+                "message_index": 1,
+                "debate_round": 1,
+                "speaker": "Bull Analyst",
+                "speaker_key": "Bull",
+                "parse_status": "valid",
+                "accepted": True,
+            }
+        ]
+
+        attempt_calls = []
+        captured_prompts = []
+
+        # Attempt 1: bad block (missing target_claim_ids in round 2 -> invalid_protocol)
+        attempt1_response = (
+            "空头第一轮发言：反驳多头观点。\n"
+            '<!-- DEBATE_STATE: {"responded_claim_ids": ["INV-1"], "new_claims": [{"claim": "空头立论", "evidence": ["PE高企"], "confidence": 0.8, "target_claim_ids": []}]} -->'
+        )
+        # Attempt 2: valid block (has target_claim_ids: ["INV-1"])
+        attempt2_response = (
+            "空头第一轮发言：基于估值高企反驳多头观点。\n"
+            '<!-- DEBATE_STATE: {"responded_claim_ids": ["INV-1"], "new_claims": [{"claim": "空头立论", "evidence": ["PE高企"], "confidence": 0.8, "target_claim_ids": ["INV-1"]}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-1"], "next_focus_claim_ids": ["INV-1"], "round_summary": "空头反驳", "round_goal": "反驳"} -->'
+        )
+
+        def fake_bear_astream(prompt):
+            captured_prompts.append(prompt)
+            attempt_calls.append(len(attempt_calls) + 1)
+            if len(attempt_calls) == 1:
+                return _fake_stream(attempt1_response)
+            else:
+                return _fake_stream(attempt2_response)
+
+        mock_llm = MagicMock()
+        mock_llm.astream = MagicMock(side_effect=fake_bear_astream)
+        memory = MagicMock()
+        memory.get_memories = MagicMock(return_value=[])
+
+        bear_node = create_bear_researcher(mock_llm, memory)
+        result = asyncio.run(bear_node(state))
+
+        assert len(attempt_calls) == 2, "Should have executed exactly 2 attempts"
+        assert "【协议重试警告 (Attempt 2)】" in captured_prompts[1]
+        assert "INV-1" in captured_prompts[1]
+
+        inv_state = result["investment_debate_state"]
+        # count 只增 1 (from 1 to 2)
+        assert inv_state["count"] == 2
+
+        # accepted 有效消息只有 1 条（加上原有的1条，总共2条 accepted valid）
+        accepted_msgs = [m for m in inv_state["round_messages"] if m.get("accepted") is True]
+        assert len(accepted_msgs) == 2
+        assert accepted_msgs[1]["message_index"] == 2
+        assert accepted_msgs[1]["parse_status"] == "valid"
+
+        # attempts 记录了 2 次尝试
+        assert "attempts" in inv_state
+        assert len(inv_state["attempts"]) == 2
+        assert inv_state["attempts"][0]["accepted"] is False
+        assert inv_state["attempts"][0]["parse_status"] == "invalid_protocol"
+        assert inv_state["attempts"][1]["accepted"] is True
+        assert inv_state["attempts"][1]["parse_status"] == "valid"
+
+    def test_researcher_consecutive_invalid_attempts_raises_debate_protocol_error(self):
+        """连续两次坏块 → 抛出 DebateProtocolError，阻止继续执行."""
+        state = _make_initial_state()
+        state["investment_debate_state"]["count"] = 1
+        state["investment_debate_state"]["current_speaker"] = "Bull"
+        state["investment_debate_state"]["claims"] = [
+            {"claim_id": "INV-1", "speaker_key": "Bull", "stance": "bullish", "status": "open"}
+        ]
+
+        attempt_calls = []
+        bad_response = "空头发言，无机读块。"
+
+        def fake_bear_astream(prompt):
+            attempt_calls.append(len(attempt_calls) + 1)
+            return _fake_stream(bad_response)
+
+        mock_llm = MagicMock()
+        mock_llm.astream = MagicMock(side_effect=fake_bear_astream)
+        memory = MagicMock()
+        memory.get_memories = MagicMock(return_value=[])
+
+        bear_node = create_bear_researcher(mock_llm, memory)
+
+        with pytest.raises(DebateProtocolError) as exc_info:
+            asyncio.run(bear_node(state))
+
+        assert len(attempt_calls) == 2
+        assert exc_info.value.message_index == 2
+        assert exc_info.value.speaker == "Bear Analyst"
+        assert len(exc_info.value.attempts) == 2
+        assert all(not a["accepted"] for a in exc_info.value.attempts)

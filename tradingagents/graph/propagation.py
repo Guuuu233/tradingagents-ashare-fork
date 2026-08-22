@@ -93,6 +93,7 @@ class Propagator:
                     "round_summary": "",
                     "round_goal": default_round_goal("investment", 1),
                     "claim_counter": 0,
+                    "attempts": [],
                 }
             ),
             "risk_debate_state": RiskDebateState(build_empty_risk_debate_state()),

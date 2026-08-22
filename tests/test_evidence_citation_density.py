@@ -127,22 +127,39 @@ def _memory():
 
 
 def _debate_state(**overrides):
+    round_messages = [
+        {"message_index": 1, "debate_round": 1, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-1"]},
+        {"message_index": 2, "debate_round": 1, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-1"], "target_claim_ids": ["INV-1"], "new_claim_ids": ["INV-2"]},
+        {"message_index": 3, "debate_round": 2, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-2"], "target_claim_ids": ["INV-2"], "new_claim_ids": ["INV-3"]},
+        {"message_index": 4, "debate_round": 2, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-3"], "target_claim_ids": ["INV-3"], "new_claim_ids": ["INV-4"]},
+        {"message_index": 5, "debate_round": 3, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-4"], "target_claim_ids": ["INV-4"], "new_claim_ids": ["INV-5"]},
+        {"message_index": 6, "debate_round": 3, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-5"], "target_claim_ids": ["INV-5"], "new_claim_ids": ["INV-6"]},
+    ]
+    claims = [
+        {"claim_id": "INV-1", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "营收高增", "evidence": ["营收同比 +15%"], "confidence": 0.85},
+        {"claim_id": "INV-2", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "估值透支", "evidence": ["RSI 48.2"], "confidence": 0.80},
+        {"claim_id": "INV-3", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "订单放量", "evidence": ["1835.5"], "confidence": 0.90},
+        {"claim_id": "INV-4", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "原料涨价", "evidence": ["毛利率 45%"], "confidence": 0.75},
+        {"claim_id": "INV-5", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "长协锁价", "evidence": ["板块资金净流入 23 亿"], "confidence": 0.88},
+        {"claim_id": "INV-6", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "竞争加剧", "evidence": ["预计增速 12%"], "confidence": 0.78},
+    ]
     base = {
         "history": "Bull: 看多\nBear: 看空",
         "bear_history": "",
         "bull_history": "",
-        "current_speaker": "",
+        "current_speaker": "Bear",
         "current_response": "",
         "judge_decision": "",
-        "count": 0,
-        "claims": [],
-        "focus_claim_ids": [],
-        "open_claim_ids": [],
+        "count": 6,
+        "claims": claims,
+        "round_messages": round_messages,
+        "focus_claim_ids": ["INV-1"],
+        "open_claim_ids": [c["claim_id"] for c in claims],
         "resolved_claim_ids": [],
-        "unresolved_claim_ids": [],
+        "unresolved_claim_ids": ["INV-1"],
         "round_summary": "",
         "round_goal": "",
-        "claim_counter": 0,
+        "claim_counter": 6,
     }
     base.update(overrides)
     return base

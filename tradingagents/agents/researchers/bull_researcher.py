@@ -4,10 +4,13 @@ from tradingagents.prompts import get_prompt
 from tradingagents.graph.intent_parser import build_horizon_context
 from tradingagents.agents.utils.agent_states import current_tracker_var
 from tradingagents.agents.utils.debate_utils import (
+    DebateProtocolError,
     build_debate_report_manifest,
     format_claim_subset_for_prompt,
     format_claims_for_prompt,
+    safe_int,
     update_debate_state_with_payload,
+    validate_debate_response,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 
@@ -77,47 +80,117 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
             **injection_slots,
         )
 
-        # ── 实现 Token 级流式输出 ──────────────────
+        # ── 实现 Token 级流式输出与单轮重试机制 ──────────────────
         tracker = current_tracker_var.get()
-        try:
-            debate_round = int(investment_debate_state.get("count", 0) or 0) // 2 + 1
-        except (ValueError, TypeError):
-            debate_round = 1
+        current_count = safe_int(investment_debate_state.get("count", 0), 0)
+        message_index = current_count + 1
+        debate_round = (message_index - 1) // 2 + 1
         model_name = getattr(llm, "model_name", None) or getattr(llm, "model", None)
-        full_content = ""
-        async for chunk in llm.astream(prompt):
-            content = chunk.content if hasattr(chunk, "content") else str(chunk)
-            full_content += content
-            if tracker:
-                tracker._emit_token("Bull Researcher", "investment_debate_state", content)
-                tracker.emit_debate_token(
-                    debate="research", agent="Bull Researcher",
-                    round_num=debate_round, token=content, model_name=model_name,
-                )
 
-        # ── 推送辩论完整消息（标记流式结束）──
-        if tracker:
-            tracker.emit_debate_message(
-                debate="research", agent="Bull Researcher",
-                round_num=debate_round, content=full_content, model_name=model_name,
+        attempts_trace = []
+        max_attempts = 2
+        last_error_detail = ""
+
+        for attempt_num in range(1, max_attempts + 1):
+            if attempt_num == 1:
+                attempt_prompt = prompt
+            else:
+                opponent_open_claims = [
+                    c["claim_id"] for c in claims
+                    if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+                    and c.get("status") != "resolved"
+                ]
+                opponent_all_claims = [
+                    c["claim_id"] for c in claims
+                    if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+                ]
+                retry_instruction = (
+                    f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
+                    f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
+                    f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
+                    f"- 当前第 {message_index} 次发言要求：\n"
+                    f"  1. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
+                    f"  2. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
+                    f"  3. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
+                    f"  4. 严禁擅自 resolve 对手的 Claim。\n"
+                    f"请立即修正并重新输出完整发言及合规机器块！"
+                )
+                attempt_prompt = prompt + retry_instruction
+
+            full_content = ""
+            async for chunk in llm.astream(attempt_prompt):
+                content = chunk.content if hasattr(chunk, "content") else str(chunk)
+                full_content += content
+                if tracker:
+                    tracker._emit_token("Bull Researcher", "investment_debate_state", content)
+                    tracker.emit_debate_token(
+                        debate="research", agent="Bull Researcher",
+                        round_num=debate_round, token=content, model_name=model_name,
+                    )
+
+            is_valid, parse_status, error_detail, parsed_payload = validate_debate_response(
+                state=investment_debate_state,
+                raw_response=full_content,
+                speaker_key="Bull",
+                stance="bullish",
+                marker="DEBATE_STATE",
+                domain="investment",
             )
 
-        new_investment_debate_state = update_debate_state_with_payload(
-            state=investment_debate_state,
-            raw_response=full_content,
-            speaker_label="Bull Analyst",
-            speaker_key="Bull",
-            stance="bullish",
-            history_key="bull_history",
-            marker="DEBATE_STATE",
-            claim_prefix="INV",
-            domain="investment",
-            speaker_field="current_speaker",
-            model_name=model_name,
+            attempt_record = {
+                "attempt_index": attempt_num,
+                "message_index": message_index,
+                "debate_round": debate_round,
+                "speaker": "Bull Analyst",
+                "speaker_key": "Bull",
+                "parse_status": parse_status,
+                "error_detail": error_detail,
+                "raw_response": full_content,
+                "accepted": is_valid,
+            }
+            attempts_trace.append(attempt_record)
+
+            if is_valid:
+                # ── 推送辩论完整消息（标记流式结束）──
+                if tracker:
+                    tracker.emit_debate_message(
+                        debate="research", agent="Bull Researcher",
+                        round_num=debate_round, content=full_content, model_name=model_name,
+                    )
+
+                new_investment_debate_state = update_debate_state_with_payload(
+                    state=investment_debate_state,
+                    raw_response=full_content,
+                    speaker_label="Bull Analyst",
+                    speaker_key="Bull",
+                    stance="bullish",
+                    history_key="bull_history",
+                    marker="DEBATE_STATE",
+                    claim_prefix="INV",
+                    domain="investment",
+                    speaker_field="current_speaker",
+                    model_name=model_name,
+                    attempts=attempts_trace,
+                )
+
+                return {"investment_debate_state": new_investment_debate_state}
+            else:
+                last_error_detail = error_detail
+                _logger.warning(
+                    "[bull_researcher] Attempt %d at message_index=%d failed protocol validation: %s (parse_status=%s)",
+                    attempt_num, message_index, error_detail, parse_status
+                )
+
+        _logger.error(
+            "[bull_researcher] All %d attempts failed debate protocol at message_index=%d. Raising DebateProtocolError.",
+            max_attempts, message_index
         )
-
-        return {"investment_debate_state": new_investment_debate_state}
-
-    return bull_node
+        raise DebateProtocolError(
+            f"Debate protocol validation failed for Bull Analyst at message_index={message_index} after {max_attempts} attempts: {last_error_detail}",
+            message_index=message_index,
+            speaker="Bull Analyst",
+            details=last_error_detail,
+            attempts=attempts_trace,
+        )
 
     return bull_node

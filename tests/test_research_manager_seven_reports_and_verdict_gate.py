@@ -35,6 +35,70 @@ async def _fake_stream(text: str):
 
 
 def _make_seven_reports_state(overrides=None):
+    round_messages = [
+        {"message_index": 1, "debate_round": 1, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-1"]},
+        {"message_index": 2, "debate_round": 1, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-1"], "target_claim_ids": ["INV-1"], "new_claim_ids": ["INV-2"]},
+        {"message_index": 3, "debate_round": 2, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-2"], "target_claim_ids": ["INV-2"], "new_claim_ids": ["INV-3"]},
+        {"message_index": 4, "debate_round": 2, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-3"], "target_claim_ids": ["INV-3"], "new_claim_ids": ["INV-4"]},
+        {"message_index": 5, "debate_round": 3, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-4"], "target_claim_ids": ["INV-4"], "new_claim_ids": ["INV-5"]},
+        {"message_index": 6, "debate_round": 3, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-5"], "target_claim_ids": ["INV-5"], "new_claim_ids": ["INV-6"]},
+    ]
+    claims = [
+        {
+            "claim_id": "INV-1",
+            "speaker": "Bull Analyst",
+            "speaker_key": "Bull",
+            "stance": "bullish",
+            "claim": "在手订单与营收高增",
+            "evidence": ["营收同比增长30%", "在手订单增长50%"],
+            "confidence": 0.85,
+        },
+        {
+            "claim_id": "INV-2",
+            "speaker": "Bear Analyst",
+            "speaker_key": "Bear",
+            "stance": "bearish",
+            "claim": "海外指数大跌压制估值",
+            "evidence": ["global_indices重挫3%"],
+            "confidence": 0.70,
+        },
+        {
+            "claim_id": "INV-3",
+            "speaker": "Bull Analyst",
+            "speaker_key": "Bull",
+            "stance": "bullish",
+            "claim": "产能利用率维持高位",
+            "evidence": ["均线多头排列"],
+            "confidence": 0.88,
+        },
+        {
+            "claim_id": "INV-4",
+            "speaker": "Bear Analyst",
+            "speaker_key": "Bear",
+            "stance": "bearish",
+            "claim": "原材料价格存在不确定性",
+            "evidence": ["散户存在分歧"],
+            "confidence": 0.75,
+        },
+        {
+            "claim_id": "INV-5",
+            "speaker": "Bull Analyst",
+            "speaker_key": "Bull",
+            "stance": "bullish",
+            "claim": "长协锁价确保盈利稳定",
+            "evidence": ["主力净流入5.2亿元"],
+            "confidence": 0.90,
+        },
+        {
+            "claim_id": "INV-6",
+            "speaker": "Bear Analyst",
+            "speaker_key": "Bear",
+            "stance": "bearish",
+            "claim": "行业新进入者加剧竞争",
+            "evidence": ["新闻报告"],
+            "confidence": 0.72,
+        },
+    ]
     state = {
         "macro_report": "宏观报告：央行降息25bp，流动性维持宽松，M2增速10.5%。",
         "market_report": "市场技术报告：突破20.0元关键阻力位，均线多头排列。",
@@ -62,35 +126,16 @@ def _make_seven_reports_state(overrides=None):
             "bear_history": "空头历史",
             "current_speaker": "Bear",
             "current_response": "空头发言",
-            "count": 2,
-            "claims": [
-                {
-                    "claim_id": "INV-1",
-                    "speaker": "Bull Analyst",
-                    "speaker_key": "Bull",
-                    "stance": "bullish",
-                    "claim": "在手订单与营收高增",
-                    "evidence": ["营收同比增长30%", "在手订单增长50%"],
-                    "confidence": 0.85,
-                },
-                {
-                    "claim_id": "INV-2",
-                    "speaker": "Bear Analyst",
-                    "speaker_key": "Bear",
-                    "stance": "bearish",
-                    "claim": "海外指数大跌压制估值",
-                    "evidence": ["global_indices重挫3%"],
-                    "confidence": 0.70,
-                },
-            ],
-            "round_messages": [],
+            "count": 6,
+            "claims": claims,
+            "round_messages": round_messages,
             "focus_claim_ids": ["INV-1"],
-            "open_claim_ids": ["INV-1", "INV-2"],
+            "open_claim_ids": ["INV-1", "INV-2", "INV-3", "INV-4", "INV-5", "INV-6"],
             "resolved_claim_ids": [],
             "unresolved_claim_ids": ["INV-1"],
             "round_summary": "多空激辩",
             "round_goal": "收敛分歧",
-            "claim_counter": 2,
+            "claim_counter": 6,
         },
         "fund_flow_consensus_guard": {
             "blocked": False,
@@ -347,6 +392,16 @@ class TestManagerVerdictConsistencyHardGate:
         assert verdict["consistency_check_passed"] is False
         assert any("不可用数据源的严重幻觉" in err for err in verdict["failed_checks"])
 
+    def test_adopted_nonexistent_claim_fails(self):
+        # Negative case: Adopts a claim ID not present in claim ledger
+        raw_output = """裁决：采纳多头不存在的论点。
+<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "采纳不存在claim", "position_pct": 60, "entry": "20.0", "target": "25.0", "stop_loss": "19.0", "adopted_claim_ids": ["INV-99"], "rejected_claim_ids": []} -->"""
+
+        claims = [{"claim_id": "INV-1", "speaker_key": "Bull", "stance": "bullish"}]
+        verdict = extract_and_validate_manager_verdict(raw_output, claims=claims)
+        assert verdict["consistency_check_passed"] is False
+        assert any("不存在的 claim ID" in err for err in verdict["failed_checks"])
+
 
 class TestResearchManagerIntegrationNode:
     """Integration test for create_research_manager execution node and state persistence."""
@@ -402,3 +457,50 @@ class TestResearchManagerIntegrationNode:
         assert result["manager_verdict"]["consistency_check_passed"] is False
         assert "研究总监裁决自洽硬闸未通过" in result["investment_plan"]
         assert "已阻断进入 Trader 执行阶段" in result["investment_plan"]
+
+    def test_research_manager_pre_gate_blocks_when_debate_incomplete(self):
+        # Incomplete debate: count=2, only 2 round messages
+        state = _make_seven_reports_state({
+            "investment_debate_state": {
+                "history": "辩论历史",
+                "current_speaker": "Bear",
+                "count": 2,
+                "claims": [{"claim_id": "INV-1", "speaker_key": "Bull", "stance": "bullish"}],
+                "round_messages": [
+                    {"message_index": 1, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True},
+                    {"message_index": 2, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "invalid_protocol", "accepted": False},
+                ],
+            }
+        })
+
+        mock_llm = MagicMock()
+        memory = MagicMock()
+        memory.get_memories = MagicMock(return_value=[])
+
+        rm_node = create_research_manager(mock_llm, memory)
+        result = asyncio.run(rm_node(state))
+
+        mock_llm.astream.assert_not_called()
+        assert result["manager_verdict"]["consistency_check_passed"] is False
+        assert any("辩论前置硬闸未通过" in check for check in result["manager_verdict"]["failed_checks"])
+        assert "辩论前置硬闸未通过" in result["investment_plan"]
+
+    def test_research_manager_pre_gate_blocks_when_missing_bear_claims(self):
+        # Debate with 6 messages but no Bear claims
+        state = _make_seven_reports_state()
+        state["investment_debate_state"]["claims"] = [
+            {"claim_id": "INV-1", "speaker_key": "Bull", "stance": "bullish"},
+            {"claim_id": "INV-2", "speaker_key": "Bull", "stance": "bullish"},
+        ]
+
+        mock_llm = MagicMock()
+        memory = MagicMock()
+        memory.get_memories = MagicMock(return_value=[])
+
+        rm_node = create_research_manager(mock_llm, memory)
+        result = asyncio.run(rm_node(state))
+
+        mock_llm.astream.assert_not_called()
+        assert result["manager_verdict"]["consistency_check_passed"] is False
+        assert any("缺失单方或双方论据" in check for check in result["manager_verdict"]["failed_checks"])
+        assert "辩论前置硬闸未通过" in result["investment_plan"]

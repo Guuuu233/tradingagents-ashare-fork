@@ -9,6 +9,8 @@ from tradingagents.agents.utils.debate_utils import (
     build_debate_report_manifest,
     format_claim_subset_for_prompt,
     format_claims_for_prompt,
+    safe_int,
+    validate_debate_preconditions,
 )
 from tradingagents.agents.utils.evidence_summary import (
     build_dense_report_input,
@@ -169,6 +171,72 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 },
             }
 
+        # ── 辩论前置硬闸检查 (Debate Pre-Gate Hard Gate - fail-closed before LLM) ──
+        gate_errors = validate_debate_preconditions(investment_debate_state, claims=claims)
+        if gate_errors:
+            failed_reasons = "; ".join(f"辩论前置硬闸未通过: {err}" for err in gate_errors)
+            _logger.warning("[research_manager] debate pre-gate check failed: %s", failed_reasons)
+            blocked_plan = f"研究总监裁决自洽硬闸未通过：{failed_reasons}。已阻断进入 Trader 执行阶段。"
+            manager_verdict = {
+                "direction": "中性",
+                "winner": "tie",
+                "reason": f"辩论前置硬闸未通过: {failed_reasons}",
+                "position_pct": 0,
+                "entry": None,
+                "target": None,
+                "stop_loss": None,
+                "upside": None,
+                "downside": None,
+                "odds": None,
+                "adopted_claim_ids": [],
+                "rejected_claim_ids": [],
+                "consistency_check_passed": False,
+                "failed_checks": [f"辩论前置硬闸未通过: {err}" for err in gate_errors],
+            }
+            truth_evaluator = EvidenceFactualTruthEvaluator()
+            claims_verification = truth_evaluator.evaluate_claims(
+                claims=claims,
+                seven_reports=seven_reports,
+                market_data_context=market_data_context,
+                analysis_baseline_date=analysis_baseline_date,
+            )
+            final_decision = f"[系统硬闸告警] 裁决自洽硬闸未通过：{failed_reasons}，已阻断后续交易。"
+            tracker = current_tracker_var.get()
+            if tracker:
+                tracker.emit_debate_message(
+                    debate="research", agent="Research Manager",
+                    round_num=-1, content=final_decision, is_verdict=True,
+                )
+            new_investment_debate_state = {
+                **investment_debate_state,
+                "judge_decision": final_decision,
+                "history": investment_debate_state.get("history", ""),
+                "bear_history": investment_debate_state.get("bear_history", ""),
+                "bull_history": investment_debate_state.get("bull_history", ""),
+                "current_speaker": investment_debate_state.get("current_speaker", ""),
+                "current_response": final_decision,
+                "count": investment_debate_state.get("count", 0),
+                "claims": claims,
+                "round_messages": investment_debate_state.get("round_messages", []),
+                "focus_claim_ids": investment_debate_state.get("focus_claim_ids", []),
+                "open_claim_ids": investment_debate_state.get("open_claim_ids", []),
+                "resolved_claim_ids": investment_debate_state.get("resolved_claim_ids", []),
+                "unresolved_claim_ids": unresolved_claim_ids,
+                "round_summary": round_summary,
+                "round_goal": investment_debate_state.get("round_goal", ""),
+                "claim_counter": investment_debate_state.get("claim_counter", 0),
+                "manager_verdict": manager_verdict,
+                "evidence_verification": claims_verification,
+                "report_manifest": report_manifest,
+            }
+            return {
+                "investment_debate_state": new_investment_debate_state,
+                "investment_plan": blocked_plan,
+                "manager_verdict": manager_verdict,
+                "evidence_verification": claims_verification,
+                "report_manifest": report_manifest,
+            }
+
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="research_manager")
         prompt = get_prompt("research_manager_prompt", config=get_config()).format(
             past_memory_str=past_memory_str,
@@ -273,6 +341,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         manager_verdict = extract_and_validate_manager_verdict(
             raw_response=full_content,
             claims_verification=claims_verification,
+            claims=claims,
         )
 
         if not manager_verdict["consistency_check_passed"]:

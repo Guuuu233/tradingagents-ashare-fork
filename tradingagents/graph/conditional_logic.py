@@ -1,7 +1,7 @@
 # TradingAgents/graph/conditional_logic.py
 
 from tradingagents.agents.utils.agent_states import AgentState
-from tradingagents.agents.utils.debate_utils import safe_int
+from tradingagents.agents.utils.debate_utils import DebateProtocolError, safe_int
 
 
 class ConditionalLogic:
@@ -22,12 +22,27 @@ class ConditionalLogic:
 
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""
+        inv_state = state.get("investment_debate_state") or {}
 
-        if (
-            state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
+        # Fail-closed check: if state is blocked by protocol failure
+        if inv_state.get("blocked"):
+            raise DebateProtocolError(
+                f"Debate state is blocked (parse_status={inv_state.get('parse_status')}, "
+                f"reason={inv_state.get('block_reason')}). Cannot route to next debate node."
+            )
+
+        # Count accepted valid messages
+        count = safe_int(inv_state.get("count", 0), 0)
+        round_messages = inv_state.get("round_messages", [])
+        accepted_valid = [
+            m for m in round_messages
+            if m.get("accepted", True) and m.get("parse_status") == "valid"
+        ]
+        effective_count = len(accepted_valid) if round_messages else count
+
+        if effective_count >= 2 * self.max_debate_rounds:
             return "Research Manager"
-        if state["investment_debate_state"].get("current_speaker", "").startswith("Bull"):
+        if inv_state.get("current_speaker", "").startswith("Bull"):
             return "Bear Researcher"
         return "Bull Researcher"
 

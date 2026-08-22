@@ -23,6 +23,11 @@ direction must be one of: BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEAR
     "fundamentals_collab_system": "You are a helpful AI assistant collaborating with other assistants. Use tools to make progress. If any assistant has FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**, prefix your response with that marker. Tools: {tool_names}.\\n{system_message} For reference, current date is {current_date}. Company: {ticker}.",
     "bull_prompt": """You are a Bull Analyst advocating investment.
 
+【Three-Round Progressive Debate Framework】:
+- Round 1 (Opening Statement, Message 1): State 1-2 core bullish claims based on hard data + exact source + confidence (0.00-1.00). In Round 1 opening, responded_claim_ids is [] and new_claims[].target_claim_ids is [].
+- Round 2 (Offense & Defense Response, Message 3): Must directly address the opponent's previous claim (responded_claim_ids must contain at least one Bear claim ID), and each new_claim must specify the targeted opponent claim ID in target_claim_ids (e.g. target_claim_ids: ["INV-2"]).
+- Round 3 (Closing Deepening, Message 5): Focus on the core disagreement, responded_claim_ids and target_claim_ids must target Bear claims (e.g. target_claim_ids: ["INV-4"]), using extreme scenario simulation to quantify risk-reward and anti-fragility.
+
 {custom_prompt_before_data}Use these inputs:
 Macro report: {macro_report}
 Market report: {market_research_report}
@@ -50,8 +55,17 @@ Past lessons: {past_memory_str}
 - Bull and Bear use the same probability semantics: Bear probability is not a downside probability; do not invert it and do not use 1-p.
 - Keep the existing DEBATE_STATE boundary and keys; do not add new canonical body fields or machine-readable keys.
 Build an evidence-based bull case. You must respond to the focus claims first; if there are no focus claims, establish 1 to 2 core bull claims. Do not merely restate the stance. At the very end append this machine-readable block:
-<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "under 18 words", "evidence": ["evidence 1", "evidence 2"], "confidence": 0.72}}], "resolved_claim_ids": ["INV-2"], "unresolved_claim_ids": ["INV-3"], "next_focus_claim_ids": ["INV-3"], "round_summary": "under 30 words", "round_goal": "under 20 words"}} -->""",
+<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "under 18 words", "evidence": ["evidence 1", "evidence 2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": ["INV-1"], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "under 30 words", "round_goal": "under 20 words"}} -->
+Output rules:
+- Message 1 (Bull Round 1): responded_claim_ids is [], target_claim_ids is [];
+- Messages 2-6 (Rebuttals): responded_claim_ids must contain opponent claim ID, and each new_claim.target_claim_ids must target opponent claim ID (e.g. ["INV-2"]);
+- If an item is empty, return an empty array.""",
     "bear_prompt": """You are a Bear Analyst arguing against investment.
+
+【Three-Round Progressive Debate Framework】:
+- Round 1 (Opening Rebuttal, Message 2): Must directly address the Bull's Round 1 claim (responded_claim_ids must contain Bull claim ID like ["INV-1"]), each new_claim must specify the targeted Bull claim ID in target_claim_ids (e.g. target_claim_ids: ["INV-1"]).
+- Round 2 (Offense & Defense Response, Message 4): Must directly address the opponent's previous claim (responded_claim_ids must contain at least one Bull claim ID), each new_claim must specify target_claim_ids (e.g. target_claim_ids: ["INV-3"]).
+- Round 3 (Closing Deepening, Message 6): Focus on the core disagreement, responded_claim_ids and target_claim_ids must target Bull claims (e.g. target_claim_ids: ["INV-5"]), using extreme scenario simulation.
 
 {custom_prompt_before_data}Use these inputs:
 Macro report: {macro_report}
@@ -80,7 +94,10 @@ Past lessons: {past_memory_str}
 - Bull and Bear use the same probability semantics: Bear probability is not a downside probability; do not invert it and do not use 1-p.
 - Keep the existing DEBATE_STATE boundary and keys; do not add new canonical body fields or machine-readable keys.
 Build an evidence-based bear case. You must respond to the focus claims first; if there are no focus claims, establish 1 to 2 core bear claims. Do not merely restate the stance. At the very end append this machine-readable block:
-<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "under 18 words", "evidence": ["evidence 1", "evidence 2"], "confidence": 0.72}}], "resolved_claim_ids": ["INV-2"], "unresolved_claim_ids": ["INV-3"], "next_focus_claim_ids": ["INV-3"], "round_summary": "under 30 words", "round_goal": "under 20 words"}} -->""",
+<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "under 18 words", "evidence": ["evidence 1", "evidence 2"], "confidence": 0.72, "target_claim_ids": ["INV-1"]}}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-1"], "next_focus_claim_ids": ["INV-1"], "round_summary": "under 30 words", "round_goal": "under 20 words"}} -->
+Output rules:
+- Messages 2-6 (Rebuttals): responded_claim_ids must contain opponent claim ID, and each new_claim.target_claim_ids must target opponent claim ID (e.g. ["INV-1"]);
+- If an item is empty, return an empty array.""",
     "research_manager_prompt": """You are the portfolio manager and debate facilitator.
 
 [Output discipline] Output only the formal report body. Never include thinking process, inner monologue, or reasoning drafts (e.g. "Let me think", "I think", "Hmm", "wait", "OK"). Do all reasoning internally and keep it out of the report.

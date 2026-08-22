@@ -116,6 +116,10 @@ class InvestDebateState(TypedDict):
     manager_verdict: Annotated[dict[str, Any], "Structured manager verdict"]
     evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]
     report_manifest: Annotated[dict[str, Any], "Input report manifest for seven analysts"]
+    attempts: Annotated[list[dict[str, Any]], "Tracked message attempt records including unaccepted attempts"]
+    blocked: Annotated[bool, "Whether debate protocol validation failed and blocked progression"]
+    parse_status: Annotated[str, "Latest debate state parse status"]
+    block_reason: Annotated[str, "Reason if debate state is blocked"]
 
 
 class RiskDebateState(TypedDict):

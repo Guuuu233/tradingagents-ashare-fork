@@ -10,6 +10,26 @@ from typing import Any, Iterable, Mapping
 
 logger = logging.getLogger(__name__)
 
+
+class DebateProtocolError(RuntimeError):
+    """Raised when debate protocol validation fails after retry."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        message_index: int | None = None,
+        speaker: str | None = None,
+        details: str | None = None,
+        attempts: list[dict[str, Any]] | None = None,
+    ):
+        super().__init__(message)
+        self.message_index = message_index
+        self.speaker = speaker
+        self.details = details
+        self.attempts = attempts or []
+
+
 _MACHINE_LIST_FIELDS = (
     "responded_claim_ids",
     "new_claims",
@@ -422,6 +442,81 @@ def default_round_goal(domain: str, next_count: int) -> str:
     return goal_list[index]
 
 
+def validate_debate_preconditions(
+    investment_debate_state: Mapping[str, Any],
+    claims: Sequence[Mapping[str, Any]] | None = None,
+) -> list[str]:
+    """Validate debate preconditions before Research Manager invocation.
+
+    Rules (Contract 5):
+    - count == 6 and accepted valid messages == 6.
+    - Bull and Bear each have exactly 3 valid messages.
+    - Subsequent messages (index 2..6) have non-empty responded_claim_ids targeting opponent claim and target_claim_ids targeting opponent claim.
+    - Both Bull and Bear have claims in the claim ledger.
+
+    Returns a list of error strings (empty if valid).
+    """
+    gate_errors: list[str] = []
+    count = safe_int(investment_debate_state.get("count", 0), 0)
+    round_messages = investment_debate_state.get("round_messages", []) or []
+    accepted_valid_messages = [
+        m for m in round_messages
+        if m.get("accepted", True) and m.get("parse_status") == "valid"
+    ]
+
+    if count != 6 or len(accepted_valid_messages) != 6:
+        gate_errors.append(
+            f"有效辩论轮次不足6次 (当前count={count}, accepted valid={len(accepted_valid_messages)})"
+        )
+
+    bull_msgs = [
+        m for m in accepted_valid_messages
+        if "Bull" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bull"
+    ]
+    bear_msgs = [
+        m for m in accepted_valid_messages
+        if "Bear" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bear"
+    ]
+    if len(bull_msgs) != 3 or len(bear_msgs) != 3:
+        gate_errors.append(
+            f"多空双方有效发言次数不均等 (多头={len(bull_msgs)}, 空头={len(bear_msgs)}, 预期各3次)"
+        )
+
+    claim_list = list(claims if claims is not None else investment_debate_state.get("claims", []) or [])
+    claim_map = {str(c.get("claim_id", "")): c for c in claim_list if str(c.get("claim_id", ""))}
+    for idx, msg in enumerate(accepted_valid_messages):
+        m_idx = msg.get("message_index", idx + 1)
+        if m_idx >= 2:
+            responded = msg.get("responded_claim_ids") or []
+            targets = msg.get("target_claim_ids") or []
+            is_bull_msg = "Bull" in str(msg.get("speaker", "")) or str(msg.get("speaker_key", "")) == "Bull"
+            opponent_key = "Bear" if is_bull_msg else "Bull"
+            opponent_stance = "bearish" if is_bull_msg else "bullish"
+
+            has_opp_responded = any(
+                cid in claim_map
+                and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
+                for cid in responded
+            )
+            if not has_opp_responded:
+                gate_errors.append(f"第 {m_idx} 次发言未在 responded_claim_ids 中回应对手 claim (responded: {responded})")
+
+            has_opp_target = any(
+                cid in claim_map
+                and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
+                for cid in targets
+            )
+            if not has_opp_target:
+                gate_errors.append(f"第 {m_idx} 次发言未在 target_claim_ids 中针对对手 claim (targets: {targets})")
+
+    has_bull_claims = any(c.get("speaker_key") == "Bull" or c.get("stance") == "bullish" for c in claim_list)
+    has_bear_claims = any(c.get("speaker_key") == "Bear" or c.get("stance") == "bearish" for c in claim_list)
+    if not has_bull_claims or not has_bear_claims:
+        gate_errors.append(f"辩论 claim 账本缺失单方或双方论据 (多头claims={has_bull_claims}, 空头claims={has_bear_claims})")
+
+    return gate_errors
+
+
 def _quarantine_rejected_machine_blocks(
     text: str,
     tags: str | Iterable[str] = ("DEBATE_STATE", "RISK_STATE"),
@@ -511,120 +606,36 @@ def build_debate_report_manifest(
     return manifest
 
 
-def _record_unstructured_response(
+def validate_debate_response(
     *,
     state: Mapping[str, Any],
     raw_response: str,
-    speaker_label: str,
-    speaker_key: str,
-    history_key: str,
-    speaker_field: str,
-    store_current_response: bool,
-    current_response_key: str | None = None,
-    parse_status: str = "missing",
-    model_name: str | None = None,
-    domain: str = "investment",
-) -> dict[str, Any]:
-    """Advance transcript metadata without accepting a rejected machine block."""
-    cleaned_response = _quarantine_rejected_machine_blocks(raw_response)
-    argument = f"{speaker_label}: {cleaned_response}"
-    new_state = dict(state)
-    current_count = safe_int(state.get("count", 0), 0)
-    message_index = current_count + 1
-    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
-
-    round_messages = [dict(m) for m in (state.get("round_messages", []) or [])]
-    round_msg: dict[str, Any] = {
-        "message_index": message_index,
-        "debate_round": debate_round,
-        "speaker": speaker_label,
-        "cleaned_prose": cleaned_response,
-        "parse_status": parse_status,
-        "responded_claim_ids": [],
-        "new_claim_ids": [],
-        "target_claim_ids": [],
-        "resolved_claim_ids": [],
-        "unresolved_claim_ids": [],
-        "resolved": [],
-        "unresolved": [],
-        "round_summary": _fallback_summary(cleaned_response),
-        "round_goal": state.get("round_goal") or default_round_goal(domain, message_index),
-    }
-    if model_name is not None:
-        round_msg["model_name"] = model_name
-    round_messages.append(round_msg)
-
-    updates = {
-        "history": _append_history(state.get("history", ""), argument),
-        history_key: _append_history(state.get(history_key, ""), argument),
-        "current_speaker": speaker_key,
-        speaker_field: speaker_key,
-        "count": message_index,
-        "round_messages": round_messages,
-    }
-    if parse_status != "valid":
-        updates["parse_status"] = parse_status
-        updates["blocked"] = True
-
-    if current_response_key:
-        updates[current_response_key] = argument
-    if store_current_response and current_response_key != "current_response":
-        updates["current_response"] = argument
-    new_state.update(updates)
-    return new_state
-
-
-def update_debate_state_with_payload(
-    *,
-    state: Mapping[str, Any],
-    raw_response: str,
-    speaker_label: str,
     speaker_key: str,
     stance: str,
-    history_key: str,
-    marker: str,
-    claim_prefix: str,
-    domain: str,
-    speaker_field: str,
-    store_current_response: bool = True,
-    current_response_key: str | None = None,
-    model_name: str | None = None,
-) -> dict[str, Any]:
+    marker: str = "DEBATE_STATE",
+    domain: str = "investment",
+) -> tuple[bool, str, str, dict[str, Any] | None]:
+    """Validate debate machine block format and protocol rules.
+
+    Returns:
+        (is_valid, parse_status, error_detail, sanitized_payload)
+    """
     parsed_payload, raw_parse_status = _get_marker_parse_status(raw_response, marker, warn=True)
     if parsed_payload is None:
-        return _record_unstructured_response(
-            state=state,
-            raw_response=raw_response,
-            speaker_label=speaker_label,
-            speaker_key=speaker_key,
-            history_key=history_key,
-            speaker_field=speaker_field,
-            store_current_response=store_current_response,
-            current_response_key=current_response_key,
-            parse_status=raw_parse_status,
-            model_name=model_name,
-            domain=domain,
-        )
+        if raw_parse_status == "missing":
+            detail = f"未找到 <!-- {marker}: ... --> 机器块"
+        elif raw_parse_status == "invalid":
+            detail = f"{marker} 机器块 JSON 解析失败或格式不合法"
+        else:
+            detail = f"{marker} 机器块状态为 {raw_parse_status}"
+        return False, raw_parse_status, detail, None
 
     payload = _sanitize_machine_payload(parsed_payload, marker)
     if payload is None:
-        return _record_unstructured_response(
-            state=state,
-            raw_response=raw_response,
-            speaker_label=speaker_label,
-            speaker_key=speaker_key,
-            history_key=history_key,
-            speaker_field=speaker_field,
-            store_current_response=store_current_response,
-            current_response_key=current_response_key,
-            parse_status="invalid",
-            model_name=model_name,
-            domain=domain,
-        )
+        return False, "invalid", f"{marker} 机器块字段类型不符合规范", None
 
     current_count = safe_int(state.get("count", 0), 0)
     message_index = current_count + 1
-    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
 
     claims = [dict(item) for item in (state.get("claims", []) or []) if isinstance(item, Mapping)]
     claim_map = {
@@ -636,6 +647,7 @@ def update_debate_state_with_payload(
     if domain == "investment":
         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
+        unauthorized = []
         for cid in raw_resolved:
             if cid in claim_map:
                 c = claim_map[cid]
@@ -643,24 +655,11 @@ def update_debate_state_with_payload(
                     c.get("stance") and c.get("stance") != stance
                 )
                 if is_opponent:
-                    logger.warning(
-                        "[debate_utils] protocol violation: %s attempted to resolve opponent claim %s",
-                        speaker_key,
-                        cid,
-                    )
-                    return _record_unstructured_response(
-                        state=state,
-                        raw_response=raw_response,
-                        speaker_label=speaker_label,
-                        speaker_key=speaker_key,
-                        history_key=history_key,
-                        speaker_field=speaker_field,
-                        store_current_response=store_current_response,
-                        current_response_key=current_response_key,
-                        parse_status="invalid_protocol",
-                        model_name=model_name,
-                        domain=domain,
-                    )
+                    unauthorized.append(cid)
+        if unauthorized:
+            detail = f"发言人 {speaker_key} 试图单方面将对手 claim {unauthorized} 标记为 resolved，违反阵营权限契约"
+            logger.warning("[debate_utils] protocol violation: %s", detail)
+            return False, "invalid_protocol", detail, payload
 
         # Check B: message_index >= 2 must respond to at least one un-resolved opponent claim
         if message_index >= 2:
@@ -676,25 +675,21 @@ def update_debate_state_with_payload(
                 and claim_map[cid].get("status") != "resolved"
             ]
             if not valid_opponent_responded:
-                logger.warning(
-                    "[debate_utils] protocol violation: message_index=%d speaker=%s did not respond to any valid un-resolved opponent claim (responded: %s)",
-                    message_index,
-                    speaker_key,
-                    raw_responded,
+                opponent_open_ids = [
+                    c["claim_id"]
+                    for c in claims
+                    if (
+                        (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
+                        or (c.get("stance") and c.get("stance") != stance)
+                    )
+                    and c.get("status") != "resolved"
+                ]
+                detail = (
+                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 responded_claim_ids 中回应至少一条未解决的对手 claim ID "
+                    f"(当前 responded: {raw_responded}, 合法对手未解决 claim: {opponent_open_ids})"
                 )
-                return _record_unstructured_response(
-                    state=state,
-                    raw_response=raw_response,
-                    speaker_label=speaker_label,
-                    speaker_key=speaker_key,
-                    history_key=history_key,
-                    speaker_field=speaker_field,
-                    store_current_response=store_current_response,
-                    current_response_key=current_response_key,
-                    parse_status="invalid_protocol",
-                    model_name=model_name,
-                    domain=domain,
-                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
 
         # Check C: message_index >= 2 must have at least one new claim targeting an opponent claim
         if message_index >= 2:
@@ -714,24 +709,180 @@ def update_debate_state_with_payload(
                 if has_opponent_target:
                     break
             if not has_opponent_target:
-                logger.warning(
-                    "[debate_utils] protocol violation: message_index=%d speaker=%s has no new claims targeting an opponent claim",
-                    message_index,
-                    speaker_key,
+                opponent_all_ids = [
+                    c["claim_id"]
+                    for c in claims
+                    if (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
+                    or (c.get("stance") and c.get("stance") != stance)
+                ]
+                detail = (
+                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims[].target_claim_ids 中指定至少一条对手 claim ID 作为反驳目标 "
+                    f"(合法对手 claim: {opponent_all_ids})"
                 )
-                return _record_unstructured_response(
-                    state=state,
-                    raw_response=raw_response,
-                    speaker_label=speaker_label,
-                    speaker_key=speaker_key,
-                    history_key=history_key,
-                    speaker_field=speaker_field,
-                    store_current_response=store_current_response,
-                    current_response_key=current_response_key,
-                    parse_status="invalid_protocol",
-                    model_name=model_name,
-                    domain=domain,
-                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+    return True, "valid", "", payload
+
+
+def _record_unstructured_response(
+    *,
+    state: Mapping[str, Any],
+    raw_response: str,
+    speaker_label: str,
+    speaker_key: str,
+    history_key: str,
+    speaker_field: str,
+    store_current_response: bool,
+    current_response_key: str | None = None,
+    parse_status: str = "missing",
+    error_detail: str = "",
+    model_name: str | None = None,
+    domain: str = "investment",
+) -> dict[str, Any]:
+    """Record an unaccepted attempt trace without advancing valid count or mutating valid transcript history."""
+    cleaned_response = _quarantine_rejected_machine_blocks(raw_response)
+    new_state = dict(state)
+    current_count = safe_int(state.get("count", 0), 0)
+    message_index = current_count + 1
+    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
+
+    if domain == "investment":
+        attempt_record: dict[str, Any] = {
+            "message_index": message_index,
+            "debate_round": debate_round,
+            "speaker": speaker_label,
+            "speaker_key": speaker_key,
+            "cleaned_prose": cleaned_response,
+            "parse_status": parse_status,
+            "accepted": False,
+            "error_detail": error_detail,
+            "responded_claim_ids": [],
+            "new_claim_ids": [],
+            "target_claim_ids": [],
+            "resolved_claim_ids": [],
+            "unresolved_claim_ids": [],
+            "resolved": [],
+            "unresolved": [],
+            "round_summary": _fallback_summary(cleaned_response),
+            "round_goal": state.get("round_goal") or default_round_goal(domain, message_index),
+        }
+        if model_name is not None:
+            attempt_record["model_name"] = model_name
+
+        round_messages = [dict(m) for m in (state.get("round_messages", []) or [])]
+        round_messages.append(attempt_record)
+
+        attempts = [dict(a) for a in (state.get("attempts", []) or [])]
+        attempts.append(attempt_record)
+
+        updates = {
+            "current_speaker": speaker_key,
+            speaker_field: speaker_key,
+            "count": current_count,
+            "round_messages": round_messages,
+            "attempts": attempts,
+            "blocked": True,
+            "parse_status": parse_status,
+            "block_reason": error_detail,
+        }
+        new_state.update(updates)
+        return new_state
+    else:
+        argument = f"{speaker_label}: {cleaned_response}"
+        round_messages = [dict(m) for m in (state.get("round_messages", []) or [])]
+        round_msg: dict[str, Any] = {
+            "message_index": message_index,
+            "debate_round": debate_round,
+            "speaker": speaker_label,
+            "cleaned_prose": cleaned_response,
+            "parse_status": parse_status,
+            "accepted": True,
+            "responded_claim_ids": [],
+            "new_claim_ids": [],
+            "target_claim_ids": [],
+            "resolved_claim_ids": [],
+            "unresolved_claim_ids": [],
+            "resolved": [],
+            "unresolved": [],
+            "round_summary": _fallback_summary(cleaned_response),
+            "round_goal": state.get("round_goal") or default_round_goal(domain, message_index),
+        }
+        if model_name is not None:
+            round_msg["model_name"] = model_name
+        round_messages.append(round_msg)
+
+        updates = {
+            "history": _append_history(state.get("history", ""), argument),
+            history_key: _append_history(state.get(history_key, ""), argument),
+            "current_speaker": speaker_key,
+            speaker_field: speaker_key,
+            "count": message_index,
+            "round_messages": round_messages,
+        }
+        if parse_status != "valid":
+            updates["parse_status"] = parse_status
+            updates["blocked"] = True
+
+        if current_response_key:
+            updates[current_response_key] = argument
+        if store_current_response and current_response_key != "current_response":
+            updates["current_response"] = argument
+        new_state.update(updates)
+        return new_state
+
+
+def update_debate_state_with_payload(
+    *,
+    state: Mapping[str, Any],
+    raw_response: str,
+    speaker_label: str,
+    speaker_key: str,
+    stance: str,
+    history_key: str,
+    marker: str,
+    claim_prefix: str,
+    domain: str,
+    speaker_field: str,
+    store_current_response: bool = True,
+    current_response_key: str | None = None,
+    model_name: str | None = None,
+    attempts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    is_valid, parse_status, error_detail, payload = validate_debate_response(
+        state=state,
+        raw_response=raw_response,
+        speaker_key=speaker_key,
+        stance=stance,
+        marker=marker,
+        domain=domain,
+    )
+    if not is_valid or payload is None:
+        return _record_unstructured_response(
+            state=state,
+            raw_response=raw_response,
+            speaker_label=speaker_label,
+            speaker_key=speaker_key,
+            history_key=history_key,
+            speaker_field=speaker_field,
+            store_current_response=store_current_response,
+            current_response_key=current_response_key,
+            parse_status=parse_status,
+            error_detail=error_detail,
+            model_name=model_name,
+            domain=domain,
+        )
+
+    current_count = safe_int(state.get("count", 0), 0)
+    message_index = current_count + 1
+    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
+
+    claims = [dict(item) for item in (state.get("claims", []) or []) if isinstance(item, Mapping)]
+    claim_map = {
+        str(item.get("claim_id", "")).strip(): item
+        for item in claims
+        if str(item.get("claim_id", "")).strip()
+    }
 
     cleaned_response = strip_tagged_json(raw_response, marker)
     claim_counter = safe_int(state.get("claim_counter", 0), 0)
@@ -810,8 +961,10 @@ def update_debate_state_with_payload(
         "message_index": message_index,
         "debate_round": debate_round,
         "speaker": speaker_label,
+        "speaker_key": speaker_key,
         "cleaned_prose": cleaned_response,
         "parse_status": "valid",
+        "accepted": True,
         "responded_claim_ids": responded_claim_ids,
         "new_claim_ids": new_claim_ids,
         "target_claim_ids": all_target_claim_ids,
@@ -824,7 +977,30 @@ def update_debate_state_with_payload(
     }
     if model_name is not None:
         round_msg["model_name"] = model_name
+    if attempts:
+        round_msg["attempts"] = [dict(a) for a in attempts]
     round_messages.append(round_msg)
+
+    state_attempts = [dict(a) for a in (state.get("attempts", []) or [])]
+    if attempts:
+        for a in attempts:
+            if not any(
+                sa.get("attempt_index") == a.get("attempt_index")
+                and sa.get("message_index") == a.get("message_index")
+                for sa in state_attempts
+            ):
+                state_attempts.append(dict(a))
+    else:
+        state_attempts.append({
+            "attempt_index": 1,
+            "message_index": message_index,
+            "debate_round": debate_round,
+            "speaker": speaker_label,
+            "parse_status": "valid",
+            "accepted": True,
+            "error_detail": "",
+            "raw_response": raw_response,
+        })
 
     argument = f"{speaker_label}: {cleaned_response}"
     new_state = dict(state)
@@ -843,17 +1019,14 @@ def update_debate_state_with_payload(
         "round_summary": summary,
         "round_goal": round_goal,
         "round_messages": round_messages,
+        "attempts": state_attempts,
     }
     if "blocked" in new_state:
         del new_state["blocked"]
     if "parse_status" in new_state:
         del new_state["parse_status"]
-    if current_response_key:
-        updates[current_response_key] = argument
-    if store_current_response and current_response_key != "current_response":
-        updates["current_response"] = argument
-    new_state.update(updates)
-    return new_state
+    if "block_reason" in new_state:
+        del new_state["block_reason"]
     if current_response_key:
         updates[current_response_key] = argument
     if store_current_response and current_response_key != "current_response":

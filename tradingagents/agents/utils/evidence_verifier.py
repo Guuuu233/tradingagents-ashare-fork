@@ -425,6 +425,7 @@ def normalize_winner(winner_raw: Any, direction_raw: Any = "") -> str:
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    claims: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract structured manager verdict and perform strict consistency check.
 
@@ -548,6 +549,20 @@ def extract_and_validate_manager_verdict(
         for cid in adopted_claim_ids:
             if str(cid) in fatal_cids:
                 failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
+
+    # Check 7: Claim ledger subset and existence validation
+    if claims is not None:
+        known_cids = {
+            str(c.get("claim_id", "")).strip()
+            for c in claims
+            if str(c.get("claim_id", "")).strip()
+        }
+        for cid in adopted_claim_ids:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+        for cid in rejected_claim_ids:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决拒绝了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
 
     consistency_passed = (len(failed_checks) == 0)
 
