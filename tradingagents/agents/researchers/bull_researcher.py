@@ -104,15 +104,26 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
                     c["claim_id"] for c in claims
                     if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
                 ]
+                same_side_prev_claims = [
+                    c["claim"] for c in claims
+                    if (c.get("speaker_key") == "Bull" or c.get("stance") == "bullish")
+                ]
+                prev_claims_hint = (
+                    f"已提出的历史多头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
+                    if same_side_prev_claims
+                    else ""
+                )
                 retry_instruction = (
                     f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
                     f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
                     f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
                     f"- 当前第 {message_index} 次发言要求：\n"
-                    f"  1. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
-                    f"  2. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
-                    f"  3. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
-                    f"  4. 严禁擅自 resolve 对手的 Claim。\n"
+                    f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
+                    f"     {prev_claims_hint}\n"
+                    f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
+                    f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
+                    f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
+                    f"  5. 严禁擅自 resolve 对手的 Claim。\n"
                     f"请立即修正并重新输出完整发言及合规机器块！"
                 )
                 attempt_prompt = prompt + retry_instruction

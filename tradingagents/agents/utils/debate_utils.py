@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import collections
+import difflib
 import json
 import logging
 import math
 import re
 from numbers import Real
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,80 @@ _MACHINE_LIST_FIELDS = (
 _MACHINE_TEXT_FIELDS = ("round_summary", "round_goal")
 _MACHINE_FIELDS = frozenset((*_MACHINE_LIST_FIELDS, *_MACHINE_TEXT_FIELDS))
 _MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids"))
+
+
+def normalize_text(text: str) -> str:
+    """Normalize text by stripping whitespace and punctuation and converting to lowercase."""
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"[^\w一-鿿]+", " ", text.lower()).strip()
+
+
+def tokenize_text(text: str) -> list[str]:
+    """Tokenize text into Chinese characters and alphanumeric words."""
+    if not isinstance(text, str):
+        return []
+    s = text.lower()
+    return re.findall(r"[一-鿿]|[a-z0-9_]+", s)
+
+
+def _token_ngrams(tokens: list[str], n: int = 2) -> list[tuple[str, ...]]:
+    if len(tokens) < n:
+        return [tuple(tokens)] if tokens else []
+    return [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
+
+
+def compute_claim_similarity(t1: str, t2: str) -> float:
+    """Compute normalized n-gram and sequence similarity between two texts.
+
+    Returns a float in [0.0, 1.0].
+    Threshold >= 0.82 indicates duplicate / high-similarity paraphrase.
+    """
+    toks1 = tokenize_text(t1)
+    toks2 = tokenize_text(t2)
+    if not toks1 and not toks2:
+        return 1.0
+    if not toks1 or not toks2:
+        return 0.0
+    if toks1 == toks2:
+        return 1.0
+
+    s1 = "".join(toks1)
+    s2 = "".join(toks2)
+    seq_ratio = difflib.SequenceMatcher(None, s1, s2).ratio()
+
+    # 1-gram & 2-gram Dice on tokens
+    c1_1, c2_1 = collections.Counter(_token_ngrams(toks1, 1)), collections.Counter(_token_ngrams(toks2, 1))
+    total_1 = sum(c1_1.values()) + sum(c2_1.values())
+    dice_1 = (2.0 * sum((c1_1 & c2_1).values())) / total_1 if total_1 > 0 else 0.0
+
+    c1_2, c2_2 = collections.Counter(_token_ngrams(toks1, 2)), collections.Counter(_token_ngrams(toks2, 2))
+    total_2 = sum(c1_2.values()) + sum(c2_2.values())
+    dice_2 = (2.0 * sum((c1_2 & c2_2).values())) / total_2 if total_2 > 0 else 0.0
+
+    token_dice = 0.4 * dice_1 + 0.6 * dice_2
+    return round(float(max(seq_ratio, dice_2, token_dice)), 4)
+
+
+def extract_new_evidence_count(
+    new_evidence_list: Iterable[Any] | None,
+    prev_evidence_list: Iterable[Any] | None,
+    threshold: float = 0.82,
+) -> int:
+    """Count how many evidence items in new_evidence_list are not duplicates of prev_evidence_list."""
+    new_items = [str(item).strip() for item in (new_evidence_list or []) if str(item).strip()]
+    prev_items = [str(item).strip() for item in (prev_evidence_list or []) if str(item).strip()]
+    if not new_items:
+        return 0
+    if not prev_items:
+        return len(new_items)
+
+    new_count = 0
+    for item in new_items:
+        max_sim = max([compute_claim_similarity(item, prev) for prev in prev_items], default=0.0)
+        if max_sim < threshold:
+            new_count += 1
+    return new_count
 
 
 def _tagged_openings(text: str, tag: str) -> list[re.Match[str]]:
@@ -514,6 +590,34 @@ def validate_debate_preconditions(
     if not has_bull_claims or not has_bear_claims:
         gate_errors.append(f"辩论 claim 账本缺失单方或双方论据 (多头claims={has_bull_claims}, 空头claims={has_bear_claims})")
 
+    # Check E: Information gain / anti-repetition hard gate across same-side rounds
+    for side_name, side_key, side_stance in (("多头", "Bull", "bullish"), ("空头", "Bear", "bearish")):
+        side_claims = [
+            c for c in claim_list
+            if (c.get("speaker_key") == side_key or c.get("stance") == side_stance)
+        ]
+        for i in range(len(side_claims)):
+            for j in range(i + 1, len(side_claims)):
+                c1 = side_claims[i]
+                c2 = side_claims[j]
+                r1 = c1.get("round_index")
+                r2 = c2.get("round_index")
+                if r1 and r2 and r1 == r2:
+                    continue
+                if c1.get("claim_id") == c2.get("claim_id"):
+                    continue
+                sim = compute_claim_similarity(str(c1.get("claim", "")), str(c2.get("claim", "")))
+                if sim >= 0.82:
+                    gate_errors.append(
+                        f"{side_name}发言存在跨轮重复观点 (最高相似度 {sim:.2f} >= 0.82: '{c1.get('claim', '')}' 与 '{c2.get('claim', '')}')，违反信息增量硬闸"
+                    )
+
+    for msg in accepted_valid_messages:
+        m_idx = msg.get("message_index", 0)
+        gain_score = msg.get("information_gain_score")
+        if gain_score is not None and isinstance(gain_score, (int, float)) and gain_score <= 0.0 and m_idx >= 3:
+            gate_errors.append(f"第 {m_idx} 次发言信息增量分数为 0，存在重复内容")
+
     return gate_errors
 
 
@@ -722,6 +826,68 @@ def validate_debate_response(
                 logger.warning("[debate_utils] protocol violation: %s", detail)
                 return False, "invalid_protocol", detail, payload
 
+        # Check D: message_index >= 3 (or same-side claims exist) must provide genuine information gain (anti-repetition hard gate)
+        same_side_claims = [
+            c
+            for c in claims
+            if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+            or (c.get("stance") and c.get("stance") == stance)
+        ]
+        if same_side_claims:
+            new_claims_list = payload.get("new_claims") or []
+            if not new_claims_list:
+                detail = (
+                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims 中提供至少一条具有信息增量的新观点"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            prev_ev_list = [
+                ev
+                for pc in same_side_claims
+                for ev in (pc.get("evidence") or [])
+                if str(ev).strip()
+            ]
+
+            duplicate_claims = []
+            valid_new_claims = []
+            max_sims = []
+
+            for nc in new_claims_list:
+                c_text = str(nc.get("claim", "")).strip()
+                c_ev = nc.get("evidence") or []
+                sim = max(
+                    [compute_claim_similarity(c_text, str(pc.get("claim", ""))) for pc in same_side_claims],
+                    default=0.0,
+                )
+                max_sims.append(sim)
+                new_ev_count = extract_new_evidence_count(c_ev, prev_ev_list)
+
+                is_duplicate = False
+                if sim >= 0.82:
+                    is_duplicate = True
+                elif sim >= 0.70 and new_ev_count == 0 and prev_ev_list:
+                    is_duplicate = True
+                elif prev_ev_list and new_ev_count == 0 and all(
+                    max([compute_claim_similarity(str(e), str(pe)) for pe in prev_ev_list], default=0.0) >= 0.82
+                    for e in c_ev
+                ):
+                    is_duplicate = True
+
+                if is_duplicate:
+                    duplicate_claims.append(c_text)
+                else:
+                    valid_new_claims.append(nc)
+
+            if not valid_new_claims:
+                max_sim = max(max_sims) if max_sims else 0.0
+                detail = (
+                    f"第 {message_index} 次发言 ({speaker_key}) 未提供有效信息增量：所有 new_claims 均与同侧历史观点重复或复用相同证据 "
+                    f"(最高相似度 {max_sim:.2f} >= 0.82 或缺乏新证据，重复观点: {duplicate_claims})"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
     return True, "valid", "", payload
 
 
@@ -766,6 +932,11 @@ def _record_unstructured_response(
             "unresolved": [],
             "round_summary": _fallback_summary(cleaned_response),
             "round_goal": state.get("round_goal") or default_round_goal(domain, message_index),
+            "information_gain_score": 0.0,
+            "duplicate_claim_ids": [],
+            "duplicate_claims": [],
+            "new_evidence_count": 0,
+            "max_similarity": 1.0 if ("重复" in error_detail or "信息增量" in error_detail) else 0.0,
         }
         if model_name is not None:
             attempt_record["model_name"] = model_name
@@ -956,6 +1127,57 @@ def update_debate_state_with_payload(
         domain, message_index
     )
 
+    # Compute information gain metrics for round_messages
+    same_side_claims = [
+        c
+        for c in claims
+        if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+        or (c.get("stance") and c.get("stance") == stance)
+    ]
+    prev_same_side_claims = [
+        c for c in same_side_claims
+        if c.get("round_index", message_index) < message_index
+    ]
+    if not prev_same_side_claims:
+        information_gain_score = 1.0
+        duplicate_claim_ids = []
+        duplicate_claims = []
+        new_evidence_count = sum(len(nc.get("evidence") or []) for nc in payload.get("new_claims", []) or [])
+        max_similarity = 0.0
+    else:
+        prev_ev_list = [
+            ev
+            for pc in prev_same_side_claims
+            for ev in (pc.get("evidence") or [])
+            if str(ev).strip()
+        ]
+        max_sims = []
+        dup_texts = []
+        dup_ids = []
+        total_new_ev = 0
+        for nc in payload.get("new_claims", []) or []:
+            c_text = str(nc.get("claim", "")).strip()
+            c_ev = nc.get("evidence") or []
+            sim = 0.0
+            matched_id = None
+            for pc in prev_same_side_claims:
+                s = compute_claim_similarity(c_text, str(pc.get("claim", "")))
+                if s > sim:
+                    sim = s
+                    matched_id = str(pc.get("claim_id", "")).strip()
+            max_sims.append(sim)
+            ev_count = extract_new_evidence_count(c_ev, prev_ev_list)
+            total_new_ev += ev_count
+            if sim >= 0.82:
+                dup_texts.append(c_text)
+                if matched_id and matched_id not in dup_ids:
+                    dup_ids.append(matched_id)
+        max_similarity = max(max_sims) if max_sims else 0.0
+        information_gain_score = max(0.0, min(1.0, round(1.0 - max_similarity, 4)))
+        duplicate_claims = dup_texts
+        duplicate_claim_ids = dup_ids
+        new_evidence_count = total_new_ev
+
     round_messages = [dict(m) for m in (state.get("round_messages", []) or [])]
     round_msg = {
         "message_index": message_index,
@@ -974,6 +1196,11 @@ def update_debate_state_with_payload(
         "unresolved": unresolved_claim_ids,
         "round_summary": summary,
         "round_goal": round_goal,
+        "information_gain_score": information_gain_score,
+        "duplicate_claim_ids": duplicate_claim_ids,
+        "duplicate_claims": duplicate_claims,
+        "new_evidence_count": new_evidence_count,
+        "max_similarity": max_similarity,
     }
     if model_name is not None:
         round_msg["model_name"] = model_name
