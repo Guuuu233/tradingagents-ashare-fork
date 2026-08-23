@@ -1,4 +1,4 @@
-import { FileText, Download, Trash2, Search, ChevronLeft, ChevronRight, Loader2, History, Clock3, X } from 'lucide-react'
+import { FileText, Download, Trash2, Search, ChevronLeft, ChevronRight, Loader2, History, Clock3, X, Scale } from 'lucide-react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import TaskProgressBanner from '@/components/TaskProgressBanner'
@@ -10,6 +10,7 @@ import ReportViewer from '@/components/ReportViewer'
 import DualHorizonReportSection from '@/components/DualHorizonReportSection'
 import RiskRadar from '@/components/RiskRadar'
 import KeyMetrics from '@/components/KeyMetrics'
+import HistoricalDebateDrawer from '@/components/HistoricalDebateDrawer'
 import { useAuthStore } from '@/stores/authStore'
 import { advanceProgress, getReportRunProgress } from '@/utils/progressFeedback'
 import { isLegacyEnglishReport, parseDecisionAction } from '@/utils/reportText'
@@ -182,6 +183,7 @@ export default function Reports() {
     const [reports, setReports] = useState<Report[]>([])
     const [total, setTotal] = useState(0)
     const [selectedReport, setSelectedReport] = useState<ReportDetail | null>(null)
+    const [showDebateDrawer, setShowDebateDrawer] = useState(false)
     const [loading, setLoading] = useState(false)
     const [detailLoading, setDetailLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -456,13 +458,23 @@ export default function Reports() {
                             <span className="ml-2 text-base font-normal text-slate-400">{selectedReport.symbol}</span>
                         )}
                     </h1>
-                    <button
-                        onClick={() => exportReport(selectedReport)}
-                        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                    >
-                        <Download className="w-4 h-4" />
-                        导出 Markdown
-                    </button>
+                    <div className="ml-auto flex items-center gap-2">
+                        <button
+                            onClick={() => setShowDebateDrawer(true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors font-medium"
+                            title="查看多空辩论逐轮发言、论点账本、总监裁决及事实核验"
+                        >
+                            <Scale className="w-4 h-4 text-amber-500" />
+                            多空辩论与裁决证据
+                        </button>
+                        <button
+                            onClick={() => exportReport(selectedReport)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                        >
+                            <Download className="w-4 h-4" />
+                            导出 Markdown
+                        </button>
+                    </div>
                 </div>
 
                 {/* 元信息 */}
@@ -529,11 +541,46 @@ export default function Reports() {
                     <KeyMetrics items={selectedReport.key_metrics ?? undefined} />
                 </div>
 
+                {/* 多空辩论与裁决证据卡片 */}
+                <div className="card bg-gradient-to-r from-amber-500/5 via-slate-900/40 to-blue-500/5 border-amber-500/20 p-5">
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div className="flex items-center gap-3.5">
+                            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                <Scale className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                                    多空辩论与裁决证据审计
+                                </h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                                    逐轮 Bull/Bear 多空对抗正文 · Claims 论点账本 · 研究总监裁决逻辑自洽硬闸 · 事实确定性核验
+                                </p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => setShowDebateDrawer(true)}
+                            className="btn-primary flex items-center gap-1.5 text-xs py-2 px-4 shrink-0 shadow-sm"
+                        >
+                            <Scale className="w-3.5 h-3.5" />
+                            <span>查看辩论与核验详情</span>
+                        </button>
+                    </div>
+                </div>
+
                 <DualHorizonReportSection reportData={selectedReport} />
 
                 <div className="card">
-                    <ReportViewer reportData={selectedReport} />
+                    <ReportViewer
+                        reportData={selectedReport}
+                        onOpenDebateDrawer={() => setShowDebateDrawer(true)}
+                    />
                 </div>
+
+                <HistoricalDebateDrawer
+                    isOpen={showDebateDrawer}
+                    onClose={() => setShowDebateDrawer(false)}
+                    reportData={selectedReport}
+                />
             </div>
         )
     }
