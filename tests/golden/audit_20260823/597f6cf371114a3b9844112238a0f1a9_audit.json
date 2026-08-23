@@ -1,0 +1,1843 @@
+{
+ "report_id": "597f6cf371114a3b9844112238a0f1a9",
+ "symbol": "600900.SH",
+ "trade_date": "2026-08-21",
+ "status": "completed",
+ "created_at": "2026-08-23 11:46:55.219068",
+ "updated_at": "2026-08-23 11:55:04.565111",
+ "decision": "BUY",
+ "direction": "偏多",
+ "confidence": 60,
+ "target_price": 29.2,
+ "stop_loss_price": 27.5,
+ "probability": null,
+ "error": null,
+ "llm_calls": {
+  "total": 0,
+  "degraded": 0,
+  "abnormal_finish": [],
+  "slow_calls_over_120s": [],
+  "by_agent": {}
+ },
+ "flat": {
+  "data_gaps": [
+   "【数据获取失败】fund_flow_board：provider call failed",
+   "【数据获取失败】insider_transactions：provider call failed",
+   "【数据获取失败】hot_stocks：provider call failed",
+   "【数据获取失败】share_pledge：provider call failed",
+   "【数据获取失败】northbound_flow：provider call failed",
+   "【数据获取失败】shareholder_count：未返回可验证数据日期",
+   "【数据获取失败】earnings_forecast：未返回可验证数据日期",
+   "【数据获取失败】cashflow：未返回可验证数据日期",
+   "【数据获取失败】balance_sheet：未返回可验证数据日期",
+   "【数据获取失败】fund_flow_individual：未返回可验证数据日期",
+   "【数据获取失败】restricted_release：未返回可验证数据日期",
+   "【数据获取失败】income_statement：未返回可验证数据日期",
+   "【数据获取失败】fundamentals：未返回可验证数据日期",
+   "【数据获取失败】行业板块即时资金流向快照无法用于历史日期分析。"
+  ],
+  "data_as_of": "2026-08-21",
+  "analyst_traces": [
+   {
+    "agent": "macro_analyst",
+    "horizon": "medium",
+    "data_window": "板块数据",
+    "key_finding": "宏观板块分析结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   },
+   {
+    "agent": "market_analyst",
+    "horizon": "short",
+    "data_window": "14天",
+    "key_finding": "市场技术面结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   },
+   {
+    "agent": "social_media_analyst",
+    "horizon": "short",
+    "data_window": "7天",
+    "key_finding": "舆情分析结论：偏空",
+    "verdict": "偏空",
+    "confidence": "中"
+   },
+   {
+    "agent": "fundamentals_analyst",
+    "horizon": "medium",
+    "data_window": "财报周期",
+    "key_finding": "基本面分析结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   },
+   {
+    "agent": "news_analyst",
+    "horizon": "short",
+    "data_window": "14天",
+    "key_finding": "新闻分析结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   },
+   {
+    "agent": "smart_money_analyst",
+    "horizon": "short",
+    "data_window": "近期可用",
+    "key_finding": "主力资金分析结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   },
+   {
+    "agent": "volume_price_analyst",
+    "horizon": "short",
+    "data_window": "14天",
+    "key_finding": "量价分析结论：偏多",
+    "verdict": "偏多",
+    "confidence": "中"
+   }
+  ],
+  "report_manifest": {
+   "macro_report": {
+    "length": 4481,
+    "raw_length": 4481,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1798,
+    "char_count": 1798
+   },
+   "market_report": {
+    "length": 2386,
+    "raw_length": 2386,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1786,
+    "char_count": 1786
+   },
+   "sentiment_report": {
+    "length": 2096,
+    "raw_length": 2096,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1020,
+    "char_count": 1020
+   },
+   "news_report": {
+    "length": 3629,
+    "raw_length": 3629,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1798,
+    "char_count": 1798
+   },
+   "fundamentals_report": {
+    "length": 3679,
+    "raw_length": 3679,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1798,
+    "char_count": 1798
+   },
+   "smart_money_report": {
+    "length": 3113,
+    "raw_length": 3113,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1798,
+    "char_count": 1798
+   },
+   "volume_price_report": {
+    "length": 3472,
+    "raw_length": 3472,
+    "passed": true,
+    "mode": "structured_dense_summary_and_excerpts",
+    "pass_mode": "structured_dense_summary_and_excerpts",
+    "passed_chars": 1781,
+    "char_count": 1781
+   }
+  },
+  "analyst_reports_audit": {
+   "market_report": {
+    "length": 2386,
+    "missing_markers": 0,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "sentiment_report": {
+    "length": 2096,
+    "missing_markers": 0,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "news_report": {
+    "length": 3629,
+    "missing_markers": 0,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "fundamentals_report": {
+    "length": 3679,
+    "missing_markers": 1,
+    "provenance_refs": 1,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "macro_report": {
+    "length": 4481,
+    "missing_markers": 7,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "smart_money_report": {
+    "length": 3113,
+    "missing_markers": 0,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   },
+   "volume_price_report": {
+    "length": 3472,
+    "missing_markers": 0,
+    "provenance_refs": 0,
+    "empty_phrases": {},
+    "think_leak": false,
+    "ascii_ratio_heavy_en": false
+   }
+  },
+  "game_theory_report": null,
+  "debate": {
+   "count_rounds": 6,
+   "n_messages": 6,
+   "messages_meta": [
+    {
+     "message_index": 1,
+     "debate_round": 1,
+     "speaker_key": "Bull",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [],
+     "new_claim_ids": [
+      "INV-1",
+      "INV-2"
+     ],
+     "target_claim_ids": [],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [],
+     "round_summary": "多头完成首轮立论，从地量供给测试、超大单逆势吸筹及基本面反脆弱底线建立做多论据。",
+     "round_goal": "等待空头反驳，针对技术面死叉及风格分流假设展开二次攻防。",
+     "information_gain_score": 1.0,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 4,
+     "max_similarity": 0.0,
+     "model_name": "gemini-3.7-flash-high"
+    },
+    {
+     "message_index": 2,
+     "debate_round": 1,
+     "speaker_key": "Bear",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [
+      "INV-1",
+      "INV-2"
+     ],
+     "new_claim_ids": [
+      "INV-3",
+      "INV-4"
+     ],
+     "target_claim_ids": [
+      "INV-1",
+      "INV-2"
+     ],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [
+      "INV-1",
+      "INV-2"
+     ],
+     "round_summary": "空头正面反驳多头地量吸筹与基本面防御假设，指出全口径资金流出与均线死叉破位风险。",
+     "round_goal": "在第二轮攻防中继续击穿多头买盘承接假设，强化下行破位逻辑。",
+     "information_gain_score": 1.0,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 4,
+     "max_similarity": 0.0,
+     "model_name": "gemini-3.7-flash-high"
+    },
+    {
+     "message_index": 3,
+     "debate_round": 2,
+     "speaker_key": "Bull",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [
+      "INV-3",
+      "INV-4"
+     ],
+     "new_claim_ids": [
+      "INV-5",
+      "INV-6"
+     ],
+     "target_claim_ids": [
+      "INV-3",
+      "INV-4"
+     ],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [
+      "INV-1",
+      "INV-2",
+      "INV-3",
+      "INV-4"
+     ],
+     "round_summary": "多头反驳资金流出定性错误，指出超大单逆势吸筹与地量见底，量化近3比1短线盈亏比",
+     "round_goal": "击穿空头资金出逃与充分定价论点，确立地量筑底拐点",
+     "information_gain_score": 0.7766,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 4,
+     "max_similarity": 0.2234,
+     "model_name": "gemini-3.7-flash-high"
+    },
+    {
+     "message_index": 4,
+     "debate_round": 2,
+     "speaker_key": "Bear",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [
+      "INV-5",
+      "INV-6"
+     ],
+     "new_claim_ids": [
+      "INV-7"
+     ],
+     "target_claim_ids": [
+      "INV-5",
+      "INV-6"
+     ],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [
+      "INV-1",
+      "INV-2",
+      "INV-3",
+      "INV-4",
+      "INV-5",
+      "INV-6"
+     ],
+     "round_summary": "空头穿透资金全口径净流出真相，以均线死叉压制与极端枯水推演击穿多头盈亏比假设",
+     "round_goal": "聚焦28.35元中轨阻力与成长分流抽水，论证短线负期望与下行破位风险",
+     "information_gain_score": 0.8868,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 2,
+     "max_similarity": 0.1132,
+     "model_name": "gemini-3.7-flash-high",
+     "attempt_details": [
+      {
+       "i": 1,
+       "parse_status": "invalid_protocol",
+       "error_detail": "发言人 Bear 试图单方面将对手 claim ['INV-1', 'INV-2'] 标记为 resolved，违反阵营权限契约"
+      },
+      {
+       "i": 2,
+       "parse_status": "valid",
+       "error_detail": ""
+      }
+     ]
+    },
+    {
+     "message_index": 5,
+     "debate_round": 3,
+     "speaker_key": "Bull",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [
+      "INV-3",
+      "INV-4",
+      "INV-7"
+     ],
+     "new_claim_ids": [
+      "INV-8",
+      "INV-9"
+     ],
+     "target_claim_ids": [
+      "INV-7",
+      "INV-3",
+      "INV-4"
+     ],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [
+      "INV-1",
+      "INV-2",
+      "INV-3",
+      "INV-4",
+      "INV-5",
+      "INV-6",
+      "INV-7"
+     ],
+     "round_summary": "多头以三峡偏丰硬数据击穿枯水杀跌论，指出题材退潮将驱动资金回流红利",
+     "round_goal": "收官论证非对称赔率优势，确立50日线上方逢低配置结论",
+     "information_gain_score": 0.875,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 4,
+     "max_similarity": 0.125,
+     "model_name": "gemini-3.7-flash-high",
+     "attempt_details": [
+      {
+       "i": 1,
+       "parse_status": "invalid_protocol",
+       "error_detail": "发言人 Bull 试图单方面将对手 claim ['INV-3', 'INV-4', 'INV-7'] 标记为 resolved，违反阵营权限契约"
+      },
+      {
+       "i": 2,
+       "parse_status": "valid",
+       "error_detail": ""
+      }
+     ]
+    },
+    {
+     "message_index": 6,
+     "debate_round": 3,
+     "speaker_key": "Bear",
+     "parse_status": "valid",
+     "accepted": true,
+     "responded_claim_ids": [
+      "INV-8",
+      "INV-9"
+     ],
+     "new_claim_ids": [
+      "INV-10"
+     ],
+     "target_claim_ids": [
+      "INV-8",
+      "INV-9"
+     ],
+     "resolved_claim_ids": [],
+     "unresolved_claim_ids": [
+      "INV-1",
+      "INV-2",
+      "INV-3",
+      "INV-4",
+      "INV-5",
+      "INV-6",
+      "INV-7",
+      "INV-8",
+      "INV-9"
+     ],
+     "round_summary": "空头指出乌东德偏枯事实击穿单向利好逻辑，量化均线死叉与资金分流下的倒挂盈亏比",
+     "round_goal": "终极论证短线技术破位与成长抽水风险，确立逢高减配规避回撤结论",
+     "information_gain_score": 0.8545,
+     "duplicate_claim_ids": [],
+     "new_evidence_count": 2,
+     "max_similarity": 0.1455,
+     "model_name": "gemini-3.7-flash-high",
+     "attempt_details": [
+      {
+       "i": 1,
+       "parse_status": "invalid_protocol",
+       "error_detail": "发言人 Bear 试图单方面将对手 claim ['INV-1', 'INV-2', 'INV-5', 'INV-6'] 标记为 resolved，违反阵营权限契约"
+      },
+      {
+       "i": 2,
+       "parse_status": "valid",
+       "error_detail": ""
+      }
+     ]
+    }
+   ],
+   "claims": [
+    {
+     "claim_id": "INV-1",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "极致缩量叠加超大单吸筹，50日线上方供给测试完成",
+     "evidence": [
+      "量价报告：8月21日成交量萎缩至6351万股(量比0.6)且振幅仅1.07%",
+      "主力资金报告：超大单逆势净流入1.2943亿元，主力净流入0.7234亿元"
+     ],
+     "confidence": 0.73,
+     "status": "unresolved",
+     "target_claim_ids": [],
+     "round_index": 1
+    },
+    {
+     "claim_id": "INV-2",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "零燃料敞口与低利率共振，极端压力测试下反脆弱极强",
+     "evidence": [
+      "基本面报告：2026H1梯级发电量同比+4.81%，2026Q1扣非ROE达15.41%且无燃料成本",
+      "宏观报告：国内低利率压降利息支出，股票型ETF逆势净流入3676亿托底"
+     ],
+     "confidence": 0.75,
+     "status": "unresolved",
+     "target_claim_ids": [],
+     "round_index": 1
+    },
+    {
+     "claim_id": "INV-3",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "均线死叉压制且同花顺全口径净流出2.46亿，地量显示买盘枯竭",
+     "evidence": [
+      "市场报告：价格跌破10日EMA(28.15)与布林中轨(28.34)，短期均线死叉",
+      "主力资金报告：同花顺全口径主力净流出-2.4649亿元，中单大单持续流出"
+     ],
+     "confidence": 0.7,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-1"
+     ],
+     "round_index": 2
+    },
+    {
+     "claim_id": "INV-4",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "基本面利好已充分定价，市场风格分流导致红利防御资产承压",
+     "evidence": [
+      "新闻报告：上半年发电量数据与0.79元分红已公开超1个月，利好出尽",
+      "情绪报告：市场风险偏好转向进攻题材，公用事业遭遇虹吸抽水"
+     ],
+     "confidence": 0.68,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-2"
+     ],
+     "round_index": 2
+    },
+    {
+     "claim_id": "INV-5",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "中散流出与超大单吸筹共振，地量显现假摔筑底拐点",
+     "evidence": [
+      "主力资金报告：超大单逆势净流入+1.2943亿元，同花顺流出以中小单为主",
+      "量价报告：8月21日成交量萎缩至6351万股(地量0.6量比)，OBV底背离"
+     ],
+     "confidence": 0.72,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-3"
+     ],
+     "round_index": 3
+    },
+    {
+     "claim_id": "INV-6",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "低利率与ETF被动增配托底，短线具备2.9比1优异盈亏比",
+     "evidence": [
+      "宏观报告：股票型ETF逆势净流入3676亿，降息压降带息负债利息",
+      "市场报告：50日均线27.54元提供强承托，目标位29.20-29.35元"
+     ],
+     "confidence": 0.7,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-4"
+     ],
+     "round_index": 3
+    },
+    {
+     "claim_id": "INV-7",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "中轨反压叠加成长分流，极端枯水推演下行深度看至27元",
+     "evidence": [
+      "市场报告：10日EMA(28.15)与布林中轨(28.34)构筑刚性阻力区",
+      "宏观报告：悲观情景下极端枯水与风格抽水可致股价回调5%-8%下探27元附近"
+     ],
+     "confidence": 0.73,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-5",
+      "INV-6"
+     ],
+     "round_index": 4
+    },
+    {
+     "claim_id": "INV-8",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "三峡偏丰28.7%锁定基本盘，450亿现金流底线击穿枯水杀跌论",
+     "evidence": [
+      "基本面报告：上半年发电量+4.81%且三峡偏丰28.74%，极端压力测试下年化现金流仍超450亿元",
+      "基本面报告：2026Q1资产负债率降至57.33%，利息保障倍数4.89倍"
+     ],
+     "confidence": 0.74,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-7"
+     ],
+     "round_index": 5
+    },
+    {
+     "claim_id": "INV-9",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "题材连板高度受限仅3板，避险回流将助推地量结构突破中轨",
+     "evidence": [
+      "情绪报告：全市场涨停54只但连板最高仅3板(汉森制药)，题材高度受限面临退潮分化",
+      "量价与主力报告：8月21日成交量萎缩至6351万股地量，超大单逆势净买入1.2943亿元"
+     ],
+     "confidence": 0.72,
+     "status": "unresolved",
+     "target_claim_ids": [
+      "INV-3",
+      "INV-4"
+     ],
+     "round_index": 5
+    },
+    {
+     "claim_id": "INV-10",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "乌东德偏枯16.9%显水文隐忧，死叉共振压制下盈亏比严重倒挂",
+     "evidence": [
+      "公司公告显示2026H1乌东德水库来水偏枯16.94%，金沙江上游蓄能承压",
+      "市场与主力报告显示收盘价27.96元低于10日EMA(28.15)及布林中轨(28.34)，且全口径资金流出2.46亿元"
+     ],
+     "confidence": 0.7,
+     "status": "open",
+     "target_claim_ids": [
+      "INV-8",
+      "INV-9"
+     ],
+     "round_index": 6
+    }
+   ],
+   "open_claim_ids": [
+    "INV-1",
+    "INV-10",
+    "INV-2",
+    "INV-3",
+    "INV-4",
+    "INV-5",
+    "INV-6",
+    "INV-7",
+    "INV-8",
+    "INV-9"
+   ],
+   "resolved_claim_ids": [],
+   "unresolved_claim_ids": [
+    "INV-1",
+    "INV-2",
+    "INV-3",
+    "INV-4",
+    "INV-5",
+    "INV-6",
+    "INV-7",
+    "INV-8",
+    "INV-9"
+   ],
+   "judge_decision": "### 一、 分析师 Verdict 全景概览与动态加权\n\n当前处于短线（1-2周）震荡筑底与高低切换窗口期，加权规则偏向微观资金、量价与技术承接，基本面作为下行硬底线：\n1. **宏观板块**：偏多（权重 10%）——宽财政与低利率环境压降带息负债成本，股票型ETF持续托底。\n2. **市场（技术面）**：偏多（权重 20%）——价格虽破10日EMA（28.15元），但50日SMA（27.54元）支撑扎实。\n3. **舆情（情绪）**：偏空（权重 10%）——短线题材多点开花分流红利防御资金，均线死叉压制做多情绪。\n4. **新闻**：偏多（权重 10%）——0.79元派息完成，大宗与两融资金底仓相对稳固。\n5. **基本面**：偏多（权重 15%）——上半年梯级发电量同比+4.81%，零燃料敞口提供极强盈利韧性。\n6. **主力资金**：偏多（权重 20%）——东财超大单逆势净流入+1.2943亿元，险资等机构“水下”接盘。\n7. **量价**：偏多（权重 15%）——成交量骤降至6,351万股（地量量比0.6），供给测试进入尾声。\n\n---\n\n### 二、 多空辩论五步深度裁决与证据评定\n\n#### 1. 证据链完整性审查\n- **采纳项（adopted_claim_ids）**：\n  - **INV-1、INV-5、INV-9**：核验通过（Coverage=100%）。8月21日成交量萎缩至6351万股（地量量比0.6），东财超大单净流入+1.2943亿元，量价背离与威科夫供给测试成立；涨停生态中连板高度仅3板，题材炒作逼近退潮拐点。\n  - **INV-2、INV-6、INV-8**：核验通过（Coverage=100%）。三峡偏丰28.74%，极端压力测试下年化经营现金流仍超450亿元，50日均线（27.54元）防守有效。\n- **驳回项（rejected_claim_ids）**：\n  - **INV-4、INV-10**：核验不足（Coverage=50% < 67%）。空头援引乌东德偏枯16.94%断言梯级蓄能承压缺乏全流域调度支撑；将同花顺净流出-2.46亿元机械推导为“主力出逃”，忽视了流出主体实为中小散户（小单/中单流出超2亿元）。\n\n#### 2. 传导路径验证\n空头主张的“风格虹吸导致估值均值回归”存在逻辑断裂。短线小盘题材炒作虽分流活跃资金，但公用事业龙头定价锚在于“低利率下的类债高股息利差”。超大单机构在27.90元附近水下承接，反映中长线配置盘对2.83%~3.50%股息率的高度认可。\n\n#### 3. 焦点分歧裁决：**多头胜**\n多头以“极致地量+超大单逆势吸筹+50日均线强支撑”构建了坚实的右侧反转逻辑；空头过度依赖滞后的“均线死叉”表象，未能识别散户调仓与机构托底的资金预期差。\n\n#### 4. 极端情景测试\n在全流域极端干旱（发电量-20%）的悲观情景下，公司年化经营现金流仍超450亿元，完全覆盖刚性利息与资本开支，50日SMA（27.54元）下方下行空间被刚性封死，空头推演杀跌至23.50-24.50元严重脱离基本面事实。\n\n#### 5. 风险收益比量化\n- **当前基准价**：27.96元\n- **上涨空间**：目标位29.20元（+4.43%）\n- **下行风险**：止损位27.50元（-1.64%）\n- **短线赔率**：2.70 : 1，具备极高数学期望。\n\n---\n\n### 三、 预期差与宏观产业链共振研判\n\n市场情绪过度悲观于短线均线死叉，忽视了成交量剧烈萎缩近70%背后的抛压枯竭。主力资金（超大单）利用题材炒作分流时机在27.90–28.07元低吸建仓。随着题材连板分化退潮，防御避险资金回流将驱动估值修复。\n\n---\n\n### 四、 投资方案与交易执行指令\n\n- **投资决策**：**Buy（看多）**\n- **建议仓位**：初始仓位 **40%**，若放量突破28.35元加仓至上限 **60%**。\n- **建议入场区间**：**27.60 – 27.96 元**（依托现价分批挂单吸筹）。\n- **目标止盈位**：第一目标 **28.43 元**（减仓1/3），第二目标 **29.20 – 29.35 元**（全部止盈）。\n- **硬性止损位**：**27.50 元**（日线收盘放量跌破50日均线即坚决止损，最大亏损 -1.64%）。\n- **失效条件**：单日成交量超1.5亿股且放量击穿27.50元，或超大单主力连续2日净流出超1.5亿元。\n\n<!-- MANAGER_VERDICT: {\"winner\": \"bull\", \"direction\": \"偏多\", \"reason\": \"地量供给测试完成且超大单逆势吸筹\", \"position_pct\": 40, \"entry\": \"27.60-27.96\", \"target\": \"29.20\", \"stop_loss\": \"27.50\", \"upside\": 4.43, \"downside\": 1.64, \"odds\": 2.70, \"adopted_claim_ids\": [\"INV-1\", \"INV-2\", \"INV-5\", \"INV-6\", \"INV-8\", \"INV-9\"], \"partially_adopted_claims\": [], \"rejected_claim_ids\": [\"INV-4\", \"INV-10\"], \"excluded_evidence\": [\"情绪报告中公用事业遭遇持续虹吸抽水之定性推论\", \"乌东德偏枯导致梯级全面承压之未验证假设\"]} -->\n<!-- VERDICT: {\"direction\": \"偏多\", \"reason\": \"地量缩量企稳，超大单逆势吸筹构筑坚实底线\"} -->",
+   "round_summary": "空头指出乌东德偏枯事实击穿单向利好逻辑，量化均线死叉与资金分流下的倒挂盈亏比"
+  },
+  "manager_verdict": {
+   "direction": "偏多",
+   "winner": "bull",
+   "reason": "地量供给测试完成且超大单逆势吸筹",
+   "position_pct": 40,
+   "entry": "27.60-27.96",
+   "target": "29.20",
+   "stop_loss": "27.50",
+   "upside": 4.43,
+   "downside": 1.64,
+   "odds": 2.7,
+   "adopted_claim_ids": [
+    "INV-1",
+    "INV-2",
+    "INV-5",
+    "INV-6",
+    "INV-8",
+    "INV-9"
+   ],
+   "partially_adopted_claims": [],
+   "rejected_claim_ids": [
+    "INV-4",
+    "INV-10"
+   ],
+   "excluded_evidence": [
+    "情绪报告中公用事业遭遇持续虹吸抽水之定性推论",
+    "乌东德偏枯导致梯级全面承压之未验证假设",
+    "情绪报告：市场风险偏好转向进攻题材，公用事业遭遇虹吸抽水",
+    "公司公告显示2026H1乌东德水库来水偏枯16.94%，金沙江上游蓄能承压"
+   ],
+   "claim_evidence_summary": {
+    "INV-1": {
+     "claim_id": "INV-1",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "极致缩量叠加超大单吸筹，50日线上方供给测试完成",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "量价报告：8月21日成交量萎缩至6351万股(量比0.6)且振幅仅1.07%",
+      "主力资金报告：超大单逆势净流入1.2943亿元，主力净流入0.7234亿元"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-2": {
+     "claim_id": "INV-2",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "零燃料敞口与低利率共振，极端压力测试下反脆弱极强",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "基本面报告：2026H1梯级发电量同比+4.81%，2026Q1扣非ROE达15.41%且无燃料成本",
+      "宏观报告：国内低利率压降利息支出，股票型ETF逆势净流入3676亿托底"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-3": {
+     "claim_id": "INV-3",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "均线死叉压制且同花顺全口径净流出2.46亿，地量显示买盘枯竭",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "市场报告：价格跌破10日EMA(28.15)与布林中轨(28.34)，短期均线死叉",
+      "主力资金报告：同花顺全口径主力净流出-2.4649亿元，中单大单持续流出"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-4": {
+     "claim_id": "INV-4",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "基本面利好已充分定价，市场风格分流导致红利防御资产承压",
+     "counts": {
+      "total": 2,
+      "verified": 1,
+      "unsupported": 1,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 0.5,
+     "decision": "reject",
+     "reason": "证据覆盖率不足 (verified 1/2, coverage=50.0% < 67%)，予以驳回/降权",
+     "verified_evidence": [
+      "新闻报告：上半年发电量数据与0.79元分红已公开超1个月，利好出尽"
+     ],
+     "unsupported_evidence": [
+      "情绪报告：市场风险偏好转向进攻题材，公用事业遭遇虹吸抽水"
+     ],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": [
+      "情绪报告：市场风险偏好转向进攻题材，公用事业遭遇虹吸抽水"
+     ]
+    },
+    "INV-5": {
+     "claim_id": "INV-5",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "中散流出与超大单吸筹共振，地量显现假摔筑底拐点",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "主力资金报告：超大单逆势净流入+1.2943亿元，同花顺流出以中小单为主",
+      "量价报告：8月21日成交量萎缩至6351万股(地量0.6量比)，OBV底背离"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-6": {
+     "claim_id": "INV-6",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "低利率与ETF被动增配托底，短线具备2.9比1优异盈亏比",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "宏观报告：股票型ETF逆势净流入3676亿，降息压降带息负债利息",
+      "市场报告：50日均线27.54元提供强承托，目标位29.20-29.35元"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-7": {
+     "claim_id": "INV-7",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "中轨反压叠加成长分流，极端枯水推演下行深度看至27元",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "市场报告：10日EMA(28.15)与布林中轨(28.34)构筑刚性阻力区",
+      "宏观报告：悲观情景下极端枯水与风格抽水可致股价回调5%-8%下探27元附近"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-8": {
+     "claim_id": "INV-8",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "三峡偏丰28.7%锁定基本盘，450亿现金流底线击穿枯水杀跌论",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "基本面报告：上半年发电量+4.81%且三峡偏丰28.74%，极端压力测试下年化现金流仍超450亿元",
+      "基本面报告：2026Q1资产负债率降至57.33%，利息保障倍数4.89倍"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-9": {
+     "claim_id": "INV-9",
+     "speaker": "Bull Analyst",
+     "speaker_key": "Bull",
+     "stance": "bullish",
+     "claim": "题材连板高度受限仅3板，避险回流将助推地量结构突破中轨",
+     "counts": {
+      "total": 2,
+      "verified": 2,
+      "unsupported": 0,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 1.0,
+     "decision": "adopt",
+     "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+     "verified_evidence": [
+      "情绪报告：全市场涨停54只但连板最高仅3板(汉森制药)，题材高度受限面临退潮分化",
+      "量价与主力报告：8月21日成交量萎缩至6351万股地量，超大单逆势净买入1.2943亿元"
+     ],
+     "unsupported_evidence": [],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": []
+    },
+    "INV-10": {
+     "claim_id": "INV-10",
+     "speaker": "Bear Analyst",
+     "speaker_key": "Bear",
+     "stance": "bearish",
+     "claim": "乌东德偏枯16.9%显水文隐忧，死叉共振压制下盈亏比严重倒挂",
+     "counts": {
+      "total": 2,
+      "verified": 1,
+      "unsupported": 1,
+      "contradicted": 0,
+      "source_unavailable": 0
+     },
+     "coverage": 0.5,
+     "decision": "reject",
+     "reason": "证据覆盖率不足 (verified 1/2, coverage=50.0% < 67%)，予以驳回/降权",
+     "verified_evidence": [
+      "市场与主力报告显示收盘价27.96元低于10日EMA(28.15)及布林中轨(28.34)，且全口径资金流出2.46亿元"
+     ],
+     "unsupported_evidence": [
+      "公司公告显示2026H1乌东德水库来水偏枯16.94%，金沙江上游蓄能承压"
+     ],
+     "contradicted_evidence": [],
+     "source_unavailable_evidence": [],
+     "excluded_evidence": [
+      "公司公告显示2026H1乌东德水库来水偏枯16.94%，金沙江上游蓄能承压"
+     ]
+    }
+   },
+   "consistency_check_passed": true,
+   "failed_checks": []
+  },
+  "evidence_verification": [
+   {
+    "raw": "量价报告：8月21日成交量萎缩至6351万股(量比0.6)且振幅仅1.07%",
+    "claim_id": "INV-1",
+    "matched_role": "news_report",
+    "matched_source": "news",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 news_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "主力资金报告：超大单逆势净流入1.2943亿元，主力净流入0.7234亿元",
+    "claim_id": "INV-1",
+    "matched_role": "smart_money_report",
+    "matched_source": "smart_money",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 smart_money_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "基本面报告：2026H1梯级发电量同比+4.81%，2026Q1扣非ROE达15.41%且无燃料成本",
+    "claim_id": "INV-2",
+    "matched_role": "fundamentals_report",
+    "matched_source": "fundamentals",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 fundamentals_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "宏观报告：国内低利率压降利息支出，股票型ETF逆势净流入3676亿托底",
+    "claim_id": "INV-2",
+    "matched_role": "macro_report",
+    "matched_source": "macro",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 macro_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "市场报告：价格跌破10日EMA(28.15)与布林中轨(28.34)，短期均线死叉",
+    "claim_id": "INV-3",
+    "matched_role": "sentiment_report",
+    "matched_source": "sentiment",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 sentiment_report 中找到精确匹配事实"
+   },
+   {
+    "raw": "主力资金报告：同花顺全口径主力净流出-2.4649亿元，中单大单持续流出",
+    "claim_id": "INV-3",
+    "matched_role": "smart_money_report",
+    "matched_source": "smart_money",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 smart_money_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "新闻报告：上半年发电量数据与0.79元分红已公开超1个月，利好出尽",
+    "claim_id": "INV-4",
+    "matched_role": "sentiment_report",
+    "matched_source": "sentiment",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 sentiment_report 中找到精确匹配事实"
+   },
+   {
+    "raw": "情绪报告：市场风险偏好转向进攻题材，公用事业遭遇虹吸抽水",
+    "claim_id": "INV-4",
+    "matched_role": null,
+    "matched_source": null,
+    "status": "unsupported",
+    "is_fatal": false,
+    "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+   },
+   {
+    "raw": "主力资金报告：超大单逆势净流入+1.2943亿元，同花顺流出以中小单为主",
+    "claim_id": "INV-5",
+    "matched_role": "smart_money_report",
+    "matched_source": "smart_money",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 smart_money_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "量价报告：8月21日成交量萎缩至6351万股(地量0.6量比)，OBV底背离",
+    "claim_id": "INV-5",
+    "matched_role": "news_report",
+    "matched_source": "news",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 news_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "宏观报告：股票型ETF逆势净流入3676亿，降息压降带息负债利息",
+    "claim_id": "INV-6",
+    "matched_role": "macro_report",
+    "matched_source": "macro",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 macro_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "市场报告：50日均线27.54元提供强承托，目标位29.20-29.35元",
+    "claim_id": "INV-6",
+    "matched_role": "market_report",
+    "matched_source": "market",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 market_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "市场报告：10日EMA(28.15)与布林中轨(28.34)构筑刚性阻力区",
+    "claim_id": "INV-7",
+    "matched_role": "market_report",
+    "matched_source": "market",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 market_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "宏观报告：悲观情景下极端枯水与风格抽水可致股价回调5%-8%下探27元附近",
+    "claim_id": "INV-7",
+    "matched_role": "news_report",
+    "matched_source": "news",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 news_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "基本面报告：上半年发电量+4.81%且三峡偏丰28.74%，极端压力测试下年化现金流仍超450亿元",
+    "claim_id": "INV-8",
+    "matched_role": "macro_report",
+    "matched_source": "macro",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 macro_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "基本面报告：2026Q1资产负债率降至57.33%，利息保障倍数4.89倍",
+    "claim_id": "INV-8",
+    "matched_role": "fundamentals_report",
+    "matched_source": "fundamentals",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 fundamentals_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "情绪报告：全市场涨停54只但连板最高仅3板(汉森制药)，题材高度受限面临退潮分化",
+    "claim_id": "INV-9",
+    "matched_role": "sentiment_report",
+    "matched_source": "sentiment",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 sentiment_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "量价与主力报告：8月21日成交量萎缩至6351万股地量，超大单逆势净买入1.2943亿元",
+    "claim_id": "INV-9",
+    "matched_role": "macro_report",
+    "matched_source": "macro",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 macro_report 中验证数值与关键词匹配"
+   },
+   {
+    "raw": "公司公告显示2026H1乌东德水库来水偏枯16.94%，金沙江上游蓄能承压",
+    "claim_id": "INV-10",
+    "matched_role": null,
+    "matched_source": null,
+    "status": "unsupported",
+    "is_fatal": false,
+    "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+   },
+   {
+    "raw": "市场与主力报告显示收盘价27.96元低于10日EMA(28.15)及布林中轨(28.34)，且全口径资金流出2.46亿元",
+    "claim_id": "INV-10",
+    "matched_role": "news_report",
+    "matched_source": "news",
+    "status": "verified",
+    "is_fatal": false,
+    "details": "在 news_report 中验证数值与关键词匹配"
+   }
+  ],
+  "evidence_verification_stats": {
+   "total": 20,
+   "by_status": {
+    "unsupported": 2,
+    "verified": 18
+   },
+   "fatal_fail": []
+  },
+  "risk_debate_state": {
+   "judge_decision": "# 长江电力（600900.SH）风控委员会审核与动态风控裁决报告\n\n**审核基准日：2026年8月21日（T+1执行）**\n\n---\n\n## 一、 风控委员会审核结论与方向定性\n\n**审核结论：买入（BUY / 偏多）—— 审核通过（PASS，附带硬性风控收紧约束）**\n\n风控委员会全面审核了交易员执行方案及三方辩论成果：\n1. **方向认可**：认可交易员与多头关于“地量供给测试完成、超大单逆势承接、50日SMA均线双重底支撑”的核心逻辑。标的具备高安全边际与高赔率数学期望。\n2. **风控修正**：交易员原方案中初始仓位（40%）及上限（60%）在当前全市场缩量存量博弈、题材股扩散吸筹的背景下偏高，且忽视了极端缩量（日成交仅6351万股）下的市价止损滑点冲击与时间磨损风险。\n3. **裁决决定**：**维持偏多方向，但对仓位预算、右侧加仓门槛、时间止损及流动性冲击施加全方位硬性约束**。\n\n---\n\n## 二、 全维度动态风控约束体系\n\n### 2.1 仓位与敞口约束（强制收紧）\n*   **初始建仓上限**：**≤ 25%**（从交易员原定的40%硬性压降，防止左侧试探暴露过多风险敞口）。\n*   **最大持仓上限**：**≤ 40%**（否决交易员方案中的60%集中度，单票敞口严格受控）。\n*   **杠杆限制**：**0杠杆**，全额使用纯多头自有资金，禁止进行任何融资加杠杆操作。\n*   **加仓门槛**：必须满足“日线收盘站稳28.35元（布林中轨）且连续2日成交量>9,000万股”的右侧量价共振条件，方可追加15%仓位至上限40%。\n\n### 2.2 回撤与止损止盈约束\n*   **硬性止损价位**：**27.50元**（以50日SMA 27.54元下方4分为终极防线）。\n    *   *触发机制*：日线收盘价跌破27.50元，或盘中跌破27.50元且成交量放大超1.2亿股，立即市价全额止损。\n    *   *最大单笔亏损*：加权入场均价27.78元测算，单笔最大亏损控制在 **-1.01%**（账户整体净值回撤不超过 -0.25%）。\n*   **动态移动锁盈机制（Trailing Stop）**：\n    *   触及第一目标位 **28.43元** 时，强制减仓50%，并将剩余仓位止损线强制上移至 **27.80元**（保本位）。\n    *   触及第二目标位 **29.20–29.35元** 时，清仓锁定全部利润。\n*   **时间止损约束（Time-stop）**：\n    *   若建仓后 **10个交易日内** 价格仍未能有效放量突破28.35元，无论盈亏，强制主动降仓至10%或全部平仓，防范横盘时间磨损与资金占用机会成本。\n\n### 2.3 流动性与冲击成本防护\n*   **挂单指令限制**：全部分批建仓均须采用**限价单（Limit Order）**在 27.65–27.90 元区间挂单，禁止开盘直接市价追单（Market Order）。\n*   **止损滑点缓冲**：由于当前成交量压缩约70%，若盘中触发极端止损，必须采取**分笔TWAP（时间加权平均算法）或小单切片方式平仓**，严禁单笔大额市价砸盘导致超额冲击成本。\n\n### 2.4 全球宏观与产业链压力测试\n*   **海外流动性/美债冲击**：标的为纯内需公用事业且带息负债以国内低息人民币贷款为主（资产负债率57.33%），完全免疫汇率敞口与海外加息。主要风险为外资情绪外溢。\n*   **燃料与成本端**：零化石燃料敞口，完全免疫煤价/原油通胀反噬。\n*   **来水与基本面韧性**：极端全流域偏枯（-20%）情景下年化经营现金流仍超450亿元，股息率硬底坚挺，基本面不存在断崖风险。\n\n---\n\n## 三、 执行前置条件与立即降风险触发器\n\n### 3.1 允许执行的前提条件（execution_preconditions）\n1.  **挂单区间准入**：开盘集合竞价或盘中回踩处于 **27.65–27.90元** 区间，且未出现跳空低开跌破27.54元情况。\n2.  **大盘流动性底线**：A股全市场全天预估成交额不低于 **6,500亿元**，排除极端流动性枯竭踩踏。\n3.  **无重大突发事件**：盘前无涉及三峡梯级电站不可抗力调度受限等突发重大非正常公告。\n\n### 3.2 立即降风险与熔断触发器（de_risk_triggers）\n1.  **宏观熔断**：美债10年期收益率连续3个交易日累计上升超 **30bps**，或国内沪深300指数单日跌幅超 **1.5%**，当日暂停建仓或削减50%持仓。\n2.  **技术破位熔断**：日线收盘价跌破 **27.50元**，无条件清仓止损，进入至少3个交易日冷静期。\n3.  **时间磨损触发器**：持有满 **10个交易日** 标的仍收于28.35元下方且量能低于7,000万股，强制平仓50%以上防范僵尸仓位。\n4.  **业绩异常触发器**：正式半年报全文公布后，若扣非归母净利润同比增速低于 **+10%**（显著偏离发电量增长逻辑），次日开盘无条件市价清仓。\n\n---\n\n## 四、 关键价格锚点与目标设定\n\n*   **入场区间**：27.65 – 27.90 元\n*   **目标价**：**29.20 元**（第一阶段止盈点 28.43 元）\n*   **止损价**：**27.50 元**\n\n---\n\n## 五、 风险 Claim 穿透审查与状态盘点\n\n*   **RISK-1（题材退潮延迟致横盘磨损与假突破）**：**已化解（Resolved）**。处置：设立10日时间止损线，并将加仓条件严格绑定为“连续2日站稳28.35元+成交量>9000万股”，彻底阻断假突破加仓风险。\n*   **RISK-2（半年报真空期与市场化电价折价）**：**已化解（Resolved）**。处置：上半年发电量+4.81%锁定基本盘，降息周期财务费用节约超7.5亿元形成对冲，设定扣非增速<10%清仓触发器。\n*   **RISK-3（超大单净流入依赖单一口径与ETF被动属性）**：**已化解（Resolved）**。处置：将初始建仓比例严格下调至25%底仓，不再将超大单作为重仓唯一论据，以右侧量价共振作为后续加仓确认。\n*   **RISK-4（极端缩量环境下止损滑点风险）**：**已化解（Resolved）**。处置：总持仓上限从60%压降至40%，并强制执行限价挂单与分笔TWAP止损指令。\n*   **RISK-5（存量博弈下红利资产流动性折价）**：**跟踪监控中（Unresolved/Monitoring）**。处置：全市场ETF净流入托底大盘蓝筹，维持低Beta配置定位，通过严格止损与止盈比例（RRR 3.70:1）吸收流动性贴水波动。\n\n---\n\n## 六、 风控委员会置信度评估\n\n*   **置信度评估**：**60 / 100**（低于75硬上限）\n    *   *定级依据*：基本面现金流与水文支撑扎实，下行空间有限；但受制于短线成长题材分流吸血、超大单口径不可跨源验证及半年报正式文本待验，定级为60，属于审慎可操作区间。\n\n---\n\n\n\n<!-- VERDICT: {\"direction\": \"偏多\", \"reason\": \"地量供给测试完成，严控仓位与时间止损防范磨损\"} -->",
+   "history": "Aggressive Analyst: ### 一、 进攻逻辑与收益弹性：把握供给枯竭下的极佳赔率\n\n站在追求绝对收益与Alpha超额回报的视角，长江电力（600900.SH）当前呈现出**“极端供给枯竭 + 均线生命线承托 + 主力逆势隐蔽吸筹”**的确定性进攻形态。过度保守主义将“均线死叉”与“短线题材活跃”误判为系统性风险，本质是对技术滞后信号与短期情绪噪音的过度反应，将承担严重的踏空与资金闲置机会成本。\n\n#### 1. 宏观与基本面双重驱动构筑向上不对称赔率\n- **宏观贴现率红利与类债溢价扩张**：在财政积极、国内降息周期的宏观背景下，长端无风险利率持续处于低位。公司带息负债结构持续优化（资产负债率降至57.33%），融资成本每下行25bps可节约利息支出超7.5亿元。\n- **基本面锁底与盈利杠杆释放**：六大梯级电站上半年总发电量同比增加4.81%（其中三峡偏丰28.74%），已锁定中报与前三季度业绩基本盘；2026Q1净利润现金含量高达173.21%，零化石燃料敞口使其完全免疫原材料通胀。业绩兑现确定性极高，下行空间被基本面硬底牢牢封死。\n\n#### 2. 微观量价与筹码结构：洗盘尾声的爆发前夜\n- **供给测试完成**：日成交量从前期2亿股峰值骤降至6,351万股（量比0.6），缩量约70%，表明浮筹与短期获利盘已基本出清，空头抛压逼近极限；\n- **主力逆势吸筹信号明确**：超大单资金逆势净流入+1.2943亿元，呈现典型的“散户被题材虹吸割肉、机构主力水下接筹”格局；\n- **赔率收益比极佳**：以27.96元基准入场，下行止损位设于50日均线支撑下沿27.50元（风险敞口仅-1.64%），上行目标直指29.20–29.35元（潜在收益+4.4%~+4.9%），**数学期望赔率高达2.70:1~3.0:1**。此等低风险、高胜率的右侧底吸机会不容错失。\n\n---\n\n### 二、 动态风控替代机械防守：以梯度执行驾驭波动\n\n机械防守往往因噎废食，而激进风控强调**“用精确的规则管理风险，用合理的敞口博取利润”**。交易员的执行方案通过多层动态风控机制，已将左侧回撤风险严格锁定：\n\n1. **分批建仓与价格带缓冲**：\n   - 第一批24%仓位在27.75–27.96元区间挂单，第二批16%仓位在27.60–27.75元低吸，严格贴合50日SMA（27.54元）生命线，将初始持仓综合成本压缩至支撑带核心。\n2. **右侧放量加仓逻辑（Trend Following）**：\n   - 绝不在左侧破位时盲目补仓，仅在日线收盘放量（>1亿股）突破28.35元（布林中轨）后顺势追加20%仓位至60%，确保重仓阶段完全处于右侧主升通道。\n3. **动态移动止损与锁盈（Trailing Stop）**：\n   - 一旦第一止盈位28.43元达成，立即减仓1/3并强制将剩余仓位止损线上移至28.00元成本线，彻底杜绝盈利单变为亏损单；\n   - 设定27.50元硬性日线收盘止损及盘中放量破位强平机制，最大单笔回撤严控在1.64%以内。\n\n---\n\n### 三、 核心执行风险定位与预算冲突\n\n当前执行方案最大的潜在风险在于**市场题材博弈情绪退潮延后，导致防御资产承接动能不足而引发时间磨损与假突破**。为此需确立首要监控claim。\nConservative Analyst: # 保守风控分析师：防守型深度审查报告\n\n## 长江电力（600900.SH）——本金安全与生存第一视角\n\n---\n\n## 一、焦点风险回应：RISK-1 题材退潮延迟与横盘磨损/假突破风险\n\n**激进方核心立论**：题材连板高度仅3板，退潮拐点临近，防御资金回流可期，构成明确催化剂时点。\n\n**我方逐层击穿**：\n\n### 1. \"题材退潮临近\"是一个不可证伪的模糊预判，不是可执行的风控锚点\n\n激进方将\"连板高度仅3板\"解读为\"退潮拐点临近\"，但这一推断犯了**将必要条件当充分条件**的逻辑错误。历史上A股题材炒作从3板发酵至7-8板高度的案例屡见不鲜（2024年低空经济、2025年人形机器人均从3板起步连续升级）。当前医药mRNA、苹果链、折叠屏等题材**尚处于分化初期而非衰竭末期**——多点开花恰恰说明市场正在寻找主线，一旦某一方向形成合力（如政策催化），连板高度可迅速攀升至5板以上，届时资金虹吸效应将进一步加剧而非缓解。\n\n**关键证据**：\n- 今日首板43只、2连板10只，题材广度仍在扩散而非收敛；\n- 创业板当日+1.43%，成长风格处于阶段性占优窗口；\n- 情绪分析明确定性：\"短线（1-2周）不宜追高建仓\"、\"公用事业板块资金被边缘化\"。\n\n**结论**：激进方对催化剂时点的预判缺乏硬性触发条件，属于主观愿望投射。若以此作为入场核心逻辑，等同于在**没有明确催化剂的情况下赌时间窗口**——这恰恰是保本型资金最不能承受的风险形态。\n\n### 2. 假突破风险被严重低估\n\n激进方将缩量解读为\"供给枯竭、洗盘完成\"，但**缩量的对立面解释同样成立且更危险**：\n\n- **缩量可能是多头动能衰竭的信号**：成交量从2亿股骤降至6351万股，下降幅度达68%，RSI仅48.41处于中性偏弱，MACD双线收敛于零轴附近——这组合指标完全可以解读为\"多头攻击动能不足、市场对该标的丧失短线兴趣\"；\n- **假突破的惩罚极不对称**：若价格在28.00-28.35元区间缩量反复试探后无法放量有效突破，将形成典型的\"蓄势失败→二次探底\"形态。一旦50日SMA（27.54元）在二次下探中被跌破，激进方40%仓位将直面破位止损，且止损出局后重新建仓需等待更低的价位确认——**时间成本与心理成本将远超-1.64%的账面亏损**；\n- **超大单净流入数据的可靠性存疑**：交易员自己已承认\"超大单净流入数据依赖东财单一口径，同花顺数据口径差异显著\"。以**单一不可交叉验证的数据源**作为\"主力吸筹\"的核心证据，在风控标准下不具备决策级可信度。\n\n### 3. 横盘磨损的隐性成本被完全忽视\n\n激进方计算了精确的赔率（2.70:1），但**完全遗漏了时间维度的机会成本**：\n- 若标的在27.60-28.35元区间横盘磨底2-3周（情绪分析的基准预期），40%资金被锁定在年化收益率为0的仓位中；\n- 同期大盘成长板块若继续轮动走强，持有防御标的的**相对收益亏损**可能远超绝对收益的潜在盈利；\n- 对于保本型资金而言，\"赚不到钱\"本身就是一种风险——它消耗了有限的交易窗口和心理耐受力。\n\n**RISK-1 裁定**：维持open状态。激进方未能提供题材退潮的硬性时间锚点或可观测触发信号，假突破与横盘磨损风险实质性存在。\n\n---\n\n## 二、宏观脆弱点穿透审查\n\n### 1. 美债利率飙升——被低估的跨境传导风险\n\n交易员设置了\"美债10年期收益率单日飙升超25bps\"的宏观触发器，看似完备，实则存在**阈值设置过高、反应滞后**的问题：\n\n- 当前美债10年期收益率已处于4.74%高位，国际对标公用事业（NEE月跌6.44%、SO月跌6.39%）已充分展示高利率环境对公用事业估值的杀伤力；\n- 美财政部扩大长期美债回购的操作本身就暗示**长端利率管理压力加大**。若8月底Jackson Hole会议或9月FOMC释放鹰派信号，美债利率可能以\"每日10-15bps持续攀升\"的温水煮蛙模式上行，**不触发25bps单日阈值却同样对全球高股息资产形成系统性压制**；\n- 人民币汇率在美元走强时面临贬值压力，北向资金（虽然交易员声称不引用）的实际流出行为会对大市值蓝筹造成边际抛压。\n\n**风控建议**：将美债触发器下调至**单日15bps或累计3日30bps**，增加\"温水煮蛙\"场景的覆盖。\n\n### 2. 国内流动性的结构性陷阱\n\n- 全市场成交量处于存量博弈格局，资金向题材股集中分流时，大市值防御标的的**流动性溢价反而下降**；\n- ETF累计净流入3676亿虽然总量充沛，但被动指数基金的配置行为是**均匀分散**的，对单一标的的边际推动力有限；\n- 若大盘日成交额持续维持在8000-9000亿元区间（存量博弈），长江电力的成交量可能进一步萎缩至5000万股以下，届时**流动性不足本身将成为风险**——大单进出的冲击成本显著放大。\n\n### 3. 大盘系统性风险的非线性尾部\n\n交易员设置了\"大盘单日下跌超2%立即清仓\"的熔断机制，但：\n- A股大盘单日跌幅超2%的事件往往伴随**跳空低开+流动性瞬间枯竭**，限价止损单可能无法按预期价格成交；\n- 长江电力虽为大市值标的，但在极端恐慌中（如2024年1月流动性危机），蓝筹龙头同样遭遇**错杀式抛售**，且跌幅可能在开盘瞬间即超过止损位。\n\n---\n\n## 三、基本面脆弱性与被忽视的尾部风险\n\n### 1. 半年报\"数据真空期\"的陷阱\n\n交易员引用\"上半年梯级发电量同比+4.81%\"作为基本面锚定，但需高度警惕：\n- 当前处于半年报正式披露期，**公司尚未发布正式半年报全文**。7月6日发布的仅为\"电量数据公告\"，不包含完整的利润表、现金流量表及资产负债表信息；\n- 电量增长+4.81%不等于利润同比增长4.81%——**电力市场化交易比例扩大**可能导致实际结算电价低于预期，量增价跌的情景完全可能出现；\n- 交易员自己已将\"半年报正式公告核心数据显著低于预期\"列为失效条件，这恰恰说明**当前基本面锚定存在尚未验证的数据空白**。\n\n### 2. 水文风险的非对称分布\n\n- 三峡偏丰28.74%是上半年数据，但三季度7-9月为汛期核心阶段，来水量的方差极大；\n- 2022年极端高温干旱导致四川水电出力骤降的教训仍历历在目——气候极端事件的频率和强度在全球变暖背景下呈上升趋势；\n- 虽然压力测试显示极端干旱（-20%）下现金流仍可维持，但**股价反映的是边际预期而非绝对底线**——若三季度来水数据同比转负，市场将对全年业绩预期进行下修定价，股价可能显著跌穿当前技术支撑位。\n\n### 3. 电价改革的灰犀牛\n\n- 国内电力现货市场建设加速推进，2025-2026年多省份电力现货市场已进入连续结算运行阶段；\n- 丰水期水电上网现货电价存在显著折价风险——四川、云南等水电大省在汛期已多次出现**现货电价跌至0.1元/度以下**的极端情况；\n- 虽然长江电力主力电站享受优先消纳和较高保障电价，但市场化交易比例的持续扩大将在中期维度**压缩其电价上行空间并增加电价波动性**。\n\n---\n\n## 四、防守型替代方案：严控敞口、抬高确认门槛\n\n### 4.1 对交易员方案的逐项修正\n\n| 维度 | 交易员方案 | 保守型修正方案 | 修正理由 |\n|------|-----------|---------------|----------|\n| **初始仓位** | 40% | **20%** | 在题材退潮时点不明、半年报未正式披露的数据真空期，保本型资金不应以超过1/5的敞口进行左侧试探 |\n| **加仓条件** | 放量突破28.35元+1亿股 | 放量突破28.35元 + **连续2日**收盘站稳 + 成交量连续2日>1亿股 | 单日放量突破的假突破概率极高（历史上A股布林中轨突破失败率超40%），必须用时间过滤噪音 |\n| **加仓幅度** | +20%至60% | **+10%至30%** | 单标的60%仓位对保本型账户构成毁灭性集中度风险 |\n| **止损位** | 27.50元（日线收盘） | **27.54元（50日SMA精确值，日线收盘）** | 50日SMA是交易员自己定义的\"生命线\"，跌破即意味着核心逻辑失效，不应给予额外4分钱的容忍度 |\n| **美债触发器** | 单日25bps | **单日15bps或累计3日30bps** | 防止\"温水煮蛙\"式利率上行绕过阈值 |\n| **最大持有期限** | 未设定 | **10个交易日**（若仍未突破28.35元则减仓至10%观察） | 控制横盘磨损的时间成本，防止资金被无限期锁定 |\n\n### 4.2 右侧确认的铁律门槛\n\n**禁止在以下条件未满足前建立超过20%的仓位**：\n1. 半年报正式全文披露且核心数据（营收、归母净利润、经营现金流）与电量公告一致（偏差<3%）；\n2. 日线成交量连续2日回升至8000万股以上（量比>1.0），确认增量资金入场；\n3. RSI(14)回升至50以上，MACD出现零轴上方金叉或柱状线由绿转红。\n\n### 4.3 黑天鹅紧急撤退预案\n\n| 黑天鹅场景 | 立即执行动作 |\n|-----------|-------------|\n| 三峡/向家坝入库流量周报数据同比转负超10% | 次日开盘减仓至10%，等待月度数据确认 |\n| 大盘单日下跌>1.5%（非2%，提前触发） | 当日尾盘前全部止损离场 |\n| 长江电力单日跌幅>3%（无论成交量） | 盘中市价止损，不等收盘 |\n| 半年报净利润同比增速<15%（vs Q1的30.5%） | 半年报发布次日全部清仓，重新评估 |\n\n---\n\n## 五、对激进方核心论点的逐项批判\n\n### 批判1：\"赔率2.70:1\"的数学幻觉\n\n赔率计算依赖两个脆弱假设：(a)止损位27.50元一定能精确执行；(b)目标位29.20元一定能到达。但：\n- 在极端缩量环境下（日成交6351万股），**大额止损单的市场冲击成本可能导致实际止损价低于27.50元**——以40%仓位、假设账户规模1000万元计算，400万元的市价止损在日成交不足2亿元的环境中可能造成5-10分钱的滑点，实际亏损可能达到-2.0%甚至更高；\n- 目标位29.20元对应的是布林上轨附近的密集套牢平台，在缺乏增量资金和明确催化剂的情况下，**价格在28.43元（前期反弹高点）即可能受阻回落**，实际到达29.20元的概率远低于激进方隐含的50%以上假设。\n\n### 批判2：\"超大单净流入=主力吸筹\"的因果谬误\n\n- 超大单净流入+1.2943亿元可能是**ETF被动配置的机械性买盘**（宽基ETF和红利ETF的日常申购），而非主动型机构的战略性建仓；\n- 被动配置资金的特征是**不择时、不择价**，不会在突破位追加买入，因此不能作为\"上行催化剂\"的证据；\n- 更重要的是，交易员已承认该数据为**单一数据源（东财）**，缺乏交叉验证——在风控标准下，单一不可验证的数据不应作为决策核心依据。\n\n### 批判3：\"均线死叉是滞后信号\"的选择性忽视\n\n激进方一方面声称均线死叉是滞后的无效信号（用于否定空头逻辑），另一方面又将50日SMA作为核心支撑位（用于支持多头逻辑）——**同一类技术指标不能选择性地采信有利面而否定不利面**。如果均线系统是滞后的，那么50日SMA的支撑同样可能是\"滞后的虚假安全感\"。\n\n---\n\n## 六、最终风控裁定\n\n### 综合置信度评估：50/100（低于交易员的65/100）\n\n**降级理由**：\n1. 催化剂时点不明确（题材退潮是主观预判，非客观信号）：-5分\n2. 半年报数据真空期的基本面验证缺失：-5分\n3. 超大单数据单一口径不可交叉验证：-3分\n4. 市场情绪明确定性为\"偏空\"，与做多方向形成直接矛盾：-2分\n\n### 最终建议\n\n**不反对做多方向，但强烈要求压降仓位至20%、抬高右侧确认门槛、设定最大持有时限。**\n\n在本金安全的最高原则下，当前标的的风险收益特征属于\"可参与但须严格限仓\"的范畴。基本面确实稳健，但短线技术面、情绪面、催化剂时点三重不确定性叠加，不支持以40%仓位进行左侧试探。正确的保本型策略是：**用最小的仓位试探方向，用右侧确认信号决定是否加码，用铁律止损保护本金。**\n\n---\nNeutral Analyst: ### 一、 焦点风险裁决与两方论据穿透（RISK-1 至 RISK-4）\n\n#### 1. 焦点回应：RISK-1（题材退潮延迟致横盘磨损与假突破）\n- **裁决**：**部分成立（Partially Resolved）**。\n- **穿透分析**：激进方将“3板高度”作为退潮拐点的依据确实存在主观线性外推的逻辑漏洞，保守方指出题材轮动扩散期（首板43家）易造成防御资产流动性持续“抽水”是客观事实。但保守方将“横盘磨损”定性为致命风险亦有过度防守之嫌：长江电力年化低波动特征（ATR降至0.48元）决定了其时间损耗成本显著低于高Beta资产。\n- **处置标准**：引入**时间止损与量价双重确认机制**，化解假突破与横盘磨损，不以单日脉冲作为右侧加仓依据。\n\n#### 2. 其余风险 Claims 穿透甄别\n- **RISK-2（半年报真空期与市场化电价折价）**：**已化解（Resolved）**。基本面分析已量化：水电无燃料成本，Q1净利率38.01%，利息支出同比下行覆盖度电微幅波动。上半年电量同比+4.81%已锁定利润基本盘，极端干旱压力测试下现金流仍超450亿元，基本面断崖风险极低。\n- **RISK-3（超大单净流入单一口径与ETF被动属性）**：**未解决（Unresolved）**。保守方质疑成立，东财单一口径超大单+1.29亿元确实无法排除宽基ETF被动配置特征，不能单独作为机构主动进攻的前瞻信号。\n- **RISK-4（缩量环境下大额市价止损滑点）**：**未解决（Unresolved）**。在日成交仅6351万股（约17.7亿元）背景下，若账户仓位过重（40%~60%），遇大盘跳水时集中市价止损将造成5~10BP的冲击成本。\n\n---\n\n### 二、 宏观变量与大类资产边际定价校准\n\n1. **美债与全球流动性**：美债10年期收益率处于4.74%高位，但国内长端国债利率维持低位（内外利差脱钩）。由于长江电力为纯内需公用事业且无外币负债，其折现率锚定国内LPR与国债收益率，海外高利率压制主要体现为北向外资情绪边际扰动，而非资产负债表实质冲击。\n2. **国内资金面与存量博弈**：全市场ETF持续净流入（3676亿元）托底大盘蓝筹，公用事业板块遭遇的是“风格轮动分流”而非“基本面出逃”。\n\n---\n\n### 三、 全天候自适应动态风控方案（折中执行矩阵）\n\n为平衡激进方的“高赔率捕捉”与保守方的“本金安全防守”，制定以下分级执行方案：\n\n```\n[初始状态：分歧磨底期] ──(初始建仓 25%)──► 挂单 27.65-27.90 元 (止损 27.50 元)\n                                │\n        ┌───────────────────────┴───────────────────────┐\n        ▼                                               ▼\n[触发右侧突破信号]                             [触发预警/时间止损]\n· 日收盘 > 28.35 元                             · 跌破 27.50 元 或 10日未突破\n· 连续 2 日成交量 > 9,000 万股                  · 宏观黑天鹅触发\n        │                                               │\n        ▼                                               ▼\n[加仓 +15% 至 40%]                             [减仓至 10% 或 全额清仓]\n```\n\n#### 1. 分阶段仓位预算分配与门槛\n- **第一阶段（底仓试探）**：**初始仓位 25%**（介于激进方40%与保守方20%之间）。\n  - *执行逻辑*：在 27.65–27.90 元区间分批限价挂单，杜绝市价追单。\n- **第二阶段（右侧确认加仓）**：**条件加仓 +15%，上限封顶 40%**（否决激进方60%集中度）。\n  - *触发门槛*：日线收盘价突破 28.35 元（布林中轨）且**连续2个交易日站稳**，同时日成交量放大至 9,000 万股以上（量比>1.2），确认增量配置资金入场。\n\n#### 2. 动态风险收益比（RRR）测算\n- **加权入场均价**：27.78 元\n- **硬性止损位**：27.50 元（日线收盘破位或盘中放量跌破），风险敞口 $\\Delta R = 27.78 - 27.50 = 0.28$ 元（-1.01%）。\n- **第一目标位**：28.43 元（减仓1/2，上移剩余仓位止损至27.80元保本），收益空间 $+0.65$ 元（+2.34%）。\n- **第二目标位**：29.20 元（出清剩余仓位），收益空间 $+1.42$ 元（+5.11%）。\n- **综合风险收益比**：\n  $$\\text{RRR} = \\frac{0.5 \\times 0.65 + 0.5 \\times 1.42}{0.28} = \\frac{1.035}{0.28} = \\mathbf{3.70 : 1} \\quad (> 2.0 : 1 \\text{ 阈值，具备显著正向数学期望})$$\n\n#### 3. 状态自适应切换与黑天鹅熔断机制\n\n| 市场/宏观状态 | 状态判定条件 | 仓位管理与风控动作 |\n| :--- | :--- | :--- |\n| **顺风进攻态** | 突破 28.35 元 + 成交量连续2日>9000万股 + 大盘题材退潮 | 允许执行第二批+15%加仓，总仓位升至40%，止损线上移至27.80元 |\n| **中性磨底态** | 价格在 27.60–28.35 元窄幅拉锯，量能 < 7000万股 | 维持 25% 底仓观察；**设定10个交易日时间窗口**，若未突破则主动降仓至10% |\n| **逆风防守态** | 日线收盘跌破 27.50 元 或 美债利率3日累升>30bps | **市价止损出局，仓位降为0**；进入至少3个交易日冷静期 |\n| **极端熔断态** | 大盘单日跌超 2.0% 或 半年报净利增速<10% | 立即清仓，无条件执行，规避非线性踩踏 |\n\n---",
+   "aggressive_history": "Aggressive Analyst: ### 一、 进攻逻辑与收益弹性：把握供给枯竭下的极佳赔率\n\n站在追求绝对收益与Alpha超额回报的视角，长江电力（600900.SH）当前呈现出**“极端供给枯竭 + 均线生命线承托 + 主力逆势隐蔽吸筹”**的确定性进攻形态。过度保守主义将“均线死叉”与“短线题材活跃”误判为系统性风险，本质是对技术滞后信号与短期情绪噪音的过度反应，将承担严重的踏空与资金闲置机会成本。\n\n#### 1. 宏观与基本面双重驱动构筑向上不对称赔率\n- **宏观贴现率红利与类债溢价扩张**：在财政积极、国内降息周期的宏观背景下，长端无风险利率持续处于低位。公司带息负债结构持续优化（资产负债率降至57.33%），融资成本每下行25bps可节约利息支出超7.5亿元。\n- **基本面锁底与盈利杠杆释放**：六大梯级电站上半年总发电量同比增加4.81%（其中三峡偏丰28.74%），已锁定中报与前三季度业绩基本盘；2026Q1净利润现金含量高达173.21%，零化石燃料敞口使其完全免疫原材料通胀。业绩兑现确定性极高，下行空间被基本面硬底牢牢封死。\n\n#### 2. 微观量价与筹码结构：洗盘尾声的爆发前夜\n- **供给测试完成**：日成交量从前期2亿股峰值骤降至6,351万股（量比0.6），缩量约70%，表明浮筹与短期获利盘已基本出清，空头抛压逼近极限；\n- **主力逆势吸筹信号明确**：超大单资金逆势净流入+1.2943亿元，呈现典型的“散户被题材虹吸割肉、机构主力水下接筹”格局；\n- **赔率收益比极佳**：以27.96元基准入场，下行止损位设于50日均线支撑下沿27.50元（风险敞口仅-1.64%），上行目标直指29.20–29.35元（潜在收益+4.4%~+4.9%），**数学期望赔率高达2.70:1~3.0:1**。此等低风险、高胜率的右侧底吸机会不容错失。\n\n---\n\n### 二、 动态风控替代机械防守：以梯度执行驾驭波动\n\n机械防守往往因噎废食，而激进风控强调**“用精确的规则管理风险，用合理的敞口博取利润”**。交易员的执行方案通过多层动态风控机制，已将左侧回撤风险严格锁定：\n\n1. **分批建仓与价格带缓冲**：\n   - 第一批24%仓位在27.75–27.96元区间挂单，第二批16%仓位在27.60–27.75元低吸，严格贴合50日SMA（27.54元）生命线，将初始持仓综合成本压缩至支撑带核心。\n2. **右侧放量加仓逻辑（Trend Following）**：\n   - 绝不在左侧破位时盲目补仓，仅在日线收盘放量（>1亿股）突破28.35元（布林中轨）后顺势追加20%仓位至60%，确保重仓阶段完全处于右侧主升通道。\n3. **动态移动止损与锁盈（Trailing Stop）**：\n   - 一旦第一止盈位28.43元达成，立即减仓1/3并强制将剩余仓位止损线上移至28.00元成本线，彻底杜绝盈利单变为亏损单；\n   - 设定27.50元硬性日线收盘止损及盘中放量破位强平机制，最大单笔回撤严控在1.64%以内。\n\n---\n\n### 三、 核心执行风险定位与预算冲突\n\n当前执行方案最大的潜在风险在于**市场题材博弈情绪退潮延后，导致防御资产承接动能不足而引发时间磨损与假突破**。为此需确立首要监控claim。",
+   "conservative_history": "Conservative Analyst: # 保守风控分析师：防守型深度审查报告\n\n## 长江电力（600900.SH）——本金安全与生存第一视角\n\n---\n\n## 一、焦点风险回应：RISK-1 题材退潮延迟与横盘磨损/假突破风险\n\n**激进方核心立论**：题材连板高度仅3板，退潮拐点临近，防御资金回流可期，构成明确催化剂时点。\n\n**我方逐层击穿**：\n\n### 1. \"题材退潮临近\"是一个不可证伪的模糊预判，不是可执行的风控锚点\n\n激进方将\"连板高度仅3板\"解读为\"退潮拐点临近\"，但这一推断犯了**将必要条件当充分条件**的逻辑错误。历史上A股题材炒作从3板发酵至7-8板高度的案例屡见不鲜（2024年低空经济、2025年人形机器人均从3板起步连续升级）。当前医药mRNA、苹果链、折叠屏等题材**尚处于分化初期而非衰竭末期**——多点开花恰恰说明市场正在寻找主线，一旦某一方向形成合力（如政策催化），连板高度可迅速攀升至5板以上，届时资金虹吸效应将进一步加剧而非缓解。\n\n**关键证据**：\n- 今日首板43只、2连板10只，题材广度仍在扩散而非收敛；\n- 创业板当日+1.43%，成长风格处于阶段性占优窗口；\n- 情绪分析明确定性：\"短线（1-2周）不宜追高建仓\"、\"公用事业板块资金被边缘化\"。\n\n**结论**：激进方对催化剂时点的预判缺乏硬性触发条件，属于主观愿望投射。若以此作为入场核心逻辑，等同于在**没有明确催化剂的情况下赌时间窗口**——这恰恰是保本型资金最不能承受的风险形态。\n\n### 2. 假突破风险被严重低估\n\n激进方将缩量解读为\"供给枯竭、洗盘完成\"，但**缩量的对立面解释同样成立且更危险**：\n\n- **缩量可能是多头动能衰竭的信号**：成交量从2亿股骤降至6351万股，下降幅度达68%，RSI仅48.41处于中性偏弱，MACD双线收敛于零轴附近——这组合指标完全可以解读为\"多头攻击动能不足、市场对该标的丧失短线兴趣\"；\n- **假突破的惩罚极不对称**：若价格在28.00-28.35元区间缩量反复试探后无法放量有效突破，将形成典型的\"蓄势失败→二次探底\"形态。一旦50日SMA（27.54元）在二次下探中被跌破，激进方40%仓位将直面破位止损，且止损出局后重新建仓需等待更低的价位确认——**时间成本与心理成本将远超-1.64%的账面亏损**；\n- **超大单净流入数据的可靠性存疑**：交易员自己已承认\"超大单净流入数据依赖东财单一口径，同花顺数据口径差异显著\"。以**单一不可交叉验证的数据源**作为\"主力吸筹\"的核心证据，在风控标准下不具备决策级可信度。\n\n### 3. 横盘磨损的隐性成本被完全忽视\n\n激进方计算了精确的赔率（2.70:1），但**完全遗漏了时间维度的机会成本**：\n- 若标的在27.60-28.35元区间横盘磨底2-3周（情绪分析的基准预期），40%资金被锁定在年化收益率为0的仓位中；\n- 同期大盘成长板块若继续轮动走强，持有防御标的的**相对收益亏损**可能远超绝对收益的潜在盈利；\n- 对于保本型资金而言，\"赚不到钱\"本身就是一种风险——它消耗了有限的交易窗口和心理耐受力。\n\n**RISK-1 裁定**：维持open状态。激进方未能提供题材退潮的硬性时间锚点或可观测触发信号，假突破与横盘磨损风险实质性存在。\n\n---\n\n## 二、宏观脆弱点穿透审查\n\n### 1. 美债利率飙升——被低估的跨境传导风险\n\n交易员设置了\"美债10年期收益率单日飙升超25bps\"的宏观触发器，看似完备，实则存在**阈值设置过高、反应滞后**的问题：\n\n- 当前美债10年期收益率已处于4.74%高位，国际对标公用事业（NEE月跌6.44%、SO月跌6.39%）已充分展示高利率环境对公用事业估值的杀伤力；\n- 美财政部扩大长期美债回购的操作本身就暗示**长端利率管理压力加大**。若8月底Jackson Hole会议或9月FOMC释放鹰派信号，美债利率可能以\"每日10-15bps持续攀升\"的温水煮蛙模式上行，**不触发25bps单日阈值却同样对全球高股息资产形成系统性压制**；\n- 人民币汇率在美元走强时面临贬值压力，北向资金（虽然交易员声称不引用）的实际流出行为会对大市值蓝筹造成边际抛压。\n\n**风控建议**：将美债触发器下调至**单日15bps或累计3日30bps**，增加\"温水煮蛙\"场景的覆盖。\n\n### 2. 国内流动性的结构性陷阱\n\n- 全市场成交量处于存量博弈格局，资金向题材股集中分流时，大市值防御标的的**流动性溢价反而下降**；\n- ETF累计净流入3676亿虽然总量充沛，但被动指数基金的配置行为是**均匀分散**的，对单一标的的边际推动力有限；\n- 若大盘日成交额持续维持在8000-9000亿元区间（存量博弈），长江电力的成交量可能进一步萎缩至5000万股以下，届时**流动性不足本身将成为风险**——大单进出的冲击成本显著放大。\n\n### 3. 大盘系统性风险的非线性尾部\n\n交易员设置了\"大盘单日下跌超2%立即清仓\"的熔断机制，但：\n- A股大盘单日跌幅超2%的事件往往伴随**跳空低开+流动性瞬间枯竭**，限价止损单可能无法按预期价格成交；\n- 长江电力虽为大市值标的，但在极端恐慌中（如2024年1月流动性危机），蓝筹龙头同样遭遇**错杀式抛售**，且跌幅可能在开盘瞬间即超过止损位。\n\n---\n\n## 三、基本面脆弱性与被忽视的尾部风险\n\n### 1. 半年报\"数据真空期\"的陷阱\n\n交易员引用\"上半年梯级发电量同比+4.81%\"作为基本面锚定，但需高度警惕：\n- 当前处于半年报正式披露期，**公司尚未发布正式半年报全文**。7月6日发布的仅为\"电量数据公告\"，不包含完整的利润表、现金流量表及资产负债表信息；\n- 电量增长+4.81%不等于利润同比增长4.81%——**电力市场化交易比例扩大**可能导致实际结算电价低于预期，量增价跌的情景完全可能出现；\n- 交易员自己已将\"半年报正式公告核心数据显著低于预期\"列为失效条件，这恰恰说明**当前基本面锚定存在尚未验证的数据空白**。\n\n### 2. 水文风险的非对称分布\n\n- 三峡偏丰28.74%是上半年数据，但三季度7-9月为汛期核心阶段，来水量的方差极大；\n- 2022年极端高温干旱导致四川水电出力骤降的教训仍历历在目——气候极端事件的频率和强度在全球变暖背景下呈上升趋势；\n- 虽然压力测试显示极端干旱（-20%）下现金流仍可维持，但**股价反映的是边际预期而非绝对底线**——若三季度来水数据同比转负，市场将对全年业绩预期进行下修定价，股价可能显著跌穿当前技术支撑位。\n\n### 3. 电价改革的灰犀牛\n\n- 国内电力现货市场建设加速推进，2025-2026年多省份电力现货市场已进入连续结算运行阶段；\n- 丰水期水电上网现货电价存在显著折价风险——四川、云南等水电大省在汛期已多次出现**现货电价跌至0.1元/度以下**的极端情况；\n- 虽然长江电力主力电站享受优先消纳和较高保障电价，但市场化交易比例的持续扩大将在中期维度**压缩其电价上行空间并增加电价波动性**。\n\n---\n\n## 四、防守型替代方案：严控敞口、抬高确认门槛\n\n### 4.1 对交易员方案的逐项修正\n\n| 维度 | 交易员方案 | 保守型修正方案 | 修正理由 |\n|------|-----------|---------------|----------|\n| **初始仓位** | 40% | **20%** | 在题材退潮时点不明、半年报未正式披露的数据真空期，保本型资金不应以超过1/5的敞口进行左侧试探 |\n| **加仓条件** | 放量突破28.35元+1亿股 | 放量突破28.35元 + **连续2日**收盘站稳 + 成交量连续2日>1亿股 | 单日放量突破的假突破概率极高（历史上A股布林中轨突破失败率超40%），必须用时间过滤噪音 |\n| **加仓幅度** | +20%至60% | **+10%至30%** | 单标的60%仓位对保本型账户构成毁灭性集中度风险 |\n| **止损位** | 27.50元（日线收盘） | **27.54元（50日SMA精确值，日线收盘）** | 50日SMA是交易员自己定义的\"生命线\"，跌破即意味着核心逻辑失效，不应给予额外4分钱的容忍度 |\n| **美债触发器** | 单日25bps | **单日15bps或累计3日30bps** | 防止\"温水煮蛙\"式利率上行绕过阈值 |\n| **最大持有期限** | 未设定 | **10个交易日**（若仍未突破28.35元则减仓至10%观察） | 控制横盘磨损的时间成本，防止资金被无限期锁定 |\n\n### 4.2 右侧确认的铁律门槛\n\n**禁止在以下条件未满足前建立超过20%的仓位**：\n1. 半年报正式全文披露且核心数据（营收、归母净利润、经营现金流）与电量公告一致（偏差<3%）；\n2. 日线成交量连续2日回升至8000万股以上（量比>1.0），确认增量资金入场；\n3. RSI(14)回升至50以上，MACD出现零轴上方金叉或柱状线由绿转红。\n\n### 4.3 黑天鹅紧急撤退预案\n\n| 黑天鹅场景 | 立即执行动作 |\n|-----------|-------------|\n| 三峡/向家坝入库流量周报数据同比转负超10% | 次日开盘减仓至10%，等待月度数据确认 |\n| 大盘单日下跌>1.5%（非2%，提前触发） | 当日尾盘前全部止损离场 |\n| 长江电力单日跌幅>3%（无论成交量） | 盘中市价止损，不等收盘 |\n| 半年报净利润同比增速<15%（vs Q1的30.5%） | 半年报发布次日全部清仓，重新评估 |\n\n---\n\n## 五、对激进方核心论点的逐项批判\n\n### 批判1：\"赔率2.70:1\"的数学幻觉\n\n赔率计算依赖两个脆弱假设：(a)止损位27.50元一定能精确执行；(b)目标位29.20元一定能到达。但：\n- 在极端缩量环境下（日成交6351万股），**大额止损单的市场冲击成本可能导致实际止损价低于27.50元**——以40%仓位、假设账户规模1000万元计算，400万元的市价止损在日成交不足2亿元的环境中可能造成5-10分钱的滑点，实际亏损可能达到-2.0%甚至更高；\n- 目标位29.20元对应的是布林上轨附近的密集套牢平台，在缺乏增量资金和明确催化剂的情况下，**价格在28.43元（前期反弹高点）即可能受阻回落**，实际到达29.20元的概率远低于激进方隐含的50%以上假设。\n\n### 批判2：\"超大单净流入=主力吸筹\"的因果谬误\n\n- 超大单净流入+1.2943亿元可能是**ETF被动配置的机械性买盘**（宽基ETF和红利ETF的日常申购），而非主动型机构的战略性建仓；\n- 被动配置资金的特征是**不择时、不择价**，不会在突破位追加买入，因此不能作为\"上行催化剂\"的证据；\n- 更重要的是，交易员已承认该数据为**单一数据源（东财）**，缺乏交叉验证——在风控标准下，单一不可验证的数据不应作为决策核心依据。\n\n### 批判3：\"均线死叉是滞后信号\"的选择性忽视\n\n激进方一方面声称均线死叉是滞后的无效信号（用于否定空头逻辑），另一方面又将50日SMA作为核心支撑位（用于支持多头逻辑）——**同一类技术指标不能选择性地采信有利面而否定不利面**。如果均线系统是滞后的，那么50日SMA的支撑同样可能是\"滞后的虚假安全感\"。\n\n---\n\n## 六、最终风控裁定\n\n### 综合置信度评估：50/100（低于交易员的65/100）\n\n**降级理由**：\n1. 催化剂时点不明确（题材退潮是主观预判，非客观信号）：-5分\n2. 半年报数据真空期的基本面验证缺失：-5分\n3. 超大单数据单一口径不可交叉验证：-3分\n4. 市场情绪明确定性为\"偏空\"，与做多方向形成直接矛盾：-2分\n\n### 最终建议\n\n**不反对做多方向，但强烈要求压降仓位至20%、抬高右侧确认门槛、设定最大持有时限。**\n\n在本金安全的最高原则下，当前标的的风险收益特征属于\"可参与但须严格限仓\"的范畴。基本面确实稳健，但短线技术面、情绪面、催化剂时点三重不确定性叠加，不支持以40%仓位进行左侧试探。正确的保本型策略是：**用最小的仓位试探方向，用右侧确认信号决定是否加码，用铁律止损保护本金。**\n\n---",
+   "neutral_history": "Neutral Analyst: ### 一、 焦点风险裁决与两方论据穿透（RISK-1 至 RISK-4）\n\n#### 1. 焦点回应：RISK-1（题材退潮延迟致横盘磨损与假突破）\n- **裁决**：**部分成立（Partially Resolved）**。\n- **穿透分析**：激进方将“3板高度”作为退潮拐点的依据确实存在主观线性外推的逻辑漏洞，保守方指出题材轮动扩散期（首板43家）易造成防御资产流动性持续“抽水”是客观事实。但保守方将“横盘磨损”定性为致命风险亦有过度防守之嫌：长江电力年化低波动特征（ATR降至0.48元）决定了其时间损耗成本显著低于高Beta资产。\n- **处置标准**：引入**时间止损与量价双重确认机制**，化解假突破与横盘磨损，不以单日脉冲作为右侧加仓依据。\n\n#### 2. 其余风险 Claims 穿透甄别\n- **RISK-2（半年报真空期与市场化电价折价）**：**已化解（Resolved）**。基本面分析已量化：水电无燃料成本，Q1净利率38.01%，利息支出同比下行覆盖度电微幅波动。上半年电量同比+4.81%已锁定利润基本盘，极端干旱压力测试下现金流仍超450亿元，基本面断崖风险极低。\n- **RISK-3（超大单净流入单一口径与ETF被动属性）**：**未解决（Unresolved）**。保守方质疑成立，东财单一口径超大单+1.29亿元确实无法排除宽基ETF被动配置特征，不能单独作为机构主动进攻的前瞻信号。\n- **RISK-4（缩量环境下大额市价止损滑点）**：**未解决（Unresolved）**。在日成交仅6351万股（约17.7亿元）背景下，若账户仓位过重（40%~60%），遇大盘跳水时集中市价止损将造成5~10BP的冲击成本。\n\n---\n\n### 二、 宏观变量与大类资产边际定价校准\n\n1. **美债与全球流动性**：美债10年期收益率处于4.74%高位，但国内长端国债利率维持低位（内外利差脱钩）。由于长江电力为纯内需公用事业且无外币负债，其折现率锚定国内LPR与国债收益率，海外高利率压制主要体现为北向外资情绪边际扰动，而非资产负债表实质冲击。\n2. **国内资金面与存量博弈**：全市场ETF持续净流入（3676亿元）托底大盘蓝筹，公用事业板块遭遇的是“风格轮动分流”而非“基本面出逃”。\n\n---\n\n### 三、 全天候自适应动态风控方案（折中执行矩阵）\n\n为平衡激进方的“高赔率捕捉”与保守方的“本金安全防守”，制定以下分级执行方案：\n\n```\n[初始状态：分歧磨底期] ──(初始建仓 25%)──► 挂单 27.65-27.90 元 (止损 27.50 元)\n                                │\n        ┌───────────────────────┴───────────────────────┐\n        ▼                                               ▼\n[触发右侧突破信号]                             [触发预警/时间止损]\n· 日收盘 > 28.35 元                             · 跌破 27.50 元 或 10日未突破\n· 连续 2 日成交量 > 9,000 万股                  · 宏观黑天鹅触发\n        │                                               │\n        ▼                                               ▼\n[加仓 +15% 至 40%]                             [减仓至 10% 或 全额清仓]\n```\n\n#### 1. 分阶段仓位预算分配与门槛\n- **第一阶段（底仓试探）**：**初始仓位 25%**（介于激进方40%与保守方20%之间）。\n  - *执行逻辑*：在 27.65–27.90 元区间分批限价挂单，杜绝市价追单。\n- **第二阶段（右侧确认加仓）**：**条件加仓 +15%，上限封顶 40%**（否决激进方60%集中度）。\n  - *触发门槛*：日线收盘价突破 28.35 元（布林中轨）且**连续2个交易日站稳**，同时日成交量放大至 9,000 万股以上（量比>1.2），确认增量配置资金入场。\n\n#### 2. 动态风险收益比（RRR）测算\n- **加权入场均价**：27.78 元\n- **硬性止损位**：27.50 元（日线收盘破位或盘中放量跌破），风险敞口 $\\Delta R = 27.78 - 27.50 = 0.28$ 元（-1.01%）。\n- **第一目标位**：28.43 元（减仓1/2，上移剩余仓位止损至27.80元保本），收益空间 $+0.65$ 元（+2.34%）。\n- **第二目标位**：29.20 元（出清剩余仓位），收益空间 $+1.42$ 元（+5.11%）。\n- **综合风险收益比**：\n  $$\\text{RRR} = \\frac{0.5 \\times 0.65 + 0.5 \\times 1.42}{0.28} = \\frac{1.035}{0.28} = \\mathbf{3.70 : 1} \\quad (> 2.0 : 1 \\text{ 阈值，具备显著正向数学期望})$$\n\n#### 3. 状态自适应切换与黑天鹅熔断机制\n\n| 市场/宏观状态 | 状态判定条件 | 仓位管理与风控动作 |\n| :--- | :--- | :--- |\n| **顺风进攻态** | 突破 28.35 元 + 成交量连续2日>9000万股 + 大盘题材退潮 | 允许执行第二批+15%加仓，总仓位升至40%，止损线上移至27.80元 |\n| **中性磨底态** | 价格在 27.60–28.35 元窄幅拉锯，量能 < 7000万股 | 维持 25% 底仓观察；**设定10个交易日时间窗口**，若未突破则主动降仓至10% |\n| **逆风防守态** | 日线收盘跌破 27.50 元 或 美债利率3日累升>30bps | **市价止损出局，仓位降为0**；进入至少3个交易日冷静期 |\n| **极端熔断态** | 大盘单日跌超 2.0% 或 半年报净利增速<10% | 立即清仓，无条件执行，规避非线性踩踏 |\n\n---",
+   "latest_speaker": "Judge",
+   "current_aggressive_response": "Aggressive Analyst: ### 一、 进攻逻辑与收益弹性：把握供给枯竭下的极佳赔率\n\n站在追求绝对收益与Alpha超额回报的视角，长江电力（600900.SH）当前呈现出**“极端供给枯竭 + 均线生命线承托 + 主力逆势隐蔽吸筹”**的确定性进攻形态。过度保守主义将“均线死叉”与“短线题材活跃”误判为系统性风险，本质是对技术滞后信号与短期情绪噪音的过度反应，将承担严重的踏空与资金闲置机会成本。\n\n#### 1. 宏观与基本面双重驱动构筑向上不对称赔率\n- **宏观贴现率红利与类债溢价扩张**：在财政积极、国内降息周期的宏观背景下，长端无风险利率持续处于低位。公司带息负债结构持续优化（资产负债率降至57.33%），融资成本每下行25bps可节约利息支出超7.5亿元。\n- **基本面锁底与盈利杠杆释放**：六大梯级电站上半年总发电量同比增加4.81%（其中三峡偏丰28.74%），已锁定中报与前三季度业绩基本盘；2026Q1净利润现金含量高达173.21%，零化石燃料敞口使其完全免疫原材料通胀。业绩兑现确定性极高，下行空间被基本面硬底牢牢封死。\n\n#### 2. 微观量价与筹码结构：洗盘尾声的爆发前夜\n- **供给测试完成**：日成交量从前期2亿股峰值骤降至6,351万股（量比0.6），缩量约70%，表明浮筹与短期获利盘已基本出清，空头抛压逼近极限；\n- **主力逆势吸筹信号明确**：超大单资金逆势净流入+1.2943亿元，呈现典型的“散户被题材虹吸割肉、机构主力水下接筹”格局；\n- **赔率收益比极佳**：以27.96元基准入场，下行止损位设于50日均线支撑下沿27.50元（风险敞口仅-1.64%），上行目标直指29.20–29.35元（潜在收益+4.4%~+4.9%），**数学期望赔率高达2.70:1~3.0:1**。此等低风险、高胜率的右侧底吸机会不容错失。\n\n---\n\n### 二、 动态风控替代机械防守：以梯度执行驾驭波动\n\n机械防守往往因噎废食，而激进风控强调**“用精确的规则管理风险，用合理的敞口博取利润”**。交易员的执行方案通过多层动态风控机制，已将左侧回撤风险严格锁定：\n\n1. **分批建仓与价格带缓冲**：\n   - 第一批24%仓位在27.75–27.96元区间挂单，第二批16%仓位在27.60–27.75元低吸，严格贴合50日SMA（27.54元）生命线，将初始持仓综合成本压缩至支撑带核心。\n2. **右侧放量加仓逻辑（Trend Following）**：\n   - 绝不在左侧破位时盲目补仓，仅在日线收盘放量（>1亿股）突破28.35元（布林中轨）后顺势追加20%仓位至60%，确保重仓阶段完全处于右侧主升通道。\n3. **动态移动止损与锁盈（Trailing Stop）**：\n   - 一旦第一止盈位28.43元达成，立即减仓1/3并强制将剩余仓位止损线上移至28.00元成本线，彻底杜绝盈利单变为亏损单；\n   - 设定27.50元硬性日线收盘止损及盘中放量破位强平机制，最大单笔回撤严控在1.64%以内。\n\n---\n\n### 三、 核心执行风险定位与预算冲突\n\n当前执行方案最大的潜在风险在于**市场题材博弈情绪退潮延后，导致防御资产承接动能不足而引发时间磨损与假突破**。为此需确立首要监控claim。",
+   "current_conservative_response": "Conservative Analyst: # 保守风控分析师：防守型深度审查报告\n\n## 长江电力（600900.SH）——本金安全与生存第一视角\n\n---\n\n## 一、焦点风险回应：RISK-1 题材退潮延迟与横盘磨损/假突破风险\n\n**激进方核心立论**：题材连板高度仅3板，退潮拐点临近，防御资金回流可期，构成明确催化剂时点。\n\n**我方逐层击穿**：\n\n### 1. \"题材退潮临近\"是一个不可证伪的模糊预判，不是可执行的风控锚点\n\n激进方将\"连板高度仅3板\"解读为\"退潮拐点临近\"，但这一推断犯了**将必要条件当充分条件**的逻辑错误。历史上A股题材炒作从3板发酵至7-8板高度的案例屡见不鲜（2024年低空经济、2025年人形机器人均从3板起步连续升级）。当前医药mRNA、苹果链、折叠屏等题材**尚处于分化初期而非衰竭末期**——多点开花恰恰说明市场正在寻找主线，一旦某一方向形成合力（如政策催化），连板高度可迅速攀升至5板以上，届时资金虹吸效应将进一步加剧而非缓解。\n\n**关键证据**：\n- 今日首板43只、2连板10只，题材广度仍在扩散而非收敛；\n- 创业板当日+1.43%，成长风格处于阶段性占优窗口；\n- 情绪分析明确定性：\"短线（1-2周）不宜追高建仓\"、\"公用事业板块资金被边缘化\"。\n\n**结论**：激进方对催化剂时点的预判缺乏硬性触发条件，属于主观愿望投射。若以此作为入场核心逻辑，等同于在**没有明确催化剂的情况下赌时间窗口**——这恰恰是保本型资金最不能承受的风险形态。\n\n### 2. 假突破风险被严重低估\n\n激进方将缩量解读为\"供给枯竭、洗盘完成\"，但**缩量的对立面解释同样成立且更危险**：\n\n- **缩量可能是多头动能衰竭的信号**：成交量从2亿股骤降至6351万股，下降幅度达68%，RSI仅48.41处于中性偏弱，MACD双线收敛于零轴附近——这组合指标完全可以解读为\"多头攻击动能不足、市场对该标的丧失短线兴趣\"；\n- **假突破的惩罚极不对称**：若价格在28.00-28.35元区间缩量反复试探后无法放量有效突破，将形成典型的\"蓄势失败→二次探底\"形态。一旦50日SMA（27.54元）在二次下探中被跌破，激进方40%仓位将直面破位止损，且止损出局后重新建仓需等待更低的价位确认——**时间成本与心理成本将远超-1.64%的账面亏损**；\n- **超大单净流入数据的可靠性存疑**：交易员自己已承认\"超大单净流入数据依赖东财单一口径，同花顺数据口径差异显著\"。以**单一不可交叉验证的数据源**作为\"主力吸筹\"的核心证据，在风控标准下不具备决策级可信度。\n\n### 3. 横盘磨损的隐性成本被完全忽视\n\n激进方计算了精确的赔率（2.70:1），但**完全遗漏了时间维度的机会成本**：\n- 若标的在27.60-28.35元区间横盘磨底2-3周（情绪分析的基准预期），40%资金被锁定在年化收益率为0的仓位中；\n- 同期大盘成长板块若继续轮动走强，持有防御标的的**相对收益亏损**可能远超绝对收益的潜在盈利；\n- 对于保本型资金而言，\"赚不到钱\"本身就是一种风险——它消耗了有限的交易窗口和心理耐受力。\n\n**RISK-1 裁定**：维持open状态。激进方未能提供题材退潮的硬性时间锚点或可观测触发信号，假突破与横盘磨损风险实质性存在。\n\n---\n\n## 二、宏观脆弱点穿透审查\n\n### 1. 美债利率飙升——被低估的跨境传导风险\n\n交易员设置了\"美债10年期收益率单日飙升超25bps\"的宏观触发器，看似完备，实则存在**阈值设置过高、反应滞后**的问题：\n\n- 当前美债10年期收益率已处于4.74%高位，国际对标公用事业（NEE月跌6.44%、SO月跌6.39%）已充分展示高利率环境对公用事业估值的杀伤力；\n- 美财政部扩大长期美债回购的操作本身就暗示**长端利率管理压力加大**。若8月底Jackson Hole会议或9月FOMC释放鹰派信号，美债利率可能以\"每日10-15bps持续攀升\"的温水煮蛙模式上行，**不触发25bps单日阈值却同样对全球高股息资产形成系统性压制**；\n- 人民币汇率在美元走强时面临贬值压力，北向资金（虽然交易员声称不引用）的实际流出行为会对大市值蓝筹造成边际抛压。\n\n**风控建议**：将美债触发器下调至**单日15bps或累计3日30bps**，增加\"温水煮蛙\"场景的覆盖。\n\n### 2. 国内流动性的结构性陷阱\n\n- 全市场成交量处于存量博弈格局，资金向题材股集中分流时，大市值防御标的的**流动性溢价反而下降**；\n- ETF累计净流入3676亿虽然总量充沛，但被动指数基金的配置行为是**均匀分散**的，对单一标的的边际推动力有限；\n- 若大盘日成交额持续维持在8000-9000亿元区间（存量博弈），长江电力的成交量可能进一步萎缩至5000万股以下，届时**流动性不足本身将成为风险**——大单进出的冲击成本显著放大。\n\n### 3. 大盘系统性风险的非线性尾部\n\n交易员设置了\"大盘单日下跌超2%立即清仓\"的熔断机制，但：\n- A股大盘单日跌幅超2%的事件往往伴随**跳空低开+流动性瞬间枯竭**，限价止损单可能无法按预期价格成交；\n- 长江电力虽为大市值标的，但在极端恐慌中（如2024年1月流动性危机），蓝筹龙头同样遭遇**错杀式抛售**，且跌幅可能在开盘瞬间即超过止损位。\n\n---\n\n## 三、基本面脆弱性与被忽视的尾部风险\n\n### 1. 半年报\"数据真空期\"的陷阱\n\n交易员引用\"上半年梯级发电量同比+4.81%\"作为基本面锚定，但需高度警惕：\n- 当前处于半年报正式披露期，**公司尚未发布正式半年报全文**。7月6日发布的仅为\"电量数据公告\"，不包含完整的利润表、现金流量表及资产负债表信息；\n- 电量增长+4.81%不等于利润同比增长4.81%——**电力市场化交易比例扩大**可能导致实际结算电价低于预期，量增价跌的情景完全可能出现；\n- 交易员自己已将\"半年报正式公告核心数据显著低于预期\"列为失效条件，这恰恰说明**当前基本面锚定存在尚未验证的数据空白**。\n\n### 2. 水文风险的非对称分布\n\n- 三峡偏丰28.74%是上半年数据，但三季度7-9月为汛期核心阶段，来水量的方差极大；\n- 2022年极端高温干旱导致四川水电出力骤降的教训仍历历在目——气候极端事件的频率和强度在全球变暖背景下呈上升趋势；\n- 虽然压力测试显示极端干旱（-20%）下现金流仍可维持，但**股价反映的是边际预期而非绝对底线**——若三季度来水数据同比转负，市场将对全年业绩预期进行下修定价，股价可能显著跌穿当前技术支撑位。\n\n### 3. 电价改革的灰犀牛\n\n- 国内电力现货市场建设加速推进，2025-2026年多省份电力现货市场已进入连续结算运行阶段；\n- 丰水期水电上网现货电价存在显著折价风险——四川、云南等水电大省在汛期已多次出现**现货电价跌至0.1元/度以下**的极端情况；\n- 虽然长江电力主力电站享受优先消纳和较高保障电价，但市场化交易比例的持续扩大将在中期维度**压缩其电价上行空间并增加电价波动性**。\n\n---\n\n## 四、防守型替代方案：严控敞口、抬高确认门槛\n\n### 4.1 对交易员方案的逐项修正\n\n| 维度 | 交易员方案 | 保守型修正方案 | 修正理由 |\n|------|-----------|---------------|----------|\n| **初始仓位** | 40% | **20%** | 在题材退潮时点不明、半年报未正式披露的数据真空期，保本型资金不应以超过1/5的敞口进行左侧试探 |\n| **加仓条件** | 放量突破28.35元+1亿股 | 放量突破28.35元 + **连续2日**收盘站稳 + 成交量连续2日>1亿股 | 单日放量突破的假突破概率极高（历史上A股布林中轨突破失败率超40%），必须用时间过滤噪音 |\n| **加仓幅度** | +20%至60% | **+10%至30%** | 单标的60%仓位对保本型账户构成毁灭性集中度风险 |\n| **止损位** | 27.50元（日线收盘） | **27.54元（50日SMA精确值，日线收盘）** | 50日SMA是交易员自己定义的\"生命线\"，跌破即意味着核心逻辑失效，不应给予额外4分钱的容忍度 |\n| **美债触发器** | 单日25bps | **单日15bps或累计3日30bps** | 防止\"温水煮蛙\"式利率上行绕过阈值 |\n| **最大持有期限** | 未设定 | **10个交易日**（若仍未突破28.35元则减仓至10%观察） | 控制横盘磨损的时间成本，防止资金被无限期锁定 |\n\n### 4.2 右侧确认的铁律门槛\n\n**禁止在以下条件未满足前建立超过20%的仓位**：\n1. 半年报正式全文披露且核心数据（营收、归母净利润、经营现金流）与电量公告一致（偏差<3%）；\n2. 日线成交量连续2日回升至8000万股以上（量比>1.0），确认增量资金入场；\n3. RSI(14)回升至50以上，MACD出现零轴上方金叉或柱状线由绿转红。\n\n### 4.3 黑天鹅紧急撤退预案\n\n| 黑天鹅场景 | 立即执行动作 |\n|-----------|-------------|\n| 三峡/向家坝入库流量周报数据同比转负超10% | 次日开盘减仓至10%，等待月度数据确认 |\n| 大盘单日下跌>1.5%（非2%，提前触发） | 当日尾盘前全部止损离场 |\n| 长江电力单日跌幅>3%（无论成交量） | 盘中市价止损，不等收盘 |\n| 半年报净利润同比增速<15%（vs Q1的30.5%） | 半年报发布次日全部清仓，重新评估 |\n\n---\n\n## 五、对激进方核心论点的逐项批判\n\n### 批判1：\"赔率2.70:1\"的数学幻觉\n\n赔率计算依赖两个脆弱假设：(a)止损位27.50元一定能精确执行；(b)目标位29.20元一定能到达。但：\n- 在极端缩量环境下（日成交6351万股），**大额止损单的市场冲击成本可能导致实际止损价低于27.50元**——以40%仓位、假设账户规模1000万元计算，400万元的市价止损在日成交不足2亿元的环境中可能造成5-10分钱的滑点，实际亏损可能达到-2.0%甚至更高；\n- 目标位29.20元对应的是布林上轨附近的密集套牢平台，在缺乏增量资金和明确催化剂的情况下，**价格在28.43元（前期反弹高点）即可能受阻回落**，实际到达29.20元的概率远低于激进方隐含的50%以上假设。\n\n### 批判2：\"超大单净流入=主力吸筹\"的因果谬误\n\n- 超大单净流入+1.2943亿元可能是**ETF被动配置的机械性买盘**（宽基ETF和红利ETF的日常申购），而非主动型机构的战略性建仓；\n- 被动配置资金的特征是**不择时、不择价**，不会在突破位追加买入，因此不能作为\"上行催化剂\"的证据；\n- 更重要的是，交易员已承认该数据为**单一数据源（东财）**，缺乏交叉验证——在风控标准下，单一不可验证的数据不应作为决策核心依据。\n\n### 批判3：\"均线死叉是滞后信号\"的选择性忽视\n\n激进方一方面声称均线死叉是滞后的无效信号（用于否定空头逻辑），另一方面又将50日SMA作为核心支撑位（用于支持多头逻辑）——**同一类技术指标不能选择性地采信有利面而否定不利面**。如果均线系统是滞后的，那么50日SMA的支撑同样可能是\"滞后的虚假安全感\"。\n\n---\n\n## 六、最终风控裁定\n\n### 综合置信度评估：50/100（低于交易员的65/100）\n\n**降级理由**：\n1. 催化剂时点不明确（题材退潮是主观预判，非客观信号）：-5分\n2. 半年报数据真空期的基本面验证缺失：-5分\n3. 超大单数据单一口径不可交叉验证：-3分\n4. 市场情绪明确定性为\"偏空\"，与做多方向形成直接矛盾：-2分\n\n### 最终建议\n\n**不反对做多方向，但强烈要求压降仓位至20%、抬高右侧确认门槛、设定最大持有时限。**\n\n在本金安全的最高原则下，当前标的的风险收益特征属于\"可参与但须严格限仓\"的范畴。基本面确实稳健，但短线技术面、情绪面、催化剂时点三重不确定性叠加，不支持以40%仓位进行左侧试探。正确的保本型策略是：**用最小的仓位试探方向，用右侧确认信号决定是否加码，用铁律止损保护本金。**\n\n---",
+   "current_neutral_response": "Neutral Analyst: ### 一、 焦点风险裁决与两方论据穿透（RISK-1 至 RISK-4）\n\n#### 1. 焦点回应：RISK-1（题材退潮延迟致横盘磨损与假突破）\n- **裁决**：**部分成立（Partially Resolved）**。\n- **穿透分析**：激进方将“3板高度”作为退潮拐点的依据确实存在主观线性外推的逻辑漏洞，保守方指出题材轮动扩散期（首板43家）易造成防御资产流动性持续“抽水”是客观事实。但保守方将“横盘磨损”定性为致命风险亦有过度防守之嫌：长江电力年化低波动特征（ATR降至0.48元）决定了其时间损耗成本显著低于高Beta资产。\n- **处置标准**：引入**时间止损与量价双重确认机制**，化解假突破与横盘磨损，不以单日脉冲作为右侧加仓依据。\n\n#### 2. 其余风险 Claims 穿透甄别\n- **RISK-2（半年报真空期与市场化电价折价）**：**已化解（Resolved）**。基本面分析已量化：水电无燃料成本，Q1净利率38.01%，利息支出同比下行覆盖度电微幅波动。上半年电量同比+4.81%已锁定利润基本盘，极端干旱压力测试下现金流仍超450亿元，基本面断崖风险极低。\n- **RISK-3（超大单净流入单一口径与ETF被动属性）**：**未解决（Unresolved）**。保守方质疑成立，东财单一口径超大单+1.29亿元确实无法排除宽基ETF被动配置特征，不能单独作为机构主动进攻的前瞻信号。\n- **RISK-4（缩量环境下大额市价止损滑点）**：**未解决（Unresolved）**。在日成交仅6351万股（约17.7亿元）背景下，若账户仓位过重（40%~60%），遇大盘跳水时集中市价止损将造成5~10BP的冲击成本。\n\n---\n\n### 二、 宏观变量与大类资产边际定价校准\n\n1. **美债与全球流动性**：美债10年期收益率处于4.74%高位，但国内长端国债利率维持低位（内外利差脱钩）。由于长江电力为纯内需公用事业且无外币负债，其折现率锚定国内LPR与国债收益率，海外高利率压制主要体现为北向外资情绪边际扰动，而非资产负债表实质冲击。\n2. **国内资金面与存量博弈**：全市场ETF持续净流入（3676亿元）托底大盘蓝筹，公用事业板块遭遇的是“风格轮动分流”而非“基本面出逃”。\n\n---\n\n### 三、 全天候自适应动态风控方案（折中执行矩阵）\n\n为平衡激进方的“高赔率捕捉”与保守方的“本金安全防守”，制定以下分级执行方案：\n\n```\n[初始状态：分歧磨底期] ──(初始建仓 25%)──► 挂单 27.65-27.90 元 (止损 27.50 元)\n                                │\n        ┌───────────────────────┴───────────────────────┐\n        ▼                                               ▼\n[触发右侧突破信号]                             [触发预警/时间止损]\n· 日收盘 > 28.35 元                             · 跌破 27.50 元 或 10日未突破\n· 连续 2 日成交量 > 9,000 万股                  · 宏观黑天鹅触发\n        │                                               │\n        ▼                                               ▼\n[加仓 +15% 至 40%]                             [减仓至 10% 或 全额清仓]\n```\n\n#### 1. 分阶段仓位预算分配与门槛\n- **第一阶段（底仓试探）**：**初始仓位 25%**（介于激进方40%与保守方20%之间）。\n  - *执行逻辑*：在 27.65–27.90 元区间分批限价挂单，杜绝市价追单。\n- **第二阶段（右侧确认加仓）**：**条件加仓 +15%，上限封顶 40%**（否决激进方60%集中度）。\n  - *触发门槛*：日线收盘价突破 28.35 元（布林中轨）且**连续2个交易日站稳**，同时日成交量放大至 9,000 万股以上（量比>1.2），确认增量配置资金入场。\n\n#### 2. 动态风险收益比（RRR）测算\n- **加权入场均价**：27.78 元\n- **硬性止损位**：27.50 元（日线收盘破位或盘中放量跌破），风险敞口 $\\Delta R = 27.78 - 27.50 = 0.28$ 元（-1.01%）。\n- **第一目标位**：28.43 元（减仓1/2，上移剩余仓位止损至27.80元保本），收益空间 $+0.65$ 元（+2.34%）。\n- **第二目标位**：29.20 元（出清剩余仓位），收益空间 $+1.42$ 元（+5.11%）。\n- **综合风险收益比**：\n  $$\\text{RRR} = \\frac{0.5 \\times 0.65 + 0.5 \\times 1.42}{0.28} = \\frac{1.035}{0.28} = \\mathbf{3.70 : 1} \\quad (> 2.0 : 1 \\text{ 阈值，具备显著正向数学期望})$$\n\n#### 3. 状态自适应切换与黑天鹅熔断机制\n\n| 市场/宏观状态 | 状态判定条件 | 仓位管理与风控动作 |\n| :--- | :--- | :--- |\n| **顺风进攻态** | 突破 28.35 元 + 成交量连续2日>9000万股 + 大盘题材退潮 | 允许执行第二批+15%加仓，总仓位升至40%，止损线上移至27.80元 |\n| **中性磨底态** | 价格在 27.60–28.35 元窄幅拉锯，量能 < 7000万股 | 维持 25% 底仓观察；**设定10个交易日时间窗口**，若未突破则主动降仓至10% |\n| **逆风防守态** | 日线收盘跌破 27.50 元 或 美债利率3日累升>30bps | **市价止损出局，仓位降为0**；进入至少3个交易日冷静期 |\n| **极端熔断态** | 大盘单日跌超 2.0% 或 半年报净利增速<10% | 立即清仓，无条件执行，规避非线性踩踏 |\n\n---",
+   "count": 3,
+   "claims": [
+    {
+     "claim_id": "RISK-1",
+     "speaker": "Aggressive Analyst",
+     "speaker_key": "Aggressive",
+     "stance": "aggressive",
+     "claim": "题材炒作若延后退潮，防御资金回流延迟将导致标的缩量横盘磨损与均线假突破。",
+     "evidence": [
+      "全市场最高连板仅3板显示投机情绪处于分化期",
+      "标的成交量极度萎缩至6351万股，向上突破需增量资金接力"
+     ],
+     "confidence": 0.68,
+     "status": "unresolved",
+     "target_claim_ids": [],
+     "round_index": 1
+    },
+    {
+     "claim_id": "RISK-2",
+     "speaker": "Conservative Analyst",
+     "speaker_key": "Conservative",
+     "stance": "conservative",
+     "claim": "半年报数据真空期基本面锚定存在验证缺口",
+     "evidence": [
+      "7月6日仅发布电量公告非完整半年报",
+      "电量+4.81%不等于利润同增，市场化电价折价风险未排除"
+     ],
+     "confidence": 0.75,
+     "status": "resolved",
+     "target_claim_ids": [],
+     "round_index": 2
+    },
+    {
+     "claim_id": "RISK-3",
+     "speaker": "Conservative Analyst",
+     "speaker_key": "Conservative",
+     "stance": "conservative",
+     "claim": "超大单净流入可能为ETF被动配置而非主力战略建仓",
+     "evidence": [
+      "数据依赖东财单一口径无法交叉验证",
+      "宽基与红利ETF日常申购可产生被动大单买入"
+     ],
+     "confidence": 0.68,
+     "status": "unresolved",
+     "target_claim_ids": [],
+     "round_index": 2
+    },
+    {
+     "claim_id": "RISK-4",
+     "speaker": "Conservative Analyst",
+     "speaker_key": "Conservative",
+     "stance": "conservative",
+     "claim": "极端缩量环境下止损执行存在滑点风险致实际亏损超预期",
+     "evidence": [
+      "日成交仅6351万股为近期极低水平",
+      "40%仓位市价止损在低流动性下冲击成本显著"
+     ],
+     "confidence": 0.72,
+     "status": "unresolved",
+     "target_claim_ids": [],
+     "round_index": 2
+    },
+    {
+     "claim_id": "RISK-5",
+     "speaker": "Neutral Analyst",
+     "speaker_key": "Neutral",
+     "stance": "neutral",
+     "claim": "存量博弈下大市值红利流动性溢价面临持续贴水",
+     "evidence": [
+      "成交量萎缩至6351万股",
+      "全市场题材股分化活跃虹吸资金"
+     ],
+     "confidence": 0.68,
+     "status": "open",
+     "target_claim_ids": [],
+     "round_index": 3
+    }
+   ],
+   "focus_claim_ids": [
+    "RISK-3",
+    "RISK-4"
+   ],
+   "open_claim_ids": [
+    "RISK-1",
+    "RISK-3",
+    "RISK-4",
+    "RISK-5"
+   ],
+   "resolved_claim_ids": [
+    "RISK-2"
+   ],
+   "unresolved_claim_ids": [
+    "RISK-1",
+    "RISK-3",
+    "RISK-4"
+   ],
+   "round_summary": "化解基本面真空期风险，裁定初始仓位压至25%、加仓上限40%，强化右侧时间与量能双确认。",
+   "round_goal": "解决资金属性识别与低流动性滑点控制方案",
+   "claim_counter": 5
+  },
+  "risk_feedback_state": {
+   "retry_count": 0,
+   "max_retries": 1,
+   "revision_required": false,
+   "latest_risk_verdict": "pass",
+   "hard_constraints": [
+    "初始仓位上限锁定25%",
+    "最大总持仓上限锁定40%",
+    "禁止融资加杠杆",
+    "硬性止损位27.50元",
+    "10个交易日时间止损"
+   ],
+   "soft_constraints": [
+    "建仓采用限价挂单避免追高",
+    "止损执行采用TWAP算法减小冲击成本"
+   ],
+   "execution_preconditions": [
+    "入场价格在27.65-27.90元区间",
+    "全市场预估日成交额>=6500亿元",
+    "盘前无重大水文调度负面突发公告"
+   ],
+   "de_risk_triggers": [
+    "日收盘破27.50元全额止损",
+    "美债10年期3日累升超30bps减仓50%",
+    "沪深300单日跌超1.5%暂停建仓并降险",
+    "10日未突破28.35元主动降仓至10%以下",
+    "半年报扣非净利增速低于10%全部清仓"
+   ],
+   "revision_reason": "无"
+  },
+  "final_trade_decision": "# 长江电力（600900.SH）风控委员会审核与动态风控裁决报告\n\n**审核基准日：2026年8月21日（T+1执行）**\n\n---\n\n## 一、 风控委员会审核结论与方向定性\n\n**审核结论：买入（BUY / 偏多）—— 审核通过（PASS，附带硬性风控收紧约束）**\n\n风控委员会全面审核了交易员执行方案及三方辩论成果：\n1. **方向认可**：认可交易员与多头关于“地量供给测试完成、超大单逆势承接、50日SMA均线双重底支撑”的核心逻辑。标的具备高安全边际与高赔率数学期望。\n2. **风控修正**：交易员原方案中初始仓位（40%）及上限（60%）在当前全市场缩量存量博弈、题材股扩散吸筹的背景下偏高，且忽视了极端缩量（日成交仅6351万股）下的市价止损滑点冲击与时间磨损风险。\n3. **裁决决定**：**维持偏多方向，但对仓位预算、右侧加仓门槛、时间止损及流动性冲击施加全方位硬性约束**。\n\n---\n\n## 二、 全维度动态风控约束体系\n\n### 2.1 仓位与敞口约束（强制收紧）\n*   **初始建仓上限**：**≤ 25%**（从交易员原定的40%硬性压降，防止左侧试探暴露过多风险敞口）。\n*   **最大持仓上限**：**≤ 40%**（否决交易员方案中的60%集中度，单票敞口严格受控）。\n*   **杠杆限制**：**0杠杆**，全额使用纯多头自有资金，禁止进行任何融资加杠杆操作。\n*   **加仓门槛**：必须满足“日线收盘站稳28.35元（布林中轨）且连续2日成交量>9,000万股”的右侧量价共振条件，方可追加15%仓位至上限40%。\n\n### 2.2 回撤与止损止盈约束\n*   **硬性止损价位**：**27.50元**（以50日SMA 27.54元下方4分为终极防线）。\n    *   *触发机制*：日线收盘价跌破27.50元，或盘中跌破27.50元且成交量放大超1.2亿股，立即市价全额止损。\n    *   *最大单笔亏损*：加权入场均价27.78元测算，单笔最大亏损控制在 **-1.01%**（账户整体净值回撤不超过 -0.25%）。\n*   **动态移动锁盈机制（Trailing Stop）**：\n    *   触及第一目标位 **28.43元** 时，强制减仓50%，并将剩余仓位止损线强制上移至 **27.80元**（保本位）。\n    *   触及第二目标位 **29.20–29.35元** 时，清仓锁定全部利润。\n*   **时间止损约束（Time-stop）**：\n    *   若建仓后 **10个交易日内** 价格仍未能有效放量突破28.35元，无论盈亏，强制主动降仓至10%或全部平仓，防范横盘时间磨损与资金占用机会成本。\n\n### 2.3 流动性与冲击成本防护\n*   **挂单指令限制**：全部分批建仓均须采用**限价单（Limit Order）**在 27.65–27.90 元区间挂单，禁止开盘直接市价追单（Market Order）。\n*   **止损滑点缓冲**：由于当前成交量压缩约70%，若盘中触发极端止损，必须采取**分笔TWAP（时间加权平均算法）或小单切片方式平仓**，严禁单笔大额市价砸盘导致超额冲击成本。\n\n### 2.4 全球宏观与产业链压力测试\n*   **海外流动性/美债冲击**：标的为纯内需公用事业且带息负债以国内低息人民币贷款为主（资产负债率57.33%），完全免疫汇率敞口与海外加息。主要风险为外资情绪外溢。\n*   **燃料与成本端**：零化石燃料敞口，完全免疫煤价/原油通胀反噬。\n*   **来水与基本面韧性**：极端全流域偏枯（-20%）情景下年化经营现金流仍超450亿元，股息率硬底坚挺，基本面不存在断崖风险。\n\n---\n\n## 三、 执行前置条件与立即降风险触发器\n\n### 3.1 允许执行的前提条件（execution_preconditions）\n1.  **挂单区间准入**：开盘集合竞价或盘中回踩处于 **27.65–27.90元** 区间，且未出现跳空低开跌破27.54元情况。\n2.  **大盘流动性底线**：A股全市场全天预估成交额不低于 **6,500亿元**，排除极端流动性枯竭踩踏。\n3.  **无重大突发事件**：盘前无涉及三峡梯级电站不可抗力调度受限等突发重大非正常公告。\n\n### 3.2 立即降风险与熔断触发器（de_risk_triggers）\n1.  **宏观熔断**：美债10年期收益率连续3个交易日累计上升超 **30bps**，或国内沪深300指数单日跌幅超 **1.5%**，当日暂停建仓或削减50%持仓。\n2.  **技术破位熔断**：日线收盘价跌破 **27.50元**，无条件清仓止损，进入至少3个交易日冷静期。\n3.  **时间磨损触发器**：持有满 **10个交易日** 标的仍收于28.35元下方且量能低于7,000万股，强制平仓50%以上防范僵尸仓位。\n4.  **业绩异常触发器**：正式半年报全文公布后，若扣非归母净利润同比增速低于 **+10%**（显著偏离发电量增长逻辑），次日开盘无条件市价清仓。\n\n---\n\n## 四、 关键价格锚点与目标设定\n\n*   **入场区间**：27.65 – 27.90 元\n*   **目标价**：**29.20 元**（第一阶段止盈点 28.43 元）\n*   **止损价**：**27.50 元**\n\n---\n\n## 五、 风险 Claim 穿透审查与状态盘点\n\n*   **RISK-1（题材退潮延迟致横盘磨损与假突破）**：**已化解（Resolved）**。处置：设立10日时间止损线，并将加仓条件严格绑定为“连续2日站稳28.35元+成交量>9000万股”，彻底阻断假突破加仓风险。\n*   **RISK-2（半年报真空期与市场化电价折价）**：**已化解（Resolved）**。处置：上半年发电量+4.81%锁定基本盘，降息周期财务费用节约超7.5亿元形成对冲，设定扣非增速<10%清仓触发器。\n*   **RISK-3（超大单净流入依赖单一口径与ETF被动属性）**：**已化解（Resolved）**。处置：将初始建仓比例严格下调至25%底仓，不再将超大单作为重仓唯一论据，以右侧量价共振作为后续加仓确认。\n*   **RISK-4（极端缩量环境下止损滑点风险）**：**已化解（Resolved）**。处置：总持仓上限从60%压降至40%，并强制执行限价挂单与分笔TWAP止损指令。\n*   **RISK-5（存量博弈下红利资产流动性折价）**：**跟踪监控中（Unresolved/Monitoring）**。处置：全市场ETF净流入托底大盘蓝筹，维持低Beta配置定位，通过严格止损与止盈比例（RRR 3.70:1）吸收流动性贴水波动。\n\n---\n\n## 六、 风控委员会置信度评估\n\n*   **置信度评估**：**60 / 100**（低于75硬上限）\n    *   *定级依据*：基本面现金流与水文支撑扎实，下行空间有限；但受制于短线成长题材分流吸血、超大单口径不可跨源验证及半年报正式文本待验，定级为60，属于审慎可操作区间。\n\n---\n\n<!-- VERDICT: {\"direction\": \"偏多\", \"reason\": \"地量供给测试完成，严控仓位与时间止损防范磨损\"} -->",
+  "investment_plan": "### 一、 分析师 Verdict 全景概览与动态加权\n\n当前处于短线（1-2周）震荡筑底与高低切换窗口期，加权规则偏向微观资金、量价与技术承接，基本面作为下行硬底线：\n1. **宏观板块**：偏多（权重 10%）——宽财政与低利率环境压降带息负债成本，股票型ETF持续托底。\n2. **市场（技术面）**：偏多（权重 20%）——价格虽破10日EMA（28.15元），但50日SMA（27.54元）支撑扎实。\n3. **舆情（情绪）**：偏空（权重 10%）——短线题材多点开花分流红利防御资金，均线死叉压制做多情绪。\n4. **新闻**：偏多（权重 10%）——0.79元派息完成，大宗与两融资金底仓相对稳固。\n5. **基本面**：偏多（权重 15%）——上半年梯级发电量同比+4.81%，零燃料敞口提供极强盈利韧性。\n6. **主力资金**：偏多（权重 20%）——东财超大单逆势净流入+1.2943亿元，险资等机构“水下”接盘。\n7. **量价**：偏多（权重 15%）——成交量骤降至6,351万股（地量量比0.6），供给测试进入尾声。\n\n---\n\n### 二、 多空辩论五步深度裁决与证据评定\n\n#### 1. 证据链完整性审查\n- **采纳项（adopted_claim_ids）**：\n  - **INV-1、INV-5、INV-9**：核验通过（Coverage=100%）。8月21日成交量萎缩至6351万股（地量量比0.6），东财超大单净流入+1.2943亿元，量价背离与威科夫供给测试成立；涨停生态中连板高度仅3板，题材炒作逼近退潮拐点。\n  - **INV-2、INV-6、INV-8**：核验通过（Coverage=100%）。三峡偏丰28.74%，极端压力测试下年化经营现金流仍超450亿元，50日均线（27.54元）防守有效。\n- **驳回项（rejected_claim_ids）**：\n  - **INV-4、INV-10**：核验不足（Coverage=50% < 67%）。空头援引乌东德偏枯16.94%断言梯级蓄能承压缺乏全流域调度支撑；将同花顺净流出-2.46亿元机械推导为“主力出逃”，忽视了流出主体实为中小散户（小单/中单流出超2亿元）。\n\n#### 2. 传导路径验证\n空头主张的“风格虹吸导致估值均值回归”存在逻辑断裂。短线小盘题材炒作虽分流活跃资金，但公用事业龙头定价锚在于“低利率下的类债高股息利差”。超大单机构在27.90元附近水下承接，反映中长线配置盘对2.83%~3.50%股息率的高度认可。\n\n#### 3. 焦点分歧裁决：**多头胜**\n多头以“极致地量+超大单逆势吸筹+50日均线强支撑”构建了坚实的右侧反转逻辑；空头过度依赖滞后的“均线死叉”表象，未能识别散户调仓与机构托底的资金预期差。\n\n#### 4. 极端情景测试\n在全流域极端干旱（发电量-20%）的悲观情景下，公司年化经营现金流仍超450亿元，完全覆盖刚性利息与资本开支，50日SMA（27.54元）下方下行空间被刚性封死，空头推演杀跌至23.50-24.50元严重脱离基本面事实。\n\n#### 5. 风险收益比量化\n- **当前基准价**：27.96元\n- **上涨空间**：目标位29.20元（+4.43%）\n- **下行风险**：止损位27.50元（-1.64%）\n- **短线赔率**：2.70 : 1，具备极高数学期望。\n\n---\n\n### 三、 预期差与宏观产业链共振研判\n\n市场情绪过度悲观于短线均线死叉，忽视了成交量剧烈萎缩近70%背后的抛压枯竭。主力资金（超大单）利用题材炒作分流时机在27.90–28.07元低吸建仓。随着题材连板分化退潮，防御避险资金回流将驱动估值修复。\n\n---\n\n### 四、 投资方案与交易执行指令\n\n- **投资决策**：**Buy（看多）**\n- **建议仓位**：初始仓位 **40%**，若放量突破28.35元加仓至上限 **60%**。\n- **建议入场区间**：**27.60 – 27.96 元**（依托现价分批挂单吸筹）。\n- **目标止盈位**：第一目标 **28.43 元**（减仓1/3），第二目标 **29.20 – 29.35 元**（全部止盈）。\n- **硬性止损位**：**27.50 元**（日线收盘放量跌破50日均线即坚决止损，最大亏损 -1.64%）。\n- **失效条件**：单日成交量超1.5亿股且放量击穿27.50元，或超大单主力连续2日净流出超1.5亿元。\n\n<!-- MANAGER_VERDICT: {\"winner\": \"bull\", \"direction\": \"偏多\", \"reason\": \"地量供给测试完成且超大单逆势吸筹\", \"position_pct\": 40, \"entry\": \"27.60-27.96\", \"target\": \"29.20\", \"stop_loss\": \"27.50\", \"upside\": 4.43, \"downside\": 1.64, \"odds\": 2.70, \"adopted_claim_ids\": [\"INV-1\", \"INV-2\", \"INV-5\", \"INV-6\", \"INV-8\", \"INV-9\"], \"partially_adopted_claims\": [], \"rejected_claim_ids\": [\"INV-4\", \"INV-10\"], \"excluded_evidence\": [\"情绪报告中公用事业遭遇持续虹吸抽水之定性推论\", \"乌东德偏枯导致梯级全面承压之未验证假设\"]} -->\n<!-- VERDICT: {\"direction\": \"偏多\", \"reason\": \"地量缩量企稳，超大单逆势吸筹构筑坚实底线\"} -->",
+  "fund_flow_consensus_guard": {
+   "blocked": false,
+   "direction_allowed": true,
+   "status": "selected",
+   "selection": {
+    "status": "selected",
+    "selection_status": "selected",
+    "data_conflict": false,
+    "reason_code": "new_algorithm_source_priority",
+    "selection_reason": "new_algorithm_source_priority",
+    "reason": "按固定来源优先级选择首个日期、字段、单位和数值均有效的来源",
+    "requested_as_of": "2026-08-21",
+    "algorithm_group": "new_algorithm_group",
+    "selected_source": "tushare_eastmoney_moneyflow_dc",
+    "selected_source_family": "eastmoney",
+    "selected_algorithm_group": "new_algorithm_group",
+    "selected_field": "r0_net",
+    "selected_value": "0.723407",
+    "selected_unit": "亿元",
+    "selected_direction": "inflow",
+    "selected_as_of": "2026-08-21",
+    "selected_period_kind": "historical_daily",
+    "selected_time_window": "1d",
+    "selected_window_days": 1,
+    "fallback_rank": 2,
+    "legacy_reference": false,
+    "legacy_web_algorithm": false,
+    "direction": "inflow",
+    "direction_allowed": true,
+    "field": "r0_net",
+    "value": "0.723407",
+    "source": "tushare_eastmoney_moneyflow_dc",
+    "source_family": "eastmoney",
+    "as_of": "2026-08-21",
+    "records": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "field": "r0_net",
+      "value": "0.723407",
+      "raw_value": "7234.07",
+      "raw_unit": "万元",
+      "unit": "亿元",
+      "date": "2026-08-21",
+      "as_of": "2026-08-21",
+      "requested_as_of": "2026-08-21",
+      "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+      "symbol": "600900.SH",
+      "status": "available",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     }
+    ],
+    "raw_values": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "field": "r0_net",
+      "value": "0.723407",
+      "direction": "inflow",
+      "date": "2026-08-21",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     },
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "date": "2026-08-21",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     }
+    ],
+    "alternative_sources": [
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "fallback_rank": 4,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_ths_moneyflow_ths",
+        "source_family": "ths",
+        "algorithm_group": "new_algorithm_group",
+        "field": "netamount",
+        "value": "-2.464978",
+        "raw_value": "-24649.78",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "-2.464978"
+      }
+     }
+    ],
+    "legacy_sources": [],
+    "new_algorithm_sources": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "r0_net",
+      "value": "0.723407",
+      "direction": "inflow",
+      "fallback_rank": 2,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_eastmoney_moneyflow_dc",
+        "source_family": "eastmoney",
+        "algorithm_group": "new_algorithm_group",
+        "field": "r0_net",
+        "value": "0.723407",
+        "raw_value": "7234.07",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "0.723407"
+      }
+     },
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "fallback_rank": 4,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_ths_moneyflow_ths",
+        "source_family": "ths",
+        "algorithm_group": "new_algorithm_group",
+        "field": "netamount",
+        "value": "-2.464978",
+        "raw_value": "-24649.78",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "-2.464978"
+      }
+     }
+    ],
+    "rejected_sources": [],
+    "hard_guard": {
+     "blocked": false,
+     "direction_allowed": true,
+     "reason": "new_algorithm_source_priority"
+    },
+    "direction_summary": "主力资金偏流入"
+   },
+   "consensus": {
+    "status": "selected",
+    "selection_status": "selected",
+    "data_conflict": false,
+    "reason_code": "new_algorithm_source_priority",
+    "selection_reason": "new_algorithm_source_priority",
+    "reason": "按固定来源优先级选择首个日期、字段、单位和数值均有效的来源",
+    "requested_as_of": "2026-08-21",
+    "algorithm_group": "new_algorithm_group",
+    "selected_source": "tushare_eastmoney_moneyflow_dc",
+    "selected_source_family": "eastmoney",
+    "selected_algorithm_group": "new_algorithm_group",
+    "selected_field": "r0_net",
+    "selected_value": "0.723407",
+    "selected_unit": "亿元",
+    "selected_direction": "inflow",
+    "selected_as_of": "2026-08-21",
+    "selected_period_kind": "historical_daily",
+    "selected_time_window": "1d",
+    "selected_window_days": 1,
+    "fallback_rank": 2,
+    "legacy_reference": false,
+    "legacy_web_algorithm": false,
+    "direction": "inflow",
+    "direction_allowed": true,
+    "field": "r0_net",
+    "value": "0.723407",
+    "source": "tushare_eastmoney_moneyflow_dc",
+    "source_family": "eastmoney",
+    "as_of": "2026-08-21",
+    "records": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "field": "r0_net",
+      "value": "0.723407",
+      "raw_value": "7234.07",
+      "raw_unit": "万元",
+      "unit": "亿元",
+      "date": "2026-08-21",
+      "as_of": "2026-08-21",
+      "requested_as_of": "2026-08-21",
+      "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+      "symbol": "600900.SH",
+      "status": "available",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     }
+    ],
+    "raw_values": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "field": "r0_net",
+      "value": "0.723407",
+      "direction": "inflow",
+      "date": "2026-08-21",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     },
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "date": "2026-08-21",
+      "period_kind": "historical_daily",
+      "time_window": "1d"
+     }
+    ],
+    "alternative_sources": [
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "fallback_rank": 4,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_ths_moneyflow_ths",
+        "source_family": "ths",
+        "algorithm_group": "new_algorithm_group",
+        "field": "netamount",
+        "value": "-2.464978",
+        "raw_value": "-24649.78",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "-2.464978"
+      }
+     }
+    ],
+    "legacy_sources": [],
+    "new_algorithm_sources": [
+     {
+      "source": "tushare_eastmoney_moneyflow_dc",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "r0_net",
+      "value": "0.723407",
+      "direction": "inflow",
+      "fallback_rank": 2,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_eastmoney_moneyflow_dc",
+        "source_family": "eastmoney",
+        "algorithm_group": "new_algorithm_group",
+        "field": "r0_net",
+        "value": "0.723407",
+        "raw_value": "7234.07",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "0.723407"
+      }
+     },
+     {
+      "source": "tushare_ths_moneyflow_ths",
+      "source_family": "ths",
+      "algorithm_group": "new_algorithm_group",
+      "legacy_web_algorithm": false,
+      "field": "netamount",
+      "value": "-2.464978",
+      "direction": "outflow",
+      "fallback_rank": 4,
+      "as_of": "2026-08-21",
+      "window_days": 1,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "records": [
+       {
+        "source": "tushare_ths_moneyflow_ths",
+        "source_family": "ths",
+        "algorithm_group": "new_algorithm_group",
+        "field": "netamount",
+        "value": "-2.464978",
+        "raw_value": "-24649.78",
+        "raw_unit": "万元",
+        "unit": "亿元",
+        "date": "2026-08-21",
+        "as_of": "2026-08-21",
+        "requested_as_of": "2026-08-21",
+        "retrieved_at": "2026-08-23T11:46:55.781739+00:00",
+        "symbol": "600900.SH",
+        "status": "available",
+        "period_kind": "historical_daily",
+        "time_window": "1d"
+       }
+      ],
+      "source_values": {
+       "2026-08-21": "-2.464978"
+      }
+     }
+    ],
+    "rejected_sources": [],
+    "hard_guard": {
+     "blocked": false,
+     "direction_allowed": true,
+     "reason": "new_algorithm_source_priority"
+    },
+    "direction_summary": "主力资金偏流入"
+   },
+   "validation": {
+    "status": "matched",
+    "hard_guard": {
+     "blocked": false,
+     "reason": "no explicit model total"
+    },
+    "structured": {
+     "window_days": 1,
+     "record_count": 1,
+     "required_window_days": 1,
+     "status": "available",
+     "data_conflict": false,
+     "dates": [
+      "2026-08-21"
+     ],
+     "netamount": null,
+     "r0_net": "0.723407",
+     "unit": "亿元",
+     "windows": [
+      "1d"
+     ],
+     "semantics": {
+      "netamount": "总净额（负值表示净流出）",
+      "r0_net": "主力净额（负值表示净流出）"
+     },
+     "selected_field": "r0_net",
+     "selected_value": "0.723407",
+     "selected_semantics": "主力净额（负值表示净流出）"
+    },
+    "selected_field": "r0_net",
+    "selected_source": "tushare_eastmoney_moneyflow_dc",
+    "requested_as_of": "2026-08-21",
+    "model": {
+     "r0_net": "0.7234",
+     "netamount": "-0.5709"
+    },
+    "model_totals": {},
+    "model_daily": {
+     "r0_net": "0.7234",
+     "netamount": "-0.5709"
+    },
+    "unverifiable_fields": [
+     "netamount"
+    ],
+    "mismatches": [],
+    "tolerance": "0.01"
+   },
+   "reason": "按固定来源优先级选择首个日期、字段、单位和数值均有效的来源",
+   "selected_source": "tushare_eastmoney_moneyflow_dc",
+   "selected_source_family": "eastmoney",
+   "selected_algorithm_group": "new_algorithm_group",
+   "selected_field": "r0_net",
+   "selected_value": "0.723407",
+   "selected_unit": "亿元",
+   "selected_direction": "inflow",
+   "selected_as_of": "2026-08-21",
+   "selected_period_kind": "historical_daily",
+   "selected_time_window": "1d",
+   "selected_window_days": 1,
+   "fallback_rank": 2,
+   "legacy_reference": false,
+   "legacy_web_algorithm": false,
+   "selection_reason": "new_algorithm_source_priority"
+  }
+ },
+ "market_data_context": {
+  "data_failure_ledger": [
+   {
+    "source": "fund_flow_board",
+    "status": "failed",
+    "reason": "provider call failed",
+    "gap": "【数据获取失败】fund_flow_board：provider call failed"
+   },
+   {
+    "source": "insider_transactions",
+    "status": "failed",
+    "reason": "provider call failed",
+    "gap": "【数据获取失败】insider_transactions：provider call failed"
+   },
+   {
+    "source": "hot_stocks",
+    "status": "failed",
+    "reason": "provider call failed",
+    "gap": "【数据获取失败】hot_stocks：provider call failed"
+   },
+   {
+    "source": "share_pledge",
+    "status": "failed",
+    "reason": "provider call failed",
+    "gap": "【数据获取失败】share_pledge：provider call failed"
+   },
+   {
+    "source": "northbound_flow",
+    "status": "failed",
+    "reason": "provider call failed",
+    "gap": "【数据获取失败】northbound_flow：provider call failed"
+   },
+   {
+    "source": "shareholder_count",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】shareholder_count：未返回可验证数据日期"
+   },
+   {
+    "source": "earnings_forecast",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】earnings_forecast：未返回可验证数据日期"
+   },
+   {
+    "source": "cashflow",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】cashflow：未返回可验证数据日期"
+   },
+   {
+    "source": "balance_sheet",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】balance_sheet：未返回可验证数据日期"
+   },
+   {
+    "source": "fund_flow_individual",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】fund_flow_individual：未返回可验证数据日期"
+   },
+   {
+    "source": "restricted_release",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】restricted_release：未返回可验证数据日期"
+   },
+   {
+    "source": "income_statement",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】income_statement：未返回可验证数据日期"
+   },
+   {
+    "source": "fundamentals",
+    "status": "unavailable",
+    "reason": "unverified as-of",
+    "gap": "【数据获取失败】fundamentals：未返回可验证数据日期"
+   }
+  ],
+  "analysis_baseline_date": "2026-08-21"
+ },
+ "top_data_gaps": [
+  "【数据获取失败】fund_flow_board：provider call failed",
+  "【数据获取失败】insider_transactions：provider call failed",
+  "【数据获取失败】hot_stocks：provider call failed",
+  "【数据获取失败】share_pledge：provider call failed",
+  "【数据获取失败】northbound_flow：provider call failed",
+  "【数据获取失败】shareholder_count：未返回可验证数据日期",
+  "【数据获取失败】earnings_forecast：未返回可验证数据日期",
+  "【数据获取失败】cashflow：未返回可验证数据日期",
+  "【数据获取失败】balance_sheet：未返回可验证数据日期",
+  "【数据获取失败】fund_flow_individual：未返回可验证数据日期",
+  "【数据获取失败】restricted_release：未返回可验证数据日期",
+  "【数据获取失败】income_statement：未返回可验证数据日期",
+  "【数据获取失败】fundamentals：未返回可验证数据日期",
+  "【数据获取失败】行业板块即时资金流向快照无法用于历史日期分析。"
+ ]
+}
