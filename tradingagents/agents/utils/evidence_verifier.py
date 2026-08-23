@@ -22,6 +22,14 @@ STATUS_UNSUPPORTED = "unsupported"
 STATUS_CONTRADICTED = "contradicted"
 STATUS_SOURCE_UNAVAILABLE = "source_unavailable"
 
+# Decision constants
+DECISION_ADOPT = "adopt"
+DECISION_PARTIAL = "partial"
+DECISION_REJECT = "reject"
+
+# Coverage thresholds
+MIN_COVERAGE_THRESHOLD = 0.67
+
 # Common failed status strings
 UNAVAILABLE_STATUSES = frozenset(
     {"failed", "unavailable", "empty", "error", "missing", "partial_failure", "not_found", "rejected"}
@@ -399,6 +407,229 @@ class EvidenceFactualTruthEvaluator:
 
         return results
 
+    def aggregate_claim_evidence(
+        self,
+        claims: Sequence[Mapping[str, Any]] | None = None,
+        claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Aggregate evidence verification by claim and compute coverage ratio and adoption decisions."""
+        return aggregate_claim_evidence(claims=claims, claims_verification=claims_verification)
+
+
+def aggregate_claim_evidence(
+    claims: Sequence[Mapping[str, Any]] | None = None,
+    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Aggregate evidence verification results by claim_id and evaluate deterministic decisions.
+
+    Returns:
+        A dict mapping claim_id -> {
+            "claim_id": str,
+            "speaker": str,
+            "speaker_key": str,
+            "stance": str,
+            "claim": str,
+            "counts": {
+                "total": int,
+                "verified": int,
+                "unsupported": int,
+                "contradicted": int,
+                "source_unavailable": int,
+            },
+            "coverage": float,
+            "decision": "adopt" | "partial" | "reject",
+            "reason": str,
+            "verified_evidence": list[str],
+            "unsupported_evidence": list[str],
+            "contradicted_evidence": list[str],
+            "source_unavailable_evidence": list[str],
+            "excluded_evidence": list[str],
+        }
+    """
+    claims_list = list(claims or [])
+    ver_list = list(claims_verification or [])
+
+    # Map verification items by claim_id
+    ver_by_cid: dict[str, list[Mapping[str, Any]]] = {}
+    for item in ver_list:
+        cid = str(item.get("claim_id", "") or "").strip()
+        if cid:
+            ver_by_cid.setdefault(cid, []).append(item)
+
+    # All known claim objects
+    known_claims: dict[str, Mapping[str, Any]] = {}
+    for c in claims_list:
+        cid = str(c.get("claim_id", "") or "").strip()
+        if cid:
+            known_claims[cid] = c
+
+    # Union of all CIDs preserving order
+    all_cids = list(known_claims.keys())
+    for cid in ver_by_cid:
+        if cid not in known_claims:
+            all_cids.append(cid)
+
+    summary_map: dict[str, dict[str, Any]] = {}
+    for cid in all_cids:
+        claim_obj = known_claims.get(cid, {})
+        claim_ver_items = ver_by_cid.get(cid, [])
+
+        verified_items = [v for v in claim_ver_items if v.get("status") == STATUS_VERIFIED]
+        unsupported_items = [v for v in claim_ver_items if v.get("status") == STATUS_UNSUPPORTED]
+        contradicted_items = [v for v in claim_ver_items if v.get("status") == STATUS_CONTRADICTED]
+        source_unavail_items = [
+            v for v in claim_ver_items
+            if v.get("status") == STATUS_SOURCE_UNAVAILABLE or v.get("is_fatal")
+        ]
+
+        total_count = len(claim_ver_items)
+        if total_count == 0:
+            ev_field = claim_obj.get("evidence") or []
+            if isinstance(ev_field, str):
+                ev_field = [ev_field]
+            total_count = len([e for e in ev_field if str(e).strip()])
+
+        verified_count = len(verified_items)
+        unsupported_count = len(unsupported_items)
+        contradicted_count = len(contradicted_items)
+        source_unavail_count = len(source_unavail_items)
+
+        counts = {
+            "total": total_count,
+            "verified": verified_count,
+            "unsupported": unsupported_count,
+            "contradicted": contradicted_count,
+            "source_unavailable": source_unavail_count,
+        }
+
+        coverage = (verified_count / total_count) if total_count > 0 else 0.0
+
+        verified_ev = [str(v.get("raw", "")).strip() for v in verified_items if str(v.get("raw", "")).strip()]
+        unsupported_ev = [str(v.get("raw", "")).strip() for v in unsupported_items if str(v.get("raw", "")).strip()]
+        contradicted_ev = [str(v.get("raw", "")).strip() for v in contradicted_items if str(v.get("raw", "")).strip()]
+        source_unavail_ev = [str(v.get("raw", "")).strip() for v in source_unavail_items if str(v.get("raw", "")).strip()]
+        excluded_ev = [
+            str(v.get("raw", "")).strip()
+            for v in claim_ver_items
+            if v.get("status") != STATUS_VERIFIED and str(v.get("raw", "")).strip()
+        ]
+
+        if contradicted_count > 0:
+            decision = DECISION_REJECT
+            reason = f"存在 {contradicted_count} 条与报告事实冲突/前视偏差证据 (contradicted)"
+        elif source_unavail_count > 0:
+            decision = DECISION_REJECT
+            reason = f"存在 {source_unavail_count} 条引用不可用数据源的严重幻觉证据 (source_unavailable)"
+        elif total_count == 0 or verified_count == 0:
+            decision = DECISION_REJECT
+            reason = "未提供有效证据或全部证据未获验证 (unsupported)"
+        elif verified_count == total_count:
+            decision = DECISION_ADOPT
+            reason = f"全部证据核验通过 (verified {verified_count}/{total_count}, coverage=100.0%)"
+        elif coverage >= MIN_COVERAGE_THRESHOLD or round(coverage, 2) >= MIN_COVERAGE_THRESHOLD or math.isclose(coverage, 2 / 3, abs_tol=1e-3):
+            decision = DECISION_PARTIAL
+            reason = f"混合证据部分通过核验 (verified {verified_count}/{total_count}, coverage={coverage:.1%})，仅可采纳 verified 子结论并剔除未验证项"
+        else:
+            decision = DECISION_REJECT
+            reason = f"证据覆盖率不足 (verified {verified_count}/{total_count}, coverage={coverage:.1%} < {MIN_COVERAGE_THRESHOLD:.0%})，予以驳回/降权"
+
+        summary_map[cid] = {
+            "claim_id": cid,
+            "speaker": str(claim_obj.get("speaker", "") or ""),
+            "speaker_key": str(claim_obj.get("speaker_key", "") or ""),
+            "stance": str(claim_obj.get("stance", "") or ""),
+            "claim": str(claim_obj.get("claim", "") or ""),
+            "counts": counts,
+            "coverage": coverage,
+            "decision": decision,
+            "reason": reason,
+            "verified_evidence": verified_ev,
+            "unsupported_evidence": unsupported_ev,
+            "contradicted_evidence": contradicted_ev,
+            "source_unavailable_evidence": source_unavail_ev,
+            "excluded_evidence": excluded_ev,
+        }
+
+    return summary_map
+
+
+def format_claims_with_verification_for_prompt(
+    claims: Sequence[Mapping[str, Any]] | None,
+    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    claim_evidence_summary: Mapping[str, Mapping[str, Any]] | None = None,
+    focus_claim_ids: Sequence[str] | None = None,
+    empty_message: str = "当前没有已登记 claim。",
+) -> str:
+    """Format claim overview with deterministic factual verification details for research manager prompt."""
+    claim_list = list(claims or [])
+    if not claim_list and not claims_verification:
+        return empty_message
+
+    if claim_evidence_summary is None:
+        summary_map = aggregate_claim_evidence(claim_list, claims_verification or [])
+    else:
+        summary_map = dict(claim_evidence_summary)
+
+    focus_set = {str(item) for item in (focus_claim_ids or []) if str(item).strip()}
+    lines: list[str] = []
+
+    badge_map = {
+        DECISION_ADOPT: "证据充分 / 全Verified",
+        DECISION_PARTIAL: "部分支持 / 混合证据(仅采纳Verified子结论)",
+        DECISION_REJECT: "证据薄弱/不支持/矛盾(驳回)",
+    }
+
+    for claim in claim_list:
+        cid = str(claim.get("claim_id", "")).strip()
+        status = str(claim.get("status", "open")).strip() or "open"
+        speaker = str(claim.get("speaker", "")).strip() or "Unknown"
+        stance = str(claim.get("stance", "")).strip() or ""
+        summary_text = str(claim.get("claim", "")).strip() or "未提供 claim 文本"
+
+        sum_info = summary_map.get(cid)
+        prefix = "* " if cid in focus_set else "- "
+        stance_str = f" ({stance})" if stance else ""
+
+        if not sum_info:
+            evidence = claim.get("evidence") or []
+            if isinstance(evidence, str):
+                evidence = [evidence]
+            ev_text = "；".join(str(e).strip() for e in evidence if str(e).strip()) or "无明确证据"
+            lines.append(f"{prefix}{cid} [{status}] {speaker}{stance_str}: {summary_text} | 证据: {ev_text}")
+            continue
+
+        decision = sum_info.get("decision", DECISION_REJECT)
+        badge = badge_map.get(decision, "待核验")
+        cov = sum_info.get("coverage", 0.0)
+        counts = sum_info.get("counts", {})
+        total = counts.get("total", 0)
+        verified = counts.get("verified", 0)
+        reason = sum_info.get("reason", "")
+
+        lines.append(f"{prefix}{cid} [{status}] {speaker}{stance_str}: {summary_text}")
+        lines.append(f"  * 核验评级: 【{badge}】 覆盖率={cov:.1%} ({verified}/{total} verified) | 规则判定: {decision}")
+        lines.append(f"  * 判定说明: {reason}")
+
+        ver_ev = sum_info.get("verified_evidence", [])
+        unsupp_ev = sum_info.get("unsupported_evidence", [])
+        contra_ev = sum_info.get("contradicted_evidence", [])
+        unavail_ev = sum_info.get("source_unavailable_evidence", [])
+
+        if ver_ev:
+            for e in ver_ev:
+                lines.append(f"    - [VERIFIED / 真实核验] {e}")
+        if unsupp_ev:
+            for e in unsupp_ev:
+                lines.append(f"    - [UNSUPPORTED / 未获支撑] {e} (严禁作为采纳依据，必须剔除)")
+        if contra_ev:
+            for e in contra_ev:
+                lines.append(f"    - [CONTRADICTED / 事实冲突] {e} (严禁采纳，必须驳回)")
+        if unavail_ev:
+            for e in unavail_ev:
+                lines.append(f"    - [UNAVAILABLE / 严重幻觉] {e} (数据源不可用，严禁采纳)")
+
+    return "\n".join(lines)
+
 
 def normalize_winner(winner_raw: Any, direction_raw: Any = "") -> str:
     """Normalize winner string to one of 'bull', 'bear', 'tie'."""
@@ -479,7 +710,24 @@ def extract_and_validate_manager_verdict(
         return []
 
     adopted_claim_ids = _to_str_list(payload.get("adopted_claim_ids")) if payload else []
+    partially_adopted_claims = _to_str_list(payload.get("partially_adopted_claims")) if payload else []
     rejected_claim_ids = _to_str_list(payload.get("rejected_claim_ids")) if payload else []
+    excluded_evidence = _to_str_list(payload.get("excluded_evidence")) if payload else []
+
+    # ── Deterministic Claim Evidence Summary Computation ──────────────────
+    claim_evidence_summary: dict[str, dict[str, Any]] = {}
+    if claims is not None or claims_verification is not None:
+        claim_evidence_summary = aggregate_claim_evidence(
+            claims=claims, claims_verification=claims_verification
+        )
+    elif payload and isinstance(payload.get("claim_evidence_summary"), dict):
+        claim_evidence_summary = payload["claim_evidence_summary"]
+
+    deterministic_excluded: list[str] = []
+    for cid, s in claim_evidence_summary.items():
+        if cid in partially_adopted_claims or cid in rejected_claim_ids or s.get("decision") in {DECISION_PARTIAL, DECISION_REJECT}:
+            deterministic_excluded.extend(s.get("excluded_evidence", []))
+    combined_excluded = list(dict.fromkeys(excluded_evidence + deterministic_excluded))
 
     # ── Consistency Hard Gate Validation ──────────────────────────────────
     # Check 1: Winner vs Direction
@@ -539,18 +787,7 @@ def extract_and_validate_manager_verdict(
         if winner == "bear":
             failed_checks.append("正文明确判定多头胜，但机读块为空头胜(bear)，正文与机读裁决严重矛盾")
 
-    # Check 6: Fatal hallucination in adopted claim IDs
-    if claims_verification:
-        fatal_cids = {
-            str(item.get("claim_id"))
-            for item in claims_verification
-            if item.get("is_fatal") or item.get("status") == STATUS_SOURCE_UNAVAILABLE
-        }
-        for cid in adopted_claim_ids:
-            if str(cid) in fatal_cids:
-                failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
-
-    # Check 7: Claim ledger subset and existence validation
+    # Check 6: Claim ledger subset and existence validation
     if claims is not None:
         known_cids = {
             str(c.get("claim_id", "")).strip()
@@ -560,9 +797,74 @@ def extract_and_validate_manager_verdict(
         for cid in adopted_claim_ids:
             if cid not in known_cids:
                 failed_checks.append(f"裁决采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+        for cid in partially_adopted_claims:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决部分采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
         for cid in rejected_claim_ids:
             if cid not in known_cids:
                 failed_checks.append(f"裁决拒绝了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+
+    # Check 7: Claim Evidence Coverage & Consistency Hard Gate
+    if claim_evidence_summary:
+        for cid in adopted_claim_ids:
+            if cid in claim_evidence_summary:
+                s = claim_evidence_summary[cid]
+                cnt = s.get("counts", {})
+                cov = s.get("coverage", 0.0)
+                dec = s.get("decision")
+                if cnt.get("contradicted", 0) > 0:
+                    failed_checks.append(f"裁决采纳了存在事实冲突/前视偏差的矛盾 claim: {cid}")
+                elif cnt.get("source_unavailable", 0) > 0:
+                    failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
+                elif cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
+                    failed_checks.append(f"裁决采纳了全部证据未获验证 (unsupported) 的 claim: {cid}")
+                elif cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3):
+                    failed_checks.append(f"裁决采纳了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
+                elif dec == DECISION_PARTIAL or (0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)):
+                    failed_checks.append(
+                        f"裁决全额采纳了含未核实混合证据的 claim: {cid} (coverage={cov:.1%})，混合证据仅允许记录于 partially_adopted_claims 并剔除未验证项"
+                    )
+
+        for cid in partially_adopted_claims:
+            if cid in claim_evidence_summary:
+                s = claim_evidence_summary[cid]
+                cnt = s.get("counts", {})
+                cov = s.get("coverage", 0.0)
+                if cnt.get("contradicted", 0) > 0:
+                    failed_checks.append(f"部分采纳列表中包含了存在事实冲突/前视偏差的矛盾 claim: {cid}")
+                elif cnt.get("source_unavailable", 0) > 0:
+                    failed_checks.append(f"部分采纳列表中包含了不可用数据源的严重幻觉 claim: {cid}")
+                elif cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
+                    failed_checks.append(f"部分采纳列表中包含了全部证据未获验证 (unsupported) 的 claim: {cid}")
+                elif cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3):
+                    failed_checks.append(f"部分采纳列表中包含了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
+
+        # Check prose consistency against claim verification
+        for cid, s in claim_evidence_summary.items():
+            cov = s.get("coverage", 0.0)
+            dec = s.get("decision")
+            if dec != DECISION_ADOPT or cov < 1.0:
+                pattern = re.compile(
+                    rf"{re.escape(cid)}[^\n。；]*?证据充分|证据充分[^\n。；]*?{re.escape(cid)}",
+                    re.IGNORECASE,
+                )
+                for line in prose.splitlines():
+                    if pattern.search(line):
+                        if not re.search(r"非[^\n]*?证据充分|不[^\n]*?证据充分|未[^\n]*?证据充分|不能[^\n]*?证据充分", line):
+                            failed_checks.append(
+                                f"裁决正文将未完全核实的 claim {cid} (coverage={cov:.1%}, decision={dec}) 标注为'证据充分'，正文与证据核验严重冲突"
+                            )
+                            break
+    elif claims_verification:
+        # Fallback fatal check if only raw verification list was provided without claim summary
+        fatal_cids = {
+            str(item.get("claim_id"))
+            for item in claims_verification
+            if item.get("is_fatal") or item.get("status") == STATUS_SOURCE_UNAVAILABLE
+        }
+        for cid in adopted_claim_ids:
+            if str(cid) in fatal_cids:
+                failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
 
     consistency_passed = (len(failed_checks) == 0)
 
@@ -578,7 +880,10 @@ def extract_and_validate_manager_verdict(
         "downside": downside,
         "odds": odds,
         "adopted_claim_ids": adopted_claim_ids,
+        "partially_adopted_claims": partially_adopted_claims,
         "rejected_claim_ids": rejected_claim_ids,
+        "excluded_evidence": combined_excluded,
+        "claim_evidence_summary": claim_evidence_summary,
         "consistency_check_passed": consistency_passed,
         "failed_checks": failed_checks,
     }

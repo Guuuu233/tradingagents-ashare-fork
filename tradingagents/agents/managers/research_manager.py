@@ -19,6 +19,7 @@ from tradingagents.agents.utils.evidence_summary import (
 from tradingagents.agents.utils.evidence_verifier import (
     EvidenceFactualTruthEvaluator,
     extract_and_validate_manager_verdict,
+    format_claims_with_verification_for_prompt,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 
@@ -151,7 +152,10 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 "downside": None,
                 "odds": None,
                 "adopted_claim_ids": [],
+                "partially_adopted_claims": [],
                 "rejected_claim_ids": [],
+                "excluded_evidence": [],
+                "claim_evidence_summary": {},
                 "consistency_check_passed": True,
                 "failed_checks": [],
             }
@@ -177,6 +181,17 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             failed_reasons = "; ".join(f"辩论前置硬闸未通过: {err}" for err in gate_errors)
             _logger.warning("[research_manager] debate pre-gate check failed: %s", failed_reasons)
             blocked_plan = f"研究总监裁决自洽硬闸未通过：{failed_reasons}。已阻断进入 Trader 执行阶段。"
+            truth_evaluator = EvidenceFactualTruthEvaluator()
+            claims_verification = truth_evaluator.evaluate_claims(
+                claims=claims,
+                seven_reports=seven_reports,
+                market_data_context=market_data_context,
+                analysis_baseline_date=analysis_baseline_date,
+            )
+            claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
+                claims=claims,
+                claims_verification=claims_verification,
+            )
             manager_verdict = {
                 "direction": "中性",
                 "winner": "tie",
@@ -189,17 +204,13 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 "downside": None,
                 "odds": None,
                 "adopted_claim_ids": [],
+                "partially_adopted_claims": [],
                 "rejected_claim_ids": [],
+                "excluded_evidence": [],
+                "claim_evidence_summary": claim_evidence_summary,
                 "consistency_check_passed": False,
                 "failed_checks": [f"辩论前置硬闸未通过: {err}" for err in gate_errors],
             }
-            truth_evaluator = EvidenceFactualTruthEvaluator()
-            claims_verification = truth_evaluator.evaluate_claims(
-                claims=claims,
-                seven_reports=seven_reports,
-                market_data_context=market_data_context,
-                analysis_baseline_date=analysis_baseline_date,
-            )
             final_decision = f"[系统硬闸告警] 裁决自洽硬闸未通过：{failed_reasons}，已阻断后续交易。"
             tracker = current_tracker_var.get()
             if tracker:
@@ -236,6 +247,32 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 "evidence_verification": claims_verification,
                 "report_manifest": report_manifest,
             }
+
+        # ── 事实核验与 Claim 证据链聚合 (Fact Checking & Claim Evidence Aggregation) ──
+        truth_evaluator = EvidenceFactualTruthEvaluator()
+        claims_verification = truth_evaluator.evaluate_claims(
+            claims=claims,
+            seven_reports=seven_reports,
+            market_data_context=market_data_context,
+            analysis_baseline_date=analysis_baseline_date,
+        )
+        claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
+            claims=claims,
+            claims_verification=claims_verification,
+        )
+
+        claims_text = format_claims_with_verification_for_prompt(
+            claims=claims,
+            claims_verification=claims_verification,
+            claim_evidence_summary=claim_evidence_summary,
+        )
+        unresolved_claims_subset = [c for c in claims if str(c.get("claim_id", "")).strip() in set(unresolved_claim_ids)]
+        unresolved_claims_text = format_claims_with_verification_for_prompt(
+            claims=unresolved_claims_subset,
+            claims_verification=claims_verification,
+            claim_evidence_summary=claim_evidence_summary,
+            empty_message="当前没有未决 claim。",
+        )
 
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="research_manager")
         prompt = get_prompt("research_manager_prompt", config=get_config()).format(
