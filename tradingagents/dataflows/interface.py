@@ -218,6 +218,14 @@ def _extract_as_of(method: str, args: tuple, kwargs: dict) -> str | None:
         "get_cashflow": 2,
         "get_income_statement": 2,
     }
+    if method in ("get_balance_sheet", "get_cashflow", "get_income_statement"):
+        if len(args) >= 3 and args[2] is not None:
+            return str(args[2])
+        if len(args) == 2 and args[1] is not None:
+            cand = str(args[1])
+            if cand not in ("annual", "quarterly", "annually"):
+                return cand
+
     idx = positional.get(method)
     if idx is not None and len(args) > idx:
         val = args[idx]
