@@ -235,9 +235,9 @@ def test_merge_data_gaps_consumes_collector_ledger_for_new_markers():
     gaps = report_service.merge_data_gaps(result_data)
 
     assert gaps == [
-        "【数据获取失败】news：provider call failed",
-        "【数据获取失败】global_news：provider call failed",
-        "【数据获取失败】zt_pool：provider call failed",
+        "【数据获取失败】news：数据源调用失败",
+        "【数据获取失败】global_news：数据源调用失败",
+        "【数据获取失败】zt_pool：数据源调用失败",
     ]
 
 
