@@ -537,7 +537,7 @@ def _compact_failure_reason(status: str) -> str:
     if status == "refused":
         return "data source refused"
     if status == "failed":
-        return "provider call failed"
+        return "数据源调用失败"
     return "data source error"
 
 
