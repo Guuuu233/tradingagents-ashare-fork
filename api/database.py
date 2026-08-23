@@ -2,8 +2,9 @@
 
 import logging
 import os
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, UniqueConstraint, event, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -294,6 +295,10 @@ def _ensure_historical_cases_schema() -> None:
         logger.error("Failed to ensure historical_cases schema: %s", e)
 
 
+# Context variable to hold report_id for log_llm_call across execution context
+current_report_id: ContextVar[Optional[str]] = ContextVar("current_report_id", default=None)
+
+
 def log_llm_call(
     *,
     agent_name: str,
@@ -312,6 +317,8 @@ def log_llm_call(
     Errors are swallowed so a log failure never breaks analysis.
     """
     from uuid import uuid4
+    if report_id is None:
+        report_id = current_report_id.get()
     try:
         with get_db_ctx() as db:
             db.add(LLMCallLogDB(

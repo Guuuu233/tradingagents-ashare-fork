@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 import requests
 
-from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx
+from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service
 import jwt
@@ -1584,6 +1584,24 @@ class RoleBindingResponse(BaseModel):
     provider_type: Optional[str] = None
 
 
+class ResolvedRoleConfigResponse(BaseModel):
+    role_key: str
+    resolved_via: str
+    fallback_used: bool
+    provider_type: str
+    model_name: str
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    api_key_masked: Optional[str] = None
+    has_api_key: bool = False
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    profile_id: Optional[str] = None
+    provider_id: Optional[str] = None
+    profile_display_name: Optional[str] = None
+    provider_display_name: Optional[str] = None
+
+
 class PresetApplyRequest(BaseModel):
     preset_mode: str
     bull_profile_id: Optional[str] = None
@@ -2316,6 +2334,7 @@ async def _run_job(
     # asyncio.to_thread may finish later, but cancellation prevents the
     # coroutine from resuming into report or terminal-state writes.
     started_monotonic = time.monotonic()
+    current_report_id.set(job_id)
     inner_task = asyncio.create_task(
         _run_job_inner(job_id, request, stream_events, save_report, user_id, request_source)
     )
@@ -2590,6 +2609,7 @@ async def _run_job_inner(
     user_id: Optional[str] = None,
     request_source: str = "api",
 ) -> None:
+    current_report_id.set(job_id)
     job_start_t = time.time()
     # DAV-105: resolve defaults once more at the job boundary so every entry
     # point shares the same CN session rule. The explicitness marker prevents a
@@ -3986,6 +4006,7 @@ async def _stream_job_events(job_id: str):
 
 
 @app.get("/healthz")
+@app.get("/api/health")
 async def healthz():
     """健康检查，同时探测 asyncio 默认线程池是否被僵尸线程占满。
 
@@ -5650,13 +5671,24 @@ def apply_user_role_preset(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/v1/role-bindings/resolved")
+@app.get("/v1/role-bindings/resolved", response_model=Dict[str, ResolvedRoleConfigResponse])
 def get_resolved_user_role_bindings(
     db: Session = Depends(get_db),
     current_user: UserDB = Depends(_require_web_user),
 ):
     runtime_cfg = _config_response_for_user(current_user, db).model_dump()
-    return role_routing_service.resolve_all_roles(db, current_user.id, runtime_cfg)
+    resolved = role_routing_service.resolve_all_roles(db, current_user.id, runtime_cfg)
+    masked_roles = {}
+    for role, cfg in resolved.items():
+        raw_key = cfg.get("api_key")
+        masked_key = role_routing_service._mask_api_key(raw_key)
+        masked_roles[role] = {
+            **cfg,
+            "api_key": masked_key,
+            "api_key_masked": masked_key,
+            "has_api_key": bool(raw_key),
+        }
+    return masked_roles
 
 
 # --- Custom Analysis Prompts Endpoints (Phase B: persistence only, no injection yet) ---
@@ -7024,12 +7056,17 @@ if os.path.exists(dist_path):
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
+        # /api/* and /v1/* prefixes must never fall into SPA fallback
+        clean_path = full_path.lstrip("/")
+        if clean_path.startswith("api/") or clean_path == "api" or clean_path.startswith("v1/") or clean_path == "v1":
+            raise HTTPException(status_code=404, detail="Not Found")
+
         # 1. Define and resolve the absolute safe root
         base_path = os.path.realpath(dist_path)
-        
+
         # 2. Resolve the requested path (handling .. and symlinks)
         # We lstrip("/") to prevent os.path.join from treating it as an absolute path
-        fullpath = os.path.realpath(os.path.join(base_path, full_path.lstrip("/")))
+        fullpath = os.path.realpath(os.path.join(base_path, clean_path))
         
         # 3. Security Check: The normalized path must start with the base_path
         if not fullpath.startswith(base_path):
