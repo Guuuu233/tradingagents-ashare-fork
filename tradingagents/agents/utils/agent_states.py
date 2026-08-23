@@ -108,13 +108,130 @@ class ManagerVerdict(TypedDict, total=False):
     failed_checks: Annotated[list[str], "List of failed consistency checks"]
 
 
+PROTOCOL_VERSION_V1_LEGACY = "v1_legacy"
+PROTOCOL_VERSION_V2_STRUCTURED = "v2_structured_disagreement"
+
+DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
+    "v2_debate_enabled": False,
+    "shadow_credit_enabled": True,
+    "credit_weighting_enabled": False,
+}
+
+DEFAULT_PROTOCOL_METADATA: dict[str, Any] = {
+    "protocol_version": PROTOCOL_VERSION_V1_LEGACY,
+    "protocol_stage": "opening",
+    "tiebreak_skipped": False,
+    "debate_degenerate": False,
+    "data_utilization_metrics": {},
+    "challenge_verification": [],
+    "shadow_credit_metrics": {},
+    "feature_flags": {
+        "v2_debate_enabled": False,
+        "shadow_credit_enabled": True,
+        "credit_weighting_enabled": False,
+    },
+}
+
+
+def get_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
+    """Extract and normalize protocol metadata from result_data or debate_state.
+
+    Missing fields in legacy reports are defaulted to v1_legacy without error.
+    """
+    if not isinstance(state_or_result, dict):
+        return {
+            "protocol_version": PROTOCOL_VERSION_V1_LEGACY,
+            "protocol_stage": "opening",
+            "tiebreak_skipped": False,
+            "debate_degenerate": False,
+            "data_utilization_metrics": {},
+            "challenge_verification": [],
+            "shadow_credit_metrics": {},
+            "feature_flags": dict(DEFAULT_FEATURE_FLAGS),
+        }
+
+    # Check root level first, then nested investment_debate_state
+    inv_state = state_or_result.get("investment_debate_state")
+    if not isinstance(inv_state, dict):
+        inv_state = state_or_result
+
+    raw_version = inv_state.get("protocol_version") or state_or_result.get("protocol_version")
+    protocol_version = str(raw_version) if raw_version else PROTOCOL_VERSION_V1_LEGACY
+
+    raw_stage = inv_state.get("protocol_stage") or state_or_result.get("protocol_stage")
+    protocol_stage = str(raw_stage) if raw_stage else "opening"
+
+    tiebreak_skipped = bool(
+        inv_state.get("tiebreak_skipped")
+        if "tiebreak_skipped" in inv_state
+        else state_or_result.get("tiebreak_skipped", False)
+    )
+
+    debate_degenerate = bool(
+        inv_state.get("debate_degenerate")
+        if "debate_degenerate" in inv_state
+        else state_or_result.get("debate_degenerate", False)
+    )
+
+    data_metrics = (
+        inv_state.get("data_utilization_metrics")
+        if isinstance(inv_state.get("data_utilization_metrics"), dict)
+        else state_or_result.get("data_utilization_metrics")
+    )
+    if not isinstance(data_metrics, dict):
+        data_metrics = {}
+
+    challenge_verif = (
+        inv_state.get("challenge_verification")
+        if isinstance(inv_state.get("challenge_verification"), list)
+        else state_or_result.get("challenge_verification")
+    )
+    if not isinstance(challenge_verif, list):
+        challenge_verif = []
+
+    shadow_metrics = (
+        inv_state.get("shadow_credit_metrics")
+        if isinstance(inv_state.get("shadow_credit_metrics"), dict)
+        else state_or_result.get("shadow_credit_metrics")
+    )
+    if not isinstance(shadow_metrics, dict):
+        shadow_metrics = {}
+
+    raw_flags = (
+        inv_state.get("feature_flags")
+        if isinstance(inv_state.get("feature_flags"), dict)
+        else state_or_result.get("feature_flags")
+    )
+    feature_flags = dict(DEFAULT_FEATURE_FLAGS)
+    if isinstance(raw_flags, dict):
+        for k in DEFAULT_FEATURE_FLAGS:
+            if k in raw_flags:
+                feature_flags[k] = bool(raw_flags[k])
+
+    return {
+        "protocol_version": protocol_version,
+        "protocol_stage": protocol_stage,
+        "tiebreak_skipped": tiebreak_skipped,
+        "debate_degenerate": debate_degenerate,
+        "data_utilization_metrics": data_metrics,
+        "challenge_verification": challenge_verif,
+        "shadow_credit_metrics": shadow_metrics,
+        "feature_flags": feature_flags,
+    }
+
+
+def normalize_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
+    """Alias for get_protocol_metadata with normalized output guarantees."""
+    return get_protocol_metadata(state_or_result)
+
+
 class InvestDebateState(TypedDict):
     bull_history: Annotated[str, "Bullish conversation history"]
     bear_history: Annotated[str, "Bearish conversation history"]
     history: Annotated[str, "Conversation history"]
     current_speaker: Annotated[str, "Speaker that spoke last"]
     current_response: Annotated[str, "Latest response"]
-    
+
     # ── Parallel Rebuttal Fields ──────────────────────────────────────
     bull_initial: Annotated[str, "Bull's initial opening statement"]
     bear_initial: Annotated[str, "Bear's initial opening statement"]
@@ -140,6 +257,16 @@ class InvestDebateState(TypedDict):
     blocked: Annotated[bool, "Whether debate protocol validation failed and blocked progression"]
     parse_status: Annotated[str, "Latest debate state parse status"]
     block_reason: Annotated[str, "Reason if debate state is blocked"]
+
+    # ── Protocol & Metrics Fields (P1-M) ──────────────────────────────
+    protocol_version: Annotated[str, "Protocol version: v1_legacy or v2_structured_disagreement"]
+    protocol_stage: Annotated[str, "Protocol stage: opening, challenge, tiebreak, manager"]
+    tiebreak_skipped: Annotated[bool, "Whether tiebreak round was skipped"]
+    debate_degenerate: Annotated[bool, "Whether debate belief trajectories degenerated"]
+    data_utilization_metrics: Annotated[dict[str, Any], "Metrics on data utilization across seven reports"]
+    challenge_verification: Annotated[list[dict[str, Any]], "Deterministic verification results for challenges"]
+    shadow_credit_metrics: Annotated[dict[str, Any], "Shadow credit metrics collected during debate"]
+    feature_flags: Annotated[dict[str, Any], "Feature flags controlling debate protocol and scoring"]
 
 
 class RiskDebateState(TypedDict):
