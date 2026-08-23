@@ -118,6 +118,43 @@ def extract_new_evidence_count(
     return new_count
 
 
+def _evaluate_claim_duplication(
+    claim_payload: Mapping[str, Any],
+    same_side_claims: Sequence[Mapping[str, Any]],
+    prev_ev_list: Sequence[Any],
+) -> tuple[bool, float, int, str | None]:
+    """Evaluate whether a candidate new claim is a duplicate of same-side historical claims.
+
+    Returns:
+        (is_duplicate, max_similarity, new_evidence_count, matched_claim_id)
+    """
+    claim_text = str(claim_payload.get("claim", "")).strip()
+    claim_ev = claim_payload.get("evidence") or []
+
+    max_sim = 0.0
+    matched_id = None
+    for pc in same_side_claims:
+        s = compute_claim_similarity(claim_text, str(pc.get("claim", "")))
+        if s > max_sim:
+            max_sim = s
+            matched_id = str(pc.get("claim_id", "")).strip() or None
+
+    new_ev_count = extract_new_evidence_count(claim_ev, prev_ev_list)
+
+    is_duplicate = False
+    if max_sim >= 0.82:
+        is_duplicate = True
+    elif max_sim >= 0.70 and new_ev_count == 0 and prev_ev_list:
+        is_duplicate = True
+    elif prev_ev_list and new_ev_count == 0 and all(
+        max([compute_claim_similarity(str(e), str(pe)) for pe in prev_ev_list], default=0.0) >= 0.82
+        for e in claim_ev
+    ):
+        is_duplicate = True
+
+    return is_duplicate, max_sim, new_ev_count, matched_id
+
+
 def _tagged_openings(text: str, tag: str) -> list[re.Match[str]]:
     if not isinstance(text, str):
         return []
@@ -854,28 +891,13 @@ def validate_debate_response(
             max_sims = []
 
             for nc in new_claims_list:
-                c_text = str(nc.get("claim", "")).strip()
-                c_ev = nc.get("evidence") or []
-                sim = max(
-                    [compute_claim_similarity(c_text, str(pc.get("claim", ""))) for pc in same_side_claims],
-                    default=0.0,
+                is_duplicate, sim, new_ev_count, _ = _evaluate_claim_duplication(
+                    nc, same_side_claims, prev_ev_list
                 )
                 max_sims.append(sim)
-                new_ev_count = extract_new_evidence_count(c_ev, prev_ev_list)
-
-                is_duplicate = False
-                if sim >= 0.82:
-                    is_duplicate = True
-                elif sim >= 0.70 and new_ev_count == 0 and prev_ev_list:
-                    is_duplicate = True
-                elif prev_ev_list and new_ev_count == 0 and all(
-                    max([compute_claim_similarity(str(e), str(pe)) for pe in prev_ev_list], default=0.0) >= 0.82
-                    for e in c_ev
-                ):
-                    is_duplicate = True
 
                 if is_duplicate:
-                    duplicate_claims.append(c_text)
+                    duplicate_claims.append(str(nc.get("claim", "")).strip())
                 else:
                     valid_new_claims.append(nc)
 
@@ -1083,37 +1105,69 @@ def update_debate_state_with_payload(
         unresolved_set.add(claim_id)
         resolved_set.discard(claim_id)
 
+    # Process new claims with per-claim duplicate rejection
+    same_side_claims = [
+        c
+        for c in claims
+        if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+        or (c.get("stance") and c.get("stance") == stance)
+    ]
+    prev_ev_list = [
+        ev
+        for pc in same_side_claims
+        for ev in (pc.get("evidence") or [])
+        if str(ev).strip()
+    ]
+
     new_claim_ids = []
     all_target_claim_ids = []
+    duplicate_claim_ids = []
+    duplicate_claims = []
+    valid_max_sims = []
+    all_max_sims = []
+    total_new_ev = 0
+
     for claim_payload in payload.get("new_claims", []) or []:
         claim_text = str(claim_payload.get("claim", "")).strip()
         if not claim_text:
             continue
         claim_counter += 1
         claim_id = f"{claim_prefix}-{claim_counter}"
-        evidence = [
-            str(item).strip()
-            for item in (claim_payload.get("evidence") or [])[:3]
-            if str(item).strip()
-        ]
-        target_claim_ids = _filter_known_claim_ids(claim_payload.get("target_claim_ids"), claim_map)
-        claim_entry = {
-            "claim_id": claim_id,
-            "speaker": speaker_label,
-            "speaker_key": speaker_key,
-            "stance": stance,
-            "claim": claim_text,
-            "evidence": evidence,
-            "confidence": claim_payload["confidence"],
-            "status": "open",
-            "target_claim_ids": target_claim_ids,
-            "round_index": message_index,
-        }
-        claims.append(claim_entry)
-        claim_map[claim_id] = claim_entry
-        open_claim_ids.add(claim_id)
-        new_claim_ids.append(claim_id)
-        all_target_claim_ids.extend(target_claim_ids)
+
+        is_dup, sim, ev_count, matched_id = _evaluate_claim_duplication(
+            claim_payload, same_side_claims, prev_ev_list
+        )
+        all_max_sims.append(sim)
+
+        if is_dup:
+            duplicate_claim_ids.append(claim_id)
+            duplicate_claims.append(claim_text)
+        else:
+            evidence = [
+                str(item).strip()
+                for item in (claim_payload.get("evidence") or [])[:3]
+                if str(item).strip()
+            ]
+            target_claim_ids = _filter_known_claim_ids(claim_payload.get("target_claim_ids"), claim_map)
+            claim_entry = {
+                "claim_id": claim_id,
+                "speaker": speaker_label,
+                "speaker_key": speaker_key,
+                "stance": stance,
+                "claim": claim_text,
+                "evidence": evidence,
+                "confidence": claim_payload["confidence"],
+                "status": "open",
+                "target_claim_ids": target_claim_ids,
+                "round_index": message_index,
+            }
+            claims.append(claim_entry)
+            claim_map[claim_id] = claim_entry
+            open_claim_ids.add(claim_id)
+            new_claim_ids.append(claim_id)
+            all_target_claim_ids.extend(target_claim_ids)
+            valid_max_sims.append(sim)
+            total_new_ev += ev_count
 
     all_target_claim_ids = list(dict.fromkeys(all_target_claim_ids))
 
@@ -1128,54 +1182,13 @@ def update_debate_state_with_payload(
     )
 
     # Compute information gain metrics for round_messages
-    same_side_claims = [
-        c
-        for c in claims
-        if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
-        or (c.get("stance") and c.get("stance") == stance)
-    ]
-    prev_same_side_claims = [
-        c for c in same_side_claims
-        if c.get("round_index", message_index) < message_index
-    ]
-    if not prev_same_side_claims:
+    if not same_side_claims:
         information_gain_score = 1.0
-        duplicate_claim_ids = []
-        duplicate_claims = []
-        new_evidence_count = sum(len(nc.get("evidence") or []) for nc in payload.get("new_claims", []) or [])
         max_similarity = 0.0
+        new_evidence_count = sum(len(nc.get("evidence") or []) for nc in payload.get("new_claims", []) or [])
     else:
-        prev_ev_list = [
-            ev
-            for pc in prev_same_side_claims
-            for ev in (pc.get("evidence") or [])
-            if str(ev).strip()
-        ]
-        max_sims = []
-        dup_texts = []
-        dup_ids = []
-        total_new_ev = 0
-        for nc in payload.get("new_claims", []) or []:
-            c_text = str(nc.get("claim", "")).strip()
-            c_ev = nc.get("evidence") or []
-            sim = 0.0
-            matched_id = None
-            for pc in prev_same_side_claims:
-                s = compute_claim_similarity(c_text, str(pc.get("claim", "")))
-                if s > sim:
-                    sim = s
-                    matched_id = str(pc.get("claim_id", "")).strip()
-            max_sims.append(sim)
-            ev_count = extract_new_evidence_count(c_ev, prev_ev_list)
-            total_new_ev += ev_count
-            if sim >= 0.82:
-                dup_texts.append(c_text)
-                if matched_id and matched_id not in dup_ids:
-                    dup_ids.append(matched_id)
-        max_similarity = max(max_sims) if max_sims else 0.0
+        max_similarity = max(valid_max_sims) if valid_max_sims else (max(all_max_sims) if all_max_sims else 0.0)
         information_gain_score = max(0.0, min(1.0, round(1.0 - max_similarity, 4)))
-        duplicate_claims = dup_texts
-        duplicate_claim_ids = dup_ids
         new_evidence_count = total_new_ev
 
     round_messages = [dict(m) for m in (state.get("round_messages", []) or [])]
