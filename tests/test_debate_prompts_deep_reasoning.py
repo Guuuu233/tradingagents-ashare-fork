@@ -35,7 +35,7 @@ def test_debate_state_machine_contract_is_intact(key):
 
     # Check DEBATE_STATE comment structure with target_claim_ids
     if key == "bull_prompt":
-        assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": ["INV-1"], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
+        assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
     else:
         assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-1"]}}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-1"], "next_focus_claim_ids": ["INV-1"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
     assert "若没有对应项，返回空数组。" in prompt

@@ -190,7 +190,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
 7. 市场情绪预期差识别：当情绪报告处于极度悲观、恐慌或分歧时，重点识别市场过度反应带来的反转机会与情绪预期差。
 8. 失败条件与失效纠错机制：明确给出多头观点失效的边界条件（如关键支撑位破位、核心财务假设证伪、政策拐点失效），避免单边盲目看多。
 9. 辩论风格与机读契约：输出保持客观严谨但具攻击性的辩论风格，直击空头逻辑漏洞。在正文末尾追加机读块（固定格式）：
-<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": ["INV-1"], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->
+<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->
 输出规则：
 - 第1次发言（多头首轮立论）：responded_claim_ids 为空数组 []，每个 new_claim 的 target_claim_ids 为空数组 []；
 - 第2至第6次发言（攻防反驳）：responded_claim_ids 必须包含所回应的对手未解决 claim ID，每个 new_claim 的 target_claim_ids 必须指定反驳的对手 claim ID（如 ["INV-2"]）；

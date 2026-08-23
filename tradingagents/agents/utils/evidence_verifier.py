@@ -47,9 +47,30 @@ SEVEN_REPORT_KEYS = (
 )
 
 # Chinese and English quantity/unit patterns
+_UNIT_STR = r"(?:万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手)"
+
+_RANGE_BOTH_UNIT_PATTERN = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")(?![\d.])"
+)
+_RANGE_END_UNIT_PATTERN = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")(?![\d.])"
+)
+_RANGE_NO_UNIT_PATTERN = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*[-~至到]\s*(\d+(?:\.\d+)?)(?![\d.])"
+)
+
 _NUMBER_WITH_UNIT_RE = re.compile(
-    r"([+-]?\d+(?:\.\d+)?)\s*(亿元|万元|万|亿|%|％|bp|点|元|港元|美元)?",
+    r"(?<![\d.])([+-]?\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")?",
     re.IGNORECASE,
+)
+
+_DATE_MASK_PATTERN = re.compile(
+    r"(?<![\d.])\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?![\d.])|"
+    r"(?<![\d.])\d{4}年\d{1,2}月\d{1,2}日?(?![\d.])|"
+    r"(?<![\d.])\d{1,2}月\d{1,2}日?(?![\d.])|"
+    r"(?<![\d.])(0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])(?![\d.])|"
+    r"(?<![\d.])\d{4}[hHqQ][1-4](?![\d.])|"
+    r"(?<![\d.])[hHqQ][1-4](?![\d.])"
 )
 
 _ISO_DATE_RE = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)")
@@ -75,7 +96,7 @@ def _parse_date(text: str) -> date | None:
 
 
 def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, str] | None:
-    """Normalize a value and its unit to a canonical base (e.g. 元, %, or raw number).
+    """Normalize a value and its unit to a canonical base (e.g. 元, 股, %, or raw number).
 
     Returns:
         (canonical_number, canonical_unit) or None
@@ -86,13 +107,19 @@ def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, st
         return None
 
     unit = (unit_str or "").strip().lower()
-    if unit in {"亿元", "亿"}:
+    if unit in {"万股", "亿股", "股"}:
+        if unit == "亿股":
+            return num * 100_000_000.0, "股"
+        elif unit == "万股":
+            return num * 10_000.0, "股"
+        return num, "股"
+    elif unit in {"亿元", "亿"}:
         return num * 100_000_000.0, "元"
     elif unit in {"万元", "万"}:
         return num * 10_000.0, "元"
     elif unit in {"元", "港元", "美元"}:
         return num, "元"
-    elif unit in {"%", "％"}:
+    elif unit in {"%", "％", "pct"}:
         return num, "%"
     elif unit == "bp":
         return num / 100.0, "%"
@@ -102,28 +129,84 @@ def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, st
 
 def _extract_numbers_and_units(text: str) -> list[tuple[float, str, str]]:
     """Extract list of (normalized_val, canonical_unit, raw_substr) from text."""
+    if not text:
+        return []
+    # 1. Mask dates to prevent temporal anchors from polluting financial metric matching
+    cleaned = _DATE_MASK_PATTERN.sub(" ", text)
+    # 2. Expand ranges so the first number inherits trailing unit (e.g. 450~470亿元 -> 450亿元 ~ 470亿元)
+    cleaned = _RANGE_BOTH_UNIT_PATTERN.sub(r"\1\2 ~ \3\4", cleaned)
+    cleaned = _RANGE_END_UNIT_PATTERN.sub(r"\1\3 ~ \2\3", cleaned)
+    cleaned = _RANGE_NO_UNIT_PATTERN.sub(r"\1 ~ \2", cleaned)
+
     results = []
-    for match in _NUMBER_WITH_UNIT_RE.finditer(text):
+    for match in _NUMBER_WITH_UNIT_RE.finditer(cleaned):
         val_str = match.group(1)
         unit_str = match.group(2) or ""
         norm = normalize_numeric_value(val_str, unit_str)
         if norm is not None:
-            results.append((norm[0], norm[1], match.group(0)))
+            results.append((norm[0], norm[1], match.group(0).strip()))
     return results
+
+
+def _is_num_match(
+    ev_num: float,
+    ev_unit: str,
+    l_num: float,
+    l_unit: str,
+    rel_tol: float = 0.02,
+    abs_tol: float = 0.05,
+) -> bool:
+    """Check if evidence numeric value matches report numeric value within tolerance."""
+    unit_compatible = (
+        (ev_unit == l_unit)
+        or (ev_unit == "raw" and l_unit == "%")
+        or (ev_unit == "%" and l_unit == "raw")
+    )
+    if not unit_compatible:
+        return False
+    return (
+        math.isclose(ev_num, l_num, rel_tol=rel_tol, abs_tol=abs_tol)
+        or math.isclose(abs(ev_num), abs(l_num), rel_tol=rel_tol, abs_tol=abs_tol)
+    )
+
+
+# Expanded domain metric and context keywords
+_METRIC_KEYWORDS = [
+    # Valuation & Financial metrics
+    "pe", "pb", "ps", "roe", "roa", "eps", "m2", "cpi", "ppi", "gdp", "lpr", "shibor",
+    "营收", "收入", "利润", "净利润", "净利", "毛利", "毛利率", "净利率", "扣非", "负债率", "资产负债率",
+    "现金流", "自由现金流", "fcf", "资本开支", "capex", "研发", "费用", "费用率", "应收账款", "存货",
+    "周转率", "商誉", "减值", "利用率", "产能", "cr3", "价格战", "库存", "去库", "补库", "订单",
+    "估值", "分红", "股息", "股息率", "回购", "增持", "减持", "重组", "定增", "质押", "现金", "货币资金", "安全垫", "安全边际",
+    "底线", "压力测试", "敏感性", "弹性",
+    # Capital & Flow metrics
+    "主力", "净流入", "净流出", "流出", "流入", "超大单", "大单", "中单", "小单", "全单", "龙虎榜",
+    "北向", "北向资金", "机构", "外资", "游资", "散户", "两融", "融资", "融券", "大宗交易", "筹码",
+    "吸筹", "出货", "洗盘", "托底", "增仓", "减仓", "持股", "席位",
+    # Technical & Volume/Price metrics
+    "成交量", "成交额", "换手率", "换手", "量比", "地量", "天量", "放量", "缩量", "量价", "均线",
+    "ema", "sma", "vwma", "macd", "rsi", "boll", "布林", "kdj", "atr", "dif", "dea",
+    "支撑", "阻力", "突破", "破位", "双底", "筑底", "死叉", "金叉", "超买", "超卖", "多头", "空头",
+    "冲高", "回落", "震荡", "趋势", "动量", "k线", "收盘", "开盘", "最高", "最低", "日内", "位置",
+    "高点", "低点", "低位", "高位", "实体", "上影", "下影", "涨停", "跌停", "连板", "炸板",
+    # Macro & Industry metrics
+    "降息", "降准", "加息", "利率", "美债", "汇率", "油价", "原油", "黄金", "铜价", "lme", "大宗商品",
+    "关税", "补贴", "以旧换新", "外需", "内需", "财政", "赤字", "信贷", "流动性", "长协", "转嫁",
+    "水库", "来水", "发电量", "偏枯", "偏丰", "蓄能", "电量", "纳斯达克", "生物科技", "指数",
+    # Pharma & Sector specific
+    "管线", "临床", "获批", "授权", "license-out", "医保", "集采", "原料药", "仿制药", "创新药", "adc", "fda",
+    # Sentiment & General
+    "风险偏好", "进攻", "防守", "避险", "虹吸", "抽水", "情绪", "舆情", "预期差", "公告", "中报", "年报", "季报",
+    # Entities frequently referenced
+    "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来"
+]
 
 
 def _extract_metric_keywords(text: str) -> list[str]:
     """Extract financial and market metric keywords from a string."""
-    keywords = [
-        "pe", "pb", "roe", "eps", "m2", "cpi", "ppi", "gdp", "lpr", "shibor",
-        "营收", "收入", "利润", "净利润", "毛利率", "净利率", "负债率", "现金流",
-        "主力", "净流入", "净流出", "超大单", "大单", "龙虎榜", "成交量", "成交额", "换手率",
-        "降息", "降准", "分红", "估值", "订单", "产能", "利用率", "均线", "突破",
-        "油价", "汇率", "关税", "补贴", "长协", "转嫁", "cr3", "价格战", "库存"
-    ]
     found = []
     text_lower = text.lower()
-    for kw in keywords:
+    for kw in _METRIC_KEYWORDS:
         if kw in text_lower:
             found.append(kw)
     return found
@@ -274,9 +357,7 @@ class EvidenceFactualTruthEvaluator:
                     "details": f"在 {role_key} 中找到精确匹配事实",
                 }
 
-        # 3.2 Numeric and keyword normalized matching in reports
-        contradicted_candidate = None
-
+        # 3.2 Single-line full match in reports
         for role_key in SEVEN_REPORT_KEYS:
             report_body = str(seven_reports.get(role_key, "") or "")
             if not report_body.strip():
@@ -306,30 +387,67 @@ class EvidenceFactualTruthEvaluator:
                         }
                     continue
 
-                # If numbers exist, check value match
-                matched_all_numbers = True
-                found_match = False
-                for ev_num, ev_unit, ev_raw in ev_numbers:
-                    num_found_in_line = False
-                    for l_num, l_unit, l_raw in line_numbers:
-                        # Check units compatible
-                        if ev_unit == l_unit or (ev_unit == "raw" and l_unit == "%") or (ev_unit == "%" and l_unit == "raw"):
-                            if math.isclose(ev_num, l_num, rel_tol=self.rel_tol, abs_tol=self.abs_tol):
+                # If numbers exist, check single-line full value match
+                if ev_numbers:
+                    matched_all_numbers = True
+                    found_match = False
+                    for ev_num, ev_unit, ev_raw in ev_numbers:
+                        num_found_in_line = False
+                        for l_num, l_unit, l_raw in line_numbers:
+                            if _is_num_match(ev_num, ev_unit, l_num, l_unit, self.rel_tol, self.abs_tol):
                                 num_found_in_line = True
                                 found_match = True
                                 break
-                            elif common_kw:
-                                # Numbers are different on the same metric keyword -> potential contradiction
-                                diff_pct = abs(ev_num - l_num) / (abs(l_num) + 1e-9)
-                                if diff_pct > 0.05:
-                                    contradicted_candidate = (
-                                        role_key,
-                                        f"在 {role_key} 中关键词 '{', '.join(common_kw)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
-                                    )
-                    if not num_found_in_line:
-                        matched_all_numbers = False
+                        if not num_found_in_line:
+                            matched_all_numbers = False
 
-                if found_match and (matched_all_numbers or len(common_kw) >= 1):
+                    if found_match and matched_all_numbers:
+                        if not ev_keywords or len(common_kw) >= 1:
+                            return {
+                                "raw": raw_text,
+                                "claim_id": claim_id,
+                                "matched_role": role_key,
+                                "matched_source": role_key.replace("_report", ""),
+                                "status": STATUS_VERIFIED,
+                                "is_fatal": False,
+                                "details": f"在 {role_key} 中验证数值与关键词匹配",
+                            }
+
+        # 3.3 Multi-line aggregation mode (when single line did not match all numbers)
+        if ev_numbers:
+            num_hits_by_report: dict[str, set[int]] = {}
+            all_hit_num_indices: set[int] = set()
+
+            for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+                for role_key in SEVEN_REPORT_KEYS:
+                    report_body = str(seven_reports.get(role_key, "") or "")
+                    if not report_body.strip():
+                        continue
+                    matched_in_report = False
+                    for line in report_body.splitlines():
+                        line_text = line.strip()
+                        if not line_text:
+                            continue
+                        line_keywords = _extract_metric_keywords(line_text)
+                        common_kw = set(ev_keywords).intersection(set(line_keywords))
+                        # Each hit line must share >= 1 keyword with the evidence sentence
+                        if ev_keywords and not common_kw:
+                            continue
+                        line_numbers = _extract_numbers_and_units(line_text)
+                        for l_num, l_unit, l_raw in line_numbers:
+                            if _is_num_match(ev_num, ev_unit, l_num, l_unit, self.rel_tol, self.abs_tol):
+                                num_hits_by_report.setdefault(role_key, set()).add(num_idx)
+                                all_hit_num_indices.add(num_idx)
+                                matched_in_report = True
+                                break
+                        if matched_in_report:
+                            break
+
+            total_nums = len(ev_numbers)
+            # Check single-report multi-line aggregation first
+            for role_key in SEVEN_REPORT_KEYS:
+                hit_set = num_hits_by_report.get(role_key, set())
+                if len(hit_set) == total_nums:
                     return {
                         "raw": raw_text,
                         "claim_id": claim_id,
@@ -337,8 +455,60 @@ class EvidenceFactualTruthEvaluator:
                         "matched_source": role_key.replace("_report", ""),
                         "status": STATUS_VERIFIED,
                         "is_fatal": False,
-                        "details": f"在 {role_key} 中验证数值与关键词匹配",
+                        "details": f"在 {role_key} 中通过多行聚合验证数值与关键词匹配 (multi_line_match)",
                     }
+
+            # Check cross-report multi-line aggregation
+            if len(all_hit_num_indices) == total_nums:
+                matched_roles = [r for r in SEVEN_REPORT_KEYS if r in num_hits_by_report and num_hits_by_report[r]]
+                return {
+                    "raw": raw_text,
+                    "claim_id": claim_id,
+                    "matched_role": ",".join(matched_roles) if len(matched_roles) > 1 else matched_roles[0],
+                    "matched_source": ",".join(r.replace("_report", "") for r in matched_roles),
+                    "status": STATUS_VERIFIED,
+                    "is_fatal": False,
+                    "details": f"在 {','.join(matched_roles)} 中跨报告多行聚合验证数值与关键词匹配 (multi_line_match)",
+                }
+
+        # 3.4 Contradiction check across reports when evidence is not verified
+        contradicted_candidate = None
+        if ev_numbers and ev_keywords:
+            for role_key in SEVEN_REPORT_KEYS:
+                report_body = str(seven_reports.get(role_key, "") or "")
+                if not report_body.strip():
+                    continue
+                for line in report_body.splitlines():
+                    line_text = line.strip()
+                    if not line_text:
+                        continue
+                    line_keywords = _extract_metric_keywords(line_text)
+                    common_kw = set(ev_keywords).intersection(set(line_keywords))
+                    # Match specific metric keywords (avoid generic tokens triggering false contradiction)
+                    metric_overlap = [kw for kw in common_kw if kw in {
+                        "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
+                        "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
+                        "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
+                    }]
+                    if not metric_overlap:
+                        continue
+                    line_numbers = _extract_numbers_and_units(line_text)
+                    for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+                        if num_idx in all_hit_num_indices:
+                            continue
+                        for l_num, l_unit, l_raw in line_numbers:
+                            if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
+                                diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
+                                if diff_pct > 0.05:
+                                    contradicted_candidate = (
+                                        role_key,
+                                        f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
+                                    )
+                                    break
+                        if contradicted_candidate:
+                            break
+                if contradicted_candidate:
+                    break
 
         if contradicted_candidate:
             return {
