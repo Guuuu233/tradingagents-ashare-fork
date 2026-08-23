@@ -14,7 +14,7 @@ import HistoricalDebateDrawer from '@/components/HistoricalDebateDrawer'
 import { useAuthStore } from '@/stores/authStore'
 import { advanceProgress, getReportRunProgress } from '@/utils/progressFeedback'
 import { isLegacyEnglishReport, parseDecisionAction } from '@/utils/reportText'
-import { buildReportMarkdown, downloadMarkdown, type MarkdownSection } from '@/utils/markdownExport'
+import { buildReportMarkdown, downloadMarkdown, REPORT_EXPORT_SECTIONS } from '@/utils/markdownExport'
 
 type ProgressState = {
     status: 'idle' | 'loading' | 'success' | 'error'
@@ -156,16 +156,6 @@ const renderStatusBadge = (report: Report) => {
             )
     }
 }
-
-const REPORT_EXPORT_SECTIONS: MarkdownSection[] = [
-    { key: 'market_report', title: '市场分析报告' },
-    { key: 'sentiment_report', title: '舆情分析报告' },
-    { key: 'news_report', title: '新闻分析报告' },
-    { key: 'fundamentals_report', title: '基本面分析报告' },
-    { key: 'investment_plan', title: '研究团队决策' },
-    { key: 'trader_investment_plan', title: '交易团队计划' },
-    { key: 'final_trade_decision', title: '最终交易决策' },
-]
 
 function exportReport(report: ReportDetail) {
     const text = buildReportMarkdown(report, REPORT_EXPORT_SECTIONS)

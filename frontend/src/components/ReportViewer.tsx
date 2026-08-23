@@ -5,21 +5,10 @@ import remarkGfm from 'remark-gfm'
 import { useAnalysisStore } from '@/stores/analysisStore'
 import type { ReportDetail } from '@/types'
 import { isLegacyEnglishReport, sanitizeReportMarkdown } from '@/utils/reportText'
-import { buildReportMarkdown, downloadMarkdown } from '@/utils/markdownExport'
+import { buildReportMarkdown, downloadMarkdown, REPORT_SECTIONS } from '@/utils/markdownExport'
 import HistoricalDebateDrawer from './HistoricalDebateDrawer'
 
-const REPORT_SECTIONS = [
-    { key: 'market_report', title: '市场分析报告', team: '分析团队' },
-    { key: 'sentiment_report', title: '舆情分析报告', team: '分析团队' },
-    { key: 'news_report', title: '新闻分析报告', team: '分析团队' },
-    { key: 'fundamentals_report', title: '基本面分析报告', team: '分析团队' },
-    { key: 'macro_report', title: '宏观板块报告', team: '分析团队' },
-    { key: 'smart_money_report', title: '主力资金报告', team: '分析团队' },
-    { key: 'volume_price_report', title: '量价分析报告', team: '分析团队' },
-    { key: 'investment_plan', title: '研究团队决策', team: '研究团队' },
-    { key: 'trader_investment_plan', title: '交易团队计划', team: '交易团队' },
-    { key: 'final_trade_decision', title: '最终交易决策', team: '组合管理' },
-]
+export { REPORT_SECTIONS }
 
 const REPORT_DISCLAIMER =
     '> 免责声明：以上内容由模型基于公开数据、历史信息与预设规则自动生成，仅供研究参考，不构成任何投资建议、收益承诺或实际交易指令。'
