@@ -104,7 +104,7 @@ def test_all_missing_sets_extraction_warning():
 
 
 def test_hold_decision_sets_extraction_note_for_null_target_price():
-    """HOLD decision with null target_price writes extraction_note='观望不设目标价'."""
+    """HOLD decision with null target_price writes extraction_note with HOLD and probability note."""
     result_data = {
         "decision": "HOLD",
         "final_trade_decision": (
@@ -116,7 +116,55 @@ def test_hold_decision_sets_extraction_note_for_null_target_price():
     resolved = resolve_report_fields(result_data)
     assert resolved["confidence"] == 70
     assert resolved["target_price"] is None
-    assert resolved["extraction_note"] == "观望不设目标价"
+    assert resolved["extraction_note"] == "观望不设目标价；概率未提供/未提取"
+
+
+def test_buy_verdict_confidence_without_probability_persists_extraction_note():
+    """Production reproduction: BUY, VERDICT confidence=68, target=36.8, stop=33.0, no probability.
+
+    - probability is None, extraction_warning is None
+    - extraction_note becomes '概率未提供/未提取'
+    - create_report persists extraction_note to top-level canonical result_data without nested structured dict
+    """
+    from api.database import SessionLocal
+
+    result_data = {
+        "final_trade_decision": (
+            "### 综合决策\n"
+            "建议买入。\n"
+            "目标价：36.8元\n"
+            "止损价：33.0元\n"
+            '<!-- VERDICT: {"direction": "BUY", "reason": "趋势反转", "confidence": 68} -->'
+        ),
+        "trader_investment_plan": "买入建议：目标价 36.8，止损价 33.0，正式文本无概率胜率。",
+    }
+    resolved = resolve_report_fields(result_data)
+    assert resolved["direction"] == "BUY"
+    assert resolved["confidence"] == 68
+    assert resolved["target_price"] == 36.8
+    assert resolved["stop_loss_price"] == 33.0
+    assert resolved["probability"] is None
+    assert resolved["extraction_warning"] is None
+    assert resolved["extraction_note"] == "概率未提供/未提取"
+
+    db = SessionLocal()
+    try:
+        report = report_service.create_report(
+            db=db,
+            symbol="600000.SH",
+            trade_date="2026-08-23",
+            decision="BUY",
+            result_data=result_data,
+        )
+        assert report.confidence == 68
+        assert report.probability is None
+        assert report.target_price == 36.8
+        assert report.stop_loss_price == 33.0
+        assert report.result_data is not None
+        assert report.result_data.get("extraction_note") == "概率未提供/未提取"
+        assert "structured" not in report.result_data
+    finally:
+        db.close()
 
 
 # ── B2. key_metrics and risk_items structured field tests ─────────────────────
@@ -175,9 +223,9 @@ def test_risk_item_statement_field_preserved_and_no_warning(caplog):
 def test_golden_replay_all_three_symbols():
     """Acceptance criteria 1: Offline replay of three golden fixtures.
 
-    - 600900 -> confidence 60, target 29.2, stop_loss 27.5
-    - 000333 -> confidence 65 (trader_plan fallback), target 86.2, stop_loss 82.8
-    - 600276 -> confidence 70, target None, extraction_note="观望不设目标价"
+    - 600900 -> confidence 60, target 29.2, stop_loss 27.5, extraction_note="概率未提供/未提取"
+    - 000333 -> confidence 65 (trader_plan fallback), target 86.2, stop_loss 82.8, extraction_note=None (probability=0.65)
+    - 600276 -> confidence 70, target None, extraction_note="观望不设目标价；概率未提供/未提取"
     """
     cases = [
         {
@@ -185,7 +233,7 @@ def test_golden_replay_all_three_symbols():
             "expected_confidence": 60,
             "expected_target": 29.2,
             "expected_stop_loss": 27.5,
-            "expected_note": None,
+            "expected_note": "概率未提供/未提取",
         },
         {
             "file": "3c09051e7e364d859dfbe5f1af7cc2c9_result_data.json",
@@ -199,7 +247,7 @@ def test_golden_replay_all_three_symbols():
             "expected_confidence": 70,
             "expected_target": None,
             "expected_stop_loss": None,
-            "expected_note": "观望不设目标价",
+            "expected_note": "观望不设目标价；概率未提供/未提取",
         },
     ]
 
@@ -220,7 +268,6 @@ def test_golden_replay_all_three_symbols():
         assert resolved["stop_loss_price"] == c["expected_stop_loss"], (
             f"{c['file']}: stop_loss_price expected {c['expected_stop_loss']}, got {resolved['stop_loss_price']}"
         )
-        if c["expected_note"]:
-            assert resolved["extraction_note"] == c["expected_note"], (
-                f"{c['file']}: extraction_note expected {c['expected_note']}, got {resolved['extraction_note']}"
-            )
+        assert resolved["extraction_note"] == c["expected_note"], (
+            f"{c['file']}: extraction_note expected {c['expected_note']}, got {resolved['extraction_note']}"
+        )
