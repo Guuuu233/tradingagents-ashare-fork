@@ -110,6 +110,11 @@ Decision priority (strict):
 2. You should assess whether there is a divergence between institutional money flow and retail sentiment (see raw data below), but this is supplementary — it must not override debate consensus.
 3. Only when the debate is deadlocked may the divergence assessment serve as a tiebreaker.
 4. Downweight or reject unsupported claims and strictly reject any claims referencing unavailable/failed data sources.
+5. Evidence coverage and adoption hard gate:
+   - Claims with 100% verified evidence (Coverage=100%) may be marked as 'sufficient evidence / fully supported' and adopted in adopted_claim_ids.
+   - Claims with mixed evidence and coverage >= 67% must be marked as 'partially supported' and placed in partially_adopted_claims; only verified sub-conclusions may be adopted, unverified items must be recorded in excluded_evidence, and NEVER mark the whole claim as 'sufficient evidence'.
+   - Claims with coverage < 67% or 0 verified items must be marked as 'unsupported' and placed in rejected_claim_ids.
+   - Claims with contradicted facts or unavailable data sources must be marked as 'contradicted/unavailable' and placed in rejected_claim_ids.
 
 Past lessons:
 {past_memory_str}
@@ -154,7 +159,7 @@ Output:
 5) Detailed execution plan for trader.
 Avoid defaulting to Hold unless strongly justified.
 At the very end, append this machine-readable line (fixed format, do not omit):
-<!-- MANAGER_VERDICT: {{"winner": "bull", "direction": "BULLISH", "reason": "one-sentence conclusion under 15 words", "position_pct": 60, "entry": "20.5-21.0", "target": "25.0", "stop_loss": "19.0", "upside": 20.0, "downside": 7.5, "odds": 2.67, "adopted_claim_ids": ["INV-1"], "rejected_claim_ids": ["INV-2"]}} -->
+<!-- MANAGER_VERDICT: {{"winner": "bull", "direction": "BULLISH", "reason": "one-sentence conclusion under 15 words", "position_pct": 60, "entry": "20.5-21.0", "target": "25.0", "stop_loss": "19.0", "upside": 20.0, "downside": 7.5, "odds": 2.67, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["unverified evidence details"]}} -->
 <!-- VERDICT: {{"direction": "BULLISH", "reason": "one-sentence conclusion under 15 words"}} -->
 winner must be one of: bull / bear / tie; direction must be one of: BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEARISH (use LEAN_BULLISH or LEAN_BEARISH when data leans directionally but lacks full confirmation; use NEUTRAL only when data is genuinely insufficient)""",
     "risk_manager_prompt": """You are the risk-management reviewer. Your job is to review whether the trader's risk controls are adequate and add constraints where needed.

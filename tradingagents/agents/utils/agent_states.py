@@ -88,6 +88,26 @@ class WorkflowContext(TypedDict):
     data_as_of: Annotated[str | None, "Confirmed data cutoff"]
 
 
+class ManagerVerdict(TypedDict, total=False):
+    direction: Annotated[str, "Directional verdict"]
+    winner: Annotated[str, "Debate winner: bull / bear / tie"]
+    reason: Annotated[str, "Core rationale for verdict"]
+    position_pct: Annotated[Optional[float | int | str], "Recommended position percentage"]
+    entry: Annotated[Optional[str], "Recommended entry price range"]
+    target: Annotated[Optional[str], "Target price"]
+    stop_loss: Annotated[Optional[str], "Stop loss price"]
+    upside: Annotated[Optional[float | int | str], "Upside percentage"]
+    downside: Annotated[Optional[float | int | str], "Downside percentage"]
+    odds: Annotated[Optional[float | int | str], "Odds ratio"]
+    adopted_claim_ids: Annotated[list[str], "Fully adopted claim IDs"]
+    partially_adopted_claims: Annotated[list[str], "Partially adopted claim IDs with verified sub-conclusions"]
+    rejected_claim_ids: Annotated[list[str], "Rejected claim IDs"]
+    excluded_evidence: Annotated[list[str], "Excluded unverified/contradicted evidence items"]
+    claim_evidence_summary: Annotated[dict[str, Any], "Deterministic claim evidence aggregation and coverage summary"]
+    consistency_check_passed: Annotated[bool, "Whether consistency check passed"]
+    failed_checks: Annotated[list[str], "List of failed consistency checks"]
+
+
 class InvestDebateState(TypedDict):
     bull_history: Annotated[str, "Bullish conversation history"]
     bear_history: Annotated[str, "Bearish conversation history"]
