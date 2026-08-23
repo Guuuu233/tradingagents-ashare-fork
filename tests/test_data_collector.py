@@ -7,6 +7,7 @@ from tradingagents.dataflows.fund_flow_evidence import FundFlowText
 
 from tradingagents.graph.data_collector import (
     DataCollector,
+    _build_data_failure_ledger,
     _build_source_provenance,
     _fetch_all,
     make_cache_key,
@@ -416,4 +417,22 @@ def test_source_provenance_records_macro_market_sources():
     assert provenance["global_indices"]["status"] == "available"
     assert provenance["major_assets"]["as_of"] == "2026-08-11"
     assert provenance["major_assets"]["status"] == "available"
+
+
+def test_build_data_failure_ledger_failed_status_uses_chinese_reason():
+    results = {
+        "shareholder_count": {
+            "status": "failed",
+            "reason": "ConnectionError: upstream unavailable",
+        }
+    }
+    ledger = _build_data_failure_ledger(results)
+    assert len(ledger) == 1
+    entry = ledger[0]
+    assert entry["status"] == "failed"
+    assert entry["source"] == "shareholder_count"
+    assert "provider call failed" not in entry["reason"]
+    assert "provider call failed" not in entry["gap"]
+    assert "数据源调用失败" in entry["reason"]
+    assert "数据源调用失败" in entry["gap"]
 
