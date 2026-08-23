@@ -110,6 +110,43 @@ def test_research_manager_five_step_framework_and_output_discipline():
     assert "具体价格/跌幅" in prompt or ("具体价格" in prompt and "跌幅" in prompt)
 
 
+def test_research_manager_seven_analysts_verdict_overview_prompt():
+    """DAV-336 (Bug B): Verify research_manager_prompt explicitly lists all 7 analysts individually with verdict and weights,
+
+    prohibiting merging or omitting any analyst, while retaining dynamic weighting rules.
+    """
+    prompt = ZH_PROMPTS["research_manager_prompt"]
+
+    # 1. 各分析师 Verdict 全景概览与动态加权
+    assert "各分析师 Verdict 全景概览与动态加权" in prompt
+
+    # 2. 必须逐一列出全部七位分析师（独立条目）
+    analysts = [
+        "宏观板块",
+        "市场（技术面）",
+        "舆情（情绪）",
+        "新闻",
+        "基本面",
+        "主力资金",
+        "量价",
+    ]
+    for analyst in analysts:
+        assert analyst in prompt, f"Missing analyst in prompt: {analyst}"
+
+    # 3. 明确要求每项均有 verdict 与权重
+    assert "verdict" in prompt
+    assert "权重" in prompt
+
+    # 4. 明确禁止合并或省略分析师
+    assert "禁止将多个分析师合并为一个视角" in prompt or "禁止合并多个分析师" in prompt or "禁止合并" in prompt
+    assert "禁止省略任何一位分析师" in prompt or "禁止省略" in prompt
+
+    # 5. 保留现有动态加权规则（短线/中线/市场环境叠加）
+    assert "短线视角" in prompt
+    assert "中线视角" in prompt
+    assert "市场环境叠加" in prompt
+
+
 def test_trader_system_prompt_deep_framework():
     """T10: trader_system_prompt must enforce direction anchoring, global macro calibration,
 
