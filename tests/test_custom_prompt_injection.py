@@ -105,10 +105,12 @@ def test_T2_switch_off_prompt_byte_identical():
     base = get_prompt("bull_prompt", config=get_config())
 
     common_kwargs = dict(
+        macro_report="Macro",
         market_research_report="M",
         sentiment_report="S",
         news_report="N",
         fundamentals_report="F",
+        smart_money_report="SM",
         volume_price_report="V",
         history="H",
         current_response="CR",
@@ -513,6 +515,45 @@ def _make_debate_state(**overrides):
     return base
 
 
+def _make_full_debate_state(**overrides):
+    round_messages = [
+        {"message_index": 1, "debate_round": 1, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-1"]},
+        {"message_index": 2, "debate_round": 1, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-1"], "target_claim_ids": ["INV-1"], "new_claim_ids": ["INV-2"]},
+        {"message_index": 3, "debate_round": 2, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-2"], "target_claim_ids": ["INV-2"], "new_claim_ids": ["INV-3"]},
+        {"message_index": 4, "debate_round": 2, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-3"], "target_claim_ids": ["INV-3"], "new_claim_ids": ["INV-4"]},
+        {"message_index": 5, "debate_round": 3, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-4"], "target_claim_ids": ["INV-4"], "new_claim_ids": ["INV-5"]},
+        {"message_index": 6, "debate_round": 3, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-5"], "target_claim_ids": ["INV-5"], "new_claim_ids": ["INV-6"]},
+    ]
+    claims = [
+        {"claim_id": "INV-1", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点1", "evidence": ["技术"], "confidence": 0.85},
+        {"claim_id": "INV-2", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点1", "evidence": ["MACD"], "confidence": 0.80},
+        {"claim_id": "INV-3", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点2", "evidence": ["基本面"], "confidence": 0.90},
+        {"claim_id": "INV-4", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点2", "evidence": ["行业"], "confidence": 0.75},
+        {"claim_id": "INV-5", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点3", "evidence": ["资金"], "confidence": 0.88},
+        {"claim_id": "INV-6", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点3", "evidence": ["新闻"], "confidence": 0.78},
+    ]
+    base = {
+        "history": "",
+        "bear_history": "",
+        "bull_history": "",
+        "current_speaker": "Bear",
+        "current_response": "",
+        "count": 6,
+        "claims": claims,
+        "round_messages": round_messages,
+        "focus_claim_ids": [],
+        "open_claim_ids": [c["claim_id"] for c in claims],
+        "resolved_claim_ids": [],
+        "unresolved_claim_ids": [],
+        "round_summary": "",
+        "round_goal": "首轮目标",
+        "claim_counter": 6,
+        "judge_decision": "",
+    }
+    base.update(overrides)
+    return base
+
+
 def _make_graph_state(**overrides):
     base = {
         "market_report": "M",
@@ -668,7 +709,7 @@ def test_T18_research_manager_injection_position_after_data():
     memory.get_memories = MagicMock(return_value=[])
 
     node = create_research_manager(llm, memory, custom_prompt=CUSTOM_TEXT, placement="after_data")
-    debate = _make_debate_state(history="Bull: ok\nBear: no")
+    debate = _make_full_debate_state(history="Bull: ok\nBear: no")
     state = _make_graph_state(investment_debate_state=debate)
 
     asyncio.run(node(state))
@@ -769,7 +810,7 @@ def test_T20_research_manager_verdict_parseable():
     memory.get_memories = MagicMock(return_value=[])
 
     node = create_research_manager(llm, memory, custom_prompt=CUSTOM_TEXT, placement="after_data")
-    debate = _make_debate_state(history="Bull: ok\nBear: no")
+    debate = _make_full_debate_state(history="Bull: ok\nBear: no")
     result = asyncio.run(node(_make_graph_state(investment_debate_state=debate)))
 
     investment_plan = result["investment_plan"]
@@ -832,7 +873,7 @@ def test_T21_research_manager_receives_evidence_summaries():
             "宏观/板块：板块资金净流入 23 亿，政策窗口开启。\n"
             '<!-- VERDICT: {"direction": "偏多", "reason": "政策与资金共振"} -->'
         ),
-        investment_debate_state=_make_debate_state(history="Bull: ok\nBear: no"),
+        investment_debate_state=_make_full_debate_state(history="Bull: ok\nBear: no"),
     )
 
     node = create_research_manager(llm, memory, custom_prompt="", placement="after_data")
@@ -890,7 +931,7 @@ def test_T21b_macro_evidence_line_omitted_when_macro_report_empty():
             "基本面：营收同比 +15%，毛利率 45%。\n"
             '<!-- VERDICT: {"direction": "中性", "reason": "估值合理"} -->'
         ),
-        investment_debate_state=_make_debate_state(history="Bull: ok\nBear: no"),
+        investment_debate_state=_make_full_debate_state(history="Bull: ok\nBear: no"),
     )
 
     node = create_research_manager(llm, memory, custom_prompt="", placement="after_data")
@@ -1098,7 +1139,9 @@ def test_downstream_nodes_allow_single_new_source_selection(role):
     from tradingagents.agents.managers.risk_manager import create_risk_manager
     from tradingagents.agents.trader.trader import create_trader
 
-    state = _make_graph_state()
+    state = _make_graph_state(
+        investment_debate_state=_make_full_debate_state() if role == "research_manager" else _make_debate_state()
+    )
     state["fund_flow_consensus_guard"] = single_source_fund_flow_selection_guard()
     prompts: list[object] = []
     llm = MagicMock()

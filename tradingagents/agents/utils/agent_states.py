@@ -105,6 +105,7 @@ class InvestDebateState(TypedDict):
     judge_decision: Annotated[str, "Final judge decision"]
     count: Annotated[int, "Length of the current conversation"]
     claims: Annotated[list[dict[str, Any]], "Tracked research claims"]
+    round_messages: Annotated[list[dict[str, Any]], "Tracked round-by-round messages"]
     focus_claim_ids: Annotated[list[str], "Claim ids that must be answered in the next round"]
     open_claim_ids: Annotated[list[str], "Claim ids still open"]
     resolved_claim_ids: Annotated[list[str], "Claim ids considered resolved"]
@@ -112,6 +113,13 @@ class InvestDebateState(TypedDict):
     round_summary: Annotated[str, "Summary of the latest debate round"]
     round_goal: Annotated[str, "Current round objective"]
     claim_counter: Annotated[int, "Claim counter for unique ids"]
+    manager_verdict: Annotated[dict[str, Any], "Structured manager verdict"]
+    evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]
+    report_manifest: Annotated[dict[str, Any], "Input report manifest for seven analysts"]
+    attempts: Annotated[list[dict[str, Any]], "Tracked message attempt records including unaccepted attempts"]
+    blocked: Annotated[bool, "Whether debate protocol validation failed and blocked progression"]
+    parse_status: Annotated[str, "Latest debate state parse status"]
+    block_reason: Annotated[str, "Reason if debate state is blocked"]
 
 
 class RiskDebateState(TypedDict):
@@ -184,6 +192,9 @@ class AgentState(MessagesState):
     user_intent: Annotated[Optional[UserIntent], "Parsed user intent from natural language"]
     horizon: Annotated[str, "Current analysis horizon: short or medium"]
     analyst_traces: Annotated[List[TraceItem], operator.add]
+    manager_verdict: Annotated[dict[str, Any], "Structured research manager verdict"]
+    evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]
+    report_manifest: Annotated[dict[str, Any], "Input report manifest for seven analysts"]
     short_term_result: Annotated[Optional[dict], "Final short-term analysis result"]
     medium_term_result: Annotated[Optional[dict], "Final medium-term analysis result"]
     metadata: Annotated[dict[str, Any], "Optional runtime metadata"]

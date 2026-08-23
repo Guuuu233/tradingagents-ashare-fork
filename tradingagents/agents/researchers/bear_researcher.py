@@ -1,13 +1,20 @@
+import logging
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
 from tradingagents.graph.intent_parser import build_horizon_context
 from tradingagents.agents.utils.agent_states import current_tracker_var
 from tradingagents.agents.utils.debate_utils import (
+    DebateProtocolError,
+    build_debate_report_manifest,
     format_claim_subset_for_prompt,
     format_claims_for_prompt,
+    safe_int,
     update_debate_state_with_payload,
+    validate_debate_response,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
+
+_logger = logging.getLogger(__name__)
 
 
 def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
@@ -15,11 +22,17 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
         current_response = investment_debate_state.get("current_response", "")
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        macro_report = state.get("macro_report", "")
+        market_research_report = state.get("market_report", "")
+        sentiment_report = state.get("sentiment_report", "")
+        news_report = state.get("news_report", "")
+        fundamentals_report = state.get("fundamentals_report", "")
+        smart_money_report = state.get("smart_money_report", "")
         volume_price_report = state.get("volume_price_report", "")
+
+        report_manifest = build_debate_report_manifest(state)
+        _logger.info("[bear_researcher] report input manifest: %s", report_manifest)
+
         claims = investment_debate_state.get("claims", [])
         focus_claim_ids = investment_debate_state.get("focus_claim_ids", [])
         unresolved_claim_ids = investment_debate_state.get("unresolved_claim_ids", [])
@@ -32,7 +45,15 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
         specific_questions = user_intent.get("specific_questions", [])
         horizon_ctx = build_horizon_context(horizon, focus_areas, specific_questions, agent_type="bear")
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}\n\n{volume_price_report}"
+        curr_situation = (
+            f"{macro_report}\n\n"
+            f"{market_research_report}\n\n"
+            f"{sentiment_report}\n\n"
+            f"{news_report}\n\n"
+            f"{fundamentals_report}\n\n"
+            f"{smart_money_report}\n\n"
+            f"{volume_price_report}"
+        )
         past_memories = memory.get_memories(curr_situation, n_matches=2)
 
         past_memory_str = ""
@@ -41,10 +62,12 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
 
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="bear_researcher")
         prompt = horizon_ctx + get_prompt("bear_prompt", config=get_config()).format(
+            macro_report=macro_report,
             market_research_report=market_research_report,
             sentiment_report=sentiment_report,
             news_report=news_report,
             fundamentals_report=fundamentals_report,
+            smart_money_report=smart_money_report,
             volume_price_report=volume_price_report,
             history=history,
             current_response=current_response,
@@ -57,44 +80,128 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
             **injection_slots,
         )
 
-        # ── 实现 Token 级流式输出 ──────────────────
+        # ── 实现 Token 级流式输出与单轮重试机制 ──────────────────
         tracker = current_tracker_var.get()
-        try:
-            debate_round = int(investment_debate_state.get("count", 0) or 0) // 2 + 1
-        except (ValueError, TypeError):
-            debate_round = 1
+        current_count = safe_int(investment_debate_state.get("count", 0), 0)
+        message_index = current_count + 1
+        debate_round = (message_index - 1) // 2 + 1
         model_name = getattr(llm, "model_name", None) or getattr(llm, "model", None)
-        full_content = ""
-        async for chunk in llm.astream(prompt):
-            content = chunk.content if hasattr(chunk, "content") else str(chunk)
-            full_content += content
-            if tracker:
-                tracker._emit_token("Bear Researcher", "investment_debate_state", content)
-                tracker.emit_debate_token(
-                    debate="research", agent="Bear Researcher",
-                    round_num=debate_round, token=content, model_name=model_name,
-                )
 
-        # ── 推送辩论完整消息（标记流式结束）──
-        if tracker:
-            tracker.emit_debate_message(
-                debate="research", agent="Bear Researcher",
-                round_num=debate_round, content=full_content, model_name=model_name,
+        attempts_trace = []
+        max_attempts = 2
+        last_error_detail = ""
+
+        for attempt_num in range(1, max_attempts + 1):
+            if attempt_num == 1:
+                attempt_prompt = prompt
+            else:
+                opponent_open_claims = [
+                    c["claim_id"] for c in claims
+                    if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
+                    and c.get("status") != "resolved"
+                ]
+                opponent_all_claims = [
+                    c["claim_id"] for c in claims
+                    if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
+                ]
+                same_side_prev_claims = [
+                    c["claim"] for c in claims
+                    if (c.get("speaker_key") == "Bear" or c.get("stance") == "bearish")
+                ]
+                prev_claims_hint = (
+                    f"已提出的历史空头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
+                    if same_side_prev_claims
+                    else ""
+                )
+                retry_instruction = (
+                    f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
+                    f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
+                    f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
+                    f"- 当前第 {message_index} 次发言要求：\n"
+                    f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
+                    f"     {prev_claims_hint}\n"
+                    f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
+                    f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
+                    f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
+                    f"  5. 严禁擅自 resolve 对手的 Claim。\n"
+                    f"请立即修正并重新输出完整发言及合规机器块！"
+                )
+                attempt_prompt = prompt + retry_instruction
+
+            full_content = ""
+            async for chunk in llm.astream(attempt_prompt):
+                content = chunk.content if hasattr(chunk, "content") else str(chunk)
+                full_content += content
+                if tracker:
+                    tracker._emit_token("Bear Researcher", "investment_debate_state", content)
+                    tracker.emit_debate_token(
+                        debate="research", agent="Bear Researcher",
+                        round_num=debate_round, token=content, model_name=model_name,
+                    )
+
+            is_valid, parse_status, error_detail, parsed_payload = validate_debate_response(
+                state=investment_debate_state,
+                raw_response=full_content,
+                speaker_key="Bear",
+                stance="bearish",
+                marker="DEBATE_STATE",
+                domain="investment",
             )
 
-        new_investment_debate_state = update_debate_state_with_payload(
-            state=investment_debate_state,
-            raw_response=full_content,
-            speaker_label="Bear Analyst",
-            speaker_key="Bear",
-            stance="bearish",
-            history_key="bear_history",
-            marker="DEBATE_STATE",
-            claim_prefix="INV",
-            domain="investment",
-            speaker_field="current_speaker",
-        )
+            attempt_record = {
+                "attempt_index": attempt_num,
+                "message_index": message_index,
+                "debate_round": debate_round,
+                "speaker": "Bear Analyst",
+                "speaker_key": "Bear",
+                "parse_status": parse_status,
+                "error_detail": error_detail,
+                "raw_response": full_content,
+                "accepted": is_valid,
+            }
+            attempts_trace.append(attempt_record)
 
-        return {"investment_debate_state": new_investment_debate_state}
+            if is_valid:
+                # ── 推送辩论完整消息（标记流式结束）──
+                if tracker:
+                    tracker.emit_debate_message(
+                        debate="research", agent="Bear Researcher",
+                        round_num=debate_round, content=full_content, model_name=model_name,
+                    )
+
+                new_investment_debate_state = update_debate_state_with_payload(
+                    state=investment_debate_state,
+                    raw_response=full_content,
+                    speaker_label="Bear Analyst",
+                    speaker_key="Bear",
+                    stance="bearish",
+                    history_key="bear_history",
+                    marker="DEBATE_STATE",
+                    claim_prefix="INV",
+                    domain="investment",
+                    speaker_field="current_speaker",
+                    model_name=model_name,
+                    attempts=attempts_trace,
+                )
+
+                return {"investment_debate_state": new_investment_debate_state}
+            else:
+                last_error_detail = error_detail
+                _logger.warning(
+                    "[bear_researcher] Attempt %d at message_index=%d failed protocol validation: %s (parse_status=%s)",
+                    attempt_num, message_index, error_detail, parse_status
+                )
+
+        _logger.error(
+            "[bear_researcher] All %d attempts failed debate protocol at message_index=%d. Raising DebateProtocolError.",
+            max_attempts, message_index
+        )
+        raise DebateProtocolError(
+            f"Debate protocol validation failed for Bear Analyst at message_index={message_index} after {max_attempts} attempts: {last_error_detail}",
+            message_index=message_index,
+            speaker="Bear Analyst",
+            details=last_error_detail,
+            attempts=attempts_trace,
+        )
 
     return bear_node

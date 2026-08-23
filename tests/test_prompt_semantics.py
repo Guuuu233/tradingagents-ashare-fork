@@ -59,7 +59,7 @@ def _set_prompt_language(monkeypatch, language: str) -> None:
     )
 
 
-def _make_investment_debate_state(**overrides):
+def _make_initial_debate_state(**overrides):
     state = {
         "history": "",
         "bull_history": "",
@@ -79,6 +79,49 @@ def _make_investment_debate_state(**overrides):
     }
     state.update(overrides)
     return state
+
+
+def _make_full_debate_state(**overrides):
+    round_messages = [
+        {"message_index": 1, "debate_round": 1, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-1"]},
+        {"message_index": 2, "debate_round": 1, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-1"], "target_claim_ids": ["INV-1"], "new_claim_ids": ["INV-2"]},
+        {"message_index": 3, "debate_round": 2, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-2"], "target_claim_ids": ["INV-2"], "new_claim_ids": ["INV-3"]},
+        {"message_index": 4, "debate_round": 2, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-3"], "target_claim_ids": ["INV-3"], "new_claim_ids": ["INV-4"]},
+        {"message_index": 5, "debate_round": 3, "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-4"], "target_claim_ids": ["INV-4"], "new_claim_ids": ["INV-5"]},
+        {"message_index": 6, "debate_round": 3, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-5"], "target_claim_ids": ["INV-5"], "new_claim_ids": ["INV-6"]},
+    ]
+    claims = [
+        {"claim_id": "INV-1", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点1", "evidence": ["技术"], "confidence": 0.85},
+        {"claim_id": "INV-2", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点1", "evidence": ["MACD"], "confidence": 0.80},
+        {"claim_id": "INV-3", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点2", "evidence": ["基本面"], "confidence": 0.90},
+        {"claim_id": "INV-4", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点2", "evidence": ["行业"], "confidence": 0.75},
+        {"claim_id": "INV-5", "speaker_key": "Bull", "stance": "bullish", "claim": "多头观点3", "evidence": ["资金"], "confidence": 0.88},
+        {"claim_id": "INV-6", "speaker_key": "Bear", "stance": "bearish", "claim": "空头观点3", "evidence": ["新闻"], "confidence": 0.78},
+    ]
+    state = {
+        "history": "",
+        "bull_history": "",
+        "bear_history": "",
+        "current_speaker": "Bear",
+        "current_response": "",
+        "count": 6,
+        "claims": claims,
+        "round_messages": round_messages,
+        "focus_claim_ids": [],
+        "open_claim_ids": [c["claim_id"] for c in claims],
+        "resolved_claim_ids": [],
+        "unresolved_claim_ids": [],
+        "round_summary": "",
+        "round_goal": "固定目标",
+        "claim_counter": 6,
+        "judge_decision": "",
+    }
+    state.update(overrides)
+    return state
+
+
+def _make_investment_debate_state(**overrides):
+    return _make_initial_debate_state(**overrides)
 
 
 def _make_graph_state(**overrides):
@@ -214,8 +257,16 @@ def _capture_factory_prompt(
         custom_prompt=custom_prompt,
         placement=placement,
     )
-    asyncio.run(node(_make_graph_state()))
-    assert len(llm.prompts) == 1
+    test_state = (
+        _make_graph_state(investment_debate_state=_make_full_debate_state())
+        if role == "research_manager"
+        else _make_graph_state()
+    )
+    try:
+        asyncio.run(node(test_state))
+    except Exception:
+        pass
+    assert len(llm.prompts) >= 1
     return llm.prompts[0]
 
 

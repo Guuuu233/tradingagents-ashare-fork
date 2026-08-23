@@ -52,6 +52,7 @@ import requests
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service
+import jwt
 
 def _get_real_ip(request: Request) -> Optional[str]:
     """Extract real client IP, preferring Cloudflare/proxy headers."""
@@ -1770,30 +1771,54 @@ class RequireUser:
 
     def __call__(
         self,
+        request: Request,
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_auth_scheme),
     ) -> UserDB:
-        with get_db_ctx() as db:
-            if credentials:
-                token = credentials.credentials
-                # 1. 优先尝试 JWT (网页登录)
-                try:
-                    payload = auth_service.decode_access_token(token)
-                    user_id = str(payload.get("sub") or "")
-                    user = auth_service.get_user_by_id(db, user_id)
-                    if user and user.is_active:
-                        db.expunge(user)
-                        return user
-                except Exception:
-                    pass
+        raw_auth = request.headers.get("authorization")
+        if raw_auth is not None:
+            raw_auth = raw_auth.strip()
+            if not raw_auth:
+                raise HTTPException(status_code=401, detail="Invalid authorization header")
 
-                # 2. 尝试 API Token (仅在允许时)
-                if self.allow_api_token and token.startswith(token_service.TOKEN_PREFIX):
+            parts = raw_auth.split(" ", 1)
+            if len(parts) != 2 or parts[0].lower() != "bearer":
+                raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+            token = parts[1].strip()
+            if not token:
+                raise HTTPException(status_code=401, detail="Missing bearer token")
+
+            with get_db_ctx() as db:
+                # 1. API Token (仅在允许时)
+                if token.startswith(token_service.TOKEN_PREFIX):
+                    if not self.allow_api_token:
+                        raise HTTPException(status_code=401, detail="API tokens are not allowed for this endpoint")
                     user = token_service.verify_token(db, token)
                     if user and user.is_active:
                         db.expunge(user)
                         return user
+                    raise HTTPException(status_code=401, detail="Invalid or inactive API token")
 
-            # 本地单用户/未登录回退至默认本地账户
+                # 2. JWT (网页登录)
+                try:
+                    payload = auth_service.decode_access_token(token)
+                except jwt.ExpiredSignatureError:
+                    raise HTTPException(status_code=401, detail="Token has expired")
+                except (jwt.InvalidTokenError, Exception):
+                    raise HTTPException(status_code=401, detail="Invalid token")
+
+                user_id = str(payload.get("sub") or "")
+                if not user_id:
+                    raise HTTPException(status_code=401, detail="Invalid token payload")
+
+                user = auth_service.get_user_by_id(db, user_id)
+                if user and user.is_active:
+                    db.expunge(user)
+                    return user
+                raise HTTPException(status_code=401, detail="User not found or inactive")
+
+        # 本地单用户/未登录回退至默认本地账户
+        with get_db_ctx() as db:
             user = auth_service.get_or_create_default_user(db)
             db.expunge(user)
             return user
@@ -1960,6 +1985,9 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "investment_plan": final_state.get("investment_plan"),
         "trader_investment_plan": final_state.get("trader_investment_plan"),
         "investment_debate_state": final_state.get("investment_debate_state"),
+        "manager_verdict": final_state.get("manager_verdict") or (final_state.get("investment_debate_state", {}).get("manager_verdict") if isinstance(final_state.get("investment_debate_state"), dict) else None),
+        "evidence_verification": final_state.get("evidence_verification") or (final_state.get("investment_debate_state", {}).get("evidence_verification") if isinstance(final_state.get("investment_debate_state"), dict) else []),
+        "report_manifest": final_state.get("report_manifest") or (final_state.get("investment_debate_state", {}).get("report_manifest") if isinstance(final_state.get("investment_debate_state"), dict) else None),
         "risk_debate_state": final_state.get("risk_debate_state"),
         "risk_feedback_state": final_state.get("risk_feedback_state"),
         "final_trade_decision": final_state.get("final_trade_decision"),
@@ -2887,6 +2915,9 @@ async def _run_job_inner(
                 finally:
                     current_tracker_var.reset(_tracker_token)
 
+                if horizon_final is None:
+                    raise RuntimeError(f"Horizon '{horizon}' produced no output")
+
                 horizon_states[horizon] = horizon_final
                 for agent, st in h_tracker.status.items():
                     if st not in ("completed", "skipped"):
@@ -2958,53 +2989,85 @@ async def _run_job_inner(
                         }
                         continue
 
-                    horizon_result = graph._build_horizon_result(
-                        horizon,
-                        horizon_states.get(horizon) or {},
-                    )
-                    structured = None
                     try:
-                        structured = await asyncio.to_thread(
-                            report_service.extract_structured_data,
-                            final_trade_decision=horizon_result.get("final_trade_decision", ""),
-                            fundamentals_report=horizon_result.get("fundamentals_report", ""),
-                            config=config,
+                        horizon_state = horizon_states.get(horizon)
+                        if not horizon_state:
+                            raise RuntimeError(f"Horizon '{horizon}' produced no output state")
+                        horizon_result = graph._build_horizon_result(
+                            horizon,
+                            horizon_state,
                         )
-                    except Exception as exc:
-                        _log(f"Structured extraction failed for {horizon} (non-fatal): {exc}")
+                        structured = None
+                        try:
+                            structured = await asyncio.to_thread(
+                                report_service.extract_structured_data,
+                                final_trade_decision=horizon_result.get("final_trade_decision", ""),
+                                fundamentals_report=horizon_result.get("fundamentals_report", ""),
+                                config=config,
+                            )
+                        except Exception as exc:
+                            _log(f"Structured extraction failed for {horizon} (non-fatal): {exc}")
 
-                    resolved = await asyncio.to_thread(
-                        report_service.resolve_report_fields,
-                        result_data=horizon_result,
-                        confidence_override=structured.confidence if structured else None,
-                        target_price_override=structured.target_price if structured else None,
-                        stop_loss_override=structured.stop_loss_price if structured else None,
-                    )
-                    graph_decision = graph.process_signal(
-                        horizon_result.get("final_trade_decision", "")
-                    )
-                    decision = _apply_structured_report_fields(
-                        horizon_result,
-                        structured=structured,
-                        graph_decision=graph_decision,
-                        resolved=resolved,
-                    )
-                    horizon_result.update(
-                        {
-                            "status": "completed",
-                            "risk_items": (
-                                [item.model_dump() for item in structured.risks]
-                                if structured
-                                else []
-                            ),
-                            "key_metrics": (
-                                [item.model_dump() for item in structured.key_metrics]
-                                if structured
-                                else []
+                        resolved = await asyncio.to_thread(
+                            report_service.resolve_report_fields,
+                            result_data=horizon_result,
+                            confidence_override=structured.confidence if structured else None,
+                            target_price_override=structured.target_price if structured else None,
+                            stop_loss_override=structured.stop_loss_price if structured else None,
+                        )
+                        graph_decision = graph.process_signal(
+                            horizon_result.get("final_trade_decision", "")
+                        )
+                        decision = _apply_structured_report_fields(
+                            horizon_result,
+                            structured=structured,
+                            graph_decision=graph_decision,
+                            resolved=resolved,
+                        )
+                        horizon_result.update(
+                            {
+                                "status": "completed",
+                                "risk_items": (
+                                    [item.model_dump() for item in structured.risks]
+                                    if structured
+                                    else []
+                                ),
+                                "key_metrics": (
+                                    [item.model_dump() for item in structured.key_metrics]
+                                    if structured
+                                    else []
+                                ),
+                            }
+                        )
+                        horizon_results[horizon] = horizon_result
+                    except Exception as exc:
+                        _log(f"Horizon '{horizon}' post-processing failed: {exc}")
+                        horizon_errors[horizon] = exc
+                        horizon_results[horizon] = {
+                            "horizon": horizon,
+                            "status": "failed",
+                            "error": _humanize_analysis_error(str(exc)),
+                            "not_applicable": None,
+                            "impact": (
+                                f"{horizon} horizon is unavailable; downstream consumers must use only the "
+                                "completed horizon and treat this result as partial."
                             ),
                         }
+
+                completed_horizons = [
+                    h for h in request.horizons
+                    if horizon_results.get(h, {}).get("status") == "completed"
+                ]
+                if not completed_horizons:
+                    failure_reasons = []
+                    for h in request.horizons:
+                        h_err = horizon_results.get(h, {}).get("error") or (
+                            str(horizon_errors.get(h)) if h in horizon_errors else "分析失败"
+                        )
+                        failure_reasons.append(f"{h}: {h_err}")
+                    raise RuntimeError(
+                        "All requested horizons failed: " + "; ".join(failure_reasons)
                     )
-                    horizon_results[horizon] = horizon_result
 
                 def _not_requested(horizon: str) -> Dict[str, Any]:
                     return {"horizon": horizon, "status": "not_requested"}
@@ -3015,6 +3078,10 @@ async def _run_job_inner(
                     horizon: horizon_results[horizon].get("status", "completed")
                     for horizon in request.horizons
                 }
+                failed_horizons = [
+                    horizon for horizon in request.horizons
+                    if horizon_results[horizon].get("status") == "failed" or horizon in horizon_errors
+                ]
                 all_data_gaps: List[str] = []
                 seen_gaps: set[str] = set()
                 for horizon in request.horizons:
@@ -3051,10 +3118,10 @@ async def _run_job_inner(
                         None,
                     ),
                     "mode": "dual_horizon",
-                    "status": "partial" if horizon_errors else "completed",
+                    "status": "partial" if failed_horizons else "completed",
                     "requested_horizons": list(request.horizons),
                     "horizon_status": horizon_status,
-                    "failed_horizons": [horizon for horizon in request.horizons if horizon in horizon_errors],
+                    "failed_horizons": failed_horizons,
                     "user_intent": user_intent,
                     "model_config_snapshot": model_snapshot,
                     "market_data_context": {
@@ -3170,6 +3237,9 @@ async def _run_job_inner(
                 "investment_plan": primary_r.get("investment_plan", ""),
                 "trader_investment_plan": primary_r.get("trader_investment_plan", ""),
                 "investment_debate_state": primary_r.get("investment_debate_state"),
+                "manager_verdict": primary_r.get("manager_verdict") or (primary_r.get("investment_debate_state", {}).get("manager_verdict") if isinstance(primary_r.get("investment_debate_state"), dict) else None),
+                "evidence_verification": primary_r.get("evidence_verification") or (primary_r.get("investment_debate_state", {}).get("evidence_verification") if isinstance(primary_r.get("investment_debate_state"), dict) else []),
+                "report_manifest": primary_r.get("report_manifest") or (primary_r.get("investment_debate_state", {}).get("report_manifest") if isinstance(primary_r.get("investment_debate_state"), dict) else None),
                 "risk_debate_state": primary_r.get("risk_debate_state"),
                 "market_report": primary_r.get("market_report", ""),
                 "sentiment_report": primary_r.get("sentiment_report", ""),
@@ -5326,24 +5396,72 @@ def _config_response_for_user(user: Optional[UserDB], db: Session) -> UserRuntim
     )
 
 
+_REQUEST_CODE_RATE_WINDOW_SECONDS = int(os.getenv("AUTH_REQUEST_CODE_RATE_WINDOW", "60"))
+_REQUEST_CODE_RATE_MAX = int(os.getenv("AUTH_REQUEST_CODE_RATE_MAX", "10"))
+_request_code_rate_hits: Dict[str, List[float]] = {}
+_request_code_rate_lock = Lock()
+
+
+def _enforce_request_code_rate_limit(remote_ip: Optional[str], email: str) -> None:
+    now = time.time()
+    key = f"{remote_ip or 'unknown'}:{email}"
+    with _request_code_rate_lock:
+        hits = _request_code_rate_hits.setdefault(key, [])
+        hits[:] = [t for t in hits if now - t < _REQUEST_CODE_RATE_WINDOW_SECONDS]
+        if len(hits) >= _REQUEST_CODE_RATE_MAX:
+            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后重试")
+        hits.append(now)
+        if len(_request_code_rate_hits) > 1024:
+            empty_keys = [k for k, v in _request_code_rate_hits.items() if not v]
+            for k in empty_keys:
+                _request_code_rate_hits.pop(k, None)
+
+
+_VERIFY_CODE_RATE_WINDOW_SECONDS = int(os.getenv("AUTH_VERIFY_CODE_RATE_WINDOW", "60"))
+_VERIFY_CODE_RATE_MAX = int(os.getenv("AUTH_VERIFY_CODE_RATE_MAX", "10"))
+_verify_code_rate_hits: Dict[str, List[float]] = {}
+_verify_code_rate_lock = Lock()
+
+
+def _enforce_verify_code_rate_limit(remote_ip: Optional[str], email: str) -> None:
+    now = time.time()
+    key = f"{remote_ip or 'unknown'}:{email}"
+    with _verify_code_rate_lock:
+        hits = _verify_code_rate_hits.setdefault(key, [])
+        hits[:] = [t for t in hits if now - t < _VERIFY_CODE_RATE_WINDOW_SECONDS]
+        if len(hits) >= _VERIFY_CODE_RATE_MAX:
+            raise HTTPException(status_code=429, detail="验证请求过于频繁，请稍后重试")
+        hits.append(now)
+        if len(_verify_code_rate_hits) > 1024:
+            empty_keys = [k for k, v in _verify_code_rate_hits.items() if not v]
+            for k in empty_keys:
+                _verify_code_rate_hits.pop(k, None)
+
+
 @app.post("/v1/auth/request-code")
-def request_login_code(request: AuthRequestCodeRequest):
-    email = auth_service.normalize_email(request.email)
+def request_login_code(body: AuthRequestCodeRequest, request: Request):
+    email = auth_service.normalize_email(body.email)
     if not re.match(r"^[^@\s]+@[^@\s.]+\.[^@\s.]+$", email):
         raise HTTPException(status_code=400, detail="邮箱格式不正确")
+    remote_ip = _get_real_ip(request)
+    _enforce_request_code_rate_limit(remote_ip, email)
     with get_db_ctx() as db:
         code = auth_service.upsert_login_code(db, email)
     # DB session 已释放，SMTP 不会阻塞连接池
     dev_code = auth_service.send_login_code(email, code)
     response = {"message": "验证码已发送"}
-    if dev_code:
+    is_prod = os.getenv("APP_ENV", "development").strip().lower() == "production"
+    if dev_code and not is_prod:
         response["dev_code"] = dev_code
     return response
 
 
 @app.post("/v1/auth/verify-code", response_model=AuthVerifyCodeResponse)
 def verify_login_code(body: AuthVerifyCodeRequest, request: Request, db: Session = Depends(get_db)):
-    user = auth_service.verify_login_code(db, body.email, body.code, client_ip=_get_real_ip(request))
+    email = auth_service.normalize_email(body.email)
+    remote_ip = _get_real_ip(request)
+    _enforce_verify_code_rate_limit(remote_ip, email)
+    user = auth_service.verify_login_code(db, email, body.code, client_ip=remote_ip)
     if not user:
         raise HTTPException(status_code=400, detail="验证码错误或已过期")
     access_token = auth_service.create_access_token(user)

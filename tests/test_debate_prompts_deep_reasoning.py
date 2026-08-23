@@ -33,8 +33,11 @@ def test_debate_state_machine_contract_is_intact(key):
     """Every debate prompt must preserve the exact DEBATE_STATE contract at the end."""
     prompt = ZH_PROMPTS[key]
 
-    # Check DEBATE_STATE comment structure
-    assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72}}], "resolved_claim_ids": ["INV-2"], "unresolved_claim_ids": ["INV-3"], "next_focus_claim_ids": ["INV-3"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
+    # Check DEBATE_STATE comment structure with target_claim_ids
+    if key == "bull_prompt":
+        assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-2"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-2"]}}], "resolved_claim_ids": ["INV-1"], "unresolved_claim_ids": ["INV-2"], "next_focus_claim_ids": ["INV-2"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
+    else:
+        assert '<!-- DEBATE_STATE: {{"responded_claim_ids": ["INV-1"], "new_claims": [{{"claim": "不超过28字", "evidence": ["证据1", "证据2"], "confidence": 0.72, "target_claim_ids": ["INV-1"]}}], "resolved_claim_ids": [], "unresolved_claim_ids": ["INV-1"], "next_focus_claim_ids": ["INV-1"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->' in prompt
     assert "若没有对应项，返回空数组。" in prompt
     assert "口径约束（不新增正文级 canonical 字段）：" in prompt
     assert "DEBATE_STATE 中每个 new_claims[].confidence 是 claim confidence，只能是有限的 0.00–1.00 数值，不得使用百分比。" in prompt
@@ -119,10 +122,12 @@ def test_debate_prompts_strict_mirror_symmetry():
     # Required placeholder symmetry
     common_placeholders = [
         "{custom_prompt_before_data}",
+        "{macro_report}",
         "{market_research_report}",
         "{sentiment_report}",
         "{news_report}",
         "{fundamentals_report}",
+        "{smart_money_report}",
         "{volume_price_report}",
         "{history}",
         "{current_response}",
