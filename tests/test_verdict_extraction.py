@@ -1,10 +1,13 @@
-"""Tests for verdict extraction fallback chain and key_metrics structured fields (DAV-339 Lane B)."""
+"""Tests for verdict extraction fallback chain and key_metrics structured fields (DAV-339 Lane B, DAV-356)."""
 
 import json
 import logging
 from pathlib import Path
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from api.database import Base
 from api.services import report_service
 from api.services.report_service import (
     KeyMetricSchema,
@@ -15,6 +18,13 @@ from api.services.report_service import (
 )
 
 GOLDEN_DIR = Path(__file__).parent / "golden" / "audit_20260823"
+
+
+def _make_sqlite_session():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return TestingSessionLocal()
 
 
 # ── B1. Fallback chain tests ───────────────────────────────────────────────────
@@ -104,7 +114,7 @@ def test_all_missing_sets_extraction_warning():
 
 
 def test_hold_decision_sets_extraction_note_for_null_target_price():
-    """HOLD decision with null target_price writes extraction_note='观望不设目标价'."""
+    """HOLD decision with null target_price writes extraction_note containing '观望不设目标价'."""
     result_data = {
         "decision": "HOLD",
         "final_trade_decision": (
@@ -116,7 +126,119 @@ def test_hold_decision_sets_extraction_note_for_null_target_price():
     resolved = resolve_report_fields(result_data)
     assert resolved["confidence"] == 70
     assert resolved["target_price"] is None
-    assert resolved["extraction_note"] == "观望不设目标价"
+    assert resolved["extraction_note"] is not None
+    assert "观望不设目标价" in resolved["extraction_note"]
+
+
+# ── B1b. Probability null explicit note / warning tests (DAV-356) ─────────────
+
+
+def test_probability_null_when_absent_sets_extraction_note_and_persists_in_result_data():
+    """DAV-356 RED: Real production repro (601899.SH): BUY, confidence=68, target=36.8, stop=33.0.
+
+    When all formal texts lack probability/胜率:
+    - probability must remain None (no 0, no confidence mapping)
+    - extraction_warning must be None (confidence was extracted, no false alarm)
+    - extraction_note must explicitly state '概率未提供/未提取'
+    - create_report must persist extraction_note into result_data
+    """
+    result_data = {
+        "decision": "BUY",
+        "final_trade_decision": (
+            "分析总结：技术面突破年线，筹码结构良好。\n"
+            '<!-- VERDICT: {"direction": "看多", "reason": "突破均线", "confidence": 68} -->\n'
+            "核心目标价：36.8元，初始止损价：33.0元。"
+        ),
+        "trader_investment_plan": "执行买入方案。目标价格：36.8元，止损价格：33.0元。",
+        "investment_debate_state": {
+            "judge_decision": "双方辩论充分，多头逻辑占优，建议采纳买入策略。"
+        },
+    }
+
+    resolved = resolve_report_fields(result_data)
+    assert resolved["confidence"] == 68
+    assert resolved["direction"] == "看多"
+    assert resolved["target_price"] == 36.8
+    assert resolved["stop_loss_price"] == 33.0
+    assert resolved["probability"] is None
+    assert resolved["extraction_warning"] is None
+    assert resolved["extraction_note"] is not None
+    assert "概率未提供/未提取" in resolved["extraction_note"]
+
+    # Verify DB creation and result_data persistence
+    db = _make_sqlite_session()
+    try:
+        report = report_service.create_report(
+            db=db,
+            symbol="601899.SH",
+            trade_date="2026-08-21",
+            decision="BUY",
+            result_data=result_data,
+        )
+        assert report.confidence == 68
+        assert report.probability is None
+        assert report.target_price == 36.8
+        assert report.stop_loss_price == 33.0
+        assert report.result_data.get("extraction_note") is not None
+        assert "概率未提供/未提取" in report.result_data.get("extraction_note")
+        assert report.result_data.get("extraction_warning") is None
+    finally:
+        db.close()
+
+
+def test_probability_null_with_structured_field_persists_in_structured_object():
+    """DAV-356 RED: Structured dictionary inside result_data must also receive extraction_note."""
+    result_data = {
+        "decision": "BUY",
+        "final_trade_decision": (
+            "分析总结...\n"
+            '<!-- VERDICT: {"direction": "看多", "reason": "突破", "confidence": 68} -->'
+        ),
+        "trader_investment_plan": "目标价：36.8元，止损价：33.0元。",
+        "structured": {
+            "decision": "BUY",
+            "confidence": 68,
+            "probability": None,
+            "target_price": 36.8,
+            "stop_loss_price": 33.0,
+        },
+    }
+
+    db = _make_sqlite_session()
+    try:
+        report = report_service.create_report(
+            db=db,
+            symbol="601899.SH",
+            trade_date="2026-08-21",
+            decision="BUY",
+            result_data=result_data,
+        )
+        assert report.result_data["structured"]["probability"] is None
+        assert report.result_data["structured"].get("extraction_note") is not None
+        assert "概率未提供/未提取" in report.result_data["structured"]["extraction_note"]
+        assert report.result_data["structured"].get("extraction_warning") is None
+    finally:
+        db.close()
+
+
+def test_hold_decision_with_null_target_and_null_probability_combines_notes():
+    """DAV-356: When both HOLD without target price and null probability occur, notes are combined."""
+    result_data = {
+        "decision": "HOLD",
+        "final_trade_decision": (
+            "分析总结...\n"
+            '<!-- VERDICT: {"direction": "中性", "reason": "维持观望"} -->'
+        ),
+        "trader_investment_plan": "**当前置信度**：70 / 100",
+    }
+    resolved = resolve_report_fields(result_data)
+    assert resolved["confidence"] == 70
+    assert resolved["target_price"] is None
+    assert resolved["probability"] is None
+    assert resolved["extraction_warning"] is None
+    assert resolved["extraction_note"] is not None
+    assert "观望不设目标价" in resolved["extraction_note"]
+    assert "概率未提供/未提取" in resolved["extraction_note"]
 
 
 # ── B2. key_metrics and risk_items structured field tests ─────────────────────
@@ -185,7 +307,7 @@ def test_golden_replay_all_three_symbols():
             "expected_confidence": 60,
             "expected_target": 29.2,
             "expected_stop_loss": 27.5,
-            "expected_note": None,
+            "expected_note": "概率未提供/未提取",
         },
         {
             "file": "3c09051e7e364d859dfbe5f1af7cc2c9_result_data.json",
@@ -221,6 +343,13 @@ def test_golden_replay_all_three_symbols():
             f"{c['file']}: stop_loss_price expected {c['expected_stop_loss']}, got {resolved['stop_loss_price']}"
         )
         if c["expected_note"]:
-            assert resolved["extraction_note"] == c["expected_note"], (
-                f"{c['file']}: extraction_note expected {c['expected_note']}, got {resolved['extraction_note']}"
+            assert resolved["extraction_note"] is not None, (
+                f"{c['file']}: extraction_note expected to contain {c['expected_note']!r}, got None"
+            )
+            assert c["expected_note"] in resolved["extraction_note"], (
+                f"{c['file']}: extraction_note expected to contain {c['expected_note']!r}, got {resolved['extraction_note']!r}"
+            )
+        else:
+            assert resolved["extraction_note"] is None, (
+                f"{c['file']}: extraction_note expected None, got {resolved['extraction_note']!r}"
             )

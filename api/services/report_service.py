@@ -919,15 +919,20 @@ def resolve_report_fields(
     if stop_loss_price is None and result_data and isinstance(result_data, dict):
         stop_loss_price = _coerce_price_value(result_data.get("stop_loss_price"))
 
-    # 5. Extraction note for HOLD / 观望 decisions
-    extraction_note = None
+    # 5. Extraction note for HOLD / 观望 decisions and missing probability
+    notes: List[str] = []
     decision_val = (result_data.get("decision") if result_data and isinstance(result_data, dict) else None)
     is_hold = (
         direction in ("中性", "NEUTRAL", "HOLD", "观望", "持有", "CAUTIOUS", "谨慎")
         or (decision_val and str(decision_val).upper() in ("HOLD", "中性", "观望", "持有"))
     )
     if is_hold and target_price is None:
-        extraction_note = "观望不设目标价"
+        notes.append("观望不设目标价")
+
+    if probability is None and extraction_warning is None:
+        notes.append("概率未提供/未提取")
+
+    extraction_note = "；".join(notes) if notes else None
 
     return {
         "market_report": market_report,
@@ -1153,6 +1158,21 @@ def create_report(
             canonical_result_data["target_price"] = resolved["target_price"]
         if resolved.get("stop_loss_price") is not None and "stop_loss_price" in canonical_result_data:
             canonical_result_data["stop_loss_price"] = resolved["stop_loss_price"]
+
+        structured_obj = canonical_result_data.get("structured")
+        if isinstance(structured_obj, dict):
+            if resolved.get("extraction_warning"):
+                structured_obj["extraction_warning"] = resolved["extraction_warning"]
+            if resolved.get("extraction_note"):
+                structured_obj["extraction_note"] = resolved["extraction_note"]
+            if resolved.get("confidence") is not None and "confidence" in structured_obj:
+                structured_obj["confidence"] = resolved["confidence"]
+            if effective_probability is not None and "probability" in structured_obj:
+                structured_obj["probability"] = effective_probability
+            if resolved.get("target_price") is not None and "target_price" in structured_obj:
+                structured_obj["target_price"] = resolved["target_price"]
+            if resolved.get("stop_loss_price") is not None and "stop_loss_price" in structured_obj:
+                structured_obj["stop_loss_price"] = resolved["stop_loss_price"]
 
     now = datetime.now(timezone.utc)
     target_status = status or "completed"
