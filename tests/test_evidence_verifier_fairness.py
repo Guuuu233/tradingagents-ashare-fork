@@ -122,5 +122,3 @@ def test_debate_state_prompt_templates_symmetry():
     # Both blocks should have `"resolved_claim_ids": []`
     assert '"resolved_claim_ids": []' in bull_match.group(1), f"Bull prompt resolved_claim_ids is not [] in: {bull_match.group(1)}"
     assert '"resolved_claim_ids": []' in bear_match.group(1), f"Bear prompt resolved_claim_ids is not [] in: {bear_match.group(1)}"
-
-

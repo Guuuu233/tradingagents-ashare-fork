@@ -236,4 +236,3 @@ def test_smoke_three_tickers_eight_interfaces_as_of(ticker: str):
         assert entry.get("actual_as_of") <= curr_date, f"{ticker} actual_as_of > curr_date for {name}"
         gap = entry.get("gap")
         assert not (gap and "未返回可验证数据日期" in gap), f"{ticker} unverified gap for {name}: {gap}"
-
