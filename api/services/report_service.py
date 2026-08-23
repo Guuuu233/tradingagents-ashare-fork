@@ -50,8 +50,8 @@ STALE_REPORT_ERROR_MESSAGE = "分析任务已中断，请重新发起分析"
 
 # ─── Structured extraction schemas ───────────────────────────────────────────
 
-_RISK_ITEM_FIELDS = frozenset(("name", "level", "description"))
-_KEY_METRIC_FIELDS = frozenset(("name", "value", "status"))
+_RISK_ITEM_FIELDS = frozenset(("name", "level", "description", "statement"))
+_KEY_METRIC_FIELDS = frozenset(("name", "value", "status", "evaluation"))
 _STRUCTURED_REPORT_FIELDS = frozenset(
     (
         "decision",
@@ -64,6 +64,8 @@ _STRUCTURED_REPORT_FIELDS = frozenset(
         "data_gaps",
         "falsification_conditions",
         "not_applicable",
+        "extraction_warning",
+        "extraction_note",
     )
 )
 
@@ -166,6 +168,32 @@ def _coerce_confidence_value(value: Any) -> Optional[int]:
     return confidence
 
 
+def _coerce_price_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        logger.warning(
+            "[report_service] price rejected: value must be a real number, got %r",
+            value,
+        )
+        return None
+    try:
+        price = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.warning(
+            "[report_service] price rejected: cannot convert %r to float",
+            value,
+        )
+        return None
+    if not math.isfinite(price):
+        logger.warning("[report_service] price rejected: value must be finite, got %r", value)
+        return None
+    if price < 0:
+        logger.warning("[report_service] price rejected: value must be non-negative, got %r", value)
+        return None
+    return price
+
+
 def _canonicalize_structured_items(items: Any, schema, field_name: str) -> Optional[List[dict]]:
     if items is None:
         return None
@@ -194,6 +222,7 @@ class RiskItemSchema(BaseModel):
     name: str = Field(..., description="风险名称，15字以内")
     level: str = Field("medium", description="风险等级")
     description: str = Field("", description="一句话说明，30字以内")
+    statement: Optional[str] = Field(None, description="风险陈述/说明")
 
     @model_validator(mode="before")
     @classmethod
@@ -207,6 +236,11 @@ class RiskItemSchema(BaseModel):
             return v.lower()
         return "medium"
 
+    @field_validator("statement", "description", mode="before")
+    @classmethod
+    def _coerce_str_field(cls, v):
+        return str(v) if v is not None and not isinstance(v, str) else v
+
 
 class KeyMetricSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -214,6 +248,7 @@ class KeyMetricSchema(BaseModel):
     name: str = Field(..., description="指标名称，如 PE、ROE、营收增速")
     value: str = Field(..., description="指标值，包含单位，如 28.5x、15.2%")
     status: str = Field("neutral", description="优劣判断")
+    evaluation: Optional[str] = Field(None, description="指标评估说明")
 
     @model_validator(mode="before")
     @classmethod
@@ -225,6 +260,11 @@ class KeyMetricSchema(BaseModel):
     def _coerce_value(cls, v):
         # LLM 可能返回数字而非字符串
         return str(v) if not isinstance(v, str) else v
+
+    @field_validator("evaluation", mode="before")
+    @classmethod
+    def _coerce_evaluation(cls, v):
+        return str(v) if v is not None and not isinstance(v, str) else v
 
     @field_validator("status", mode="before")
     @classmethod
@@ -247,6 +287,8 @@ class StructuredReport(BaseModel):
     data_gaps: List[str] = Field(default_factory=list, description="报告明确列出的数据缺口")
     falsification_conditions: List[str] = Field(default_factory=list, description="报告明确列出的证伪条件")
     not_applicable: bool = Field(False, description="本分析框架是否明确不适用")
+    extraction_warning: Optional[str] = Field(None, description="提取异常告警")
+    extraction_note: Optional[str] = Field(None, description="字段提取补充说明")
 
     @model_validator(mode="before")
     @classmethod
@@ -290,29 +332,7 @@ class StructuredReport(BaseModel):
     @field_validator("target_price", "stop_loss_price", mode="before")
     @classmethod
     def _coerce_price(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, bool) or not isinstance(v, Real):
-            logger.warning(
-                "[report_service] price rejected: value must be a real number, got %r",
-                v,
-            )
-            return None
-        try:
-            price = float(v)
-        except (TypeError, ValueError, OverflowError) as exc:
-            logger.warning(
-                "[report_service] price rejected: cannot convert %r to float",
-                v,
-            )
-            return None
-        if not math.isfinite(price):
-            logger.warning("[report_service] price rejected: value must be finite, got %r", v)
-            return None
-        if price < 0:
-            logger.warning("[report_service] price rejected: value must be non-negative, got %r", v)
-            return None
-        return price
+        return _coerce_price_value(v)
 
 
 def _strict_unit_interval(value: Any, field_name: str) -> Any:
@@ -726,14 +746,29 @@ def extract_structured_data(
 
 # ─── Fallback regex extraction (used when LLM extraction unavailable) ─────────
 
-# Confidence appears both as a percent ("置信度：55%") and as an upper-bound
-# fraction ("置信度：62/75" — the 3000-char prompt caps confidence at 75, so the
-# LLM emits the numerator/denominator). Match both; take the numerator.
+# Confidence appears as a percent ("置信度：55%"), an upper-bound fraction
+# ("置信度：62/75" or "置信度评估：60 / 100"), or a direct integer ("**置信度：65**").
 _CONFIDENCE_PATTERNS = (
-    r'置信度[:：]\s*(\d+)%',
-    r'confidence[:：]\s*(\d+)%',
-    r'置信度[:：]\s*(\d+)\s*[/／]\s*\d+',
-    r'confidence[:：]\s*(\d+)\s*[/／]\s*\d+',
+    r"\*{0,2}(?:当前|本次结论)?置信度(?:评估|说明)?\*{0,2}\s*[:：]\s*(?:评估为\s*)?\*{0,2}(\d+)(?:\s*[/／]\s*\d+|[%％])?\*{0,2}",
+    r"置信度(?:评估|说明)?为\s*\*{0,2}(\d+)(?:\s*[/／]\s*\d+|[%％])?\*{0,2}",
+    r"\*{0,2}confidence(?:\s+level|\s+score|\s+assessment)?\*{0,2}\s*[:：]\s*\*{0,2}(\d+)(?:\s*[/／]\s*\d+|[%％])?\*{0,2}",
+)
+
+_PROBABILITY_PATTERNS = (
+    r"\*{0,2}(?:短线|中线|波段)?(?:上涨|做多|看多|盈利|获利)?(?:概率|胜率)(?:预估)?(?:为)?\*{0,2}\s*[:：=]?\s*\*{0,2}(0\.\d+)\*{0,2}",
+    r"\*{0,2}probability(?:\s+estimate)?\*{0,2}\s*[:：=]?\s*\*{0,2}(0\.\d+)\*{0,2}",
+    r"\*{0,2}(?:短线|中线|波段)?(?:上涨|做多|看多|盈利|获利)?(?:概率|胜率)(?:预估)?(?:为)?\*{0,2}\s*[:：=]?\s*\*{0,2}(\d+(?:\.\d+)?)\s*[%％]\*{0,2}",
+    r"\*{0,2}probability(?:\s+estimate)?\*{0,2}\s*[:：=]?\s*\*{0,2}(\d+(?:\.\d+)?)\s*[%％]\*{0,2}",
+)
+
+_TARGET_PATTERNS = (
+    r"\*{0,2}(?:第一(?:阶段|目标)?|第二(?:阶段|目标)?|明确|核心)?目标(?:止盈)?(?:价|价格|价位|点)?\*{0,2}\s*[:：=]\s*[¥$]?\s*\*{0,2}(\d+\.?\d*)\s*(?:元|块)?\*{0,2}",
+    r"\*{0,2}target(?:\s+price)?\*{0,2}\s*[:：=]\s*[¥$]?\s*\*{0,2}(\d+\.?\d*)\s*(?:元|块)?\*{0,2}",
+)
+
+_STOP_LOSS_PATTERNS = (
+    r"\*{0,2}(?:硬性|价格|初始|最终|日线)?止损(?:价|价格|价位|位|点)?\*{0,2}\s*[:：=]\s*[¥$]?\s*\*{0,2}(\d+\.?\d*)\s*(?:元|块)?\*{0,2}",
+    r"\*{0,2}stop[-\s_]?loss(?:\s+price)?\*{0,2}\s*[:：=]\s*[¥$]?\s*\*{0,2}(\d+\.?\d*)\s*(?:元|块)?\*{0,2}",
 )
 
 
@@ -748,29 +783,38 @@ def _extract_confidence_regex(text: Optional[str]) -> Optional[int]:
     return None
 
 
-def _extract_price_regex(text: Optional[str], price_type: str = "target") -> Optional[float]:
+def _extract_probability_regex(text: Optional[str]) -> Optional[float]:
     if not text:
         return None
-    if price_type == "target":
-        patterns = [
-            r'目标价[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-            r'目标价格[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-            r'target[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-        ]
-    else:
-        patterns = [
-            r'止损价[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-            r'止损价格[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-            r'stop[-\s_]?loss[:：]\s*[¥$]?\s*(\d+\.?\d*)',
-        ]
-    for p in patterns:
-        m = re.search(p, text, re.IGNORECASE)
+    for pattern in _PROBABILITY_PATTERNS:
+        m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            return float(m.group(1))
+            try:
+                v = float(m.group(1))
+                if "%" in m.group(0) or "％" in m.group(0):
+                    v /= 100.0
+                return v if 0.0 <= v <= 1.0 else None
+            except (ValueError, TypeError):
+                continue
     return None
 
 
-def _extract_verdict(text: Optional[str]) -> Optional[Dict[str, str]]:
+def _extract_price_regex(text: Optional[str], price_type: str = "target") -> Optional[float]:
+    if not text:
+        return None
+    patterns = _TARGET_PATTERNS if price_type == "target" else _STOP_LOSS_PATTERNS
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            try:
+                val = float(m.group(1))
+                return val if val >= 0 else None
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _extract_verdict(text: Optional[str]) -> Optional[Dict[str, Any]]:
     if not text:
         return None
     match = re.search(r"<!--\s*VERDICT:\s*(\{.*?\})\s*-->", text, re.IGNORECASE | re.DOTALL)
@@ -786,7 +830,10 @@ def _extract_verdict(text: Optional[str]) -> Optional[Dict[str, str]]:
     reason = str(payload.get("reason") or "").strip()
     if not direction:
         return None
-    return {"direction": direction, "reason": reason}
+    res = {"direction": direction, "reason": reason}
+    if "confidence" in payload:
+        res["confidence"] = payload.get("confidence")
+    return res
 
 
 def resolve_report_fields(
@@ -800,6 +847,7 @@ def resolve_report_fields(
     fundamentals_report = macro_report = smart_money_report = volume_price_report = game_theory_report = None
     investment_plan = trader_investment_plan = None
     final_trade_decision = None
+    investment_debate_state = None
 
     if result_data:
         market_report = result_data.get("market_report")
@@ -813,27 +861,73 @@ def resolve_report_fields(
         investment_plan = result_data.get("investment_plan")
         trader_investment_plan = result_data.get("trader_investment_plan")
         final_trade_decision = result_data.get("final_trade_decision")
+        investment_debate_state = result_data.get("investment_debate_state")
 
     verdict = _extract_verdict(final_trade_decision)
     direction = verdict["direction"] if verdict else None
+    if direction is None and result_data and isinstance(result_data, dict):
+        direction = result_data.get("direction")
 
+    # 1. Confidence extraction fallback chain:
+    # VERDICT JSON -> trader_investment_plan regex -> final_trade_decision regex
     if confidence_override is not None:
         confidence = _coerce_confidence_value(confidence_override)
     else:
-        # Confidence often lives in trader_investment_plan rather than
-        # final_trade_decision (600206.SH repro); fall back just like
-        # target_price / stop_loss below.
-        confidence = _extract_confidence_regex(final_trade_decision)
+        confidence = None
+        # Step 1: VERDICT JSON contains confidence
+        if verdict and "confidence" in verdict and verdict["confidence"] is not None:
+            confidence = _coerce_confidence_value(verdict["confidence"])
+        # Step 2: Fallback to final_trade_decision text regex
+        if confidence is None:
+            confidence = _extract_confidence_regex(final_trade_decision)
+        # Step 3: Fallback to trader_investment_plan regex
         if confidence is None:
             confidence = _extract_confidence_regex(trader_investment_plan)
+        # Fallback to result_data top-level confidence if present
+        if confidence is None and result_data and isinstance(result_data, dict):
+            confidence = _coerce_confidence_value(result_data.get("confidence"))
 
+    # 2. Probability extraction fallback chain:
+    # result_data.probability -> investment_debate_state.judge_decision regex -> result_data.judge_decision regex
+    probability = None
+    if result_data and isinstance(result_data, dict) and result_data.get("probability") is not None:
+        probability = _coerce_probability_value(result_data.get("probability"))
+    if probability is None and investment_debate_state and isinstance(investment_debate_state, dict):
+        judge_decision = investment_debate_state.get("judge_decision")
+        if judge_decision:
+            probability = _extract_probability_regex(judge_decision)
+    if probability is None and result_data and isinstance(result_data, dict):
+        judge_decision = result_data.get("judge_decision")
+        if judge_decision:
+            probability = _extract_probability_regex(judge_decision)
+
+    # 3. Extraction warning: marked when both confidence and probability are missing across all sources
+    extraction_warning = None
+    if confidence is None and probability is None:
+        extraction_warning = "置信度及概率数据全部缺失"
+
+    # 4. Target price and stop loss price extraction
     target_price = target_price_override if target_price_override is not None else _extract_price_regex(final_trade_decision, "target")
     if target_price is None:
         target_price = _extract_price_regex(trader_investment_plan, "target")
+    if target_price is None and result_data and isinstance(result_data, dict):
+        target_price = _coerce_price_value(result_data.get("target_price"))
 
     stop_loss_price = stop_loss_override if stop_loss_override is not None else _extract_price_regex(final_trade_decision, "stop_loss")
     if stop_loss_price is None:
         stop_loss_price = _extract_price_regex(trader_investment_plan, "stop_loss")
+    if stop_loss_price is None and result_data and isinstance(result_data, dict):
+        stop_loss_price = _coerce_price_value(result_data.get("stop_loss_price"))
+
+    # 5. Extraction note for HOLD / 观望 decisions
+    extraction_note = None
+    decision_val = (result_data.get("decision") if result_data and isinstance(result_data, dict) else None)
+    is_hold = (
+        direction in ("中性", "NEUTRAL", "HOLD", "观望", "持有", "CAUTIOUS", "谨慎")
+        or (decision_val and str(decision_val).upper() in ("HOLD", "中性", "观望", "持有"))
+    )
+    if is_hold and target_price is None:
+        extraction_note = "观望不设目标价"
 
     return {
         "market_report": market_report,
@@ -849,8 +943,11 @@ def resolve_report_fields(
         "final_trade_decision": final_trade_decision,
         "direction": direction,
         "confidence": confidence,
+        "probability": probability,
         "target_price": target_price,
         "stop_loss_price": stop_loss_price,
+        "extraction_warning": extraction_warning,
+        "extraction_note": extraction_note,
     }
 
 
@@ -902,6 +999,8 @@ def update_report_partial(
                 value = _coerce_confidence_value(value)
             elif key == "probability":
                 value = _coerce_probability_value(value)
+            elif key in ("target_price", "stop_loss_price"):
+                value = _coerce_price_value(value)
             elif key == "result_data":
                 value = canonicalize_report_result_data(value)
             elif key == "risk_items":
@@ -1040,6 +1139,20 @@ def create_report(
         target_price_override=target_price_override,
         stop_loss_override=stop_loss_override,
     )
+    effective_probability = validated_probability if validated_probability is not None else resolved.get("probability")
+    if canonical_result_data is not None and isinstance(canonical_result_data, dict):
+        if resolved.get("extraction_warning"):
+            canonical_result_data["extraction_warning"] = resolved["extraction_warning"]
+        if resolved.get("extraction_note"):
+            canonical_result_data["extraction_note"] = resolved["extraction_note"]
+        if resolved.get("confidence") is not None and "confidence" in canonical_result_data:
+            canonical_result_data["confidence"] = resolved["confidence"]
+        if effective_probability is not None and "probability" in canonical_result_data:
+            canonical_result_data["probability"] = effective_probability
+        if resolved.get("target_price") is not None and "target_price" in canonical_result_data:
+            canonical_result_data["target_price"] = resolved["target_price"]
+        if resolved.get("stop_loss_price") is not None and "stop_loss_price" in canonical_result_data:
+            canonical_result_data["stop_loss_price"] = resolved["stop_loss_price"]
 
     now = datetime.now(timezone.utc)
     target_status = status or "completed"
@@ -1068,7 +1181,7 @@ def create_report(
         db_report.decision = decision
         db_report.direction = resolved["direction"]
         db_report.confidence = resolved["confidence"]
-        db_report.probability = validated_probability
+        db_report.probability = effective_probability
         db_report.target_price = resolved["target_price"]
         db_report.stop_loss_price = resolved["stop_loss_price"]
         db_report.result_data = canonical_result_data
@@ -1102,7 +1215,7 @@ def create_report(
             decision=decision,
             direction=resolved["direction"],
             confidence=resolved["confidence"],
-            probability=validated_probability,
+            probability=effective_probability,
             target_price=resolved["target_price"],
             stop_loss_price=resolved["stop_loss_price"],
             result_data=canonical_result_data,
