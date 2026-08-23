@@ -1,4 +1,4 @@
-import { FileText, Download, ChevronDown, ChevronRight, Loader2, MousePointerClick } from 'lucide-react'
+import { FileText, Download, ChevronDown, ChevronRight, Loader2, MousePointerClick, Scale } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -6,6 +6,7 @@ import { useAnalysisStore } from '@/stores/analysisStore'
 import type { ReportDetail } from '@/types'
 import { isLegacyEnglishReport, sanitizeReportMarkdown } from '@/utils/reportText'
 import { buildReportMarkdown, downloadMarkdown } from '@/utils/markdownExport'
+import HistoricalDebateDrawer from './HistoricalDebateDrawer'
 
 const REPORT_SECTIONS = [
     { key: 'market_report', title: '市场分析报告', team: '分析团队' },
@@ -46,12 +47,23 @@ interface ReportViewerProps {
     reportData?: ReportDetail
     /** 当前选中章节（实时模式：点哪个智能体就显示哪个） */
     activeSection?: string
+    /** 打开多空辩论与裁决证据抽屉 */
+    onOpenDebateDrawer?: () => void
 }
 
-export default function ReportViewer({ reportData, activeSection }: ReportViewerProps = {}) {
+export default function ReportViewer({ reportData, activeSection, onOpenDebateDrawer }: ReportViewerProps = {}) {
     const { report, streamingSections, isAnalyzing } = useAnalysisStore()
     const [expandedSections, setExpandedSections] = useState<string[]>([])
+    const [showDebateDrawer, setShowDebateDrawer] = useState(false)
     const isHistorical = !!reportData
+
+    const handleOpenDebate = () => {
+        if (onOpenDebateDrawer) {
+            onOpenDebateDrawer()
+        } else {
+            setShowDebateDrawer(true)
+        }
+    }
 
     const getSectionContent = (key: string): string => {
         if (isHistorical) {
@@ -121,10 +133,20 @@ export default function ReportViewer({ reportData, activeSection }: ReportViewer
                             </span>
                         )}
                     </div>
-                    <button onClick={handleExport} className="btn-secondary flex items-center gap-2 text-sm py-1.5 px-3">
-                        <Download className="w-4 h-4" />
-                        导出
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleOpenDebate}
+                            className="btn-secondary flex items-center gap-1.5 text-sm py-1.5 px-3 border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors font-medium"
+                            title="查看多空辩论逐轮发言、论点账本、总监裁决及事实核验"
+                        >
+                            <Scale className="w-4 h-4 text-amber-500" />
+                            多空辩论与裁决证据
+                        </button>
+                        <button onClick={handleExport} className="btn-secondary flex items-center gap-2 text-sm py-1.5 px-3">
+                            <Download className="w-4 h-4" />
+                            导出
+                        </button>
+                    </div>
                 </div>
                 {isLegacyEnglishReport(reportData) && (
                     <div className="rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-2.5 text-xs leading-5 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
@@ -163,6 +185,11 @@ export default function ReportViewer({ reportData, activeSection }: ReportViewer
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{REPORT_DISCLAIMER}</ReactMarkdown>
                     </div>
                 </div>
+                <HistoricalDebateDrawer
+                    isOpen={showDebateDrawer}
+                    onClose={() => setShowDebateDrawer(false)}
+                    reportData={reportData}
+                />
             </div>
         )
     }

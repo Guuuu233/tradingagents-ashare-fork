@@ -285,6 +285,10 @@ export interface AnalysisReport {
     trader_investment_plan?: string
     risk_feedback_state?: RiskFeedbackState
     final_trade_decision?: string
+    investment_debate_state?: InvestmentDebateState
+    manager_verdict?: HistoricalDebateManagerVerdict | null
+    evidence_verification?: HistoricalDebateEvidenceVerification[]
+    report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
 }
 
 // UI Types
@@ -368,6 +372,10 @@ export interface AnalysisHorizonResult {
     investment_plan?: string
     trader_investment_plan?: string
     final_trade_decision?: string
+    investment_debate_state?: InvestmentDebateState
+    manager_verdict?: HistoricalDebateManagerVerdict | null
+    evidence_verification?: HistoricalDebateEvidenceVerification[]
+    report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
 }
 
 // Report Types (from database)
@@ -411,6 +419,148 @@ export interface ReportDetail extends Report {
     trader_investment_plan?: string
     final_trade_decision?: string
     result_data?: AnalysisReport
+    investment_debate_state?: InvestmentDebateState
+    manager_verdict?: HistoricalDebateManagerVerdict | null
+    evidence_verification?: HistoricalDebateEvidenceVerification[]
+    report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
+}
+
+// ─── Historical Debate & Verification Types ─────────────────────────────────
+
+export interface HistoricalDebateAttempt {
+    attempt_index?: number
+    message_index?: number
+    debate_round?: number
+    speaker?: string
+    speaker_key?: string
+    cleaned_prose?: string
+    parse_status?: string
+    accepted?: boolean
+    error_detail?: string
+    responded_claim_ids?: string[]
+    new_claim_ids?: string[]
+    target_claim_ids?: string[]
+    resolved_claim_ids?: string[]
+    unresolved_claim_ids?: string[]
+    round_summary?: string
+    round_goal?: string
+    information_gain_score?: number
+    duplicate_claim_ids?: string[]
+    duplicate_claims?: string[]
+    new_evidence_count?: number
+    max_similarity?: number
+    model_name?: string
+}
+
+export interface HistoricalDebateRoundMessage {
+    message_index: number
+    debate_round: number
+    speaker: string
+    speaker_key?: 'Bull' | 'Bear' | string
+    cleaned_prose?: string
+    parse_status?: string
+    accepted?: boolean
+    error_detail?: string
+    responded_claim_ids?: string[]
+    new_claim_ids?: string[]
+    target_claim_ids?: string[]
+    resolved_claim_ids?: string[]
+    unresolved_claim_ids?: string[]
+    resolved?: string[]
+    unresolved?: string[]
+    round_summary?: string
+    round_goal?: string
+    information_gain_score?: number
+    duplicate_claim_ids?: string[]
+    duplicate_claims?: string[]
+    new_evidence_count?: number
+    max_similarity?: number
+    model_name?: string
+    attempts?: HistoricalDebateAttempt[]
+}
+
+export interface HistoricalDebateClaim {
+    claim_id: string
+    speaker?: string
+    speaker_key?: 'Bull' | 'Bear' | string
+    stance?: 'bullish' | 'bearish' | string
+    round_index?: number
+    debate_round?: number
+    claim?: string
+    text?: string
+    content?: string
+    evidence?: string[] | string
+    confidence?: number
+    status?: 'open' | 'resolved' | 'unresolved' | 'adopted' | 'rejected' | string
+    target_claim_ids?: string[]
+    responded_claim_ids?: string[]
+    responded_by?: string[] | string
+}
+
+export interface HistoricalDebateManagerVerdict {
+    direction?: string
+    winner?: 'bull' | 'bear' | 'tie' | string
+    reason?: string
+    position_pct?: number | string | null
+    entry?: number | string | null
+    target?: number | string | null
+    stop_loss?: number | string | null
+    upside?: number | string | null
+    downside?: number | string | null
+    odds?: number | string | null
+    adopted_claim_ids?: string[]
+    rejected_claim_ids?: string[]
+    consistency_check_passed?: boolean
+    failed_checks?: string[]
+}
+
+export type EvidenceVerificationStatus = 'verified' | 'unsupported' | 'contradicted' | 'source_unavailable' | string
+
+export interface HistoricalDebateEvidenceVerification {
+    raw: string
+    claim_id?: string | null
+    matched_role?: string | null
+    matched_source?: string | null
+    status: EvidenceVerificationStatus
+    is_fatal: boolean
+    details?: string
+}
+
+export interface HistoricalDebateReportManifest {
+    seven_reports_present?: Record<string, boolean>
+    all_reports_valid?: boolean
+    missing_reports?: string[]
+    [key: string]: unknown
+}
+
+export interface InvestmentDebateState {
+    bull_history?: string
+    bear_history?: string
+    history?: string
+    current_speaker?: string
+    current_response?: string
+    bull_initial?: string
+    bear_initial?: string
+    bull_rebuttal?: string
+    bear_rebuttal?: string
+    judge_decision?: string
+    count?: number
+    claims?: HistoricalDebateClaim[]
+    round_messages?: HistoricalDebateRoundMessage[]
+    attempts?: HistoricalDebateAttempt[]
+    focus_claim_ids?: string[]
+    open_claim_ids?: string[]
+    resolved_claim_ids?: string[]
+    unresolved_claim_ids?: string[]
+    round_summary?: string
+    round_goal?: string
+    claim_counter?: number
+    manager_verdict?: HistoricalDebateManagerVerdict | null
+    evidence_verification?: HistoricalDebateEvidenceVerification[]
+    report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
+    blocked?: boolean
+    parse_status?: string
+    block_reason?: string
 }
 
 export interface ReportListResponse {
