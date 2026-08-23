@@ -555,6 +555,12 @@ def _classify_failure_value(value: Any) -> Optional[str]:
 
     normalized = value.strip()
     lowered = normalized.lower()
+    if "【财务数据截至" in normalized or "生效公告日" in normalized:
+        return None
+    if "停止披露" in normalized or "披露停止" in normalized:
+        return "unavailable"
+    if "仅提供当前快照" in normalized or "仅支持当日快照" in normalized:
+        return "refused"
     if any(marker.lower() in lowered for marker in ("调用失败", "调用异常", "拉取失败", "抓取失败")):
         return "failed"
     if "数据拉取超时" in normalized or "timeout" in lowered or "超时" in normalized:
@@ -604,12 +610,28 @@ _SOURCE_AS_OF_PATTERNS = (
     r"【数据日期】\s*(20\d{2}-\d{2}-\d{2})",
     r"实际数据日期\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
     r"数据基准日\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"排查基准日\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
     r"数据日期[】：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"生效公告日\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"截止日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"统计截止日\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"公告日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"报告日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"报告期(?:截止日|日)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"解禁日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"变动日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"交易日(?:期)?\s*[：:]?\s*(20\d{2}-\d{2}-\d{2})",
+    r"截至于\s*(20\d{2}-\d{2}-\d{2})",
     r"日期\s*[：:]\s*(20\d{2}-\d{2}-\d{2})",
     r"龙虎榜明细[（(]\s*(20\d{2}-\d{2}-\d{2})",
     r"涨停池[（(]\s*(20\d{2}-\d{2}-\d{2})",
     r"(20\d{2}-\d{2}-\d{2})\s+涨停家数",
     r"\[(20\d{2}-\d{2}-\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2})?)?\]",
+)
+
+_SOURCE_AS_OF_YYYYMMDD_PATTERNS = (
+    r"查询报告期\s*=\s*(20\d{2})(\d{2})(\d{2})",
+    r"报告期\s*[：:=]?\s*(20\d{2})(\d{2})(\d{2})",
 )
 
 
@@ -635,10 +657,25 @@ def _extract_source_as_of(value: Any, requested_as_of: str) -> Optional[str]:
                 return match.group(0)
         return None
 
+    if hasattr(value, "fund_flow_evidence_meta") and isinstance(value.fund_flow_evidence_meta, dict):
+        for key in ("as_of", "actual_as_of", "quote_as_of", "data_as_of"):
+            candidate = value.fund_flow_evidence_meta.get(key)
+            match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate or ""))
+            if match and match.group(0) <= requested_as_of:
+                return match.group(0)
+
+    if hasattr(value, "as_of") and getattr(value, "as_of"):
+        match = re.search(r"20\d{2}-\d{2}-\d{2}", str(getattr(value, "as_of") or ""))
+        if match and match.group(0) <= requested_as_of:
+            return match.group(0)
+
     text = value if isinstance(value, str) else str(value or "")
     candidates: list[str] = []
     for pattern in _SOURCE_AS_OF_PATTERNS:
         candidates.extend(match.group(1) for match in re.finditer(pattern, text))
+    for pattern in _SOURCE_AS_OF_YYYYMMDD_PATTERNS:
+        for match in re.finditer(pattern, text):
+            candidates.append(f"{match.group(1)}-{match.group(2)}-{match.group(3)}")
     dates = [item for item in candidates if item <= requested_as_of]
     return max(dates) if dates else None
 

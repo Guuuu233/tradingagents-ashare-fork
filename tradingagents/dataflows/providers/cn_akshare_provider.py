@@ -3774,17 +3774,23 @@ class CnAkshareProvider(BaseMarketDataProvider):
             # Filter for specific stock code
             stock_df = df[df["股票代码"].astype(str).str.zfill(6) == code.zfill(6)]
             if stock_df.empty:
-                res = DataResult(ok=True, data="【解禁排查】距当前分析日期前后60日内无限售股解禁记录，无重大解禁冲击风险。", source=source_name, title=title)
+                res = DataResult(
+                    ok=True,
+                    data=f"【解禁排查】数据基准日：{curr_date}。距当前分析日期前后60日内无限售股解禁记录，无重大解禁冲击风险。",
+                    source=source_name,
+                    title=title,
+                    as_of=curr_date,
+                )
                 return res.to_prompt()
 
-            summary_lines = [f"【限售解禁风险预警】找到 {len(stock_df)} 条近期解禁记录："]
+            summary_lines = [f"【限售解禁风险预警】（数据基准日：{curr_date}）找到 {len(stock_df)} 条近期解禁记录："]
             for _, row in stock_df.iterrows():
                 rel_date = row.get("解禁时间", "未知日期")
                 rel_ratio = row.get("占解禁前流通市值比例", "未知")
                 rel_type = row.get("限售股类型", "限售股")
                 summary_lines.append(f"- 解禁日期: {rel_date} | 类型: {rel_type} | 占比流通市值: {rel_ratio}%")
 
-            res = DataResult(ok=True, data="\n".join(summary_lines), source=source_name, title=title)
+            res = DataResult(ok=True, data="\n".join(summary_lines), source=source_name, title=title, as_of=curr_date)
             return res.to_prompt()
         except Exception as exc:
             res = DataResult(ok=False, data=None, error=f"{type(exc).__name__}: {exc}", source=source_name, title=title)
@@ -3913,11 +3919,12 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 return res.to_prompt()
 
             period_label = format_report_period_label(date_param)
+            as_of_date = f"{date_param[:4]}-{date_param[4:6]}-{date_param[6:]}" if len(date_param) == 8 else date_param
 
             with AKSHARE_CALL_LOCK:
                 df = ak.stock_yjyg_em(date=date_param)
 
-            header = f"查询报告期 = {date_param}（{period_label}）"
+            header = f"查询报告期 = {date_param}（{period_label}，报告期日 {as_of_date}）"
 
             if df is None or df.empty:
                 # Market-wide empty for a standard period is treated as query failure /
@@ -3944,6 +3951,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     ),
                     source=source_name,
                     title=title,
+                    as_of=as_of_date,
                 )
                 return res.to_prompt()
 
@@ -3972,12 +3980,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     f"【业绩预告排查】{header}。在分析日截断后无可用预告记录"
                     "（公告日均晚于分析日或无法解析）。"
                 ]
+                final_as_of = as_of_date
             else:
                 lines = [
                     f"【业绩预告/快报】{header}。找到 {len(kept_lines)} 条预告记录："
                 ] + kept_lines
+                anns = [l.split("公告日: ")[1].split(" |")[0] for l in kept_lines if "公告日: " in l]
+                final_as_of = max(anns) if anns else as_of_date
 
-            res = DataResult(ok=True, data="\n".join(lines), source=source_name, title=title)
+            res = DataResult(ok=True, data="\n".join(lines), source=source_name, title=title, as_of=final_as_of)
             return res.to_prompt()
         except Exception as exc:
             res = DataResult(ok=False, data=None, error=f"{type(exc).__name__}: {exc}", source=source_name, title=title)
@@ -4180,7 +4191,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             ok=False,
             data=None,
             error=(
-                "沪深港通个股每日持股明细自 2024 年 8 月起停止披露，本项不可用。"
+                "沪深港通个股每日持股明细自 2024 年 8 月起停止披露，本项制度性停更不可用。"
                 "如需北向数据请使用季度持股口径，注意频率为季度而非每日。"
             ),
             source=source_name,
