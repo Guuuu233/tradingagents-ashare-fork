@@ -919,15 +919,20 @@ def resolve_report_fields(
     if stop_loss_price is None and result_data and isinstance(result_data, dict):
         stop_loss_price = _coerce_price_value(result_data.get("stop_loss_price"))
 
-    # 5. Extraction note for HOLD / 观望 decisions
-    extraction_note = None
+    # 5. Extraction note for HOLD / 观望 decisions and missing probability
+    notes: List[str] = []
     decision_val = (result_data.get("decision") if result_data and isinstance(result_data, dict) else None)
     is_hold = (
         direction in ("中性", "NEUTRAL", "HOLD", "观望", "持有", "CAUTIOUS", "谨慎")
         or (decision_val and str(decision_val).upper() in ("HOLD", "中性", "观望", "持有"))
     )
     if is_hold and target_price is None:
-        extraction_note = "观望不设目标价"
+        notes.append("观望不设目标价")
+
+    if probability is None and not extraction_warning:
+        notes.append("概率未提供/未提取")
+
+    extraction_note = "；".join(notes) if notes else None
 
     return {
         "market_report": market_report,
