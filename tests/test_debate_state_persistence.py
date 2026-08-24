@@ -510,6 +510,13 @@ class TestJobExecutionDebatePersistence:
         assert result_data["challenge_verification"] == []
         assert result_data["shadow_credit_metrics"] == {}
         assert isinstance(result_data["data_utilization_metrics"], dict)
+        top_fc = result_data["data_utilization_metrics"]["field_completeness"]
+        assert top_fc["numerator"] == 4
+        assert top_fc["status"] == "complete"
+        assert "confidence" in top_fc["present_fields"]
+        assert "target_price" in top_fc["present_fields"]
+        assert "stop_loss_price" in top_fc["present_fields"]
+        assert "probability" in top_fc["present_fields"]
 
         # Check short_term and medium_term in result_data have debate states
         assert result_data["short_term"]["investment_debate_state"]["judge_decision"] == "short 多头胜"
@@ -794,6 +801,149 @@ class TestJobExecutionDebatePersistence:
             assert saved["risk_feedback_state"]["latest_risk_verdict"] == "pass"
         finally:
             _FakeTradingGraphForJob.multi_chunk = False
+
+    def test_red_a_legitimate_empty_probability_with_extraction_note(self):
+        """RED A: probability=None with extraction_note must have field_completeness=4/4, legitimate_omissions containing probability, and note persisted."""
+        result = {
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [],
+                "count": 6,
+            }
+        }
+        resolved = {
+            "confidence": 68,
+            "target_price": 28.03,
+            "stop_loss_price": 26.8,
+            "extraction_note": "概率未提供/未提取",
+            "extraction_warning": None,
+        }
+        main._apply_structured_report_fields(
+            result,
+            structured=None,
+            graph_decision="BUY",
+            resolved=resolved,
+        )
+        main._mount_or_refresh_protocol_metadata_and_metrics(result)
+
+        assert result.get("extraction_note") == "概率未提供/未提取"
+        assert result.get("extraction_warning") is None
+        fc = result["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 4
+        assert fc["status"] == "complete"
+        assert "probability" in fc["legitimate_omissions"]
+
+    def test_red_b_dual_aggregate_metrics_from_source_state(self):
+        """RED B: aggregate with source_state=primary must derive top-level metrics from primary, not empty 0/4."""
+        primary = {
+            "symbol": "600519.SH",
+            "confidence": 68,
+            "probability": 0.8,
+            "target_price": 28.03,
+            "stop_loss_price": 26.8,
+            "decision": "BUY",
+            "extraction_note": None,
+            "extraction_warning": None,
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [{"claim_id": "INV-1", "claim": "多头主张", "confidence": 0.85}],
+                "count": 6,
+                "round_messages": deepcopy(_DEFAULT_ROUND_MESSAGES),
+                "judge_decision": "short 多头胜",
+            },
+        }
+        main._mount_or_refresh_protocol_metadata_and_metrics(primary)
+        primary_metrics = primary["data_utilization_metrics"]
+        assert primary_metrics["field_completeness"]["numerator"] == 4
+
+        aggregate = {
+            "symbol": "600519.SH",
+            "short_term": primary,
+            "medium_term": {},
+        }
+        main._mount_or_refresh_protocol_metadata_and_metrics(aggregate, source_state=primary)
+
+        top_metrics = aggregate["data_utilization_metrics"]
+        assert top_metrics["field_completeness"] == primary_metrics["field_completeness"]
+        assert top_metrics["evidence_recycling"] == primary_metrics["evidence_recycling"]
+        assert top_metrics["field_completeness"]["numerator"] == 4
+        assert top_metrics["field_completeness"]["status"] == "complete"
+
+    def test_job_execution_with_legitimate_empty_probability_persists_note_and_4_of_4_metrics(self):
+        """Full job execution: probability=None with extraction_note persists note and 4/4 metrics in result and saved DB report."""
+        job_id = f"job-{uuid4().hex}"
+        store = InMemoryJobStore()
+        collector = MagicMock()
+        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        saved_reports = []
+        db = MagicMock()
+
+        fake_structured = report_service.StructuredReport(
+            decision="BUY",
+            confidence=85,
+            target_price=1800.0,
+            stop_loss_price=1600.0,
+            probability=None,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+
+        request = main.AnalyzeRequest(
+            symbol="600519.SH",
+            trade_date="2026-08-20",
+            horizons=["short"],
+            query="分析 600519.SH 短线走势",
+            selected_analysts=[],
+        )
+
+        def capture_create_report(*args, **kwargs):
+            saved_reports.append(kwargs)
+            return MagicMock()
+
+        async def run_job():
+            stream = main._stream_job_events(job_id)
+            await stream.__anext__()
+            task = asyncio.create_task(
+                main._run_job_inner(job_id, request, stream_events=False, save_report=True)
+            )
+            async for chunk in stream:
+                if "event: done" in chunk:
+                    break
+            await task
+            await stream.aclose()
+
+        with (
+            patch.object(main, "_job_store_instance", store),
+            patch.object(main, "_shared_data_collector", collector),
+            patch.object(main, "TradingAgentsGraph", _FakeTradingGraphForJob),
+            patch.object(main, "_build_runtime_config", return_value={}),
+            patch.object(main, "_resolve_and_freeze_custom_prompts", return_value=({}, False)),
+            patch.object(main, "get_db_ctx", return_value=nullcontext(db)),
+            patch.object(report_service, "init_report"),
+            patch.object(report_service, "update_report_partial"),
+            patch.object(report_service, "extract_structured_data", return_value=fake_structured),
+            patch.object(report_service, "create_report", side_effect=capture_create_report),
+        ):
+            asyncio.run(run_job())
+
+        job = store.get_job(job_id)
+        assert job["status"] == "completed"
+        result_data = job["result"]
+
+        assert result_data.get("extraction_note") == "概率未提供/未提取"
+        fc = result_data["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 4
+        assert fc["status"] == "complete"
+        assert "probability" in fc["legitimate_omissions"]
+
+        assert len(saved_reports) == 1
+        saved = saved_reports[0]["result_data"]
+        assert saved.get("extraction_note") == "概率未提供/未提取"
+        assert saved["data_utilization_metrics"]["field_completeness"]["numerator"] == 4
+        assert "probability" in saved["data_utilization_metrics"]["field_completeness"]["legitimate_omissions"]
 
 
 # ============================================================================

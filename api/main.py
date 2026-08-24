@@ -1976,7 +1976,38 @@ def _mount_or_refresh_protocol_metadata_and_metrics(
     """
     state_for_meta = source_state if source_state is not None else result
     meta = get_protocol_metadata(state_for_meta)
-    data_utilization_metrics = calculate_all_debate_metrics(result)
+
+    if source_state is not None:
+        metrics_input = dict(source_state) if isinstance(source_state, dict) else {}
+        for key in (
+            "confidence",
+            "probability",
+            "target_price",
+            "stop_loss_price",
+            "decision",
+            "direction",
+            "extraction_note",
+            "extraction_warning",
+            "note",
+            "market_report",
+            "sentiment_report",
+            "news_report",
+            "fundamentals_report",
+            "macro_report",
+            "smart_money_report",
+            "volume_price_report",
+            "investment_debate_state",
+            "manager_verdict",
+            "claim_evidence_summary",
+        ):
+            if key in result and result[key] is not None:
+                metrics_input[key] = result[key]
+            elif key in result and key not in metrics_input:
+                metrics_input[key] = result[key]
+    else:
+        metrics_input = result
+
+    data_utilization_metrics = calculate_all_debate_metrics(metrics_input)
 
     raw_inv_state = (
         source_state.get("investment_debate_state")
@@ -2596,6 +2627,8 @@ def _apply_structured_report_fields(
             "not_applicable": not_applicable,
             "target_price": resolved.get("target_price"),
             "stop_loss_price": resolved.get("stop_loss_price"),
+            "extraction_note": resolved.get("extraction_note"),
+            "extraction_warning": resolved.get("extraction_warning"),
         }
     )
     return decision
