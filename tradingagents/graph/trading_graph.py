@@ -324,6 +324,7 @@ class TradingAgentsGraph:
             selected_analysts=selected_analysts,
             request_source=request_source,
             market_data_context=market_data_context,
+            runtime_config=self.config,
         )
         args = self.propagator.get_graph_args()
 
@@ -407,6 +408,7 @@ class TradingAgentsGraph:
             user_intent=user_intent,
             horizon="short",
             market_data_context=market_data_context,
+            runtime_config=self.config,
         )
         final_state = await self.graph.ainvoke(state, **graph_args)
 

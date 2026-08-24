@@ -2,7 +2,7 @@ import contextvars
 import json
 import operator
 import re
-from typing import Annotated, Any, List, Tuple
+from typing import Annotated, Any, List, Mapping, Tuple
 
 from typing_extensions import Optional, TypedDict
 from langgraph.graph import MessagesState
@@ -223,6 +223,38 @@ def get_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
 def normalize_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
     """Alias for get_protocol_metadata with normalized output guarantees."""
     return get_protocol_metadata(state_or_result)
+
+
+def is_v2_debate_enabled(state_or_config: Any) -> bool:
+    """Return True if v2_debate_enabled is explicitly enabled in state, config, or feature_flags."""
+    if not isinstance(state_or_config, (dict, Mapping)):
+        return False
+
+    # 1. Direct check in nested investment_debate_state if present
+    inv_state = state_or_config.get("investment_debate_state")
+    if isinstance(inv_state, (dict, Mapping)):
+        flags = inv_state.get("feature_flags")
+        if isinstance(flags, (dict, Mapping)) and flags.get("v2_debate_enabled") is not None:
+            return bool(flags["v2_debate_enabled"])
+        if inv_state.get("v2_debate_enabled") is not None:
+            return bool(inv_state.get("v2_debate_enabled"))
+        if inv_state.get("protocol_version") == PROTOCOL_VERSION_V2_STRUCTURED:
+            return True
+
+    # 2. Check in top-level feature_flags dict
+    flags = state_or_config.get("feature_flags")
+    if isinstance(flags, (dict, Mapping)) and flags.get("v2_debate_enabled") is not None:
+        return bool(flags["v2_debate_enabled"])
+
+    # 3. Direct key at top level
+    if state_or_config.get("v2_debate_enabled") is not None:
+        return bool(state_or_config.get("v2_debate_enabled"))
+
+    # 4. Direct protocol_version at top level
+    if state_or_config.get("protocol_version") == PROTOCOL_VERSION_V2_STRUCTURED:
+        return True
+
+    return False
 
 
 class InvestDebateState(TypedDict):

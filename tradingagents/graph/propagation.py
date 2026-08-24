@@ -5,7 +5,10 @@ from typing import Dict, Any, List, Optional, Mapping
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_PROTOCOL_METADATA,
     InvestDebateState,
+    PROTOCOL_VERSION_V1_LEGACY,
+    PROTOCOL_VERSION_V2_STRUCTURED,
     RiskDebateState,
+    is_v2_debate_enabled,
 )
 from tradingagents.agents.utils.context_utils import (
     build_market_context,
@@ -50,6 +53,7 @@ class Propagator:
         user_intent: Optional[Dict[str, Any]] = None,
         horizon: str = "short",
         market_data_context: Optional[Dict[str, Any]] = None,
+        runtime_config: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
         instrument_context = infer_instrument_context(company_name)
@@ -61,6 +65,12 @@ class Propagator:
             f"{summarize_market_context(market_context)}\n"
             f"{user_context_summary}"
         )
+        protocol_meta = copy.deepcopy(DEFAULT_PROTOCOL_METADATA)
+        if runtime_config and is_v2_debate_enabled(runtime_config):
+            protocol_meta["protocol_version"] = PROTOCOL_VERSION_V2_STRUCTURED
+            protocol_meta["protocol_stage"] = "opening"
+            protocol_meta["feature_flags"]["v2_debate_enabled"] = True
+
         investment_debate_state_dict: Dict[str, Any] = {
             "history": "",
             "bull_history": "",
@@ -80,7 +90,7 @@ class Propagator:
             "claim_counter": 0,
             "attempts": [],
         }
-        investment_debate_state_dict.update(copy.deepcopy(DEFAULT_PROTOCOL_METADATA))
+        investment_debate_state_dict.update(protocol_meta)
         state: Dict[str, Any] = {
             "messages": [("human", user_prompt_context)],
             "company_of_interest": company_name,
