@@ -100,13 +100,17 @@ class OfflineABHarness:
         }
 
         summary = {
+            "comparison_mode": "structural_compatibility_baseline",
             "protocol_change": f"{legacy_res.get('protocol_version')} -> {v2_res.get('protocol_version')}",
             "seven_reports_utilization": v2_res.get("seven_reports_utilization", {}).get("rate"),
             "field_completeness": v2_res.get("field_completeness", {}).get("rate"),
             "challenge_count": v2_res.get("challenge_metrics", {}).get("challenge_count", {}).get("rate"),
+            "note": "结构兼容性基线对比：同一 legacy result_data 重放时 delta=0 仅验证协议结构解析兼容性，不代表真实 v2 质量等同。",
         }
 
         return {
+            "comparison_mode": "structural_compatibility_baseline",
+            "note": "结构兼容性基线对比：同一 legacy result_data 重放时 delta=0 仅验证协议结构解析兼容性，不代表真实 v2 质量等同。",
             "legacy": legacy_res,
             "v2": v2_res,
             "diff": diff,

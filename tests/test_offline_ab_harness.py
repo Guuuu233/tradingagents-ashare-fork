@@ -106,6 +106,32 @@ def test_offline_ab_harness_single_report_comparison():
     assert "seven_reports_utilization_rate" in diff
     assert "field_completeness_rate" in diff
 
+    # S4: Output tags and comparison mode notes
+    assert res.get("comparison_mode") == "structural_compatibility_baseline"
+    assert res["summary"].get("comparison_mode") == "structural_compatibility_baseline"
+    assert "delta=0" in res.get("note", "")
+    assert "delta=0" in res["summary"].get("note", "")
+
+
+def test_offline_ab_harness_output_tags_contract():
+    """S4: When evaluating same legacy result_data across protocol versions, output must carry comparison_mode and disclaimer note."""
+    harness = OfflineABHarness()
+    raw_data = {
+        "confidence": 70,
+        "probability": 0.60,
+        "target_price": 50.0,
+        "stop_loss_price": 40.0,
+        "decision": "BUY",
+        "investment_debate_state": {"protocol_version": "v1_legacy"},
+    }
+    res = harness.compare_report(raw_data)
+    assert res["comparison_mode"] == "structural_compatibility_baseline"
+    assert "delta=0" in res["note"]
+    assert "不代表" in res["note"]
+    assert "v2" in res["note"]
+    assert res["summary"]["comparison_mode"] == "structural_compatibility_baseline"
+    assert "delta=0" in res["summary"]["note"]
+
 
 def test_offline_ab_harness_no_network_or_llm():
     """Assert that running OfflineABHarness makes zero network or LLM API calls."""

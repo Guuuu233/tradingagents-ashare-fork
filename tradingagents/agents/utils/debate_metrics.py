@@ -31,6 +31,40 @@ SEVEN_REPORT_KEYS = (
     "volume_price_report",
 )
 
+# De-pollution patterns for non-financial or metadata identifiers
+_ID_MASK_RE = re.compile(
+    r"(?<![\w])(?:INV|CH|CHAL|CLAIM|CLM|REQ|RULE|ARG|SEC|POINT|ID|CASE|VERDICT|DOC|ITEM)[-_]?\d+(?![\w])|"
+    r"(?<![\w])(?:v|V)\d+(?:\.\d+)*(?![\w])|"
+    r"(?:^|[\s\n(（\[【])\d{1,2}[.、)）\]】](?!\d)\s*|"
+    r"(?<![\w])#\d+(?![\w])",
+    re.IGNORECASE,
+)
+
+# Stock codes (6-digit securities with or without exchange suffixes; without financial quantity units)
+_STOCK_CODE_RE = re.compile(
+    r"(?<![\w.])(?:\d{6}\.(?:SH|SZ|BJ|HK|sh|sz|bj|hk)|(?:SH|SZ|BJ|HK|sh|sz|bj|hk)\d{6}|\d{5}\.HK|0\d{5}|\b(?:60|68|00|30|83|87|92|43)\d{4}\b)(?!\s*(?:万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手))",
+    re.IGNORECASE,
+)
+
+# Temporal anchors (dates, calendar years, quarters)
+_DATE_MASK_RE = re.compile(
+    r"(?<![\d.])\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:日)?(?![\d.])|"
+    r"(?<![\d.])\d{4}年\d{1,2}月(?:\d{1,2}日?)?(?![\d.])|"
+    r"(?<![\d.])\d{1,2}月\d{1,2}日?(?![\d.])|"
+    r"(?<![\d.])(?:0[1-9]|1[0-2])[-/.](?:0[1-9]|[12]\d|3[01])(?![\d.])|"
+    r"(?<![\d.])(?:19|20)\d{2}年度?(?![\d.])|"
+    r"(?<![\d.])(?:19|20)\d{2}[hHqQ][1-4](?![\d.])|"
+    r"(?<![\d.])[hHqQ][1-4](?![\d.])|"
+    r"(?<![\d.])(?:19|20)\d{2}(?![.\d\w])",
+    re.IGNORECASE,
+)
+
+# Ranges and intervals (captured as single range token)
+_RANGE_RE = re.compile(
+    r"(?<![\w.])([+-]?\d+(?:\.\d+)?)\s*(万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手)?\s*[-~至到–—]\s*([+-]?\d+(?:\.\d+)?)\s*(万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手)?(?!\w)",
+    re.IGNORECASE,
+)
+
 # Robust numerical pattern capturing numbers with financial units
 _NUM_UNIT_RE = re.compile(
     r"(?<![\w.])([+-]?\d+(?:\.\d+)?)\s*(万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手|年|月|日|天)?(?!\w)",
@@ -38,23 +72,33 @@ _NUM_UNIT_RE = re.compile(
 )
 
 
-class MetricResult(TypedDict):
+class MetricResult(TypedDict, total=False):
     numerator: Union[int, float]
     denominator: Union[int, float]
     rate: Optional[float]
     version: str
     status: str
     note: Optional[str]
+    present_fields: list[str]
+    missing_fields: list[str]
+    legitimate_omissions: list[str]
 
 
 def _normalize_num_token(num_str: str, unit_str: Optional[str]) -> str:
     """Normalize a numerical token with unit for deterministic comparison."""
+    s = (num_str or "").strip()
+    is_pos_sign = s.startswith("+")
     try:
-        val = float(num_str)
-        # format float nicely
-        formatted_num = f"{val:.4f}".rstrip("0").rstrip(".") if "." in f"{val:.4f}" else str(int(val))
+        val = float(s)
+        # format float nicely without scientific notation or trailing zeros
+        if "." in f"{val:.4f}":
+            formatted_num = f"{val:.4f}".rstrip("0").rstrip(".")
+        else:
+            formatted_num = str(int(val))
+        if is_pos_sign and not formatted_num.startswith("+") and not formatted_num.startswith("-"):
+            formatted_num = f"+{formatted_num}"
     except (ValueError, TypeError):
-        formatted_num = num_str.strip()
+        formatted_num = s
     unit = (unit_str or "").strip()
     if unit in ("％", "pct"):
         unit = "%"
@@ -66,18 +110,72 @@ def _normalize_num_token(num_str: str, unit_str: Optional[str]) -> str:
 
 
 def extract_numerical_tokens(text: str) -> list[str]:
-    """Extract distinct numerical tokens with units from text."""
+    """Extract distinct numerical tokens with units from text after de-pollution."""
     if not text or not isinstance(text, str):
         return []
+
+    # 1. Mask claim/challenge IDs and document labels
+    cleaned = _ID_MASK_RE.sub(" ", text)
+    # 2. Mask stock codes
+    cleaned = _STOCK_CODE_RE.sub(" ", cleaned)
+    # 3. Mask temporal anchors (dates, calendar years, quarters)
+    cleaned = _DATE_MASK_RE.sub(" ", cleaned)
+
     tokens: list[str] = []
     seen: set[str] = set()
-    for m in _NUM_UNIT_RE.finditer(text):
+
+    # 4. Extract ranges as single range tokens and mask them
+    def _replace_range(m: re.Match) -> str:
+        n1, u1, n2, u2 = m.group(1), m.group(2), m.group(3), m.group(4)
+        u = u2 or u1 or ""
+        tok1 = _normalize_num_token(n1, "")
+        tok2 = _normalize_num_token(n2, u)
+        rtok = f"{tok1}-{tok2}"
+        if rtok not in seen:
+            seen.add(rtok)
+            tokens.append(rtok)
+        return " "
+
+    cleaned = _RANGE_RE.sub(_replace_range, cleaned)
+
+    # 5. Extract remaining numbers with units
+    for m in _NUM_UNIT_RE.finditer(cleaned):
         num_str, unit_str = m.group(1), m.group(2)
         norm = _normalize_num_token(num_str, unit_str)
         if norm and norm not in seen:
             seen.add(norm)
             tokens.append(norm)
     return tokens
+
+
+def _resolve_round_from_item(item: Mapping[str, Any]) -> Optional[int]:
+    """Resolve debate round index following strict priority:
+    1. Explicit debate_round (if positive int)
+    2. Explicit round_index (if positive int, fixture compatibility)
+    3. Derived from message_index (if positive int: ((message_index - 1) // 2) + 1)
+    Returns None if missing or invalid (no arbitrary guessing).
+    """
+    if not isinstance(item, (dict, Mapping)):
+        return None
+    # 1. debate_round
+    dr = item.get("debate_round")
+    if isinstance(dr, int) and dr > 0 and not isinstance(dr, bool):
+        return dr
+    if isinstance(dr, str) and dr.strip().isdigit() and int(dr.strip()) > 0:
+        return int(dr.strip())
+    # 2. round_index
+    ri = item.get("round_index")
+    if isinstance(ri, int) and ri > 0 and not isinstance(ri, bool):
+        return ri
+    if isinstance(ri, str) and ri.strip().isdigit() and int(ri.strip()) > 0:
+        return int(ri.strip())
+    # 3. message_index
+    mi = item.get("message_index")
+    if isinstance(mi, int) and mi > 0 and not isinstance(mi, bool):
+        return ((mi - 1) // 2) + 1
+    if isinstance(mi, str) and mi.strip().isdigit() and int(mi.strip()) > 0:
+        return ((int(mi.strip()) - 1) // 2) + 1
+    return None
 
 
 def calculate_evidence_recycling_rate(
@@ -106,10 +204,16 @@ def calculate_evidence_recycling_rate(
     # Organize numbers by round or message order
     seen_numbers_early: set[str] = set()
     subsequent_numbers: list[str] = []
+    has_valid_rounds = False
 
     if round_messages:
         for msg in round_messages:
-            r_idx = msg.get("round_index", 1)
+            if not isinstance(msg, (dict, Mapping)):
+                continue
+            r_idx = _resolve_round_from_item(msg)
+            if r_idx is None:
+                continue
+            has_valid_rounds = True
             msg_text = msg.get("cleaned_prose", "") or ""
             # also extract from message claims if any
             for c in msg.get("claims") or []:
@@ -122,12 +226,15 @@ def calculate_evidence_recycling_rate(
                 seen_numbers_early.update(nums)
             else:
                 subsequent_numbers.extend(nums)
-    else:
-        # Fallback to claims round_index
+    elif claims:
+        # Fallback to claims round resolution
         for c in claims:
-            if not isinstance(c, dict):
+            if not isinstance(c, (dict, Mapping)):
                 continue
-            r_idx = c.get("round_index", 1)
+            r_idx = _resolve_round_from_item(c)
+            if r_idx is None:
+                continue
+            has_valid_rounds = True
             claim_text = str(c.get("claim", ""))
             for ev in c.get("evidence") or []:
                 claim_text += " " + str(ev)
@@ -136,6 +243,16 @@ def calculate_evidence_recycling_rate(
                 seen_numbers_early.update(nums)
             else:
                 subsequent_numbers.extend(nums)
+
+    if not has_valid_rounds:
+        return {
+            "numerator": 0,
+            "denominator": 0,
+            "rate": None,
+            "version": version,
+            "status": "zero_denominator",
+            "note": "分母为0：无有效辩论轮次数据",
+        }
 
     denominator = len(subsequent_numbers)
     if denominator == 0:
@@ -526,10 +643,11 @@ def calculate_field_completeness_rate(
     result_data: Mapping[str, Any],
     version: str = PROTOCOL_VERSION_V1_LEGACY,
 ) -> MetricResult:
-    """Calculate field completeness rate across confidence, probability, target, stop.
+    """Calculate field contract completeness rate across confidence, probability, target, stop.
 
     Denominator: 4 core fields.
-    For HOLD / 观望 decisions, legitimate target_price omission is recognized with typed note.
+    For legitimate omissions (probability with whitelisted note, HOLD target_price with whitelisted note),
+    the field is recognized as legitimate_empty and counted towards contract conformance numerator.
     """
     if not isinstance(result_data, dict):
         return {
@@ -538,6 +656,9 @@ def calculate_field_completeness_rate(
             "rate": 0.0,
             "version": version,
             "status": "invalid_input",
+            "present_fields": [],
+            "missing_fields": ["confidence", "probability", "target_price", "stop_loss_price"],
+            "legitimate_omissions": [],
             "note": "输入非字典",
         }
 
@@ -547,32 +668,39 @@ def calculate_field_completeness_rate(
     stop = result_data.get("stop_loss_price")
     direction = str(result_data.get("direction") or result_data.get("decision") or "")
     extraction_note = str(result_data.get("extraction_note") or "")
+    top_note = str(result_data.get("note") or "")
+    combined_notes = f"{extraction_note} {top_note}".strip()
 
-    is_hold = direction.upper() in ("HOLD", "中性", "观望", "持有", "NEUTRAL") or "观望不设目标价" in extraction_note
+    is_hold = direction.upper() in ("HOLD", "中性", "观望", "持有", "NEUTRAL") or "观望不设目标价" in combined_notes
 
-    present_fields = []
-    missing_fields = []
-    notes = []
+    present_fields: list[str] = []
+    missing_fields: list[str] = []
+    legitimate_omissions: list[str] = []
+    notes: list[str] = []
 
-    # 1. confidence (0-100 int)
+    # 1. confidence (0-100 int or float)
     if isinstance(conf, (int, float)) and 0 <= conf <= 100 and not isinstance(conf, bool):
         present_fields.append("confidence")
     else:
         missing_fields.append("confidence")
 
-    # 2. probability (0.0 - 1.0 float)
+    # 2. probability (0.0 - 1.0 float or legitimate empty note)
     if isinstance(prob, (int, float)) and 0.0 <= prob <= 1.0 and not isinstance(prob, bool):
         present_fields.append("probability")
+    elif prob is None and any(w in combined_notes for w in ("概率未提供/未提取", "概率未提供")):
+        legitimate_omissions.append("probability")
+        notes.append("概率未提供/未提取")
     else:
         missing_fields.append("probability")
 
     # 3. target_price (positive float or legitimate omission for HOLD)
     if isinstance(target, (int, float)) and target > 0 and not isinstance(target, bool):
         present_fields.append("target_price")
+    elif target is None and is_hold and ("观望不设目标价" in combined_notes):
+        legitimate_omissions.append("target_price")
+        notes.append("观望不设目标价")
     else:
         missing_fields.append("target_price")
-        if is_hold:
-            notes.append("观望不设目标价")
 
     # 4. stop_loss_price (positive float)
     if isinstance(stop, (int, float)) and stop > 0 and not isinstance(stop, bool):
@@ -581,11 +709,17 @@ def calculate_field_completeness_rate(
         missing_fields.append("stop_loss_price")
 
     denominator = 4
-    numerator = len(present_fields)
+    numerator = len(present_fields) + len(legitimate_omissions)
     rate = round(numerator / denominator, 4)
 
     status = "complete" if numerator == 4 else "partial" if numerator > 0 else "incomplete"
-    note_str = "；".join(notes) if notes else (f"缺失字段: {', '.join(missing_fields)}" if missing_fields else None)
+
+    note_parts = []
+    if notes:
+        note_parts.append("；".join(notes))
+    if missing_fields:
+        note_parts.append(f"缺失字段: {', '.join(missing_fields)}")
+    note_str = "；".join(note_parts) if note_parts else None
 
     return {
         "numerator": numerator,
@@ -593,6 +727,9 @@ def calculate_field_completeness_rate(
         "rate": rate,
         "version": version,
         "status": status,
+        "present_fields": present_fields,
+        "missing_fields": missing_fields,
+        "legitimate_omissions": legitimate_omissions,
         "note": note_str,
     }
 
