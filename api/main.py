@@ -1962,6 +1962,59 @@ def _is_empty_debate_state(state: Any) -> bool:
     return True
 
 
+def _mount_or_refresh_protocol_metadata_and_metrics(
+    result: Dict[str, Any],
+    source_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Normalize protocol metadata and calculate/refresh debate metrics on a result payload.
+
+    - Top-level always receives normalized metadata (8 keys) and calculated debate metrics.
+    - When nested investment_debate_state already contains P1-M keys (new state), update
+      the nested state shallow copy with normalized metadata and metrics.
+    - Legacy nested state without P1-M keys remains verbatim unchanged.
+    - Never mutates source_state or original input objects in-place.
+    """
+    state_for_meta = source_state if source_state is not None else result
+    meta = get_protocol_metadata(state_for_meta)
+    data_utilization_metrics = calculate_all_debate_metrics(result)
+
+    raw_inv_state = (
+        source_state.get("investment_debate_state")
+        if isinstance(source_state, dict) and "investment_debate_state" in source_state
+        else result.get("investment_debate_state")
+    )
+    inv_state = result.get("investment_debate_state")
+
+    if isinstance(inv_state, dict) and isinstance(raw_inv_state, dict):
+        if (
+            "protocol_version" in raw_inv_state
+            or "feature_flags" in raw_inv_state
+            or "data_utilization_metrics" in raw_inv_state
+        ):
+            if source_state is not None and inv_state is source_state.get("investment_debate_state"):
+                inv_state = dict(inv_state)
+                result["investment_debate_state"] = inv_state
+            inv_state["protocol_version"] = meta["protocol_version"]
+            inv_state["protocol_stage"] = meta["protocol_stage"]
+            inv_state["tiebreak_skipped"] = meta["tiebreak_skipped"]
+            inv_state["debate_degenerate"] = meta["debate_degenerate"]
+            inv_state["data_utilization_metrics"] = data_utilization_metrics
+            inv_state["challenge_verification"] = meta["challenge_verification"]
+            inv_state["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+            inv_state["feature_flags"] = meta["feature_flags"]
+
+    result["protocol_version"] = meta["protocol_version"]
+    result["protocol_stage"] = meta["protocol_stage"]
+    result["tiebreak_skipped"] = meta["tiebreak_skipped"]
+    result["debate_degenerate"] = meta["debate_degenerate"]
+    result["data_utilization_metrics"] = data_utilization_metrics
+    result["challenge_verification"] = meta["challenge_verification"]
+    result["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+    result["feature_flags"] = meta["feature_flags"]
+
+    return result
+
+
 def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
     market_context = final_state.get("market_context") or {}
     market_data_context = final_state.get("market_data_context") or {}
@@ -2006,7 +2059,7 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "analyst_traces": final_state.get("analyst_traces"),
         "investment_plan": final_state.get("investment_plan"),
         "trader_investment_plan": final_state.get("trader_investment_plan"),
-        "investment_debate_state": inv_state,
+        "investment_debate_state": inv_state if (isinstance(raw_inv_state, dict) and ("protocol_version" in raw_inv_state or "feature_flags" in raw_inv_state or "data_utilization_metrics" in raw_inv_state)) else raw_inv_state,
         "manager_verdict": final_state.get("manager_verdict") or (raw_inv_state.get("manager_verdict") if isinstance(raw_inv_state, dict) else None),
         "evidence_verification": final_state.get("evidence_verification") or (raw_inv_state.get("evidence_verification") if isinstance(raw_inv_state, dict) else []),
         "report_manifest": final_state.get("report_manifest") or (raw_inv_state.get("report_manifest") if isinstance(raw_inv_state, dict) else None),
@@ -2015,35 +2068,7 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "final_trade_decision": final_state.get("final_trade_decision"),
     }
 
-    # Normalize protocol metadata and compute debate metrics without mutating final_state
-    meta = get_protocol_metadata(final_state)
-    data_utilization_metrics = calculate_all_debate_metrics(result)
-
-    if inv_state is not None:
-        if (
-            "protocol_version" in raw_inv_state
-            or "feature_flags" in raw_inv_state
-            or "data_utilization_metrics" in raw_inv_state
-        ):
-            inv_state["protocol_version"] = meta["protocol_version"]
-            inv_state["protocol_stage"] = meta["protocol_stage"]
-            inv_state["tiebreak_skipped"] = meta["tiebreak_skipped"]
-            inv_state["debate_degenerate"] = meta["debate_degenerate"]
-            inv_state["data_utilization_metrics"] = data_utilization_metrics
-            inv_state["challenge_verification"] = meta["challenge_verification"]
-            inv_state["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
-            inv_state["feature_flags"] = meta["feature_flags"]
-
-    result["protocol_version"] = meta["protocol_version"]
-    result["protocol_stage"] = meta["protocol_stage"]
-    result["tiebreak_skipped"] = meta["tiebreak_skipped"]
-    result["debate_degenerate"] = meta["debate_degenerate"]
-    result["data_utilization_metrics"] = data_utilization_metrics
-    result["challenge_verification"] = meta["challenge_verification"]
-    result["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
-    result["feature_flags"] = meta["feature_flags"]
-
-    return result
+    return _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=final_state)
 
 
 class AgentProgressTracker:
@@ -3078,6 +3103,7 @@ async def _run_job_inner(
                             graph_decision=graph_decision,
                             resolved=resolved,
                         )
+                        _mount_or_refresh_protocol_metadata_and_metrics(horizon_result)
                         horizon_result.update(
                             {
                                 "status": "completed",
@@ -3199,6 +3225,12 @@ async def _run_job_inner(
                         for trace in horizon_results[horizon].get("analyst_traces", [])
                     ],
                 }
+                primary_horizon = next(
+                    (h for h in request.horizons if horizon_results.get(h, {}).get("status") == "completed"),
+                    request.horizons[0] if request.horizons else "short",
+                )
+                primary_completed_r = horizon_results.get(primary_horizon) or {}
+                _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=primary_completed_r)
                 _attach_custom_prompt_snapshot(result, _prompt_snapshot)
 
                 if save_report:
@@ -3306,6 +3338,7 @@ async def _run_job_inner(
                     short_r.get("analyst_traces", []) + medium_r.get("analyst_traces", [])
                 ),
             }
+            _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=primary_r)
             # LLM 结构化提取（目标价、止损、信心、风险、关键指标）
             # 注意：必须在 _set_job(status="completed") 之前完成，否则 SSE 超时
             # 会因为看到 status="completed" 而提前关闭流，导致 job.completed 事件丢失。
@@ -3333,6 +3366,7 @@ async def _run_job_inner(
                 graph_decision=graph_decision,
                 resolved=resolved,
             )
+            _mount_or_refresh_protocol_metadata_and_metrics(result)
             _attach_custom_prompt_snapshot(result, _prompt_snapshot)
 
             # 自动保存报告到数据库
@@ -3645,6 +3679,7 @@ async def _run_job_inner(
             graph_decision=graph_decision,
             resolved=resolved,
         )
+        _mount_or_refresh_protocol_metadata_and_metrics(result)
         _attach_custom_prompt_snapshot(result, _prompt_snapshot)
 
         # 自动保存/收口报告到数据库

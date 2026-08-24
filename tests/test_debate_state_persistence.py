@@ -430,9 +430,7 @@ class _FakeTradingGraphForJob:
         return "BUY"
 
     def _build_horizon_result(self, horizon, state):
-        res = dict(state)
-        res["horizon"] = horizon
-        return res
+        return TradingAgentsGraph._build_horizon_result(self, horizon, state)
 
 
 class TestJobExecutionDebatePersistence:
@@ -445,6 +443,19 @@ class TestJobExecutionDebatePersistence:
         collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
         saved_reports = []
         db = MagicMock()
+
+        fake_structured = report_service.StructuredReport(
+            decision="BUY",
+            confidence=85,
+            target_price=1800.0,
+            stop_loss_price=1600.0,
+            probability=0.8,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
 
         request = main.AnalyzeRequest(
             symbol="600519.SH",
@@ -477,7 +488,7 @@ class TestJobExecutionDebatePersistence:
             patch.object(main, "get_db_ctx", return_value=nullcontext(db)),
             patch.object(report_service, "init_report"),
             patch.object(report_service, "update_report_partial"),
-            patch.object(report_service, "extract_structured_data", return_value=None),
+            patch.object(report_service, "extract_structured_data", return_value=fake_structured),
             patch.object(report_service, "create_report", side_effect=capture_create_report),
         ):
             asyncio.run(run_job())
@@ -485,6 +496,20 @@ class TestJobExecutionDebatePersistence:
         job = store.get_job(job_id)
         assert job["status"] == "completed"
         result_data = job["result"]
+
+        # Top-level P1-M metadata and metrics for dual horizon aggregation
+        assert result_data["protocol_version"] == "v1_legacy"
+        assert result_data["protocol_stage"] == "opening"
+        assert result_data["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert result_data["tiebreak_skipped"] is False
+        assert result_data["debate_degenerate"] is False
+        assert result_data["challenge_verification"] == []
+        assert result_data["shadow_credit_metrics"] == {}
+        assert isinstance(result_data["data_utilization_metrics"], dict)
 
         # Check short_term and medium_term in result_data have debate states
         assert result_data["short_term"]["investment_debate_state"]["judge_decision"] == "short 多头胜"
@@ -495,9 +520,30 @@ class TestJobExecutionDebatePersistence:
         assert result_data["medium_term"]["risk_debate_state"]["judge_decision"] == "medium 风控通过"
         assert result_data["medium_term"]["risk_feedback_state"]["latest_risk_verdict"] == "pass"
 
+        # Field completeness refreshed after structured resolve
+        short_fc = result_data["short_term"]["data_utilization_metrics"]["field_completeness"]
+        assert short_fc["numerator"] == 4
+        assert short_fc["status"] == "complete"
+        assert "confidence" in short_fc["present_fields"]
+        assert "target_price" in short_fc["present_fields"]
+        assert "stop_loss_price" in short_fc["present_fields"]
+        assert "probability" in short_fc["present_fields"]
+
+        medium_fc = result_data["medium_term"]["data_utilization_metrics"]["field_completeness"]
+        assert medium_fc["numerator"] == 4
+        assert medium_fc["status"] == "complete"
+
         # Check saved report in ReportDB
         assert len(saved_reports) == 1
         saved = saved_reports[0]["result_data"]
+        assert saved["protocol_version"] == "v1_legacy"
+        assert saved["protocol_stage"] == "opening"
+        assert saved["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert saved["data_utilization_metrics"] == result_data["data_utilization_metrics"]
         assert saved["short_term"]["investment_debate_state"]["judge_decision"] == "short 多头胜"
         assert saved["medium_term"]["risk_debate_state"]["judge_decision"] == "medium 风控通过"
         assert saved["short_term"]["risk_feedback_state"]["latest_risk_verdict"] == "pass"
@@ -510,6 +556,19 @@ class TestJobExecutionDebatePersistence:
         collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
         saved_reports = []
         db = MagicMock()
+
+        fake_structured = report_service.StructuredReport(
+            decision="BUY",
+            confidence=85,
+            target_price=1800.0,
+            stop_loss_price=1600.0,
+            probability=0.8,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
 
         # query with single horizon invokes the hoist path
         request = main.AnalyzeRequest(
@@ -544,7 +603,7 @@ class TestJobExecutionDebatePersistence:
             patch.object(main, "get_db_ctx", return_value=nullcontext(db)),
             patch.object(report_service, "init_report"),
             patch.object(report_service, "update_report_partial"),
-            patch.object(report_service, "extract_structured_data", return_value=None),
+            patch.object(report_service, "extract_structured_data", return_value=fake_structured),
             patch.object(report_service, "create_report", side_effect=capture_create_report),
         ):
             asyncio.run(run_job())
@@ -553,6 +612,29 @@ class TestJobExecutionDebatePersistence:
         assert job["status"] == "completed"
         result_data = job["result"]
 
+        # Top-level P1-M hoisted metadata and metrics
+        assert result_data["protocol_version"] == "v1_legacy"
+        assert result_data["protocol_stage"] == "opening"
+        assert result_data["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert result_data["tiebreak_skipped"] is False
+        assert result_data["debate_degenerate"] is False
+        assert result_data["challenge_verification"] == []
+        assert result_data["shadow_credit_metrics"] == {}
+        assert isinstance(result_data["data_utilization_metrics"], dict)
+
+        # Field completeness refreshed after structured resolve on hoist path
+        fc = result_data["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 4
+        assert fc["status"] == "complete"
+        assert "confidence" in fc["present_fields"]
+        assert "target_price" in fc["present_fields"]
+        assert "stop_loss_price" in fc["present_fields"]
+        assert "probability" in fc["present_fields"]
+
         # Check top-level hoisted fields
         assert result_data["investment_debate_state"]["judge_decision"] == "short 多头胜"
         assert result_data["risk_debate_state"]["judge_decision"] == "short 风控通过"
@@ -560,6 +642,15 @@ class TestJobExecutionDebatePersistence:
         # Check saved report in ReportDB
         assert len(saved_reports) == 1
         saved = saved_reports[0]["result_data"]
+        assert saved["protocol_version"] == "v1_legacy"
+        assert saved["protocol_stage"] == "opening"
+        assert saved["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert saved["data_utilization_metrics"] == result_data["data_utilization_metrics"]
+        assert saved["data_utilization_metrics"]["field_completeness"]["numerator"] == 4
         assert saved["investment_debate_state"]["judge_decision"] == "short 多头胜"
         assert saved["risk_debate_state"]["judge_decision"] == "short 风控通过"
 
@@ -570,6 +661,19 @@ class TestJobExecutionDebatePersistence:
         collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
         saved_reports = []
         db = MagicMock()
+
+        fake_structured = report_service.StructuredReport(
+            decision="BUY",
+            confidence=85,
+            target_price=1800.0,
+            stop_loss_price=1600.0,
+            probability=0.8,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
 
         _FakeTradingGraphForJob.captured_instances.clear()
         _FakeTradingGraphForJob.multi_chunk = True
@@ -606,7 +710,7 @@ class TestJobExecutionDebatePersistence:
                 patch.object(main, "get_db_ctx", return_value=nullcontext(db)),
                 patch.object(report_service, "init_report"),
                 patch.object(report_service, "update_report_partial"),
-                patch.object(report_service, "extract_structured_data", return_value=None),
+                patch.object(report_service, "extract_structured_data", return_value=fake_structured),
                 patch.object(report_service, "create_report", side_effect=capture_create_report),
             ):
                 asyncio.run(run_job())
@@ -638,6 +742,15 @@ class TestJobExecutionDebatePersistence:
             assert "field_completeness" in result_data["data_utilization_metrics"]
             assert "challenge_metrics" in result_data["data_utilization_metrics"]
             assert result_data["data_utilization_metrics"]["challenge_metrics"]["challenge_count"]["status"] == "legacy_no_data"
+
+            # Field completeness refreshed after structured resolve
+            fc = result_data["data_utilization_metrics"]["field_completeness"]
+            assert fc["numerator"] == 4
+            assert fc["status"] == "complete"
+            assert "confidence" in fc["present_fields"]
+            assert "target_price" in fc["present_fields"]
+            assert "stop_loss_price" in fc["present_fields"]
+            assert "probability" in fc["present_fields"]
 
             # Nested investment_debate_state P1-M fields and debate fields
             inv_state = result_data["investment_debate_state"]
@@ -671,6 +784,7 @@ class TestJobExecutionDebatePersistence:
                 "credit_weighting_enabled": False,
             }
             assert saved["data_utilization_metrics"] == result_data["data_utilization_metrics"]
+            assert saved["data_utilization_metrics"]["field_completeness"]["numerator"] == 4
             assert saved["investment_debate_state"]["protocol_version"] == "v1_legacy"
             assert len(saved["investment_debate_state"]["round_messages"]) == 6
             assert saved["investment_debate_state"]["judge_decision"] == "short 多头胜"
