@@ -1121,4 +1121,3 @@ class TestC25AuthoritativeStageRecovery:
         )
         assert is_valid is True
         assert parse_status == "valid"
-
