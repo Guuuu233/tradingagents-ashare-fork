@@ -25,7 +25,10 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
         message_index = current_count + 1
         v2_enabled = is_v2_debate_enabled(state)
         current_stage = str(investment_debate_state.get("protocol_stage") or "opening").strip().lower()
-        is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
+        is_opening_stage = v2_enabled and current_stage == "opening" and message_index <= 2
+        is_challenge_stage = v2_enabled and (
+            current_stage == "challenge" or (not is_opening_stage and message_index in (3, 4))
+        )
 
         macro_report = state.get("macro_report", "")
         market_research_report = state.get("market_report", "")
@@ -84,6 +87,7 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
         rendered_template = render_debate_prompt(
             raw_prompt_template,
             is_opening_stage=is_opening_stage,
+            is_challenge_stage=is_challenge_stage,
             language=prompt_language,
         )
         prompt = horizon_ctx + rendered_template.format(
@@ -129,6 +133,30 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
                         f"  3. 每一项 new_claims 必须包含 battlefield 字段（属于五大战场之一），且 target_claim_ids 必须为空数组 []。\n"
                         f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
                         f"  5. resolved_claim_ids 必须为空数组 []。\n"
+                        f"请立即修正并重新输出完整发言及合规机器块！"
+                    )
+                elif is_challenge_stage:
+                    opponent_open_claims = [
+                        c["claim_id"] for c in claims
+                        if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+                        and c.get("status") != "resolved"
+                    ]
+                    opponent_all_claims = [
+                        c["claim_id"] for c in claims
+                        if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+                    ]
+                    legal_targets = opponent_open_claims or opponent_all_claims
+                    retry_instruction = (
+                        f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
+                        f"你上一次输出的 DEBATE_STATE 机器块未通过 Challenge 阶段协议校验，错误原因：{last_error_detail}。\n"
+                        f"请在保持专业盘问正文的同时，重新严格按 Challenge 契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
+                        f"- 当前 Challenge 发言要求：\n"
+                        f"  1. new_claims 必须严格为空数组 []。禁止提出新 Claim。\n"
+                        f"  2. challenges 至少包含 1 条；每条必须包含 target_claim_id、weakest_point、至少 1 条非空 evidence、severity（fatal/major/minor）。\n"
+                        f"     当前可选合法对手 Claim: {legal_targets}。\n"
+                        f"  3. self_win_prob 必须是 0.0-1.0 之间的有限数值。\n"
+                        f"  4. responded_claim_ids 必须包含所有被 challenge 的 target_claim_id。\n"
+                        f"  5. 严禁擅自 resolve 对手的 Claim。\n"
                         f"请立即修正并重新输出完整发言及合规机器块！"
                     )
                 else:

@@ -1943,6 +1943,7 @@ def render_debate_prompt(
     *,
     is_opening_stage: bool,
     language: str = "zh",
+    is_challenge_stage: bool = False,
 ) -> str:
     """Render debate prompt by handling stage framework and output contract sections.
 
@@ -1950,6 +1951,7 @@ def render_debate_prompt(
     In v2 Opening mode, removes legacy-only sections and injects the Opening double-blind contract
     (exactly 3 claims across 3 distinct valid battlefields, responded/target/resolved as empty arrays,
     clean machine block example with 0 INV IDs).
+    In v2 Challenge mode, forbids new_claims and requires challenges + self_win_prob.
     """
     if not isinstance(template, str):
         return template
@@ -2001,10 +2003,60 @@ def render_debate_prompt(
             flags=re.DOTALL,
         )
         return rendered
-    else:
-        # Strip the stage marker comments while preserving the exact inner legacy text
-        cleaned = re.sub(r"<!--\s*STAGE_FRAMEWORK_START\s*-->\n?", "", template)
-        cleaned = re.sub(r"<!--\s*STAGE_FRAMEWORK_END\s*-->\n?", "", cleaned)
-        cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_START\s*-->", "", cleaned)
-        cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_END\s*-->", "", cleaned)
-        return cleaned
+
+    if is_challenge_stage:
+        if language == "en":
+            challenge_framework = (
+                "【Challenge Stage Evidence Cross-Examination Contract】:\n"
+                "- No new claims: Do not propose new_claims. new_claims must be strictly an empty array [].\n"
+                "- Cross-examine opponent claims: challenges must contain at least 1 item. Each item must include target_claim_id (an unresolved opponent claim), weakest_point, at least 1 non-empty evidence item, and severity (fatal / major / minor).\n"
+                "- Self assessment: self_win_prob must be a finite number in 0.0-1.0.\n"
+                "- responded_claim_ids must include every target_claim_id that appears in challenges."
+            )
+            challenge_output_contract = (
+                "At the very end append this machine-readable block:\n"
+                '<!-- DEBATE_STATE: {{"responded_claim_ids": ["OPPONENT_CLAIM_ID"], "new_claims": [], "challenges": [{{"target_claim_id": "OPPONENT_CLAIM_ID", "weakest_point": "the weakest assumption", "evidence": ["hard evidence"], "severity": "major"}}], "self_win_prob": 0.55, "resolved_claim_ids": [], "unresolved_claim_ids": ["OPPONENT_CLAIM_ID"], "next_focus_claim_ids": ["OPPONENT_CLAIM_ID"], "round_summary": "under 30 words", "round_goal": "under 20 words"}} -->\n'
+                "Output rules:\n"
+                "- Challenge Stage: new_claims must be strictly an empty array [];\n"
+                "- challenges must contain at least 1 item with target_claim_id, weakest_point, evidence, and severity (fatal/major/minor);\n"
+                "- self_win_prob must be a finite number in 0.0-1.0;\n"
+                "- responded_claim_ids must include every challenged target_claim_id."
+            )
+        else:
+            challenge_framework = (
+                "【Challenge 阶段证据盘问契约】：\n"
+                "- 禁止立新：本阶段禁止提出新 Claim，new_claims 必须严格为空数组 []。\n"
+                "- 必须盘问：challenges 至少包含 1 条；每条必须包含 target_claim_id（对手未解决 Claim）、weakest_point、至少 1 条非空 evidence、severity（fatal / major / minor）。\n"
+                "- 必须自评：self_win_prob 必须是 0.0 到 1.0 的有限数值。\n"
+                "- responded_claim_ids 必须包含所有被 challenge 的 target_claim_id。"
+            )
+            challenge_output_contract = (
+                "在正文末尾追加机读块（固定格式）：\n"
+                '<!-- DEBATE_STATE: {{"responded_claim_ids": ["OPPONENT_CLAIM_ID"], "new_claims": [], "challenges": [{{"target_claim_id": "OPPONENT_CLAIM_ID", "weakest_point": "不超过80字的最弱环节", "evidence": ["硬证据"], "severity": "major"}}], "self_win_prob": 0.55, "resolved_claim_ids": [], "unresolved_claim_ids": ["OPPONENT_CLAIM_ID"], "next_focus_claim_ids": ["OPPONENT_CLAIM_ID"], "round_summary": "不超过50字", "round_goal": "不超过30字"}} -->\n'
+                "输出规则：\n"
+                "- Challenge 阶段：new_claims 必须严格为空数组 []；\n"
+                "- challenges 至少包含 1 条，且必须包含 target_claim_id、weakest_point、evidence、severity（fatal/major/minor）；\n"
+                "- self_win_prob 必须是 0.0 到 1.0 的有限数值；\n"
+                "- responded_claim_ids 必须包含所有被 challenge 的 target_claim_id。"
+            )
+
+        rendered = re.sub(
+            r"<!--\s*STAGE_FRAMEWORK_START\s*-->.*?<!--\s*STAGE_FRAMEWORK_END\s*-->",
+            challenge_framework,
+            template,
+            flags=re.DOTALL,
+        )
+        rendered = re.sub(
+            r"<!--\s*STAGE_OUTPUT_CONTRACT_START\s*-->.*?<!--\s*STAGE_OUTPUT_CONTRACT_END\s*-->",
+            challenge_output_contract,
+            rendered,
+            flags=re.DOTALL,
+        )
+        return rendered
+
+    # Strip the stage marker comments while preserving the exact inner legacy text
+    cleaned = re.sub(r"<!--\s*STAGE_FRAMEWORK_START\s*-->\n?", "", template)
+    cleaned = re.sub(r"<!--\s*STAGE_FRAMEWORK_END\s*-->\n?", "", cleaned)
+    cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_START\s*-->", "", cleaned)
+    cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_END\s*-->", "", cleaned)
+    return cleaned

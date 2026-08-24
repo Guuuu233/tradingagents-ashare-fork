@@ -1,6 +1,9 @@
 """Unit tests for P1-B/B2-C2 Challenge Protocol: Hard Gates, Ledger, and Stage Progression (DAV-405)."""
 
+import asyncio
 import copy
+from unittest.mock import MagicMock
+
 import pytest
 
 from tradingagents.agents.utils.agent_states import (
@@ -1121,3 +1124,88 @@ class TestC25AuthoritativeStageRecovery:
         )
         assert is_valid is True
         assert parse_status == "valid"
+
+
+_VALID_BULL_CHALLENGE_RESPONSE = (
+    "多头盘问反驳：针对空头INV-4的现金流假设提出质疑。\n\n"
+    "<!-- DEBATE_STATE: {\n"
+    '  "responded_claim_ids": ["INV-4"],\n'
+    '  "new_claims": [],\n'
+    '  "challenges": [\n'
+    "    {\n"
+    '      "target_claim_id": "INV-4",\n'
+    '      "weakest_point": "空头忽略了三季度预收款和合同负债大增45%的事实",\n'
+    '      "evidence": ["三季报预收款及合同负债达到35亿元，同比+45%"],\n'
+    '      "severity": "major"\n'
+    "    }\n"
+    "  ],\n"
+    '  "self_win_prob": 0.75,\n'
+    '  "resolved_claim_ids": [],\n'
+    '  "unresolved_claim_ids": ["INV-4"],\n'
+    '  "next_focus_claim_ids": ["INV-4"],\n'
+    '  "round_summary": "多头盘问空头现金流漏洞",\n'
+    '  "round_goal": "击穿空头核心立论"\n'
+    "} -->"
+)
+
+
+class _FakeStreamingLLM:
+    def __init__(self, responses: list[str] | None = None):
+        self.captured_prompts: list[str] = []
+        self.responses = responses or []
+        self.call_count = 0
+
+    async def astream(self, prompt: str):
+        self.captured_prompts.append(prompt)
+        resp = self.responses[self.call_count] if self.call_count < len(self.responses) else ""
+        self.call_count += 1
+        mid = max(len(resp) // 2, 1)
+        for chunk in [resp[:mid], resp[mid:]]:
+            mock_chunk = MagicMock()
+            mock_chunk.content = chunk
+            yield mock_chunk
+
+
+class TestC2ChallengePromptAndRetryContract:
+    """Challenge-stage researcher prompts must not fall back to legacy new_claims retry text."""
+
+    def test_bull_challenge_first_prompt_and_retry_forbid_new_claims(self):
+        async def _run():
+            from tradingagents.agents.researchers.bull_researcher import create_bull_researcher
+
+            invalid = (
+                "正文\n<!-- DEBATE_STATE: {"
+                '"responded_claim_ids": ["INV-4"], '
+                '"new_claims": [{"claim": "新增多头claim", "evidence": ["x"], "confidence": 0.8, "target_claim_ids": ["INV-4"]}], '
+                '"resolved_claim_ids": [], "unresolved_claim_ids": ["INV-4"], '
+                '"next_focus_claim_ids": ["INV-4"], "round_summary": "s", "round_goal": "g"'
+                "} -->"
+            )
+            llm = _FakeStreamingLLM(responses=[invalid, _VALID_BULL_CHALLENGE_RESPONSE])
+            memory = MagicMock()
+            memory.get_memories = MagicMock(return_value=[])
+            node = create_bull_researcher(llm, memory)
+            graph_state = {
+                "investment_debate_state": _build_opening_completed_v2_state(),
+                "macro_report": "宏观",
+                "market_report": "市场",
+                "sentiment_report": "情绪",
+                "news_report": "新闻",
+                "fundamentals_report": "基本面",
+                "smart_money_report": "主力",
+                "volume_price_report": "量价",
+                "horizon": "medium",
+                "user_intent": {},
+            }
+            result = await node(graph_state)
+            assert result["investment_debate_state"]["count"] == 3
+            assert len(llm.captured_prompts) == 2
+            first, retry = llm.captured_prompts
+            for prompt in (first, retry):
+                assert "【Challenge 阶段证据盘问契约】" in prompt
+                assert "new_claims 必须严格为空数组" in prompt
+                assert "必须提出至少一条具有实质信息增量的新 Claim" not in prompt
+                assert "new_claims 中的每一项必须包含 target_claim_ids" not in prompt
+            assert "challenges 至少" in retry or "至少 1 条 challenges" in retry or "challenges 至少包含" in retry
+
+        asyncio.run(_run())

@@ -780,6 +780,47 @@ class TestRenderDebatePromptAndStageContracts:
             assert "STAGE_FRAMEWORK_START" not in en_rendered
             assert "STAGE_OUTPUT_CONTRACT_START" not in en_rendered
 
+    def test_render_debate_prompt_challenge_forbids_new_claims_and_requires_challenges(self):
+        from tradingagents.agents.utils.debate_utils import render_debate_prompt
+        from tradingagents.prompts.zh import PROMPTS as ZH_PROMPTS
+        from tradingagents.prompts.en import PROMPTS as EN_PROMPTS
+
+        for key in ("bull_prompt", "bear_prompt"):
+            zh_rendered = render_debate_prompt(
+                ZH_PROMPTS[key],
+                is_opening_stage=False,
+                is_challenge_stage=True,
+                language="zh",
+            )
+            assert "【Challenge 阶段证据盘问契约】" in zh_rendered
+            assert "【辩论三轮递进推进框架】" not in zh_rendered
+            assert "【Opening 阶段独立双盲立论契约】" not in zh_rendered
+            assert "new_claims 必须严格为空数组" in zh_rendered
+            assert '"new_claims": []' in zh_rendered
+            assert "challenges" in zh_rendered
+            assert "weakest_point" in zh_rendered
+            assert "self_win_prob" in zh_rendered
+            assert "fatal" in zh_rendered and "major" in zh_rendered and "minor" in zh_rendered
+            assert '"target_claim_ids": ["INV-2"]' not in zh_rendered
+            assert '"target_claim_ids": ["INV-1"]' not in zh_rendered
+            assert "STAGE_FRAMEWORK_START" not in zh_rendered
+            assert "STAGE_OUTPUT_CONTRACT_START" not in zh_rendered
+
+            en_rendered = render_debate_prompt(
+                EN_PROMPTS[key],
+                is_opening_stage=False,
+                is_challenge_stage=True,
+                language="en",
+            )
+            assert "【Challenge Stage Evidence Cross-Examination Contract】" in en_rendered
+            assert "【Three-Round Progressive Debate Framework】" not in en_rendered
+            assert "new_claims must be strictly an empty array" in en_rendered
+            assert '"new_claims": []' in en_rendered
+            assert "challenges" in en_rendered
+            assert "self_win_prob" in en_rendered
+            assert '"target_claim_ids": ["INV-2"]' not in en_rendered
+            assert '"target_claim_ids": ["INV-1"]' not in en_rendered
+
     def test_v2_opening_stage_transition_and_unaccepted_attempt_isolation(self):
         """Verify:
 
