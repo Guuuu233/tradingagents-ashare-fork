@@ -321,7 +321,10 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         mock_resp.text = mock_response_text
         mock_resp.encoding = "gbk"
 
-        with patch("requests.get", return_value=mock_resp):
+        with patch("requests.get", return_value=mock_resp), patch(
+            "tradingagents.dataflows.providers.cn_akshare_provider._get_latest_us_session_date",
+            return_value="2026-08-21",
+        ):
             snapshots = provider._fetch_global_indices_sina_hq(curr_date="2026-08-21")
 
         assert "标普500" in snapshots
