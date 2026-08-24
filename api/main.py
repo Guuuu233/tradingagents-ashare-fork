@@ -599,6 +599,7 @@ _CONFIG_OVERRIDES_ALLOWLIST = {
     "llm_provider", "deep_think_llm", "quick_think_llm",
     "max_debate_rounds", "max_risk_discuss_rounds",
     "prompt_language",
+    "v2_debate_enabled",
 }
 # Hold references to fire-and-forget tasks so they are not garbage collected
 _background_tasks: set = set()
