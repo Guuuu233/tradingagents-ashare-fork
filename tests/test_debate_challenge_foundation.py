@@ -12,7 +12,6 @@ from tradingagents.agents.utils.agent_states import (
 )
 from tradingagents.agents.utils.debate_utils import (
     _sanitize_machine_payload,
-    validate_debate_response,
 )
 from tradingagents.graph.propagation import Propagator
 
@@ -287,44 +286,3 @@ class TestDebateStateSanitizerChallengeFoundation:
         assert len(res["new_claims"]) == 1
         assert res["new_claims"][0]["claim"] == "主力资金净流入1.2亿"
         assert res["new_claims"][0]["confidence"] == 0.85
-
-    def test_validate_debate_response_accepts_challenge_payload(self):
-        raw_response = (
-            "多头盘问反驳正文：空头所指出的应收账款恶化忽略了下游大客户的季度集中结算规律。\n\n"
-            "<!-- DEBATE_STATE: {\n"
-            '  "challenges": [{\n'
-            '    "target_claim_id": "INV-4",\n'
-            '    "weakest_point": "空头忽略了下游大客户三季度集中结算与合同负债同比增加45%的确定性",\n'
-            '    "evidence": ["三季报预收款与合同负债达35亿元同比增加45%"],\n'
-            '    "severity": "major"\n'
-            '  }],\n'
-            '  "self_win_prob": 0.72,\n'
-            '  "new_claims": [],\n'
-            '  "responded_claim_ids": [],\n'
-            '  "resolved_claim_ids": [],\n'
-            '  "unresolved_claim_ids": [],\n'
-            '  "next_focus_claim_ids": [],\n'
-            '  "round_summary": "多头反驳空头应收账款逻辑",\n'
-            '  "round_goal": "击穿空头现金流假设"\n'
-            "} -->"
-        )
-        state = {
-            "count": 2,
-            "claims": [],
-            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
-            "protocol_stage": "challenge",
-            "feature_flags": {"v2_debate_enabled": True},
-        }
-        is_valid, parse_status, error_detail, payload = validate_debate_response(
-            state=state,
-            raw_response=raw_response,
-            speaker_key="Bull",
-            stance="bullish",
-            marker="DEBATE_STATE",
-            domain="investment",
-        )
-        assert is_valid is True
-        assert parse_status == "valid"
-        assert payload is not None
-        assert len(payload["challenges"]) == 1
-        assert payload["self_win_prob"] == 0.72

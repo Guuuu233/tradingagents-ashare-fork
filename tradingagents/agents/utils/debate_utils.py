@@ -931,7 +931,6 @@ def validate_debate_response(
         v2_enabled = is_v2_debate_enabled(state)
         current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
         is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
-        is_challenge_stage = v2_enabled and current_stage == "challenge" and message_index > 2
 
         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
@@ -1002,12 +1001,6 @@ def validate_debate_response(
                 )
                 logger.warning("[debate_utils] protocol violation: %s", detail)
                 return False, "invalid_protocol", detail, payload
-
-        elif is_challenge_stage:
-            # ── C1 Challenge Foundation ──────────────────────────────────
-            # C1 foundation layer: schema & sanitizer validation only.
-            # Protocol hard gates (new_claims=[], non-empty challenges, opponent target, severity enum, duplicate) in C2.
-            pass
 
         else:
             # ── Legacy 规则 (及 v1 非 opening 逻辑) ───────────────────────
