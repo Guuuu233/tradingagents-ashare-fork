@@ -945,6 +945,273 @@ class TestJobExecutionDebatePersistence:
         assert saved["data_utilization_metrics"]["field_completeness"]["numerator"] == 4
         assert "probability" in saved["data_utilization_metrics"]["field_completeness"]["legitimate_omissions"]
 
+    def test_post_decision_hold_refreshes_note_and_field_completeness_metrics(self):
+        """DAV-387: result without decision initially resolves to note=None and warning=置信度及概率数据全部缺失;
+        when _apply_structured_report_fields selects HOLD, extraction_note must refresh to '观望不设目标价',
+        extraction_warning stays intact, and field_completeness becomes 1/4 partial with target_price in legitimate_omissions.
+        """
+        result = {
+            "symbol": "600406.SH",
+            "final_trade_decision": "综合各方研判，当前时点多空博弈激烈，建议观望等待明确信号。",
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [],
+                "count": 6,
+            },
+        }
+        # Initial resolution before decision is known
+        initial_resolved = report_service.resolve_report_fields(result_data=result)
+        assert initial_resolved.get("extraction_note") is None
+        assert initial_resolved.get("extraction_warning") == "置信度及概率数据全部缺失"
+
+        fake_structured = report_service.StructuredReport(
+            decision="HOLD",
+            confidence=None,
+            probability=None,
+            target_price=None,
+            stop_loss_price=None,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+
+        main._apply_structured_report_fields(
+            result,
+            structured=fake_structured,
+            graph_decision=None,
+            resolved=initial_resolved,
+        )
+        main._mount_or_refresh_protocol_metadata_and_metrics(result)
+
+        assert result.get("extraction_note") == "观望不设目标价"
+        assert result.get("extraction_warning") == "置信度及概率数据全部缺失"
+        fc = result["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 1
+        assert fc["denominator"] == 4
+        assert fc["status"] == "partial"
+        assert fc["legitimate_omissions"] == ["target_price"]
+        assert "target_price" not in fc["missing_fields"]
+        assert "probability" in fc["missing_fields"]
+        assert "confidence" in fc["missing_fields"]
+        assert "stop_loss_price" in fc["missing_fields"]
+
+    def test_job_execution_hold_decision_persists_note_and_metrics_consistency(self):
+        """DAV-387: Job execution with structured HOLD decision persists note='观望不设目标价'
+        and 1/4 field_completeness metrics in both job result and DB saved report consistently.
+        """
+        job_id = f"job-{uuid4().hex}"
+        store = InMemoryJobStore()
+        collector = MagicMock()
+        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        saved_reports = []
+        db = MagicMock()
+
+        fake_structured = report_service.StructuredReport(
+            decision="HOLD",
+            confidence=None,
+            probability=None,
+            target_price=None,
+            stop_loss_price=None,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+
+        request = main.AnalyzeRequest(
+            symbol="600406.SH",
+            trade_date="2026-08-20",
+            horizons=["short"],
+            query="分析 600406.SH 短线走势",
+            selected_analysts=[],
+        )
+
+        def capture_create_report(*args, **kwargs):
+            saved_reports.append(kwargs)
+            return MagicMock()
+
+        async def run_job():
+            stream = main._stream_job_events(job_id)
+            await stream.__anext__()
+            task = asyncio.create_task(
+                main._run_job_inner(job_id, request, stream_events=False, save_report=True)
+            )
+            async for chunk in stream:
+                if "event: done" in chunk:
+                    break
+            await task
+            await stream.aclose()
+
+        with (
+            patch.object(main, "_job_store_instance", store),
+            patch.object(main, "_shared_data_collector", collector),
+            patch.object(main, "TradingAgentsGraph", _FakeTradingGraphForJob),
+            patch.object(main, "_build_runtime_config", return_value={}),
+            patch.object(main, "_resolve_and_freeze_custom_prompts", return_value=({}, False)),
+            patch.object(main, "get_db_ctx", return_value=nullcontext(db)),
+            patch.object(report_service, "init_report"),
+            patch.object(report_service, "update_report_partial"),
+            patch.object(report_service, "extract_structured_data", return_value=fake_structured),
+            patch.object(report_service, "create_report", side_effect=capture_create_report),
+        ):
+            asyncio.run(run_job())
+
+        job = store.get_job(job_id)
+        assert job["status"] == "completed"
+        result_data = job["result"]
+
+        assert result_data.get("decision") == "HOLD"
+        assert result_data.get("extraction_note") == "观望不设目标价"
+        assert result_data.get("extraction_warning") == "置信度及概率数据全部缺失"
+        fc = result_data["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 1
+        assert fc["denominator"] == 4
+        assert fc["status"] == "partial"
+        assert fc["legitimate_omissions"] == ["target_price"]
+        assert "probability" in fc["missing_fields"]
+
+        assert len(saved_reports) == 1
+        saved = saved_reports[0]["result_data"]
+        assert saved.get("decision") == "HOLD"
+        assert saved.get("extraction_note") == "观望不设目标价"
+        assert saved.get("extraction_warning") == "置信度及概率数据全部缺失"
+        assert saved["data_utilization_metrics"]["field_completeness"]["numerator"] == 1
+        assert saved["data_utilization_metrics"]["field_completeness"]["status"] == "partial"
+        assert saved["data_utilization_metrics"]["field_completeness"]["legitimate_omissions"] == ["target_price"]
+        assert saved["data_utilization_metrics"]["field_completeness"] == result_data["data_utilization_metrics"]["field_completeness"]
+
+    def test_post_decision_hold_with_confidence_and_probability_note(self):
+        """DAV-387: HOLD with confidence present and probability missing should have both notes
+        and field_completeness=3/4 partial (confidence, target_price legitimate, probability legitimate).
+        """
+        result = {
+            "symbol": "600406.SH",
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [],
+                "count": 6,
+            },
+        }
+        fake_structured = report_service.StructuredReport(
+            decision="HOLD",
+            confidence=75,
+            probability=None,
+            target_price=None,
+            stop_loss_price=None,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+        resolved = report_service.resolve_report_fields(
+            result_data=result,
+            confidence_override=75,
+        )
+        main._apply_structured_report_fields(
+            result,
+            structured=fake_structured,
+            graph_decision=None,
+            resolved=resolved,
+        )
+        main._mount_or_refresh_protocol_metadata_and_metrics(result)
+
+        assert result.get("extraction_note") == "观望不设目标价；概率未提供/未提取"
+        assert result.get("extraction_warning") is None
+        fc = result["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 3
+        assert fc["status"] == "partial"
+        assert "confidence" in fc["present_fields"]
+        assert "target_price" in fc["legitimate_omissions"]
+        assert "probability" in fc["legitimate_omissions"]
+        assert "stop_loss_price" in fc["missing_fields"]
+
+    def test_post_decision_hold_with_target_price_does_not_set_omission_note(self):
+        """DAV-387: HOLD with target price provided should not set '观望不设目标价' note."""
+        result = {
+            "symbol": "600406.SH",
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [],
+                "count": 6,
+            },
+        }
+        fake_structured = report_service.StructuredReport(
+            decision="HOLD",
+            confidence=75,
+            probability=0.6,
+            target_price=100.0,
+            stop_loss_price=90.0,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+        resolved = report_service.resolve_report_fields(
+            result_data=result,
+            confidence_override=75,
+            target_price_override=100.0,
+            stop_loss_override=90.0,
+        )
+        main._apply_structured_report_fields(
+            result,
+            structured=fake_structured,
+            graph_decision=None,
+            resolved=resolved,
+        )
+        main._mount_or_refresh_protocol_metadata_and_metrics(result)
+
+        assert result.get("extraction_note") is None
+        assert result.get("extraction_warning") is None
+        fc = result["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 4
+        assert fc["status"] == "complete"
+        assert "target_price" in fc["present_fields"]
+        assert "target_price" not in fc["legitimate_omissions"]
+
+    def test_post_decision_buy_without_target_price_leaves_target_missing(self):
+        """DAV-387: BUY decision without target price must leave target_price in missing_fields, not legitimate_omissions."""
+        result = {
+            "symbol": "600406.SH",
+            "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "claims": [],
+                "count": 6,
+            },
+        }
+        fake_structured = report_service.StructuredReport(
+            decision="BUY",
+            confidence=None,
+            probability=None,
+            target_price=None,
+            stop_loss_price=None,
+            risks=[],
+            key_metrics=[],
+            data_gaps=[],
+            falsification_conditions=[],
+            not_applicable=False,
+        )
+        resolved = report_service.resolve_report_fields(result_data=result)
+        main._apply_structured_report_fields(
+            result,
+            structured=fake_structured,
+            graph_decision=None,
+            resolved=resolved,
+        )
+        main._mount_or_refresh_protocol_metadata_and_metrics(result)
+
+        assert result.get("extraction_note") is None
+        assert result.get("extraction_warning") == "置信度及概率数据全部缺失"
+        fc = result["data_utilization_metrics"]["field_completeness"]
+        assert fc["numerator"] == 0
+        assert fc["status"] == "incomplete"
+        assert "target_price" in fc["missing_fields"]
+        assert fc["legitimate_omissions"] == []
+
 
 # ============================================================================
 # DAV-210: Isolating rejected machine blocks from transcript history

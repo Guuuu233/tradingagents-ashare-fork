@@ -2631,6 +2631,14 @@ def _apply_structured_report_fields(
             "extraction_warning": resolved.get("extraction_warning"),
         }
     )
+    post_resolved = report_service.resolve_report_fields(
+        result_data=result,
+        confidence_override=result.get("confidence"),
+        target_price_override=result.get("target_price"),
+        stop_loss_override=result.get("stop_loss_price"),
+    )
+    result["extraction_note"] = post_resolved.get("extraction_note")
+    result["extraction_warning"] = post_resolved.get("extraction_warning")
     return decision
 
 
