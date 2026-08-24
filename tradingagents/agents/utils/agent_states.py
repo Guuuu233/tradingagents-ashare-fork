@@ -188,6 +188,12 @@ def get_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
         if "debate_degenerate" in inv_state
         else state_or_result.get("debate_degenerate", False)
     )
+    if not debate_degenerate and is_v2_debate_enabled(state_or_result):
+        try:
+            from tradingagents.agents.utils.debate_utils import detect_debate_degenerate
+            debate_degenerate = detect_debate_degenerate(state_or_result)
+        except Exception:
+            pass
 
     data_metrics = (
         inv_state.get("data_utilization_metrics")

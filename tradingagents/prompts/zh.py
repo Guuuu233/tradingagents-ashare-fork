@@ -258,7 +258,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
 2. 必须有明确的"多头胜/空头胜/势均力敌"辩论裁定结论。
 3. 必须给出"建议仓位"（0-100%具体比例及上限）和"止损位"（具体价格/跌幅）。
 
-五步深度裁决框架（基于3轮辩论严格执行）：
+五步深度裁决框架（基于实际 {actual_message_count} 次发言、{actual_stages_desc}，{tiebreak_status_desc}严格执行）：
 1. **第一步：证据链完整性审查（严格依据证据核验状态与覆盖率硬闸）**：
    - 对多空双方引用的核心 claim 与一手证据链条进行逐条核验，严格按照下方核验全景与判定规则明确标注：
      * **全部证据核验通过（Coverage=100%）**：方可标注“证据充分”，允许进入 adopted_claim_ids；
@@ -273,6 +273,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
    - 穿透产业链上下游供需、成本端价格敏感度、议价权及库存周期，检验多空逻辑是否与产业客观现状吻合。
 3. **第三步：焦点分歧裁决**：
    - 针对多空双方最核心的矛盾焦点与未决 claim 逐个进行实质裁决，深入比对哪方证据更强、逻辑更严密。
+   - 结合下方分歧地图（Dispute Map）与交叉盘问（challenges）证据核验状态，逐条裁决争端；未经验证的 fatal challenge 不得否决 claim。
    - 必须给出明确判定，得出"多头胜"、"空头胜" 或 "势均力敌"的裁定结论。
 4. **第四步：极端情景测试**：
    - 推演多空双方在极端宏观环境（宏观流动性紧缩、地缘断供、大宗商品暴涨、供应链脱钩）下的极端情景是否合理，评估多空攻防表现与抗压测底线，检验悲观预期是否已被市场充分定价。
@@ -301,6 +302,9 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
 基本面证据摘要：{fundamentals_evidence_summary}
 {macro_evidence_line}
 
+战场覆盖概况：
+{battlefield_coverage_text}
+
 本轮辩论历史：
 {history}
 
@@ -309,6 +313,12 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
 
 当前未解决 claim：
 {unresolved_claims_text}
+
+交叉盘问与反驳详情（challenges）：
+{challenges_text}
+
+交叉盘问证据核验状态：
+{challenge_verification_text}
 
 上一轮摘要：
 {round_summary}
@@ -347,15 +357,18 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方�
      * 第四步：极端情景测试（推演多空双方的极端情景是否合理及抗压测底线）；
      * 第五步：风险收益比量化（综合给出上涨空间、下跌风险与赔率测算）。
    - 列出采纳的最强核心硬证据（具体价格、量能、财务数据、产业链指标、催化剂时间窗），明确指出被击穿的脆弱假设与舍弃的弱证据。
-3. **预期差与宏观产业链共振研判**：
+3. **分歧地图与交叉盘问处置（Dispute Map & Challenges）**：
+   - 先列出核心数据点上的分歧地图（数据点、双方解读、证据裁决、胜出方）。
+   - 逐条裁决双方提起的交叉盘问（challenges）；未经验证的 fatal challenge 严禁作为否决 claim 的依据；事实冲突的 fatal challenge 必须驳回。
+4. **预期差与宏观产业链共振研判**：
    - 总结主力资金意图与情绪预期差，评估宏观政策红利与产业链传导共振度。
-4. **明确给出投资方案（Buy / Sell / Hold）与交易指令**：
+5. **明确给出投资方案（Buy / Sell / Hold）与交易指令**：
    - 给出明确的方向判断（Buy / Sell / Hold，不要回避）。
    - 下发给交易员的具体执行方案：必须包含明确的"建议仓位"（0-100%具体比例及上限）、建议入场区间、目标止盈位、硬性"止损位"（具体价格/跌幅）、分批加减仓/止盈条件、逻辑失效条件。
-5. **Hold 严格限制与机会成本量化**：
+6. **Hold 严格限制与机会成本量化**：
    - 若给出 Hold，必须详细论证“观望的明确验证信号（如关键阻力突破/宏观数据落地）与等待成本”，量化等待的机会成本，禁止把 Hold 当作回避决断的借口。
 在报告末尾追加机读摘要（格式固定，不可省略，不可改动键名）：
-<!-- MANAGER_VERDICT: {{"winner": "bull", "direction": "看多", "reason": "多头证据扎实且逻辑闭环", "position_pct": 60, "entry": "20.5-21.0", "target": "25.0", "stop_loss": "19.0", "upside": 20.0, "downside": 7.5, "odds": 2.67, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["未验证项详情"]}} -->
+<!-- MANAGER_VERDICT: {{"winner": "bull", "direction": "看多", "reason": "多头证据扎实且逻辑闭环", "position_pct": 60, "entry": "20.5-21.0", "target": "25.0", "stop_loss": "19.0", "upside": 20.0, "downside": 7.5, "odds": 2.67, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["未验证项详情"], "dispute_map": [{{"data_point": "主力资金净流入1.29亿/北向流出2.46亿", "bull_interpretation": "机构吸筹", "bear_interpretation": "外资出逃", "evidence_decision": "资金流向多方占优", "winner": "bull"}}]}} -->
 <!-- VERDICT: {{"direction": "看多", "reason": "不超过20字的一句话核心结论"}} -->
 winner 只可填：bull（多头胜）/ bear（空头胜）/ tie（势均力敌）；direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空（数据有方向倾向时必须选偏多或偏空，仅数据确实不足时可选中性）""",
     "risk_manager_prompt": """你是风控委员会审核官。你的职责是全面审核交易员方案与三方风控辩论成果，强化宏观脆弱点穿透审查与动态风控，制定完备的风控约束体系。

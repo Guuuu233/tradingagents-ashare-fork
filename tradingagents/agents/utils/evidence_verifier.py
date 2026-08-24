@@ -577,6 +577,80 @@ class EvidenceFactualTruthEvaluator:
 
         return results
 
+    def evaluate_challenges(
+        self,
+        challenges: Sequence[Mapping[str, Any]],
+        seven_reports: Mapping[str, str],
+        market_data_context: Mapping[str, Any] | None = None,
+        analysis_baseline_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Evaluate all evidence items across challenges and compute challenge-level evidence status."""
+        results: list[dict[str, Any]] = []
+        for ch in challenges:
+            chid = str(ch.get("challenge_id", "")).strip() or None
+            target_id = str(ch.get("target_claim_id", "")).strip()
+            speaker = str(ch.get("speaker") or ch.get("speaker_key") or "")
+            speaker_key = str(ch.get("speaker_key") or ch.get("speaker") or "")
+            severity = str(ch.get("severity", "major")).strip().lower()
+            ev_list = ch.get("evidence") or []
+            if isinstance(ev_list, str):
+                ev_list = [ev_list]
+
+            ver_items: list[dict[str, Any]] = []
+            for ev in ev_list:
+                ev_str = str(ev).strip()
+                if not ev_str:
+                    continue
+                ver_res = self.evaluate_single_evidence(
+                    raw_evidence=ev_str,
+                    seven_reports=seven_reports,
+                    market_data_context=market_data_context,
+                    analysis_baseline_date=analysis_baseline_date,
+                    claim_id=chid,
+                )
+                ver_items.append(ver_res)
+
+            verified_items = [v for v in ver_items if v.get("status") == STATUS_VERIFIED]
+            contradicted_items = [v for v in ver_items if v.get("status") == STATUS_CONTRADICTED]
+            unavail_items = [
+                v for v in ver_items
+                if v.get("status") == STATUS_SOURCE_UNAVAILABLE or v.get("is_fatal")
+            ]
+            unsupported_items = [v for v in ver_items if v.get("status") == STATUS_UNSUPPORTED]
+
+            total_count = len(ver_items)
+            verified_count = len(verified_items)
+            contradicted_count = len(contradicted_items)
+            unavail_count = len(unavail_items)
+            unsupported_count = len(unsupported_items)
+
+            if contradicted_count > 0 or unavail_count > 0:
+                evidence_status = "contradicted"
+            elif verified_count == total_count and total_count > 0:
+                evidence_status = "verified"
+            else:
+                evidence_status = "unsupported"
+
+            ch_res = {
+                "challenge_id": chid,
+                "target_claim_id": target_id,
+                "speaker": speaker,
+                "speaker_key": speaker_key,
+                "severity": severity,
+                "evidence_status": evidence_status,
+                "counts": {
+                    "total": total_count,
+                    "verified": verified_count,
+                    "unsupported": unsupported_count,
+                    "contradicted": contradicted_count,
+                    "source_unavailable": unavail_count,
+                },
+                "verification_items": ver_items,
+            }
+            results.append(ch_res)
+
+        return results
+
     def aggregate_claim_evidence(
         self,
         claims: Sequence[Mapping[str, Any]] | None = None,
@@ -801,6 +875,98 @@ def format_claims_with_verification_for_prompt(
     return "\n".join(lines)
 
 
+def format_challenges_for_prompt(
+    challenges: Sequence[Mapping[str, Any]] | None,
+    challenge_verification: Sequence[Mapping[str, Any]] | None = None,
+    empty_message: str = "当前没有提出交叉盘问 (challenges)。",
+) -> str:
+    """Format challenges with verification status for research manager prompt."""
+    ch_list = list(challenges or [])
+    if not ch_list:
+        return empty_message
+
+    ver_map: dict[str, Mapping[str, Any]] = {}
+    if challenge_verification:
+        for v in challenge_verification:
+            chid = str(v.get("challenge_id", "")).strip()
+            if chid:
+                ver_map[chid] = v
+
+    lines: list[str] = []
+    for ch in ch_list:
+        chid = str(ch.get("challenge_id", "")).strip()
+        speaker = str(ch.get("speaker") or ch.get("speaker_key") or "Unknown").strip()
+        target_id = str(ch.get("target_claim_id", "")).strip()
+        weakest = str(ch.get("weakest_point", "")).strip()
+        sev = str(ch.get("severity", "major")).strip().lower()
+        ev_list = [str(e).strip() for e in (ch.get("evidence") or []) if str(e).strip()]
+        ev_str = "；".join(ev_list) if ev_list else "无"
+        status = str(ch.get("status", "open")).strip()
+
+        ver_info = ver_map.get(chid)
+        ev_status = ver_info.get("evidence_status") if ver_info else ch.get("evidence_status", "unverified")
+        badge = f"【证据核验: {ev_status}】" if ev_status else ""
+
+        line = f"- {chid} [{status}] {speaker} 攻击对手 {target_id} (严厉度: {sev}) {badge}: 弱点={weakest} | 证据: {ev_str}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def format_challenge_verification_summary(
+    challenges: Sequence[Mapping[str, Any]] | None,
+    challenge_verification: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    """Format summary of challenge evidence verification status for research manager prompt."""
+    ch_list = list(challenges or [])
+    if not ch_list:
+        return "暂无交叉盘问核验数据。"
+
+    ver_list = list(challenge_verification or [])
+    if not ver_list:
+        return "交叉盘问证据尚未核验。"
+
+    verified_count = sum(1 for v in ver_list if v.get("evidence_status") == "verified")
+    unsupported_count = sum(1 for v in ver_list if v.get("evidence_status") == "unsupported")
+    contradicted_count = sum(1 for v in ver_list if v.get("evidence_status") == "contradicted")
+
+    lines = [
+        f"交叉盘问核验汇总 (共 {len(ver_list)} 项): Verified={verified_count}, Unsupported={unsupported_count}, Contradicted={contradicted_count}",
+    ]
+    for v in ver_list:
+        chid = v.get("challenge_id", "")
+        target_id = v.get("target_claim_id", "")
+        sev = v.get("severity", "")
+        ev_st = v.get("evidence_status", "")
+        lines.append(f"  * {chid} (针对 {target_id}, 严厉度: {sev}): 证据状态={ev_st}")
+
+    return "\n".join(lines)
+
+
+def format_battlefield_coverage(claims: Sequence[Mapping[str, Any]] | None) -> str:
+    """Format summary of covered battlefields by camp for research manager prompt."""
+    claim_list = list(claims or [])
+    if not claim_list:
+        return "暂无战场覆盖数据。"
+
+    bull_bfs = set()
+    bear_bfs = set()
+    for c in claim_list:
+        bf = str(c.get("battlefield", "")).strip()
+        if not bf:
+            continue
+        sp = str(c.get("speaker_key") or c.get("speaker") or "")
+        st = str(c.get("stance") or "").lower()
+        if "bull" in sp.lower() or "bull" in st:
+            bull_bfs.add(bf)
+        elif "bear" in sp.lower() or "bear" in st:
+            bear_bfs.add(bf)
+
+    b_str = ", ".join(sorted(bull_bfs)) if bull_bfs else "未指定"
+    be_str = ", ".join(sorted(bear_bfs)) if bear_bfs else "未指定"
+    return f"多头覆盖战场 ({len(bull_bfs)}/5): {b_str} | 空头覆盖战场 ({len(bear_bfs)}/5): {be_str}"
+
+
 def normalize_winner(winner_raw: Any, direction_raw: Any = "") -> str:
     """Normalize winner string to one of 'bull', 'bear', 'tie'."""
     w_str = str(winner_raw or "").strip().lower()
@@ -808,7 +974,7 @@ def normalize_winner(winner_raw: Any, direction_raw: Any = "") -> str:
         return "bull"
     elif w_str in {"bear", "bearish", "空头", "空方", "空头胜", "空方胜", "空头全面胜出"}:
         return "bear"
-    elif w_str in {"tie", "neutral", "平局", "势均力敌", "分歧", "观望", "hold", "中性"}:
+    elif w_str in {"tie", "neutral", "平局", "势均力敌", "分歧", "观望", "hold", "中性", "unresolved"}:
         return "tie"
 
     # Infer from direction if winner is not explicit
@@ -827,6 +993,8 @@ def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
     claims: Sequence[Mapping[str, Any]] | None = None,
+    challenges: Sequence[Mapping[str, Any]] | None = None,
+    challenges_verification: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract structured manager verdict and perform strict consistency check.
 
@@ -843,7 +1011,11 @@ def extract_and_validate_manager_verdict(
         - downside
         - odds
         - adopted_claim_ids
+        - partially_adopted_claims
         - rejected_claim_ids
+        - excluded_evidence
+        - claim_evidence_summary
+        - dispute_map
         - consistency_check_passed
         - failed_checks
     """
@@ -883,6 +1055,25 @@ def extract_and_validate_manager_verdict(
     partially_adopted_claims = _to_str_list(payload.get("partially_adopted_claims")) if payload else []
     rejected_claim_ids = _to_str_list(payload.get("rejected_claim_ids")) if payload else []
     excluded_evidence = _to_str_list(payload.get("excluded_evidence")) if payload else []
+
+    # ── Extract Dispute Map ───────────────────────────────────────────────
+    raw_dispute_map = payload.get("dispute_map") or []
+    dispute_map: list[dict[str, Any]] = []
+    if isinstance(raw_dispute_map, list):
+        for item in raw_dispute_map:
+            if isinstance(item, Mapping):
+                dp = str(item.get("data_point") or "").strip()
+                b_interp = str(item.get("bull_interpretation") or "").strip()
+                be_interp = str(item.get("bear_interpretation") or "").strip()
+                ev_dec = str(item.get("evidence_decision") or "").strip()
+                w_raw = str(item.get("winner") or "").strip()
+                dispute_map.append({
+                    "data_point": dp,
+                    "bull_interpretation": b_interp,
+                    "bear_interpretation": be_interp,
+                    "evidence_decision": ev_dec,
+                    "winner": normalize_winner(w_raw),
+                })
 
     # ── Deterministic Claim Evidence Summary Computation ──────────────────
     claim_evidence_summary: dict[str, dict[str, Any]] = {}
@@ -1036,6 +1227,49 @@ def extract_and_validate_manager_verdict(
             if str(cid) in fatal_cids:
                 failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
 
+    # ── Check 8: Fatal Challenge Consistency Hard Gate ──────────────────
+    ch_map: dict[str, Mapping[str, Any]] = {}
+    if challenges:
+        for ch in challenges:
+            chid = str(ch.get("challenge_id", "")).strip()
+            if chid:
+                ch_map[chid] = ch
+
+    ch_ver_map: dict[str, Mapping[str, Any]] = {}
+    if challenges_verification:
+        for cv in challenges_verification:
+            chid = str(cv.get("challenge_id", "")).strip()
+            if chid:
+                ch_ver_map[chid] = cv
+
+    # Rule 8.1: Unverified fatal challenge cannot reject 100% verified claim
+    for chid, ch in ch_map.items():
+        sev = str(ch.get("severity", "major")).strip().lower()
+        if sev == "fatal":
+            target_id = str(ch.get("target_claim_id", "")).strip()
+            cv = ch_ver_map.get(chid, {})
+            ev_status = cv.get("evidence_status") or ch.get("evidence_status", "unverified")
+
+            # If fatal challenge evidence is unsupported or contradicted
+            if ev_status in ("unsupported", "contradicted", "unverified"):
+                if target_id in rejected_claim_ids and claim_evidence_summary:
+                    target_summary = claim_evidence_summary.get(target_id, {})
+                    target_cov = target_summary.get("coverage", 0.0)
+                    target_dec = target_summary.get("decision")
+                    if target_dec == DECISION_ADOPT and (target_cov >= 1.0 or math.isclose(target_cov, 1.0)):
+                        failed_checks.append(
+                            f"未经验证的 fatal challenge ({chid}, status={ev_status}) 不得作为否决高质量已验证 claim {target_id} 的依据"
+                        )
+
+            # Rule 8.2: Contradicted fatal challenge must be rejected
+            if ev_status == "contradicted":
+                ch_status = str(ch.get("status", "")).strip().lower()
+                adopted_challenges = payload.get("adopted_challenge_ids") or []
+                if ch_status == "adopted" or chid in adopted_challenges:
+                    failed_checks.append(
+                        f"存在事实冲突的 fatal challenge ({chid}) 必须被驳回，不得采纳"
+                    )
+
     consistency_passed = (len(failed_checks) == 0)
 
     return {
@@ -1054,6 +1288,7 @@ def extract_and_validate_manager_verdict(
         "rejected_claim_ids": rejected_claim_ids,
         "excluded_evidence": combined_excluded,
         "claim_evidence_summary": claim_evidence_summary,
+        "dispute_map": dispute_map,
         "consistency_check_passed": consistency_passed,
         "failed_checks": failed_checks,
     }

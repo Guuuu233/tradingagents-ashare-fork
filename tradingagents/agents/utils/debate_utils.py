@@ -942,6 +942,7 @@ def validate_debate_response(
 
         is_opening_stage = v2_enabled and current_stage == "opening"
         is_challenge_stage = v2_enabled and current_stage == "challenge"
+        is_tiebreak_stage = v2_enabled and current_stage == "tiebreak"
 
         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
@@ -1166,6 +1167,55 @@ def validate_debate_response(
 
                 seen_challenges.append(ch)
 
+        elif is_tiebreak_stage:
+            # ── B3 Tiebreak 阶段专属契约与硬闸 ──────────────────────────
+            # 1. self_win_prob 必须存在且为有限 0..1
+            if "self_win_prob" not in payload or payload.get("self_win_prob") is None:
+                detail = (
+                    f"Tiebreak 阶段 ({speaker_key}) 必须显式提供 self_win_prob (0.0 到 1.0 的有限数值)"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 2. Tiebreak 阶段禁止提交纯 challenge 动作载荷 (challenges 属于 challenge 阶段)
+            raw_challenges = payload.get("challenges") or []
+            new_claims_list = payload.get("new_claims") or []
+            if raw_challenges and not new_claims_list:
+                detail = (
+                    f"Tiebreak 阶段 ({speaker_key}) 不支持纯 challenge 载荷 (new_claims 为空且包含 challenges)；"
+                    f"challenge 仅在 challenge 阶段提交"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 3. duplicate claim 检查 (如果提供了 new_claims)
+            same_side_claims = [
+                c
+                for c in claims
+                if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+                or (c.get("stance") and c.get("stance") == stance)
+            ]
+            prev_ev_list = [
+                ev
+                for pc in same_side_claims
+                for ev in (pc.get("evidence") or [])
+                if str(ev).strip()
+            ]
+            if new_claims_list and same_side_claims:
+                duplicate_claims = []
+                for nc in new_claims_list:
+                    is_dup, sim, _, _ = _evaluate_claim_duplication(
+                        nc, same_side_claims, prev_ev_list
+                    )
+                    if is_dup:
+                        duplicate_claims.append(str(nc.get("claim", "")).strip())
+                if duplicate_claims:
+                    detail = (
+                        f"Tiebreak 阶段 ({speaker_key}) 观点与同侧历史观点重复: {duplicate_claims}"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
         else:
             # ── Legacy 规则 (及 v1 非 opening 逻辑) ───────────────────────
             # Check B: message_index >= 2 must respond to at least one un-resolved opponent claim
@@ -1315,6 +1365,8 @@ def _record_unstructured_response(
         debate_round = 1
     elif v2_enabled and current_stage == "challenge":
         debate_round = 2
+    elif v2_enabled and current_stage == "tiebreak":
+        debate_round = 3
     else:
         debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
 
@@ -1466,10 +1518,13 @@ def update_debate_state_with_payload(
             current_stage = "tiebreak"
 
     is_challenge_stage = v2_enabled and current_stage == "challenge"
+    is_tiebreak_stage = v2_enabled and current_stage == "tiebreak"
     if v2_enabled and current_stage == "opening":
         debate_round = 1
     elif is_challenge_stage:
         debate_round = 2
+    elif is_tiebreak_stage:
+        debate_round = 3
     else:
         debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
 
@@ -1709,8 +1764,25 @@ def update_debate_state_with_payload(
                 next_protocol_stage = "challenge"
             elif message_index >= 4:
                 next_protocol_stage = "tiebreak"
+        elif current_stage == "tiebreak":
+            if message_index <= 5:
+                next_protocol_stage = "tiebreak"
+            elif message_index >= 6:
+                next_protocol_stage = "manager"
         else:
             next_protocol_stage = state.get("protocol_stage", current_stage)
+
+    trajectory_entry = {
+        "stage": current_stage,
+        "message_index": message_index,
+        "speaker": speaker_label,
+        "speaker_key": speaker_key,
+        "stance": stance,
+        "self_win_prob": float(payload["self_win_prob"]) if payload.get("self_win_prob") is not None else None,
+        "debate_round": debate_round,
+    }
+    prior_trajectory = [dict(e) for e in (state.get("belief_trajectory") or []) if isinstance(e, Mapping)]
+    belief_trajectory = prior_trajectory + [trajectory_entry]
 
     updates = {
         "history": _append_history(state.get("history", ""), argument),
@@ -1730,6 +1802,7 @@ def update_debate_state_with_payload(
         "round_goal": round_goal,
         "round_messages": round_messages,
         "attempts": state_attempts,
+        "belief_trajectory": belief_trajectory,
     }
     if v2_enabled and domain == "investment":
         updates["protocol_stage"] = next_protocol_stage
@@ -1743,8 +1816,70 @@ def update_debate_state_with_payload(
         updates[current_response_key] = argument
     if store_current_response and current_response_key != "current_response":
         updates["current_response"] = argument
+
+    temp_state = dict(state)
+    temp_state.update(updates)
+    updates["debate_degenerate"] = detect_debate_degenerate(temp_state)
     new_state.update(updates)
     return new_state
+
+
+def detect_debate_degenerate(state_or_inv_state: Mapping[str, Any]) -> bool:
+    """Detect whether debate has degenerated into fixed dogmatic stances.
+
+    Returns True when both sides maintain stationary self_win_prob across stages
+    despite cross-examination and challenge stage progression.
+    """
+    if not isinstance(state_or_inv_state, Mapping):
+        return False
+    if not is_v2_debate_enabled(state_or_inv_state):
+        return False
+
+    inv_state = state_or_inv_state.get("investment_debate_state")
+    if not isinstance(inv_state, Mapping):
+        inv_state = state_or_inv_state
+
+    # Extract belief trajectory or round messages
+    trajectory = inv_state.get("belief_trajectory") or []
+    if not trajectory:
+        round_messages = inv_state.get("round_messages") or []
+        trajectory = [
+            {
+                "speaker_key": m.get("speaker_key") or m.get("speaker"),
+                "self_win_prob": m.get("self_win_prob"),
+                "stage": m.get("stage") or m.get("protocol_stage"),
+                "message_index": m.get("message_index"),
+            }
+            for m in round_messages
+            if isinstance(m, Mapping) and m.get("self_win_prob") is not None
+        ]
+
+    bull_probs = [
+        float(e["self_win_prob"])
+        for e in trajectory
+        if isinstance(e, Mapping)
+        and (e.get("speaker_key") == "Bull" or str(e.get("speaker", "")).startswith("Bull"))
+        and e.get("self_win_prob") is not None
+    ]
+    bear_probs = [
+        float(e["self_win_prob"])
+        for e in trajectory
+        if isinstance(e, Mapping)
+        and (e.get("speaker_key") == "Bear" or str(e.get("speaker", "")).startswith("Bear"))
+        and e.get("self_win_prob") is not None
+    ]
+
+    # Need at least 2 probability samples per side (e.g. opening + challenge)
+    if len(bull_probs) >= 2 and len(bear_probs) >= 2:
+        bull_delta = max(bull_probs) - min(bull_probs)
+        bear_delta = max(bear_probs) - min(bear_probs)
+        if bull_delta < 0.001 and bear_delta < 0.001:
+            # Check if challenges or evidence updates occurred
+            challenges = inv_state.get("challenges") or []
+            if challenges or len(trajectory) >= 4:
+                return True
+
+    return False
 
 
 def _append_history(history: Any, argument: str) -> str:

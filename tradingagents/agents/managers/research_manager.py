@@ -19,6 +19,9 @@ from tradingagents.agents.utils.evidence_summary import (
 from tradingagents.agents.utils.evidence_verifier import (
     EvidenceFactualTruthEvaluator,
     extract_and_validate_manager_verdict,
+    format_battlefield_coverage,
+    format_challenge_verification_summary,
+    format_challenges_for_prompt,
     format_claims_with_verification_for_prompt,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
@@ -274,6 +277,45 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             empty_message="当前没有未决 claim。",
         )
 
+        # ── Parameterize actual messages, stages, challenges, and battlefield coverage ──
+        round_messages = investment_debate_state.get("round_messages", [])
+        actual_message_count = len(round_messages) if round_messages else safe_int(investment_debate_state.get("count", 0), 0)
+
+        stages_list = [
+            str(m.get("stage") or m.get("protocol_stage") or "").strip()
+            for m in round_messages
+            if m.get("stage") or m.get("protocol_stage")
+        ]
+        unique_stages = list(dict.fromkeys([s for s in stages_list if s]))
+        if not unique_stages:
+            unique_stages = ["opening", "challenge"]
+        actual_stages_desc = f"覆盖阶段: {', '.join(unique_stages)}"
+
+        is_tb_skipped = bool(investment_debate_state.get("tiebreak_skipped", False))
+        if is_tb_skipped:
+            tiebreak_status_desc = "已跳过加赛(证据足以裁决)"
+        elif "tiebreak" in unique_stages:
+            tiebreak_status_desc = "已执行加赛"
+        else:
+            tiebreak_status_desc = "标准流程"
+
+        challenges = investment_debate_state.get("challenges", [])
+        challenges_verification = truth_evaluator.evaluate_challenges(
+            challenges=challenges,
+            seven_reports=seven_reports,
+            market_data_context=market_data_context,
+            analysis_baseline_date=analysis_baseline_date,
+        )
+        challenges_text = format_challenges_for_prompt(
+            challenges=challenges,
+            challenge_verification=challenges_verification,
+        )
+        challenge_verification_text = format_challenge_verification_summary(
+            challenges=challenges,
+            challenge_verification=challenges_verification,
+        )
+        battlefield_coverage_text = format_battlefield_coverage(claims)
+
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="research_manager")
         prompt = get_prompt("research_manager_prompt", config=get_config()).format(
             past_memory_str=past_memory_str,
@@ -289,6 +331,12 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             claims_text=claims_text,
             unresolved_claims_text=unresolved_claims_text,
             round_summary=round_summary_text,
+            actual_message_count=actual_message_count,
+            actual_stages_desc=actual_stages_desc,
+            tiebreak_status_desc=tiebreak_status_desc,
+            challenges_text=challenges_text,
+            challenge_verification_text=challenge_verification_text,
+            battlefield_coverage_text=battlefield_coverage_text,
             **injection_slots,
         )
 
@@ -379,6 +427,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             raw_response=full_content,
             claims_verification=claims_verification,
             claims=claims,
+            challenges=challenges,
+            challenges_verification=challenges_verification,
         )
 
         if not manager_verdict["consistency_check_passed"]:
@@ -417,6 +467,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "claim_counter": investment_debate_state.get("claim_counter", 0),
             "manager_verdict": manager_verdict,
             "evidence_verification": claims_verification,
+            "challenge_verification": challenges_verification,
             "report_manifest": report_manifest,
         }
 
@@ -425,6 +476,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "investment_plan": final_plan,
             "manager_verdict": manager_verdict,
             "evidence_verification": claims_verification,
+            "challenge_verification": challenges_verification,
             "report_manifest": report_manifest,
         }
 
