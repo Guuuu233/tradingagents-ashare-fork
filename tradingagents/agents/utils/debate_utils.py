@@ -697,6 +697,101 @@ def default_round_goal(domain: str, next_count: int) -> str:
     return goal_list[index]
 
 
+
+def _message_is_accepted_valid(message: Mapping[str, Any]) -> bool:
+    accepted = message.get("accepted")
+    if accepted is None:
+        accepted = message.get("accepted", True)
+    status = message.get("parse_status") or message.get("parse_status")
+    return bool(accepted) and status == "valid"
+
+
+def _v2_message_targets_opponent(
+    message: Mapping[str, Any],
+    debate_state: Mapping[str, Any],
+    claim_map: Mapping[str, Mapping[str, Any]],
+    *,
+    is_bull_msg: bool,
+) -> bool:
+    opponent_key = "Bear" if is_bull_msg else "Bull"
+    opponent_stance = "bearish" if is_bull_msg else "bullish"
+
+    def _is_opponent(cid: Any) -> bool:
+        claim = claim_map.get(str(cid), {})
+        return claim.get("speaker_key") == opponent_key or claim.get("stance") == opponent_stance
+
+    responded = list(message.get("responded_claim_ids") or [])
+    targets = list(message.get("target_claim_ids") or [])
+    if any(_is_opponent(cid) for cid in responded + targets):
+        return True
+
+    msg_challenges = list(message.get("challenges") or [])
+    message_index = message.get("message_index")
+    speaker_key = "Bull" if is_bull_msg else "Bear"
+    state_challenges = [
+        ch for ch in (debate_state.get("challenges") or [])
+        if isinstance(ch, Mapping)
+        and (
+            ch.get("message_index") == message_index
+            or ch.get("speaker_key") == speaker_key
+        )
+    ]
+    for ch in msg_challenges + state_challenges:
+        if not isinstance(ch, Mapping):
+            continue
+        target_id = ch.get("target_claim_id") or ch.get("target_claim_id")
+        if _is_opponent(target_id):
+            return True
+    return False
+
+
+def _v2_manager_pre_gate_errors(
+    debate_state: Mapping[str, Any],
+    accepted_valid_messages: Sequence[Mapping[str, Any]],
+    claim_list: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    skipped = bool(debate_state.get("tiebreak_skipped"))
+    expected_count = 4 if skipped else 6
+    expected_each = 2 if skipped else 3
+    count = safe_int(debate_state.get("count", 0), 0)
+    if count != expected_count or len(accepted_valid_messages) != expected_count:
+        errors.append(
+            f"v2 有效辩论轮次应为{expected_count}次 (当前count={count}, accepted valid={len(accepted_valid_messages)}, tiebreak_skipped={skipped})"
+        )
+
+    bull_msgs = [
+        m for m in accepted_valid_messages
+        if "Bull" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bull"
+    ]
+    bear_msgs = [
+        m for m in accepted_valid_messages
+        if "Bear" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bear"
+    ]
+    if len(bull_msgs) != expected_each or len(bear_msgs) != expected_each:
+        errors.append(
+            f"v2 多空双方有效发言次数不均等 (多头={len(bull_msgs)}, 空头={len(bear_msgs)}, 预期各{expected_each}次, tiebreak_skipped={skipped})"
+        )
+
+    claim_map = {str(c.get("claim_id", "")): c for c in claim_list if str(c.get("claim_id", ""))}
+    challenge_errors = 0
+    for idx, msg in enumerate(accepted_valid_messages):
+        m_idx = int(msg.get("message_index", idx + 1) or (idx + 1))
+        stage = str(msg.get("stage") or msg.get("protocol_stage") or "").strip().lower()
+        is_opening = stage == "opening" or m_idx <= 2
+        if is_opening:
+            continue
+        is_bull_msg = "Bull" in str(msg.get("speaker", "")) or str(msg.get("speaker_key", "")) == "Bull"
+        if not _v2_message_targets_opponent(msg, debate_state, claim_map, is_bull_msg=is_bull_msg):
+            challenge_errors += 1
+            errors.append(
+                f"v2 第 {m_idx} 次发言缺少针对对手的 challenge/responded_claim_ids"
+            )
+    if challenge_errors:
+        errors.append("v2 Challenge 阶段必须包含至少一条针对对手 claim 的盘问")
+    return errors
+
+
 def validate_debate_preconditions(
     investment_debate_state: Mapping[str, Any],
     claims: Sequence[Mapping[str, Any]] | None = None,
@@ -716,53 +811,64 @@ def validate_debate_preconditions(
     round_messages = investment_debate_state.get("round_messages", []) or []
     accepted_valid_messages = [
         m for m in round_messages
-        if m.get("accepted", True) and m.get("parse_status") == "valid"
+        if _message_is_accepted_valid(m)
     ]
+    claim_list = list(claims if claims is not None else investment_debate_state.get("claims", []) or [])
+    v2_enabled = is_v2_debate_enabled(investment_debate_state)
 
-    if count != 6 or len(accepted_valid_messages) != 6:
+    if v2_enabled:
+        gate_errors.extend(
+            _v2_manager_pre_gate_errors(
+                investment_debate_state,
+                accepted_valid_messages,
+                claim_list,
+            )
+        )
+    elif count != 6 or len(accepted_valid_messages) != 6:
         gate_errors.append(
             f"有效辩论轮次不足6次 (当前count={count}, accepted valid={len(accepted_valid_messages)})"
         )
 
-    bull_msgs = [
-        m for m in accepted_valid_messages
-        if "Bull" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bull"
-    ]
-    bear_msgs = [
-        m for m in accepted_valid_messages
-        if "Bear" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bear"
-    ]
-    if len(bull_msgs) != 3 or len(bear_msgs) != 3:
-        gate_errors.append(
-            f"多空双方有效发言次数不均等 (多头={len(bull_msgs)}, 空头={len(bear_msgs)}, 预期各3次)"
-        )
+    if not v2_enabled:
+        bull_msgs = [
+            m for m in accepted_valid_messages
+            if "Bull" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bull"
+        ]
+        bear_msgs = [
+            m for m in accepted_valid_messages
+            if "Bear" in str(m.get("speaker", "")) or str(m.get("speaker_key", "")) == "Bear"
+        ]
+        if len(bull_msgs) != 3 or len(bear_msgs) != 3:
+            gate_errors.append(
+                f"多空双方有效发言次数不均等 (多头={len(bull_msgs)}, 空头={len(bear_msgs)}, 预期各3次)"
+            )
 
-    claim_list = list(claims if claims is not None else investment_debate_state.get("claims", []) or [])
     claim_map = {str(c.get("claim_id", "")): c for c in claim_list if str(c.get("claim_id", ""))}
-    for idx, msg in enumerate(accepted_valid_messages):
-        m_idx = msg.get("message_index", idx + 1)
-        if m_idx >= 2:
-            responded = msg.get("responded_claim_ids") or []
-            targets = msg.get("target_claim_ids") or []
-            is_bull_msg = "Bull" in str(msg.get("speaker", "")) or str(msg.get("speaker_key", "")) == "Bull"
-            opponent_key = "Bear" if is_bull_msg else "Bull"
-            opponent_stance = "bearish" if is_bull_msg else "bullish"
+    if not v2_enabled:
+        for idx, msg in enumerate(accepted_valid_messages):
+            m_idx = msg.get("message_index", idx + 1)
+            if m_idx >= 2:
+                responded = msg.get("responded_claim_ids") or []
+                targets = msg.get("target_claim_ids") or []
+                is_bull_msg = "Bull" in str(msg.get("speaker", "")) or str(msg.get("speaker_key", "")) == "Bull"
+                opponent_key = "Bear" if is_bull_msg else "Bull"
+                opponent_stance = "bearish" if is_bull_msg else "bullish"
 
-            has_opp_responded = any(
-                cid in claim_map
-                and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
-                for cid in responded
-            )
-            if not has_opp_responded:
-                gate_errors.append(f"第 {m_idx} 次发言未在 responded_claim_ids 中回应对手 claim (responded: {responded})")
+                has_opp_responded = any(
+                    cid in claim_map
+                    and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
+                    for cid in responded
+                )
+                if not has_opp_responded:
+                    gate_errors.append(f"第 {m_idx} 次发言未在 responded_claim_ids 中回应对手 claim (responded: {responded})")
 
-            has_opp_target = any(
-                cid in claim_map
-                and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
-                for cid in targets
-            )
-            if not has_opp_target:
-                gate_errors.append(f"第 {m_idx} 次发言未在 target_claim_ids 中针对对手 claim (targets: {targets})")
+                has_opp_target = any(
+                    cid in claim_map
+                    and (claim_map[cid].get("speaker_key") == opponent_key or claim_map[cid].get("stance") == opponent_stance)
+                    for cid in targets
+                )
+                if not has_opp_target:
+                    gate_errors.append(f"第 {m_idx} 次发言未在 target_claim_ids 中针对对手 claim (targets: {targets})")
 
     has_bull_claims = any(c.get("speaker_key") == "Bull" or c.get("stance") == "bullish" for c in claim_list)
     has_bear_claims = any(c.get("speaker_key") == "Bear" or c.get("stance") == "bearish" for c in claim_list)

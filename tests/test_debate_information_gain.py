@@ -597,3 +597,65 @@ def test_valid_six_round_fixture_with_information_gain_passes_pre_gate():
 
     errors = validate_debate_preconditions(state["investment_debate_state"], claims=claims)
     assert errors == []
+
+
+def _v2_four_round_skipped_tiebreak_state():
+    from tradingagents.agents.utils.agent_states import PROTOCOL_VERSION_V2_STRUCTURED
+
+    claims = [
+        {"claim_id": "INV-1", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "主力资金连续净流入1.2亿", "evidence": ["主力净流入1.2亿"], "confidence": 0.85, "battlefield": "capital_flow"},
+        {"claim_id": "INV-2", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "行业景气政策密集落地", "evidence": ["产业政策周内3项"], "confidence": 0.80, "battlefield": "sentiment_theme"},
+        {"claim_id": "INV-3", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "放量突破60日线", "evidence": ["突破60日线放量12%"], "confidence": 0.78, "battlefield": "price_volume"},
+        {"claim_id": "INV-4", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "经营现金流同比下滑30%", "evidence": ["经营现金流-30%"], "confidence": 0.82, "battlefield": "fundamentals"},
+        {"claim_id": "INV-5", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "出口交货值同比下降", "evidence": ["出口交货值回落"], "confidence": 0.75, "battlefield": "macro_policy"},
+        {"claim_id": "INV-6", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "高位换手率超过25%", "evidence": ["换手率25%"], "confidence": 0.70, "battlefield": "capital_flow"},
+    ]
+    round_messages = [
+        {"message_index": 1, "stage": "opening", "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-1", "INV-2", "INV-3"], "information_gain_score": 1.0},
+        {"message_index": 2, "stage": "opening", "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": [], "target_claim_ids": [], "new_claim_ids": ["INV-4", "INV-5", "INV-6"], "information_gain_score": 1.0},
+        {"message_index": 3, "stage": "challenge", "speaker": "Bull Analyst", "speaker_key": "Bull", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-4"], "target_claim_ids": ["INV-4"], "new_claim_ids": [], "challenges": [{"target_claim_id": "INV-4", "weakest_point": "忽略预收款", "evidence": ["预收款+45%"], "severity": "major"}], "information_gain_score": 0.9},
+        {"message_index": 4, "stage": "challenge", "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-1"], "target_claim_ids": ["INV-1"], "new_claim_ids": [], "challenges": [{"target_claim_id": "INV-1", "weakest_point": "净流入不可持续", "evidence": ["近5日转净流出"], "severity": "major"}], "information_gain_score": 0.88},
+    ]
+    return {
+        "count": 4,
+        "round_messages": round_messages,
+        "claims": claims,
+        "challenges": [
+            {"speaker_key": "Bull", "target_claim_id": "INV-4", "message_index": 3},
+            {"speaker_key": "Bear", "target_claim_id": "INV-1", "message_index": 4},
+        ],
+        "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+        "feature_flags": {"v2_debate_enabled": True},
+        "tiebreak_skipped": True,
+    }
+
+
+def test_v2_four_round_skipped_tiebreak_passes_manager_pre_gate():
+    """v2 Opening+Challenge with tiebreak skipped is 4 messages, not legacy 6."""
+    debate_state = _v2_four_round_skipped_tiebreak_state()
+    errors = validate_debate_preconditions(debate_state, claims=debate_state["claims"])
+    assert errors == []
+
+
+def test_v2_four_round_without_challenges_still_fail_closed():
+    debate_state = _v2_four_round_skipped_tiebreak_state()
+    debate_state["challenges"] = []
+    debate_state["round_messages"][2]["challenges"] = []
+    debate_state["round_messages"][3]["challenges"] = []
+    debate_state["round_messages"][2]["responded_claim_ids"] = []
+    debate_state["round_messages"][3]["responded_claim_ids"] = []
+    debate_state["round_messages"][2]["target_claim_ids"] = []
+    debate_state["round_messages"][3]["target_claim_ids"] = []
+    errors = validate_debate_preconditions(debate_state, claims=debate_state["claims"])
+    assert errors
+    assert any("challenge" in err.lower() or "盘问" in err for err in errors)
+
+
+def test_legacy_four_round_still_fails_six_round_pre_gate():
+    debate_state = _v2_four_round_skipped_tiebreak_state()
+    debate_state["protocol_version"] = "v1_legacy"
+    debate_state["feature_flags"] = {"v2_debate_enabled": False}
+    debate_state["v2_debate_enabled"] = False
+    errors = validate_debate_preconditions(debate_state, claims=debate_state["claims"])
+    assert errors
+    assert any("6" in err for err in errors)
