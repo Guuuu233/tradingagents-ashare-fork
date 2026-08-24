@@ -2953,6 +2953,7 @@ async def _run_job_inner(
                     user_intent=user_intent,
                     horizon=horizon,
                     market_data_context=market_data_context,
+                    runtime_config=config,
                 )
                 last_report: Dict[str, str] = {}
                 seen: Dict[str, bool] = {}   # 追踪哪些字段已出现过，避免重复事件
@@ -3482,6 +3483,7 @@ async def _run_job_inner(
                 request_source=request_source,
                 horizon=request.horizons[0] if request.horizons else "short",
                 market_data_context=market_data_context,
+                runtime_config=config,
             )
             args = graph.propagator.get_graph_args()
             
@@ -3669,6 +3671,7 @@ async def _run_job_inner(
                     request_source=request_source,
                     horizon=single_horizon,
                     market_data_context=market_data_context,
+                    runtime_config=config,
                 )
                 args = graph.propagator.get_graph_args()
                 if "config" not in args:

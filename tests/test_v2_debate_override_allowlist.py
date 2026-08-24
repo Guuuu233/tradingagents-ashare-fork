@@ -118,3 +118,26 @@ def test_http_analyze_dry_run_passes_v2_override_and_keeps_3_1():
         assert (after.max_debate_rounds, after.max_risk_discuss_rounds) == (3, 1)
         assert (after.max_debate_rounds, after.max_risk_discuss_rounds) == before_rounds
         assert after.updated_at == before_updated
+
+
+def test_analyze_job_paths_forward_runtime_config_into_create_initial_state():
+    """dry_run never reaches the propagator; v2 dies if the three job paths omit runtime_config."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("api/main.py").read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "create_initial_state"
+    ]
+    assert len(calls) == 3
+    for call in calls:
+        forwarded = {
+            kw.arg: ast.unparse(kw.value)
+            for kw in call.keywords
+            if kw.arg
+        }
+        assert forwarded.get("runtime_config") == "config", forwarded
