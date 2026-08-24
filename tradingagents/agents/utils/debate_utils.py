@@ -1506,4 +1506,3 @@ def render_debate_prompt(
         cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_START\s*-->", "", cleaned)
         cleaned = re.sub(r"<!--\s*STAGE_OUTPUT_CONTRACT_END\s*-->", "", cleaned)
         return cleaned
-

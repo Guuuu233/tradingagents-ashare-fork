@@ -874,6 +874,3 @@ class TestRenderDebatePromptAndStageContracts:
         assert state_after_bear["round_messages"][1]["stage"] == "opening"
         assert state_after_bear["round_messages"][1]["protocol_stage"] == "opening"
         assert len(state_after_bear["claims"]) == 6
-
-
-
