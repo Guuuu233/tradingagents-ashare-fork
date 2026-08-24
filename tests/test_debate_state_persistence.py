@@ -43,11 +43,95 @@ class TestDebateStatePayloadExtraction:
                 "max_retries": 1,
             },
         }
+        inv_before = deepcopy(final_state["investment_debate_state"])
         payload = main._build_result_payload(final_state)
 
-        assert payload["investment_debate_state"] == final_state["investment_debate_state"]
+        # Legacy nested state without P1-M keys must remain verbatim identical
+        assert payload["investment_debate_state"] == inv_before
         assert payload["risk_debate_state"] == final_state["risk_debate_state"]
         assert payload["risk_feedback_state"] == final_state["risk_feedback_state"]
+        # Input investment_debate_state original object must not be mutated
+        assert final_state["investment_debate_state"] == inv_before
+        # Top-level canonical metadata and metrics must be mounted and readable
+        assert payload["protocol_version"] == "v1_legacy"
+        assert payload["protocol_stage"] == "opening"
+        assert payload["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert payload["tiebreak_skipped"] is False
+        assert payload["debate_degenerate"] is False
+        assert payload["challenge_verification"] == []
+        assert payload["shadow_credit_metrics"] == {}
+        assert isinstance(payload["data_utilization_metrics"], dict)
+
+    def test_build_result_payload_mounts_p1_m_when_nested_state_has_keys(self):
+        initial_inv = {
+            "protocol_version": "v1_legacy",
+            "protocol_stage": "opening",
+            "tiebreak_skipped": False,
+            "debate_degenerate": False,
+            "data_utilization_metrics": {},
+            "challenge_verification": [],
+            "shadow_credit_metrics": {},
+            "feature_flags": {
+                "v2_debate_enabled": False,
+                "shadow_credit_enabled": True,
+                "credit_weighting_enabled": False,
+            },
+            "count": 6,
+            "bull_history": "多头观点",
+            "bear_history": "空头观点",
+            "judge_decision": "多头胜",
+            "claims": [{"claim_id": "INV-1", "claim": "多头主张", "confidence": 0.85}],
+            "round_messages": _DEFAULT_ROUND_MESSAGES,
+        }
+        final_state = {
+            "company_of_interest": "600519.SH",
+            "horizon": "short",
+            "trade_date": "2026-08-20",
+            "investment_plan": "测试投资计划",
+            "trader_investment_plan": "测试交易计划",
+            "final_trade_decision": "买入",
+            "investment_debate_state": deepcopy(initial_inv),
+            "market_data_context": {"daily": {"as_of": "2026-08-20"}, "data_failure_ledger": []},
+        }
+        inv_before = deepcopy(final_state["investment_debate_state"])
+        payload = main._build_result_payload(final_state)
+
+        # Input final_state investment_debate_state must NOT be mutated in-place
+        assert final_state["investment_debate_state"] == inv_before
+
+        # Top-level P1-M fields
+        assert payload["protocol_version"] == "v1_legacy"
+        assert payload["protocol_stage"] == "opening"
+        assert payload["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert payload["tiebreak_skipped"] is False
+        assert payload["debate_degenerate"] is False
+        assert isinstance(payload["data_utilization_metrics"], dict)
+        assert "seven_reports_utilization" in payload["data_utilization_metrics"]
+        assert "evidence_recycling" in payload["data_utilization_metrics"]
+        assert "field_completeness" in payload["data_utilization_metrics"]
+        assert "challenge_metrics" in payload["data_utilization_metrics"]
+        assert payload["data_utilization_metrics"]["challenge_metrics"]["challenge_count"]["status"] == "legacy_no_data"
+
+        # Nested investment_debate_state shallow copy must be mounted with P1-M fields
+        nested = payload["investment_debate_state"]
+        assert nested is not None
+        assert nested["protocol_version"] == "v1_legacy"
+        assert nested["protocol_stage"] == "opening"
+        assert nested["feature_flags"] == {
+            "v2_debate_enabled": False,
+            "shadow_credit_enabled": True,
+            "credit_weighting_enabled": False,
+        }
+        assert nested["data_utilization_metrics"] == payload["data_utilization_metrics"]
+        assert len(nested["round_messages"]) == 6
 
     def test_build_result_payload_handles_none_debate_states(self):
         final_state = {
@@ -124,6 +208,62 @@ class TestHorizonResultDebateStates:
         assert result.get("risk_feedback_state") is None
 
 
+_DEFAULT_ROUND_MESSAGES = [
+    {
+        "debate_round": 1,
+        "message_index": 1,
+        "speaker_key": "Bull",
+        "cleaned_prose": "多头第一轮发言：看好后市。",
+        "new_claim_ids": ["INV-1"],
+        "accepted": True,
+        "parse_status": "valid",
+    },
+    {
+        "debate_round": 1,
+        "message_index": 2,
+        "speaker_key": "Bear",
+        "cleaned_prose": "空头第一轮发言：警惕估值回调。",
+        "responded_claim_ids": ["INV-1"],
+        "accepted": True,
+        "parse_status": "valid",
+    },
+    {
+        "debate_round": 2,
+        "message_index": 3,
+        "speaker_key": "Bull",
+        "cleaned_prose": "多头第二轮发言：基本面稳健。",
+        "new_claim_ids": ["INV-2"],
+        "accepted": True,
+        "parse_status": "valid",
+    },
+    {
+        "debate_round": 2,
+        "message_index": 4,
+        "speaker_key": "Bear",
+        "cleaned_prose": "空头第二轮发言：增速放缓。",
+        "responded_claim_ids": ["INV-2"],
+        "accepted": True,
+        "parse_status": "valid",
+    },
+    {
+        "debate_round": 3,
+        "message_index": 5,
+        "speaker_key": "Bull",
+        "cleaned_prose": "多头第三轮发言：催化剂落地。",
+        "accepted": True,
+        "parse_status": "valid",
+    },
+    {
+        "debate_round": 3,
+        "message_index": 6,
+        "speaker_key": "Bear",
+        "cleaned_prose": "空头第三轮发言：注意宏观风险。",
+        "accepted": True,
+        "parse_status": "valid",
+    },
+]
+
+
 class _FakePropagator:
     def __init__(self, horizon):
         self.horizon = horizon
@@ -156,11 +296,24 @@ class _FakeGraphStream:
             "investment_plan": f"{horizon} 投资计划",
             "trader_investment_plan": f"{horizon} 交易计划",
             "investment_debate_state": {
+                "protocol_version": "v1_legacy",
+                "protocol_stage": "opening",
+                "tiebreak_skipped": False,
+                "debate_degenerate": False,
+                "data_utilization_metrics": {},
+                "challenge_verification": [],
+                "shadow_credit_metrics": {},
+                "feature_flags": {
+                    "v2_debate_enabled": False,
+                    "shadow_credit_enabled": True,
+                    "credit_weighting_enabled": False,
+                },
                 "count": 6,
                 "bull_history": f"{horizon} 多头观点",
                 "bear_history": f"{horizon} 空头观点",
                 "judge_decision": f"{horizon} 多头胜",
                 "claims": [{"claim_id": "INV-1", "claim": "多头主张", "confidence": 0.85}],
+                "round_messages": deepcopy(_DEFAULT_ROUND_MESSAGES),
             },
             "risk_debate_state": {
                 "count": 9,
@@ -192,16 +345,29 @@ class _FakeGraphStream:
                 "market_data_context": init_state.get("market_data_context"),
                 "analyst_traces": [{"horizon": horizon, "analyst": "news"}],
             }
-            # 2. investment_debate_state count=6, Bull/Bear history/judge/claims
+            # 2. investment_debate_state count=6, Bull/Bear history/judge/claims, v1 metadata & round_messages
             yield {
                 "investment_plan": f"{horizon} 投资计划",
                 "investment_debate_state": {
+                    "protocol_version": "v1_legacy",
+                    "protocol_stage": "opening",
+                    "tiebreak_skipped": False,
+                    "debate_degenerate": False,
+                    "data_utilization_metrics": {},
+                    "challenge_verification": [],
+                    "shadow_credit_metrics": {},
+                    "feature_flags": {
+                        "v2_debate_enabled": False,
+                        "shadow_credit_enabled": True,
+                        "credit_weighting_enabled": False,
+                    },
                     "count": 6,
                     "history": f"{horizon} 多空辩论历史",
                     "bull_history": f"{horizon} 多头观点",
                     "bear_history": f"{horizon} 空头观点",
                     "judge_decision": f"{horizon} 多头胜",
                     "claims": [{"claim_id": "INV-1", "claim": "多头主张", "confidence": 0.85}],
+                    "round_messages": deepcopy(_DEFAULT_ROUND_MESSAGES),
                 },
             }
             # 3. risk_debate_state count=9, 三方 history/judge/claims
@@ -454,16 +620,59 @@ class TestJobExecutionDebatePersistence:
             assert job["status"] == "completed"
             result_data = job["result"]
 
-            assert result_data["investment_debate_state"]["judge_decision"] == "short 多头胜"
-            assert result_data["investment_debate_state"]["count"] == 6
-            assert len(result_data["investment_debate_state"]["claims"]) == 1
+            # Top-level P1-M metadata and metrics on streaming path
+            assert result_data["protocol_version"] == "v1_legacy"
+            assert result_data["protocol_stage"] == "opening"
+            assert result_data["feature_flags"] == {
+                "v2_debate_enabled": False,
+                "shadow_credit_enabled": True,
+                "credit_weighting_enabled": False,
+            }
+            assert result_data["tiebreak_skipped"] is False
+            assert result_data["debate_degenerate"] is False
+            assert result_data["challenge_verification"] == []
+            assert result_data["shadow_credit_metrics"] == {}
+            assert isinstance(result_data["data_utilization_metrics"], dict)
+            assert "evidence_recycling" in result_data["data_utilization_metrics"]
+            assert "seven_reports_utilization" in result_data["data_utilization_metrics"]
+            assert "field_completeness" in result_data["data_utilization_metrics"]
+            assert "challenge_metrics" in result_data["data_utilization_metrics"]
+            assert result_data["data_utilization_metrics"]["challenge_metrics"]["challenge_count"]["status"] == "legacy_no_data"
+
+            # Nested investment_debate_state P1-M fields and debate fields
+            inv_state = result_data["investment_debate_state"]
+            assert inv_state["protocol_version"] == "v1_legacy"
+            assert inv_state["protocol_stage"] == "opening"
+            assert inv_state["feature_flags"] == {
+                "v2_debate_enabled": False,
+                "shadow_credit_enabled": True,
+                "credit_weighting_enabled": False,
+            }
+            assert inv_state["tiebreak_skipped"] is False
+            assert inv_state["debate_degenerate"] is False
+            assert inv_state["data_utilization_metrics"] == result_data["data_utilization_metrics"]
+            assert inv_state["judge_decision"] == "short 多头胜"
+            assert inv_state["count"] == 6
+            assert len(inv_state["claims"]) == 1
+            assert len(inv_state["round_messages"]) == 6
             assert result_data["risk_debate_state"]["judge_decision"] == "short 风控通过"
             assert result_data["risk_debate_state"]["count"] == 9
             assert len(result_data["risk_debate_state"]["claims"]) == 1
             assert result_data["risk_feedback_state"]["latest_risk_verdict"] == "pass"
 
+            # Saved report in ReportDB must also persist all P1-M fields
             assert len(saved_reports) == 1
             saved = saved_reports[0]["result_data"]
+            assert saved["protocol_version"] == "v1_legacy"
+            assert saved["protocol_stage"] == "opening"
+            assert saved["feature_flags"] == {
+                "v2_debate_enabled": False,
+                "shadow_credit_enabled": True,
+                "credit_weighting_enabled": False,
+            }
+            assert saved["data_utilization_metrics"] == result_data["data_utilization_metrics"]
+            assert saved["investment_debate_state"]["protocol_version"] == "v1_legacy"
+            assert len(saved["investment_debate_state"]["round_messages"]) == 6
             assert saved["investment_debate_state"]["judge_decision"] == "short 多头胜"
             assert saved["investment_debate_state"]["count"] == 6
             assert saved["risk_debate_state"]["judge_decision"] == "short 风控通过"
