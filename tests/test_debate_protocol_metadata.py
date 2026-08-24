@@ -1,6 +1,8 @@
 """Tests for debate protocol metadata, feature flags, and backward compatible serialization (P1-M1)."""
 
+import copy
 import json
+from unittest.mock import MagicMock, patch
 import pytest
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
@@ -9,6 +11,8 @@ from tradingagents.agents.utils.agent_states import (
     get_protocol_metadata,
     normalize_protocol_metadata,
 )
+from tradingagents.graph.propagation import Propagator
+from tradingagents.graph.trading_graph import TradingAgentsGraph
 from api.services.report_service import canonicalize_report_result_data
 
 
@@ -217,3 +221,148 @@ def test_invest_debate_state_typeddict_typing():
     }
     assert state["protocol_version"] == "v1_legacy"
     assert state["feature_flags"]["v2_debate_enabled"] is False
+
+
+def test_propagator_create_initial_state_has_default_protocol_metadata():
+    """RED 1: Propagator.create_initial_state must populate default protocol metadata on investment_debate_state."""
+    propagator = Propagator()
+    state = propagator.create_initial_state("601318.SH", "2026-08-21")
+    inv = state["investment_debate_state"]
+
+    assert inv.get("protocol_version") == "v1_legacy"
+    assert inv.get("protocol_stage") == "opening"
+    assert inv.get("tiebreak_skipped") is False
+    assert inv.get("debate_degenerate") is False
+    assert inv.get("data_utilization_metrics") == {}
+    assert inv.get("challenge_verification") == []
+    assert inv.get("shadow_credit_metrics") == {}
+    assert inv.get("feature_flags") == {
+        "v2_debate_enabled": False,
+        "shadow_credit_enabled": True,
+        "credit_weighting_enabled": False,
+    }
+
+    # Verify deepcopy isolation: mutating inv's nested dicts must not affect DEFAULT_PROTOCOL_METADATA
+    inv["feature_flags"]["v2_debate_enabled"] = True
+    assert DEFAULT_PROTOCOL_METADATA["feature_flags"]["v2_debate_enabled"] is False
+    inv["data_utilization_metrics"]["test"] = 123
+    assert DEFAULT_PROTOCOL_METADATA["data_utilization_metrics"] == {}
+
+
+def test_build_horizon_result_mounts_protocol_metadata_and_metrics():
+    """RED 2: TradingAgentsGraph._build_horizon_result mounts canonical protocol metadata and calculated metrics."""
+    with patch("tradingagents.graph.trading_graph.create_llm_client"), \
+         patch("tradingagents.graph.trading_graph.FinancialSituationMemory"), \
+         patch("tradingagents.graph.trading_graph.GraphSetup"), \
+         patch("tradingagents.graph.trading_graph.ConditionalLogic"), \
+         patch("tradingagents.graph.trading_graph.Propagator"), \
+         patch("tradingagents.graph.trading_graph.Reflector"), \
+         patch("tradingagents.graph.trading_graph.SignalProcessor"), \
+         patch("tradingagents.graph.trading_graph.set_config"):
+        ta = TradingAgentsGraph.__new__(TradingAgentsGraph)
+        ta.debug = False
+        ta.config = {}
+        ta.callbacks = []
+        ta.ticker = None
+        ta.log_states_dict = {}
+
+    initial_inv_state = Propagator().create_initial_state("601318.SH", "2026-08-21")["investment_debate_state"]
+    initial_inv_state.update({
+        "history": "辩论内容",
+        "bull_history": "多头发言",
+        "bear_history": "空头发言",
+        "current_speaker": "Bull",
+        "current_response": "多头观点",
+        "judge_decision": "多头胜",
+        "count": 4,
+        "claims": [
+            {"claim_id": "INV-1", "speaker_key": "Bull", "evidence": ["营收 150 亿", "毛利率 25%"]},
+        ],
+        "round_messages": [],
+        "focus_claim_ids": [],
+        "open_claim_ids": [],
+        "resolved_claim_ids": ["INV-1"],
+        "unresolved_claim_ids": [],
+        "round_summary": "第一轮总结",
+        "round_goal": "多空辩论",
+        "claim_counter": 1,
+        "manager_verdict": {
+            "claim_evidence_summary": {
+                "INV-1": {"speaker_key": "Bull", "counts": {"total": 2, "verified": 2}},
+            }
+        },
+    })
+
+    final_state = {
+        "company_of_interest": "601318.SH",
+        "trade_date": "2026-08-21",
+        "horizon": "short",
+        "market_report": "支撑位 50.0 元",
+        "fundamentals_report": "营业收入 150 亿，毛利率 25%",
+        "macro_report": "GDP 预期 3.5%，通过产业链传导与外围联动。",
+        "sentiment_report": "",
+        "news_report": "",
+        "smart_money_report": "",
+        "volume_price_report": "",
+        "final_trade_decision": "买入",
+        "investment_plan": "投资计划",
+        "trader_investment_plan": "交易计划",
+        "market_data_context": {"data_failure_ledger": []},
+        "investment_debate_state": copy.deepcopy(initial_inv_state),
+        "manager_verdict": {
+            "claim_evidence_summary": {
+                "INV-1": {"speaker_key": "Bull", "counts": {"total": 2, "verified": 2}},
+            }
+        },
+    }
+
+    # Snapshot of final_state before call to verify observer pure function (no mutation)
+    final_state_before = copy.deepcopy(final_state)
+
+    result = ta._build_horizon_result("short", final_state)
+
+    # 1. Verify observer pure function: final_state investment_debate_state was NOT mutated
+    assert final_state["investment_debate_state"] == final_state_before["investment_debate_state"]
+
+    # 2. Verify top-level and normalized metadata
+    meta = get_protocol_metadata(result)
+    assert meta["protocol_version"] == "v1_legacy"
+    assert meta["protocol_stage"] == "opening"
+    assert meta["tiebreak_skipped"] is False
+    assert meta["debate_degenerate"] is False
+    assert meta["feature_flags"] == {
+        "v2_debate_enabled": False,
+        "shadow_credit_enabled": True,
+        "credit_weighting_enabled": False,
+    }
+    assert result.get("protocol_version") == "v1_legacy"
+    assert result.get("feature_flags") == {
+        "v2_debate_enabled": False,
+        "shadow_credit_enabled": True,
+        "credit_weighting_enabled": False,
+    }
+
+    # 3. Verify data_utilization_metrics output from real pure function
+    metrics = result.get("data_utilization_metrics")
+    assert isinstance(metrics, dict)
+    assert "seven_reports_utilization" in metrics
+    assert metrics["seven_reports_utilization"]["status"] == "valid"
+    assert metrics["seven_reports_utilization"]["numerator"] >= 1
+    assert metrics["seven_reports_utilization"]["denominator"] >= 1
+    assert metrics["seven_reports_utilization"]["rate"] is not None
+    assert metrics["seven_reports_utilization"]["version"] == "v1_legacy"
+
+    # 4. Verify legacy challenge status is legacy_no_data
+    challenge_m = metrics.get("challenge_metrics")
+    assert challenge_m is not None
+    assert challenge_m["challenge_count"]["status"] == "legacy_no_data"
+    assert challenge_m["challenge_adoption_rate"]["status"] == "legacy_no_data"
+
+    # 5. Verify existing fields, count, history are preserved verbatim
+    inv_res = result.get("investment_debate_state")
+    assert inv_res is not None
+    assert inv_res["count"] == 4
+    assert inv_res["bull_history"] == "多头发言"
+    assert inv_res["bear_history"] == "空头发言"
+    assert inv_res["judge_decision"] == "多头胜"
+    assert result["final_trade_decision"] == "买入"

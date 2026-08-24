@@ -42,6 +42,8 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .report_quality_gate import apply_report_quality_gate
 from .signal_processing import SignalProcessor
+from tradingagents.agents.utils.agent_states import get_protocol_metadata
+from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
 
 
 _logger = logging.getLogger(__name__)
@@ -438,7 +440,10 @@ class TradingAgentsGraph:
             for entry in failure_ledger
             if isinstance(entry, dict) and entry.get("gap")
         ]
-        return {
+        raw_inv_state = final_state.get("investment_debate_state")
+        inv_state = dict(raw_inv_state) if isinstance(raw_inv_state, dict) else None
+
+        result = {
             "horizon": horizon,
             "company_of_interest": final_state.get("company_of_interest", ""),
             "trade_date": trade_date,
@@ -450,10 +455,10 @@ class TradingAgentsGraph:
             "final_trade_decision": final_state.get("final_trade_decision", ""),
             "investment_plan": final_state.get("investment_plan", ""),
             "trader_investment_plan": final_state.get("trader_investment_plan", ""),
-            "investment_debate_state": final_state.get("investment_debate_state"),
-            "manager_verdict": final_state.get("manager_verdict") or (final_state.get("investment_debate_state", {}).get("manager_verdict") if isinstance(final_state.get("investment_debate_state"), dict) else None),
-            "evidence_verification": final_state.get("evidence_verification") or (final_state.get("investment_debate_state", {}).get("evidence_verification") if isinstance(final_state.get("investment_debate_state"), dict) else []),
-            "report_manifest": final_state.get("report_manifest") or (final_state.get("investment_debate_state", {}).get("report_manifest") if isinstance(final_state.get("investment_debate_state"), dict) else None),
+            "investment_debate_state": inv_state,
+            "manager_verdict": final_state.get("manager_verdict") or (raw_inv_state.get("manager_verdict") if isinstance(raw_inv_state, dict) else None),
+            "evidence_verification": final_state.get("evidence_verification") or (raw_inv_state.get("evidence_verification") if isinstance(raw_inv_state, dict) else []),
+            "report_manifest": final_state.get("report_manifest") or (raw_inv_state.get("report_manifest") if isinstance(raw_inv_state, dict) else None),
             "risk_debate_state": final_state.get("risk_debate_state"),
             "risk_feedback_state": final_state.get("risk_feedback_state"),
             "fund_flow_consensus_guard": final_state.get("fund_flow_consensus_guard", {"blocked": True, "direction_allowed": False, "status": "not_checked"}),
@@ -466,6 +471,36 @@ class TradingAgentsGraph:
             "smart_money_report": final_state.get("smart_money_report", ""),
             "volume_price_report": final_state.get("volume_price_report", ""),
         }
+
+        # Normalize protocol metadata and compute debate metrics without mutating final_state
+        meta = get_protocol_metadata(final_state)
+        data_utilization_metrics = calculate_all_debate_metrics(result)
+
+        if inv_state is not None:
+            if (
+                "protocol_version" in raw_inv_state
+                or "feature_flags" in raw_inv_state
+                or "data_utilization_metrics" in raw_inv_state
+            ):
+                inv_state["protocol_version"] = meta["protocol_version"]
+                inv_state["protocol_stage"] = meta["protocol_stage"]
+                inv_state["tiebreak_skipped"] = meta["tiebreak_skipped"]
+                inv_state["debate_degenerate"] = meta["debate_degenerate"]
+                inv_state["data_utilization_metrics"] = data_utilization_metrics
+                inv_state["challenge_verification"] = meta["challenge_verification"]
+                inv_state["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+                inv_state["feature_flags"] = meta["feature_flags"]
+
+        result["protocol_version"] = meta["protocol_version"]
+        result["protocol_stage"] = meta["protocol_stage"]
+        result["tiebreak_skipped"] = meta["tiebreak_skipped"]
+        result["debate_degenerate"] = meta["debate_degenerate"]
+        result["data_utilization_metrics"] = data_utilization_metrics
+        result["challenge_verification"] = meta["challenge_verification"]
+        result["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+        result["feature_flags"] = meta["feature_flags"]
+
+        return result
 
     @staticmethod
     def _safe_ticker(ticker: str) -> str:

@@ -1,7 +1,9 @@
 # TradingAgents/graph/propagation.py
 
+import copy
 from typing import Dict, Any, List, Optional, Mapping
 from tradingagents.agents.utils.agent_states import (
+    DEFAULT_PROTOCOL_METADATA,
     InvestDebateState,
     RiskDebateState,
 )
@@ -59,6 +61,26 @@ class Propagator:
             f"{summarize_market_context(market_context)}\n"
             f"{user_context_summary}"
         )
+        investment_debate_state_dict: Dict[str, Any] = {
+            "history": "",
+            "bull_history": "",
+            "bear_history": "",
+            "current_speaker": "",
+            "current_response": "",
+            "judge_decision": "",
+            "count": 0,
+            "claims": [],
+            "round_messages": [],
+            "focus_claim_ids": [],
+            "open_claim_ids": [],
+            "resolved_claim_ids": [],
+            "unresolved_claim_ids": [],
+            "round_summary": "",
+            "round_goal": default_round_goal("investment", 1),
+            "claim_counter": 0,
+            "attempts": [],
+        }
+        investment_debate_state_dict.update(copy.deepcopy(DEFAULT_PROTOCOL_METADATA))
         state: Dict[str, Any] = {
             "messages": [("human", user_prompt_context)],
             "company_of_interest": company_name,
@@ -75,27 +97,7 @@ class Propagator:
                 "analysis_baseline_date": str(trade_date),
                 "data_as_of": market_context.get("data_as_of"),
             },
-            "investment_debate_state": InvestDebateState(
-                {
-                    "history": "",
-                    "bull_history": "",
-                    "bear_history": "",
-                    "current_speaker": "",
-                    "current_response": "",
-                    "judge_decision": "",
-                    "count": 0,
-                    "claims": [],
-                    "round_messages": [],
-                    "focus_claim_ids": [],
-                    "open_claim_ids": [],
-                    "resolved_claim_ids": [],
-                    "unresolved_claim_ids": [],
-                    "round_summary": "",
-                    "round_goal": default_round_goal("investment", 1),
-                    "claim_counter": 0,
-                    "attempts": [],
-                }
-            ),
+            "investment_debate_state": InvestDebateState(investment_debate_state_dict),
             "risk_debate_state": RiskDebateState(build_empty_risk_debate_state()),
             "risk_feedback_state": {
                 "retry_count": 0,
