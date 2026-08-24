@@ -929,8 +929,19 @@ def validate_debate_response(
 
     if domain == "investment":
         v2_enabled = is_v2_debate_enabled(state)
-        current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
-        is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
+        explicit_stage = state.get("protocol_stage")
+        if explicit_stage is not None and str(explicit_stage).strip():
+            current_stage = str(explicit_stage).strip().lower()
+        else:
+            if message_index <= 2:
+                current_stage = "opening"
+            elif message_index in (3, 4):
+                current_stage = "challenge"
+            else:
+                current_stage = "tiebreak"
+
+        is_opening_stage = v2_enabled and current_stage == "opening"
+        is_challenge_stage = v2_enabled and current_stage == "challenge"
 
         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
@@ -1001,6 +1012,159 @@ def validate_debate_response(
                 )
                 logger.warning("[debate_utils] protocol violation: %s", detail)
                 return False, "invalid_protocol", detail, payload
+
+        elif is_challenge_stage:
+            # ── C2 Challenge 阶段专属契约与硬闸 ──────────────────────────
+            # 1. new_claims 必须严格为空数组 []
+            new_claims_list = payload.get("new_claims") or []
+            if new_claims_list:
+                detail = (
+                    f"Challenge 阶段 ({speaker_key}) 必须聚焦反驳对手已有立论，禁止提出 new_claims，"
+                    f"new_claims 必须严格为空数组 [] (当前 new_claims 数量: {len(new_claims_list)})"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 2. challenges 至少包含 1 条
+            raw_challenges = payload.get("challenges") or []
+            if not raw_challenges:
+                detail = (
+                    f"Challenge 阶段 ({speaker_key}) 必须包含至少 1 条 challenges "
+                    f"(当前 challenges 数量: {len(raw_challenges)})"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 3. self_win_prob 必须存在且为有限 0..1
+            if "self_win_prob" not in payload or payload.get("self_win_prob") is None:
+                detail = (
+                    f"Challenge 阶段 ({speaker_key}) 必须显式提供 self_win_prob (0.0 到 1.0 的有限数值)"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 4. 每条 challenge 的字段校验 (target_claim_id, weakest_point, evidence, severity)
+            target_ids_in_challenges = set()
+            for ch_idx, ch in enumerate(raw_challenges, start=1):
+                target_id = str(ch.get("target_claim_id") or "").strip()
+                if not target_id:
+                    detail = f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 target_claim_id 不能为空"
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                if target_id not in claim_map:
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 target_claim_id '{target_id}' "
+                        f"不存在于 claim 账本中 (现有 claim: {list(claim_map.keys())})"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                target_claim = claim_map[target_id]
+                is_opponent = (
+                    target_claim.get("speaker_key") and target_claim.get("speaker_key") != speaker_key
+                ) or (target_claim.get("stance") and target_claim.get("stance") != stance)
+                if not is_opponent:
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 target_claim_id '{target_id}' "
+                        f"不属于对手 claim (属于同侧 {speaker_key})"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                if target_claim.get("status") == "resolved":
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 target_claim_id '{target_id}' "
+                        f"状态已为 resolved，不可作为 challenge 目标"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                weakest_point = str(ch.get("weakest_point") or "").strip()
+                if not weakest_point:
+                    detail = f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 weakest_point 不能为空"
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+                if len(weakest_point) > 500:
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 weakest_point "
+                        f"长度超出上限 500 字符 (当前长度: {len(weakest_point)})"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                ch_ev = [str(item).strip() for item in (ch.get("evidence") or []) if str(item).strip()]
+                if not ch_ev:
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 evidence 必须提供至少 1 条非空证据"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                severity = str(ch.get("severity") or "").strip().lower()
+                if severity not in {"fatal", "major", "minor"}:
+                    detail = (
+                        f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 的 severity "
+                        f"必须为 fatal、major 或 minor 之一 (当前: {repr(ch.get('severity'))})"
+                    )
+                    logger.warning("[debate_utils] protocol violation: %s", detail)
+                    return False, "invalid_protocol", detail, payload
+
+                target_ids_in_challenges.add(target_id)
+
+            # 5. responded_claim_ids 必须包含所有被 challenge 的 target_claim_id
+            raw_responded = set(_string_list(payload.get("responded_claim_ids")))
+            if not target_ids_in_challenges.issubset(raw_responded):
+                missing_targets = sorted(target_ids_in_challenges - raw_responded)
+                detail = (
+                    f"Challenge 阶段 ({speaker_key}) responded_claim_ids 必须包含所有被 challenge 的 target_claim_id "
+                    f"(缺失: {missing_targets}, 当前 responded_claim_ids: {sorted(raw_responded)})"
+                )
+                logger.warning("[debate_utils] protocol violation: %s", detail)
+                return False, "invalid_protocol", detail, payload
+
+            # 6. duplicate 校验: 同speaker + 同target + (normalize_text(weakest_point)完全相同 或 similarity >= 0.82)
+            historical_challenges = [
+                c for c in (state.get("challenges", []) or [])
+                if isinstance(c, Mapping)
+                and (
+                    (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+                    or (c.get("speaker") and c.get("speaker") == speaker_key)
+                )
+            ]
+            seen_challenges: list[dict[str, Any]] = list(historical_challenges)
+
+            for ch_idx, ch in enumerate(raw_challenges, start=1):
+                target_id = str(ch.get("target_claim_id") or "").strip()
+                wp = str(ch.get("weakest_point") or "").strip()
+                norm_wp = normalize_text(wp)
+
+                for prev_ch in seen_challenges:
+                    prev_target = str(prev_ch.get("target_claim_id") or "").strip()
+                    if prev_target != target_id:
+                        continue
+                    prev_wp = str(prev_ch.get("weakest_point") or "").strip()
+                    prev_norm_wp = normalize_text(prev_wp)
+
+                    is_dup = False
+                    sim = 0.0
+                    if norm_wp and prev_norm_wp and norm_wp == prev_norm_wp:
+                        is_dup = True
+                        sim = 1.0
+                    else:
+                        sim = compute_claim_similarity(wp, prev_wp)
+                        if sim >= 0.82:
+                            is_dup = True
+
+                    if is_dup:
+                        detail = (
+                            f"Challenge 阶段 ({speaker_key}) 第 {ch_idx} 条 challenge 针对同一目标 '{target_id}' "
+                            f"存在重复弱点观点 (最高相似度 {sim:.2f} >= 0.82 或规范化文本完全相同: '{wp}' 与 '{prev_wp}')"
+                        )
+                        logger.warning("[debate_utils] protocol violation: %s", detail)
+                        return False, "invalid_protocol", detail, payload
+
+                seen_challenges.append(ch)
 
         else:
             # ── Legacy 规则 (及 v1 非 opening 逻辑) ───────────────────────
@@ -1136,10 +1300,21 @@ def _record_unstructured_response(
     current_count = safe_int(state.get("count", 0), 0)
     message_index = current_count + 1
     v2_enabled = is_v2_debate_enabled(state)
-    current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
-    if v2_enabled and message_index <= 2:
-        current_stage = "opening"
+    explicit_stage = state.get("protocol_stage")
+    if explicit_stage is not None and str(explicit_stage).strip():
+        current_stage = str(explicit_stage).strip().lower()
+    else:
+        if message_index <= 2:
+            current_stage = "opening"
+        elif message_index in (3, 4):
+            current_stage = "challenge"
+        else:
+            current_stage = "tiebreak"
+
+    if v2_enabled and current_stage == "opening":
         debate_round = 1
+    elif v2_enabled and current_stage == "challenge":
+        debate_round = 2
     else:
         debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
 
@@ -1279,10 +1454,22 @@ def update_debate_state_with_payload(
     current_count = safe_int(state.get("count", 0), 0)
     message_index = current_count + 1
     v2_enabled = is_v2_debate_enabled(state)
-    current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
-    if v2_enabled and message_index <= 2:
-        current_stage = "opening"
+    explicit_stage = state.get("protocol_stage")
+    if explicit_stage is not None and str(explicit_stage).strip():
+        current_stage = str(explicit_stage).strip().lower()
+    else:
+        if message_index <= 2:
+            current_stage = "opening"
+        elif message_index in (3, 4):
+            current_stage = "challenge"
+        else:
+            current_stage = "tiebreak"
+
+    is_challenge_stage = v2_enabled and current_stage == "challenge"
+    if v2_enabled and current_stage == "opening":
         debate_round = 1
+    elif is_challenge_stage:
+        debate_round = 2
     else:
         debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
 
@@ -1295,6 +1482,10 @@ def update_debate_state_with_payload(
 
     cleaned_response = strip_tagged_json(raw_response, marker)
     claim_counter = safe_int(state.get("claim_counter", 0), 0)
+    challenge_counter = safe_int(state.get("challenge_counter", 0), 0)
+    challenges = [dict(item) for item in (state.get("challenges", []) or []) if isinstance(item, Mapping)]
+    new_challenge_ids: list[str] = []
+
     responded_claim_ids = _filter_known_claim_ids(payload.get("responded_claim_ids"), claim_map)
     resolved_claim_ids = _filter_known_claim_ids(payload.get("resolved_claim_ids"), claim_map)
     unresolved_claim_ids = _filter_known_claim_ids(payload.get("unresolved_claim_ids"), claim_map)
@@ -1321,6 +1512,35 @@ def update_debate_state_with_payload(
         unresolved_set.add(claim_id)
         resolved_set.discard(claim_id)
 
+    # Process challenges in challenge stage
+    if is_challenge_stage:
+        for ch_payload in payload.get("challenges", []) or []:
+            target_id = str(ch_payload.get("target_claim_id") or "").strip()
+            wp = str(ch_payload.get("weakest_point") or "").strip()
+            ev = [str(item).strip() for item in (ch_payload.get("evidence") or []) if str(item).strip()]
+            sev = str(ch_payload.get("severity") or "major").strip().lower()
+            if sev not in {"fatal", "major", "minor"}:
+                sev = "major"
+            challenge_counter += 1
+            ch_id = f"CH-{challenge_counter}"
+            challenge_entry = {
+                "challenge_id": ch_id,
+                "speaker": speaker_label,
+                "speaker_key": speaker_key,
+                "stance": stance,
+                "target_claim_id": target_id,
+                "weakest_point": wp,
+                "evidence": ev,
+                "severity": sev,
+                "status": "open",
+                "evidence_status": "unverified",
+                "message_index": message_index,
+                "debate_round": debate_round,
+                "stage": current_stage,
+            }
+            challenges.append(challenge_entry)
+            new_challenge_ids.append(ch_id)
+
     # Process new claims with per-claim duplicate rejection
     same_side_claims = [
         c
@@ -1337,6 +1557,12 @@ def update_debate_state_with_payload(
 
     new_claim_ids = []
     all_target_claim_ids = []
+    if is_challenge_stage:
+        for ch in challenges:
+            if ch.get("message_index") == message_index:
+                t_id = ch.get("target_claim_id")
+                if t_id and t_id in claim_map:
+                    all_target_claim_ids.append(t_id)
     duplicate_claim_ids = []
     duplicate_claims = []
     valid_max_sims = []
@@ -1438,6 +1664,10 @@ def update_debate_state_with_payload(
         "new_evidence_count": new_evidence_count,
         "max_similarity": max_similarity,
     }
+    if is_challenge_stage:
+        round_msg["challenge_ids"] = new_challenge_ids
+    if payload.get("self_win_prob") is not None:
+        round_msg["self_win_prob"] = payload["self_win_prob"]
     if model_name is not None:
         round_msg["model_name"] = model_name
     if attempts:
@@ -1469,10 +1699,16 @@ def update_debate_state_with_payload(
     new_state = dict(state)
     next_protocol_stage = current_stage
     if v2_enabled and domain == "investment":
-        if message_index == 1:
-            next_protocol_stage = "opening"
-        elif message_index == 2:
-            next_protocol_stage = "challenge"
+        if current_stage == "opening":
+            if message_index == 1:
+                next_protocol_stage = "opening"
+            elif message_index >= 2:
+                next_protocol_stage = "challenge"
+        elif current_stage == "challenge":
+            if message_index <= 3:
+                next_protocol_stage = "challenge"
+            elif message_index >= 4:
+                next_protocol_stage = "tiebreak"
         else:
             next_protocol_stage = state.get("protocol_stage", current_stage)
 
@@ -1484,6 +1720,8 @@ def update_debate_state_with_payload(
         "count": message_index,
         "claims": claims,
         "claim_counter": claim_counter,
+        "challenges": challenges,
+        "challenge_counter": challenge_counter,
         "open_claim_ids": sorted(open_claim_ids),
         "resolved_claim_ids": sorted(resolved_set),
         "unresolved_claim_ids": sorted(unresolved_set),
