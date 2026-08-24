@@ -51,8 +51,9 @@ _MACHINE_LIST_FIELDS = (
     "next_focus_claim_ids",
 )
 _MACHINE_TEXT_FIELDS = ("round_summary", "round_goal")
-_MACHINE_FIELDS = frozenset((*_MACHINE_LIST_FIELDS, *_MACHINE_TEXT_FIELDS))
+_MACHINE_FIELDS = frozenset((*_MACHINE_LIST_FIELDS, *_MACHINE_TEXT_FIELDS, "challenges", "self_win_prob"))
 _MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids", "battlefield"))
+_MACHINE_CHALLENGE_FIELDS = frozenset(("challenge_id", "target_claim_id", "weakest_point", "evidence", "severity"))
 
 
 def normalize_text(text: str) -> str:
@@ -386,6 +387,134 @@ def _sanitize_machine_payload(payload: Mapping[str, Any], tag: str) -> dict[str,
             return None
         else:
             normalized[field_name] = value
+
+    raw_challenges = payload.get("challenges")
+    if raw_challenges is None:
+        normalized["challenges"] = []
+    elif not isinstance(raw_challenges, list):
+        _warn_machine_validation(
+            tag,
+            "invalid_schema",
+            "challenges must be an array",
+        )
+        return None
+    else:
+        challenges: list[dict[str, Any]] = []
+        for ch_index, raw_ch in enumerate(raw_challenges, start=1):
+            if not isinstance(raw_ch, Mapping):
+                _warn_machine_validation(
+                    tag,
+                    "invalid_schema",
+                    f"challenge {ch_index} must be an object",
+                )
+                return None
+            unknown_ch_fields = sorted(str(key) for key in raw_ch if key not in _MACHINE_CHALLENGE_FIELDS)
+            if unknown_ch_fields:
+                _warn_machine_validation(
+                    tag,
+                    "unknown_fields",
+                    f"challenge {ch_index} unknown structured fields ignored: {', '.join(unknown_ch_fields)}",
+                )
+
+            ch_dict: dict[str, Any] = {}
+            if "challenge_id" in raw_ch and raw_ch["challenge_id"] is not None:
+                if isinstance(raw_ch["challenge_id"], str) and raw_ch["challenge_id"].strip():
+                    ch_dict["challenge_id"] = raw_ch["challenge_id"].strip()
+                else:
+                    _warn_machine_validation(
+                        tag,
+                        "invalid_schema",
+                        f"challenge {ch_index} challenge_id must be a non-empty string",
+                    )
+                    return None
+
+            target_claim_id = raw_ch.get("target_claim_id")
+            if target_claim_id is not None:
+                if isinstance(target_claim_id, str):
+                    ch_dict["target_claim_id"] = target_claim_id.strip()
+                else:
+                    _warn_machine_validation(
+                        tag,
+                        "invalid_schema",
+                        f"challenge {ch_index} target_claim_id must be a string",
+                    )
+                    return None
+            else:
+                ch_dict["target_claim_id"] = ""
+
+            weakest_point = raw_ch.get("weakest_point")
+            if weakest_point is not None:
+                if isinstance(weakest_point, str):
+                    ch_dict["weakest_point"] = weakest_point.strip()
+                else:
+                    _warn_machine_validation(
+                        tag,
+                        "invalid_schema",
+                        f"challenge {ch_index} weakest_point must be a string",
+                    )
+                    return None
+            else:
+                ch_dict["weakest_point"] = ""
+
+            raw_ev = raw_ch.get("evidence")
+            if raw_ev is None:
+                ch_dict["evidence"] = []
+            elif isinstance(raw_ev, list):
+                ch_dict["evidence"] = [str(item).strip() for item in raw_ev if str(item).strip()]
+            elif isinstance(raw_ev, str):
+                s = raw_ev.strip()
+                ch_dict["evidence"] = [s] if s else []
+            else:
+                _warn_machine_validation(
+                    tag,
+                    "invalid_schema",
+                    f"challenge {ch_index} evidence must be an array or string",
+                )
+                return None
+
+            severity = raw_ch.get("severity")
+            if severity is not None:
+                if isinstance(severity, str):
+                    ch_dict["severity"] = severity.strip()
+                else:
+                    _warn_machine_validation(
+                        tag,
+                        "invalid_schema",
+                        f"challenge {ch_index} severity must be a string",
+                    )
+                    return None
+            else:
+                ch_dict["severity"] = ""
+
+            challenges.append(ch_dict)
+        normalized["challenges"] = challenges
+
+    if "self_win_prob" in payload and payload.get("self_win_prob") is not None:
+        raw_self_win_prob = payload.get("self_win_prob")
+        if isinstance(raw_self_win_prob, bool) or not isinstance(raw_self_win_prob, (int, float, Real)):
+            _warn_machine_validation(
+                tag,
+                "invalid_self_win_prob",
+                "self_win_prob must be a finite number in [0.0, 1.0]",
+            )
+            return None
+        try:
+            prob_float = float(raw_self_win_prob)
+        except (TypeError, ValueError, OverflowError):
+            _warn_machine_validation(
+                tag,
+                "invalid_self_win_prob",
+                "self_win_prob must be a finite number in [0.0, 1.0]",
+            )
+            return None
+        if not math.isfinite(prob_float) or not (0.0 <= prob_float <= 1.0):
+            _warn_machine_validation(
+                tag,
+                "invalid_self_win_prob",
+                "self_win_prob must be a finite number in [0.0, 1.0]",
+            )
+            return None
+        normalized["self_win_prob"] = prob_float
 
     claims: list[dict[str, Any]] = []
     for claim_index, raw_claim in enumerate(normalized["new_claims"], start=1):
@@ -802,6 +931,7 @@ def validate_debate_response(
         v2_enabled = is_v2_debate_enabled(state)
         current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
         is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
+        is_challenge_stage = v2_enabled and current_stage == "challenge" and message_index > 2
 
         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
@@ -872,6 +1002,12 @@ def validate_debate_response(
                 )
                 logger.warning("[debate_utils] protocol violation: %s", detail)
                 return False, "invalid_protocol", detail, payload
+
+        elif is_challenge_stage:
+            # ── C1 Challenge Foundation ──────────────────────────────────
+            # C1 foundation layer: schema & sanitizer validation only.
+            # Protocol hard gates (new_claims=[], non-empty challenges, opponent target, severity enum, duplicate) in C2.
+            pass
 
         else:
             # ── Legacy 规则 (及 v1 非 opening 逻辑) ───────────────────────

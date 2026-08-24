@@ -80,6 +80,7 @@ class Propagator:
             "judge_decision": "",
             "count": 0,
             "claims": [],
+            "challenges": [],
             "round_messages": [],
             "focus_claim_ids": [],
             "open_claim_ids": [],
@@ -88,6 +89,7 @@ class Propagator:
             "round_summary": "",
             "round_goal": default_round_goal("investment", 1),
             "claim_counter": 0,
+            "challenge_counter": 0,
             "attempts": [],
         }
         investment_debate_state_dict.update(protocol_meta)

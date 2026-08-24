@@ -108,6 +108,22 @@ class ManagerVerdict(TypedDict, total=False):
     failed_checks: Annotated[list[str], "List of failed consistency checks"]
 
 
+class Challenge(TypedDict, total=False):
+    challenge_id: Annotated[str, "Unique challenge identifier (e.g. CH-1)"]
+    speaker: Annotated[str, "Speaker label"]
+    speaker_key: Annotated[str, "Speaker key (Bull / Bear)"]
+    stance: Annotated[str, "Speaker stance"]
+    target_claim_id: Annotated[str, "Target opponent claim id being challenged"]
+    weakest_point: Annotated[str, "Identified flaw or weakest point in target claim"]
+    evidence: Annotated[list[str], "Factual evidence items supporting challenge"]
+    severity: Annotated[str, "Severity level: fatal, major, minor"]
+    status: Annotated[str, "Challenge status: open, addressed, resolved, rejected"]
+    message_index: Annotated[int, "Message index where challenge was proposed"]
+    debate_round: Annotated[int, "Debate round index"]
+    stage: Annotated[str, "Debate stage: challenge"]
+    evidence_status: Annotated[str, "Evidence verification status: verified, unsupported, contradicted"]
+
+
 PROTOCOL_VERSION_V1_LEGACY = "v1_legacy"
 PROTOCOL_VERSION_V2_STRUCTURED = "v2_structured_disagreement"
 
@@ -274,6 +290,7 @@ class InvestDebateState(TypedDict):
     judge_decision: Annotated[str, "Final judge decision"]
     count: Annotated[int, "Length of the current conversation"]
     claims: Annotated[list[dict[str, Any]], "Tracked research claims"]
+    challenges: Annotated[list[dict[str, Any]], "Tracked debate challenges"]
     round_messages: Annotated[list[dict[str, Any]], "Tracked round-by-round messages"]
     focus_claim_ids: Annotated[list[str], "Claim ids that must be answered in the next round"]
     open_claim_ids: Annotated[list[str], "Claim ids still open"]
@@ -282,6 +299,7 @@ class InvestDebateState(TypedDict):
     round_summary: Annotated[str, "Summary of the latest debate round"]
     round_goal: Annotated[str, "Current round objective"]
     claim_counter: Annotated[int, "Claim counter for unique ids"]
+    challenge_counter: Annotated[int, "Challenge counter for unique challenge ids"]
     manager_verdict: Annotated[dict[str, Any], "Structured manager verdict"]
     evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]
     report_manifest: Annotated[dict[str, Any], "Input report manifest for seven analysts"]
