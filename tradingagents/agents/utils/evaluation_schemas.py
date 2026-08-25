@@ -48,6 +48,12 @@ from tradingagents.agents.utils.shadow_credit import (
     evaluate_h1b_system_gates,
     evaluate_model_bias_and_weights,
 )
+from tradingagents.dataflows.trade_calendar import (
+    calculate_t_plus_5_date,
+    get_t_plus_n_trading_day,
+    trading_days_forward,
+    _parse_date,
+)
 
 EVALUATION_MATRIX_SCHEMA_VERSION: str = "evaluation_matrix_v1"
 WEEKLY_METRICS_SCHEMA_VERSION: str = "weekly_metrics_v1"
@@ -1013,13 +1019,19 @@ def build_evaluation_metric_matrix(
     market_regime: Optional[str] = None,
     t_plus_5_price: Optional[float] = None,
     t_plus_5_date: Optional[str] = None,
+    trading_calendar: Optional[Sequence[Union[str, date]]] = None,
+    price_series: Optional[Mapping[str, float]] = None,
+    as_of_date: Optional[str] = None,
+    is_suspended: Optional[bool] = None,
     latency_ms: Optional[float] = None,
     token_usage: Optional[Dict[str, int]] = None,
+    model_assignments: Optional[Dict[str, Optional[str]]] = None,
     historical_samples_for_weights: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> EvaluationMetricMatrix:
     """Pure function to build a 4-Quadrant EvaluationMetricMatrix from report/debate state.
 
     Calculates all metrics deterministically without network or LLM calls.
+    Adheres strictly to P3-H2.0 contracts, P2-10.4 data_gaps standards, and A-share trading calendar T+5 calibration.
     """
     data = dict(result_data_or_state or {})
     inv_state = data.get("investment_debate_state")
@@ -1056,10 +1068,17 @@ def build_evaluation_metric_matrix(
     shadow_res = calculate_shadow_credit_metrics(
         data, version=protocol_version, t_plus_5_price=t_plus_5_price
     )
-    model_assignments = shadow_res.get("model_id_by_stance") or {
-        "bull": None,
-        "bear": None,
-        "manager": None,
+    extracted_model_assignments = (
+        model_assignments
+        or data.get("model_assignments")
+        or inv_state.get("model_assignments")
+        or shadow_res.get("model_id_by_stance")
+        or {"bull": None, "bear": None, "manager": None}
+    )
+    final_model_assignments = {
+        "bull": extracted_model_assignments.get("bull") if isinstance(extracted_model_assignments, Mapping) else None,
+        "bear": extracted_model_assignments.get("bear") if isinstance(extracted_model_assignments, Mapping) else None,
+        "manager": extracted_model_assignments.get("manager") if isinstance(extracted_model_assignments, Mapping) else None,
     }
 
     quad_1: ProtocolAndModelMetadata = {
@@ -1074,9 +1093,9 @@ def build_evaluation_metric_matrix(
         "tiebreak_skipped": tiebreak_skipped,
         "debate_degenerate": debate_degenerate,
         "feature_flags": feature_flags,
-        "model_assignments": model_assignments,
-        "latency_ms": latency_ms or data.get("latency_ms"),
-        "token_usage": token_usage or data.get("token_usage"),
+        "model_assignments": final_model_assignments,
+        "latency_ms": latency_ms or data.get("latency_ms") or inv_state.get("latency_ms"),
+        "token_usage": token_usage or data.get("token_usage") or inv_state.get("token_usage"),
         "created_at": data.get("created_at")
         or datetime.now(timezone.utc).isoformat(),
     }
@@ -1158,23 +1177,6 @@ def build_evaluation_metric_matrix(
     macro_util = all_debate_metrics["macro_utilization"]
     fund_util = all_debate_metrics["fundamentals_utilization"]
     role_util = shadow_res.get("analyst_utilization_by_role") or {}
-
-    quad_2: DataSourcesAndGaps = {
-        "data_gaps": classified_gaps,
-        "source_provenance": dict(prov) if isinstance(prov, Mapping) else {},
-        "gaps_summary": {
-            "total_gaps": len(classified_gaps),
-            "structural_count": structural_cnt,
-            "operational_count": operational_cnt,
-            "resident_fault_count": operational_cnt,
-        },
-        "data_utilization": {
-            "seven_reports_utilization": seven_util,
-            "macro_utilization": macro_util,
-            "fundamentals_utilization": fund_util,
-            "analyst_utilization_by_role": role_util,
-        },
-    }
 
     # ── 3. Quadrant 3: Debate Quality 6-Dimension Metrics ─────────────────────
     bull_bear_res = all_debate_metrics["bull_bear_verified"]
@@ -1277,7 +1279,7 @@ def build_evaluation_metric_matrix(
     ).upper()
     winner_str = str(
         manager_verdict.get("winner")
-        or ("bull" if "BUY" in decision_dir else "bear" if "SELL" in decision_dir else "tie")
+        or ("bull" if any(w in decision_dir for w in ("BUY", "BULL", "多", "买入", "增持")) else "bear" if any(w in decision_dir for w in ("SELL", "BEAR", "空", "卖出", "减持")) else "tie")
     ).lower()
 
     entry_val: Optional[float] = None
@@ -1311,17 +1313,131 @@ def build_evaluation_metric_matrix(
     if isinstance(raw_prob, (int, float)) and not isinstance(raw_prob, bool):
         prob_val = float(raw_prob)
 
+    # Calculate T+5 trading date using A-share Trading Calendar
+    calc_t5_date = None
+    if t_date:
+        try:
+            calc_t5_date = calculate_t_plus_5_date(t_date, calendar_dates=trading_calendar)
+        except Exception:
+            calc_t5_date = None
+
+    final_t5_date = t_plus_5_date or data.get("t_plus_5_date") or calc_t5_date
+
+    # Check suspension
+    suspended = bool(
+        is_suspended
+        or data.get("is_suspended") is True
+        or data.get("suspension") is True
+        or data.get("t_plus_5_status") == "suspension"
+    )
+    if not suspended and raw_gaps:
+        for g in raw_gaps:
+            g_txt = (str(g.get("reason") or "") + " " + str(g.get("gap") or "") + " " + str(g.get("status") or "")).lower() if isinstance(g, Mapping) else str(g).lower()
+            if "suspension" in g_txt or "停牌" in g_txt:
+                suspended = True
+                break
+
+    # Determine T+5 Price
+    final_t5_price: Optional[float] = None
+    if t_plus_5_price is not None and isinstance(t_plus_5_price, (int, float)):
+        final_t5_price = float(t_plus_5_price)
+    elif price_series and final_t5_date and final_t5_date in price_series:
+        p_val = price_series.get(final_t5_date)
+        if p_val is not None:
+            try:
+                final_t5_price = float(p_val)
+            except (ValueError, TypeError):
+                final_t5_price = None
+    elif data.get("t_plus_5_price") is not None:
+        try:
+            final_t5_price = float(data["t_plus_5_price"])
+        except (ValueError, TypeError):
+            final_t5_price = None
+
     t5_return_pct: Optional[float] = None
-    t5_hit = shadow_res.get("t_plus_5_direction_hit")
+    t5_hit: Optional[bool] = None
     t5_status = "pending_due"
 
-    if t_plus_5_price is not None and entry_val is not None and entry_val > 0:
-        t5_return_pct = round(((t_plus_5_price - entry_val) / entry_val) * 100.0, 2)
+    if suspended:
+        t5_status = "suspension"
+        t5_return_pct = None
+        t5_hit = None
+        has_susp_gap = any(
+            "suspension" in str(item.get("gap", "")).lower()
+            or "停牌" in str(item.get("reason", ""))
+            or item.get("status") == "suspended"
+            for item in classified_gaps
+        )
+        if not has_susp_gap:
+            classified_gaps.append(
+                {
+                    "source": "trading_calendar",
+                    "gap_class": "operational",
+                    "status": "suspended",
+                    "reason": f"标的 {sym} 在 T+5 ({final_t5_date or '未知'}) 停牌，剔除分母",
+                    "gap": "data_gap: suspension",
+                }
+            )
+            operational_cnt += 1
+    elif final_t5_price is not None:
         t5_status = "due_and_evaluated"
-    elif t_plus_5_price is not None:
-        t5_status = "due_and_evaluated"
-    elif data.get("t_plus_5_evaluated"):
-        t5_status = "due_and_evaluated"
+        if entry_val is not None and entry_val > 0:
+            t5_return_pct = round(((final_t5_price - entry_val) / entry_val) * 100.0, 2)
+            price_change = final_t5_price - entry_val
+            if any(w in decision_dir for w in ("BUY", "BULLISH", "BULL", "多", "买入", "增持")):
+                t5_hit = bool(price_change > 0)
+            elif any(w in decision_dir for w in ("SELL", "BEARISH", "BEAR", "空", "卖出", "减持")):
+                t5_hit = bool(price_change < 0)
+            elif any(w in decision_dir for w in ("HOLD", "NEUTRAL", "中性", "观望", "持有")):
+                t5_hit = bool(abs(price_change / entry_val) <= 0.03)
+            else:
+                t5_hit = bool(price_change > 0)
+        else:
+            t5_hit = shadow_res.get("t_plus_5_direction_hit")
+    else:
+        # final_t5_price is None: evaluate pending_due (<5 trading days) vs data_missing
+        is_pending = False
+        if final_t5_date is None:
+            is_pending = True
+        elif as_of_date:
+            try:
+                as_of_d = _parse_date(as_of_date)
+                t5_d = _parse_date(final_t5_date)
+                if as_of_d < t5_d:
+                    is_pending = True
+            except Exception:
+                pass
+        elif data.get("is_t_plus_5_due") is False or data.get("is_in_flight") is True:
+            is_pending = True
+        elif not data.get("t_plus_5_evaluated"):
+            is_pending = True
+
+        if is_pending:
+            t5_status = "pending_due"
+            t5_return_pct = None
+            t5_hit = None
+        else:
+            t5_status = "data_missing"
+            t5_return_pct = None
+            t5_hit = None
+
+    # Update Quadrant 2 gaps summary in case suspension gap was added
+    quad_2: DataSourcesAndGaps = {
+        "data_gaps": classified_gaps,
+        "source_provenance": dict(prov) if isinstance(prov, Mapping) else {},
+        "gaps_summary": {
+            "total_gaps": len(classified_gaps),
+            "structural_count": structural_cnt,
+            "operational_count": operational_cnt,
+            "resident_fault_count": operational_cnt,
+        },
+        "data_utilization": {
+            "seven_reports_utilization": seven_util,
+            "macro_utilization": macro_util,
+            "fundamentals_utilization": fund_util,
+            "analyst_utilization_by_role": role_util,
+        },
+    }
 
     # Credit weighting shadow application
     weighting_app = apply_credit_weighting_to_debate(
@@ -1353,8 +1469,8 @@ def build_evaluation_metric_matrix(
         "debate_winner": winner_str,
         "confidence": conf_val,
         "probability": prob_val,
-        "t_plus_5_date": t_plus_5_date or data.get("t_plus_5_date"),
-        "t_plus_5_price": t_plus_5_price,
+        "t_plus_5_date": final_t5_date,
+        "t_plus_5_price": final_t5_price,
         "t_plus_5_return_pct": t5_return_pct,
         "t_plus_5_direction_hit": t5_hit,
         "t_plus_5_status": t5_status,
@@ -1591,6 +1707,10 @@ def build_weekly_metrics(
         hit = q4.get("t_plus_5_direction_hit")
         ret = q4.get("t_plus_5_return_pct")
 
+        # Exclude suspension and pending_due from due denominator
+        if st == "suspension" or st == "pending_due":
+            continue
+
         if st == "due_and_evaluated" or hit is not None:
             due_cnt += 1
             if hit is not None:
@@ -1599,6 +1719,8 @@ def build_weekly_metrics(
                     hit_cnt += 1
             if ret is not None:
                 t5_returns.append(float(ret))
+        elif st == "data_missing":
+            due_cnt += 1
 
     t5_completeness = (comp_cnt / due_cnt) if due_cnt > 0 else (1.0 if sample_count >= 60 else 0.0)
     t5_acc = (hit_cnt / comp_cnt) if comp_cnt > 0 else None
@@ -1650,6 +1772,8 @@ def build_weekly_metrics(
                 "industry": q1.get("industry"),
                 "trade_date": q1.get("trade_date"),
                 "market_regime": q1.get("market_regime"),
+                "t_plus_5_status": q4.get("t_plus_5_status"),
+                "is_suspended": q4.get("t_plus_5_status") == "suspension",
                 "manager_verdict": {
                     "winner": q4.get("debate_winner"),
                     "direction": q4.get("decision_direction"),
@@ -1667,6 +1791,7 @@ def build_weekly_metrics(
                         "manager_consistency_gate_triggered"
                     ),
                     "t_plus_5_direction_hit": q4.get("t_plus_5_direction_hit"),
+                    "t_plus_5_status": q4.get("t_plus_5_status"),
                     "model_id_by_stance": q1.get("model_assignments"),
                 },
                 "claims": claims_list,

@@ -37,6 +37,11 @@ from tradingagents.agents.utils.evaluation_schemas import (
     validate_weekly_metrics,
     validate_weekly_summary_md,
 )
+from tradingagents.dataflows.trade_calendar import (
+    calculate_t_plus_5_date,
+    get_t_plus_n_trading_day,
+    trading_days_forward,
+)
 from tests.mock_evaluations.mock_scenarios import (
     create_mock_balanced_tie_report,
     create_mock_bear_win_report,
@@ -409,3 +414,135 @@ class TestMockArtifactsDiskPersistence:
                 loaded = json.load(f)
             assert isinstance(loaded, dict)
             assert "schema_version" in loaded
+
+
+class TestTradingCalendarT5CalibrationAndDataGaps:
+    """Test explicit Trading Calendar binding, T+5 calibration, in-flight, suspension, and data_gaps."""
+
+    def test_trading_calendar_forward_sequence_and_t_plus_5(self):
+        # A-share mock trading calendar crossing a weekend
+        calendar = [
+            "2026-08-03",  # Monday (T0)
+            "2026-08-04",  # Tuesday (T+1)
+            "2026-08-05",  # Wednesday (T+2)
+            "2026-08-06",  # Thursday (T+3)
+            "2026-08-07",  # Friday (T+4)
+            "2026-08-10",  # Monday (T+5)
+            "2026-08-11",  # Tuesday (T+6)
+        ]
+        fwd_5 = trading_days_forward("2026-08-03", 5, calendar_dates=calendar)
+        assert fwd_5 == ["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"]
+
+        t5_date = calculate_t_plus_5_date("2026-08-03", calendar_dates=calendar)
+        assert t5_date == "2026-08-10"
+
+        # T0 on Friday 2026-08-07 -> T+5 should be Friday 2026-08-14
+        calendar_ext = calendar + ["2026-08-12", "2026-08-13", "2026-08-14"]
+        t5_from_friday = calculate_t_plus_5_date("2026-08-07", calendar_dates=calendar_ext)
+        assert t5_from_friday == "2026-08-14"
+
+    def test_t_plus_5_binding_with_price_series(self):
+        calendar = [
+            "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"
+        ]
+        price_series = {
+            "2026-08-03": 1650.0,
+            "2026-08-10": 1732.5,  # +5%
+        }
+        raw_bull = create_mock_bull_win_report()
+        matrix = build_evaluation_metric_matrix(
+            raw_bull,
+            trade_date="2026-08-03",
+            trading_calendar=calendar,
+            price_series=price_series,
+        )
+        q4 = matrix["quadrant_4_t_plus_5_and_shadow"]
+        assert q4["t_plus_5_date"] == "2026-08-10"
+        assert q4["t_plus_5_price"] == 1732.5
+        assert q4["t_plus_5_return_pct"] == 5.0
+        assert q4["t_plus_5_direction_hit"] is True
+        assert q4["t_plus_5_status"] == "due_and_evaluated"
+
+    def test_t_plus_5_in_flight_pending_due_keeps_hit_none(self):
+        calendar = ["2026-08-03", "2026-08-04", "2026-08-05"]  # Only 2 forward days available
+        raw_bull = create_mock_bull_win_report()
+        matrix = build_evaluation_metric_matrix(
+            raw_bull,
+            trade_date="2026-08-03",
+            trading_calendar=calendar,
+            as_of_date="2026-08-05",
+        )
+        q4 = matrix["quadrant_4_t_plus_5_and_shadow"]
+        assert q4["t_plus_5_status"] == "pending_due"
+        assert q4["t_plus_5_price"] is None
+        assert q4["t_plus_5_return_pct"] is None
+        assert q4["t_plus_5_direction_hit"] is None  # Strictly None, never False
+
+    def test_t_plus_5_suspension_recorded_and_excluded_from_denominator(self):
+        raw_bull = create_mock_bull_win_report()
+        raw_bull["data_gaps"] = [
+            {
+                "source": "trading_calendar",
+                "gap_class": "operational",
+                "status": "suspended",
+                "reason": "标的 600519.SH 停牌",
+                "gap": "data_gap: suspension",
+            }
+        ]
+        matrix = build_evaluation_metric_matrix(
+            raw_bull,
+            trade_date="2026-08-03",
+            is_suspended=True,
+        )
+        q4 = matrix["quadrant_4_t_plus_5_and_shadow"]
+        assert q4["t_plus_5_status"] == "suspension"
+        assert q4["t_plus_5_direction_hit"] is None
+        assert q4["t_plus_5_return_pct"] is None
+
+        q2 = matrix["quadrant_2_data_sources_and_gaps"]
+        assert any("suspension" in str(g.get("gap", "")).lower() or g.get("status") == "suspended" for g in q2["data_gaps"])
+
+        # Test weekly aggregation excludes suspension from due denominator
+        normal_rep = create_mock_bull_win_report()
+        normal_matrix = build_evaluation_metric_matrix(normal_rep, t_plus_5_price=1700.0)
+
+        weekly = build_weekly_metrics(
+            [matrix, normal_matrix],
+            week_identifier="week_202634",
+            start_date="2026-08-03",
+            end_date="2026-08-10",
+        )
+        t5_calib = weekly["weekly_aggregate"]["t5_calibration"]
+        assert t5_calib["due_sample_count"] == 1  # 2 samples total, but suspension excluded!
+        assert t5_calib["completed_sample_count"] == 1
+        assert t5_calib["completeness_rate"] == 1.0
+
+    def test_t_plus_5_data_missing_handling(self):
+        raw_bull = create_mock_bull_win_report()
+        raw_bull["t_plus_5_evaluated"] = False
+        matrix = build_evaluation_metric_matrix(
+            raw_bull,
+            trade_date="2026-08-03",
+            t_plus_5_date="2026-08-10",
+            as_of_date="2026-08-15",  # Past T+5, but no price passed
+        )
+        q4 = matrix["quadrant_4_t_plus_5_and_shadow"]
+        assert q4["t_plus_5_status"] in ("data_missing", "pending_due")
+        assert q4["t_plus_5_direction_hit"] is None
+
+    def test_protocol_and_model_assignments_metadata_extraction(self):
+        raw_bull = create_mock_bull_win_report()
+        model_custom = {"bull": "deepseek-r1-0528", "bear": "qwen-max-0801", "manager": "claude-3-7-sonnet"}
+        matrix = build_evaluation_metric_matrix(
+            raw_bull,
+            model_assignments=model_custom,
+            latency_ms=1250.5,
+            token_usage={"prompt": 4200, "completion": 1800, "total": 6000},
+        )
+        q1 = matrix["quadrant_1_protocol_metadata"]
+        assert q1["protocol_version"] == PROTOCOL_VERSION_V2_STRUCTURED
+        assert q1["model_assignments"]["bull"] == "deepseek-r1-0528"
+        assert q1["model_assignments"]["bear"] == "qwen-max-0801"
+        assert q1["model_assignments"]["manager"] == "claude-3-7-sonnet"
+        assert q1["latency_ms"] == 1250.5
+        assert q1["token_usage"]["total"] == 6000

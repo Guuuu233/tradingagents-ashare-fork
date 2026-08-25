@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence, Union
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -410,6 +410,75 @@ def trading_days_back(
     start_idx = max(0, end_idx - count + 1)
     window = dates[start_idx : end_idx + 1]
     return [_format_date(x) for x in reversed(window)]
+
+
+def trading_days_forward(
+    date_str: str,
+    count: int,
+    *,
+    start_offset: int = 0,
+    calendar_dates: Optional[Sequence[Union[str, date]]] = None,
+) -> list[str]:
+    """Return ``count`` trading days starting after normalize(date) + start_offset, in chronological order.
+
+    If ``calendar_dates`` is provided, it uses those dates; otherwise uses :func:`require_cn_trade_dates`.
+    """
+    if count <= 0:
+        raise ValueError(f"trading_days_forward: count must be positive, got {count!r}")
+    if start_offset < 0:
+        raise ValueError(f"trading_days_forward: start_offset must be >= 0, got {start_offset!r}")
+
+    if calendar_dates is not None:
+        dates = sorted({_parse_date(d) if isinstance(d, str) else d for d in calendar_dates})
+        if not dates:
+            raise TradeCalendarUnavailableError("交易日历不可用：自定义日历为空")
+        d = _parse_date(date_str)
+        if d in set(dates):
+            base_idx = dates.index(d)
+        else:
+            base_idx = bisect.bisect_right(dates, d) - 1
+            if base_idx < 0:
+                base_idx = -1
+    else:
+        dates, _ = require_cn_trade_dates()
+        base = _parse_date(normalize_to_trading_day(date_str))
+        base_idx = bisect.bisect_left(dates, base)
+        if base_idx >= len(dates) or dates[base_idx] != base:
+            base_idx = bisect.bisect_right(dates, base) - 1
+
+    start_idx = base_idx + 1 + start_offset
+    if start_idx >= len(dates) or start_idx < 0:
+        return []
+    end_idx = min(len(dates), start_idx + count)
+    window = dates[start_idx:end_idx]
+    return [_format_date(x) for x in window]
+
+
+def get_t_plus_n_trading_day(
+    date_str: str,
+    n: int = 5,
+    *,
+    calendar_dates: Optional[Sequence[Union[str, date]]] = None,
+) -> Optional[str]:
+    """Return the exact trading day at trade_date_index + n.
+
+    Returns None if n trading days have not elapsed or date is beyond available calendar.
+    """
+    if n <= 0:
+        raise ValueError(f"get_t_plus_n_trading_day: n must be positive, got {n!r}")
+    forward_days = trading_days_forward(date_str, n, calendar_dates=calendar_dates)
+    if len(forward_days) < n:
+        return None
+    return forward_days[-1]
+
+
+def calculate_t_plus_5_date(
+    date_str: str,
+    *,
+    calendar_dates: Optional[Sequence[Union[str, date]]] = None,
+) -> Optional[str]:
+    """Return the T+5 trading day (trade_date_index + 5) for a given trade date."""
+    return get_t_plus_n_trading_day(date_str, n=5, calendar_dates=calendar_dates)
 
 
 @dataclass

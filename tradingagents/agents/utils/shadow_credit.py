@@ -554,10 +554,18 @@ def evaluate_h1b_system_gates(
     for s in samples:
         metrics = s.get("shadow_credit_metrics") or {}
         hit = metrics.get("t_plus_5_direction_hit")
+        st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status")
+        # Exclude suspension from due denominator
+        if st == "suspension" or s.get("is_suspended") is True or s.get("suspension") is True:
+            continue
+        # Exclude pending / in-flight samples from due denominator
+        if st == "pending_due" or s.get("is_in_flight") is True or s.get("is_t_plus_5_due") is False:
+            continue
+
         is_due = s.get("is_t_plus_5_due")
         if is_due is None:
             # If not explicitly marked, treat as due if trade_date exists and > 5 days ago or hit is not None
-            is_due = (hit is not None) or bool(s.get("t_plus_5_evaluated", False))
+            is_due = (hit is not None) or bool(s.get("t_plus_5_evaluated", False)) or (st in ("due_and_evaluated", "data_missing"))
 
         if is_due:
             due_t5_count += 1
