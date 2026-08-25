@@ -660,6 +660,31 @@ class WeeklyT5CalibrationModel(BaseModel):
     )
 
 
+class WeeklyModelIsolationModel(BaseModel):
+    """Per-model bias freeze and layered isolation state for weekly dashboards."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    credit_weighting_active: bool = Field(
+        default=False, description="Whether credit weighting may be active"
+    )
+    global_fallback_shadow: bool = Field(
+        default=True, description="Whether global shadow-only fallback is engaged"
+    )
+    system_gate_status: str = Field(
+        default="FAIL", description="System gate status label"
+    )
+    model_weights: Dict[str, float] = Field(
+        default_factory=dict, description="Per-model effective weight multipliers"
+    )
+    bias_freeze_reasons: Dict[str, str] = Field(
+        default_factory=dict, description="Per-model bias freeze audit reasons"
+    )
+    abnormal_model_ratio: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Share of models flagged as biased"
+    )
+
+
 class WeeklyH1bGatesModel(BaseModel):
     """7-dimension gate evaluation result for H1b activation."""
 
@@ -673,6 +698,10 @@ class WeeklyH1bGatesModel(BaseModel):
     )
     matrix: Dict[str, Any] = Field(
         default_factory=dict, description="Detailed 7-dimension evaluation matrix"
+    )
+    model_isolation: WeeklyModelIsolationModel = Field(
+        default_factory=WeeklyModelIsolationModel,
+        description="Layered isolation and per-model bias freeze evaluation",
     )
 
 
@@ -974,10 +1003,20 @@ class WeeklyT5Calibration(TypedDict, total=False):
     avg_t5_return_pct: Optional[float]
 
 
+class WeeklyModelIsolation(TypedDict, total=False):
+    credit_weighting_active: bool
+    global_fallback_shadow: bool
+    system_gate_status: str
+    model_weights: Dict[str, float]
+    bias_freeze_reasons: Dict[str, str]
+    abnormal_model_ratio: float
+
+
 class WeeklyH1bGates(TypedDict, total=False):
     passed: bool
     recommendation: str
     matrix: Dict[str, Any]
+    model_isolation: WeeklyModelIsolation
 
 
 class WeeklyDeduplicationAudit(TypedDict, total=False):
@@ -2037,10 +2076,22 @@ def build_weekly_metrics(
         )
 
     h1b_eval = evaluate_h1b_system_gates(eval_inputs)
+    isolation_eval = evaluate_model_bias_and_weights(
+        eval_inputs,
+        system_gate_passed=bool(h1b_eval.get("passed", False)),
+    )
     h1b_gates: WeeklyH1bGates = {
         "passed": bool(h1b_eval.get("passed", False)),
         "recommendation": h1b_eval.get("recommendation", "KEEP_FALSE"),
         "matrix": h1b_eval.get("matrix", {}),
+        "model_isolation": {
+            "credit_weighting_active": bool(isolation_eval.get("credit_weighting_active", False)),
+            "global_fallback_shadow": bool(isolation_eval.get("global_fallback_shadow", True)),
+            "system_gate_status": str(isolation_eval.get("system_gate_status", "FAIL")),
+            "model_weights": dict(isolation_eval.get("model_weights") or {}),
+            "bias_freeze_reasons": dict(isolation_eval.get("bias_freeze_reasons") or {}),
+            "abnormal_model_ratio": float(isolation_eval.get("abnormal_model_ratio", 0.0) or 0.0),
+        },
     }
 
     # ── 6. Deduplication Audit ────────────────────────────────────────────────
@@ -2102,6 +2153,7 @@ def render_weekly_summary_markdown(
     t5 = aggs.get("t5_calibration") or {}
     h1b = aggs.get("h1b_system_gates_evaluation") or {}
     h1b_matrix = h1b.get("matrix") or {}
+    model_isolation = h1b.get("model_isolation") or {}
     dedup = aggs.get("deduplication_audit") or {}
 
     total_samples = overview.get("total_samples", 0)
@@ -2310,6 +2362,64 @@ def render_weekly_summary_markdown(
     lines.append(
         f"| **7. 权重幅度约束 (Magnitude)** | 权重倍数上下限严格限制在 $[0.85, 1.15]$ | 实施范围={d_m_det.get('range', [0.85, 1.15])} | $[0.85, 1.15]$ | {'✅ PASS' if dim_mag.get('passed', True) else '❌ FAIL'} |"
     )
+
+    # Dynamic gap tracking: explicit distance-to-threshold for failed dimensions
+    gap_lines = []
+    if not dim_n.get("passed"):
+        need_n = max(0, 60 - int(d_n_det.get("sample_count", total_samples) or 0))
+        gap_lines.append(f"- **样本量 Gap**：还需 `+{need_n}` 局样本（当前 {d_n_det.get('sample_count', total_samples)} / 60）")
+    if not dim_time.get("passed"):
+        cal_days = d_t_det.get("calendar_days")
+        trd_days = d_t_det.get("trading_days")
+        if cal_days is not None and int(cal_days) < 45:
+            gap_lines.append(f"- **日历跨度 Gap**：还需 `+{45 - int(cal_days)}` 自然日（当前 {cal_days} / 45）")
+        if trd_days is not None and int(trd_days) < 30:
+            gap_lines.append(f"- **交易日 Gap**：还需 `+{30 - int(trd_days)}` 个交易日（当前 {trd_days} / 30）")
+    if not dim_t5.get("passed"):
+        gap_rate = d_t5_det.get("completeness_rate", t5_rate)
+        if gap_rate is not None:
+            gap_lines.append(
+                f"- **T+5 完整率 Gap**：距 95% 门槛差 `{max(0.0, 0.95 - float(gap_rate)) * 100:.1f}` 个百分点"
+            )
+    if not dim_bal.get("passed"):
+        gap_lines.append(
+            f"- **多空平衡 Gap**：多头占比 {_pct(d_b_det.get('bull_ratio', bull_ratio))}，多空差 {d_b_det.get('side_diff', abs(bull_cnt - bear_cnt))}（目标 [40%,60%] 且差值 ≤10）"
+        )
+
+    if gap_lines:
+        lines.extend(
+            [
+                "",
+                "### 7 维门槛动态 Gap 追踪",
+                "",
+                *gap_lines,
+            ]
+        )
+
+    iso_active = bool(model_isolation.get("credit_weighting_active", False))
+    iso_shadow = bool(model_isolation.get("global_fallback_shadow", True))
+    iso_ratio = float(model_isolation.get("abnormal_model_ratio", 0.0) or 0.0)
+    bias_reasons = model_isolation.get("bias_freeze_reasons") or {}
+    model_weights = model_isolation.get("model_weights") or {}
+
+    lines.extend(
+        [
+            "",
+            "### 分层隔离与单模型偏置冻结预警",
+            "",
+            f"- **分层隔离状态**：`credit_weighting_active={iso_active}`，`global_fallback_shadow={iso_shadow}`，系统门槛 `{model_isolation.get('system_gate_status', 'FAIL')}`；",
+            f"- **异常模型占比**：`{iso_ratio * 100:.1f}%`（>50% 触发全局 Shadow 回退告警）{' 🚨' if iso_ratio > 0.5 else ''}；",
+        ]
+    )
+    if bias_reasons:
+        lines.append("- **偏置冻结明细**：")
+        for model_name, reason in sorted(bias_reasons.items()):
+            weight = model_weights.get(model_name, 1.0)
+            lines.append(f"  - `{model_name}`：权重 clamp `{weight:.2f}` — {reason}")
+    elif iso_shadow:
+        lines.append("- **偏置冻结明细**：系统门槛未通过，全部模型权重归一化为 1.0（Shadow-only）。")
+    else:
+        lines.append("- **偏置冻结明细**：本周无单模型偏置冻结触发。")
 
     lines.extend(
         [

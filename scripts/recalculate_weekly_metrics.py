@@ -273,13 +273,6 @@ def group_samples_by_week(
             w_id = extract_week_from_date(t_date)
         groups.setdefault(w_id, []).append(dict(item))
     return groups
-    """Group report samples by week_YYYYWW."""
-    groups: Dict[str, List[Dict[str, Any]]] = {}
-    for item in samples:
-        t_date = extract_sample_trade_date(item)
-        w_id = extract_week_from_date(t_date)
-        groups.setdefault(w_id, []).append(dict(item))
-    return groups
 
 
 def compute_week_date_range(samples: Sequence[Mapping[str, Any]], week_id: str) -> Tuple[str, str]:
@@ -452,6 +445,20 @@ def format_cli_text_report(weekly_metrics: WeeklyMetricsJSON, artifacts: Optiona
         f"  • 系统级门槛状态 : {'✅ PASS (7 维全部达标)' if passed else '❌ FAIL (存在未达标项)'}",
         f"  • 决策建议       : {rec} ({'允许开启特征开关' if passed else '禁止开启，保持默认 credit_weighting_enabled=False'})",
     ]
+
+    model_isolation = h1b.get("model_isolation") or {}
+    iso_shadow = bool(model_isolation.get("global_fallback_shadow", True))
+    iso_ratio = float(model_isolation.get("abnormal_model_ratio", 0.0) or 0.0)
+    bias_reasons = model_isolation.get("bias_freeze_reasons") or {}
+    lines.append(
+        f"  • 分层隔离       : shadow_fallback={iso_shadow}, 异常模型占比={iso_ratio * 100:.1f}%"
+    )
+    if bias_reasons:
+        lines.append("  • 偏置冻结预警   :")
+        for model_name, reason in sorted(bias_reasons.items())[:6]:
+            lines.append(f"      - {model_name}: {reason}")
+        if iso_ratio > 0.5:
+            lines.append("      🚨 异常模型占比 >50%，已触发全局 Shadow 回退告警")
 
     if drill_ind:
         lines.append("-" * 82)

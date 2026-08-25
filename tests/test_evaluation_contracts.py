@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 import pytest
 
 from tradingagents.agents.utils.agent_states import (
@@ -336,6 +338,10 @@ class TestWeeklyMetricsAggregationAndDashboard:
         # 5. H1b 7-dimension system gates
         assert aggs.h1b_system_gates_evaluation.passed is True
         assert aggs.h1b_system_gates_evaluation.recommendation == "ELIGIBLE_FOR_ACTIVATION"
+        iso = aggs.h1b_system_gates_evaluation.model_isolation
+        assert iso.credit_weighting_active is True
+        assert iso.global_fallback_shadow is False
+        assert iso.abnormal_model_ratio == 0.0
 
         # 6. Deduplication audit
         assert aggs.deduplication_audit.status == "PASSED_NO_DUPLICATES"
@@ -386,6 +392,7 @@ class TestWeeklyMetricsAggregationAndDashboard:
         assert "6. 偏置冻结线 (Bias Freeze)" in md_text
         assert "7. 权重幅度约束 (Magnitude)" in md_text
         assert "ELIGIBLE_FOR_ACTIVATION" in md_text
+        assert "### 分层隔离与单模型偏置冻结预警" in md_text
 
         # Validate with Pydantic model
         md_model = validate_weekly_summary_md(
@@ -398,6 +405,47 @@ class TestWeeklyMetricsAggregationAndDashboard:
         )
         assert isinstance(md_model, WeeklySummaryMDModel)
         assert md_model.week_identifier == "week_202634"
+
+    def test_weekly_h1b_model_isolation_keeps_false_when_gates_fail(self):
+        weekly_data = build_weekly_metrics(
+            [create_mock_bull_win_report()],
+            week_identifier="week_small",
+            start_date="2026-08-15",
+            end_date="2026-08-15",
+        )
+        h1b = weekly_data["weekly_aggregate"]["h1b_system_gates_evaluation"]
+        assert h1b["passed"] is False
+        assert h1b["recommendation"] == "KEEP_FALSE"
+        iso = h1b["model_isolation"]
+        assert iso["credit_weighting_active"] is False
+        assert iso["global_fallback_shadow"] is True
+        assert iso["bias_freeze_reasons"]
+
+        md_text = render_weekly_summary_markdown(weekly_data)
+        assert "KEEP_FALSE" in md_text
+        assert "7 维门槛动态 Gap 追踪" in md_text
+        assert "Shadow-only" in md_text or "global_fallback_shadow=True" in md_text
+
+
+class TestH2E2EGatesPipelineIntegration:
+    """End-to-end: weekly recalc -> H1b gates -> layered isolation audit trail."""
+
+    def test_recalculate_weekly_metrics_cli_includes_isolation_banner(self, tmp_path):
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "recalculate_weekly_metrics.py"
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--week",
+            "202634",
+            "--use-mock",
+            "--dry-run",
+            "--format",
+            "text",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        assert proc.returncode == 0
+        assert "H1b 信用加权 7 维激活门槛离线复算结论" in proc.stdout
+        assert "分层隔离" in proc.stdout
 
 
 class TestMockArtifactsDiskPersistence:
