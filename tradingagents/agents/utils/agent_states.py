@@ -279,6 +279,32 @@ def is_v2_debate_enabled(state_or_config: Any) -> bool:
     return False
 
 
+def is_credit_weighting_enabled(state_or_config: Any) -> bool:
+    """Return True if credit_weighting_enabled is explicitly enabled in state, config, or feature_flags."""
+    if not isinstance(state_or_config, (dict, Mapping)):
+        return False
+
+    # 1. Direct check in nested investment_debate_state if present
+    inv_state = state_or_config.get("investment_debate_state")
+    if isinstance(inv_state, (dict, Mapping)):
+        flags = inv_state.get("feature_flags")
+        if isinstance(flags, (dict, Mapping)) and flags.get("credit_weighting_enabled") is not None:
+            return bool(flags["credit_weighting_enabled"])
+        if inv_state.get("credit_weighting_enabled") is not None:
+            return bool(inv_state.get("credit_weighting_enabled"))
+
+    # 2. Check in top-level feature_flags dict
+    flags = state_or_config.get("feature_flags")
+    if isinstance(flags, (dict, Mapping)) and flags.get("credit_weighting_enabled") is not None:
+        return bool(flags["credit_weighting_enabled"])
+
+    # 3. Direct key at top level
+    if state_or_config.get("credit_weighting_enabled") is not None:
+        return bool(state_or_config.get("credit_weighting_enabled"))
+
+    return False
+
+
 class InvestDebateState(TypedDict):
     bull_history: Annotated[str, "Bullish conversation history"]
     bear_history: Annotated[str, "Bearish conversation history"]

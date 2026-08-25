@@ -1,0 +1,117 @@
+{
+  "generated_at": "2026-08-25T17:02:37.413456+00:00",
+  "task_id": "P3-H1b",
+  "sample_count": 3,
+  "gate_evaluation": {
+    "schema_version": "h1b_json_v1",
+    "passed": false,
+    "matrix": {
+      "dimension_n": {
+        "passed": false,
+        "details": {
+          "sample_count": 3,
+          "min_required": 60,
+          "unique_symbols": 3,
+          "min_unique_symbols": 20,
+          "unique_industries": 0,
+          "min_industries": 5,
+          "max_symbol_share": 0.3333,
+          "max_allowed_share": 0.15
+        }
+      },
+      "dimension_side": {
+        "passed": false,
+        "details": {
+          "bull_samples": 0,
+          "bear_samples": 0,
+          "min_side_samples": 25,
+          "bull_verified_claims": 0,
+          "bear_verified_claims": 0,
+          "min_verified_claims": 100
+        }
+      },
+      "dimension_time": {
+        "passed": false,
+        "details": {
+          "calendar_days": 1,
+          "min_calendar_days": 45,
+          "trading_days": 1,
+          "min_trading_days": 30,
+          "market_regimes_covered": []
+        }
+      },
+      "dimension_t5": {
+        "passed": false,
+        "details": {
+          "due_count": 0,
+          "completed_count": 0,
+          "completeness_rate": 0.0,
+          "min_required_rate": 0.95
+        }
+      },
+      "dimension_balance": {
+        "passed": false,
+        "details": {
+          "bull_ratio": 0.0,
+          "allowed_range": [
+            0.4,
+            0.6
+          ],
+          "side_diff": 0,
+          "max_allowed_diff": 10
+        }
+      },
+      "dimension_bias": {
+        "passed": false,
+        "details": {
+          "avg_bull_verified_rate": 0.0,
+          "avg_bear_verified_rate": 0.0,
+          "delta_verified_rate": 0.0,
+          "max_allowed_delta_v": 0.18,
+          "avg_bull_challenge_adoption_rate": 0.0,
+          "avg_bear_challenge_adoption_rate": 0.0,
+          "delta_challenge_adoption_rate": 0.0,
+          "max_allowed_delta_ch": 0.25,
+          "clone_rate": 0.0,
+          "max_allowed_clone_rate": 0.05,
+          "consistency_trigger_rate": 0.0,
+          "max_allowed_consistency_rate": 0.05
+        }
+      },
+      "dimension_magnitude": {
+        "passed": true,
+        "details": {
+          "min_weight_multiplier": 0.85,
+          "max_weight_multiplier": 1.15,
+          "range": [
+            0.85,
+            1.15
+          ]
+        }
+      }
+    },
+    "summary": {
+      "sample_count": 3,
+      "system_gate_status": "FAIL",
+      "recommendation": "KEEP_FALSE"
+    },
+    "recommendation": "KEEP_FALSE"
+  },
+  "model_isolation": {
+    "credit_weighting_active": false,
+    "global_fallback_shadow": true,
+    "system_gate_status": "FAIL",
+    "model_weights": {
+      "gpt-4o": 1.0,
+      "qwen-max": 1.0,
+      "deepseek-r1": 1.0
+    },
+    "bias_freeze_reasons": {
+      "gpt-4o": "System-level activation gates not passed",
+      "qwen-max": "System-level activation gates not passed",
+      "deepseek-r1": "System-level activation gates not passed"
+    },
+    "abnormal_model_ratio": 1.0
+  },
+  "recommendation": "KEEP_FALSE"
+}

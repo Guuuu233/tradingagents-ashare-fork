@@ -4,7 +4,10 @@ import time
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
 from tradingagents.prompts.catalog import _resolve_language
-from tradingagents.agents.utils.agent_states import current_tracker_var
+from tradingagents.agents.utils.agent_states import (
+    current_tracker_var,
+    is_credit_weighting_enabled,
+)
 from tradingagents.agents.utils.debate_utils import (
     build_debate_report_manifest,
     format_claim_subset_for_prompt,
@@ -448,6 +451,17 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 round_num=-1, content=final_decision, is_verdict=True,
             )
 
+        claim_weights = None
+        if is_credit_weighting_enabled(investment_debate_state) or is_credit_weighting_enabled(state):
+            from tradingagents.agents.utils.shadow_credit import calculate_claim_credit_weights
+            weights_res = calculate_claim_credit_weights(
+                claims=claims,
+                claim_evidence_summary=claim_evidence_summary,
+                credit_weighting_enabled=True,
+                system_gate_passed=False,
+            )
+            claim_weights = weights_res.get("claim_weights")
+
         new_investment_debate_state = {
             **investment_debate_state,
             "judge_decision": final_decision,
@@ -471,6 +485,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "challenge_verification": challenges_verification,
             "report_manifest": report_manifest,
         }
+        if claim_weights is not None:
+            new_investment_debate_state["claim_weights"] = claim_weights
 
         return {
             "investment_debate_state": new_investment_debate_state,

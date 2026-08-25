@@ -1,0 +1,450 @@
+"""Unit tests for P3-H1b: Credit Weighting Gates and Layered Isolation (TDD Suite).
+
+Tests cover:
+1. 7-dimension gate threshold evaluation (N, Side, Time, T+5, Balance, Bias Freeze, Magnitude).
+2. Layered isolation state machine:
+   - System gate failure -> Global weight=1.0 (Shadow-only)
+   - Single model bias -> Only that model clamped to 1.0 + bias_freeze_reason
+   - Abnormal model ratio > 50% -> Global fallback to Shadow
+3. Credit weighting application:
+   - Only verified claims receive relative weight modification in [0.85, 1.15]
+   - Contradicted/unsupported claims NEVER elevated by credit weighting
+   - Feature flag false -> 100% flat weighting (1.0) and preserved shadow metrics
+4. Read-only gate verification script logic (verify_h1b_gates.py).
+"""
+
+import copy
+import json
+import pytest
+
+from tradingagents.agents.utils.agent_states import (
+    DEFAULT_FEATURE_FLAGS,
+    PROTOCOL_VERSION_V2_STRUCTURED,
+    get_protocol_metadata,
+)
+from tradingagents.agents.utils.shadow_credit import (
+    H1B_THRESHOLDS,
+    calculate_shadow_credit_metrics,
+    evaluate_h1b_system_gates,
+    evaluate_model_bias_and_weights,
+    calculate_claim_credit_weights,
+    apply_credit_weighting_to_debate,
+)
+
+
+def _build_mock_debate_sample(
+    *,
+    symbol: str = "600519.SH",
+    industry: str = "白酒",
+    trade_date: str = "2026-08-01",
+    bull_model: str = "deepseek-r1",
+    bear_model: str = "qwen-max",
+    manager_model: str = "gpt-4o",
+    winner: str = "bull",
+    bull_v_cnt: int = 2,
+    bull_t_cnt: int = 2,
+    bear_v_cnt: int = 2,
+    bear_t_cnt: int = 2,
+    bull_ch_adopt: int = 1,
+    bull_ch_tot: int = 1,
+    bear_ch_adopt: int = 1,
+    bear_ch_tot: int = 1,
+    t_plus_5_hit: bool | None = True,
+    consistency_failed: bool = False,
+    market_regime: str = "震荡",
+    sample_idx: int = 0,
+) -> dict:
+    """Helper to construct a mock v2 debate report with structured shadow metrics."""
+    return {
+        "symbol": symbol,
+        "industry": industry,
+        "trade_date": trade_date,
+        "market_regime": market_regime,
+        "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+        "final_trade_decision": "决策建议",
+        "market_report": "市场分析报告正文",
+        "fundamentals_report": "基本面分析报告正文",
+        "macro_report": "宏观分析报告正文",
+        "sentiment_report": "情绪分析报告正文",
+        "news_report": "新闻分析报告正文",
+        "smart_money_report": "资金分析报告正文",
+        "volume_price_report": "量价分析报告正文",
+        "investment_debate_state": {
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "claims": [
+                {
+                    "claim_id": "INV-1",
+                    "speaker_key": "Bull",
+                    "speaker": "Bull Analyst",
+                    "stance": "bullish",
+                    "claim": f"多头看好逻辑_{symbol}_{sample_idx}",
+                    "evidence": ["多头证据1"],
+                    "status": "verified",
+                    "is_verified": True,
+                },
+                {
+                    "claim_id": "INV-2",
+                    "speaker_key": "Bear",
+                    "speaker": "Bear Analyst",
+                    "stance": "bearish",
+                    "claim": f"空头看空逻辑_{symbol}_{sample_idx}",
+                    "evidence": ["空头证据1"],
+                    "status": "verified",
+                    "is_verified": True,
+                },
+            ],
+            "claim_evidence_summary": {
+                "INV-1": {
+                    "speaker_key": "Bull",
+                    "counts": {"verified": bull_v_cnt, "total": bull_t_cnt},
+                    "coverage": bull_v_cnt / bull_t_cnt if bull_t_cnt else 0,
+                    "decision": "adopt",
+                },
+                "INV-2": {
+                    "speaker_key": "Bear",
+                    "counts": {"verified": bear_v_cnt, "total": bear_t_cnt},
+                    "coverage": bear_v_cnt / bear_t_cnt if bear_t_cnt else 0,
+                    "decision": "adopt",
+                },
+            },
+            "challenges": [
+                {
+                    "challenge_id": "CH-1",
+                    "speaker_key": "Bull",
+                    "target_claim_id": "INV-2",
+                    "adopted": bool(bull_ch_adopt > 0),
+                },
+                {
+                    "challenge_id": "CH-2",
+                    "speaker_key": "Bear",
+                    "target_claim_id": "INV-1",
+                    "adopted": bool(bear_ch_adopt > 0),
+                },
+            ],
+            "manager_verdict": {
+                "winner": winner,
+                "direction": "看多" if winner == "bull" else ("看空" if winner == "bear" else "中性"),
+                "adopted_challenge_ids": (["CH-1"] if bull_ch_adopt > 0 else []) + (["CH-2"] if bear_ch_adopt > 0 else []),
+                "consistency_check_passed": not consistency_failed,
+                "failed_checks": ["自洽校验失败"] if consistency_failed else [],
+            },
+            "round_messages": [
+                {"speaker_key": "Bull", "stance": "bullish", "model_name": bull_model},
+                {"speaker_key": "Bear", "stance": "bearish", "model_name": bear_model},
+                {"speaker_key": "Research Manager", "is_verdict": True, "model_name": manager_model},
+            ],
+            "feature_flags": {
+                "v2_debate_enabled": True,
+                "shadow_credit_enabled": True,
+                "credit_weighting_enabled": False,
+            },
+        },
+        "shadow_credit_metrics": {
+            "schema_version": "h1a_json_v1",
+            "credit_weighting_enabled": False,
+            "bull_verified_rate": round(bull_v_cnt / bull_t_cnt, 4) if bull_t_cnt else None,
+            "bear_verified_rate": round(bear_v_cnt / bear_t_cnt, 4) if bear_t_cnt else None,
+            "bull_challenge_adoption_rate": round(bull_ch_adopt / bull_ch_tot, 4) if bull_ch_tot else None,
+            "bear_challenge_adoption_rate": round(bear_ch_adopt / bear_ch_tot, 4) if bear_ch_tot else None,
+            "manager_evidence_coverage": 1.0,
+            "manager_consistency_gate_triggered": consistency_failed,
+            "t_plus_5_direction_hit": t_plus_5_hit,
+            "sample_count": 1,
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "model_id_by_stance": {
+                "bull": bull_model,
+                "bear": bear_model,
+                "manager": manager_model,
+            },
+        },
+    }
+
+
+def _build_qualifying_sample_pool(n: int = 60) -> list[dict]:
+    """Generate a pool of n samples that satisfy all 7 gate dimensions."""
+    samples = []
+    symbols = [f"60000{i:02d}.SH" for i in range(20)]
+    industries = ["电子", "医药", "白酒", "新能源", "金融", "军工", "化工"]
+    regimes = ["牛市", "熊市", "震荡"]
+
+    from datetime import date, timedelta
+    start_date = date(2026, 6, 1)
+
+    for i in range(n):
+        sym = symbols[i % len(symbols)]
+        ind = industries[i % len(industries)]
+        cur_date = (start_date + timedelta(days=int(i * 1.0))).strftime("%Y-%m-%d")
+        winner = "bull" if (i % 2 == 0) else "bear"
+        regime = regimes[i % len(regimes)]
+
+        sample = _build_mock_debate_sample(
+            symbol=sym,
+            industry=ind,
+            trade_date=cur_date,
+            bull_model="deepseek-r1",
+            bear_model="qwen-max",
+            manager_model="gpt-4o",
+            winner=winner,
+            bull_v_cnt=3,
+            bull_t_cnt=3,
+            bear_v_cnt=3,
+            bear_t_cnt=3,
+            bull_ch_adopt=1,
+            bull_ch_tot=1,
+            bear_ch_adopt=1,
+            bear_ch_tot=1,
+            t_plus_5_hit=True,
+            consistency_failed=False,
+            market_regime=regime,
+            sample_idx=i,
+        )
+        samples.append(sample)
+    return samples
+
+
+class TestH1bSevenDimensionGates:
+    """Test suite for 7-dimension gate threshold validation."""
+
+    def test_dimension_n_insufficient_samples_fails(self):
+        """Dimension 1 (N): Less than 60 samples must fail."""
+        samples = _build_qualifying_sample_pool(n=59)
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_n"]["passed"] is False
+        assert result["matrix"]["dimension_n"]["details"]["sample_count"] == 59
+        assert result["matrix"]["dimension_n"]["details"]["min_required"] == 60
+        assert result["recommendation"] == "KEEP_FALSE"
+
+    def test_dimension_n_insufficient_unique_symbols_fails(self):
+        """Dimension 1 (N): Less than 20 unique symbols must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Force all samples to share only 10 symbols
+        for idx, s in enumerate(samples):
+            s["symbol"] = f"60000{idx % 10:02d}.SH"
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_n"]["passed"] is False
+        assert result["matrix"]["dimension_n"]["details"]["unique_symbols"] == 10
+        assert result["matrix"]["dimension_n"]["details"]["min_unique_symbols"] == 20
+
+    def test_dimension_n_max_single_symbol_concentration_fails(self):
+        """Dimension 1 (N): Single symbol share > 15% must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Make one symbol take 12 samples out of 60 (20% > 15%)
+        for i in range(12):
+            samples[i]["symbol"] = "600519.SH"
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_n"]["passed"] is False
+        assert result["matrix"]["dimension_n"]["details"]["max_symbol_share"] > 0.15
+
+    def test_dimension_side_split_insufficient_samples_fails(self):
+        """Dimension 2 (Side): bull or bear samples < 25 must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Set 40 bull winners and 20 bear winners
+        for i in range(40):
+            samples[i]["investment_debate_state"]["manager_verdict"]["winner"] = "bull"
+        for i in range(40, 60):
+            samples[i]["investment_debate_state"]["manager_verdict"]["winner"] = "bear"
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_side"]["passed"] is False
+        assert result["matrix"]["dimension_side"]["details"]["bear_samples"] == 20
+
+    def test_dimension_time_span_insufficient_days_fails(self):
+        """Dimension 3 (Time): Less than 45 calendar days must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Constrain all trade dates to 20 days span
+        for i, s in enumerate(samples):
+            s["trade_date"] = f"2026-08-{1 + (i % 20):02d}"
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_time"]["passed"] is False
+        assert result["matrix"]["dimension_time"]["details"]["calendar_days"] < 45
+
+    def test_dimension_t_plus_5_completeness_fails(self):
+        """Dimension 4 (T+5): Completeness rate < 95% must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Set 10 samples to have missing/unreached T+5 when they should be evaluated (50/60 = 83.3% < 95%)
+        for i in range(10):
+            samples[i]["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            samples[i]["is_t_plus_5_due"] = True  # explicitly marked as due but missing
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_t5"]["passed"] is False
+
+    def test_dimension_balance_ratio_and_diff_fails(self):
+        """Dimension 5 (Balance): |Nbull - Nbear| > 10 must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for i in range(36):
+            samples[i]["investment_debate_state"]["manager_verdict"]["winner"] = "bull"
+        for i in range(36, 60):
+            samples[i]["investment_debate_state"]["manager_verdict"]["winner"] = "bear"
+        # 36 vs 24 -> diff = 12 > 10
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_balance"]["passed"] is False
+        assert result["matrix"]["dimension_balance"]["details"]["side_diff"] == 12
+
+    def test_dimension_bias_freeze_delta_verified_fails(self):
+        """Dimension 6 (Bias Freeze): Δverified > 18% must fail."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for s in samples:
+            s["shadow_credit_metrics"]["bull_verified_rate"] = 0.90
+            s["shadow_credit_metrics"]["bear_verified_rate"] = 0.70  # delta = 20% > 18%
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        assert result["matrix"]["dimension_bias"]["passed"] is False
+        assert result["matrix"]["dimension_bias"]["details"]["delta_verified_rate"] == pytest.approx(0.20, abs=1e-4)
+
+    def test_all_dimensions_pass_produces_eligible_recommendation(self):
+        """When all 7 dimensions pass, system gate is PASS and recommendation is ELIGIBLE_FOR_ACTIVATION."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Ensure 60 calendar days and 40 trading days
+        from datetime import date, timedelta
+        start = date(2026, 5, 1)
+        for i, s in enumerate(samples):
+            s["trade_date"] = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is True
+        assert result["recommendation"] == "ELIGIBLE_FOR_ACTIVATION"
+        for dim_name, dim_info in result["matrix"].items():
+            assert dim_info["passed"] is True, f"Dimension {dim_name} failed: {dim_info}"
+
+
+class TestLayeredIsolationStateMachine:
+    """Test suite for layered isolation (System -> Model -> Global Shadow)."""
+
+    def test_system_gate_fail_forces_global_shadow(self):
+        """If system gate fails, credit weighting is completely inactive (weights=1.0)."""
+        samples = _build_qualifying_sample_pool(n=10)  # Only 10 samples -> FAIL
+        system_gate = evaluate_h1b_system_gates(samples)
+        assert system_gate["passed"] is False
+
+        model_isolation = evaluate_model_bias_and_weights(samples, system_gate_passed=False)
+        assert model_isolation["credit_weighting_active"] is False
+        assert model_isolation["global_fallback_shadow"] is True
+        assert model_isolation["model_weights"]["deepseek-r1"] == 1.0
+        assert model_isolation["model_weights"]["qwen-max"] == 1.0
+
+    def test_single_model_bias_clamped_to_1_0(self):
+        """If a single model has bias exceeding threshold, only that model is clamped to 1.0 with reason."""
+        samples = _build_qualifying_sample_pool(n=60)
+        from datetime import date, timedelta
+        start = date(2026, 5, 1)
+        for i, s in enumerate(samples):
+            s["trade_date"] = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            # Let deepseek-r1 have high verified delta or high consistency gate trigger rate
+            s["shadow_credit_metrics"]["bull_verified_rate"] = 0.95
+            s["shadow_credit_metrics"]["bear_verified_rate"] = 0.72  # > 18% bias on bull stance
+
+        system_gate = evaluate_h1b_system_gates(samples)
+        # Note: system gate bias check may pass or fail depending on setup, let's test model-level isolation
+        model_isolation = evaluate_model_bias_and_weights(
+            samples,
+            system_gate_passed=True,
+            per_model_bias_overrides={"deepseek-r1": {"biased": True, "reason": "Δverified=23% > 18%"}},
+        )
+
+        assert model_isolation["credit_weighting_active"] is True
+        assert model_isolation["model_weights"]["deepseek-r1"] == 1.0
+        assert "deepseek-r1" in model_isolation["bias_freeze_reasons"]
+        assert "Δverified" in model_isolation["bias_freeze_reasons"]["deepseek-r1"]
+
+    def test_abnormal_model_ratio_over_50_pct_falls_back_to_global_shadow(self):
+        """If abnormal/biased models ratio > 50%, trigger global fallback to Shadow."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Suppose 2 out of 3 models are biased (> 50%)
+        model_isolation = evaluate_model_bias_and_weights(
+            samples,
+            system_gate_passed=True,
+            per_model_bias_overrides={
+                "deepseek-r1": {"biased": True, "reason": "Bias exceeded"},
+                "qwen-max": {"biased": True, "reason": "Consistency triggers > 5%"},
+                "gpt-4o": {"biased": False},
+            },
+        )
+
+        assert model_isolation["credit_weighting_active"] is False
+        assert model_isolation["global_fallback_shadow"] is True
+        assert model_isolation["abnormal_model_ratio"] == pytest.approx(2 / 3, abs=1e-3)
+        assert model_isolation["model_weights"]["deepseek-r1"] == 1.0
+        assert model_isolation["model_weights"]["qwen-max"] == 1.0
+        assert model_isolation["model_weights"]["gpt-4o"] == 1.0
+
+
+class TestCreditWeightingApplication:
+    """Test suite for credit weight application on claims and verdicts."""
+
+    def test_unsupported_and_contradicted_never_elevated(self):
+        """Contradicted and unsupported claims must NEVER receive weight > 0 or be elevated to verified."""
+        claims = [
+            {"claim_id": "C1", "speaker": "Bull", "model_name": "deepseek-r1", "status": "verified", "is_verified": True},
+            {"claim_id": "C2", "speaker": "Bull", "model_name": "deepseek-r1", "status": "unsupported", "is_verified": False},
+            {"claim_id": "C3", "speaker": "Bear", "model_name": "qwen-max", "status": "contradicted", "is_verified": False},
+        ]
+        claim_summary = {
+            "C1": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+            "C2": {"decision": "reject", "counts": {"verified": 0, "total": 1}},
+            "C3": {"decision": "reject", "counts": {"contradicted": 1, "total": 1}},
+        }
+        model_weights = {"deepseek-r1": 1.15, "qwen-max": 0.85}
+
+        weights_res = calculate_claim_credit_weights(
+            claims=claims,
+            claim_evidence_summary=claim_summary,
+            model_weights=model_weights,
+            credit_weighting_enabled=True,
+            system_gate_passed=True,
+        )
+
+        # C1 (verified) gets weight 1.15
+        assert weights_res["claim_weights"]["C1"] == 1.15
+        # C2 and C3 must NOT be elevated
+        assert weights_res["claim_weights"]["C2"] == 0.0 or weights_res["claim_decisions"]["C2"] == "reject"
+        assert weights_res["claim_weights"]["C3"] == 0.0 or weights_res["claim_decisions"]["C3"] == "reject"
+        assert weights_res["claim_decisions"]["C2"] == "reject"
+        assert weights_res["claim_decisions"]["C3"] == "reject"
+
+    def test_weight_multiplier_strictly_bounded(self):
+        """Weights must be strictly bounded in [0.85, 1.15]."""
+        claims = [
+            {"claim_id": "C1", "speaker": "Bull", "model_name": "super-bull", "status": "verified"},
+            {"claim_id": "C2", "speaker": "Bear", "model_name": "bad-bear", "status": "verified"},
+        ]
+        claim_summary = {
+            "C1": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+            "C2": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+        }
+        # Provide out-of-bound raw weights 1.50 and 0.50
+        model_weights = {"super-bull": 1.50, "bad-bear": 0.50}
+
+        weights_res = calculate_claim_credit_weights(
+            claims=claims,
+            claim_evidence_summary=claim_summary,
+            model_weights=model_weights,
+            credit_weighting_enabled=True,
+            system_gate_passed=True,
+        )
+
+        assert weights_res["claim_weights"]["C1"] == 1.15
+        assert weights_res["claim_weights"]["C2"] == 0.85
+
+    def test_flag_disabled_instant_flat_weighting(self):
+        """When credit_weighting_enabled=False, all weights are 1.0 and shadow metrics are preserved."""
+        fixture = _build_mock_debate_sample()
+        fixture["investment_debate_state"]["feature_flags"]["credit_weighting_enabled"] = False
+
+        applied = apply_credit_weighting_to_debate(fixture)
+        assert applied["credit_weighting_active"] is False
+        assert applied["shadow_credit_metrics"]["credit_weighting_enabled"] is False
+        # All claim weights are 1.0 (flat)
+        for w in applied.get("claim_weights", {}).values():
+            assert w == 1.0

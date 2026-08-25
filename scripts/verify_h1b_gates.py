@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""P3-H1b: 信用加权门槛校验与分层隔离只读检查脚本 (verify_h1b_gates.py).
+
+功能：
+1. 扫描当前数据库 (ReportDB / reports) 及历史 v2 结构化辩论报告；
+2. 提取并核验 7 维门槛指标矩阵 (N, 分侧, 时间, T+5 完整率, 平衡, 偏置冻结, 幅度)；
+3. 输出 7 维 PASS/FAIL 结构化矩阵与汇总 JSON；
+4. 依据已批准门槛给出系统级决策建议（样本未达标时明确建议保持关 flag）。
+"""
+
+import argparse
+import json
+import logging
+import os
+import sys
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+# Ensure project root in sys.path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from tradingagents.agents.utils.shadow_credit import (
+    H1B_THRESHOLDS,
+    calculate_shadow_credit_metrics,
+    evaluate_h1b_system_gates,
+    evaluate_model_bias_and_weights,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("verify_h1b_gates")
+
+
+def load_reports_from_db(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load reports from SQLite database or fallback paths."""
+    reports: List[Dict[str, Any]] = []
+
+    # Try loading via sqlalchemy ReportDB if db exists
+    try:
+        from api.database import get_db_ctx, ReportDB
+        with get_db_ctx() as db:
+            db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
+            for r in db_reports:
+                data = r.to_dict()
+                res_data = data.get("result_data") or {}
+                if isinstance(res_data, dict):
+                    # Merge top-level metadata
+                    merged = {**res_data, **data}
+                    reports.append(merged)
+        if reports:
+            logger.info("从数据库中加载了 %d 份报告记录", len(reports))
+            return reports
+    except Exception as exc:
+        logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
+
+    # Check golden audit reports as fallback/supplement
+    golden_dir = os.path.join(project_root, "tests", "golden", "audit_20260823")
+    if os.path.exists(golden_dir):
+        for fname in sorted(os.listdir(golden_dir)):
+            if fname.endswith("_result_data.json"):
+                fpath = os.path.join(golden_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict):
+                            reports.append(data)
+                except Exception as e:
+                    logger.debug("读取 golden 报告 %s 失败: %s", fname, e)
+
+    logger.info("共检索到 %d 份可用历史辩论样本", len(reports))
+    return reports
+
+
+def format_gates_matrix_text(evaluation: Dict[str, Any]) -> str:
+    """Format evaluation matrix to clean terminal table."""
+    matrix = evaluation.get("matrix", {})
+    summary = evaluation.get("summary", {})
+    passed = evaluation.get("passed", False)
+    rec = evaluation.get("recommendation", "KEEP_FALSE")
+
+    lines = [
+        "=" * 80,
+        "P3-H1b 信用加权门槛校验报告 (7维门槛矩阵)",
+        "=" * 80,
+    ]
+
+    d_n = matrix.get("dimension_n", {})
+    d_side = matrix.get("dimension_side", {})
+    d_time = matrix.get("dimension_time", {})
+    d_t5 = matrix.get("dimension_t5", {})
+    d_balance = matrix.get("dimension_balance", {})
+    d_bias = matrix.get("dimension_bias", {})
+    d_mag = matrix.get("dimension_magnitude", {})
+
+    def _st(p: bool) -> str:
+        return "[ PASS ]" if p else "[ FAIL ]"
+
+    # 1. N
+    det_n = d_n.get("details", {})
+    lines.append(
+        f"1. 样本与覆盖 (N)      : {_st(d_n.get('passed', False))} "
+        f"样本量={det_n.get('sample_count', 0)}/{det_n.get('min_required', 60)}, "
+        f"标的数={det_n.get('unique_symbols', 0)}/{det_n.get('min_unique_symbols', 20)}, "
+        f"行业数={det_n.get('unique_industries', 0)}/{det_n.get('min_industries', 5)}, "
+        f"单标的占比={det_n.get('max_symbol_share', 0.0):.1%}<={det_n.get('max_allowed_share', 0.15):.1%}"
+    )
+
+    # 2. Side
+    det_side = d_side.get("details", {})
+    lines.append(
+        f"2. 分侧样本与Claims    : {_st(d_side.get('passed', False))} "
+        f"多空样本={det_side.get('bull_samples', 0)}/{det_side.get('bear_samples', 0)} (各>={det_side.get('min_side_samples', 25)}), "
+        f"Verified Claims={det_side.get('bull_verified_claims', 0)}/{det_side.get('bear_verified_claims', 0)} (各>={det_side.get('min_verified_claims', 100)})"
+    )
+
+    # 3. Time
+    det_time = d_time.get("details", {})
+    lines.append(
+        f"3. 时间跨度与市场状态  : {_st(d_time.get('passed', False))} "
+        f"自然日={det_time.get('calendar_days', 0)}/{det_time.get('min_calendar_days', 45)}, "
+        f"交易日={det_time.get('trading_days', 0)}/{det_time.get('min_trading_days', 30)}, "
+        f"覆盖状态={det_time.get('market_regimes_covered', [])}"
+    )
+
+    # 4. T+5
+    det_t5 = d_t5.get("details", {})
+    lines.append(
+        f"4. T+5 完整率          : {_st(d_t5.get('passed', False))} "
+        f"完整率={det_t5.get('completeness_rate', 0.0):.1%}/{det_t5.get('min_required_rate', 0.95):.1%} "
+        f"(已评估={det_t5.get('completed_count', 0)}/到期={det_t5.get('due_count', 0)})"
+    )
+
+    # 5. Balance
+    det_bal = d_balance.get("details", {})
+    lines.append(
+        f"5. 多空平衡性          : {_st(d_balance.get('passed', False))} "
+        f"多头占比={det_bal.get('bull_ratio', 0.0):.1%} (区间 [40.0%, 60.0%]), "
+        f"多空差值={det_bal.get('side_diff', 0)}<={det_bal.get('max_allowed_diff', 10)}"
+    )
+
+    # 6. Bias Freeze
+    det_bias = d_bias.get("details", {})
+    lines.append(
+        f"6. 偏置冻结指标        : {_st(d_bias.get('passed', False))} "
+        f"Δverified={det_bias.get('delta_verified_rate', 0.0):.1%}<={det_bias.get('max_allowed_delta_v', 0.18):.1%}, "
+        f"Δchallenge={det_bias.get('delta_challenge_adoption_rate', 0.0):.1%}<={det_bias.get('max_allowed_delta_ch', 0.25):.1%}, "
+        f"克隆率={det_bias.get('clone_rate', 0.0):.1%}<={det_bias.get('max_allowed_clone_rate', 0.05):.1%}, "
+        f"自洽硬闸触发率={det_bias.get('consistency_trigger_rate', 0.0):.1%}<={det_bias.get('max_allowed_consistency_rate', 0.05):.1%}"
+    )
+
+    # 7. Magnitude
+    det_mag = d_mag.get("details", {})
+    lines.append(
+        f"7. 加权幅度范围        : {_st(d_mag.get('passed', True))} "
+        f"系数范围={det_mag.get('range', [0.85, 1.15])}"
+    )
+
+    lines.append("-" * 80)
+    lines.append(f"【系统级门槛总状态】: {'PASS (全部通过)' if passed else 'FAIL (未达标)'}")
+    lines.append(f"【Feature Flag 建议】: {'可开启 (ELIGIBLE_FOR_ACTIVATION)' if passed else '严禁开启，保持默认关闭 (KEEP_FALSE)'}")
+    lines.append("=" * 80)
+
+    return "\n".join(lines)
+
+
+def run_verify(
+    db_path: Optional[str] = None,
+    output_json: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute gate verification and generate structured report."""
+    reports = load_reports_from_db(db_path)
+
+    # 1. 7-dimension gate evaluation
+    gate_eval = evaluate_h1b_system_gates(reports)
+
+    # 2. Model isolation evaluation
+    isolation_eval = evaluate_model_bias_and_weights(
+        reports,
+        system_gate_passed=gate_eval["passed"],
+    )
+
+    report_result: Dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "task_id": "P3-H1b",
+        "sample_count": len(reports),
+        "gate_evaluation": gate_eval,
+        "model_isolation": isolation_eval,
+        "recommendation": gate_eval["recommendation"],
+    }
+
+    # Print terminal output
+    print(format_gates_matrix_text(gate_eval))
+    print(f"分层隔离状态: credit_weighting_active={isolation_eval.get('credit_weighting_active')}, global_fallback_shadow={isolation_eval.get('global_fallback_shadow')}")
+    print(f"模型权重分配: {isolation_eval.get('model_weights')}")
+    if isolation_eval.get("bias_freeze_reasons"):
+        print(f"偏置冻结原因: {isolation_eval.get('bias_freeze_reasons')}")
+
+    if output_json:
+        out_dir = os.path.dirname(output_json)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(output_json, "w", encoding="utf-8") as f:
+            json.dump(report_result, f, ensure_ascii=False, indent=2)
+        print(f"\n[产物生成] 结构化门槛校验 JSON 已写入: {output_json}")
+
+    return report_result
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="P3-H1b 信用加权门槛校验脚本")
+    parser.add_argument("--db-path", type=str, default=None, help="SQLite 数据库路径")
+    parser.add_argument("--output-json", type=str, default="work/h1b_gates_report.json", help="输出汇总 JSON 路径")
+    args = parser.parse_args()
+
+    res = run_verify(db_path=args.db_path, output_json=args.output_json)
+    # Exit code: 0 if valid execution
+    sys.exit(0)
