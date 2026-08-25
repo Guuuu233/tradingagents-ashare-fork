@@ -449,6 +449,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             )
 
         new_investment_debate_state = {
+            **investment_debate_state,
             "judge_decision": final_decision,
             "history": investment_debate_state.get("history", ""),
             "bear_history": investment_debate_state.get("bear_history", ""),

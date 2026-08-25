@@ -659,3 +659,65 @@ def test_legacy_four_round_still_fails_six_round_pre_gate():
     errors = validate_debate_preconditions(debate_state, claims=debate_state["claims"])
     assert errors
     assert any("6" in err for err in errors)
+
+
+def test_research_manager_success_path_preserves_v2_protocol_metadata():
+    """Success-path manager return must keep v2 protocol fields for persistence.
+
+    Live 000858/000063/000651 reports dropped protocol_version/feature_flags/
+    challenges on the manager rewrite, so get_protocol_metadata defaulted to v1.
+    """
+    from tradingagents.agents.utils.agent_states import (
+        PROTOCOL_VERSION_V2_STRUCTURED,
+        get_protocol_metadata,
+    )
+
+    state = _make_base_state()
+    debate_state = _v2_four_round_skipped_tiebreak_state()
+    debate_state["history"] = "辩论历史"
+    debate_state["bull_history"] = "多头历史"
+    debate_state["bear_history"] = "空头历史"
+    debate_state["current_speaker"] = "Bear"
+    debate_state["unresolved_claim_ids"] = ["INV-1", "INV-4"]
+    debate_state["round_summary"] = "Opening 与 Challenge 已完成"
+    state["investment_debate_state"] = debate_state
+
+    verdict_body = (
+        "研究总监裁决正文\n"
+        "<!-- MANAGER_VERDICT: {"
+        '"winner": "bear", "direction": "偏空", "reason": "现金流与估值证据更硬",'
+        '"position_pct": 0, "entry": null, "target": "31.5", "stop_loss": "32.8",'
+        '"upside": 5.0, "downside": 12.0, "odds": 0.4,'
+        '"adopted_claim_ids": ["INV-4", "INV-5", "INV-6"],'
+        '"partially_adopted_claims": [],'
+        '"rejected_claim_ids": ["INV-1", "INV-2", "INV-3"],'
+        '"excluded_evidence": [],'
+        '"dispute_map": [{'
+        '"data_point": "经营现金流同比下滑30%",'
+        '"bull_interpretation": "短期波动",'
+        '"bear_interpretation": "盈利质量恶化",'
+        '"evidence_decision": "财报现金流更可信",'
+        '"winner": "bear"}]'
+        "} -->"
+    )
+
+    mock_llm = MagicMock()
+    mock_llm.astream = lambda prompt: _fake_stream(verdict_body)
+    mock_memory = MagicMock()
+    mock_memory.get_memories.return_value = []
+
+    manager_node = create_research_manager(mock_llm, mock_memory)
+    result = asyncio.run(manager_node(state))
+
+    inv = result["investment_debate_state"]
+    assert inv.get("protocol_version") == PROTOCOL_VERSION_V2_STRUCTURED
+    assert inv.get("feature_flags", {}).get("v2_debate_enabled") is True
+    assert inv.get("tiebreak_skipped") is True
+    assert inv.get("challenges")
+    assert inv.get("count") == 4
+    assert len(inv.get("round_messages") or []) == 4
+
+    meta = get_protocol_metadata({"investment_debate_state": inv})
+    assert meta["protocol_version"] == PROTOCOL_VERSION_V2_STRUCTURED
+    assert meta["feature_flags"]["v2_debate_enabled"] is True
+    assert meta["tiebreak_skipped"] is True
