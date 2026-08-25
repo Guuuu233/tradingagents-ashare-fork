@@ -1,0 +1,230 @@
+{
+  "schema_version": "evaluation_matrix_v1",
+  "matrix_id": "matrix_600519.SH_2026-08-20_mock_rep",
+  "evaluated_at": "2026-08-25T18:30:29.526255+00:00",
+  "quadrant_1_protocol_metadata": {
+    "report_id": "mock_rep_bull_001",
+    "symbol": "600519.SH",
+    "security_name": "贵州茅台",
+    "trade_date": "2026-08-20",
+    "industry": "白酒",
+    "market_regime": "bull_trend",
+    "protocol_version": "v2_structured_disagreement",
+    "protocol_stage": "manager",
+    "tiebreak_skipped": false,
+    "debate_degenerate": false,
+    "feature_flags": {
+      "v2_debate_enabled": false,
+      "shadow_credit_enabled": true,
+      "credit_weighting_enabled": false
+    },
+    "model_assignments": {
+      "bull": "deepseek-r1",
+      "bear": "qwen-max",
+      "manager": null
+    },
+    "latency_ms": 1250.0,
+    "token_usage": null,
+    "created_at": "2026-08-25T18:30:29.524691+00:00"
+  },
+  "quadrant_2_data_sources_and_gaps": {
+    "data_gaps": [],
+    "source_provenance": {
+      "stock_data": {
+        "status": "ok",
+        "gap_class": "operational"
+      },
+      "fundamentals": {
+        "status": "ok",
+        "gap_class": "operational"
+      }
+    },
+    "gaps_summary": {
+      "total_gaps": 0,
+      "structural_count": 0,
+      "operational_count": 0,
+      "resident_fault_count": 0
+    },
+    "data_utilization": {
+      "seven_reports_utilization": {
+        "numerator": 7,
+        "denominator": 21,
+        "rate": 0.3333,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "macro_utilization": {
+        "numerator": 0,
+        "denominator": 3,
+        "rate": 0.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "fundamentals_utilization": {
+        "numerator": 3,
+        "denominator": 5,
+        "rate": 0.6,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "analyst_utilization_by_role": {
+        "macro": 0.0,
+        "market": 0.0,
+        "sentiment": 0.0,
+        "news": 0.5,
+        "fundamentals": 0.6,
+        "smart_money": 0.6667,
+        "volume_price": 0.3333
+      }
+    }
+  },
+  "quadrant_3_debate_quality": {
+    "verified_rates": {
+      "bull_verified_rate": {
+        "numerator": 5,
+        "denominator": 5,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "bear_verified_rate": {
+        "numerator": 0,
+        "denominator": 1,
+        "rate": 0.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "bull_bear_verified_delta": {
+        "numerator": 5,
+        "denominator": 5,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      }
+    },
+    "battlefield_coverage": {
+      "manager_evidence_coverage": 0.8333,
+      "total_claims_count": 3,
+      "verified_claims_count": 2,
+      "unsupported_claims_count": 1,
+      "contradicted_claims_count": 0
+    },
+    "evidence_recycling": {
+      "evidence_recycling_rate": {
+        "numerator": 1,
+        "denominator": 4,
+        "rate": 0.25,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "unique_claim_count": 3,
+      "total_claim_count": 3,
+      "clone_rate": 0.0
+    },
+    "challenge_metrics": {
+      "challenge_count": {
+        "numerator": 1,
+        "denominator": 1,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "challenge_adoption_rate": {
+        "numerator": 1,
+        "denominator": 1,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "bull_challenge_adoption_rate": 1.0,
+      "bear_challenge_adoption_rate": null,
+      "challenge_evidence_status": {
+        "verified": 1,
+        "unsupported": 0,
+        "contradicted": 0,
+        "status": "valid",
+        "note": null
+      }
+    },
+    "field_completeness": {
+      "field_completeness_rate": {
+        "numerator": 4,
+        "denominator": 4,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "complete",
+        "present_fields": [
+          "confidence",
+          "probability",
+          "target_price",
+          "stop_loss_price"
+        ],
+        "missing_fields": [],
+        "legitimate_omissions": [],
+        "note": null
+      },
+      "present_fields": [
+        "confidence",
+        "probability",
+        "target_price",
+        "stop_loss_price"
+      ],
+      "missing_fields": [],
+      "legitimate_omissions": []
+    },
+    "debate_health": {
+      "consistency_check_passed": true,
+      "manager_consistency_gate_triggered": false,
+      "failed_checks": [],
+      "debate_degenerate": false
+    }
+  },
+  "quadrant_4_t_plus_5_and_shadow": {
+    "entry_price": 1650.0,
+    "target_price": 1820.0,
+    "stop_loss_price": 1580.0,
+    "decision_direction": "BUY",
+    "debate_winner": "bull",
+    "confidence": 85.0,
+    "probability": 0.85,
+    "t_plus_5_date": null,
+    "t_plus_5_price": 1708.0,
+    "t_plus_5_return_pct": 3.52,
+    "t_plus_5_direction_hit": true,
+    "t_plus_5_status": "due_and_evaluated",
+    "shadow_weighted_metrics": {
+      "credit_weighting_enabled": false,
+      "credit_weighting_active": false,
+      "system_gate_status": "FAIL",
+      "unweighted_decision": "BUY",
+      "shadow_weighted_decision": "BUY",
+      "unweighted_return_pct": 3.52,
+      "shadow_weighted_return_pct": 3.52,
+      "shadow_alpha_spread": 0.0,
+      "claim_weights": {
+        "CLM-1": 1.0,
+        "CLM-2": 1.0,
+        "CLM-3": 1.0
+      },
+      "model_weights": {
+        "deepseek-r1": 1.0,
+        "gpt-4o": 1.0,
+        "qwen-max": 1.0
+      },
+      "bias_freeze_reasons": {
+        "deepseek-r1": "System-level activation gates not passed",
+        "gpt-4o": "System-level activation gates not passed",
+        "qwen-max": "System-level activation gates not passed"
+      }
+    }
+  }
+}

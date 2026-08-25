@@ -1,0 +1,222 @@
+{
+  "schema_version": "evaluation_matrix_v1",
+  "matrix_id": "matrix_600900.SH_2026-08-20_mock_rep",
+  "evaluated_at": "2026-08-25T18:30:29.677352+00:00",
+  "quadrant_1_protocol_metadata": {
+    "report_id": "mock_rep_hold_003",
+    "symbol": "600900.SH",
+    "security_name": "长江电力",
+    "trade_date": "2026-08-20",
+    "industry": "公用事业",
+    "market_regime": "consolidation",
+    "protocol_version": "v2_structured_disagreement",
+    "protocol_stage": "manager",
+    "tiebreak_skipped": false,
+    "debate_degenerate": false,
+    "feature_flags": {
+      "v2_debate_enabled": false,
+      "shadow_credit_enabled": true,
+      "credit_weighting_enabled": false
+    },
+    "model_assignments": {
+      "bull": "deepseek-r1",
+      "bear": "qwen-max",
+      "manager": null
+    },
+    "latency_ms": 1050.0,
+    "token_usage": null,
+    "created_at": "2026-08-25T18:30:29.676211+00:00"
+  },
+  "quadrant_2_data_sources_and_gaps": {
+    "data_gaps": [],
+    "source_provenance": {},
+    "gaps_summary": {
+      "total_gaps": 0,
+      "structural_count": 0,
+      "operational_count": 0,
+      "resident_fault_count": 0
+    },
+    "data_utilization": {
+      "seven_reports_utilization": {
+        "numerator": 3,
+        "denominator": 12,
+        "rate": 0.25,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "macro_utilization": {
+        "numerator": 0,
+        "denominator": 2,
+        "rate": 0.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "fundamentals_utilization": {
+        "numerator": 2,
+        "denominator": 3,
+        "rate": 0.6667,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "analyst_utilization_by_role": {
+        "macro": 0.0,
+        "market": 0.5,
+        "sentiment": 0.0,
+        "news": 0.0,
+        "fundamentals": 0.6667,
+        "smart_money": 0.0,
+        "volume_price": 0.0
+      }
+    }
+  },
+  "quadrant_3_debate_quality": {
+    "verified_rates": {
+      "bull_verified_rate": {
+        "numerator": 2,
+        "denominator": 2,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "bear_verified_rate": {
+        "numerator": 1,
+        "denominator": 1,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "bull_bear_verified_delta": {
+        "numerator": 0,
+        "denominator": 2,
+        "rate": 0.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      }
+    },
+    "battlefield_coverage": {
+      "manager_evidence_coverage": 1.0,
+      "total_claims_count": 2,
+      "verified_claims_count": 2,
+      "unsupported_claims_count": 0,
+      "contradicted_claims_count": 0
+    },
+    "evidence_recycling": {
+      "evidence_recycling_rate": {
+        "numerator": 2,
+        "denominator": 2,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "valid",
+        "note": null
+      },
+      "unique_claim_count": 2,
+      "total_claim_count": 2,
+      "clone_rate": 0.0
+    },
+    "challenge_metrics": {
+      "challenge_count": {
+        "numerator": 0,
+        "denominator": 0,
+        "rate": null,
+        "version": "v2_structured_disagreement",
+        "status": "zero_denominator",
+        "note": "分母为0：未提出challenge"
+      },
+      "challenge_adoption_rate": {
+        "numerator": 0,
+        "denominator": 0,
+        "rate": null,
+        "version": "v2_structured_disagreement",
+        "status": "zero_denominator",
+        "note": "分母为0：未提出challenge"
+      },
+      "bull_challenge_adoption_rate": null,
+      "bear_challenge_adoption_rate": null,
+      "challenge_evidence_status": {
+        "verified": 0,
+        "unsupported": 0,
+        "contradicted": 0,
+        "status": "zero_denominator",
+        "note": "无challenge证据"
+      }
+    },
+    "field_completeness": {
+      "field_completeness_rate": {
+        "numerator": 4,
+        "denominator": 4,
+        "rate": 1.0,
+        "version": "v2_structured_disagreement",
+        "status": "complete",
+        "present_fields": [
+          "confidence",
+          "probability",
+          "stop_loss_price"
+        ],
+        "missing_fields": [],
+        "legitimate_omissions": [
+          "target_price"
+        ],
+        "note": "观望不设目标价"
+      },
+      "present_fields": [
+        "confidence",
+        "probability",
+        "stop_loss_price"
+      ],
+      "missing_fields": [],
+      "legitimate_omissions": [
+        "target_price"
+      ]
+    },
+    "debate_health": {
+      "consistency_check_passed": true,
+      "manager_consistency_gate_triggered": false,
+      "failed_checks": [],
+      "debate_degenerate": false
+    }
+  },
+  "quadrant_4_t_plus_5_and_shadow": {
+    "entry_price": 29.0,
+    "target_price": null,
+    "stop_loss_price": 27.5,
+    "decision_direction": "HOLD",
+    "debate_winner": "tie",
+    "confidence": 60.0,
+    "probability": 0.5,
+    "t_plus_5_date": null,
+    "t_plus_5_price": 29.05,
+    "t_plus_5_return_pct": 0.17,
+    "t_plus_5_direction_hit": true,
+    "t_plus_5_status": "due_and_evaluated",
+    "shadow_weighted_metrics": {
+      "credit_weighting_enabled": false,
+      "credit_weighting_active": false,
+      "system_gate_status": "FAIL",
+      "unweighted_decision": "HOLD",
+      "shadow_weighted_decision": "HOLD",
+      "unweighted_return_pct": 0.17,
+      "shadow_weighted_return_pct": 0.17,
+      "shadow_alpha_spread": 0.0,
+      "claim_weights": {
+        "CLM-H1": 1.0,
+        "CLM-H2": 1.0
+      },
+      "model_weights": {
+        "deepseek-r1": 1.0,
+        "gpt-4o": 1.0,
+        "qwen-max": 1.0
+      },
+      "bias_freeze_reasons": {
+        "deepseek-r1": "System-level activation gates not passed",
+        "gpt-4o": "System-level activation gates not passed",
+        "qwen-max": "System-level activation gates not passed"
+      }
+    }
+  }
+}
