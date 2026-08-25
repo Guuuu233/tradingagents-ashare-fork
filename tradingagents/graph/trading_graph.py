@@ -44,6 +44,7 @@ from .report_quality_gate import apply_report_quality_gate
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
+from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
 
 
 _logger = logging.getLogger(__name__)
@@ -477,6 +478,9 @@ class TradingAgentsGraph:
         # Normalize protocol metadata and compute debate metrics without mutating final_state
         meta = get_protocol_metadata(final_state)
         data_utilization_metrics = calculate_all_debate_metrics(result)
+        shadow_credit_metrics = meta.get("shadow_credit_metrics")
+        if not shadow_credit_metrics or shadow_credit_metrics == {}:
+            shadow_credit_metrics = calculate_shadow_credit_metrics(result)
 
         if inv_state is not None:
             if (
@@ -490,7 +494,7 @@ class TradingAgentsGraph:
                 inv_state["debate_degenerate"] = meta["debate_degenerate"]
                 inv_state["data_utilization_metrics"] = data_utilization_metrics
                 inv_state["challenge_verification"] = meta["challenge_verification"]
-                inv_state["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+                inv_state["shadow_credit_metrics"] = shadow_credit_metrics
                 inv_state["feature_flags"] = meta["feature_flags"]
 
         result["protocol_version"] = meta["protocol_version"]
@@ -499,7 +503,7 @@ class TradingAgentsGraph:
         result["debate_degenerate"] = meta["debate_degenerate"]
         result["data_utilization_metrics"] = data_utilization_metrics
         result["challenge_verification"] = meta["challenge_verification"]
-        result["shadow_credit_metrics"] = meta["shadow_credit_metrics"]
+        result["shadow_credit_metrics"] = shadow_credit_metrics
         result["feature_flags"] = meta["feature_flags"]
 
         return result

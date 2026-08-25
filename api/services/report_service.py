@@ -1158,6 +1158,11 @@ def create_report(
             canonical_result_data["target_price"] = resolved["target_price"]
         if resolved.get("stop_loss_price") is not None and "stop_loss_price" in canonical_result_data:
             canonical_result_data["stop_loss_price"] = resolved["stop_loss_price"]
+        if not canonical_result_data.get("shadow_credit_metrics"):
+            from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
+            canonical_result_data["shadow_credit_metrics"] = calculate_shadow_credit_metrics(canonical_result_data)
+            if isinstance(canonical_result_data.get("investment_debate_state"), dict):
+                canonical_result_data["investment_debate_state"]["shadow_credit_metrics"] = canonical_result_data["shadow_credit_metrics"]
 
     now = datetime.now(timezone.utc)
     target_status = status or "completed"

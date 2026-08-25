@@ -508,7 +508,8 @@ class TestJobExecutionDebatePersistence:
         assert result_data["tiebreak_skipped"] is False
         assert result_data["debate_degenerate"] is False
         assert result_data["challenge_verification"] == []
-        assert result_data["shadow_credit_metrics"] == {}
+        assert isinstance(result_data["shadow_credit_metrics"], dict)
+        assert result_data["shadow_credit_metrics"].get("credit_weighting_enabled", False) is False
         assert isinstance(result_data["data_utilization_metrics"], dict)
         top_fc = result_data["data_utilization_metrics"]["field_completeness"]
         assert top_fc["numerator"] == 4
@@ -630,7 +631,8 @@ class TestJobExecutionDebatePersistence:
         assert result_data["tiebreak_skipped"] is False
         assert result_data["debate_degenerate"] is False
         assert result_data["challenge_verification"] == []
-        assert result_data["shadow_credit_metrics"] == {}
+        assert isinstance(result_data["shadow_credit_metrics"], dict)
+        assert result_data["shadow_credit_metrics"].get("credit_weighting_enabled", False) is False
         assert isinstance(result_data["data_utilization_metrics"], dict)
 
         # Field completeness refreshed after structured resolve on hoist path
@@ -742,7 +744,8 @@ class TestJobExecutionDebatePersistence:
             assert result_data["tiebreak_skipped"] is False
             assert result_data["debate_degenerate"] is False
             assert result_data["challenge_verification"] == []
-            assert result_data["shadow_credit_metrics"] == {}
+            assert isinstance(result_data["shadow_credit_metrics"], dict)
+            assert result_data["shadow_credit_metrics"].get("credit_weighting_enabled", False) is False
             assert isinstance(result_data["data_utilization_metrics"], dict)
             assert "evidence_recycling" in result_data["data_utilization_metrics"]
             assert "seven_reports_utilization" in result_data["data_utilization_metrics"]
