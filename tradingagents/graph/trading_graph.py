@@ -45,6 +45,7 @@ from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
 from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
+from tradingagents.agents.utils.model_tier_warning import check_model_tier_warnings
 
 
 _logger = logging.getLogger(__name__)
@@ -481,6 +482,10 @@ class TradingAgentsGraph:
         shadow_credit_metrics = meta.get("shadow_credit_metrics")
         if not shadow_credit_metrics or shadow_credit_metrics == {}:
             shadow_credit_metrics = calculate_shadow_credit_metrics(result)
+        model_tier_warning = check_model_tier_warnings(
+            result,
+            role_resolved_configs=getattr(self, "role_resolved_configs", {}),
+        )
 
         if inv_state is not None:
             if (
@@ -496,6 +501,9 @@ class TradingAgentsGraph:
                 inv_state["challenge_verification"] = meta["challenge_verification"]
                 inv_state["shadow_credit_metrics"] = shadow_credit_metrics
                 inv_state["feature_flags"] = meta["feature_flags"]
+                inv_state["model_tier_warning"] = model_tier_warning
+                inv_state["model_tier_warnings"] = model_tier_warning["warnings"]
+                inv_state["model_tier_check"] = model_tier_warning
 
         result["protocol_version"] = meta["protocol_version"]
         result["protocol_stage"] = meta["protocol_stage"]
@@ -505,6 +513,9 @@ class TradingAgentsGraph:
         result["challenge_verification"] = meta["challenge_verification"]
         result["shadow_credit_metrics"] = shadow_credit_metrics
         result["feature_flags"] = meta["feature_flags"]
+        result["model_tier_warning"] = model_tier_warning
+        result["model_tier_warnings"] = model_tier_warning["warnings"]
+        result["model_tier_check"] = model_tier_warning
 
         return result
 

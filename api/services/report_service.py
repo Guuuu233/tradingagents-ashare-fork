@@ -1163,6 +1163,16 @@ def create_report(
             canonical_result_data["shadow_credit_metrics"] = calculate_shadow_credit_metrics(canonical_result_data)
             if isinstance(canonical_result_data.get("investment_debate_state"), dict):
                 canonical_result_data["investment_debate_state"]["shadow_credit_metrics"] = canonical_result_data["shadow_credit_metrics"]
+        if not canonical_result_data.get("model_tier_warning") and not canonical_result_data.get("model_tier_check"):
+            from tradingagents.agents.utils.model_tier_warning import check_model_tier_warnings
+            tier_meta = check_model_tier_warnings(canonical_result_data)
+            canonical_result_data["model_tier_warning"] = tier_meta
+            canonical_result_data["model_tier_warnings"] = tier_meta["warnings"]
+            canonical_result_data["model_tier_check"] = tier_meta
+            if isinstance(canonical_result_data.get("investment_debate_state"), dict):
+                canonical_result_data["investment_debate_state"]["model_tier_warning"] = tier_meta
+                canonical_result_data["investment_debate_state"]["model_tier_warnings"] = tier_meta["warnings"]
+                canonical_result_data["investment_debate_state"]["model_tier_check"] = tier_meta
 
     now = datetime.now(timezone.utc)
     target_status = status or "completed"
