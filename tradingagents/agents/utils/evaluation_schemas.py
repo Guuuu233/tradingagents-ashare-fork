@@ -724,6 +724,18 @@ class WeeklyAggregateMetricsModel(BaseModel):
         default_factory=WeeklyDeduplicationAuditModel,
         description="Historical sample deduplication audit",
     )
+    drilldown_by_industry: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Drilldown analytics grouped by industry",
+    )
+    drilldown_by_model: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Drilldown analytics grouped by model assignment",
+    )
+    drilldown_by_regime: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Drilldown analytics grouped by market regime",
+    )
 
 
 class WeeklyMetricsJSONModel(BaseModel):
@@ -982,6 +994,9 @@ class WeeklyAggregateMetrics(TypedDict, total=False):
     t5_calibration: WeeklyT5Calibration
     h1b_system_gates_evaluation: WeeklyH1bGates
     deduplication_audit: WeeklyDeduplicationAudit
+    drilldown_by_industry: Dict[str, Any]
+    drilldown_by_model: Dict[str, Any]
+    drilldown_by_regime: Dict[str, Any]
 
 
 class WeeklyMetricsJSON(TypedDict, total=False):
@@ -1490,6 +1505,229 @@ def build_evaluation_metric_matrix(
     }
 
 
+def calculate_drilldown_by_industry(
+    matrix_samples: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Group metrics by industry and compute drill-down statistics."""
+    industry_groups: Dict[str, List[Mapping[str, Any]]] = {}
+    for m in matrix_samples:
+        q1 = m.get("quadrant_1_protocol_metadata") or {}
+        ind = str(q1.get("industry") or "未知行业").strip()
+        industry_groups.setdefault(ind, []).append(m)
+
+    result = {}
+    for ind, samples in sorted(industry_groups.items()):
+        total = len(samples)
+        bull_cnt = 0
+        bear_cnt = 0
+        hold_cnt = 0
+        bull_v_rates = []
+        bear_v_rates = []
+        clone_rates = []
+        challenge_rates = []
+        t5_hits = 0
+        t5_due = 0
+        t5_returns = []
+
+        for s in samples:
+            q1 = s.get("quadrant_1_protocol_metadata") or {}
+            q3 = s.get("quadrant_3_debate_quality") or {}
+            q4 = s.get("quadrant_4_t_plus_5_and_shadow") or {}
+
+            dec = str(q4.get("decision_direction") or "").upper()
+            if any(w in dec for w in ("BUY", "BULL", "多", "买入", "增持")):
+                bull_cnt += 1
+            elif any(w in dec for w in ("SELL", "BEAR", "空", "卖出", "减持")):
+                bear_cnt += 1
+            else:
+                hold_cnt += 1
+
+            vr = q3.get("verified_rates") or {}
+            bv = vr.get("bull_verified_rate", {}).get("rate")
+            if bv is not None:
+                bull_v_rates.append(float(bv))
+            br = vr.get("bear_verified_rate", {}).get("rate")
+            if br is not None:
+                bear_v_rates.append(float(br))
+
+            cl = q3.get("evidence_recycling", {}).get("clone_rate")
+            if cl is not None:
+                clone_rates.append(float(cl))
+
+            ca = q3.get("challenge_metrics", {}).get("challenge_adoption_rate", {}).get("rate")
+            if ca is not None:
+                challenge_rates.append(float(ca))
+
+            hit = q4.get("t_plus_5_direction_hit")
+            st = q4.get("t_plus_5_status")
+            if hit is not None or st == "due_and_evaluated":
+                t5_due += 1
+                if hit is True:
+                    t5_hits += 1
+            ret = q4.get("t_plus_5_return_pct")
+            if ret is not None:
+                t5_returns.append(float(ret))
+
+        avg_bv = round(sum(bull_v_rates) / len(bull_v_rates), 4) if bull_v_rates else None
+        avg_br = round(sum(bear_v_rates) / len(bear_v_rates), 4) if bear_v_rates else None
+        delta_v = round(abs(avg_bv - avg_br), 4) if (avg_bv is not None and avg_br is not None) else None
+        avg_cl = round(sum(clone_rates) / len(clone_rates), 4) if clone_rates else 0.0
+        avg_ca = round(sum(challenge_rates) / len(challenge_rates), 4) if challenge_rates else None
+        t5_acc = round(t5_hits / t5_due, 4) if t5_due > 0 else None
+        avg_ret = round(sum(t5_returns) / len(t5_returns), 2) if t5_returns else None
+
+        result[ind] = {
+            "sample_count": total,
+            "bull_count": bull_cnt,
+            "bear_count": bear_cnt,
+            "hold_count": hold_cnt,
+            "bull_ratio": round(bull_cnt / total, 4) if total > 0 else 0.0,
+            "avg_bull_verified_rate": avg_bv,
+            "avg_bear_verified_rate": avg_br,
+            "delta_verified_rate": delta_v,
+            "avg_clone_rate": avg_cl,
+            "avg_challenge_adoption_rate": avg_ca,
+            "t5_accuracy_rate": t5_acc,
+            "avg_t5_return_pct": avg_ret,
+        }
+    return result
+
+
+def calculate_drilldown_by_model(
+    matrix_samples: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Group metrics by model assignment (bull/bear/manager) and compute performance."""
+    model_stats: Dict[str, Dict[str, Any]] = {}
+
+    for s in matrix_samples:
+        q1 = s.get("quadrant_1_protocol_metadata") or {}
+        q3 = s.get("quadrant_3_debate_quality") or {}
+        q4 = s.get("quadrant_4_t_plus_5_and_shadow") or {}
+        models = q1.get("model_assignments") or {}
+        winner = str(q4.get("debate_winner") or "").lower()
+
+        bull_model = models.get("bull") or "unknown_bull_model"
+        bear_model = models.get("bear") or "unknown_bear_model"
+
+        # Bull side
+        if bull_model not in model_stats:
+            model_stats[bull_model] = {
+                "total_debates": 0,
+                "bull_debates": 0,
+                "bear_debates": 0,
+                "bull_wins": 0,
+                "bear_wins": 0,
+                "ties": 0,
+                "verified_rates": [],
+                "challenge_adoption_rates": [],
+            }
+        model_stats[bull_model]["total_debates"] += 1
+        model_stats[bull_model]["bull_debates"] += 1
+        if winner == "bull":
+            model_stats[bull_model]["bull_wins"] += 1
+        elif winner == "tie":
+            model_stats[bull_model]["ties"] += 1
+
+        vr = q3.get("verified_rates") or {}
+        bv = vr.get("bull_verified_rate", {}).get("rate")
+        if bv is not None:
+            model_stats[bull_model]["verified_rates"].append(float(bv))
+
+        b_ca = q3.get("challenge_metrics", {}).get("bull_challenge_adoption_rate")
+        if b_ca is not None:
+            model_stats[bull_model]["challenge_adoption_rates"].append(float(b_ca))
+
+        # Bear side
+        if bear_model not in model_stats:
+            model_stats[bear_model] = {
+                "total_debates": 0,
+                "bull_debates": 0,
+                "bear_debates": 0,
+                "bull_wins": 0,
+                "bear_wins": 0,
+                "ties": 0,
+                "verified_rates": [],
+                "challenge_adoption_rates": [],
+            }
+        model_stats[bear_model]["total_debates"] += 1
+        model_stats[bear_model]["bear_debates"] += 1
+        if winner == "bear":
+            model_stats[bear_model]["bear_wins"] += 1
+        elif winner == "tie":
+            model_stats[bear_model]["ties"] += 1
+
+        br = vr.get("bear_verified_rate", {}).get("rate")
+        if br is not None:
+            model_stats[bear_model]["verified_rates"].append(float(br))
+
+        be_ca = q3.get("challenge_metrics", {}).get("bear_challenge_adoption_rate")
+        if be_ca is not None:
+            model_stats[bear_model]["challenge_adoption_rates"].append(float(be_ca))
+
+    result = {}
+    for m_name, st in sorted(model_stats.items()):
+        total = st["total_debates"]
+        total_wins = st["bull_wins"] + st["bear_wins"]
+        win_rate = round(total_wins / total, 4) if total > 0 else 0.0
+        v_rates = st["verified_rates"]
+        c_rates = st["challenge_adoption_rates"]
+
+        result[m_name] = {
+            "total_debates": total,
+            "bull_debates": st["bull_debates"],
+            "bear_debates": st["bear_debates"],
+            "bull_wins": st["bull_wins"],
+            "bear_wins": st["bear_wins"],
+            "ties": st["ties"],
+            "win_rate": win_rate,
+            "avg_verified_rate": round(sum(v_rates) / len(v_rates), 4) if v_rates else None,
+            "avg_challenge_adoption_rate": round(sum(c_rates) / len(c_rates), 4) if c_rates else None,
+        }
+    return result
+
+
+def calculate_drilldown_by_regime(
+    matrix_samples: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Group metrics by market regime."""
+    regime_groups: Dict[str, List[Mapping[str, Any]]] = {}
+    for m in matrix_samples:
+        q1 = m.get("quadrant_1_protocol_metadata") or {}
+        reg = str(q1.get("market_regime") or "未知状态").strip()
+        regime_groups.setdefault(reg, []).append(m)
+
+    result = {}
+    for reg, samples in sorted(regime_groups.items()):
+        total = len(samples)
+        bull_cnt = sum(
+            1
+            for s in samples
+            if any(w in str((s.get("quadrant_4_t_plus_5_and_shadow") or {}).get("decision_direction") or "").upper() for w in ("BUY", "BULL", "多", "买入"))
+        )
+        bear_cnt = sum(
+            1
+            for s in samples
+            if any(w in str((s.get("quadrant_4_t_plus_5_and_shadow") or {}).get("decision_direction") or "").upper() for w in ("SELL", "BEAR", "空", "卖出"))
+        )
+        hold_cnt = total - bull_cnt - bear_cnt
+        t5_hits = sum(1 for s in samples if (s.get("quadrant_4_t_plus_5_and_shadow") or {}).get("t_plus_5_direction_hit") is True)
+        t5_due = sum(
+            1
+            for s in samples
+            if (s.get("quadrant_4_t_plus_5_and_shadow") or {}).get("t_plus_5_direction_hit") is not None
+            or (s.get("quadrant_4_t_plus_5_and_shadow") or {}).get("t_plus_5_status") == "due_and_evaluated"
+        )
+
+        result[reg] = {
+            "sample_count": total,
+            "bull_count": bull_cnt,
+            "bear_count": bear_cnt,
+            "hold_count": hold_cnt,
+            "t5_accuracy_rate": round(t5_hits / t5_due, 4) if t5_due > 0 else None,
+        }
+    return result
+
+
 def build_weekly_metrics(
     samples: Sequence[Union[EvaluationMetricMatrix, Mapping[str, Any]]],
     *,
@@ -1815,6 +2053,11 @@ def build_weekly_metrics(
         ),
     }
 
+    # ── 7. Multi-Dimensional Drilldown Analytics ──────────────────────────────
+    drill_ind = calculate_drilldown_by_industry(matrix_samples)
+    drill_model = calculate_drilldown_by_model(matrix_samples)
+    drill_regime = calculate_drilldown_by_regime(matrix_samples)
+
     weekly_aggs: WeeklyAggregateMetrics = {
         "overview": overview,
         "quality_aggregates": quality_aggs,
@@ -1822,6 +2065,9 @@ def build_weekly_metrics(
         "t5_calibration": t5_calib,
         "h1b_system_gates_evaluation": h1b_gates,
         "deduplication_audit": dedup_audit,
+        "drilldown_by_industry": drill_ind,
+        "drilldown_by_model": drill_model,
+        "drilldown_by_regime": drill_regime,
     }
 
     return {
@@ -1955,6 +2201,64 @@ def render_weekly_summary_markdown(
         f"- **T+5 收益概况**：已结算样本平均收益 `{_num(avg_t5_ret)}%`，方向判断命中率 `{_pct(t5_acc)}`；",
         f"- **影子加权状态**：特性开关 `credit_weighting_enabled` 保持默认 `False`，所有加权仅在 Shadow 模式下并行离线观察；",
         f"- **权重幅度约束**：严格限定相对修正倍数位于 $[0.85, 1.15]$ 区间内，未核验及矛盾证据权重视为 0.0，绝不提权。",
+    ]
+
+    drill_ind = aggs.get("drilldown_by_industry") or {}
+    drill_model = aggs.get("drilldown_by_model") or {}
+    drill_regime = aggs.get("drilldown_by_regime") or {}
+
+    if drill_ind or drill_model or drill_regime:
+        lines.extend([
+            "",
+            "### 5. 多维度下钻分析 (按行业 / 模型 / 市场状态)",
+        ])
+
+        if drill_ind:
+            lines.extend([
+                "",
+                "#### (1) 行业维度下钻 (Industry Breakdown)",
+                "",
+                "| 行业 | 样本数 | 多/空/平分布 | 多头占比 | 多空核验率差 | 证据克隆率 | 挑战采纳率 | T+5命中率 | T+5平均收益 |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ])
+            for ind_name, st in sorted(drill_ind.items()):
+                b_cnt = st.get("bull_count", 0)
+                be_cnt = st.get("bear_count", 0)
+                h_cnt = st.get("hold_count", 0)
+                lines.append(
+                    f"| **{ind_name}** | {st.get('sample_count', 0)} | {b_cnt} / {be_cnt} / {h_cnt} | {_pct(st.get('bull_ratio'))} | {_pct(st.get('delta_verified_rate'))} | {_pct(st.get('avg_clone_rate'))} | {_pct(st.get('avg_challenge_adoption_rate'))} | {_pct(st.get('t5_accuracy_rate'))} | {_num(st.get('avg_t5_return_pct'))}% |"
+                )
+
+        if drill_model:
+            lines.extend([
+                "",
+                "#### (2) 模型维度下钻 (Model Assignment Breakdown)",
+                "",
+                "| 模型名称 | 参与辩论数 | 多/空辩论分布 | 多头胜局 | 空头胜局 | 综合胜率 | 平均核验率 | 挑战采纳率 |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ])
+            for m_name, st in sorted(drill_model.items()):
+                lines.append(
+                    f"| **{m_name}** | {st.get('total_debates', 0)} | {st.get('bull_debates', 0)} / {st.get('bear_debates', 0)} | {st.get('bull_wins', 0)} | {st.get('bear_wins', 0)} | {_pct(st.get('win_rate'))} | {_pct(st.get('avg_verified_rate'))} | {_pct(st.get('avg_challenge_adoption_rate'))} |"
+                )
+
+        if drill_regime:
+            lines.extend([
+                "",
+                "#### (3) 市场状态维度下钻 (Market Regime Breakdown)",
+                "",
+                "| 市场状态 | 样本数 | 多/空/平分布 | T+5 命中率 |",
+                "| :--- | :--- | :--- | :--- |",
+            ])
+            for r_name, st in sorted(drill_regime.items()):
+                b_cnt = st.get("bull_count", 0)
+                be_cnt = st.get("bear_count", 0)
+                h_cnt = st.get("hold_count", 0)
+                lines.append(
+                    f"| **{r_name}** | {st.get('sample_count', 0)} | {b_cnt} / {be_cnt} / {h_cnt} | {_pct(st.get('t5_accuracy_rate'))} |"
+                )
+
+    lines.extend([
         "",
         "---",
         "",
@@ -1962,7 +2266,7 @@ def render_weekly_summary_markdown(
         "",
         "| 门槛维度 | 门槛规则定义 | 当前复算实测值 | 门槛标准要求 | 状态 |",
         "| :--- | :--- | :--- | :--- | :--- |",
-    ]
+    ])
 
     # Render Dimension rows from h1b_matrix
     dim_n = h1b_matrix.get("dimension_n", {})

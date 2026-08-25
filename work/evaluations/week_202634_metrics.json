@@ -3,13 +3,13 @@
   "week_identifier": "week_202634",
   "start_date": "2026-07-06",
   "end_date": "2026-08-20",
-  "generated_at": "2026-08-25T18:30:29.510594+00:00",
+  "generated_at": "2026-08-25T19:50:04.781698+00:00",
   "sample_count": 60,
   "samples": [
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600519.SH_2026-07-06_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.398510+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.685344+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_001_600519.SH",
         "symbol": "600519.SH",
@@ -33,7 +33,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.396862+00:00"
+        "created_at": "2026-08-25T18:30:29.683789+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -242,12 +242,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000858.SZ_2026-07-06_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.400597+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.687695+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_002_000858.SZ",
         "symbol": "000858.SZ",
@@ -271,7 +272,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.399038+00:00"
+        "created_at": "2026-08-25T18:30:29.685841+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -472,12 +473,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000568.SZ_2026-07-07_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.402625+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.689830+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_003_000568.SZ",
         "symbol": "000568.SZ",
@@ -501,7 +503,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.401088+00:00"
+        "created_at": "2026-08-25T18:30:29.688270+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -702,12 +704,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000333.SZ_2026-07-08_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.404646+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.691849+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_004_000333.SZ",
         "symbol": "000333.SZ",
@@ -731,7 +734,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.403112+00:00"
+        "created_at": "2026-08-25T18:30:29.690318+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -932,12 +935,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600690.SH_2026-07-09_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.406678+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.693869+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_005_600690.SH",
         "symbol": "600690.SH",
@@ -961,7 +965,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.405135+00:00"
+        "created_at": "2026-08-25T18:30:29.692338+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -1162,12 +1166,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000651.SZ_2026-07-09_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.408691+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.696039+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_006_000651.SZ",
         "symbol": "000651.SZ",
@@ -1191,7 +1196,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.407169+00:00"
+        "created_at": "2026-08-25T18:30:29.694431+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -1392,12 +1397,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601318.SH_2026-07-10_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.410694+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.698185+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_007_601318.SH",
         "symbol": "601318.SH",
@@ -1421,7 +1427,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.409174+00:00"
+        "created_at": "2026-08-25T18:30:29.696587+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -1622,12 +1628,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600030.SH_2026-07-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.412705+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.700241+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_008_600030.SH",
         "symbol": "600030.SH",
@@ -1651,7 +1658,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.411178+00:00"
+        "created_at": "2026-08-25T18:30:29.698683+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -1852,12 +1859,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601166.SH_2026-07-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.414875+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.702313+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_009_601166.SH",
         "symbol": "601166.SH",
@@ -1881,7 +1889,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.413196+00:00"
+        "created_at": "2026-08-25T18:30:29.700744+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -2082,12 +2090,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600036.SH_2026-07-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.416982+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.704434+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_010_600036.SH",
         "symbol": "600036.SH",
@@ -2111,7 +2120,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.415409+00:00"
+        "created_at": "2026-08-25T18:30:29.702839+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -2312,12 +2321,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600276.SH_2026-07-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.419251+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.706519+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_011_600276.SH",
         "symbol": "600276.SH",
@@ -2341,7 +2351,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.417477+00:00"
+        "created_at": "2026-08-25T18:30:29.704964+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -2550,12 +2560,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300760.SZ_2026-07-14_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.421402+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.708551+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_012_300760.SZ",
         "symbol": "300760.SZ",
@@ -2579,7 +2590,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.419805+00:00"
+        "created_at": "2026-08-25T18:30:29.707008+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -2780,12 +2791,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300015.SZ_2026-07-15_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.423465+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.711012+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_013_300015.SZ",
         "symbol": "300015.SZ",
@@ -2809,7 +2821,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.421914+00:00"
+        "created_at": "2026-08-25T18:30:29.709039+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -3010,12 +3022,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300750.SZ_2026-07-15_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.425504+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.713189+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_014_300750.SZ",
         "symbol": "300750.SZ",
@@ -3039,7 +3052,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.423959+00:00"
+        "created_at": "2026-08-25T18:30:29.711532+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -3240,12 +3253,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002594.SZ_2026-07-16_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.427535+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.715236+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_015_002594.SZ",
         "symbol": "002594.SZ",
@@ -3269,7 +3283,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.425991+00:00"
+        "created_at": "2026-08-25T18:30:29.713679+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -3470,12 +3484,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600900.SH_2026-07-17_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.429942+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.717255+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_016_600900.SH",
         "symbol": "600900.SH",
@@ -3499,7 +3514,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.428263+00:00"
+        "created_at": "2026-08-25T18:30:29.715722+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -3708,12 +3723,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002415.SZ_2026-07-20_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.432091+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.719390+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_017_002415.SZ",
         "symbol": "002415.SZ",
@@ -3737,7 +3753,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.430506+00:00"
+        "created_at": "2026-08-25T18:30:29.717742+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -3938,12 +3954,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601899.SH_2026-07-20_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.434127+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.721677+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_018_601899.SH",
         "symbol": "601899.SH",
@@ -3967,7 +3984,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.432594+00:00"
+        "created_at": "2026-08-25T18:30:29.720090+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -4168,12 +4185,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600028.SH_2026-07-20_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.436257+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.723704+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_019_600028.SH",
         "symbol": "600028.SH",
@@ -4197,7 +4215,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.434613+00:00"
+        "created_at": "2026-08-25T18:30:29.722174+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -4398,12 +4416,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000002.SZ_2026-07-20_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.438439+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.725723+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_020_000002.SZ",
         "symbol": "000002.SZ",
@@ -4427,7 +4446,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.436833+00:00"
+        "created_at": "2026-08-25T18:30:29.724193+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -4628,12 +4647,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600519.SH_2026-07-21_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.440482+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.727836+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_021_600519.SH",
         "symbol": "600519.SH",
@@ -4657,7 +4677,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.438943+00:00"
+        "created_at": "2026-08-25T18:30:29.726209+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -4866,12 +4886,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000858.SZ_2026-07-22_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.442500+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.730014+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_022_000858.SZ",
         "symbol": "000858.SZ",
@@ -4895,7 +4916,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.440969+00:00"
+        "created_at": "2026-08-25T18:30:29.728426+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -5096,12 +5117,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000568.SZ_2026-07-22_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.444514+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.732038+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_023_000568.SZ",
         "symbol": "000568.SZ",
@@ -5125,7 +5147,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.442983+00:00"
+        "created_at": "2026-08-25T18:30:29.730504+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -5326,12 +5348,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000333.SZ_2026-07-23_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.446550+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.734068+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_024_000333.SZ",
         "symbol": "000333.SZ",
@@ -5355,7 +5378,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.445000+00:00"
+        "created_at": "2026-08-25T18:30:29.732529+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -5556,12 +5579,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600690.SH_2026-07-24_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.448625+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.736303+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_025_600690.SH",
         "symbol": "600690.SH",
@@ -5585,7 +5609,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.447054+00:00"
+        "created_at": "2026-08-25T18:30:29.734556+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -5786,12 +5810,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000651.SZ_2026-07-27_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.450661+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.738508+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_026_000651.SZ",
         "symbol": "000651.SZ",
@@ -5815,7 +5840,7 @@
         },
         "latency_ms": 1250.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.449122+00:00"
+        "created_at": "2026-08-25T18:30:29.736892+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -6016,12 +6041,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601318.SH_2026-07-27_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.452741+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.740309+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_027_601318.SH",
         "symbol": "601318.SH",
@@ -6045,7 +6071,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.451083+00:00"
+        "created_at": "2026-08-25T18:30:29.738951+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -6242,12 +6268,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600030.SH_2026-07-27_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.454540+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.742050+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_028_600030.SH",
         "symbol": "600030.SH",
@@ -6271,7 +6298,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.453196+00:00"
+        "created_at": "2026-08-25T18:30:29.740723+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -6468,12 +6495,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601166.SH_2026-07-27_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.456270+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.743781+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_029_601166.SH",
         "symbol": "601166.SH",
@@ -6497,7 +6525,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.454953+00:00"
+        "created_at": "2026-08-25T18:30:29.742462+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -6694,12 +6722,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600036.SH_2026-07-28_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.458009+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.745728+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_030_600036.SH",
         "symbol": "600036.SH",
@@ -6723,7 +6752,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.456691+00:00"
+        "created_at": "2026-08-25T18:30:29.744193+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -6920,12 +6949,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600276.SH_2026-07-28_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.459742+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.747625+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_031_600276.SH",
         "symbol": "600276.SH",
@@ -6949,7 +6979,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.458417+00:00"
+        "created_at": "2026-08-25T18:30:29.746222+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -7154,12 +7184,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300760.SZ_2026-07-29_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.461654+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.749384+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_032_300760.SZ",
         "symbol": "300760.SZ",
@@ -7183,7 +7214,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.460152+00:00"
+        "created_at": "2026-08-25T18:30:29.748060+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -7380,12 +7411,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300015.SZ_2026-07-30_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.463417+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.751138+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_033_300015.SZ",
         "symbol": "300015.SZ",
@@ -7409,7 +7441,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.462072+00:00"
+        "created_at": "2026-08-25T18:30:29.749798+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -7606,12 +7638,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300750.SZ_2026-07-31_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.466034+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.752991+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_034_300750.SZ",
         "symbol": "300750.SZ",
@@ -7635,7 +7668,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.464596+00:00"
+        "created_at": "2026-08-25T18:30:29.751570+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -7832,12 +7865,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002594.SZ_2026-07-31_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.467812+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.754810+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_035_002594.SZ",
         "symbol": "002594.SZ",
@@ -7861,7 +7895,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.466465+00:00"
+        "created_at": "2026-08-25T18:30:29.753417+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -8058,12 +8092,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600900.SH_2026-08-03_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.469654+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.756560+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_036_600900.SH",
         "symbol": "600900.SH",
@@ -8087,7 +8122,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.468231+00:00"
+        "created_at": "2026-08-25T18:30:29.755240+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -8284,12 +8319,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002415.SZ_2026-08-03_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.471477+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.758287+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_037_002415.SZ",
         "symbol": "002415.SZ",
@@ -8313,7 +8349,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.470114+00:00"
+        "created_at": "2026-08-25T18:30:29.756972+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -8510,12 +8546,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601899.SH_2026-08-03_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.473247+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.760012+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_038_601899.SH",
         "symbol": "601899.SH",
@@ -8539,7 +8576,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.471908+00:00"
+        "created_at": "2026-08-25T18:30:29.758696+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -8736,12 +8773,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600028.SH_2026-08-03_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.474980+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.761927+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_039_600028.SH",
         "symbol": "600028.SH",
@@ -8765,7 +8803,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.473657+00:00"
+        "created_at": "2026-08-25T18:30:29.760418+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -8962,12 +9000,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000002.SZ_2026-08-04_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.476709+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.763728+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_040_000002.SZ",
         "symbol": "000002.SZ",
@@ -8991,7 +9030,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.475390+00:00"
+        "created_at": "2026-08-25T18:30:29.762367+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -9188,12 +9227,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600519.SH_2026-08-05_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.478525+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.765477+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_041_600519.SH",
         "symbol": "600519.SH",
@@ -9217,7 +9257,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.477119+00:00"
+        "created_at": "2026-08-25T18:30:29.764149+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -9422,12 +9462,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000858.SZ_2026-08-06_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.480303+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.767216+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_042_000858.SZ",
         "symbol": "000858.SZ",
@@ -9451,7 +9492,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.478940+00:00"
+        "created_at": "2026-08-25T18:30:29.765886+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -9648,12 +9689,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000568.SZ_2026-08-07_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.482053+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.768949+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_043_000568.SZ",
         "symbol": "000568.SZ",
@@ -9677,7 +9719,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.480733+00:00"
+        "created_at": "2026-08-25T18:30:29.767626+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -9874,12 +9916,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000333.SZ_2026-08-07_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.483790+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.770863+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_044_000333.SZ",
         "symbol": "000333.SZ",
@@ -9903,7 +9946,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.482465+00:00"
+        "created_at": "2026-08-25T18:30:29.769412+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -10100,12 +10143,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600690.SH_2026-08-10_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.485525+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.772666+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_045_600690.SH",
         "symbol": "600690.SH",
@@ -10129,7 +10173,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.484201+00:00"
+        "created_at": "2026-08-25T18:30:29.771314+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -10326,12 +10370,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000651.SZ_2026-08-10_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.487266+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.774389+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_046_000651.SZ",
         "symbol": "000651.SZ",
@@ -10355,7 +10400,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.485934+00:00"
+        "created_at": "2026-08-25T18:30:29.773075+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -10560,12 +10605,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601318.SH_2026-08-10_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.489006+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.776114+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_047_601318.SH",
         "symbol": "601318.SH",
@@ -10589,7 +10635,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.487678+00:00"
+        "created_at": "2026-08-25T18:30:29.774796+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -10786,12 +10832,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600030.SH_2026-08-10_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.490737+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.778176+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_048_600030.SH",
         "symbol": "600030.SH",
@@ -10815,7 +10862,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.489416+00:00"
+        "created_at": "2026-08-25T18:30:29.776522+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -11012,12 +11059,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601166.SH_2026-08-11_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.492468+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.779950+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_049_601166.SH",
         "symbol": "601166.SH",
@@ -11041,7 +11089,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.491146+00:00"
+        "created_at": "2026-08-25T18:30:29.778599+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -11238,12 +11286,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600036.SH_2026-08-12_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.494213+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.781728+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_050_600036.SH",
         "symbol": "600036.SH",
@@ -11267,7 +11316,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.492883+00:00"
+        "created_at": "2026-08-25T18:30:29.780380+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -11464,12 +11513,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600276.SH_2026-08-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.495984+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.783476+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_051_600276.SH",
         "symbol": "600276.SH",
@@ -11493,7 +11543,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.494623+00:00"
+        "created_at": "2026-08-25T18:30:29.782141+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [
@@ -11698,12 +11748,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300760.SZ_2026-08-13_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.497730+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.785218+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_052_300760.SZ",
         "symbol": "300760.SZ",
@@ -11727,7 +11778,7 @@
         },
         "latency_ms": 1180.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.496393+00:00"
+        "created_at": "2026-08-25T18:30:29.783891+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -11924,12 +11975,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300015.SZ_2026-08-14_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.499181+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.786789+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_053_300015.SZ",
         "symbol": "300015.SZ",
@@ -11953,7 +12005,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.498098+00:00"
+        "created_at": "2026-08-25T18:30:29.785585+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -12146,12 +12198,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_300750.SZ_2026-08-17_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.500605+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.788276+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_054_300750.SZ",
         "symbol": "300750.SZ",
@@ -12175,7 +12228,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.499531+00:00"
+        "created_at": "2026-08-25T18:30:29.787162+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -12368,12 +12421,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002594.SZ_2026-08-17_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.502019+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.789714+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_055_002594.SZ",
         "symbol": "002594.SZ",
@@ -12397,7 +12451,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.500955+00:00"
+        "created_at": "2026-08-25T18:30:29.788642+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -12590,12 +12644,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600900.SH_2026-08-17_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.503426+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.791135+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_056_600900.SH",
         "symbol": "600900.SH",
@@ -12619,7 +12674,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.502366+00:00"
+        "created_at": "2026-08-25T18:30:29.790064+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -12812,12 +12867,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_002415.SZ_2026-08-17_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.504831+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.792549+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_057_002415.SZ",
         "symbol": "002415.SZ",
@@ -12841,7 +12897,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.503770+00:00"
+        "created_at": "2026-08-25T18:30:29.791483+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -13034,12 +13090,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_601899.SH_2026-08-18_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.506289+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.793968+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_058_601899.SH",
         "symbol": "601899.SH",
@@ -13063,7 +13120,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.505191+00:00"
+        "created_at": "2026-08-25T18:30:29.792897+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -13256,12 +13313,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_600028.SH_2026-08-19_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.507707+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.795438+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_059_600028.SH",
         "symbol": "600028.SH",
@@ -13285,7 +13343,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.506637+00:00"
+        "created_at": "2026-08-25T18:30:29.794353+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -13478,12 +13536,13 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     },
     {
       "schema_version": "evaluation_matrix_v1",
       "matrix_id": "matrix_000002.SZ_2026-08-20_mock_wee",
-      "evaluated_at": "2026-08-25T18:30:29.509117+00:00",
+      "evaluated_at": "2026-08-25T18:30:29.796865+00:00",
       "quadrant_1_protocol_metadata": {
         "report_id": "mock_weekly_060_000002.SZ",
         "symbol": "000002.SZ",
@@ -13507,7 +13566,7 @@
         },
         "latency_ms": 1050.0,
         "token_usage": null,
-        "created_at": "2026-08-25T18:30:29.508056+00:00"
+        "created_at": "2026-08-25T18:30:29.795790+00:00"
       },
       "quadrant_2_data_sources_and_gaps": {
         "data_gaps": [],
@@ -13700,7 +13759,8 @@
             "qwen-max": "System-level activation gates not passed"
           }
         }
-      }
+      },
+      "_source_week_identifier": "week_202634"
     }
   ],
   "weekly_aggregate": {
@@ -13786,9 +13846,9 @@
             "trading_days": 34,
             "min_trading_days": 30,
             "market_regimes_covered": [
-              "consolidation",
+              "bull_trend",
               "bear_trend",
-              "bull_trend"
+              "consolidation"
             ]
           }
         },
@@ -13848,6 +13908,223 @@
       "new_unique_samples": 60,
       "duplicate_samples_dropped": 0,
       "status": "PASSED_NO_DUPLICATES"
+    },
+    "drilldown_by_industry": {
+      "公用事业": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.3333,
+        "avg_t5_return_pct": 43.74
+      },
+      "医药生物": {
+        "sample_count": 9,
+        "bull_count": 3,
+        "bear_count": 5,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.4444,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.2223,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 698.09
+      },
+      "房地产": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.3333,
+        "avg_t5_return_pct": -57.87
+      },
+      "有色金属": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": -20.69
+      },
+      "汽车": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 1139.24
+      },
+      "电力设备": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 990.53
+      },
+      "白色家电": {
+        "sample_count": 9,
+        "bull_count": 6,
+        "bear_count": 3,
+        "hold_count": 0,
+        "bull_ratio": 0.6667,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.3333,
+        "delta_verified_rate": 0.3334,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 97.04
+      },
+      "白酒": {
+        "sample_count": 9,
+        "bull_count": 6,
+        "bear_count": 3,
+        "hold_count": 0,
+        "bull_ratio": 0.6667,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.3333,
+        "delta_verified_rate": 0.3334,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.2222,
+        "avg_t5_return_pct": 2348.72
+      },
+      "石油石化": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.3333,
+        "avg_t5_return_pct": -69.28
+      },
+      "计算机": {
+        "sample_count": 3,
+        "bull_count": 1,
+        "bear_count": 1,
+        "hold_count": 1,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.6667,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.0,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 53.64
+      },
+      "银行": {
+        "sample_count": 6,
+        "bull_count": 2,
+        "bear_count": 4,
+        "hold_count": 0,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.3333,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.3334,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 106.81
+      },
+      "非银金融": {
+        "sample_count": 6,
+        "bull_count": 2,
+        "bear_count": 4,
+        "hold_count": 0,
+        "bull_ratio": 0.3333,
+        "avg_bull_verified_rate": 0.3333,
+        "avg_bear_verified_rate": 0.6667,
+        "delta_verified_rate": 0.3334,
+        "avg_clone_rate": 0.0,
+        "avg_challenge_adoption_rate": 1.0,
+        "t5_accuracy_rate": 0.0,
+        "avg_t5_return_pct": 154.23
+      }
+    },
+    "drilldown_by_model": {
+      "deepseek-r1": {
+        "total_debates": 60,
+        "bull_debates": 60,
+        "bear_debates": 0,
+        "bull_wins": 26,
+        "bear_wins": 0,
+        "ties": 8,
+        "win_rate": 0.4333,
+        "avg_verified_rate": 0.5667,
+        "avg_challenge_adoption_rate": 1.0
+      },
+      "qwen-max": {
+        "total_debates": 60,
+        "bull_debates": 0,
+        "bear_debates": 60,
+        "bull_wins": 0,
+        "bear_wins": 26,
+        "ties": 8,
+        "win_rate": 0.4333,
+        "avg_verified_rate": 0.5667,
+        "avg_challenge_adoption_rate": 1.0
+      }
+    },
+    "drilldown_by_regime": {
+      "bear_trend": {
+        "sample_count": 26,
+        "bull_count": 0,
+        "bear_count": 26,
+        "hold_count": 0,
+        "t5_accuracy_rate": 0.0769
+      },
+      "bull_trend": {
+        "sample_count": 26,
+        "bull_count": 26,
+        "bear_count": 0,
+        "hold_count": 0,
+        "t5_accuracy_rate": 0.0769
+      },
+      "consolidation": {
+        "sample_count": 8,
+        "bull_count": 0,
+        "bear_count": 0,
+        "hold_count": 8,
+        "t5_accuracy_rate": 0.125
+      }
     }
   }
 }
