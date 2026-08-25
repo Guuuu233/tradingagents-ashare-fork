@@ -268,6 +268,76 @@ _FUND_AMOUNT_TEXT_RE = re.compile(
     r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:万亿|亿元|万元|亿|万)?$"
 )
 
+_TUSHARE_FINANCIAL_APIS = {
+    "资产负债表": "balancesheet",
+    "利润表": "income",
+    "现金流量表": "cashflow",
+}
+
+_TUSHARE_BS_COL_MAP = {
+    "end_date": "报告日",
+    "ann_date": "公告日期",
+    "f_ann_date": "实际公告日",
+    "money_cap": "货币资金",
+    "accounts_receiv": "应收账款",
+    "inventories": "存货",
+    "total_cur_assets": "流动资产合计",
+    "total_nca": "非流动资产合计",
+    "total_assets": "资产总计",
+    "short_term_loans": "短期借款",
+    "accounts_payable": "应付账款",
+    "total_cur_liab": "流动负债合计",
+    "total_ncl": "非流动负债合计",
+    "total_liab": "负债合计",
+    "total_hldr_eqy_exc_min_int": "归属于母公司股东权益合计",
+    "total_hldr_eqy_inc_min_int": "所有者权益(或股东权益)合计",
+}
+
+_TUSHARE_INC_COL_MAP = {
+    "end_date": "报告日",
+    "ann_date": "公告日期",
+    "f_ann_date": "实际公告日",
+    "total_revenue": "营业总收入",
+    "revenue": "营业收入",
+    "total_cogs": "营业总成本",
+    "oper_cost": "营业成本",
+    "biz_tax_surchg": "营业税金及附加",
+    "sell_exp": "销售费用",
+    "admin_exp": "管理费用",
+    "fin_exp": "财务费用",
+    "rd_exp": "研发费用",
+    "operate_profit": "营业利润",
+    "total_profit": "利润总额",
+    "income_tax": "所得税费用",
+    "n_income": "净利润",
+    "n_income_attr_p": "归属于母公司所有者的净利润",
+    "basic_eps": "基本每股收益",
+    "diluted_eps": "稀释每股收益",
+}
+
+_TUSHARE_CF_COL_MAP = {
+    "end_date": "报告日",
+    "ann_date": "公告日期",
+    "f_ann_date": "实际公告日",
+    "c_fr_sale_sg": "销售商品、提供劳务收到的现金",
+    "c_inf_fr_oper_a": "经营活动现金流入小计",
+    "c_paid_goods_s": "购买商品、接受劳务支付的现金",
+    "c_paid_to_for_empl": "支付给职工以及为职工支付的现金",
+    "c_paid_for_taxes": "支付的各项税费",
+    "c_ouf_fr_oper_a": "经营活动现金流出小计",
+    "n_cashflow_act": "经营活动产生的现金流量净额",
+    "c_disp_withdrwl_invest": "收回投资收到的现金",
+    "c_recp_return_invest": "取得投资收益收到的现金",
+    "c_pay_acq_const_fi_and_ot": "购建固定资产、无形资产和其他长期资产所支付的现金",
+    "n_cashflow_inv_act": "投资活动产生的现金流量净额",
+    "c_recp_borrow": "取得借款收到的现金",
+    "c_pay_dist_dpcp_int_exp": "分配股利、利润或偿付利息支付的现金",
+    "n_cash_flows_fnc_act": "筹资活动产生的现金流量净额",
+    "n_incr_cash_cash_equ": "现金及现金等价物净增加额",
+    "c_cash_equ_end_period": "期末现金及现金等价物余额",
+}
+
+
 
 def _sina_decimal(value) -> Decimal | None:
     """Parse a finite provider amount without introducing binary-float error."""
@@ -998,97 +1068,283 @@ class CnAkshareProvider(BaseMarketDataProvider):
         cache[code] = (time.monotonic(), out)
         return out
 
+    def _fetch_tushare_financial_tables(
+        self, ticker: str
+    ) -> tuple[dict[str, pd.DataFrame], list[str]]:
+        """Fetch backup financial tables with announce dates via Tushare transport."""
+        token = os.getenv("TUSHARE_TOKEN", "").strip()
+        api_names = list(_TUSHARE_FINANCIAL_APIS.values())
+        if not token:
+            return {}, [
+                self._tushare_error(api, "token_missing") for api in api_names
+            ]
+        try:
+            ts_code = self._tushare_ts_code(ticker)
+        except Exception:
+            return {}, [
+                self._tushare_error("financials", "validation", "symbol")
+            ]
+
+        out: dict[str, pd.DataFrame] = {}
+        errors: list[str] = []
+        col_maps = {
+            "资产负债表": _TUSHARE_BS_COL_MAP,
+            "利润表": _TUSHARE_INC_COL_MAP,
+            "现金流量表": _TUSHARE_CF_COL_MAP,
+        }
+
+        for report_name, api_name in _TUSHARE_FINANCIAL_APIS.items():
+            payload = {
+                "api_name": api_name,
+                "token": token,
+                "params": {"ts_code": ts_code},
+            }
+            response, error, category, _retryable = self._tushare_transport_post(
+                api_name, payload
+            )
+            if error:
+                errors.append(error)
+                continue
+            payload_data, error, category = self._tushare_decode_response(
+                response, api_name
+            )
+            if error:
+                errors.append(error)
+                continue
+            if not isinstance(payload_data, dict):
+                errors.append(self._tushare_error(api_name, "json_shape", "data_missing"))
+                continue
+            code = payload_data.get("code")
+            try:
+                code_value = int(code)
+            except (TypeError, ValueError):
+                errors.append(self._tushare_error(api_name, "api_code_invalid"))
+                continue
+            if code_value != 0:
+                cat = self._tushare_api_failure_category(code, payload_data.get("msg"))
+                errors.append(self._tushare_error(api_name, cat, f"code={code}"))
+                continue
+            data = payload_data.get("data")
+            if not isinstance(data, dict):
+                errors.append(self._tushare_error(api_name, "json_shape", "data_missing"))
+                continue
+            fields = data.get("fields")
+            items = data.get("items")
+            if not isinstance(fields, (list, tuple)) or not isinstance(items, (list, tuple)):
+                errors.append(self._tushare_error(api_name, "json_shape", "fields_items_missing"))
+                continue
+            if not items:
+                errors.append(self._tushare_error(api_name, "no_rows"))
+                continue
+
+            field_names = [str(f) for f in fields]
+            df = pd.DataFrame(items, columns=field_names)
+            if "end_date" not in df.columns:
+                errors.append(self._tushare_error(api_name, "missing_field", "end_date"))
+                continue
+            if "ann_date" not in df.columns and "f_ann_date" not in df.columns:
+                errors.append(self._tushare_error(api_name, "missing_field", "ann_date/f_ann_date"))
+                continue
+
+            # Prefer consolidated statements (report_type == '1' or 1) if present
+            if "report_type" in df.columns:
+                consolidated = df[df["report_type"].astype(str) == "1"]
+                if not consolidated.empty:
+                    df = consolidated
+
+            # Rename mapped columns to canonical Chinese names
+            mapping = col_maps.get(report_name, {})
+            rename_dict = {orig: target for orig, target in mapping.items() if orig in df.columns}
+            df = df.rename(columns=rename_dict)
+
+            # Drop duplicates by report date keeping first
+            rep_col = "报告日" if "报告日" in df.columns else "end_date"
+            df = df.drop_duplicates(subset=[rep_col]).reset_index(drop=True)
+            out[report_name] = df
+
+        return out, errors
+
+    def _load_backup_financial_tables(
+        self, ticker: str, assume_locked: bool = False
+    ) -> tuple[dict[str, pd.DataFrame], list[str]]:
+        """Load backup financial tables with announce dates (Tushare client path)."""
+        code = self._normalize_symbol(ticker)
+        cache = getattr(self, "_backup_fin_tables_cache", None)
+        if cache is None:
+            self._backup_fin_tables_cache = {}
+            cache = self._backup_fin_tables_cache
+        hit = cache.get(code)
+        if hit is not None:
+            loaded_at, tables, errors = hit
+            if time.monotonic() - loaded_at < 120 and tables:
+                return tables, errors
+
+        tables, errors = self._fetch_tushare_financial_tables(ticker)
+        cache[code] = (time.monotonic(), tables, errors)
+        return tables, errors
+
     def _sina_effective_announce_map(self, ticker: str, assume_locked: bool = False):
         tables = self._load_sina_financial_tables(ticker, assume_locked=assume_locked)
-        return build_effective_announce_map(tables)
+        if tables:
+            return build_effective_announce_map(tables)
+        backup_tables, _ = self._load_backup_financial_tables(ticker, assume_locked=assume_locked)
+        if backup_tables:
+            return build_effective_announce_map(backup_tables)
+        return {}
 
     def _financial_report_sina(
         self, ticker: str, report_name: str, curr_date: str = None
     ) -> str:
-        """Return one sina financial statement markdown, truncated by A4 effective announce date.
+        """Return one financial statement markdown, truncated by A4 effective announce date.
 
-        Historical-date analysis refuses the THS abstract fallback because it has
-        no announcement-date field and cannot be proven public-by-curr_date.
+        Primary source is Sina ``stock_financial_report_sina``.
+        If Sina is unavailable, falls back to backup source with verifiable announcement dates.
+        Historical-date analysis refuses un-dated abstract fallbacks.
         """
         if not curr_date:
             return (
                 "【数据获取失败】财务报表缺少 curr_date，无法按公告生效日截断，"
                 f"{report_name} 本项不可用。"
             )
-        with AKSHARE_CALL_LOCK:
-            ak = self._ak()
-            symbol = self._sina_symbol(ticker)
-            errors: list[str] = []
-            today = cn_today_str()
-            is_historical = (
-                parse_yyyymmdd(curr_date) is not None
-                and parse_yyyymmdd(curr_date) < parse_yyyymmdd(today)
+        cutoff = parse_yyyymmdd(curr_date)
+        if cutoff is None:
+            return (
+                f"【数据获取失败】财务报表 curr_date ({curr_date}) 解析失败，"
+                f"无法做公告日截断，不得默认今天，本项不可用。"
             )
 
+        with AKSHARE_CALL_LOCK:
+            ak = self._ak()
+            errors: list[str] = []
+            today = cn_today_str()
+            today_dt = parse_yyyymmdd(today)
+            is_historical = (
+                today_dt is not None
+                and cutoff < today_dt
+            )
+
+            # 1. Try primary source: Sina
             tables = self._load_sina_financial_tables(ticker, assume_locked=True)
             sina_df = tables.get(report_name)
-            if sina_df is None:
+
+            if sina_df is not None and not sina_df.empty:
+                if "报告日" not in sina_df.columns or "公告日期" not in sina_df.columns:
+                    errors.append(f"stock_financial_report_sina: {report_name} 缺少 报告日/公告日期 列")
+                else:
+                    try:
+                        eff_map = build_effective_announce_map(tables)
+                        filtered, latest = filter_financial_df_by_effective_announce(
+                            sina_df, eff_map, curr_date
+                        )
+                        if filtered is None or filtered.empty or latest is None:
+                            header = financial_cutoff_header(latest, curr_date)
+                            return (
+                                f"{header}\n"
+                                f"【数据获取失败】{report_name} 在 {curr_date} 及之前无已公开报告期。"
+                            )
+                        # Newest first for LLM: sort by report period descending.
+                        work = filtered.copy()
+                        work["__period"] = work["报告日"].map(lambda x: parse_yyyymmdd(x))
+                        work = work.dropna(subset=["__period"]).sort_values("__period", ascending=False)
+                        work = work.drop(columns=["__period"])
+                        yoy_note = periods_used_dropped_yoy(eff_map, work["报告日"])
+                        header = financial_cutoff_header(
+                            latest, curr_date, yoy_disclaimer=yoy_note
+                        )
+                        kind_map = {
+                            "资产负债表": "balance",
+                            "利润表": "income",
+                            "现金流量表": "cashflow",
+                        }
+                        table = self._shrink_table(
+                            work,
+                            max_rows=12,
+                            max_cols=18,
+                            table_kind=kind_map.get(report_name, "generic"),
+                            require_core_fields=(report_name == "资产负债表"),
+                        )
+                        return f"{header}\n\n{table}"
+                    except Exception as exc:
+                        errors.append(f"stock_financial_report_sina: {type(exc).__name__}({exc})")
+            else:
                 errors.append(f"stock_financial_report_sina: missing {report_name}")
 
-            if sina_df is not None:
-                if "报告日" not in sina_df.columns or "公告日期" not in sina_df.columns:
-                    return (
-                        f"【数据获取失败】{report_name} 缺少 报告日/公告日期 列，"
-                        "无法做历史截断，本项不可用。"
-                    )
-                try:
-                    # Map uses all three tables so IS/CF YoY refresh is capped by
-                    # statutory deadline and cross-checked with BS announce dates.
-                    eff_map = build_effective_announce_map(tables)
-                    filtered, latest = filter_financial_df_by_effective_announce(
-                        sina_df, eff_map, curr_date
-                    )
-                except Exception as exc:
-                    return (
-                        f"【数据获取失败】{report_name} 公告生效日截断失败"
-                        f"（{type(exc).__name__}: {exc}），本项不可用。"
-                    )
-                if filtered is None or filtered.empty or latest is None:
-                    header = financial_cutoff_header(latest, curr_date)
-                    return (
-                        f"{header}\n"
-                        f"【数据获取失败】{report_name} 在 {curr_date} 及之前无已公开报告期。"
-                    )
-                # Newest first for LLM: sort by report period descending.
-                work = filtered.copy()
-                work["__period"] = work["报告日"].map(lambda x: parse_yyyymmdd(x))
-                work = work.dropna(subset=["__period"]).sort_values("__period", ascending=False)
-                work = work.drop(columns=["__period"])
-                yoy_note = periods_used_dropped_yoy(eff_map, work["报告日"])
-                header = financial_cutoff_header(
-                    latest, curr_date, yoy_disclaimer=yoy_note
-                )
-                kind_map = {
-                    "资产负债表": "balance",
-                    "利润表": "income",
-                    "现金流量表": "cashflow",
+            # 2. Try backup source with verifiable announcement dates
+            backup_tables, backup_errors = self._load_backup_financial_tables(
+                ticker, assume_locked=True
+            )
+            errors.extend(backup_errors)
+            backup_df = backup_tables.get(report_name)
+            if backup_df is not None and not backup_df.empty:
+                col_maps = {
+                    "资产负债表": _TUSHARE_BS_COL_MAP,
+                    "利润表": _TUSHARE_INC_COL_MAP,
+                    "现金流量表": _TUSHARE_CF_COL_MAP,
                 }
-                table = self._shrink_table(
-                    work,
-                    max_rows=12,
-                    max_cols=18,
-                    table_kind=kind_map.get(report_name, "generic"),
-                    # Core-four gate only applies to balance sheet: income/cashflow
-                    # never contain 总资产/总负债/净资产 together.
-                    require_core_fields=(report_name == "资产负债表"),
-                )
-                if table.startswith("【数据获取失败】"):
-                    return f"{header}\n\n{table}"
-                return f"{header}\n\n{table}"
+                mapping = col_maps.get(report_name, {})
+                rename_dict = {orig: target for orig, target in mapping.items() if orig in backup_df.columns}
+                if rename_dict:
+                    backup_df = backup_df.rename(columns=rename_dict)
 
-            # Sina failed → THS fallback only allowed for same-day (non-historical) analysis.
+                has_ann = any(
+                    c in backup_df.columns
+                    for c in ("公告日期", "实际公告日", "f_ann_date", "ann_date", "NOTICE_DATE")
+                )
+                has_rep = any(
+                    c in backup_df.columns
+                    for c in ("报告日", "end_date", "REPORT_DATE", "报告期")
+                )
+                if has_ann and has_rep:
+                    try:
+                        eff_map = build_effective_announce_map(backup_tables)
+                        filtered, latest = filter_financial_df_by_effective_announce(
+                            backup_df, eff_map, curr_date
+                        )
+                        if filtered is None or filtered.empty or latest is None:
+                            header = financial_cutoff_header(latest, curr_date)
+                            return (
+                                f"{header}\n"
+                                f"【数据获取失败】{report_name} 在 {curr_date} 及之前无已公开报告期。"
+                            )
+                        work = filtered.copy()
+                        rep_col = "报告日" if "报告日" in work.columns else next(
+                            (c for c in ("end_date", "REPORT_DATE", "报告期") if c in work.columns),
+                            work.columns[0],
+                        )
+                        work["__period"] = work[rep_col].map(lambda x: parse_yyyymmdd(x))
+                        work = work.dropna(subset=["__period"]).sort_values("__period", ascending=False)
+                        work = work.drop(columns=["__period"])
+                        yoy_note = periods_used_dropped_yoy(eff_map, work[rep_col])
+                        header = financial_cutoff_header(
+                            latest, curr_date, yoy_disclaimer=yoy_note
+                        )
+                        kind_map = {
+                            "资产负债表": "balance",
+                            "利润表": "income",
+                            "现金流量表": "cashflow",
+                        }
+                        table = self._shrink_table(
+                            work,
+                            max_rows=12,
+                            max_cols=18,
+                            table_kind=kind_map.get(report_name, "generic"),
+                            require_core_fields=(report_name == "资产负债表"),
+                        )
+                        return f"{header}\n\n{table}"
+                    except Exception as exc:
+                        errors.append(f"backup_financial_report: {type(exc).__name__}({exc})")
+                else:
+                    errors.append(f"backup_{report_name}: missing_ann_date_field")
+
+            # 3. Both Sina and backup with announce date failed
             if is_historical:
                 return (
-                    f"【数据获取失败】主数据源新浪财报不可用，备用源同花顺摘要无公告日字段，"
+                    f"【数据获取失败】主数据源新浪财报不可用，备用源未提供可验证公告日数据，"
                     f"历史日期分析（{curr_date}）下 {report_name} 不可用。"
                     + (f" 原因：{'; '.join(errors)}" if errors else "")
                 )
 
+            # 4. Same-day (non-historical) analysis fallback to THS abstract
             code = self._normalize_symbol(ticker)
             indicator = "按报告期"
             try:

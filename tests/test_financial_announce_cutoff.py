@@ -425,3 +425,315 @@ def test_fund_flow_requires_curr_date_and_oor_message():
     ok = _P().get_individual_fund_flow("600519", curr_date="2026-07-22")
     assert "2026-07-22" in ok
     assert "截至于 2026-07-22" in ok
+
+
+# ── Backup financial source with ann_date / f_ann_date (P2-G3) ──────
+
+
+def test_build_effective_announce_map_with_ann_date_and_f_ann_date():
+    """Backup tables with end_date, ann_date (YoY refreshed) and f_ann_date (first public)."""
+    bs = pd.DataFrame(
+        {
+            "end_date": ["20240331", "20231231"],
+            "ann_date": ["20250430", "20240428"],  # 20240331 ann_date is YoY refresh
+            "f_ann_date": ["20240428", "20240428"],  # real first filing for 20240331
+            "total_assets": [1000.0, 900.0],
+        }
+    )
+    inc = pd.DataFrame(
+        {
+            "end_date": ["20240331", "20231231"],
+            "ann_date": ["20250430", "20240428"],
+            "f_ann_date": ["20240428", "20240428"],
+            "revenue": [500.0, 450.0],
+        }
+    )
+    tables = {"资产负债表": bs, "利润表": inc}
+    eff_map = build_effective_announce_map(tables)
+    assert "20240331" in eff_map
+    # A4 windowed: 20240428 is within grace window, 20250430 is discarded as YoY
+    assert eff_map["20240331"].effective_date == date(2024, 4, 28)
+    assert eff_map["20240331"].path == PATH_MAX_WITHIN_WINDOW
+    assert date(2024, 4, 28) in eff_map["20240331"].kept_announce_dates
+    assert date(2025, 4, 30) in eff_map["20240331"].discarded_announce_dates
+
+
+def test_provider_backup_source_with_ann_date_and_f_ann_date_a4_cutoff(monkeypatch):
+    """When Sina fails, backup source with ann_date/f_ann_date succeeds with A4 cutoff."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+
+    backup_bs = pd.DataFrame(
+        {
+            "end_date": ["20240331", "20231231", "20230930"],
+            "ann_date": ["20250430", "20240428", "20231028"],
+            "f_ann_date": ["20240428", "20240428", "20231028"],
+            "total_assets": [1000.0, 900.0, 850.0],
+            "total_liab": [400.0, 350.0, 320.0],
+            "total_hldr_eqy_inc_min_int": [600.0, 550.0, 530.0],
+        }
+    )
+    backup_inc = pd.DataFrame(
+        {
+            "end_date": ["20240331", "20231231", "20230930"],
+            "ann_date": ["20250430", "20240428", "20231028"],
+            "f_ann_date": ["20240428", "20240428", "20231028"],
+            "revenue": [500.0, 450.0, 400.0],
+            "n_income_attr_p": [100.0, 90.0, 80.0],
+        }
+    )
+    backup_cf = pd.DataFrame(
+        {
+            "end_date": ["20240331", "20231231", "20230930"],
+            "ann_date": ["20250430", "20240428", "20231028"],
+            "f_ann_date": ["20240428", "20240428", "20231028"],
+            "n_cashflow_act": [80.0, 70.0, 60.0],
+        }
+    )
+    backup_tables = {
+        "资产负债表": backup_bs,
+        "利润表": backup_inc,
+        "现金流量表": backup_cf,
+    }
+
+    class _SinaFailBackupSuccessProvider(CnAkshareProvider):
+        def _ak(self):
+            class _Ak:
+                def stock_financial_report_sina(self, stock, symbol):
+                    raise RuntimeError("sina unavailable")
+
+                def stock_financial_abstract_new_ths(self, symbol, indicator):
+                    return pd.DataFrame({"report_date": ["20251231"], "净利润": [9]})
+
+            return _Ak()
+
+        def _load_backup_financial_tables(self, ticker: str, assume_locked: bool = False):
+            return {k: v.copy() for k, v in backup_tables.items()}, []
+
+    provider = _SinaFailBackupSuccessProvider()
+
+    # On 2024-04-20 (before 2024-04-28), 20240331 and 20231231 must be excluded
+    before_text = provider.get_balance_sheet("600519", curr_date="2024-04-20")
+    assert "财务数据截至" in before_text
+    assert "20240331" not in before_text
+    assert "20231231" not in before_text
+    assert "20230930" in before_text or "2023Q3" in before_text
+
+    # On 2024-04-28 (effective announce date), 20240331 is included
+    on_text = provider.get_balance_sheet("600519", curr_date="2024-04-28")
+    assert "财务数据截至" in on_text
+    assert "20240331" in on_text or "2024Q1" in on_text
+    assert "2024-04-28" in on_text
+
+    # Income statement
+    inc_text = provider.get_income_statement("600519", curr_date="2024-04-28")
+    assert "财务数据截至" in inc_text
+    assert "20240331" in inc_text or "2024Q1" in inc_text
+
+    # Cashflow statement
+    cf_text = provider.get_cashflow("600519", curr_date="2024-04-28")
+    assert "财务数据截至" in cf_text
+    assert "20240331" in cf_text or "2024Q1" in cf_text
+
+
+def test_provider_backup_source_without_ann_date_refused_on_historical_date(monkeypatch):
+    """When Sina fails and backup source has no announce date, refuse on historical dates."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+
+    undated_bs = pd.DataFrame(
+        {
+            "end_date": ["20240331"],
+            "total_assets": [1000.0],
+            # No ann_date, f_ann_date, or 公告日期
+        }
+    )
+
+    class _SinaFailBackupUndatedProvider(CnAkshareProvider):
+        def _ak(self):
+            class _Ak:
+                def stock_financial_report_sina(self, stock, symbol):
+                    raise RuntimeError("sina unavailable")
+
+                def stock_financial_abstract_new_ths(self, symbol, indicator):
+                    return pd.DataFrame({"report_date": ["20251231"], "净利润": [9]})
+
+            return _Ak()
+
+        def _load_backup_financial_tables(self, ticker: str, assume_locked: bool = False):
+            return {"资产负债表": undated_bs.copy()}, ["backup:missing_ann_date_field"]
+
+    provider = _SinaFailBackupUndatedProvider()
+    res = provider.get_balance_sheet("600519", curr_date="2024-05-01")
+    assert "数据获取失败" in res
+    assert "不可用" in res
+    assert ("无公告日" in res or "未提供可验证公告日" in res or "未返回带可验证公告日" in res or "历史日期" in res)
+    assert "2026-07-28" not in res  # Must not default to today!
+
+
+def test_provider_unparseable_curr_date_fails_not_today(monkeypatch):
+    """Unparseable curr_date must fail explicitly, never default to today."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    provider = _FinFixtureProvider(_three_tables())
+
+    for bad_date in ("invalid-date", "20240230", "bad", ""):
+        res = provider.get_balance_sheet("600519", curr_date=bad_date)
+        assert "数据获取失败" in res
+        assert "不可用" in res
+        assert "2026-07-28" not in res  # Must not default to today
+
+
+def test_tushare_financial_tables_error_handling(monkeypatch):
+    """Tushare financial table client path produces explicit error categories."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    provider = CnAkshareProvider()
+    tables, errors = provider._fetch_tushare_financial_tables("600519")
+    assert tables == {}
+    assert len(errors) > 0
+    assert any("token_missing" in err for err in errors)
+    assert all(err != "" for err in errors)
+
+    # Permission denied mock
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake_token")
+    class _MockResp:
+        status_code = 200
+        def json(self):
+            return {"code": 40101, "msg": "抱歉，您没有访问该接口的权限", "data": None}
+
+    monkeypatch.setattr(
+        provider,
+        "_tushare_transport_post",
+        lambda api_name, payload: (_MockResp(), None, None, False),
+    )
+    tables2, errors2 = provider._fetch_tushare_financial_tables("600519")
+    assert tables2 == {}
+    assert any("permission_denied" in err for err in errors2)
+
+
+def test_tushare_financial_tables_valid_envelope_parsing(monkeypatch):
+    """Tushare financial table parser parses fields/items into mapped DataFrames."""
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake_token")
+    provider = CnAkshareProvider()
+
+    def _mock_transport(api_name, payload):
+        class _Resp:
+            status_code = 200
+            def json(self):
+                if api_name == "balancesheet":
+                    return {
+                        "code": 0,
+                        "msg": "",
+                        "data": {
+                            "fields": ["ts_code", "ann_date", "f_ann_date", "end_date", "total_assets", "total_liab", "total_hldr_eqy_inc_min_int", "money_cap"],
+                            "items": [
+                                ["600519.SH", "20240428", "20240428", "20240331", 10000.0, 4000.0, 6000.0, 3000.0],
+                                ["600519.SH", "20240428", "20240428", "20231231", 9000.0, 3500.0, 5500.0, 2500.0],
+                            ],
+                        },
+                    }
+                elif api_name == "income":
+                    return {
+                        "code": 0,
+                        "msg": "",
+                        "data": {
+                            "fields": ["ts_code", "ann_date", "f_ann_date", "end_date", "total_revenue", "n_income_attr_p"],
+                            "items": [
+                                ["600519.SH", "20240428", "20240428", "20240331", 5000.0, 1000.0],
+                            ],
+                        },
+                    }
+                elif api_name == "cashflow":
+                    return {
+                        "code": 0,
+                        "msg": "",
+                        "data": {
+                            "fields": ["ts_code", "ann_date", "f_ann_date", "end_date", "n_cashflow_act"],
+                            "items": [
+                                ["600519.SH", "20240428", "20240428", "20240331", 800.0],
+                            ],
+                        },
+                    }
+                return {"code": 0, "msg": "", "data": None}
+
+        return _Resp(), None, None, False
+
+    monkeypatch.setattr(provider, "_tushare_transport_post", _mock_transport)
+    tables, errors = provider._fetch_tushare_financial_tables("600519")
+    assert errors == []
+    assert "资产负债表" in tables
+    assert "利润表" in tables
+    assert "现金流量表" in tables
+
+    bs_df = tables["资产负债表"]
+    assert "报告日" in bs_df.columns
+    assert "公告日期" in bs_df.columns
+    assert "实际公告日" in bs_df.columns
+    assert "资产总计" in bs_df.columns
+    assert "负债合计" in bs_df.columns
+    assert "所有者权益(或股东权益)合计" in bs_df.columns
+    assert "货币资金" in bs_df.columns
+    assert len(bs_df) == 2
+
+
+def test_provider_backup_source_single_ann_date_or_f_ann_date(monkeypatch):
+    """Backup tables with only ann_date or only f_ann_date cutoff properly."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    # Only ann_date
+    bs_ann = pd.DataFrame(
+        {
+            "end_date": ["20240331"],
+            "ann_date": ["20240428"],
+            "total_assets": [1000.0],
+            "total_liab": [400.0],
+            "total_hldr_eqy_inc_min_int": [600.0],
+        }
+    )
+    # Only f_ann_date
+    bs_f_ann = pd.DataFrame(
+        {
+            "end_date": ["20240331"],
+            "f_ann_date": ["20240428"],
+            "total_assets": [1000.0],
+            "total_liab": [400.0],
+            "total_hldr_eqy_inc_min_int": [600.0],
+        }
+    )
+
+    class _PAnn(CnAkshareProvider):
+        def _ak(self):
+            class _Ak:
+                def stock_financial_report_sina(self, stock, symbol):
+                    raise RuntimeError("sina down")
+            return _Ak()
+        def _load_backup_financial_tables(self, ticker, assume_locked=False):
+            return {"资产负债表": bs_ann.copy()}, []
+
+    res_ann = _PAnn().get_balance_sheet("600519", curr_date="2024-04-28")
+    assert "财务数据截至" in res_ann
+    assert "2024-04-28" in res_ann
+
+    class _PFAnn(CnAkshareProvider):
+        def _ak(self):
+            class _Ak:
+                def stock_financial_report_sina(self, stock, symbol):
+                    raise RuntimeError("sina down")
+            return _Ak()
+        def _load_backup_financial_tables(self, ticker, assume_locked=False):
+            return {"资产负债表": bs_f_ann.copy()}, []
+
+    res_f_ann = _PFAnn().get_balance_sheet("600519", curr_date="2024-04-28")
+    assert "财务数据截至" in res_f_ann
+    assert "2024-04-28" in res_f_ann
+
+
+

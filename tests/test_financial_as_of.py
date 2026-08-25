@@ -99,7 +99,17 @@ SAMPLE_FUND_FLOW_INDIVIDUAL_OBJ = FundFlowText(
     evidence_meta={"as_of": "2026-08-21", "actual_as_of": "2026-08-21", "status": "available", "symbol": "600900.SH"},
 )
 
+SAMPLE_BACKUP_BALANCE_SHEET = """## Balance Sheet (600900.SH)
+
+【财务数据截至 2026Q1】（生效公告日 2026-04-28，分析日 2026-08-21）
+
+|      报告日 |     公告日期 |     实际公告日 |        资产总计 |        负债合计 |
+|---------:|---------:|------------:|------------:|------------:|
+| 20260331 | 20260430 | 20260428    |  12345678.0 |   5678901.0 |
+"""
+
 SAMPLE_RESTRICTED_RELEASE_NONE = """【解禁排查】数据基准日：2026-08-21。距当前分析日期前后60日内无限售股解禁记录，无重大解禁冲击风险。"""
+
 
 SAMPLE_RESTRICTED_RELEASE_WITH_DATA = """【限售解禁风险预警】（数据基准日：2026-08-21）找到 1 条近期解禁记录：
 - 解禁日期: 2026-08-15 | 类型: 首发原股东限售股份 | 占比流通市值: 12.5%"""
@@ -119,6 +129,7 @@ SAMPLE_RESTRICTED_RELEASE_WITH_DATA = """【限售解禁风险预警】（数据
         ("shareholder_count", SAMPLE_SHAREHOLDER_COUNT, "2026-08-21", "2026-03-31"),
         ("fund_flow_individual_text", SAMPLE_FUND_FLOW_INDIVIDUAL_TEXT, "2026-08-21", "2026-08-21"),
         ("fund_flow_individual_obj", SAMPLE_FUND_FLOW_INDIVIDUAL_OBJ, "2026-08-21", "2026-08-21"),
+        ("backup_balance_sheet", SAMPLE_BACKUP_BALANCE_SHEET, "2026-08-21", "2026-04-28"),
         ("restricted_release_none", SAMPLE_RESTRICTED_RELEASE_NONE, "2026-08-21", "2026-08-21"),
         ("restricted_release_data", SAMPLE_RESTRICTED_RELEASE_WITH_DATA, "2026-08-21", "2026-08-21"),
     ],

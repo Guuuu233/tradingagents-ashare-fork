@@ -102,6 +102,24 @@ PATH_MAX_WITHIN_WINDOW = "max_within_window"
 PATH_STATUTORY_FALLBACK = "statutory_fallback"
 PATH_DROPPED_YOY_REFRESH = "dropped_yoy_refresh"
 
+REPORT_COL_CANDIDATES: tuple[str, ...] = (
+    "报告日",
+    "end_date",
+    "REPORT_DATE",
+    "报告期",
+    "report_date",
+    "end_dt",
+)
+ANNOUNCE_COL_CANDIDATES: tuple[str, ...] = (
+    "公告日期",
+    "实际公告日",
+    "f_ann_date",
+    "ann_date",
+    "actual_ann_date",
+    "NOTICE_DATE",
+    "ann_dt",
+)
+
 
 @dataclass(frozen=True)
 class EffectiveAnnounceDate:
@@ -299,13 +317,32 @@ def build_effective_announce_map(
     for _name, df in tables.items():
         if df is None or getattr(df, "empty", True):
             continue
-        if report_col not in df.columns or announce_col not in df.columns:
+        rep_col = report_col if report_col in df.columns else next(
+            (c for c in REPORT_COL_CANDIDATES if c in df.columns), None
+        )
+        if rep_col is None:
             continue
+
+        ann_cols = [
+            c
+            for c in (announce_col, *ANNOUNCE_COL_CANDIDATES)
+            if c in df.columns
+        ]
+        seen_ann = set()
+        unique_ann_cols = [
+            c for c in ann_cols if not (c in seen_ann or seen_ann.add(c))
+        ]
+        if not unique_ann_cols:
+            continue
+
         for _, row in df.iterrows():
-            period = normalize_report_period(row.get(report_col))
+            period = normalize_report_period(row.get(rep_col))
             if not period:
                 continue
-            period_to_anns.setdefault(period, []).append(row.get(announce_col))
+            for c in unique_ann_cols:
+                val = row.get(c)
+                if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                    period_to_anns.setdefault(period, []).append(val)
 
     out: dict[str, EffectiveAnnounceDate] = {}
     for period, anns in period_to_anns.items():
@@ -328,7 +365,10 @@ def filter_financial_df_by_effective_announce(
     """
     if df is None or df.empty:
         return df, None
-    if report_col not in df.columns:
+    rep_col = report_col if report_col in df.columns else next(
+        (c for c in REPORT_COL_CANDIDATES if c in df.columns), None
+    )
+    if rep_col is None:
         raise ValueError(f"missing report column {report_col!r}")
 
     cutoff = parse_yyyymmdd(curr_date)
@@ -338,15 +378,35 @@ def filter_financial_df_by_effective_announce(
     keep_mask = []
     latest: Optional[EffectiveAnnounceDate] = None
     for _, row in df.iterrows():
-        period = normalize_report_period(row.get(report_col))
+        period = normalize_report_period(row.get(rep_col))
         eff = effective_map.get(period) if period else None
         if eff is None and period:
             # Period only present on this table — resolve with its own ann if any.
-            ann = row.get("公告日期") if "公告日期" in df.columns else None
-            try:
-                eff = resolve_effective_announce_date(period, [ann] if ann is not None else [])
-            except ValueError:
-                eff = None
+            ann_cols = [
+                c
+                for c in (
+                    "公告日期",
+                    "实际公告日",
+                    "f_ann_date",
+                    "ann_date",
+                    "NOTICE_DATE",
+                    *ANNOUNCE_COL_CANDIDATES,
+                )
+                if c in df.columns
+            ]
+            seen_c = set()
+            unique_c = [c for c in ann_cols if not (c in seen_c or seen_c.add(c))]
+            anns = [
+                row.get(c)
+                for c in unique_c
+                if row.get(c) is not None
+                and not (isinstance(row.get(c), float) and pd.isna(row.get(c)))
+            ]
+            if anns:
+                try:
+                    eff = resolve_effective_announce_date(period, anns)
+                except ValueError:
+                    eff = None
         if eff is None:
             keep_mask.append(False)
             continue
