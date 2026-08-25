@@ -286,6 +286,14 @@ export interface AnalysisReport {
     risk_feedback_state?: RiskFeedbackState
     final_trade_decision?: string
     investment_debate_state?: InvestmentDebateState
+    protocol_version?: ProtocolVersion
+    protocol_stage?: DebateStage
+    tiebreak_skipped?: boolean
+    debate_degenerate?: boolean
+    challenges?: Challenge[]
+    dispute_map?: DisputeMapItem[]
+    challenge_verification?: HistoricalDebateEvidenceVerification[]
+    shadow_credit_metrics?: ShadowCreditMetrics
     manager_verdict?: HistoricalDebateManagerVerdict | null
     evidence_verification?: HistoricalDebateEvidenceVerification[]
     report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
@@ -373,6 +381,14 @@ export interface AnalysisHorizonResult {
     trader_investment_plan?: string
     final_trade_decision?: string
     investment_debate_state?: InvestmentDebateState
+    protocol_version?: ProtocolVersion
+    protocol_stage?: DebateStage
+    tiebreak_skipped?: boolean
+    debate_degenerate?: boolean
+    challenges?: Challenge[]
+    dispute_map?: DisputeMapItem[]
+    challenge_verification?: HistoricalDebateEvidenceVerification[]
+    shadow_credit_metrics?: ShadowCreditMetrics
     manager_verdict?: HistoricalDebateManagerVerdict | null
     evidence_verification?: HistoricalDebateEvidenceVerification[]
     report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
@@ -420,12 +436,57 @@ export interface ReportDetail extends Report {
     final_trade_decision?: string
     result_data?: AnalysisReport
     investment_debate_state?: InvestmentDebateState
+    protocol_version?: ProtocolVersion
+    protocol_stage?: DebateStage
+    tiebreak_skipped?: boolean
+    debate_degenerate?: boolean
+    challenges?: Challenge[]
+    dispute_map?: DisputeMapItem[]
+    challenge_verification?: HistoricalDebateEvidenceVerification[]
+    shadow_credit_metrics?: ShadowCreditMetrics
     manager_verdict?: HistoricalDebateManagerVerdict | null
     evidence_verification?: HistoricalDebateEvidenceVerification[]
     report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
 }
 
 // ─── Historical Debate & Verification Types ─────────────────────────────────
+
+export type ProtocolVersion = 'v1_legacy' | 'v2_structured_disagreement' | string
+export type DebateStage = 'opening' | 'challenge' | 'tiebreak' | 'manager' | string
+
+export interface Challenge {
+    challenge_id?: string
+    target_claim_id?: string
+    weakest_point?: string
+    evidence?: string[] | string
+    severity?: 'minor' | 'major' | 'fatal' | string
+    status?: 'open' | 'addressed' | 'resolved' | 'rejected' | 'adopted' | string
+    evidence_status?: EvidenceVerificationStatus | 'verified' | 'unsupported' | 'contradicted' | 'source_unavailable' | string
+    message_index?: number
+    debate_round?: number
+    stage?: DebateStage | string
+    speaker?: string
+    speaker_key?: 'Bull' | 'Bear' | string
+    is_fatal?: boolean
+    is_penetrated?: boolean
+    [key: string]: unknown
+}
+
+export interface DisputeMapItem {
+    data_point?: string
+    bull_interpretation?: string
+    bear_interpretation?: string
+    evidence_decision?: string
+    winner?: 'bull' | 'bear' | 'tie' | string
+    [key: string]: unknown
+}
+
+export interface ShadowCreditMetrics {
+    bull_score?: number
+    bear_score?: number
+    total_credit?: number
+    [key: string]: unknown
+}
 
 export interface HistoricalDebateAttempt {
     attempt_index?: number
@@ -461,6 +522,12 @@ export interface HistoricalDebateRoundMessage {
     parse_status?: string
     accepted?: boolean
     error_detail?: string
+    stage?: DebateStage | string
+    battlefield?: string
+    self_win_prob?: number | null
+    tiebreak_question?: string
+    tiebreak_answer?: string
+    challenges?: Challenge[]
     responded_claim_ids?: string[]
     new_claim_ids?: string[]
     target_claim_ids?: string[]
@@ -491,6 +558,9 @@ export interface HistoricalDebateClaim {
     content?: string
     evidence?: string[] | string
     confidence?: number
+    battlefield?: string
+    falsification_conditions?: string[] | string
+    stage?: DebateStage | string
     status?: 'open' | 'resolved' | 'unresolved' | 'adopted' | 'rejected' | string
     target_claim_ids?: string[]
     responded_claim_ids?: string[]
@@ -510,6 +580,9 @@ export interface HistoricalDebateManagerVerdict {
     odds?: number | string | null
     adopted_claim_ids?: string[]
     rejected_claim_ids?: string[]
+    adopted_challenge_ids?: string[]
+    rejected_challenge_ids?: string[]
+    dispute_map?: DisputeMapItem[]
     consistency_check_passed?: boolean
     failed_checks?: string[]
 }
@@ -519,8 +592,12 @@ export type EvidenceVerificationStatus = 'verified' | 'unsupported' | 'contradic
 export interface HistoricalDebateEvidenceVerification {
     raw: string
     claim_id?: string | null
+    challenge_id?: string | null
+    target_claim_id?: string | null
     matched_role?: string | null
     matched_source?: string | null
+    severity?: string
+    evidence_status?: string
     status: EvidenceVerificationStatus
     is_fatal: boolean
     details?: string
@@ -545,6 +622,18 @@ export interface InvestmentDebateState {
     bear_rebuttal?: string
     judge_decision?: string
     count?: number
+    protocol_version?: ProtocolVersion
+    protocol_stage?: DebateStage
+    tiebreak_skipped?: boolean
+    debate_degenerate?: boolean
+    challenges?: Challenge[]
+    dispute_map?: DisputeMapItem[]
+    challenge_verification?: HistoricalDebateEvidenceVerification[]
+    shadow_credit_metrics?: ShadowCreditMetrics
+    data_utilization_metrics?: Record<string, unknown>
+    feature_flags?: Record<string, unknown>
+    requires_tiebreak?: boolean
+    self_win_prob?: number | null
     claims?: HistoricalDebateClaim[]
     round_messages?: HistoricalDebateRoundMessage[]
     attempts?: HistoricalDebateAttempt[]
@@ -555,6 +644,7 @@ export interface InvestmentDebateState {
     round_summary?: string
     round_goal?: string
     claim_counter?: number
+    challenge_counter?: number
     manager_verdict?: HistoricalDebateManagerVerdict | null
     evidence_verification?: HistoricalDebateEvidenceVerification[]
     report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null

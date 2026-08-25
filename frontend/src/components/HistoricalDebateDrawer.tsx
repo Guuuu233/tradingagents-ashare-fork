@@ -16,6 +16,7 @@ import {
     AlertOctagon,
     Target,
     Database,
+    Swords,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -27,6 +28,11 @@ import type {
     HistoricalDebateManagerVerdict,
     HistoricalDebateEvidenceVerification,
     HistoricalDebateAttempt,
+    ProtocolVersion,
+    DebateStage,
+    Challenge,
+    DisputeMapItem,
+    ShadowCreditMetrics,
 } from '@/types'
 
 const MD_COMPONENTS = {
@@ -47,6 +53,63 @@ const MD_COMPONENTS = {
     ),
 }
 
+export const BATTLEFIELD_MAP: Record<string, { label: string; icon: string; bg: string; text: string; border: string }> = {
+    capital_flow: { label: '资金筹码', icon: '💰', bg: 'bg-amber-500/15', text: 'text-amber-300', border: 'border-amber-500/30' },
+    sentiment_theme: { label: '情绪题材', icon: '🔥', bg: 'bg-purple-500/15', text: 'text-purple-300', border: 'border-purple-500/30' },
+    price_volume: { label: '量价技术', icon: '📈', bg: 'bg-blue-500/15', text: 'text-blue-300', border: 'border-blue-500/30' },
+    macro_policy: { label: '宏观政策', icon: '🏛️', bg: 'bg-emerald-500/15', text: 'text-emerald-300', border: 'border-emerald-500/30' },
+    fundamentals: { label: '基本面', icon: '📊', bg: 'bg-cyan-500/15', text: 'text-cyan-300', border: 'border-cyan-500/30' },
+}
+
+export function getBattlefieldDisplay(bf?: string | null) {
+    if (!bf) return null
+    const key = bf.toLowerCase().trim()
+    const config = BATTLEFIELD_MAP[key]
+    if (config) {
+        return {
+            key,
+            label: config.label,
+            fullLabel: `${config.label} (${key})`,
+            icon: config.icon,
+            bg: config.bg,
+            text: config.text,
+            border: config.border,
+        }
+    }
+    return {
+        key,
+        label: bf,
+        fullLabel: bf,
+        icon: '⚔️',
+        bg: 'bg-slate-800',
+        text: 'text-slate-300',
+        border: 'border-slate-700',
+    }
+}
+
+/**
+ * Hard Gate Check: unsupported / contradicted fatal challenges MUST NOT be marked as penetrated.
+ */
+export function isChallengePenetrated(
+    challenge: Challenge,
+    adoptedChallengeIds?: string[],
+): boolean {
+    const severity = (challenge.severity || '').toLowerCase().trim()
+    const isFatal = severity === 'fatal'
+    if (!isFatal) return false
+
+    const evStatus = (challenge.evidence_status || '').toLowerCase().trim()
+    // HARD GATE: unsupported / contradicted fatal challenge MUST NOT show as "已击穿"
+    if (evStatus === 'unsupported' || evStatus === 'contradicted' || evStatus === 'source_unavailable') {
+        return false
+    }
+
+    const isVerified = evStatus === 'verified'
+    const isAdopted = challenge.status === 'adopted' || (adoptedChallengeIds && challenge.challenge_id ? adoptedChallengeIds.includes(challenge.challenge_id) : false)
+
+    return isFatal && isVerified && isAdopted
+}
+
 export interface HistoricalDebateDrawerProps {
     isOpen: boolean
     onClose: () => void
@@ -60,6 +123,14 @@ export function extractDebateState(
     debateState: InvestmentDebateState | null
     managerVerdict: HistoricalDebateManagerVerdict | null
     evidenceVerification: HistoricalDebateEvidenceVerification[]
+    protocolVersion: ProtocolVersion
+    protocolStage: DebateStage
+    tiebreakSkipped: boolean
+    debateDegenerate: boolean
+    challenges: Challenge[]
+    disputeMap: DisputeMapItem[]
+    challengeVerification: HistoricalDebateEvidenceVerification[]
+    shadowCreditMetrics: ShadowCreditMetrics | null
     hasStructuredDebate: boolean
     hasLegacyHistory: boolean
 } {
@@ -68,6 +139,14 @@ export function extractDebateState(
             debateState: null,
             managerVerdict: null,
             evidenceVerification: [],
+            protocolVersion: 'v1_legacy',
+            protocolStage: 'opening',
+            tiebreakSkipped: false,
+            debateDegenerate: false,
+            challenges: [],
+            disputeMap: [],
+            challengeVerification: [],
+            shadowCreditMetrics: null,
             hasStructuredDebate: false,
             hasLegacyHistory: false,
         }
@@ -108,12 +187,65 @@ export function extractDebateState(
         || reportData.evidence_verification
         || []
 
+    const protocolVersion: ProtocolVersion =
+        debateState?.protocol_version
+        || resData?.protocol_version
+        || reportData.protocol_version
+        || (debateState?.round_messages && debateState.round_messages.some(m => m.stage || (m.challenges && m.challenges.length > 0)) ? 'v2_structured_disagreement' : 'v1_legacy')
+
+    const protocolStage: DebateStage =
+        debateState?.protocol_stage
+        || resData?.protocol_stage
+        || reportData.protocol_stage
+        || 'opening'
+
+    const tiebreakSkipped = Boolean(
+        debateState?.tiebreak_skipped
+        ?? resData?.tiebreak_skipped
+        ?? reportData.tiebreak_skipped
+        ?? false
+    )
+
+    const debateDegenerate = Boolean(
+        debateState?.debate_degenerate
+        ?? resData?.debate_degenerate
+        ?? reportData.debate_degenerate
+        ?? false
+    )
+
+    // Collect challenges from root or messages
+    const messageChallenges = debateState?.round_messages?.flatMap(m => m.challenges || []) || []
+    const rawChallenges = debateState?.challenges || resData?.challenges || reportData.challenges || []
+    const challenges: Challenge[] = rawChallenges.length > 0 ? rawChallenges : messageChallenges
+
+    // Dispute map from manager verdict or state
+    const disputeMap: DisputeMapItem[] =
+        managerVerdict?.dispute_map
+        || debateState?.dispute_map
+        || resData?.dispute_map
+        || reportData.dispute_map
+        || []
+
+    const challengeVerification: HistoricalDebateEvidenceVerification[] =
+        debateState?.challenge_verification
+        || resData?.challenge_verification
+        || evidenceVerification.filter(e => Boolean(e.challenge_id))
+        || []
+
+    const shadowCreditMetrics: ShadowCreditMetrics | null =
+        debateState?.shadow_credit_metrics
+        || resData?.shadow_credit_metrics
+        || null
+
     const hasStructuredDebate = Boolean(
         (debateState?.round_messages && debateState.round_messages.length > 0)
         || (debateState?.claims && debateState.claims.length > 0)
+        || (challenges && challenges.length > 0)
+        || (disputeMap && disputeMap.length > 0)
         || (debateState?.attempts && debateState.attempts.length > 0)
         || (managerVerdict && (managerVerdict.winner || managerVerdict.direction || managerVerdict.consistency_check_passed !== undefined))
         || (evidenceVerification && evidenceVerification.length > 0)
+        || protocolVersion === 'v2_structured_disagreement'
     )
 
     const hasLegacyHistory = Boolean(
@@ -127,6 +259,14 @@ export function extractDebateState(
         debateState,
         managerVerdict,
         evidenceVerification,
+        protocolVersion,
+        protocolStage,
+        tiebreakSkipped,
+        debateDegenerate,
+        challenges,
+        disputeMap,
+        challengeVerification,
+        shadowCreditMetrics,
         hasStructuredDebate,
         hasLegacyHistory,
     }
@@ -178,11 +318,19 @@ export default function HistoricalDebateDrawer({
         debateState,
         managerVerdict,
         evidenceVerification,
+        protocolVersion,
+        protocolStage,
+        tiebreakSkipped,
+        debateDegenerate,
+        challenges,
+        disputeMap,
         hasStructuredDebate,
         hasLegacyHistory,
     } = useMemo(() => {
         return extractDebateState(reportData, selectedHorizon)
     }, [reportData, selectedHorizon])
+
+    const isV2 = protocolVersion === 'v2_structured_disagreement'
 
     const roundMessages: HistoricalDebateRoundMessage[] = useMemo(() => {
         return debateState?.round_messages || []
@@ -219,7 +367,7 @@ export default function HistoricalDebateDrawer({
     // Claims filtering
     const filteredClaims = useMemo(() => {
         return claims.filter(c => {
-            const text = `${c.claim_id} ${c.claim || c.text || c.content || ''} ${Array.isArray(c.evidence) ? c.evidence.join(' ') : c.evidence || ''}`.toLowerCase()
+            const text = `${c.claim_id} ${c.claim || c.text || c.content || ''} ${Array.isArray(c.evidence) ? c.evidence.join(' ') : c.evidence || ''} ${c.battlefield || ''}`.toLowerCase()
             if (claimSearch && !text.includes(claimSearch.toLowerCase())) {
                 return false
             }
@@ -295,11 +443,40 @@ export default function HistoricalDebateDrawer({
                             <Scale className="w-5 h-5" />
                         </div>
                         <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                                 <h2 className="text-lg font-bold text-white tracking-tight">多空辩论与裁决证据</h2>
                                 <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
                                     {reportData?.symbol || '历史审计'}
                                 </span>
+
+                                {/* Protocol Version Badge */}
+                                {isV2 ? (
+                                    <span
+                                        className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-mono font-semibold"
+                                        title="v2 结构化非共识协议"
+                                    >
+                                        <Sparkles className="w-3 h-3 text-indigo-400" />
+                                        <span>v2_structured_disagreement</span>
+                                    </span>
+                                ) : (
+                                    <span
+                                        className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono"
+                                        title="v1 传统辩论协议"
+                                    >
+                                        <span>v1_legacy</span>
+                                    </span>
+                                )}
+
+                                {/* Degenerate Badge */}
+                                {debateDegenerate && (
+                                    <span
+                                        className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold animate-pulse"
+                                        title="多空双方信念概率未发生实质位移"
+                                    >
+                                        <AlertTriangle className="w-3 h-3 text-amber-400" />
+                                        <span>⚠️ 辩论退化</span>
+                                    </span>
+                                )}
                             </div>
                             <p className="text-xs text-slate-400 mt-0.5">
                                 逐轮多空对抗 · 论点账本 · 研究总监裁决 · 事实确定性核验
@@ -370,9 +547,9 @@ export default function HistoricalDebateDrawer({
                         >
                             <Database className="w-3.5 h-3.5" />
                             <span>论点账本 (Claims)</span>
-                            {claims.length > 0 && (
+                            {(claims.length > 0 || challenges.length > 0) && (
                                 <span className="ml-1 px-1.5 py-0.2 rounded-full bg-slate-800 text-[10px]">
-                                    {claims.length}
+                                    {claims.length + challenges.length}
                                 </span>
                             )}
                         </button>
@@ -490,9 +667,62 @@ export default function HistoricalDebateDrawer({
                             {/* TAB 1: 逐轮辩论 TIMELINE */}
                             {activeTab === 'timeline' && (
                                 <div className="space-y-4">
-                                    <div className="flex items-center justify-between pb-2">
+                                    {/* Degenerate Alert Banner if applicable */}
+                                    {debateDegenerate && (
+                                        <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-4 flex items-start gap-3 shadow-sm">
+                                            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                                            <div>
+                                                <div className="flex items-center gap-2">
+                                                    <h4 className="text-xs font-bold text-amber-300">辩论退化警告 (Debate Degenerate)</h4>
+                                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono font-bold">
+                                                        静止退化
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                                    多空双方在辩论过程中自评胜率未随反方证据调整，信念轨迹保持静止。
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Tiebreak Status Banner */}
+                                    {tiebreakSkipped ? (
+                                        <div className="rounded-xl border border-blue-500/30 bg-blue-950/20 p-3.5 flex items-center gap-3">
+                                            <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-bold text-blue-300">加赛裁决状态 (Tiebreak)</span>
+                                                    <span className="text-[10px] px-2 py-0.2 rounded bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono">
+                                                        已跳过
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-slate-300 mt-0.5">
+                                                    证据足以裁决，未触发加赛
+                                                </p>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        roundMessages.some(m => m.stage === 'tiebreak' || m.debate_round === 3) && (
+                                            <div className="rounded-xl border border-purple-500/30 bg-purple-950/20 p-3.5 flex items-center gap-3">
+                                                <Sparkles className="w-4 h-4 text-purple-400 shrink-0" />
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-bold text-purple-300">已执行加赛裁决 (Executed Tiebreak)</span>
+                                                        <span className="text-[10px] px-2 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40 font-mono">
+                                                            加赛阶段
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-300 mt-0.5">
+                                                        核心分歧点势均力敌，已执行深度加赛问答并记录胜率调整。
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        )
+                                    )}
+
+                                    <div className="flex items-center justify-between pb-1">
                                         <div className="text-xs text-slate-400">
-                                            共 {roundMessages.length} 次正式发言 · 默认折叠正文以保障性能
+                                            共 {roundMessages.length} 次正式发言 · 协议阶段: <span className="font-mono text-blue-400">{protocolStage}</span>
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <button
@@ -515,10 +745,10 @@ export default function HistoricalDebateDrawer({
                                             暂无逐轮发言记录
                                         </div>
                                     ) : (
-                                        <div className="space-y-3">
+                                        <div className="space-y-4">
                                             {roundMessages.map((msg, idx) => {
                                                 const key = `msg-${msg.message_index ?? idx}`
-                                                const isExpanded = expandedMessages[key] ?? false
+                                                const isExpanded = expandedMessages[key] ?? true // default expanded for rich view or toggleable
                                                 const isBull = (msg.speaker_key || msg.speaker || '').toLowerCase().includes('bull') || (msg.speaker || '').includes('多')
                                                 const speakerEmoji = isBull ? '🐂' : '🐻'
                                                 const speakerLabel = isBull ? '多头研究员' : '空头研究员'
@@ -528,6 +758,10 @@ export default function HistoricalDebateDrawer({
                                                 const bgTheme = isBull ? 'bg-emerald-950/20' : 'bg-rose-950/20'
                                                 const badgeText = isBull ? 'text-emerald-400' : 'text-rose-400'
 
+                                                // Stage & battlefield
+                                                const stage = msg.stage || (msg.debate_round === 1 ? 'opening' : msg.debate_round === 2 ? 'challenge' : msg.debate_round === 3 ? 'tiebreak' : undefined)
+                                                const bfDisplay = getBattlefieldDisplay(msg.battlefield)
+
                                                 // Information gain formatting
                                                 const infoScore = typeof msg.information_gain_score === 'number'
                                                     ? msg.information_gain_score
@@ -535,6 +769,18 @@ export default function HistoricalDebateDrawer({
                                                 const newEvCount = msg.new_evidence_count ?? 0
                                                 const parseStatus = msg.parse_status || 'valid'
                                                 const isProtocolValid = parseStatus === 'valid'
+
+                                                // Collect opening claims for this message
+                                                const msgOpeningClaims = claims.filter(c =>
+                                                    (msg.new_claim_ids && msg.new_claim_ids.includes(c.claim_id)) ||
+                                                    (stage === 'opening' && (c.debate_round === msg.debate_round || c.round_index === msg.debate_round) && ((isBull && (c.stance === 'bullish' || c.speaker_key === 'Bull')) || (!isBull && (c.stance === 'bearish' || c.speaker_key === 'Bear'))))
+                                                )
+
+                                                // Collect challenges inside this message or associated
+                                                const msgChallenges = msg.challenges || challenges.filter(c =>
+                                                    c.message_index === msg.message_index ||
+                                                    (c.debate_round === msg.debate_round && ((isBull && (c.speaker_key === 'Bull' || c.speaker?.includes('多'))) || (!isBull && (c.speaker_key === 'Bear' || c.speaker?.includes('空')))))
+                                                )
 
                                                 // Collect unaccepted attempts for this message
                                                 const msgAttempts: HistoricalDebateAttempt[] = [
@@ -569,6 +815,22 @@ export default function HistoricalDebateDrawer({
                                                                         <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-mono">
                                                                             Round {msg.debate_round || Math.ceil((msg.message_index || 1) / 2)} · #{msg.message_index ?? idx + 1}
                                                                         </span>
+                                                                        {stage && (
+                                                                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-mono uppercase ${
+                                                                                stage === 'opening'
+                                                                                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                                                                    : stage === 'challenge'
+                                                                                        ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                                                                        : 'bg-purple-500/15 text-purple-300 border border-purple-500/30'
+                                                                            }`}>
+                                                                                {stage === 'opening' ? '立论 (Opening)' : stage === 'challenge' ? '质询 (Challenge)' : '加赛 (Tiebreak)'}
+                                                                            </span>
+                                                                        )}
+                                                                        {bfDisplay && (
+                                                                            <span className={`text-[11px] px-2 py-0.5 rounded-full border ${bfDisplay.bg} ${bfDisplay.text} ${bfDisplay.border}`}>
+                                                                                {bfDisplay.icon} {bfDisplay.label}
+                                                                            </span>
+                                                                        )}
                                                                         {isProtocolValid ? (
                                                                             <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                                                                                 <CheckCircle2 className="w-3 h-3" />
@@ -601,6 +863,11 @@ export default function HistoricalDebateDrawer({
                                                                         <span>增量: {(infoScore * 100).toFixed(0)}%</span>
                                                                     </span>
                                                                 )}
+                                                                {msg.self_win_prob !== undefined && msg.self_win_prob !== null && (
+                                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-mono">
+                                                                        <span>自评胜率: {(Number(msg.self_win_prob) * 100).toFixed(0)}%</span>
+                                                                    </span>
+                                                                )}
                                                                 {newEvCount > 0 && (
                                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/30">
                                                                         <span>新证据: {newEvCount}</span>
@@ -614,6 +881,12 @@ export default function HistoricalDebateDrawer({
                                                                 {msg.new_claim_ids && msg.new_claim_ids.length > 0 && (
                                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">
                                                                         <span>提出: {msg.new_claim_ids.join(', ')}</span>
+                                                                    </span>
+                                                                )}
+                                                                {msgChallenges.length > 0 && (
+                                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 border border-rose-500/30 font-semibold">
+                                                                        <Swords className="w-3 h-3 text-rose-400" />
+                                                                        <span>盘问: {msgChallenges.length}</span>
                                                                     </span>
                                                                 )}
                                                                 {uniqueAttempts.length > 0 && (
@@ -633,7 +906,7 @@ export default function HistoricalDebateDrawer({
                                                         {/* Expandable Body */}
                                                         {isExpanded && (
                                                             <div className="px-5 py-4 border-t border-slate-800/80 bg-slate-900/90 space-y-4">
-                                                                {/* Claim metadata bar */}
+                                                                {/* Metadata bar */}
                                                                 <div className="flex flex-wrap gap-2 text-xs">
                                                                     {msg.target_claim_ids && msg.target_claim_ids.length > 0 && (
                                                                         <div className="px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700 text-slate-300">
@@ -654,6 +927,203 @@ export default function HistoricalDebateDrawer({
                                                                         </div>
                                                                     )}
                                                                 </div>
+
+                                                                {/* Opening Claims inside this message */}
+                                                                {msgOpeningClaims.length > 0 && (
+                                                                    <div className="space-y-2.5 pt-1">
+                                                                        <div className="flex items-center gap-2 text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                                                                            <Database className="w-3.5 h-3.5 text-emerald-400" />
+                                                                            <span>立论论点与战场分布 ({msgOpeningClaims.length})</span>
+                                                                        </div>
+                                                                        <div className="space-y-2.5">
+                                                                            {msgOpeningClaims.map((claim, clmIdx) => {
+                                                                                const claimBf = getBattlefieldDisplay(claim.battlefield)
+                                                                                const claimEvidence = Array.isArray(claim.evidence) ? claim.evidence : claim.evidence ? [claim.evidence] : []
+                                                                                const confidence = typeof claim.confidence === 'number' ? claim.confidence : null
+
+                                                                                return (
+                                                                                    <div
+                                                                                        key={`msg-op-claim-${claim.claim_id || clmIdx}`}
+                                                                                        className="p-3.5 rounded-xl border border-slate-800 bg-slate-950/60 space-y-2 text-xs"
+                                                                                    >
+                                                                                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                                                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                                                <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                                                                                    {claim.claim_id}
+                                                                                                </span>
+                                                                                                {claimBf && (
+                                                                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${claimBf.bg} ${claimBf.text} ${claimBf.border} font-medium`}>
+                                                                                                        <span>{claimBf.icon}</span>
+                                                                                                        <span>{claimBf.label}</span>
+                                                                                                    </span>
+                                                                                                )}
+                                                                                            </div>
+                                                                                            {confidence !== null && (
+                                                                                                <span className="text-slate-400 font-mono">
+                                                                                                    置信度: {(confidence * 100).toFixed(0)}%
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </div>
+
+                                                                                        <div className="text-slate-100 font-medium leading-relaxed">
+                                                                                            {claim.claim || claim.text || claim.content || ''}
+                                                                                        </div>
+
+                                                                                        {claimEvidence.length > 0 && (
+                                                                                            <div className="space-y-1 bg-slate-900/60 p-2 rounded-lg border border-slate-800/60 text-slate-300">
+                                                                                                <span className="text-slate-500 text-[11px] block font-semibold">支撑证据:</span>
+                                                                                                <ul className="space-y-0.5">
+                                                                                                    {claimEvidence.map((ev, evIdx) => (
+                                                                                                        <li key={`ev-${claim.claim_id}-${evIdx}`} className="flex items-start gap-1.5 text-slate-300">
+                                                                                                            <span className="text-blue-400">•</span>
+                                                                                                            <span>{String(ev)}</span>
+                                                                                                        </li>
+                                                                                                    ))}
+                                                                                                </ul>
+                                                                                            </div>
+                                                                                        )}
+
+                                                                                        {claim.falsification_conditions && (
+                                                                                            <div className="space-y-1 bg-amber-950/20 p-2.5 rounded-lg border border-amber-500/30">
+                                                                                                <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                                                                                                    <AlertTriangle className="w-3 h-3" /> 失效条件 (Falsification Conditions)
+                                                                                                </span>
+                                                                                                <div className="text-xs text-amber-200/90 leading-relaxed">
+                                                                                                    {Array.isArray(claim.falsification_conditions)
+                                                                                                        ? claim.falsification_conditions.join('；')
+                                                                                                        : String(claim.falsification_conditions)}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )
+                                                                            })}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+
+                                                                {/* Tiebreak Q&A Block if present */}
+                                                                {msg.tiebreak_question && (
+                                                                    <div className="bg-purple-950/40 p-3.5 rounded-xl border border-purple-500/30 space-y-2 text-xs">
+                                                                        <div className="flex items-center gap-1.5 font-bold text-purple-300">
+                                                                            <Sparkles className="w-3.5 h-3.5" />
+                                                                            <span>加赛针对性问答 (Tiebreak Q&A)</span>
+                                                                        </div>
+                                                                        <div className="text-slate-300 bg-slate-900/60 p-2.5 rounded-lg border border-purple-500/20">
+                                                                            <span className="text-purple-400 font-semibold mr-1.5">核心争议提问:</span>
+                                                                            <span>{msg.tiebreak_question}</span>
+                                                                        </div>
+                                                                        {msg.tiebreak_answer && (
+                                                                            <div className="text-slate-200 bg-slate-900/60 p-2.5 rounded-lg border border-emerald-500/20">
+                                                                                <span className="text-emerald-400 font-semibold mr-1.5">回答与自洽论证:</span>
+                                                                                <span>{msg.tiebreak_answer}</span>
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                )}
+
+                                                                {/* Challenges inside this round */}
+                                                                {msgChallenges.length > 0 && (
+                                                                    <div className="space-y-2 pt-1">
+                                                                        <div className="flex items-center gap-2 text-xs font-bold text-rose-300 uppercase tracking-wider">
+                                                                            <Swords className="w-3.5 h-3.5 text-rose-400" />
+                                                                            <span>本轮提出交叉盘问 ({msgChallenges.length})</span>
+                                                                        </div>
+                                                                        <div className="space-y-2">
+                                                                            {msgChallenges.map((ch, chIdx) => {
+                                                                                const isFatal = (ch.severity || '').toLowerCase() === 'fatal'
+                                                                                const isMajor = (ch.severity || '').toLowerCase() === 'major'
+                                                                                const evStatus = (ch.evidence_status || 'unverified').toLowerCase()
+                                                                                const isAdopted = managerVerdict?.adopted_challenge_ids?.includes(ch.challenge_id || '') || ch.status === 'adopted'
+                                                                                const isRejected = managerVerdict?.rejected_challenge_ids?.includes(ch.challenge_id || '') || ch.status === 'rejected'
+                                                                                const penetrated = isChallengePenetrated(ch, managerVerdict?.adopted_challenge_ids)
+
+                                                                                return (
+                                                                                    <div
+                                                                                        key={`msg-ch-${ch.challenge_id || chIdx}`}
+                                                                                        className={`p-3.5 rounded-xl border ${
+                                                                                            penetrated
+                                                                                                ? 'border-rose-500 bg-rose-950/30 ring-1 ring-rose-500/50'
+                                                                                                : 'border-slate-800 bg-slate-950/60'
+                                                                                        } space-y-2 text-xs`}
+                                                                                    >
+                                                                                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                                                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                                                <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                                                                                    {ch.challenge_id || `CH-${chIdx + 1}`}
+                                                                                                </span>
+                                                                                                <span className="text-slate-400">
+                                                                                                    攻击对手: <span className="font-mono text-blue-300 font-bold">{ch.target_claim_id || '-'}</span>
+                                                                                                </span>
+                                                                                                <span className={`px-2 py-0.5 rounded font-mono font-bold uppercase ${
+                                                                                                    isFatal
+                                                                                                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                                                                                        : isMajor
+                                                                                                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                                                                                            : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                                                                                }`}>
+                                                                                                    {ch.severity || 'major'}
+                                                                                                </span>
+                                                                                            </div>
+
+                                                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                                                {/* Evidence status */}
+                                                                                                <span className={`px-2 py-0.5 rounded-full font-medium ${
+                                                                                                    evStatus === 'verified'
+                                                                                                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                                                                                        : evStatus === 'contradicted'
+                                                                                                            ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                                                                                            : evStatus === 'unsupported'
+                                                                                                                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                                                                                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                                                                                }`}>
+                                                                                                    证据: {evStatus}
+                                                                                                </span>
+
+                                                                                                {/* Manager adoption */}
+                                                                                                {isAdopted ? (
+                                                                                                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold">
+                                                                                                        总监采纳
+                                                                                                    </span>
+                                                                                                ) : isRejected ? (
+                                                                                                    <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 font-semibold">
+                                                                                                        总监驳回
+                                                                                                    </span>
+                                                                                                ) : null}
+
+                                                                                                {/* Penetrated badge - strictly protected by hard gate */}
+                                                                                                {penetrated ? (
+                                                                                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-rose-600 text-white font-bold text-xs animate-pulse shadow-sm">
+                                                                                                        <AlertOctagon className="w-3.5 h-3.5" />
+                                                                                                        <span>已击穿</span>
+                                                                                                    </span>
+                                                                                                ) : isFatal && (evStatus === 'unsupported' || evStatus === 'contradicted') ? (
+                                                                                                    <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                                                                                        未击穿 (证据未通过核验)
+                                                                                                    </span>
+                                                                                                ) : null}
+                                                                                            </div>
+                                                                                        </div>
+
+                                                                                        {ch.weakest_point && (
+                                                                                            <div className="text-slate-200 font-medium">
+                                                                                                <span className="text-rose-400 font-semibold mr-1">攻击弱点:</span>
+                                                                                                <span>{ch.weakest_point}</span>
+                                                                                            </div>
+                                                                                        )}
+
+                                                                                        {ch.evidence && (
+                                                                                            <div className="text-slate-400 text-[11px]">
+                                                                                                <span className="text-slate-500 mr-1">质询依据:</span>
+                                                                                                <span>{Array.isArray(ch.evidence) ? ch.evidence.join('；') : ch.evidence}</span>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                )
+                                                                            })}
+                                                                        </div>
+                                                                    </div>
+                                                                )}
 
                                                                 {/* Prose speech */}
                                                                 <div className="prose prose-invert prose-sm max-w-none text-slate-200 bg-slate-950/50 p-4 rounded-xl border border-slate-800 leading-relaxed">
@@ -719,12 +1189,73 @@ export default function HistoricalDebateDrawer({
                                             })}
                                         </div>
                                     )}
+
+                                    {/* Dispute Map Card in Timeline flow for comprehensive overview */}
+                                    {disputeMap.length > 0 && (
+                                        <div className="rounded-xl border border-slate-700 bg-slate-900/90 p-5 space-y-4 shadow-md mt-6">
+                                            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                                                <div className="flex items-center gap-2">
+                                                    <Scale className="w-4 h-4 text-amber-400" />
+                                                    <h4 className="font-bold text-sm text-white">分歧全景图 (Dispute Map)</h4>
+                                                </div>
+                                                <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono">
+                                                    {disputeMap.length} 项核心分歧
+                                                </span>
+                                            </div>
+
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs text-left border-collapse">
+                                                    <thead>
+                                                        <tr className="border-b border-slate-800 text-slate-400 bg-slate-950/50">
+                                                            <th className="py-2.5 px-3 font-semibold">争议数据点 (Data Point)</th>
+                                                            <th className="py-2.5 px-3 font-semibold text-emerald-400">🐂 多头解读 (Bull)</th>
+                                                            <th className="py-2.5 px-3 font-semibold text-rose-400">🐻 空头解读 (Bear)</th>
+                                                            <th className="py-2.5 px-3 font-semibold text-blue-400">证据裁决 (Decision)</th>
+                                                            <th className="py-2.5 px-3 font-semibold text-center">裁决归属</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-800/60">
+                                                        {disputeMap.map((item, dIdx) => {
+                                                            const w = (item.winner || '').toLowerCase()
+                                                            return (
+                                                                <tr key={`tl-dm-${dIdx}`} className="hover:bg-slate-800/30 transition-colors">
+                                                                    <td className="py-3 px-3 font-medium text-slate-200 align-top max-w-[200px]">
+                                                                        {item.data_point || '-'}
+                                                                    </td>
+                                                                    <td className="py-3 px-3 text-slate-300 align-top bg-emerald-950/10">
+                                                                        {item.bull_interpretation || '-'}
+                                                                    </td>
+                                                                    <td className="py-3 px-3 text-slate-300 align-top bg-rose-950/10">
+                                                                        {item.bear_interpretation || '-'}
+                                                                    </td>
+                                                                    <td className="py-3 px-3 text-blue-300 font-medium align-top bg-blue-950/10">
+                                                                        {item.evidence_decision || '-'}
+                                                                    </td>
+                                                                    <td className="py-3 px-3 text-center align-top whitespace-nowrap">
+                                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${
+                                                                            w === 'bull'
+                                                                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                                                                : w === 'bear'
+                                                                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                                                                    : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                                                        }`}>
+                                                                            {w === 'bull' ? '🐂 多方胜' : w === 'bear' ? '🐻 空方胜' : '⚖️ 势均力敌'}
+                                                                        </span>
+                                                                    </td>
+                                                                </tr>
+                                                            )
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
-                            {/* TAB 2: 论点账本 (CLAIMS LEDGER) */}
+                            {/* TAB 2: 论点账本 (CLAIMS LEDGER & CHALLENGES) */}
                             {activeTab === 'claims' && (
-                                <div className="space-y-4">
+                                <div className="space-y-6">
                                     {/* Search & Filter Bar */}
                                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-800/40 p-3 rounded-xl border border-slate-800">
                                         <div className="relative flex-1">
@@ -733,7 +1264,7 @@ export default function HistoricalDebateDrawer({
                                                 type="text"
                                                 value={claimSearch}
                                                 onChange={e => setClaimSearch(e.target.value)}
-                                                placeholder="搜索 Claim ID、论点文本或证据..."
+                                                placeholder="搜索 Claim ID、论点、战场、失效条件或证据..."
                                                 className="w-full pl-9 pr-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                                             />
                                         </div>
@@ -781,114 +1312,264 @@ export default function HistoricalDebateDrawer({
                                         </div>
                                     </div>
 
-                                    {/* Claims Cards */}
-                                    {filteredClaims.length === 0 ? (
-                                        <div className="text-center py-12 text-slate-500 text-sm">
-                                            没有找到匹配的 Claim 论点
+                                    {/* SECTION 1: Claims Cards */}
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                            <div className="flex items-center gap-2">
+                                                <Database className="w-4 h-4 text-amber-400" />
+                                                <h4 className="font-bold text-xs uppercase tracking-wider text-slate-300">
+                                                    核心论点账本 (Claims · {filteredClaims.length})
+                                                </h4>
+                                            </div>
                                         </div>
-                                    ) : (
-                                        <div className="space-y-3">
-                                            {filteredClaims.map((claim, cIdx) => {
-                                                const isBull = (claim.stance || claim.speaker_key || claim.speaker || '').toLowerCase().includes('bull') || (claim.speaker || '').includes('多')
-                                                const claimText = claim.claim || claim.text || claim.content || '无论点正文'
-                                                const evidenceList = Array.isArray(claim.evidence)
-                                                    ? claim.evidence
-                                                    : claim.evidence ? [claim.evidence] : []
-                                                const confidence = typeof claim.confidence === 'number' ? claim.confidence : null
-                                                const status = claim.status || 'open'
 
-                                                // Find if any message responded to this claim
-                                                const responderMsg = roundMessages.filter(m =>
-                                                    m.responded_claim_ids?.includes(claim.claim_id) ||
-                                                    m.target_claim_ids?.includes(claim.claim_id)
-                                                )
+                                        {filteredClaims.length === 0 ? (
+                                            <div className="text-center py-8 text-slate-500 text-xs">
+                                                没有找到匹配的 Claim 论点
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                {filteredClaims.map((claim, cIdx) => {
+                                                    const isBull = (claim.stance || claim.speaker_key || claim.speaker || '').toLowerCase().includes('bull') || (claim.speaker || '').includes('多')
+                                                    const claimText = claim.claim || claim.text || claim.content || '无论点正文'
+                                                    const evidenceList = Array.isArray(claim.evidence)
+                                                        ? claim.evidence
+                                                        : claim.evidence ? [claim.evidence] : []
+                                                    const confidence = typeof claim.confidence === 'number' ? claim.confidence : null
+                                                    const status = claim.status || 'open'
+                                                    const bfDisplay = getBattlefieldDisplay(claim.battlefield)
 
-                                                return (
-                                                    <div
-                                                        key={`claim-${claim.claim_id || cIdx}`}
-                                                        className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 space-y-3 hover:border-slate-700 transition-colors"
-                                                    >
-                                                        {/* Claim Header */}
-                                                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-mono text-sm font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
-                                                                    {claim.claim_id}
-                                                                </span>
-                                                                <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded ${
-                                                                    isBull
-                                                                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                                                        : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                                                                }`}>
-                                                                    <span>{isBull ? '🐂 多头阵营' : '🐻 空头阵营'}</span>
-                                                                </span>
-                                                                {claim.round_index || claim.debate_round ? (
-                                                                    <span className="text-xs text-slate-400 font-mono">
-                                                                        第 {claim.debate_round || claim.round_index} 轮提出
+                                                    // Find if any message responded to this claim
+                                                    const responderMsg = roundMessages.filter(m =>
+                                                        m.responded_claim_ids?.includes(claim.claim_id) ||
+                                                        m.target_claim_ids?.includes(claim.claim_id)
+                                                    )
+
+                                                    return (
+                                                        <div
+                                                            key={`claim-${claim.claim_id || cIdx}`}
+                                                            className="rounded-xl border border-slate-800 bg-slate-900/80 p-4 space-y-3 hover:border-slate-700 transition-colors"
+                                                        >
+                                                            {/* Claim Header */}
+                                                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="font-mono text-sm font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                                                        {claim.claim_id}
                                                                     </span>
-                                                                ) : null}
-                                                            </div>
-
-                                                            <div className="flex items-center gap-2">
-                                                                {confidence !== null && (
-                                                                    <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                                                                        置信度: {(confidence * 100).toFixed(0)}%
+                                                                    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded ${
+                                                                        isBull
+                                                                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                                                            : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                                                    }`}>
+                                                                        <span>{isBull ? '🐂 多头阵营' : '🐻 空头阵营'}</span>
                                                                     </span>
-                                                                )}
-                                                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                                                                    status === 'resolved' || status === 'adopted'
-                                                                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                                                        : status === 'rejected'
-                                                                            ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                                                                            : status === 'unresolved'
-                                                                                ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
-                                                                                : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                                                                }`}>
-                                                                    {status === 'resolved' ? '已解决' :
-                                                                     status === 'adopted' ? '总监采纳' :
-                                                                     status === 'rejected' ? '总监否决' :
-                                                                     status === 'unresolved' ? '争议未决' : '待回应 (open)'}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Claim Content */}
-                                                        <div className="text-sm font-medium text-slate-100 leading-relaxed">
-                                                            {claimText}
-                                                        </div>
-
-                                                        {/* Evidence List */}
-                                                        {evidenceList.length > 0 && (
-                                                            <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
-                                                                <span className="text-[11px] uppercase tracking-wider font-semibold text-slate-400">
-                                                                    支撑证据 ({evidenceList.length})
-                                                                </span>
-                                                                <ul className="space-y-1">
-                                                                    {evidenceList.map((ev, evIdx) => (
-                                                                        <li key={`ev-${claim.claim_id}-${evIdx}`} className="text-xs text-slate-300 flex items-start gap-1.5">
-                                                                            <span className="text-blue-400 mt-0.5">•</span>
-                                                                            <span>{String(ev)}</span>
-                                                                        </li>
-                                                                    ))}
-                                                                </ul>
-                                                            </div>
-                                                        )}
-
-                                                        {/* Responded in Rounds */}
-                                                        {responderMsg.length > 0 && (
-                                                            <div className="flex items-center gap-2 text-xs text-slate-400 pt-1">
-                                                                <span className="text-slate-500">被回应轮次:</span>
-                                                                <div className="flex items-center gap-1.5 flex-wrap">
-                                                                    {responderMsg.map(rm => (
-                                                                        <span key={`res-${rm.message_index}`} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[11px]">
-                                                                            {rm.speaker_key || rm.speaker} (#Round {rm.debate_round || Math.ceil((rm.message_index || 1) / 2)})
+                                                                    {bfDisplay && (
+                                                                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${bfDisplay.bg} ${bfDisplay.text} ${bfDisplay.border}`}>
+                                                                            <span>{bfDisplay.icon}</span>
+                                                                            <span>{bfDisplay.label}</span>
                                                                         </span>
-                                                                    ))}
+                                                                    )}
+                                                                    {claim.round_index || claim.debate_round ? (
+                                                                        <span className="text-xs text-slate-400 font-mono">
+                                                                            第 {claim.debate_round || claim.round_index} 轮提出
+                                                                        </span>
+                                                                    ) : null}
+                                                                </div>
+
+                                                                <div className="flex items-center gap-2">
+                                                                    {confidence !== null && (
+                                                                        <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                                                                            置信度: {(confidence * 100).toFixed(0)}%
+                                                                        </span>
+                                                                    )}
+                                                                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                                                        status === 'resolved' || status === 'adopted'
+                                                                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                                                            : status === 'rejected'
+                                                                                ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                                                                : status === 'unresolved'
+                                                                                    ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                                                                                    : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                                                    }`}>
+                                                                        {status === 'resolved' ? '已解决' :
+                                                                         status === 'adopted' ? '总监采纳' :
+                                                                         status === 'rejected' ? '总监否决' :
+                                                                         status === 'unresolved' ? '争议未决' : '待回应 (open)'}
+                                                                    </span>
                                                                 </div>
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                )
-                                            })}
+
+                                                            {/* Claim Content */}
+                                                            <div className="text-sm font-medium text-slate-100 leading-relaxed">
+                                                                {claimText}
+                                                            </div>
+
+                                                            {/* Evidence List */}
+                                                            {evidenceList.length > 0 && (
+                                                                <div className="space-y-1.5 bg-slate-950/40 p-3 rounded-lg border border-slate-800/60">
+                                                                    <span className="text-[11px] uppercase tracking-wider font-semibold text-slate-400">
+                                                                        支撑证据 ({evidenceList.length})
+                                                                    </span>
+                                                                    <ul className="space-y-1">
+                                                                        {evidenceList.map((ev, evIdx) => (
+                                                                            <li key={`ev-${claim.claim_id}-${evIdx}`} className="text-xs text-slate-300 flex items-start gap-1.5">
+                                                                                <span className="text-blue-400 mt-0.5">•</span>
+                                                                                <span>{String(ev)}</span>
+                                                                            </li>
+                                                                        ))}
+                                                                    </ul>
+                                                                </div>
+                                                            )}
+
+                                                            {/* Falsification Conditions */}
+                                                            {claim.falsification_conditions && (
+                                                                <div className="space-y-1 bg-amber-950/20 p-2.5 rounded-lg border border-amber-500/30">
+                                                                    <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                                                                        <AlertTriangle className="w-3 h-3" /> 失效条件 (Falsification Conditions)
+                                                                    </span>
+                                                                    <div className="text-xs text-amber-200/90 leading-relaxed">
+                                                                        {Array.isArray(claim.falsification_conditions)
+                                                                            ? claim.falsification_conditions.join('；')
+                                                                            : String(claim.falsification_conditions)}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {/* Responded in Rounds */}
+                                                            {responderMsg.length > 0 && (
+                                                                <div className="flex items-center gap-2 text-xs text-slate-400 pt-1">
+                                                                    <span className="text-slate-500">被回应轮次:</span>
+                                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                                        {responderMsg.map(rm => (
+                                                                            <span key={`res-${rm.message_index}`} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[11px]">
+                                                                                {rm.speaker_key || rm.speaker} (#Round {rm.debate_round || Math.ceil((rm.message_index || 1) / 2)})
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* SECTION 2: Challenges List */}
+                                    {challenges.length > 0 && (
+                                        <div className="space-y-3 pt-4 border-t border-slate-800">
+                                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <Swords className="w-4 h-4 text-rose-400" />
+                                                    <h4 className="font-bold text-xs uppercase tracking-wider text-slate-300">
+                                                        交叉盘问与质询清单 (Challenges · {challenges.length})
+                                                    </h4>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                {challenges.map((ch, chIdx) => {
+                                                    const isBull = (ch.speaker_key || ch.speaker || '').toLowerCase().includes('bull') || (ch.speaker || '').includes('多')
+                                                    const isFatal = (ch.severity || '').toLowerCase() === 'fatal'
+                                                    const isMajor = (ch.severity || '').toLowerCase() === 'major'
+                                                    const evStatus = (ch.evidence_status || 'unverified').toLowerCase()
+                                                    const isAdopted = managerVerdict?.adopted_challenge_ids?.includes(ch.challenge_id || '') || ch.status === 'adopted'
+                                                    const isRejected = managerVerdict?.rejected_challenge_ids?.includes(ch.challenge_id || '') || ch.status === 'rejected'
+                                                    const penetrated = isChallengePenetrated(ch, managerVerdict?.adopted_challenge_ids)
+
+                                                    return (
+                                                        <div
+                                                            key={`tab-ch-${ch.challenge_id || chIdx}`}
+                                                            className={`p-4 rounded-xl border ${
+                                                                penetrated
+                                                                    ? 'border-rose-500 bg-rose-950/30 ring-1 ring-rose-500/50'
+                                                                    : 'border-slate-800 bg-slate-900/80'
+                                                            } space-y-3 text-xs`}
+                                                        >
+                                                            <div className="flex items-center justify-between gap-2 flex-wrap border-b border-slate-800/80 pb-2">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                                                                        {ch.challenge_id || `CH-${chIdx + 1}`}
+                                                                    </span>
+                                                                    <span className={`px-2 py-0.5 rounded font-semibold ${
+                                                                        isBull
+                                                                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                                                            : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                                                    }`}>
+                                                                        {isBull ? '🐂 多头发起' : '🐻 空头发起'}
+                                                                    </span>
+                                                                    <span className="text-slate-400">
+                                                                        质询目标: <span className="font-mono text-blue-300 font-bold">{ch.target_claim_id || '-'}</span>
+                                                                    </span>
+                                                                    <span className={`px-2 py-0.5 rounded font-mono font-bold uppercase ${
+                                                                        isFatal
+                                                                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                                                            : isMajor
+                                                                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                                                                : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                                                    }`}>
+                                                                        严厉度: {ch.severity || 'major'}
+                                                                    </span>
+                                                                </div>
+
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className={`px-2 py-0.5 rounded-full font-medium ${
+                                                                        evStatus === 'verified'
+                                                                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                                                                            : evStatus === 'contradicted'
+                                                                                ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                                                                                : evStatus === 'unsupported'
+                                                                                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                                                                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                                                    }`}>
+                                                                        证据: {evStatus}
+                                                                    </span>
+
+                                                                    {isAdopted ? (
+                                                                        <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-semibold">
+                                                                            总监采纳
+                                                                        </span>
+                                                                    ) : isRejected ? (
+                                                                        <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 font-semibold">
+                                                                            总监驳回
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                                                            待裁决
+                                                                        </span>
+                                                                    )}
+
+                                                                    {/* Penetrated badge - strictly protected by hard gate */}
+                                                                    {penetrated ? (
+                                                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-rose-600 text-white font-bold text-xs animate-pulse shadow-sm">
+                                                                            <AlertOctagon className="w-3.5 h-3.5" />
+                                                                            <span>已击穿</span>
+                                                                        </span>
+                                                                    ) : isFatal && (evStatus === 'unsupported' || evStatus === 'contradicted') ? (
+                                                                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                                                                            未击穿 (证据未通过核验)
+                                                                        </span>
+                                                                    ) : null}
+                                                                </div>
+                                                            </div>
+
+                                                            {ch.weakest_point && (
+                                                                <div className="text-slate-100 font-medium leading-relaxed">
+                                                                    <span className="text-rose-400 font-semibold mr-1.5">质疑弱点:</span>
+                                                                    <span>{ch.weakest_point}</span>
+                                                                </div>
+                                                            )}
+
+                                                            {ch.evidence && (
+                                                                <div className="bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/60 text-slate-300 text-xs">
+                                                                    <span className="text-slate-500 mr-1.5">质询支撑依据:</span>
+                                                                    <span>{Array.isArray(ch.evidence) ? ch.evidence.join('；') : ch.evidence}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -899,6 +1580,24 @@ export default function HistoricalDebateDrawer({
                                 <div className="space-y-5">
                                     {managerVerdict ? (
                                         <>
+                                            {/* Degenerate Alert Banner in Verdict if applicable */}
+                                            {debateDegenerate && (
+                                                <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-4 flex items-start gap-3 shadow-sm">
+                                                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <h4 className="text-xs font-bold text-amber-300">辩论退化警告 (Debate Degenerate)</h4>
+                                                            <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-mono font-bold">
+                                                                静止退化
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                                            多空双方在各轮质询中胜率预估均未随反方新证据调整，辩论信念轨迹趋于静止退化。
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+
                                             {/* Winner & Direction Card */}
                                             <div className="rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-800/80 to-slate-900 p-6 space-y-4 shadow-lg">
                                                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-700/80 pb-4">
@@ -981,6 +1680,67 @@ export default function HistoricalDebateDrawer({
                                                 </div>
                                             </div>
 
+                                            {/* Dispute Map (分歧全景图) */}
+                                            {disputeMap.length > 0 && (
+                                                <div className="rounded-xl border border-slate-700 bg-slate-900/90 p-5 space-y-4 shadow-md">
+                                                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                                                        <div className="flex items-center gap-2">
+                                                            <Scale className="w-4 h-4 text-amber-400" />
+                                                            <h4 className="font-bold text-sm text-white">分歧全景图 (Dispute Map)</h4>
+                                                        </div>
+                                                        <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono">
+                                                            {disputeMap.length} 项核心分歧
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="overflow-x-auto">
+                                                        <table className="w-full text-xs text-left border-collapse">
+                                                            <thead>
+                                                                <tr className="border-b border-slate-800 text-slate-400 bg-slate-950/50">
+                                                                    <th className="py-2.5 px-3 font-semibold">争议数据点 (Data Point)</th>
+                                                                    <th className="py-2.5 px-3 font-semibold text-emerald-400">🐂 多头解读 (Bull)</th>
+                                                                    <th className="py-2.5 px-3 font-semibold text-rose-400">🐻 空头解读 (Bear)</th>
+                                                                    <th className="py-2.5 px-3 font-semibold text-blue-400">证据裁决 (Decision)</th>
+                                                                    <th className="py-2.5 px-3 font-semibold text-center">裁决归属</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-slate-800/60">
+                                                                {disputeMap.map((item, dIdx) => {
+                                                                    const w = (item.winner || '').toLowerCase()
+                                                                    return (
+                                                                        <tr key={`dm-${dIdx}`} className="hover:bg-slate-800/30 transition-colors">
+                                                                            <td className="py-3 px-3 font-medium text-slate-200 align-top max-w-[200px]">
+                                                                                {item.data_point || '-'}
+                                                                            </td>
+                                                                            <td className="py-3 px-3 text-slate-300 align-top bg-emerald-950/10">
+                                                                                {item.bull_interpretation || '-'}
+                                                                            </td>
+                                                                            <td className="py-3 px-3 text-slate-300 align-top bg-rose-950/10">
+                                                                                {item.bear_interpretation || '-'}
+                                                                            </td>
+                                                                            <td className="py-3 px-3 text-blue-300 font-medium align-top bg-blue-950/10">
+                                                                                {item.evidence_decision || '-'}
+                                                                            </td>
+                                                                            <td className="py-3 px-3 text-center align-top whitespace-nowrap">
+                                                                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${
+                                                                                    w === 'bull'
+                                                                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                                                                        : w === 'bear'
+                                                                                            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                                                                            : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                                                                }`}>
+                                                                                    {w === 'bull' ? '🐂 多方胜' : w === 'bear' ? '🐻 空方胜' : '⚖️ 势均力敌'}
+                                                                                </span>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            )}
+
                                             {/* Consistency Check Hard Gate */}
                                             <div className={`rounded-xl border p-4 ${
                                                 managerVerdict.consistency_check_passed === true
@@ -1031,41 +1791,71 @@ export default function HistoricalDebateDrawer({
                                                 )}
                                             </div>
 
-                                            {/* Adopted / Rejected Claims */}
+                                            {/* Adopted / Rejected Claims & Challenges */}
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4 space-y-2">
+                                                <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-4 space-y-3">
                                                     <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase tracking-wider">
                                                         <CheckCircle2 className="w-4 h-4" />
-                                                        <span>总监采纳的核心论据 (Adopted)</span>
+                                                        <span>总监采纳项 (Adopted)</span>
                                                     </div>
-                                                    {managerVerdict.adopted_claim_ids && managerVerdict.adopted_claim_ids.length > 0 ? (
-                                                        <div className="flex flex-wrap gap-1.5 pt-1">
-                                                            {managerVerdict.adopted_claim_ids.map(cid => (
-                                                                <span key={`ad-${cid}`} className="px-2.5 py-1 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-mono font-bold">
-                                                                    {cid}
-                                                                </span>
-                                                            ))}
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 block mb-1">采纳论点 (Claims):</span>
+                                                        {managerVerdict.adopted_claim_ids && managerVerdict.adopted_claim_ids.length > 0 ? (
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {managerVerdict.adopted_claim_ids.map(cid => (
+                                                                    <span key={`ad-claim-${cid}`} className="px-2.5 py-1 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-mono font-bold">
+                                                                        {cid}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <p className="text-xs text-slate-400 italic">未指定明确采纳的 Claim ID</p>
+                                                        )}
+                                                    </div>
+                                                    {managerVerdict.adopted_challenge_ids && managerVerdict.adopted_challenge_ids.length > 0 && (
+                                                        <div className="pt-2 border-t border-emerald-500/20">
+                                                            <span className="text-[11px] text-slate-400 block mb-1">采纳盘问 (Challenges):</span>
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {managerVerdict.adopted_challenge_ids.map(chid => (
+                                                                    <span key={`ad-ch-${chid}`} className="px-2.5 py-1 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 text-xs font-mono font-bold">
+                                                                        {chid}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    ) : (
-                                                        <p className="text-xs text-slate-400 italic">未指定明确采纳的 Claim ID</p>
                                                     )}
                                                 </div>
 
-                                                <div className="rounded-xl border border-rose-500/20 bg-rose-950/10 p-4 space-y-2">
+                                                <div className="rounded-xl border border-rose-500/20 bg-rose-950/10 p-4 space-y-3">
                                                     <div className="flex items-center gap-2 text-rose-400 font-semibold text-xs uppercase tracking-wider">
                                                         <XCircle className="w-4 h-4" />
-                                                        <span>总监否决的存疑论据 (Rejected)</span>
+                                                        <span>总监否决/驳回项 (Rejected)</span>
                                                     </div>
-                                                    {managerVerdict.rejected_claim_ids && managerVerdict.rejected_claim_ids.length > 0 ? (
-                                                        <div className="flex flex-wrap gap-1.5 pt-1">
-                                                            {managerVerdict.rejected_claim_ids.map(cid => (
-                                                                <span key={`rej-${cid}`} className="px-2.5 py-1 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-mono font-bold">
-                                                                    {cid}
-                                                                </span>
-                                                            ))}
+                                                    <div>
+                                                        <span className="text-[11px] text-slate-400 block mb-1">否决论点 (Claims):</span>
+                                                        {managerVerdict.rejected_claim_ids && managerVerdict.rejected_claim_ids.length > 0 ? (
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {managerVerdict.rejected_claim_ids.map(cid => (
+                                                                    <span key={`rej-claim-${cid}`} className="px-2.5 py-1 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-mono font-bold">
+                                                                        {cid}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <p className="text-xs text-slate-400 italic">无否决 Claim ID 记录</p>
+                                                        )}
+                                                    </div>
+                                                    {managerVerdict.rejected_challenge_ids && managerVerdict.rejected_challenge_ids.length > 0 && (
+                                                        <div className="pt-2 border-t border-rose-500/20">
+                                                            <span className="text-[11px] text-slate-400 block mb-1">驳回盘问 (Challenges):</span>
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {managerVerdict.rejected_challenge_ids.map(chid => (
+                                                                    <span key={`rej-ch-${chid}`} className="px-2.5 py-1 rounded bg-rose-500/20 border border-rose-500/40 text-rose-200 text-xs font-mono font-bold">
+                                                                        {chid}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
                                                         </div>
-                                                    ) : (
-                                                        <p className="text-xs text-slate-400 italic">无否决 Claim ID 记录</p>
                                                     )}
                                                 </div>
                                             </div>
@@ -1185,7 +1975,7 @@ export default function HistoricalDebateDrawer({
 
                                                 return (
                                                     <div
-                                                        key={`ev-item-${ev.claim_id || 'ev'}-${evIdx}`}
+                                                        key={`ev-item-${ev.claim_id || ev.challenge_id || 'ev'}-${evIdx}`}
                                                         className={`rounded-xl border ${borderCls} p-4 space-y-3 transition-all`}
                                                     >
                                                         {/* Top status line */}
@@ -1221,6 +2011,11 @@ export default function HistoricalDebateDrawer({
                                                                 {ev.claim_id && (
                                                                     <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                                                                         Claim: {ev.claim_id}
+                                                                    </span>
+                                                                )}
+                                                                {ev.challenge_id && (
+                                                                    <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-800 text-amber-300 border border-slate-700">
+                                                                        Challenge: {ev.challenge_id}
                                                                     </span>
                                                                 )}
                                                             </div>
