@@ -208,6 +208,309 @@ function makeMockLegacyReport(): ReportDetail {
     }
 }
 
+function makeMockV2StructuredReport(overrides?: {
+    tiebreak_skipped?: boolean
+    debate_degenerate?: boolean
+    withExecutedTiebreak?: boolean
+}): ReportDetail {
+    const isTiebreakSkipped = overrides?.tiebreak_skipped ?? (overrides?.withExecutedTiebreak ? false : true)
+    const isDegenerate = overrides?.debate_degenerate ?? false
+
+    const messages = [
+        {
+            message_index: 1,
+            debate_round: 1,
+            stage: 'opening',
+            speaker: 'Bull Researcher',
+            speaker_key: 'Bull',
+            battlefield: 'capital_flow',
+            cleaned_prose: '多头立论：主力大单逆势净流入1.29亿元，资金面持续向好。',
+            parse_status: 'valid',
+            accepted: true,
+            responded_claim_ids: [],
+            new_claim_ids: ['INV-1'],
+            target_claim_ids: [],
+            information_gain_score: 0.92,
+            new_evidence_count: 2,
+            round_summary: '多头建立资金面核心立论',
+            round_goal: '确立多头主导优势',
+        },
+        {
+            message_index: 2,
+            debate_round: 1,
+            stage: 'opening',
+            speaker: 'Bear Researcher',
+            speaker_key: 'Bear',
+            battlefield: 'macro_policy',
+            cleaned_prose: '空头立论：北向资金单日流出2.46亿元，宏观政策存不确定性。',
+            parse_status: 'valid',
+            accepted: true,
+            responded_claim_ids: [],
+            new_claim_ids: ['INV-4'],
+            target_claim_ids: [],
+            information_gain_score: 0.89,
+            new_evidence_count: 1,
+            round_summary: '空头建立宏观流出核心立论',
+            round_goal: '确立空头反脆弱防线',
+        },
+        {
+            message_index: 3,
+            debate_round: 2,
+            stage: 'challenge',
+            speaker: 'Bull Researcher',
+            speaker_key: 'Bull',
+            cleaned_prose: '多头盘问：空头全单净流出未区分主力与散户，实际机构在大举吸筹。',
+            parse_status: 'valid',
+            accepted: true,
+            responded_claim_ids: ['INV-4'],
+            new_claim_ids: [],
+            target_claim_ids: ['INV-4'],
+            information_gain_score: 0.94,
+            new_evidence_count: 1,
+            round_summary: '多头质疑空头资金口径',
+            round_goal: '击穿空头资金流论据',
+            challenges: [
+                {
+                    challenge_id: 'CH-1',
+                    target_claim_id: 'INV-4',
+                    weakest_point: '空头混淆主力与散户资金流向',
+                    severity: 'major',
+                    evidence: ['主力大单实为净买入1.29亿'],
+                    evidence_status: 'verified',
+                    status: 'adopted',
+                    speaker: 'Bull Researcher',
+                    speaker_key: 'Bull',
+                },
+                {
+                    challenge_id: 'CH-3',
+                    target_claim_id: 'INV-4',
+                    weakest_point: '致命击穿对手宏观流出断言',
+                    severity: 'fatal',
+                    evidence: ['发改委重大投资审批清单落地'],
+                    evidence_status: 'verified',
+                    status: 'adopted',
+                    speaker: 'Bull Researcher',
+                    speaker_key: 'Bull',
+                },
+            ],
+        },
+        {
+            message_index: 4,
+            debate_round: 2,
+            stage: 'challenge',
+            speaker: 'Bear Researcher',
+            speaker_key: 'Bear',
+            cleaned_prose: '空头盘问：多头净流入为短期假象，近5日已转向净流出。',
+            parse_status: 'valid',
+            accepted: true,
+            responded_claim_ids: ['INV-1'],
+            new_claim_ids: [],
+            target_claim_ids: ['INV-1'],
+            information_gain_score: 0.85,
+            new_evidence_count: 1,
+            round_summary: '空头质疑多头流入持续性',
+            round_goal: '瓦解多头短期反弹逻辑',
+            challenges: [
+                {
+                    challenge_id: 'CH-2',
+                    target_claim_id: 'INV-1',
+                    weakest_point: '伪造数据攻击多头主力流向',
+                    severity: 'fatal',
+                    evidence: ['伪造资金流断崖数据'],
+                    evidence_status: 'unsupported',
+                    status: 'rejected',
+                    speaker: 'Bear Researcher',
+                    speaker_key: 'Bear',
+                },
+            ],
+        },
+    ]
+
+    if (overrides?.withExecutedTiebreak) {
+        messages.push(
+            {
+                message_index: 5,
+                debate_round: 3,
+                stage: 'tiebreak',
+                speaker: 'Bull Researcher',
+                speaker_key: 'Bull',
+                cleaned_prose: '多头加赛陈述：高频微观逐笔大单数据显示机构持续点火。',
+                parse_status: 'valid',
+                accepted: true,
+                responded_claim_ids: ['INV-4'],
+                new_claim_ids: [],
+                target_claim_ids: ['INV-4'],
+                information_gain_score: 0.96,
+                new_evidence_count: 1,
+                round_summary: '多头加赛终局论述',
+                round_goal: '锁定胜局',
+                tiebreak_question: '核心争议：主力大单是否真实锁定筹码？',
+                tiebreak_answer: '多头回答：逐笔成交明细确凿显示机构锁仓，换手率降至0.8%。',
+                self_win_prob: 0.78,
+            } as any,
+            {
+                message_index: 6,
+                debate_round: 3,
+                stage: 'tiebreak',
+                speaker: 'Bear Researcher',
+                speaker_key: 'Bear',
+                cleaned_prose: '空头加赛陈述：盘口大单存在对倒嫌疑，尾盘资金流出加速。',
+                parse_status: 'valid',
+                accepted: true,
+                responded_claim_ids: ['INV-1'],
+                new_claim_ids: [],
+                target_claim_ids: ['INV-1'],
+                information_gain_score: 0.86,
+                new_evidence_count: 1,
+                round_summary: '空头加赛防守',
+                round_goal: '争取中性裁决',
+                tiebreak_question: '核心争议：主力大单是否真实锁定筹码？',
+                tiebreak_answer: '空头回答：尾盘集合竞价存在大单撤单异动，对倒诱多风险极大。',
+                self_win_prob: 0.35,
+            } as any,
+        )
+    }
+
+    return {
+        id: 'report-v2-structured-1',
+        symbol: '000333.SZ',
+        trade_date: '2026-08-25',
+        status: 'completed',
+        result_data: {
+            symbol: '000333.SZ',
+            trade_date: '2026-08-25',
+            protocol_version: 'v2_structured_disagreement',
+            protocol_stage: 'manager',
+            tiebreak_skipped: isTiebreakSkipped,
+            debate_degenerate: isDegenerate,
+            investment_debate_state: {
+                count: messages.length,
+                protocol_version: 'v2_structured_disagreement',
+                protocol_stage: 'manager',
+                tiebreak_skipped: isTiebreakSkipped,
+                debate_degenerate: isDegenerate,
+                round_messages: messages,
+                claims: [
+                    {
+                        claim_id: 'INV-1',
+                        speaker: 'Bull Researcher',
+                        speaker_key: 'Bull',
+                        stance: 'bullish',
+                        round_index: 1,
+                        debate_round: 1,
+                        battlefield: 'capital_flow',
+                        claim: '主力大单逆势净流入1.29亿元',
+                        evidence: ['东财主力净流入1.29亿元'],
+                        confidence: 0.85,
+                        falsification_conditions: ['若主力资金连续3日净流出超5000万则论点失效'],
+                        status: 'adopted',
+                        target_claim_ids: [],
+                        responded_claim_ids: [],
+                    },
+                    {
+                        claim_id: 'INV-4',
+                        speaker: 'Bear Researcher',
+                        speaker_key: 'Bear',
+                        stance: 'bearish',
+                        round_index: 1,
+                        debate_round: 1,
+                        battlefield: 'macro_policy',
+                        claim: '北向资金单日大幅流出2.46亿元',
+                        evidence: ['北向资金流出2.46亿元'],
+                        confidence: 0.80,
+                        falsification_conditions: ['北向资金连续2日净回流则论点失效'],
+                        status: 'rejected',
+                        target_claim_ids: [],
+                        responded_claim_ids: [],
+                    },
+                ],
+                challenges: [
+                    {
+                        challenge_id: 'CH-1',
+                        target_claim_id: 'INV-4',
+                        weakest_point: '空头混淆主力与散户资金流向',
+                        severity: 'major',
+                        evidence: ['主力大单实为净买入1.29亿'],
+                        evidence_status: 'verified',
+                        status: 'adopted',
+                        speaker: 'Bull Researcher',
+                        speaker_key: 'Bull',
+                    },
+                    {
+                        challenge_id: 'CH-2',
+                        target_claim_id: 'INV-1',
+                        weakest_point: '伪造数据攻击多头主力流向',
+                        severity: 'fatal',
+                        evidence: ['伪造资金流断崖数据'],
+                        evidence_status: 'unsupported',
+                        status: 'rejected',
+                        speaker: 'Bear Researcher',
+                        speaker_key: 'Bear',
+                    },
+                    {
+                        challenge_id: 'CH-3',
+                        target_claim_id: 'INV-4',
+                        weakest_point: '致命击穿对手宏观流出断言',
+                        severity: 'fatal',
+                        evidence: ['发改委重大投资审批清单落地'],
+                        evidence_status: 'verified',
+                        status: 'adopted',
+                        speaker: 'Bull Researcher',
+                        speaker_key: 'Bull',
+                    },
+                ],
+                dispute_map: [
+                    {
+                        data_point: '主力资金净流入1.29亿 / 北向流出2.46亿',
+                        bull_interpretation: '机构借北向调整逆势吸筹',
+                        bear_interpretation: '外资避险出逃，买盘枯竭',
+                        evidence_decision: '多方资金流向证据更具确定性',
+                        winner: 'bull',
+                    },
+                ],
+                manager_verdict: {
+                    winner: 'bull',
+                    direction: '看多',
+                    reason: '多头资金与政策证据确凿，空头致命盘问缺乏证据支撑被驳回。',
+                    position_pct: '40%',
+                    entry: '84.0-84.5',
+                    target: '95.0',
+                    stop_loss: '81.0',
+                    odds: '3.67',
+                    upside: '13.1%',
+                    downside: '3.6%',
+                    adopted_claim_ids: ['INV-1'],
+                    rejected_claim_ids: ['INV-4'],
+                    adopted_challenge_ids: ['CH-1', 'CH-3'],
+                    rejected_challenge_ids: ['CH-2'],
+                    dispute_map: [
+                        {
+                            data_point: '主力资金净流入1.29亿 / 北向流出2.46亿',
+                            bull_interpretation: '机构借北向调整逆势吸筹',
+                            bear_interpretation: '外资避险出逃，买盘枯竭',
+                            evidence_decision: '多方资金流向证据更具确定性',
+                            winner: 'bull',
+                        },
+                    ],
+                    consistency_check_passed: true,
+                    failed_checks: [],
+                },
+                evidence_verification: [
+                    {
+                        raw: '东财主力净流入1.29亿元',
+                        claim_id: 'INV-1',
+                        matched_role: 'smart_money_report',
+                        matched_source: 'smart_money',
+                        status: 'verified',
+                        is_fatal: false,
+                        details: '精确匹配主力资金流入数据',
+                    },
+                ],
+            },
+        },
+    }
+}
+
 function makeMockEmptyReport(): ReportDetail {
     return {
         id: 'report-empty-1',
@@ -366,6 +669,177 @@ describe('HistoricalDebateDrawer', () => {
         const mediumExtract = extractDebateState(dualReport, 'medium')
         expect(mediumExtract.hasStructuredDebate).toBe(true)
         expect(mediumExtract.debateState?.round_messages?.[0].cleaned_prose).toBe('中线空头')
+    })
+
+    describe('v2 Structured Disagreement Protocol', () => {
+        it('renders protocol version badge for v2 and v1', () => {
+            const v2Report = makeMockV2StructuredReport()
+            const v2Html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+            expect(v2Html).toContain('v2_structured_disagreement')
+
+            const v1Report = makeMockStructuredReport()
+            const v1Html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v1Report}
+                />,
+            )
+            expect(v1Html).toContain('v1_legacy')
+        })
+
+        it('renders opening stage with battlefield, claim, evidence, confidence, and falsification conditions', () => {
+            const v2Report = makeMockV2StructuredReport()
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            // Battlefield badges
+            expect(html).toContain('资金筹码')
+            expect(html).toContain('宏观政策')
+
+            // Opening Claims
+            expect(html).toContain('主力大单逆势净流入1.29亿元')
+            expect(html).toContain('北向资金单日大幅流出2.46亿元')
+
+            // Falsification conditions
+            expect(html).toContain('失效条件')
+            expect(html).toContain('若主力资金连续3日净流出超5000万则论点失效')
+        })
+
+        it('renders challenges with target claim, weakest point, severity, evidence status, and manager adoption', () => {
+            const v2Report = makeMockV2StructuredReport()
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            // Challenges list & badges
+            expect(html).toContain('CH-1')
+            expect(html).toContain('空头混淆主力与散户资金流向')
+            expect(html).toContain('INV-4')
+            expect(html).toContain('major')
+            expect(html).toContain('CH-2')
+            expect(html).toContain('CH-3')
+            expect(html).toContain('fatal')
+            expect(html).toContain('总监驳回')
+        })
+
+        it('enforces hard gate: unsupported/contradicted fatal challenge must NOT show as 已击穿', () => {
+            const v2Report = makeMockV2StructuredReport()
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            // CH-2 is fatal with unsupported evidence -> MUST NOT show as 已击穿
+            // We verify that the string "CH-2" is not accompanied by "已击穿"
+            expect(html).not.toMatch(/CH-2[^<]*已击穿/)
+            // And verified adopted fatal CH-3 CAN show as 已击穿
+            expect(html).toContain('已击穿')
+        })
+
+        it('renders tiebreak skipped banner when tiebreak_skipped is true', () => {
+            const v2Report = makeMockV2StructuredReport({ tiebreak_skipped: true })
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            expect(html).toContain('证据足以裁决，未触发加赛')
+        })
+
+        it('renders executed tiebreak Q&A when tiebreak is executed', () => {
+            const v2Report = makeMockV2StructuredReport({ withExecutedTiebreak: true })
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            expect(html).not.toContain('证据足以裁决，未触发加赛')
+            expect(html).toContain('加赛')
+            expect(html).toContain('核心争议：主力大单是否真实锁定筹码？')
+            expect(html).toContain('逐笔成交明细确凿显示机构锁仓')
+        })
+
+        it('renders dispute map with data point, interpretations, decision, and winner', () => {
+            const v2Report = makeMockV2StructuredReport()
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={v2Report}
+                />,
+            )
+
+            expect(html).toContain('分歧全景')
+            expect(html).toContain('主力资金净流入1.29亿 / 北向流出2.46亿')
+            expect(html).toContain('机构借北向调整逆势吸筹')
+            expect(html).toContain('外资避险出逃，买盘枯竭')
+            expect(html).toContain('多方资金流向证据更具确定性')
+        })
+
+        it('renders degenerate flag when debate_degenerate is true', () => {
+            const degenerateReport = makeMockV2StructuredReport({ debate_degenerate: true })
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={degenerateReport}
+                />,
+            )
+
+            expect(html).toContain('辩论退化')
+
+            const normalReport = makeMockV2StructuredReport({ debate_degenerate: false })
+            const normalHtml = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={normalReport}
+                />,
+            )
+            expect(normalHtml).not.toContain('⚠️ 辩论退化')
+        })
+
+        it('does not crash on legacy reports missing v2 protocol fields', () => {
+            const legacy = makeMockLegacyReport()
+            const empty = makeMockEmptyReport()
+
+            expect(() => {
+                renderToStaticMarkup(
+                    <HistoricalDebateDrawer isOpen={true} onClose={() => {}} reportData={legacy} />,
+                )
+            }).not.toThrow()
+
+            expect(() => {
+                renderToStaticMarkup(
+                    <HistoricalDebateDrawer isOpen={true} onClose={() => {}} reportData={empty} />,
+                )
+            }).not.toThrow()
+        })
     })
 })
 
