@@ -570,6 +570,54 @@ def _classify_failure_value(value: Any) -> Optional[str]:
     return None
 
 
+def _determine_gap_class(source: str, value: Any, status: str) -> str:
+    """Classify a data failure/gap as 'structural' or 'operational'.
+
+    Structural:
+      - Northbound institutional stoppage (e.g. daily holdings discontinued from Aug 2024).
+      - Historical snapshot refusal (snapshot_historical_refusal, e.g. share_pledge, fund_flow_board, hot_stocks).
+      - Explicit status 'refused' or refusal markers.
+
+    Operational:
+      - Transient network, transport, token, timeout, connection failures.
+      - Empty table/dataframe, format/parse errors.
+      - Unverified as-of, missing completed daily bars.
+      - Quality gate / calculation failures.
+    """
+    if isinstance(value, dict):
+        explicit_class = value.get("gap_class")
+        if explicit_class in ("structural", "operational"):
+            return explicit_class
+        if str(value.get("status") or "").strip().lower() == "refused":
+            return "structural"
+        reason = str(value.get("reason") or "")
+        gap = str(value.get("gap") or "")
+        combined_meta = f"{reason} {gap}"
+        if any(marker in combined_meta for marker in ("停止披露", "披露停止", "制度性停更", "仅提供当前快照", "仅支持当日快照", "无法用于历史日期分析", "快照拒绝")):
+            return "structural"
+
+    text = value if isinstance(value, str) else str(value or "")
+
+    # 1. Structural Northbound stoppage
+    if source == "northbound_flow" or any(marker in text for marker in ("停止披露", "披露停止", "制度性停更", "沪深港通个股每日持股明细自 2024 年 8 月起停止披露")):
+        return "structural"
+
+    # 2. Structural historical snapshot refusal
+    if status == "refused" or any(marker in text for marker in (
+        "仅提供当前快照",
+        "仅支持当日快照",
+        "无法用于历史日期分析",
+        "快照拒绝",
+        "仅提供近窗，非全历史",
+        "当前热度快照",
+        "全市场快照",
+    )):
+        return "structural"
+
+    # 3. Default to operational
+    return "operational"
+
+
 def _build_data_failure_ledger(results: Dict[str, Any]) -> List[Dict[str, str]]:
     """Build stable, serializable failure evidence for the report boundary."""
     if not isinstance(results, dict):
@@ -587,6 +635,7 @@ def _build_data_failure_ledger(results: Dict[str, Any]) -> List[Dict[str, str]]:
         status = classified
 
         reason = _compact_failure_reason(status)
+        gap_class = _determine_gap_class(source_name, value, status)
         entries.append(
             (
                 source_rank.get(source_name, len(_DATA_FAILURE_SOURCE_ORDER)),
@@ -596,6 +645,7 @@ def _build_data_failure_ledger(results: Dict[str, Any]) -> List[Dict[str, str]]:
                     "status": status,
                     "reason": reason,
                     "gap": f"【数据获取失败】{source_name}：{reason}",
+                    "gap_class": gap_class,
                 },
             )
         )
@@ -805,30 +855,64 @@ def _build_source_provenance(
             }
             if status == "unavailable":
                 entry["gap"] = f"【数据获取失败】industry_linkage：{reason or '数据源不可用'}"
+                entry["gap_class"] = _determine_gap_class(str(source), value, status)
             elif actual_as_of is None:
+                entry["status"] = "unavailable"
                 entry["gap"] = "【数据获取失败】industry_linkage：未返回可验证数据日期"
+                entry["gap_class"] = "operational"
             provenance[str(source)] = entry
             continue
 
-        status = _classify_failure_value(value) or "available"
+        classified_status = _classify_failure_value(value)
         as_of = _extract_source_as_of(value, requested_as_of)
         if source == "stock_data":
             as_of = daily_as_of
-        entry = {
-            "requested_as_of": requested_as_of,
-            "actual_as_of": as_of,
-            "as_of": as_of,
-            "status": status,
-        }
-        if source == "stock_data" and as_of and as_of < requested_as_of:
-            entry["gap"] = (
-                f"【数据获取失败】stock_data：实际最新数据日 {as_of} "
-                f"早于请求日期 {requested_as_of}"
-            )
-        if status != "available":
-            entry["gap"] = f"【数据获取失败】{source}：{_compact_failure_reason(status)}"
-        elif as_of is None and source != "realtime":
-            entry["gap"] = f"【数据获取失败】{source}：未返回可验证数据日期"
+
+        if classified_status is not None:
+            status = classified_status
+            gap_class = _determine_gap_class(str(source), value, status)
+            entry = {
+                "requested_as_of": requested_as_of,
+                "actual_as_of": as_of,
+                "as_of": as_of,
+                "status": status,
+                "gap_class": gap_class,
+                "gap": f"【数据获取失败】{source}：{_compact_failure_reason(status)}",
+            }
+        else:
+            if source == "stock_data" and as_of and as_of < requested_as_of:
+                status = "unavailable"
+                gap_class = "operational"
+                entry = {
+                    "requested_as_of": requested_as_of,
+                    "actual_as_of": as_of,
+                    "as_of": as_of,
+                    "status": status,
+                    "gap_class": gap_class,
+                    "gap": (
+                        f"【数据获取失败】stock_data：实际最新数据日 {as_of} "
+                        f"早于请求日期 {requested_as_of}"
+                    ),
+                }
+            elif as_of is None and source != "realtime":
+                status = "unavailable"
+                gap_class = "operational"
+                entry = {
+                    "requested_as_of": requested_as_of,
+                    "actual_as_of": None,
+                    "as_of": None,
+                    "status": status,
+                    "gap_class": gap_class,
+                    "gap": f"【数据获取失败】{source}：未返回可验证数据日期",
+                }
+            else:
+                entry = {
+                    "requested_as_of": requested_as_of,
+                    "actual_as_of": as_of,
+                    "as_of": as_of,
+                    "status": "available",
+                }
+
         provenance[str(source)] = entry
     return provenance
 
@@ -1414,6 +1498,7 @@ def _fetch_all(
                 "status": "unavailable",
                 "reason": "structured evidence unavailable",
                 "gap": fund_flow_context["gap"],
+                "gap_class": "operational",
             })
 
     # ── Parse CSV once, reuse for indicators and VPA ──────────────────
@@ -1447,6 +1532,7 @@ def _fetch_all(
                         f"【数据获取失败】stock_data：{ticker} 在 {trade_date} "
                         "无有效完整日线数据"
                     ),
+                    "gap_class": "operational",
                 }
             )
     daily_context = _build_daily_context(df, trade_date)
@@ -1468,9 +1554,10 @@ def _fetch_all(
             data_failure_ledger.append(
                 {
                     "source": str(source),
-                    "status": "unavailable",
+                    "status": str(provenance.get("status") or "unavailable"),
                     "reason": "unverified as-of",
                     "gap": str(gap),
+                    "gap_class": str(provenance.get("gap_class") or "operational"),
                 }
             )
     realtime_context = results.pop("realtime", None)

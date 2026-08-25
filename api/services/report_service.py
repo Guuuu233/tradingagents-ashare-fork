@@ -1457,8 +1457,13 @@ def _iter_report_texts(result_data: Any) -> Iterable[str]:
 def merge_data_gaps(
     result_data: Optional[Dict[str, Any]] = None,
     llm_data_gaps: Optional[Iterable[Any]] = None,
+    gap_class: Optional[str] = None,
 ) -> List[str]:
-    """Merge explicit report failures with model-reported gaps deterministically."""
+    """Merge explicit report failures with model-reported gaps deterministically.
+
+    If gap_class is specified ('structural' or 'operational'), only ledger entries
+    matching that classification are merged. When None (default), all gaps are merged.
+    """
     merged: List[str] = []
     seen: set[str] = set()
 
@@ -1472,6 +1477,9 @@ def merge_data_gaps(
         source = _normalize_gap_text(ledger_entry.get("source"))
         status = _normalize_gap_text(ledger_entry.get("status")).lower()
         reason = _normalize_gap_text(ledger_entry.get("reason"))
+        entry_gap_class = ledger_entry.get("gap_class")
+        if gap_class is not None and entry_gap_class is not None and entry_gap_class != gap_class:
+            continue
         if not source or status not in _FAILURE_LEDGER_STATUSES:
             continue
         explicit_gap = _normalize_gap_text(ledger_entry.get("gap"))
@@ -1480,18 +1488,19 @@ def merge_data_gaps(
         elif reason:
             add(f"【数据获取失败】{source}：{reason}")
 
-    for report_text in _iter_report_texts(result_data):
-        for gap in _explicit_data_failure_lines(report_text):
-            add(gap)
+    if gap_class is None or gap_class == "operational":
+        for report_text in _iter_report_texts(result_data):
+            for gap in _explicit_data_failure_lines(report_text):
+                add(gap)
 
-    if isinstance(llm_data_gaps, str):
-        llm_data_gaps = [llm_data_gaps]
-    try:
-        llm_items = iter(llm_data_gaps or [])
-    except TypeError:
-        llm_items = iter(())
-    for gap in llm_items:
-        add(gap)
+        if isinstance(llm_data_gaps, str):
+            llm_data_gaps = [llm_data_gaps]
+        try:
+            llm_items = iter(llm_data_gaps or [])
+        except TypeError:
+            llm_items = iter(())
+        for gap in llm_items:
+            add(gap)
 
     return merged
 

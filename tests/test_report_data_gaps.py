@@ -46,3 +46,49 @@ def test_merge_data_gaps_handles_empty_and_non_mapping_report_payloads():
     assert report_service.merge_data_gaps(
         {"not_applicable": True, "market_report": "本周期无可评估事件。"}
     ) == []
+
+
+def test_merge_data_gaps_filters_by_gap_class():
+    result_data = {
+        "market_data_context": {
+            "data_failure_ledger": [
+                {
+                    "source": "northbound_flow",
+                    "status": "unavailable",
+                    "reason": "data source unavailable",
+                    "gap": "【数据获取失败】northbound_flow：data source unavailable",
+                    "gap_class": "structural",
+                },
+                {
+                    "source": "share_pledge",
+                    "status": "refused",
+                    "reason": "data source refused",
+                    "gap": "【数据获取失败】share_pledge：data source refused",
+                    "gap_class": "structural",
+                },
+                {
+                    "source": "news",
+                    "status": "timeout",
+                    "reason": "provider timeout",
+                    "gap": "【数据获取失败】news：provider timeout",
+                    "gap_class": "operational",
+                },
+            ]
+        }
+    }
+
+    # Default: merges all
+    all_gaps = report_service.merge_data_gaps(result_data)
+    assert len(all_gaps) == 3
+
+    # Operational only
+    operational_gaps = report_service.merge_data_gaps(result_data, gap_class="operational")
+    assert operational_gaps == ["【数据获取失败】news：provider timeout"]
+
+    # Structural only
+    structural_gaps = report_service.merge_data_gaps(result_data, gap_class="structural")
+    assert structural_gaps == [
+        "【数据获取失败】northbound_flow：data source unavailable",
+        "【数据获取失败】share_pledge：data source refused",
+    ]
+
