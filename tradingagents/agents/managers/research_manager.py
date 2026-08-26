@@ -452,15 +452,39 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             )
 
         claim_weights = None
+        credit_weight_audit = None
         if is_credit_weighting_enabled(investment_debate_state) or is_credit_weighting_enabled(state):
-            from tradingagents.agents.utils.shadow_credit import calculate_claim_credit_weights
-            weights_res = calculate_claim_credit_weights(
+            # Live gate evaluation (fail-closed without h1b_gate_samples).
+            # Do not hardcode system_gate_passed=False — that made flag-on still flat.
+            from tradingagents.agents.utils.shadow_credit import (
+                resolve_claim_credit_weights_for_manager,
+            )
+
+            historical_samples = state.get("h1b_gate_samples") or []
+            if not isinstance(historical_samples, list):
+                historical_samples = []
+            weights_res = resolve_claim_credit_weights_for_manager(
                 claims=claims,
                 claim_evidence_summary=claim_evidence_summary,
+                historical_samples=historical_samples,
                 credit_weighting_enabled=True,
-                system_gate_passed=False,
             )
             claim_weights = weights_res.get("claim_weights")
+            credit_weight_audit = {
+                "credit_weighting_active": bool(weights_res.get("credit_weighting_active", False)),
+                "system_gate_passed": bool(weights_res.get("system_gate_passed", False)),
+                "system_gate_status": weights_res.get("system_gate_status", "FAIL"),
+                "recommendation": weights_res.get("recommendation", "KEEP_FALSE"),
+                "bias_freeze_reasons": weights_res.get("bias_freeze_reasons") or {},
+                "model_weights": weights_res.get("model_weights") or {},
+                "global_fallback_shadow": bool(weights_res.get("global_fallback_shadow", True)),
+            }
+            if not credit_weight_audit["system_gate_passed"]:
+                _logger.info(
+                    "[research_manager] credit weighting stay flat: system_gate=%s recommendation=%s",
+                    credit_weight_audit["system_gate_status"],
+                    credit_weight_audit["recommendation"],
+                )
 
         new_investment_debate_state = {
             **investment_debate_state,
@@ -487,6 +511,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         }
         if claim_weights is not None:
             new_investment_debate_state["claim_weights"] = claim_weights
+        if credit_weight_audit is not None:
+            new_investment_debate_state["credit_weight_audit"] = credit_weight_audit
 
         return {
             "investment_debate_state": new_investment_debate_state,

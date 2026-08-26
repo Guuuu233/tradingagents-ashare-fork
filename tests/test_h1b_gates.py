@@ -29,6 +29,7 @@ from tradingagents.agents.utils.shadow_credit import (
     evaluate_model_bias_and_weights,
     calculate_claim_credit_weights,
     apply_credit_weighting_to_debate,
+    resolve_claim_credit_weights_for_manager,
 )
 
 
@@ -448,3 +449,76 @@ class TestCreditWeightingApplication:
         # All claim weights are 1.0 (flat)
         for w in applied.get("claim_weights", {}).values():
             assert w == 1.0
+
+
+class TestResearchManagerGateWiring:
+    """research_manager must not hardcode system_gate_passed=False when flag is on."""
+
+    def _claims_and_summary(self):
+        claims = [
+            {
+                "claim_id": "C1",
+                "speaker": "Bull",
+                "model_name": "deepseek-r1",
+                "status": "verified",
+                "is_verified": True,
+            },
+            {
+                "claim_id": "C2",
+                "speaker": "Bear",
+                "model_name": "qwen-max",
+                "status": "verified",
+                "is_verified": True,
+            },
+        ]
+        claim_summary = {
+            "C1": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+            "C2": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+        }
+        return claims, claim_summary
+
+    def test_empty_history_fail_closed_flat(self):
+        claims, summary = self._claims_and_summary()
+        res = resolve_claim_credit_weights_for_manager(
+            claims=claims,
+            claim_evidence_summary=summary,
+            historical_samples=[],
+            credit_weighting_enabled=True,
+        )
+        assert res["system_gate_passed"] is False
+        assert res["credit_weighting_active"] is False
+        assert res["recommendation"] == "KEEP_FALSE"
+        assert res["claim_weights"]["C1"] == 1.0
+        assert res["claim_weights"]["C2"] == 1.0
+
+    def test_qualifying_history_activates_non_flat_weights(self):
+        claims, summary = self._claims_and_summary()
+        history = _build_qualifying_sample_pool(n=60)
+        gate = evaluate_h1b_system_gates(history)
+        assert gate["passed"] is True
+
+        res = resolve_claim_credit_weights_for_manager(
+            claims=claims,
+            claim_evidence_summary=summary,
+            historical_samples=history,
+            credit_weighting_enabled=True,
+        )
+        assert res["system_gate_passed"] is True
+        assert res["credit_weighting_active"] is True
+        assert res["recommendation"] == "ELIGIBLE_FOR_ACTIVATION"
+        # Default calibrated model weight is 1.05 when unbiased and gates pass
+        assert res["claim_weights"]["C1"] == pytest.approx(1.05)
+        assert res["claim_weights"]["C2"] == pytest.approx(1.05)
+
+    def test_flag_off_stays_flat_even_if_gates_pass(self):
+        claims, summary = self._claims_and_summary()
+        history = _build_qualifying_sample_pool(n=60)
+        res = resolve_claim_credit_weights_for_manager(
+            claims=claims,
+            claim_evidence_summary=summary,
+            historical_samples=history,
+            credit_weighting_enabled=False,
+        )
+        assert res["system_gate_passed"] is True
+        assert res["credit_weighting_active"] is False
+        assert res["claim_weights"]["C1"] == 1.0

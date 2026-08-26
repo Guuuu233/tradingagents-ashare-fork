@@ -898,6 +898,50 @@ def calculate_claim_credit_weights(
     }
 
 
+def resolve_claim_credit_weights_for_manager(
+    *,
+    claims: Sequence[Mapping[str, Any]],
+    claim_evidence_summary: Mapping[str, Any],
+    historical_samples: Optional[Sequence[Mapping[str, Any]]] = None,
+    credit_weighting_enabled: bool = False,
+) -> dict[str, Any]:
+    """Resolve claim credit weights for research_manager using live H1b gates.
+
+    Fail-closed: empty/missing historical samples → system_gate_passed=False → flat 1.0.
+    When flag is off, weights stay flat regardless of gate status.
+    """
+    history = list(historical_samples or [])
+    if history:
+        gate_res = evaluate_h1b_system_gates(history)
+    else:
+        gate_res = {
+            "passed": False,
+            "recommendation": "KEEP_FALSE",
+            "matrix": {},
+        }
+    system_gate_passed = bool(gate_res.get("passed", False))
+    isolation = evaluate_model_bias_and_weights(
+        history,
+        system_gate_passed=system_gate_passed,
+    )
+    weights_res = calculate_claim_credit_weights(
+        claims=claims,
+        claim_evidence_summary=claim_evidence_summary,
+        model_weights=isolation.get("model_weights", {}),
+        credit_weighting_enabled=credit_weighting_enabled,
+        system_gate_passed=system_gate_passed,
+    )
+    return {
+        **weights_res,
+        "system_gate_passed": system_gate_passed,
+        "system_gate_status": "PASS" if system_gate_passed else "FAIL",
+        "recommendation": gate_res.get("recommendation", "KEEP_FALSE"),
+        "bias_freeze_reasons": isolation.get("bias_freeze_reasons", {}),
+        "model_weights": isolation.get("model_weights", {}),
+        "global_fallback_shadow": bool(isolation.get("global_fallback_shadow", True)),
+    }
+
+
 def apply_credit_weighting_to_debate(
     result_data_or_state: Mapping[str, Any],
     historical_samples: Optional[Sequence[Mapping[str, Any]]] = None,
@@ -914,18 +958,23 @@ def apply_credit_weighting_to_debate(
     verdict = inv_state.get("manager_verdict") or result_data_or_state.get("manager_verdict") or {}
     claim_summary = verdict.get("claim_evidence_summary") or inv_state.get("claim_evidence_summary") or {}
 
-    history = list(historical_samples or [])
-    gate_res = evaluate_h1b_system_gates(history) if history else {"passed": False}
-    system_gate_passed = bool(gate_res.get("passed", False))
-
-    isolation = evaluate_model_bias_and_weights(history, system_gate_passed=system_gate_passed)
-    weights_res = calculate_claim_credit_weights(
+    resolved = resolve_claim_credit_weights_for_manager(
         claims=claims,
-        claim_evidence_summary=claim_summary,
-        model_weights=isolation.get("model_weights", {}),
+        claim_evidence_summary=claim_summary if isinstance(claim_summary, Mapping) else {},
+        historical_samples=historical_samples,
         credit_weighting_enabled=credit_weighting_flag,
-        system_gate_passed=system_gate_passed,
     )
+    system_gate_passed = bool(resolved.get("system_gate_passed", False))
+    weights_res = {
+        "credit_weighting_active": resolved.get("credit_weighting_active", False),
+        "claim_weights": resolved.get("claim_weights", {}),
+        "claim_decisions": resolved.get("claim_decisions", {}),
+        "effective_weights": resolved.get("effective_weights", {}),
+    }
+    isolation = {
+        "bias_freeze_reasons": resolved.get("bias_freeze_reasons", {}),
+        "model_weights": resolved.get("model_weights", {}),
+    }
 
     shadow_metrics = calculate_shadow_credit_metrics(result_data_or_state)
     shadow_metrics.update({
