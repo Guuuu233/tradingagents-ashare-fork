@@ -1,5 +1,7 @@
 # Docs (local design/plan documents)
-docs/
+docs/*
+!docs/social_data/
+!docs/social_data/**
 
 # LangGraph Checkpoints
 graph_checkpoints.db
