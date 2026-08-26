@@ -436,3 +436,40 @@ def test_build_data_failure_ledger_failed_status_uses_chinese_reason():
     assert "数据源调用失败" in entry["reason"]
     assert "数据源调用失败" in entry["gap"]
 
+
+def test_parse_collector_as_of_accepts_only_iso_and_compact():
+    """B1: only YYYY-MM-DD and YYYYMMDD are accepted."""
+    import pytest
+    from tradingagents.graph.data_collector import _parse_collector_as_of
+
+    end_dt, norm = _parse_collector_as_of("2025-08-20")
+    assert norm == "2025-08-20"
+    assert end_dt.year == 2025 and end_dt.month == 8 and end_dt.day == 20
+
+    end_dt2, norm2 = _parse_collector_as_of("20250820")
+    assert norm2 == "2025-08-20"
+    assert end_dt2.day == 20
+
+    for bad in ("bad-date", "2025/08/20", "2025-8-20", "", "20250230", None):
+        with pytest.raises((ValueError, TypeError)):
+            _parse_collector_as_of(bad)
+
+
+def test_fetch_all_rejects_invalid_as_of_without_calling_providers_or_now():
+    """B1: illegal collector as-of must fail closed (no provider, no datetime.now)."""
+    import pytest
+    from datetime import datetime as real_datetime
+
+    class _BoomDatetime(real_datetime):
+        @classmethod
+        def now(cls, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("datetime.now must not be used for invalid as-of")
+
+    with patch("tradingagents.graph.data_collector.datetime", _BoomDatetime), \
+         patch("tradingagents.graph.data_collector._safe") as mock_safe, \
+         patch("tradingagents.graph.data_collector.ThreadPoolExecutor") as mock_pool:
+        with pytest.raises(ValueError, match="非法分析日期|as-of|YYYY-MM-DD"):
+            _fetch_all("600519.SH", "bad-date")
+
+    mock_safe.assert_not_called()
+    mock_pool.assert_not_called()

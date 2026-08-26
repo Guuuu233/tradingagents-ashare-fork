@@ -1342,6 +1342,42 @@ def _map_stock_to_industry(ticker: Optional[str]) -> Optional[str]:
 _DEFAULT_INDUSTRY_LINKAGE_PROVIDER = IndustryLinkageProvider()
 
 
+_COLLECTOR_AS_OF_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})$")
+_COLLECTOR_AS_OF_COMPACT_RE = re.compile(r"^(20\d{2})(\d{2})(\d{2})$")
+
+
+def _parse_collector_as_of(trade_date: Any) -> tuple[datetime, str]:
+    """Parse collector as-of; only YYYY-MM-DD or YYYYMMDD. Never fall back to now."""
+    if not isinstance(trade_date, str):
+        raise TypeError(
+            f"非法分析日期 as-of: {trade_date!r}；仅接受 YYYY-MM-DD 或 YYYYMMDD"
+        )
+    raw = trade_date.strip()
+    match = _COLLECTOR_AS_OF_ISO_RE.fullmatch(raw)
+    if match:
+        year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        try:
+            end_dt = datetime(year, month, day)
+        except ValueError as exc:
+            raise ValueError(
+                f"非法分析日期 as-of: {trade_date!r}；仅接受 YYYY-MM-DD 或 YYYYMMDD"
+            ) from exc
+        return end_dt, end_dt.strftime("%Y-%m-%d")
+    match = _COLLECTOR_AS_OF_COMPACT_RE.fullmatch(raw)
+    if match:
+        year, month, day = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        try:
+            end_dt = datetime(year, month, day)
+        except ValueError as exc:
+            raise ValueError(
+                f"非法分析日期 as-of: {trade_date!r}；仅接受 YYYY-MM-DD 或 YYYYMMDD"
+            ) from exc
+        return end_dt, end_dt.strftime("%Y-%m-%d")
+    raise ValueError(
+        f"非法分析日期 as-of: {trade_date!r}；仅接受 YYYY-MM-DD 或 YYYYMMDD"
+    )
+
+
 def _fetch_all(
     ticker: str,
     trade_date: str,
@@ -1353,20 +1389,8 @@ def _fetch_all(
     The horizon only affects the analysis window, not data collection.
     """
     lookback = LONG_DAYS
-    if "-" in trade_date:
-        end_dt = datetime.strptime(trade_date, "%Y-%m-%d")
-        norm_trade_date = trade_date
-    elif len(trade_date) == 8 and trade_date.isdigit():
-        end_dt = datetime.strptime(trade_date, "%Y%m%d")
-        norm_trade_date = end_dt.strftime("%Y-%m-%d")
-    else:
-        dt = pd.to_datetime(trade_date, errors="coerce")
-        if pd.isna(dt):
-            end_dt = datetime.now()
-            norm_trade_date = end_dt.strftime("%Y-%m-%d")
-        else:
-            end_dt = dt.to_pydatetime()
-            norm_trade_date = end_dt.strftime("%Y-%m-%d")
+    end_dt, trade_date = _parse_collector_as_of(trade_date)
+    norm_trade_date = trade_date
 
     # 为了计算指标准确（如 200 SMA），需要比分析窗口更长的历史数据
     fetch_lookback = 365
