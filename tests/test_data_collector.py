@@ -473,3 +473,45 @@ def test_fetch_all_rejects_invalid_as_of_without_calling_providers_or_now():
 
     mock_safe.assert_not_called()
     mock_pool.assert_not_called()
+
+
+def test_financial_numeric_payload_without_iso_as_of_is_not_fetch_failure():
+    """A1: financial field+value pairs without ISO as_of must not enter failure gaps."""
+    payload = (
+        "## Fundamentals for 688981.SH\n"
+        "总资产 1234567890.12\n"
+        "净资产 987654321.00\n"
+        "归属于母公司所有者的净利润 11223344.55\n"
+    )
+    provenance = _build_source_provenance(
+        {
+            "fundamentals": payload,
+            "balance_sheet": "资产总计 100.5 负债合计 40.2 所有者权益合计 60.3",
+            "income_statement": "营业总收入 88.1 净利润 12.3",
+            "cashflow": "经营活动产生的现金流量净额 5.6",
+        },
+        "2026-07-22",
+        daily_as_of="2026-07-22",
+    )
+    for key in ("fundamentals", "balance_sheet", "income_statement", "cashflow"):
+        entry = provenance[key]
+        assert entry["status"] == "available_unverified_as_of", key
+        assert entry.get("actual_as_of") is None, key
+        gap = entry.get("gap") or ""
+        assert "【数据获取失败】" not in gap, (key, gap)
+        assert "未返回可验证数据日期" not in gap, (key, gap)
+
+
+def test_financial_provenance_rejects_code_or_year_only_payloads():
+    """A1 negatives: ticker codes, report years, or titles alone are not financial data."""
+    cases = {
+        "fundamentals": "688981.SH",
+        "balance_sheet": "2026年报 / 报告期 2026",
+        "income_statement": "## Income Statement 标题无财务字段",
+        "cashflow": "Cashflow for 600519.SH — 仅有代码与年份 2025",
+    }
+    provenance = _build_source_provenance(cases, "2026-07-22", daily_as_of="2026-07-22")
+    for key in cases:
+        entry = provenance[key]
+        assert entry["status"] == "unavailable", key
+        assert "未返回可验证数据日期" in (entry.get("gap") or ""), key

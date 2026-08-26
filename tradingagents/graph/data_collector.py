@@ -895,16 +895,29 @@ def _build_source_provenance(
                     ),
                 }
             elif as_of is None and source != "realtime":
-                status = "unavailable"
-                gap_class = "operational"
-                entry = {
-                    "requested_as_of": requested_as_of,
-                    "actual_as_of": None,
-                    "as_of": None,
-                    "status": status,
-                    "gap_class": gap_class,
-                    "gap": f"【数据获取失败】{source}：未返回可验证数据日期",
-                }
+                if (
+                    source in _FINANCIAL_PROVENANCE_SOURCES
+                    and _has_financial_field_value_pair(value)
+                ):
+                    # 有可解析财务字段+数值但抽不出 ISO as_of：账本假缺口，不是没拉到表。
+                    entry = {
+                        "requested_as_of": requested_as_of,
+                        "actual_as_of": None,
+                        "as_of": None,
+                        "status": "available_unverified_as_of",
+                        "note": "有可解析财务字段与数值但缺少可验证 ISO 数据日期",
+                    }
+                else:
+                    status = "unavailable"
+                    gap_class = "operational"
+                    entry = {
+                        "requested_as_of": requested_as_of,
+                        "actual_as_of": None,
+                        "as_of": None,
+                        "status": status,
+                        "gap_class": gap_class,
+                        "gap": f"【数据获取失败】{source}：未返回可验证数据日期",
+                    }
             else:
                 entry = {
                     "requested_as_of": requested_as_of,
@@ -1340,6 +1353,54 @@ def _map_stock_to_industry(ticker: Optional[str]) -> Optional[str]:
 
 
 _DEFAULT_INDUSTRY_LINKAGE_PROVIDER = IndustryLinkageProvider()
+
+
+
+_FINANCIAL_PROVENANCE_SOURCES = frozenset(
+    {"fundamentals", "balance_sheet", "income_statement", "cashflow"}
+)
+# Field names that must appear paired with a numeric value — codes/years alone do not count.
+_FINANCIAL_FIELD_NAMES = (
+    "总资产",
+    "总负债",
+    "净资产",
+    "资产总计",
+    "负债合计",
+    "所有者权益合计",
+    "所有者权益",
+    "货币资金",
+    "应收账款",
+    "存货",
+    "营业总收入",
+    "营业收入",
+    "营业总成本",
+    "净利润",
+    "归属于母公司所有者的净利润",
+    "归属于母公司",
+    "每股收益",
+    "毛利率",
+    "经营活动产生的现金流量净额",
+    "经营活动现金流入小计",
+    "销售商品、提供劳务收到的现金",
+)
+
+
+def _has_financial_field_value_pair(value: Any) -> bool:
+    """True only when a known financial field name is paired with a numeric value.
+
+    Stock codes (e.g. 688981.SH) and bare report years must not count as data.
+    """
+    text = value if isinstance(value, str) else str(value or "")
+    if not text.strip():
+        return False
+    for field in _FINANCIAL_FIELD_NAMES:
+        # 「总资产 123.45」/ 「总资产：123」/ 「总资产=123」
+        if re.search(rf"{re.escape(field)}\s*[:：=]?\s*-?\d", text):
+            return True
+        # table-ish 「123.45 总资产」
+        if re.search(rf"-?\d[\d,.]*(?:\s+|\|){re.escape(field)}", text):
+            return True
+    return False
 
 
 _COLLECTOR_AS_OF_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})$")
