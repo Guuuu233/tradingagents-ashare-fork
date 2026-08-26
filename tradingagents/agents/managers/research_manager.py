@@ -432,6 +432,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             claims=claims,
             challenges=challenges,
             challenges_verification=challenges_verification,
+            market_data_context=market_data_context if isinstance(market_data_context, dict) else None,
         )
 
         if not manager_verdict["consistency_check_passed"]:

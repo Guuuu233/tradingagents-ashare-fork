@@ -989,12 +989,80 @@ def normalize_winner(winner_raw: Any, direction_raw: Any = "") -> str:
     return "tie"
 
 
+
+def is_daily_ohlcv_unavailable(market_data_context: Any) -> bool:
+    """True when daily OHLCV is missing or failed in a *provided* market_data_context.
+
+    Compatibility: ``None`` (caller did not pass context) returns False so legacy
+    call sites keep prior behavior. Any explicitly provided Mapping — including
+    ``{}``, missing ``stock_data`` provenance, or no usable daily as_of — is
+    treated as unavailable (fail-closed).
+    """
+    if market_data_context is None:
+        return False
+    if not isinstance(market_data_context, Mapping):
+        return True
+
+    provenance = market_data_context.get("source_provenance")
+    if isinstance(provenance, Mapping):
+        stock = provenance.get("stock_data")
+        if isinstance(stock, Mapping):
+            status = str(stock.get("status") or "").strip().lower()
+            if status in {"unavailable", "failed", "timeout", "refused", "error"}:
+                return True
+            gap = str(stock.get("gap") or "")
+            if "无有效完整日线" in gap or "【数据获取失败】stock_data" in gap:
+                return True
+            if status == "available" and stock.get("as_of"):
+                return False
+            # Provenance present but not a usable available+as_of bar.
+            return True
+        # Context provided with provenance map but no stock_data entry.
+        if "stock_data" not in provenance:
+            # Fall through to daily / ledger checks before concluding.
+            pass
+        else:
+            return True
+
+    ledger = market_data_context.get("data_failure_ledger")
+    if isinstance(ledger, Sequence) and not isinstance(ledger, (str, bytes)):
+        for entry in ledger:
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("source") or "").strip() != "stock_data":
+                continue
+            status = str(entry.get("status") or "").strip().lower()
+            gap = str(entry.get("gap") or "")
+            if status in {"unavailable", "failed", "timeout", "refused", "error"}:
+                return True
+            if "无有效完整日线" in gap or "【数据获取失败】stock_data" in gap:
+                return True
+
+    daily = market_data_context.get("daily")
+    if isinstance(daily, Mapping):
+        daily_status = str(daily.get("status") or "").strip().lower()
+        if daily_status in {"unavailable", "failed", "timeout", "refused", "error"}:
+            return True
+        completeness = str(daily.get("completeness") or "").strip().lower()
+        if completeness == "completed" and daily.get("as_of"):
+            return False
+        if daily.get("as_of") and completeness not in {"unavailable", ""}:
+            return False
+        # Explicit daily block without usable as_of.
+        if "as_of" in daily or "completeness" in daily or "status" in daily:
+            return True
+
+    # Provided context but no usable OHLCV evidence anywhere.
+    return True
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
     claims: Sequence[Mapping[str, Any]] | None = None,
     challenges: Sequence[Mapping[str, Any]] | None = None,
     challenges_verification: Sequence[Mapping[str, Any]] | None = None,
+    market_data_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Extract structured manager verdict and perform strict consistency check.
 
@@ -1034,6 +1102,15 @@ def extract_and_validate_manager_verdict(
     direction = str(payload.get("direction", "")).strip() if payload else ""
     winner = normalize_winner(payload.get("winner"), direction)
     reason = str(payload.get("reason", "")).strip() if payload else ""
+    ohlcv_gate_applied = False
+
+    # A2: missing daily OHLCV → fail-closed; never allow bull/bear winner.
+    if is_daily_ohlcv_unavailable(market_data_context) and winner in {"bull", "bear"}:
+        winner = "tie"
+        direction = "中性"
+        gate_note = "日线 OHLCV 不可用，禁止方向性裁决"
+        reason = f"{reason}；{gate_note}" if reason else gate_note
+        ohlcv_gate_applied = True
 
     position_pct = payload.get("position_pct") if payload else None
     entry = payload.get("entry") if payload else None
@@ -1291,5 +1368,6 @@ def extract_and_validate_manager_verdict(
         "dispute_map": dispute_map,
         "consistency_check_passed": consistency_passed,
         "failed_checks": failed_checks,
+        "ohlcv_gate_applied": ohlcv_gate_applied,
     }
 
