@@ -60,12 +60,14 @@ def test_research_manager_prompt_deep_framework():
     assert any(term in prompt for term in ("动态加权", "分析视角", "短线视角", "中线视角"))
     assert any(term in prompt for term in ("入场区间", "止损位", "止盈", "失效条件"))
 
-    # 4. Hold 限制与机会成本
-    assert "机会成本" in prompt
-    assert "观望的明确验证信号" in prompt or "观望的验证信号" in prompt
+    # 4. 中性/Hold 正当使用（去偏：冲突时鼓励中性）
+    assert "中性/Hold 的正当使用" in prompt or "允许且鼓励给出中性" in prompt
+    assert "禁止把冲突资金流默认解读为吸筹" in prompt or "禁止把冲突资金流默认解读为偏多" in prompt
 
     # 5. VERDICT 与输出纪律
-    assert '<!-- VERDICT: {{"direction": "看多", "reason": "不超过20字的一句话核心结论"}} -->' in prompt
+    assert '<!-- VERDICT: {{"direction": "中性", "reason": "不超过20字的一句话核心结论"}} -->' in prompt
+    assert '"winner": "tie"' in prompt
+    assert "资金流向多方占优" not in prompt
     assert "【输出纪律】只输出正式报告正文" in prompt
 
 

@@ -48,13 +48,19 @@ def test_no_parallel_v2_prompt_keys():
 
 @pytest.mark.parametrize("key", ANALYST_PROMPT_KEYS)
 def test_analyst_verdict_contract_is_intact(key):
-    """Every analyst prompt must preserve the exact VERDICT contract at the end."""
-    prompt = ZH_PROMPTS[key]
+    """Every analyst prompt must keep a parseable VERDICT block and anti-bias rules."""
+    from tradingagents.agents.utils.debate_utils import extract_tagged_json
 
-    # Check verdict comment structure
-    assert '<!-- VERDICT: {"direction": "看多", "reason": "不超过20字的一句话核心结论"} -->' in prompt
+    prompt = ZH_PROMPTS[key]
+    payload = extract_tagged_json(prompt, "VERDICT")
+    assert payload, f"{key}: missing parseable <!-- VERDICT: {{...}} --> block"
+    assert set(payload.keys()) >= {"direction", "reason"}, f"{key}: keys={payload.keys()}"
+    assert payload["direction"] in {"看多", "偏多", "中性", "偏空", "看空"}, payload
+    assert isinstance(payload["reason"], str) and payload["reason"].strip(), payload
     assert "direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空" in prompt
-    assert "（数据有方向倾向时必须选偏多或偏空，仅数据确实不足时可选中性）" in prompt
+    assert "允许且鼓励选中性" in prompt
+    assert "禁止把冲突资金流默认解读为偏多" in prompt
+    assert "必须选偏多或偏空，仅数据确实不足时可选中性" not in prompt
 
 
 @pytest.mark.parametrize("key", ANALYST_PROMPT_KEYS)
