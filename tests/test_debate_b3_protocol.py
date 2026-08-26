@@ -499,7 +499,51 @@ class TestB33DisputeMapAndChallengeConsistency:
     """Test dispute map extraction and fatal challenge consistency rules in manager verdict."""
 
     def test_dispute_map_extracted_and_normalized(self):
-        """MANAGER_VERDICT containing dispute_map is extracted and normalized."""
+        """MANAGER_VERDICT containing non-conflicting dispute_map is extracted and normalized."""
+        raw_response = (
+            "研究总监正式报告正文...\n\n"
+            "<!-- MANAGER_VERDICT: {\n"
+            '  "winner": "bull",\n'
+            '  "direction": "看多",\n'
+            '  "reason": "多头证据扎实闭环",\n'
+            '  "position_pct": 60,\n'
+            '  "entry": "20.5",\n'
+            '  "target": "25.0",\n'
+            '  "stop_loss": "19.0",\n'
+            '  "adopted_claim_ids": ["INV-1"],\n'
+            '  "rejected_claim_ids": [],\n'
+            '  "dispute_map": [\n'
+            "    {\n"
+            '      "data_point": "主力资金净流入1.29亿且各分单同向",\n'
+            '      "bull_interpretation": "主力机构增持",\n'
+            '      "bear_interpretation": "流入幅度不及预期",\n'
+            '      "evidence_decision": "主力资金净流入明确",\n'
+            '      "winner": "bull"\n'
+            "    }\n"
+            "  ]\n"
+            "} -->"
+        )
+        claims = [
+            {"claim_id": "INV-1", "speaker_key": "Bull", "evidence": ["东财主力净流入1.29亿元"]}
+        ]
+        claims_verification = [
+            {"claim_id": "INV-1", "status": "verified", "raw": "东财主力净流入1.29亿元"}
+        ]
+
+        verdict = extract_and_validate_manager_verdict(
+            raw_response=raw_response,
+            claims_verification=claims_verification,
+            claims=claims,
+        )
+
+        assert verdict["consistency_check_passed"] is True, f"Failed checks: {verdict['failed_checks']}"
+        assert len(verdict["dispute_map"]) == 1
+        d0 = verdict["dispute_map"][0]
+        assert d0["data_point"] == "主力资金净流入1.29亿且各分单同向"
+        assert d0["winner"] == "bull"
+
+    def test_dispute_map_conflicting_fund_flow_forced_tie(self):
+        """A4: Conflicting fund-flow dispute forces tie and blocks high position."""
         raw_response = (
             "研究总监正式报告正文...\n\n"
             "<!-- MANAGER_VERDICT: {\n"
@@ -536,11 +580,14 @@ class TestB33DisputeMapAndChallengeConsistency:
             claims=claims,
         )
 
-        assert verdict["consistency_check_passed"] is True, f"Failed checks: {verdict['failed_checks']}"
+        # High position (60%) on forced tie fails consistency check
+        assert verdict["winner"] == "tie"
+        assert verdict["consistency_check_passed"] is False
+        assert any("不得高于30%" in msg for msg in verdict["failed_checks"])
+        assert verdict.get("fund_flow_dispute_gate_applied") is True
         assert len(verdict["dispute_map"]) == 1
         d0 = verdict["dispute_map"][0]
-        assert d0["data_point"] == "主力资金净流入1.29亿/全单净流出2.46亿"
-        assert d0["winner"] == "bull"
+        assert d0["winner"] == "tie"
 
     def test_unverified_fatal_challenge_cannot_reject_verified_claim(self):
         """An unverified fatal challenge (evidence unsupported) cannot reject a 100% verified claim."""
