@@ -111,6 +111,7 @@ def _make_seven_reports_state(overrides=None):
             "analysis_baseline_date": "2026-08-22",
             "trade_date": "2026-08-22",
             "source_provenance": {
+                "stock_data": {"status": "available", "as_of": "2026-08-22"},
                 "tushare_daily": {"status": "available", "as_of": "2026-08-22"},
                 "global_indices": {"status": "failed", "reason": "connection timeout"},
             },

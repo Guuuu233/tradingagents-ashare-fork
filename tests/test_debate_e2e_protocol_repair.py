@@ -45,7 +45,9 @@ def _make_base_state():
         "market_data_context": {
             "analysis_baseline_date": "2026-08-22",
             "trade_date": "2026-08-22",
-            "source_provenance": {},
+            "source_provenance": {
+                "stock_data": {"status": "available", "as_of": "2026-08-22"},
+            },
             "data_failure_ledger": [],
             "data_gaps": [],
         },
