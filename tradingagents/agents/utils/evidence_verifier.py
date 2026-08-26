@@ -1056,6 +1056,43 @@ def is_daily_ohlcv_unavailable(market_data_context: Any) -> bool:
     return True
 
 
+
+_FUND_FLOW_IN_MARKERS = ("流入", "净流入", "吸筹", "inflow", "accumulation")
+_FUND_FLOW_OUT_MARKERS = ("流出", "净流出", "派发", "出货", "outflow", "distribution")
+_FUND_FLOW_ABSORPTION_MARKERS = (
+    "流出=吸筹",
+    "流出等于吸筹",
+    "流出即吸筹",
+    "边打边吸",
+    "边出边吸",
+    "流出当作吸筹",
+)
+
+
+def is_conflicting_fund_flow_dispute(
+    data_point: str = "",
+    bull_interpretation: str = "",
+    bear_interpretation: str = "",
+    evidence_decision: str = "",
+) -> bool:
+    """True when a dispute row mixes inflow/outflow prints or uses outflow=absorption."""
+    blob = " ".join(
+        [
+            str(data_point or ""),
+            str(bull_interpretation or ""),
+            str(bear_interpretation or ""),
+            str(evidence_decision or ""),
+        ]
+    )
+    if not blob.strip():
+        return False
+    if any(marker in blob for marker in _FUND_FLOW_ABSORPTION_MARKERS):
+        return True
+    has_in = any(marker in blob for marker in _FUND_FLOW_IN_MARKERS)
+    has_out = any(marker in blob for marker in _FUND_FLOW_OUT_MARKERS)
+    return has_in and has_out
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -1136,6 +1173,7 @@ def extract_and_validate_manager_verdict(
     # ── Extract Dispute Map ───────────────────────────────────────────────
     raw_dispute_map = payload.get("dispute_map") or []
     dispute_map: list[dict[str, Any]] = []
+    fund_flow_dispute_gate_applied = False
     if isinstance(raw_dispute_map, list):
         for item in raw_dispute_map:
             if isinstance(item, Mapping):
@@ -1144,13 +1182,27 @@ def extract_and_validate_manager_verdict(
                 be_interp = str(item.get("bear_interpretation") or "").strip()
                 ev_dec = str(item.get("evidence_decision") or "").strip()
                 w_raw = str(item.get("winner") or "").strip()
+                row_winner = normalize_winner(w_raw)
+                if is_conflicting_fund_flow_dispute(dp, b_interp, be_interp, ev_dec):
+                    row_winner = "tie"
+                    ev_dec = "分单对打/冲突资金流不得单独支撑方向（禁止流出=吸筹）"
+                    fund_flow_dispute_gate_applied = True
                 dispute_map.append({
                     "data_point": dp,
                     "bull_interpretation": b_interp,
                     "bear_interpretation": be_interp,
                     "evidence_decision": ev_dec,
-                    "winner": normalize_winner(w_raw),
+                    "winner": row_winner,
                 })
+
+    # A4: if every directional dispute was fund-flow conflict, do not keep bull/bear.
+    if fund_flow_dispute_gate_applied and winner in {"bull", "bear"}:
+        directional_rows = [r for r in dispute_map if r.get("winner") in {"bull", "bear"}]
+        if not directional_rows:
+            winner = "tie"
+            direction = "中性"
+            gate_note = "资金流分单冲突，禁止据此给出方向性裁决"
+            reason = f"{reason}；{gate_note}" if reason else gate_note
 
     # ── Deterministic Claim Evidence Summary Computation ──────────────────
     claim_evidence_summary: dict[str, dict[str, Any]] = {}
@@ -1369,5 +1421,6 @@ def extract_and_validate_manager_verdict(
         "consistency_check_passed": consistency_passed,
         "failed_checks": failed_checks,
         "ohlcv_gate_applied": ohlcv_gate_applied,
+        "fund_flow_dispute_gate_applied": fund_flow_dispute_gate_applied,
     }
 
