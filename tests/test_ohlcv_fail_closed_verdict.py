@@ -216,3 +216,95 @@ def test_evaluator_rejects_claims_quoting_unverified_fundamentals():
     assert res_b["status"] != STATUS_VERIFIED
     assert res_b["status"] in (STATUS_SOURCE_UNAVAILABLE, STATUS_UNSUPPORTED)
 
+    # Case C (High): claim quotes value and seven_reports has fundamentals_report with that value,
+    # but fundamentals is available_unverified_as_of / unverified -> MUST NOT BE VERIFIED
+    seven_reports_unverified = {
+        "fundamentals_report": "基本面：归属于母公司所有者的净利润 11223344.55，盈利稳定。"
+    }
+    res_c = evaluator.evaluate_single_evidence(
+        raw_evidence="归属于母公司所有者的净利润 11223344.55",
+        seven_reports=seven_reports_unverified,
+        market_data_context=market_data_context,
+        claim_id="C-3",
+    )
+    assert res_c["status"] != STATUS_VERIFIED
+    assert res_c["status"] == STATUS_UNSUPPORTED
+    assert res_c["is_fatal"] is False
+
+    # Case D (Control): same claim + fundamentals provenance available + as_of + verified -> CAN BE VERIFIED
+    market_data_context_verified = {
+        "source_provenance": {
+            "fundamentals": {
+                "status": "available",
+                "actual_as_of": "2026-06-30",
+                "as_of": "2026-06-30",
+                "provenance_status": "verified",
+            },
+            "stock_data": {
+                "status": "available",
+                "actual_as_of": "2026-07-22",
+                "as_of": "2026-07-22",
+                "provenance_status": "verified",
+            },
+        },
+    }
+    res_d = evaluator.evaluate_single_evidence(
+        raw_evidence="归属于母公司所有者的净利润 11223344.55",
+        seven_reports=seven_reports_unverified,
+        market_data_context=market_data_context_verified,
+        claim_id="C-4",
+    )
+    assert res_d["status"] == STATUS_VERIFIED
+    assert res_d["matched_role"] == "fundamentals_report"
+
+
+def test_evaluator_rejects_market_report_claims_when_stock_data_unverified():
+    """P0-2b: market_report matching must not verify when stock_data is unverified/unavailable."""
+    from tradingagents.agents.utils.evidence_verifier import (
+        EvidenceFactualTruthEvaluator,
+        STATUS_VERIFIED,
+        STATUS_UNSUPPORTED,
+    )
+
+    evaluator = EvidenceFactualTruthEvaluator()
+    market_data_context_unverified_stock = {
+        "source_provenance": {
+            "stock_data": {
+                "status": "available_unverified_as_of",
+                "actual_as_of": None,
+                "provenance_status": "unverified",
+            },
+        },
+    }
+    seven_reports = {
+        "market_report": "行情分析：收盘价 45.60 元，成交量放量突破。"
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="收盘价 45.60 元",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context_unverified_stock,
+        claim_id="C-stock-1",
+    )
+    assert res["status"] != STATUS_VERIFIED
+    assert res["status"] == STATUS_UNSUPPORTED
+
+    # Control: stock_data verified
+    market_data_context_verified_stock = {
+        "source_provenance": {
+            "stock_data": {
+                "status": "available",
+                "actual_as_of": "2026-07-22",
+                "as_of": "2026-07-22",
+                "provenance_status": "verified",
+            },
+        },
+    }
+    res_verified = evaluator.evaluate_single_evidence(
+        raw_evidence="收盘价 45.60 元",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context_verified_stock,
+        claim_id="C-stock-2",
+    )
+    assert res_verified["status"] == STATUS_VERIFIED
+    assert res_verified["matched_role"] == "market_report"
+

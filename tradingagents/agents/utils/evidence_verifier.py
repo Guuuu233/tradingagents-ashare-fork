@@ -59,6 +59,14 @@ SEVEN_REPORT_KEYS = (
     "volume_price_report",
 )
 
+# Mapping from report key to underlying provenance sources
+REPORT_TO_PROVENANCE_SOURCES: dict[str, tuple[str, ...]] = {
+    "fundamentals_report": ("fundamentals", "balance_sheet", "income_statement", "cashflow"),
+    "market_report": ("stock_data",),
+    "volume_price_report": ("stock_data",),
+    "news_report": ("news",),
+}
+
 # Chinese and English quantity/unit patterns
 _UNIT_STR = r"(?:万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手)"
 
@@ -284,6 +292,18 @@ class EvidenceFactualTruthEvaluator:
                 return True, src
         return False, ""
 
+    def _is_report_unavailable(
+        self, role_key: str, unavailable_sources: set[str]
+    ) -> bool:
+        """Check if a report's underlying provenance sources are marked unavailable/unverified."""
+        if not unavailable_sources:
+            return False
+        mapped_sources = (
+            REPORT_TO_PROVENANCE_SOURCES.get(role_key)
+            or REPORT_TO_PROVENANCE_SOURCES.get(f"{role_key}_report", ())
+        )
+        return any(src in unavailable_sources for src in mapped_sources)
+
     def _check_anti_lookahead(
         self, raw_evidence: str, baseline_date_obj: date | None
     ) -> tuple[bool, str]:
@@ -358,6 +378,8 @@ class EvidenceFactualTruthEvaluator:
 
         # 3.1 Exact substring match in any report
         for role_key in SEVEN_REPORT_KEYS:
+            if self._is_report_unavailable(role_key, unavailable_sources):
+                continue
             report_body = str(seven_reports.get(role_key, "") or "")
             if not report_body.strip():
                 continue
@@ -374,6 +396,8 @@ class EvidenceFactualTruthEvaluator:
 
         # 3.2 Single-line full match in reports
         for role_key in SEVEN_REPORT_KEYS:
+            if self._is_report_unavailable(role_key, unavailable_sources):
+                continue
             report_body = str(seven_reports.get(role_key, "") or "")
             if not report_body.strip():
                 continue
@@ -435,6 +459,8 @@ class EvidenceFactualTruthEvaluator:
 
             for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
                 for role_key in SEVEN_REPORT_KEYS:
+                    if self._is_report_unavailable(role_key, unavailable_sources):
+                        continue
                     report_body = str(seven_reports.get(role_key, "") or "")
                     if not report_body.strip():
                         continue
@@ -461,6 +487,8 @@ class EvidenceFactualTruthEvaluator:
             total_nums = len(ev_numbers)
             # Check single-report multi-line aggregation first
             for role_key in SEVEN_REPORT_KEYS:
+                if self._is_report_unavailable(role_key, unavailable_sources):
+                    continue
                 hit_set = num_hits_by_report.get(role_key, set())
                 if len(hit_set) == total_nums:
                     return {
@@ -475,55 +503,64 @@ class EvidenceFactualTruthEvaluator:
 
             # Check cross-report multi-line aggregation
             if len(all_hit_num_indices) == total_nums:
-                matched_roles = [r for r in SEVEN_REPORT_KEYS if r in num_hits_by_report and num_hits_by_report[r]]
-                return {
-                    "raw": raw_text,
-                    "claim_id": claim_id,
-                    "matched_role": ",".join(matched_roles) if len(matched_roles) > 1 else matched_roles[0],
-                    "matched_source": ",".join(r.replace("_report", "") for r in matched_roles),
-                    "status": STATUS_VERIFIED,
-                    "is_fatal": False,
-                    "details": f"在 {','.join(matched_roles)} 中跨报告多行聚合验证数值与关键词匹配 (multi_line_match)",
-                }
+                matched_roles = [
+                    r for r in SEVEN_REPORT_KEYS
+                    if r in num_hits_by_report and num_hits_by_report[r]
+                    and not self._is_report_unavailable(r, unavailable_sources)
+                ]
+                if matched_roles:
+                    return {
+                        "raw": raw_text,
+                        "claim_id": claim_id,
+                        "matched_role": ",".join(matched_roles) if len(matched_roles) > 1 else matched_roles[0],
+                        "matched_source": ",".join(r.replace("_report", "") for r in matched_roles),
+                        "status": STATUS_VERIFIED,
+                        "is_fatal": False,
+                        "details": f"在 {','.join(matched_roles)} 中跨报告多行聚合验证数值与关键词匹配 (multi_line_match)",
+                    }
 
         # 3.4 Contradiction check across reports when evidence is not verified
         contradicted_candidate = None
         if ev_numbers and ev_keywords:
-            for role_key in SEVEN_REPORT_KEYS:
-                report_body = str(seven_reports.get(role_key, "") or "")
-                if not report_body.strip():
-                    continue
-                for line in report_body.splitlines():
-                    line_text = line.strip()
-                    if not line_text:
+            is_forward_scenario = any(w in raw_text for w in ("预测", "预期", "目标", "展望", "情景", "未来", "压力测试", "底线"))
+            if not is_forward_scenario:
+                for role_key in SEVEN_REPORT_KEYS:
+                    if self._is_report_unavailable(role_key, unavailable_sources):
                         continue
-                    line_keywords = _extract_metric_keywords(line_text)
-                    common_kw = set(ev_keywords).intersection(set(line_keywords))
-                    # Match specific metric keywords (avoid generic tokens triggering false contradiction)
-                    metric_overlap = [kw for kw in common_kw if kw in {
-                        "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
-                        "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
-                        "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
-                    }]
-                    if not metric_overlap:
+                    report_body = str(seven_reports.get(role_key, "") or "")
+                    if not report_body.strip():
                         continue
-                    line_numbers = _extract_numbers_and_units(line_text)
-                    for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
-                        if num_idx in all_hit_num_indices:
+                    for line in report_body.splitlines():
+                        line_text = line.strip()
+                        if not line_text:
                             continue
-                        for l_num, l_unit, l_raw in line_numbers:
-                            if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
-                                diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
-                                if diff_pct > 0.05:
-                                    contradicted_candidate = (
-                                        role_key,
-                                        f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
-                                    )
-                                    break
-                        if contradicted_candidate:
-                            break
-                if contradicted_candidate:
-                    break
+                        line_keywords = _extract_metric_keywords(line_text)
+                        common_kw = set(ev_keywords).intersection(set(line_keywords))
+                        # Match specific metric keywords (avoid generic tokens triggering false contradiction)
+                        metric_overlap = [kw for kw in common_kw if kw in {
+                            "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
+                            "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
+                            "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
+                        }]
+                        if not metric_overlap:
+                            continue
+                        line_numbers = _extract_numbers_and_units(line_text)
+                        for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+                            if num_idx in all_hit_num_indices:
+                                continue
+                            for l_num, l_unit, l_raw in line_numbers:
+                                if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
+                                    diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
+                                    if diff_pct > 0.05:
+                                        contradicted_candidate = (
+                                            role_key,
+                                            f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
+                                        )
+                                        break
+                            if contradicted_candidate:
+                                break
+                    if contradicted_candidate:
+                        break
 
         if contradicted_candidate:
             return {

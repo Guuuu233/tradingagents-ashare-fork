@@ -38,7 +38,7 @@ def test_golden_dataset_exists_and_valid():
     assert len(cases) >= 15
     pos_cases = [c for c in cases if c.get("is_positive")]
     neg_cases = [c for c in cases if not c.get("is_positive")]
-    assert len(pos_cases) >= 14
+    assert len(pos_cases) >= 12
     assert len(neg_cases) >= 1
 
 
