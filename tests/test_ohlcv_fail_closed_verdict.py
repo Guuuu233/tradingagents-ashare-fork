@@ -308,3 +308,53 @@ def test_evaluator_rejects_market_report_claims_when_stock_data_unverified():
     assert res_verified["status"] == STATUS_VERIFIED
     assert res_verified["matched_role"] == "market_report"
 
+
+def test_evaluator_contradiction_detects_forward_prediction_and_statement():
+    """Verified fundamentals: both '净利润预期为 10 元' and '净利润为 10 元' against report '净利润 8 元' must be contradicted."""
+    from tradingagents.agents.utils.evidence_verifier import (
+        EvidenceFactualTruthEvaluator,
+        STATUS_CONTRADICTED,
+    )
+
+    evaluator = EvidenceFactualTruthEvaluator()
+    market_data_context_verified = {
+        "source_provenance": {
+            "fundamentals": {
+                "status": "available",
+                "actual_as_of": "2026-06-30",
+                "as_of": "2026-06-30",
+                "provenance_status": "verified",
+            },
+        },
+    }
+    seven_reports = {
+        "fundamentals_report": "公司基本面稳健，2026年上半年实现归母净利润 8 元。"
+    }
+
+    res_statement = evaluator.evaluate_single_evidence(
+        raw_evidence="净利润为 10 元",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context_verified,
+        claim_id="C-stat-1",
+    )
+    assert res_statement["status"] == STATUS_CONTRADICTED
+    assert "数据冲突" in res_statement["details"]
+
+    res_forward = evaluator.evaluate_single_evidence(
+        raw_evidence="净利润预期为 10 元",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context_verified,
+        claim_id="C-fwd-1",
+    )
+    assert res_forward["status"] == STATUS_CONTRADICTED
+    assert "数据冲突" in res_forward["details"]
+
+    res_target = evaluator.evaluate_single_evidence(
+        raw_evidence="目标净利润 10 元",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context_verified,
+        claim_id="C-tgt-1",
+    )
+    assert res_target["status"] == STATUS_CONTRADICTED
+    assert "数据冲突" in res_target["details"]
+

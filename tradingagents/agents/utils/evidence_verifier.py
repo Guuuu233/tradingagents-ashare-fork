@@ -522,45 +522,43 @@ class EvidenceFactualTruthEvaluator:
         # 3.4 Contradiction check across reports when evidence is not verified
         contradicted_candidate = None
         if ev_numbers and ev_keywords:
-            is_forward_scenario = any(w in raw_text for w in ("预测", "预期", "目标", "展望", "情景", "未来", "压力测试", "底线"))
-            if not is_forward_scenario:
-                for role_key in SEVEN_REPORT_KEYS:
-                    if self._is_report_unavailable(role_key, unavailable_sources):
+            for role_key in SEVEN_REPORT_KEYS:
+                if self._is_report_unavailable(role_key, unavailable_sources):
+                    continue
+                report_body = str(seven_reports.get(role_key, "") or "")
+                if not report_body.strip():
+                    continue
+                for line in report_body.splitlines():
+                    line_text = line.strip()
+                    if not line_text:
                         continue
-                    report_body = str(seven_reports.get(role_key, "") or "")
-                    if not report_body.strip():
+                    line_keywords = _extract_metric_keywords(line_text)
+                    common_kw = set(ev_keywords).intersection(set(line_keywords))
+                    # Match specific metric keywords (avoid generic tokens triggering false contradiction)
+                    metric_overlap = [kw for kw in common_kw if kw in {
+                        "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
+                        "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
+                        "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
+                    }]
+                    if not metric_overlap:
                         continue
-                    for line in report_body.splitlines():
-                        line_text = line.strip()
-                        if not line_text:
+                    line_numbers = _extract_numbers_and_units(line_text)
+                    for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+                        if num_idx in all_hit_num_indices:
                             continue
-                        line_keywords = _extract_metric_keywords(line_text)
-                        common_kw = set(ev_keywords).intersection(set(line_keywords))
-                        # Match specific metric keywords (avoid generic tokens triggering false contradiction)
-                        metric_overlap = [kw for kw in common_kw if kw in {
-                            "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
-                            "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
-                            "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
-                        }]
-                        if not metric_overlap:
-                            continue
-                        line_numbers = _extract_numbers_and_units(line_text)
-                        for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
-                            if num_idx in all_hit_num_indices:
-                                continue
-                            for l_num, l_unit, l_raw in line_numbers:
-                                if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
-                                    diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
-                                    if diff_pct > 0.05:
-                                        contradicted_candidate = (
-                                            role_key,
-                                            f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
-                                        )
-                                        break
-                            if contradicted_candidate:
-                                break
-                    if contradicted_candidate:
-                        break
+                        for l_num, l_unit, l_raw in line_numbers:
+                            if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
+                                diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
+                                if diff_pct > 0.05:
+                                    contradicted_candidate = (
+                                        role_key,
+                                        f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
+                                    )
+                                    break
+                        if contradicted_candidate:
+                            break
+                if contradicted_candidate:
+                    break
 
         if contradicted_candidate:
             return {
