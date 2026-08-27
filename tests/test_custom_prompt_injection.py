@@ -180,6 +180,7 @@ def test_T4_other_roles_no_injection():
         should_continue_analyst=lambda *_: "done",
         should_continue_after_integrity=lambda *_: "Bull Researcher",
         should_continue_debate=lambda *_: "Research Manager",
+        should_continue_after_trader=lambda *_: "Aggressive Analyst",
         should_continue_risk_analysis=lambda *_: "Risk Judge",
         should_revise_after_risk_judge=lambda *_: "END",
     )

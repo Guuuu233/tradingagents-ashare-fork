@@ -436,8 +436,15 @@ def test_risk_chain_edges_are_wired():
 
     assert {"Trader", "Aggressive Analyst", "Conservative Analyst",
             "Neutral Analyst", "Risk Judge"} <= set(compiled["nodes"])
-    # Trader hands off directly to the aggressive risk analyst.
-    assert ("Trader", "Aggressive Analyst") in compiled["edges"]
+    # Trader routes conditionally to either Aggressive Analyst or Risk Judge (no unconditional edge).
+    assert ("Trader", "Aggressive Analyst") not in compiled["edges"]
+    trader_conds = [mapping for src, _cond, mapping in compiled["conditional_edges"]
+                    if src == "Trader"]
+    assert len(trader_conds) == 1
+    assert trader_conds[0] == {
+        "Aggressive Analyst": "Aggressive Analyst",
+        "Risk Judge": "Risk Judge",
+    }
     # The three risk analysts are looped by the shared should_continue_risk_analysis.
     risk_conds = {src: mapping for src, _cond, mapping in compiled["conditional_edges"]
                   if src in ("Aggressive Analyst", "Conservative Analyst", "Neutral Analyst")}
@@ -452,3 +459,4 @@ def test_risk_chain_edges_are_wired():
                    if src == "Risk Judge"]
     assert len(judge_conds) == 1
     assert "Trader" in judge_conds[0], "Risk Judge must be able to route back to Trader for revision"
+    assert "END" in judge_conds[0], "Risk Judge must be able to route to END"
