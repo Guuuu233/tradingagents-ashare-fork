@@ -120,3 +120,99 @@ def test_available_ohlcv_keeps_bull_winner():
     )
     assert verdict["winner"] == "bull"
     assert verdict.get("ohlcv_gate_applied") is not True
+
+
+def test_is_daily_ohlcv_unavailable_for_unverified_or_future_as_of():
+    """P0-2b: available_unverified_as_of or unverified provenance must fail-closed for OHLCV."""
+    # 1. available_unverified_as_of with no as_of -> True
+    ctx1 = {
+        "source_provenance": {
+            "stock_data": {
+                "status": "available_unverified_as_of",
+                "actual_as_of": None,
+                "provenance_status": "unverified",
+            }
+        }
+    }
+    assert is_daily_ohlcv_unavailable(ctx1) is True
+
+    # 2. available but no as_of / unverified -> True
+    ctx2 = {
+        "source_provenance": {
+            "stock_data": {
+                "status": "available",
+                "actual_as_of": None,
+                "provenance_status": "unverified",
+            }
+        }
+    }
+    assert is_daily_ohlcv_unavailable(ctx2) is True
+
+    # 3. future status / provenance_status -> True
+    ctx3 = {
+        "source_provenance": {
+            "stock_data": {
+                "status": "future",
+                "actual_as_of": "2026-08-25",
+                "provenance_status": "future",
+            }
+        }
+    }
+    assert is_daily_ohlcv_unavailable(ctx3) is True
+
+
+def test_evaluator_rejects_claims_quoting_unverified_fundamentals():
+    """P0-2b: evidence quoting available_unverified_as_of source must not be verified."""
+    from tradingagents.agents.utils.evidence_verifier import (
+        EvidenceFactualTruthEvaluator,
+        STATUS_VERIFIED,
+        STATUS_SOURCE_UNAVAILABLE,
+        STATUS_UNSUPPORTED,
+    )
+
+    evaluator = EvidenceFactualTruthEvaluator()
+
+    # Fundamentals payload with numeric pairs but unverified as_of
+    market_data_context = {
+        "fundamentals": (
+            "## Fundamentals for 688981.SH\n"
+            "总资产 1234567890.12\n"
+            "净资产 987654321.00\n"
+            "归属于母公司所有者的净利润 11223344.55\n"
+        ),
+        "source_provenance": {
+            "fundamentals": {
+                "status": "available_unverified_as_of",
+                "actual_as_of": None,
+                "provenance_status": "unverified",
+                "note": "有可解析财务字段与数值但缺少可验证 ISO 数据日期",
+            },
+            "stock_data": {
+                "status": "available",
+                "actual_as_of": "2026-07-22",
+                "as_of": "2026-07-22",
+                "provenance_status": "verified",
+            },
+        },
+    }
+
+    # Case A: claim quotes fundamentals by name and numeric value
+    res_a = evaluator.evaluate_single_evidence(
+        raw_evidence="根据 fundamentals，归属于母公司所有者的净利润 11223344.55",
+        seven_reports={},
+        market_data_context=market_data_context,
+        claim_id="C-1",
+    )
+    assert res_a["status"] != STATUS_VERIFIED
+    assert res_a["status"] in (STATUS_SOURCE_UNAVAILABLE, STATUS_UNSUPPORTED)
+
+    # Case B: claim quotes the numeric string from market_data_context without explicit source name
+    res_b = evaluator.evaluate_single_evidence(
+        raw_evidence="归属于母公司所有者的净利润 11223344.55",
+        seven_reports={},
+        market_data_context=market_data_context,
+        claim_id="C-2",
+    )
+    assert res_b["status"] != STATUS_VERIFIED
+    assert res_b["status"] in (STATUS_SOURCE_UNAVAILABLE, STATUS_UNSUPPORTED)
+

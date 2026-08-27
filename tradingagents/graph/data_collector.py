@@ -857,10 +857,19 @@ def _build_source_provenance(
             if status == "unavailable":
                 entry["gap"] = f"【数据获取失败】industry_linkage：{reason or '数据源不可用'}"
                 entry["gap_class"] = _determine_gap_class(str(source), value, status)
+                entry["provenance_status"] = "refused"
             elif actual_as_of is None:
                 entry["status"] = "unavailable"
                 entry["gap"] = "【数据获取失败】industry_linkage：未返回可验证数据日期"
                 entry["gap_class"] = "operational"
+                entry["provenance_status"] = "refused"
+            elif actual_as_of > requested_as_of:
+                entry["status"] = "future"
+                entry["gap"] = f"【数据获取失败】industry_linkage：数据日期 {actual_as_of} 晚于请求日期 {requested_as_of}"
+                entry["gap_class"] = "operational"
+                entry["provenance_status"] = "future"
+            else:
+                entry["provenance_status"] = "verified"
             provenance[str(source)] = entry
             continue
 
@@ -879,6 +888,7 @@ def _build_source_provenance(
                 "status": status,
                 "gap_class": gap_class,
                 "gap": f"【数据获取失败】{source}：{_compact_failure_reason(status)}",
+                "provenance_status": "refused",
             }
         else:
             if source == "stock_data" and as_of and as_of < requested_as_of:
@@ -894,6 +904,7 @@ def _build_source_provenance(
                         f"【数据获取失败】stock_data：实际最新数据日 {as_of} "
                         f"早于请求日期 {requested_as_of}"
                     ),
+                    "provenance_status": "refused",
                 }
             elif as_of is None and source != "realtime":
                 if (
@@ -906,6 +917,7 @@ def _build_source_provenance(
                         "actual_as_of": None,
                         "as_of": None,
                         "status": "available_unverified_as_of",
+                        "provenance_status": "unverified",
                         "note": "有可解析财务字段与数值但缺少可验证 ISO 数据日期",
                     }
                 else:
@@ -918,14 +930,35 @@ def _build_source_provenance(
                         "status": status,
                         "gap_class": gap_class,
                         "gap": f"【数据获取失败】{source}：未返回可验证数据日期",
+                        "provenance_status": "refused",
                     }
             else:
-                entry = {
-                    "requested_as_of": requested_as_of,
-                    "actual_as_of": as_of,
-                    "as_of": as_of,
-                    "status": "available",
-                }
+                if as_of is not None and as_of > requested_as_of:
+                    entry = {
+                        "requested_as_of": requested_as_of,
+                        "actual_as_of": as_of,
+                        "as_of": as_of,
+                        "status": "future",
+                        "gap_class": "operational",
+                        "gap": f"【数据获取失败】{source}：实际最新数据日 {as_of} 晚于请求日期 {requested_as_of}",
+                        "provenance_status": "future",
+                    }
+                elif as_of is None:
+                    entry = {
+                        "requested_as_of": requested_as_of,
+                        "actual_as_of": None,
+                        "as_of": None,
+                        "status": "available",
+                        "provenance_status": "unverified",
+                    }
+                else:
+                    entry = {
+                        "requested_as_of": requested_as_of,
+                        "actual_as_of": as_of,
+                        "as_of": as_of,
+                        "status": "available",
+                        "provenance_status": "verified",
+                    }
 
         provenance[str(source)] = entry
     return provenance

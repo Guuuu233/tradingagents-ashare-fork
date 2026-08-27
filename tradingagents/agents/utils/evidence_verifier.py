@@ -32,7 +32,20 @@ MIN_COVERAGE_THRESHOLD = 0.67
 
 # Common failed status strings
 UNAVAILABLE_STATUSES = frozenset(
-    {"failed", "unavailable", "empty", "error", "missing", "partial_failure", "not_found", "rejected"}
+    {
+        "failed",
+        "unavailable",
+        "empty",
+        "error",
+        "missing",
+        "partial_failure",
+        "not_found",
+        "rejected",
+        "available_unverified_as_of",
+        "unverified",
+        "refused",
+        "future",
+    }
 )
 
 # Standard report keys
@@ -233,7 +246,8 @@ class EvidenceFactualTruthEvaluator:
                 if isinstance(entry, dict):
                     src = str(entry.get("source", "")).strip().lower()
                     status = str(entry.get("status", "")).strip().lower()
-                    if src and (not status or status in UNAVAILABLE_STATUSES):
+                    prov_status = str(entry.get("provenance_status", "")).strip().lower()
+                    if src and (not status or status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}):
                         unavailable.add(src)
                         # Add alias name if available
                         name = str(entry.get("name", "")).strip().lower()
@@ -246,7 +260,8 @@ class EvidenceFactualTruthEvaluator:
             for src, info in prov.items():
                 if isinstance(info, dict):
                     status = str(info.get("status", "")).strip().lower()
-                    if status in UNAVAILABLE_STATUSES:
+                    prov_status = str(info.get("provenance_status", "")).strip().lower()
+                    if status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}:
                         unavailable.add(src.strip().lower())
 
         # Check data_gaps
@@ -523,18 +538,30 @@ class EvidenceFactualTruthEvaluator:
 
         # 4. Check market_data_context if provided
         if isinstance(market_data_context, Mapping):
-            # Check quotes, indicators, fund_flow_evidence
-            md_str = str(market_data_context)
-            if raw_text in md_str:
-                return {
-                    "raw": raw_text,
-                    "claim_id": claim_id,
-                    "matched_role": "market_data_context",
-                    "matched_source": "market_data_context",
-                    "status": STATUS_VERIFIED,
-                    "is_fatal": False,
-                    "details": "在 market_data_context 中找到匹配数据",
-                }
+            # Check quotes, indicators, fund_flow_evidence (excluding metadata and unavailable sources)
+            for k, v in market_data_context.items():
+                if k in {
+                    "source_provenance",
+                    "data_failure_ledger",
+                    "data_gaps",
+                    "analysis_baseline_date",
+                    "trade_date",
+                    "data_as_of",
+                }:
+                    continue
+                if str(k).strip().lower() in unavailable_sources:
+                    continue
+                v_str = str(v or "")
+                if raw_text in v_str:
+                    return {
+                        "raw": raw_text,
+                        "claim_id": claim_id,
+                        "matched_role": "market_data_context",
+                        "matched_source": str(k),
+                        "status": STATUS_VERIFIED,
+                        "is_fatal": False,
+                        "details": f"在 market_data_context[{k}] 中找到匹配数据",
+                    }
 
         # 5. Unsupported
         return {
@@ -1008,12 +1035,17 @@ def is_daily_ohlcv_unavailable(market_data_context: Any) -> bool:
         stock = provenance.get("stock_data")
         if isinstance(stock, Mapping):
             status = str(stock.get("status") or "").strip().lower()
-            if status in {"unavailable", "failed", "timeout", "refused", "error"}:
+            prov_status = str(stock.get("provenance_status") or "").strip().lower()
+            if status in {"unavailable", "failed", "timeout", "refused", "error", "future", "available_unverified_as_of"}:
+                return True
+            if prov_status in {"refused", "future", "unverified"}:
                 return True
             gap = str(stock.get("gap") or "")
             if "无有效完整日线" in gap or "【数据获取失败】stock_data" in gap:
                 return True
-            if status == "available" and stock.get("as_of"):
+            if status == "available" and stock.get("as_of") and prov_status == "verified":
+                return False
+            if status == "available" and stock.get("as_of") and not prov_status:
                 return False
             # Provenance present but not a usable available+as_of bar.
             return True
@@ -1032,8 +1064,11 @@ def is_daily_ohlcv_unavailable(market_data_context: Any) -> bool:
             if str(entry.get("source") or "").strip() != "stock_data":
                 continue
             status = str(entry.get("status") or "").strip().lower()
+            prov_status = str(entry.get("provenance_status") or "").strip().lower()
             gap = str(entry.get("gap") or "")
-            if status in {"unavailable", "failed", "timeout", "refused", "error"}:
+            if status in {"unavailable", "failed", "timeout", "refused", "error", "future", "available_unverified_as_of"}:
+                return True
+            if prov_status in {"refused", "future", "unverified"}:
                 return True
             if "无有效完整日线" in gap or "【数据获取失败】stock_data" in gap:
                 return True
@@ -1041,7 +1076,7 @@ def is_daily_ohlcv_unavailable(market_data_context: Any) -> bool:
     daily = market_data_context.get("daily")
     if isinstance(daily, Mapping):
         daily_status = str(daily.get("status") or "").strip().lower()
-        if daily_status in {"unavailable", "failed", "timeout", "refused", "error"}:
+        if daily_status in {"unavailable", "failed", "timeout", "refused", "error", "future", "available_unverified_as_of"}:
             return True
         completeness = str(daily.get("completeness") or "").strip().lower()
         if completeness == "completed" and daily.get("as_of"):
