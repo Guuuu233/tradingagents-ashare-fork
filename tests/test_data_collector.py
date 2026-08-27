@@ -9,6 +9,7 @@ from tradingagents.graph.data_collector import (
     DataCollector,
     _build_data_failure_ledger,
     _build_source_provenance,
+    _extract_source_as_of,
     _fetch_all,
     make_cache_key,
 )
@@ -515,3 +516,30 @@ def test_financial_provenance_rejects_code_or_year_only_payloads():
         entry = provenance[key]
         assert entry["status"] == "unavailable", key
         assert "未返回可验证数据日期" in (entry.get("gap") or ""), key
+
+
+def test_extract_source_as_of_rejects_cached_at_as_data_as_of():
+    """P0-2a: _extract_source_as_of must never use cached_at as actual_as_of."""
+    # 1. payload 仅有 cached_at（epoch 或 ISO）时 _extract_source_as_of 为 None
+    assert _extract_source_as_of({"cached_at": 1787486172}, "2026-08-21") is None
+    assert _extract_source_as_of({"cached_at": 1787486172.5}, "2026-08-21") is None
+    assert _extract_source_as_of({"cached_at": "2026-08-20"}, "2026-08-21") is None
+    assert _extract_source_as_of({"cached_at": "2026-08-20 15:00:00"}, "2026-08-21") is None
+    assert _extract_source_as_of({"cached_at": "2026-08-20T15:00:00Z"}, "2026-08-21") is None
+    assert _extract_source_as_of({"retrieved_at": "2026-08-20 15:00:00"}, "2026-08-21") is None
+    assert _extract_source_as_of({"ingest_time": "2026-08-20"}, "2026-08-21") is None
+
+    # 2. 同时有 as_of=2026-08-20 与更新的 cached_at 时，返回 2026-08-20
+    assert _extract_source_as_of({"as_of": "2026-08-20", "cached_at": 1787486172}, "2026-08-21") == "2026-08-20"
+    assert _extract_source_as_of({"as_of": "2026-08-20", "cached_at": "2026-08-21 12:00:00"}, "2026-08-21") == "2026-08-20"
+    assert _extract_source_as_of({"actual_as_of": "2026-08-20", "cached_at": "2026-08-21"}, "2026-08-21") == "2026-08-20"
+    assert _extract_source_as_of({"quote_as_of": "2026-08-20", "cached_at": "2026-08-21"}, "2026-08-21") == "2026-08-20"
+    assert _extract_source_as_of({"data_as_of": "2026-08-20", "cached_at": "2026-08-21"}, "2026-08-21") == "2026-08-20"
+
+    # 3. as_of=2026-08-22 且 requested_as_of=2026-08-21 时返回 None (future 拒绝)
+    assert _extract_source_as_of({"as_of": "2026-08-22"}, "2026-08-21") is None
+    assert _extract_source_as_of({"actual_as_of": "2026-08-22", "cached_at": "2026-08-20"}, "2026-08-21") is None
+
+    # 4. 显式日期无法解析时返回 None，记录日志，不得 pass 后填今天或 cached_at
+    assert _extract_source_as_of({"as_of": "invalid-date", "cached_at": "2026-08-20"}, "2026-08-21") is None
+

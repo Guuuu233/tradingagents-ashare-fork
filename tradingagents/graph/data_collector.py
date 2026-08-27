@@ -690,34 +690,35 @@ def _extract_source_as_of(value: Any, requested_as_of: str) -> Optional[str]:
     if isinstance(value, dict):
         for key in ("as_of", "actual_as_of", "quote_as_of", "data_as_of"):
             candidate = value.get(key)
-            match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate or ""))
-            if match and match.group(0) <= requested_as_of:
-                return match.group(0)
-        cached_at = value.get("cached_at")
-        if isinstance(cached_at, (int, float)):
-            try:
-                dt_str = datetime.fromtimestamp(cached_at).strftime("%Y-%m-%d")
-                if dt_str <= requested_as_of:
-                    return dt_str
-            except Exception:
-                pass
-        elif isinstance(cached_at, str):
-            match = re.search(r"20\d{2}-\d{2}-\d{2}", cached_at)
-            if match and match.group(0) <= requested_as_of:
-                return match.group(0)
+            if candidate is not None:
+                match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate))
+                if match:
+                    if match.group(0) <= requested_as_of:
+                        return match.group(0)
+                else:
+                    logger.warning("Explicit date field %s='%s' cannot be parsed", key, candidate)
         return None
 
     if hasattr(value, "fund_flow_evidence_meta") and isinstance(value.fund_flow_evidence_meta, dict):
         for key in ("as_of", "actual_as_of", "quote_as_of", "data_as_of"):
             candidate = value.fund_flow_evidence_meta.get(key)
-            match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate or ""))
-            if match and match.group(0) <= requested_as_of:
-                return match.group(0)
+            if candidate is not None:
+                match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate))
+                if match:
+                    if match.group(0) <= requested_as_of:
+                        return match.group(0)
+                else:
+                    logger.warning("fund_flow_evidence_meta date field %s='%s' cannot be parsed", key, candidate)
 
     if hasattr(value, "as_of") and getattr(value, "as_of"):
-        match = re.search(r"20\d{2}-\d{2}-\d{2}", str(getattr(value, "as_of") or ""))
-        if match and match.group(0) <= requested_as_of:
-            return match.group(0)
+        candidate = getattr(value, "as_of")
+        if candidate is not None:
+            match = re.search(r"20\d{2}-\d{2}-\d{2}", str(candidate))
+            if match:
+                if match.group(0) <= requested_as_of:
+                    return match.group(0)
+            else:
+                logger.warning("Explicit as_of attribute '%s' cannot be parsed", candidate)
 
     text = value if isinstance(value, str) else str(value or "")
     candidates: list[str] = []
