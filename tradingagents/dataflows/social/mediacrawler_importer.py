@@ -34,6 +34,9 @@ from tradingagents.dataflows.social.contracts import (
     compute_content_hash,
     compute_metrics_hash,
 )
+from tradingagents.dataflows.social.entity_resolver import (
+    EntityResolver,
+)
 
 DEFAULT_CRAWLER_COMMIT = "d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
 
@@ -186,18 +189,47 @@ class MediaCrawlerImporter:
 
     def __init__(
         self,
-        archive_db: Union[sqlite3.Connection, str],
+        archive_db: Optional[Union[sqlite3.Connection, str]] = None,
         crawler_commit: str = DEFAULT_CRAWLER_COMMIT,
+        entity_resolver: Optional[EntityResolver] = None,
+        archive_conn: Optional[sqlite3.Connection] = None,
     ) -> None:
-        if isinstance(archive_db, str):
-            self.archive_conn = init_archive_db(archive_db)
+        target_db = archive_conn if archive_conn is not None else archive_db
+        if target_db is None:
+            raise ValueError("archive_db or archive_conn must be provided")
+
+        if isinstance(target_db, str):
+            self.archive_conn = init_archive_db(target_db)
             self._owns_archive_conn = True
         else:
-            self.archive_conn = archive_db
+            self.archive_conn = target_db
             init_archive_db(self.archive_conn)
             self._owns_archive_conn = False
 
         self.crawler_commit = crawler_commit
+        self.entity_resolver = entity_resolver or EntityResolver()
+
+    def import_records(
+        self,
+        source_db: Union[sqlite3.Connection, str],
+        platform: Optional[Union[str, List[str]]] = None,
+        platforms: Optional[List[str]] = None,
+        query_text: Optional[str] = None,
+        ingest_run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convenience alias for import_from_db."""
+        actual_platforms: Optional[List[str]] = platforms
+        if actual_platforms is None and platform is not None:
+            if isinstance(platform, str):
+                actual_platforms = None if platform == "all" else [p.strip() for p in platform.split(",")]
+            else:
+                actual_platforms = list(platform)
+        return self.import_from_db(
+            source_db=source_db,
+            platforms=actual_platforms,
+            query_text=query_text,
+            ingest_run_id=ingest_run_id,
+        )
 
     def import_from_db(
         self,
@@ -465,6 +497,31 @@ class MediaCrawlerImporter:
                 source_table, source_row_id,
             ),
         )
+
+        # Resolve entity mentions and insert into social_entity_mentions
+        if self.entity_resolver:
+            mentions = self.entity_resolver.resolve(
+                text=text,
+                title=title,
+                source_keyword=source_keyword,
+            )
+            for mention in mentions:
+                arch_cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO social_entity_mentions (
+                        snapshot_id, symbol, matched_text, match_method, confidence, resolver_version
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id,
+                        mention.symbol,
+                        mention.matched_text,
+                        mention.match_method,
+                        mention.confidence,
+                        mention.resolver_version,
+                    ),
+                )
+
         return True
 
     def _import_xhs_notes(
