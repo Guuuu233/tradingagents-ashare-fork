@@ -278,6 +278,22 @@ def _query_reports(
         ReportDB.status == "completed",
         ReportDB.probability.isnot(None),
     )
+    # D-009 P0-1: only explicit VALID rows are calibration-eligible (no NULL legacy).
+    from tradingagents.agents.utils.decision_status import (
+        ANALYSIS_VALID,
+        NON_DIRECTIONAL_TRADE_ACTIONS,
+        is_calibration_eligible,
+    )
+
+    try:
+        query = query.filter(ReportDB.analysis_status == ANALYSIS_VALID)
+        query = query.filter(
+            (ReportDB.trade_action.is_(None))
+            | (~ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS)))
+        )
+    except Exception:
+        # Older SQLite sessions without the columns should still work via Python filter.
+        pass
     if user_id:
         query = query.filter(ReportDB.user_id == user_id)
     if symbol:
@@ -312,6 +328,7 @@ def _query_reports(
     else:
         rows = query.order_by(ReportDB.created_at.desc()).limit(limit).all()
         truncated_before_filter = False
+    rows = [row for row in rows if is_calibration_eligible(row)]
     return rows, truncated_before_filter, skipped_incomplete
 
 

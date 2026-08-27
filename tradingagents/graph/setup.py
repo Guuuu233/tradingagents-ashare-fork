@@ -215,6 +215,9 @@ class GraphSetup:
             workflow.add_node(f"{analyst_display_name(analyst_type)} Analyst Done", done_nodes[analyst_type])
 
         # Add other nodes
+        from tradingagents.agents.utils.run_integrity import create_run_integrity_gate
+
+        workflow.add_node("Run Integrity Gate", create_run_integrity_gate())
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
@@ -228,7 +231,7 @@ class GraphSetup:
         # Two-stage analyst topology:
         # Phase 1: Macro, Market, Social parallel from START
         # Barrier: All Phase 1 analysts complete -> fan out to Phase 2 (Fundamentals, News, Smart Money, Volume Price)
-        # All Phase 2 analysts complete -> Bull Researcher (start debate)
+        # All Phase 2 analysts complete -> Run Integrity Gate -> Bull or END
 
         phase1_types = [a for a in selected_analysts if a in ("macro", "market", "social")]
         phase2_types = [a for a in selected_analysts if a not in ("macro", "market", "social")]
@@ -241,15 +244,24 @@ class GraphSetup:
                 workflow.add_edge(START, f"{analyst_display_name(analyst_type)} Analyst")
             for analyst_type in phase2_types:
                 workflow.add_edge(phase1_dones, f"{analyst_display_name(analyst_type)} Analyst")
-            workflow.add_edge(phase2_dones, "Bull Researcher")
+            workflow.add_edge(phase2_dones, "Run Integrity Gate")
         elif phase1_types:
             for analyst_type in phase1_types:
                 workflow.add_edge(START, f"{analyst_display_name(analyst_type)} Analyst")
-            workflow.add_edge(phase1_dones, "Bull Researcher")
+            workflow.add_edge(phase1_dones, "Run Integrity Gate")
         elif phase2_types:
             for analyst_type in phase2_types:
                 workflow.add_edge(START, f"{analyst_display_name(analyst_type)} Analyst")
-            workflow.add_edge(phase2_dones, "Bull Researcher")
+            workflow.add_edge(phase2_dones, "Run Integrity Gate")
+
+        workflow.add_conditional_edges(
+            "Run Integrity Gate",
+            self.conditional_logic.should_continue_after_integrity,
+            {
+                "Bull Researcher": "Bull Researcher",
+                "END": END,
+            },
+        )
 
         # Each analyst loops independently with its tool node until done
         for analyst_type in selected_analysts:

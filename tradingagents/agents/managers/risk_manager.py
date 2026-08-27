@@ -8,7 +8,23 @@ from tradingagents.agents.utils.debate_utils import (
     format_claims_for_prompt,
     safe_int,
 )
+from tradingagents.agents.utils.decision_status import (
+    decision_status_from_state,
+    is_non_executable_status,
+    status_from_risk_verdict,
+)
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
+
+
+def _with_status(payload: dict, status) -> dict:
+    if status is None:
+        return payload
+    payload["decision_status"] = status.to_dict()
+    payload["analysis_status"] = status.analysis_status
+    payload["trade_action"] = status.trade_action
+    payload["risk_status"] = status.risk_status
+    payload["direction"] = status.direction
+    return payload
 
 
 def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
@@ -24,19 +40,57 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
         sentiment_report = state["sentiment_report"]
         trader_plan = state["trader_investment_plan"]
         risk_feedback_state = state.get("risk_feedback_state", {})
+        upstream_status = decision_status_from_state(state)
         fund_flow_guard = state.get("fund_flow_consensus_guard") or {"blocked": True, "direction_allowed": False}
         if fund_flow_guard.get("blocked") or not fund_flow_guard.get("direction_allowed"):
             blocked_decision = "资金流来源选择 guard 已阻断：风险计划不得批准增持、减持或吸筹方向。"
-            return {
-                "fund_flow_consensus_guard": fund_flow_guard,
-                "final_trade_decision": blocked_decision,
-                "risk_feedback_state": {
-                    **risk_feedback_state,
-                    "latest_risk_verdict": "blocked",
-                    "revision_reason": blocked_decision,
-                    "execution_preconditions": ["fund_flow_consensus_guard must be unblocked"],
+            status = status_from_risk_verdict(
+                upstream=upstream_status,
+                risk_verdict="blocked",
+                reason_codes=["fund_flow_consensus_guard"],
+            )
+            return _with_status(
+                {
+                    "fund_flow_consensus_guard": fund_flow_guard,
+                    "final_trade_decision": blocked_decision,
+                    "risk_feedback_state": {
+                        **risk_feedback_state,
+                        "latest_risk_verdict": "blocked",
+                        "revision_reason": blocked_decision,
+                        "execution_preconditions": ["fund_flow_consensus_guard must be unblocked"],
+                    },
                 },
-            }
+                status,
+            )
+
+        # D-009 P0-1: INVALID/ABSTAIN/NO_TRADE must not be rewritten into BUY/SELL.
+        if is_non_executable_status(upstream_status):
+            status_label = (
+                f"{upstream_status.analysis_status}/{upstream_status.trade_action}"
+                if upstream_status is not None
+                else "NO_TRADE"
+            )
+            blocked_decision = (
+                f"上游决策状态为 {status_label}：风险层不得批准任何方向性交易；"
+                "最终动作保持 NO_TRADE。"
+            )
+            status = status_from_risk_verdict(
+                upstream=upstream_status,
+                risk_verdict="blocked",
+                reason_codes=["upstream_non_executable"],
+            )
+            return _with_status(
+                {
+                    "final_trade_decision": blocked_decision,
+                    "risk_feedback_state": {
+                        **risk_feedback_state,
+                        "latest_risk_verdict": "blocked",
+                        "revision_reason": blocked_decision,
+                        "execution_preconditions": ["upstream decision_status must be executable"],
+                    },
+                },
+                status,
+            )
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)
@@ -66,7 +120,6 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
 
         # ── 流式输出 ──
         tracker = current_tracker_var.get()
-        model_name = getattr(llm, "model_name", None) or getattr(llm, "model", None)
         full_content = ""
         async for chunk in llm.astream(prompt):
             content = chunk.content if hasattr(chunk, "content") else str(chunk)
@@ -125,10 +178,18 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
             "revision_reason": revision_reason or ("风控要求交易员按硬约束重写方案" if verdict == "revise" else ""),
         }
 
-        return {
-            "risk_debate_state": new_risk_debate_state,
-            "risk_feedback_state": new_risk_feedback_state,
-            "final_trade_decision": cleaned_response,
-        }
+        status = status_from_risk_verdict(
+            upstream=upstream_status,
+            risk_verdict=str(verdict or ""),
+            reason_codes=["risk_judge_terminal"],
+        )
+        return _with_status(
+            {
+                "risk_debate_state": new_risk_debate_state,
+                "risk_feedback_state": new_risk_feedback_state,
+                "final_trade_decision": cleaned_response,
+            },
+            status,
+        )
 
     return risk_manager_node

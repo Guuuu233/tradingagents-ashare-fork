@@ -137,6 +137,17 @@ class Propagator:
             "horizon": horizon,
             "short_term_result": None,
             "medium_term_result": None,
+            # D-009 P0-1 placeholders (filled by Research Manager when applicable)
+            "decision_status": None,
+            "analysis_status": None,
+            "trade_action": None,
+            "risk_status": None,
+            "run_integrity": None,
+            "manager_verdict": None,
+            "evidence_verification": [],
+            "report_manifest": None,
+            "volume_price_report": "",
+            "integrity_route": None,
         }
         if user_intent is not None:
             state["user_intent"] = user_intent

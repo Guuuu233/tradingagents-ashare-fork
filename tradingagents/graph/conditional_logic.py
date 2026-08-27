@@ -65,6 +65,25 @@ class ConditionalLogic:
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
+    def should_continue_after_integrity(self, state: AgentState) -> str:
+        """After analyst barrier: END on INVALID_RUN, else start Bull debate."""
+        route = str(state.get("integrity_route") or "").strip()
+        if route == "END":
+            return "END"
+        analysis_status = str(state.get("analysis_status") or "").upper()
+        trade_action = str(state.get("trade_action") or "").upper()
+        integrity = state.get("run_integrity")
+        all_failed = False
+        if isinstance(integrity, Mapping):
+            all_failed = bool(integrity.get("all_required_failed"))
+        if all_failed or (
+            analysis_status in {"INVALID_RUN", "DATA_ERROR"}
+            and trade_action == "NO_TRADE"
+            and route != "Bull Researcher"
+        ):
+            return "END"
+        return "Bull Researcher"
+
     def should_continue_analyst(self, state: AgentState):
         """Determine if an analyst node should continue (shared by all analyst types)."""
         messages = state["messages"]

@@ -28,18 +28,42 @@ const IDLE_PROGRESS: ProgressState = {
     detail: null,
 }
 
-const parseDecision = (decisionText?: string): { action: 'add' | 'reduce' | 'hold'; label: string } => {
-    if (!decisionText) return { action: 'hold', label: '观望' }
-    const action = parseDecisionAction(decisionText)
+const parseDecision = (
+    decisionText?: string,
+    meta?: { analysis_status?: string | null; trade_action?: string | null; direction?: string | null },
+): { action: 'add' | 'reduce' | 'hold' | 'watch' | 'no_trade' | 'invalid'; label: string } => {
+    const status = (meta?.analysis_status || '').toUpperCase()
+    const trade = (meta?.trade_action || decisionText || '').toUpperCase()
+    if (status === 'INVALID_RUN' || status === 'DATA_ERROR' || trade.includes('INVALID')) {
+        return { action: 'invalid', label: '无效运行' }
+    }
+    if (status === 'ABSTAIN') {
+        return { action: 'no_trade', label: '弃权/不交易' }
+    }
+    if (trade === 'NO_TRADE' || trade.includes('NO_TRADE')) {
+        return { action: 'no_trade', label: '不交易' }
+    }
+    if (trade === 'WAIT' || status === 'PARTIAL') {
+        return { action: 'watch', label: status === 'PARTIAL' ? '部分可用/观望' : '观望' }
+    }
+    if (!decisionText && !trade) return { action: 'hold', label: '观望' }
+    const action = parseDecisionAction(meta?.trade_action || decisionText)
+    if (action === 'invalid') return { action: 'invalid', label: '无效运行' }
+    if (action === 'no_trade') return { action: 'no_trade', label: '不交易' }
+    if (action === 'watch') return { action: 'watch', label: '观望' }
     if (action === 'buy' || action === 'add') return { action: 'add', label: '增持' }
     if (action === 'sell' || action === 'reduce') return { action: 'reduce', label: '减持' }
     return { action: 'hold', label: '持有' }
 }
 
-const getDecisionColor = (decision?: string) => {
-    const { action } = parseDecision(decision)
+const getDecisionColor = (
+    decision?: string,
+    meta?: { analysis_status?: string | null; trade_action?: string | null },
+) => {
+    const { action } = parseDecision(decision, meta)
     if (action === 'add') return 'text-red-600 dark:text-red-400'
     if (action === 'reduce') return 'text-green-600 dark:text-green-400'
+    if (action === 'invalid' || action === 'no_trade') return 'text-amber-600 dark:text-amber-400'
     return 'text-slate-600 dark:text-slate-400'
 }
 
@@ -148,9 +172,14 @@ const renderStatusBadge = (report: Report) => {
                 </div>
             )
         default:
-            const { label } = parseDecision(report.decision)
+            const decisionMeta = {
+                analysis_status: report.analysis_status,
+                trade_action: report.trade_action,
+                direction: report.direction,
+            }
+            const { label } = parseDecision(report.decision, decisionMeta)
             return (
-                <span className={`font-medium ${getDecisionColor(report.decision)}`}>
+                <span className={`font-medium ${getDecisionColor(report.decision, decisionMeta)}`}>
                     {label}
                 </span>
             )
@@ -401,7 +430,11 @@ export default function Reports() {
     }
 
     if (selectedReport) {
-        const { action } = parseDecision(selectedReport.decision)
+        const { action } = parseDecision(selectedReport.decision, {
+            analysis_status: selectedReport.analysis_status,
+            trade_action: selectedReport.trade_action,
+            direction: selectedReport.direction,
+        })
         const selectedReportProgressStatus = selectedReport.status === 'pending' || selectedReport.status === 'running'
             ? 'loading'
             : selectedReport.status === 'failed'
@@ -482,8 +515,16 @@ export default function Reports() {
                         </div>
                         <div className="flex items-center gap-2 overflow-x-auto pb-1">
                             {symbolHistory.slice().reverse().map(r => {
-                                const { action: a } = parseDecision(r.decision)
-                                const color = a === 'add' ? 'bg-red-500' : a === 'reduce' ? 'bg-green-500' : 'bg-slate-400'
+                                const { action: a } = parseDecision(r.decision, {
+                                    analysis_status: r.analysis_status,
+                                    trade_action: r.trade_action,
+                                    direction: r.direction,
+                                })
+                                const color =
+                                    a === 'add' ? 'bg-red-500'
+                                    : a === 'reduce' ? 'bg-green-500'
+                                    : a === 'invalid' || a === 'no_trade' ? 'bg-amber-500'
+                                    : 'bg-slate-400'
                                 const isCurrent = r.id === selectedReport.id
                                 return (
                                     <button
@@ -508,6 +549,8 @@ export default function Reports() {
                             symbol={selectedReport.symbol}
                             name={selectedReport.name}
                             decision={action}
+                            analysisStatus={selectedReport.analysis_status}
+                            tradeAction={selectedReport.trade_action}
                             direction={selectedReport.direction}
                             confidence={selectedReport.confidence ?? undefined}
                             targetPrice={selectedReport.target_price ?? undefined}

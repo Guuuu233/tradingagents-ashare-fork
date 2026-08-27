@@ -474,6 +474,12 @@ class TradingAgentsGraph:
             "macro_report": final_state.get("macro_report", ""),
             "smart_money_report": final_state.get("smart_money_report", ""),
             "volume_price_report": final_state.get("volume_price_report", ""),
+            # D-009 P0-1 status fields (must survive dual-horizon packaging)
+            "run_integrity": final_state.get("run_integrity"),
+            "decision_status": final_state.get("decision_status"),
+            "analysis_status": final_state.get("analysis_status"),
+            "trade_action": final_state.get("trade_action"),
+            "risk_status": final_state.get("risk_status"),
         }
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state

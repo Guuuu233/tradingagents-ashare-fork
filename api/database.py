@@ -105,36 +105,103 @@ def _ensure_auth_schema() -> None:
 
 
 def _ensure_report_schema() -> None:
-    """Add lightweight columns for existing SQLite deployments without migrations."""
+    """Add missing report columns for existing deployments (SQLite / PG / MySQL).
+
+    Critical D-009 columns are migrated first. Dialect-specific DDL is used so
+    PostgreSQL does not receive SQLite-style ``BOOLEAN DEFAULT 0``. After ALTER,
+    columns are re-inspected; missing critical columns abort startup.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    def _column_ddl(dialect: str, name: str) -> str:
+        if name == "not_applicable":
+            if dialect == "sqlite":
+                return "BOOLEAN DEFAULT 0"
+            if dialect in {"postgresql", "postgres"}:
+                return "BOOLEAN DEFAULT FALSE"
+            if dialect in {"mysql", "mariadb"}:
+                return "BOOLEAN DEFAULT 0"
+            return "BOOLEAN DEFAULT FALSE"
+        mapping = {
+            "direction": "VARCHAR(50)",
+            "status": "VARCHAR(20) DEFAULT 'completed'",
+            "error": "TEXT",
+            "analyst_traces": "JSON",
+            "probability": "FLOAT",
+            "data_gaps": "JSON",
+            "falsification_conditions": "JSON",
+            "macro_report": "TEXT",
+            "smart_money_report": "TEXT",
+            "game_theory_report": "TEXT",
+            "volume_price_report": "TEXT",
+            "analysis_status": "VARCHAR(32)",
+            "trade_action": "VARCHAR(32)",
+            "risk_status": "VARCHAR(32)",
+        }
+        return mapping[name]
+
+    # Critical status columns first so a later DDL failure cannot skip them.
+    ordered_columns = [
+        "analysis_status",
+        "trade_action",
+        "risk_status",
+        "direction",
+        "status",
+        "error",
+        "analyst_traces",
+        "probability",
+        "data_gaps",
+        "falsification_conditions",
+        "not_applicable",
+        "macro_report",
+        "smart_money_report",
+        "game_theory_report",
+        "volume_price_report",
+    ]
+    critical = {"analysis_status", "trade_action", "risk_status"}
+
+    try:
+        insp = sa_inspect(engine)
+        existing = {col["name"] for col in insp.get_columns("reports")}
+    except Exception as e:
+        logger.error("Failed to inspect reports schema: %s", e)
+        raise RuntimeError(f"reports schema inspection failed: {e}") from e
+
+    missing = [name for name in ordered_columns if name not in existing]
+    if not missing:
+        return
+
+    dialect = engine.dialect.name
     try:
         with engine.begin() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(reports)"))}
-            if "direction" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN direction VARCHAR(50)"))
-            if "status" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN status VARCHAR(20) DEFAULT 'completed'"))
-            if "error" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN error TEXT"))
-            if "analyst_traces" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN analyst_traces JSON"))
-            if "probability" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN probability FLOAT"))
-            if "data_gaps" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN data_gaps JSON NOT NULL DEFAULT '[]'"))
-            if "falsification_conditions" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN falsification_conditions JSON NOT NULL DEFAULT '[]'"))
-            if "not_applicable" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN not_applicable BOOLEAN NOT NULL DEFAULT 0"))
-            if "macro_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN macro_report TEXT"))
-            if "smart_money_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN smart_money_report TEXT"))
-            if "game_theory_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN game_theory_report TEXT"))
-            if "volume_price_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN volume_price_report TEXT"))
+            for name in missing:
+                col_type = _column_ddl(dialect, name)
+                if dialect == "sqlite":
+                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
+                elif dialect in {"postgresql", "postgres"}:
+                    conn.execute(
+                        text(f"ALTER TABLE reports ADD COLUMN IF NOT EXISTS {name} {col_type}")
+                    )
+                elif dialect in {"mysql", "mariadb"}:
+                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
+                else:
+                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
     except Exception as e:
         logger.error("Failed to ensure report schema: %s", e)
+        raise RuntimeError(f"report schema migration failed: {e}") from e
+
+    # Re-inspect: critical columns must exist after migration.
+    try:
+        insp = sa_inspect(engine)
+        after = {col["name"] for col in insp.get_columns("reports")}
+    except Exception as e:
+        raise RuntimeError(f"reports schema re-inspection failed: {e}") from e
+    missing_critical = sorted(critical - after)
+    if missing_critical:
+        raise RuntimeError(
+            "Critical report columns missing after migration: "
+            + ", ".join(missing_critical)
+        )
 
 
 def _ensure_user_schema() -> None:
@@ -355,12 +422,16 @@ class ReportDB(Base):
     error = Column(Text, nullable=True)
     
     # Decision info
-    decision = Column(String(50), nullable=True)  # BUY, SELL, HOLD, etc.
-    direction = Column(String(50), nullable=True)  # 看多、偏多、中性、偏空、看空
-    confidence = Column(Integer, nullable=True)  # 0-100
+    decision = Column(String(50), nullable=True)  # BUY, SELL, HOLD, WAIT, NO_TRADE, etc.
+    direction = Column(String(50), nullable=True)  # BULL/BEAR/NEUTRAL/N/A or legacy 看多…
+    confidence = Column(Integer, nullable=True)  # 0-100; null for INVALID/ABSTAIN
     probability = Column(Float, nullable=True)
     target_price = Column(Float, nullable=True)
     stop_loss_price = Column(Float, nullable=True)
+    # D-009 P0-1: analysis validity vs job lifecycle status
+    analysis_status = Column(String(32), nullable=True, index=True)
+    trade_action = Column(String(32), nullable=True)
+    risk_status = Column(String(32), nullable=True)
     
     # Full analysis results stored as JSON
     result_data = Column(JSON, nullable=True)
@@ -403,6 +474,9 @@ class ReportDB(Base):
             "probability": self.probability,
             "target_price": self.target_price,
             "stop_loss_price": self.stop_loss_price,
+            "analysis_status": self.analysis_status,
+            "trade_action": self.trade_action,
+            "risk_status": self.risk_status,
             "result_data": self.result_data,
             "risk_items": self.risk_items,
             "key_metrics": self.key_metrics,

@@ -1,32 +1,57 @@
 import { useState } from 'react'
-import { TrendingUp, TrendingDown, Target, Shield, ChevronDown, ChevronUp, Info } from 'lucide-react'
+import { TrendingUp, TrendingDown, Target, Shield, ChevronDown, ChevronUp, Info, Ban, AlertTriangle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AnalysisReport } from '@/types'
-import { sanitizeReportMarkdown, localizeDirection, parseDecisionAction } from '@/utils/reportText'
+import {
+    sanitizeReportMarkdown,
+    localizeDirection,
+    parseDecisionAction,
+    type DecisionAction,
+} from '@/utils/reportText'
 
 interface DecisionCardProps {
     symbol: string
     name?: string
-    decision?: 'buy' | 'sell' | 'hold' | 'add' | 'reduce' | 'watch'
+    decision?: DecisionAction
     direction?: string
-    confidence?: number
-    targetPrice?: number
+    confidence?: number | null
+    targetPrice?: number | null
     targetChange?: number
-    stopLoss?: number
+    stopLoss?: number | null
     stopLossChange?: number
     reasoning?: string
     riskLevel?: 'low' | 'medium' | 'high'
+    analysisStatus?: string | null
+    tradeAction?: string | null
     report?: AnalysisReport
 }
 
-const decisionConfig: Record<string, { label: string; color: string; icon: typeof TrendingUp }> = {
+const decisionConfig: Record<DecisionAction, { label: string; color: string; icon: typeof TrendingUp }> = {
     buy: { label: '买入', color: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/30', icon: TrendingUp },
     sell: { label: '卖出', color: 'bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 border-green-200 dark:border-green-500/30', icon: TrendingDown },
     hold: { label: '持有', color: 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-500/30', icon: Shield },
     add: { label: '增持', color: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/30', icon: TrendingUp },
     reduce: { label: '减持', color: 'bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-500/30', icon: TrendingDown },
     watch: { label: '观望', color: 'bg-slate-100 dark:bg-slate-700/50 text-slate-700 dark:text-slate-400 border-slate-200 dark:border-slate-600', icon: Info },
+    no_trade: { label: '不交易', color: 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30', icon: Ban },
+    invalid: { label: '无效运行', color: 'bg-rose-100 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30', icon: AlertTriangle },
+}
+
+function resolveDecision(
+    propDecision: DecisionAction | undefined,
+    tradeAction: string | null | undefined,
+    analysisStatus: string | null | undefined,
+    report: AnalysisReport | undefined,
+): DecisionAction | undefined {
+    const status = (analysisStatus || report?.analysis_status || '').toString().toUpperCase()
+    if (status === 'INVALID_RUN' || status === 'DATA_ERROR') return 'invalid'
+    if (status === 'ABSTAIN') return 'no_trade'
+    if (status === 'PARTIAL') return 'watch'
+    const fromTrade = parseDecisionAction(tradeAction || report?.trade_action || null)
+    if (fromTrade) return fromTrade
+    if (propDecision) return propDecision
+    return parseDecisionAction(report?.decision || report?.final_trade_decision)
 }
 
 export default function DecisionCard({
@@ -41,13 +66,18 @@ export default function DecisionCard({
     stopLossChange,
     reasoning,
     riskLevel,
+    analysisStatus,
+    tradeAction,
     report,
 }: DecisionCardProps) {
     const [expanded, setExpanded] = useState(false)
 
-    const decision = propDecision || parseDecisionAction(report?.decision || report?.final_trade_decision)
-    const config = decision ? (decisionConfig[decision] || decisionConfig.hold) : null
+    const decision = resolveDecision(propDecision, tradeAction, analysisStatus, report)
+    const config = decision ? decisionConfig[decision] : null
     const DecisionIcon = config?.icon
+    const nonExecutable = decision === 'invalid' || decision === 'no_trade' || decision === 'watch'
+    const showPrices = !nonExecutable && (targetPrice != null || stopLoss != null)
+    const showConfidence = confidence != null && !nonExecutable
 
     const riskLabels: Record<string, string> = { low: '低', medium: '中等', high: '高' }
     const riskColors: Record<string, string> = {
@@ -57,7 +87,7 @@ export default function DecisionCard({
     }
 
     return (
-        <div className="card overflow-hidden">
+        <div className="card overflow-hidden" data-testid="decision-card" data-decision={decision || ''}>
             {/* 头部 */}
             <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -85,7 +115,7 @@ export default function DecisionCard({
             </div>
 
             {/* 置信度 */}
-            {confidence != null && (
+            {showConfidence && (
                 <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-sm text-slate-500">置信度</span>
@@ -101,6 +131,7 @@ export default function DecisionCard({
             )}
 
             {/* 目标价和止损价 */}
+            {showPrices ? (
             <div className="grid grid-cols-2 gap-3 mb-4">
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20">
                     <div className="flex items-center gap-1.5 mb-1">
@@ -131,41 +162,40 @@ export default function DecisionCard({
                     )}
                 </div>
             </div>
+            ) : nonExecutable ? (
+                <div className="mb-4 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+                    非可执行状态：不展示目标价 / 止损 / 置信度交易参数。
+                </div>
+            ) : null}
 
-            {/* 展开详情 */}
-            {expanded && (reasoning || riskLevel) && (
-                <div className="mb-4 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-2">
-                    {reasoning && (
-                        <div>
-                            <span className="text-sm text-slate-500">核心逻辑</span>
-                            <div className="mt-1 prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-slate-300">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                    {sanitizeReportMarkdown(reasoning)}
-                                </ReactMarkdown>
-                            </div>
-                        </div>
-                    )}
-                    {riskLevel && (
-                        <div className="flex justify-between">
-                            <span className="text-sm text-slate-500">风险等级</span>
-                            <span className={`text-sm font-medium ${riskColors[riskLevel]}`}>{riskLabels[riskLevel]}</span>
+            {riskLevel && (
+                <div className="mb-4 text-sm">
+                    风险等级：
+                    <span className={`font-medium ${riskColors[riskLevel] || ''}`}>
+                        {riskLabels[riskLevel] || riskLevel}
+                    </span>
+                </div>
+            )}
+
+            {reasoning && (
+                <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
+                    <button
+                        type="button"
+                        onClick={() => setExpanded((v) => !v)}
+                        className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                    >
+                        {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                        裁决摘要
+                    </button>
+                    {expanded && (
+                        <div className="mt-2 prose prose-sm dark:prose-invert max-w-none text-slate-600 dark:text-slate-300">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {sanitizeReportMarkdown(reasoning)}
+                            </ReactMarkdown>
                         </div>
                     )}
                 </div>
             )}
-
-            {/* 操作按钮 */}
-            <div className="flex flex-wrap gap-2">
-                {(reasoning || riskLevel) && (
-                    <button
-                        onClick={() => setExpanded(!expanded)}
-                        className="flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                    >
-                        {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        {expanded ? '收起' : '详情'}
-                    </button>
-                )}
-            </div>
         </div>
     )
 }

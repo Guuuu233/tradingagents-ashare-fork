@@ -8,6 +8,10 @@ from tradingagents.agents.utils.debate_utils import (
     build_empty_risk_debate_state,
     summarize_risk_feedback,
 )
+from tradingagents.agents.utils.decision_status import (
+    decision_status_from_state,
+    is_non_executable_status,
+)
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 
 
@@ -25,6 +29,30 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
         if fund_flow_guard.get("blocked") or not fund_flow_guard.get("direction_allowed"):
             blocked_plan = "资金流来源选择 guard 已阻断：不得生成方向性交易计划。"
             return {"messages": [AIMessage(content=blocked_plan, name=name)], "trader_investment_plan": blocked_plan, "fund_flow_consensus_guard": fund_flow_guard, "sender": name}
+
+        # D-009 P0-1: never invent BUY/SELL after INVALID_RUN / ABSTAIN / NO_TRADE.
+        blocked_status = decision_status_from_state(state)
+        if is_non_executable_status(blocked_status):
+            status_label = (
+                f"{blocked_status.analysis_status}/{blocked_status.trade_action}"
+                if blocked_status is not None
+                else "NO_TRADE"
+            )
+            blocked_plan = (
+                f"上游决策状态为 {status_label}：不得生成方向性交易计划；"
+                "保持 NO_TRADE / 观望，禁止输出目标价、止损或仓位。"
+            )
+            payload = {
+                "messages": [AIMessage(content=blocked_plan, name=name)],
+                "trader_investment_plan": blocked_plan,
+                "sender": name,
+            }
+            if blocked_status is not None:
+                payload["decision_status"] = blocked_status.to_dict()
+                payload["analysis_status"] = blocked_status.analysis_status
+                payload["trade_action"] = blocked_status.trade_action
+                payload["risk_status"] = blocked_status.risk_status
+            return payload
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
         past_memories = memory.get_memories(curr_situation, n_matches=2)

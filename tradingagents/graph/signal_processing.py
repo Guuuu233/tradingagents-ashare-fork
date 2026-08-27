@@ -73,11 +73,20 @@ def _extract_decision_keyword(text: str) -> str | None:
             "HOLD": "HOLD",
             "谨慎": "HOLD",
             "CAUTIOUS": "HOLD",
+            "N/A": "NO_TRADE",
+            "NA": "NO_TRADE",
+            "NO_TRADE": "NO_TRADE",
+            "WAIT": "WAIT",
+            "观望": "WAIT",
         }
         return direction_map.get(direction)
 
     def classify(snippet: str) -> str | None:
         snippet_upper = snippet.upper()
+        if "NO_TRADE" in snippet_upper or "INVALID_RUN" in snippet_upper or "DATA_ERROR" in snippet_upper:
+            return "NO_TRADE"
+        if "WAIT" in snippet_upper or "观望" in snippet:
+            return "WAIT"
         sell_keywords = [
             "SELL",
             "卖出",

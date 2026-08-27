@@ -40,6 +40,9 @@ REPORT_SUMMARY_COLUMNS = (
     ReportDB.falsification_conditions,
     ReportDB.not_applicable,
     ReportDB.analyst_traces,
+    ReportDB.analysis_status,
+    ReportDB.trade_action,
+    ReportDB.risk_status,
     ReportDB.created_at,
     ReportDB.updated_at,
 )
@@ -82,6 +85,8 @@ _LEGAL_DECISION_ALIASES = {
     "BUY": "BUY",
     "SELL": "SELL",
     "HOLD": "HOLD",
+    "WAIT": "WAIT",
+    "NO_TRADE": "NO_TRADE",
     "增持": "BUY",
     "买入": "BUY",
     "看多": "BUY",
@@ -90,6 +95,9 @@ _LEGAL_DECISION_ALIASES = {
     "看空": "SELL",
     "持有": "HOLD",
     "中性": "HOLD",
+    "观望": "WAIT",
+    "不交易": "NO_TRADE",
+    "放弃": "NO_TRADE",
 }
 
 
@@ -1199,11 +1207,40 @@ def create_report(
         else:
             db_report.error = (result_data.get("error") if isinstance(result_data, dict) else None) or "Report analysis failed"
         db_report.decision = decision
-        db_report.direction = resolved["direction"]
+        from tradingagents.agents.utils.decision_status import db_direction_from_canonical
+
+        canonical_direction = db_direction_from_canonical(
+            canonical_result_data if isinstance(canonical_result_data, dict) else None,
+            fallback=resolved["direction"],
+        )
+        db_report.direction = canonical_direction
         db_report.confidence = resolved["confidence"]
         db_report.probability = effective_probability
         db_report.target_price = resolved["target_price"]
         db_report.stop_loss_price = resolved["stop_loss_price"]
+        if isinstance(canonical_result_data, dict):
+            db_report.analysis_status = canonical_result_data.get("analysis_status")
+            db_report.trade_action = canonical_result_data.get("trade_action") or (
+                decision if decision in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"} else None
+            )
+            db_report.risk_status = canonical_result_data.get("risk_status")
+            # Prefer canonical decision column from trade_action when present.
+            if db_report.trade_action in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"}:
+                db_report.decision = db_report.trade_action
+            # INVALID/ABSTAIN must not keep extracted confidence/probability
+            if canonical_result_data.get("analysis_status") in {
+                "INVALID_RUN",
+                "DATA_ERROR",
+                "ABSTAIN",
+                "PARTIAL",
+            } or canonical_result_data.get("trade_action") in {"NO_TRADE", "WAIT"}:
+                db_report.confidence = None
+                db_report.probability = None
+                db_report.target_price = None
+                db_report.stop_loss_price = None
+                effective_probability = None
+                if db_report.direction in {None, "", "中性", "NEUTRAL", "HOLD"}:
+                    db_report.direction = "N/A"
         db_report.result_data = canonical_result_data
         db_report.risk_items = canonical_risk_items
         db_report.key_metrics = canonical_key_metrics
@@ -1225,6 +1262,44 @@ def create_report(
         db_report.updated_at = now
     else:
         # Create new
+        analysis_status = None
+        trade_action = None
+        risk_status = None
+        conf_value = resolved["confidence"]
+        prob_value = effective_probability
+        target_value = resolved["target_price"]
+        stop_value = resolved["stop_loss_price"]
+        from tradingagents.agents.utils.decision_status import db_direction_from_canonical
+
+        direction_value = db_direction_from_canonical(
+            canonical_result_data if isinstance(canonical_result_data, dict) else None,
+            fallback=resolved["direction"],
+        )
+        decision_value = decision
+        if isinstance(canonical_result_data, dict):
+            analysis_status = canonical_result_data.get("analysis_status")
+            trade_action = canonical_result_data.get("trade_action") or (
+                decision if decision in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"} else None
+            )
+            risk_status = canonical_result_data.get("risk_status")
+            if trade_action in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"}:
+                decision_value = trade_action
+            if analysis_status in {
+                "INVALID_RUN",
+                "DATA_ERROR",
+                "ABSTAIN",
+                "PARTIAL",
+            } or trade_action in {
+                "NO_TRADE",
+                "WAIT",
+            }:
+                conf_value = None
+                prob_value = None
+                target_value = None
+                stop_value = None
+                effective_probability = None
+                if direction_value in {None, "", "中性", "NEUTRAL", "HOLD"}:
+                    direction_value = "N/A"
         db_report = ReportDB(
             id=report_id or str(uuid4()),
             user_id=user_id,
@@ -1232,12 +1307,15 @@ def create_report(
             trade_date=trade_date,
             status=target_status,
             error=None if target_status == "completed" else ((result_data.get("error") if isinstance(result_data, dict) else None) or "Report analysis failed"),
-            decision=decision,
-            direction=resolved["direction"],
-            confidence=resolved["confidence"],
-            probability=effective_probability,
-            target_price=resolved["target_price"],
-            stop_loss_price=resolved["stop_loss_price"],
+            decision=decision_value,
+            direction=direction_value,
+            confidence=conf_value,
+            probability=prob_value,
+            target_price=target_value,
+            stop_loss_price=stop_value,
+            analysis_status=analysis_status,
+            trade_action=trade_action,
+            risk_status=risk_status,
             result_data=canonical_result_data,
             risk_items=canonical_risk_items,
             key_metrics=canonical_key_metrics,

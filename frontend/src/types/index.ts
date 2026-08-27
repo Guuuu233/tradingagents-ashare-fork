@@ -249,6 +249,9 @@ export interface AnalysisReport {
     trade_date: string
     decision?: string
     direction?: string
+    analysis_status?: string | null
+    trade_action?: string | null
+    risk_status?: string | null
     mode?: 'single_horizon' | 'dual_horizon' | string
     status?: string
     requested_horizons?: AnalysisHorizon[]
@@ -409,6 +412,9 @@ export interface Report {
     probability?: number | null
     target_price?: number
     stop_loss_price?: number
+    analysis_status?: string | null
+    trade_action?: string | null
+    risk_status?: string | null
     risk_items?: RiskItem[]
     key_metrics?: KeyMetric[]
     data_gaps?: string[]

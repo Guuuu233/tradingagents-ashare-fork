@@ -961,7 +961,13 @@ def build_debate_report_manifest(
     reports_or_state: Mapping[str, Any],
     pass_info: Mapping[str, tuple[str, int]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Build report input manifest recording length, mode, passed chars, and passed=True for 7 input reports."""
+    """Build report input manifest for the 7 analyst inputs.
+
+    ``passed`` is False when the report body is empty/failed/degraded so
+    run-integrity and manager gates can see real failures (D-009 P0-1).
+    """
+    from tradingagents.agents.utils.run_integrity import is_failed_analyst_report
+
     report_keys = (
         ("macro_report", "macro_report"),
         ("market_report", "market_report"),
@@ -977,20 +983,25 @@ def build_debate_report_manifest(
         content = reports_or_state.get(state_key, "")
         text = str(content or "")
         raw_length = len(text)
+        failed, fail_reason = is_failed_analyst_report(text)
         info = pass_info.get(manifest_key)
         if info:
             mode, passed_chars = info
         else:
-            mode = "full" if raw_length > 0 else "empty"
-            passed_chars = raw_length
+            mode = "full" if raw_length > 0 and not failed else ("failed" if failed else "empty")
+            passed_chars = 0 if failed else raw_length
+        if failed:
+            mode = "failed"
+            passed_chars = 0
         manifest[manifest_key] = {
             "length": raw_length,
             "raw_length": raw_length,
-            "passed": True,
+            "passed": not failed,
             "mode": mode,
             "pass_mode": mode,
             "passed_chars": passed_chars,
             "char_count": passed_chars,
+            "fail_reason": fail_reason,
         }
     return manifest
 

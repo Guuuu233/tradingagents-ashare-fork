@@ -4,15 +4,36 @@
  * DecisionCard.tsx with inconsistent semantics (Reports mapped BUY→add while
  * DecisionCard mapped BUY→buy); all call sites now share this one function.
  */
-export function parseDecisionAction(decision?: string | null): 'buy' | 'sell' | 'hold' | 'add' | 'reduce' | 'watch' | undefined {
+export type DecisionAction =
+    | 'buy'
+    | 'sell'
+    | 'hold'
+    | 'add'
+    | 'reduce'
+    | 'watch'
+    | 'no_trade'
+    | 'invalid'
+
+export function parseDecisionAction(decision?: string | null): DecisionAction | undefined {
     if (!decision) return undefined
     const d = decision.toUpperCase()
+    if (d.includes('INVALID_RUN') || d.includes('DATA_ERROR') || d.includes('无效运行')) {
+        return 'invalid'
+    }
+    // Prefer exact INVALID over generic "INVALID" substring after INVALID_RUN handled.
+    if (d === 'INVALID' || d.includes('INVALID')) {
+        return 'invalid'
+    }
+    if (d.includes('NO_TRADE') || d.includes('不交易') || d.includes('ABSTAIN') || d.includes('弃权')) {
+        return 'no_trade'
+    }
+    if (d.includes('WAIT') || d.includes('WATCH') || d.includes('观望')) return 'watch'
     if (d.includes('SELL') || d.includes('卖出')) return 'sell'
     if (d.includes('REDUCE') || d.includes('减持')) return 'reduce'
-    if (d.includes('WATCH') || d.includes('观望')) return 'watch'
-    if (d.includes('HOLD') || d.includes('持有')) return 'hold'
+    if (d.includes('HOLD') || d.includes('持有') || d.includes('中性')) return 'hold'
     if (d.includes('ADD') || d.includes('增持')) return 'add'
     if (d.includes('BUY') || d.includes('买入')) return 'buy'
+    if (d === 'N/A' || d === 'NA') return 'no_trade'
     return undefined
 }
 
@@ -42,6 +63,10 @@ const DIRECTION_ALIAS: Record<string, string> = {
     LEAN_BEARISH:  '偏空',
     NEUTRAL:       '中性',
     CAUTIOUS:      '谨慎',  // 向后兼容旧报告
+    'N/A':         '不适用',
+    NA:            '不适用',
+    BULL:          '看多',
+    BEAR:          '看空',
 }
 
 // English directions only ever come from the legacy en.py prompt set. New

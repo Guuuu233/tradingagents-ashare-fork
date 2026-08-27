@@ -28,8 +28,80 @@ from tradingagents.agents.utils.evidence_verifier import (
     format_claims_with_verification_for_prompt,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
+from tradingagents.agents.utils.decision_status import (
+    ACTION_NO_TRADE,
+    DIRECTION_NA,
+    status_from_manager_verdict,
+)
+from tradingagents.agents.utils.run_integrity import (
+    evaluate_state_integrity,
+    fund_flow_guard_abstain_status,
+)
 
 _logger = logging.getLogger(__name__)
+
+
+def _blocked_manager_payload(
+    *,
+    investment_debate_state: dict,
+    report_manifest: dict,
+    fund_flow_guard: dict,
+    decision_status: dict,
+    blocked_plan: str,
+    manager_reason: str,
+    run_integrity: dict | None = None,
+    claim_evidence_summary: dict | None = None,
+    consistency_check_passed: bool = True,
+    failed_checks: list | None = None,
+    evidence_verification: list | None = None,
+) -> dict:
+    """Shared early-return shape for INVALID/ABSTAIN manager short-circuits."""
+    manager_verdict = {
+        "direction": DIRECTION_NA,
+        "winner": "tie",
+        "reason": manager_reason,
+        "position_pct": 0,
+        "entry": None,
+        "target": None,
+        "stop_loss": None,
+        "upside": None,
+        "downside": None,
+        "odds": None,
+        "adopted_claim_ids": [],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+        "excluded_evidence": [],
+        "claim_evidence_summary": claim_evidence_summary or {},
+        "consistency_check_passed": consistency_check_passed,
+        "failed_checks": list(failed_checks or []),
+        "decision_status": decision_status,
+        "analysis_status": decision_status.get("analysis_status"),
+        "trade_action": decision_status.get("trade_action", ACTION_NO_TRADE),
+        "risk_status": decision_status.get("risk_status"),
+    }
+    payload = {
+        "fund_flow_consensus_guard": fund_flow_guard,
+        "investment_plan": blocked_plan,
+        "manager_verdict": manager_verdict,
+        "evidence_verification": list(evidence_verification or []),
+        "report_manifest": report_manifest,
+        "decision_status": decision_status,
+        "analysis_status": decision_status.get("analysis_status"),
+        "trade_action": decision_status.get("trade_action", ACTION_NO_TRADE),
+        "risk_status": decision_status.get("risk_status"),
+        "final_trade_decision": blocked_plan,
+        "investment_debate_state": {
+            **investment_debate_state,
+            "judge_decision": blocked_plan,
+            "current_response": blocked_plan,
+            "manager_verdict": manager_verdict,
+            "evidence_verification": list(evidence_verification or []),
+            "report_manifest": report_manifest,
+        },
+    }
+    if run_integrity is not None:
+        payload["run_integrity"] = run_integrity
+    return payload
 
 
 def create_research_manager(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
@@ -112,6 +184,30 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         }
         report_manifest = build_debate_report_manifest(seven_reports, pass_info=pass_info)
 
+        # ── P0-1: Run integrity before any Neutral/HOLD collapse ────────────
+        run_integrity = evaluate_state_integrity(state)
+        if run_integrity.all_required_failed and run_integrity.decision_status:
+            blocked_plan = (
+                "运行完整性判定：必需分析师报告全部失败（INVALID_RUN/DATA_ERROR）。"
+                "不得输出方向、概率、百分比区间或 Neutral/HOLD 观点；执行动作 NO_TRADE。"
+                f" 失败角色={','.join(run_integrity.failed_required)}"
+            )
+            _logger.warning(
+                "[research_manager] run integrity INVALID: %s",
+                run_integrity.reason_codes,
+            )
+            return _blocked_manager_payload(
+                investment_debate_state=investment_debate_state,
+                report_manifest=report_manifest,
+                fund_flow_guard=fund_flow_guard,
+                decision_status=run_integrity.decision_status,
+                blocked_plan=blocked_plan,
+                manager_reason="必需分析师上游全部失败",
+                run_integrity=run_integrity.to_dict(),
+                consistency_check_passed=False,
+                failed_checks=list(run_integrity.reason_codes),
+            )
+
         # ── Provenance & Data Failure Context ──────────────────────────────
         prov_lines = [f"- 基准分析日期 (analysis_baseline_date): {analysis_baseline_date or '未明确指定'}"]
         source_provenance = market_data_context.get("source_provenance") if isinstance(market_data_context, dict) else {}
@@ -145,48 +241,31 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             macro_evidence_line = f"{label}{macro_evidence_summary}"
 
         if fund_flow_guard.get("blocked") or not fund_flow_guard.get("direction_allowed"):
-            blocked_plan = "资金流来源选择 guard 已阻断：不得输出增持、减持、吸筹或其他方向性投资计划。"
-            manager_verdict = {
-                "direction": "中性",
-                "winner": "tie",
-                "reason": "资金流来源选择 guard 已阻断",
-                "position_pct": 0,
-                "entry": None,
-                "target": None,
-                "stop_loss": None,
-                "upside": None,
-                "downside": None,
-                "odds": None,
-                "adopted_claim_ids": [],
-                "partially_adopted_claims": [],
-                "rejected_claim_ids": [],
-                "excluded_evidence": [],
-                "claim_evidence_summary": {},
-                "consistency_check_passed": True,
-                "failed_checks": [],
-            }
-            return {
-                "fund_flow_consensus_guard": fund_flow_guard,
-                "investment_plan": blocked_plan,
-                "manager_verdict": manager_verdict,
-                "evidence_verification": [],
-                "report_manifest": report_manifest,
-                "investment_debate_state": {
-                    **investment_debate_state,
-                    "judge_decision": blocked_plan,
-                    "current_response": blocked_plan,
-                    "manager_verdict": manager_verdict,
-                    "evidence_verification": [],
-                    "report_manifest": report_manifest,
-                },
-            }
+            decision_status = fund_flow_guard_abstain_status(fund_flow_guard).to_dict()
+            blocked_plan = (
+                "资金流来源选择 guard 已阻断：不得输出增持、减持、吸筹或其他方向性投资计划。"
+                "状态=ABSTAIN，动作=NO_TRADE（不是 Neutral/HOLD 观点）。"
+            )
+            return _blocked_manager_payload(
+                investment_debate_state=investment_debate_state,
+                report_manifest=report_manifest,
+                fund_flow_guard=fund_flow_guard,
+                decision_status=decision_status,
+                blocked_plan=blocked_plan,
+                manager_reason="资金流来源选择 guard 已阻断",
+                run_integrity=run_integrity.to_dict(),
+                consistency_check_passed=True,
+            )
 
         # ── 辩论前置硬闸检查 (Debate Pre-Gate Hard Gate - fail-closed before LLM) ──
         gate_errors = validate_debate_preconditions(investment_debate_state, claims=claims)
         if gate_errors:
             failed_reasons = "; ".join(f"辩论前置硬闸未通过: {err}" for err in gate_errors)
             _logger.warning("[research_manager] debate pre-gate check failed: %s", failed_reasons)
-            blocked_plan = f"研究总监裁决自洽硬闸未通过：{failed_reasons}。已阻断进入 Trader 执行阶段。"
+            blocked_plan = (
+                f"研究总监裁决自洽硬闸未通过：{failed_reasons}。"
+                "状态=ABSTAIN，动作=NO_TRADE；已阻断进入 Trader 执行阶段。"
+            )
             truth_evaluator = EvidenceFactualTruthEvaluator()
             claims_verification = truth_evaluator.evaluate_claims(
                 claims=claims,
@@ -198,61 +277,53 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 claims=claims,
                 claims_verification=claims_verification,
             )
-            manager_verdict = {
-                "direction": "中性",
-                "winner": "tie",
-                "reason": f"辩论前置硬闸未通过: {failed_reasons}",
-                "position_pct": 0,
-                "entry": None,
-                "target": None,
-                "stop_loss": None,
-                "upside": None,
-                "downside": None,
-                "odds": None,
-                "adopted_claim_ids": [],
-                "partially_adopted_claims": [],
-                "rejected_claim_ids": [],
-                "excluded_evidence": [],
-                "claim_evidence_summary": claim_evidence_summary,
-                "consistency_check_passed": False,
-                "failed_checks": [f"辩论前置硬闸未通过: {err}" for err in gate_errors],
-            }
-            final_decision = f"[系统硬闸告警] 裁决自洽硬闸未通过：{failed_reasons}，已阻断后续交易。"
+            from tradingagents.agents.utils.decision_status import abstain_status
+
+            decision_status = abstain_status(
+                reason_codes=[f"debate_pre_gate:{err}" for err in gate_errors],
+                trade_action="NO_TRADE",
+                risk_status="BLOCKED",
+            ).to_dict()
             tracker = current_tracker_var.get()
             if tracker:
                 tracker.emit_debate_message(
                     debate="research", agent="Research Manager",
-                    round_num=-1, content=final_decision, is_verdict=True,
+                    round_num=-1, content=blocked_plan, is_verdict=True,
                 )
-            new_investment_debate_state = {
-                **investment_debate_state,
-                "judge_decision": final_decision,
-                "history": investment_debate_state.get("history", ""),
-                "bear_history": investment_debate_state.get("bear_history", ""),
-                "bull_history": investment_debate_state.get("bull_history", ""),
-                "current_speaker": investment_debate_state.get("current_speaker", ""),
-                "current_response": final_decision,
-                "count": investment_debate_state.get("count", 0),
-                "claims": claims,
-                "round_messages": investment_debate_state.get("round_messages", []),
-                "focus_claim_ids": investment_debate_state.get("focus_claim_ids", []),
-                "open_claim_ids": investment_debate_state.get("open_claim_ids", []),
-                "resolved_claim_ids": investment_debate_state.get("resolved_claim_ids", []),
-                "unresolved_claim_ids": unresolved_claim_ids,
-                "round_summary": round_summary,
-                "round_goal": investment_debate_state.get("round_goal", ""),
-                "claim_counter": investment_debate_state.get("claim_counter", 0),
-                "manager_verdict": manager_verdict,
-                "evidence_verification": claims_verification,
-                "report_manifest": report_manifest,
-            }
-            return {
-                "investment_debate_state": new_investment_debate_state,
-                "investment_plan": blocked_plan,
-                "manager_verdict": manager_verdict,
-                "evidence_verification": claims_verification,
-                "report_manifest": report_manifest,
-            }
+            payload = _blocked_manager_payload(
+                investment_debate_state=investment_debate_state,
+                report_manifest=report_manifest,
+                fund_flow_guard=fund_flow_guard,
+                decision_status=decision_status,
+                blocked_plan=blocked_plan,
+                manager_reason=f"辩论前置硬闸未通过: {failed_reasons}",
+                run_integrity=run_integrity.to_dict(),
+                claim_evidence_summary=claim_evidence_summary,
+                consistency_check_passed=False,
+                failed_checks=[f"辩论前置硬闸未通过: {err}" for err in gate_errors],
+                evidence_verification=claims_verification,
+            )
+            # Preserve pre-gate debate bookkeeping fields
+            debate_state = payload["investment_debate_state"]
+            debate_state.update(
+                {
+                    "history": investment_debate_state.get("history", ""),
+                    "bear_history": investment_debate_state.get("bear_history", ""),
+                    "bull_history": investment_debate_state.get("bull_history", ""),
+                    "current_speaker": investment_debate_state.get("current_speaker", ""),
+                    "count": investment_debate_state.get("count", 0),
+                    "claims": claims,
+                    "round_messages": investment_debate_state.get("round_messages", []),
+                    "focus_claim_ids": investment_debate_state.get("focus_claim_ids", []),
+                    "open_claim_ids": investment_debate_state.get("open_claim_ids", []),
+                    "resolved_claim_ids": investment_debate_state.get("resolved_claim_ids", []),
+                    "unresolved_claim_ids": unresolved_claim_ids,
+                    "round_summary": round_summary,
+                    "round_goal": investment_debate_state.get("round_goal", ""),
+                    "claim_counter": investment_debate_state.get("claim_counter", 0),
+                }
+            )
+            return payload
 
         # ── 事实核验与 Claim 证据链聚合 (Fact Checking & Claim Evidence Aggregation) ──
         truth_evaluator = EvidenceFactualTruthEvaluator()
@@ -515,13 +586,34 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if credit_weight_audit is not None:
             new_investment_debate_state["credit_weight_audit"] = credit_weight_audit
 
-        return {
+        # D-009 P0-1: every successful terminal path emits canonical decision_status.
+        terminal_status = status_from_manager_verdict(
+            manager_verdict,
+            prior_analysis_status=state.get("analysis_status"),
+        )
+        status_dict = terminal_status.to_dict()
+        manager_verdict = {
+            **manager_verdict,
+            "decision_status": status_dict,
+            "analysis_status": status_dict["analysis_status"],
+            "trade_action": status_dict["trade_action"],
+            "risk_status": status_dict["risk_status"],
+        }
+        new_investment_debate_state["manager_verdict"] = manager_verdict
+
+        payload = {
             "investment_debate_state": new_investment_debate_state,
             "investment_plan": final_plan,
             "manager_verdict": manager_verdict,
             "evidence_verification": claims_verification,
             "challenge_verification": challenges_verification,
             "report_manifest": report_manifest,
+            "decision_status": status_dict,
+            "analysis_status": status_dict["analysis_status"],
+            "trade_action": status_dict["trade_action"],
+            "risk_status": status_dict["risk_status"],
+            "run_integrity": run_integrity.to_dict(),
         }
+        return payload
 
     return research_manager_node

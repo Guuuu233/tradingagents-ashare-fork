@@ -106,6 +106,10 @@ class ManagerVerdict(TypedDict, total=False):
     claim_evidence_summary: Annotated[dict[str, Any], "Deterministic claim evidence aggregation and coverage summary"]
     consistency_check_passed: Annotated[bool, "Whether consistency check passed"]
     failed_checks: Annotated[list[str], "List of failed consistency checks"]
+    decision_status: Annotated[dict[str, Any], "D-009 analysis/trade status payload"]
+    analysis_status: Annotated[str, "VALID|PARTIAL|ABSTAIN|INVALID_RUN|DATA_ERROR"]
+    trade_action: Annotated[str, "BUY|SELL|HOLD|WAIT|NO_TRADE"]
+    risk_status: Annotated[str, "OK|ELEVATED|BLOCKED|UNKNOWN"]
 
 
 class Challenge(TypedDict, total=False):
@@ -424,6 +428,13 @@ class AgentState(MessagesState):
     manager_verdict: Annotated[dict[str, Any], "Structured research manager verdict"]
     evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]
     report_manifest: Annotated[dict[str, Any], "Input report manifest for seven analysts"]
+    # D-009 P0-1: must be first-class state keys or LangGraph may drop them.
+    decision_status: Annotated[dict[str, Any], "Canonical analysis/trade status payload"]
+    analysis_status: Annotated[str, "VALID|PARTIAL|ABSTAIN|INVALID_RUN|DATA_ERROR"]
+    trade_action: Annotated[str, "BUY|SELL|HOLD|WAIT|NO_TRADE"]
+    risk_status: Annotated[str, "OK|ELEVATED|BLOCKED|UNKNOWN"]
+    run_integrity: Annotated[dict[str, Any], "RunIntegrity summary for required analysts"]
+    integrity_route: Annotated[str, "Post-analyst integrity route: Bull Researcher | END"]
     short_term_result: Annotated[Optional[dict], "Final short-term analysis result"]
     medium_term_result: Annotated[Optional[dict], "Final medium-term analysis result"]
     metadata: Annotated[dict[str, Any], "Optional runtime metadata"]

@@ -1305,6 +1305,9 @@ class ReportResponse(BaseModel):
     probability: Optional[float] = None
     target_price: Optional[float]
     stop_loss_price: Optional[float]
+    analysis_status: Optional[str] = None
+    trade_action: Optional[str] = None
+    risk_status: Optional[str] = None
     risk_items: Optional[List[Dict[str, Any]]] = None
     key_metrics: Optional[List[Dict[str, Any]]] = None
     data_gaps: List[str] = Field(default_factory=list)
@@ -2098,6 +2101,11 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "risk_debate_state": final_state.get("risk_debate_state"),
         "risk_feedback_state": final_state.get("risk_feedback_state"),
         "final_trade_decision": final_state.get("final_trade_decision"),
+        "run_integrity": final_state.get("run_integrity"),
+        "decision_status": final_state.get("decision_status"),
+        "analysis_status": final_state.get("analysis_status"),
+        "trade_action": final_state.get("trade_action"),
+        "risk_status": final_state.get("risk_status"),
     }
 
     return _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=final_state)
@@ -2585,7 +2593,15 @@ def _apply_structured_report_fields(
     resolved: Dict[str, Any],
 ) -> str:
     """Apply one deterministic structured-report contract to every save path."""
-    legal_decisions = {"BUY", "SELL", "HOLD"}
+    from tradingagents.agents.utils.decision_status import (
+        ACTION_HOLD,
+        ACTION_NO_TRADE,
+        ACTION_WAIT,
+        apply_decision_status_to_result,
+    )
+    from tradingagents.agents.utils.run_integrity import resolve_decision_status_for_result
+
+    legal_decisions = {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"}
     structured_decision = getattr(structured, "decision", None) if structured else None
     if structured_decision not in legal_decisions:
         structured_decision = None
@@ -2632,6 +2648,15 @@ def _apply_structured_report_fields(
             "extraction_warning": resolved.get("extraction_warning"),
         }
     )
+    # D-009 P0-1: prefer explicit decision_status / recompute from analyst failures
+    # so 7/7 upstream failures never persist as Neutral/HOLD with confidence.
+    status_obj = resolve_decision_status_for_result(result)
+    if status_obj is not None:
+        apply_decision_status_to_result(result, status_obj)
+        decision = str(result.get("trade_action") or result.get("decision") or decision)
+        if decision in {ACTION_NO_TRADE, ACTION_WAIT}:
+            # Keep lifecycle completed but mark not_applicable for UI/stats.
+            result["not_applicable"] = True
     post_resolved = report_service.resolve_report_fields(
         result_data=result,
         confidence_override=result.get("confidence"),
@@ -2640,6 +2665,10 @@ def _apply_structured_report_fields(
     )
     result["extraction_note"] = post_resolved.get("extraction_note")
     result["extraction_warning"] = post_resolved.get("extraction_warning")
+    # Re-apply nulls after resolve_report_fields which may re-extract confidence
+    if status_obj is not None:
+        apply_decision_status_to_result(result, status_obj)
+        decision = str(result.get("trade_action") or result.get("decision") or decision)
     return decision
 
 
@@ -3268,6 +3297,24 @@ async def _run_job_inner(
                         for trace in horizon_results[horizon].get("analyst_traces", [])
                     ],
                 }
+                # D-009 P0-1: aggregate short/medium decision_status onto the top-level row.
+                from tradingagents.agents.utils.decision_status import (
+                    aggregate_horizon_decision_statuses,
+                    apply_decision_status_to_result,
+                )
+
+                horizon_status_agg = aggregate_horizon_decision_statuses(
+                    {
+                        horizon: horizon_results[horizon]
+                        for horizon in request.horizons
+                    },
+                    requested_horizons=list(request.horizons),
+                )
+                result["horizon_decision_status"] = horizon_status_agg
+                apply_decision_status_to_result(
+                    result, horizon_status_agg["decision_status"]
+                )
+                dual_decision = horizon_status_agg.get("trade_action")
                 primary_horizon = next(
                     (h for h in request.horizons if horizon_results.get(h, {}).get("status") == "completed"),
                     request.horizons[0] if request.horizons else "short",
@@ -3283,12 +3330,16 @@ async def _run_job_inner(
                                 db=save_db,
                                 symbol=request.symbol,
                                 trade_date=request.trade_date,
-                                decision=None,
+                                decision=dual_decision,
                                 result_data=result,
                                 user_id=user_id,
                                 risk_items=None,
                                 key_metrics=None,
-                                probability=None,
+                                probability=(
+                                    None
+                                    if dual_decision in {"NO_TRADE", "WAIT"}
+                                    else result.get("probability")
+                                ),
                                 data_gaps=result["data_gaps"],
                                 falsification_conditions=result["falsification_conditions"],
                                 not_applicable=result["not_applicable"],
@@ -3306,7 +3357,7 @@ async def _run_job_inner(
                     job_id,
                     status="completed",
                     result=result,
-                    decision=None,
+                    decision=dual_decision,
                     error=None,
                     overtime=False,
                     overtime_at=None,

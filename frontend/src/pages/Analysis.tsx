@@ -105,7 +105,9 @@ export default function Analysis() {
                         <DecisionCard
                             symbol={activeSymbol}
                             report={report || undefined}
-                            decision={parseDecisionAction(report?.decision)}
+                            decision={parseDecisionAction(report?.trade_action || report?.decision)}
+                            analysisStatus={report?.analysis_status}
+                            tradeAction={report?.trade_action}
                             direction={report?.direction}
                             confidence={confidence}
                             targetPrice={targetPrice}
