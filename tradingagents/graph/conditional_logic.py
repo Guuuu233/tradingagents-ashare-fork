@@ -162,6 +162,23 @@ class ConditionalLogic:
                 state["protocol_stage"] = "manager"
             return "Research Manager"
 
+    def should_continue_after_trader(self, state: AgentState) -> str:
+        """Determine whether to start risk debate or skip straight to Risk Judge."""
+        from tradingagents.agents.utils.decision_status import (
+            decision_status_from_state,
+            is_non_executable_status,
+        )
+
+        fund_flow_guard = state.get("fund_flow_consensus_guard") or {}
+        if fund_flow_guard.get("blocked") or not fund_flow_guard.get("direction_allowed"):
+            return "Risk Judge"
+
+        status = decision_status_from_state(state)
+        if is_non_executable_status(status):
+            return "Risk Judge"
+
+        return "Aggressive Analyst"
+
     def should_continue_risk_analysis(self, state: AgentState) -> str:
         """Determine if risk analysis should continue."""
         if (
@@ -176,6 +193,15 @@ class ConditionalLogic:
 
     def should_revise_after_risk_judge(self, state: AgentState) -> str:
         """Determine whether the trader must revise the plan after the risk judge."""
+        from tradingagents.agents.utils.decision_status import (
+            decision_status_from_state,
+            is_non_executable_status,
+        )
+
+        current_status = decision_status_from_state(state)
+        if is_non_executable_status(current_status):
+            return "END"
+
         feedback = state.get("risk_feedback_state", {})
         if (
             feedback.get("revision_required")

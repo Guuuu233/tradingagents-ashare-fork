@@ -55,6 +55,7 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
                     "final_trade_decision": blocked_decision,
                     "risk_feedback_state": {
                         **risk_feedback_state,
+                        "revision_required": False,
                         "latest_risk_verdict": "blocked",
                         "revision_reason": blocked_decision,
                         "execution_preconditions": ["fund_flow_consensus_guard must be unblocked"],
@@ -84,6 +85,7 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
                     "final_trade_decision": blocked_decision,
                     "risk_feedback_state": {
                         **risk_feedback_state,
+                        "revision_required": False,
                         "latest_risk_verdict": "blocked",
                         "revision_reason": blocked_decision,
                         "execution_preconditions": ["upstream decision_status must be executable"],
@@ -166,22 +168,33 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
             "round_goal": risk_debate_state.get("round_goal", ""),
             "claim_counter": risk_debate_state.get("claim_counter", 0),
         }
+        retry_count = safe_int(risk_feedback_state.get("retry_count", 0), 0) + (1 if verdict == "revise" else 0)
+        max_retries = safe_int(risk_feedback_state.get("max_retries", 1), 1)
+        retry_exhausted = bool(verdict == "revise" and retry_count > max_retries)
+        revision_required = bool(verdict == "revise" and not retry_exhausted)
         new_risk_feedback_state = {
-            "retry_count": safe_int(risk_feedback_state.get("retry_count", 0), 0) + (1 if verdict == "revise" else 0),
-            "max_retries": safe_int(risk_feedback_state.get("max_retries", 1), 1),
-            "revision_required": verdict == "revise",
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "revision_required": revision_required,
             "latest_risk_verdict": verdict,
             "hard_constraints": hard_constraints,
             "soft_constraints": soft_constraints,
             "execution_preconditions": execution_preconditions,
             "de_risk_triggers": de_risk_triggers,
-            "revision_reason": revision_reason or ("风控要求交易员按硬约束重写方案" if verdict == "revise" else ""),
+            "revision_reason": revision_reason or (
+                "风控要求交易员按硬约束重写方案"
+                if revision_required
+                else ("改写次数已耗尽，保持 NO_TRADE" if retry_exhausted else "")
+            ),
         }
 
         status = status_from_risk_verdict(
             upstream=upstream_status,
             risk_verdict=str(verdict or ""),
             reason_codes=["risk_judge_terminal"],
+            retry_count=retry_count,
+            max_retries=max_retries,
+            retry_exhausted=retry_exhausted,
         )
         return _with_status(
             {

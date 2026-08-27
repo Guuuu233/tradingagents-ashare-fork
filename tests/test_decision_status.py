@@ -131,12 +131,110 @@ def test_consistency_hard_gate_maps_to_abstain_not_valid_buy():
 
 def test_risk_reject_overwrites_upstream_valid_buy():
     from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
         status_from_risk_verdict,
         valid_status,
     )
 
-    upstream = valid_status(direction="BULL", trade_action=ACTION_BUY, probability=0.7)
+    upstream = valid_status(direction=DIRECTION_BULL, trade_action=ACTION_BUY, probability=0.7)
     status = status_from_risk_verdict(upstream=upstream, risk_verdict="reject")
+    # Contract: reject preserves upstream direction, trade_action=NO_TRADE, risk_status=BLOCKED, analysis_status=VALID
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.direction == DIRECTION_BULL
+    assert status.trade_action == ACTION_NO_TRADE
+    assert status.risk_status == "BLOCKED"
+    assert is_non_executable_status(status) is True
+
+
+def test_risk_revise_preserves_valid_upstream_and_allows_trader_llm():
+    from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
+        status_from_risk_verdict,
+        valid_status,
+    )
+
+    upstream = valid_status(direction=DIRECTION_BULL, trade_action=ACTION_BUY, confidence=80, probability=0.75)
+    status = status_from_risk_verdict(upstream=upstream, risk_verdict="revise", retry_count=1, max_retries=1)
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.direction == DIRECTION_BULL
+    assert status.trade_action == ACTION_BUY
+    assert status.risk_status == "ELEVATED"
+    assert is_non_executable_status(status) is False
+
+
+def test_risk_revise_exhausted_retries_becomes_no_trade_blocked():
+    from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
+        status_from_risk_verdict,
+        valid_status,
+    )
+
+    upstream = valid_status(direction=DIRECTION_BULL, trade_action=ACTION_BUY, confidence=80, probability=0.75)
+    status = status_from_risk_verdict(upstream=upstream, risk_verdict="revise", retry_count=2, max_retries=1)
+    assert status.trade_action == ACTION_NO_TRADE
+    assert status.risk_status == "BLOCKED"
+    assert is_non_executable_status(status) is True
+
+
+def test_risk_pass_preserves_valid_upstream():
+    from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
+        status_from_risk_verdict,
+        valid_status,
+    )
+
+    upstream = valid_status(direction=DIRECTION_BULL, trade_action=ACTION_BUY, confidence=80, probability=0.75)
+    status = status_from_risk_verdict(upstream=upstream, risk_verdict="pass")
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.direction == DIRECTION_BULL
+    assert status.trade_action == ACTION_BUY
+    assert status.risk_status == "OK"
+    assert is_non_executable_status(status) is False
+
+
+def test_risk_verdict_on_non_executable_upstream_stays_non_executable():
+    from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
+        status_from_risk_verdict,
+    )
+
+    upstream = abstain_status()
+    status = status_from_risk_verdict(upstream=upstream, risk_verdict="revise")
     assert status.analysis_status == ANALYSIS_ABSTAIN
     assert status.trade_action == ACTION_NO_TRADE
     assert status.risk_status == "BLOCKED"
+    assert is_non_executable_status(status) is True
+
+
+def test_resolve_soft_returns_abstain_not_valid_neutral_hold():
+    from tradingagents.agents.utils.decision_status import (
+        is_non_executable_status,
+        resolve_soft,
+    )
+
+    # 1. 7/7 reports OK but lacks decision_status -> must ABSTAIN (not VALID/NEUTRAL/HOLD)
+    ok_report = "市场技术报告：突破阻力位，均线多头排列，成交量温和放大，趋势明确。"
+    seven_ok = {
+        "macro_report": ok_report,
+        "market_report": ok_report,
+        "sentiment_report": ok_report,
+        "news_report": ok_report,
+        "fundamentals_report": ok_report,
+        "smart_money_report": ok_report,
+        "volume_price_report": ok_report,
+    }
+    status_with_report = resolve_soft(seven_ok)
+    assert status_with_report.analysis_status == ANALYSIS_ABSTAIN
+    assert status_with_report.direction == DIRECTION_NA
+    assert status_with_report.trade_action == ACTION_NO_TRADE
+    assert status_with_report.analysis_status != ANALYSIS_VALID
+    assert status_with_report.trade_action != ACTION_HOLD
+    assert is_non_executable_status(status_with_report) is True
+
+    # 2. Empty horizon payload -> INVALID_RUN (also non-executable)
+    status_empty = resolve_soft({})
+    assert status_empty.analysis_status in {ANALYSIS_ABSTAIN, ANALYSIS_INVALID_RUN}
+    assert status_empty.trade_action == ACTION_NO_TRADE
+    assert status_empty.analysis_status != ANALYSIS_VALID
+    assert status_empty.trade_action != ACTION_HOLD
+    assert is_non_executable_status(status_empty) is True

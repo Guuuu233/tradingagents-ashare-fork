@@ -257,7 +257,7 @@ def _query_reports(
     model: Optional[str],
     limit: int,
     hold_days: int,
-) -> Tuple[List[ReportDB], bool, int]:
+) -> Tuple[List[ReportDB], bool, int, Dict[str, int]]:
     """Load completed reports that carry a probability, applying filters.
 
     Date/symbol/user filters run in SQL.  Hold-window completeness also runs in
@@ -270,38 +270,58 @@ def _query_reports(
     queries are unreliable across backends); they are applied on a wide
     candidate scan BEFORE the final ``limit`` truncation.
 
-    Returns ``(rows, truncated_before_filter, skipped_incomplete_window)``.
+    Returns ``(rows, truncated_before_filter, skipped_incomplete_window, exclusion_stats)``.
     ``truncated_before_filter`` is True only when the pre-filter candidate scan
     actually hit its cap (checked by fetching one extra row).
     """
-    query = db.query(ReportDB).filter(
-        ReportDB.status == "completed",
-        ReportDB.probability.isnot(None),
-    )
-    # D-009 P0-1: only explicit VALID rows are calibration-eligible (no NULL legacy).
     from tradingagents.agents.utils.decision_status import (
         ANALYSIS_VALID,
         NON_DIRECTIONAL_TRADE_ACTIONS,
         is_calibration_eligible,
     )
 
-    try:
-        query = query.filter(ReportDB.analysis_status == ANALYSIS_VALID)
-        query = query.filter(
-            (ReportDB.trade_action.is_(None))
-            | (~ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS)))
-        )
-    except Exception:
-        # Older SQLite sessions without the columns should still work via Python filter.
-        pass
+    base_query = db.query(ReportDB).filter(
+        ReportDB.status == "completed",
+        ReportDB.probability.isnot(None),
+    )
     if user_id:
-        query = query.filter(ReportDB.user_id == user_id)
+        base_query = base_query.filter(ReportDB.user_id == user_id)
     if symbol:
-        query = query.filter(ReportDB.symbol == _normalize_symbol(symbol))
+        base_query = base_query.filter(ReportDB.symbol == _normalize_symbol(symbol))
     if start_date:
-        query = query.filter(ReportDB.trade_date >= start_date)
+        base_query = base_query.filter(ReportDB.trade_date >= start_date)
     if end_date:
-        query = query.filter(ReportDB.trade_date <= end_date)
+        base_query = base_query.filter(ReportDB.trade_date <= end_date)
+
+    # Count exclusions in the filtered scope (D-009 P0-1: legacy null, invalid, abstain, non-directional)
+    excluded_null = base_query.filter(ReportDB.analysis_status.is_(None)).count()
+    excluded_invalid = base_query.filter(
+        ReportDB.analysis_status.in_(["INVALID_RUN", "DATA_ERROR"])
+    ).count()
+    excluded_abstain = base_query.filter(
+        ReportDB.analysis_status.in_(["ABSTAIN", "PARTIAL"])
+    ).count()
+    excluded_no_trade = base_query.filter(
+        ReportDB.analysis_status == ANALYSIS_VALID,
+        ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS)),
+    ).count()
+    excluded_total = (
+        excluded_null + excluded_invalid + excluded_abstain + excluded_no_trade
+    )
+    exclusion_stats = {
+        "excluded_null": excluded_null,
+        "excluded_invalid": excluded_invalid,
+        "excluded_abstain": excluded_abstain,
+        "excluded_no_trade": excluded_no_trade,
+        "excluded_total": excluded_total,
+    }
+
+    # Only explicit VALID directional rows are calibration-eligible
+    query = base_query.filter(
+        ReportDB.analysis_status == ANALYSIS_VALID,
+        (ReportDB.trade_action.is_(None))
+        | (~ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS))),
+    )
 
     # Hold-window completeness before truncation: only reports whose window has
     # elapsed are eligible; count the too-recent ones so callers know the view
@@ -329,7 +349,7 @@ def _query_reports(
         rows = query.order_by(ReportDB.created_at.desc()).limit(limit).all()
         truncated_before_filter = False
     rows = [row for row in rows if is_calibration_eligible(row)]
-    return rows, truncated_before_filter, skipped_incomplete
+    return rows, truncated_before_filter, skipped_incomplete, exclusion_stats
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -468,7 +488,7 @@ def _compute_calibration_unlocked(
     window).  Reports whose outcome cannot be resolved are counted separately
     and excluded from the curve and Brier score.
     """
-    reports, truncated_before_filter, skipped_incomplete = _query_reports(
+    reports, truncated_before_filter, skipped_incomplete, exclusion_stats = _query_reports(
         db,
         user_id=user_id,
         start_date=start_date,
@@ -521,6 +541,18 @@ def _compute_calibration_unlocked(
         "skipped_no_outcome": skipped_no_outcome,
         "truncated_before_filter": truncated_before_filter,
         "buckets": buckets,
+        "excluded_null": exclusion_stats["excluded_null"],
+        "excluded_invalid": exclusion_stats["excluded_invalid"],
+        "excluded_abstain": exclusion_stats["excluded_abstain"],
+        "excluded_no_trade": exclusion_stats["excluded_no_trade"],
+        "excluded_total": exclusion_stats["excluded_total"],
+        "excluded_counts": {
+            "legacy_null": exclusion_stats["excluded_null"],
+            "invalid": exclusion_stats["excluded_invalid"],
+            "abstain": exclusion_stats["excluded_abstain"],
+            "no_trade": exclusion_stats["excluded_no_trade"],
+            "total": exclusion_stats["excluded_total"],
+        },
         "filters": {
             "start_date": start_date,
             "end_date": end_date,

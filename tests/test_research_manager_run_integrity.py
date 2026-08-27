@@ -248,7 +248,7 @@ def test_consistency_fail_status_blocks_trader_llm():
             "direction": "看多",
             "winner": "bull",
             "consistency_check_passed": False,
-            "failed_checks":["仓位与方向冲突"],
+            "failed_checks": ["仓位与方向冲突"],
         }
     )
     assert status.analysis_status == ANALYSIS_ABSTAIN
@@ -289,3 +289,64 @@ def test_consistency_fail_status_blocks_trader_llm():
     result = asyncio.run(node(state))
     assert calls["n"] == 0
     assert "NO_TRADE" in result["trader_investment_plan"]
+
+
+def test_abstain_manager_bypasses_risk_debate_to_risk_judge_and_ends():
+    """Consistency / fund-flow ABSTAIN must route Trader -> Risk Judge (skipping debate), then END."""
+    from tradingagents.agents.managers.risk_manager import create_risk_manager
+    from tradingagents.agents.utils.decision_status import status_from_manager_verdict
+    from tradingagents.graph.conditional_logic import ConditionalLogic
+
+    status = status_from_manager_verdict(
+        {
+            "direction": "看多",
+            "winner": "bull",
+            "consistency_check_passed": False,
+            "failed_checks": ["stop_loss_missing"],
+        }
+    )
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.trade_action == ACTION_NO_TRADE
+
+    state = _base_state(
+        company_of_interest="300433.SZ",
+        investment_plan="研究总监裁决自洽硬闸未通过",
+        trader_investment_plan="保持 NO_TRADE / 观望",
+        decision_status=status.to_dict(),
+        analysis_status=status.analysis_status,
+        trade_action=status.trade_action,
+        risk_debate_state={
+            "history": "", "aggressive_history": "", "conservative_history": "", "neutral_history": "",
+            "latest_speaker": "", "current_aggressive_response": "", "current_conservative_response": "",
+            "current_neutral_response": "", "judge_decision": "", "count": 0, "claims": [],
+            "focus_claim_ids": [], "open_claim_ids": [], "resolved_claim_ids": [], "unresolved_claim_ids": [],
+            "round_summary": "", "round_goal": "", "claim_counter": 0,
+        },
+        risk_feedback_state={},
+    )
+
+    logic = ConditionalLogic()
+    # 1. Trader route must skip Aggressive Analyst and go straight to Risk Judge
+    route_after_trader = logic.should_continue_after_trader(state)
+    assert route_after_trader == "Risk Judge"
+
+    # 2. Risk Judge node must short-circuit without calling LLM
+    llm = MagicMock()
+    calls = {"n": 0}
+
+    async def _astream(*_a, **_k):
+        calls["n"] += 1
+        yield MagicMock(content="SHOULD_NOT_BE_CALLED")
+
+    llm.astream = _astream
+    memory = MagicMock()
+    memory.get_memories.return_value = []
+    risk_node = create_risk_manager(llm, memory)
+    risk_out = asyncio.run(risk_node(state))
+    assert calls["n"] == 0
+    assert risk_out["risk_feedback_state"]["revision_required"] is False
+    assert risk_out["risk_status"] == "BLOCKED"
+
+    # 3. Next route after Risk Judge must be END
+    route_after_risk = logic.should_revise_after_risk_judge({**state, **risk_out})
+    assert route_after_risk == "END"

@@ -297,7 +297,14 @@ class GraphSetup:
             },
         )
         workflow.add_edge("Research Manager", "Trader")
-        workflow.add_edge("Trader", "Aggressive Analyst")
+        workflow.add_conditional_edges(
+            "Trader",
+            self.conditional_logic.should_continue_after_trader,
+            {
+                "Aggressive Analyst": "Aggressive Analyst",
+                "Risk Judge": "Risk Judge",
+            },
+        )
         workflow.add_conditional_edges(
             "Aggressive Analyst",
             self.conditional_logic.should_continue_risk_analysis,

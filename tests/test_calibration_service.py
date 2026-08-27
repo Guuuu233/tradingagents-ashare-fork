@@ -22,6 +22,8 @@ def _result_data(
     *,
     prompt_versions: tuple[str, ...] = ("v1",),
     model_names: tuple[str, ...] = ("gpt-4o-mini",),
+    analysis_status: Optional[str] = "VALID",
+    trade_action: Optional[str] = "BUY",
 ) -> dict:
     """Build a result_data dict shaped like a persisted dual-horizon report."""
     roles = {
@@ -45,7 +47,7 @@ def _result_data(
         }
         for i in range(3)
     }
-    return {
+    rd = {
         "mode": "dual_horizon",
         "status": "completed",
         "short_term": {"horizon": "short", "status": "completed"},
@@ -57,6 +59,11 @@ def _result_data(
         },
         "model_config_snapshot": model_snapshot,
     }
+    if analysis_status is not None:
+        rd["analysis_status"] = analysis_status
+    if trade_action is not None:
+        rd["trade_action"] = trade_action
+    return rd
 
 
 def _seed_report(
@@ -67,23 +74,33 @@ def _seed_report(
     user_id: str,
     prompt_versions: tuple[str, ...] = ("v1",),
     model_names: tuple[str, ...] = ("gpt-4o-mini",),
+    analysis_status: Optional[str] = "VALID",
+    trade_action: Optional[str] = "BUY",
 ) -> ReportDB:
     init_db()
     with get_db_ctx() as db:
+        res_data = _result_data(
+            prompt_versions=prompt_versions,
+            model_names=model_names,
+            analysis_status=analysis_status,
+            trade_action=trade_action,
+        )
         report = report_service.create_report(
             db=db,
             symbol=symbol,
             trade_date=trade_date,
-            decision="BUY",
+            decision=trade_action or "BUY",
             probability=probability,
-            result_data=_result_data(
-                prompt_versions=prompt_versions,
-                model_names=model_names,
-            ),
+            result_data=res_data,
             user_id=user_id,
             report_id=str(uuid4()),
         )
+        # Directly enforce DB column values for exact test fixture setup
+        report.probability = probability
+        report.analysis_status = analysis_status
+        report.trade_action = trade_action
         db.commit()
+        db.refresh(report)
         return report
 
 
@@ -140,13 +157,19 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _reset_calibration_state(monkeypatch):
-    """Isolate the module-level cache, concurrency counter and per-IP rate limiter."""
+    """Isolate the module-level cache, concurrency counter, rate limiter and network calls."""
     from api import main as main_mod
 
     cal._calibration_cache.clear()
     cal._active_calibrations = 0
     main_mod._calibration_rate_hits.clear()
     monkeypatch.setattr(main_mod, "_CALIBRATION_RATE_MAX", 10000)
+    try:
+        from tradingagents.knowledge import historical_cases
+        monkeypatch.setattr(historical_cases, "backfill_pending_cases", lambda *a, **kw: {})
+        monkeypatch.setattr(historical_cases, "record_historical_case", lambda *a, **kw: None)
+    except Exception:
+        pass
     yield
 
 
@@ -366,6 +389,32 @@ class TestFilters:
         with get_db_ctx() as db:
             result = cal.compute_calibration(db, user_id=user_a, outcome_resolver=lambda r: True)
         assert result["sample_size"] == 1
+
+    def test_legacy_null_and_non_directional_reports_excluded_with_counts(self):
+        user_id, _ = _user_token()
+        # 1. Valid directional report (eligible)
+        _seed_report(symbol="600519.SH", trade_date="2024-01-02", probability=0.6, user_id=user_id, analysis_status="VALID", trade_action="BUY")
+        # 2. Legacy row with analysis_status=NULL (excluded)
+        _seed_report(symbol="600519.SH", trade_date="2024-01-03", probability=0.7, user_id=user_id, analysis_status=None, trade_action=None)
+        # 3. Non-directional NO_TRADE report (excluded)
+        _seed_report(symbol="600519.SH", trade_date="2024-01-04", probability=0.8, user_id=user_id, analysis_status="VALID", trade_action="NO_TRADE")
+        # 4. ABSTAIN report (excluded)
+        _seed_report(symbol="600519.SH", trade_date="2024-01-05", probability=0.9, user_id=user_id, analysis_status="ABSTAIN", trade_action="NO_TRADE")
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                outcome_resolver=lambda r: True,
+            )
+
+        assert result["sample_size"] == 1
+        # Response must surface exclusion counts
+        assert "excluded_null" in result or "excluded_counts" in result or "excluded_total" in result
+        excluded_null = result.get("excluded_null", result.get("excluded_counts", {}).get("legacy_null", 0))
+        assert excluded_null >= 1
+        excluded_total = result.get("excluded_total", result.get("excluded_counts", {}).get("total", 0))
+        assert excluded_total >= 3
 
 
 class TestFilterBeforeLimit:

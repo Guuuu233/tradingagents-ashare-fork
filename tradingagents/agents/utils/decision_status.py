@@ -387,17 +387,20 @@ def aggregate_horizon_decision_statuses(
 def resolve_soft(payload: Mapping[str, Any]) -> DecisionStatus:
     """Fallback when a horizon payload lacks decision_status."""
     from tradingagents.agents.utils.run_integrity import evaluate_run_integrity
-    from tradingagents.agents.utils.decision_status import decision_status_from_mapping
+    from tradingagents.agents.utils.decision_status import (
+        abstain_status,
+        decision_status_from_mapping,
+    )
 
     integrity = evaluate_run_integrity(payload)
     if integrity.decision_status:
         parsed = decision_status_from_mapping(integrity.decision_status)
         if parsed is not None:
             return parsed
-    return valid_status(
-        direction=DIRECTION_NEUTRAL,
-        trade_action=ACTION_HOLD,
-        reason_codes=["horizon_status_defaulted"],
+    return abstain_status(
+        reason_codes=["horizon_status_missing_abstain"],
+        trade_action=ACTION_NO_TRADE,
+        risk_status=RISK_UNKNOWN,
     )
 
 
@@ -406,17 +409,20 @@ def db_direction_from_canonical(
     *,
     fallback: Optional[str] = None,
 ) -> Optional[str]:
-    """Persist direction consistent with analysis_status / trade_action."""
+    """Persist direction consistent with analysis_status / trade_action.
+
+    D-009: BULL + Risk BLOCKED -> keep BULL direction, trade_action NO_TRADE.
+    Only INVALID_RUN / DATA_ERROR / ABSTAIN collapse direction to N/A.
+    """
     if not isinstance(canonical, Mapping):
         return fallback
     analysis_status = str(canonical.get("analysis_status") or "").upper()
-    trade_action = str(canonical.get("trade_action") or "").upper()
     direction = str(canonical.get("direction") or "").upper()
     if analysis_status in {
         ANALYSIS_INVALID_RUN,
         ANALYSIS_DATA_ERROR,
         ANALYSIS_ABSTAIN,
-    } or trade_action in NON_DIRECTIONAL_TRADE_ACTIONS:
+    } or direction in {DIRECTION_NA, "N/A", "NA", ""}:
         return DIRECTION_NA
     display = {
         DIRECTION_BULL: "看多",
@@ -436,13 +442,17 @@ def status_from_risk_verdict(
     upstream: Optional[DecisionStatus],
     risk_verdict: str,
     reason_codes: Optional[list[str]] = None,
+    retry_count: int = 0,
+    max_retries: int = 1,
+    retry_exhausted: Optional[bool] = None,
 ) -> DecisionStatus:
     """Rewrite canonical status at Risk Judge terminal — never inherit stale BUY blindly.
 
     - upstream non-executable → keep non-executable, force risk BLOCKED
-    - reject/blocked → ABSTAIN/NO_TRADE/BLOCKED
-    - revise → WAIT + ELEVATED (not a directional fill)
-    - pass → keep upstream direction/action if VALID; else ABSTAIN
+    - revise (retry not exhausted) → keep upstream analysis_status (VALID) & direction & trade_action, risk_status ELEVATED
+    - revise (retry exhausted) → keep direction, trade_action NO_TRADE, risk_status BLOCKED
+    - reject/blocked → keep upstream analysis_status & direction, trade_action NO_TRADE, risk_status BLOCKED
+    - pass/approve → keep upstream direction/action if VALID; else ABSTAIN
     """
     verdict = str(risk_verdict or "").strip().lower()
     codes = list(reason_codes or [])
@@ -451,7 +461,7 @@ def status_from_risk_verdict(
     if upstream is not None and is_non_executable_status(upstream):
         return DecisionStatus(
             analysis_status=upstream.analysis_status,
-            direction=DIRECTION_NA,
+            direction=upstream.direction if upstream.analysis_status == ANALYSIS_VALID else DIRECTION_NA,
             trade_action=ACTION_NO_TRADE
             if upstream.trade_action not in NON_DIRECTIONAL_TRADE_ACTIONS
             else upstream.trade_action,
@@ -463,7 +473,25 @@ def status_from_risk_verdict(
             probability=None,
         )
 
+    is_exhausted = (
+        retry_exhausted
+        if retry_exhausted is not None
+        else (retry_count > max_retries if retry_count > 0 else False)
+    )
+
     if verdict in {"reject", "blocked", "fail", "failed"}:
+        if upstream is not None and upstream.analysis_status == ANALYSIS_VALID:
+            return DecisionStatus(
+                analysis_status=ANALYSIS_VALID,
+                direction=upstream.direction,
+                trade_action=ACTION_NO_TRADE,
+                risk_status=RISK_BLOCKED,
+                confirmation_state=upstream.confirmation_state,
+                failure_class=None,
+                reason_codes=list(upstream.reason_codes) + codes,
+                confidence=None,
+                probability=None,
+            )
         return abstain_status(
             reason_codes=codes,
             trade_action=ACTION_NO_TRADE,
@@ -471,6 +499,33 @@ def status_from_risk_verdict(
         )
 
     if verdict == "revise":
+        if is_exhausted:
+            dir_val = upstream.direction if upstream is not None and upstream.analysis_status == ANALYSIS_VALID else DIRECTION_NA
+            analysis_val = upstream.analysis_status if upstream is not None else ANALYSIS_ABSTAIN
+            return DecisionStatus(
+                analysis_status=analysis_val,
+                direction=dir_val,
+                trade_action=ACTION_NO_TRADE,
+                risk_status=RISK_BLOCKED,
+                confirmation_state=CONFIRM_UNRESOLVED,
+                failure_class=None,
+                reason_codes=list(upstream.reason_codes if upstream else []) + codes + ["risk_retries_exhausted"],
+                confidence=None,
+                probability=None,
+            )
+        # revise with retries remaining: keep upstream VALID status, direction, and trade_action proposal
+        if upstream is not None and upstream.analysis_status == ANALYSIS_VALID:
+            return DecisionStatus(
+                analysis_status=ANALYSIS_VALID,
+                direction=upstream.direction,
+                trade_action=upstream.trade_action,
+                risk_status=RISK_ELEVATED,
+                confirmation_state=CONFIRM_PARTIAL,
+                failure_class=None,
+                reason_codes=list(upstream.reason_codes) + codes,
+                confidence=upstream.confidence,
+                probability=upstream.probability,
+            )
         return DecisionStatus(
             analysis_status=ANALYSIS_ABSTAIN,
             direction=DIRECTION_NA,
@@ -492,7 +547,7 @@ def status_from_risk_verdict(
             risk_status=RISK_OK if verdict in {"pass", "approve", "approved", ""} else RISK_ELEVATED,
             confirmation_state=CONFIRM_CONFIRMED,
             failure_class=None,
-            reason_codes=codes,
+            reason_codes=list(upstream.reason_codes) + codes,
             confidence=upstream.confidence,
             probability=upstream.probability,
         )
