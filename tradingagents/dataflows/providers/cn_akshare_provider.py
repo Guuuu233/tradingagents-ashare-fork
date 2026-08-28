@@ -2448,9 +2448,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             "raw_unit": "万元",
             "status": status,
             "selection": selection,
-            # Keep the old median/field comparison as audit evidence only; it
-            # no longer gates a valid higher-priority source.
-            "consensus": selection,
+            "same_field_consensus_audit": consensus_audit,
             "consensus_audit": consensus_audit,
             "tushare_failures": list(failures),
             "failure_categories": sorted({item["category"] for item in failures}),
@@ -2586,8 +2584,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 symbol=metadata.get("symbol") or symbol,
                 requested_as_of=metadata.get("requested_as_of") or curr_date,
             )
+            consensus_audit = build_consensus_evidence(
+                combined,
+                symbol=metadata.get("symbol") or symbol,
+                requested_as_of=metadata.get("requested_as_of") or curr_date,
+            )
             metadata["selection"] = selection
-            metadata["consensus"] = selection
+            metadata["same_field_consensus_audit"] = consensus_audit
+            metadata["consensus_audit"] = consensus_audit
+            metadata.pop("consensus", None)
             metadata["side_evidence_sources"] = sorted(
                 {str(record.get("source")) for record in side_records if record.get("source")}
             )
@@ -2629,15 +2634,23 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     # Preserve the former median/MAD result for audit, but do
                     # not let its source-count gate decide the direction.
                     metadata.setdefault("consensus_audit", existing_consensus)
+                    metadata.setdefault("same_field_consensus_audit", existing_consensus)
                 selection = select_fund_flow_source(
                     evidence,
                     symbol=metadata.get("symbol") or (evidence[0].get("symbol") if evidence else None),
                     requested_as_of=metadata.get("requested_as_of"),
                 )
             metadata["selection"] = selection
-            # ``consensus`` is retained as a compatibility key for API/report
-            # consumers; the old comparison is available as consensus_audit.
-            metadata["consensus"] = selection
+            if "same_field_consensus_audit" not in metadata and "consensus_audit" in metadata:
+                metadata["same_field_consensus_audit"] = metadata["consensus_audit"]
+            elif "same_field_consensus_audit" not in metadata:
+                metadata["same_field_consensus_audit"] = build_consensus_evidence(
+                    evidence,
+                    symbol=metadata.get("symbol") or (evidence[0].get("symbol") if evidence else None),
+                    requested_as_of=metadata.get("requested_as_of"),
+                )
+                metadata.setdefault("consensus_audit", metadata["same_field_consensus_audit"])
+            metadata.pop("consensus", None)
             selection_status = selection.get("status")
             direction_allowed = bool(
                 selection.get("direction_allowed")
@@ -3063,7 +3076,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     "actual_as_of": curr_date,
                     "status": "available",
                     "selection": selection,
-                    "consensus": selection,
+                    "same_field_consensus_audit": consensus_audit,
                     "consensus_audit": consensus_audit,
                     "reason": "同花顺即时资金流净额是总净额，未将其等同于新浪历史 r0_net 主力序列",
                 },
@@ -3512,7 +3525,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 "unit": "亿元",
                 "status": "available" if len(evidence) >= _SINA_HIST_FUND_FLOW_SHOW else "partial",
                 "selection": selection,
-                "consensus": selection,
+                "same_field_consensus_audit": consensus_audit,
                 "consensus_audit": consensus_audit,
             },
         )
@@ -3607,13 +3620,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 symbol=symbol,
                 requested_as_of=curr_date,
             )
-            metadata["consensus"] = metadata["selection"]
-            metadata["consensus_audit"] = build_consensus_evidence(
+            consensus_audit = build_consensus_evidence(
                 evidence,
                 symbol=symbol,
                 requested_as_of=curr_date,
                 field="r0_net",
             )
+            metadata["same_field_consensus_audit"] = consensus_audit
+            metadata["consensus_audit"] = consensus_audit
+            metadata.pop("consensus", None)
             metadata["total_net_consensus"] = build_consensus_evidence(
                 ths_records,
                 symbol=symbol,
@@ -3820,7 +3835,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 "actual_as_of": latest_str,
                 "status": "available" if source == "eastmoney_direct" else "partial",
                 "selection": selection,
-                "consensus": selection,
+                "same_field_consensus_audit": consensus_audit,
                 "consensus_audit": consensus_audit,
                 "reason": reason,
             },

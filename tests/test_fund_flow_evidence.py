@@ -190,8 +190,63 @@ def test_conflicting_ths_side_value_never_overrides_eastmoney_priority():
     assert result["selected_source"] == "eastmoney_direct"
     assert result["selected_value"] == "1"
     assert result["selected_direction"] == "inflow"
+    assert result["direction_allowed"] is False
+    assert result["hard_guard"]["blocked"] is True
+    assert result["reason_code"] == "incomparable_field_semantics"
     assert result["alternative_sources"][0]["source"] == "tushare_ths_moneyflow_ths"
     assert result["alternative_sources"][0]["value"] == "-9"
+
+
+def test_incomparable_fields_em_r0_net_and_ths_netamount_both_valid_blocks_direction():
+    result = select_fund_flow_source(
+        [
+            _selection_record("eastmoney_direct", "2.5", field="r0_net"),
+            _selection_record("ths_instant_snapshot", "3.0", field="netamount"),
+        ],
+        symbol="600519",
+        requested_as_of="2026-08-14",
+    )
+
+    assert result["direction_allowed"] is False
+    assert result["hard_guard"]["blocked"] is True
+    assert result["reason_code"] == "incomparable_field_semantics"
+    assert len(result["raw_values"]) == 2
+    assert len(result["alternative_sources"]) == 1
+    assert result["selected_source"] == "eastmoney_direct"
+
+
+def test_single_valid_field_multiple_sources_same_field_allows_direction():
+    result = select_fund_flow_source(
+        [
+            _selection_record("eastmoney_direct", "1.5", field="r0_net"),
+            _selection_record("tushare_eastmoney_moneyflow_dc", "1.5", field="r0_net"),
+        ],
+        symbol="600519",
+        requested_as_of="2026-08-14",
+    )
+
+    assert result["direction_allowed"] is True
+    assert result["hard_guard"]["blocked"] is False
+    assert result["selected_source"] == "eastmoney_direct"
+    assert result["selected_field"] == "r0_net"
+    assert result["reason_code"] == "new_algorithm_source_priority"
+
+
+def test_em_invalid_ths_netamount_valid_allows_direction():
+    result = select_fund_flow_source(
+        [
+            _selection_record("eastmoney_direct", "invalid_val", field="r0_net"),
+            _selection_record("tushare_ths_moneyflow_ths", "4.0", field="netamount"),
+        ],
+        symbol="600519",
+        requested_as_of="2026-08-14",
+    )
+
+    assert result["direction_allowed"] is True
+    assert result["hard_guard"]["blocked"] is False
+    assert result["selected_source"] == "tushare_ths_moneyflow_ths"
+    assert result["selected_field"] == "netamount"
+    assert result["reason_code"] == "new_algorithm_source_priority"
 
 
 def test_legacy_is_allowed_only_as_explicit_fallback():
@@ -407,7 +462,9 @@ def test_dc_r0_net_and_ths_netamount_opposite_directions_selects_dc_without_cros
     assert result["selected_field"] == "r0_net"
     assert result["selected_value"] == "2.21197136"
     assert result["selected_direction"] == "inflow"
-    assert result["direction_allowed"] is True
+    assert result["direction_allowed"] is False
+    assert result["hard_guard"]["blocked"] is True
+    assert result["reason_code"] == "incomparable_field_semantics"
     assert len(result["alternative_sources"]) == 1
     assert result["alternative_sources"][0]["source"] == "tushare_ths_moneyflow_ths"
     assert result["alternative_sources"][0]["field"] == "netamount"

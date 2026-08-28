@@ -1507,6 +1507,8 @@ def select_fund_flow_source(
         return result
 
     is_legacy = bool(selected["legacy_web_algorithm"])
+    new_fields = {item["field"] for item in new_groups}
+    incomparable_fields = len(new_fields) >= 2
     alternatives = [
         item
         for item in valid_groups
@@ -1522,22 +1524,56 @@ def select_fund_flow_source(
             selected["time_window"],
         )
     ]
-    selection_reason = (
-        "no_new_algorithm_source_legacy_fallback"
-        if is_legacy
-        else "new_algorithm_source_priority"
-    )
+    if incomparable_fields:
+        selection_reason = "incomparable_field_semantics"
+        reason = "新算法组存在多个不同字段（如主力净额与总净额）同时有效，字段语义不可比，禁止放行方向"
+        direction_allowed = False
+        hard_guard_blocked = True
+        status = "data_conflict"
+        direction = "blocked"
+        direction_summary = "不可比字段同时有效，方向结论已阻断"
+    elif is_legacy:
+        selection_reason = "no_new_algorithm_source_legacy_fallback"
+        reason = "所有新算法来源不可用后使用新浪 legacy Web 参考值；仅展示该来源自身方向"
+        direction_allowed = True
+        hard_guard_blocked = False
+        status = "selected"
+        direction = selected["direction"]
+        if selected["field"] == "netamount":
+            label = "总资金（非主力口径）"
+        else:
+            label = "主力资金"
+        if selected["direction"] == "outflow":
+            direction_summary = f"{label}偏流出"
+        elif selected["direction"] == "inflow":
+            direction_summary = f"{label}偏流入"
+        else:
+            direction_summary = f"{label}接近平衡"
+    else:
+        selection_reason = "new_algorithm_source_priority"
+        reason = "按固定来源优先级选择首个日期、字段、单位和数值均有效的来源"
+        direction_allowed = True
+        hard_guard_blocked = False
+        status = "selected"
+        direction = selected["direction"]
+        if selected["field"] == "netamount":
+            label = "总资金（非主力口径）"
+        else:
+            label = "主力资金"
+        if selected["direction"] == "outflow":
+            direction_summary = f"{label}偏流出"
+        elif selected["direction"] == "inflow":
+            direction_summary = f"{label}偏流入"
+        else:
+            direction_summary = f"{label}接近平衡"
+
     result = {
-        "status": "selected",
-        "selection_status": "selected",
-        "data_conflict": False,
+        "status": status,
+        "selection_status": status,
+        "data_conflict": incomparable_fields,
         "reason_code": selection_reason,
         "selection_reason": selection_reason,
-        "reason": (
-            "所有新算法来源不可用后使用新浪 legacy Web 参考值；仅展示该来源自身方向"
-            if is_legacy
-            else "按固定来源优先级选择首个日期、字段、单位和数值均有效的来源"
-        ),
+        "reason": reason,
         "requested_as_of": _normalise_date_text(requested_as_of) if requested_as_of else None,
         "algorithm_group": selected["algorithm_group"],
         "selected_source": selected["source"],
@@ -1554,8 +1590,8 @@ def select_fund_flow_source(
         "fallback_rank": selected["fallback_rank"],
         "legacy_reference": is_legacy,
         "legacy_web_algorithm": is_legacy,
-        "direction": selected["direction"],
-        "direction_allowed": True,
+        "direction": direction,
+        "direction_allowed": direction_allowed,
         "field": selected["field"],
         "value": selected["value"],
         "source": selected["source"],
@@ -1568,23 +1604,14 @@ def select_fund_flow_source(
         "new_algorithm_sources": [item for item in valid_groups if not item["legacy_web_algorithm"]],
         "rejected_sources": rejected,
         "hard_guard": {
-            "blocked": False,
-            "direction_allowed": True,
+            "blocked": hard_guard_blocked,
+            "direction_allowed": direction_allowed,
             "reason": selection_reason,
         },
+        "direction_summary": direction_summary,
     }
     if is_legacy:
         result["legacy_warning"] = "legacy_web_algorithm：新浪旧 Web，仅供参考，不得冒充新算法来源"
-    if selected["field"] == "netamount":
-        label = "总资金（非主力口径）"
-    else:
-        label = "主力资金"
-    if selected["direction"] == "outflow":
-        result["direction_summary"] = f"{label}偏流出"
-    elif selected["direction"] == "inflow":
-        result["direction_summary"] = f"{label}偏流入"
-    else:
-        result["direction_summary"] = f"{label}接近平衡"
     return result
 
 
@@ -1892,6 +1919,9 @@ def build_consensus_evidence(
 
 # Public aliases retain the historical audit API; direction callers use the
 # explicit ``select_fund_flow_source`` contract above.
+same_field_consensus_audit = build_consensus_evidence
+build_same_field_consensus_audit = build_consensus_evidence
+consensus_audit = build_consensus_evidence
 summarize_source_consensus = build_consensus_evidence
 build_consensus = build_consensus_evidence
 

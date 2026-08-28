@@ -76,10 +76,6 @@ def create_smart_money_analyst(llm, data_collector=None):
         selection: dict = {}
         if isinstance(fund_flow_evidence, dict):
             selection = fund_flow_evidence.get("selection") or {}
-            if not isinstance(selection, dict) or "selected_source" not in selection:
-                legacy_consensus = fund_flow_evidence.get("consensus") or {}
-                if isinstance(legacy_consensus, dict) and "selected_source" in legacy_consensus:
-                    selection = legacy_consensus
         if not isinstance(selection, dict) or "selected_source" not in selection:
             records = fund_flow_evidence.get("records") or [] if isinstance(fund_flow_evidence, dict) else []
             selection = select_fund_flow_source(
@@ -89,8 +85,6 @@ def create_smart_money_analyst(llm, data_collector=None):
             )
             if isinstance(fund_flow_evidence, dict):
                 fund_flow_evidence["selection"] = selection
-                fund_flow_evidence["consensus"] = selection
-        consensus = selection
         evidence_text = json.dumps(fund_flow_evidence, ensure_ascii=False, sort_keys=True)
         consensus_instruction = consensus_prompt_instruction(selection)
         validation = (
@@ -118,7 +112,6 @@ def create_smart_money_analyst(llm, data_collector=None):
             "direction_allowed": not consensus_blocked,
             "status": selection.get("status", "not_checked") if isinstance(selection, dict) else "not_checked",
             "selection": selection,
-            "consensus": selection,
             "validation": validation,
             "reason": (validation or {}).get("hard_guard", {}).get("reason")
             or (selection or {}).get("reason", "fund-flow source selection unavailable"),
@@ -300,8 +293,8 @@ def create_smart_money_analyst(llm, data_collector=None):
             "status": selection.get("status", "not_checked") if isinstance(selection, dict) else "not_checked",
             "validation": validation,
             "selection": selection,
-            "consensus": consensus,
         })
+        consensus_guard.pop("consensus", None)
         if isinstance(selection, dict):
             for key in (
                 "selected_source",

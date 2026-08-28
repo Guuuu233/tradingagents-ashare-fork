@@ -195,11 +195,16 @@ def test_tushare_dc_ths_success_keeps_transport_and_field_semantics(monkeypatch)
     assert ths_record["net_d5_amount_raw"] == "56000"
     assert ths_record["net_d5_amount_period_kind"] == "five_day_cumulative"
     assert meta["transport_provider"] == "tushare"
-    assert meta["consensus"]["selected_source"] == "tushare_eastmoney_moneyflow_dc"
-    assert meta["consensus"]["selected_field"] == "r0_net"
-    assert meta["consensus"]["direction_allowed"] is True
-    assert meta["consensus"]["alternative_sources"][0]["source"] == "tushare_ths_moneyflow_ths"
+    assert meta["selection"]["selected_source"] == "tushare_eastmoney_moneyflow_dc"
+    assert meta["selection"]["selected_field"] == "r0_net"
+    assert meta["selection"]["direction_allowed"] is False
+    assert meta["selection"]["hard_guard"]["blocked"] is True
+    assert meta["selection"]["reason_code"] == "incomparable_field_semantics"
+    assert meta["selection"]["alternative_sources"][0]["source"] == "tushare_ths_moneyflow_ths"
+    assert meta["same_field_consensus_audit"]["reason_code"] == "incomparable_field_semantics"
     assert meta["consensus_audit"]["reason_code"] == "incomparable_field_semantics"
+    if "consensus" in meta:
+        assert meta["consensus"].get("selected_source") is None or meta["consensus"].get("direction_allowed") is False
 
 
 def test_tushare_token_missing_is_typed_and_does_not_call_network(monkeypatch):
