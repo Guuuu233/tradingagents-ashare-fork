@@ -1,6 +1,9 @@
 """Tests for data-layer as-of extraction and failure triage (Lane A / DAV-337)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import pandas as pd
 import pytest
 
 from tradingagents.dataflows.interface import (
@@ -9,6 +12,7 @@ from tradingagents.dataflows.interface import (
     route_to_vendor,
 )
 from tradingagents.dataflows.fund_flow_evidence import FundFlowText
+from tradingagents.dataflows.providers.cn_akshare_provider import CnAkshareProvider
 from tradingagents.graph.data_collector import (
     _extract_source_as_of,
     _build_source_provenance,
@@ -19,6 +23,7 @@ from tradingagents.dataflows.trade_calendar import (
     SNAPSHOT_ONLY_REFUSAL,
     snapshot_historical_refusal,
 )
+
 
 
 # ── Sample Payloads for the 8 Financial/Report Interfaces ────────────────────
@@ -214,11 +219,106 @@ def test_classify_and_compact_reason_triage():
     assert _compact_failure_reason("refused") == "data source refused"
 
 
-# ── Live 3-Ticker Smoke Test for 8 Interfaces ────────────────────────────────
+# ── Offline Fixtures for 3 Tickers x 8 Interfaces ───────────────────────────
+
+_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "financial_as_of" / "three_tickers_fixtures.json"
+)
+with open(_FIXTURE_PATH, "r", encoding="utf-8") as _f:
+    _THREE_TICKERS_FIXTURES: dict[str, dict] = json.load(_f)
+
+
+class _OfflineFinancialAk:
+    """Mock AkShare vendor serving frozen offline fixtures for 3 tickers x 8 interfaces."""
+
+    def __init__(self, fixtures: dict[str, dict] | None = None):
+        self._fixtures = fixtures or _THREE_TICKERS_FIXTURES
+
+    def stock_financial_report_sina(self, stock: str, symbol: str) -> pd.DataFrame:
+        table_map = {
+            "资产负债表": "balance_sheet",
+            "利润表": "income_statement",
+            "现金流量表": "cashflow",
+        }
+        key = table_map.get(symbol)
+        for ticker, data in self._fixtures.items():
+            if data.get("sina_symbol") == stock or data.get("code") == stock:
+                if key and key in data:
+                    return pd.DataFrame(data[key])
+        raise ValueError(f"Unknown stock={stock}, symbol={symbol}")
+
+    def stock_individual_info_em(self, symbol: str) -> pd.DataFrame:
+        for ticker, data in self._fixtures.items():
+            if data.get("code") == symbol:
+                return pd.DataFrame(data.get("individual_info", []))
+        return pd.DataFrame()
+
+    def stock_individual_basic_info_xq(self, symbol: str) -> pd.DataFrame:
+        return pd.DataFrame()
+
+    def stock_financial_abstract(self, symbol: str) -> pd.DataFrame:
+        for ticker, data in self._fixtures.items():
+            if data.get("code") == symbol:
+                return pd.DataFrame(data.get("financial_abstract", []))
+        return pd.DataFrame()
+
+    def stock_yjyg_em(self, date: str) -> pd.DataFrame:
+        rows = []
+        for ticker, data in self._fixtures.items():
+            rows.extend(data.get("earnings_forecast", []))
+        return pd.DataFrame(rows)
+
+    def stock_zh_a_gdhs_detail_em(self, symbol: str) -> pd.DataFrame:
+        for ticker, data in self._fixtures.items():
+            if data.get("code") == symbol:
+                return pd.DataFrame(data.get("shareholder_count", []))
+        return pd.DataFrame()
+
+    def stock_individual_fund_flow(self, stock: str, market: str) -> pd.DataFrame:
+        for ticker, data in self._fixtures.items():
+            if data.get("code") == stock:
+                return pd.DataFrame(data.get("fund_flow_individual", []))
+        return pd.DataFrame()
+
+    def stock_restricted_release_detail_em(
+        self, start_date: str = None, end_date: str = None
+    ) -> pd.DataFrame:
+        rows = []
+        for ticker, data in self._fixtures.items():
+            rows.extend(data.get("restricted_release", []))
+        return pd.DataFrame(rows)
+
+    def stock_financial_abstract_new_ths(self, symbol: str, indicator: str = None):
+        return pd.DataFrame({"report_date": ["2025-12-31"], "净利润": [1]})
+
+
+@pytest.fixture
+def offline_financial_ak(monkeypatch):
+    """Inject offline fixture mock for CnAkshareProvider and reset cache."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.CnAkshareProvider._ak",
+        lambda self: _OfflineFinancialAk(),
+    )
+    from tradingagents.dataflows.interface import _registry
+
+    provider = _registry.get("cn_akshare")
+    if hasattr(provider, "_sina_fin_tables_cache"):
+        provider._sina_fin_tables_cache.clear()
+    if hasattr(provider, "_backup_fin_tables_cache"):
+        provider._backup_fin_tables_cache.clear()
+    yield
+    if hasattr(provider, "_sina_fin_tables_cache"):
+        provider._sina_fin_tables_cache.clear()
+    if hasattr(provider, "_backup_fin_tables_cache"):
+        provider._backup_fin_tables_cache.clear()
+
+
+
+# ── 3-Ticker Smoke Test for 8 Interfaces (Offline Fixtures by Default) ───────
 
 @pytest.mark.parametrize("ticker", ["600900.SH", "000333.SZ", "600276.SH"])
-def test_smoke_three_tickers_eight_interfaces_as_of(ticker: str):
-    """Smoke test: 600900 / 000333 / 600276 x 8 interfaces -> actual_as_of <= curr_date."""
+def test_smoke_three_tickers_eight_interfaces_as_of(ticker: str, offline_financial_ak):
+    """Smoke test: 600900 / 000333 / 600276 x 8 interfaces -> actual_as_of <= curr_date (offline)."""
     curr_date = "2026-08-21"
     methods = [
         ("balance_sheet", "get_balance_sheet", {"ticker": ticker, "freq": "quarterly", "curr_date": curr_date}),
@@ -247,3 +347,85 @@ def test_smoke_three_tickers_eight_interfaces_as_of(ticker: str):
         assert entry.get("actual_as_of") <= curr_date, f"{ticker} actual_as_of > curr_date for {name}"
         gap = entry.get("gap")
         assert not (gap and "未返回可验证数据日期" in gap), f"{ticker} unverified gap for {name}: {gap}"
+
+
+# ── Live Network 3-Ticker Smoke Test (Isolated with network mark) ────────────
+
+@pytest.mark.network
+@pytest.mark.parametrize("ticker", ["600900.SH", "000333.SZ", "600276.SH"])
+def test_network_smoke_three_tickers_eight_interfaces_as_of(ticker: str):
+    """Live network smoke test for 8 interfaces. Run with: pytest -m network"""
+    curr_date = "2026-08-21"
+    methods = [
+        ("balance_sheet", "get_balance_sheet", {"ticker": ticker, "freq": "quarterly", "curr_date": curr_date}),
+        ("income_statement", "get_income_statement", {"ticker": ticker, "freq": "quarterly", "curr_date": curr_date}),
+        ("cashflow", "get_cashflow", {"ticker": ticker, "freq": "quarterly", "curr_date": curr_date}),
+        ("fundamentals", "get_fundamentals", {"ticker": ticker, "curr_date": curr_date}),
+        ("earnings_forecast", "get_earnings_forecast", {"symbol": ticker, "curr_date": curr_date}),
+        ("shareholder_count", "get_shareholder_count", {"symbol": ticker, "curr_date": curr_date}),
+        ("fund_flow_individual", "get_individual_fund_flow", {"symbol": ticker, "curr_date": curr_date}),
+        ("restricted_release", "get_restricted_release", {"symbol": ticker, "curr_date": curr_date}),
+    ]
+
+    results = {}
+    for name, method, kwargs in methods:
+        res = route_to_vendor(method, **kwargs)
+        results[name] = res
+        as_of = _extract_source_as_of(res, curr_date)
+        assert as_of is not None, f"{ticker} {name} returned None as_of"
+        assert as_of <= curr_date, f"{ticker} {name} as_of {as_of} exceeds {curr_date}"
+
+    prov = _build_source_provenance(results, curr_date, daily_as_of=curr_date)
+    for name, _m, _kw in methods:
+        entry = prov.get(name)
+        assert entry is not None, f"{ticker} missing provenance for {name}"
+        assert entry.get("actual_as_of") is not None, f"{ticker} null actual_as_of for {name}"
+        assert entry.get("actual_as_of") <= curr_date, f"{ticker} actual_as_of > curr_date for {name}"
+        gap = entry.get("gap")
+        assert not (gap and "未返回可验证数据日期" in gap), f"{ticker} unverified gap for {name}: {gap}"
+
+
+# ── Sina Failure Refusal & PIT Semantics Tests ───────────────────────────────
+
+def test_provider_sina_failure_refuses_ths_fallback_and_reports_failure(monkeypatch):
+    """When Sina fails and no backup announce date is available, refuse THS fallback on historical dates."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-08-28",
+    )
+
+    class _FailingSinaAk:
+        def stock_financial_report_sina(self, stock, symbol):
+            raise RuntimeError("sina connection reset")
+
+        def stock_financial_abstract_new_ths(self, symbol, indicator=None):
+            return pd.DataFrame({"report_date": ["20260331"], "净利润": [999]})
+
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.CnAkshareProvider._ak",
+        lambda self: _FailingSinaAk(),
+    )
+
+    from tradingagents.dataflows.interface import _registry
+
+    provider = _registry.get("cn_akshare")
+    if hasattr(provider, "_sina_fin_tables_cache"):
+        provider._sina_fin_tables_cache.clear()
+    if hasattr(provider, "_backup_fin_tables_cache"):
+        provider._backup_fin_tables_cache.clear()
+
+    curr_date = "2026-08-21"
+    for method in ("get_balance_sheet", "get_income_statement", "get_cashflow"):
+        res = route_to_vendor(method, ticker="600900.SH", curr_date=curr_date)
+        # Must return explicit failure text, not THS fallback data
+        assert "数据获取失败" in res
+        assert "不可用" in res
+        assert "同花顺" not in res or "仅当日分析可用" in res or "【数据获取失败】" in res
+        # Must not extract an as_of date as valid data
+        as_of = _extract_source_as_of(res, curr_date)
+        assert as_of is None, f"Expected None as_of for failed {method}, got {as_of}"
+        # Provenance classification must report failure status
+        status = _classify_failure_value(res)
+        assert status in ("failed", "unavailable", "refused")
+
+

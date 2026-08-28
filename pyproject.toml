@@ -48,3 +48,10 @@ dev = [
     "pytest>=9.0.2",
     "fakeredis>=2.37.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "network: tests that require real network access (run with: pytest -m network)",
+]
+addopts = "-m 'not network'"
+
