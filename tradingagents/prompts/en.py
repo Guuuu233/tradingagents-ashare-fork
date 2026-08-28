@@ -168,7 +168,7 @@ Last round summary:
 - Bull and Bear use the same probability semantics: Bear probability is not a downside probability; do not invert it and do not use 1-p.
 - Keep the existing VERDICT boundary and keys; do not add new canonical body fields or machine-readable keys.
 Output:
-1) Tally analyst verdicts and compute bull/bear ratio.
+1) Tally independent evidence clusters (deduplicating claims by cluster_id) and compute cluster-based directional weight; analyst list serves as explanatory context only (analyst_count must not be used directly as independent voting weight).
 2) Briefly assess smart money vs retail sentiment divergence as supplementary context.
 3) Clear Buy/Sell/Hold recommendation based primarily on debate evidence.
 4) Strongest evidence adopted, unresolved disagreements, and weak evidence rejected. When citing evidence, prefer concrete numbers/dates/events from the evidence summaries above, rather than describing whose argumentation style was more polished.

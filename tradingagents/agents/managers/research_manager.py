@@ -27,6 +27,10 @@ from tradingagents.agents.utils.evidence_verifier import (
     format_challenges_for_prompt,
     format_claims_with_verification_for_prompt,
 )
+from tradingagents.agents.utils.claim_cluster import (
+    cluster_claims,
+    tally_cluster_votes,
+)
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 from tradingagents.agents.utils.decision_status import (
     ACTION_NO_TRADE,
@@ -54,8 +58,13 @@ def _blocked_manager_payload(
     consistency_check_passed: bool = True,
     failed_checks: list | None = None,
     evidence_verification: list | None = None,
+    claim_cluster_metrics: dict | None = None,
 ) -> dict:
     """Shared early-return shape for INVALID/ABSTAIN manager short-circuits."""
+    if claim_cluster_metrics is None:
+        claim_cluster_metrics = tally_cluster_votes(
+            claims=investment_debate_state.get("claims", []),
+        )
     manager_verdict = {
         "direction": DIRECTION_NA,
         "winner": "tie",
@@ -97,6 +106,10 @@ def _blocked_manager_payload(
             "manager_verdict": manager_verdict,
             "evidence_verification": list(evidence_verification or []),
             "report_manifest": report_manifest,
+            "claim_cluster_metrics": claim_cluster_metrics,
+            "independent_cluster_count": claim_cluster_metrics.get("independent_cluster_count", 0),
+            "analyst_count": claim_cluster_metrics.get("analyst_count", 0),
+            "verified_evidence_count": claim_cluster_metrics.get("verified_evidence_count", 0),
         },
     }
     if run_integrity is not None:
@@ -336,6 +349,25 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
             claims=claims,
             claims_verification=claims_verification,
+        )
+
+        symbol_val = (
+            (market_data_context.get("symbol") if isinstance(market_data_context, dict) else None)
+            or state.get("symbol")
+            or state.get("ticker")
+        )
+        claims = cluster_claims(
+            claims,
+            symbol=symbol_val,
+            date=analysis_baseline_date,
+            claims_verification=claims_verification,
+        )
+        claim_cluster_metrics = tally_cluster_votes(
+            claims=claims,
+            reports=seven_reports,
+            claims_verification=claims_verification,
+            symbol=symbol_val,
+            trade_date=analysis_baseline_date,
         )
 
         claims_text = format_claims_with_verification_for_prompt(
@@ -580,6 +612,10 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "evidence_verification": claims_verification,
             "challenge_verification": challenges_verification,
             "report_manifest": report_manifest,
+            "claim_cluster_metrics": claim_cluster_metrics,
+            "independent_cluster_count": claim_cluster_metrics.get("independent_cluster_count", 0),
+            "analyst_count": claim_cluster_metrics.get("analyst_count", 0),
+            "verified_evidence_count": claim_cluster_metrics.get("verified_evidence_count", 0),
         }
         if claim_weights is not None:
             new_investment_debate_state["claim_weights"] = claim_weights

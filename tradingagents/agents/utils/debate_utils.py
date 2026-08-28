@@ -52,7 +52,7 @@ _MACHINE_LIST_FIELDS = (
 )
 _MACHINE_TEXT_FIELDS = ("round_summary", "round_goal")
 _MACHINE_FIELDS = frozenset((*_MACHINE_LIST_FIELDS, *_MACHINE_TEXT_FIELDS, "challenges", "self_win_prob"))
-_MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids", "battlefield"))
+_MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids", "battlefield", "evidence_ids", "cluster_id"))
 _MACHINE_CHALLENGE_FIELDS = frozenset(("challenge_id", "target_claim_id", "weakest_point", "evidence", "severity"))
 
 
@@ -557,6 +557,14 @@ def _sanitize_machine_payload(payload: Mapping[str, Any], tag: str) -> dict[str,
         raw_battlefield = raw_claim.get("battlefield")
         if raw_battlefield is not None:
             claim_dict["battlefield"] = str(raw_battlefield).strip()
+        raw_evidence_ids = raw_claim.get("evidence_ids")
+        if raw_evidence_ids is not None:
+            claim_dict["evidence_ids"] = _normalize_machine_string_list(
+                raw_evidence_ids, tag, "evidence_ids", claim_index
+            )
+        raw_cluster_id = raw_claim.get("cluster_id")
+        if raw_cluster_id is not None:
+            claim_dict["cluster_id"] = str(raw_cluster_id).strip()
         claims.append(claim_dict)
     normalized["new_claims"] = claims
     return normalized
@@ -1780,6 +1788,14 @@ def update_debate_state_with_payload(
             }
             if claim_payload.get("battlefield"):
                 claim_entry["battlefield"] = claim_payload["battlefield"]
+            if claim_payload.get("evidence_ids"):
+                claim_entry["evidence_ids"] = list(claim_payload["evidence_ids"])
+            if claim_payload.get("cluster_id"):
+                claim_entry["cluster_id"] = claim_payload["cluster_id"]
+
+            from tradingagents.agents.utils.claim_cluster import assign_claim_cluster
+            claim_entry = assign_claim_cluster(claim_entry)
+
             claims.append(claim_entry)
             claim_map[claim_id] = claim_entry
             open_claim_ids.add(claim_id)
