@@ -631,7 +631,19 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if credit_weight_audit is not None:
             new_investment_debate_state["credit_weight_audit"] = credit_weight_audit
 
-        # D-009 P0-1/P0-5b: every successful terminal path emits canonical decision_status.
+        # D-009 P0-1/P0-5b/P1-2: every successful terminal path emits canonical decision_status.
+        vpa_ctx = market_data_context.get("vpa_context") if isinstance(market_data_context, dict) else None
+        if (
+            manager_verdict.get("position_pct") is not None
+            and isinstance(vpa_ctx, dict)
+            and vpa_ctx.get("reversal_state") == "reversal_confirmed"
+        ):
+            from tradingagents.agents.utils.decision_status import resolve_staged_entry_position
+            manager_verdict["position_pct"] = resolve_staged_entry_position(
+                manager_verdict["position_pct"],
+                vpa_context=vpa_ctx,
+            )
+
         terminal_status = status_from_manager_verdict(
             manager_verdict,
             prior_analysis_status=state.get("analysis_status"),
@@ -641,6 +653,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             focus_claim_ids=new_investment_debate_state.get("focus_claim_ids"),
             unresolved_claim_ids=unresolved_claim_ids,
             claims=claims,
+            market_data_context=market_data_context,
+            vpa_context=vpa_ctx,
         )
         status_dict = terminal_status.to_dict()
         manager_verdict = {

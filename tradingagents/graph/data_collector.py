@@ -152,6 +152,202 @@ def _parse_csv_to_dataframe(raw_csv: str) -> Optional[pd.DataFrame]:
 
 # ── VPA (Volume Price Analysis) 预计算 ──────────────────────────
 
+# Volume Regimes (D-009 P1-2)
+VOLUME_REGIME_NORMAL = "normal"
+VOLUME_REGIME_HIGH_VOLUME_STAGNATION = "high_volume_stagnation_candidate"
+VOLUME_REGIME_CAPITULATION = "capitulation_candidate"
+VOLUME_REGIME_INSUFFICIENT_DATA = "insufficient_data"
+
+VOLUME_REGIMES = frozenset({
+    VOLUME_REGIME_NORMAL,
+    VOLUME_REGIME_HIGH_VOLUME_STAGNATION,
+    VOLUME_REGIME_CAPITULATION,
+    VOLUME_REGIME_INSUFFICIENT_DATA,
+})
+
+# Reversal States (D-009 P1-2)
+REVERSAL_STATE_UNCONFIRMED = "reversal_unconfirmed"
+REVERSAL_STATE_CONFIRMED = "reversal_confirmed"
+REVERSAL_STATE_INSUFFICIENT_DATA = "insufficient_data"
+REVERSAL_STATE_NONE = "none"
+
+REVERSAL_STATES = frozenset({
+    REVERSAL_STATE_UNCONFIRMED,
+    REVERSAL_STATE_CONFIRMED,
+    REVERSAL_STATE_INSUFFICIENT_DATA,
+    REVERSAL_STATE_NONE,
+})
+
+VPA_DEFAULT_WINDOW = 20
+VPA_MIN_REQUIRED_BARS = 25  # window + 5
+VPA_CAPITULATION_ZSCORE_THRESHOLD = 2.0
+VPA_CAPITULATION_VOLUME_RATIO_THRESHOLD = 2.0
+VPA_CAPITULATION_DROP_PCT_THRESHOLD = -0.03
+VPA_CAPITULATION_CONSECUTIVE_DOWN_DAYS = 3
+VPA_STAGNATION_ZSCORE_THRESHOLD = 1.5
+VPA_STAGNATION_VOLUME_RATIO_THRESHOLD = 1.8
+VPA_STAGNATION_MAX_ABS_PCT_CHANGE = 0.015
+VPA_STAGNATION_MAX_SPREAD = 0.02
+MAX_REVERSAL_STAGED_POSITION_PCT = 10.0
+
+
+def compute_vpa_deterministic_features(
+    df: Optional[pd.DataFrame],
+    cutoff: Optional[str] = None,
+    window: int = VPA_DEFAULT_WINDOW,
+) -> Dict[str, Any]:
+    """Compute deterministic VPA regime and reversal candidate features (D-009 P1-2).
+
+    Strictly no forward-looking / T+1 leakage:
+    Bars are truncated strictly to date <= cutoff before evaluating patterns and follow-through.
+    """
+    cutoff_str = str(cutoff).strip() if cutoff is not None and str(cutoff).strip() else None
+
+    insufficient_result = {
+        "volume_regime": VOLUME_REGIME_INSUFFICIENT_DATA,
+        "reversal_state": REVERSAL_STATE_INSUFFICIENT_DATA,
+        "features": {},
+        "as_of": cutoff_str or "",
+        "cutoff": cutoff_str or "",
+    }
+
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return insufficient_result
+
+    required = {"open", "high", "low", "close", "volume"}
+    if not required.issubset(set(df.columns)):
+        return insufficient_result
+
+    df = df.copy()
+
+    # If date column is available, sort and truncate strictly <= cutoff
+    if "date" in df.columns:
+        df["date_dt"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date_dt"]).sort_values("date_dt")
+        if cutoff_str:
+            cutoff_dt = pd.to_datetime(cutoff_str, errors="coerce")
+            if pd.notna(cutoff_dt):
+                df = df[df["date_dt"] <= cutoff_dt]
+        df = df.drop(columns=["date_dt"])
+
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df["open"] = pd.to_numeric(df["open"], errors="coerce")
+    df["high"] = pd.to_numeric(df["high"], errors="coerce")
+    df["low"] = pd.to_numeric(df["low"], errors="coerce")
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+
+    if len(df) < window + 5:
+        return insufficient_result
+
+    # ── Derive Rolling & Bar Features ──
+    vol_mean = df["volume"].rolling(window).mean()
+    vol_std = df["volume"].rolling(window).std(ddof=0)
+    df["volume_zscore"] = np.where(vol_std > 0, (df["volume"] - vol_mean) / vol_std, 0.0)
+    df["volume_ratio"] = np.where(vol_mean > 0, df["volume"] / vol_mean, 1.0)
+
+    hl_range = df["high"] - df["low"]
+    df["bar_spread"] = np.where(df["close"] > 0, hl_range / df["close"], 0.0)
+    df["close_position"] = np.where(
+        hl_range > 0,
+        (df["close"] - df["low"]) / hl_range,
+        0.5,
+    )
+    df["pct_change"] = df["close"].pct_change().fillna(0.0)
+
+    # Consecutive down days up to the bar
+    down_series = (df["pct_change"] < 0) | (df["close"] < df["open"])
+    consec_down = []
+    curr_down = 0
+    for is_down in down_series:
+        if is_down:
+            curr_down += 1
+        else:
+            curr_down = 0
+        consec_down.append(curr_down)
+    df["consecutive_down_days"] = consec_down
+
+    last_bar = df.iloc[-1]
+    as_of = str(last_bar.get("date", cutoff_str or ""))
+
+    # ── Regime Detection (look at recent bars up to cutoff, e.g. last 5 bars) ──
+    recent_len = min(5, len(df))
+    recent_bars = df.tail(recent_len).reset_index(drop=True)
+
+    capitulation_idx = None
+    for i in range(len(recent_bars) - 1, -1, -1):
+        row = recent_bars.iloc[i]
+        vol_extreme = (
+            row["volume_zscore"] >= VPA_CAPITULATION_ZSCORE_THRESHOLD
+            or row["volume_ratio"] >= VPA_CAPITULATION_VOLUME_RATIO_THRESHOLD
+        )
+        drop_extreme = (
+            row["pct_change"] <= VPA_CAPITULATION_DROP_PCT_THRESHOLD
+            or row["consecutive_down_days"] >= VPA_CAPITULATION_CONSECUTIVE_DOWN_DAYS
+        )
+        if vol_extreme and drop_extreme:
+            capitulation_idx = i
+            break
+
+    volume_regime = VOLUME_REGIME_NORMAL
+    reversal_state = REVERSAL_STATE_NONE
+
+    if capitulation_idx is not None:
+        volume_regime = VOLUME_REGIME_CAPITULATION
+        # Follow-through bars occur strictly AFTER capitulation_idx within recent_bars (all <= cutoff)
+        follow_through_bars = recent_bars.iloc[capitulation_idx + 1 :]
+        if len(follow_through_bars) == 0:
+            reversal_state = REVERSAL_STATE_UNCONFIRMED
+        else:
+            cap_close = recent_bars.iloc[capitulation_idx]["close"]
+            confirmed = False
+            for _, ft_row in follow_through_bars.iterrows():
+                if ft_row["close"] > cap_close or ft_row["pct_change"] > 0:
+                    confirmed = True
+                    break
+            reversal_state = REVERSAL_STATE_CONFIRMED if confirmed else REVERSAL_STATE_UNCONFIRMED
+    else:
+        # Check for high volume stagnation candidate
+        stagnation_idx = None
+        for i in range(len(recent_bars) - 1, -1, -1):
+            row = recent_bars.iloc[i]
+            vol_high = (
+                row["volume_ratio"] >= VPA_STAGNATION_VOLUME_RATIO_THRESHOLD
+                or row["volume_zscore"] >= VPA_STAGNATION_ZSCORE_THRESHOLD
+            )
+            move_narrow = (
+                abs(row["pct_change"]) <= VPA_STAGNATION_MAX_ABS_PCT_CHANGE
+                or row["bar_spread"] <= VPA_STAGNATION_MAX_SPREAD
+            )
+            if vol_high and move_narrow:
+                stagnation_idx = i
+                break
+
+        if stagnation_idx is not None:
+            volume_regime = VOLUME_REGIME_HIGH_VOLUME_STAGNATION
+            reversal_state = REVERSAL_STATE_UNCONFIRMED
+        else:
+            volume_regime = VOLUME_REGIME_NORMAL
+            reversal_state = REVERSAL_STATE_NONE
+
+    features = {
+        "volume_zscore": round(float(last_bar.get("volume_zscore", 0.0)), 2),
+        "volume_ratio": round(float(last_bar.get("volume_ratio", 1.0)), 2),
+        "bar_spread": round(float(last_bar.get("bar_spread", 0.0)), 4),
+        "close_position": round(float(last_bar.get("close_position", 0.5)), 2),
+        "pct_change": round(float(last_bar.get("pct_change", 0.0)), 4),
+        "consecutive_down_days": int(last_bar.get("consecutive_down_days", 0)),
+        "follow_through_count": int(len(recent_bars) - 1 - capitulation_idx) if capitulation_idx is not None else 0,
+    }
+
+    return {
+        "volume_regime": volume_regime,
+        "reversal_state": reversal_state,
+        "features": features,
+        "as_of": as_of,
+        "cutoff": cutoff_str or as_of,
+    }
+
 
 def _compute_vpa_indicators(df: pd.DataFrame, window: int = 20) -> str:
     """Pre-compute Volume Price Analysis indicators from OHLCV DataFrame.
@@ -381,6 +577,7 @@ def _unavailable_realtime_context(retrieved_at: Optional[str], error: str) -> Di
 
 def default_market_data_context() -> Dict[str, Any]:
     """Return a safe context when collection did not provide one."""
+    empty_vpa = compute_vpa_deterministic_features(None)
     return {
         "analysis_baseline_date": None,
         "fund_flow_evidence": {
@@ -391,6 +588,8 @@ def default_market_data_context() -> Dict[str, Any]:
             "validation": {"status": "not_checked", "mismatches": []},
             "gap": "【数据获取失败】资金流 evidence：未返回结构化逐日记录",
         },
+        "vpa_context": empty_vpa,
+        "vpa_structured": empty_vpa,
         "daily": {"as_of": None, "completeness": "unavailable"},
         "realtime": {
             "status": "unavailable",
@@ -1761,10 +1960,17 @@ def _fetch_all(
     try:
         if df is not None:
             results["vpa_indicators"] = _compute_vpa_indicators(df.copy())
+            results["vpa_structured"] = compute_vpa_deterministic_features(df.copy(), cutoff=trade_date)
         else:
             results["vpa_indicators"] = "VPA 数据不足"
+            results["vpa_structured"] = compute_vpa_deterministic_features(None, cutoff=trade_date)
     except Exception as e:
         results["vpa_indicators"] = f"VPA 计算失败：{e}"
+        results["vpa_structured"] = compute_vpa_deterministic_features(None, cutoff=trade_date)
+
+    results["vpa_context"] = results["vpa_structured"]
+    results["market_data_context"]["vpa_context"] = results["vpa_structured"]
+    results["market_data_context"]["vpa_structured"] = results["vpa_structured"]
 
     logger.debug("[Timer] Total Data Collection for %s took %.2fs", ticker, time.time() - fetch_start)
     return results

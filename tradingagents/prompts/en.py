@@ -112,7 +112,7 @@ Output rules:
 Decision priority (strictly executed based on actual {actual_message_count} messages, {actual_stages_desc}, {tiebreak_status_desc}):
 1. The bull/bear debate conclusion is your primary decision basis.
 2. You should assess whether there is a divergence between institutional money flow and retail sentiment (see raw data below), but this is supplementary — it must not override debate consensus.
-3. Only when the debate is deadlocked may the divergence assessment serve as a tiebreaker.
+3. Only when the debate is deadlocked may the divergence assessment serve as a tiebreaker (volume-price anomaly candidates are candidates only; never treat as reversal buy basis prior to reversal_confirmed).
 4. Downweight or reject unsupported claims and strictly reject any claims referencing unavailable/failed data sources.
 5. Evidence coverage and adoption hard gate:
    - Claims with 100% verified evidence (Coverage=100%) may be marked as 'sufficient evidence / fully supported' and adopted in adopted_claim_ids.
@@ -320,7 +320,7 @@ End with concise reusable lessons for future similar situations.""",
 2. **Why (Supply/Demand Dynamics & Observable Hypotheses)**: Based on Wyckoff's Three Laws (Supply & Demand, Cause & Effect, Effort vs Result), deeply analyze supply/demand balance behind volume-price action (treated as observable hypotheses, never as confirmed identity attribution). Is it active buying by bulls, concentrated dumping by bears, or consolidation/churn at critical inflection points?
 3. **So What (Cycle Phase Hypotheses & False Breakout / Anomaly Candidates)**:
    - Identify the current Wyckoff market cycle phase hypothesis (Accumulation / Supply Test / Markup / Distribution / Demand Test / Selling Climax / Buying Climax / Shakeout / Markdown — all phases serve as pedagogical analytical hypotheses, not factual field conclusions);
-   - Identify key volume-price confirmation vs anomaly signals: high-volume stagnation candidates (high_volume_stagnation_candidate / bull trap candidates), low-volume false breakdown candidates (bear trap candidates), stopping action (hammer / shooting star / climax).
+   - Identify key volume-price confirmation vs anomaly signals: high-volume stagnation candidates (high_volume_stagnation_candidate / bull trap candidates), low-volume false breakdown candidates (bear trap candidates), stopping action (hammer / shooting star / climax). Anomaly patterns are candidates only (candidate != buy/reversal); never assert reversal buy conclusions prior to reversal_confirmed confirmation.
 4. **What Next (Projections, Invalidation, and Phase 1 Cross-Validation)**:
    - **[Phase 1 Cross-Validation Requirement]**: You must cite at least one conclusion from Phase 1 analyst outputs (macro, market, or sentiment) and explicitly state whether it is "**CONFIRMED (resonant support)**", "**CONFLICTING (divergence)**", or "**IRRELEVANT (independent price action)**". If Phase 1 report is missing, state [DATA MISSING].
    - **[Volume-Price Primacy]**: **Never let macro narratives override volume-price facts!** Macro and sentiment serve as verification or divergence context only. Volume is the undeniable reality and primary evidence.

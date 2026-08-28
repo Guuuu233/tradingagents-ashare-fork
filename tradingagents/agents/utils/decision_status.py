@@ -65,6 +65,8 @@ CONFIRMATION_STATES = frozenset(
     {CONFIRM_CONFIRMED, CONFIRM_PARTIAL, CONFIRM_UNRESOLVED}
 )
 
+MAX_REVERSAL_STAGED_POSITION_PCT = 10.0
+
 # analysis_status values that must never enter calibration / directional backtest
 NON_ELIGIBLE_ANALYSIS_STATUSES = frozenset(
     {
@@ -250,6 +252,28 @@ def map_verdict_trade_action(
     return ACTION_NO_TRADE
 
 
+def resolve_staged_entry_position(
+    requested_position_pct: Any,
+    *,
+    vpa_context: Mapping[str, Any] | None = None,
+) -> float:
+    """Resolve position percentage with staged entry caps for reversal candidates (D-009 P1-2)."""
+    try:
+        pos = float(requested_position_pct)
+    except (TypeError, ValueError):
+        pos = 0.0
+    if not vpa_context or not isinstance(vpa_context, Mapping):
+        return pos
+    regime = str(vpa_context.get("volume_regime") or "").strip()
+    rev_state = str(vpa_context.get("reversal_state") or "").strip()
+    if (
+        regime in {"capitulation_candidate", "high_volume_stagnation_candidate"}
+        and rev_state == "reversal_confirmed"
+    ):
+        return min(pos, MAX_REVERSAL_STAGED_POSITION_PCT)
+    return pos
+
+
 def evaluate_confirmation_state(
     *,
     focus_claim_ids: Sequence[Any] | None = None,
@@ -364,6 +388,8 @@ def status_from_manager_verdict(
     focus_claim_ids: Sequence[Any] | None = None,
     unresolved_claim_ids: Sequence[Any] | None = None,
     claims: Sequence[Mapping[str, Any]] | None = None,
+    market_data_context: Mapping[str, Any] | None = None,
+    vpa_context: Mapping[str, Any] | None = None,
 ) -> DecisionStatus:
     """Build canonical status for a completed Research Manager path."""
     mv = manager_verdict if isinstance(manager_verdict, Mapping) else {}
@@ -423,6 +449,21 @@ def status_from_manager_verdict(
         claims=cl_list,
     )
 
+    # VPA candidate / reversal feature evaluation (D-009 P1-2)
+    vpa = vpa_context
+    if vpa is None and isinstance(market_data_context, Mapping):
+        vpa = market_data_context.get("vpa_context") or market_data_context.get("vpa_structured")
+    if vpa is None and isinstance(deb_state, Mapping):
+        mdc = deb_state.get("market_data_context")
+        if isinstance(mdc, Mapping):
+            vpa = mdc.get("vpa_context") or mdc.get("vpa_structured")
+    if vpa is None and isinstance(mv, Mapping):
+        vpa = mv.get("vpa_context") or mv.get("vpa_structured")
+
+    vpa_regime = str(vpa.get("volume_regime") or "").strip() if isinstance(vpa, Mapping) else ""
+    vpa_rev_state = str(vpa.get("reversal_state") or "").strip() if isinstance(vpa, Mapping) else ""
+    vpa_codes: list[str] = []
+
     direction = map_verdict_direction(mv.get("direction"))
     if confirmation_state in {CONFIRM_UNRESOLVED, CONFIRM_PARTIAL}:
         trade_action = ACTION_WAIT
@@ -432,24 +473,37 @@ def status_from_manager_verdict(
             winner=mv.get("winner"),
             position_pct=mv.get("position_pct"),
         )
+        if trade_action == ACTION_BUY:
+            if vpa_regime == "capitulation_candidate":
+                if vpa_rev_state != "reversal_confirmed":
+                    trade_action = ACTION_WAIT
+                    vpa_codes.append("vpa_capitulation_unconfirmed_wait")
+                else:
+                    vpa_codes.append("vpa_reversal_confirmed_staged_entry")
+            elif vpa_regime == "high_volume_stagnation_candidate":
+                if vpa_rev_state != "reversal_confirmed":
+                    trade_action = ACTION_WAIT
+                    vpa_codes.append("vpa_stagnation_candidate_wait")
+                else:
+                    vpa_codes.append("vpa_reversal_confirmed_staged_entry")
 
     if prior_analysis_status == ANALYSIS_PARTIAL:
         return partial_status(
-            reason_codes=["prior_partial_analyst_failures", *confirm_codes],
+            reason_codes=["prior_partial_analyst_failures", *confirm_codes, *vpa_codes],
             trade_action=ACTION_NO_TRADE
             if trade_action not in NON_DIRECTIONAL_TRADE_ACTIONS
             else trade_action,
             direction=DIRECTION_NA,
         )
     if direction == DIRECTION_NA and trade_action in NON_DIRECTIONAL_TRADE_ACTIONS and confirmation_state == CONFIRM_CONFIRMED:
-        return abstain_status(reason_codes=["manager_direction_na", *confirm_codes])
+        return abstain_status(reason_codes=["manager_direction_na", *confirm_codes, *vpa_codes])
 
     return valid_status(
         direction=direction if direction != DIRECTION_NA else DIRECTION_NEUTRAL,
         trade_action=trade_action if trade_action != ACTION_NO_TRADE else ACTION_HOLD,
         risk_status=RISK_OK,
         confirmation_state=confirmation_state,
-        reason_codes=["manager_terminal", *confirm_codes],
+        reason_codes=["manager_terminal", *confirm_codes, *vpa_codes],
     )
 
 
