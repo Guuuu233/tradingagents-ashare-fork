@@ -427,6 +427,51 @@ def test_fund_flow_requires_curr_date_and_oor_message():
     assert "截至于 2026-07-22" in ok
 
 
+def test_provider_income_statement_includes_period_kind_and_no_q2(monkeypatch):
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    provider = _FinFixtureProvider(_three_tables())
+    text = provider.get_income_statement("600519", curr_date="2024-08-20")
+    assert "财务数据截至 2024H1" in text
+    assert "period_kind=half_year_cumulative" in text
+    assert "reported_period_label=2024H1" in text
+    assert "derivation_formula=not_derived" in text
+    assert "2024Q2" not in text
+    assert ("不是 Q2" in text or "不是Q2" in text or "禁止当作 Q2" in text or "禁止当作Q2" in text)
+
+
+def test_provider_balance_sheet_includes_period_end_stock(monkeypatch):
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    provider = _FinFixtureProvider(_three_tables())
+    text = provider.get_balance_sheet("600519", curr_date="2024-08-20")
+    assert "财务数据截至 2024H1" in text
+    assert "period_kind=period_end_stock" in text
+    assert "reported_period_label=2024H1" in text
+    assert "derivation_formula=not_derived" in text
+    assert "期末点值" in text
+
+
+def test_provider_cashflow_statement_includes_period_kind_and_no_q2(monkeypatch):
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    provider = _FinFixtureProvider(_three_tables())
+    text = provider.get_cashflow("600519", curr_date="2024-08-20")
+    assert "财务数据截至 2024H1" in text
+    assert "period_kind=half_year_cumulative" in text
+    assert "reported_period_label=2024H1" in text
+    assert "derivation_formula=not_derived" in text
+    assert "2024Q2" not in text
+    assert ("不是 Q2" in text or "不是Q2" in text or "禁止当作 Q2" in text or "禁止当作Q2" in text)
+
+
+
 # ── Backup financial source with ann_date / f_ann_date (P2-G3) ──────
 
 

@@ -1222,6 +1222,12 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 today_dt is not None
                 and cutoff < today_dt
             )
+            kind_map = {
+                "资产负债表": "balance",
+                "利润表": "income",
+                "现金流量表": "cashflow",
+            }
+            stmt_kind = kind_map.get(report_name)
 
             # 1. Try primary source: Sina
             tables = self._load_sina_financial_tables(ticker, assume_locked=True)
@@ -1237,7 +1243,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             sina_df, eff_map, curr_date
                         )
                         if filtered is None or filtered.empty or latest is None:
-                            header = financial_cutoff_header(latest, curr_date)
+                            header = financial_cutoff_header(
+                                latest, curr_date, statement_kind=stmt_kind
+                            )
                             return (
                                 f"{header}\n"
                                 f"【数据获取失败】{report_name} 在 {curr_date} 及之前无已公开报告期。"
@@ -1249,13 +1257,11 @@ class CnAkshareProvider(BaseMarketDataProvider):
                         work = work.drop(columns=["__period"])
                         yoy_note = periods_used_dropped_yoy(eff_map, work["报告日"])
                         header = financial_cutoff_header(
-                            latest, curr_date, yoy_disclaimer=yoy_note
+                            latest,
+                            curr_date,
+                            yoy_disclaimer=yoy_note,
+                            statement_kind=stmt_kind,
                         )
-                        kind_map = {
-                            "资产负债表": "balance",
-                            "利润表": "income",
-                            "现金流量表": "cashflow",
-                        }
                         table = self._shrink_table(
                             work,
                             max_rows=12,
@@ -1301,7 +1307,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             backup_df, eff_map, curr_date
                         )
                         if filtered is None or filtered.empty or latest is None:
-                            header = financial_cutoff_header(latest, curr_date)
+                            header = financial_cutoff_header(
+                                latest, curr_date, statement_kind=stmt_kind
+                            )
                             return (
                                 f"{header}\n"
                                 f"【数据获取失败】{report_name} 在 {curr_date} 及之前无已公开报告期。"
@@ -1316,13 +1324,11 @@ class CnAkshareProvider(BaseMarketDataProvider):
                         work = work.drop(columns=["__period"])
                         yoy_note = periods_used_dropped_yoy(eff_map, work[rep_col])
                         header = financial_cutoff_header(
-                            latest, curr_date, yoy_disclaimer=yoy_note
+                            latest,
+                            curr_date,
+                            yoy_disclaimer=yoy_note,
+                            statement_kind=stmt_kind,
                         )
-                        kind_map = {
-                            "资产负债表": "balance",
-                            "利润表": "income",
-                            "现金流量表": "cashflow",
-                        }
                         table = self._shrink_table(
                             work,
                             max_rows=12,

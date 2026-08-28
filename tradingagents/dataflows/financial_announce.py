@@ -142,6 +142,16 @@ class EffectiveAnnounceDate:
         return format_report_period_label(self.report_period)
 
 
+@dataclass(frozen=True)
+class FinancialPeriodKind:
+    """Classified financial report period kind and derivation metadata."""
+
+    reported_period_label: str
+    period_kind: str  # first_quarter | half_year_cumulative | nine_month_cumulative | annual_cumulative | period_end_stock | unknown
+    derivation_formula: str = "not_derived"
+
+
+
 def parse_yyyymmdd(value) -> Optional[date]:
     """Parse common vendor date forms into a ``date``; invalid → None."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -201,6 +211,64 @@ def format_report_period_label(report_period: str) -> str:
     if md == "1231":
         return f"{year}A"
     return token
+
+
+def classify_financial_period_kind(
+    report_period, statement_kind: Optional[str] = None
+) -> FinancialPeriodKind:
+    """Classify financial statement period kind without single-quarter derivation.
+
+    Maps (report_period, statement_kind) into an unambiguous period_kind:
+    - income / cashflow + 0331 -> first_quarter
+    - income / cashflow + 0630 -> half_year_cumulative
+    - income / cashflow + 0930 -> nine_month_cumulative
+    - income / cashflow + 1231 -> annual_cumulative
+    - balance + (0331/0630/0930/1231) -> period_end_stock
+    - other -> unknown
+    """
+    token = normalize_report_period(report_period)
+    if not token or len(token) != 8:
+        label = format_report_period_label(report_period) if report_period is not None else ""
+        return FinancialPeriodKind(
+            reported_period_label=str(label),
+            period_kind="unknown",
+            derivation_formula="not_derived",
+        )
+
+    label = format_report_period_label(token)
+    if statement_kind not in ("income", "cashflow", "balance"):
+        return FinancialPeriodKind(
+            reported_period_label=label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+        )
+
+    md = token[4:]
+    if statement_kind in ("income", "cashflow"):
+        if md == "0331":
+            kind = "first_quarter"
+        elif md == "0630":
+            kind = "half_year_cumulative"
+        elif md == "0930":
+            kind = "nine_month_cumulative"
+        elif md == "1231":
+            kind = "annual_cumulative"
+        else:
+            kind = "unknown"
+    elif statement_kind == "balance":
+        if md in ("0331", "0630", "0930", "1231"):
+            kind = "period_end_stock"
+        else:
+            kind = "unknown"
+    else:
+        kind = "unknown"
+
+    return FinancialPeriodKind(
+        reported_period_label=label,
+        period_kind=kind,
+        derivation_formula="not_derived",
+    )
+
 
 
 def statutory_disclosure_deadline(report_period) -> date:
@@ -470,11 +538,35 @@ DROPPED_YOY_PROMPT_NOTE = (
 )
 
 
+def _period_kind_chinese_note(
+    statement_kind: Optional[str], period_kind: str, report_period: str
+) -> str:
+    """Chinese semantic guidance note for period_kind."""
+    token = normalize_report_period(report_period)
+    md = token[4:] if token and len(token) >= 8 else ""
+    if statement_kind in ("income", "cashflow"):
+        if period_kind == "half_year_cumulative" or md == "0630":
+            return "利润表/现金流量表半年度（0630）是1–6月累计值，禁止当作Q2单季使用（不是Q2单季）"
+        elif period_kind == "nine_month_cumulative" or md == "0930":
+            return "利润表/现金流量表三季度（0930）是1–9月累计值，禁止当作Q3单季使用（不是Q3单季）"
+        elif period_kind == "annual_cumulative" or md == "1231":
+            return "利润表/现金流量表年度（1231）是1–12月全年累计值，禁止当作Q4单季使用（不是Q4单季）"
+        elif period_kind == "first_quarter" or md == "0331":
+            return "利润表/现金流量表一季度（0331）是1–3月累计值（一季度单季）"
+        return "利润表/现金流量表非标准报告期"
+    elif statement_kind == "balance":
+        if period_kind == "period_end_stock":
+            return "资产负债表各报告期是期末点值（时点存量指标），不适用累计或单季流量口径"
+        return "资产负债表非标准报告期"
+    return "未知财务报表类型或报告期"
+
+
 def financial_cutoff_header(
     latest: Optional[EffectiveAnnounceDate],
     curr_date: str,
     *,
     yoy_disclaimer: Optional[bool] = None,
+    statement_kind: Optional[str] = None,
 ) -> str:
     """Prompt-visible cutoff line for financial injections.
 
@@ -484,10 +576,26 @@ def financial_cutoff_header(
     """
     if latest is None:
         return f"【财务数据】在 {curr_date} 及之前无已公开报告期"
-    line = (
-        f"【财务数据截至 {latest.report_period_label}】"
-        f"（生效公告日 {latest.effective_date_str}，分析日 {curr_date}）"
-    )
+
+    if statement_kind is not None:
+        info = classify_financial_period_kind(latest.report_period, statement_kind)
+        chinese_note = _period_kind_chinese_note(
+            statement_kind, info.period_kind, latest.report_period
+        )
+        line = (
+            f"【财务数据截至 {latest.report_period_label}】"
+            f"（生效公告日 {latest.effective_date_str}，分析日 {curr_date}；"
+            f"reported_period_label={info.reported_period_label}, "
+            f"period_kind={info.period_kind}, "
+            f"derivation_formula={info.derivation_formula}；"
+            f"{chinese_note}）"
+        )
+    else:
+        line = (
+            f"【财务数据截至 {latest.report_period_label}】"
+            f"（生效公告日 {latest.effective_date_str}，分析日 {curr_date}）"
+        )
+
     show_note = (
         yoy_disclaimer
         if yoy_disclaimer is not None
@@ -496,6 +604,7 @@ def financial_cutoff_header(
     if show_note:
         line = f"{line}\n{DROPPED_YOY_PROMPT_NOTE}"
     return line
+
 
 
 def periods_used_dropped_yoy(
