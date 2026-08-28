@@ -30,7 +30,7 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
             blocked_plan = "资金流来源选择 guard 已阻断：不得生成方向性交易计划。"
             return {"messages": [AIMessage(content=blocked_plan, name=name)], "trader_investment_plan": blocked_plan, "fund_flow_consensus_guard": fund_flow_guard, "sender": name}
 
-        # D-009 P0-1: never invent BUY/SELL after INVALID_RUN / ABSTAIN / NO_TRADE.
+        # D-009 P0-1/P0-5b: never invent BUY/SELL after INVALID_RUN / ABSTAIN / NO_TRADE / WAIT / UNRESOLVED.
         blocked_status = decision_status_from_state(state)
         if is_non_executable_status(blocked_status):
             status_label = (
@@ -52,6 +52,7 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
                 payload["analysis_status"] = blocked_status.analysis_status
                 payload["trade_action"] = blocked_status.trade_action
                 payload["risk_status"] = blocked_status.risk_status
+                payload["confirmation_state"] = blocked_status.confirmation_state
             return payload
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"

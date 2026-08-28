@@ -8,7 +8,7 @@ not be collapsed into Neutral/HOLD.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 # analysis_status
 ANALYSIS_VALID = "VALID"
@@ -250,10 +250,120 @@ def map_verdict_trade_action(
     return ACTION_NO_TRADE
 
 
+def evaluate_confirmation_state(
+    *,
+    focus_claim_ids: Sequence[Any] | None = None,
+    unresolved_claim_ids: Sequence[Any] | None = None,
+    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    claim_evidence_summary: Mapping[str, Mapping[str, Any]] | None = None,
+    claims: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[str, list[str]]:
+    """Determine confirmation_state (CONFIRMED / PARTIAL / UNRESOLVED) and diagnostic codes.
+
+    Deterministic rules (D-009 P0-5b):
+    - Core claims: focus_claim_ids if non-empty; else unresolved_claim_ids; else empty.
+    - If core claims exist with fatal/contradicted or 0 verified -> UNRESOLVED.
+    - If core claims have partial verified (>0 and <total) without fatal -> PARTIAL.
+    - If all core claims verified without fatal conflict -> CONFIRMED.
+    - If no core claims exist, but verification has fatal/contradicted -> UNRESOLVED; else CONFIRMED.
+    """
+    focus_ids = [str(x).strip() for x in (focus_claim_ids or []) if str(x).strip()]
+    unresolved_ids = [str(x).strip() for x in (unresolved_claim_ids or []) if str(x).strip()]
+
+    if focus_ids:
+        core_claim_ids = focus_ids
+    elif unresolved_ids:
+        core_claim_ids = unresolved_ids
+    else:
+        core_claim_ids = []
+
+    summary_map: dict[str, Mapping[str, Any]] = {}
+    if claim_evidence_summary:
+        summary_map = {str(k).strip(): v for k, v in claim_evidence_summary.items() if str(k).strip()}
+    elif claims_verification:
+        from tradingagents.agents.utils.evidence_verifier import aggregate_claim_evidence
+
+        summary_map = aggregate_claim_evidence(claims=claims, claims_verification=claims_verification)
+
+    ver_by_cid: dict[str, list[Mapping[str, Any]]] = {}
+    for v in (claims_verification or []):
+        cid = str(v.get("claim_id", "") or "").strip()
+        if cid:
+            ver_by_cid.setdefault(cid, []).append(v)
+
+    global_fatal_cids: set[str] = set()
+    for cid, sm in summary_map.items():
+        cnt = sm.get("counts") or {}
+        if cnt.get("contradicted", 0) > 0 or cnt.get("source_unavailable", 0) > 0:
+            global_fatal_cids.add(cid)
+    for v in (claims_verification or []):
+        if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
+            cid = str(v.get("claim_id", "") or "").strip()
+            if cid:
+                global_fatal_cids.add(cid)
+
+    has_global_fatal = bool(global_fatal_cids)
+
+    if not core_claim_ids:
+        if has_global_fatal:
+            return CONFIRM_UNRESOLVED, [f"fatal_contradicted_claims:{','.join(sorted(global_fatal_cids))}"]
+        return CONFIRM_CONFIRMED, []
+
+    def _is_claim_fatal(cid: str) -> bool:
+        if cid in global_fatal_cids:
+            return True
+        sm = summary_map.get(cid)
+        if sm:
+            cnt = sm.get("counts") or {}
+            if cnt.get("contradicted", 0) > 0 or cnt.get("source_unavailable", 0) > 0:
+                return True
+        for v in ver_by_cid.get(cid, []):
+            if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
+                return True
+        return False
+
+    def _is_claim_verified(cid: str) -> bool:
+        if _is_claim_fatal(cid):
+            return False
+        sm = summary_map.get(cid)
+        if sm:
+            cnt = sm.get("counts") or {}
+            if cnt.get("verified", 0) > 0:
+                return True
+        for v in ver_by_cid.get(cid, []):
+            if v.get("status") == "verified":
+                return True
+        return False
+
+    core_fatal = [cid for cid in core_claim_ids if _is_claim_fatal(cid)]
+    core_verified = [cid for cid in core_claim_ids if _is_claim_verified(cid)]
+    core_unverified = [cid for cid in core_claim_ids if not _is_claim_verified(cid) and not _is_claim_fatal(cid)]
+
+    if core_fatal:
+        return CONFIRM_UNRESOLVED, [f"fatal_core_claims:{','.join(core_fatal)}"]
+    if has_global_fatal:
+        return CONFIRM_UNRESOLVED, [f"fatal_contradicted_claims:{','.join(sorted(global_fatal_cids))}"]
+
+    if len(core_verified) == 0:
+        return CONFIRM_UNRESOLVED, [f"unverified_core_claims:{','.join(core_claim_ids)}"]
+    elif len(core_verified) < len(core_claim_ids):
+        return CONFIRM_PARTIAL, [
+            f"partial_core_claims:verified={','.join(core_verified)};unverified={','.join(core_unverified)}"
+        ]
+    else:
+        return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(core_verified)}"]
+
+
 def status_from_manager_verdict(
     manager_verdict: Mapping[str, Any] | None,
     *,
     prior_analysis_status: Optional[str] = None,
+    investment_debate_state: Mapping[str, Any] | None = None,
+    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    claim_evidence_summary: Mapping[str, Mapping[str, Any]] | None = None,
+    focus_claim_ids: Sequence[Any] | None = None,
+    unresolved_claim_ids: Sequence[Any] | None = None,
+    claims: Sequence[Mapping[str, Any]] | None = None,
 ) -> DecisionStatus:
     """Build canonical status for a completed Research Manager path."""
     mv = manager_verdict if isinstance(manager_verdict, Mapping) else {}
@@ -278,28 +388,68 @@ def status_from_manager_verdict(
             risk_status=RISK_BLOCKED,
         )
 
-    direction = map_verdict_direction(mv.get("direction"))
-    trade_action = map_verdict_trade_action(
-        direction=direction,
-        winner=mv.get("winner"),
-        position_pct=mv.get("position_pct"),
+    deb_state = investment_debate_state if isinstance(investment_debate_state, Mapping) else {}
+    f_ids = (
+        focus_claim_ids
+        if focus_claim_ids is not None
+        else (deb_state.get("focus_claim_ids") or mv.get("focus_claim_ids"))
     )
+    u_ids = (
+        unresolved_claim_ids
+        if unresolved_claim_ids is not None
+        else (deb_state.get("unresolved_claim_ids") or mv.get("unresolved_claim_ids"))
+    )
+    ver = (
+        claims_verification
+        if claims_verification is not None
+        else (deb_state.get("evidence_verification") or mv.get("evidence_verification"))
+    )
+    ev_summary = (
+        claim_evidence_summary
+        if claim_evidence_summary is not None
+        else (deb_state.get("claim_evidence_summary") or mv.get("claim_evidence_summary"))
+    )
+    cl_list = (
+        claims
+        if claims is not None
+        else (deb_state.get("claims") or mv.get("claims"))
+    )
+
+    confirmation_state, confirm_codes = evaluate_confirmation_state(
+        focus_claim_ids=f_ids,
+        unresolved_claim_ids=u_ids,
+        claims_verification=ver,
+        claim_evidence_summary=ev_summary,
+        claims=cl_list,
+    )
+
+    direction = map_verdict_direction(mv.get("direction"))
+    if confirmation_state in {CONFIRM_UNRESOLVED, CONFIRM_PARTIAL}:
+        trade_action = ACTION_WAIT
+    else:
+        trade_action = map_verdict_trade_action(
+            direction=direction,
+            winner=mv.get("winner"),
+            position_pct=mv.get("position_pct"),
+        )
+
     if prior_analysis_status == ANALYSIS_PARTIAL:
         return partial_status(
-            reason_codes=["prior_partial_analyst_failures"],
+            reason_codes=["prior_partial_analyst_failures", *confirm_codes],
             trade_action=ACTION_NO_TRADE
             if trade_action not in NON_DIRECTIONAL_TRADE_ACTIONS
             else trade_action,
             direction=DIRECTION_NA,
         )
-    if direction == DIRECTION_NA and trade_action in NON_DIRECTIONAL_TRADE_ACTIONS:
-        return abstain_status(reason_codes=["manager_direction_na"])
+    if direction == DIRECTION_NA and trade_action in NON_DIRECTIONAL_TRADE_ACTIONS and confirmation_state == CONFIRM_CONFIRMED:
+        return abstain_status(reason_codes=["manager_direction_na", *confirm_codes])
+
     return valid_status(
         direction=direction if direction != DIRECTION_NA else DIRECTION_NEUTRAL,
         trade_action=trade_action if trade_action != ACTION_NO_TRADE else ACTION_HOLD,
         risk_status=RISK_OK,
-        confirmation_state=CONFIRM_CONFIRMED,
-        reason_codes=["manager_terminal"],
+        confirmation_state=confirmation_state,
+        reason_codes=["manager_terminal", *confirm_codes],
     )
 
 
@@ -679,20 +829,33 @@ def decision_status_from_mapping(
     analysis_status = str(raw.get("analysis_status") or "").upper()
     if analysis_status not in ANALYSIS_STATUSES:
         return None
+    trade_action = (
+        str(raw.get("trade_action") or ACTION_NO_TRADE).upper()
+        if str(raw.get("trade_action") or "").upper() in TRADE_ACTIONS
+        else ACTION_NO_TRADE
+    )
+    raw_confirm = raw.get("confirmation_state")
+    if raw_confirm and str(raw_confirm).upper() in CONFIRMATION_STATES:
+        confirm_val = str(raw_confirm).upper()
+    elif analysis_status == ANALYSIS_VALID and trade_action in {
+        ACTION_BUY,
+        ACTION_SELL,
+        ACTION_HOLD,
+    }:
+        confirm_val = CONFIRM_CONFIRMED
+    else:
+        confirm_val = CONFIRM_UNRESOLVED
+
     return DecisionStatus(
         analysis_status=analysis_status,
         direction=str(raw.get("direction") or DIRECTION_NA).upper()
         if str(raw.get("direction") or "").upper() in DIRECTIONS
         else DIRECTION_NA,
-        trade_action=str(raw.get("trade_action") or ACTION_NO_TRADE).upper()
-        if str(raw.get("trade_action") or "").upper() in TRADE_ACTIONS
-        else ACTION_NO_TRADE,
+        trade_action=trade_action,
         risk_status=str(raw.get("risk_status") or RISK_UNKNOWN).upper()
         if str(raw.get("risk_status") or "").upper() in RISK_STATUSES
         else RISK_UNKNOWN,
-        confirmation_state=str(raw.get("confirmation_state") or CONFIRM_UNRESOLVED).upper()
-        if str(raw.get("confirmation_state") or "").upper() in CONFIRMATION_STATES
-        else CONFIRM_UNRESOLVED,
+        confirmation_state=confirm_val,
         failure_class=raw.get("failure_class"),
         reason_codes=list(raw.get("reason_codes") or []),
         confidence=raw.get("confidence"),
@@ -707,9 +870,11 @@ def is_non_executable_status(status: DecisionStatus | Mapping[str, Any] | None) 
     if isinstance(status, DecisionStatus):
         analysis_status = status.analysis_status
         trade_action = status.trade_action
+        confirmation_state = status.confirmation_state
     elif isinstance(status, Mapping):
         analysis_status = str(status.get("analysis_status") or "").upper()
         trade_action = str(status.get("trade_action") or "").upper()
+        confirmation_state = str(status.get("confirmation_state") or "").upper()
     else:
         return False
     if analysis_status in {
@@ -717,6 +882,8 @@ def is_non_executable_status(status: DecisionStatus | Mapping[str, Any] | None) 
         ANALYSIS_DATA_ERROR,
         ANALYSIS_ABSTAIN,
     }:
+        return True
+    if confirmation_state in {CONFIRM_UNRESOLVED, "UNRESOLVED"}:
         return True
     return trade_action in NON_DIRECTIONAL_TRADE_ACTIONS
 
@@ -742,6 +909,7 @@ def decision_status_from_state(
                 "direction": state.get("direction") or DIRECTION_NA,
                 "trade_action": trade_action or ACTION_NO_TRADE,
                 "risk_status": state.get("risk_status") or RISK_UNKNOWN,
+                "confirmation_state": state.get("confirmation_state"),
                 "failure_class": state.get("failure_class"),
                 "reason_codes": state.get("reason_codes") or [],
             }

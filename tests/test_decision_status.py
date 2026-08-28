@@ -238,3 +238,67 @@ def test_resolve_soft_returns_abstain_not_valid_neutral_hold():
     assert status_empty.analysis_status != ANALYSIS_VALID
     assert status_empty.trade_action != ACTION_HOLD
     assert is_non_executable_status(status_empty) is True
+
+
+def test_decision_status_mapping_roundtrip_includes_confirmation_state():
+    from tradingagents.agents.utils.decision_status import (
+        CONFIRM_CONFIRMED,
+        CONFIRM_PARTIAL,
+        CONFIRM_UNRESOLVED,
+        decision_status_from_mapping,
+    )
+
+    raw = {
+        "analysis_status": "VALID",
+        "direction": "BULL",
+        "trade_action": "WAIT",
+        "risk_status": "OK",
+        "confirmation_state": "UNRESOLVED",
+    }
+    st = decision_status_from_mapping(raw)
+    assert st is not None
+    assert st.confirmation_state == CONFIRM_UNRESOLVED
+    assert st.trade_action == "WAIT"
+
+    d = st.to_dict()
+    assert d["confirmation_state"] == CONFIRM_UNRESOLVED
+
+
+def test_is_non_executable_status_on_unresolved_and_wait():
+    from tradingagents.agents.utils.decision_status import (
+        CONFIRM_CONFIRMED,
+        CONFIRM_PARTIAL,
+        CONFIRM_UNRESOLVED,
+        DecisionStatus,
+        is_non_executable_status,
+    )
+
+    # 1. VALID with WAIT -> non executable
+    st_wait = DecisionStatus(
+        analysis_status="VALID",
+        direction="BULL",
+        trade_action="WAIT",
+        risk_status="OK",
+        confirmation_state=CONFIRM_UNRESOLVED,
+    )
+    assert is_non_executable_status(st_wait) is True
+
+    # 2. VALID with BUY and UNRESOLVED -> non executable
+    st_unresolved_buy = DecisionStatus(
+        analysis_status="VALID",
+        direction="BULL",
+        trade_action="BUY",
+        risk_status="OK",
+        confirmation_state=CONFIRM_UNRESOLVED,
+    )
+    assert is_non_executable_status(st_unresolved_buy) is True
+
+    # 3. VALID with BUY and CONFIRMED -> executable
+    st_confirmed_buy = DecisionStatus(
+        analysis_status="VALID",
+        direction="BULL",
+        trade_action="BUY",
+        risk_status="OK",
+        confirmation_state=CONFIRM_CONFIRMED,
+    )
+    assert is_non_executable_status(st_confirmed_buy) is False

@@ -88,6 +88,7 @@ def _blocked_manager_payload(
         "analysis_status": decision_status.get("analysis_status"),
         "trade_action": decision_status.get("trade_action", ACTION_NO_TRADE),
         "risk_status": decision_status.get("risk_status"),
+        "confirmation_state": decision_status.get("confirmation_state", "UNRESOLVED"),
     }
     payload = {
         "fund_flow_consensus_guard": fund_flow_guard,
@@ -99,6 +100,7 @@ def _blocked_manager_payload(
         "analysis_status": decision_status.get("analysis_status"),
         "trade_action": decision_status.get("trade_action", ACTION_NO_TRADE),
         "risk_status": decision_status.get("risk_status"),
+        "confirmation_state": decision_status.get("confirmation_state", "UNRESOLVED"),
         "final_trade_decision": blocked_plan,
         "investment_debate_state": {
             **investment_debate_state,
@@ -629,10 +631,16 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if credit_weight_audit is not None:
             new_investment_debate_state["credit_weight_audit"] = credit_weight_audit
 
-        # D-009 P0-1: every successful terminal path emits canonical decision_status.
+        # D-009 P0-1/P0-5b: every successful terminal path emits canonical decision_status.
         terminal_status = status_from_manager_verdict(
             manager_verdict,
             prior_analysis_status=state.get("analysis_status"),
+            investment_debate_state=new_investment_debate_state,
+            claims_verification=claims_verification,
+            claim_evidence_summary=claim_evidence_summary,
+            focus_claim_ids=new_investment_debate_state.get("focus_claim_ids"),
+            unresolved_claim_ids=unresolved_claim_ids,
+            claims=claims,
         )
         status_dict = terminal_status.to_dict()
         manager_verdict = {
@@ -641,6 +649,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "analysis_status": status_dict["analysis_status"],
             "trade_action": status_dict["trade_action"],
             "risk_status": status_dict["risk_status"],
+            "confirmation_state": status_dict["confirmation_state"],
         }
         new_investment_debate_state["manager_verdict"] = manager_verdict
 
@@ -655,6 +664,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "analysis_status": status_dict["analysis_status"],
             "trade_action": status_dict["trade_action"],
             "risk_status": status_dict["risk_status"],
+            "confirmation_state": status_dict["confirmation_state"],
             "run_integrity": run_integrity.to_dict(),
         }
         return payload

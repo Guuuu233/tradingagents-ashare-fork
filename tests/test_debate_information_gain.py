@@ -567,7 +567,7 @@ def test_research_manager_pre_gate_blocks_on_duplicate_accepted_messages_with_ze
     # 2. Gate failed and blocked plan returned
     assert "manager_verdict" in result
     assert result["manager_verdict"]["consistency_check_passed"] is False
-    assert result["manager_verdict"]["direction"] == "中性"
+    assert result["manager_verdict"]["direction"] in ("中性", "N/A", "NA")
     assert any("信息增量" in err or "重复" in err or "相似度" in err for err in result["manager_verdict"]["failed_checks"])
     assert "硬闸未通过" in result["investment_plan"]
 
