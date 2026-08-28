@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from tradingagents.agents.utils.claim_cluster import (
@@ -24,6 +25,7 @@ from tradingagents.agents.utils.claim_cluster import (
     assign_claim_cluster,
     compute_cluster_id,
     extract_evidence_ids,
+    format_claim_cluster_summary_for_prompt,
     tally_cluster_votes,
 )
 from tradingagents.prompts import get_prompt
@@ -273,6 +275,67 @@ class TestClaimClusterCore:
         assert metrics["bull_cluster_count"] == 1
         assert metrics["cluster_weights"]["bull"] == 1.0
 
+    def test_verified_evidence_count_with_claims_verification(self):
+        """verified_evidence_count must only count verified evidence items.
+
+        Contradicted, unsupported, and source_unavailable items must be excluded.
+        """
+        symbol = "601138.SH"
+        trade_date = "2026-08-22"
+
+        c1 = {
+            "claim_id": "INV-1",
+            "speaker": "Bull Analyst 1",
+            "stance": "bullish",
+            "claim": "收盘价放量突破阻力位",
+            "evidence": ["收盘价22.5元", "突破20日均线"],
+        }
+        c2 = {
+            "claim_id": "INV-2",
+            "speaker": "Bull Analyst 2",
+            "stance": "bullish",
+            "claim": "成交量放大且主力资金流入",
+            "evidence": ["成交量放大1.5倍", "当日涨幅5.2%"],
+        }
+
+        # Case 1: Partial verification
+        # INV-1: '收盘价22.5元' verified, '突破20日均线' contradicted
+        # INV-2: '成交量放大1.5倍' unsupported, '当日涨幅5.2%' verified
+        claims_verification = [
+            {"claim_id": "INV-1", "raw": "收盘价22.5元", "status": "verified"},
+            {"claim_id": "INV-1", "raw": "突破20日均线", "status": "contradicted"},
+            {"claim_id": "INV-2", "raw": "成交量放大1.5倍", "status": "unsupported"},
+            {"claim_id": "INV-2", "raw": "当日涨幅5.2%", "status": "verified"},
+        ]
+
+        metrics = tally_cluster_votes(
+            claims=[c1, c2],
+            claims_verification=claims_verification,
+            symbol=symbol,
+            trade_date=trade_date,
+        )
+
+        assert metrics["analyst_count"] == 2
+        assert metrics["independent_cluster_count"] == 1
+        # Exactly 2 verified items ('收盘价22.5元' and '当日涨幅5.2%'); contradicted and unsupported excluded
+        assert metrics["verified_evidence_count"] == 2
+
+        # Case 2: All contradicted / unsupported -> verified_evidence_count must be 0
+        all_failed_verification = [
+            {"claim_id": "INV-1", "raw": "收盘价22.5元", "status": "contradicted"},
+            {"claim_id": "INV-1", "raw": "突破20日均线", "status": "contradicted"},
+            {"claim_id": "INV-2", "raw": "成交量放大1.5倍", "status": "unsupported"},
+            {"claim_id": "INV-2", "raw": "当日涨幅5.2%", "status": "source_unavailable"},
+        ]
+
+        failed_metrics = tally_cluster_votes(
+            claims=[c1, c2],
+            claims_verification=all_failed_verification,
+            symbol=symbol,
+            trade_date=trade_date,
+        )
+        assert failed_metrics["verified_evidence_count"] == 0
+
 
 class TestPromptSemanticsRegression:
     """Prompt requirement tests for P0-4b."""
@@ -350,25 +413,31 @@ class TestIntegrationDebateAndResearchManager:
         assert "price_shock" in claim["cluster_id"]
         assert len(claim["evidence_ids"]) == 2
 
-    @pytest.mark.asyncio
-    async def test_research_manager_node_produces_claim_cluster_metrics(self):
+    def test_research_manager_node_produces_claim_cluster_metrics(self):
         from unittest.mock import MagicMock
+        from tests.test_debate_b3_protocol import _build_v2_challenge_completed_state
         from tradingagents.agents.managers.research_manager import create_research_manager
 
-        async def _fake_stream(text: str):
+        captured_prompts = []
+
+        async def _fake_stream(prompt: str):
             from types import SimpleNamespace
-            yield SimpleNamespace(content=text)
+            captured_prompts.append(prompt)
+            yield SimpleNamespace(content=(
+                "研究总监正式报告正文\n\n"
+                '<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "突破确认", "position_pct": 30, "entry": "22.5", "target": "25.0", "stop_loss": "21.0", "upside": 11.0, "downside": 6.0, "odds": 1.8, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": [], "rejected_claim_ids": [], "excluded_evidence": [], "dispute_map": []} -->'
+                '\n<!-- VERDICT: {"direction": "看多", "reason": "突破确认"} -->'
+            ))
 
         mock_llm = MagicMock()
-        mock_llm.astream.return_value = _fake_stream(
-            "研究总监正式报告正文\n\n"
-            '<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "突破确认", "position_pct": 30, "entry": "22.5", "target": "25.0", "stop_loss": "21.0", "upside": 11.0, "downside": 6.0, "odds": 1.8, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": [], "rejected_claim_ids": [], "excluded_evidence": [], "dispute_map": []} -->'
-            '\n<!-- VERDICT: {"direction": "看多", "reason": "突破确认"} -->'
-        )
+        mock_llm.astream = _fake_stream
         mock_memory = MagicMock()
         mock_memory.get_memories.return_value = []
 
         manager_node = create_research_manager(mock_llm, mock_memory)
+
+        inv_debate_state = _build_v2_challenge_completed_state()
+        inv_debate_state["tiebreak_skipped"] = True
 
         state = {
             "symbol": "601138.SH",
@@ -381,25 +450,14 @@ class TestIntegrationDebateAndResearchManager:
                     "stock_data": {"status": "available", "as_of": "2026-08-22"},
                 },
             },
-            "investment_debate_state": {
-                "history": "辩论记录",
-                "claims": [
-                    {
-                        "claim_id": "INV-1",
-                        "speaker": "Bull Analyst",
-                        "speaker_key": "Bull",
-                        "stance": "bullish",
-                        "claim": "收盘价站上22.5元阻力位",
-                        "evidence": ["收盘价22.5元"],
-                        "confidence": 0.85,
-                    }
-                ],
-                "unresolved_claim_ids": [],
-                "count": 2,
-            },
+            "investment_debate_state": inv_debate_state,
+            "macro_report": "宏观板块报告：政策支持行业发展。",
             "market_report": "市场技术报告：收盘价22.5元，突破阻力位。",
-            "volume_price_report": "量价报告：放量突破。",
-            "smart_money_report": "主力资金报告：主力资金净流入5.2亿元。",
+            "sentiment_report": "舆情报告：情绪乐观偏多。",
+            "news_report": "新闻报告：行业订单增加。",
+            "fundamentals_report": "基本面报告：前三季度扣非净利15.2亿元同比增25%。",
+            "volume_price_report": "量价报告：放量突破20日均线。",
+            "smart_money_report": "主力资金报告：东财主力净流入1.29亿元。",
             "fund_flow_consensus_guard": {
                 "blocked": False,
                 "direction_allowed": True,
@@ -407,7 +465,7 @@ class TestIntegrationDebateAndResearchManager:
             },
         }
 
-        result = await manager_node(state)
+        result = asyncio.run(manager_node(state))
         debate_state = result["investment_debate_state"]
 
         assert "claim_cluster_metrics" in debate_state
@@ -416,4 +474,11 @@ class TestIntegrationDebateAndResearchManager:
         assert debate_state["independent_cluster_count"] == metrics["independent_cluster_count"]
         assert debate_state["analyst_count"] >= 1
         assert debate_state["verified_evidence_count"] >= 1
+
+        # Manager prompt must have received claim_cluster_metrics (analyst_count, independent_cluster_count, verified_evidence_count)
+        assert len(captured_prompts) == 1
+        prompt_text = captured_prompts[0]
+        assert "analyst_count" in prompt_text
+        assert "independent_cluster_count" in prompt_text
+        assert "verified_evidence_count" in prompt_text
 

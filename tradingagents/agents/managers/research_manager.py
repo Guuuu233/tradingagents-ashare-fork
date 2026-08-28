@@ -29,6 +29,7 @@ from tradingagents.agents.utils.evidence_verifier import (
 )
 from tradingagents.agents.utils.claim_cluster import (
     cluster_claims,
+    format_claim_cluster_summary_for_prompt,
     tally_cluster_votes,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
@@ -375,6 +376,12 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             claims_verification=claims_verification,
             claim_evidence_summary=claim_evidence_summary,
         )
+        cluster_summary = format_claim_cluster_summary_for_prompt(
+            claim_cluster_metrics,
+            language=_resolve_language(get_config()),
+        )
+        if cluster_summary:
+            claims_text = f"{cluster_summary}\n\n{claims_text}"
         unresolved_claims_subset = [c for c in claims if str(c.get("claim_id", "")).strip() in set(unresolved_claim_ids)]
         unresolved_claims_text = format_claims_with_verification_for_prompt(
             claims=unresolved_claims_subset,

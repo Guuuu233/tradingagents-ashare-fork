@@ -156,6 +156,75 @@ def extract_evidence_ids(
     return ids
 
 
+def _build_verification_index(
+    claims_verification: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[str], set[str], bool]:
+    if claims_verification is None:
+        return set(), set(), set(), set(), False
+
+    verified_cid_raw: set[tuple[str, str]] = set()
+    verified_cid_norm: set[tuple[str, str]] = set()
+    verified_raw: set[str] = set()
+    verified_norm: set[str] = set()
+
+    if isinstance(claims_verification, Sequence):
+        for item in claims_verification:
+            if not isinstance(item, Mapping):
+                continue
+            st = str(item.get("status") or "").strip().lower()
+            is_fatal = bool(item.get("is_fatal", False))
+            if st in {"verified", "pass", "ok"} and not is_fatal and st not in {
+                "contradicted",
+                "unsupported",
+                "source_unavailable",
+                "failed",
+                "unavailable",
+                "error",
+                "missing",
+            }:
+                cid = str(item.get("claim_id") or "").strip()
+                raw = str(item.get("raw") or item.get("evidence") or "").strip()
+                if raw:
+                    norm = normalize_text(raw)
+                    if cid:
+                        verified_cid_raw.add((cid, raw))
+                        verified_cid_norm.add((cid, norm))
+                    verified_raw.add(raw)
+                    verified_norm.add(norm)
+    elif isinstance(claims_verification, Mapping):
+        for cid, info in claims_verification.items():
+            if isinstance(info, Mapping):
+                for raw in (info.get("verified_evidence") or []):
+                    r_str = str(raw).strip()
+                    if r_str:
+                        norm = normalize_text(r_str)
+                        verified_cid_raw.add((str(cid).strip(), r_str))
+                        verified_cid_norm.add((str(cid).strip(), norm))
+                        verified_raw.add(r_str)
+                        verified_norm.add(norm)
+
+    return verified_cid_raw, verified_cid_norm, verified_raw, verified_norm, True
+
+
+def _is_evidence_verified(
+    claim_id: str | None,
+    raw_evidence: str,
+    ver_index: tuple[set[tuple[str, str]], set[tuple[str, str]], set[str], set[str], bool],
+) -> bool:
+    v_cid_raw, v_cid_norm, v_raw, v_norm, is_active = ver_index
+    if not is_active:
+        return True
+    raw_str = str(raw_evidence).strip()
+    if not raw_str:
+        return False
+    norm_str = normalize_text(raw_str)
+    cid_str = str(claim_id or "").strip()
+    if cid_str:
+        if (cid_str, raw_str) in v_cid_raw or (cid_str, norm_str) in v_cid_norm:
+            return True
+    return raw_str in v_raw or norm_str in v_norm
+
+
 def assign_claim_cluster(
     claim: Mapping[str, Any],
     symbol: str | None = None,
@@ -164,14 +233,20 @@ def assign_claim_cluster(
 ) -> dict[str, Any]:
     """Assign deterministic cluster_id and evidence_ids to a claim object."""
     claim_dict = dict(claim)
+    claim_id = str(claim_dict.get("claim_id") or "").strip()
     evidence_list = claim_dict.get("evidence") or []
     if isinstance(evidence_list, str):
         evidence_list = [evidence_list]
     valid_evidence = [str(e).strip() for e in evidence_list if str(e).strip()]
 
+    ver_index = _build_verification_index(claims_verification)
+    verified_evidence = [e for e in valid_evidence if _is_evidence_verified(claim_id, e, ver_index)]
+
     if not valid_evidence:
         claim_dict["cluster_id"] = None
         claim_dict["evidence_ids"] = []
+        claim_dict["verified_evidence"] = []
+        claim_dict["verified_evidence_ids"] = []
         claim_dict["cluster_status"] = "unsupported"
         return claim_dict
 
@@ -186,6 +261,8 @@ def assign_claim_cluster(
     if not cluster_votes:
         claim_dict["cluster_id"] = None
         claim_dict["evidence_ids"] = []
+        claim_dict["verified_evidence"] = []
+        claim_dict["verified_evidence_ids"] = []
         claim_dict["cluster_status"] = "unsupported"
         return claim_dict
 
@@ -193,9 +270,12 @@ def assign_claim_cluster(
     sym, dt = cluster_info[primary_type]
     cid = compute_cluster_id(primary_type, symbol=sym, date=dt)
     ev_ids = extract_evidence_ids(valid_evidence, cid)
+    ver_ev_ids = extract_evidence_ids(verified_evidence, cid)
 
     claim_dict["cluster_id"] = cid
     claim_dict["evidence_ids"] = ev_ids
+    claim_dict["verified_evidence"] = verified_evidence
+    claim_dict["verified_evidence_ids"] = ver_ev_ids
     claim_dict["cluster_type"] = primary_type
     claim_dict["cluster_status"] = "clustered"
     return claim_dict
@@ -246,6 +326,7 @@ def _extract_analyst_count(
 
 def _build_clusters_map(
     enriched_claims: Sequence[Mapping[str, Any]],
+    claims_verification_active: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], list[str]]:
     clusters_map: dict[str, dict[str, Any]] = {}
     unsupported_ids: list[str] = []
@@ -267,6 +348,7 @@ def _build_clusters_map(
                 "speakers": set(),
                 "stances": set(),
                 "evidence_ids": set(),
+                "verified_evidence_ids": set(),
                 "direction_votes": {"bull": 0, "bear": 0, "neutral": 0},
             }
         cluster_entry = clusters_map[cid]
@@ -278,6 +360,8 @@ def _build_clusters_map(
         cluster_entry["stances"].add(stance)
         for evid in (c.get("evidence_ids") or []):
             cluster_entry["evidence_ids"].add(evid)
+        for evid in (c.get("verified_evidence_ids") or []):
+            cluster_entry["verified_evidence_ids"].add(evid)
 
         # Every cluster casts at most ONE vote per direction
         cluster_entry["direction_votes"][stance] = 1
@@ -288,7 +372,7 @@ def _build_clusters_map(
 def tally_cluster_votes(
     claims: Sequence[Mapping[str, Any]] | None = None,
     reports: Mapping[str, str] | None = None,
-    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    claims_verification: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
     symbol: str | None = None,
     trade_date: str | None = None,
     horizon: str | None = None,
@@ -303,14 +387,21 @@ def tally_cluster_votes(
     )
 
     analyst_count = _extract_analyst_count(claims_list, reports)
-    clusters_map, unsupported_ids = _build_clusters_map(enriched_claims)
+    has_ver = claims_verification is not None
+    clusters_map, unsupported_ids = _build_clusters_map(
+        enriched_claims,
+        claims_verification_active=has_ver,
+    )
 
     bull_cluster_count = sum(1 for cl in clusters_map.values() if cl["direction_votes"].get("bull"))
     bear_cluster_count = sum(1 for cl in clusters_map.values() if cl["direction_votes"].get("bear"))
     neutral_cluster_count = sum(1 for cl in clusters_map.values() if cl["direction_votes"].get("neutral"))
     independent_cluster_count = len(clusters_map)
 
-    verified_evidence_count = sum(len(cl["evidence_ids"]) for cl in clusters_map.values())
+    if has_ver:
+        verified_evidence_count = sum(len(cl["verified_evidence_ids"]) for cl in clusters_map.values())
+    else:
+        verified_evidence_count = sum(len(cl["evidence_ids"]) for cl in clusters_map.values())
 
     active_dir_total = bull_cluster_count + bear_cluster_count
     if active_dir_total > 0:
@@ -345,9 +436,66 @@ def tally_cluster_votes(
                 "claims": cl["claims"],
                 "speakers": sorted(cl["speakers"]),
                 "stances": sorted(cl["stances"]),
-                "evidence_count": len(cl["evidence_ids"]),
+                "evidence_count": len(cl["verified_evidence_ids"]) if has_ver else len(cl["evidence_ids"]),
                 "direction_votes": cl["direction_votes"],
             }
             for cl in clusters_map.values()
         ],
     }
+
+
+def format_claim_cluster_summary_for_prompt(
+    metrics: Mapping[str, Any] | None,
+    language: str = "zh",
+) -> str:
+    """Format a concise, human/LLM-consumable summary of claim evidence cluster metrics."""
+    if not metrics:
+        return ""
+    analyst_count = metrics.get("analyst_count", 0)
+    independent_cluster_count = metrics.get("independent_cluster_count", 0)
+    verified_evidence_count = metrics.get("verified_evidence_count", 0)
+    bull_clusters = metrics.get("bull_cluster_count", 0)
+    bear_clusters = metrics.get("bear_cluster_count", 0)
+    neutral_clusters = metrics.get("neutral_cluster_count", 0)
+    cluster_weights = metrics.get("cluster_weights", {}) or {}
+    bull_weight = cluster_weights.get("bull", 0.0)
+    bear_weight = cluster_weights.get("bear", 0.0)
+
+    if language == "en":
+        lines = [
+            "### Claim Evidence Cluster Metrics (Deduplication Summary)",
+            f"- analyst_count: {analyst_count} (explanatory context only; do NOT use directly as voting weight)",
+            f"- independent_cluster_count: {independent_cluster_count} (bull clusters={bull_clusters}, bear clusters={bear_clusters}, neutral={neutral_clusters})",
+            f"- verified_evidence_count: {verified_evidence_count} (only factual verified evidence counted)",
+            f"- directional_cluster_weights: Bull={bull_weight:.1%}, Bear={bear_weight:.1%}",
+        ]
+        clusters = metrics.get("clusters") or []
+        if clusters:
+            lines.append("- evidence_clusters:")
+            for cl in clusters:
+                c_id = cl.get("cluster_id")
+                c_type = cl.get("cluster_type")
+                claims_str = ", ".join(cl.get("claims") or []) or "none"
+                speakers_str = ", ".join(cl.get("speakers") or []) or "none"
+                votes = cl.get("direction_votes") or {}
+                lines.append(f"  * [{c_id}] type={c_type}, claims=[{claims_str}], speakers=[{speakers_str}], votes={votes}")
+        return "\n".join(lines)
+
+    lines = [
+        "### Claim 证据簇与去重计票全景 (claim_cluster_metrics)",
+        f"- 参与分析师人数 (analyst_count): {analyst_count}（仅作解释性参考，严禁直接作为多空投票权重）",
+        f"- 独立证据簇数 (independent_cluster_count): {independent_cluster_count}（多头独立簇={bull_clusters}, 空头独立簇={bear_clusters}, 中性={neutral_clusters}）",
+        f"- 真实核验有效证据数 (verified_evidence_count): {verified_evidence_count}（仅统计经核验通过证据，矛盾/未支撑项不计入）",
+        f"- 证据簇方向权重 (cluster_weights): 多头权重={bull_weight:.1%}, 空头权重={bear_weight:.1%}",
+    ]
+    clusters = metrics.get("clusters") or []
+    if clusters:
+        lines.append("- 独立证据簇明细:")
+        for cl in clusters:
+            c_id = cl.get("cluster_id")
+            c_type = cl.get("cluster_type")
+            claims_str = ", ".join(cl.get("claims") or []) or "无"
+            speakers_str = ", ".join(cl.get("speakers") or []) or "无"
+            votes = cl.get("direction_votes") or {}
+            lines.append(f"  * 【{c_id}】 类型={c_type} | 关联 claim=[{claims_str}] | 发言分析师=[{speakers_str}] | 方向投票={votes}")
+    return "\n".join(lines)

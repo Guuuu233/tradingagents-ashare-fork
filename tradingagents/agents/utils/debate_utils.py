@@ -1793,6 +1793,7 @@ def update_debate_state_with_payload(
             if claim_payload.get("cluster_id"):
                 claim_entry["cluster_id"] = claim_payload["cluster_id"]
 
+            # Inline import to avoid circular dependency with claim_cluster (which imports normalize_text from debate_utils)
             from tradingagents.agents.utils.claim_cluster import assign_claim_cluster
             claim_entry = assign_claim_cluster(claim_entry)
 
