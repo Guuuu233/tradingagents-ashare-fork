@@ -47,6 +47,10 @@ from tradingagents.dataflows.fund_flow_evidence import (
     build_provider_text,
     summarize_evidence,
 )
+from tradingagents.dataflows.news_event_evidence import (
+    build_news_event_coverage,
+    parse_news_markdown_to_evidences,
+)
 from tradingagents.dataflows.trade_calendar import (
     dedupe_daily_bars,
     is_historical_analysis_date,
@@ -1689,9 +1693,24 @@ def _fetch_all(
             datetime.now(timezone.utc).isoformat(),
             "实时行情抓取未完成",
         )
+    # ── 结构化新闻事件覆盖度计算 ──────────────────
+    news_text = results.get("news", "")
+    global_news_text = results.get("global_news", "")
+    stock_evs, stock_unp = parse_news_markdown_to_evidences(news_text, default_entity=ticker)
+    glob_evs, glob_unp = parse_news_markdown_to_evidences(global_news_text, default_entity="宏观/行业")
+    event_cov = build_news_event_coverage(
+        stock_evs + glob_evs + stock_unp + glob_unp,
+        requested_themes=["跨市场", "财报", "行业政策", "公司治理", "重大合同"],
+        cutoff=trade_date,
+        window=f"{lookback}天",
+        default_entity=ticker,
+    )
+    results["event_coverage"] = event_cov
+
     results["market_data_context"] = {
         "analysis_baseline_date": trade_date,
         "fund_flow_evidence": fund_flow_context,
+        "event_coverage": event_cov,
         "daily": daily_context,
         "realtime": realtime_context,
         "global_indices": results.get("global_indices"),

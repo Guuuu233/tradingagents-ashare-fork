@@ -422,6 +422,7 @@ class AgentState(MessagesState):
     macro_report: Annotated[str, "Report from the Macro/Sector Analyst"]
     smart_money_report: Annotated[str, "Report from the Smart Money Analyst"]
     volume_price_report: Annotated[str, "Report from the Volume Price Analyst"]
+    event_coverage: Annotated[dict[str, Any], "Structured news event evidence and coverage summary"]
     user_intent: Annotated[Optional[UserIntent], "Parsed user intent from natural language"]
     horizon: Annotated[str, "Current analysis horizon: short or medium"]
     analyst_traces: Annotated[List[TraceItem], operator.add]

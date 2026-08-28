@@ -128,6 +128,8 @@ class Propagator:
             "news_report": "",
             "macro_report": "",
             "smart_money_report": "",
+            "volume_price_report": "",
+            "event_coverage": {},
             "investment_plan": "",
             "trader_investment_plan": "",
             "final_trade_decision": "",
@@ -146,7 +148,6 @@ class Propagator:
             "manager_verdict": None,
             "evidence_verification": [],
             "report_manifest": None,
-            "volume_price_report": "",
             "integrity_route": None,
         }
         if user_intent is not None:

@@ -16,6 +16,11 @@ from tradingagents.agents.utils.knowledge_context import (
     resolve_industry_context,
     resolve_macro_event_context,
 )
+from tradingagents.dataflows.news_event_evidence import (
+    build_news_event_coverage,
+    format_event_coverage_summary,
+    parse_news_markdown_to_evidences,
+)
 from api.database import log_llm_call
 
 logger = logging.getLogger(__name__)
@@ -73,6 +78,26 @@ def create_news_analyst(llm, data_collector=None):
             stock_news, global_news = results
             data_window = f"{days}天"
 
+        # ── 结构化新闻事件证据与覆盖率计算 ──────────────────
+        stock_evidences, stock_unparseable = parse_news_markdown_to_evidences(
+            stock_news, default_entity=ticker
+        )
+        global_evidences, global_unparseable = parse_news_markdown_to_evidences(
+            global_news, default_entity="宏观/行业"
+        )
+        all_evidences = stock_evidences + global_evidences
+        all_unparseable = stock_unparseable + global_unparseable
+
+        requested_themes = focus_areas if focus_areas else ["跨市场", "财报", "行业政策", "公司治理", "重大合同"]
+        event_coverage = build_news_event_coverage(
+            all_evidences + all_unparseable,
+            requested_themes=requested_themes,
+            cutoff=current_date,
+            window=data_window,
+            default_entity=ticker,
+        )
+        coverage_summary = format_event_coverage_summary(event_coverage)
+
         # ── 宏观事件情景图谱与行业知识库挂载 ──────────────────
         extra_event_text = f"{stock_news}\n{global_news}"
         macro_report = state.get("macro_report", "")
@@ -96,6 +121,7 @@ def create_news_analyst(llm, data_collector=None):
         human_content_blocks = [
             horizon_ctx + "\n" + f"以下是 {ticker_display} 在 {current_date} 的新闻资料（{data_window}）。",
             phase1_reports_text,
+            f"{coverage_summary}",
             f"【get_news】\n{stock_news}",
             f"【get_global_news】\n{global_news}",
         ]
@@ -166,6 +192,7 @@ def create_news_analyst(llm, data_collector=None):
         verdict, confidence = extract_verdict(full_content)
         return {
             "news_report": full_content,
+            "event_coverage": event_coverage,
             "analyst_traces": [{
                 "agent": "news_analyst",
                 "horizon": horizon,
