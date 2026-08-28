@@ -307,11 +307,14 @@ def test_market_system_message_deep_framework():
 
 
 def test_smart_money_system_message_deep_framework():
-    """T4: smart_money_system_message must include institutional vs hot money seats, intention analysis, and capital synergy."""
+    """T4: smart_money_system_message must include institutional vs hot money seats, observable order grouping, and depersonification constraints."""
     prompt = ZH_PROMPTS["smart_money_system_message"]
     assert any(term in prompt for term in ("龙虎榜", "机构专用席位", "游资席位"))
-    assert any(term in prompt for term in ("建仓", "派发", "洗盘", "震仓"))
+    assert any(term in prompt for term in ("超大单", "大单", "分单", "订单分组"))
     assert any(term in prompt for term in ("协同", "抽血", "筹码", "预期差"))
+    assert any(term in prompt for term in ("ownership_inference", "无席位", "不得归因", "身份证据"))
+    assert "主力成本区间" not in prompt
+    assert "假摔洗盘" not in prompt
 
 
 def _make_analyst_state(ticker="600519", trade_date="2026-07-31", horizon="short"):
