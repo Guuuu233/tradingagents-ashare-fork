@@ -181,8 +181,6 @@ INCOME_DERIVATION_WHITELIST: tuple[str, ...] = (
     "所得税费用",
     "净利润",
     "归属于母公司所有者的净利润",
-    "基本每股收益",
-    "稀释每股收益",
 )
 
 CASHFLOW_DERIVATION_WHITELIST: tuple[str, ...] = (
@@ -220,6 +218,10 @@ PERCENTAGE_COL_KEYWORDS: tuple[str, ...] = (
 CASHFLOW_STOCK_COL_KEYWORDS: tuple[str, ...] = (
     "期末",
     "期初",
+)
+
+PER_SHARE_COL_KEYWORDS: tuple[str, ...] = (
+    "每股",
 )
 
 
@@ -530,6 +532,10 @@ def derive_q2_from_h1_q1(
 
     for field in whitelist:
         if field not in df.columns:
+            missing.append(field)
+            continue
+
+        if any(k in field for k in PER_SHARE_COL_KEYWORDS):
             missing.append(field)
             continue
 

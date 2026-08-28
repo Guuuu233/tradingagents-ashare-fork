@@ -173,7 +173,56 @@ def test_derive_q2_income_statement_success():
     assert res.values["归属于母公司所有者的净利润"] == 120.0
     assert res.values["营业总收入"] == 600.0
     assert res.values["营业收入"] == 570.0
+    assert "基本每股收益" not in res.values
+    assert "稀释每股收益" not in res.values
+
+
+def test_derive_q2_income_statement_excludes_eps():
+    """EPS is non-additive and must not be subtracted or written to Q2 values."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            "净利润": [250.0, 100.0],
+            "基本每股收益": [2.50, 1.00],
+            "稀释每股收益": [2.40, 0.90],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "single_quarter_derived"
+    assert res.reported_period_label == "2024Q2"
+    assert res.derivation_formula == "H1-Q1"
+    assert res.values["净利润"] == 150.0
+    assert "基本每股收益" not in res.values
+    assert "稀释每股收益" not in res.values
+
+
+def test_derive_q2_defends_against_per_share_columns_even_if_in_whitelist(monkeypatch):
+    """Defense: any column name containing '每股' must never be subtracted into values."""
+    from tradingagents.dataflows import financial_announce
+
+    monkeypatch.setattr(
+        financial_announce,
+        "INCOME_DERIVATION_WHITELIST",
+        (*financial_announce.INCOME_DERIVATION_WHITELIST, "基本每股收益", "每股收益", "扣非每股收益"),
+    )
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            "净利润": [250.0, 100.0],
+            "基本每股收益": [2.50, 1.00],
+            "每股收益": [2.50, 1.00],
+            "扣非每股收益": [2.20, 0.90],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "single_quarter_derived"
+    assert res.values["净利润"] == 150.0
+    assert "基本每股收益" not in res.values
+    assert "每股收益" not in res.values
+    assert "扣非每股收益" not in res.values
     assert "基本每股收益" in res.missing
+    assert "每股收益" in res.missing
+    assert "扣非每股收益" in res.missing
 
 
 def test_derive_q2_cashflow_statement_success_and_excludes_stock():

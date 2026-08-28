@@ -851,4 +851,55 @@ def test_provider_income_statement_with_h1_and_q1_derives_q2(monkeypatch):
     assert "H1-Q1" not in bs_text
 
 
+def test_provider_income_statement_with_eps_excludes_eps_from_derivation(monkeypatch):
+    """Production path: income statement with EPS under H1+Q1 must NOT derive EPS."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    inc_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "净利润": [500.0, 200.0, 800.0],
+            "基本每股收益": [3.21, 1.07, 4.50],
+            "稀释每股收益": [3.18, 1.06, 4.40],
+            "营业总收入": [2000.0, 800.0, 3600.0],
+        }
+    )
+    bs_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "总资产": [5000.0, 4800.0, 4500.0],
+        }
+    )
+    cf_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "经营活动产生的现金流量净额": [300.0, 120.0, 500.0],
+        }
+    )
+    tables = {"资产负债表": bs_df, "利润表": inc_df, "现金流量表": cf_df}
+    provider = _FinFixtureProvider(tables)
+
+    inc_text = provider.get_income_statement("600519", curr_date="2024-08-20")
+    assert "财务数据截至 2024H1" in inc_text
+    assert "period_kind=half_year_cumulative" in inc_text
+    assert "derivation_formula=not_derived" in inc_text
+    # Q2 derivation block
+    assert "period_kind=single_quarter_derived" in inc_text
+    assert "reported_period_label=2024Q2" in inc_text
+    assert "derivation_formula=H1-Q1" in inc_text
+    assert "净利润" in inc_text and "300" in inc_text
+    assert "营业总收入" in inc_text and "1200" in inc_text
+    # EPS must NOT appear in derived values or prompt derivation block
+    assert "基本每股收益=" not in inc_text
+    assert "稀释每股收益=" not in inc_text
+    assert "2.14" not in inc_text
+    assert "2.12" not in inc_text
+
+
+
 
