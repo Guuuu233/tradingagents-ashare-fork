@@ -10,10 +10,14 @@ import pytest
 
 from tradingagents.dataflows.financial_announce import (
     FinancialPeriodKind,
+    Q2DerivationResult,
     classify_financial_period_kind,
+    derive_q2_from_h1_q1,
     financial_cutoff_header,
+    format_q2_derivation_block,
     resolve_effective_announce_date,
 )
+import pandas as pd
 
 
 # ── classify_financial_period_kind unit tests ────────────────────────
@@ -141,3 +145,176 @@ def test_financial_cutoff_header_with_statement_kind_cashflow():
 def test_financial_cutoff_header_none_latest_with_statement_kind():
     header = financial_cutoff_header(None, "2024-08-20", statement_kind="income")
     assert header == "【财务数据】在 2024-08-20 及之前无已公开报告期"
+
+
+# ── Q2 derivation unit tests (P0-3b) ─────────────────────────────────
+
+
+def test_derive_q2_income_statement_success():
+    """H1 net profit 250, Q1 net profit 100 -> Q2 derived 150."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "净利润": [250.0, 100.0, 400.0],
+            "归属于母公司所有者的净利润": [200.0, 80.0, 350.0],
+            "营业总收入": [1000.0, 400.0, 1800.0],
+            "营业收入": [950.0, 380.0, 1700.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert isinstance(res, Q2DerivationResult)
+    assert res.period_kind == "single_quarter_derived"
+    assert res.reported_period_label == "2024Q2"
+    assert res.derivation_formula == "H1-Q1"
+    assert res.h1_period == "20240630"
+    assert res.q1_period == "20240331"
+    assert res.reason in ("ok", "")
+    assert res.values["净利润"] == 150.0
+    assert res.values["归属于母公司所有者的净利润"] == 120.0
+    assert res.values["营业总收入"] == 600.0
+    assert res.values["营业收入"] == 570.0
+    assert "基本每股收益" in res.missing
+
+
+def test_derive_q2_cashflow_statement_success_and_excludes_stock():
+    """Cashflow flow fields derived; period-end stock balance excluded."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            "经营活动产生的现金流量净额": [500.0, 200.0],
+            "现金及现金等价物净增加额": [100.0, 40.0],
+            "期末现金及现金等价物余额": [1000.0, 900.0],
+            "期初现金及现金等价物余额": [900.0, 860.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("cashflow", df)
+    assert res.period_kind == "single_quarter_derived"
+    assert res.reported_period_label == "2024Q2"
+    assert res.derivation_formula == "H1-Q1"
+    assert res.values["经营活动产生的现金流量净额"] == 300.0
+    assert res.values["现金及现金等价物净增加额"] == 60.0
+    # Must NOT include stock balances
+    assert "期末现金及现金等价物余额" not in res.values
+    assert "期初现金及现金等价物余额" not in res.values
+
+
+def test_derive_q2_missing_q1():
+    """When Q1 is missing from filtered df, returns missing_q1 without values."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20231231", "20230930"],
+            "净利润": [250.0, 400.0, 300.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "unknown"
+    assert res.reason == "missing_q1"
+    assert len(res.values) == 0
+
+
+def test_derive_q2_not_h1_latest():
+    """When latest period is not 0630, derivation is skipped."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240930", "20240630", "20240331"],
+            "净利润": [350.0, 250.0, 100.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "unknown"
+    assert res.reason == "not_h1_latest"
+    assert len(res.values) == 0
+
+
+@pytest.mark.parametrize(
+    "scope_col, h1_val, q1_val",
+    [
+        ("合并范围", "合并报表", "母公司报表"),
+        ("币种", "CNY", "USD"),
+        ("单位", "千元", "元"),
+        ("会计口径", "新准则", "旧准则"),
+        ("合并范围", "合并", None),
+    ],
+)
+def test_derive_q2_scope_mismatch(scope_col, h1_val, q1_val):
+    """When scope / currency / unit columns differ or only one side present, refuse."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            scope_col: [h1_val, q1_val],
+            "净利润": [250.0, 100.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "unknown"
+    assert res.reason == "scope_mismatch"
+    assert len(res.values) == 0
+
+
+def test_derive_q2_percent_only():
+    """When all candidate fields are YoY / QoQ / percentage, refuse with percent_only."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            "净利润同比增长率": [10.0, 8.0],
+            "营业收入环比增长(%)": [5.0, 3.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("income", df)
+    assert res.period_kind == "unknown"
+    assert res.reason == "percent_only"
+    assert len(res.values) == 0
+
+
+def test_derive_q2_balance_sheet_refused():
+    """Balance sheet is point-in-time stock and cannot derive single-quarter flow."""
+    df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331"],
+            "货币资金": [500.0, 300.0],
+            "总资产": [2000.0, 1800.0],
+        }
+    )
+    res = derive_q2_from_h1_q1("balance", df)
+    assert res.period_kind == "unknown"
+    assert res.reason == "balance_is_stock"
+    assert len(res.values) == 0
+
+
+def test_format_q2_derivation_block_success():
+    """Successful derivation formats structured text with required machine-readable tokens."""
+    res = Q2DerivationResult(
+        reported_period_label="2024Q2",
+        period_kind="single_quarter_derived",
+        derivation_formula="H1-Q1",
+        h1_period="20240630",
+        q1_period="20240331",
+        values={"净利润": 150.0, "归属于母公司所有者的净利润": 120.0},
+        missing=("基本每股收益",),
+        reason="ok",
+    )
+    block = format_q2_derivation_block(res)
+    assert "period_kind=single_quarter_derived" in block
+    assert "reported_period_label=2024Q2" in block
+    assert "derivation_formula=H1-Q1" in block
+    assert "净利润" in block and "150" in block
+    assert "这是 H1 累计减 Q1 得到的 Q2 单季，不是报表原始 Q2 行" in block
+
+
+def test_format_q2_derivation_block_failure():
+    """Failed derivation formats explicit N/A notice with reason and prohibition."""
+    res = Q2DerivationResult(
+        reported_period_label="2024Q2",
+        period_kind="unknown",
+        derivation_formula="not_derived",
+        h1_period="20240630",
+        q1_period="20240331",
+        values={},
+        missing=(),
+        reason="missing_q1",
+    )
+    block = format_q2_derivation_block(res)
+    assert ("Q2_single_quarter=N/A" in block or "period_kind=unknown" in block)
+    assert "reason=missing_q1" in block
+    assert ("禁止把 H1 累计当作 Q2 单季" in block or "禁止把H1累计当作Q2单季" in block)
+    assert "150" not in block  # no fabricated amounts

@@ -781,4 +781,74 @@ def test_provider_backup_source_single_ann_date_or_f_ann_date(monkeypatch):
     assert "2024-04-28" in res_f_ann
 
 
+# ── Production path tests for Q2 single-quarter derivation (P0-3b) ────
+
+
+def test_provider_income_statement_missing_q1_shows_na_declaration(monkeypatch):
+    """_three_tables() on 2024-08-20 has 20240630 but missing 20240331 -> Q2 N/A."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    provider = _FinFixtureProvider(_three_tables())
+    text = provider.get_income_statement("600519", curr_date="2024-08-20")
+    # P0-3a header remains intact
+    assert "财务数据截至 2024H1" in text
+    assert "period_kind=half_year_cumulative" in text
+    assert "derivation_formula=not_derived" in text
+    # P0-3b Q2 derivation block reports N/A with reason=missing_q1 and prohibition
+    assert ("Q2_single_quarter=N/A" in text or "period_kind=unknown" in text)
+    assert "reason=missing_q1" in text
+    assert ("禁止把 H1 累计当作 Q2 单季" in text or "禁止把H1累计当作Q2单季" in text)
+
+
+def test_provider_income_statement_with_h1_and_q1_derives_q2(monkeypatch):
+    """When both 20240630 and 20240331 are available and comparable, derive Q2."""
+    monkeypatch.setattr(
+        "tradingagents.dataflows.providers.cn_akshare_provider.cn_today_str",
+        lambda: "2026-07-28",
+    )
+    inc_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "归属于母公司所有者的净利润": [250.0, 100.0, 400.0],
+            "营业总收入": [1000.0, 400.0, 1800.0],
+        }
+    )
+    bs_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "总资产": [5000.0, 4800.0, 4500.0],
+        }
+    )
+    cf_df = pd.DataFrame(
+        {
+            "报告日": ["20240630", "20240331", "20231231"],
+            "公告日期": ["20240809", "20240428", "20240428"],
+            "经营活动产生的现金流量净额": [300.0, 120.0, 500.0],
+        }
+    )
+    tables = {"资产负债表": bs_df, "利润表": inc_df, "现金流量表": cf_df}
+    provider = _FinFixtureProvider(tables)
+
+    inc_text = provider.get_income_statement("600519", curr_date="2024-08-20")
+    assert "财务数据截至 2024H1" in inc_text
+    assert "period_kind=half_year_cumulative" in inc_text
+    assert "derivation_formula=not_derived" in inc_text  # H1 header remains not_derived
+    # Q2 derivation block
+    assert "period_kind=single_quarter_derived" in inc_text
+    assert "reported_period_label=2024Q2" in inc_text
+    assert "derivation_formula=H1-Q1" in inc_text
+    assert "归属于母公司所有者的净利润" in inc_text and "150" in inc_text
+    assert "营业总收入" in inc_text and "600" in inc_text
+    assert "这是 H1 累计减 Q1 得到的 Q2 单季，不是报表原始 Q2 行" in inc_text
+
+    # Balance sheet on same date must NOT contain single_quarter_derived
+    bs_text = provider.get_balance_sheet("600519", curr_date="2024-08-20")
+    assert "single_quarter_derived" not in bs_text
+    assert "H1-Q1" not in bs_text
+
+
 

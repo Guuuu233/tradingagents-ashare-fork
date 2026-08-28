@@ -151,6 +151,78 @@ class FinancialPeriodKind:
     derivation_formula: str = "not_derived"
 
 
+@dataclass(frozen=True)
+class Q2DerivationResult:
+    """Result of deriving Q2 single quarter from H1 cumulative minus Q1."""
+
+    reported_period_label: str  # e.g. "2024Q2" or "unknown"
+    period_kind: str  # "single_quarter_derived" | "unknown"
+    derivation_formula: str  # "H1-Q1" | "not_derived"
+    h1_period: str  # "YYYYMMDD" or ""
+    q1_period: str  # "YYYYMMDD" or ""
+    values: dict[str, float]  # {field_name: diff_value}
+    missing: tuple[str, ...]  # whitelist columns missing or skipped
+    reason: str  # "ok" / "" on success, or rejection code
+
+
+INCOME_DERIVATION_WHITELIST: tuple[str, ...] = (
+    "营业总收入",
+    "营业收入",
+    "营业总成本",
+    "营业成本",
+    "税金及附加",
+    "营业税金及附加",
+    "销售费用",
+    "管理费用",
+    "研发费用",
+    "财务费用",
+    "营业利润",
+    "利润总额",
+    "所得税费用",
+    "净利润",
+    "归属于母公司所有者的净利润",
+    "基本每股收益",
+    "稀释每股收益",
+)
+
+CASHFLOW_DERIVATION_WHITELIST: tuple[str, ...] = (
+    "销售商品、提供劳务收到的现金",
+    "经营活动现金流入小计",
+    "购买商品、接受劳务支付的现金",
+    "支付给职工以及为职工支付的现金",
+    "支付的各项税费",
+    "经营活动现金流出小计",
+    "经营活动产生的现金流量净额",
+    "购建固定资产、无形资产和其他长期资产所支付的现金",
+    "投资活动产生的现金流量净额",
+    "吸收投资收到的现金",
+    "取得借款收到的现金",
+    "分配股利、利润或偿付利息支付的现金",
+    "筹资活动产生的现金流量净额",
+    "现金及现金等价物净增加额",
+)
+
+SCOPE_COMPARISON_COL_KEYWORDS: tuple[str, ...] = (
+    "合并范围",
+    "币种",
+    "单位",
+    "会计口径",
+)
+
+PERCENTAGE_COL_KEYWORDS: tuple[str, ...] = (
+    "同比",
+    "环比",
+    "%",
+    "百分比",
+    "增长率",
+)
+
+CASHFLOW_STOCK_COL_KEYWORDS: tuple[str, ...] = (
+    "期末",
+    "期初",
+)
+
+
 
 def parse_yyyymmdd(value) -> Optional[date]:
     """Parse common vendor date forms into a ``date``; invalid → None."""
@@ -268,6 +340,320 @@ def classify_financial_period_kind(
         period_kind=kind,
         derivation_formula="not_derived",
     )
+
+
+def derive_q2_from_h1_q1(
+    statement_kind: str,
+    df: pd.DataFrame,
+    effective_map: Optional[dict[str, EffectiveAnnounceDate]] = None,
+) -> Q2DerivationResult:
+    """Derive Q2 single quarter (H1 - Q1) for income and cashflow statements.
+
+    Refuses with explicit reason if:
+    - statement_kind is balance ("balance_is_stock")
+    - statement_kind is not income or cashflow ("invalid_statement_kind")
+    - df is empty or missing report-period column ("no_eligible_fields")
+    - latest report period is not YYYY0630 ("not_h1_latest")
+    - same-year Q1 (YYYY0331) is not in the filtered df ("missing_q1")
+    - comparability / scope columns differ ("scope_mismatch")
+    - all candidate fields are percentage-only ("percent_only")
+    - no computable whitelist fields found ("no_eligible_fields")
+    """
+    _ = effective_map
+    if statement_kind == "balance":
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="balance_is_stock",
+        )
+
+    if statement_kind not in ("income", "cashflow"):
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="invalid_statement_kind",
+        )
+
+    if df is None or df.empty:
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="no_eligible_fields",
+        )
+
+    rep_col = next((c for c in REPORT_COL_CANDIDATES if c in df.columns), None)
+    if rep_col is None:
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="no_eligible_fields",
+        )
+
+    parsed_periods: list[tuple[str, pd.Series]] = []
+    for _, row in df.iterrows():
+        token = normalize_report_period(row.get(rep_col))
+        if token and len(token) == 8:
+            parsed_periods.append((token, row))
+
+    if not parsed_periods:
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="no_eligible_fields",
+        )
+
+    parsed_periods.sort(key=lambda x: x[0], reverse=True)
+    latest_period, _ = parsed_periods[0]
+
+    if not latest_period.endswith("0630"):
+        return Q2DerivationResult(
+            reported_period_label="unknown",
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period="",
+            q1_period="",
+            values={},
+            missing=(),
+            reason="not_h1_latest",
+        )
+
+    year = latest_period[:4]
+    h1_period = f"{year}0630"
+    q1_period = f"{year}0331"
+    reported_period_label = f"{year}Q2"
+
+    h1_rows = [row for p, row in parsed_periods if p == h1_period]
+    q1_rows = [row for p, row in parsed_periods if p == q1_period]
+
+    if not h1_rows:
+        return Q2DerivationResult(
+            reported_period_label=reported_period_label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period=h1_period,
+            q1_period=q1_period,
+            values={},
+            missing=(),
+            reason="not_h1_latest",
+        )
+
+    if not q1_rows:
+        return Q2DerivationResult(
+            reported_period_label=reported_period_label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period=h1_period,
+            q1_period=q1_period,
+            values={},
+            missing=(),
+            reason="missing_q1",
+        )
+
+    h1_row = h1_rows[0]
+    q1_row = q1_rows[0]
+
+    # Scope / comparability column check
+    scope_cols = [
+        c
+        for c in df.columns
+        if any(k in c for k in SCOPE_COMPARISON_COL_KEYWORDS)
+    ]
+    for sc in scope_cols:
+        h1_val = h1_row.get(sc)
+        q1_val = q1_row.get(sc)
+        h1_has = (
+            h1_val is not None
+            and not (isinstance(h1_val, float) and pd.isna(h1_val))
+            and str(h1_val).strip() not in ("", "nan", "None", "NAT", "null")
+        )
+        q1_has = (
+            q1_val is not None
+            and not (isinstance(q1_val, float) and pd.isna(q1_val))
+            and str(q1_val).strip() not in ("", "nan", "None", "NAT", "null")
+        )
+        if h1_has != q1_has:
+            return Q2DerivationResult(
+                reported_period_label=reported_period_label,
+                period_kind="unknown",
+                derivation_formula="not_derived",
+                h1_period=h1_period,
+                q1_period=q1_period,
+                values={},
+                missing=(),
+                reason="scope_mismatch",
+            )
+        if h1_has and q1_has:
+            if str(h1_val).strip() != str(q1_val).strip():
+                return Q2DerivationResult(
+                    reported_period_label=reported_period_label,
+                    period_kind="unknown",
+                    derivation_formula="not_derived",
+                    h1_period=h1_period,
+                    q1_period=q1_period,
+                    values={},
+                    missing=(),
+                    reason="scope_mismatch",
+                )
+
+    if statement_kind == "income":
+        whitelist = INCOME_DERIVATION_WHITELIST
+    else:
+        whitelist = CASHFLOW_DERIVATION_WHITELIST
+
+    values: dict[str, float] = {}
+    missing: list[str] = []
+
+    for field in whitelist:
+        if field not in df.columns:
+            missing.append(field)
+            continue
+
+        if any(p in field for p in PERCENTAGE_COL_KEYWORDS):
+            continue
+        if statement_kind == "cashflow" and any(
+            s in field for s in CASHFLOW_STOCK_COL_KEYWORDS
+        ):
+            continue
+
+        h1_val = h1_row.get(field)
+        q1_val = q1_row.get(field)
+
+        h1_num = pd.to_numeric(h1_val, errors="coerce")
+        q1_num = pd.to_numeric(q1_val, errors="coerce")
+
+        if pd.isna(h1_num) or pd.isna(q1_num):
+            missing.append(field)
+            continue
+
+        try:
+            h1_f = float(h1_num)
+            q1_f = float(q1_num)
+            if not (pd.isna(h1_f) or pd.isna(q1_f)):
+                diff = round(h1_f - q1_f, 6)
+                values[field] = diff
+            else:
+                missing.append(field)
+        except (ValueError, TypeError, OverflowError):
+            missing.append(field)
+
+    if not values:
+        candidate_cols = [
+            c
+            for c in df.columns
+            if c not in REPORT_COL_CANDIDATES
+            and c not in ANNOUNCE_COL_CANDIDATES
+            and not any(k in c for k in SCOPE_COMPARISON_COL_KEYWORDS)
+        ]
+        if candidate_cols and all(
+            any(p in c for p in PERCENTAGE_COL_KEYWORDS) for c in candidate_cols
+        ):
+            return Q2DerivationResult(
+                reported_period_label=reported_period_label,
+                period_kind="unknown",
+                derivation_formula="not_derived",
+                h1_period=h1_period,
+                q1_period=q1_period,
+                values={},
+                missing=tuple(missing),
+                reason="percent_only",
+            )
+        return Q2DerivationResult(
+            reported_period_label=reported_period_label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period=h1_period,
+            q1_period=q1_period,
+            values={},
+            missing=tuple(missing),
+            reason="no_eligible_fields",
+        )
+
+    return Q2DerivationResult(
+        reported_period_label=reported_period_label,
+        period_kind="single_quarter_derived",
+        derivation_formula="H1-Q1",
+        h1_period=h1_period,
+        q1_period=q1_period,
+        values=values,
+        missing=tuple(missing),
+        reason="ok",
+    )
+
+
+def format_q2_derivation_block(
+    result: Q2DerivationResult,
+    effective_map: Optional[dict[str, EffectiveAnnounceDate]] = None,
+) -> str:
+    """Format Q2 derivation result into prompt-visible injection block."""
+    if result.period_kind == "single_quarter_derived":
+        h1_eff_str = ""
+        q1_eff_str = ""
+        if effective_map:
+            h1_eff = effective_map.get(result.h1_period)
+            q1_eff = effective_map.get(result.q1_period)
+            if h1_eff and q1_eff:
+                h1_eff_str = f"（生效公告日 {h1_eff.effective_date_str}）"
+                q1_eff_str = f"（生效公告日 {q1_eff.effective_date_str}）"
+
+        val_lines = []
+        for k, v in result.values.items():
+            if isinstance(v, float) and v.is_integer():
+                v_str = str(int(v))
+            else:
+                v_str = str(v)
+            val_lines.append(f"{k}={v_str}")
+        val_block = ", ".join(val_lines)
+        return (
+            f"【Q2单季派生数据（{result.reported_period_label}，公式 {result.derivation_formula}）】\n"
+            f"（reported_period_label={result.reported_period_label}, "
+            f"period_kind={result.period_kind}, "
+            f"derivation_formula={result.derivation_formula}；"
+            f"基准报告期: H1={result.h1_period}{h1_eff_str}, Q1={result.q1_period}{q1_eff_str}；"
+            f"派生金额: {val_block}；"
+            "这是 H1 累计减 Q1 得到的 Q2 单季，不是报表原始 Q2 行）"
+        )
+    else:
+        reason_explanations = {
+            "not_h1_latest": "最新已公开报告期非半年度（0630）",
+            "balance_is_stock": "资产负债表为期末时点存量指标，不可做单季流量派生",
+            "missing_q1": "同年度一季度（0331）财报未在当前分析日之前公开",
+            "q1_not_public": "同年度一季度（0331）财报未在当前分析日之前公开",
+            "scope_mismatch": "半年度与一季度合并范围/币种/单位/会计口径不一致",
+            "no_eligible_fields": "无可用的同口径可减金额字段",
+            "percent_only": "候选字段均为百分比/比率字段，不可做差值派生",
+        }
+        explanation = reason_explanations.get(result.reason, "未满足派生条件")
+        return (
+            f"【Q2单季派生数据（不可用）】\n"
+            f"（Q2_single_quarter=N/A, period_kind=unknown, reason={result.reason}；"
+            f"原因: {explanation}；"
+            "禁止把 H1 累计当作 Q2 单季使用，不得将 H1 累计金额误作单季数据）"
+        )
 
 
 

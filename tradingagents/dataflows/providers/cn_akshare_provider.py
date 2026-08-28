@@ -51,9 +51,11 @@ from ..fund_flow_evidence import (
 )
 from ..financial_announce import (
     build_effective_announce_map,
+    derive_q2_from_h1_q1,
     filter_abstract_period_columns,
     filter_financial_df_by_effective_announce,
     financial_cutoff_header,
+    format_q2_derivation_block,
     format_report_period_label,
     parse_yyyymmdd,
     periods_used_dropped_yoy,
@@ -1269,6 +1271,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             table_kind=kind_map.get(report_name, "generic"),
                             require_core_fields=(report_name == "资产负债表"),
                         )
+                        if stmt_kind in ("income", "cashflow"):
+                            q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
+                            q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)
+                            return f"{header}\n\n{table}\n\n{q2_block}"
                         return f"{header}\n\n{table}"
                     except Exception as exc:
                         errors.append(f"stock_financial_report_sina: {type(exc).__name__}({exc})")
@@ -1336,6 +1342,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             table_kind=kind_map.get(report_name, "generic"),
                             require_core_fields=(report_name == "资产负债表"),
                         )
+                        if stmt_kind in ("income", "cashflow"):
+                            q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
+                            q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)
+                            return f"{header}\n\n{table}\n\n{q2_block}"
                         return f"{header}\n\n{table}"
                     except Exception as exc:
                         errors.append(f"backup_financial_report: {type(exc).__name__}({exc})")
