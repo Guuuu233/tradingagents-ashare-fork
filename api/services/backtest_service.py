@@ -153,7 +153,11 @@ def _get_trading_dates(start: str, end: str, interval_days: int) -> List[str]:
 
 
 def _get_price_after(symbol: str, base_date: str, hold_days: int) -> Optional[float]:
-    """Fetch closing price hold_days trading days after base_date using akshare."""
+    """Fetch closing price hold_days trading days after base_date using akshare.
+
+    Refuses to shorten hold_days when the fetched series is shorter than hold_days;
+    returns None to ensure strict T+N evaluation (D-009 / P1-3).
+    """
     try:
         from tradingagents.dataflows.interface import route_to_vendor
         import pandas as pd
@@ -176,12 +180,17 @@ def _get_price_after(symbol: str, base_date: str, hold_days: int) -> Optional[fl
             return None
 
         df = df.sort_values(date_cols[0]).reset_index(drop=True)
-        if len(df) < hold_days:
-            hold_days = len(df) - 1
-        if hold_days < 1:
+        if len(df) < max(1, hold_days):
             return None
         return float(df[close_cols[0]].iloc[hold_days - 1])
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "_get_price_after failed for %s @ %s (hold_days=%s): %s",
+            symbol,
+            base_date,
+            hold_days,
+            exc,
+        )
         return None
 
 
@@ -203,7 +212,8 @@ def _get_price_on(symbol: str, date: str) -> Optional[float]:
             return None
         df = df.sort_values(date_cols[0]).reset_index(drop=True)
         return float(df[close_cols[0]].iloc[-1])
-    except Exception:
+    except Exception as exc:
+        logger.warning("_get_price_on failed for %s @ %s: %s", symbol, date, exc)
         return None
 
 
@@ -211,10 +221,16 @@ def _get_price_on(symbol: str, date: str) -> Optional[float]:
 # Core backtest runner
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _run_single_analysis(symbol: str, trade_date: str, selected_analysts: List[str], config: Dict[str, Any]) -> Dict[str, Any]:
+def _run_single_analysis(
+    symbol: str,
+    trade_date: str,
+    selected_analysts: List[str],
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
     """Run one full analysis without SSE. Returns final state dict."""
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
+    from tradingagents.agents.utils.decision_status import decision_status_from_state
     from tradingagents.dataflows.config import set_config
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     set_config(config)
     graph = TradingAgentsGraph(
@@ -225,45 +241,153 @@ def _run_single_analysis(symbol: str, trade_date: str, selected_analysts: List[s
     final_state, _ = graph.propagate(symbol, trade_date)
     decision_raw = final_state.get("final_trade_decision", "")
     decision = graph.process_signal(decision_raw)
+
+    dec_status = decision_status_from_state(final_state)
+    analysis_status = (
+        final_state.get("analysis_status")
+        or (dec_status.analysis_status if dec_status else None)
+    )
+    trade_action = (
+        final_state.get("trade_action")
+        or (dec_status.trade_action if dec_status else None)
+    )
+    price_basis = final_state.get("price_basis") or "raw"
+
     return {
         "final_trade_decision": decision_raw,
         "decision": decision,
+        "analysis_status": analysis_status,
+        "trade_action": trade_action,
+        "decision_status": dec_status.to_dict() if dec_status else final_state.get("decision_status"),
+        "price_basis": price_basis,
+        "final_state": final_state,
     }
 
 
-def _classify_decision(decision: str) -> str:
-    """Classify decision as BUY / SELL / HOLD."""
-    d = decision.upper()
-    if any(k in d for k in ["BUY", "增持", "买入", "BULLISH"]):
+def _classify_decision(decision: Any) -> str:
+    """Classify decision or state into trade action (BUY / SELL / HOLD / WAIT / NO_TRADE).
+
+    D-009 / P1-3: Does not collapse non-directional / invalid states into HOLD.
+    """
+    if isinstance(decision, dict):
+        status = decision.get("analysis_status")
+        action = decision.get("trade_action")
+        if status in ("INVALID_RUN", "DATA_ERROR"):
+            return "NO_TRADE"
+        if status in ("ABSTAIN", "PARTIAL"):
+            return "NO_TRADE" if action not in ("WAIT", "NO_TRADE") else action
+        if action in ("BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"):
+            return action
+        decision = decision.get("decision") or decision.get("final_trade_decision") or ""
+
+    d = str(decision or "").strip().upper()
+    if not d:
+        return "NO_TRADE"
+    if any(k in d for k in ["INVALID_RUN", "DATA_ERROR", "INVALID"]):
+        return "NO_TRADE"
+    if any(k in d for k in ["ABSTAIN", "PARTIAL"]):
+        return "NO_TRADE"
+    if any(k in d for k in ["WAIT", "观望", "待确认"]):
+        return "WAIT"
+    if any(k in d for k in ["NO_TRADE", "禁止交易", "不交易"]):
+        return "NO_TRADE"
+    if any(k in d for k in ["BUY", "增持", "买入", "BULLISH", "BULL", "看多", "偏多"]):
         return "BUY"
-    if any(k in d for k in ["SELL", "减持", "卖出", "BEARISH"]):
+    if any(k in d for k in ["SELL", "减持", "卖出", "BEARISH", "BEAR", "看空", "偏空"]):
         return "SELL"
-    return "HOLD"
+    if any(k in d for k in ["HOLD", "中性", "NEUTRAL"]):
+        return "HOLD"
+    return "NO_TRADE"
 
 
 def _compute_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compute win rate and average return from backtest records."""
-    trades = [r for r in records if r.get("action") in ("BUY", "SELL") and r.get("return_pct") is not None]
-    if not trades:
-        return {"total_signals": 0, "win_rate": None, "avg_return_pct": None, "best_return_pct": None, "worst_return_pct": None}
+    """Compute win rate, returns, and exclusion statistics from backtest records."""
+    excluded_invalid = 0
+    excluded_abstain = 0
+    excluded_no_trade = 0
+    excluded_incomplete = 0
+    excluded_hold = 0
+
+    valid_trades: List[Dict[str, Any]] = []
+
+    for r in records:
+        analysis_status = str(r.get("analysis_status") or "").upper()
+        trade_action = str(r.get("trade_action") or r.get("action") or "").upper()
+        outcome_status = str(r.get("outcome_status") or "").lower()
+        ret = r.get("return_pct")
+        err = r.get("error")
+
+        if err is not None or analysis_status in ("INVALID_RUN", "DATA_ERROR"):
+            excluded_invalid += 1
+        elif analysis_status in ("ABSTAIN", "PARTIAL"):
+            excluded_abstain += 1
+        elif trade_action in ("WAIT", "NO_TRADE"):
+            excluded_no_trade += 1
+        elif trade_action == "HOLD":
+            excluded_hold += 1
+        elif trade_action in ("BUY", "SELL"):
+            if analysis_status != "VALID":
+                excluded_invalid += 1
+            elif outcome_status == "incomplete" or ret is None:
+                excluded_incomplete += 1
+            else:
+                valid_trades.append(r)
+        else:
+            excluded_invalid += 1
+
+    excluded_total = (
+        excluded_invalid
+        + excluded_abstain
+        + excluded_no_trade
+        + excluded_incomplete
+        + excluded_hold
+    )
+
+    base_stats = {
+        "excluded_invalid": excluded_invalid,
+        "excluded_abstain": excluded_abstain,
+        "excluded_wait_or_no_trade": excluded_no_trade,
+        "excluded_no_trade": excluded_no_trade,
+        "excluded_incomplete": excluded_incomplete,
+        "excluded_hold": excluded_hold,
+        "excluded_total": excluded_total,
+        "excluded_counts": {
+            "invalid": excluded_invalid,
+            "abstain": excluded_abstain,
+            "wait_or_no_trade": excluded_no_trade,
+            "no_trade": excluded_no_trade,
+            "incomplete": excluded_incomplete,
+            "hold": excluded_hold,
+            "total": excluded_total,
+        },
+    }
+
+    if not valid_trades:
+        return {
+            "total_signals": 0,
+            "win_rate": None,
+            "avg_return_pct": None,
+            "best_return_pct": None,
+            "worst_return_pct": None,
+            **base_stats,
+        }
 
     wins = 0
     returns = []
-    for t in trades:
+    for t in valid_trades:
         ret = t["return_pct"]
         returns.append(ret)
-        # Win = positive return for BUY, negative return for SELL
-        if t["action"] == "BUY" and ret > 0:
-            wins += 1
-        elif t["action"] == "SELL" and ret < 0:
+        # return_pct is already signed so positive return is a winning trade
+        if ret > 0:
             wins += 1
 
     return {
-        "total_signals": len(trades),
-        "win_rate": round(wins / len(trades) * 100, 1),
+        "total_signals": len(valid_trades),
+        "win_rate": round(wins / len(valid_trades) * 100, 1),
         "avg_return_pct": round(sum(returns) / len(returns), 2),
         "best_return_pct": round(max(returns), 2),
         "worst_return_pct": round(min(returns), 2),
+        **base_stats,
     }
 
 
@@ -282,26 +406,112 @@ def _run_backtest(job_id: str, symbol: str, start_date: str, end_date: str,
         for i, trade_date in enumerate(dates):
             record: Dict[str, Any] = {
                 "date": trade_date,
-                "action": "HOLD",
+                "action": "NO_TRADE",
+                "analysis_status": "INVALID_RUN",
+                "trade_action": "NO_TRADE",
+                "price_basis": "unknown",
+                "entry_price": None,
+                "entry_price_as_of": None,
+                "exit_price": None,
+                "exit_price_as_of": None,
                 "return_pct": None,
+                "outcome_status": "excluded_invalid",
+                "decision_summary": "",
                 "error": None,
             }
             try:
                 analysis = _run_single_analysis(symbol, trade_date, selected_analysts, config)
-                action = _classify_decision(analysis["decision"])
-                record["action"] = action
-                record["decision_summary"] = analysis["final_trade_decision"][:200] if analysis.get("final_trade_decision") else ""
 
-                if action in ("BUY", "SELL"):
+                raw_decision = analysis.get("decision") or ""
+                final_decision_text = analysis.get("final_trade_decision") or ""
+
+                analysis_status = analysis.get("analysis_status")
+                if not analysis_status and isinstance(analysis.get("decision_status"), dict):
+                    analysis_status = analysis["decision_status"].get("analysis_status")
+                if not analysis_status and isinstance(analysis.get("final_state"), dict):
+                    analysis_status = analysis["final_state"].get("analysis_status")
+
+                trade_action = analysis.get("trade_action")
+                if not trade_action and isinstance(analysis.get("decision_status"), dict):
+                    trade_action = analysis["decision_status"].get("trade_action")
+                if not trade_action and isinstance(analysis.get("final_state"), dict):
+                    trade_action = analysis["final_state"].get("trade_action")
+
+                if not analysis_status:
+                    text_to_check = f"{raw_decision} {final_decision_text}".upper()
+                    if any(k in text_to_check for k in ["INVALID_RUN", "DATA_ERROR"]):
+                        analysis_status = "INVALID_RUN"
+                    elif any(k in text_to_check for k in ["ABSTAIN", "PARTIAL"]):
+                        analysis_status = "ABSTAIN"
+                    elif any(k in text_to_check for k in ["BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"]):
+                        analysis_status = "VALID"
+                    else:
+                        analysis_status = "VALID"
+
+                if not trade_action:
+                    trade_action = _classify_decision(raw_decision or final_decision_text)
+
+                if analysis_status in ("INVALID_RUN", "DATA_ERROR"):
+                    trade_action = "NO_TRADE"
+                elif analysis_status in ("ABSTAIN", "PARTIAL"):
+                    if trade_action not in ("WAIT", "NO_TRADE"):
+                        trade_action = "NO_TRADE"
+
+                price_basis = analysis.get("price_basis") or "raw"
+
+                record["analysis_status"] = analysis_status
+                record["trade_action"] = trade_action
+                record["action"] = trade_action
+                record["price_basis"] = price_basis
+                record["decision_summary"] = (
+                    final_decision_text[:200] if final_decision_text else ""
+                )
+
+                if analysis_status in ("INVALID_RUN", "DATA_ERROR"):
+                    record["outcome_status"] = "excluded_invalid"
+                elif analysis_status in ("ABSTAIN", "PARTIAL"):
+                    record["outcome_status"] = "excluded_abstain"
+                elif trade_action in ("WAIT", "NO_TRADE"):
+                    record["outcome_status"] = "excluded_no_trade"
+                elif trade_action == "HOLD":
+                    record["outcome_status"] = "excluded_hold"
+                elif trade_action in ("BUY", "SELL") and analysis_status == "VALID":
                     entry_price = _get_price_on(symbol, trade_date)
                     exit_price = _get_price_after(symbol, trade_date, hold_days)
-                    if entry_price and exit_price and entry_price > 0:
-                        raw_return = (exit_price - entry_price) / entry_price * 100
+
+                    if entry_price is not None and entry_price > 0:
                         record["entry_price"] = round(entry_price, 2)
+                        record["entry_price_as_of"] = trade_date
+
+                    if exit_price is not None and exit_price > 0:
                         record["exit_price"] = round(exit_price, 2)
-                        record["return_pct"] = round(raw_return if action == "BUY" else -raw_return, 2)
+                        record["exit_price_as_of"] = f"{trade_date}+T{hold_days}"
+
+                    if (
+                        entry_price is not None
+                        and exit_price is not None
+                        and entry_price > 0
+                        and exit_price > 0
+                    ):
+                        raw_return = (exit_price - entry_price) / entry_price * 100
+                        record["return_pct"] = round(
+                            raw_return if trade_action == "BUY" else -raw_return, 2
+                        )
+                        record["outcome_status"] = "ok"
+                    else:
+                        record["return_pct"] = None
+                        record["outcome_status"] = "incomplete"
+                else:
+                    record["outcome_status"] = "excluded_invalid"
+
             except Exception as exc:
+                logger.exception("Single analysis failed for %s @ %s", symbol, trade_date)
                 record["error"] = str(exc)[:200]
+                record["analysis_status"] = "INVALID_RUN"
+                record["trade_action"] = "NO_TRADE"
+                record["action"] = "NO_TRADE"
+                record["outcome_status"] = "excluded_invalid"
+                record["return_pct"] = None
 
             records.append(record)
             _set(job_id, completed_dates=i + 1, records=list(records))
