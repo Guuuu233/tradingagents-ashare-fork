@@ -78,6 +78,23 @@ from tradingagents.dataflows.social.registry import (
     SocialDataProviderRegistry,
     build_default_social_registry,
 )
+from tradingagents.dataflows.social.classifier import (
+    LEXICON_VERSION,
+    StanceHit,
+    StanceClassificationResult,
+    StanceClassifier,
+    classify_text,
+)
+from tradingagents.dataflows.social.aggregator import (
+    HALF_LIFE_DAYS,
+    MAX_PLATFORM_SHARE,
+    MAX_LIKES_MULTIPLIER,
+    compute_time_decay,
+    compute_interaction_multiplier,
+    compute_deterministic_bundle_id,
+    SocialSentimentAggregator,
+    aggregate_sentiment_bundle,
+)
 
 __all__ = [
     "VALID_SOCIAL_STATUSES",
@@ -142,4 +159,17 @@ __all__ = [
     "check_content_eligibility",
     "SocialDataProviderRegistry",
     "build_default_social_registry",
+    "LEXICON_VERSION",
+    "StanceHit",
+    "StanceClassificationResult",
+    "StanceClassifier",
+    "classify_text",
+    "HALF_LIFE_DAYS",
+    "MAX_PLATFORM_SHARE",
+    "MAX_LIKES_MULTIPLIER",
+    "compute_time_decay",
+    "compute_interaction_multiplier",
+    "compute_deterministic_bundle_id",
+    "SocialSentimentAggregator",
+    "aggregate_sentiment_bundle",
 ]
