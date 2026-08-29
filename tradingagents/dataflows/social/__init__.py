@@ -1,6 +1,6 @@
 """TradingAgents social dataflow module.
 
-Defines contracts, archive schema, importer, and data providers for
+Defines contracts, archive schema, importer, entity resolver, and data providers for
 social media evidence (小红书, 抖音).
 """
 
@@ -65,6 +65,19 @@ from tradingagents.dataflows.social.mediacrawler_importer import (
     parse_crawler_timestamp,
     parse_metric_number,
 )
+from tradingagents.dataflows.social.provider import (
+    SocialDataProvider,
+    SocialArchiveProvider,
+    SocialFetchResult,
+    parse_iso_datetime,
+    compute_as_of_cutoff,
+    select_candidate_snapshot,
+    check_content_eligibility,
+)
+from tradingagents.dataflows.social.registry import (
+    SocialDataProviderRegistry,
+    build_default_social_registry,
+)
 
 __all__ = [
     "VALID_SOCIAL_STATUSES",
@@ -120,4 +133,13 @@ __all__ = [
     "compute_schema_fingerprint",
     "parse_crawler_timestamp",
     "parse_metric_number",
+    "SocialDataProvider",
+    "SocialArchiveProvider",
+    "SocialFetchResult",
+    "parse_iso_datetime",
+    "compute_as_of_cutoff",
+    "select_candidate_snapshot",
+    "check_content_eligibility",
+    "SocialDataProviderRegistry",
+    "build_default_social_registry",
 ]
