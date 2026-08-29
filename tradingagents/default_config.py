@@ -55,4 +55,21 @@ DEFAULT_CONFIG = {
         "get_individual_fund_flow": "cn_akshare",
         "get_hot_stocks_xq": "cn_akshare",
     },
+
+    # Social data configuration (Task 7 / §7)
+    "social": {
+        "mode": os.getenv("TA_SOCIAL_MODE", "disabled"),
+        "provider": os.getenv("TA_SOCIAL_PROVIDER", "archive_sqlite"),
+        "archive_db": os.getenv("TA_SOCIAL_ARCHIVE_DB", "").strip(),
+        "platforms": os.getenv("TA_SOCIAL_PLATFORMS", "xhs,dy"),
+        "lookback_days": int(os.getenv("TA_SOCIAL_LOOKBACK_DAYS") or "7"),
+        "max_posts": int(os.getenv("TA_SOCIAL_MAX_POSTS") or "100"),
+        "max_comments": int(os.getenv("TA_SOCIAL_MAX_COMMENTS") or "300"),
+        "min_posts": int(os.getenv("TA_SOCIAL_MIN_POSTS") or "3"),
+        "min_classified": int(os.getenv("TA_SOCIAL_MIN_CLASSIFIED") or "20"),
+        "min_authors": int(os.getenv("TA_SOCIAL_MIN_AUTHORS") or "10"),
+        "evidence_limit": int(os.getenv("TA_SOCIAL_EVIDENCE_LIMIT") or "20"),
+        "canary_symbols": os.getenv("TA_SOCIAL_CANARY_SYMBOLS", "").strip(),
+        "fetch_timeout": int(os.getenv("TA_SOCIAL_FETCH_TIMEOUT") or "5"),
+    },
 }

@@ -95,6 +95,10 @@ from tradingagents.dataflows.social.aggregator import (
     SocialSentimentAggregator,
     aggregate_sentiment_bundle,
 )
+from tradingagents.dataflows.social.collector import (
+    SocialDataCollector,
+    build_social_failure_ledger,
+)
 
 __all__ = [
     "VALID_SOCIAL_STATUSES",
@@ -172,4 +176,6 @@ __all__ = [
     "compute_deterministic_bundle_id",
     "SocialSentimentAggregator",
     "aggregate_sentiment_bundle",
+    "SocialDataCollector",
+    "build_social_failure_ledger",
 ]
