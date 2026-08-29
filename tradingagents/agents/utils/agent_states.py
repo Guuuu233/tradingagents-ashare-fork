@@ -43,6 +43,12 @@ class TraceItem(TypedDict, total=False):
     key_finding: str
     verdict: str
     confidence: str
+    source_status: str
+    source_mode: str
+    bundle_id: str
+    direction_allowed: bool
+    reason_codes: list[str]
+    evidence_refs: list[str]
 
 
 class InstrumentContext(TypedDict):
@@ -396,6 +402,7 @@ class AgentState(MessagesState):
     instrument_context: Annotated[InstrumentContext, "Normalized instrument context"]
     market_context: Annotated[MarketContext, "Market session and timing context"]
     market_data_context: Annotated[dict[str, Any], "Completed daily bars and independent realtime snapshot"]
+    social_data_context: Annotated[dict[str, Any], "Social media sentiment bundle and evidence context"]
     fund_flow_consensus_guard: Annotated[dict[str, Any], "Fail-closed fund-flow direction guard and validation"]
     user_context: Annotated[UserContext, "User-specific holdings and constraints"]
     workflow_context: Annotated[WorkflowContext, "Workflow metadata for the current run"]

@@ -317,6 +317,11 @@ class TradingAgentsGraph:
             if isinstance(collected, dict)
             else None
         )
+        social_data_context = (
+            collected.get("social_data_context")
+            if isinstance(collected, dict)
+            else None
+        )
 
         # Initialize state
         init_agent_state = self.propagator.create_initial_state(
@@ -326,6 +331,7 @@ class TradingAgentsGraph:
             selected_analysts=selected_analysts,
             request_source=request_source,
             market_data_context=market_data_context,
+            social_data_context=social_data_context,
             runtime_config=self.config,
         )
         args = self.propagator.get_graph_args()
@@ -401,6 +407,11 @@ class TradingAgentsGraph:
             if isinstance(collected, dict)
             else None
         )
+        social_data_context = (
+            collected.get("social_data_context")
+            if isinstance(collected, dict)
+            else None
+        )
 
         graph_args = self.propagator.get_graph_args()
 
@@ -410,6 +421,7 @@ class TradingAgentsGraph:
             user_intent=user_intent,
             horizon="short",
             market_data_context=market_data_context,
+            social_data_context=social_data_context,
             runtime_config=self.config,
         )
         final_state = await self.graph.ainvoke(state, **graph_args)
@@ -429,6 +441,7 @@ class TradingAgentsGraph:
             "data_as_of": result.get("data_as_of"),
             "data_gaps": list(result.get("data_gaps") or []),
             "market_data_context": market_data_context,
+            "social_data_context": social_data_context,
         }
 
     def _build_horizon_result(self, horizon: str, final_state: Dict[str, Any]) -> Dict[str, Any]:
@@ -437,13 +450,29 @@ class TradingAgentsGraph:
         market_context = final_state.get("market_context", {})
         trade_date = final_state.get("trade_date", "")
         market_data_context = final_state.get("market_data_context", {})
+        social_data_context = final_state.get("social_data_context", {})
         daily_context = market_data_context.get("daily", {}) if isinstance(market_data_context, dict) else {}
         failure_ledger = market_data_context.get("data_failure_ledger", []) if isinstance(market_data_context, dict) else []
-        data_gaps = [
-            str(entry.get("gap"))
-            for entry in failure_ledger
-            if isinstance(entry, dict) and entry.get("gap")
-        ]
+        social_failure_ledger = social_data_context.get("data_failure_ledger", []) if isinstance(social_data_context, dict) else []
+
+        valid_failure_statuses = {"failed", "timeout", "unavailable", "refused", "error"}
+        data_gaps: List[str] = []
+        for entry in failure_ledger:
+            if isinstance(entry, dict) and entry.get("gap"):
+                status = entry.get("status")
+                if status is None or str(status).lower() in valid_failure_statuses:
+                    gap_str = str(entry["gap"])
+                    if gap_str not in data_gaps:
+                        data_gaps.append(gap_str)
+
+        for entry in social_failure_ledger:
+            if isinstance(entry, dict) and entry.get("gap"):
+                status = entry.get("status")
+                if status is not None and str(status).lower() in valid_failure_statuses:
+                    gap_str = str(entry["gap"])
+                    if gap_str not in data_gaps:
+                        data_gaps.append(gap_str)
+
         raw_inv_state = final_state.get("investment_debate_state")
         inv_state = dict(raw_inv_state) if isinstance(raw_inv_state, dict) else None
 
@@ -456,6 +485,7 @@ class TradingAgentsGraph:
             "data_gaps": data_gaps,
             "market_context": market_context,
             "market_data_context": market_data_context,
+            "social_data_context": social_data_context,
             "final_trade_decision": final_state.get("final_trade_decision", ""),
             "investment_plan": final_state.get("investment_plan", ""),
             "trader_investment_plan": final_state.get("trader_investment_plan", ""),

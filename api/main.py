@@ -2925,6 +2925,11 @@ async def _run_job_inner(
                 if isinstance(collected_pool, dict)
                 else None
             )
+            social_data_context = (
+                collected_pool.get("social_data_context")
+                if isinstance(collected_pool, dict)
+                else None
+            )
             _log(f"[Timer] Data Collection step in _run_job took {time.time() - collect_start_t:.2f}s")
 
             _emit_job_event(job_id, "agent.tool_call", {
@@ -2982,6 +2987,7 @@ async def _run_job_inner(
                     user_intent=user_intent,
                     horizon=horizon,
                     market_data_context=market_data_context,
+                    social_data_context=social_data_context,
                     runtime_config=config,
                 )
                 last_report: Dict[str, str] = {}
@@ -3526,6 +3532,11 @@ async def _run_job_inner(
                 if isinstance(collected_pool, dict)
                 else None
             )
+            social_data_context = (
+                collected_pool.get("social_data_context")
+                if isinstance(collected_pool, dict)
+                else None
+            )
             init_state = graph.propagator.create_initial_state(
                 request.symbol,
                 request.trade_date,
@@ -3534,6 +3545,7 @@ async def _run_job_inner(
                 request_source=request_source,
                 horizon=request.horizons[0] if request.horizons else "short",
                 market_data_context=market_data_context,
+                social_data_context=social_data_context,
                 runtime_config=config,
             )
             args = graph.propagator.get_graph_args()
@@ -3714,6 +3726,11 @@ async def _run_job_inner(
                     if isinstance(collected_pool, dict)
                     else None
                 )
+                social_data_context = (
+                    collected_pool.get("social_data_context")
+                    if isinstance(collected_pool, dict)
+                    else None
+                )
                 init_state = graph.propagator.create_initial_state(
                     request.symbol,
                     request.trade_date,
@@ -3722,6 +3739,7 @@ async def _run_job_inner(
                     request_source=request_source,
                     horizon=single_horizon,
                     market_data_context=market_data_context,
+                    social_data_context=social_data_context,
                     runtime_config=config,
                 )
                 args = graph.propagator.get_graph_args()

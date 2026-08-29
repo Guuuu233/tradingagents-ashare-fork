@@ -23,6 +23,7 @@ from tradingagents.agents.utils.debate_utils import (
     default_round_goal,
 )
 from .data_collector import default_market_data_context
+from tradingagents.dataflows.social.contracts import create_default_social_data_context
 
 
 def default_fund_flow_consensus_guard() -> Dict[str, Any]:
@@ -53,6 +54,7 @@ class Propagator:
         user_intent: Optional[Dict[str, Any]] = None,
         horizon: str = "short",
         market_data_context: Optional[Dict[str, Any]] = None,
+        social_data_context: Optional[Dict[str, Any]] = None,
         runtime_config: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
@@ -100,6 +102,7 @@ class Propagator:
             "instrument_context": instrument_context,
             "market_context": market_context,
             "market_data_context": market_data_context or default_market_data_context(),
+            "social_data_context": social_data_context or create_default_social_data_context(requested_as_of=str(trade_date)),
             "fund_flow_consensus_guard": default_fund_flow_consensus_guard(),
             "user_context": normalized_user_context,
             "workflow_context": {
