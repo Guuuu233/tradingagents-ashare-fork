@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+    wait as futures_wait,
+)
 import copy
 from datetime import datetime, timedelta, timezone
 import math
@@ -57,6 +61,19 @@ from tradingagents.dataflows.trade_calendar import (
 )
 from tradingagents.dataflows.providers.industry_linkage_provider import (
     IndustryLinkageProvider,
+)
+from tradingagents.dataflows.social.collector import (
+    SocialDataCollector,
+    build_social_failure_ledger,
+)
+from tradingagents.dataflows.social.contracts import (
+    REASON_SOCIAL_ARCHIVE_LOCKED,
+    REASON_SOCIAL_ARCHIVE_MISSING,
+    REASON_SOCIAL_NOT_APPLICABLE,
+    SocialDataContext,
+    SocialStatus,
+    create_default_social_data_context,
+    create_empty_sentiment_bundle,
 )
 
 INDICATORS = [
@@ -1167,6 +1184,62 @@ def _build_source_provenance(
     return provenance
 
 
+def _build_market_attention(
+    results: Dict[str, Any],
+    source_provenance: Dict[str, Dict[str, Any]],
+    requested_as_of: str,
+) -> Dict[str, Any]:
+    """Extract market attention context from zt_pool and hot_stocks (Task 8 / §1 / D-008).
+
+    Guarantees:
+    - Retains status and verified as_of per source.
+    - Explicit failure/gap metadata when source fails or is refused; never silent empty dict.
+    - Preserves raw source payload for downstream consumption without inferring retail sentiment scores.
+    """
+    attention: Dict[str, Any] = {}
+    for key in ("zt_pool", "hot_stocks"):
+        raw_val = results.get(key)
+        prov = source_provenance.get(key) if isinstance(source_provenance, dict) else None
+
+        if prov and isinstance(prov, dict):
+            status = prov.get("status", "available")
+            as_of = prov.get("as_of") or prov.get("actual_as_of")
+            gap = prov.get("gap")
+            gap_class = prov.get("gap_class")
+        else:
+            classified = _classify_failure_value(raw_val)
+            if classified is not None:
+                status = classified
+                gap_class = _determine_gap_class(key, raw_val, status)
+                reason = _compact_failure_reason(status)
+                gap = f"【数据获取失败】{key}：{reason}"
+                as_of = None
+            elif raw_val is None or raw_val == "":
+                status = "unavailable"
+                gap_class = "operational"
+                gap = f"【数据获取失败】{key}：无数据"
+                as_of = None
+            else:
+                status = "available"
+                as_of = _extract_source_as_of(raw_val, requested_as_of)
+                gap = None
+                gap_class = None
+
+        entry: Dict[str, Any] = {
+            "status": status,
+            "as_of": as_of,
+            "requested_as_of": requested_as_of,
+            "raw": raw_val,
+        }
+        if gap:
+            entry["gap"] = gap
+        if gap_class:
+            entry["gap_class"] = gap_class
+
+        attention[key] = entry
+    return attention
+
+
 def _map_stock_to_industry(ticker: Optional[str]) -> Optional[str]:
     """根据股票代码映射到核心行业（覆盖全部 27 个权威行业，保持原有 5 行业与 6 只标的向后兼容）。
 
@@ -1906,6 +1979,10 @@ def _fetch_all(
     )
     results["event_coverage"] = event_cov
 
+    market_attention = _build_market_attention(
+        results, source_provenance, trade_date
+    )
+
     results["market_data_context"] = {
         "analysis_baseline_date": trade_date,
         "fund_flow_evidence": fund_flow_context,
@@ -1916,6 +1993,7 @@ def _fetch_all(
         "cn_indices": results.get("cn_indices"),
         "major_assets": results.get("major_assets"),
         "industry_linkage": results.get("industry_linkage"),
+        "market_attention": market_attention,
         "source_provenance": source_provenance,
         "data_failure_ledger": data_failure_ledger,
     }
@@ -1979,13 +2057,20 @@ def _fetch_all(
 class DataCollector:
     """Collect and cache data, thread-safe and shareable across jobs."""
 
-    def __init__(self, industry_linkage_provider: Optional[IndustryLinkageProvider] = None):
+    def __init__(
+        self,
+        industry_linkage_provider: Optional[IndustryLinkageProvider] = None,
+        social_collector: Optional[SocialDataCollector] = None,
+    ):
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._meta_lock = threading.Lock()
         self._refcounts: Dict[str, int] = {}
         self.industry_linkage_provider: IndustryLinkageProvider = (
             industry_linkage_provider or IndustryLinkageProvider()
+        )
+        self.social_collector: SocialDataCollector = (
+            social_collector if social_collector is not None else SocialDataCollector()
         )
 
     _map_stock_to_industry = staticmethod(_map_stock_to_industry)
@@ -1995,6 +2080,116 @@ class DataCollector:
             if key not in self._locks:
                 self._locks[key] = threading.Lock()
             return self._locks[key]
+
+    def _fetch_social_context(self, ticker: str, trade_date: str) -> Dict[str, Any]:
+        """Fetch social sentiment context after market collection with independent short timeout (Task 8 / §1 / D-008)."""
+        collector = self.social_collector
+        if collector is None:
+            collector = SocialDataCollector()
+
+        mode = getattr(collector, "mode", os.getenv("TA_SOCIAL_MODE", "disabled"))
+        timeout = float(
+            os.getenv("TA_SOCIAL_FETCH_TIMEOUT")
+            or getattr(collector, "fetch_timeout", 5.0)
+            or 5.0
+        )
+
+        if not hasattr(collector, "collect") or not callable(collector.collect):
+            bundle = create_empty_sentiment_bundle(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=trade_date,
+                cutoff_at="",
+                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+                symbol=ticker,
+            )
+            return create_default_social_data_context(
+                status=SocialStatus.FAILED.value,
+                mode=str(mode),
+                requested_as_of=trade_date,
+                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+                bundle=bundle,
+                source_provenance={
+                    "social_archive": {
+                        "status": SocialStatus.FAILED.value,
+                        "provider": getattr(collector, "provider_name", "archive_sqlite"),
+                    }
+                },
+                data_failure_ledger=build_social_failure_ledger(
+                    SocialStatus.FAILED.value, [REASON_SOCIAL_ARCHIVE_MISSING]
+                ),
+            )
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(collector.collect, ticker, trade_date)
+            context = future.result(timeout=timeout)
+            if isinstance(context, dict):
+                return context
+            if hasattr(context, "to_dict"):
+                return context.to_dict()
+            return dict(context)
+        except (TimeoutError, FuturesTimeoutError):
+            logger.warning(
+                "Social data fetch timed out after %ss for %s on %s",
+                timeout,
+                ticker,
+                trade_date,
+            )
+            bundle = create_empty_sentiment_bundle(
+                status=SocialStatus.TIMEOUT.value,
+                requested_as_of=trade_date,
+                cutoff_at="",
+                reason_codes=[REASON_SOCIAL_ARCHIVE_LOCKED],
+                symbol=ticker,
+            )
+            return create_default_social_data_context(
+                status=SocialStatus.TIMEOUT.value,
+                mode=str(mode),
+                requested_as_of=trade_date,
+                reason_codes=[REASON_SOCIAL_ARCHIVE_LOCKED],
+                bundle=bundle,
+                source_provenance={
+                    "social_archive": {
+                        "status": SocialStatus.TIMEOUT.value,
+                        "provider": getattr(collector, "provider_name", "archive_sqlite"),
+                    }
+                },
+                data_failure_ledger=build_social_failure_ledger(
+                    SocialStatus.TIMEOUT.value, [REASON_SOCIAL_ARCHIVE_LOCKED]
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Social data collection failed unexpectedly for %s on %s: %s",
+                ticker,
+                trade_date,
+                exc,
+            )
+            bundle = create_empty_sentiment_bundle(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=trade_date,
+                cutoff_at="",
+                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+                symbol=ticker,
+            )
+            return create_default_social_data_context(
+                status=SocialStatus.FAILED.value,
+                mode=str(mode),
+                requested_as_of=trade_date,
+                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+                bundle=bundle,
+                source_provenance={
+                    "social_archive": {
+                        "status": SocialStatus.FAILED.value,
+                        "provider": getattr(collector, "provider_name", "archive_sqlite"),
+                    }
+                },
+                data_failure_ledger=build_social_failure_ledger(
+                    SocialStatus.FAILED.value, [REASON_SOCIAL_ARCHIVE_MISSING]
+                ),
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def collect(self, ticker: str, trade_date: str, horizons: Optional[List[str]] = None) -> Dict[str, Any]:
         """Fetch all data and store in cache.
@@ -2013,11 +2208,15 @@ class DataCollector:
             )
         try:
             if key not in self._cache:
-                self._cache[key] = _fetch_all(
+                pool = _fetch_all(
                     ticker,
                     trade_date,
                     industry_provider=self.industry_linkage_provider,
                 )
+                pool["social_data_context"] = self._fetch_social_context(
+                    ticker, trade_date
+                )
+                self._cache[key] = pool
             return copy.deepcopy(self._cache[key])
         finally:
             key_lock.release()

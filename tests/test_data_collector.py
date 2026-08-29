@@ -92,6 +92,7 @@ def test_collect_populates_required_keys():
     assert "stock_data" in result
     assert "lhb" in result
     assert "zt_pool" in result
+    assert "social_data_context" in result
 
 
 def test_collect_uses_cache_on_second_call():
