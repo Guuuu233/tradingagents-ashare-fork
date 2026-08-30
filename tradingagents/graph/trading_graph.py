@@ -255,8 +255,7 @@ class TradingAgentsGraph:
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
-                    get_news,
+                    # Social analyst does not use news fallback tools (Task 10 / D-009 / D-010)
                 ]
             ),
             "news": ToolNode(
