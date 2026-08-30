@@ -629,6 +629,164 @@ def evaluate_volume_price_depth(
     return passed, score, failed_dims, reason_str
 
 
+INDETERMINATE_OR_UNAVAILABLE_MARKERS = (
+    "不可判断",
+    "无法判断",
+    "不具备判断条件",
+    "数据不足",
+    "样本不足",
+    "覆盖不足",
+    "不可用",
+    "【数据缺失】",
+    "【数据获取失败】",
+    "数据缺失",
+    "数据获取失败",
+    "暂无数据",
+    "未获取到",
+    "无数据",
+    "中性观察",
+    "保持中性",
+)
+
+
+def evaluate_social_depth(
+    text: str,
+    social_data_context: Optional[Dict[str, Any]] = None,
+    state: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, float, List[str], str]:
+    """Evaluate depth and compliance of social media / sentiment report.
+
+    Rules:
+    - In legacy proxy modes (disabled / shadow / not_applicable when not active):
+      Legacy sentiment report text is accepted without demanding social indeterminate markers.
+    - In active mode when social data is insufficient, empty, failed, timeout, refused, or direction_allowed=False:
+      Requires the report text to contain indeterminate / unavailable / missing markers ("不可判断", "数据不足", etc.).
+      Does NOT force quantitative directional metrics (e.g. bullish/bearish score or probability).
+    - In active mode when social data is available and direction_allowed=True:
+      Evaluates 4-segment coverage: data status, sentiment/opinions, attention/heat, reflexivity/lifecycle.
+    """
+    if not text or not isinstance(text, str) or not text.strip():
+        return False, 0.0, ["empty_report"], "social/sentiment报告正文为空"
+
+    t = text.strip()
+    failed_dims: List[str] = []
+
+    # Check social context state
+    ctx = social_data_context
+    if not isinstance(ctx, dict) and isinstance(state, dict):
+        ctx = state.get("social_data_context")
+
+    mode = "disabled"
+    status = "not_applicable"
+    direction_allowed = False
+    if isinstance(ctx, dict):
+        mode = str(ctx.get("mode", "disabled")).lower()
+        status = str(ctx.get("status", "not_applicable")).lower()
+        direction_allowed = bool(ctx.get("direction_allowed", False))
+    elif isinstance(state, dict):
+        market_ctx = state.get("market_data_context")
+        if isinstance(market_ctx, dict) and isinstance(market_ctx.get("social_data_context"), dict):
+            s_ctx = market_ctx["social_data_context"]
+            mode = str(s_ctx.get("mode", "disabled")).lower()
+            status = str(s_ctx.get("status", "not_applicable")).lower()
+            direction_allowed = bool(s_ctx.get("direction_allowed", False))
+
+    # In disabled or shadow mode (or not_applicable when not active), legacy proxy runs
+    if mode in ("disabled", "shadow") or (status == "not_applicable" and mode != "active"):
+        # Legacy sentiment report: basic validity check
+        has_sentiment = bool(
+            re.search(
+                r"(?:情绪|舆情|情绪面|市场情绪|关注度|热度|散户|观点|偏多|偏空|看多|看空|中性|分歧|乐观|悲观|恐慌|贪婪|新闻|数据)",
+                t,
+            )
+        )
+        has_missing = _has_explicit_missing(t) or any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS)
+        if not (has_sentiment or has_missing):
+            failed_dims.append("legacy_sentiment_content")
+            return False, 0.0, failed_dims, "sentiment报告正文缺少有效情绪分析或数据说明"
+        return True, 1.0, [], ""
+
+    # Active mode:
+    is_insufficient_state = (
+        not direction_allowed
+        or status in ("insufficient", "empty", "failed", "timeout", "refused", "not_applicable")
+    )
+
+    if is_insufficient_state:
+        # Insufficient / disallowed direction in active mode:
+        # Must acknowledge insufficiency or indeterminate status
+        has_indeterminate = any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS) or _has_explicit_missing(t)
+        if not has_indeterminate:
+            failed_dims.append("indeterminate_or_missing_marker")
+
+        # Do NOT force directional quantification metrics
+        passed = len(failed_dims) == 0
+        score = 1.0 if passed else 0.0
+        reason_str = "social深度不足：社交数据不足或不可用时，正文必须包含不可判断/数据不足/不可用或数据缺失标记" if not passed else ""
+        return passed, score, failed_dims, reason_str
+
+    # Available & direction_allowed mode: 4 dimensions
+    dim_count = 4
+    has_missing = _has_explicit_missing(t)
+
+    # 1. data_status_or_sample
+    has_sample = bool(
+        re.search(
+            r"(?:数据状态|数据源|覆盖|样本|有效帖子|有效发帖|评论|发帖量|互动量|小红书|抖音|微博|雪球|发帖数|样本量)",
+            t,
+        )
+    )
+    if not (has_missing or has_sample):
+        failed_dims.append("data_status_or_sample")
+
+    # 2. sentiment_or_opinion
+    has_opinion = bool(
+        re.search(
+            r"(?:观点|立场|情绪|看多|看空|多头|空头|中性|讨论|分歧|舆论|散户|正面|负面|评价|口碑)",
+            t,
+        )
+    )
+    if not (has_missing or has_opinion):
+        failed_dims.append("sentiment_or_opinion")
+
+    # 3. heat_or_attention
+    has_heat = bool(
+        re.search(
+            r"(?:热度|关注度|互动|点赞|转发|收藏|讨论量|速度|环比|活跃度|涨停池|连板|热门股票|榜单)",
+            t,
+        )
+    )
+    if not (has_missing or has_heat):
+        failed_dims.append("heat_or_attention")
+
+    # 4. reflexivity_or_lifecycle
+    has_reflexivity = bool(
+        re.search(
+            r"(?:反身性|生命周期|阶段|脉冲|狂热|恐慌|极值|踩踏|透支|持续性|演化|扩散|拐点|退潮|高潮|启动|发酵|冰点)",
+            t,
+        )
+    )
+    if not (has_missing or has_reflexivity):
+        failed_dims.append("reflexivity_or_lifecycle")
+
+    passed_count = dim_count - len(failed_dims)
+    score = round(max(0.0, passed_count / dim_count), 2)
+    passed = len(failed_dims) == 0
+
+    reasons: List[str] = []
+    if "data_status_or_sample" in failed_dims:
+        reasons.append("缺少数据状态或样本覆盖说明")
+    if "sentiment_or_opinion" in failed_dims:
+        reasons.append("缺少社交观点或情绪分布分析")
+    if "heat_or_attention" in failed_dims:
+        reasons.append("缺少社交热度或市场关注度分析")
+    if "reflexivity_or_lifecycle" in failed_dims:
+        reasons.append("缺少情绪反身性或生命周期演化推演")
+
+    reason_str = f"social深度不足：{'；'.join(reasons)}" if reasons else ""
+    return passed, score, failed_dims, reason_str
+
+
 def evaluate_role_depth(
     role: str,
     text: str,
@@ -645,6 +803,11 @@ def evaluate_role_depth(
         return evaluate_news_depth(text, market_data_context)
     elif r in ("volume_price", "volumeprice", "volume_price_analyst"):
         return evaluate_volume_price_depth(text, market_data_context, state)
+    elif r in ("social", "sentiment", "social_media", "social_media_analyst", "social_sentiment"):
+        social_ctx = (state.get("social_data_context") if isinstance(state, dict) else None) or (
+            market_data_context.get("social_data_context") if isinstance(market_data_context, dict) else None
+        )
+        return evaluate_social_depth(text, social_data_context=social_ctx, state=state)
     else:
         return True, 1.0, [], ""
 
@@ -737,6 +900,7 @@ def apply_report_quality_gate(
     fundamentals_report = state_or_result.get("fundamentals_report", "")
     news_report = state_or_result.get("news_report", "")
     volume_price_report = state_or_result.get("volume_price_report", "")
+    sentiment_report = state_or_result.get("sentiment_report", "")
 
     market_data_context = state_or_result.get("market_data_context")
     if not isinstance(market_data_context, dict):
@@ -758,6 +922,8 @@ def apply_report_quality_gate(
                 news_report = sub_val["news_report"]
             if not volume_price_report and sub_val.get("volume_price_report"):
                 volume_price_report = sub_val["volume_price_report"]
+            if not sentiment_report and sub_val.get("sentiment_report"):
+                sentiment_report = sub_val["sentiment_report"]
 
     passed, failure_reasons = check_report_quality(
         macro_report=macro_report,
@@ -785,6 +951,7 @@ def apply_report_quality_gate(
         "fundamentals": fundamentals_report,
         "news": news_report,
         "volume_price": volume_price_report,
+        "sentiment": sentiment_report,
     }
     depth_all_passed, depth_results = check_analyst_depth_quality(
         reports=reports_map,

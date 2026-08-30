@@ -51,7 +51,7 @@ import requests
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
 from api.job_store import get_job_store as _new_job_store
-from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service
+from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service, social_data_service
 import jwt
 
 def _get_real_ip(request: Request) -> Optional[str]:
@@ -7230,6 +7230,14 @@ def check_data_providers_health():
         "providers": providers_status,
         "categories": list(TOOLS_CATEGORIES.keys()),
     }
+
+
+@app.get("/v1/social-data/status", response_model=social_data_service.SocialDataStatusResponse)
+def get_social_data_status(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    """Return authenticated read-only status and metadata for social data subsystem."""
+    return social_data_service.get_social_data_status()
 
 
 # Mount frontend if dist exists

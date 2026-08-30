@@ -238,6 +238,33 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             for entry in failure_ledger:
                 if isinstance(entry, dict):
                     prov_lines.append(f"  * [UNAVAILABLE] {entry.get('source', '')}: {entry.get('reason', entry.get('status', 'failed'))}")
+
+        social_data_context = state.get("social_data_context") or {}
+        if isinstance(social_data_context, dict) and social_data_context:
+            social_mode = social_data_context.get("mode", "disabled")
+            social_status = social_data_context.get("status", "unknown")
+            social_dir_allowed = bool(social_data_context.get("direction_allowed", False))
+            social_reasons = social_data_context.get("reason_codes", [])
+            bundle = social_data_context.get("bundle") if isinstance(social_data_context.get("bundle"), dict) else {}
+            bundle_id = (bundle.get("bundle_id") if isinstance(bundle, dict) else None) or social_data_context.get("bundle_id") or "none"
+
+            reasons_str = f" ({', '.join(str(r) for r in social_reasons)})" if social_reasons else ""
+            prov_lines.append(
+                f"- 社交数据状态 (social_data_context): mode={social_mode}, status={social_status}, "
+                f"direction_allowed={social_dir_allowed}, bundle_id={bundle_id}{reasons_str}"
+            )
+            if not social_dir_allowed:
+                prov_lines.append(
+                    f"  * [DIRECTION_GUARD] 明确禁止：当前社交数据 direction_allowed=false（状态: {social_status}{reasons_str}），"
+                    f"严禁将社交分数、散户情绪得分或讨论热度作为多空方向证据或交易依据！"
+                )
+
+            social_ledger = social_data_context.get("data_failure_ledger")
+            if isinstance(social_ledger, list) and social_ledger:
+                for entry in social_ledger:
+                    if isinstance(entry, dict):
+                        prov_lines.append(f"  * [UNAVAILABLE] {entry.get('source', 'social_archive')}: {entry.get('reason', entry.get('status', 'failed'))}")
+
         if data_gaps:
             prov_lines.append(f"- 已知数据缺口 (data_gaps): {', '.join(str(g) for g in data_gaps)}")
         provenance_context = "\n".join(prov_lines)
@@ -288,6 +315,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 seven_reports=seven_reports,
                 market_data_context=market_data_context,
                 analysis_baseline_date=analysis_baseline_date,
+                social_data_context=social_data_context,
             )
             claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
                 claims=claims,
@@ -348,6 +376,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             seven_reports=seven_reports,
             market_data_context=market_data_context,
             analysis_baseline_date=analysis_baseline_date,
+            social_data_context=social_data_context,
         )
         claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
             claims=claims,
@@ -420,6 +449,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             seven_reports=seven_reports,
             market_data_context=market_data_context,
             analysis_baseline_date=analysis_baseline_date,
+            social_data_context=social_data_context,
         )
         challenges_text = format_challenges_for_prompt(
             challenges=challenges,
@@ -536,6 +566,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             seven_reports=seven_reports,
             market_data_context=market_data_context,
             analysis_baseline_date=analysis_baseline_date,
+            social_data_context=social_data_context,
         )
 
         manager_verdict = extract_and_validate_manager_verdict(

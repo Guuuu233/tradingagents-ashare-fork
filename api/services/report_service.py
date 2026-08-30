@@ -1587,7 +1587,7 @@ _FAILURE_LEDGER_STATUSES = frozenset(("failed", "timeout", "unavailable", "refus
 
 
 def _iter_failure_ledger_entries(result_data: Any) -> Iterable[Dict[str, Any]]:
-    """Yield only ledgers from the known market-data context locations."""
+    """Yield ledgers from known market-data and social-data context locations."""
     if not isinstance(result_data, dict):
         return
 
@@ -1601,6 +1601,21 @@ def _iter_failure_ledger_entries(result_data: Any) -> Iterable[Dict[str, Any]]:
         # Dual reports keep one context per horizon at this location.
         for nested_context in market_data_context.values():
             if isinstance(nested_context, dict) and nested_context is not market_data_context:
+                nested_ledger = nested_context.get("data_failure_ledger")
+                if isinstance(nested_ledger, list):
+                    for entry in nested_ledger:
+                        if isinstance(entry, dict):
+                            yield entry
+
+    social_data_context = result_data.get("social_data_context")
+    if isinstance(social_data_context, dict):
+        social_ledger = social_data_context.get("data_failure_ledger")
+        if isinstance(social_ledger, list):
+            for entry in social_ledger:
+                if isinstance(entry, dict):
+                    yield entry
+        for nested_context in social_data_context.values():
+            if isinstance(nested_context, dict) and nested_context is not social_data_context:
                 nested_ledger = nested_context.get("data_failure_ledger")
                 if isinstance(nested_ledger, list):
                     for entry in nested_ledger:

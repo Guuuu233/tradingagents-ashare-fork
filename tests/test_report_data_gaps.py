@@ -92,3 +92,175 @@ def test_merge_data_gaps_filters_by_gap_class():
         "【数据获取失败】share_pledge：data source refused",
     ]
 
+
+def test_merge_data_gaps_scans_social_failure_ledger_top_level():
+    result_data = {
+        "social_data_context": {
+            "status": "failed",
+            "data_failure_ledger": [
+                {
+                    "source": "social_archive",
+                    "status": "failed",
+                    "reason": "social_archive_missing",
+                    "gap": "【数据获取失败】social_archive：social_archive_missing",
+                    "gap_class": "operational",
+                },
+                {
+                    "source": "social.xhs",
+                    "status": "timeout",
+                    "reason": "social_archive_locked",
+                    "gap": "【数据获取失败】social.xhs：social_archive_locked",
+                    "gap_class": "operational",
+                },
+                {
+                    "source": "social.dy",
+                    "status": "refused",
+                    "reason": "social_invalid_as_of",
+                    "gap": "【数据获取失败】social.dy：social_invalid_as_of",
+                    "gap_class": "structural",
+                },
+            ],
+        }
+    }
+
+    all_gaps = report_service.merge_data_gaps(result_data)
+    assert all_gaps == [
+        "【数据获取失败】social_archive：social_archive_missing",
+        "【数据获取失败】social.xhs：social_archive_locked",
+        "【数据获取失败】social.dy：social_invalid_as_of",
+    ]
+
+    operational_gaps = report_service.merge_data_gaps(result_data, gap_class="operational")
+    assert operational_gaps == [
+        "【数据获取失败】social_archive：social_archive_missing",
+        "【数据获取失败】social.xhs：social_archive_locked",
+    ]
+
+    structural_gaps = report_service.merge_data_gaps(result_data, gap_class="structural")
+    assert structural_gaps == [
+        "【数据获取失败】social.dy：social_invalid_as_of",
+    ]
+
+
+def test_merge_data_gaps_ignores_non_failure_social_statuses():
+    result_data = {
+        "social_data_context": {
+            "status": "partial",
+            "data_failure_ledger": [
+                {
+                    "source": "social_archive",
+                    "status": "empty",
+                    "reason": "social_empty",
+                    "gap": "【数据获取失败】social_archive：social_empty",
+                    "gap_class": "operational",
+                },
+                {
+                    "source": "social.xhs",
+                    "status": "insufficient",
+                    "reason": "social_insufficient_coverage",
+                    "gap": "【数据获取失败】social.xhs：social_insufficient_coverage",
+                    "gap_class": "operational",
+                },
+                {
+                    "source": "social.dy",
+                    "status": "not_applicable",
+                    "reason": "social_not_applicable",
+                    "gap": "【数据获取失败】social.dy：social_not_applicable",
+                    "gap_class": "structural",
+                },
+                {
+                    "source": "social_archive",
+                    "status": "partial",
+                    "reason": "social_platform_partial",
+                    "gap": "【数据获取失败】social_archive：social_platform_partial",
+                    "gap_class": "operational",
+                },
+                {
+                    "source": "social_archive",
+                    "status": "available",
+                    "reason": "available",
+                    "gap": "【数据获取失败】social_archive：available",
+                    "gap_class": "operational",
+                },
+            ],
+        }
+    }
+
+    assert report_service.merge_data_gaps(result_data) == []
+
+
+def test_merge_data_gaps_scans_social_ledger_across_horizons_and_deduplicates():
+    result_data = {
+        "market_data_context": {
+            "data_failure_ledger": [
+                {
+                    "source": "social_archive",
+                    "status": "failed",
+                    "reason": "social_archive_missing",
+                    "gap": "【数据获取失败】social_archive：social_archive_missing",
+                    "gap_class": "operational",
+                }
+            ]
+        },
+        "social_data_context": {
+            "data_failure_ledger": [
+                {
+                    "source": "social_archive",
+                    "status": "failed",
+                    "reason": "social_archive_missing",
+                    "gap": "【数据获取失败】social_archive：social_archive_missing",
+                    "gap_class": "operational",
+                }
+            ]
+        },
+        "short_term": {
+            "social_data_context": {
+                "data_failure_ledger": [
+                    {
+                        "source": "social.xhs",
+                        "status": "unavailable",
+                        "reason": "social_archive_locked",
+                        "gap": "【数据获取失败】social.xhs：social_archive_locked",
+                        "gap_class": "operational",
+                    }
+                ]
+            }
+        },
+        "medium_term": {
+            "social_data_context": {
+                "data_failure_ledger": [
+                    {
+                        "source": "social.dy",
+                        "status": "error",
+                        "reason": "social_schema_mismatch",
+                        "gap": "【数据获取失败】social.dy：social_schema_mismatch",
+                        "gap_class": "operational",
+                    }
+                ]
+            }
+        },
+        "horizons": {
+            "long_term": {
+                "social_data_context": {
+                    "data_failure_ledger": [
+                        {
+                            "source": "social.xhs",
+                            "status": "unavailable",
+                            "reason": "social_archive_locked",
+                            "gap": "【数据获取失败】social.xhs：social_archive_locked",
+                            "gap_class": "operational",
+                        }
+                    ]
+                }
+            }
+        },
+    }
+
+    gaps = report_service.merge_data_gaps(result_data)
+    assert gaps == [
+        "【数据获取失败】social_archive：social_archive_missing",
+        "【数据获取失败】social.xhs：social_archive_locked",
+        "【数据获取失败】social.dy：social_schema_mismatch",
+    ]
+
+

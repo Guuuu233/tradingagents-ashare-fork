@@ -65,6 +65,7 @@ REPORT_TO_PROVENANCE_SOURCES: dict[str, tuple[str, ...]] = {
     "market_report": ("stock_data",),
     "volume_price_report": ("stock_data",),
     "news_report": ("news",),
+    "sentiment_report": ("social_archive", "social_data", "social", "social.xhs", "social.dy"),
 }
 
 # Chinese and English quantity/unit patterns
@@ -241,43 +242,72 @@ class EvidenceFactualTruthEvaluator:
         self.abs_tol = absolute_tolerance
 
     def _extract_unavailable_sources(
-        self, market_data_context: Mapping[str, Any] | None
+        self,
+        market_data_context: Mapping[str, Any] | None,
+        social_data_context: Mapping[str, Any] | None = None,
     ) -> set[str]:
         unavailable = set()
-        if not isinstance(market_data_context, Mapping):
-            return unavailable
+        if isinstance(market_data_context, Mapping):
+            # Check data_failure_ledger
+            ledger = market_data_context.get("data_failure_ledger")
+            if isinstance(ledger, list):
+                for entry in ledger:
+                    if isinstance(entry, dict):
+                        src = str(entry.get("source", "")).strip().lower()
+                        status = str(entry.get("status", "")).strip().lower()
+                        prov_status = str(entry.get("provenance_status", "")).strip().lower()
+                        if src and (not status or status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}):
+                            unavailable.add(src)
+                            # Add alias name if available
+                            name = str(entry.get("name", "")).strip().lower()
+                            if name:
+                                unavailable.add(name)
 
-        # Check data_failure_ledger
-        ledger = market_data_context.get("data_failure_ledger")
-        if isinstance(ledger, list):
-            for entry in ledger:
-                if isinstance(entry, dict):
-                    src = str(entry.get("source", "")).strip().lower()
-                    status = str(entry.get("status", "")).strip().lower()
-                    prov_status = str(entry.get("provenance_status", "")).strip().lower()
-                    if src and (not status or status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}):
-                        unavailable.add(src)
-                        # Add alias name if available
-                        name = str(entry.get("name", "")).strip().lower()
-                        if name:
-                            unavailable.add(name)
+            # Check source_provenance
+            prov = market_data_context.get("source_provenance")
+            if isinstance(prov, dict):
+                for src, info in prov.items():
+                    if isinstance(info, dict):
+                        status = str(info.get("status", "")).strip().lower()
+                        prov_status = str(info.get("provenance_status", "")).strip().lower()
+                        if status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}:
+                            unavailable.add(src.strip().lower())
 
-        # Check source_provenance
-        prov = market_data_context.get("source_provenance")
-        if isinstance(prov, dict):
-            for src, info in prov.items():
-                if isinstance(info, dict):
-                    status = str(info.get("status", "")).strip().lower()
-                    prov_status = str(info.get("provenance_status", "")).strip().lower()
-                    if status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}:
-                        unavailable.add(src.strip().lower())
+            # Check data_gaps
+            gaps = market_data_context.get("data_gaps")
+            if isinstance(gaps, list):
+                for g in gaps:
+                    if isinstance(g, str):
+                        unavailable.add(g.strip().lower())
 
-        # Check data_gaps
-        gaps = market_data_context.get("data_gaps")
-        if isinstance(gaps, list):
-            for g in gaps:
-                if isinstance(g, str):
-                    unavailable.add(g.strip().lower())
+        if isinstance(social_data_context, Mapping):
+            social_ledger = social_data_context.get("data_failure_ledger")
+            if isinstance(social_ledger, list):
+                for entry in social_ledger:
+                    if isinstance(entry, dict):
+                        src = str(entry.get("source", "")).strip().lower()
+                        status = str(entry.get("status", "")).strip().lower()
+                        prov_status = str(entry.get("provenance_status", "")).strip().lower()
+                        if src and (not status or status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}):
+                            unavailable.add(src)
+                            name = str(entry.get("name", "")).strip().lower()
+                            if name:
+                                unavailable.add(name)
+
+            social_prov = social_data_context.get("source_provenance")
+            if isinstance(social_prov, dict):
+                for src, info in social_prov.items():
+                    if isinstance(info, dict):
+                        status = str(info.get("status", "")).strip().lower()
+                        prov_status = str(info.get("provenance_status", "")).strip().lower()
+                        if status in UNAVAILABLE_STATUSES or prov_status in {"unverified", "refused", "future"}:
+                            unavailable.add(src.strip().lower())
+
+            social_status = str(social_data_context.get("status", "")).strip().lower()
+            if social_status in UNAVAILABLE_STATUSES:
+                unavailable.add("social_archive")
+                unavailable.add("social_data")
+                unavailable.add("social")
 
         return unavailable
 
@@ -287,7 +317,8 @@ class EvidenceFactualTruthEvaluator:
         if not unavailable_sources or not raw_evidence:
             return False, ""
         evidence_lower = raw_evidence.lower()
-        for src in unavailable_sources:
+        sorted_sources = sorted(unavailable_sources, key=len, reverse=True)
+        for src in sorted_sources:
             if src and (src in evidence_lower or evidence_lower in src):
                 return True, src
         return False, ""
@@ -323,6 +354,7 @@ class EvidenceFactualTruthEvaluator:
         market_data_context: Mapping[str, Any] | None = None,
         analysis_baseline_date: str | None = None,
         claim_id: str | None = None,
+        social_data_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Evaluate a single evidence string for truthfulness, lookahead, and fatal hallucination."""
         raw_text = str(raw_evidence or "").strip()
@@ -338,7 +370,7 @@ class EvidenceFactualTruthEvaluator:
             }
 
         # 1. Check for unavailable data sources (Fatal Hallucination)
-        unavailable_sources = self._extract_unavailable_sources(market_data_context)
+        unavailable_sources = self._extract_unavailable_sources(market_data_context, social_data_context)
         is_unavail, failed_src = self._check_source_unavailable(raw_text, unavailable_sources)
         if is_unavail:
             return {
@@ -350,6 +382,32 @@ class EvidenceFactualTruthEvaluator:
                 "is_fatal": True,
                 "details": f"引用了失败账本中不可用或缺失的数据源指标: {failed_src}，属于严重幻觉",
             }
+
+        # 1.1 Check if evidence asserts a directional social sentiment score when direction is disallowed or social is insufficient/empty
+        if isinstance(social_data_context, Mapping):
+            social_status = str(social_data_context.get("status", "")).strip().lower()
+            dir_allowed = bool(social_data_context.get("direction_allowed", False))
+            bundle = social_data_context.get("bundle") if isinstance(social_data_context.get("bundle"), dict) else {}
+            sent_label = bundle.get("social_sentiment", {}).get("label") if isinstance(bundle.get("social_sentiment"), dict) else None
+
+            if (
+                not dir_allowed
+                or social_status in ("insufficient", "empty", "disabled", "shadow", "not_applicable", "failed", "timeout", "refused")
+                or sent_label == "insufficient"
+            ):
+                raw_lower = raw_text.lower()
+                is_social_mention = any(kw in raw_lower for kw in ("社交", "舆情", "散户", "小红书", "抖音", "social"))
+                has_score_or_dir = any(kw in raw_lower for kw in ("得分", "分数", "score", "看多", "看空", "多头", "空头", "0.", "极度", "狂热", "高涨", "情绪分"))
+                if is_social_mention and has_score_or_dir:
+                    return {
+                        "raw": raw_text,
+                        "claim_id": claim_id,
+                        "matched_role": None,
+                        "matched_source": None,
+                        "status": STATUS_UNSUPPORTED,
+                        "is_fatal": False,
+                        "details": "社交数据处于不可用/不足态或 direction_allowed=false，禁止将社交情绪分数或多空方向作为已验证事实",
+                    }
 
         # 2. Check Anti-lookahead Date
         baseline_date_obj = None
@@ -615,6 +673,7 @@ class EvidenceFactualTruthEvaluator:
         seven_reports: Mapping[str, str],
         market_data_context: Mapping[str, Any] | None = None,
         analysis_baseline_date: str | None = None,
+        social_data_context: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate all evidence items across tracked debate claims."""
         results: list[dict[str, Any]] = []
@@ -634,6 +693,7 @@ class EvidenceFactualTruthEvaluator:
                     market_data_context=market_data_context,
                     analysis_baseline_date=analysis_baseline_date,
                     claim_id=cid,
+                    social_data_context=social_data_context,
                 )
                 results.append(ver_res)
 
@@ -645,6 +705,7 @@ class EvidenceFactualTruthEvaluator:
         seven_reports: Mapping[str, str],
         market_data_context: Mapping[str, Any] | None = None,
         analysis_baseline_date: str | None = None,
+        social_data_context: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate all evidence items across challenges and compute challenge-level evidence status."""
         results: list[dict[str, Any]] = []
@@ -669,6 +730,7 @@ class EvidenceFactualTruthEvaluator:
                     market_data_context=market_data_context,
                     analysis_baseline_date=analysis_baseline_date,
                     claim_id=chid,
+                    social_data_context=social_data_context,
                 )
                 ver_items.append(ver_res)
 
