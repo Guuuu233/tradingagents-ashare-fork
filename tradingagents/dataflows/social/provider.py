@@ -244,17 +244,30 @@ def select_candidate_snapshot(
 ) -> Optional[Dict[str, Any]]:
     """Select candidate snapshot for a record_id from a list of snapshot rows/dicts.
 
-    Rule (D-008):
+    Rule (D-008 / M3):
     - Select snapshots where snapshot_at <= cutoff.
     - Pick the snapshot with MAXIMUM snapshot_at.
-    - Tie-breaker: latest ingest_at or snapshot_id.
+    - Tie-breaker: latest ingest_at (parsed as UTC datetime) then snapshot_id.
+    - Reject snapshots with missing or invalid ingest_at (forbidden to backfill 'now').
     - Returns None if no snapshot has snapshot_at <= cutoff.
     """
     valid_snapshots = []
     for s in snapshots:
         s_at = parse_iso_datetime(s.get("snapshot_at"))
-        if s_at is not None and s_at <= cutoff_utc:
-            valid_snapshots.append((s_at, s.get("ingest_at") or "", s.get("snapshot_id") or "", s))
+        if s_at is None or s_at > cutoff_utc:
+            continue
+
+        raw_ingest_at = s.get("ingest_at")
+        ingest_dt = parse_iso_datetime(raw_ingest_at)
+        if ingest_dt is None:
+            logger.warning(
+                "Snapshot %s has missing or invalid ingest_at (%r); rejecting snapshot",
+                s.get("snapshot_id"),
+                raw_ingest_at,
+            )
+            continue
+
+        valid_snapshots.append((s_at, ingest_dt, str(s.get("snapshot_id") or ""), s))
 
     if not valid_snapshots:
         return None

@@ -244,9 +244,9 @@ def test_select_candidate_snapshot_picks_max_le_cutoff():
     """Multiple snapshots for same record: select snapshot with MAX snapshot_at <= cutoff."""
     cutoff_utc = datetime(2026, 8, 26, 15, 59, 59, 999999, tzinfo=timezone.utc)
 
-    snap1 = {"snapshot_id": "s1", "snapshot_at": "2026-08-25T10:00:00Z", "likes": 10}
-    snap2 = {"snapshot_id": "s2", "snapshot_at": "2026-08-26T08:00:00Z", "likes": 50}
-    snap3 = {"snapshot_id": "s3", "snapshot_at": "2026-08-27T08:00:00Z", "likes": 500}  # After cutoff
+    snap1 = {"snapshot_id": "s1", "snapshot_at": "2026-08-25T10:00:00Z", "ingest_at": "2026-08-25T10:05:00Z", "likes": 10}
+    snap2 = {"snapshot_id": "s2", "snapshot_at": "2026-08-26T08:00:00Z", "ingest_at": "2026-08-26T08:05:00Z", "likes": 50}
+    snap3 = {"snapshot_id": "s3", "snapshot_at": "2026-08-27T08:00:00Z", "ingest_at": "2026-08-27T08:05:00Z", "likes": 500}  # After cutoff
 
     candidate = select_candidate_snapshot([snap1, snap2, snap3], cutoff_utc)
     assert candidate is not None
@@ -258,11 +258,55 @@ def test_select_candidate_snapshot_none_when_all_after_cutoff():
     """When all snapshots are after cutoff, candidate selection returns None."""
     cutoff_utc = datetime(2026, 8, 26, 15, 59, 59, 999999, tzinfo=timezone.utc)
 
-    snap1 = {"snapshot_id": "s1", "snapshot_at": "2026-08-27T01:00:00Z"}
-    snap2 = {"snapshot_id": "s2", "snapshot_at": "2026-08-27T10:00:00Z"}
+    snap1 = {"snapshot_id": "s1", "snapshot_at": "2026-08-27T01:00:00Z", "ingest_at": "2026-08-27T01:05:00Z"}
+    snap2 = {"snapshot_id": "s2", "snapshot_at": "2026-08-27T10:00:00Z", "ingest_at": "2026-08-27T10:05:00Z"}
 
     candidate = select_candidate_snapshot([snap1, snap2], cutoff_utc)
     assert candidate is None
+
+
+def test_select_candidate_snapshot_ingest_at_datetime_tie_break():
+    """M3: Tie-breaker between snapshots with identical snapshot_at parses ingest_at as UTC datetime."""
+    cutoff_utc = datetime(2026, 8, 26, 15, 59, 59, 999999, tzinfo=timezone.utc)
+
+    # Identical snapshot_at, different ingest_at with timezone offset notation vs Z
+    snap1 = {
+        "snapshot_id": "s1",
+        "snapshot_at": "2026-08-26T08:00:00Z",
+        "ingest_at": "2026-08-26T08:30:00Z",
+        "likes": 10,
+    }
+    snap2 = {
+        "snapshot_id": "s2",
+        "snapshot_at": "2026-08-26T08:00:00Z",
+        "ingest_at": "2026-08-26T16:35:00+08:00",  # Equivalent to 08:35:00Z (later than s1)
+        "likes": 20,
+    }
+
+    candidate = select_candidate_snapshot([snap1, snap2], cutoff_utc)
+    assert candidate is not None
+    assert candidate["snapshot_id"] == "s2"
+    assert candidate["likes"] == 20
+
+
+def test_select_candidate_snapshot_invalid_ingest_at_rejected(caplog):
+    """M3: Snapshots with missing/invalid ingest_at must be rejected, forbidden to backfill 'now'."""
+    cutoff_utc = datetime(2026, 8, 26, 15, 59, 59, 999999, tzinfo=timezone.utc)
+
+    snap_invalid = {
+        "snapshot_id": "s_bad",
+        "snapshot_at": "2026-08-26T08:00:00Z",
+        "ingest_at": "invalid_timestamp",
+    }
+    snap_none = {
+        "snapshot_id": "s_none",
+        "snapshot_at": "2026-08-26T08:00:00Z",
+        "ingest_at": None,
+    }
+
+    candidate = select_candidate_snapshot([snap_invalid, snap_none], cutoff_utc)
+    assert candidate is None
+    assert "missing or invalid ingest_at" in caplog.text
 
 
 # ============================================================================
