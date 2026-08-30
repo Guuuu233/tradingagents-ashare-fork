@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+logger = logging.getLogger(__name__)
 
 from tradingagents.dataflows.social.archive_schema import (
     ARCHIVE_SCHEMA_VERSION,
@@ -198,6 +201,14 @@ class MediaCrawlerImporter:
         if target_db is None:
             raise ValueError("archive_db or archive_conn must be provided")
 
+        if crawler_commit is not None:
+            commit_str = str(crawler_commit).strip()
+            if not commit_str:
+                raise ValueError("crawler_commit cannot be empty; fabricating commit string is forbidden")
+            self.crawler_commit = commit_str
+        else:
+            self.crawler_commit = DEFAULT_CRAWLER_COMMIT
+
         if isinstance(target_db, str):
             self.archive_conn = init_archive_db(target_db)
             self._owns_archive_conn = True
@@ -206,7 +217,6 @@ class MediaCrawlerImporter:
             init_archive_db(self.archive_conn)
             self._owns_archive_conn = False
 
-        self.crawler_commit = crawler_commit
         self.entity_resolver = entity_resolver or EntityResolver()
 
     def import_records(

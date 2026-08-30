@@ -22,6 +22,7 @@ Core Contracts:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -29,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Protocol, Sequence, Set, Tuple, Union, runtime_checkable
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from tradingagents.dataflows.trade_calendar import CN_TZ, now_cn
 from tradingagents.dataflows.social.archive_schema import verify_archive_schema
@@ -589,9 +592,15 @@ class SocialArchiveProvider:
 
                 # Construct SocialRawRecordV1
                 metrics = SocialMetrics.from_dict(json.loads(cand.get("metrics_json") or "{}"))
-                crawler_commit = crawler_commits.get(
-                    cand["ingest_run_id"], "d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
-                )
+                crawler_commit = crawler_commits.get(cand["ingest_run_id"])
+                if not crawler_commit or not str(crawler_commit).strip():
+                    logger.warning(
+                        "Snapshot %s references missing or invalid ingest_run_id %s; rejecting record",
+                        cand.get("snapshot_id"),
+                        cand.get("ingest_run_id"),
+                    )
+                    continue
+                crawler_commit = str(crawler_commit).strip()
                 source_ref = SourceRef(
                     provider="mediacrawler",
                     crawler_commit=crawler_commit,

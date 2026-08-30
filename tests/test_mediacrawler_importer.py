@@ -480,3 +480,15 @@ def test_importer_platform_filtering(tmp_path):
     assert platforms == ["xhs"]
     arch_conn.close()
 
+
+def test_missing_crawler_commit_rejected_explicitly():
+    """M2: Missing/empty crawler_commit must raise ValueError, forbidding fabricated commit strings."""
+    archive_conn = sqlite3.connect(":memory:")
+    init_archive_db(archive_conn)
+
+    with pytest.raises(ValueError, match="crawler_commit cannot be empty"):
+        MediaCrawlerImporter(archive_db=archive_conn, crawler_commit="")
+
+    with pytest.raises(ValueError, match="crawler_commit cannot be empty"):
+        MediaCrawlerImporter(archive_db=archive_conn, crawler_commit="   ")
+

@@ -270,3 +270,58 @@ def test_provider_max_posts_and_comments_limits(sample_archive_db):
     comments = [r for r in res.records if r.record_type == "comment"]
     assert len(posts) <= 1
     assert len(comments) <= 1
+
+
+def test_provider_missing_ingest_run_metadata_rejected(tmp_path):
+    """M2: Snapshots referencing invalid or missing crawler_commit metadata must be rejected without fabricating commits."""
+    archive_db_path = str(tmp_path / "social_archive_no_run.db")
+    conn = init_archive_db(archive_db_path)
+
+    # Insert ingest run with empty crawler_commit
+    conn.execute(
+        """
+        INSERT INTO social_ingest_runs (
+            run_id, provider, platform, query_text, started_at, status,
+            crawler_commit, source_schema_fingerprint
+        ) VALUES (
+            'run_empty_commit', 'mediacrawler', 'xhs', '寒武纪', '2026-08-26T01:00:00Z', 'completed',
+            '', 'fingerprint123'
+        )
+        """
+    )
+
+    # Insert snapshot referencing run_empty_commit
+    conn.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform,
+            native_id, parent_record_id, root_post_record_id,
+            published_at, source_updated_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, canonical_url, author_id_hash, source_keyword,
+            metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_orphan_1', 'xhs:post:orphan_1', 'social.raw_record.v1', 'post', 'xhs',
+            'orphan_1', NULL, 'xhs:post:orphan_1',
+            '2026-08-26T03:00:00Z', NULL, '2026-08-26T03:10:00Z', '2026-08-26T04:00:00Z', '2026-08-26T05:00:00Z',
+            '寒武纪测试', '正文', NULL, 'sha256:abc', '寒武纪',
+            '{"likes": 10, "comments": 1}', 'chash1', 'mhash1', 'run_empty_commit',
+            'xhs_note', '1'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO social_entity_mentions (
+            snapshot_id, symbol, matched_text, match_method, confidence, resolver_version
+        ) VALUES ('snap_orphan_1', '688256.SH', '寒武纪', 'exact_name', 1.0, 'v1')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    provider = SocialArchiveProvider(db_path=archive_db_path)
+    res = provider.fetch_records(symbol="688256.SH", as_of="2026-08-26")
+
+    # Record must be rejected since run metadata is invalid/empty; resulting in empty records
+    assert len(res.records) == 0
