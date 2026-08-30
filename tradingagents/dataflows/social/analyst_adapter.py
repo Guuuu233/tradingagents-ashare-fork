@@ -3,7 +3,7 @@
 This module is the SOLE mode branching point for social media analyst inputs.
 Centralizes the migration logic across rollout modes:
 - 'disabled' (Gate 0–3): returns legacy news/zt/hot via legacy_proxy; does NOT use bundle for direction.
-- 'shadow': reads/holds bundle, but analyst body text input still follows legacy fields; bundle does not enter direction.
+- 'shadow': reads/holds bundle, but analyst body text input still follows legacy fields; bundle does not enter direction; source_mode='legacy_proxy'.
 - 'active': ONLY returns bundle + market_attention; missing data results in explicit gap text; FORBIDDEN to fallback to news/get_news.
 """
 
@@ -26,7 +26,7 @@ class ResolvedSocialInputs:
     """Resolved social analyst inputs and trace metadata."""
 
     mode: str
-    source_mode: str  # 'legacy_proxy' | 'shadow' | 'active'
+    source_mode: str  # 'legacy_proxy' | 'active'
     human_content: str
     source_status: str
     direction_allowed: bool
@@ -199,7 +199,7 @@ def resolve_social_analyst_inputs(
 
         return ResolvedSocialInputs(
             mode="shadow",
-            source_mode="shadow",
+            source_mode="legacy_proxy",
             human_content=human_content,
             source_status=b_status,
             direction_allowed=False,  # Bundle must not enter directional evidence in shadow mode

@@ -509,6 +509,9 @@ class SocialDataCollector:
             source_provenance=source_provenance,
             data_failure_ledger=failure_ledger,
         )
+        if self.mode == "shadow":
+            # In shadow mode, direction_allowed is strictly False per plan §7 / Gate 2
+            context["direction_allowed"] = False
 
         elapsed = time.time() - start_time
         post_cnt = bundle.social_attention.post_count if bundle.social_attention else 0

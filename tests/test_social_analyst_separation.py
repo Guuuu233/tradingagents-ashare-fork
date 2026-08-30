@@ -391,7 +391,7 @@ def test_social_analyst_shadow_mode_holds_bundle_without_directional_impact():
 
     result = asyncio.run(node(state))
     trace = result["analyst_traces"][0]
-    assert trace["source_mode"] == "shadow"
+    assert trace["source_mode"] == "legacy_proxy"
     assert trace["direction_allowed"] is False
     assert trace["bundle_id"] == "sha256:testbundle123456"
 
