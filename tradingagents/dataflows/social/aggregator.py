@@ -270,6 +270,18 @@ class SocialSentimentAggregator:
             selected_records.append(comment)
             selected_comments_count += 1
 
+        if not selected_records:
+            reasons = list(provider_reason_codes or [REASON_SOCIAL_EMPTY])
+            if REASON_SOCIAL_EMPTY not in reasons:
+                reasons.append(REASON_SOCIAL_EMPTY)
+            return create_empty_sentiment_bundle(
+                status=SocialStatus.EMPTY.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                reason_codes=reasons,
+                symbol=symbol,
+            )
+
         # 5. Classify records and calculate raw weights
         classified_items: List[Dict[str, Any]] = []
         platform_records: Dict[str, List[Dict[str, Any]]] = {"xhs": [], "dy": []}

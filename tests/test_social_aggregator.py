@@ -525,3 +525,26 @@ def test_tie_breaker_deterministic_ordering():
     assert bundle1.bundle_id == bundle2.bundle_id
     assert [e["record_id"] for e in bundle1.evidence_samples] == [e["record_id"] for e in bundle2.evidence_samples]
 
+
+def test_aggregator_zero_rows_after_deduplication_marked_empty():
+    """M7: When records are filtered/capped/deduplicated to 0 selected rows, bundle must be empty (not partial)."""
+    # 2 duplicate records
+    rec1 = make_record("xhs:post:1", platform="xhs", title="同文", text="同文", author_id_hash="sha:a1")
+    rec2 = make_record("xhs:post:2", platform="xhs", title="同文", text="同文", author_id_hash="sha:a1")
+
+    # If max_posts=0, max_comments=0, 0 records will be selected from the input list
+    agg = SocialSentimentAggregator(max_posts=0, max_comments=0)
+    bundle = agg.aggregate(
+        records=[rec1, rec2],
+        symbol="688256.SH",
+        as_of="2026-08-26",
+    )
+
+    assert bundle.status == SocialStatus.EMPTY.value
+    assert bundle.direction_allowed is False
+    assert bundle.social_sentiment.score is None
+    assert bundle.social_sentiment.label == "insufficient"
+    assert REASON_SOCIAL_EMPTY in bundle.reason_codes
+    assert bundle.social_attention.post_count == 0
+    assert bundle.social_attention.comment_count == 0
+
