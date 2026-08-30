@@ -431,3 +431,62 @@ def test_provider_ingest_at_future_does_not_disqualify(custom_archive_db):
     assert len(res.records) == 1
     # ingest_at is in 2026-08-29
     assert "2026-08-29" in res.records[0].ingest_at
+
+
+def test_provider_as_of_lookback_empty_window_returns_empty_not_refused(tmp_path):
+    """When snapshots exist with snapshot_at <= cutoff but published_at is outside lookback window:
+
+    Expected: status is 'empty', reason is 'social_empty', NOT 'refused' + 'observed_after_cutoff_excluded'.
+    """
+    db_path = str(tmp_path / "lookback_test_archive.db")
+    conn = init_archive_db(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO social_ingest_runs (
+            run_id, provider, platform, query_text, started_at, completed_at,
+            status, crawler_commit, source_schema_fingerprint, rows_read, rows_inserted
+        ) VALUES (
+            'run_old', 'mediacrawler', 'xhs', '寒武纪', '2026-08-01T10:00:00Z', '2026-08-01T10:01:00Z',
+            'success', 'd6f7c5bb906b6dac40ddf343ef9e26438a3de092', 'fp_001', 1, 1
+        )
+        """
+    )
+
+    # Post published on 2026-07-20 (37 days before 2026-08-26), snapshot taken on 2026-07-20 <= cutoff
+    cursor.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform, native_id,
+            root_post_record_id, published_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_old_1', 'xhs:post:note_old_1', 'social.raw_record.v1', 'post', 'xhs', 'note_old_1',
+            'xhs:post:note_old_1', '2026-07-20T03:00:00Z', '2026-07-20T04:00:00Z', '2026-07-20T05:00:00Z', '2026-08-01T10:00:00Z',
+            '寒武纪旧帖', '正文内容', '{"likes": 10}', 'c_hash_old', 'm_hash_old', 'run_old',
+            'xhs_note', '1'
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO social_entity_mentions (snapshot_id, symbol, matched_text, match_method, confidence, resolver_version) VALUES (?, ?, ?, ?, ?, ?)",
+        ('snap_old_1', '688256.SH', '寒武纪', 'standard_name', 1.0, 'v1')
+    )
+    conn.commit()
+    conn.close()
+
+    provider = SocialArchiveProvider(db_path=db_path)
+    now_frozen = datetime(2026, 8, 29, 12, 0, 0, tzinfo=CN_TZ)
+
+    # As-of 2026-08-26 with lookback_days=7 (window is 2026-08-19 to 2026-08-26)
+    # The record was published on 2026-07-20 (outside window)
+    res = provider.fetch_records(symbol="688256.SH", as_of="2026-08-26", lookback_days=7, now=now_frozen)
+
+    assert res.status == SocialStatus.EMPTY.value
+    assert res.status != SocialStatus.REFUSED.value
+    assert "social_empty" in res.reason_codes
+    assert "observed_after_cutoff_excluded" not in res.reason_codes
+    assert len(res.records) == 0
+

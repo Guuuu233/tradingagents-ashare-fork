@@ -667,12 +667,12 @@ class SocialArchiveProvider:
             else:
                 # Candidate snapshots existed but all failed eligibility (e.g. outside window)
                 return SocialFetchResult(
-                    status=SocialStatus.REFUSED.value,
+                    status=SocialStatus.EMPTY.value,
                     requested_as_of=as_of,
                     cutoff_at=cutoff_iso,
                     window_start=window_start_iso,
                     records=[],
-                    reason_codes=[REASON_OBSERVED_AFTER_CUTOFF_EXCLUDED],
+                    reason_codes=[REASON_SOCIAL_EMPTY],
                     meta=meta_dict,
                 )
 

@@ -462,3 +462,67 @@ def test_safe_logging(sample_archive_db, caplog):
     # Sensitive tokens/cookies must not be in log
     assert "cookie" not in log_text.lower()
     assert "token" not in log_text.lower()
+
+
+# ============================================================================
+# 9. Lookback Empty Window & Failure Ledger Tests (P2 Retro H1)
+# ============================================================================
+
+def test_collector_lookback_empty_window_produces_no_failure_ledger_entry(tmp_path):
+    """When candidates exist in archive with snapshot_at <= cutoff but published_at is outside lookback window:
+
+    Collector must return status='empty', bundle.status='empty', and data_failure_ledger must be empty (NO structural gap).
+    """
+    db_path = str(tmp_path / "lookback_collector_archive.db")
+    conn = init_archive_db(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO social_ingest_runs (
+            run_id, provider, platform, query_text, started_at, completed_at,
+            status, crawler_commit, source_schema_fingerprint, rows_read, rows_inserted
+        ) VALUES (
+            'run_old', 'mediacrawler', 'xhs', '寒武纪', '2026-08-01T10:00:00Z', '2026-08-01T10:01:00Z',
+            'success', 'd6f7c5bb906b6dac40ddf343ef9e26438a3de092', 'fp_001', 1, 1
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform, native_id,
+            root_post_record_id, published_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_old_1', 'xhs:post:note_old_1', 'social.raw_record.v1', 'post', 'xhs', 'note_old_1',
+            'xhs:post:note_old_1', '2026-07-20T03:00:00Z', '2026-07-20T04:00:00Z', '2026-07-20T05:00:00Z', '2026-08-01T10:00:00Z',
+            '寒武纪旧帖', '正文内容', '{"likes": 10}', 'c_hash_old', 'm_hash_old', 'run_old',
+            'xhs_note', '1'
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO social_entity_mentions (snapshot_id, symbol, matched_text, match_method, confidence, resolver_version) VALUES (?, ?, ?, ?, ?, ?)",
+        ('snap_old_1', '688256.SH', '寒武纪', 'standard_name', 1.0, 'v1')
+    )
+    conn.commit()
+    conn.close()
+
+    collector = SocialDataCollector(
+        mode="active",
+        archive_db=db_path,
+        lookback_days=7,
+    )
+    now_frozen = datetime(2026, 8, 29, 12, 0, 0, tzinfo=CN_TZ)
+
+    ctx = collector.collect(symbol="688256.SH", as_of="2026-08-26", now=now_frozen)
+
+    assert ctx["status"] == "empty"
+    assert ctx["direction_allowed"] is False
+    assert "social_empty" in ctx["reason_codes"]
+    assert "observed_after_cutoff_excluded" not in ctx["reason_codes"]
+    assert ctx["bundle"]["status"] == "empty"
+    assert ctx["data_failure_ledger"] == []
+
