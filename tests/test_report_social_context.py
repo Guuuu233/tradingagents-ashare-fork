@@ -293,3 +293,68 @@ def test_propagate_async_injects_and_returns_social_data_context():
     assert captured_state["social_data_context"] == social_ctx
     assert result["social_data_context"] == social_ctx
     assert result["short_term"]["social_data_context"] == social_ctx
+
+
+def test_log_state_includes_safe_social_data_context_summary():
+    """M4: _log_state records safe summary of social_data_context (mode, status, direction_allowed, reason counts).
+
+    Strictly forbids raw text/content or sensitive cookie fields.
+    """
+    ta = _make_mock_graph_instance()
+    social_ctx = {
+        "mode": "active",
+        "status": "available",
+        "requested_as_of": "2026-08-26",
+        "direction_allowed": True,
+        "reason_codes": ["code_1", "code_2"],
+        "bundle": {
+            "bundle_id": "sha256:bundle123",
+            "evidence_summary": [
+                {"record_id": "r1", "text": "敏感正文内容不应入日志"},
+                {"record_id": "r2", "text": "另一条正文内容"},
+            ],
+            "cookie": "sensitive_session_cookie=abcdef",
+        },
+        "data_failure_ledger": [{"source": "s1", "status": "failed"}],
+    }
+    final_state = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-26",
+        "market_report": "m",
+        "sentiment_report": "s",
+        "news_report": "n",
+        "fundamentals_report": "f",
+        "investment_debate_state": {
+            "bull_history": "", "bear_history": "", "history": "",
+            "current_response": "", "judge_decision": "",
+        },
+        "trader_investment_plan": "",
+        "risk_debate_state": {
+            "aggressive_history": "", "conservative_history": "",
+            "neutral_history": "", "history": "", "judge_decision": "",
+        },
+        "investment_plan": "",
+        "final_trade_decision": "BUY",
+        "social_data_context": social_ctx,
+    }
+
+    ta._log_state("2026-08-26", final_state)
+    logged = ta.log_states_dict.get("2026-08-26")
+    assert logged is not None
+    assert "social_data_context" in logged
+
+    summary = logged["social_data_context"]
+    assert summary["mode"] == "active"
+    assert summary["status"] == "available"
+    assert summary["requested_as_of"] == "2026-08-26"
+    assert summary["direction_allowed"] is True
+    assert summary["reason_count"] == 2
+    assert summary["reason_codes"] == ["code_1", "code_2"]
+    assert summary["ledger_count"] == 1
+    assert summary["evidence_count"] == 2
+    assert summary["bundle_id"] == "sha256:bundle123"
+
+    # Verify no raw body text or cookies in the logged summary
+    summary_str = str(summary)
+    assert "敏感正文内容不应入日志" not in summary_str
+    assert "sensitive_session_cookie" not in summary_str

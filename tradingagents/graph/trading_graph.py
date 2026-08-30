@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 
 from langgraph.prebuilt import ToolNode
@@ -60,6 +60,31 @@ def _state_logging_enabled() -> bool:
     """
     raw = os.getenv("TA_TRACE")
     return raw is not None and raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _summarize_social_context(ctx: Optional[Union[Dict[str, Any], Any]]) -> Dict[str, Any]:
+    """Summarize social_data_context into a privacy-safe structure for state logging (M4).
+
+    Includes safe metadata: mode, status, requested_as_of, direction_allowed, reason counts and codes.
+    Strictly forbidden: raw text/content, user cookies, access tokens, or personal identifiers.
+    """
+    if not isinstance(ctx, dict):
+        return {}
+    reasons = ctx.get("reason_codes") or []
+    ledger = ctx.get("data_failure_ledger") or []
+    bundle = ctx.get("bundle") if isinstance(ctx.get("bundle"), dict) else {}
+    evidence_count = len(bundle.get("evidence_summary", [])) if isinstance(bundle, dict) else 0
+    return {
+        "mode": ctx.get("mode", "disabled"),
+        "status": ctx.get("status", "not_applicable"),
+        "requested_as_of": ctx.get("requested_as_of", ""),
+        "direction_allowed": bool(ctx.get("direction_allowed", False)),
+        "reason_count": len(reasons),
+        "reason_codes": list(reasons),
+        "ledger_count": len(ledger),
+        "evidence_count": evidence_count,
+        "bundle_id": (bundle.get("bundle_id") if isinstance(bundle, dict) else None) or "none",
+    }
 
 
 class TradingAgentsGraph:
@@ -596,6 +621,7 @@ class TradingAgentsGraph:
             "instrument_context": final_state.get("instrument_context", {}),
             "market_context": final_state.get("market_context", {}),
             "market_data_context": final_state.get("market_data_context", {}),
+            "social_data_context": _summarize_social_context(final_state.get("social_data_context")),
             "fund_flow_consensus_guard": final_state.get("fund_flow_consensus_guard", {}),
             "user_context": final_state.get("user_context", {}),
             "workflow_context": final_state.get("workflow_context", {}),
