@@ -291,9 +291,18 @@ def test_news_system_message_output_requirements():
 
 
 def test_social_system_message_deep_framework():
-    """T4: social_system_message must include sentiment quantification, sentiment life cycle, and reflexivity risk."""
+    """Task 11 / DAV-188: social_system_message must enforce four-section structure,
+    attention != bullish, score not calibrated probability, insufficient data -> unjudgeable,
+    and reflexivity / life cycle."""
     prompt = ZH_PROMPTS["social_system_message"]
-    assert any(term in prompt for term in ("涨停板情绪池", "涨停池", "雪球"))
+    # 1. 四段结构输入与分层解构
+    assert "四段结构" in prompt or all(section in prompt for section in ("数据状态", "社交观点", "社交热度", "市场关注度"))
+    assert all(section in prompt for section in ("数据状态", "社交观点", "社交热度", "市场关注度"))
+    # 2. 核心禁令：热度≠看多、score非校准概率、数据不足不可判断
+    assert "热度≠看多" in prompt or "热度不等于利多" in prompt
+    assert "非校准概率" in prompt
+    assert "不可判断" in prompt and "数据不足" in prompt
+    # 3. 深度分析框架要素：反身性、极值、持续性判断、生命周期
     assert any(term in prompt for term in ("反身性", "极值", "极度贪婪", "极度恐惧"))
     assert any(term in prompt for term in ("持续性判断", "扩散路径", "生命周期"))
 

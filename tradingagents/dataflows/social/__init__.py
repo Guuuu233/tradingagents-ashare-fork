@@ -99,6 +99,15 @@ from tradingagents.dataflows.social.collector import (
     SocialDataCollector,
     build_social_failure_ledger,
 )
+from tradingagents.dataflows.social.prompt_formatter import (
+    format_social_sections,
+    format_social_analyst_prompt,
+)
+from tradingagents.dataflows.social.analyst_adapter import (
+    ResolvedSocialInputs,
+    resolve_social_mode,
+    resolve_social_analyst_inputs,
+)
 
 __all__ = [
     "VALID_SOCIAL_STATUSES",
@@ -178,4 +187,9 @@ __all__ = [
     "aggregate_sentiment_bundle",
     "SocialDataCollector",
     "build_social_failure_ledger",
+    "format_social_sections",
+    "format_social_analyst_prompt",
+    "ResolvedSocialInputs",
+    "resolve_social_mode",
+    "resolve_social_analyst_inputs",
 ]
