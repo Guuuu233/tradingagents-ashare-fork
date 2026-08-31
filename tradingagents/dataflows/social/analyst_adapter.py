@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from tradingagents.dataflows.social.contracts import (
+    REASON_SOCIAL_EMPTY,
     SentimentBundleV1,
     SocialDataContext,
     create_empty_sentiment_bundle,
@@ -226,12 +227,26 @@ def resolve_social_analyst_inputs(
             bundle_dict = b
 
     if bundle_dict is None:
-        # Construct empty fallback bundle
+        # Construct empty fallback bundle without hardcoded cutoff
+        fallback_cutoff = "unknown"
+        if cur_date_str:
+            try:
+                from tradingagents.dataflows.social.provider import compute_as_of_cutoff
+
+                _, cutoff_utc, _ = compute_as_of_cutoff(cur_date_str)
+                fallback_cutoff = (
+                    cutoff_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if cutoff_utc.microsecond == 0
+                    else cutoff_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                )
+            except Exception:
+                fallback_cutoff = "unknown"
+
         b_obj = create_empty_sentiment_bundle(
             status="empty",
-            requested_as_of=cur_date_str,
-            cutoff_at=f"{cur_date_str}T15:59:59Z",
-            reason_codes=["social_empty_context"],
+            requested_as_of=cur_date_str or "unknown",
+            cutoff_at=fallback_cutoff,
+            reason_codes=[REASON_SOCIAL_EMPTY],
             symbol=ticker,
         )
         bundle_dict = b_obj.to_dict()

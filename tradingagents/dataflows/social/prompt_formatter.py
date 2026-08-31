@@ -44,8 +44,23 @@ def format_social_sections(
 
     # Extract fields with fallbacks
     bundle_status = status or bundle_dict.get("status", "empty")
-    requested_as_of = bundle_dict.get("requested_as_of") or current_date
-    cutoff_at = bundle_dict.get("cutoff_at") or f"{current_date}T15:59:59Z"
+    requested_as_of = bundle_dict.get("requested_as_of") or current_date or "unknown"
+    cutoff_at = bundle_dict.get("cutoff_at")
+    if not cutoff_at:
+        if current_date:
+            try:
+                from tradingagents.dataflows.social.provider import compute_as_of_cutoff
+
+                _, cutoff_utc, _ = compute_as_of_cutoff(current_date)
+                cutoff_at = (
+                    cutoff_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    if cutoff_utc.microsecond == 0
+                    else cutoff_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                )
+            except Exception:
+                cutoff_at = "unknown"
+        else:
+            cutoff_at = "unknown"
     content_as_of = bundle_dict.get("content_as_of")
     metric_as_of = bundle_dict.get("metric_as_of")
 

@@ -447,3 +447,45 @@ def test_prompt_formatter_discipline_and_sections():
     assert "000001 (平安银行)" in formatted
     assert "zt raw" in formatted
     assert "【数据获取失败】hot_stocks：无数据" in formatted
+
+
+def test_adapter_and_formatter_cutoff_and_reason_code_l1():
+    """L1: Adapter and formatter must not fabricate hardcoded 15:59:59Z or ad-hoc reasons."""
+    from tradingagents.dataflows.social.contracts import REASON_SOCIAL_EMPTY
+
+    # 1. Adapter active mode with missing bundle and valid date
+    res_valid = resolve_social_analyst_inputs(
+        mode="active",
+        social_data_context=None,
+        ticker="600519",
+        current_date="2026-08-26",
+    )
+    assert res_valid.source_status == "empty"
+    assert res_valid.reason_codes == [REASON_SOCIAL_EMPTY]
+    assert "social_empty_context" not in res_valid.reason_codes
+    assert res_valid.bundle is not None
+    assert res_valid.bundle["cutoff_at"] == "2026-08-26T15:59:59.999999Z"
+
+    # 2. Adapter active mode with invalid date falls back to unknown
+    res_invalid = resolve_social_analyst_inputs(
+        mode="active",
+        social_data_context=None,
+        ticker="600519",
+        current_date="invalid-date",
+    )
+    assert res_invalid.bundle["cutoff_at"] == "unknown"
+    assert res_invalid.reason_codes == [REASON_SOCIAL_EMPTY]
+
+    # 3. Prompt formatter with missing cutoff_at in bundle
+    formatted_valid = format_social_sections(
+        bundle={"status": "empty"},
+        current_date="2026-08-26",
+    )
+    assert "截断时间 2026-08-26T15:59:59.999999Z" in formatted_valid
+
+    formatted_unknown = format_social_sections(
+        bundle={"status": "empty"},
+        current_date="invalid-date",
+    )
+    assert "截断时间 unknown" in formatted_unknown
+
