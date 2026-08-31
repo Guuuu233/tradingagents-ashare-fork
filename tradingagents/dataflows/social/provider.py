@@ -723,12 +723,17 @@ class SocialArchiveProvider:
         max_posts: Optional[int] = None,
         max_comments: Optional[int] = None,
     ) -> List[SocialRawRecordV1]:
-        """Sort posts and comments by published_at / record_id and apply count limits."""
+        """Sort posts and comments by parsed published_at desc / record_id asc and apply count limits."""
         posts = [r for r in records if r.record_type == "post"]
         comments = [r for r in records if r.record_type == "comment"]
 
-        posts.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
-        comments.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
+        def _sort_key(r: SocialRawRecordV1):
+            p_dt = parse_iso_datetime(r.published_at)
+            ts = p_dt.timestamp() if p_dt else 0.0
+            return (-ts, r.record_id)
+
+        posts.sort(key=_sort_key)
+        comments.sort(key=_sort_key)
 
         if max_posts is not None:
             posts = posts[:max_posts]

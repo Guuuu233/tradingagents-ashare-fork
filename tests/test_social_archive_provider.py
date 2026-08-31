@@ -478,6 +478,52 @@ def test_provider_sort_and_limit_records():
     assert limited[0].record_id == "p2"
     assert limited[1].record_id == "c1"
 
+    # L3: Verify that invalid published_at does not masquerade as newest
+    r_corrupt = SocialRawRecordV1(
+        schema_version="social.raw_record.v1",
+        record_id="p_corrupt",
+        snapshot_id="s_c",
+        record_type="post",
+        platform="xhs",
+        native_id="nc",
+        root_post_record_id="p_corrupt",
+        published_at="invalid_date_xxx",
+        first_seen_at="2026-08-26T02:00:00Z",
+        snapshot_at="2026-08-26T02:00:00Z",
+        ingest_at="2026-08-26T02:00:00Z",
+        metrics=metrics,
+        content_hash="chc",
+        metrics_hash="mhc",
+        ingest_run_id="r1",
+        source_ref=sref,
+    )
+    # r2 (02:00 UTC) > r1 (01:00 UTC) > r_corrupt (invalid -> 0.0)
+    sorted_posts = provider._sort_and_limit_records([r_corrupt, r1, r2])
+    assert [p.record_id for p in sorted_posts] == ["p2", "p1", "p_corrupt"]
+
+    # L3: Cross-format sorting (CST string vs ISO UTC)
+    r_cst = SocialRawRecordV1(
+        schema_version="social.raw_record.v1",
+        record_id="p_cst",
+        snapshot_id="s_cst",
+        record_type="post",
+        platform="xhs",
+        native_id="ncst",
+        root_post_record_id="p_cst",
+        published_at="2026-08-26 10:30:00",  # 02:30:00 UTC -> newer than p2 (02:00:00 UTC)
+        first_seen_at="2026-08-26T02:30:00Z",
+        snapshot_at="2026-08-26T02:30:00Z",
+        ingest_at="2026-08-26T02:30:00Z",
+        metrics=metrics,
+        content_hash="ch_cst",
+        metrics_hash="mh_cst",
+        ingest_run_id="r1",
+        source_ref=sref,
+    )
+    sorted_cross = provider._sort_and_limit_records([r1, r2, r_cst])
+    assert [p.record_id for p in sorted_cross] == ["p_cst", "p2", "r1" if r1.record_id == "r1" else "p1"]
+
+
 
 # ============================================================================
 # 7. R1 Residuals Tests (Corrupt metrics_json Row Rejection)
