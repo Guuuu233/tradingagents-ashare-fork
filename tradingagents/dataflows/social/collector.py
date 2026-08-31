@@ -46,6 +46,8 @@ from tradingagents.dataflows.social.contracts import (
     REASON_SOCIAL_NOT_APPLICABLE,
     REASON_SOCIAL_PLATFORM_PARTIAL,
     REASON_SOCIAL_SCHEMA_MISMATCH,
+    REASON_SOCIAL_ARCHIVE_CORRUPT,
+    REASON_SOCIAL_INVALID_INGEST_RUN,
     SentimentBundleV1,
     SocialDataContext,
     SocialStatus,
@@ -143,6 +145,10 @@ def build_social_failure_ledger(
         reason_text = "社交归档数据库缺失或不可用"
         if code == REASON_SOCIAL_SCHEMA_MISMATCH:
             reason_text = "社交归档数据库Schema版本不匹配"
+        elif code == REASON_SOCIAL_INVALID_INGEST_RUN:
+            reason_text = "社交数据采集批次元数据无效或缺失"
+        elif code == REASON_SOCIAL_ARCHIVE_CORRUPT:
+            reason_text = "社交归档数据损坏"
         entries.append({
             "source": "social_archive",
             "status": SocialStatus.FAILED.value,

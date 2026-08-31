@@ -54,6 +54,7 @@ REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT = "social_no_historical_snapshot"
 REASON_SOCIAL_ARCHIVE_MISSING = "social_archive_missing"
 REASON_SOCIAL_SCHEMA_MISMATCH = "social_schema_mismatch"
 REASON_SOCIAL_ARCHIVE_CORRUPT = "social_archive_corrupt"
+REASON_SOCIAL_INVALID_INGEST_RUN = "social_invalid_ingest_run"
 REASON_SOCIAL_ARCHIVE_LOCKED = "social_archive_locked"
 REASON_OBSERVED_AFTER_CUTOFF_EXCLUDED = "observed_after_cutoff_excluded"
 

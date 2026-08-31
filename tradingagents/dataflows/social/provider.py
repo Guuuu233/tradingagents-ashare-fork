@@ -43,6 +43,7 @@ from tradingagents.dataflows.social.contracts import (
     REASON_SOCIAL_EMPTY,
     REASON_SOCIAL_FUTURE_AS_OF,
     REASON_SOCIAL_INVALID_AS_OF,
+    REASON_SOCIAL_INVALID_INGEST_RUN,
     REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT,
     REASON_SOCIAL_SCHEMA_MISMATCH,
     EntityMention,
@@ -654,7 +655,7 @@ class SocialArchiveProvider:
         platforms: Optional[Sequence[str]],
         crawler_commits: Dict[str, str],
         mentions_by_snap: Dict[str, List[EntityMention]],
-    ) -> Tuple[List[SocialRawRecordV1], int]:
+    ) -> Tuple[List[SocialRawRecordV1], int, int, int, int]:
         """Group snapshots by record_id, pick PIT candidate, and check content eligibility."""
         by_record_id: Dict[str, List[Dict[str, Any]]] = {}
         for r_dict in dict_rows:
@@ -664,6 +665,9 @@ class SocialArchiveProvider:
         target_platforms = set(platforms) if platforms else None
         eligible_records: List[SocialRawRecordV1] = []
         records_with_candidate_count = 0
+        content_eligible_count = 0
+        invalid_ingest_run_count = 0
+        corrupt_count = 0
 
         for rec_id, snap_list in by_record_id.items():
             cand = select_candidate_snapshot(snap_list, cutoff_utc)
@@ -684,11 +688,31 @@ class SocialArchiveProvider:
             if not is_eligible:
                 continue
 
+            content_eligible_count += 1
+
+            crawler_commit = crawler_commits.get(cand["ingest_run_id"])
+            if not crawler_commit or not str(crawler_commit).strip():
+                invalid_ingest_run_count += 1
+                logger.warning(
+                    "Snapshot %s references missing or invalid ingest_run_id %s; rejecting record",
+                    cand.get("snapshot_id"),
+                    cand.get("ingest_run_id"),
+                )
+                continue
+
             raw_record = self._build_raw_record(cand, crawler_commits, mentions_by_snap)
             if raw_record is not None:
                 eligible_records.append(raw_record)
+            else:
+                corrupt_count += 1
 
-        return eligible_records, records_with_candidate_count
+        return (
+            eligible_records,
+            records_with_candidate_count,
+            content_eligible_count,
+            invalid_ingest_run_count,
+            corrupt_count,
+        )
 
     def _sort_and_limit_records(
         self,
@@ -718,6 +742,9 @@ class SocialArchiveProvider:
         records: List[SocialRawRecordV1],
         records_with_candidate_count: int,
         meta_dict: Dict[str, Any],
+        content_eligible_count: int = 0,
+        invalid_ingest_run_count: int = 0,
+        corrupt_count: int = 0,
     ) -> SocialFetchResult:
         """Construct final SocialFetchResult based on available records and candidate presence."""
         if records:
@@ -738,6 +765,26 @@ class SocialArchiveProvider:
                 window_start=window_start_iso,
                 records=[],
                 reason_codes=[REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT],
+                meta=meta_dict,
+            )
+        elif content_eligible_count > 0 and invalid_ingest_run_count > 0:
+            return SocialFetchResult(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                records=[],
+                reason_codes=[REASON_SOCIAL_INVALID_INGEST_RUN],
+                meta=meta_dict,
+            )
+        elif content_eligible_count > 0 and corrupt_count > 0:
+            return SocialFetchResult(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                records=[],
+                reason_codes=[REASON_SOCIAL_ARCHIVE_CORRUPT],
                 meta=meta_dict,
             )
         else:
@@ -820,7 +867,13 @@ class SocialArchiveProvider:
             mentions_by_snap = self._load_snapshot_mentions(conn, snap_ids)
 
             # 7. Filter & assemble candidate records
-            eligible_records, candidate_count = self._filter_and_assemble_records(
+            (
+                eligible_records,
+                candidate_count,
+                content_eligible_count,
+                invalid_ingest_run_count,
+                corrupt_count,
+            ) = self._filter_and_assemble_records(
                 dict_rows=dict_rows,
                 window_start_utc=window_start_utc,
                 cutoff_utc=cutoff_utc,
@@ -839,6 +892,9 @@ class SocialArchiveProvider:
                 records=final_records,
                 records_with_candidate_count=candidate_count,
                 meta_dict=meta_dict,
+                content_eligible_count=content_eligible_count,
+                invalid_ingest_run_count=invalid_ingest_run_count,
+                corrupt_count=corrupt_count,
             )
 
         except sqlite3.OperationalError as exc:

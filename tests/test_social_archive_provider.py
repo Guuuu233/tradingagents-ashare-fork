@@ -20,9 +20,11 @@ from tradingagents.dataflows.social.archive_schema import (
     init_archive_db,
 )
 from tradingagents.dataflows.social.contracts import (
+    REASON_SOCIAL_ARCHIVE_CORRUPT,
     REASON_SOCIAL_ARCHIVE_LOCKED,
     REASON_SOCIAL_ARCHIVE_MISSING,
     REASON_SOCIAL_EMPTY,
+    REASON_SOCIAL_INVALID_INGEST_RUN,
     REASON_SOCIAL_SCHEMA_MISMATCH,
     SocialRawRecordV1,
     SocialStatus,
@@ -273,7 +275,7 @@ def test_provider_max_posts_and_comments_limits(sample_archive_db):
 
 
 def test_provider_missing_ingest_run_metadata_rejected(tmp_path):
-    """M2: Snapshots referencing invalid or missing crawler_commit metadata must be rejected without fabricating commits."""
+    """M2 / R2: Snapshots referencing invalid or missing crawler_commit metadata must be rejected with distinct reason."""
     archive_db_path = str(tmp_path / "social_archive_no_run.db")
     conn = init_archive_db(archive_db_path)
 
@@ -323,8 +325,67 @@ def test_provider_missing_ingest_run_metadata_rejected(tmp_path):
     provider = SocialArchiveProvider(db_path=archive_db_path)
     res = provider.fetch_records(symbol="688256.SH", as_of="2026-08-26")
 
-    # Record must be rejected since run metadata is invalid/empty; resulting in empty records
+    # Record must be rejected since run metadata is invalid/empty; resulting in FAILED status with REASON_SOCIAL_INVALID_INGEST_RUN
     assert len(res.records) == 0
+    assert res.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_INVALID_INGEST_RUN in res.reason_codes
+    assert REASON_SOCIAL_EMPTY not in res.reason_codes
+
+
+def test_provider_all_candidates_corrupt_returns_failed_archive_corrupt(tmp_path):
+    """R1/R2: When all PIT candidate rows are corrupted, return FAILED with REASON_SOCIAL_ARCHIVE_CORRUPT."""
+    archive_db_path = str(tmp_path / "social_archive_all_corrupt.db")
+    conn = init_archive_db(archive_db_path)
+
+    conn.execute(
+        """
+        INSERT INTO social_ingest_runs (
+            run_id, provider, platform, query_text, started_at, status,
+            crawler_commit, source_schema_fingerprint
+        ) VALUES (
+            'run_valid_1', 'mediacrawler', 'xhs', '寒武纪', '2026-08-26T01:00:00Z', 'completed',
+            'd6f7c5bb906b6dac40ddf343ef9e26438a3de092', 'fingerprint123'
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform,
+            native_id, parent_record_id, root_post_record_id,
+            published_at, source_updated_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, canonical_url, author_id_hash, source_keyword,
+            metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_corrupt_only', 'xhs:post:corrupt_only', 'social.raw_record.v1', 'post', 'xhs',
+            'corrupt_only', NULL, 'xhs:post:corrupt_only',
+            '2026-08-26T02:00:00Z', NULL, '2026-08-26T02:10:00Z', '2026-08-26T03:00:00Z', '2026-08-26T04:00:00Z',
+            '全损测试', '正文', NULL, 'sha256:abc', '寒武纪',
+            '{bad_metrics_json: true', 'chash_c', 'mhash_c', 'run_valid_1',
+            'xhs_note', '1'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO social_entity_mentions (
+            snapshot_id, symbol, matched_text, match_method, confidence, resolver_version
+        ) VALUES ('snap_corrupt_only', '688256.SH', '寒武纪', 'exact_name', 1.0, 'v1')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    provider = SocialArchiveProvider(db_path=archive_db_path)
+    res = provider.fetch_records(symbol="688256.SH", as_of="2026-08-26")
+
+    assert len(res.records) == 0
+    assert res.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ARCHIVE_CORRUPT in res.reason_codes
+    assert REASON_SOCIAL_EMPTY not in res.reason_codes
+    assert REASON_SOCIAL_ARCHIVE_MISSING not in res.reason_codes
 
 
 # ============================================================================
