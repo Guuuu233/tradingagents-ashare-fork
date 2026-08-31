@@ -37,6 +37,7 @@ from tradingagents.dataflows.trade_calendar import CN_TZ, now_cn
 from tradingagents.dataflows.social.archive_schema import verify_archive_schema
 from tradingagents.dataflows.social.contracts import (
     REASON_OBSERVED_AFTER_CUTOFF_EXCLUDED,
+    REASON_SOCIAL_ARCHIVE_CORRUPT,
     REASON_SOCIAL_ARCHIVE_LOCKED,
     REASON_SOCIAL_ARCHIVE_MISSING,
     REASON_SOCIAL_EMPTY,
@@ -475,7 +476,7 @@ class SocialArchiveProvider:
                 requested_as_of=as_of,
                 cutoff_at=cutoff_iso,
                 window_start=window_start_iso,
-                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+                reason_codes=[REASON_SOCIAL_SCHEMA_MISMATCH],
             )
         except sqlite3.DatabaseError:
             return SocialFetchResult(
@@ -574,7 +575,31 @@ class SocialArchiveProvider:
             return None
 
         crawler_commit = str(crawler_commit).strip()
-        metrics = SocialMetrics.from_dict(json.loads(cand.get("metrics_json") or "{}"))
+
+        # Safely parse metrics_json (R1: row-level rejection on corruption)
+        try:
+            raw_metrics_json = cand.get("metrics_json")
+            if raw_metrics_json is None or not str(raw_metrics_json).strip():
+                metrics = SocialMetrics()
+            else:
+                metrics_data = json.loads(raw_metrics_json)
+                if not isinstance(metrics_data, dict):
+                    logger.warning(
+                        "Snapshot %s has non-dict metrics_json %r; rejecting snapshot",
+                        cand.get("snapshot_id"),
+                        raw_metrics_json,
+                    )
+                    return None
+                metrics = SocialMetrics.from_dict(metrics_data)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning(
+                "Snapshot %s has corrupt metrics_json %r: %s; rejecting snapshot",
+                cand.get("snapshot_id"),
+                cand.get("metrics_json"),
+                exc,
+            )
+            return None
+
         source_ref = SourceRef(
             provider="mediacrawler",
             crawler_commit=crawler_commit,
@@ -583,34 +608,42 @@ class SocialArchiveProvider:
         )
         entities = mentions_by_snap.get(cand["snapshot_id"], [])
 
-        raw_record = SocialRawRecordV1(
-            schema_version=cand.get("schema_version", "social.raw_record.v1"),
-            record_id=cand["record_id"],
-            snapshot_id=cand["snapshot_id"],
-            record_type=cand["record_type"],
-            platform=cand["platform"],
-            native_id=cand["native_id"],
-            parent_record_id=cand.get("parent_record_id"),
-            root_post_record_id=cand["root_post_record_id"],
-            published_at=cand["published_at"],
-            source_updated_at=cand.get("source_updated_at"),
-            first_seen_at=cand["first_seen_at"],
-            snapshot_at=cand["snapshot_at"],
-            ingest_at=cand["ingest_at"],
-            title=cand.get("title"),
-            text=cand.get("text", ""),
-            canonical_url=cand.get("canonical_url"),
-            author_id_hash=cand.get("author_id_hash"),
-            source_keyword=cand.get("source_keyword"),
-            entities=entities,
-            metrics=metrics,
-            content_hash=cand["content_hash"],
-            metrics_hash=cand["metrics_hash"],
-            ingest_run_id=cand["ingest_run_id"],
-            source_ref=source_ref,
-        )
-        raw_record.validate()
-        return raw_record
+        try:
+            raw_record = SocialRawRecordV1(
+                schema_version=cand.get("schema_version", "social.raw_record.v1"),
+                record_id=cand["record_id"],
+                snapshot_id=cand["snapshot_id"],
+                record_type=cand["record_type"],
+                platform=cand["platform"],
+                native_id=cand["native_id"],
+                parent_record_id=cand.get("parent_record_id"),
+                root_post_record_id=cand["root_post_record_id"],
+                published_at=cand["published_at"],
+                source_updated_at=cand.get("source_updated_at"),
+                first_seen_at=cand["first_seen_at"],
+                snapshot_at=cand["snapshot_at"],
+                ingest_at=cand["ingest_at"],
+                title=cand.get("title"),
+                text=cand.get("text", ""),
+                canonical_url=cand.get("canonical_url"),
+                author_id_hash=cand.get("author_id_hash"),
+                source_keyword=cand.get("source_keyword"),
+                entities=entities,
+                metrics=metrics,
+                content_hash=cand["content_hash"],
+                metrics_hash=cand["metrics_hash"],
+                ingest_run_id=cand["ingest_run_id"],
+                source_ref=source_ref,
+            )
+            raw_record.validate()
+            return raw_record
+        except (ValueError, TypeError, KeyError) as exc:
+            logger.warning(
+                "Snapshot %s record validation failed: %s; rejecting snapshot",
+                cand.get("snapshot_id"),
+                exc,
+            )
+            return None
 
     def _filter_and_assemble_records(
         self,
@@ -818,6 +851,14 @@ class SocialArchiveProvider:
                     window_start=window_start_iso,
                     reason_codes=[REASON_SOCIAL_ARCHIVE_LOCKED],
                 )
+            return SocialFetchResult(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                reason_codes=[REASON_SOCIAL_SCHEMA_MISMATCH],
+            )
+        except sqlite3.DatabaseError:
             return SocialFetchResult(
                 status=SocialStatus.FAILED.value,
                 requested_as_of=as_of,

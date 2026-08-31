@@ -413,7 +413,97 @@ def test_provider_sort_and_limit_records():
 
     limited = provider._sort_and_limit_records([r1, r2, c1], max_posts=1, max_comments=1)
     assert len(limited) == 2
-    # Newer post p2 should be first
     assert limited[0].record_id == "p2"
     assert limited[1].record_id == "c1"
+
+
+# ============================================================================
+# 7. R1 Residuals Tests (Corrupt metrics_json Row Rejection)
+# ============================================================================
+
+def test_provider_corrupt_metrics_json_row_rejected_without_archive_missing(tmp_path):
+    """R1: Corrupted metrics_json must be rejected at row level without crashing or reporting ARCHIVE_MISSING."""
+    archive_db_path = str(tmp_path / "social_archive_corrupt_row.db")
+    conn = init_archive_db(archive_db_path)
+
+    conn.execute(
+        """
+        INSERT INTO social_ingest_runs (
+            run_id, provider, platform, query_text, started_at, status,
+            crawler_commit, source_schema_fingerprint
+        ) VALUES (
+            'run_valid_1', 'mediacrawler', 'xhs', '寒武纪', '2026-08-26T01:00:00Z', 'completed',
+            'd6f7c5bb906b6dac40ddf343ef9e26438a3de092', 'fingerprint123'
+        )
+        """
+    )
+
+    # 1. Snapshot with corrupt metrics_json
+    conn.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform,
+            native_id, parent_record_id, root_post_record_id,
+            published_at, source_updated_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, canonical_url, author_id_hash, source_keyword,
+            metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_corrupt_1', 'xhs:post:corrupt_1', 'social.raw_record.v1', 'post', 'xhs',
+            'corrupt_1', NULL, 'xhs:post:corrupt_1',
+            '2026-08-26T02:00:00Z', NULL, '2026-08-26T02:10:00Z', '2026-08-26T03:00:00Z', '2026-08-26T04:00:00Z',
+            '损坏测试', '正文', NULL, 'sha256:abc', '寒武纪',
+            '{corrupted_json_syntax: true', 'chash_corrupt', 'mhash_corrupt', 'run_valid_1',
+            'xhs_note', '1'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO social_entity_mentions (
+            snapshot_id, symbol, matched_text, match_method, confidence, resolver_version
+        ) VALUES ('snap_corrupt_1', '688256.SH', '寒武纪', 'exact_name', 1.0, 'v1')
+        """
+    )
+
+    # 2. Snapshot with valid metrics_json
+    conn.execute(
+        """
+        INSERT INTO social_record_snapshots (
+            snapshot_id, record_id, schema_version, record_type, platform,
+            native_id, parent_record_id, root_post_record_id,
+            published_at, source_updated_at, first_seen_at, snapshot_at, ingest_at,
+            title, text, canonical_url, author_id_hash, source_keyword,
+            metrics_json, content_hash, metrics_hash, ingest_run_id,
+            source_table, source_row_id
+        ) VALUES (
+            'snap_valid_1', 'xhs:post:valid_1', 'social.raw_record.v1', 'post', 'xhs',
+            'valid_1', NULL, 'xhs:post:valid_1',
+            '2026-08-26T03:00:00Z', NULL, '2026-08-26T03:10:00Z', '2026-08-26T04:00:00Z', '2026-08-26T05:00:00Z',
+            '正常测试', '正文2', NULL, 'sha256:def', '寒武纪',
+            '{"likes": 42, "comments": 7}', 'chash_valid', 'mhash_valid', 'run_valid_1',
+            'xhs_note', '2'
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO social_entity_mentions (
+            snapshot_id, symbol, matched_text, match_method, confidence, resolver_version
+        ) VALUES ('snap_valid_1', '688256.SH', '寒武纪', 'exact_name', 1.0, 'v1')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    provider = SocialArchiveProvider(db_path=archive_db_path)
+    res = provider.fetch_records(symbol="688256.SH", as_of="2026-08-26")
+
+    # Provider should succeed for valid row while rejecting corrupt row
+    assert res.status == SocialStatus.AVAILABLE.value
+    assert REASON_SOCIAL_ARCHIVE_MISSING not in res.reason_codes
+    assert len(res.records) == 1
+    assert res.records[0].record_id == "xhs:post:valid_1"
+    assert res.records[0].metrics.likes == 42
+    assert res.records[0].metrics.comments == 7
 
