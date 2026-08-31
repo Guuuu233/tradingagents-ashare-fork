@@ -15,7 +15,6 @@ import sqlite3
 import pytest
 
 from scripts.run_social_ingestion import (
-    DEFAULT_CRAWLER_COMMIT,
     DEFAULT_CRAWLER_HOST,
     DEFAULT_ENABLE_COMMENTS,
     DEFAULT_ENABLE_SUB_COMMENTS,
@@ -114,15 +113,15 @@ def test_default_constants_and_flags():
     assert DEFAULT_ENABLE_COMMENTS is True
     assert DEFAULT_ENABLE_SUB_COMMENTS is False
     assert DEFAULT_CRAWLER_HOST == "127.0.0.1"
-    assert DEFAULT_CRAWLER_COMMIT == "d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
 
 
 def test_parse_args_defaults_and_overrides():
-    """Verify CLI argument defaults and flag toggles."""
+    """Verify CLI argument defaults and flag toggles with mandatory --crawler-commit."""
     args = parse_args([
         "--platform", "xhs",
         "--query", "寒武纪",
         "--source-db", "/tmp/source.db",
+        "--crawler-commit", "d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
     ])
     assert args.save_option == "sqlite"
     assert args.crawler_host == "127.0.0.1"
@@ -136,13 +135,23 @@ def test_parse_args_defaults_and_overrides():
         "--platform", "xhs",
         "--query", "寒武纪",
         "--source-db", "/tmp/source.db",
+        "--crawler-commit", "custom_sha_12345",
         "--no-enable-comments",
         "--enable-sub-comments",
         "--auto-import",
     ])
+    assert args_overrides.crawler_commit == "custom_sha_12345"
     assert args_overrides.enable_comments is False
     assert args_overrides.enable_sub_comments is True
     assert args_overrides.auto_import is True
+
+    # Omitting --crawler-commit must raise SystemExit (mandatory CLI argument)
+    with pytest.raises(SystemExit):
+        parse_args([
+            "--platform", "xhs",
+            "--query", "寒武纪",
+            "--source-db", "/tmp/source.db",
+        ])
 
 
 # ============================================================================
@@ -193,10 +202,10 @@ def test_run_social_ingestion_success_and_auto_import(tmp_path):
         platform="xhs",
         query="寒武纪",
         source_db=source_db,
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
         archive_db=archive_db,
         save_option="sqlite",
         crawler_host="127.0.0.1",
-        crawler_commit=DEFAULT_CRAWLER_COMMIT,
         enable_comments=True,
         enable_sub_comments=False,
         lock_file=lock_file,
@@ -221,6 +230,7 @@ def test_runner_cli_main_rejections(tmp_path, capsys):
         "--platform", "xhs",
         "--query", "寒武纪",
         "--source-db", source_db,
+        "--crawler-commit", "d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
         "--save-option", "jsonl",
     ])
     assert code_save == 1
@@ -232,8 +242,17 @@ def test_runner_cli_main_rejections(tmp_path, capsys):
         "--platform", "xhs",
         "--query", "寒武纪",
         "--source-db", source_db,
+        "--crawler-commit", "d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
         "--crawler-host", "192.168.1.50",
     ])
     assert code_host == 1
     captured = capsys.readouterr()
     assert "Security Violation" in captured.err
+
+    # 3. Missing --crawler-commit rejected
+    with pytest.raises(SystemExit):
+        runner_cli_main([
+            "--platform", "xhs",
+            "--query", "寒武纪",
+            "--source-db", source_db,
+        ])

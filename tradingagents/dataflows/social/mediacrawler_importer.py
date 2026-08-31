@@ -41,8 +41,6 @@ from tradingagents.dataflows.social.entity_resolver import (
     EntityResolver,
 )
 
-DEFAULT_CRAWLER_COMMIT = "d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
-
 # Required columns per table in MediaCrawler SQLite database
 REQUIRED_SOURCE_COLUMNS: Dict[str, Set[str]] = {
     "xhs_note": {"note_id", "time", "add_ts", "last_modify_ts"},
@@ -193,7 +191,7 @@ class MediaCrawlerImporter:
     def __init__(
         self,
         archive_db: Optional[Union[sqlite3.Connection, str]] = None,
-        crawler_commit: str = DEFAULT_CRAWLER_COMMIT,
+        crawler_commit: Optional[str] = None,
         entity_resolver: Optional[EntityResolver] = None,
         archive_conn: Optional[sqlite3.Connection] = None,
     ) -> None:
@@ -201,13 +199,13 @@ class MediaCrawlerImporter:
         if target_db is None:
             raise ValueError("archive_db or archive_conn must be provided")
 
-        if crawler_commit is not None:
-            commit_str = str(crawler_commit).strip()
-            if not commit_str:
-                raise ValueError("crawler_commit cannot be empty; fabricating commit string is forbidden")
-            self.crawler_commit = commit_str
-        else:
-            self.crawler_commit = DEFAULT_CRAWLER_COMMIT
+        if crawler_commit is None:
+            raise ValueError("crawler_commit must be explicitly provided; default fabrication is forbidden")
+
+        commit_str = str(crawler_commit).strip()
+        if not commit_str:
+            raise ValueError("crawler_commit cannot be empty; fabricating commit string is forbidden")
+        self.crawler_commit = commit_str
 
         if isinstance(target_db, str):
             self.archive_conn = init_archive_db(target_db)

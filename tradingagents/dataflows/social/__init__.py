@@ -59,7 +59,6 @@ from tradingagents.dataflows.social.archive_schema import (
     verify_archive_schema,
 )
 from tradingagents.dataflows.social.mediacrawler_importer import (
-    DEFAULT_CRAWLER_COMMIT,
     MediaCrawlerImporter,
     clean_canonical_url,
     compute_author_id_hash,
@@ -160,7 +159,6 @@ __all__ = [
     "INDEXES",
     "init_archive_db",
     "verify_archive_schema",
-    "DEFAULT_CRAWLER_COMMIT",
     "MediaCrawlerImporter",
     "clean_canonical_url",
     "compute_author_id_hash",

@@ -200,7 +200,7 @@ def test_empty_desc_allowed_in_archive():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     importer.import_from_db(source_conn)
 
     cursor = archive_conn.cursor()
@@ -219,7 +219,7 @@ def test_no_sensitive_fields_in_archive():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     importer.import_from_db(source_conn)
 
     # Check column names of social_record_snapshots table
@@ -256,7 +256,7 @@ def test_importer_idempotent_no_duplicate_or_update():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
 
     # Run 1
     res1 = importer.import_from_db(source_conn)
@@ -294,7 +294,7 @@ def test_importer_append_only_on_metrics_change():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     importer.import_from_db(source_conn)
 
     # Simulate MediaCrawler update-in-place on xhs_note table:
@@ -382,7 +382,7 @@ def test_missing_required_timestamps_rejected_no_backfill():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     result = importer.import_from_db(source_conn)
 
     assert result["rows_read"] == 3
@@ -400,7 +400,7 @@ def test_schema_mismatch_fails_closed():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     result = importer.import_from_db(bad_source_conn)
 
     assert result["status"] == "failed"
@@ -439,7 +439,7 @@ def test_secondary_comment_parent_record_id():
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    importer = MediaCrawlerImporter(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     importer.import_from_db(source_conn)
 
     cursor = archive_conn.cursor()
@@ -465,7 +465,7 @@ def test_importer_platform_filtering(tmp_path):
     populate_sample_mediacrawler_data(s_conn)
     s_conn.close()
 
-    importer = MediaCrawlerImporter(archive_db_path)
+    importer = MediaCrawlerImporter(archive_db_path, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
 
     # Import XHS only
     res = importer.import_from_db(source_db=source_db_path, platforms=["xhs"])
@@ -482,13 +482,19 @@ def test_importer_platform_filtering(tmp_path):
 
 
 def test_missing_crawler_commit_rejected_explicitly():
-    """M2: Missing/empty crawler_commit must raise ValueError, forbidding fabricated commit strings."""
+    """M2 / R3: Missing/empty/None crawler_commit must raise ValueError, forbidding fabricated commit strings."""
     archive_conn = sqlite3.connect(":memory:")
     init_archive_db(archive_conn)
 
-    with pytest.raises(ValueError, match="crawler_commit cannot be empty"):
+    with pytest.raises(ValueError, match="crawler_commit"):
         MediaCrawlerImporter(archive_db=archive_conn, crawler_commit="")
 
-    with pytest.raises(ValueError, match="crawler_commit cannot be empty"):
+    with pytest.raises(ValueError, match="crawler_commit"):
         MediaCrawlerImporter(archive_db=archive_conn, crawler_commit="   ")
+
+    with pytest.raises(ValueError, match="crawler_commit"):
+        MediaCrawlerImporter(archive_db=archive_conn, crawler_commit=None)
+
+    with pytest.raises(ValueError, match="crawler_commit"):
+        MediaCrawlerImporter(archive_db=archive_conn)
 

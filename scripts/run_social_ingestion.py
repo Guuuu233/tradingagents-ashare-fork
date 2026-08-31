@@ -30,7 +30,6 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from tradingagents.dataflows.social.mediacrawler_importer import (
-    DEFAULT_CRAWLER_COMMIT,
     MediaCrawlerImporter,
     REQUIRED_SOURCE_COLUMNS,
 )
@@ -197,16 +196,18 @@ class IngestionLock:
 def build_crawler_config(
     platform: str,
     query: str,
+    crawler_commit: str,
     save_option: str = DEFAULT_SAVE_OPTION,
     enable_comments: bool = DEFAULT_ENABLE_COMMENTS,
     enable_sub_comments: bool = DEFAULT_ENABLE_SUB_COMMENTS,
     crawler_host: str = DEFAULT_CRAWLER_HOST,
-    crawler_commit: str = DEFAULT_CRAWLER_COMMIT,
     cookie_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build crawler launch configuration dict with strict validation."""
     validate_crawler_host(crawler_host)
     validate_save_option(save_option)
+    if not crawler_commit or not str(crawler_commit).strip():
+        raise ValueError("crawler_commit must be explicitly provided and cannot be empty; fabricating commit string is forbidden")
 
     config = {
         "platform": platform,
@@ -215,7 +216,7 @@ def build_crawler_config(
         "enable_comments": enable_comments,
         "enable_sub_comments": enable_sub_comments,
         "crawler_host": crawler_host,
-        "crawler_commit": crawler_commit,
+        "crawler_commit": str(crawler_commit).strip(),
         "cookie_path": cookie_path,
     }
     return config
@@ -225,10 +226,10 @@ def run_social_ingestion(
     platform: str,
     query: str,
     source_db: str,
+    crawler_commit: str,
     archive_db: Optional[str] = None,
     save_option: str = DEFAULT_SAVE_OPTION,
     crawler_host: str = DEFAULT_CRAWLER_HOST,
-    crawler_commit: str = DEFAULT_CRAWLER_COMMIT,
     enable_comments: bool = DEFAULT_ENABLE_COMMENTS,
     enable_sub_comments: bool = DEFAULT_ENABLE_SUB_COMMENTS,
     cookie_path: Optional[str] = None,
@@ -240,6 +241,10 @@ def run_social_ingestion(
     # 1. Guards validation
     validate_crawler_host(crawler_host)
     validate_save_option(save_option)
+    if not crawler_commit or not str(crawler_commit).strip():
+        raise ValueError("crawler_commit must be explicitly provided and cannot be empty; fabricating commit string is forbidden")
+
+    commit_str = str(crawler_commit).strip()
 
     # 2. Concurrency Lock
     with IngestionLock(lock_file):
@@ -251,7 +256,7 @@ def run_social_ingestion(
         print(f"Query:              {query}")
         print(f"Save Option:        {save_option}")
         print(f"Crawler Host:       {crawler_host} (Loopback Enforced)")
-        print(f"Crawler Commit:     {crawler_commit}")
+        print(f"Crawler Commit:     {commit_str}")
         print(f"Enable Comments:    {enable_comments}")
         print(f"Enable SubComments: {enable_sub_comments}")
         print(f"Source DB:          {source_db}")
@@ -276,7 +281,7 @@ def run_social_ingestion(
             print("Running auto-import to TradingAgents social archive...")
             importer = MediaCrawlerImporter(
                 archive_db=archive_db,
-                crawler_commit=crawler_commit,
+                crawler_commit=commit_str,
             )
             import_summary = importer.import_records(
                 source_db=source_db,
@@ -338,8 +343,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--crawler-commit",
-        default=DEFAULT_CRAWLER_COMMIT,
-        help="Pinned MediaCrawler Git commit hash.",
+        required=True,
+        help="Pinned MediaCrawler Git commit hash (e.g. d6f7c5bb906b6dac40ddf343ef9e26438a3de092).",
     )
     parser.add_argument(
         "--enable-comments",

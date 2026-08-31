@@ -62,6 +62,7 @@ def sample_archive_db(tmp_path):
     resolver = EntityResolver()
     importer = MediaCrawlerImporter(
         archive_db=archive_db_path,
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
         entity_resolver=resolver,
     )
     result = importer.import_records(source_db=crawler_db_path)

@@ -604,6 +604,7 @@ def test_synthetic_e2e_full_pipeline_active_mode(tmp_path, dual_platform_mediacr
     # Step 1: MediaCrawlerImporter
     importer = MediaCrawlerImporter(
         archive_db=archive_db_path,
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
         entity_resolver=resolver,
     )
     import_res = importer.import_records(source_db=dual_platform_mediacrawler_db)
@@ -743,7 +744,11 @@ def test_synthetic_e2e_full_pipeline_shadow_mode(tmp_path, dual_platform_mediacr
     archive_db_path = str(tmp_path / "synthetic_shadow_archive.db")
     resolver = EntityResolver()
 
-    importer = MediaCrawlerImporter(archive_db=archive_db_path, entity_resolver=resolver)
+    importer = MediaCrawlerImporter(
+        archive_db=archive_db_path,
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
+        entity_resolver=resolver,
+    )
     importer.import_records(source_db=dual_platform_mediacrawler_db)
 
     collector = SocialDataCollector(
@@ -881,7 +886,11 @@ def test_synthetic_e2e_data_sanitization_no_cookies_no_tokens(tmp_path):
 
     # Step 1: Import
     resolver = EntityResolver()
-    importer = MediaCrawlerImporter(archive_db=archive_db_path, entity_resolver=resolver)
+    importer = MediaCrawlerImporter(
+        archive_db=archive_db_path,
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
+        entity_resolver=resolver,
+    )
     importer.import_records(source_db=crawler_db_path)
 
     # Inspect SQLite Raw Records

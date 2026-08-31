@@ -365,7 +365,7 @@ def test_importer_writes_social_entity_mentions():
     populate_sample_mediacrawler_data(source_conn)
 
     # 2. Run importer
-    importer = MediaCrawlerImporter(archive_conn=archive_conn)
+    importer = MediaCrawlerImporter(archive_conn=archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     result = importer.import_records(source_db=source_conn, platform="all")
     assert result["status"] == "completed"
     assert result["rows_inserted"] > 0
@@ -390,7 +390,7 @@ def test_importer_entity_mentions_idempotency():
     source_conn = init_mediacrawler_db(":memory:")
     populate_sample_mediacrawler_data(source_conn)
 
-    importer = MediaCrawlerImporter(archive_conn=archive_conn)
+    importer = MediaCrawlerImporter(archive_conn=archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
     importer.import_records(source_db=source_conn, platform="all")
 
     cursor = archive_conn.cursor()
