@@ -232,6 +232,50 @@ def test_evidence_verifier_insufficient_social_score_cannot_be_verified():
     assert res["status"] != STATUS_VERIFIED
 
 
+def test_evidence_verifier_mode_status_separation_l4():
+    """L4: Verifier must separate mode from status and reject directional claims across disabled/shadow modes."""
+    evaluator = EvidenceFactualTruthEvaluator()
+    market_data_context = {"analysis_baseline_date": "2026-08-26"}
+    seven_reports = {
+        "sentiment_report": "舆情数据处于影子模式，未开启方向推断。",
+    }
+
+    # Shadow mode with valid status 'available' but direction_allowed=False
+    social_data_context_shadow = {
+        "mode": "shadow",
+        "status": "available",
+        "direction_allowed": False,
+        "bundle": {
+            "direction_allowed": False,
+            "social_sentiment": {"score": 0.8, "label": "bullish"},
+        },
+    }
+
+    res_shadow = evaluator.evaluate_single_evidence(
+        raw_evidence="社交舆情情绪得分达到0.80，散户看多",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context,
+        social_data_context=social_data_context_shadow,
+    )
+    assert res_shadow["status"] == STATUS_UNSUPPORTED
+
+    # Disabled mode with status 'not_applicable'
+    social_data_context_disabled = {
+        "mode": "disabled",
+        "status": "not_applicable",
+        "direction_allowed": False,
+    }
+
+    res_disabled = evaluator.evaluate_single_evidence(
+        raw_evidence="社交舆情情绪得分高涨，多头狂热",
+        seven_reports=seven_reports,
+        market_data_context=market_data_context,
+        social_data_context=social_data_context_disabled,
+    )
+    assert res_disabled["status"] == STATUS_UNSUPPORTED
+
+
+
 # ============================================================================
 # C. report_quality_gate Tests
 # ============================================================================

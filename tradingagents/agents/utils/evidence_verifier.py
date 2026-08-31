@@ -386,13 +386,15 @@ class EvidenceFactualTruthEvaluator:
         # 1.1 Check if evidence asserts a directional social sentiment score when direction is disallowed or social is insufficient/empty
         if isinstance(social_data_context, Mapping):
             social_status = str(social_data_context.get("status", "")).strip().lower()
+            social_mode = str(social_data_context.get("mode", "")).strip().lower()
             dir_allowed = bool(social_data_context.get("direction_allowed", False))
             bundle = social_data_context.get("bundle") if isinstance(social_data_context.get("bundle"), dict) else {}
             sent_label = bundle.get("social_sentiment", {}).get("label") if isinstance(bundle.get("social_sentiment"), dict) else None
 
             if (
                 not dir_allowed
-                or social_status in ("insufficient", "empty", "disabled", "shadow", "not_applicable", "failed", "timeout", "refused")
+                or social_mode in ("disabled", "shadow")
+                or social_status in ("insufficient", "empty", "not_applicable", "failed", "timeout", "refused")
                 or sent_label == "insufficient"
             ):
                 raw_lower = raw_text.lower()
