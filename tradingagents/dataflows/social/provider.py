@@ -111,10 +111,13 @@ def parse_iso_datetime(val: Any) -> Optional[datetime]:
             return val.replace(tzinfo=timezone.utc)
         return val.astimezone(timezone.utc)
     if isinstance(val, (int, float)):
-        num = float(val)
-        if abs(num) >= 1e11:  # milliseconds
-            num = num / 1000.0
-        return datetime.fromtimestamp(num, tz=timezone.utc)
+        try:
+            num = float(val)
+            if abs(num) >= 1e11:  # milliseconds
+                num = num / 1000.0
+            return datetime.fromtimestamp(num, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            return None
 
     s = str(val).strip()
     if not s:
@@ -126,7 +129,7 @@ def parse_iso_datetime(val: Any) -> Optional[datetime]:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
-    except Exception:
+    except (ValueError, TypeError, OverflowError):
         pass
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
@@ -137,7 +140,7 @@ def parse_iso_datetime(val: Any) -> Optional[datetime]:
             else:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc)
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             continue
 
     return None

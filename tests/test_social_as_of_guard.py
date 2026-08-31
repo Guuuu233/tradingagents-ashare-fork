@@ -70,10 +70,13 @@ def test_parse_iso_datetime_utc_aware():
     dt_ts = parse_iso_datetime(1787713931000)
     assert dt_ts == dt_z
 
-    # Invalid / None
+    # Invalid / None / Overflow
     assert parse_iso_datetime(None) is None
     assert parse_iso_datetime("") is None
     assert parse_iso_datetime("invalid") is None
+    assert parse_iso_datetime("2026-99-99T99:99:99Z") is None
+    assert parse_iso_datetime(1e30) is None
+    assert parse_iso_datetime(-1e30) is None
 
 
 def test_invalid_as_of_formats_rejected():
