@@ -407,19 +407,13 @@ class SocialArchiveProvider:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def fetch_records(
+    def _resolve_cutoff(
         self,
-        symbol: str,
         as_of: str,
-        lookback_days: int = 7,
-        platforms: Optional[Sequence[str]] = None,
-        max_posts: Optional[int] = None,
-        max_comments: Optional[int] = None,
-        now: Optional[datetime] = None,
-        **kwargs: Any,
-    ) -> SocialFetchResult:
-        """Fetch qualified historical social media records for given symbol and as-of date (D-008)."""
-        # 1. Check as_of and compute cutoff
+        lookback_days: int,
+        now: Optional[datetime],
+    ) -> Union[Tuple[datetime, datetime, str, str], SocialFetchResult]:
+        """Validate as_of and compute window_start and cutoff timestamps."""
         try:
             window_start_utc, cutoff_utc, _ = compute_as_of_cutoff(
                 as_of=as_of,
@@ -446,21 +440,18 @@ class SocialArchiveProvider:
             else cutoff_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         )
         window_start_iso = window_start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return window_start_utc, cutoff_utc, window_start_iso, cutoff_iso
 
-        # 2. Check DB path
-        db_file = self.db_path
-        if not db_file or not str(db_file).strip():
-            return SocialFetchResult(
-                status=SocialStatus.FAILED.value,
-                requested_as_of=as_of,
-                cutoff_at=cutoff_iso,
-                window_start=window_start_iso,
-                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
-            )
-
-        # 3. Connect read-only
+    def _open_archive_connection(
+        self,
+        db_file: str,
+        as_of: str,
+        cutoff_iso: str,
+        window_start_iso: str,
+    ) -> Union[sqlite3.Connection, SocialFetchResult]:
+        """Open read-only connection to archive DB with error mapping."""
         try:
-            conn = self._get_readonly_connection(db_file)
+            return self._get_readonly_connection(db_file)
         except (FileNotFoundError, sqlite3.OperationalError) as exc:
             err_msg = str(exc).lower()
             if "unable to open" in err_msg or "not found" in err_msg or "no such file" in err_msg:
@@ -495,8 +486,274 @@ class SocialArchiveProvider:
                 reason_codes=[REASON_SOCIAL_SCHEMA_MISMATCH],
             )
 
+    def _read_archive_meta(self, conn: sqlite3.Connection) -> Dict[str, str]:
+        """Read key-value pairs from social_archive_meta table."""
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM social_archive_meta")
+        return {row["key"]: row["value"] for row in cursor.fetchall()}
+
+    def _query_candidate_snapshots(
+        self,
+        conn: sqlite3.Connection,
+        symbol: str,
+    ) -> List[Dict[str, Any]]:
+        """Query raw snapshot rows matching target symbol mentions or parent post mentions."""
+        target_symbols = self._resolve_target_symbols(symbol)
+        placeholders = ",".join("?" for _ in target_symbols)
+        sym_list = list(target_symbols)
+
+        query = f"""
+            SELECT DISTINCT s.*
+            FROM social_record_snapshots s
+            WHERE s.snapshot_id IN (
+                SELECT snapshot_id FROM social_entity_mentions WHERE symbol IN ({placeholders})
+            )
+            OR s.root_post_record_id IN (
+                SELECT s2.record_id
+                FROM social_record_snapshots s2
+                JOIN social_entity_mentions m ON s2.snapshot_id = m.snapshot_id
+                WHERE m.symbol IN ({placeholders})
+            )
+        """
+        cursor = conn.cursor()
+        cursor.execute(query, sym_list + sym_list)
+        return [dict(r) for r in cursor.fetchall()]
+
+    def _load_crawler_commits(
+        self,
+        conn: sqlite3.Connection,
+        run_ids: Set[str],
+    ) -> Dict[str, str]:
+        """Load crawler_commit for ingest run IDs."""
+        if not run_ids:
+            return {}
+        run_ph = ",".join("?" for _ in run_ids)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT run_id, crawler_commit FROM social_ingest_runs WHERE run_id IN ({run_ph})",
+            list(run_ids),
+        )
+        return {row["run_id"]: row["crawler_commit"] for row in cursor.fetchall()}
+
+    def _load_snapshot_mentions(
+        self,
+        conn: sqlite3.Connection,
+        snap_ids: Set[str],
+    ) -> Dict[str, List[EntityMention]]:
+        """Load entity mentions grouped by snapshot_id."""
+        if not snap_ids:
+            return {}
+        snap_ph = ",".join("?" for _ in snap_ids)
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM social_entity_mentions WHERE snapshot_id IN ({snap_ph})",
+            list(snap_ids),
+        )
+        mentions_by_snap: Dict[str, List[EntityMention]] = {}
+        for m_row in cursor.fetchall():
+            m_dict = dict(m_row)
+            mentions_by_snap.setdefault(m_dict["snapshot_id"], []).append(
+                EntityMention.from_dict(m_dict)
+            )
+        return mentions_by_snap
+
+    def _build_raw_record(
+        self,
+        cand: Dict[str, Any],
+        crawler_commits: Dict[str, str],
+        mentions_by_snap: Dict[str, List[EntityMention]],
+    ) -> Optional[SocialRawRecordV1]:
+        """Construct and validate a SocialRawRecordV1 from candidate snapshot row."""
+        crawler_commit = crawler_commits.get(cand["ingest_run_id"])
+        if not crawler_commit or not str(crawler_commit).strip():
+            logger.warning(
+                "Snapshot %s references missing or invalid ingest_run_id %s; rejecting record",
+                cand.get("snapshot_id"),
+                cand.get("ingest_run_id"),
+            )
+            return None
+
+        crawler_commit = str(crawler_commit).strip()
+        metrics = SocialMetrics.from_dict(json.loads(cand.get("metrics_json") or "{}"))
+        source_ref = SourceRef(
+            provider="mediacrawler",
+            crawler_commit=crawler_commit,
+            source_table=cand["source_table"],
+            source_row_id=cand["source_row_id"],
+        )
+        entities = mentions_by_snap.get(cand["snapshot_id"], [])
+
+        raw_record = SocialRawRecordV1(
+            schema_version=cand.get("schema_version", "social.raw_record.v1"),
+            record_id=cand["record_id"],
+            snapshot_id=cand["snapshot_id"],
+            record_type=cand["record_type"],
+            platform=cand["platform"],
+            native_id=cand["native_id"],
+            parent_record_id=cand.get("parent_record_id"),
+            root_post_record_id=cand["root_post_record_id"],
+            published_at=cand["published_at"],
+            source_updated_at=cand.get("source_updated_at"),
+            first_seen_at=cand["first_seen_at"],
+            snapshot_at=cand["snapshot_at"],
+            ingest_at=cand["ingest_at"],
+            title=cand.get("title"),
+            text=cand.get("text", ""),
+            canonical_url=cand.get("canonical_url"),
+            author_id_hash=cand.get("author_id_hash"),
+            source_keyword=cand.get("source_keyword"),
+            entities=entities,
+            metrics=metrics,
+            content_hash=cand["content_hash"],
+            metrics_hash=cand["metrics_hash"],
+            ingest_run_id=cand["ingest_run_id"],
+            source_ref=source_ref,
+        )
+        raw_record.validate()
+        return raw_record
+
+    def _filter_and_assemble_records(
+        self,
+        dict_rows: List[Dict[str, Any]],
+        window_start_utc: datetime,
+        cutoff_utc: datetime,
+        xhs_trusted: bool,
+        platforms: Optional[Sequence[str]],
+        crawler_commits: Dict[str, str],
+        mentions_by_snap: Dict[str, List[EntityMention]],
+    ) -> Tuple[List[SocialRawRecordV1], int]:
+        """Group snapshots by record_id, pick PIT candidate, and check content eligibility."""
+        by_record_id: Dict[str, List[Dict[str, Any]]] = {}
+        for r_dict in dict_rows:
+            rec_id = r_dict["record_id"]
+            by_record_id.setdefault(rec_id, []).append(r_dict)
+
+        target_platforms = set(platforms) if platforms else None
+        eligible_records: List[SocialRawRecordV1] = []
+        records_with_candidate_count = 0
+
+        for rec_id, snap_list in by_record_id.items():
+            cand = select_candidate_snapshot(snap_list, cutoff_utc)
+            if cand is None:
+                continue
+
+            records_with_candidate_count += 1
+
+            if target_platforms and cand["platform"] not in target_platforms:
+                continue
+
+            is_eligible, _ = check_content_eligibility(
+                cand,
+                window_start_utc=window_start_utc,
+                cutoff_utc=cutoff_utc,
+                xhs_last_update_time_trusted=xhs_trusted,
+            )
+            if not is_eligible:
+                continue
+
+            raw_record = self._build_raw_record(cand, crawler_commits, mentions_by_snap)
+            if raw_record is not None:
+                eligible_records.append(raw_record)
+
+        return eligible_records, records_with_candidate_count
+
+    def _sort_and_limit_records(
+        self,
+        records: List[SocialRawRecordV1],
+        max_posts: Optional[int] = None,
+        max_comments: Optional[int] = None,
+    ) -> List[SocialRawRecordV1]:
+        """Sort posts and comments by published_at / record_id and apply count limits."""
+        posts = [r for r in records if r.record_type == "post"]
+        comments = [r for r in records if r.record_type == "comment"]
+
+        posts.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
+        comments.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
+
+        if max_posts is not None:
+            posts = posts[:max_posts]
+        if max_comments is not None:
+            comments = comments[:max_comments]
+
+        return posts + comments
+
+    def _build_fetch_result(
+        self,
+        as_of: str,
+        cutoff_iso: str,
+        window_start_iso: str,
+        records: List[SocialRawRecordV1],
+        records_with_candidate_count: int,
+        meta_dict: Dict[str, Any],
+    ) -> SocialFetchResult:
+        """Construct final SocialFetchResult based on available records and candidate presence."""
+        if records:
+            return SocialFetchResult(
+                status=SocialStatus.AVAILABLE.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                records=records,
+                reason_codes=[],
+                meta=meta_dict,
+            )
+        elif records_with_candidate_count == 0:
+            return SocialFetchResult(
+                status=SocialStatus.REFUSED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                records=[],
+                reason_codes=[REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT],
+                meta=meta_dict,
+            )
+        else:
+            return SocialFetchResult(
+                status=SocialStatus.EMPTY.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                records=[],
+                reason_codes=[REASON_SOCIAL_EMPTY],
+                meta=meta_dict,
+            )
+
+    def fetch_records(
+        self,
+        symbol: str,
+        as_of: str,
+        lookback_days: int = 7,
+        platforms: Optional[Sequence[str]] = None,
+        max_posts: Optional[int] = None,
+        max_comments: Optional[int] = None,
+        now: Optional[datetime] = None,
+        **kwargs: Any,
+    ) -> SocialFetchResult:
+        """Fetch qualified historical social media records for given symbol and as-of date (D-008)."""
+        # 1. Check as_of and compute cutoff
+        cutoff_res = self._resolve_cutoff(as_of, lookback_days, now)
+        if isinstance(cutoff_res, SocialFetchResult):
+            return cutoff_res
+        window_start_utc, cutoff_utc, window_start_iso, cutoff_iso = cutoff_res
+
+        # 2. Check DB path & connect
+        db_file = self.db_path
+        if not db_file or not str(db_file).strip():
+            return SocialFetchResult(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                window_start=window_start_iso,
+                reason_codes=[REASON_SOCIAL_ARCHIVE_MISSING],
+            )
+
+        conn_res = self._open_archive_connection(db_file, as_of, cutoff_iso, window_start_iso)
+        if isinstance(conn_res, SocialFetchResult):
+            return conn_res
+        conn = conn_res
+
         try:
-            # 4. Verify schema
+            # 3. Verify schema
             if not verify_archive_schema(conn):
                 return SocialFetchResult(
                     status=SocialStatus.FAILED.value,
@@ -506,34 +763,13 @@ class SocialArchiveProvider:
                     reason_codes=[REASON_SOCIAL_SCHEMA_MISMATCH],
                 )
 
-            # 5. Read meta
-            cursor = conn.cursor()
-            cursor.execute("SELECT key, value FROM social_archive_meta")
-            meta_dict = {row["key"]: row["value"] for row in cursor.fetchall()}
+            # 4. Read metadata
+            meta_dict = self._read_archive_meta(conn)
             xhs_trusted = meta_dict.get("xhs_last_update_time_trusted", "false").lower() == "true"
 
-            # 6. Normalize symbol and query candidate snapshots
-            target_symbols = self._resolve_target_symbols(symbol)
-            placeholders = ",".join("?" for _ in target_symbols)
-            sym_list = list(target_symbols)
-
-            query = f"""
-                SELECT DISTINCT s.*
-                FROM social_record_snapshots s
-                WHERE s.snapshot_id IN (
-                    SELECT snapshot_id FROM social_entity_mentions WHERE symbol IN ({placeholders})
-                )
-                OR s.root_post_record_id IN (
-                    SELECT s2.record_id
-                    FROM social_record_snapshots s2
-                    JOIN social_entity_mentions m ON s2.snapshot_id = m.snapshot_id
-                    WHERE m.symbol IN ({placeholders})
-                )
-            """
-            cursor.execute(query, sym_list + sym_list)
-            raw_rows = cursor.fetchall()
-
-            if not raw_rows:
+            # 5. Query candidate snapshots
+            dict_rows = self._query_candidate_snapshots(conn, symbol)
+            if not dict_rows:
                 return SocialFetchResult(
                     status=SocialStatus.EMPTY.value,
                     requested_as_of=as_of,
@@ -544,159 +780,33 @@ class SocialArchiveProvider:
                     meta=meta_dict,
                 )
 
-            dict_rows = [dict(r) for r in raw_rows]
+            # 6. Load crawler commits & entity mentions
+            run_ids = {r["ingest_run_id"] for r in dict_rows if r.get("ingest_run_id")}
+            snap_ids = {r["snapshot_id"] for r in dict_rows if r.get("snapshot_id")}
+            crawler_commits = self._load_crawler_commits(conn, run_ids)
+            mentions_by_snap = self._load_snapshot_mentions(conn, snap_ids)
 
-            # 7. Group snapshots by record_id
-            by_record_id: Dict[str, List[Dict[str, Any]]] = {}
-            for r_dict in dict_rows:
-                rec_id = r_dict["record_id"]
-                by_record_id.setdefault(rec_id, []).append(r_dict)
+            # 7. Filter & assemble candidate records
+            eligible_records, candidate_count = self._filter_and_assemble_records(
+                dict_rows=dict_rows,
+                window_start_utc=window_start_utc,
+                cutoff_utc=cutoff_utc,
+                xhs_trusted=xhs_trusted,
+                platforms=platforms,
+                crawler_commits=crawler_commits,
+                mentions_by_snap=mentions_by_snap,
+            )
 
-            # 8. Load crawler commits and mentions
-            run_ids = {r_dict["ingest_run_id"] for r_dict in dict_rows if r_dict.get("ingest_run_id")}
-            crawler_commits: Dict[str, str] = {}
-            if run_ids:
-                run_ph = ",".join("?" for _ in run_ids)
-                cursor.execute(
-                    f"SELECT run_id, crawler_commit FROM social_ingest_runs WHERE run_id IN ({run_ph})",
-                    list(run_ids),
-                )
-                crawler_commits = {row["run_id"]: row["crawler_commit"] for row in cursor.fetchall()}
-
-            snap_ids = {r_dict["snapshot_id"] for r_dict in dict_rows}
-            mentions_by_snap: Dict[str, List[EntityMention]] = {}
-            if snap_ids:
-                snap_ph = ",".join("?" for _ in snap_ids)
-                cursor.execute(
-                    f"SELECT * FROM social_entity_mentions WHERE snapshot_id IN ({snap_ph})",
-                    list(snap_ids),
-                )
-                for m_row in cursor.fetchall():
-                    m_dict = dict(m_row)
-                    mentions_by_snap.setdefault(m_dict["snapshot_id"], []).append(
-                        EntityMention.from_dict(m_dict)
-                    )
-
-            target_platforms = set(platforms) if platforms else None
-            eligible_records: List[SocialRawRecordV1] = []
-            records_with_candidate_count = 0
-
-            # 9. Apply snapshot candidate selection and eligibility checks
-            for rec_id, snap_list in by_record_id.items():
-                cand = select_candidate_snapshot(snap_list, cutoff_utc)
-                if cand is None:
-                    continue  # No historical snapshot <= cutoff
-
-                records_with_candidate_count += 1
-
-                # Platform filtering
-                if target_platforms and cand["platform"] not in target_platforms:
-                    continue
-
-                # Content eligibility
-                is_eligible, _ = check_content_eligibility(
-                    cand,
-                    window_start_utc=window_start_utc,
-                    cutoff_utc=cutoff_utc,
-                    xhs_last_update_time_trusted=xhs_trusted,
-                )
-                if not is_eligible:
-                    continue
-
-                # Construct SocialRawRecordV1
-                metrics = SocialMetrics.from_dict(json.loads(cand.get("metrics_json") or "{}"))
-                crawler_commit = crawler_commits.get(cand["ingest_run_id"])
-                if not crawler_commit or not str(crawler_commit).strip():
-                    logger.warning(
-                        "Snapshot %s references missing or invalid ingest_run_id %s; rejecting record",
-                        cand.get("snapshot_id"),
-                        cand.get("ingest_run_id"),
-                    )
-                    continue
-                crawler_commit = str(crawler_commit).strip()
-                source_ref = SourceRef(
-                    provider="mediacrawler",
-                    crawler_commit=crawler_commit,
-                    source_table=cand["source_table"],
-                    source_row_id=cand["source_row_id"],
-                )
-                entities = mentions_by_snap.get(cand["snapshot_id"], [])
-
-                raw_record = SocialRawRecordV1(
-                    schema_version=cand.get("schema_version", "social.raw_record.v1"),
-                    record_id=cand["record_id"],
-                    snapshot_id=cand["snapshot_id"],
-                    record_type=cand["record_type"],
-                    platform=cand["platform"],
-                    native_id=cand["native_id"],
-                    parent_record_id=cand.get("parent_record_id"),
-                    root_post_record_id=cand["root_post_record_id"],
-                    published_at=cand["published_at"],
-                    source_updated_at=cand.get("source_updated_at"),
-                    first_seen_at=cand["first_seen_at"],
-                    snapshot_at=cand["snapshot_at"],
-                    ingest_at=cand["ingest_at"],
-                    title=cand.get("title"),
-                    text=cand.get("text", ""),
-                    canonical_url=cand.get("canonical_url"),
-                    author_id_hash=cand.get("author_id_hash"),
-                    source_keyword=cand.get("source_keyword"),
-                    entities=entities,
-                    metrics=metrics,
-                    content_hash=cand["content_hash"],
-                    metrics_hash=cand["metrics_hash"],
-                    ingest_run_id=cand["ingest_run_id"],
-                    source_ref=source_ref,
-                )
-                raw_record.validate()
-                eligible_records.append(raw_record)
-
-            # Sort and apply limits
-            posts = [r for r in eligible_records if r.record_type == "post"]
-            comments = [r for r in eligible_records if r.record_type == "comment"]
-
-            posts.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
-            comments.sort(key=lambda r: (r.published_at or "", r.record_id), reverse=True)
-
-            if max_posts is not None:
-                posts = posts[:max_posts]
-            if max_comments is not None:
-                comments = comments[:max_comments]
-
-            final_records = posts + comments
-
-            if final_records:
-                return SocialFetchResult(
-                    status=SocialStatus.AVAILABLE.value,
-                    requested_as_of=as_of,
-                    cutoff_at=cutoff_iso,
-                    window_start=window_start_iso,
-                    records=final_records,
-                    reason_codes=[],
-                    meta=meta_dict,
-                )
-            elif records_with_candidate_count == 0:
-                # All snapshots in DB for this symbol were taken after cutoff
-                return SocialFetchResult(
-                    status=SocialStatus.REFUSED.value,
-                    requested_as_of=as_of,
-                    cutoff_at=cutoff_iso,
-                    window_start=window_start_iso,
-                    records=[],
-                    reason_codes=[REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT],
-                    meta=meta_dict,
-                )
-            else:
-                # Candidate snapshots existed but all failed eligibility (e.g. outside window)
-                return SocialFetchResult(
-                    status=SocialStatus.EMPTY.value,
-                    requested_as_of=as_of,
-                    cutoff_at=cutoff_iso,
-                    window_start=window_start_iso,
-                    records=[],
-                    reason_codes=[REASON_SOCIAL_EMPTY],
-                    meta=meta_dict,
-                )
+            # 8. Sort, limit & build final result
+            final_records = self._sort_and_limit_records(eligible_records, max_posts, max_comments)
+            return self._build_fetch_result(
+                as_of=as_of,
+                cutoff_iso=cutoff_iso,
+                window_start_iso=window_start_iso,
+                records=final_records,
+                records_with_candidate_count=candidate_count,
+                meta_dict=meta_dict,
+            )
 
         except sqlite3.OperationalError as exc:
             err_msg = str(exc).lower()

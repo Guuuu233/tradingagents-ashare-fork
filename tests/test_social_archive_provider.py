@@ -325,3 +325,95 @@ def test_provider_missing_ingest_run_metadata_rejected(tmp_path):
 
     # Record must be rejected since run metadata is invalid/empty; resulting in empty records
     assert len(res.records) == 0
+
+
+# ============================================================================
+# 6. Helper Method Unit Tests (M1 Refactoring Locks)
+# ============================================================================
+
+def test_provider_resolve_cutoff_invalid_and_valid():
+    """Test _resolve_cutoff handles valid and invalid as_of inputs."""
+    provider = SocialArchiveProvider(db_path=":memory:")
+    # Invalid
+    res_inv = provider._resolve_cutoff("", lookback_days=7, now=None)
+    assert isinstance(res_inv, SocialFetchResult)
+    assert res_inv.status == SocialStatus.REFUSED.value
+
+    # Valid
+    res_valid = provider._resolve_cutoff("2026-08-26", lookback_days=7, now=datetime(2026, 8, 27, tzinfo=CN_TZ))
+    assert isinstance(res_valid, tuple)
+    w_start, cutoff_utc, w_iso, c_iso = res_valid
+    # 2026-08-19 00:00:00 CST -> 2026-08-18T16:00:00Z in UTC
+    assert w_iso == "2026-08-18T16:00:00Z"
+    # 2026-08-26 23:59:59.999999 CST -> 2026-08-26T15:59:59.999999Z in UTC
+    assert c_iso == "2026-08-26T15:59:59.999999Z"
+
+
+def test_provider_sort_and_limit_records():
+    """Test _sort_and_limit_records sorts by published_at desc and limits correctly."""
+    from tradingagents.dataflows.social.contracts import SocialMetrics, SourceRef
+    provider = SocialArchiveProvider(db_path=":memory:")
+    sref = SourceRef(provider="mediacrawler", crawler_commit="abc", source_table="t", source_row_id="1")
+    metrics = SocialMetrics()
+
+    r1 = SocialRawRecordV1(
+        schema_version="social.raw_record.v1",
+        record_id="p1",
+        snapshot_id="s1",
+        record_type="post",
+        platform="xhs",
+        native_id="n1",
+        root_post_record_id="p1",
+        published_at="2026-08-26T01:00:00Z",
+        first_seen_at="2026-08-26T01:00:00Z",
+        snapshot_at="2026-08-26T01:00:00Z",
+        ingest_at="2026-08-26T01:00:00Z",
+        metrics=metrics,
+        content_hash="ch1",
+        metrics_hash="mh1",
+        ingest_run_id="r1",
+        source_ref=sref,
+    )
+    r2 = SocialRawRecordV1(
+        schema_version="social.raw_record.v1",
+        record_id="p2",
+        snapshot_id="s2",
+        record_type="post",
+        platform="xhs",
+        native_id="n2",
+        root_post_record_id="p2",
+        published_at="2026-08-26T02:00:00Z",
+        first_seen_at="2026-08-26T02:00:00Z",
+        snapshot_at="2026-08-26T02:00:00Z",
+        ingest_at="2026-08-26T02:00:00Z",
+        metrics=metrics,
+        content_hash="ch2",
+        metrics_hash="mh2",
+        ingest_run_id="r1",
+        source_ref=sref,
+    )
+    c1 = SocialRawRecordV1(
+        schema_version="social.raw_record.v1",
+        record_id="c1",
+        snapshot_id="s3",
+        record_type="comment",
+        platform="xhs",
+        native_id="nc1",
+        root_post_record_id="p1",
+        published_at="2026-08-26T01:30:00Z",
+        first_seen_at="2026-08-26T01:30:00Z",
+        snapshot_at="2026-08-26T01:30:00Z",
+        ingest_at="2026-08-26T01:30:00Z",
+        metrics=metrics,
+        content_hash="ch3",
+        metrics_hash="mh3",
+        ingest_run_id="r1",
+        source_ref=sref,
+    )
+
+    limited = provider._sort_and_limit_records([r1, r2, c1], max_posts=1, max_comments=1)
+    assert len(limited) == 2
+    # Newer post p2 should be first
+    assert limited[0].record_id == "p2"
+    assert limited[1].record_id == "c1"
+
