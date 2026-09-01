@@ -15,10 +15,12 @@ Tests cover:
 
 import copy
 import json
+import os
 import pytest
 
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
+    PROTOCOL_VERSION_V1_LEGACY,
     PROTOCOL_VERSION_V2_STRUCTURED,
     get_protocol_metadata,
 )
@@ -30,6 +32,10 @@ from tradingagents.agents.utils.shadow_credit import (
     calculate_claim_credit_weights,
     apply_credit_weighting_to_debate,
     resolve_claim_credit_weights_for_manager,
+    extract_report_industry,
+    is_qualifying_v2_report,
+    normalize_report_for_evaluation,
+    filter_v2_completed_reports,
 )
 
 
@@ -522,3 +528,236 @@ class TestResearchManagerGateWiring:
         assert res["system_gate_passed"] is True
         assert res["credit_weighting_active"] is False
         assert res["claim_weights"]["C1"] == 1.0
+
+
+class TestH1bV2OnlySampleFilteringAndIndustry:
+    """Test suite for Track A6: Gate verification counting only completed v2 reports."""
+
+    def test_extract_report_industry_from_multiple_sources(self):
+        """extract_report_industry correctly finds industry across all metadata locations."""
+        # 1. Direct top-level
+        assert extract_report_industry({"industry": "白酒"}) == "白酒"
+        assert extract_report_industry({"sector": "半导体"}) == "半导体"
+
+        # 2. instrument_context
+        assert extract_report_industry({"instrument_context": {"industry": "新能源"}}) == "新能源"
+
+        # 3. market_data_context.industry_linkage
+        assert extract_report_industry({
+            "market_data_context": {
+                "industry_linkage": {"industry_name": "家用电器与智能家居"}
+            }
+        }) == "家用电器与智能家居"
+
+        # 4. data_collection_provenance.industry_linkage_raw
+        assert extract_report_industry({
+            "data_collection_provenance": {
+                "industry_linkage_raw": {"industry_name": "医药生物与创新药"}
+            }
+        }) == "医药生物与创新药"
+
+        # 5. quadrant_1_protocol_metadata
+        assert extract_report_industry({
+            "quadrant_1_protocol_metadata": {"industry": "电力与公用事业"}
+        }) == "电力与公用事业"
+
+        # 6. Nested under result_data
+        assert extract_report_industry({
+            "result_data": {
+                "market_data_context": {
+                    "industry_linkage": {"industry_name": "军工装备"}
+                }
+            }
+        }) == "军工装备"
+
+        # 7. Absent / empty / unknown -> None (never fabricate)
+        assert extract_report_industry({}) is None
+        assert extract_report_industry({"industry": ""}) is None
+        assert extract_report_industry({"quadrant_1_protocol_metadata": {"industry": "未知行业"}}) is None
+
+    def test_is_qualifying_v2_report_true_for_valid_v2_and_winner(self):
+        """is_qualifying_v2_report returns True only for completed v2 reports with winner."""
+        # Standard v2 report with winner
+        v2_bull = {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+        }
+        assert is_qualifying_v2_report(v2_bull) is True
+
+        v2_bear = {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "bear", "direction": "看空"},
+        }
+        assert is_qualifying_v2_report(v2_bear) is True
+
+        # Nested in result_data
+        v2_nested = {
+            "status": "completed",
+            "result_data": {
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "investment_debate_state": {
+                    "manager_verdict": {"winner": "tie", "direction": "中性"}
+                },
+            },
+        }
+        assert is_qualifying_v2_report(v2_nested) is True
+
+    def test_is_qualifying_v2_report_false_for_v1_legacy_or_missing_winner(self):
+        """is_qualifying_v2_report returns False for legacy reports, missing winner, or non-completed."""
+        # v1 legacy without winner
+        v1_legacy = {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V1_LEGACY,
+        }
+        assert is_qualifying_v2_report(v1_legacy) is False
+
+        # Non-completed status (failed/pending/running)
+        failed_report = {
+            "status": "failed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "bull"},
+        }
+        assert is_qualifying_v2_report(failed_report) is False
+
+        running_report = {
+            "status": "running",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "bull"},
+        }
+        assert is_qualifying_v2_report(running_report) is False
+
+        # Empty or missing winner
+        no_winner = {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {},
+        }
+        assert is_qualifying_v2_report(no_winner) is False
+
+        invalid_winner = {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "invalid_winner"},
+        }
+        assert is_qualifying_v2_report(invalid_winner) is False
+
+    def test_filter_v2_completed_reports_excludes_old_samples_and_denominators(self):
+        """Pool of mixed legacy and v2 reports: legacy reports excluded from sample count and denominator."""
+        mixed_pool = [
+            # 3 old v1 reports without winner
+            {"symbol": "600001.SH", "status": "completed", "protocol_version": "v1_legacy"},
+            {"symbol": "600002.SH", "status": "completed", "protocol_version": "v1_legacy"},
+            {"symbol": "600003.SH", "status": "completed", "protocol_version": "v1_legacy"},
+            # 1 failed v2 report
+            {"symbol": "600004.SH", "status": "failed", "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED, "manager_verdict": {"winner": "bull"}},
+            # 4 valid completed v2 reports
+            {
+                "symbol": "600519.SH",
+                "industry": "白酒",
+                "status": "completed",
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "trade_date": "2026-08-01",
+                "manager_verdict": {"winner": "bull", "direction": "看多"},
+            },
+            {
+                "symbol": "000858.SZ",
+                "industry": "白酒",
+                "status": "completed",
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "trade_date": "2026-08-02",
+                "manager_verdict": {"winner": "bull", "direction": "看多"},
+            },
+            {
+                "symbol": "600276.SH",
+                "industry": "医药",
+                "status": "completed",
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "trade_date": "2026-08-03",
+                "manager_verdict": {"winner": "bear", "direction": "看空"},
+            },
+            {
+                "symbol": "300750.SZ",
+                "industry": "新能源",
+                "status": "completed",
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "trade_date": "2026-08-04",
+                "manager_verdict": {"winner": "bear", "direction": "看空"},
+            },
+        ]
+
+        filtered = filter_v2_completed_reports(mixed_pool)
+        assert len(filtered) == 4
+
+        # Gate evaluation must have sample_count=4 (not 8)
+        gate_res = evaluate_h1b_system_gates(filtered)
+        assert gate_res["summary"]["sample_count"] == 4
+        assert gate_res["matrix"]["dimension_n"]["details"]["sample_count"] == 4
+        assert gate_res["matrix"]["dimension_n"]["details"]["unique_symbols"] == 4
+        assert gate_res["matrix"]["dimension_n"]["details"]["unique_industries"] == 3
+        # 2 bull, 2 bear -> side split 2/2, balance ratio 50%
+        assert gate_res["matrix"]["dimension_side"]["details"]["bull_samples"] == 2
+        assert gate_res["matrix"]["dimension_side"]["details"]["bear_samples"] == 2
+        assert gate_res["matrix"]["dimension_balance"]["details"]["bull_ratio"] == 0.5
+        assert gate_res["matrix"]["dimension_balance"]["details"]["side_diff"] == 0
+
+    def test_golden_audit_samples_extracted_and_evaluated_correctly(self):
+        """Golden audit samples must be parsed with real industries (3) and real side split (2 bull, 1 bear)."""
+        import os
+        import glob
+        golden_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "tests",
+            "golden",
+            "audit_20260823",
+        )
+        assert os.path.exists(golden_dir)
+
+        golden_files = sorted(glob.glob(os.path.join(golden_dir, "*_result_data.json")))
+        assert len(golden_files) == 3
+
+        raw_samples = []
+        for fpath in golden_files:
+            with open(fpath, "r", encoding="utf-8") as f:
+                raw_samples.append(json.load(f))
+
+        filtered = filter_v2_completed_reports(raw_samples)
+        assert len(filtered) == 3
+
+        # Check extracted industries
+        industries = [s.get("industry") for s in filtered]
+        assert "家用电器与智能家居" in industries
+        assert "电力与公用事业" in industries
+        assert "医药生物与创新药" in industries
+
+        # Check gate evaluation
+        gate_res = evaluate_h1b_system_gates(filtered)
+        assert gate_res["summary"]["sample_count"] == 3
+        assert gate_res["matrix"]["dimension_n"]["details"]["unique_industries"] == 3
+        assert gate_res["matrix"]["dimension_side"]["details"]["bull_samples"] == 2
+        assert gate_res["matrix"]["dimension_side"]["details"]["bear_samples"] == 1
+        assert gate_res["matrix"]["dimension_side"]["details"]["bull_verified_claims"] > 0
+        assert gate_res["matrix"]["dimension_side"]["details"]["bear_verified_claims"] > 0
+
+    def test_verify_h1b_gates_script_runs_and_verifies_v2_only(self, tmp_path):
+        """scripts/verify_h1b_gates.py run_verify produces correct v2-only output JSON and structure."""
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        # 1. Test load_reports_from_db fallback to golden samples
+        reports = load_reports_from_db()
+        assert len(reports) == 3
+        for r in reports:
+            assert r.get("industry") is not None
+            assert r.get("manager_verdict", {}).get("winner") in ("bull", "bear", "tie")
+
+        # 2. Test run_verify execution with output json
+        out_json = str(tmp_path / "test_h1b_report.json")
+        res = run_verify(output_json=out_json)
+        assert res["task_id"] == "P3-H1b"
+        assert res["sample_count"] == 3
+        assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["unique_industries"] == 3
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bull_samples"] == 2
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bear_samples"] == 1
+        assert os.path.exists(out_json)
+

@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Ensure project root in sys.path
@@ -26,6 +27,10 @@ from tradingagents.agents.utils.shadow_credit import (
     calculate_shadow_credit_metrics,
     evaluate_h1b_system_gates,
     evaluate_model_bias_and_weights,
+    extract_report_industry,
+    filter_v2_completed_reports,
+    is_qualifying_v2_report,
+    normalize_report_for_evaluation,
 )
 
 logging.basicConfig(
@@ -35,44 +40,94 @@ logging.basicConfig(
 logger = logging.getLogger("verify_h1b_gates")
 
 
-def load_reports_from_db(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load reports from SQLite database or fallback paths."""
-    reports: List[Dict[str, Any]] = []
+def load_reports_from_db(
+    db_path: Optional[str] = None,
+    input_file: Optional[str] = None,
+    input_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Load reports from SQLite database, input file/dir, or fallback paths, filtering strictly for completed v2 samples."""
+    raw_reports: List[Dict[str, Any]] = []
 
-    # Try loading via sqlalchemy ReportDB if db exists
-    try:
-        from api.database import get_db_ctx, ReportDB
-        with get_db_ctx() as db:
-            db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
-            for r in db_reports:
-                data = r.to_dict()
-                res_data = data.get("result_data") or {}
-                if isinstance(res_data, dict):
-                    # Merge top-level metadata
-                    merged = {**res_data, **data}
-                    reports.append(merged)
-        if reports:
-            logger.info("从数据库中加载了 %d 份报告记录", len(reports))
-            return reports
-    except Exception as exc:
-        logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
+    # 1. Explicit input file
+    if input_file:
+        p = Path(input_file)
+        if not p.is_absolute():
+            p = Path(project_root) / p
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    if "samples" in data and isinstance(data["samples"], list):
+                        raw_reports.extend([dict(s) for s in data["samples"] if isinstance(s, dict)])
+                    else:
+                        raw_reports.append(data)
+                elif isinstance(data, list):
+                    raw_reports.extend([dict(s) for s in data if isinstance(s, dict)])
+                logger.info("从 JSON 文件 %s 中加载了 %d 份原始样本", p.name, len(raw_reports))
+            except Exception as e:
+                logger.warning("读取 input-file %s 失败: %s", p, e)
 
-    # Check golden audit reports as fallback/supplement
-    golden_dir = os.path.join(project_root, "tests", "golden", "audit_20260823")
-    if os.path.exists(golden_dir):
-        for fname in sorted(os.listdir(golden_dir)):
-            if fname.endswith("_result_data.json"):
-                fpath = os.path.join(golden_dir, fname)
+    # 2. Explicit input directory
+    if input_dir and not raw_reports:
+        p_dir = Path(input_dir)
+        if not p_dir.is_absolute():
+            p_dir = Path(project_root) / p_dir
+        if p_dir.exists() and p_dir.is_dir():
+            for fpath in sorted(p_dir.glob("*.json")):
                 try:
                     with open(fpath, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        if isinstance(data, dict):
-                            reports.append(data)
+                    if isinstance(data, dict):
+                        if "samples" in data and isinstance(data["samples"], list):
+                            raw_reports.extend([dict(s) for s in data["samples"] if isinstance(s, dict)])
+                        else:
+                            raw_reports.append(data)
+                    elif isinstance(data, list):
+                        raw_reports.extend([dict(s) for s in data if isinstance(s, dict)])
                 except Exception as e:
-                    logger.debug("读取 golden 报告 %s 失败: %s", fname, e)
+                    logger.debug("读取 input-dir 文件 %s 失败: %s", fpath.name, e)
+            if raw_reports:
+                logger.info("从目录 %s 中加载了 %d 份原始样本", p_dir.name, len(raw_reports))
 
-    logger.info("共检索到 %d 份可用历史辩论样本", len(reports))
-    return reports
+    # 3. Try loading via sqlalchemy ReportDB if db exists
+    if not raw_reports:
+        try:
+            from api.database import get_db_ctx, ReportDB
+            with get_db_ctx() as db:
+                db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    data = r.to_dict()
+                    raw_reports.append(data)
+            if raw_reports:
+                logger.info("从数据库中加载了 %d 份 completed 报告记录", len(raw_reports))
+        except Exception as exc:
+            logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
+
+    # 4. Check golden audit reports as fallback/supplement
+    if not raw_reports:
+        golden_dir = os.path.join(project_root, "tests", "golden", "audit_20260823")
+        if os.path.exists(golden_dir):
+            for fname in sorted(os.listdir(golden_dir)):
+                if fname.endswith("_result_data.json"):
+                    fpath = os.path.join(golden_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if isinstance(data, dict):
+                                raw_reports.append(data)
+                    except Exception as e:
+                        logger.debug("读取 golden 报告 %s 失败: %s", fname, e)
+
+    # 5. Filter strictly for completed v2 reports with winner (and extract industry without fabrication)
+    v2_reports = filter_v2_completed_reports(raw_reports)
+    logger.info(
+        "共检索到 %d 份原始样本，筛选出 %d 份合格 v2 结构化辩论样本 (排除 %d 份无 v2 winner/非 completed 样本)",
+        len(raw_reports),
+        len(v2_reports),
+        len(raw_reports) - len(v2_reports),
+    )
+    return v2_reports
 
 
 def format_gates_matrix_text(evaluation: Dict[str, Any]) -> str:
@@ -170,9 +225,15 @@ def format_gates_matrix_text(evaluation: Dict[str, Any]) -> str:
 def run_verify(
     db_path: Optional[str] = None,
     output_json: Optional[str] = None,
+    input_file: Optional[str] = None,
+    input_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute gate verification and generate structured report."""
-    reports = load_reports_from_db(db_path)
+    reports = load_reports_from_db(
+        db_path=db_path,
+        input_file=input_file,
+        input_dir=input_dir,
+    )
 
     # 1. 7-dimension gate evaluation
     gate_eval = evaluate_h1b_system_gates(reports)
@@ -213,9 +274,16 @@ def run_verify(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="P3-H1b 信用加权门槛校验脚本")
     parser.add_argument("--db-path", type=str, default=None, help="SQLite 数据库路径")
+    parser.add_argument("--input-file", type=str, default=None, help="指定评测 JSON 文件路径")
+    parser.add_argument("--input-dir", type=str, default=None, help="指定评测 JSON 目录路径")
     parser.add_argument("--output-json", type=str, default="work/h1b_gates_report.json", help="输出汇总 JSON 路径")
     args = parser.parse_args()
 
-    res = run_verify(db_path=args.db_path, output_json=args.output_json)
+    res = run_verify(
+        db_path=args.db_path,
+        output_json=args.output_json,
+        input_file=args.input_file,
+        input_dir=args.input_dir,
+    )
     # Exit code: 0 if valid execution
     sys.exit(0)

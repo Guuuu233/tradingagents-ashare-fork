@@ -16,7 +16,9 @@ from typing import Any, Mapping, Optional, Sequence
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
     PROTOCOL_VERSION_V1_LEGACY,
+    PROTOCOL_VERSION_V2_STRUCTURED,
     get_protocol_metadata,
+    is_v2_debate_enabled,
 )
 from tradingagents.agents.utils.debate_metrics import (
     SEVEN_REPORT_KEYS,
@@ -380,6 +382,156 @@ def calculate_shadow_credit_metrics(
     }
 
 
+def extract_report_industry(sample: Mapping[str, Any]) -> Optional[str]:
+    """Extract industry metadata if present in report without hardcoding or fabricating."""
+    if not isinstance(sample, Mapping):
+        return None
+
+    # 1. Direct top-level industry / sector
+    ind = sample.get("industry") or sample.get("sector")
+    if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+        return str(ind).strip()
+
+    # 2. Nested result_data if present
+    res_data = sample.get("result_data")
+    if isinstance(res_data, Mapping):
+        ind = res_data.get("industry") or res_data.get("sector")
+        if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+            return str(ind).strip()
+
+    # 3. instrument_context
+    inst = sample.get("instrument_context") or (res_data.get("instrument_context") if isinstance(res_data, Mapping) else None)
+    if isinstance(inst, Mapping):
+        ind = inst.get("industry") or inst.get("sector")
+        if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+            return str(ind).strip()
+
+    # 4. market_data_context.industry_linkage
+    mdc = sample.get("market_data_context") or (res_data.get("market_data_context") if isinstance(res_data, Mapping) else None)
+    if isinstance(mdc, Mapping):
+        il = mdc.get("industry_linkage")
+        if isinstance(il, Mapping):
+            ind = il.get("industry_name") or il.get("industry")
+            if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+                return str(ind).strip()
+
+    # 5. data_collection_provenance.industry_linkage_raw
+    prov = sample.get("data_collection_provenance") or (res_data.get("data_collection_provenance") if isinstance(res_data, Mapping) else None)
+    if isinstance(prov, Mapping):
+        il_raw = prov.get("industry_linkage_raw") or prov.get("industry_linkage")
+        if isinstance(il_raw, Mapping):
+            ind = il_raw.get("industry_name") or il_raw.get("industry")
+            if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+                return str(ind).strip()
+
+    # 6. quadrant_1_protocol_metadata
+    q1 = sample.get("quadrant_1_protocol_metadata") or (res_data.get("quadrant_1_protocol_metadata") if isinstance(res_data, Mapping) else None)
+    if isinstance(q1, Mapping):
+        ind = q1.get("industry")
+        if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+            return str(ind).strip()
+
+    return None
+
+
+def is_qualifying_v2_report(report: Mapping[str, Any]) -> bool:
+    """Return True if report is a completed v2 structured debate report with a valid v2 manager verdict winner.
+
+    Excludes:
+    - Non-completed reports (if status is present and != 'completed')
+    - Legacy v1 reports without v2 structured disagreement / without v2 manager_verdict.winner
+    - Reports without winner in manager_verdict
+    """
+    if not isinstance(report, Mapping):
+        return False
+
+    # 1. Status check: if status is specified, must be 'completed'
+    status = report.get("status")
+    if status is not None and str(status).strip().lower() != "completed":
+        return False
+
+    # Unpack nested result_data if present
+    res_data = report.get("result_data")
+    target = {**res_data, **report} if isinstance(res_data, Mapping) else report
+
+    inv_state = target.get("investment_debate_state")
+    if not isinstance(inv_state, Mapping):
+        inv_state = target
+
+    # 2. Protocol version check:
+    meta = get_protocol_metadata(target)
+    proto_ver = meta.get("protocol_version") or target.get("protocol_version") or inv_state.get("protocol_version")
+    is_v2 = (
+        proto_ver == PROTOCOL_VERSION_V2_STRUCTURED
+        or is_v2_debate_enabled(target)
+    )
+
+    # 3. Manager verdict & winner check:
+    verdict = (
+        target.get("manager_verdict")
+        or inv_state.get("manager_verdict")
+        or {}
+    )
+    if not isinstance(verdict, Mapping):
+        verdict = {}
+
+    raw_winner = verdict.get("winner") or target.get("debate_winner")
+    winner_str = str(raw_winner or "").strip().lower()
+    has_valid_winner = winner_str in ("bull", "bear", "tie")
+
+    if is_v2 and has_valid_winner:
+        return True
+    if has_valid_winner and (
+        bool(verdict.get("claim_evidence_summary"))
+        or verdict.get("consistency_check_passed") is not None
+        or bool(inv_state.get("claims"))
+    ):
+        return True
+
+    return False
+
+
+def normalize_report_for_evaluation(sample: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a raw report dictionary for gate evaluation."""
+    if not isinstance(sample, Mapping):
+        return {}
+
+    res_data = sample.get("result_data")
+    if isinstance(res_data, Mapping):
+        merged = {**res_data, **{k: v for k, v in sample.items() if v is not None}}
+    else:
+        merged = dict(sample)
+
+    ind = extract_report_industry(merged)
+    if ind:
+        merged["industry"] = ind
+
+    # Also normalize manager_verdict and investment_debate_state at top level if present
+    inv_state = merged.get("investment_debate_state")
+    if isinstance(inv_state, Mapping):
+        if not merged.get("manager_verdict") and inv_state.get("manager_verdict"):
+            merged["manager_verdict"] = inv_state["manager_verdict"]
+        if not merged.get("claims") and inv_state.get("claims"):
+            merged["claims"] = inv_state["claims"]
+
+    if not merged.get("shadow_credit_metrics") or not isinstance(merged.get("shadow_credit_metrics"), Mapping):
+        merged["shadow_credit_metrics"] = calculate_shadow_credit_metrics(merged)
+
+    return merged
+
+
+def filter_v2_completed_reports(
+    reports: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Filter and normalize reports, returning only qualifying completed v2 reports with a valid winner."""
+    qualifying: list[dict[str, Any]] = []
+    for r in reports:
+        if is_qualifying_v2_report(r):
+            normalized = normalize_report_for_evaluation(r)
+            qualifying.append(normalized)
+    return qualifying
+
+
 # ── 7-Dimension Gate Threshold Evaluation (P3-H1b) ───────────────────────────
 
 def evaluate_h1b_system_gates(
@@ -414,7 +566,7 @@ def evaluate_h1b_system_gates(
         sym = s.get("symbol") or s.get("ticker") or ""
         if sym:
             symbols.append(str(sym).strip())
-        ind = s.get("industry") or s.get("sector") or ""
+        ind = extract_report_industry(s) or s.get("industry") or s.get("sector") or ""
         if ind:
             industries.append(str(ind).strip())
 
@@ -451,10 +603,10 @@ def evaluate_h1b_system_gates(
     bear_verified_claims = 0
 
     for s in samples:
-        inv_state = s.get("investment_debate_state") or s
-        verdict = inv_state.get("manager_verdict") or s.get("manager_verdict") or {}
-        winner = str(verdict.get("winner") or "").lower()
-        direction = str(verdict.get("direction") or "").lower()
+        inv_state = s.get("investment_debate_state") or s.get("result_data", {}).get("investment_debate_state") or s
+        verdict = inv_state.get("manager_verdict") or s.get("manager_verdict") or s.get("result_data", {}).get("manager_verdict") or {}
+        winner = str(verdict.get("winner") or s.get("debate_winner") or "").lower()
+        direction = str(verdict.get("direction") or s.get("direction") or "").lower()
 
         if winner == "bull":
             bull_samples += 1
@@ -468,10 +620,15 @@ def evaluate_h1b_system_gates(
             # Neutral / Tie
             pass
 
-        claims = inv_state.get("claims") or s.get("claims") or []
+        claims = inv_state.get("claims") or s.get("claims") or s.get("result_data", {}).get("claims") or []
         claim_map = {str(c.get("claim_id", "")).strip(): c for c in claims if isinstance(c, Mapping)}
 
-        summary = inv_state.get("claim_evidence_summary") or {}
+        summary = (
+            verdict.get("claim_evidence_summary")
+            or inv_state.get("claim_evidence_summary")
+            or s.get("claim_evidence_summary")
+            or {}
+        )
         if summary:
             for cid_k, info in summary.items():
                 if not isinstance(info, Mapping):
@@ -552,7 +709,9 @@ def evaluate_h1b_system_gates(
     completed_t5_count = 0
 
     for s in samples:
-        metrics = s.get("shadow_credit_metrics") or {}
+        metrics = s.get("shadow_credit_metrics")
+        if not metrics or not isinstance(metrics, Mapping):
+            metrics = calculate_shadow_credit_metrics(s)
         hit = metrics.get("t_plus_5_direction_hit")
         st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status")
         # Exclude suspension from due denominator
@@ -618,7 +777,9 @@ def evaluate_h1b_system_gates(
     claims_text_pool: list[str] = []
 
     for s in samples:
-        metrics = s.get("shadow_credit_metrics") or {}
+        metrics = s.get("shadow_credit_metrics")
+        if not metrics or not isinstance(metrics, Mapping):
+            metrics = calculate_shadow_credit_metrics(s)
         if metrics.get("bull_verified_rate") is not None:
             bull_v_rates.append(float(metrics["bull_verified_rate"]))
         if metrics.get("bear_verified_rate") is not None:
@@ -630,8 +791,8 @@ def evaluate_h1b_system_gates(
         if metrics.get("manager_consistency_gate_triggered") is True:
             consistency_triggers += 1
 
-        inv_state = s.get("investment_debate_state") or s
-        for c in (inv_state.get("claims") or []):
+        inv_state = s.get("investment_debate_state") or s.get("result_data", {}).get("investment_debate_state") or s
+        for c in (inv_state.get("claims") or s.get("claims") or []):
             if isinstance(c, Mapping) and c.get("claim"):
                 claims_text_pool.append(str(c["claim"]).strip())
 
