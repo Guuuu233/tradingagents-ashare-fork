@@ -1,13 +1,13 @@
-"""Unit and integration tests for P2-T14: shadow and canary rollout guards (Task 14 / §7 / D-008 / D-009 / D-010).
+"""Unit and integration tests for P2-T14 & P2-T15b (Gate 4): shadow and canary rollout guards and legacy proxy removal.
 
-Verifies the four rollout mode boundaries:
-1. disabled: does NOT call provider or open archive DB; adapter uses legacy news/zt/hot with source_mode='legacy_proxy' and direction_allowed=False.
-2. shadow: collector queries archive and populates bundle; adapter human_content uses legacy format; direction_allowed=False; source_mode='legacy_proxy' (M6 fix).
+Verifies the rollout mode boundaries:
+1. disabled: does NOT call provider or open archive DB; returns not_applicable with source_mode='disabled' and direction_allowed=False, without news fallback.
+2. shadow: collector queries archive and populates bundle; adapter formats 4-section structured text with direction_allowed=False; source_mode='shadow'.
 3. active + canary whitelist:
    - Canary hit: allowed into active archive collection path.
    - Canary miss: falls back to non-active (status=not_applicable, mode=disabled, direction_allowed=False); provider never called; never silently active.
    - Canary empty: all valid A-share symbols allowed into active collection.
-4. active insufficient / empty / failed: adapter produces explicit gap notices without falling back to legacy news/zt/hot; direction_allowed=False; legacy_data=None.
+4. active insufficient / empty / failed: adapter produces explicit gap notices without falling back to news/zt/hot; direction_allowed=False.
 """
 
 from __future__ import annotations
@@ -224,35 +224,27 @@ def test_disabled_mode_collector_does_not_call_provider_or_touch_db():
     assert ctx["data_failure_ledger"] == []
 
 
-def test_disabled_mode_adapter_uses_legacy_proxy():
-    """Contract A: adapter in disabled mode returns legacy proxy text with source_mode='legacy_proxy'."""
+def test_disabled_mode_adapter_returns_not_applicable():
+    """Contract A: adapter in disabled mode returns 4-section not_applicable text with source_mode='disabled'."""
     resolved = resolve_social_analyst_inputs(
         mode="disabled",
-        legacy_data={
-            "news": "2026-08-26 贵州茅台发布半年报",
-            "zt_data": "涨停 35 家",
-            "hot_stocks": "雪球热搜第一：贵州茅台",
-        },
         ticker="600519",
         current_date="2026-08-26",
         ticker_display="600519 (贵州茅台)",
     )
 
     assert resolved.mode == "disabled"
-    assert resolved.source_mode == "legacy_proxy"
+    assert resolved.source_mode == "disabled"
+    assert resolved.source_status == "not_applicable"
     assert resolved.direction_allowed is False
-    assert resolved.legacy_data is not None
-    assert resolved.legacy_data["news"] == "2026-08-26 贵州茅台发布半年报"
-    assert "【get_news】" in resolved.human_content
-    assert "2026-08-26 贵州茅台发布半年报" in resolved.human_content
-    assert "【涨停池数据】" in resolved.human_content
-    assert "【雪球热门股票】" in resolved.human_content
-    # Must NOT format as active 4-section bundle
-    assert "【一、数据状态与数据源有效性】" not in resolved.human_content
+    assert "【get_news】" not in resolved.human_content
+    assert "【一、数据状态与数据源有效性】" in resolved.human_content
+    assert "社交归档状态：not_applicable" in resolved.human_content
+    assert "【社交方向不可判断】" in resolved.human_content
 
 
 def test_disabled_mode_end_to_end_analyst_trace():
-    """Contract A: analyst node in disabled mode records source_mode='legacy_proxy'."""
+    """Contract A: analyst node in disabled mode records source_mode='disabled'."""
     collector = DataCollector()
     collector._cache["600519_2026-08-26"] = {
         "news": "传统新闻数据",
@@ -272,16 +264,18 @@ def test_disabled_mode_end_to_end_analyst_trace():
     result = asyncio.run(node(state))
     assert "analyst_traces" in result
     trace = result["analyst_traces"][0]
-    assert trace["source_mode"] == "legacy_proxy"
+    assert trace["source_mode"] == "disabled"
+    assert trace["source_status"] == "not_applicable"
     assert trace["direction_allowed"] is False
 
     human_msg = [m for m in mock_llm.captured_messages if m.__class__.__name__ == "HumanMessage"][0]
-    assert "【get_news】" in human_msg.content
-    assert "传统新闻数据" in human_msg.content
+    assert "【get_news】" not in human_msg.content
+    assert "传统新闻数据" not in human_msg.content
+    assert "【一、数据状态与数据源有效性】" in human_msg.content
 
 
 # ============================================================================
-# 2. Contract B: shadow Mode Tests (Including M6 Audit Fix)
+# 2. Contract B: shadow Mode Tests (Gate 4 Contract)
 # ============================================================================
 
 def test_shadow_mode_collector_generates_bundle_with_direction_disallowed(populated_archive_db):
@@ -305,8 +299,8 @@ def test_shadow_mode_collector_generates_bundle_with_direction_disallowed(popula
     assert ctx["data_failure_ledger"] == []
 
 
-def test_shadow_mode_adapter_preserves_bundle_and_traces_legacy_proxy_m6():
-    """Contract B & M6: shadow mode adapter returns legacy proxy text and source_mode='legacy_proxy'."""
+def test_shadow_mode_adapter_preserves_bundle_and_traces_shadow():
+    """Contract B: shadow mode adapter returns structured bundle text and source_mode='shadow'."""
     bundle = _make_sample_bundle(symbol="688256.SH", as_of="2026-08-26", direction_allowed=True)
     social_data_context: SocialDataContext = {
         "status": "available",
@@ -322,35 +316,26 @@ def test_shadow_mode_adapter_preserves_bundle_and_traces_legacy_proxy_m6():
     resolved = resolve_social_analyst_inputs(
         mode="shadow",
         social_data_context=social_data_context,
-        legacy_data={
-            "news": "影子模式传统新闻",
-            "zt_data": "影子模式涨停池",
-            "hot_stocks": "影子模式热门榜",
-        },
         ticker="688256.SH",
         current_date="2026-08-26",
         ticker_display="688256.SH (寒武纪)",
     )
 
     assert resolved.mode == "shadow"
-    # M6 assertion: source_mode MUST be 'legacy_proxy' per plan §7
-    assert resolved.source_mode == "legacy_proxy", "M6 violation: shadow source_mode must be 'legacy_proxy'"
+    assert resolved.source_mode == "shadow"
     assert resolved.direction_allowed is False, "Bundle must not enter direction in shadow mode"
     assert resolved.bundle is not None
     assert resolved.bundle["symbol"] == "688256.SH"
     assert resolved.bundle_id == "sha256:rollout_test_bundle_hash"
 
-    # Human content MUST still be legacy format (get_news / 涨停池 / 雪球)
-    assert "【get_news】" in resolved.human_content
-    assert "影子模式传统新闻" in resolved.human_content
-    assert "【涨停池数据】" in resolved.human_content
-    assert "【雪球热门股票】" in resolved.human_content
-    # Must NOT format as active 4-section bundle as primary text
-    assert "【一、数据状态与数据源有效性】" not in resolved.human_content
+    # Human content in Gate 4 shadow mode uses structured 4 sections with direction_allowed=False
+    assert "【get_news】" not in resolved.human_content
+    assert "【一、数据状态与数据源有效性】" in resolved.human_content
+    assert "允许方向推断 (direction_allowed)：否 (False)" in resolved.human_content
 
 
 def test_shadow_mode_end_to_end_analyst_trace_and_message():
-    """Contract B: analyst node in shadow mode records source_mode='legacy_proxy' and direction_allowed=False."""
+    """Contract B: analyst node in shadow mode records source_mode='shadow' and direction_allowed=False."""
     bundle = _make_sample_bundle(symbol="688256.SH", as_of="2026-08-26")
     social_data_context: SocialDataContext = {
         "status": "available",
@@ -383,14 +368,15 @@ def test_shadow_mode_end_to_end_analyst_trace_and_message():
 
     result = asyncio.run(node(state))
     trace = result["analyst_traces"][0]
-    # M6 check
-    assert trace["source_mode"] == "legacy_proxy"
+    assert trace["source_mode"] == "shadow"
     assert trace["direction_allowed"] is False
     assert trace["bundle_id"] == "sha256:rollout_test_bundle_hash"
 
     human_msg = [m for m in mock_llm.captured_messages if m.__class__.__name__ == "HumanMessage"][0]
-    assert "【get_news】" in human_msg.content
-    assert "影子传统新闻" in human_msg.content
+    assert "【get_news】" not in human_msg.content
+    assert "影子传统新闻" not in human_msg.content
+    assert "【一、数据状态与数据源有效性】" in human_msg.content
+    assert "允许方向推断 (direction_allowed)：否 (False)" in human_msg.content
 
 
 # ============================================================================
@@ -493,11 +479,6 @@ def test_active_mode_non_available_adapter_has_no_legacy_fallback(status, reason
     resolved = resolve_social_analyst_inputs(
         mode="active",
         social_data_context=social_data_context,
-        legacy_data={
-            "news": "【绝密新闻】禁止在 active 模式泄露！",
-            "zt_data": "【绝密涨停】禁止泄露！",
-            "hot_stocks": "【绝密热搜】禁止泄露！",
-        },
         pool={
             "news": "【Pool新闻】禁止泄露！",
             "zt_pool": "【Pool涨停】禁止泄露！",
@@ -515,7 +496,6 @@ def test_active_mode_non_available_adapter_has_no_legacy_fallback(status, reason
     assert resolved.mode == "active"
     assert resolved.source_mode == "active"
     assert resolved.direction_allowed is False
-    assert resolved.legacy_data is None, "legacy_data must be None in active mode"
 
     # Human content MUST contain structured 4 sections and explicit gap notice
     assert "【一、数据状态与数据源有效性】" in resolved.human_content
@@ -524,7 +504,6 @@ def test_active_mode_non_available_adapter_has_no_legacy_fallback(status, reason
 
     # Strict isolation: NO legacy news / pool news / 【get_news】 block
     assert "【get_news】" not in resolved.human_content
-    assert "【绝密新闻】" not in resolved.human_content
     assert "【Pool新闻】" not in resolved.human_content
 
 
@@ -569,3 +548,28 @@ def test_active_mode_end_to_end_empty_bundle_has_no_legacy_news():
     assert "【社交方向不可判断】" in human_msg.content
     assert "新闻数据（ACTIVE 禁止读取）" not in human_msg.content
     assert "【get_news】" not in human_msg.content
+
+
+def test_gate4_matrix_t_h4_legacy_symbols_deleted_and_disabled_is_not_applicable():
+    """Matrix T-H4: Gate 4 verification - legacy symbols deleted and disabled=not_applicable."""
+    import inspect
+    import tradingagents.dataflows.social.analyst_adapter as adapter_module
+    from tradingagents.dataflows.social.analyst_adapter import (
+        ResolvedSocialInputs,
+        resolve_social_analyst_inputs,
+    )
+
+    # 1. Verify legacy_proxy does NOT appear in ResolvedSocialInputs field annotations or defaults
+    resolved = resolve_social_analyst_inputs(mode="disabled", ticker="600519", current_date="2026-08-26")
+    assert resolved.source_mode != "legacy_proxy"
+    assert resolved.source_status == "not_applicable"
+    assert resolved.direction_allowed is False
+
+    # 2. Verify adapter module source code has 0 occurrences of 'legacy_proxy'
+    adapter_src = inspect.getsource(adapter_module)
+    assert "legacy_proxy" not in adapter_src, "T-H4 violation: legacy_proxy symbol still exists in analyst_adapter"
+
+    # 3. Disabled mode does not contain news sentinel or fallback
+    assert "【get_news】" not in resolved.human_content
+    assert "【社交方向不可判断】" in resolved.human_content
+

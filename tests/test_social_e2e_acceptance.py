@@ -20,7 +20,7 @@ Hard Acceptance Invariants (P2-T15a):
 4. Disabled Safety:
    - Default TA_SOCIAL_MODE remains 'disabled'.
    - Disabled mode does NOT touch or open archive DB (even if archive_db path is invalid).
-   - Adapter continues using legacy_proxy with direction_allowed=False and legacy news/zt/hot formatting (Gate 4 / T15b legacy code is NOT deleted in this card).
+   - In Gate 4, disabled mode returns not_applicable without news fallback.
 """
 
 from __future__ import annotations
@@ -679,7 +679,6 @@ def test_synthetic_e2e_full_pipeline_active_mode(tmp_path, dual_platform_mediacr
     resolved = resolve_social_analyst_inputs(
         mode="active",
         social_data_context=social_context,
-        legacy_data={"news": "传统新闻", "zt_data": "涨停数据", "hot_stocks": "热搜数据"},
         market_attention={
             "zt_pool": {"status": "available", "as_of": "2026-08-26", "raw": "涨停池数据"},
             "hot_stocks": {"status": "available", "as_of": "2026-08-26", "raw": "雪球榜首"},
@@ -692,7 +691,6 @@ def test_synthetic_e2e_full_pipeline_active_mode(tmp_path, dual_platform_mediacr
     assert resolved.mode == "active"
     assert resolved.source_mode == "active"
     assert resolved.direction_allowed is True
-    assert resolved.legacy_data is None
 
     # Formats active 4-section content
     assert "【一、数据状态与数据源有效性】" in resolved.human_content
@@ -734,12 +732,12 @@ def test_synthetic_e2e_full_pipeline_active_mode(tmp_path, dual_platform_mediacr
 
 
 def test_synthetic_e2e_full_pipeline_shadow_mode(tmp_path, dual_platform_mediacrawler_db):
-    """Requirement C: Full pipeline run with dual-platform fixture in shadow mode.
+    """Requirement C: Full pipeline run with dual-platform fixture in shadow mode (Gate 4).
 
     Asserts:
     1. Collector queries archive and produces bundle, but direction_allowed is strictly False.
-    2. Adapter uses legacy_proxy text formatting and records source_mode='legacy_proxy'.
-    3. Analyst trace preserves bundle_id while source_mode='legacy_proxy' and direction_allowed=False.
+    2. Adapter uses 4-section structured text formatting and records source_mode='shadow'.
+    3. Analyst trace preserves bundle_id while source_mode='shadow' and direction_allowed=False.
     """
     archive_db_path = str(tmp_path / "synthetic_shadow_archive.db")
     resolver = EntityResolver()
@@ -769,23 +767,19 @@ def test_synthetic_e2e_full_pipeline_shadow_mode(tmp_path, dual_platform_mediacr
     resolved = resolve_social_analyst_inputs(
         mode="shadow",
         social_data_context=social_context,
-        legacy_data={
-            "news": "影子传统新闻",
-            "zt_data": "影子涨停池",
-            "hot_stocks": "影子热搜",
-        },
         ticker="688256.SH",
         current_date="2026-08-26",
         ticker_display="688256.SH (寒武纪)",
     )
 
     assert resolved.mode == "shadow"
-    assert resolved.source_mode == "legacy_proxy"
+    assert resolved.source_mode == "shadow"
     assert resolved.direction_allowed is False
     assert resolved.bundle is not None
-    assert "【get_news】" in resolved.human_content
-    assert "影子传统新闻" in resolved.human_content
-    assert "【一、数据状态与数据源有效性】" not in resolved.human_content
+    assert "【get_news】" not in resolved.human_content
+    assert "影子传统新闻" not in resolved.human_content
+    assert "【一、数据状态与数据源有效性】" in resolved.human_content
+    assert "允许方向推断 (direction_allowed)：否 (False)" in resolved.human_content
 
     # Analyst execution in shadow mode
     mock_llm = CaptureLLM()
@@ -807,7 +801,7 @@ def test_synthetic_e2e_full_pipeline_shadow_mode(tmp_path, dual_platform_mediacr
 
     result = asyncio.run(node(state))
     trace = result["analyst_traces"][0]
-    assert trace["source_mode"] == "legacy_proxy"
+    assert trace["source_mode"] == "shadow"
     assert trace["direction_allowed"] is False
     assert trace["bundle_id"] == social_context["bundle"]["bundle_id"]
 
@@ -961,12 +955,12 @@ def test_synthetic_e2e_data_sanitization_no_cookies_no_tokens(tmp_path):
 # ============================================================================
 
 def test_disabled_mode_zero_archive_touch_and_legacy_behavior():
-    """Requirement D: Disabled mode must never touch archive DB, keeping legacy proxy intact.
+    """Requirement D: Disabled mode must never touch archive DB, returning not_applicable (Gate 4).
 
     Asserts:
     1. When mode='disabled', provider is never called and archive DB is never opened.
     2. Even an invalid/missing archive DB path causes NO error in disabled mode.
-    3. Adapter outputs legacy proxy format with source_mode='legacy_proxy' and direction_allowed=False.
+    3. Adapter outputs 4-section not_applicable format with source_mode='disabled' and direction_allowed=False, without news fallback.
     """
     fake_nonexistent_db = "/tmp/strictly_nonexistent_fake_path_12345.db"
 
@@ -986,23 +980,19 @@ def test_disabled_mode_zero_archive_touch_and_legacy_behavior():
     # Adapter output in disabled mode
     resolved = resolve_social_analyst_inputs(
         mode="disabled",
-        legacy_data={
-            "news": "2026-08-26 贵州茅台发布半年报",
-            "zt_data": "涨停 35 家",
-            "hot_stocks": "雪球热搜第一：贵州茅台",
-        },
         ticker="600519",
         current_date="2026-08-26",
         ticker_display="600519 (贵州茅台)",
     )
 
     assert resolved.mode == "disabled"
-    assert resolved.source_mode == "legacy_proxy"
+    assert resolved.source_mode == "disabled"
+    assert resolved.source_status == "not_applicable"
     assert resolved.direction_allowed is False
-    assert resolved.legacy_data is not None
-    assert "【get_news】" in resolved.human_content
-    assert "2026-08-26 贵州茅台发布半年报" in resolved.human_content
-    assert "【一、数据状态与数据源有效性】" not in resolved.human_content
+    assert "【get_news】" not in resolved.human_content
+    assert "【一、数据状态与数据源有效性】" in resolved.human_content
+    assert "社交归档状态：not_applicable" in resolved.human_content
+    assert "【社交方向不可判断】" in resolved.human_content
 
 
 def test_disabled_mode_default_env_and_config_safety(monkeypatch):
@@ -1010,7 +1000,7 @@ def test_disabled_mode_default_env_and_config_safety(monkeypatch):
 
     Asserts:
     1. Unset, empty, or unrecognized TA_SOCIAL_MODE defaults safely to 'disabled'.
-    2. System operates in legacy mode with zero risk to production.
+    2. System operates in safe disabled mode with zero risk to production.
     """
     monkeypatch.delenv("TA_SOCIAL_MODE", raising=False)
     assert resolve_social_mode(None) == "disabled"

@@ -64,63 +64,34 @@ def create_social_media_analyst(llm, data_collector=None):
             config=config,
         )
 
-        legacy_data = None
         market_attention_fallback = None
 
-        if mode in ("disabled", "shadow"):
-            if pool is not None:
-                legacy_data = {
-                    "news": pool.get("news", "无数据"),
-                    "zt_data": pool.get("zt_pool", "无数据"),
-                    "hot_stocks": pool.get("hot_stocks", "无数据"),
-                }
-            else:
-                from datetime import datetime, timedelta
-                from tradingagents.agents.utils.agent_utils import get_news, get_zt_pool, get_hot_stocks_xq
-                days = 7
-                end_dt = datetime.strptime(current_date, "%Y-%m-%d")
-                start_dt = end_dt - timedelta(days=days)
+        # Check if market_attention is present in context/pool
+        has_market_attention = False
+        if market_data_context and isinstance(market_data_context, dict) and "market_attention" in market_data_context:
+            has_market_attention = True
+        elif pool and isinstance(pool, dict) and (
+            "market_attention" in pool
+            or ("market_data_context" in pool and isinstance(pool["market_data_context"], dict) and "market_attention" in pool["market_data_context"])
+        ):
+            has_market_attention = True
 
-                results = await asyncio.gather(
-                    _safe(get_news, {
-                        "ticker": ticker, "start_date": start_dt.strftime("%Y-%m-%d"), "end_date": current_date,
-                    }),
-                    _safe(get_zt_pool, {"date": current_date}),
-                    _safe(get_hot_stocks_xq, {"curr_date": current_date}),
-                )
-                legacy_data = {
-                    "news": results[0],
-                    "zt_data": results[1],
-                    "hot_stocks": results[2],
-                }
-        else:
-            # Active mode: check if market_attention is present in context/pool
-            has_market_attention = False
-            if market_data_context and isinstance(market_data_context, dict) and "market_attention" in market_data_context:
-                has_market_attention = True
-            elif pool and isinstance(pool, dict) and (
-                "market_attention" in pool
-                or ("market_data_context" in pool and isinstance(pool["market_data_context"], dict) and "market_attention" in pool["market_data_context"])
-            ):
-                has_market_attention = True
-
-            if not has_market_attention and pool is None:
-                from tradingagents.agents.utils.agent_utils import get_zt_pool, get_hot_stocks_xq
-                zt_res, hot_res = await asyncio.gather(
-                    _safe(get_zt_pool, {"date": current_date}),
-                    _safe(get_hot_stocks_xq, {"curr_date": current_date}),
-                )
-                market_attention_fallback = {
-                    "zt_pool": {"status": "available", "as_of": current_date, "requested_as_of": current_date, "raw": zt_res},
-                    "hot_stocks": {"status": "available", "as_of": current_date, "requested_as_of": current_date, "raw": hot_res},
-                }
+        if not has_market_attention and pool is None:
+            from tradingagents.agents.utils.agent_utils import get_zt_pool, get_hot_stocks_xq
+            zt_res, hot_res = await asyncio.gather(
+                _safe(get_zt_pool, {"date": current_date}),
+                _safe(get_hot_stocks_xq, {"curr_date": current_date}),
+            )
+            market_attention_fallback = {
+                "zt_pool": {"status": "available", "as_of": current_date, "requested_as_of": current_date, "raw": zt_res},
+                "hot_stocks": {"status": "available", "as_of": current_date, "requested_as_of": current_date, "raw": hot_res},
+            }
 
         resolved = resolve_social_analyst_inputs(
             mode=mode,
             social_data_context=social_data_context,
             market_data_context=market_data_context,
             pool=pool,
-            legacy_data=legacy_data,
             market_attention=market_attention_fallback,
             ticker=ticker,
             current_date=current_date,

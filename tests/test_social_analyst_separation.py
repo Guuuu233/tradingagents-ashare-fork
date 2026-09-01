@@ -1,10 +1,10 @@
-"""Unit and integration tests for Task 11: social analyst input separation and adapter.
+"""Unit and integration tests for Task 11 & Task 15 (Gate 4): social analyst input separation and adapter.
 
 Verifies:
 1. Fake LLM captures messages; NEWS and SOCIAL sentinels do not leak into each other.
 2. Active mode ONLY consumes social_data_context + market_attention; no 【get_news】 and no get_news tool calls.
-3. Disabled mode uses legacy_proxy without using bundle for direction.
-4. Shadow mode retains bundle while keeping legacy text inputs.
+3. Disabled mode returns not_applicable without news fallback (Gate 4 contract).
+4. Shadow mode retains bundle while using 4-section structured text with direction_allowed=False.
 5. Missing/insufficient data formats explicit gap notice with direction_allowed=False.
 6. Adapter resolution and prompt formatter 4-section structure and anti-hallucination guardrails.
 """
@@ -323,12 +323,12 @@ def test_social_analyst_active_mode_missing_bundle_fails_closed():
 
 
 # ============================================================================
-# 3. Disabled & Shadow Mode Tests
+# 3. Disabled & Shadow Mode Tests (Gate 4 Contract)
 # ============================================================================
 
 
-def test_social_analyst_disabled_mode_uses_legacy_proxy():
-    """Disabled mode returns legacy news/zt/hot and traces source_mode='legacy_proxy'."""
+def test_social_analyst_disabled_mode_returns_not_applicable_without_news_fallback():
+    """Disabled mode returns not_applicable, no news fallback, and traces source_mode='disabled'."""
     collector = DataCollector()
     collector._cache["600519_2026-08-26"] = {
         "news": "2026-08-26 贵州茅台发布半年报公告",
@@ -347,18 +347,22 @@ def test_social_analyst_disabled_mode_uses_legacy_proxy():
 
     result = asyncio.run(node(state))
     trace = result["analyst_traces"][0]
-    assert trace["source_mode"] == "legacy_proxy"
+    assert trace["source_mode"] == "disabled"
+    assert trace["source_status"] == "not_applicable"
+    assert trace["direction_allowed"] is False
 
     human_msg = [m for m in mock_llm.captured_messages if m.__class__.__name__ == "HumanMessage"][0]
     content = human_msg.content
-    assert "【get_news】" in content
-    assert "2026-08-26 贵州茅台发布半年报公告" in content
-    assert "【涨停池数据】" in content
-    assert "【雪球热门股票】" in content
+    # Gate 4: No news / get_news fallback; 4 sections with not_applicable
+    assert "【get_news】" not in content
+    assert "2026-08-26 贵州茅台发布半年报公告" not in content
+    assert "【一、数据状态与数据源有效性】" in content
+    assert "社交归档状态：not_applicable" in content
+    assert "【社交方向不可判断】" in content
 
 
 def test_social_analyst_shadow_mode_holds_bundle_without_directional_impact():
-    """Shadow mode holds bundle in metadata but uses legacy format and sets direction_allowed=False."""
+    """Shadow mode formats 4-section structured text with direction_allowed=False, tracing source_mode='shadow'."""
     bundle = _make_active_social_bundle(symbol="600519", as_of="2026-08-26")
     social_data_context: SocialDataContext = {
         "status": "available",
@@ -373,7 +377,7 @@ def test_social_analyst_shadow_mode_holds_bundle_without_directional_impact():
 
     collector = DataCollector()
     collector._cache["600519_2026-08-26"] = {
-        "news": "影子模式传统新闻",
+        "news": "影子模式传统新闻（禁止读取）",
         "zt_pool": "影子模式涨停池",
         "hot_stocks": "影子模式雪球榜",
         "social_data_context": social_data_context,
@@ -391,15 +395,17 @@ def test_social_analyst_shadow_mode_holds_bundle_without_directional_impact():
 
     result = asyncio.run(node(state))
     trace = result["analyst_traces"][0]
-    assert trace["source_mode"] == "legacy_proxy"
+    assert trace["source_mode"] == "shadow"
     assert trace["direction_allowed"] is False
     assert trace["bundle_id"] == "sha256:testbundle123456"
 
     human_msg = [m for m in mock_llm.captured_messages if m.__class__.__name__ == "HumanMessage"][0]
     content = human_msg.content
-    # In shadow mode, human message uses legacy proxy format
-    assert "【get_news】" in content
-    assert "影子模式传统新闻" in content
+    # In Gate 4 shadow mode, human message uses 4-section structured format with direction_allowed=False
+    assert "【get_news】" not in content
+    assert "影子模式传统新闻" not in content
+    assert "【一、数据状态与数据源有效性】" in content
+    assert "允许方向推断 (direction_allowed)：否 (False)" in content
 
 
 # ============================================================================

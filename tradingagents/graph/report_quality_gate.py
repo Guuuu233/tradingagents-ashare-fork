@@ -657,8 +657,8 @@ def evaluate_social_depth(
     """Evaluate depth and compliance of social media / sentiment report.
 
     Rules:
-    - In legacy proxy modes (disabled / shadow / not_applicable when not active):
-      Legacy sentiment report text is accepted without demanding social indeterminate markers.
+    - In disabled or shadow mode (or not_applicable when not active):
+      Sentiment report text is accepted with basic sentiment/market attention validity check.
     - In active mode when social data is insufficient, empty, failed, timeout, refused, or direction_allowed=False:
       Requires the report text to contain indeterminate / unavailable / missing markers ("不可判断", "数据不足", etc.).
       Does NOT force quantitative directional metrics (e.g. bullish/bearish score or probability).
@@ -691,9 +691,8 @@ def evaluate_social_depth(
             status = str(s_ctx.get("status", "not_applicable")).lower()
             direction_allowed = bool(s_ctx.get("direction_allowed", False))
 
-    # In disabled or shadow mode (or not_applicable when not active), legacy proxy runs
+    # In disabled or shadow mode (or not_applicable when not active): basic validity check
     if mode in ("disabled", "shadow") or (status == "not_applicable" and mode != "active"):
-        # Legacy sentiment report: basic validity check
         has_sentiment = bool(
             re.search(
                 r"(?:情绪|舆情|情绪面|市场情绪|关注度|热度|散户|观点|偏多|偏空|看多|看空|中性|分歧|乐观|悲观|恐慌|贪婪|新闻|数据)",
@@ -702,7 +701,7 @@ def evaluate_social_depth(
         )
         has_missing = _has_explicit_missing(t) or any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS)
         if not (has_sentiment or has_missing):
-            failed_dims.append("legacy_sentiment_content")
+            failed_dims.append("sentiment_content_missing")
             return False, 0.0, failed_dims, "sentiment报告正文缺少有效情绪分析或数据说明"
         return True, 1.0, [], ""
 
