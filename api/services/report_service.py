@@ -665,6 +665,75 @@ def _validate_fund_flow_evidence(result_data: Dict[str, Any]) -> None:
                     raise ValueError("fund_flow_evidence netamount and r0_net semantics cannot be collapsed")
 
 
+def ensure_report_industry_persisted(
+    result_data: Optional[Dict[str, Any]],
+    symbol: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Persist verified industry metadata into result_data existing slots without schema changes.
+
+    Priority:
+    1. Existing valid industry extracted via extract_report_industry(result_data)
+    2. Collector-side stock mapping via _map_stock_to_industry(target_symbol)
+
+    Target slot:
+    - instrument_context.industry (top-level and nested horizon slots)
+
+    Constraint:
+    - If unmapped or missing, do NOT fabricate or hardcode '未知行业' or default industry.
+      Clears any legacy '未知行业' to None / omits.
+    """
+    if not isinstance(result_data, dict):
+        return result_data
+
+    from tradingagents.agents.utils.shadow_credit import extract_report_industry
+    from tradingagents.graph.data_collector import _map_stock_to_industry
+    from tradingagents.agents.utils.context_utils import infer_instrument_context
+
+    # 1. Resolve target symbol
+    target_symbol = (
+        symbol
+        or result_data.get("symbol")
+        or result_data.get("company_of_interest")
+    )
+    if not target_symbol and isinstance(result_data.get("instrument_context"), dict):
+        target_symbol = result_data["instrument_context"].get("symbol")
+
+    # 2. Extract existing industry from result_data
+    existing_ind = extract_report_industry(result_data)
+    industry: Optional[str] = None
+    if existing_ind and str(existing_ind).strip() and str(existing_ind).strip() != "未知行业":
+        industry = str(existing_ind).strip()
+    elif target_symbol:
+        mapped = _map_stock_to_industry(target_symbol)
+        if mapped and str(mapped).strip() and str(mapped).strip() != "未知行业":
+            industry = str(mapped).strip()
+
+    # 3. If industry is identified, write to instrument_context.industry
+    if industry:
+        inst = result_data.get("instrument_context")
+        if isinstance(inst, dict):
+            inst["industry"] = industry
+        elif target_symbol:
+            inst_ctx = infer_instrument_context(target_symbol)
+            inst_ctx["industry"] = industry
+            result_data["instrument_context"] = inst_ctx
+        else:
+            result_data["instrument_context"] = {"industry": industry}
+    else:
+        # If no valid industry is found, clean any legacy "未知行业"
+        inst = result_data.get("instrument_context")
+        if isinstance(inst, dict) and inst.get("industry") == "未知行业":
+            inst["industry"] = None
+
+    # 4. Handle dual_horizon nested horizons if present
+    for nested_key in ("short_term", "medium_term"):
+        nested = result_data.get(nested_key)
+        if isinstance(nested, dict):
+            ensure_report_industry_persisted(nested, symbol=target_symbol)
+
+    return result_data
+
+
 def canonicalize_report_result_data(
     result_data: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
@@ -1031,6 +1100,12 @@ def update_report_partial(
     for key, value in canonical_fields.items():
         setattr(db_report, key, value)
 
+    # Track A7: Persist verified industry on completed reports
+    if db_report.status == "completed" and isinstance(db_report.result_data, dict):
+        ensure_report_industry_persisted(db_report.result_data, symbol=db_report.symbol)
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(db_report, "result_data")
+
     db_report.updated_at = datetime.now(timezone.utc)
     try:
         db.commit()
@@ -1166,6 +1241,8 @@ def create_report(
             canonical_result_data["target_price"] = resolved["target_price"]
         if resolved.get("stop_loss_price") is not None and "stop_loss_price" in canonical_result_data:
             canonical_result_data["stop_loss_price"] = resolved["stop_loss_price"]
+        # Track A7: Persist verified industry metadata into result_data existing slots (prioritizing instrument_context.industry)
+        ensure_report_industry_persisted(canonical_result_data, symbol=symbol)
         if not canonical_result_data.get("shadow_credit_metrics"):
             from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
             canonical_result_data["shadow_credit_metrics"] = calculate_shadow_credit_metrics(canonical_result_data)

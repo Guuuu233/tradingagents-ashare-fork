@@ -519,6 +519,14 @@ def extract_report_industry(sample: Mapping[str, Any]) -> Optional[str]:
         if ind and str(ind).strip() and str(ind).strip() != "未知行业":
             return str(ind).strip()
 
+    # 7. Nested dual-horizon sub-objects (short_term / medium_term)
+    for sub_key in ("short_term", "medium_term", "primary"):
+        sub = sample.get(sub_key) or (res_data.get(sub_key) if isinstance(res_data, Mapping) else None)
+        if isinstance(sub, Mapping):
+            sub_ind = extract_report_industry(sub)
+            if sub_ind and str(sub_ind).strip() and str(sub_ind).strip() != "未知行业":
+                return str(sub_ind).strip()
+
     return None
 
 

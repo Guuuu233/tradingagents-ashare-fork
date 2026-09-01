@@ -51,13 +51,14 @@ class TraceItem(TypedDict, total=False):
     evidence_refs: list[str]
 
 
-class InstrumentContext(TypedDict):
+class InstrumentContext(TypedDict, total=False):
     symbol: Annotated[str, "Normalized symbol"]
     security_name: Annotated[str, "Display name or fallback symbol"]
     market_country: Annotated[str, "Market country such as CN or US"]
     exchange: Annotated[str, "Exchange code"]
     currency: Annotated[str, "Trading currency"]
     asset_type: Annotated[str, "Asset type"]
+    industry: Annotated[Optional[str], "Normalized industry or sector name"]
 
 
 class MarketContext(TypedDict):

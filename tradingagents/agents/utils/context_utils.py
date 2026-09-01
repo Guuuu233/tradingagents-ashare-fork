@@ -70,11 +70,21 @@ def get_cn_stock_name(symbol: str) -> str:
 
 def infer_instrument_context(symbol: str) -> dict[str, Any]:
     normalized = (symbol or "").strip().upper()
+    industry = None
+    if normalized:
+        try:
+            from tradingagents.graph.data_collector import _map_stock_to_industry
+            ind_val = _map_stock_to_industry(normalized)
+            if ind_val and str(ind_val).strip() and str(ind_val).strip() != "未知行业":
+                industry = str(ind_val).strip()
+        except Exception:
+            industry = None
+
     if is_cn_symbol(normalized):
         exchange = _infer_cn_exchange(normalized)
         stock_name = get_cn_stock_name(normalized)
         security_title = f"{normalized} ({stock_name})" if stock_name and stock_name != normalized else normalized
-        return {
+        res = {
             "symbol": normalized,
             "security_name": security_title,
             "market_country": "CN",
@@ -82,10 +92,13 @@ def infer_instrument_context(symbol: str) -> dict[str, Any]:
             "currency": "CNY",
             "asset_type": "equity",
         }
+        if industry:
+            res["industry"] = industry
+        return res
 
     if re.fullmatch(r"[A-Z]{1,6}(?:\.[A-Z]{1,4})?", normalized):
         exchange = normalized.split(".", 1)[1] if "." in normalized else "US"
-        return {
+        res = {
             "symbol": normalized,
             "security_name": normalized,
             "market_country": "US",
@@ -93,8 +106,11 @@ def infer_instrument_context(symbol: str) -> dict[str, Any]:
             "currency": "USD",
             "asset_type": "equity",
         }
+        if industry:
+            res["industry"] = industry
+        return res
 
-    return {
+    res = {
         "symbol": normalized,
         "security_name": normalized,
         "market_country": "UNKNOWN",
@@ -102,6 +118,9 @@ def infer_instrument_context(symbol: str) -> dict[str, Any]:
         "currency": "UNKNOWN",
         "asset_type": "unknown",
     }
+    if industry:
+        res["industry"] = industry
+    return res
 
 
 def build_market_context(symbol: str, trade_date: str, now: datetime | None = None) -> dict[str, Any]:
@@ -202,16 +221,17 @@ def _coerce_numeric_user_value(value: Any) -> float | None:
 
 def summarize_instrument_context(context: Mapping[str, Any] | None) -> str:
     ctx = context or {}
-    return "\n".join(
-        [
-            f"标的代码：{ctx.get('symbol', '—')}",
-            f"证券名称：{ctx.get('security_name', '—')}",
-            f"市场归属：{ctx.get('market_country', '—')}",
-            f"交易所：{ctx.get('exchange', '—')}",
-            f"币种：{ctx.get('currency', '—')}",
-            f"资产类型：{ctx.get('asset_type', '—')}",
-        ]
-    )
+    lines = [
+        f"标的代码：{ctx.get('symbol', '—')}",
+        f"证券名称：{ctx.get('security_name', '—')}",
+        f"市场归属：{ctx.get('market_country', '—')}",
+        f"交易所：{ctx.get('exchange', '—')}",
+        f"币种：{ctx.get('currency', '—')}",
+        f"资产类型：{ctx.get('asset_type', '—')}",
+    ]
+    if ctx.get("industry"):
+        lines.append(f"所属行业：{ctx.get('industry')}")
+    return "\n".join(lines)
 
 
 def summarize_market_context(context: Mapping[str, Any] | None) -> str:
