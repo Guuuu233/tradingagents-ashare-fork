@@ -8,10 +8,22 @@ Pure function implementation for:
 """
 
 from collections import Counter
+import copy
+import csv
 from datetime import date, datetime
+import io
+import logging
 import math
 import re
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+
+from tradingagents.dataflows.trade_calendar import (
+    calculate_t_plus_5_date,
+    cn_market_phase,
+    now_cn,
+)
+
+logger = logging.getLogger(__name__)
 
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
@@ -301,23 +313,77 @@ def calculate_shadow_credit_metrics(
 
     # ── 6. T+5 Direction Hit ──────────────────────────────────────────────────
     t_plus_5_direction_hit: Optional[bool] = None
+
+    # Resolve t_plus_5_price if not explicitly passed
+    if t_plus_5_price is None:
+        raw_p = (
+            result_data_or_state.get("t_plus_5_price")
+            or inv_state.get("t_plus_5_price")
+            or (
+                result_data_or_state.get("shadow_credit_metrics", {}).get("t_plus_5_price")
+                if isinstance(result_data_or_state.get("shadow_credit_metrics"), Mapping)
+                else None
+            )
+        )
+        if raw_p is not None:
+            try:
+                t_plus_5_price = float(raw_p)
+            except (ValueError, TypeError):
+                t_plus_5_price = None
+
     if t_plus_5_price is not None and isinstance(t_plus_5_price, (int, float)):
         entry_val = None
-        raw_entry = manager_verdict.get("entry") or result_data_or_state.get("target_price")
+        raw_entry = (
+            manager_verdict.get("entry")
+            or result_data_or_state.get("entry_price")
+            or result_data_or_state.get("target_price")
+            or inv_state.get("entry_price")
+            or inv_state.get("target_price")
+        )
         if raw_entry:
             try:
                 entry_val = float(str(raw_entry).split("-")[0].replace("元", "").strip())
             except (ValueError, TypeError):
                 entry_val = None
-        direction_str = str(manager_verdict.get("direction") or result_data_or_state.get("decision") or "").upper()
+
+        winner = str(
+            manager_verdict.get("winner")
+            or result_data_or_state.get("debate_winner")
+            or inv_state.get("manager_verdict", {}).get("winner")
+            or ""
+        ).strip().lower()
+        direction_str = str(
+            manager_verdict.get("direction")
+            or result_data_or_state.get("decision")
+            or inv_state.get("manager_verdict", {}).get("direction")
+            or ""
+        ).upper()
+
         if entry_val is not None and entry_val > 0:
             price_change = t_plus_5_price - entry_val
-            if any(w in direction_str for w in ("BUY", "BULLISH", "多", "买入", "增持")):
+            if winner == "bull":
+                t_plus_5_direction_hit = bool(price_change > 0)
+            elif winner == "bear":
+                t_plus_5_direction_hit = bool(price_change < 0)
+            elif winner == "tie":
+                t_plus_5_direction_hit = bool(abs(price_change / entry_val) <= 0.03)
+            elif any(w in direction_str for w in ("BUY", "BULLISH", "多", "买入", "增持")):
                 t_plus_5_direction_hit = bool(price_change > 0)
             elif any(w in direction_str for w in ("SELL", "BEARISH", "空", "卖出", "减持")):
                 t_plus_5_direction_hit = bool(price_change < 0)
             elif any(w in direction_str for w in ("HOLD", "NEUTRAL", "中性", "观望", "持有")):
                 t_plus_5_direction_hit = bool(abs(price_change / entry_val) <= 0.03)
+    else:
+        existing_hit = (
+            result_data_or_state.get("t_plus_5_direction_hit")
+            or (
+                result_data_or_state.get("shadow_credit_metrics", {}).get("t_plus_5_direction_hit")
+                if isinstance(result_data_or_state.get("shadow_credit_metrics"), Mapping)
+                else None
+            )
+        )
+        if isinstance(existing_hit, bool):
+            t_plus_5_direction_hit = existing_hit
 
     # ── 7. Model ID x Stance ──────────────────────────────────────────────────
     bull_model: Optional[str] = None
@@ -365,6 +431,25 @@ def calculate_shadow_credit_metrics(
         "manager": manager_model if (manager_model and manager_model != "unknown") else None,
     }
 
+    t_plus_5_status = (
+        result_data_or_state.get("t_plus_5_status")
+        or inv_state.get("t_plus_5_status")
+        or (
+            result_data_or_state.get("shadow_credit_metrics", {}).get("t_plus_5_status")
+            if isinstance(result_data_or_state.get("shadow_credit_metrics"), Mapping)
+            else None
+        )
+    )
+    t_plus_5_date = (
+        result_data_or_state.get("t_plus_5_date")
+        or inv_state.get("t_plus_5_date")
+        or (
+            result_data_or_state.get("shadow_credit_metrics", {}).get("t_plus_5_date")
+            if isinstance(result_data_or_state.get("shadow_credit_metrics"), Mapping)
+            else None
+        )
+    )
+
     return {
         "schema_version": SCHEMA_VERSION,
         "credit_weighting_enabled": credit_weighting_flag,
@@ -376,6 +461,9 @@ def calculate_shadow_credit_metrics(
         "manager_evidence_coverage": manager_evidence_coverage,
         "manager_consistency_gate_triggered": manager_consistency_gate_triggered,
         "t_plus_5_direction_hit": t_plus_5_direction_hit,
+        "t_plus_5_status": t_plus_5_status,
+        "t_plus_5_date": t_plus_5_date,
+        "t_plus_5_price": t_plus_5_price,
         "sample_count": 1,
         "protocol_version": protocol_version,
         "model_id_by_stance": model_id_by_stance,
@@ -1152,3 +1240,475 @@ def apply_credit_weighting_to_debate(
         "shadow_credit_metrics": shadow_metrics,
         "system_gate_status": "PASS" if system_gate_passed else "FAIL",
     }
+
+
+# ── T+5 Shadow Backfill Module (Track A5) ───────────────────────────────────
+
+def fetch_close_prices_safe(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> dict[str, float]:
+    """Fetch close prices from market data vendor safely, returning date_str -> close_price mapping."""
+    if not symbol or not start_date or not end_date:
+        return {}
+    try:
+        from tradingagents.dataflows.interface import route_to_vendor
+        raw_csv = route_to_vendor("get_stock_data", symbol, start_date, end_date)
+        if not raw_csv or not isinstance(raw_csv, str):
+            return {}
+        clean_lines = [
+            line for line in raw_csv.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if not clean_lines:
+            return {}
+        reader = csv.DictReader(io.StringIO("\n".join(clean_lines)))
+        prices: dict[str, float] = {}
+        for row in reader:
+            cols_lower = {k.lower().strip(): v for k, v in row.items() if k}
+            d_val = cols_lower.get("date") or cols_lower.get("trade_date")
+            c_val = cols_lower.get("close") or cols_lower.get("close_price")
+            if d_val and c_val:
+                try:
+                    d_clean = str(d_val)[:10]
+                    prices[d_clean] = float(c_val)
+                except (ValueError, TypeError):
+                    pass
+        return prices
+    except Exception as exc:
+        logger.debug("fetch_close_prices_safe failed for %s (%s -> %s): %s", symbol, start_date, end_date, exc)
+        return {}
+
+
+def backfill_tplus5_shadow_for_report(
+    report_or_result_data: Mapping[str, Any],
+    *,
+    as_of: Optional[Union[str, date, datetime]] = None,
+    price_series: Optional[Mapping[str, float]] = None,
+    get_price_fn: Optional[Any] = None,
+    trading_calendar: Optional[Sequence[Union[str, date]]] = None,
+    is_suspended: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Backfill T+5 shadow credit metrics for a single report.
+
+    Rules:
+    1. Strictly filter for qualifying completed v2 reports (is_qualifying_v2_report).
+       Non-qualifying reports are returned unmodified with status recorded.
+    2. Strict trading calendar T+5 forward (calculate_t_plus_5_date).
+       Hold window is strictly 5 trading days — forbidden to shorten.
+    3. Status classification:
+       - T+5 date not reached (eval_date > as_of): t_plus_5_status='pending_due', hit=None, is_t_plus_5_due=False, t_plus_5_evaluated=False.
+       - Suspended (is_suspended / suspension gap): t_plus_5_status='suspension', hit=None, is_suspended=True, is_t_plus_5_due=False.
+       - Market data missing (failed price fetch): t_plus_5_status='data_missing', hit=None, is_t_plus_5_due=True, t_plus_5_evaluated=True.
+       - Evaluated (price successfully parsed): t_plus_5_status='due_and_evaluated', is_t_plus_5_due=True, t_plus_5_evaluated=True.
+    4. Hit determination uses manager_verdict.winner:
+       - 'bull': price_change > 0
+       - 'bear': price_change < 0
+       - 'tie': abs(price_change / entry_val) <= 0.03
+    5. Pure & idempotent: preserves all existing fields in result_data.
+    """
+    if not isinstance(report_or_result_data, Mapping):
+        return {}
+
+    res = copy.deepcopy(dict(report_or_result_data))
+
+    # 1. Qualification check
+    if not is_qualifying_v2_report(res):
+        res["_backfill_status"] = "skipped_non_qualifying"
+        return res
+
+    # Identify target dictionary (nested result_data if present, else res)
+    has_nested_result_data = "result_data" in res and isinstance(res["result_data"], Mapping)
+    target = dict(res["result_data"]) if has_nested_result_data else res
+
+    inv_state = target.get("investment_debate_state")
+    if not isinstance(inv_state, Mapping):
+        inv_state = target
+
+    # Extract symbol and trade date
+    symbol = (
+        target.get("symbol")
+        or target.get("ticker")
+        or res.get("symbol")
+        or res.get("ticker")
+        or ""
+    )
+    symbol = str(symbol).strip()
+
+    raw_date = target.get("trade_date") or target.get("date") or res.get("trade_date") or res.get("date") or res.get("created_at")
+    parsed_d = _parse_sample_date(raw_date)
+    trade_date_str = parsed_d.strftime("%Y-%m-%d") if parsed_d else (str(raw_date)[:10] if raw_date else None)
+
+    # 2. Strict T+5 Date Calculation
+    t5_date: Optional[str] = None
+    if trade_date_str:
+        try:
+            t5_date = calculate_t_plus_5_date(trade_date_str, calendar_dates=trading_calendar)
+        except Exception as exc:
+            logger.debug("calculate_t_plus_5_date failed for %s: %s", trade_date_str, exc)
+            t5_date = None
+
+    if not trade_date_str or not t5_date:
+        t_plus_5_status = "data_missing"
+        is_t_plus_5_due = False
+        t_plus_5_evaluated = False
+        t_plus_5_direction_hit = None
+        t_plus_5_price = None
+        target["t_plus_5_status"] = t_plus_5_status
+        target["is_t_plus_5_due"] = is_t_plus_5_due
+        target["t_plus_5_evaluated"] = t_plus_5_evaluated
+        target["t_plus_5_direction_hit"] = t_plus_5_direction_hit
+        sm = calculate_shadow_credit_metrics(target)
+        target["shadow_credit_metrics"] = sm
+        if has_nested_result_data:
+            res["result_data"] = target
+            res["t_plus_5_status"] = t_plus_5_status
+            res["t_plus_5_price"] = None
+            res["t_plus_5_direction_hit"] = None
+            res["is_t_plus_5_due"] = is_t_plus_5_due
+            res["t_plus_5_evaluated"] = t_plus_5_evaluated
+            res["shadow_credit_metrics"] = sm
+        res["_backfill_status"] = "missing_date"
+        return res
+
+    # 3. As-of Boundary Check
+    if as_of is None:
+        as_of_str = now_cn().date().strftime("%Y-%m-%d")
+        is_live_today = (t5_date == as_of_str)
+    elif isinstance(as_of, (date, datetime)):
+        as_of_str = as_of.strftime("%Y-%m-%d")
+        is_live_today = False
+    else:
+        as_of_str = str(as_of)[:10].strip()
+        is_live_today = False
+
+    if t5_date > as_of_str or (is_live_today and cn_market_phase() != "post_close"):
+        # T+5 window not yet arrived
+        t_plus_5_status = "pending_due"
+        is_t_plus_5_due = False
+        t_plus_5_evaluated = False
+        t_plus_5_direction_hit = None
+        t_plus_5_price = None
+
+        target["t_plus_5_date"] = t5_date
+        target["t_plus_5_price"] = None
+        target["t_plus_5_status"] = t_plus_5_status
+        target["is_t_plus_5_due"] = is_t_plus_5_due
+        target["t_plus_5_evaluated"] = t_plus_5_evaluated
+        target["t_plus_5_direction_hit"] = None
+        sm = calculate_shadow_credit_metrics(target)
+        target["shadow_credit_metrics"] = sm
+        if isinstance(target.get("investment_debate_state"), dict):
+            target["investment_debate_state"]["shadow_credit_metrics"] = sm
+            target["investment_debate_state"]["t_plus_5_date"] = t5_date
+            target["investment_debate_state"]["t_plus_5_status"] = t_plus_5_status
+            target["investment_debate_state"]["is_t_plus_5_due"] = is_t_plus_5_due
+            target["investment_debate_state"]["t_plus_5_evaluated"] = t_plus_5_evaluated
+            target["investment_debate_state"]["t_plus_5_direction_hit"] = None
+        if has_nested_result_data:
+            res["result_data"] = target
+            res["t_plus_5_date"] = t5_date
+            res["t_plus_5_price"] = None
+            res["t_plus_5_status"] = t_plus_5_status
+            res["is_t_plus_5_due"] = is_t_plus_5_due
+            res["t_plus_5_evaluated"] = t_plus_5_evaluated
+            res["t_plus_5_direction_hit"] = None
+            res["shadow_credit_metrics"] = sm
+        res["_backfill_status"] = "pending_due"
+        return res
+
+    # 4. Suspension Check
+    suspended = bool(
+        is_suspended
+        or target.get("is_suspended") is True
+        or target.get("suspension") is True
+        or target.get("t_plus_5_status") == "suspension"
+        or res.get("is_suspended") is True
+        or res.get("suspension") is True
+        or res.get("t_plus_5_status") == "suspension"
+    )
+
+    # Check raw_gaps for suspension mention if any
+    raw_gaps = target.get("data_gaps") or res.get("data_gaps") or []
+    if not suspended and isinstance(raw_gaps, list):
+        for g in raw_gaps:
+            g_str = str(g).lower()
+            if "suspension" in g_str or "停牌" in g_str:
+                suspended = True
+                break
+
+    if suspended:
+        t_plus_5_status = "suspension"
+        is_t_plus_5_due = False
+        t_plus_5_evaluated = False
+        t_plus_5_direction_hit = None
+        t_plus_5_price = None
+
+        target["t_plus_5_date"] = t5_date
+        target["t_plus_5_price"] = None
+        target["t_plus_5_status"] = t_plus_5_status
+        target["is_t_plus_5_due"] = False
+        target["t_plus_5_evaluated"] = False
+        target["t_plus_5_direction_hit"] = None
+        target["is_suspended"] = True
+        sm = calculate_shadow_credit_metrics(target)
+        target["shadow_credit_metrics"] = sm
+        if isinstance(target.get("investment_debate_state"), dict):
+            target["investment_debate_state"]["shadow_credit_metrics"] = sm
+            target["investment_debate_state"]["t_plus_5_date"] = t5_date
+            target["investment_debate_state"]["t_plus_5_status"] = t_plus_5_status
+            target["investment_debate_state"]["is_t_plus_5_due"] = False
+            target["investment_debate_state"]["t_plus_5_evaluated"] = False
+            target["investment_debate_state"]["t_plus_5_direction_hit"] = None
+            target["investment_debate_state"]["is_suspended"] = True
+        if has_nested_result_data:
+            res["result_data"] = target
+            res["t_plus_5_date"] = t5_date
+            res["t_plus_5_price"] = None
+            res["t_plus_5_status"] = t_plus_5_status
+            res["is_t_plus_5_due"] = False
+            res["t_plus_5_evaluated"] = False
+            res["t_plus_5_direction_hit"] = None
+            res["is_suspended"] = True
+            res["shadow_credit_metrics"] = sm
+        res["_backfill_status"] = "suspension"
+        return res
+
+    # 5. Price Resolution
+    manager_verdict = (
+        target.get("manager_verdict")
+        or inv_state.get("manager_verdict")
+        or res.get("manager_verdict")
+        or {}
+    )
+    if not isinstance(manager_verdict, Mapping):
+        manager_verdict = {}
+
+    entry_val: Optional[float] = None
+    raw_entry = (
+        manager_verdict.get("entry")
+        or target.get("entry_price")
+        or target.get("target_price")
+        or inv_state.get("entry_price")
+        or inv_state.get("target_price")
+        or res.get("entry_price")
+        or res.get("target_price")
+    )
+    if raw_entry:
+        try:
+            entry_val = float(str(raw_entry).split("-")[0].replace("元", "").strip())
+        except (ValueError, TypeError):
+            entry_val = None
+
+    t5_price_val: Optional[float] = None
+
+    # Check custom price_series or get_price_fn or pre-set t_plus_5_price
+    if price_series and isinstance(price_series, Mapping):
+        if t5_date in price_series:
+            try:
+                t5_price_val = float(price_series[t5_date])
+            except (ValueError, TypeError):
+                t5_price_val = None
+        if entry_val is None and trade_date_str in price_series:
+            try:
+                entry_val = float(price_series[trade_date_str])
+            except (ValueError, TypeError):
+                entry_val = None
+    elif get_price_fn and callable(get_price_fn):
+        try:
+            fn_res = get_price_fn(symbol, trade_date_str, t5_date)
+            if fn_res is not None:
+                t5_price_val = float(fn_res)
+        except Exception as exc:
+            logger.debug("get_price_fn failed for %s: %s", symbol, exc)
+    elif target.get("t_plus_5_price") is not None:
+        try:
+            t5_price_val = float(target["t_plus_5_price"])
+        except (ValueError, TypeError):
+            t5_price_val = None
+    elif res.get("t_plus_5_price") is not None:
+        try:
+            t5_price_val = float(res["t_plus_5_price"])
+        except (ValueError, TypeError):
+            t5_price_val = None
+    else:
+        # Try fetching from vendor
+        fetched = fetch_close_prices_safe(symbol, trade_date_str, t5_date)
+        if fetched:
+            if t5_date in fetched:
+                t5_price_val = fetched[t5_date]
+            if entry_val is None and trade_date_str in fetched:
+                entry_val = fetched[trade_date_str]
+
+    # 6. Evaluation based on winner
+    winner = str(
+        manager_verdict.get("winner")
+        or target.get("debate_winner")
+        or res.get("debate_winner")
+        or ""
+    ).strip().lower()
+
+    t_plus_5_return_pct: Optional[float] = None
+
+    if t5_price_val is None or entry_val is None or entry_val <= 0:
+        t_plus_5_status = "data_missing"
+        is_t_plus_5_due = True
+        t_plus_5_evaluated = True
+        t_plus_5_direction_hit = None
+        t_plus_5_price = None
+        backfill_status = "data_missing"
+    else:
+        price_change = t5_price_val - entry_val
+        t_plus_5_return_pct = round((price_change / entry_val) * 100.0, 2)
+        if winner == "bull":
+            t_plus_5_direction_hit = bool(price_change > 0)
+        elif winner == "bear":
+            t_plus_5_direction_hit = bool(price_change < 0)
+        elif winner == "tie":
+            t_plus_5_direction_hit = bool(abs(price_change / entry_val) <= 0.03)
+        else:
+            direction_str = str(
+                manager_verdict.get("direction")
+                or target.get("decision")
+                or res.get("decision")
+                or ""
+            ).upper()
+            if any(w in direction_str for w in ("BUY", "BULLISH", "多", "买入", "增持")):
+                t_plus_5_direction_hit = bool(price_change > 0)
+            elif any(w in direction_str for w in ("SELL", "BEARISH", "空", "卖出", "减持")):
+                t_plus_5_direction_hit = bool(price_change < 0)
+            elif any(w in direction_str for w in ("HOLD", "NEUTRAL", "中性", "观望", "持有")):
+                t_plus_5_direction_hit = bool(abs(price_change / entry_val) <= 0.03)
+            else:
+                t_plus_5_direction_hit = bool(price_change > 0)
+
+        t_plus_5_status = "due_and_evaluated"
+        is_t_plus_5_due = True
+        t_plus_5_evaluated = True
+        t_plus_5_price = round(t5_price_val, 4)
+        backfill_status = "hit" if t_plus_5_direction_hit else "miss"
+
+    target["t_plus_5_date"] = t5_date
+    target["t_plus_5_price"] = t_plus_5_price
+    target["t_plus_5_status"] = t_plus_5_status
+    target["is_t_plus_5_due"] = is_t_plus_5_due
+    target["t_plus_5_evaluated"] = t_plus_5_evaluated
+    target["t_plus_5_direction_hit"] = t_plus_5_direction_hit
+    if t_plus_5_return_pct is not None:
+        target["t_plus_5_return_pct"] = t_plus_5_return_pct
+
+    sm = calculate_shadow_credit_metrics(target, t_plus_5_price=t_plus_5_price)
+    sm["t_plus_5_status"] = t_plus_5_status
+    sm["t_plus_5_date"] = t5_date
+    sm["t_plus_5_price"] = t_plus_5_price
+    sm["t_plus_5_direction_hit"] = t_plus_5_direction_hit
+    target["shadow_credit_metrics"] = sm
+
+    if isinstance(target.get("investment_debate_state"), dict):
+        target["investment_debate_state"]["shadow_credit_metrics"] = sm
+        target["investment_debate_state"]["t_plus_5_date"] = t5_date
+        target["investment_debate_state"]["t_plus_5_price"] = t_plus_5_price
+        target["investment_debate_state"]["t_plus_5_status"] = t_plus_5_status
+        target["investment_debate_state"]["is_t_plus_5_due"] = is_t_plus_5_due
+        target["investment_debate_state"]["t_plus_5_evaluated"] = t_plus_5_evaluated
+        target["investment_debate_state"]["t_plus_5_direction_hit"] = t_plus_5_direction_hit
+        if t_plus_5_return_pct is not None:
+            target["investment_debate_state"]["t_plus_5_return_pct"] = t_plus_5_return_pct
+
+    if has_nested_result_data:
+        res["result_data"] = target
+        res["t_plus_5_date"] = t5_date
+        res["t_plus_5_price"] = t_plus_5_price
+        res["t_plus_5_status"] = t_plus_5_status
+        res["is_t_plus_5_due"] = is_t_plus_5_due
+        res["t_plus_5_evaluated"] = t_plus_5_evaluated
+        res["t_plus_5_direction_hit"] = t_plus_5_direction_hit
+        if t_plus_5_return_pct is not None:
+            res["t_plus_5_return_pct"] = t_plus_5_return_pct
+        res["shadow_credit_metrics"] = sm
+
+    res["_backfill_status"] = backfill_status
+    return res
+
+
+def backfill_tplus5_shadow_for_reports(
+    reports: Sequence[Mapping[str, Any]],
+    *,
+    as_of: Optional[Union[str, date, datetime]] = None,
+    price_series_map: Optional[Mapping[str, Mapping[str, float]]] = None,
+    get_price_fn: Optional[Any] = None,
+    trading_calendar: Optional[Sequence[Union[str, date]]] = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Batch backfill T+5 shadow credit metrics for a list of reports.
+
+    Returns:
+        (updated_reports, summary_stats)
+    """
+    updated_reports: list[dict[str, Any]] = []
+    prices_map = dict(price_series_map or {})
+
+    stats: dict[str, Any] = {
+        "total_scanned": len(reports),
+        "qualifying_v2_count": 0,
+        "skipped_non_qualifying": 0,
+        "due_count": 0,
+        "evaluated_count": 0,
+        "hit_count": 0,
+        "miss_count": 0,
+        "data_missing_count": 0,
+        "suspension_count": 0,
+        "pending_due_count": 0,
+        "completeness_rate": 0.0,
+        "hit_rate": None,
+    }
+
+    for r in reports:
+        if not is_qualifying_v2_report(r):
+            stats["skipped_non_qualifying"] += 1
+            updated_reports.append(dict(r))
+            continue
+
+        stats["qualifying_v2_count"] += 1
+        sym = r.get("symbol") or (r.get("result_data", {}).get("symbol") if isinstance(r.get("result_data"), Mapping) else "")
+        sym_clean = str(sym).strip()
+        series = prices_map.get(sym_clean) or prices_map.get(sym_clean.split(".")[0])
+
+        updated = backfill_tplus5_shadow_for_report(
+            r,
+            as_of=as_of,
+            price_series=series,
+            get_price_fn=get_price_fn,
+            trading_calendar=trading_calendar,
+        )
+        updated_reports.append(updated)
+
+        st = updated.get("t_plus_5_status") or (updated.get("result_data", {}).get("t_plus_5_status") if isinstance(updated.get("result_data"), Mapping) else None)
+        hit = updated.get("t_plus_5_direction_hit")
+        if hit is None and isinstance(updated.get("result_data"), Mapping):
+            hit = updated["result_data"].get("t_plus_5_direction_hit")
+
+        if st == "suspension":
+            stats["suspension_count"] += 1
+        elif st == "pending_due":
+            stats["pending_due_count"] += 1
+        elif st == "data_missing":
+            stats["due_count"] += 1
+            stats["data_missing_count"] += 1
+        elif st == "due_and_evaluated":
+            stats["due_count"] += 1
+            stats["evaluated_count"] += 1
+            if hit is True:
+                stats["hit_count"] += 1
+            elif hit is False:
+                stats["miss_count"] += 1
+
+    if stats["due_count"] > 0:
+        stats["completeness_rate"] = round(stats["evaluated_count"] / stats["due_count"], 4)
+    else:
+        stats["completeness_rate"] = 1.0 if stats["qualifying_v2_count"] >= 60 else 0.0
+
+    if stats["evaluated_count"] > 0:
+        stats["hit_rate"] = round(stats["hit_count"] / stats["evaluated_count"], 4)
+
+    return updated_reports, stats
