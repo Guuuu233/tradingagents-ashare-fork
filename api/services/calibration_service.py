@@ -246,6 +246,134 @@ def _normalize_symbol(raw: str) -> str:
     return s
 
 
+def _extract_report_probability(report: ReportDB) -> Optional[float]:
+    """Extract explicit numerical probability (0–1) from report DB column or result_data."""
+    if report.probability is not None:
+        try:
+            p = float(report.probability)
+            if 0.0 <= p <= 1.0:
+                return p
+        except (ValueError, TypeError):
+            pass
+    rd = report.result_data
+    if isinstance(rd, dict):
+        prob = rd.get("probability")
+        if prob is not None:
+            try:
+                p = float(prob)
+                if 0.0 <= p <= 1.0:
+                    return p
+            except (ValueError, TypeError):
+                pass
+        dec_st = rd.get("decision_status")
+        if isinstance(dec_st, dict):
+            prob = dec_st.get("probability")
+            if prob is not None:
+                try:
+                    p = float(prob)
+                    if 0.0 <= p <= 1.0:
+                        return p
+                except (ValueError, TypeError):
+                    pass
+    return None
+
+
+def _extract_report_winner(report: ReportDB) -> Optional[str]:
+    """Extract winner ('bull' or 'bear') from report."""
+    rd = report.result_data
+    if not isinstance(rd, dict):
+        return None
+
+    containers = [
+        rd,
+        rd.get("investment_debate_state"),
+        rd.get("short_term"),
+        rd.get("primary"),
+        rd.get("medium_term"),
+    ]
+    for c in containers:
+        if not isinstance(c, dict):
+            continue
+        w = c.get("winner") or c.get("debate_winner")
+        if w and str(w).strip().lower() in ("bull", "bear"):
+            return str(w).strip().lower()
+        mv = c.get("manager_verdict")
+        if isinstance(mv, dict):
+            w = mv.get("winner")
+            if w and str(w).strip().lower() in ("bull", "bear"):
+                return str(w).strip().lower()
+        inv = c.get("investment_debate_state")
+        if isinstance(inv, dict):
+            mv2 = inv.get("manager_verdict")
+            if isinstance(mv2, dict):
+                w = mv2.get("winner")
+                if w and str(w).strip().lower() in ("bull", "bear"):
+                    return str(w).strip().lower()
+            w = inv.get("winner") or inv.get("debate_winner")
+            if w and str(w).strip().lower() in ("bull", "bear"):
+                return str(w).strip().lower()
+    return None
+
+
+def _is_admissible_calibration_report(
+    report: ReportDB,
+) -> Tuple[bool, bool, Optional[float], Optional[str]]:
+    """Determine if report is eligible for calibration evaluation.
+
+    Returns:
+        (is_admissible, is_winner_only, probability, winner)
+
+    Two valid admission paths:
+    1. Probability Path:
+       - Explicit valid probability in [0, 1]
+       - Explicit VALID directional status (analysis_status == 'VALID', trade_action directional)
+    2. Winner-only Path:
+       - Completed status
+       - probability is None
+       - Qualifying v2 report (matching A6 is_qualifying_v2_report specification)
+       - winner in {'bull', 'bear'}
+       - Not explicitly marked INVALID/DATA_ERROR/ABSTAIN/PARTIAL or non-directional WAIT/NO_TRADE
+    """
+    from tradingagents.agents.utils.decision_status import (
+        NON_DIRECTIONAL_TRADE_ACTIONS,
+        NON_ELIGIBLE_ANALYSIS_STATUSES,
+        is_calibration_eligible,
+    )
+    from tradingagents.agents.utils.shadow_credit import is_qualifying_v2_report
+
+    if report.status != "completed":
+        return False, False, None, None
+
+    # Path 1: Explicit probability
+    prob = _extract_report_probability(report)
+    if prob is not None:
+        if is_calibration_eligible(report):
+            return True, False, prob, None
+
+    # Path 2: Winner-only v2 report
+    if report.analysis_status in NON_ELIGIBLE_ANALYSIS_STATUSES:
+        return False, False, None, None
+    if report.trade_action in NON_DIRECTIONAL_TRADE_ACTIONS:
+        return False, False, None, None
+
+    rd = report.result_data if isinstance(report.result_data, dict) else {}
+    sample_dict = {
+        "status": report.status,
+        "result_data": rd,
+        "analysis_status": report.analysis_status,
+        "trade_action": report.trade_action,
+        "probability": report.probability,
+    }
+    if not is_qualifying_v2_report(sample_dict):
+        return False, False, None, None
+
+    winner = _extract_report_winner(report)
+    if winner in ("bull", "bear"):
+        return True, True, None, winner
+
+    return False, False, None, None
+
+
 def _query_reports(
     db: Session,
     *,
@@ -258,7 +386,7 @@ def _query_reports(
     limit: int,
     hold_days: int,
 ) -> Tuple[List[ReportDB], bool, int, Dict[str, int]]:
-    """Load completed reports that carry a probability, applying filters.
+    """Load completed reports that carry a probability or qualifying v2 winner, applying filters.
 
     Date/symbol/user filters run in SQL.  Hold-window completeness also runs in
     SQL, BEFORE the ``limit`` truncation, so the newest reports (whose hold
@@ -277,12 +405,10 @@ def _query_reports(
     from tradingagents.agents.utils.decision_status import (
         ANALYSIS_VALID,
         NON_DIRECTIONAL_TRADE_ACTIONS,
-        is_calibration_eligible,
     )
 
     base_query = db.query(ReportDB).filter(
         ReportDB.status == "completed",
-        ReportDB.probability.isnot(None),
     )
     if user_id:
         base_query = base_query.filter(ReportDB.user_id == user_id)
@@ -316,11 +442,16 @@ def _query_reports(
         "excluded_total": excluded_total,
     }
 
-    # Only explicit VALID directional rows are calibration-eligible
+    # Only explicit VALID directional rows or candidate v2 rows are calibration-eligible
     query = base_query.filter(
-        ReportDB.analysis_status == ANALYSIS_VALID,
-        (ReportDB.trade_action.is_(None))
-        | (~ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS))),
+        (
+            (ReportDB.analysis_status == ANALYSIS_VALID)
+            & (
+                (ReportDB.trade_action.is_(None))
+                | (~ReportDB.trade_action.in_(list(NON_DIRECTIONAL_TRADE_ACTIONS)))
+            )
+        )
+        | (ReportDB.analysis_status.is_(None))
     )
 
     # Hold-window completeness before truncation: only reports whose window has
@@ -348,7 +479,7 @@ def _query_reports(
     else:
         rows = query.order_by(ReportDB.created_at.desc()).limit(limit).all()
         truncated_before_filter = False
-    rows = [row for row in rows if is_calibration_eligible(row)]
+    rows = [row for row in rows if _is_admissible_calibration_report(row)[0]]
     return rows, truncated_before_filter, skipped_incomplete, exclusion_stats
 
 
@@ -487,6 +618,13 @@ def _compute_calibration_unlocked(
     binary outcome (resolved via ``outcome_resolver``, or the default price
     window).  Reports whose outcome cannot be resolved are counted separately
     and excluded from the curve and Brier score.
+
+    For qualifying v2 debate reports without probability (winner-only), we admit
+    them into the evaluable sample set without fabricating probabilities from
+    confidence or text. They contribute to winner direction hit metrics
+    (winner_only_admitted, winner_only_hits, winner_only_hit_rate), while
+    probability reliability curve buckets and Brier score are strictly derived
+    from reports with explicit probabilities.
     """
     reports, truncated_before_filter, skipped_incomplete, exclusion_stats = _query_reports(
         db,
@@ -500,22 +638,52 @@ def _compute_calibration_unlocked(
         hold_days=hold_days,
     )
 
-    samples: List[Tuple[float, bool]] = []
+    prob_samples: List[Tuple[float, bool]] = []
+    winner_only_admitted = 0
+    winner_only_hits = 0
+    winner_bull_count = 0
+    winner_bull_hits = 0
+    winner_bear_count = 0
+    winner_bear_hits = 0
+
     # Too-recent reports (hold window not yet elapsed) are excluded at selection
     # time; they count as skipped alongside reports whose price is unavailable.
     skipped_no_outcome = skipped_incomplete
     resolve = outcome_resolver or (lambda row: _resolve_outcome(row, hold_days))
 
     for report in reports:
-        probability = float(report.probability)
+        is_admissible, is_winner_only, probability, winner = _is_admissible_calibration_report(report)
+        if not is_admissible:
+            continue
+
         outcome = resolve(report)
         if outcome is None:
             skipped_no_outcome += 1
             continue
-        samples.append((probability, outcome))
+
+        if is_winner_only:
+            winner_only_admitted += 1
+            # Direction hit evaluation:
+            # - 'bull' expects rise (outcome is True -> hit)
+            # - 'bear' expects fall (outcome is False -> hit)
+            if winner == "bull":
+                winner_bull_count += 1
+                hit = bool(outcome is True)
+                if hit:
+                    winner_bull_hits += 1
+            else:  # winner == "bear"
+                winner_bear_count += 1
+                hit = bool(outcome is False)
+                if hit:
+                    winner_bear_hits += 1
+            if hit:
+                winner_only_hits += 1
+        else:
+            if probability is not None:
+                prob_samples.append((probability, outcome))
 
     buckets = [_empty_bucket(label, low, high) for label, low, high in _BUCKETS]
-    for probability, outcome in samples:
+    for probability, outcome in prob_samples:
         bucket = _bucket_for(probability)
         if bucket is None:
             continue
@@ -535,9 +703,30 @@ def _compute_calibration_unlocked(
         entry["rise_rate"] = round(rise_count / count * 100, 1) if count else None
         entry["avg_probability"] = round(prob_sum / count, 3) if count else None
 
+    winner_only_hit_rate = (
+        round(winner_only_hits / winner_only_admitted * 100, 1)
+        if winner_only_admitted > 0
+        else None
+    )
+
+    total_sample_size = len(prob_samples) + winner_only_admitted
+
     return {
-        "brier_score": _brier_score(samples),
-        "sample_size": len(samples),
+        "brier_score": _brier_score(prob_samples),
+        "sample_size": total_sample_size,
+        "probability_sample_size": len(prob_samples),
+        "winner_only_admitted": winner_only_admitted,
+        "winner_only_hits": winner_only_hits,
+        "winner_only_hit_rate": winner_only_hit_rate,
+        "winner_only_stats": {
+            "admitted": winner_only_admitted,
+            "hits": winner_only_hits,
+            "hit_rate": winner_only_hit_rate,
+            "bull_count": winner_bull_count,
+            "bull_hits": winner_bull_hits,
+            "bear_count": winner_bear_count,
+            "bear_hits": winner_bear_hits,
+        },
         "skipped_no_outcome": skipped_no_outcome,
         "truncated_before_filter": truncated_before_filter,
         "buckets": buckets,

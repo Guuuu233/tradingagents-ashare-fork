@@ -765,20 +765,81 @@ def status_from_risk_verdict(
 
 def is_calibration_eligible(
     result_or_row: Mapping[str, Any] | Any,
+    *,
+    allow_winner_only: bool = False,
 ) -> bool:
     """True only for explicit VALID runs with a directional trade action and probability.
 
+    When ``allow_winner_only=True``, also admits completed qualifying v2 reports
+    (A6 is_qualifying_v2_report specification) with winner in ('bull', 'bear')
+    even when probability is None.
     Legacy rows with ``analysis_status=NULL`` are excluded so pre-P0 Neutral/HOLD
     pollution cannot keep entering calibration.
     """
     analysis_status, trade_action, probability = _extract_status_fields(result_or_row)
-    if analysis_status is None:
+    if analysis_status is None and not allow_winner_only:
         return False
-    if analysis_status != ANALYSIS_VALID:
+    if analysis_status is not None and analysis_status != ANALYSIS_VALID:
         return False
     if trade_action in NON_DIRECTIONAL_TRADE_ACTIONS:
         return False
-    return probability is not None
+    if probability is not None:
+        return analysis_status == ANALYSIS_VALID
+
+    if allow_winner_only:
+        from tradingagents.agents.utils.shadow_credit import is_qualifying_v2_report
+
+        rd = (
+            result_or_row.get("result_data")
+            if isinstance(result_or_row, Mapping)
+            else getattr(result_or_row, "result_data", None)
+        )
+        sample = (
+            dict(result_or_row)
+            if isinstance(result_or_row, Mapping)
+            else {
+                "status": getattr(result_or_row, "status", None),
+                "result_data": rd if isinstance(rd, dict) else {},
+                "analysis_status": analysis_status,
+                "trade_action": trade_action,
+                "probability": probability,
+            }
+        )
+        if not is_qualifying_v2_report(sample):
+            return False
+
+        # Extract winner
+        target_rd = rd if isinstance(rd, dict) else (sample if isinstance(sample, dict) else {})
+        inv_state = (
+            target_rd.get("investment_debate_state")
+            if isinstance(target_rd.get("investment_debate_state"), dict)
+            else target_rd
+        )
+        mv = target_rd.get("manager_verdict") or inv_state.get("manager_verdict") or {}
+        raw_winner = (
+            mv.get("winner")
+            or target_rd.get("debate_winner")
+            or (
+                inv_state.get("manager_verdict", {}).get("winner")
+                if isinstance(inv_state.get("manager_verdict"), dict)
+                else None
+            )
+        )
+        if not raw_winner:
+            for sub_k in ("short_term", "primary"):
+                sub = target_rd.get(sub_k)
+                if isinstance(sub, dict):
+                    raw_winner = (
+                        sub.get("manager_verdict", {}).get("winner")
+                        if isinstance(sub.get("manager_verdict"), dict)
+                        else sub.get("winner")
+                    )
+                    if raw_winner:
+                        break
+        winner_str = str(raw_winner or "").strip().lower()
+        return winner_str in ("bull", "bear")
+
+    return False
 
 
 def _extract_status_fields(

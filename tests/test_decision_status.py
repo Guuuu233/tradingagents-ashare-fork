@@ -111,6 +111,59 @@ def test_legacy_row_without_analysis_status_is_excluded():
     ) is True
 
 
+def test_is_calibration_eligible_winner_only_flag():
+    from tradingagents.agents.utils.agent_states import PROTOCOL_VERSION_V2_STRUCTURED
+
+    v2_bull_winner = {
+        "status": "completed",
+        "analysis_status": ANALYSIS_VALID,
+        "trade_action": ACTION_BUY,
+        "probability": None,
+        "result_data": {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {
+                "winner": "bull",
+                "direction": "看多",
+                "consistency_check_passed": True,
+            },
+        },
+    }
+    # Default allow_winner_only=False requires probability
+    assert is_calibration_eligible(v2_bull_winner) is False
+    assert is_calibration_eligible(v2_bull_winner, allow_winner_only=False) is False
+    # allow_winner_only=True admits qualifying v2 winner
+    assert is_calibration_eligible(v2_bull_winner, allow_winner_only=True) is True
+
+    # winner='tie' is non-directional -> False
+    v2_tie = {
+        "status": "completed",
+        "analysis_status": ANALYSIS_VALID,
+        "trade_action": ACTION_HOLD,
+        "probability": None,
+        "result_data": {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "tie"},
+        },
+    }
+    assert is_calibration_eligible(v2_tie, allow_winner_only=True) is False
+
+    # ABSTAIN -> False even with allow_winner_only=True
+    v2_abstain = {
+        "status": "completed",
+        "analysis_status": ANALYSIS_ABSTAIN,
+        "trade_action": ACTION_NO_TRADE,
+        "probability": None,
+        "result_data": {
+            "status": "completed",
+            "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            "manager_verdict": {"winner": "bull"},
+        },
+    }
+    assert is_calibration_eligible(v2_abstain, allow_winner_only=True) is False
+
+
 def test_consistency_hard_gate_maps_to_abstain_not_valid_buy():
     from tradingagents.agents.utils.decision_status import status_from_manager_verdict
 

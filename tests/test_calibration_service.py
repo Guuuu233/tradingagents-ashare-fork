@@ -104,6 +104,61 @@ def _seed_report(
         return report
 
 
+def _seed_v2_report(
+    *,
+    symbol: str,
+    trade_date: str,
+    winner: Optional[str] = "bull",
+    probability: Optional[float] = None,
+    user_id: str,
+    status: str = "completed",
+    analysis_status: Optional[str] = "VALID",
+    trade_action: Optional[str] = "BUY",
+    prompt_versions: tuple[str, ...] = ("v1",),
+    model_names: tuple[str, ...] = ("gpt-4o-mini",),
+) -> ReportDB:
+    init_db()
+    with get_db_ctx() as db:
+        res_data = _result_data(
+            prompt_versions=prompt_versions,
+            model_names=model_names,
+            analysis_status=analysis_status,
+            trade_action=trade_action,
+        )
+        res_data["protocol_version"] = "v2_structured_disagreement"
+        res_data["status"] = status
+        direction = "看多" if winner == "bull" else ("看空" if winner == "bear" else "中性")
+        mv = {
+            "winner": winner,
+            "direction": direction,
+            "consistency_check_passed": True,
+            "claim_evidence_summary": {"c1": {"counts": {"verified": 1, "total": 1}}},
+        }
+        res_data["manager_verdict"] = mv
+        res_data["investment_debate_state"] = {
+            "protocol_version": "v2_structured_disagreement",
+            "manager_verdict": mv,
+            "claims": [{"claim_id": "c1", "status": "verified"}],
+        }
+        report = report_service.create_report(
+            db=db,
+            symbol=symbol,
+            trade_date=trade_date,
+            decision=trade_action or ("BUY" if winner == "bull" else "SELL"),
+            probability=probability,
+            result_data=res_data,
+            user_id=user_id,
+            report_id=str(uuid4()),
+        )
+        report.status = status
+        report.probability = probability
+        report.analysis_status = analysis_status
+        report.trade_action = trade_action
+        db.commit()
+        db.refresh(report)
+        return report
+
+
 def _fake_price_after(entry_price: float) -> float:
     """Return a price_after that yields the given relative outcome."""
 
@@ -171,6 +226,12 @@ def _reset_calibration_state(monkeypatch):
     except Exception:
         pass
     yield
+    try:
+        with get_db_ctx() as db:
+            db.query(ReportDB).delete()
+            db.commit()
+    except Exception:
+        pass
 
 
 class TestReliabilityCurveBucketing:
@@ -745,3 +806,191 @@ class TestApiParamsAndResourceGuard:
         assert first.json() == second.json()
         # The cache key is stored — the second identical request did not recompute.
         assert len(cal._calibration_cache) == 1
+
+
+class TestV2WinnerOnlyCalibration:
+    def test_v2_winner_only_reports_admitted_with_sample_size_greater_than_zero(self):
+        """Track A8: completed v2 reports with winner in {bull, bear} and probability=NULL are admitted."""
+        user_id, _ = _user_token()
+        # Seed 3 v2 reports with probability=None:
+        # report 1: winner='bull' (predicts rise)
+        # report 2: winner='bear' (predicts fall)
+        # report 3: winner='bear' (predicts fall)
+        r1 = _seed_v2_report(symbol="600519.SH", trade_date="2024-03-01", winner="bull", user_id=user_id)
+        r2 = _seed_v2_report(symbol="600519.SH", trade_date="2024-03-02", winner="bear", user_id=user_id)
+        r3 = _seed_v2_report(symbol="600519.SH", trade_date="2024-03-03", winner="bear", user_id=user_id)
+
+        def outcome_resolver(report: ReportDB):
+            # 2024-03-01 rose (True) -> bull hits
+            # 2024-03-02 fell (False) -> bear hits
+            # 2024-03-03 rose (True) -> bear misses
+            if report.trade_date in ("2024-03-01", "2024-03-03"):
+                return True
+            return False
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=outcome_resolver,
+            )
+
+        assert result["sample_size"] == 3
+        assert result["winner_only_admitted"] == 3
+        assert result["winner_only_hits"] == 2
+        assert result["winner_only_hit_rate"] == 66.7
+        assert result["winner_only_stats"]["bull_count"] == 1
+        assert result["winner_only_stats"]["bull_hits"] == 1
+        assert result["winner_only_stats"]["bear_count"] == 2
+        assert result["winner_only_stats"]["bear_hits"] == 1
+        assert result["probability_sample_size"] == 0
+        assert result["brier_score"] is None
+        # Probability buckets should have count=0
+        assert all(b["count"] == 0 for b in result["buckets"])
+
+    def test_no_winner_and_no_probability_excluded(self):
+        """Track A8: reports with neither explicit probability nor valid v2 winner are excluded."""
+        user_id, _ = _user_token()
+        # 1. Legacy report with probability=None and no winner
+        init_db()
+        with get_db_ctx() as db:
+            rep = report_service.create_report(
+                db=db,
+                symbol="600519.SH",
+                trade_date="2024-03-01",
+                decision="BUY",
+                probability=None,
+                result_data={"status": "completed", "protocol_version": "v1_legacy"},
+                user_id=user_id,
+                report_id=str(uuid4()),
+            )
+            rep.probability = None
+            db.commit()
+
+        # 2. v2 report with winner='tie' (non-directional) and probability=None
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-02", winner="tie", user_id=user_id)
+
+        # 3. v2 report with invalid winner and probability=None
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-03", winner="unknown", user_id=user_id)
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=lambda r: True,
+            )
+
+        assert result["sample_size"] == 0
+        assert result["winner_only_admitted"] == 0
+        assert result["probability_sample_size"] == 0
+        assert result["brier_score"] is None
+
+    def test_mixed_probability_and_winner_only_reports(self):
+        """Track A8: mixed pool correctly segments probability curve and winner-only direction hits."""
+        user_id, _ = _user_token()
+        # 2 reports with probability
+        _seed_report(symbol="600519.SH", trade_date="2024-03-01", probability=0.65, user_id=user_id)
+        _seed_report(symbol="600519.SH", trade_date="2024-03-02", probability=0.85, user_id=user_id)
+        # 2 reports with winner-only
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-03", winner="bull", user_id=user_id)
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-04", winner="bear", user_id=user_id)
+
+        def outcome_resolver(report: ReportDB):
+            # 2024-03-01 rose (prob 0.65 -> hit)
+            # 2024-03-02 fell (prob 0.85 -> miss)
+            # 2024-03-03 rose (winner bull -> hit)
+            # 2024-03-04 fell (winner bear -> hit)
+            if report.trade_date in ("2024-03-01", "2024-03-03"):
+                return True
+            return False
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=outcome_resolver,
+            )
+
+        assert result["sample_size"] == 4
+        assert result["probability_sample_size"] == 2
+        assert result["winner_only_admitted"] == 2
+        assert result["winner_only_hits"] == 2
+        assert result["winner_only_hit_rate"] == 100.0
+        assert result["brier_score"] is not None
+        # Probability buckets should only contain the 2 probability reports
+        b60 = next(b for b in result["buckets"] if b["bucket"] == "60-70%")
+        b80 = next(b for b in result["buckets"] if b["bucket"] == "80+%")
+        assert b60["count"] == 1
+        assert b80["count"] == 1
+        assert sum(b["count"] for b in result["buckets"]) == 2
+
+    def test_v2_winner_only_hold_window_discipline(self, monkeypatch):
+        """Track A8: hold window completeness applies strictly to winner-only reports without shortening hold."""
+        user_id, _ = _user_token()
+        today = datetime(2026, 8, 1).date()
+        monkeypatch.setattr(cal, "_today", lambda: today)
+        # Recent report dated in incomplete hold window
+        _seed_v2_report(symbol="600519.SH", trade_date="2026-07-28", winner="bull", user_id=user_id)
+        # Evaluated report dated before hold window cutoff
+        _seed_v2_report(symbol="600519.SH", trade_date="2026-06-01", winner="bull", user_id=user_id)
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=lambda r: True,
+            )
+
+        assert result["sample_size"] == 1
+        assert result["winner_only_admitted"] == 1
+        assert result["skipped_no_outcome"] == 1
+
+    def test_v2_winner_only_non_completed_or_invalid_excluded(self):
+        """Track A8: non-completed, ABSTAIN, or non-directional reports must not be admitted."""
+        user_id, _ = _user_token()
+        # 1. Failed status
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-01", winner="bull", status="failed", user_id=user_id)
+        # 2. ABSTAIN analysis_status
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-02", winner="bull", analysis_status="ABSTAIN", user_id=user_id)
+        # 3. NO_TRADE trade_action
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-03-03", winner="bull", trade_action="NO_TRADE", user_id=user_id)
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=lambda r: True,
+            )
+
+        assert result["sample_size"] == 0
+        assert result["winner_only_admitted"] == 0
+
+    def test_v2_winner_only_endpoint_returns_metrics_in_api(self, client):
+        """Track A8: HTTP /v1/calibration returns winner-only admitted metrics in API response."""
+        user_id, token = _user_token()
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-01-02", winner="bull", user_id=user_id)
+        _seed_v2_report(symbol="600519.SH", trade_date="2024-01-03", winner="bear", user_id=user_id)
+
+        with (
+            patch.object(cal, "_get_price_on", side_effect=_fake_price_on(100.0)),
+            patch.object(cal, "_get_price_after_strict", side_effect=_fake_price_after(110.0)),
+        ):
+            response = client.get(
+                "/v1/calibration",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["sample_size"] == 2
+        assert payload["winner_only_admitted"] == 2
+        assert payload["winner_only_hits"] == 1  # 2024-01-02 bull rose (hit); 2024-01-03 bear rose (miss)
+        assert payload["winner_only_hit_rate"] == 50.0
+        assert "winner_only_stats" in payload
+        assert payload["winner_only_stats"]["bull_count"] == 1
+        assert payload["winner_only_stats"]["bear_count"] == 1
