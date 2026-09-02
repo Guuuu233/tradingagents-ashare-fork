@@ -41,6 +41,7 @@ from tradingagents.agents.utils.shadow_credit import (
 )
 from scripts.backfill_report_industry import (
     backfill_report_industry_in_sample,
+    load_raw_reports,
     run_industry_backfill,
 )
 
@@ -362,3 +363,178 @@ class TestBackfillReportIndustryScript:
         assert len(saved["samples"]) == 3
         for s in saved["samples"]:
             assert s["result_data"]["instrument_context"]["industry"] is not None
+
+
+class TestBackfillReportIndustryDbPath:
+    """Test suite for Track A10: backfill_report_industry --db-path behavior."""
+
+    @pytest.fixture
+    def custom_sqlite_db(self, tmp_path):
+        """Create a temporary SQLite DB populated with known ReportDB records without industry."""
+        db_path = str(tmp_path / "custom_industry.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        symbols = [
+            ("rep-1", "600519.SH", "completed"),
+            ("rep-2", "688981.SH", "completed"),
+            ("rep-3", "000725.SZ", "completed"),
+            ("rep-4", "300750.SZ", "completed"),
+            ("rep-5", "601857.SH", "completed"),
+            ("rep-6", "600036.SH", "completed"),
+            ("rep-7", "000001.SZ", "failed"),  # non-completed report
+        ]
+
+        reports = []
+        for rep_id, sym, status in symbols:
+            reports.append(
+                ReportDB(
+                    id=rep_id,
+                    symbol=sym,
+                    trade_date="2026-08-01",
+                    status=status,
+                    result_data={
+                        "symbol": sym,
+                        "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                        "instrument_context": {"symbol": sym},
+                    },
+                )
+            )
+
+        session.add_all(reports)
+        session.commit()
+        session.close()
+        engine.dispose()
+        return db_path
+
+    def test_load_raw_reports_with_db_path(self, custom_sqlite_db):
+        """load_raw_reports strictly reads completed reports from the custom SQLite DB."""
+        reports, db_ctx = load_raw_reports(db_path=custom_sqlite_db)
+        assert len(reports) == 6
+        symbols = [r["symbol"] for r in reports]
+        assert "000001.SZ" not in symbols
+        assert set(symbols) == {"600519.SH", "688981.SH", "000725.SZ", "300750.SZ", "601857.SH", "600036.SH"}
+        assert db_ctx is not None
+        ctx, db, ReportDBCls = db_ctx
+        ctx.__exit__(None, None, None)
+
+    def test_run_industry_backfill_active_updates_sqlite_db(self, custom_sqlite_db):
+        """Active run_industry_backfill updates instrument_context.industry in SQLite DB."""
+        stats = run_industry_backfill(db_path=custom_sqlite_db, dry_run=False)
+        assert stats["total_scanned"] == 6
+        assert stats["backfilled_count"] == 6
+        assert stats["unique_industries_after"] == 6
+
+        # Verify DB directly
+        engine = create_engine(f"sqlite:///{custom_sqlite_db}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+            assert len(db_rows) == 6
+            industry_map = {row.symbol: row.result_data["instrument_context"].get("industry") for row in db_rows}
+            assert industry_map["600519.SH"] == "白酒与精制茶酒"
+            assert industry_map["688981.SH"] == "半导体"
+            assert industry_map["000725.SZ"] == "消费电子"
+            assert industry_map["300750.SZ"] == "新能源车"
+            assert industry_map["601857.SH"] == "石油化工"
+            assert industry_map["600036.SH"] == "金融地产"
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_run_industry_backfill_dry_run_does_not_modify_sqlite_db(self, custom_sqlite_db):
+        """--dry-run mode computes statistics but leaves SQLite DB completely unchanged."""
+        stats = run_industry_backfill(db_path=custom_sqlite_db, dry_run=True)
+        assert stats["total_scanned"] == 6
+        assert stats["backfilled_count"] == 6
+        assert stats["dry_run"] is True
+
+        # Verify DB is not modified
+        engine = create_engine(f"sqlite:///{custom_sqlite_db}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+            assert len(db_rows) == 6
+            for row in db_rows:
+                assert "industry" not in row.result_data["instrument_context"]
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_non_existent_db_path_raises_file_not_found(self):
+        """Non-existent db_path must raise FileNotFoundError and NEVER fall back to golden samples."""
+        fake_path = "/non/existent/path/custom_industry_fake.db"
+        with pytest.raises(FileNotFoundError):
+            load_raw_reports(db_path=fake_path)
+
+        with pytest.raises(FileNotFoundError):
+            run_industry_backfill(db_path=fake_path)
+
+    def test_corrupt_db_path_raises_runtime_error(self, tmp_path):
+        """Corrupt non-SQLite file must raise RuntimeError and NEVER fall back to golden samples."""
+        corrupt_file = tmp_path / "corrupt.db"
+        corrupt_file.write_text("Not a SQLite database")
+
+        with pytest.raises(RuntimeError):
+            load_raw_reports(db_path=str(corrupt_file))
+
+        with pytest.raises(RuntimeError):
+            run_industry_backfill(db_path=str(corrupt_file))
+
+    def test_empty_sqlite_db_returns_zero_samples_without_golden_fallback(self, tmp_path):
+        """Empty SQLite DB returns 0 samples without falling back to golden audit."""
+        empty_db = str(tmp_path / "empty.db")
+        engine = create_engine(f"sqlite:///{empty_db}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
+
+        reports, db_ctx = load_raw_reports(db_path=empty_db)
+        assert len(reports) == 0
+        if db_ctx:
+            db_ctx[0].__exit__(None, None, None)
+
+        stats = run_industry_backfill(db_path=empty_db, dry_run=True)
+        assert stats["total_scanned"] == 0
+        assert stats["backfilled_count"] == 0
+
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
+        """CLI invocation with --db-path exits with 0."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "backfill_report_industry.py",
+        )
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", custom_sqlite_db, "--dry-run"],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0
+        output = json.loads(proc.stdout)
+        assert output["total_scanned"] == 6
+
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self):
+        """CLI invocation with non-existent --db-path exits with non-zero exit code."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "backfill_report_industry.py",
+        )
+        fake_db = "/non/existent/path/fake.db"
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", fake_db],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+

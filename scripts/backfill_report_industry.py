@@ -53,6 +53,25 @@ logging.basicConfig(
 logger = logging.getLogger("backfill_report_industry")
 
 
+class _CustomSQLiteDBCtx:
+    """Context manager for custom SQLite database session and engine lifecycle."""
+
+    def __init__(self, session, engine) -> None:
+        self.session = session
+        self.engine = engine
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        try:
+            if exc_type is not None:
+                self.session.rollback()
+        finally:
+            self.session.close()
+            self.engine.dispose()
+
+
 def load_raw_reports(
     db_path: Optional[str] = None,
     input_file: Optional[str] = None,
@@ -62,7 +81,46 @@ def load_raw_reports(
     raw_reports: List[Dict[str, Any]] = []
     db_ctx = None
 
-    # 1. Explicit input file
+    # 1. Explicit SQLite DB path (prioritized and strict: fails explicitly if invalid/inaccessible)
+    if db_path and str(db_path).strip():
+        p = Path(db_path)
+        if not p.is_absolute():
+            if not p.exists():
+                p_root = Path(project_root) / p
+                if p_root.exists():
+                    p = p_root
+        if not p.exists():
+            logger.error("指定的 SQLite 数据库路径不存在: %s", db_path)
+            raise FileNotFoundError(f"指定的 SQLite 数据库路径不存在: {db_path}")
+
+        abs_path = str(p.resolve())
+        db_url = f"sqlite:///{abs_path}"
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from api.database import ReportDB
+
+            engine = create_engine(db_url, connect_args={"check_same_thread": False})
+            SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            session = SessionCls()
+            try:
+                db_reports = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    raw_reports.append(r.to_dict())
+                logger.info("从 SQLite 数据库 %s 中加载了 %d 份 completed 报告记录", abs_path, len(raw_reports))
+            except Exception:
+                session.close()
+                engine.dispose()
+                raise
+
+            ctx = _CustomSQLiteDBCtx(session, engine)
+            db_ctx = (ctx, session, ReportDB)
+            return raw_reports, db_ctx
+        except Exception as exc:
+            logger.error("读取指定 SQLite 数据库 %s 失败: %s", db_path, exc)
+            raise RuntimeError(f"读取指定 SQLite 数据库 {db_path} 失败: {exc}") from exc
+
+    # 2. Explicit input file
     if input_file:
         p = Path(input_file)
         if not p.is_absolute():
@@ -84,7 +142,7 @@ def load_raw_reports(
             except Exception as e:
                 logger.warning("读取 input-file %s 失败: %s", p, e)
 
-    # 2. Explicit input directory
+    # 3. Explicit input directory
     if input_dir and not raw_reports:
         p_dir = Path(input_dir)
         if not p_dir.is_absolute():
@@ -108,7 +166,7 @@ def load_raw_reports(
             if raw_reports:
                 logger.info("从目录 %s 中加载了 %d 份样本", p_dir.name, len(raw_reports))
 
-    # 3. Try loading via sqlalchemy ReportDB if db exists
+    # 4. Try loading via sqlalchemy ReportDB if db exists
     if not raw_reports:
         try:
             from api.database import get_db_ctx, ReportDB
@@ -125,7 +183,7 @@ def load_raw_reports(
         except Exception as exc:
             logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
 
-    # 4. Fallback to golden audit samples
+    # 5. Fallback to golden audit samples
     if not raw_reports:
         golden_dir = os.path.join(project_root, "tests", "golden", "audit_20260823")
         if os.path.exists(golden_dir):
@@ -262,6 +320,7 @@ def run_industry_backfill(
         except Exception as exc:
             db.rollback()
             logger.error("数据库持久化回填失败: %s", exc)
+            raise exc
         finally:
             ctx.__exit__(None, None, None)
     elif db_ctx:
@@ -308,16 +367,21 @@ def main_cli() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="输出详细调试日志")
 
     args = parser.parse_args()
-    stats = run_industry_backfill(
-        db_path=args.db_path,
-        input_file=args.input_file,
-        input_dir=args.input_dir,
-        output_file=args.output_file,
-        dry_run=args.dry_run,
-        verify_gates=args.verify_gates,
-        verbose=args.verbose,
-    )
-    print(json.dumps(stats, indent=2, ensure_ascii=False))
+    try:
+        stats = run_industry_backfill(
+            db_path=args.db_path,
+            input_file=args.input_file,
+            input_dir=args.input_dir,
+            output_file=args.output_file,
+            dry_run=args.dry_run,
+            verify_gates=args.verify_gates,
+            verbose=args.verbose,
+        )
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
+    except Exception as exc:
+        logger.error("行业回填执行失败: %s", exc)
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

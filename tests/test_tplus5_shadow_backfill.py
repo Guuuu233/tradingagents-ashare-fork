@@ -18,6 +18,10 @@ import os
 import pytest
 from pathlib import Path
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from api.database import Base, ReportDB
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
     PROTOCOL_VERSION_V1_LEGACY,
@@ -31,7 +35,7 @@ from tradingagents.agents.utils.shadow_credit import (
     filter_v2_completed_reports,
     is_qualifying_v2_report,
 )
-from scripts.backfill_tplus5_shadow import run_backfill
+from scripts.backfill_tplus5_shadow import load_raw_reports, run_backfill
 
 
 def _build_v2_report_fixture(
@@ -434,4 +438,218 @@ class TestBackfillCLIAndPersistence:
         assert len(saved["samples"]) == 1
         assert saved["samples"][0]["t_plus_5_direction_hit"] is True
         assert saved["samples"][0]["t_plus_5_status"] == "due_and_evaluated"
+
+
+class TestBackfillTplus5ShadowDbPath:
+    """Test suite for Track A10: backfill_tplus5_shadow --db-path behavior."""
+
+    @pytest.fixture
+    def custom_sqlite_db(self, tmp_path):
+        """Create a temporary SQLite DB populated with known ReportDB records for T+5 backfill."""
+        db_path = str(tmp_path / "custom_tplus5.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        reports = [
+            ReportDB(
+                id="rep-1",
+                symbol="600519.SH",
+                trade_date="2026-08-03",
+                status="completed",
+                result_data={
+                    "symbol": "600519.SH",
+                    "trade_date": "2026-08-03",
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "manager_verdict": {"winner": "bull", "entry": "1600.00元"},
+                    "t_plus_5_price": 1700.0,
+                },
+            ),
+            ReportDB(
+                id="rep-2",
+                symbol="600276.SH",
+                trade_date="2026-08-03",
+                status="completed",
+                result_data={
+                    "symbol": "600276.SH",
+                    "trade_date": "2026-08-03",
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "manager_verdict": {"winner": "bear", "entry": "40.00元"},
+                    "t_plus_5_price": 35.0,
+                },
+            ),
+            ReportDB(
+                id="rep-3",
+                symbol="000858.SZ",
+                trade_date="2026-08-03",
+                status="completed",
+                result_data={
+                    "symbol": "000858.SZ",
+                    "trade_date": "2026-08-03",
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "manager_verdict": {"winner": "bull", "entry": "150.00元"},
+                    "t_plus_5_price": 140.0,
+                },
+            ),
+            ReportDB(
+                id="rep-4",
+                symbol="300750.SZ",
+                trade_date="2026-08-20",
+                status="completed",
+                result_data={
+                    "symbol": "300750.SZ",
+                    "trade_date": "2026-08-20",
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "manager_verdict": {"winner": "bull", "entry": "200.00元"},
+                },
+            ),
+            ReportDB(
+                id="rep-5",
+                symbol="601398.SH",
+                trade_date="2026-08-03",
+                status="failed",
+                result_data={"symbol": "601398.SH"},
+            ),
+        ]
+
+        session.add_all(reports)
+        session.commit()
+        session.close()
+        engine.dispose()
+        return db_path
+
+    def test_load_raw_reports_with_db_path(self, custom_sqlite_db):
+        """load_raw_reports strictly reads completed reports from the custom SQLite DB."""
+        reports, db_ctx = load_raw_reports(db_path=custom_sqlite_db)
+        assert len(reports) == 4
+        symbols = [r["symbol"] for r in reports]
+        assert "601398.SH" not in symbols
+        assert set(symbols) == {"600519.SH", "600276.SH", "000858.SZ", "300750.SZ"}
+        assert db_ctx is not None
+        ctx, db, ReportDBCls = db_ctx
+        ctx.__exit__(None, None, None)
+
+    def test_run_backfill_active_updates_sqlite_db(self, custom_sqlite_db):
+        """Active run_backfill updates shadow metrics and T+5 direction hit in SQLite DB."""
+        res = run_backfill(db_path=custom_sqlite_db, as_of="2026-08-15", dry_run=False)
+        assert res["dry_run"] is False
+        assert res["sample_count"] == 4
+        stats = res["stats"]
+        assert stats["total_scanned"] == 4
+        assert stats["qualifying_v2_count"] == 4
+        assert stats["due_count"] == 3
+        assert stats["hit_count"] == 2
+        assert stats["miss_count"] == 1
+        assert stats["pending_due_count"] == 1
+
+        # Verify DB directly
+        engine = create_engine(f"sqlite:///{custom_sqlite_db}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+            assert len(db_rows) == 4
+            row_map = {row.symbol: row.result_data for row in db_rows}
+            assert row_map["600519.SH"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is True
+            assert row_map["600519.SH"]["t_plus_5_status"] == "due_and_evaluated"
+            assert row_map["600276.SH"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is True
+            assert row_map["000858.SZ"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is False
+            assert row_map["300750.SZ"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is None
+            assert row_map["300750.SZ"]["t_plus_5_status"] == "pending_due"
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_run_backfill_dry_run_does_not_modify_sqlite_db(self, custom_sqlite_db):
+        """--dry-run mode computes statistics but leaves SQLite DB completely unchanged."""
+        res = run_backfill(db_path=custom_sqlite_db, as_of="2026-08-15", dry_run=True)
+        assert res["dry_run"] is True
+        assert res["sample_count"] == 4
+
+        # Verify DB is not modified
+        engine = create_engine(f"sqlite:///{custom_sqlite_db}")
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+            assert len(db_rows) == 4
+            for row in db_rows:
+                assert "shadow_credit_metrics" not in row.result_data
+                assert "t_plus_5_status" not in row.result_data
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_non_existent_db_path_raises_file_not_found(self):
+        """Non-existent db_path must raise FileNotFoundError and NEVER fall back to golden samples."""
+        fake_path = "/non/existent/path/custom_tplus5_fake.db"
+        with pytest.raises(FileNotFoundError):
+            load_raw_reports(db_path=fake_path)
+
+        with pytest.raises(FileNotFoundError):
+            run_backfill(db_path=fake_path)
+
+    def test_corrupt_db_path_raises_runtime_error(self, tmp_path):
+        """Corrupt non-SQLite file must raise RuntimeError and NEVER fall back to golden samples."""
+        corrupt_file = tmp_path / "corrupt.db"
+        corrupt_file.write_text("Not a SQLite database")
+
+        with pytest.raises(RuntimeError):
+            load_raw_reports(db_path=str(corrupt_file))
+
+        with pytest.raises(RuntimeError):
+            run_backfill(db_path=str(corrupt_file))
+
+    def test_empty_sqlite_db_returns_zero_samples_without_golden_fallback(self, tmp_path):
+        """Empty SQLite DB returns 0 samples without falling back to golden audit."""
+        empty_db = str(tmp_path / "empty.db")
+        engine = create_engine(f"sqlite:///{empty_db}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
+
+        reports, db_ctx = load_raw_reports(db_path=empty_db)
+        assert len(reports) == 0
+        if db_ctx:
+            db_ctx[0].__exit__(None, None, None)
+
+        res = run_backfill(db_path=empty_db, dry_run=True)
+        assert res["sample_count"] == 0
+        assert res["stats"]["total_scanned"] == 0
+
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
+        """CLI invocation with --db-path exits with 0."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "backfill_tplus5_shadow.py",
+        )
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", custom_sqlite_db, "--dry-run", "--as-of", "2026-08-15"],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0
+
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self):
+        """CLI invocation with non-existent --db-path exits with non-zero exit code."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "backfill_tplus5_shadow.py",
+        )
+        fake_db = "/non/existent/path/fake.db"
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", fake_db],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+
 

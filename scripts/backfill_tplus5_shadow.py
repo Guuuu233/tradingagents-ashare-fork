@@ -58,6 +58,25 @@ logging.basicConfig(
 logger = logging.getLogger("backfill_tplus5_shadow")
 
 
+class _CustomSQLiteDBCtx:
+    """Context manager for custom SQLite database session and engine lifecycle."""
+
+    def __init__(self, session, engine) -> None:
+        self.session = session
+        self.engine = engine
+
+    def __enter__(self):
+        return self.session
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        try:
+            if exc_type is not None:
+                self.session.rollback()
+        finally:
+            self.session.close()
+            self.engine.dispose()
+
+
 def load_raw_reports(
     db_path: Optional[str] = None,
     input_file: Optional[str] = None,
@@ -67,7 +86,47 @@ def load_raw_reports(
     raw_reports: List[Dict[str, Any]] = []
     db_ctx = None
 
-    # 1. Explicit input file
+    # 1. Explicit SQLite DB path (prioritized and strict: fails explicitly if invalid/inaccessible)
+    if db_path and str(db_path).strip():
+        p = Path(db_path)
+        if not p.is_absolute():
+            if not p.exists():
+                p_root = Path(project_root) / p
+                if p_root.exists():
+                    p = p_root
+        if not p.exists():
+            logger.error("指定的 SQLite 数据库路径不存在: %s", db_path)
+            raise FileNotFoundError(f"指定的 SQLite 数据库路径不存在: {db_path}")
+
+        abs_path = str(p.resolve())
+        db_url = f"sqlite:///{abs_path}"
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from api.database import ReportDB
+
+            engine = create_engine(db_url, connect_args={"check_same_thread": False})
+            SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            session = SessionCls()
+            try:
+                db_reports = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    data = r.to_dict()
+                    raw_reports.append(data)
+                logger.info("从 SQLite 数据库 %s 中加载了 %d 份 completed 报告记录", abs_path, len(raw_reports))
+            except Exception:
+                session.close()
+                engine.dispose()
+                raise
+
+            ctx = _CustomSQLiteDBCtx(session, engine)
+            db_ctx = (ctx, session, ReportDB)
+            return raw_reports, db_ctx
+        except Exception as exc:
+            logger.error("读取指定 SQLite 数据库 %s 失败: %s", db_path, exc)
+            raise RuntimeError(f"读取指定 SQLite 数据库 {db_path} 失败: {exc}") from exc
+
+    # 2. Explicit input file
     if input_file:
         p = Path(input_file)
         if not p.is_absolute():
@@ -203,6 +262,7 @@ def run_backfill(
         if db_ctx:
             ctx, db, ReportDB = db_ctx
             try:
+                from sqlalchemy.orm.attributes import flag_modified
                 for rep in updated_reports:
                     rep_id = rep.get("id")
                     if not rep_id:
@@ -210,12 +270,13 @@ def run_backfill(
                     db_row = db.query(ReportDB).filter(ReportDB.id == rep_id).first()
                     if db_row and "result_data" in rep:
                         db_row.result_data = rep["result_data"]
-                        db_row.updated_at = datetime.now(timezone.utc)
+                        flag_modified(db_row, "result_data")
                 db.commit()
                 logger.info("[写库成功] 已更新数据库中 %d 条报告的 result_data", len(updated_reports))
             except Exception as exc:
                 db.rollback()
                 logger.error("[写库失败] 回填数据提交数据库失败: %s", exc)
+                raise exc
             finally:
                 ctx.__exit__(None, None, None)
 
@@ -263,13 +324,17 @@ if __name__ == "__main__":
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
-    run_backfill(
-        db_path=args.db_path,
-        input_file=args.input_file,
-        input_dir=args.input_dir,
-        output_file=args.output_file,
-        as_of=args.as_of,
-        dry_run=args.dry_run,
-        verify_gates=args.verify_gates,
-    )
+    try:
+        run_backfill(
+            db_path=args.db_path,
+            input_file=args.input_file,
+            input_dir=args.input_dir,
+            output_file=args.output_file,
+            as_of=args.as_of,
+            dry_run=args.dry_run,
+            verify_gates=args.verify_gates,
+        )
+    except Exception as exc:
+        logger.error("T+5 shadow 回填执行失败: %s", exc)
+        sys.exit(1)
     sys.exit(0)
