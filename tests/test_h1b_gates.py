@@ -761,3 +761,208 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
         assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bear_samples"] == 1
         assert os.path.exists(out_json)
 
+
+class TestH1bVerifyGatesDbPath:
+    """Test suite for Track A9: verify_h1b_gates --db-path loading and failure behavior."""
+
+    @pytest.fixture
+    def custom_sqlite_db(self, tmp_path):
+        """Create a temporary SQLite DB populated with known ReportDB records."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        db_path = str(tmp_path / "custom_tradingagents.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        # Insert 4 qualifying completed v2 reports
+        v2_reports = [
+            ReportDB(
+                id="rep-1",
+                symbol="600519.SH",
+                trade_date="2026-08-01",
+                status="completed",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "白酒",
+                    "manager_verdict": {"winner": "bull", "direction": "看多"},
+                    "shadow_credit_metrics": {"bull_verified_rate": 0.9, "bear_verified_rate": 0.8},
+                },
+            ),
+            ReportDB(
+                id="rep-2",
+                symbol="000858.SZ",
+                trade_date="2026-08-02",
+                status="completed",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "白酒",
+                    "manager_verdict": {"winner": "bull", "direction": "看多"},
+                    "shadow_credit_metrics": {"bull_verified_rate": 0.9, "bear_verified_rate": 0.8},
+                },
+            ),
+            ReportDB(
+                id="rep-3",
+                symbol="600276.SH",
+                trade_date="2026-08-03",
+                status="completed",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "医药",
+                    "manager_verdict": {"winner": "bear", "direction": "看空"},
+                    "shadow_credit_metrics": {"bull_verified_rate": 0.85, "bear_verified_rate": 0.85},
+                },
+            ),
+            ReportDB(
+                id="rep-4",
+                symbol="300750.SZ",
+                trade_date="2026-08-04",
+                status="completed",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "新能源",
+                    "manager_verdict": {"winner": "bear", "direction": "看空"},
+                    "shadow_credit_metrics": {"bull_verified_rate": 0.8, "bear_verified_rate": 0.9},
+                },
+            ),
+            # 1 legacy completed v1 report (no winner) -> excluded by v2 filter
+            ReportDB(
+                id="rep-5",
+                symbol="601398.SH",
+                trade_date="2026-08-05",
+                status="completed",
+                result_data={"protocol_version": PROTOCOL_VERSION_V1_LEGACY},
+            ),
+            # 1 failed v2 report -> excluded by completed filter
+            ReportDB(
+                id="rep-6",
+                symbol="600036.SH",
+                trade_date="2026-08-06",
+                status="failed",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "manager_verdict": {"winner": "bull"},
+                },
+            ),
+        ]
+
+        session.add_all(v2_reports)
+        session.commit()
+        session.close()
+        engine.dispose()
+        return db_path
+
+    def test_load_reports_from_db_reads_custom_sqlite(self, custom_sqlite_db):
+        """Passing db_path loads only from that SQLite DB and applies qualifying v2 filter."""
+        from scripts.verify_h1b_gates import load_reports_from_db
+
+        reports = load_reports_from_db(db_path=custom_sqlite_db)
+        assert len(reports) == 4
+        symbols = [r.get("symbol") for r in reports]
+        assert symbols == ["600519.SH", "000858.SZ", "600276.SH", "300750.SZ"]
+        assert "601398.SH" not in symbols
+        assert "600036.SH" not in symbols
+
+    def test_run_verify_with_db_path(self, custom_sqlite_db, tmp_path):
+        """run_verify with db_path runs gate evaluation against the specified SQLite database."""
+        from scripts.verify_h1b_gates import run_verify
+
+        out_json = str(tmp_path / "out_verify.json")
+        res = run_verify(db_path=custom_sqlite_db, output_json=out_json)
+        assert res["sample_count"] == 4
+        assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["sample_count"] == 4
+        assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["unique_symbols"] == 4
+        assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["unique_industries"] == 3
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bull_samples"] == 2
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bear_samples"] == 2
+        assert os.path.exists(out_json)
+
+    def test_non_existent_db_path_raises_file_not_found(self):
+        """Non-existent db_path must raise FileNotFoundError and NEVER fall back to golden samples."""
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        fake_path = "/non/existent/path/tradingagents_fake.db"
+        with pytest.raises(FileNotFoundError):
+            load_reports_from_db(db_path=fake_path)
+
+        with pytest.raises(FileNotFoundError):
+            run_verify(db_path=fake_path)
+
+    def test_invalid_corrupt_db_path_raises_runtime_error(self, tmp_path):
+        """Corrupt or non-SQLite file must raise RuntimeError and NEVER fall back to golden samples."""
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        corrupt_file = tmp_path / "corrupt.db"
+        corrupt_file.write_text("This is not a SQLite database file")
+
+        with pytest.raises(RuntimeError):
+            load_reports_from_db(db_path=str(corrupt_file))
+
+        with pytest.raises(RuntimeError):
+            run_verify(db_path=str(corrupt_file))
+
+    def test_empty_sqlite_db_returns_zero_samples_without_golden_fallback(self, tmp_path):
+        """Empty SQLite DB returns 0 qualifying samples without silently falling back to golden."""
+        from sqlalchemy import create_engine
+        from api.database import Base
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        empty_db = str(tmp_path / "empty.db")
+        engine = create_engine(f"sqlite:///{empty_db}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
+
+        reports = load_reports_from_db(db_path=empty_db)
+        assert len(reports) == 0
+
+        out_json = str(tmp_path / "empty_report.json")
+        res = run_verify(db_path=empty_db, output_json=out_json)
+        assert res["sample_count"] == 0
+        assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["sample_count"] == 0
+        assert res["recommendation"] == "KEEP_FALSE"
+
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db, tmp_path):
+        """CLI invocation with --db-path exits with 0 and writes evaluation report."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        out_json = str(tmp_path / "cli_out.json")
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", custom_sqlite_db, "--output-json", out_json],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0
+        assert os.path.exists(out_json)
+        with open(out_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["sample_count"] == 4
+
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, tmp_path):
+        """CLI invocation with bad --db-path exits with non-zero exit code and error logged."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        fake_db = "/non/existent/path/tradingagents_fake.db"
+        out_json = str(tmp_path / "cli_bad_out.json")
+        proc = subprocess.run(
+            [sys.executable, script_path, "--db-path", fake_db, "--output-json", out_json],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+        assert not os.path.exists(out_json)
+

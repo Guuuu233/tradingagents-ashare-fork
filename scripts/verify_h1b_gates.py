@@ -48,7 +48,52 @@ def load_reports_from_db(
     """Load reports from SQLite database, input file/dir, or fallback paths, filtering strictly for completed v2 samples."""
     raw_reports: List[Dict[str, Any]] = []
 
-    # 1. Explicit input file
+    # 1. Explicit SQLite DB path (prioritized and strict: fails explicitly if invalid/inaccessible)
+    if db_path and str(db_path).strip():
+        p = Path(db_path)
+        if not p.is_absolute():
+            if not p.exists():
+                p_root = Path(project_root) / p
+                if p_root.exists():
+                    p = p_root
+        if not p.exists():
+            logger.error("指定的 SQLite 数据库路径不存在: %s", db_path)
+            raise FileNotFoundError(f"指定的 SQLite 数据库路径不存在: {db_path}")
+
+        abs_path = str(p.resolve())
+        ro_url = f"sqlite:///file:{abs_path}?mode=ro&uri=true"
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from api.database import ReportDB
+
+            engine = create_engine(ro_url, connect_args={"check_same_thread": False})
+            SessionRO = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            session = SessionRO()
+            try:
+                db_reports = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    data = r.to_dict()
+                    raw_reports.append(data)
+                logger.info("从 SQLite 数据库 %s 中加载了 %d 份 completed 报告记录", abs_path, len(raw_reports))
+            finally:
+                session.close()
+                engine.dispose()
+        except Exception as exc:
+            logger.error("读取指定 SQLite 数据库 %s 失败: %s", db_path, exc)
+            raise RuntimeError(f"读取指定 SQLite 数据库 {db_path} 失败: {exc}") from exc
+
+        # When explicit db_path is provided, strictly return filtered results from this db without fallback
+        v2_reports = filter_v2_completed_reports(raw_reports)
+        logger.info(
+            "从指定数据库共检索到 %d 份原始样本，筛选出 %d 份合格 v2 结构化辩论样本 (排除 %d 份无 v2 winner/非 completed 样本)",
+            len(raw_reports),
+            len(v2_reports),
+            len(raw_reports) - len(v2_reports),
+        )
+        return v2_reports
+
+    # 2. Explicit input file
     if input_file:
         p = Path(input_file)
         if not p.is_absolute():
@@ -68,7 +113,7 @@ def load_reports_from_db(
             except Exception as e:
                 logger.warning("读取 input-file %s 失败: %s", p, e)
 
-    # 2. Explicit input directory
+    # 3. Explicit input directory
     if input_dir and not raw_reports:
         p_dir = Path(input_dir)
         if not p_dir.is_absolute():
@@ -90,7 +135,7 @@ def load_reports_from_db(
             if raw_reports:
                 logger.info("从目录 %s 中加载了 %d 份原始样本", p_dir.name, len(raw_reports))
 
-    # 3. Try loading via sqlalchemy ReportDB if db exists
+    # 4. Try loading via sqlalchemy ReportDB if db exists
     if not raw_reports:
         try:
             from api.database import get_db_ctx, ReportDB
@@ -104,7 +149,7 @@ def load_reports_from_db(
         except Exception as exc:
             logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
 
-    # 4. Check golden audit reports as fallback/supplement
+    # 5. Check golden audit reports as fallback/supplement
     if not raw_reports:
         golden_dir = os.path.join(project_root, "tests", "golden", "audit_20260823")
         if os.path.exists(golden_dir):
@@ -119,7 +164,7 @@ def load_reports_from_db(
                     except Exception as e:
                         logger.debug("读取 golden 报告 %s 失败: %s", fname, e)
 
-    # 5. Filter strictly for completed v2 reports with winner (and extract industry without fabrication)
+    # 6. Filter strictly for completed v2 reports with winner (and extract industry without fabrication)
     v2_reports = filter_v2_completed_reports(raw_reports)
     logger.info(
         "共检索到 %d 份原始样本，筛选出 %d 份合格 v2 结构化辩论样本 (排除 %d 份无 v2 winner/非 completed 样本)",
@@ -279,11 +324,15 @@ if __name__ == "__main__":
     parser.add_argument("--output-json", type=str, default="work/h1b_gates_report.json", help="输出汇总 JSON 路径")
     args = parser.parse_args()
 
-    res = run_verify(
-        db_path=args.db_path,
-        output_json=args.output_json,
-        input_file=args.input_file,
-        input_dir=args.input_dir,
-    )
+    try:
+        res = run_verify(
+            db_path=args.db_path,
+            output_json=args.output_json,
+            input_file=args.input_file,
+            input_dir=args.input_dir,
+        )
+    except Exception as exc:
+        logger.error("门槛校验执行失败: %s", exc)
+        sys.exit(1)
     # Exit code: 0 if valid execution
     sys.exit(0)
