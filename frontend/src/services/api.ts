@@ -110,6 +110,7 @@ class ApiService {
                 messages,
                 stream,
                 selected_analysts: selectedAnalysts,
+                config_overrides: { v2_debate_enabled: true },
             }),
         })
 
