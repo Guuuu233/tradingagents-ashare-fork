@@ -187,7 +187,7 @@ class TestEnsureReportIndustryPersisted:
 class TestReportServiceIndustryWritePath:
     """Test create_report and update_report_partial persistence in SQLite."""
 
-    def test_create_report_persists_industry_in_result_data(self, sqlite_db_session):
+    def test_create_report_persists_industry_in_result_data_and_sql_column(self, sqlite_db_session):
         report_id = f"test-rep-{uuid4().hex[:8]}"
         res_data = {
             "symbol": "688981.SH",
@@ -206,11 +206,18 @@ class TestReportServiceIndustryWritePath:
         )
         assert rep.id == report_id
         assert rep.symbol == "688981.SH"
+        assert rep.industry == "半导体"
         assert isinstance(rep.result_data, dict)
         assert rep.result_data.get("instrument_context", {}).get("industry") == "半导体"
 
+        # Verify from direct DB query
+        from_db = sqlite_db_session.query(ReportDB).filter(ReportDB.id == report_id).first()
+        assert from_db is not None
+        assert from_db.industry == "半导体"
+
         # Verify extract_report_industry directly extracts from ReportDB dict
         rep_dict = rep.to_dict()
+        assert rep_dict["industry"] == "半导体"
         extracted = extract_report_industry(rep_dict)
         assert extracted == "半导体"
 
@@ -230,9 +237,33 @@ class TestReportServiceIndustryWritePath:
             report_id=report_id,
             status="completed",
         )
+        assert rep.industry is None
+        assert rep.industry != "未知行业"
         rep_dict = rep.to_dict()
+        assert rep_dict.get("industry") is None
         extracted = extract_report_industry(rep_dict)
         assert extracted is None
+
+    def test_create_report_failed_status_keeps_industry_none(self, sqlite_db_session):
+        report_id = f"test-rep-fail-{uuid4().hex[:8]}"
+        res_data = {
+            "symbol": "688981.SH",
+            "error": "LLM API timeout",
+            "status": "failed",
+        }
+        rep = create_report(
+            db=sqlite_db_session,
+            symbol="688981.SH",
+            trade_date="2026-08-20",
+            decision="HOLD",
+            result_data=res_data,
+            report_id=report_id,
+            status="failed",
+        )
+        assert rep.status == "failed"
+        assert rep.industry is None
+        rep_dict = rep.to_dict()
+        assert rep_dict.get("industry") is None
 
     def test_update_report_partial_completed_status_persists_industry(self, sqlite_db_session):
         report_id = f"test-init-{uuid4().hex[:8]}"
@@ -255,8 +286,32 @@ class TestReportServiceIndustryWritePath:
             result_data=res_data,
         )
         assert updated is not None
+        assert updated.industry == "石油化工"
         assert updated.result_data["instrument_context"]["industry"] == "石油化工"
+        assert updated.to_dict()["industry"] == "石油化工"
         assert extract_report_industry(updated.to_dict()) == "石油化工"
+
+        # Verify from DB directly
+        from_db = sqlite_db_session.query(ReportDB).filter(ReportDB.id == report_id).first()
+        assert from_db.industry == "石油化工"
+
+    def test_update_report_partial_failed_status_keeps_industry_none(self, sqlite_db_session):
+        report_id = f"test-init-fail-{uuid4().hex[:8]}"
+        init_report(
+            db=sqlite_db_session,
+            report_id=report_id,
+            symbol="601857.SH",
+            trade_date="2026-08-20",
+        )
+        updated = update_report_partial(
+            db=sqlite_db_session,
+            report_id=report_id,
+            status="failed",
+            error="Collection error",
+        )
+        assert updated is not None
+        assert updated.status == "failed"
+        assert updated.industry is None
 
 
 class TestH1bGateMultiIndustryVerification:
@@ -421,7 +476,7 @@ class TestBackfillReportIndustryDbPath:
         ctx.__exit__(None, None, None)
 
     def test_run_industry_backfill_active_updates_sqlite_db(self, custom_sqlite_db):
-        """Active run_industry_backfill updates instrument_context.industry in SQLite DB."""
+        """Active run_industry_backfill updates instrument_context.industry and SQL industry column in SQLite DB."""
         stats = run_industry_backfill(db_path=custom_sqlite_db, dry_run=False)
         assert stats["total_scanned"] == 6
         assert stats["backfilled_count"] == 6
@@ -435,12 +490,23 @@ class TestBackfillReportIndustryDbPath:
             db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
             assert len(db_rows) == 6
             industry_map = {row.symbol: row.result_data["instrument_context"].get("industry") for row in db_rows}
+            sql_industry_map = {row.symbol: row.industry for row in db_rows}
             assert industry_map["600519.SH"] == "白酒与精制茶酒"
+            assert sql_industry_map["600519.SH"] == "白酒与精制茶酒"
             assert industry_map["688981.SH"] == "半导体"
+            assert sql_industry_map["688981.SH"] == "半导体"
             assert industry_map["000725.SZ"] == "消费电子"
+            assert sql_industry_map["000725.SZ"] == "消费电子"
             assert industry_map["300750.SZ"] == "新能源车"
+            assert sql_industry_map["300750.SZ"] == "新能源车"
             assert industry_map["601857.SH"] == "石油化工"
+            assert sql_industry_map["601857.SH"] == "石油化工"
             assert industry_map["600036.SH"] == "金融地产"
+            assert sql_industry_map["600036.SH"] == "金融地产"
+
+            # Check non-completed report was not modified and has None industry
+            failed_row = session.query(ReportDB).filter(ReportDB.id == "rep-7").first()
+            assert failed_row.industry is None
         finally:
             session.close()
             engine.dispose()
@@ -461,6 +527,76 @@ class TestBackfillReportIndustryDbPath:
             assert len(db_rows) == 6
             for row in db_rows:
                 assert "industry" not in row.result_data["instrument_context"]
+                assert row.industry is None
+        finally:
+            session.close()
+            engine.dispose()
+
+    def test_backfill_db_path_with_unmigrated_schema_migrates_and_fills_industry(self, tmp_path):
+        """DB without industry column is migrated on the fly and populated with verified industries."""
+        from sqlalchemy import text
+        db_path = str(tmp_path / "old_unmigrated_schema.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE reports ("
+                    "id VARCHAR(36) PRIMARY KEY, "
+                    "user_id VARCHAR(64), "
+                    "symbol VARCHAR(20), "
+                    "trade_date VARCHAR(10), "
+                    "status VARCHAR(20), "
+                    "error TEXT, "
+                    "decision VARCHAR(50), "
+                    "direction VARCHAR(50), "
+                    "confidence INTEGER, "
+                    "probability FLOAT, "
+                    "target_price FLOAT, "
+                    "stop_loss_price FLOAT, "
+                    "analysis_status VARCHAR(32), "
+                    "trade_action VARCHAR(32), "
+                    "risk_status VARCHAR(32), "
+                    "result_data JSON, "
+                    "risk_items JSON, "
+                    "key_metrics JSON, "
+                    "data_gaps JSON, "
+                    "falsification_conditions JSON, "
+                    "not_applicable BOOLEAN, "
+                    "analyst_traces JSON, "
+                    "market_report TEXT, "
+                    "sentiment_report TEXT, "
+                    "news_report TEXT, "
+                    "fundamentals_report TEXT, "
+                    "macro_report TEXT, "
+                    "smart_money_report TEXT, "
+                    "volume_price_report TEXT, "
+                    "game_theory_report TEXT, "
+                    "investment_plan TEXT, "
+                    "trader_investment_plan TEXT, "
+                    "final_trade_decision TEXT, "
+                    "created_at DATETIME, "
+                    "updated_at DATETIME"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO reports (id, symbol, trade_date, status, result_data) VALUES "
+                    "('rep-old-1', '600519.SH', '2026-08-01', 'completed', '{\"symbol\": \"600519.SH\", \"protocol_version\": \"2.0\"}')"
+                )
+            )
+
+        stats = run_industry_backfill(db_path=db_path, dry_run=False)
+        assert stats["total_scanned"] == 1
+        assert stats["backfilled_count"] == 1
+
+        # Check DB columns and values
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        try:
+            row = session.query(ReportDB).filter(ReportDB.id == "rep-old-1").one()
+            assert row.industry == "白酒与精制茶酒"
+            assert row.result_data["instrument_context"]["industry"] == "白酒与精制茶酒"
         finally:
             session.close()
             engine.dispose()

@@ -104,14 +104,16 @@ def _ensure_auth_schema() -> None:
         logger.error("Failed to ensure auth schema: %s", e)
 
 
-def _ensure_report_schema() -> None:
+def _ensure_report_schema(target_engine=None) -> None:
     """Add missing report columns for existing deployments (SQLite / PG / MySQL).
 
-    Critical D-009 columns are migrated first. Dialect-specific DDL is used so
+    Critical D-009 / A13 columns are migrated first. Dialect-specific DDL is used so
     PostgreSQL does not receive SQLite-style ``BOOLEAN DEFAULT 0``. After ALTER,
     columns are re-inspected; missing critical columns abort startup.
     """
     from sqlalchemy import inspect as sa_inspect
+
+    target = target_engine or engine
 
     def _column_ddl(dialect: str, name: str) -> str:
         if name == "not_applicable":
@@ -123,6 +125,7 @@ def _ensure_report_schema() -> None:
                 return "BOOLEAN DEFAULT 0"
             return "BOOLEAN DEFAULT FALSE"
         mapping = {
+            "industry": "VARCHAR(50)",
             "direction": "VARCHAR(50)",
             "status": "VARCHAR(20) DEFAULT 'completed'",
             "error": "TEXT",
@@ -145,6 +148,7 @@ def _ensure_report_schema() -> None:
         "analysis_status",
         "trade_action",
         "risk_status",
+        "industry",
         "direction",
         "status",
         "error",
@@ -158,41 +162,39 @@ def _ensure_report_schema() -> None:
         "game_theory_report",
         "volume_price_report",
     ]
-    critical = {"analysis_status", "trade_action", "risk_status"}
+    critical = {"analysis_status", "trade_action", "risk_status", "industry"}
 
     try:
-        insp = sa_inspect(engine)
+        insp = sa_inspect(target)
         existing = {col["name"] for col in insp.get_columns("reports")}
     except Exception as e:
         logger.error("Failed to inspect reports schema: %s", e)
         raise RuntimeError(f"reports schema inspection failed: {e}") from e
 
     missing = [name for name in ordered_columns if name not in existing]
-    if not missing:
-        return
-
-    dialect = engine.dialect.name
-    try:
-        with engine.begin() as conn:
-            for name in missing:
-                col_type = _column_ddl(dialect, name)
-                if dialect == "sqlite":
-                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
-                elif dialect in {"postgresql", "postgres"}:
-                    conn.execute(
-                        text(f"ALTER TABLE reports ADD COLUMN IF NOT EXISTS {name} {col_type}")
-                    )
-                elif dialect in {"mysql", "mariadb"}:
-                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
-                else:
-                    conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
-    except Exception as e:
-        logger.error("Failed to ensure report schema: %s", e)
-        raise RuntimeError(f"report schema migration failed: {e}") from e
+    dialect = target.dialect.name
+    if missing:
+        try:
+            with target.begin() as conn:
+                for name in missing:
+                    col_type = _column_ddl(dialect, name)
+                    if dialect == "sqlite":
+                        conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
+                    elif dialect in {"postgresql", "postgres"}:
+                        conn.execute(
+                            text(f"ALTER TABLE reports ADD COLUMN IF NOT EXISTS {name} {col_type}")
+                        )
+                    elif dialect in {"mysql", "mariadb"}:
+                        conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
+                    else:
+                        conn.execute(text(f"ALTER TABLE reports ADD COLUMN {name} {col_type}"))
+        except Exception as e:
+            logger.error("Failed to ensure report schema: %s", e)
+            raise RuntimeError(f"report schema migration failed: {e}") from e
 
     # Re-inspect: critical columns must exist after migration.
     try:
-        insp = sa_inspect(engine)
+        insp = sa_inspect(target)
         after = {col["name"] for col in insp.get_columns("reports")}
     except Exception as e:
         raise RuntimeError(f"reports schema re-inspection failed: {e}") from e
@@ -202,6 +204,19 @@ def _ensure_report_schema() -> None:
             "Critical report columns missing after migration: "
             + ", ".join(missing_critical)
         )
+
+    # Ensure index on reports.industry if column exists
+    try:
+        existing_indexes = {idx.get("name") for idx in insp.get_indexes("reports") if idx.get("name")}
+        if "ix_reports_industry" not in existing_indexes and "industry" in after:
+            with target.begin() as conn:
+                if dialect in {"sqlite", "postgresql", "postgres"}:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_reports_industry ON reports (industry)"))
+                else:
+                    conn.execute(text("CREATE INDEX ix_reports_industry ON reports (industry)"))
+    except Exception as e:
+        logger.error("Failed to ensure reports industry index: %s", e)
+        raise RuntimeError(f"reports industry index migration failed: {e}") from e
 
 
 def _ensure_user_schema() -> None:
@@ -416,6 +431,7 @@ class ReportDB(Base):
     user_id = Column(String(64), index=True, nullable=True)  # For future multi-user support
     symbol = Column(String(20), index=True, nullable=False)
     trade_date = Column(String(10), nullable=False)
+    industry = Column(String(50), index=True, nullable=True)
     
     # Task lifecycle info
     status = Column(String(20), default="completed", index=True)  # pending, running, completed, failed
@@ -468,6 +484,7 @@ class ReportDB(Base):
             "user_id": self.user_id,
             "symbol": self.symbol,
             "trade_date": self.trade_date,
+            "industry": self.industry,
             "decision": self.decision,
             "direction": self.direction,
             "confidence": self.confidence,

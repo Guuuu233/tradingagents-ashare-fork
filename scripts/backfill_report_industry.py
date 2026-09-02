@@ -98,9 +98,10 @@ def load_raw_reports(
         try:
             from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
-            from api.database import ReportDB
+            from api.database import ReportDB, _ensure_report_schema
 
             engine = create_engine(db_url, connect_args={"check_same_thread": False})
+            _ensure_report_schema(engine)
             SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
             session = SessionCls()
             try:
@@ -226,7 +227,11 @@ def backfill_report_industry_in_sample(sample: Dict[str, Any]) -> Tuple[Dict[str
         prev_ind = extract_report_industry(updated)
         ensure_report_industry_persisted(res_data, symbol=symbol)
         curr_ind = extract_report_industry(updated)
-        modified = (prev_ind != curr_ind)
+        if curr_ind and str(curr_ind).strip() and str(curr_ind).strip() != "未知行业":
+            updated["industry"] = str(curr_ind).strip()
+        else:
+            updated["industry"] = None
+        modified = (prev_ind != curr_ind) or (sample.get("industry") != updated.get("industry"))
         return updated, modified, curr_ind
 
     return updated, False, None
@@ -311,12 +316,27 @@ def run_industry_backfill(
                 rep_id = r.get("id")
                 if rep_id:
                     db_row = db.query(ReportDB).filter(ReportDB.id == rep_id).first()
-                    if db_row and isinstance(db_row.result_data, dict):
-                        ensure_report_industry_persisted(db_row.result_data, symbol=db_row.symbol)
-                        flag_modified(db_row, "result_data")
+                    if db_row:
+                        if isinstance(db_row.result_data, dict):
+                            ensure_report_industry_persisted(db_row.result_data, symbol=db_row.symbol)
+                            flag_modified(db_row, "result_data")
+                            ind = extract_report_industry(db_row.result_data)
+                            if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+                                db_row.industry = str(ind).strip()
+                            else:
+                                db_row.industry = None
+                        elif db_row.symbol:
+                            from tradingagents.graph.data_collector import _map_stock_to_industry
+                            mapped = _map_stock_to_industry(db_row.symbol)
+                            if mapped and str(mapped).strip() and str(mapped).strip() != "未知行业":
+                                db_row.industry = str(mapped).strip()
+                            else:
+                                db_row.industry = None
+                        else:
+                            db_row.industry = None
                         persisted_count += 1
             db.commit()
-            logger.info("已将 %d 份已完成报告的行业更新持久化至数据库", persisted_count)
+            logger.info("已将 %d 份已完成报告的行业更新持久化至数据库 (JSON + SQL 列)", persisted_count)
         except Exception as exc:
             db.rollback()
             logger.error("数据库持久化回填失败: %s", exc)

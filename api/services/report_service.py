@@ -26,6 +26,7 @@ REPORT_SUMMARY_COLUMNS = (
     ReportDB.user_id,
     ReportDB.symbol,
     ReportDB.trade_date,
+    ReportDB.industry,
     ReportDB.status,
     ReportDB.error,
     ReportDB.decision,
@@ -1100,11 +1101,28 @@ def update_report_partial(
     for key, value in canonical_fields.items():
         setattr(db_report, key, value)
 
-    # Track A7: Persist verified industry on completed reports
-    if db_report.status == "completed" and isinstance(db_report.result_data, dict):
-        ensure_report_industry_persisted(db_report.result_data, symbol=db_report.symbol)
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(db_report, "result_data")
+    # Track A7 + A13: Persist verified industry on completed reports (both JSON slot and SQL column)
+    if db_report.status == "completed":
+        if isinstance(db_report.result_data, dict):
+            ensure_report_industry_persisted(db_report.result_data, symbol=db_report.symbol)
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(db_report, "result_data")
+            from tradingagents.agents.utils.shadow_credit import extract_report_industry
+            ind = extract_report_industry(db_report.result_data)
+            if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+                db_report.industry = str(ind).strip()
+            else:
+                db_report.industry = None
+        elif db_report.symbol:
+            from tradingagents.graph.data_collector import _map_stock_to_industry
+            mapped = _map_stock_to_industry(db_report.symbol)
+            if mapped and str(mapped).strip() and str(mapped).strip() != "未知行业":
+                db_report.industry = str(mapped).strip()
+            else:
+                db_report.industry = None
+    elif db_report.status != "completed" and "industry" not in canonical_fields:
+        if db_report.status in {"failed", "cancelled"}:
+            db_report.industry = None
 
     db_report.updated_at = datetime.now(timezone.utc)
     try:
@@ -1269,6 +1287,20 @@ def create_report(
             if h_status and all(st == "failed" for st in h_status.values()):
                 target_status = "failed"
 
+    # Track A13: Determine resolved industry for SQL column
+    resolved_industry = None
+    if target_status == "completed":
+        if isinstance(canonical_result_data, dict):
+            from tradingagents.agents.utils.shadow_credit import extract_report_industry
+            ind = extract_report_industry(canonical_result_data)
+            if ind and str(ind).strip() and str(ind).strip() != "未知行业":
+                resolved_industry = str(ind).strip()
+        if not resolved_industry and symbol:
+            from tradingagents.graph.data_collector import _map_stock_to_industry
+            mapped = _map_stock_to_industry(symbol)
+            if mapped and str(mapped).strip() and str(mapped).strip() != "未知行业":
+                resolved_industry = str(mapped).strip()
+
     # Check if we should update an existing record (initialized via init_report)
     db_report = None
     if report_id:
@@ -1277,6 +1309,7 @@ def create_report(
     if db_report:
         # Update existing
         db_report.status = target_status
+        db_report.industry = resolved_industry
         # A report may previously have been marked failed by an older worker
         # or timeout policy.  Successful finalisation is authoritative.
         if target_status == "completed":
@@ -1382,6 +1415,7 @@ def create_report(
             user_id=user_id,
             symbol=symbol,
             trade_date=trade_date,
+            industry=resolved_industry,
             status=target_status,
             error=None if target_status == "completed" else ((result_data.get("error") if isinstance(result_data, dict) else None) or "Report analysis failed"),
             decision=decision_value,
