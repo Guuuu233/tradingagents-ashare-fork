@@ -1,0 +1,88 @@
+{
+  "version": "1.0.0",
+  "name": "decision_semantics_regression_fixtures",
+  "description": "D-009 / decision-semantics-workflow frozen offline regression fixtures for R1, R2, and R3.",
+  "authority_rule": "R1/R2/R3 离线 fixture 齐备并通过前，不得声称历史案例已修复。",
+  "samples": {
+    "R1": {
+      "fixture_id": "R1",
+      "name": "歌尔股份",
+      "symbol": "002241.SZ",
+      "trade_date": "2026-05-28",
+      "fixture_file": "r1_goertek_fixture.json",
+      "scenario": "核心多空分歧未决（新产线良率 vs 砍单传闻）-> confirmation_state=UNRESOLVED, trade_action=WAIT 状态机路由及 PIT 数据隔离",
+      "expected_analysis_status": "VALID",
+      "expected_confirmation_state": "UNRESOLVED",
+      "expected_trade_action": "WAIT",
+      "expected_direction": "BULL",
+      "calibration_eligible": false,
+      "coverage_boundaries": {
+        "covered": [
+          "Point-in-Time (PIT) as-of 2026-05-28 data boundary",
+          "investment_debate_state with unverified focus claims (CLM-1, CLM-2)",
+          "confirmation_state state machine evaluation (UNRESOLVED -> WAIT)",
+          "Research Manager and Trader node non-executable WAIT short-circuit",
+          "Calibration eligibility exclusion due to non-directional trade action"
+        ],
+        "excluded": [
+          "Real external network fetching",
+          "Real broker credential/API keys",
+          "Production order routing"
+        ]
+      }
+    },
+    "R2": {
+      "fixture_id": "R2",
+      "name": "工业富联",
+      "symbol": "601138.SH",
+      "trade_date": "2026-07-30",
+      "fixture_file": "../news_events/r2_news_fixture.json",
+      "scenario": "新闻舆情时间戳 PIT cutoff 严格校验、未来新闻防前视阻断与重复新闻聚类",
+      "expected_cutoff": "2026-07-30",
+      "expected_hit_count": 1,
+      "expected_unverifiable_count": 2,
+      "expected_future_rejected_count": 1,
+      "coverage_boundaries": {
+        "covered": [
+          "News published_at timestamp validation",
+          "Anti-lookahead rejection of post-cutoff events",
+          "Near-duplicate news clustering",
+          "Fail-closed suspected_gaps semantics"
+        ],
+        "excluded": [
+          "External news search spider",
+          "Live crawler session tokens"
+        ]
+      }
+    },
+    "R3": {
+      "fixture_id": "R3",
+      "name": "蓝思科技",
+      "symbol": "300433.SZ",
+      "trade_date": "2026-05-06",
+      "fixture_file": "r3_lens_fixture.json",
+      "scenario": "七必需分析师全部失败 (502 / 上游异常) -> RunIntegrity 判定 INVALID_RUN / DATA_ERROR, trade_action=NO_TRADE 且严格排除在校准之外",
+      "expected_analysis_status": "INVALID_RUN",
+      "expected_failure_class": "DATA_ERROR",
+      "expected_trade_action": "NO_TRADE",
+      "expected_direction": "N/A",
+      "expected_all_required_failed": true,
+      "expected_failed_required_count": 7,
+      "calibration_eligible": false,
+      "coverage_boundaries": {
+        "covered": [
+          "7/7 required analyst failure detection (502 Bad Gateway wrappers)",
+          "RunIntegrity evaluation to INVALID_RUN / DATA_ERROR",
+          "Research Manager and Trader pre-LLM short-circuit with 0 LLM calls",
+          "Strict exclusion from calibration service (excluded_invalid bucket)",
+          "ReportDB persistence with typed INVALID_RUN status"
+        ],
+        "excluded": [
+          "Live LLM API connections",
+          "Real vendor access tokens / credentials",
+          "External market data spider"
+        ]
+      }
+    }
+  }
+}

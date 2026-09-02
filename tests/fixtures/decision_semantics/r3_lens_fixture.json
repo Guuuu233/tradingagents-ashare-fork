@@ -1,0 +1,215 @@
+{
+  "manifest": {
+    "fixture_id": "R3",
+    "name": "蓝思科技",
+    "symbol": "300433.SZ",
+    "trade_date": "2026-05-06",
+    "baseline_date": "2026-05-06",
+    "description": "R3 regression sample: Lens 300433.SZ as of 2026-05-06 with 7/7 analyst upstream 502 failures yielding INVALID_RUN/NO_TRADE.",
+    "coverage_boundaries": {
+      "coverage_scope": "7/7 required analyst upstream failures (502 wrappers), RunIntegrity evaluation to INVALID_RUN / DATA_ERROR, Research Manager and Trader pre-LLM short-circuit, strict exclusion from calibration evaluation and DB reports isolation.",
+      "boundary_notes": "Desensitized historical shape. No live network, no credentials, 502 error wrappers simulate upstream outage."
+    },
+    "expected_contract": {
+      "symbol": "300433.SZ",
+      "trade_date": "2026-05-06",
+      "analysis_status": "INVALID_RUN",
+      "failure_class": "DATA_ERROR",
+      "trade_action": "NO_TRADE",
+      "direction": "N/A",
+      "all_required_failed": true,
+      "failed_required_count": 7,
+      "required_count": 7,
+      "is_non_executable": true,
+      "calibration_eligible": false,
+      "excluded_from_calibration_stats": true
+    }
+  },
+  "id": "r3-lens-20260506-invalid-run-fixture",
+  "symbol": "300433.SZ",
+  "trade_date": "2026-05-06",
+  "status": "completed",
+  "analysis_status": "INVALID_RUN",
+  "trade_action": "NO_TRADE",
+  "direction": "N/A",
+  "decision": "NO_TRADE",
+  "risk_status": "UNKNOWN",
+  "confidence": null,
+  "probability": null,
+  "target_price": null,
+  "stop_loss_price": null,
+  "error": null,
+  "company_of_interest": "300433.SZ",
+  "horizon": "medium",
+  "market_data_context": {
+    "analysis_baseline_date": "2026-05-06",
+    "source_provenance": {
+      "stock_data": {
+        "status": "available",
+        "as_of": "2026-05-06",
+        "source": "akshare_offline_fixture"
+      }
+    }
+  },
+  "seven_reports": {
+    "macro_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "market_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "sentiment_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "news_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "fundamentals_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "smart_money_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+    "volume_price_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service"
+  },
+  "macro_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "market_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "sentiment_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "news_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "fundamentals_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "smart_money_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "volume_price_report": "分析报告生成失败：Error code: 502 - Bad Gateway from upstream model service",
+  "analyst_traces": [
+    {
+      "agent": "macro_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "market_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "social_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "news_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "fundamentals_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "smart_money_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    },
+    {
+      "agent": "volume_price_analyst",
+      "status": "failed",
+      "error": "502 Bad Gateway",
+      "key_finding": "分析报告生成失败：Error code: 502"
+    }
+  ],
+  "investment_debate_state": {
+    "history": "",
+    "bull_history": "",
+    "bear_history": "",
+    "current_speaker": "",
+    "current_response": "",
+    "count": 0,
+    "claims": [],
+    "round_messages": [],
+    "challenges": [],
+    "focus_claim_ids": [],
+    "open_claim_ids": [],
+    "resolved_claim_ids": [],
+    "unresolved_claim_ids": [],
+    "round_summary": "",
+    "round_goal": "",
+    "claim_counter": 0,
+    "protocol_version": "v2.0_structured",
+    "feature_flags": {
+      "v2_debate_enabled": true
+    }
+  },
+  "fund_flow_consensus_guard": {
+    "blocked": false,
+    "direction_allowed": true,
+    "status": "consensus"
+  },
+  "run_integrity": {
+    "required_analysts": [
+      "market",
+      "social",
+      "news",
+      "fundamentals",
+      "macro",
+      "smart_money",
+      "volume_price"
+    ],
+    "failed_required": [
+      "market",
+      "social",
+      "news",
+      "fundamentals",
+      "macro",
+      "smart_money",
+      "volume_price"
+    ],
+    "available_required": [],
+    "failed_required_count": 7,
+    "required_count": 7,
+    "all_required_failed": true,
+    "analysis_status": "INVALID_RUN",
+    "failure_class": "DATA_ERROR",
+    "reason_codes": [
+      "analyst_upstream_7_of_7_failed",
+      "market:prefix:分析报告生成失败",
+      "social:prefix:分析报告生成失败",
+      "news:prefix:分析报告生成失败",
+      "fundamentals:prefix:分析报告生成失败",
+      "macro:prefix:分析报告生成失败",
+      "smart_money:prefix:分析报告生成失败",
+      "volume_price:prefix:分析报告生成失败"
+    ]
+  },
+  "manager_verdict": {
+    "direction": "N/A",
+    "winner": "tie",
+    "reason": "运行完整性判定：必需分析师报告全部失败（INVALID_RUN/DATA_ERROR）。",
+    "position_pct": 0,
+    "consistency_check_passed": false,
+    "failed_checks": [
+      "all_required_analysts_failed"
+    ]
+  },
+  "decision_status": {
+    "analysis_status": "INVALID_RUN",
+    "direction": "N/A",
+    "trade_action": "NO_TRADE",
+    "risk_status": "UNKNOWN",
+    "confirmation_state": "UNRESOLVED",
+    "failure_class": "DATA_ERROR",
+    "reason_codes": [
+      "analyst_upstream_7_of_7_failed",
+      "market:prefix:分析报告生成失败",
+      "social:prefix:分析报告生成失败",
+      "news:prefix:分析报告生成失败",
+      "fundamentals:prefix:分析报告生成失败",
+      "macro:prefix:分析报告生成失败",
+      "smart_money:prefix:分析报告生成失败",
+      "volume_price:prefix:分析报告生成失败"
+    ],
+    "confidence": null,
+    "probability": null
+  },
+  "investment_plan": "运行完整性判定：必需分析师报告全部失败（INVALID_RUN/DATA_ERROR）。中止后续多空研判，生成 NO_TRADE 观望计划。",
+  "trader_investment_plan": "【系统终止】上游必需分析师报告全部失败（7/7 异常），当前运行被标记为 INVALID_RUN / NO_TRADE，禁止生成买入/卖出委托指令。",
+  "data_gaps": [
+    {
+      "analyst": "all",
+      "gap": "502 Bad Gateway on all 7 analysts"
+    }
+  ]
+}
