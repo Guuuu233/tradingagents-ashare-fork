@@ -273,6 +273,37 @@ class TestH1bSevenDimensionGates:
         assert result["matrix"]["dimension_time"]["passed"] is False
         assert result["matrix"]["dimension_time"]["details"]["calendar_days"] < 45
 
+    def test_dimension_t_plus_5_no_due_samples_fails_without_vacuous_pass(self):
+        """Dimension 4 (T+5): When due_count == 0, completeness rate must be 0.0 and fail even if N >= 60."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # Clear T+5 evaluation so all 60 samples are not due / pending
+        for s in samples:
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            s["shadow_credit_metrics"]["t_plus_5_status"] = "pending_due"
+            s["is_t_plus_5_due"] = False
+            s["t_plus_5_evaluated"] = False
+
+        result = evaluate_h1b_system_gates(samples)
+        assert result["passed"] is False
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is False
+        assert dim_t5["details"]["due_count"] == 0
+        assert dim_t5["details"]["completed_count"] == 0
+        assert dim_t5["details"]["completeness_rate"] == 0.0
+        assert dim_t5["details"]["reason"] == "no_due_samples"
+
+    def test_dimension_t_plus_5_completeness_passes_when_due_and_sufficient(self):
+        """Dimension 4 (T+5): When due_count > 0 and completeness rate >= 95%, passes."""
+        samples = _build_qualifying_sample_pool(n=60)
+        # All 60 samples are due and completed (60/60 = 100% >= 95%)
+        result = evaluate_h1b_system_gates(samples)
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is True
+        assert dim_t5["details"]["due_count"] == 60
+        assert dim_t5["details"]["completed_count"] == 60
+        assert dim_t5["details"]["completeness_rate"] == 1.0
+        assert "reason" not in dim_t5["details"]
+
     def test_dimension_t_plus_5_completeness_fails(self):
         """Dimension 4 (T+5): Completeness rate < 95% must fail."""
         samples = _build_qualifying_sample_pool(n=60)
@@ -283,7 +314,11 @@ class TestH1bSevenDimensionGates:
 
         result = evaluate_h1b_system_gates(samples)
         assert result["passed"] is False
-        assert result["matrix"]["dimension_t5"]["passed"] is False
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is False
+        assert dim_t5["details"]["due_count"] == 60
+        assert dim_t5["details"]["completed_count"] == 50
+        assert dim_t5["details"]["completeness_rate"] == round(50 / 60, 4)
 
     def test_dimension_balance_ratio_and_diff_fails(self):
         """Dimension 5 (Balance): |Nbull - Nbear| > 10 must fail."""

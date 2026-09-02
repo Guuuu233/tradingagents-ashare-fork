@@ -828,21 +828,25 @@ def evaluate_h1b_system_gates(
                 completed_t5_count += 1
 
     if due_t5_count == 0:
-        # If no sample is due or no historical evaluated data, mark based on sample count
-        t5_completeness_rate = 1.0 if sample_count >= cfg["min_sample_count"] else 0.0
-        pass_d4 = False if sample_count < cfg["min_sample_count"] else True
+        # If no sample is due or no historical evaluated data, completeness rate is 0.0 and Dimension 4 fails (no vacuous pass)
+        t5_completeness_rate = 0.0
+        pass_d4 = False
     else:
         t5_completeness_rate = completed_t5_count / due_t5_count
         pass_d4 = bool(t5_completeness_rate >= cfg["min_t_plus_5_completeness"])
 
+    dim_t5_details: dict[str, Any] = {
+        "due_count": due_t5_count,
+        "completed_count": completed_t5_count,
+        "completeness_rate": round(t5_completeness_rate, 4),
+        "min_required_rate": cfg["min_t_plus_5_completeness"],
+    }
+    if due_t5_count == 0:
+        dim_t5_details["reason"] = "no_due_samples"
+
     dim_t5 = {
         "passed": pass_d4,
-        "details": {
-            "due_count": due_t5_count,
-            "completed_count": completed_t5_count,
-            "completeness_rate": round(t5_completeness_rate, 4),
-            "min_required_rate": cfg["min_t_plus_5_completeness"],
-        },
+        "details": dim_t5_details,
     }
 
     # ── Dimension 5: Balance ──────────────────────────────────────────────────
@@ -1714,7 +1718,7 @@ def backfill_tplus5_shadow_for_reports(
     if stats["due_count"] > 0:
         stats["completeness_rate"] = round(stats["evaluated_count"] / stats["due_count"], 4)
     else:
-        stats["completeness_rate"] = 1.0 if stats["qualifying_v2_count"] >= 60 else 0.0
+        stats["completeness_rate"] = 0.0
 
     if stats["evaluated_count"] > 0:
         stats["hit_rate"] = round(stats["hit_count"] / stats["evaluated_count"], 4)
