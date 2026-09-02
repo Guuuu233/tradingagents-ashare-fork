@@ -298,7 +298,7 @@ def run_backfill(
     if verify_gates:
         print("\n" + "-" * 80)
         print("【联动校验】执行 7 维门槛校验矩阵...")
-        gate_res = evaluate_h1b_system_gates(updated_reports)
+        gate_res = evaluate_h1b_system_gates(updated_reports, as_of=as_of)
         print(format_gates_matrix_text(gate_res))
 
     return {

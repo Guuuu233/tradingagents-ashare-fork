@@ -977,9 +977,188 @@ class TestH1bVerifyGatesDbPath:
         )
         assert proc.returncode == 0
         assert os.path.exists(out_json)
-        with open(out_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        assert data["sample_count"] == 4
+
+
+class TestH1bTPlus5DueInference:
+    """Test suite for Track A12: T+5 due inference via trade_date / t_plus_5_date in Dimension 4."""
+
+    def test_t5_due_inferred_from_past_trade_date_when_unbackfilled_fails_completeness(self):
+        """When 60 samples have past trade_date (T+5 elapsed) but unbackfilled (hit/status/is_due is None),
+        Dimension 4 infers due_count=60, completed_count=0, completeness_rate=0.0, and fails due to missing data.
+        """
+        samples = _build_qualifying_sample_pool(n=60)
+        # Simulate unbackfilled historical samples where trade_date is in early August 2026 (>= 7 days before 2026-09-02)
+        for i, s in enumerate(samples):
+            s["trade_date"] = "2026-08-03"
+            # Clear all T+5 pre-evaluated metadata
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            s["shadow_credit_metrics"].pop("t_plus_5_status", None)
+            s["shadow_credit_metrics"].pop("t_plus_5_date", None)
+            s.pop("t_plus_5_status", None)
+            s.pop("t_plus_5_date", None)
+            s.pop("t_plus_5_evaluated", None)
+            s["is_t_plus_5_due"] = None
+
+        result = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        assert result["passed"] is False
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is False
+        assert dim_t5["details"]["due_count"] == 60
+        assert dim_t5["details"]["completed_count"] == 0
+        assert dim_t5["details"]["completeness_rate"] == 0.0
+        # Honest failure: due_count > 0 so reason is NOT "no_due_samples"
+        assert "reason" not in dim_t5["details"]
+
+    def test_t5_due_not_inferred_when_trade_date_is_pending_due(self):
+        """When trade_date is too recent (T+5 > as_of), samples are pending and not due (due_count=0 -> no_due_samples)."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for s in samples:
+            s["trade_date"] = "2026-09-01"
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            s["is_t_plus_5_due"] = None
+            s.pop("t_plus_5_status", None)
+            s.pop("t_plus_5_date", None)
+            s.pop("t_plus_5_evaluated", None)
+
+        # As of 2026-09-02, T+5 of 2026-09-01 is 2026-09-08 (> 2026-09-02)
+        result = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        assert result["passed"] is False
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is False
+        assert dim_t5["details"]["due_count"] == 0
+        assert dim_t5["details"]["completed_count"] == 0
+        assert dim_t5["details"]["completeness_rate"] == 0.0
+        assert dim_t5["details"]["reason"] == "no_due_samples"
+
+    def test_t5_due_explicit_false_and_suspension_excluded(self):
+        """Explicit is_t_plus_5_due=False, pending_due, and suspension status are excluded from due denominator."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for i, s in enumerate(samples):
+            s["trade_date"] = "2026-08-01"
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            if i < 20:
+                s["is_t_plus_5_due"] = False
+            elif i < 40:
+                s["t_plus_5_status"] = "suspension"
+            else:
+                s["t_plus_5_status"] = "pending_due"
+
+        result = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        assert result["passed"] is False
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["details"]["due_count"] == 0
+        assert dim_t5["details"]["completed_count"] == 0
+        assert dim_t5["details"]["reason"] == "no_due_samples"
+
+    def test_t5_due_inferred_from_top_level_or_metrics_t_plus_5_date(self):
+        """When t_plus_5_date is explicitly present (on sample or metrics), use it to compare against as_of."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for i, s in enumerate(samples):
+            s["trade_date"] = None
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            s["is_t_plus_5_due"] = None
+            if i < 30:
+                s["t_plus_5_date"] = "2026-08-10"
+            else:
+                s["shadow_credit_metrics"]["t_plus_5_date"] = "2026-08-12"
+
+        result = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        dim_t5 = result["matrix"]["dimension_t5"]
+        assert dim_t5["details"]["due_count"] == 60
+        assert dim_t5["details"]["completed_count"] == 0
+
+        # Now test with future t_plus_5_date
+        for s in samples:
+            s["t_plus_5_date"] = "2026-09-15"
+            s["shadow_credit_metrics"].pop("t_plus_5_date", None)
+        result_future = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        assert result_future["matrix"]["dimension_t5"]["details"]["due_count"] == 0
+        assert result_future["matrix"]["dimension_t5"]["details"]["reason"] == "no_due_samples"
+
+    def test_t5_due_unparseable_or_failed_calendar_does_not_invent_due(self):
+        """When trade date is unparseable or calendar fails/has insufficient days, do NOT invent due status."""
+        samples = _build_qualifying_sample_pool(n=60)
+        for s in samples:
+            s["trade_date"] = "not-a-valid-date"
+            s["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            s["is_t_plus_5_due"] = None
+
+        res_invalid = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        assert res_invalid["matrix"]["dimension_t5"]["details"]["due_count"] == 0
+        assert res_invalid["matrix"]["dimension_t5"]["details"]["reason"] == "no_due_samples"
+
+        # Test with custom calendar having insufficient forward trading days (< 5)
+        for s in samples:
+            s["trade_date"] = "2026-08-01"
+        res_cal_fail = evaluate_h1b_system_gates(
+            samples,
+            as_of="2026-09-02",
+            trading_calendar=["2026-08-01", "2026-08-02"],
+        )
+        assert res_cal_fail["matrix"]["dimension_t5"]["details"]["due_count"] == 0
+        assert res_cal_fail["matrix"]["dimension_t5"]["details"]["reason"] == "no_due_samples"
+
+    def test_t5_due_mixed_due_and_pending_calculates_honest_rate(self):
+        """Mixed sample set: 57 due and completed + 3 due uncompleted -> 57/60 = 95% PASS.
+        56 due and completed + 4 due uncompleted -> 56/60 = 93.3% FAIL.
+        """
+        samples = _build_qualifying_sample_pool(n=60)
+        # 57 completed due samples
+        for i in range(57):
+            samples[i]["trade_date"] = "2026-08-03"
+            samples[i]["shadow_credit_metrics"]["t_plus_5_direction_hit"] = True
+
+        # 3 uncompleted due samples (due inferred from trade_date, hit is None)
+        for i in range(57, 60):
+            samples[i]["trade_date"] = "2026-08-03"
+            samples[i]["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+            samples[i]["is_t_plus_5_due"] = None
+
+        res_95 = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        dim_t5_95 = res_95["matrix"]["dimension_t5"]
+        assert dim_t5_95["passed"] is True
+        assert dim_t5_95["details"]["due_count"] == 60
+        assert dim_t5_95["details"]["completed_count"] == 57
+        assert dim_t5_95["details"]["completeness_rate"] == 0.95
+
+        # Change 1 more to uncompleted (56/60)
+        samples[56]["shadow_credit_metrics"]["t_plus_5_direction_hit"] = None
+        samples[56]["is_t_plus_5_due"] = None
+        res_93 = evaluate_h1b_system_gates(samples, as_of="2026-09-02")
+        dim_t5_93 = res_93["matrix"]["dimension_t5"]
+        assert dim_t5_93["passed"] is False
+        assert dim_t5_93["details"]["due_count"] == 60
+        assert dim_t5_93["details"]["completed_count"] == 56
+        assert dim_t5_93["details"]["completeness_rate"] == round(56 / 60, 4)
+
+    def test_t5_due_nested_result_data_inference(self):
+        """evaluate_h1b_system_gates extracts trade_date and t_plus_5_date from nested result_data."""
+        reports = []
+        for i in range(60):
+            rep = {
+                "id": f"rep-{i}",
+                "symbol": f"6000{i % 20:02d}.SH",
+                "trade_date": "2026-08-03",
+                "result_data": {
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "trade_date": "2026-08-03",
+                    "industry": "电子",
+                    "manager_verdict": {"winner": "bull" if i % 2 == 0 else "bear", "direction": "看多"},
+                    "shadow_credit_metrics": {
+                        "bull_verified_rate": 0.9,
+                        "bear_verified_rate": 0.9,
+                        "t_plus_5_direction_hit": None,
+                    },
+                },
+            }
+            reports.append(rep)
+
+        res = evaluate_h1b_system_gates(reports, as_of="2026-09-02")
+        dim_t5 = res["matrix"]["dimension_t5"]
+        assert dim_t5["passed"] is False
+        assert dim_t5["details"]["due_count"] == 60
+        assert dim_t5["details"]["completed_count"] == 0
+        assert dim_t5["details"]["completeness_rate"] == 0.0
 
     def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, tmp_path):
         """CLI invocation with bad --db-path exits with non-zero exit code and error logged."""

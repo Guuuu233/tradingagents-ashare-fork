@@ -272,6 +272,7 @@ def run_verify(
     output_json: Optional[str] = None,
     input_file: Optional[str] = None,
     input_dir: Optional[str] = None,
+    as_of: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute gate verification and generate structured report."""
     reports = load_reports_from_db(
@@ -281,7 +282,7 @@ def run_verify(
     )
 
     # 1. 7-dimension gate evaluation
-    gate_eval = evaluate_h1b_system_gates(reports)
+    gate_eval = evaluate_h1b_system_gates(reports, as_of=as_of)
 
     # 2. Model isolation evaluation
     isolation_eval = evaluate_model_bias_and_weights(
@@ -322,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument("--input-file", type=str, default=None, help="指定评测 JSON 文件路径")
     parser.add_argument("--input-dir", type=str, default=None, help="指定评测 JSON 目录路径")
     parser.add_argument("--output-json", type=str, default="work/h1b_gates_report.json", help="输出汇总 JSON 路径")
+    parser.add_argument("--as-of", type=str, default=None, help="评估基准日期 (YYYY-MM-DD)")
     args = parser.parse_args()
 
     try:
@@ -330,6 +332,7 @@ if __name__ == "__main__":
             output_json=args.output_json,
             input_file=args.input_file,
             input_dir=args.input_dir,
+            as_of=args.as_of,
         )
     except Exception as exc:
         logger.error("门槛校验执行失败: %s", exc)

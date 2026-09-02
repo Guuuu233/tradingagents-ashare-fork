@@ -634,6 +634,9 @@ def evaluate_h1b_system_gates(
     samples_or_reports: Sequence[Mapping[str, Any]],
     *,
     thresholds: Optional[Mapping[str, Any]] = None,
+    as_of: Optional[Union[str, date, datetime]] = None,
+    trading_calendar: Optional[Sequence[Union[str, date]]] = None,
+    calendar_dates: Optional[Sequence[Union[str, date]]] = None,
 ) -> dict[str, Any]:
     """Evaluate 7-dimension gate thresholds for credit weighting activation.
 
@@ -651,6 +654,22 @@ def evaluate_h1b_system_gates(
     cfg = dict(H1B_THRESHOLDS)
     if thresholds:
         cfg.update(thresholds)
+
+    cal_dates = trading_calendar if trading_calendar is not None else calendar_dates
+
+    # Parse as_of date (defaulting to today in CN timezone)
+    as_of_date: date
+    if as_of is None:
+        as_of_date = now_cn().date()
+    elif isinstance(as_of, datetime):
+        as_of_date = as_of.date()
+    elif isinstance(as_of, date):
+        as_of_date = as_of
+    elif isinstance(as_of, str):
+        parsed_as_of = _parse_sample_date(as_of)
+        as_of_date = parsed_as_of if parsed_as_of is not None else now_cn().date()
+    else:
+        as_of_date = now_cn().date()
 
     samples = list(samples_or_reports or [])
     sample_count = len(samples)
@@ -805,22 +824,85 @@ def evaluate_h1b_system_gates(
     completed_t5_count = 0
 
     for s in samples:
+        res_data = s.get("result_data") if isinstance(s.get("result_data"), Mapping) else {}
         metrics = s.get("shadow_credit_metrics")
+        if not metrics or not isinstance(metrics, Mapping):
+            metrics = res_data.get("shadow_credit_metrics") if isinstance(res_data.get("shadow_credit_metrics"), Mapping) else None
         if not metrics or not isinstance(metrics, Mapping):
             metrics = calculate_shadow_credit_metrics(s)
         hit = metrics.get("t_plus_5_direction_hit")
-        st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status")
+        st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status") or res_data.get("t_plus_5_status")
         # Exclude suspension from due denominator
-        if st == "suspension" or s.get("is_suspended") is True or s.get("suspension") is True:
+        if (
+            st == "suspension"
+            or s.get("is_suspended") is True
+            or s.get("suspension") is True
+            or res_data.get("is_suspended") is True
+            or res_data.get("suspension") is True
+        ):
             continue
         # Exclude pending / in-flight samples from due denominator
-        if st == "pending_due" or s.get("is_in_flight") is True or s.get("is_t_plus_5_due") is False:
+        if (
+            st == "pending_due"
+            or s.get("is_in_flight") is True
+            or s.get("is_t_plus_5_due") is False
+            or res_data.get("is_in_flight") is True
+            or res_data.get("is_t_plus_5_due") is False
+        ):
             continue
 
         is_due = s.get("is_t_plus_5_due")
+        if is_due is None and res_data:
+            is_due = res_data.get("is_t_plus_5_due")
+
         if is_due is None:
-            # If not explicitly marked, treat as due if trade_date exists and > 5 days ago or hit is not None
-            is_due = (hit is not None) or bool(s.get("t_plus_5_evaluated", False)) or (st in ("due_and_evaluated", "data_missing"))
+            if (
+                (hit is not None)
+                or bool(s.get("t_plus_5_evaluated", False))
+                or bool(res_data.get("t_plus_5_evaluated", False))
+                or (st in ("due_and_evaluated", "data_missing"))
+            ):
+                is_due = True
+            else:
+                # 1. Check if t_plus_5_date exists (top-level, shadow_credit_metrics, or result_data) and <= as_of
+                raw_t5_date = (
+                    s.get("t_plus_5_date")
+                    or metrics.get("t_plus_5_date")
+                    or res_data.get("t_plus_5_date")
+                )
+                t5_parsed = _parse_sample_date(raw_t5_date) if raw_t5_date else None
+                if t5_parsed is not None:
+                    is_due = bool(t5_parsed <= as_of_date)
+                else:
+                    # 2. Check if trade_date / date exists and compute T+5 date forward
+                    raw_td = (
+                        s.get("trade_date")
+                        or s.get("date")
+                        or res_data.get("trade_date")
+                        or res_data.get("date")
+                    )
+                    td_parsed = _parse_sample_date(raw_td) if raw_td else None
+                    if td_parsed is not None:
+                        td_str = td_parsed.strftime("%Y-%m-%d")
+                        calc_t5_str = None
+                        try:
+                            calc_t5_str = calculate_t_plus_5_date(td_str, calendar_dates=cal_dates)
+                        except Exception as exc:
+                            logger.debug("calculate_t_plus_5_date in gate evaluation failed for %s: %s", td_str, exc)
+                            calc_t5_str = None
+
+                        if calc_t5_str:
+                            calc_t5_parsed = _parse_sample_date(calc_t5_str)
+                            if calc_t5_parsed is not None and calc_t5_parsed <= as_of_date:
+                                is_due = True
+                            else:
+                                is_due = False
+                        else:
+                            # Calculation failed / out of calendar: do not invent due
+                            is_due = False
+                    else:
+                        # Cannot parse date: do not invent due
+                        is_due = False
 
         if is_due:
             due_t5_count += 1
