@@ -978,6 +978,155 @@ class TestH1bVerifyGatesDbPath:
         assert proc.returncode == 0
         assert os.path.exists(out_json)
 
+    def test_unmigrated_db_without_industry_column_ensures_schema_and_loads_completed(self, tmp_path):
+        """Track A14: unmigrated SQLite DB without industry column has schema ensured on read and loads completed reports."""
+        import sqlite3
+        from sqlalchemy import create_engine, inspect
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        db_path = str(tmp_path / "unmigrated_reports.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE reports (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id VARCHAR(64),
+                symbol VARCHAR(20),
+                trade_date VARCHAR(10),
+                status VARCHAR(20),
+                error TEXT,
+                decision VARCHAR(50),
+                direction VARCHAR(50),
+                confidence INTEGER,
+                probability FLOAT,
+                target_price FLOAT,
+                stop_loss_price FLOAT,
+                analysis_status VARCHAR(32),
+                trade_action VARCHAR(32),
+                risk_status VARCHAR(32),
+                result_data JSON,
+                risk_items JSON,
+                key_metrics JSON,
+                data_gaps JSON,
+                falsification_conditions JSON,
+                not_applicable BOOLEAN,
+                analyst_traces JSON,
+                market_report TEXT,
+                sentiment_report TEXT,
+                news_report TEXT,
+                fundamentals_report TEXT,
+                macro_report TEXT,
+                smart_money_report TEXT,
+                volume_price_report TEXT,
+                game_theory_report TEXT,
+                investment_plan TEXT,
+                trader_investment_plan TEXT,
+                final_trade_decision TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reports (id, symbol, trade_date, status, result_data) VALUES
+            ('rep-unmig-1', '600519.SH', '2026-08-01', 'completed', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bull", "direction": "看多"}}'),
+            ('rep-unmig-2', '000858.SZ', '2026-08-02', 'completed', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bear", "direction": "看空"}}'),
+            ('rep-unmig-3', '600036.SH', '2026-08-03', 'failed', '{"protocol_version": "v2_structured_disagreement", "manager_verdict": {"winner": "bull"}}')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        # Check that industry column does NOT exist before ensure
+        check_engine = create_engine(f"sqlite:///{db_path}")
+        insp_before = inspect(check_engine)
+        cols_before = {col["name"] for col in insp_before.get_columns("reports")}
+        assert "industry" not in cols_before
+        check_engine.dispose()
+
+        # Call load_reports_from_db: schema should be ensured before query
+        reports = load_reports_from_db(db_path=db_path)
+        assert len(reports) == 2
+        symbols = [r.get("symbol") for r in reports]
+        assert symbols == ["600519.SH", "000858.SZ"]
+
+        # Verify industry column and index were added to SQLite table
+        insp_after = inspect(check_engine)
+        cols_after = {col["name"] for col in insp_after.get_columns("reports")}
+        assert "industry" in cols_after
+        indexes_after = {idx["name"] for idx in insp_after.get_indexes("reports")}
+        assert "ix_reports_industry" in indexes_after
+        check_engine.dispose()
+
+        # Call run_verify to verify full path succeeds
+        out_json = str(tmp_path / "out_unmigrated.json")
+        res = run_verify(db_path=db_path, output_json=out_json)
+        assert res["sample_count"] == 2
+        assert os.path.exists(out_json)
+
+    def test_schema_migration_failure_raises_explicit_runtime_error_without_golden_fallback(self, tmp_path, monkeypatch):
+        """Track A14: failure during _ensure_report_schema raises explicit RuntimeError and never falls back to golden."""
+        import sqlite3
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        db_path = str(tmp_path / "fail_migration.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE reports (id VARCHAR(64) PRIMARY KEY, status VARCHAR(20))")
+        conn.commit()
+        conn.close()
+
+        def _mock_ensure_fail(target_engine=None):
+            raise RuntimeError("Mocked DDL migration failure on reports")
+
+        monkeypatch.setattr("api.database._ensure_report_schema", _mock_ensure_fail)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            load_reports_from_db(db_path=db_path)
+        assert "Mocked DDL migration failure" in str(exc_info.value)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            run_verify(db_path=db_path)
+        assert "Mocked DDL migration failure" in str(exc_info.value)
+
+    def test_schema_inspection_failure_raises_explicit_runtime_error(self, tmp_path, monkeypatch):
+        """Track A14: inspection failure during _ensure_report_schema raises explicit RuntimeError without fallback."""
+        from scripts.verify_h1b_gates import load_reports_from_db, run_verify
+
+        db_path = str(tmp_path / "inspect_fail.db")
+        tmp_path.joinpath("inspect_fail.db").touch()
+
+        def _mock_inspect_fail(target):
+            raise RuntimeError("Mocked inspect failure")
+
+        monkeypatch.setattr("sqlalchemy.inspect", _mock_inspect_fail)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            load_reports_from_db(db_path=db_path)
+        assert "Mocked inspect failure" in str(exc_info.value)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            run_verify(db_path=db_path)
+        assert "Mocked inspect failure" in str(exc_info.value)
+
+    def test_default_db_schema_migration_failure_raises_explicit_runtime_error_without_golden_fallback(self, monkeypatch):
+        """Track A14: default DB with reports table experiencing migration failure raises RuntimeError instead of golden fallback."""
+        from scripts.verify_h1b_gates import load_reports_from_db
+
+        class _MockInspector:
+            def has_table(self, table_name):
+                return table_name == "reports"
+
+        monkeypatch.setattr("sqlalchemy.inspect", lambda engine: _MockInspector())
+        monkeypatch.setattr(
+            "api.database._ensure_report_schema",
+            lambda target_engine=None: (_ for _ in ()).throw(RuntimeError("Mocked default DB migration error")),
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            load_reports_from_db()
+        assert "Mocked default DB migration error" in str(exc_info.value)
+
 
 class TestH1bTPlus5DueInference:
     """Test suite for Track A12: T+5 due inference via trade_date / t_plus_5_date in Dimension 4."""

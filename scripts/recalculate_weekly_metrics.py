@@ -183,22 +183,26 @@ def load_reports(
 
     # 3. Database (ReportDB / SQLite)
     try:
-        from api.database import get_db_ctx, ReportDB
-        with get_db_ctx() as db:
-            db_query = db.query(ReportDB)
-            # Fetch completed reports
-            db_reports = db_query.filter(ReportDB.status == "completed").all()
-            for r in db_reports:
-                data = r.to_dict()
-                res_data = data.get("result_data") or {}
-                if isinstance(res_data, dict):
-                    merged = {**res_data, **data}
-                    reports.append(merged)
-                else:
-                    reports.append(data)
-        if reports:
-            logger.info("从 SQLite 数据库中检索到 %d 份已完成报告", len(reports))
-            return reports
+        from sqlalchemy import inspect as sa_inspect
+        from api.database import get_db_ctx, ReportDB, _ensure_report_schema, engine
+        insp = sa_inspect(engine)
+        if insp.has_table("reports"):
+            _ensure_report_schema(target_engine=engine)
+            with get_db_ctx() as db:
+                db_query = db.query(ReportDB)
+                # Fetch completed reports
+                db_reports = db_query.filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    data = r.to_dict()
+                    res_data = data.get("result_data") or {}
+                    if isinstance(res_data, dict):
+                        merged = {**res_data, **data}
+                        reports.append(merged)
+                    else:
+                        reports.append(data)
+            if reports:
+                logger.info("从 SQLite 数据库中检索到 %d 份已完成报告", len(reports))
+                return reports
     except Exception as exc:
         logger.debug("从数据库加载报告失败 (正常离线/无DB环境): %s", exc)
 

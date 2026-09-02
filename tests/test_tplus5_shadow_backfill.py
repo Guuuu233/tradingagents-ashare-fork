@@ -617,6 +617,84 @@ class TestBackfillTplus5ShadowDbPath:
         assert res["sample_count"] == 0
         assert res["stats"]["total_scanned"] == 0
 
+    def test_unmigrated_db_without_industry_column_ensures_schema_and_loads_completed(self, tmp_path):
+        """Track A14: unmigrated SQLite DB without industry column has schema ensured on read and loads completed reports."""
+        import sqlite3
+        from sqlalchemy import create_engine, inspect
+
+        db_path = str(tmp_path / "unmigrated_tplus5.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE reports (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id VARCHAR(64),
+                symbol VARCHAR(20),
+                trade_date VARCHAR(10),
+                status VARCHAR(20),
+                error TEXT,
+                decision VARCHAR(50),
+                direction VARCHAR(50),
+                confidence INTEGER,
+                probability FLOAT,
+                target_price FLOAT,
+                stop_loss_price FLOAT,
+                analysis_status VARCHAR(32),
+                trade_action VARCHAR(32),
+                risk_status VARCHAR(32),
+                result_data JSON,
+                risk_items JSON,
+                key_metrics JSON,
+                data_gaps JSON,
+                falsification_conditions JSON,
+                not_applicable BOOLEAN,
+                analyst_traces JSON,
+                market_report TEXT,
+                sentiment_report TEXT,
+                news_report TEXT,
+                fundamentals_report TEXT,
+                macro_report TEXT,
+                smart_money_report TEXT,
+                volume_price_report TEXT,
+                game_theory_report TEXT,
+                investment_plan TEXT,
+                trader_investment_plan TEXT,
+                final_trade_decision TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reports (id, symbol, trade_date, status, result_data) VALUES
+            ('rep-unmig-1', '600519.SH', '2026-08-01', 'completed', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bull"}}'),
+            ('rep-unmig-2', '000858.SZ', '2026-08-02', 'completed', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bear"}}')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        # Check industry column does not exist before read
+        check_engine = create_engine(f"sqlite:///{db_path}")
+        insp_before = inspect(check_engine)
+        cols_before = {col["name"] for col in insp_before.get_columns("reports")}
+        assert "industry" not in cols_before
+        check_engine.dispose()
+
+        reports, db_ctx = load_raw_reports(db_path=db_path)
+        assert len(reports) == 2
+        assert db_ctx is not None
+        db_ctx[0].__exit__(None, None, None)
+
+        # Verify industry column and index were added
+        insp_after = inspect(check_engine)
+        cols_after = {col["name"] for col in insp_after.get_columns("reports")}
+        assert "industry" in cols_after
+        indexes_after = {idx["name"] for idx in insp_after.get_indexes("reports")}
+        assert "ix_reports_industry" in indexes_after
+        check_engine.dispose()
+
     def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
         """CLI invocation with --db-path exits with 0."""
         import subprocess

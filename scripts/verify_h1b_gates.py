@@ -61,23 +61,26 @@ def load_reports_from_db(
             raise FileNotFoundError(f"指定的 SQLite 数据库路径不存在: {db_path}")
 
         abs_path = str(p.resolve())
-        ro_url = f"sqlite:///file:{abs_path}?mode=ro&uri=true"
+        db_url = f"sqlite:///{abs_path}"
         try:
             from sqlalchemy import create_engine
             from sqlalchemy.orm import sessionmaker
-            from api.database import ReportDB
+            from api.database import ReportDB, _ensure_report_schema
 
-            engine = create_engine(ro_url, connect_args={"check_same_thread": False})
-            SessionRO = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-            session = SessionRO()
+            engine = create_engine(db_url, connect_args={"check_same_thread": False})
             try:
-                db_reports = session.query(ReportDB).filter(ReportDB.status == "completed").all()
-                for r in db_reports:
-                    data = r.to_dict()
-                    raw_reports.append(data)
-                logger.info("从 SQLite 数据库 %s 中加载了 %d 份 completed 报告记录", abs_path, len(raw_reports))
+                _ensure_report_schema(target_engine=engine)
+                SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+                session = SessionCls()
+                try:
+                    db_reports = session.query(ReportDB).filter(ReportDB.status == "completed").all()
+                    for r in db_reports:
+                        data = r.to_dict()
+                        raw_reports.append(data)
+                    logger.info("从 SQLite 数据库 %s 中加载了 %d 份 completed 报告记录", abs_path, len(raw_reports))
+                finally:
+                    session.close()
             finally:
-                session.close()
                 engine.dispose()
         except Exception as exc:
             logger.error("读取指定 SQLite 数据库 %s 失败: %s", db_path, exc)
@@ -138,16 +141,21 @@ def load_reports_from_db(
     # 4. Try loading via sqlalchemy ReportDB if db exists
     if not raw_reports:
         try:
-            from api.database import get_db_ctx, ReportDB
-            with get_db_ctx() as db:
-                db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
-                for r in db_reports:
-                    data = r.to_dict()
-                    raw_reports.append(data)
-            if raw_reports:
-                logger.info("从数据库中加载了 %d 份 completed 报告记录", len(raw_reports))
+            from sqlalchemy import inspect as sa_inspect
+            from api.database import get_db_ctx, ReportDB, _ensure_report_schema, engine
+            insp = sa_inspect(engine)
+            if insp.has_table("reports"):
+                _ensure_report_schema(target_engine=engine)
+                with get_db_ctx() as db:
+                    db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
+                    for r in db_reports:
+                        data = r.to_dict()
+                        raw_reports.append(data)
+                if raw_reports:
+                    logger.info("从数据库中加载了 %d 份 completed 报告记录", len(raw_reports))
         except Exception as exc:
-            logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
+            logger.error("从数据库加载报告或 schema 迁移失败: %s", exc)
+            raise RuntimeError(f"从数据库加载报告或 schema 迁移失败: {exc}") from exc
 
     # 5. Check golden audit reports as fallback/supplement
     if not raw_reports:
