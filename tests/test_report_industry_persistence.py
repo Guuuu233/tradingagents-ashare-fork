@@ -674,3 +674,146 @@ class TestBackfillReportIndustryDbPath:
         )
         assert proc.returncode != 0
 
+
+class TestBackfillReportIndustryDefaultDbPath:
+    """Test suite for Track A15: backfill_report_industry default get_db_ctx path ensures schema."""
+
+    def test_default_db_without_industry_column_ensures_schema_and_loads_completed(self, tmp_path, monkeypatch):
+        """Track A15: default DB without industry column has schema ensured on read and loads completed reports."""
+        import sqlite3
+        from sqlalchemy import inspect as sa_inspect
+
+        db_path = str(tmp_path / "default_unmigrated.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE reports (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id VARCHAR(64),
+                symbol VARCHAR(20),
+                trade_date VARCHAR(10),
+                status VARCHAR(20),
+                error TEXT,
+                decision VARCHAR(50),
+                direction VARCHAR(50),
+                confidence INTEGER,
+                probability FLOAT,
+                target_price FLOAT,
+                stop_loss_price FLOAT,
+                analysis_status VARCHAR(32),
+                trade_action VARCHAR(32),
+                risk_status VARCHAR(32),
+                result_data JSON,
+                risk_items JSON,
+                key_metrics JSON,
+                data_gaps JSON,
+                falsification_conditions JSON,
+                not_applicable BOOLEAN,
+                analyst_traces JSON,
+                market_report TEXT,
+                sentiment_report TEXT,
+                news_report TEXT,
+                fundamentals_report TEXT,
+                macro_report TEXT,
+                smart_money_report TEXT,
+                volume_price_report TEXT,
+                game_theory_report TEXT,
+                investment_plan TEXT,
+                trader_investment_plan TEXT,
+                final_trade_decision TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO reports (id, symbol, trade_date, status, result_data) VALUES
+            ('rep-def-1', '600519.SH', '2026-08-01', 'completed', '{"symbol": "600519.SH", "protocol_version": "v2_structured_disagreement", "instrument_context": {"symbol": "600519.SH"}}'),
+            ('rep-def-2', '000858.SZ', '2026-08-02', 'completed', '{"symbol": "000858.SZ", "protocol_version": "v2_structured_disagreement", "instrument_context": {"symbol": "000858.SZ"}}'),
+            ('rep-def-3', '600036.SH', '2026-08-03', 'failed', '{"symbol": "600036.SH"}')
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        test_engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+        # Verify industry column does not exist before ensure
+        insp_before = sa_inspect(test_engine)
+        cols_before = {col["name"] for col in insp_before.get_columns("reports")}
+        assert "industry" not in cols_before
+
+        # Monkeypatch default database engine and SessionLocal
+        monkeypatch.setattr("api.database.engine", test_engine)
+        monkeypatch.setattr("api.database.SessionLocal", TestSession)
+
+        # Call load_raw_reports() via default path (no db_path, no input files)
+        reports, db_ctx = load_raw_reports()
+        assert len(reports) == 2
+        symbols = [r["symbol"] for r in reports]
+        assert set(symbols) == {"600519.SH", "000858.SZ"}
+        assert db_ctx is not None
+        db_ctx[0].__exit__(None, None, None)
+
+        # Verify industry column and index were added to SQLite table
+        insp_after = sa_inspect(test_engine)
+        cols_after = {col["name"] for col in insp_after.get_columns("reports")}
+        assert "industry" in cols_after
+        indexes_after = {idx["name"] for idx in insp_after.get_indexes("reports")}
+        assert "ix_reports_industry" in indexes_after
+
+        # Verify run_industry_backfill via default path works end-to-end and updates DB
+        stats = run_industry_backfill(dry_run=False)
+        assert stats["total_scanned"] == 2
+        assert stats["backfilled_count"] == 2
+
+        session = TestSession()
+        try:
+            row1 = session.query(ReportDB).filter(ReportDB.id == "rep-def-1").one()
+            assert row1.industry == "白酒与精制茶酒"
+            assert row1.result_data["instrument_context"]["industry"] == "白酒与精制茶酒"
+            row2 = session.query(ReportDB).filter(ReportDB.id == "rep-def-2").one()
+            assert row2.industry == "白酒与精制茶酒"
+            assert row2.result_data["instrument_context"]["industry"] == "白酒与精制茶酒"
+        finally:
+            session.close()
+            test_engine.dispose()
+
+    def test_default_db_schema_migration_failure_raises_explicit_runtime_error_without_golden_fallback(self, monkeypatch):
+        """Track A15: default DB with reports table experiencing migration failure raises RuntimeError instead of golden fallback."""
+        class _MockInspector:
+            def has_table(self, table_name):
+                return table_name == "reports"
+
+        monkeypatch.setattr("sqlalchemy.inspect", lambda engine: _MockInspector())
+        monkeypatch.setattr(
+            "api.database._ensure_report_schema",
+            lambda target_engine=None: (_ for _ in ()).throw(RuntimeError("Mocked default DB migration error")),
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            load_raw_reports()
+        assert "Mocked default DB migration error" in str(exc_info.value)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            run_industry_backfill()
+        assert "Mocked default DB migration error" in str(exc_info.value)
+
+    def test_default_db_inspection_failure_raises_explicit_runtime_error(self, monkeypatch):
+        """Track A15: inspection failure on default DB raises explicit RuntimeError without fallback."""
+        def _mock_inspect_fail(target):
+            raise RuntimeError("Mocked inspect failure on default engine")
+
+        monkeypatch.setattr("sqlalchemy.inspect", _mock_inspect_fail)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            load_raw_reports()
+        assert "Mocked inspect failure on default engine" in str(exc_info.value)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            run_industry_backfill()
+        assert "Mocked inspect failure on default engine" in str(exc_info.value)
+
+

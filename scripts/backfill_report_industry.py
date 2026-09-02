@@ -170,19 +170,24 @@ def load_raw_reports(
     # 4. Try loading via sqlalchemy ReportDB if db exists
     if not raw_reports:
         try:
-            from api.database import get_db_ctx, ReportDB
-            ctx = get_db_ctx()
-            db = ctx.__enter__()
-            db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
-            for r in db_reports:
-                raw_reports.append(r.to_dict())
-            if raw_reports:
-                logger.info("从数据库中加载了 %d 份 completed 报告", len(raw_reports))
-                db_ctx = (ctx, db, ReportDB)
-            else:
-                ctx.__exit__(None, None, None)
+            from sqlalchemy import inspect as sa_inspect
+            from api.database import get_db_ctx, ReportDB, _ensure_report_schema, engine
+            insp = sa_inspect(engine)
+            if insp.has_table("reports"):
+                _ensure_report_schema(target_engine=engine)
+                ctx = get_db_ctx()
+                db = ctx.__enter__()
+                db_reports = db.query(ReportDB).filter(ReportDB.status == "completed").all()
+                for r in db_reports:
+                    raw_reports.append(r.to_dict())
+                if raw_reports:
+                    logger.info("从数据库中加载了 %d 份 completed 报告", len(raw_reports))
+                    db_ctx = (ctx, db, ReportDB)
+                else:
+                    ctx.__exit__(None, None, None)
         except Exception as exc:
-            logger.debug("从数据库加载报告失败 (可能无数据库或表为空): %s", exc)
+            logger.error("从数据库加载报告或 schema 迁移失败: %s", exc)
+            raise RuntimeError(f"从数据库加载报告或 schema 迁移失败: {exc}") from exc
 
     # 5. Fallback to golden audit samples
     if not raw_reports:
