@@ -60,7 +60,6 @@ class TestBacktestHoldDaysStrictness:
             "final_trade_decision": "BUY",
             "analysis_status": "VALID",
             "trade_action": "BUY",
-            "price_basis": "raw",
         }
 
         with (
@@ -89,7 +88,8 @@ class TestBacktestHoldDaysStrictness:
         assert record["return_pct"] is None
         assert record["analysis_status"] == "VALID"
         assert record["trade_action"] == "BUY"
-        assert record["price_basis"] == "raw"
+        assert record["price_basis"] == "vendor_qfq"
+        assert record["price_basis"] != "raw"
         assert record["entry_price"] == 100.0
         assert record["entry_price_as_of"] == "2024-01-02"
 
@@ -110,7 +110,7 @@ class TestBacktestSemanticExclusions:
             "final_trade_decision": "BUY 强烈推荐买入（但运行实际失败）",
             "analysis_status": "INVALID_RUN",
             "trade_action": "NO_TRADE",
-            "price_basis": "raw",
+            "price_basis": "vendor_qfq",
         }
 
         with (
@@ -154,7 +154,7 @@ class TestBacktestSemanticExclusions:
             "final_trade_decision": "WAIT 观望等待确认",
             "analysis_status": "VALID",
             "trade_action": "WAIT",
-            "price_basis": "raw",
+            "price_basis": "vendor_qfq",
         }
 
         with (
@@ -229,7 +229,7 @@ class TestBacktestSemanticExclusions:
                 "action": "BUY",
                 "trade_action": "BUY",
                 "analysis_status": "VALID",
-                "price_basis": "raw",
+                "price_basis": "vendor_qfq",
                 "entry_price": 100.0,
                 "entry_price_as_of": "2024-01-02",
                 "exit_price": 110.0,
@@ -242,7 +242,7 @@ class TestBacktestSemanticExclusions:
                 "action": "SELL",
                 "trade_action": "SELL",
                 "analysis_status": "VALID",
-                "price_basis": "raw",
+                "price_basis": "vendor_qfq",
                 "entry_price": 100.0,
                 "entry_price_as_of": "2024-01-10",
                 "exit_price": 90.0,
@@ -369,7 +369,8 @@ class TestCalibrationIsolationIntegrity:
         assert res["excluded_abstain"] >= 1
         assert res["excluded_no_trade"] >= 1
         assert "excluded_incomplete_outcome" in res or "skipped_no_outcome" in res
-        assert res["price_basis"] == "raw"
+        assert res["price_basis"] == "vendor_qfq"
+        assert res["price_basis"] != "raw"
 
     def test_calibration_insufficient_sample_returns_none_metrics(self):
         from api.database import get_db_ctx, init_db, UserDB
@@ -396,3 +397,131 @@ class TestCalibrationIsolationIntegrity:
         assert res["brier_score"] is None
         assert all(b["rise_rate"] is None for b in res["buckets"])
         assert res["excluded_invalid"] >= 1
+
+
+class TestPriceBasisSemantics:
+    """DAV-606: verify price_basis正名: vendor_qfq replaces raw default."""
+
+    def test_constants_defined(self):
+        """Named constants must be defined and match allowed values."""
+        assert getattr(bt, "PRICE_BASIS_VENDOR_QFQ", None) == "vendor_qfq"
+        assert getattr(bt, "PRICE_BASIS_UNSPECIFIED", None) == "unspecified"
+        assert getattr(cal, "PRICE_BASIS_VENDOR_QFQ", None) == "vendor_qfq"
+
+    def test_single_analysis_defaults_to_vendor_qfq_and_never_raw(self):
+        """_run_single_analysis must default price_basis to vendor_qfq, never raw."""
+        with patch("tradingagents.graph.trading_graph.TradingAgentsGraph") as mock_graph_cls:
+            mock_graph = MagicMock()
+            mock_graph.propagate.return_value = ({"final_trade_decision": "BUY"}, {})
+            mock_graph.process_signal.return_value = "BUY"
+            mock_graph_cls.return_value = mock_graph
+
+            res = bt._run_single_analysis("600519.SH", "2024-01-02", ["market"], {})
+            assert res["price_basis"] == "vendor_qfq"
+            assert res["price_basis"] != "raw"
+
+    def test_single_analysis_preserves_explicit_price_basis(self):
+        """_run_single_analysis preserves explicit caller-provided price_basis."""
+        with patch("tradingagents.graph.trading_graph.TradingAgentsGraph") as mock_graph_cls:
+            mock_graph = MagicMock()
+            mock_graph.propagate.return_value = (
+                {"final_trade_decision": "BUY", "price_basis": "unspecified"},
+                {},
+            )
+            mock_graph.process_signal.return_value = "BUY"
+            mock_graph_cls.return_value = mock_graph
+
+            res = bt._run_single_analysis("600519.SH", "2024-01-02", ["market"], {})
+            assert res["price_basis"] == "unspecified"
+
+    def test_backtest_run_defaults_to_vendor_qfq_when_analysis_omits_price_basis(self):
+        """_run_backtest record must default price_basis to vendor_qfq and never raw."""
+        job_id = "test-job-price-basis-default"
+        bt._create_job(job_id=job_id, user_id="u1", status="pending")
+
+        analysis_mock = {
+            "decision": "BUY",
+            "final_trade_decision": "BUY",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            # price_basis omitted
+        }
+
+        with (
+            patch.object(bt, "_get_trading_dates", return_value=["2024-01-02"]),
+            patch.object(bt, "_run_single_analysis", return_value=analysis_mock),
+            patch.object(bt, "_get_price_on", side_effect=_fake_price_on(100.0)),
+            patch.object(bt, "_get_price_after", side_effect=_fake_price_after(110.0)),
+        ):
+            bt._run_backtest(
+                job_id=job_id,
+                symbol="600519.SH",
+                start_date="2024-01-02",
+                end_date="2024-01-02",
+                selected_analysts=["market"],
+                hold_days=5,
+                sample_interval=1,
+                config={},
+            )
+
+        job = bt.get_job(job_id, "u1")
+        assert job is not None
+        record = job["records"][0]
+        assert record["price_basis"] == "vendor_qfq"
+        assert record["price_basis"] != "raw"
+
+    def test_backtest_run_preserves_explicit_price_basis(self):
+        """_run_backtest preserves explicit price_basis when declared by analysis."""
+        job_id = "test-job-price-basis-explicit"
+        bt._create_job(job_id=job_id, user_id="u1", status="pending")
+
+        analysis_mock = {
+            "decision": "BUY",
+            "final_trade_decision": "BUY",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "price_basis": "unspecified",
+        }
+
+        with (
+            patch.object(bt, "_get_trading_dates", return_value=["2024-01-02"]),
+            patch.object(bt, "_run_single_analysis", return_value=analysis_mock),
+            patch.object(bt, "_get_price_on", side_effect=_fake_price_on(100.0)),
+            patch.object(bt, "_get_price_after", side_effect=_fake_price_after(110.0)),
+        ):
+            bt._run_backtest(
+                job_id=job_id,
+                symbol="600519.SH",
+                start_date="2024-01-02",
+                end_date="2024-01-02",
+                selected_analysts=["market"],
+                hold_days=5,
+                sample_interval=1,
+                config={},
+            )
+
+        job = bt.get_job(job_id, "u1")
+        assert job is not None
+        record = job["records"][0]
+        assert record["price_basis"] == "unspecified"
+
+    def test_calibration_summary_defaults_to_vendor_qfq_and_never_raw(self):
+        """Calibration output price_basis must be vendor_qfq and never raw."""
+        from api.database import get_db_ctx, init_db, UserDB
+        init_db()
+        now = datetime.now(timezone.utc)
+        user_id = str(uuid4())
+        with get_db_ctx() as db:
+            user = UserDB(id=user_id, email=f"cal-{uuid4().hex[:8]}@t.com", is_active=True, created_at=now, updated_at=now, last_login_at=now)
+            db.add(user)
+            db.commit()
+
+            res = cal.compute_calibration(
+                db,
+                user_id=user_id,
+                hold_days=5,
+                outcome_resolver=lambda r: True,
+            )
+
+        assert res["price_basis"] == "vendor_qfq"
+        assert res["price_basis"] != "raw"

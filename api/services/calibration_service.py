@@ -29,9 +29,17 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from api.database import ReportDB
-from api.services.backtest_service import _get_price_on
+from api.services.backtest_service import (
+    _get_price_on,
+    PRICE_BASIS_VENDOR_QFQ,
+    PRICE_BASIS_UNSPECIFIED,
+)
 
 logger = logging.getLogger(__name__)
+
+# Price basis semantics (DAV-606)
+PRICE_BASIS_VENDOR_QFQ: str = PRICE_BASIS_VENDOR_QFQ
+PRICE_BASIS_UNSPECIFIED: str = PRICE_BASIS_UNSPECIFIED
 
 # Bounded evaluation: fetching hold-window prices is I/O-heavy, so cap how many
 # reports a single calibration run resolves.  Mirrors backtest_service's
@@ -745,7 +753,7 @@ def _compute_calibration_unlocked(
             "incomplete": skipped_no_outcome,
             "total": exclusion_stats["excluded_total"] + skipped_no_outcome,
         },
-        "price_basis": "raw",
+        "price_basis": PRICE_BASIS_VENDOR_QFQ,
         "filters": {
             "start_date": start_date,
             "end_date": end_date,

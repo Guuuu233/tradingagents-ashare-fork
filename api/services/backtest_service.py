@@ -34,6 +34,10 @@ MAX_RETAINED_BACKTEST_JOBS = max(1, int(os.getenv("BACKTEST_MAX_RETAINED_JOBS", 
 MIN_SAMPLE_INTERVAL = 1
 MAX_SAMPLE_INTERVAL = 365
 
+# Price basis semantics (DAV-606)
+PRICE_BASIS_VENDOR_QFQ: str = "vendor_qfq"
+PRICE_BASIS_UNSPECIFIED: str = "unspecified"
+
 
 class BacktestQueueFullError(RuntimeError):
     """Raised when the bounded backtest submission queue is full."""
@@ -251,7 +255,7 @@ def _run_single_analysis(
         final_state.get("trade_action")
         or (dec_status.trade_action if dec_status else None)
     )
-    price_basis = final_state.get("price_basis") or "raw"
+    price_basis = final_state.get("price_basis") or PRICE_BASIS_VENDOR_QFQ
 
     return {
         "final_trade_decision": decision_raw,
@@ -457,7 +461,7 @@ def _run_backtest(job_id: str, symbol: str, start_date: str, end_date: str,
                     if trade_action not in ("WAIT", "NO_TRADE"):
                         trade_action = "NO_TRADE"
 
-                price_basis = analysis.get("price_basis") or "raw"
+                price_basis = analysis.get("price_basis") or PRICE_BASIS_VENDOR_QFQ
 
                 record["analysis_status"] = analysis_status
                 record["trade_action"] = trade_action
