@@ -1972,7 +1972,7 @@ def _fetch_all(
     glob_evs, glob_unp = parse_news_markdown_to_evidences(global_news_text, default_entity="宏观/行业")
     event_cov = build_news_event_coverage(
         stock_evs + glob_evs + stock_unp + glob_unp,
-        requested_themes=["跨市场", "财报", "行业政策", "公司治理", "重大合同"],
+        requested_themes=None,
         cutoff=trade_date,
         window=f"{lookback}天",
         default_entity=ticker,

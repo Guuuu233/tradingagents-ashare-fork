@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NEWS_WINDOW = "14天"
 GAP_UNVERIFIABLE_MESSAGE = "未检索到/不可验证"
+RECALL_STATUS_UNKNOWN = "unknown"
+RECALL_STATUS_PARTIAL_VS_MANIFEST = "partial_vs_manifest"
+LEGACY_DEFAULT_THEMES = ("跨市场", "财报", "行业政策", "公司治理", "重大合同")
 
 _THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
     "跨市场": ("跨市场", "美股", "港股", "汇率", "关税", "外盘", "全球", "海外", "a50", "nasdaq", "标普"),
@@ -280,6 +283,7 @@ def cluster_news_evidences(
 def build_news_event_coverage(
     items_or_evidences: Iterable[Mapping[str, Any] | NewsEvidence],
     requested_themes: Sequence[str] | None = None,
+    query_manifest: Sequence[str] | None = None,
     cutoff: str | datetime | None = None,
     window: str | int = DEFAULT_NEWS_WINDOW,
     default_entity: str = "",
@@ -292,6 +296,8 @@ def build_news_event_coverage(
     - Deduplication: near-duplicate items form a single EventCluster.
     - Suspected gaps: requested themes with 0 hits are documented with
       '未检索到/不可验证', strictly forbidding '确认无相关新闻'.
+    - Recall honesty (DAV-608): recall_status is 'unknown' when no manifest/themes provided;
+      'partial_vs_manifest' when manifest/themes explicitly supplied. No theme fabrication.
     """
     cutoff_dt = parse_cutoff_datetime(cutoff)
     cutoff_str = cutoff.strftime("%Y-%m-%d") if isinstance(cutoff, datetime) else str(cutoff or "")
@@ -369,12 +375,16 @@ def build_news_event_coverage(
     hit_cluster_ids = [c.cluster_id for c in clusters]
     hit_count = len(clusters)
 
-    # 4. Suspected gaps evaluation
-    themes_to_check = list(requested_themes or [])
-    if not themes_to_check and clusters:
-        themes_to_check = list({c.theme for c in clusters if c.theme})
-    if not themes_to_check:
-        themes_to_check = ["跨市场", "财报", "行业政策", "公司治理", "重大合同"]
+    # 4. Suspected gaps evaluation (DAV-608: no fabrication of default 5 themes)
+    manifest_source = query_manifest if query_manifest is not None else requested_themes
+    if manifest_source:
+        manifest_list = list(manifest_source)
+        recall_status = RECALL_STATUS_PARTIAL_VS_MANIFEST
+        themes_to_check = manifest_list
+    else:
+        manifest_list = []
+        recall_status = RECALL_STATUS_UNKNOWN
+        themes_to_check = []
 
     hit_themes = {c.theme for c in clusters}
     suspected_gaps: list[dict[str, Any]] = []
@@ -395,7 +405,9 @@ def build_news_event_coverage(
     return {
         "cutoff": cutoff_str,
         "window": window_str,
-        "requested_themes": themes_to_check,
+        "recall_status": recall_status,
+        "query_manifest": manifest_list,
+        "requested_themes": manifest_list,
         "hit_count": hit_count,
         "hit_cluster_ids": hit_cluster_ids,
         "unverifiable_count": len(unverifiable_items),
@@ -480,16 +492,25 @@ def format_event_coverage_summary(coverage: Mapping[str, Any]) -> str:
     """Format compact, prompt-injectable news event coverage summary."""
     cutoff = coverage.get("cutoff", "")
     window = coverage.get("window", DEFAULT_NEWS_WINDOW)
-    themes = ", ".join(coverage.get("requested_themes", []))
+    recall_status = coverage.get("recall_status", RECALL_STATUS_UNKNOWN)
+    manifest = coverage.get("query_manifest") or coverage.get("requested_themes") or []
+    themes_str = ", ".join(manifest) if manifest else "未指定（无应查清单）"
     hit_count = coverage.get("hit_count", 0)
     unverifiable_count = coverage.get("unverifiable_count", 0)
     future_count = coverage.get("future_rejected_count", 0)
     gaps = coverage.get("suspected_gaps", [])
 
+    recall_explanation = (
+        "召回完整性未知；未提供应查清单，仅证明时间资格"
+        if recall_status == RECALL_STATUS_UNKNOWN
+        else "仅对比调用方声明清单，非全市场核验"
+    )
+
     lines = [
         "【新闻事件结构化覆盖度（event_coverage）】",
         f"- 截断基准日（cutoff）：{cutoff}（观察窗口：{window}）",
-        f"- 重点覆盖主题：{themes or '未指定'}",
+        f"- 召回完整性（recall_status）：{recall_status}（{recall_explanation}）",
+        f"- 重点覆盖主题（query_manifest）：{themes_str}",
         f"- 命中有效事件簇：{hit_count} 个",
     ]
 
@@ -510,6 +531,9 @@ def format_event_coverage_summary(coverage: Mapping[str, Any]) -> str:
                 f"  * {theme_name}：{GAP_UNVERIFIABLE_MESSAGE}（注：未检索到不等于无相关事件，不可验证项不得作为利多/利空依据）"
             )
     else:
-        lines.append("- 潜在数据缺口：无明显主题缺失")
+        if recall_status == RECALL_STATUS_UNKNOWN:
+            lines.append("- 潜在数据缺口：未知（未提供应查清单，不作缺口假设）")
+        else:
+            lines.append("- 潜在数据缺口：清单内主题均已检索到对应事件（注：仅限声明清单，非全市场核验）")
 
     return "\n".join(lines)

@@ -88,7 +88,7 @@ def create_news_analyst(llm, data_collector=None):
         all_evidences = stock_evidences + global_evidences
         all_unparseable = stock_unparseable + global_unparseable
 
-        requested_themes = focus_areas if focus_areas else ["跨市场", "财报", "行业政策", "公司治理", "重大合同"]
+        requested_themes = focus_areas if focus_areas else None
         event_coverage = build_news_event_coverage(
             all_evidences + all_unparseable,
             requested_themes=requested_themes,

@@ -311,3 +311,195 @@ def test_prompt_contains_unverifiable_discipline_rule():
 
     en_prompt = get_prompt("news_system_message", config={"prompt_language": "en"})
     assert "event_coverage" in en_prompt or "unverifiable" in en_prompt
+
+
+def test_event_coverage_without_manifest_defaults_to_unknown_recall():
+    """DAV-608 RED: requested_themes=None results in recall_status='unknown' and query_manifest=[], no fabricated 5 themes."""
+    raw_items = [
+        {
+            "title": "公司签署重大战略合作协议",
+            "published_at": "2026-07-29 14:00:00",
+            "theme": "重大合同",
+            "entity": "600519",
+            "source": "上证报",
+            "summary": "重大战略合作协议",
+        }
+    ]
+
+    coverage = build_news_event_coverage(
+        raw_items,
+        cutoff="2026-07-30",
+        requested_themes=None,
+    )
+
+    assert coverage["recall_status"] == "unknown"
+    assert coverage["query_manifest"] == []
+    assert coverage["requested_themes"] == []
+    for default_theme in ("跨市场", "财报", "行业政策", "公司治理", "重大合同"):
+        assert default_theme not in coverage["requested_themes"]
+        assert default_theme not in coverage["query_manifest"]
+    # Suspected gaps must not pretend default themes are gaps
+    assert coverage["suspected_gaps"] == []
+
+    summary = format_event_coverage_summary(coverage)
+    assert "无明显主题缺失" not in summary
+    assert "unknown" in summary or "未知" in summary
+
+
+def test_format_event_coverage_summary_forbids_no_apparent_gap_message():
+    """DAV-608 RED: format_event_coverage_summary must NEVER contain '无明显主题缺失' on any code path."""
+    # Path 1: Unknown manifest, no gaps
+    cov_unknown = build_news_event_coverage(
+        [],
+        cutoff="2026-07-30",
+        requested_themes=None,
+    )
+    summary_unknown = format_event_coverage_summary(cov_unknown)
+    assert "无明显主题缺失" not in summary_unknown
+
+    # Path 2: Explicit manifest where all items hit, so suspected_gaps is empty
+    items = [
+        {
+            "title": "重大合同公告",
+            "published_at": "2026-07-29 10:00:00",
+            "theme": "重大合同",
+            "source": "东财",
+            "summary": "重大合同内容",
+        }
+    ]
+    cov_hit = build_news_event_coverage(
+        items,
+        cutoff="2026-07-30",
+        requested_themes=["重大合同"],
+    )
+    assert len(cov_hit["suspected_gaps"]) == 0
+    summary_hit = format_event_coverage_summary(cov_hit)
+    assert "无明显主题缺失" not in summary_hit
+    assert "全市场查全" not in summary_hit
+
+
+def test_event_coverage_with_explicit_manifest_has_partial_vs_manifest_status():
+    """DAV-608: With explicit requested_themes or query_manifest, recall_status is partial_vs_manifest."""
+    items = [
+        {
+            "title": "半年报业绩披露",
+            "published_at": "2026-07-29 10:00:00",
+            "theme": "财报",
+            "source": "东财",
+            "summary": "半年报内容",
+        }
+    ]
+    coverage = build_news_event_coverage(
+        items,
+        cutoff="2026-07-30",
+        requested_themes=["财报", "行业政策"],
+    )
+    assert coverage["recall_status"] == "partial_vs_manifest"
+    assert coverage["query_manifest"] == ["财报", "行业政策"]
+    assert coverage["requested_themes"] == ["财报", "行业政策"]
+    assert len(coverage["suspected_gaps"]) == 1
+    gap = coverage["suspected_gaps"][0]
+    assert gap["theme"] == "行业政策"
+    assert gap["status"] == "unverified_or_not_found"
+    assert "未检索到/不可验证" in gap["message"]
+    assert "确认无新闻" not in gap["message"]
+    assert "确认无相关新闻" not in gap["message"]
+
+
+def test_news_analyst_without_focus_areas_does_not_inject_default_themes():
+    """DAV-608 RED: news_analyst without focus_areas must not inject 5 themes into coverage manifest."""
+    from tradingagents.agents.analysts.news_analyst import create_news_analyst
+
+    mock_llm = MagicMock()
+    mock_chunk = MagicMock()
+    mock_chunk.content = "新闻分析报告正文\n<!-- VERDICT: {\"direction\": \"中性\", \"reason\": \"数据中性\"} -->"
+    mock_chunk.response_metadata = {"token_usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}}
+
+    async def mock_astream(messages):
+        yield mock_chunk
+
+    mock_llm.astream = mock_astream
+
+    mock_collector = {
+        ("002167", "2026-07-30"): {
+            "news": "### 东方财富：重大合作 [发布时间：2026-07-29 10:00:00] (source: 东方财富)\n合作内容",
+            "global_news": "### 全球财经快讯 [发布时间：2026-07-29 11:00:00] (source: 新浪)\n全球宏观动态",
+            "_data_window": "14天",
+        }
+    }
+
+    class MockCollectorObj:
+        def get(self, ticker, date):
+            return mock_collector.get((ticker, date))
+
+    news_node = create_news_analyst(mock_llm, data_collector=MockCollectorObj())
+
+    # user_intent with NO focus_areas
+    state = {
+        "trade_date": "2026-07-30",
+        "company_of_interest": "002167",
+        "user_intent": {},
+    }
+
+    with patch("tradingagents.agents.analysts.news_analyst.get_cn_stock_name", return_value="东方国信"), \
+         patch("tradingagents.agents.analysts.news_analyst.resolve_industry_context", return_value=(None, "【行业常识知识库】\n【知识库未命中】")), \
+         patch("tradingagents.agents.analysts.news_analyst.resolve_macro_event_context", return_value=(None, "【宏观事件传导图谱】\n【知识库未命中】")), \
+         patch("tradingagents.agents.analysts.news_analyst.log_llm_call"):
+        result = asyncio.run(news_node(state))
+
+    assert "event_coverage" in result
+    coverage = result["event_coverage"]
+    assert coverage["recall_status"] == "unknown"
+    assert coverage["query_manifest"] == []
+    assert coverage["requested_themes"] == []
+    for default_theme in ("跨市场", "财报", "行业政策", "公司治理", "重大合同"):
+        assert default_theme not in coverage["requested_themes"]
+        assert default_theme not in coverage["query_manifest"]
+
+
+def test_news_analyst_with_focus_areas_retains_manifest():
+    """DAV-608: news_analyst with explicit focus_areas records query_manifest and partial_vs_manifest status."""
+    from tradingagents.agents.analysts.news_analyst import create_news_analyst
+
+    mock_llm = MagicMock()
+    mock_chunk = MagicMock()
+    mock_chunk.content = "新闻分析报告正文\n<!-- VERDICT: {\"direction\": \"中性\", \"reason\": \"数据中性\"} -->"
+    mock_chunk.response_metadata = {"token_usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}}
+
+    async def mock_astream(messages):
+        yield mock_chunk
+
+    mock_llm.astream = mock_astream
+
+    mock_collector = {
+        ("002167", "2026-07-30"): {
+            "news": "### 东方财富：重大合作 [发布时间：2026-07-29 10:00:00] (source: 东方财富)\n合作内容",
+            "global_news": "### 全球财经快讯 [发布时间：2026-07-29 11:00:00] (source: 新浪)\n全球宏观动态",
+            "_data_window": "14天",
+        }
+    }
+
+    class MockCollectorObj:
+        def get(self, ticker, date):
+            return mock_collector.get((ticker, date))
+
+    news_node = create_news_analyst(mock_llm, data_collector=MockCollectorObj())
+
+    # user_intent with focus_areas
+    state = {
+        "trade_date": "2026-07-30",
+        "company_of_interest": "002167",
+        "user_intent": {"focus_areas": ["财报", "行业政策"]},
+    }
+
+    with patch("tradingagents.agents.analysts.news_analyst.get_cn_stock_name", return_value="东方国信"), \
+         patch("tradingagents.agents.analysts.news_analyst.resolve_industry_context", return_value=(None, "【行业常识知识库】\n【知识库未命中】")), \
+         patch("tradingagents.agents.analysts.news_analyst.resolve_macro_event_context", return_value=(None, "【宏观事件传导图谱】\n【知识库未命中】")), \
+         patch("tradingagents.agents.analysts.news_analyst.log_llm_call"):
+        result = asyncio.run(news_node(state))
+
+    assert "event_coverage" in result
+    coverage = result["event_coverage"]
+    assert coverage["recall_status"] == "partial_vs_manifest"
+    assert coverage["query_manifest"] == ["财报", "行业政策"]
+    assert coverage["requested_themes"] == ["财报", "行业政策"]
