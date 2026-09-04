@@ -178,12 +178,12 @@ def compute_source_hash(
 ) -> str:
     """Compute deterministic hash for source verification and deduplication.
 
-    When normalized URL is provided, incorporates it into the hash.
+    When normalized URL is provided, aligns cross-source hash (determined by URL, DAV-612).
     When URL is absent, preserves legacy title/source/published_at/summary behavior.
     """
     norm_url = normalize_url(url)
     if norm_url:
-        raw = f"{str(source).strip()}:{str(title).strip()}:{str(published_at).strip()}:{str(summary).strip()[:100]}:{norm_url}"
+        raw = f"url:{norm_url}"
     else:
         raw = f"{str(source).strip()}:{str(title).strip()}:{str(published_at).strip()}:{str(summary).strip()[:100]}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]

@@ -548,6 +548,9 @@ def test_url_deduplication_different_source_and_differing_titles():
         # DAV-610 forbidden: no canonical_event_id invented
         assert "canonical_event_id" not in ev
     assert "canonical_event_id" not in cluster
+    # DAV-612: Cross-source hash alignment when normalized URL is present
+    assert cluster["evidences"][0]["source_hash"] == cluster["evidences"][1]["source_hash"]
+    assert len(cluster["source_hashes"]) == 1
 
 
 def test_normalize_url_trim_and_strip_fragment():
@@ -591,9 +594,13 @@ def test_compute_source_hash_incorporates_url():
     hash_with_frag = compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要", url="https://example.com/1#section")
     assert hash_with_frag == hash_with_url
 
-    # Source is preserved in hash (different source -> different hash)
+    # DAV-612: Same normalized URL across different sources produces IDENTICAL source_hash
     hash_diff_src = compute_source_hash("新浪", "标题", "2026-07-29 10:00:00", "摘要", url="https://example.com/1")
-    assert hash_diff_src != hash_with_url
+    assert hash_diff_src == hash_with_url
+
+    # DAV-612: Without URL, different sources still produce different hashes
+    hash_no_url_diff_src = compute_source_hash("新浪", "标题", "2026-07-29 10:00:00", "摘要")
+    assert hash_no_url_diff_src != base_hash
 
 
 def test_parse_news_markdown_extracts_link_url():
