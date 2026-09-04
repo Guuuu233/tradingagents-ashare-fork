@@ -36,6 +36,7 @@ from typing import Any, Mapping
 import urllib.parse
 
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -427,10 +428,174 @@ def build_cninfo_record(
     )
 
 
+CNINFO_CATEGORY_DICT: dict[str, str] = {
+    "年报": "category_ndbg_szsh",
+    "半年报": "category_bndbg_szsh",
+    "一季报": "category_yjdbg_szsh",
+    "三季报": "category_sjdbg_szsh",
+    "业绩预告": "category_yjygjxz_szsh",
+    "权益分派": "category_qyfpxzcs_szsh",
+    "董事会": "category_dshgg_szsh",
+    "监事会": "category_jshgg_szsh",
+    "股东大会": "category_gddh_szsh",
+    "日常经营": "category_rcjy_szsh",
+    "公司治理": "category_gszl_szsh",
+    "中介报告": "category_zj_szsh",
+    "首发": "category_sf_szsh",
+    "增发": "category_zf_szsh",
+    "股权激励": "category_gqjl_szsh",
+    "配股": "category_pg_szsh",
+    "解禁": "category_jj_szsh",
+    "公司债": "category_gszq_szsh",
+    "可转债": "category_kzzq_szsh",
+    "其他融资": "category_qtrz_szsh",
+    "股权变动": "category_gqbd_szsh",
+    "补充更正": "category_bcgz_szsh",
+    "澄清致歉": "category_cqdq_szsh",
+    "风险提示": "category_fxts_szsh",
+    "特别处理和退市": "category_tbclts_szsh",
+    "退市整理期": "category_tszlq_szsh",
+}
+
+
+def attach_adjunct_url_to_df(
+    df: pd.DataFrame,
+    raw_announcements: list[dict[str, Any]],
+) -> pd.DataFrame:
+    """Attach official adjunctUrl to DataFrame rows matching announcementId or title.
+
+    Strict rule (C-05b):
+    Only populates adjunctUrl from official field present in raw_announcements.
+    If adjunctUrl is missing from the query response, it remains None.
+    Never invents static.cninfo.com.cn/finalpage/... formulas.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty or not raw_announcements:
+        return df
+
+    # Build lookup by announcementId and title
+    id_map: dict[str, str] = {}
+    title_map: dict[tuple[str, str], str] = {}
+
+    for item in raw_announcements:
+        if not isinstance(item, dict):
+            continue
+        raw_adj = item.get("adjunctUrl") or item.get("adjunct_url") or item.get("pdf_url")
+        if raw_adj is not None and not pd.isna(raw_adj):
+            adj_str = str(raw_adj).strip()
+            if adj_str and adj_str.lower() not in ("none", "null", "nan", ""):
+                # 1. Map by announcementId
+                aid = item.get("announcementId") or item.get("announcement_id") or item.get("id")
+                if aid is not None and not pd.isna(aid):
+                    aid_str = str(aid).strip()
+                    if aid_str:
+                        id_map[aid_str] = adj_str
+                # 2. Map by (secCode, announcementTitle)
+                code = str(item.get("secCode") or item.get("code") or "").strip()
+                title = str(item.get("announcementTitle") or item.get("title") or "").strip()
+                if title:
+                    title_map[(code, title)] = adj_str
+                    if code:
+                        title_map[("", title)] = adj_str
+
+    if not id_map and not title_map:
+        return df
+
+    df = df.copy()
+    if "adjunctUrl" not in df.columns:
+        df["adjunctUrl"] = None
+
+    for idx, row in df.iterrows():
+        current_val = row.get("adjunctUrl")
+        if current_val is not None and not pd.isna(current_val) and str(current_val).strip():
+            continue
+
+        aid = extract_announcement_id(row)
+        matched_adj = None
+        if aid and aid in id_map:
+            matched_adj = id_map[aid]
+        else:
+            row_code = str(row.get("代码") or "").strip()
+            row_title = str(row.get("公告标题") or "").strip()
+            if (row_code, row_title) in title_map:
+                matched_adj = title_map[(row_code, row_title)]
+            elif ("", row_title) in title_map:
+                matched_adj = title_map[("", row_title)]
+
+        if matched_adj:
+            df.at[idx, "adjunctUrl"] = matched_adj
+
+    return df
+
+
+def query_cninfo_raw_announcements(
+    symbol: str = "",
+    market: str = "沪深京",
+    keyword: str = "",
+    category: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    tab_name: str = "fulltext",
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Query cninfo hisAnnouncement/query endpoint for raw announcement dicts with adjunctUrl.
+
+    Provides the underlying query JSON when AKShare 1.18.30 drops adjunctUrl or when
+    underlying endpoint is mocked in testing.
+    """
+    column_map = {
+        "沪深京": "szse",
+        "港股": "hke",
+        "三板": "third",
+        "基金": "fund",
+        "债券": "bond",
+        "监管": "regulator",
+        "预披露": "pre_disclosure",
+    }
+    col = column_map.get(market, "szse")
+    stock_item = symbol
+    cat_item = CNINFO_CATEGORY_DICT.get(category, category)
+
+    if start_date and len(start_date) == 8:
+        se_date = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}~{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+    else:
+        se_date = f"{start_date}~{end_date}" if (start_date or end_date) else ""
+
+    payload = {
+        "pageNum": "1",
+        "pageSize": "30",
+        "column": col,
+        "tabName": tab_name,
+        "plate": "",
+        "stock": stock_item,
+        "searchkey": keyword,
+        "secid": "",
+        "category": cat_item,
+        "trade": "",
+        "seDate": se_date,
+        "sortName": "",
+        "sortType": "",
+        "isHLtitle": "true",
+    }
+    url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+    try:
+        r = requests.post(url, data=payload, timeout=timeout)
+        data = r.json() if hasattr(r, "json") else None
+        if callable(data):
+            data = data()
+        if isinstance(data, dict):
+            anns = data.get("announcements")
+            if isinstance(anns, list):
+                return anns
+    except Exception as exc:
+        logger.debug("query_cninfo_raw_announcements request failed: %s", exc)
+    return []
+
+
 def parse_cninfo_disclosure_df(
     df: Any,
     source_type: str,
     cutoff: str | None = None,
+    raw_announcements: list[dict[str, Any]] | None = None,
 ) -> CninfoDisclosureEnvelope:
     """Parse raw AKShare disclosure DataFrame into CninfoDisclosureEnvelope.
 
@@ -472,6 +637,10 @@ def parse_cninfo_disclosure_df(
             records=[],
             source_type=source_type,
         )
+
+    # Attach raw adjunctUrl if supplied
+    if raw_announcements:
+        df = attach_adjunct_url_to_df(df, raw_announcements)
 
     # Parse each row by column name (no positional slicing)
     records: list[CninfoDisclosureRecord] = []

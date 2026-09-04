@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd
+import requests
 from stockstats import wrap
 
 from .base import BaseMarketDataProvider, DataResult
@@ -71,8 +72,10 @@ from ..cninfo_disclosure import (
     STATUS_PROVIDER_FAILURE,
     CninfoDisclosureEnvelope,
     CninfoDisclosureRecord,
+    attach_adjunct_url_to_df,
     parse_cninfo_disclosure_df,
     qualify_cninfo_content,
+    query_cninfo_raw_announcements,
 )
 
 _provider_logger = logging.getLogger(__name__)
@@ -5067,6 +5070,28 @@ class CnAkshareProvider(BaseMarketDataProvider):
 
     # ── 巨潮资讯信息披露与 IR 调研元数据 (C-05a) ─────────────────────────────
 
+    def _query_cninfo_raw_announcements(
+        self,
+        symbol: str = "",
+        market: str = "沪深京",
+        keyword: str = "",
+        category: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        tab_name: str = "fulltext",
+        timeout: float = 5.0,
+    ) -> list[dict[str, Any]]:
+        return query_cninfo_raw_announcements(
+            symbol=symbol,
+            market=market,
+            keyword=keyword,
+            category=category,
+            start_date=start_date,
+            end_date=end_date,
+            tab_name=tab_name,
+            timeout=timeout,
+        )
+
     def get_cninfo_announcements(
         self,
         symbol: str,
@@ -5094,17 +5119,39 @@ class CnAkshareProvider(BaseMarketDataProvider):
         start_yyyymmdd = str(start_date).replace("-", "").replace("/", "")[:8]
         end_yyyymmdd = str(end_date).replace("-", "").replace("/", "")[:8]
 
+        captured_announcements: list[dict[str, Any]] = []
+        orig_post = requests.post
+
+        def _capturing_post(url, *args, **kwargs):
+            resp = orig_post(url, *args, **kwargs)
+            try:
+                if "hisAnnouncement/query" in str(url):
+                    data = resp.json() if hasattr(resp, "json") else None
+                    if callable(data):
+                        data = data()
+                    if isinstance(data, dict):
+                        anns = data.get("announcements")
+                        if isinstance(anns, list):
+                            captured_announcements.extend(anns)
+            except Exception:
+                pass
+            return resp
+
         try:
             ak = self._ak()
             with AKSHARE_CALL_LOCK:
-                df = ak.stock_zh_a_disclosure_report_cninfo(
-                    symbol=code,
-                    market=market,
-                    keyword=keyword,
-                    category=category,
-                    start_date=start_yyyymmdd,
-                    end_date=end_yyyymmdd,
-                )
+                requests.post = _capturing_post
+                try:
+                    df = ak.stock_zh_a_disclosure_report_cninfo(
+                        symbol=code,
+                        market=market,
+                        keyword=keyword,
+                        category=category,
+                        start_date=start_yyyymmdd,
+                        end_date=end_yyyymmdd,
+                    )
+                finally:
+                    requests.post = orig_post
         except KeyError as exc:
             # AKShare 1.18.30 在无结果分类拼列时抛 KeyError，这是 adapter 崩溃而非 confirmed_empty
             _provider_logger.warning("AKShare cninfo report KeyError (provider_failure): %s", exc)
@@ -5122,6 +5169,27 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 error=f"{type(exc).__name__}: {exc}",
                 source_type=SOURCE_TYPE_ANNOUNCEMENT,
             )
+
+        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+            has_adjunct = any(c in df.columns for c in ("adjunctUrl", "adjunct_url", "pdf_url", "adjunct", "附件链接"))
+            if not has_adjunct:
+                raw_anns = captured_announcements
+                if not raw_anns:
+                    try:
+                        raw_anns = self._query_cninfo_raw_announcements(
+                            symbol=code,
+                            market=market,
+                            keyword=keyword,
+                            category=category,
+                            start_date=start_yyyymmdd,
+                            end_date=end_yyyymmdd,
+                            tab_name="fulltext",
+                        )
+                    except Exception as exc:
+                        _provider_logger.debug("Fallback query cninfo raw announcements failed: %s", exc)
+                        raw_anns = []
+                if raw_anns:
+                    df = attach_adjunct_url_to_df(df, raw_anns)
 
         return parse_cninfo_disclosure_df(
             df,
@@ -5154,15 +5222,37 @@ class CnAkshareProvider(BaseMarketDataProvider):
         start_yyyymmdd = str(start_date).replace("-", "").replace("/", "")[:8]
         end_yyyymmdd = str(end_date).replace("-", "").replace("/", "")[:8]
 
+        captured_announcements: list[dict[str, Any]] = []
+        orig_post = requests.post
+
+        def _capturing_post(url, *args, **kwargs):
+            resp = orig_post(url, *args, **kwargs)
+            try:
+                if "hisAnnouncement/query" in str(url):
+                    data = resp.json() if hasattr(resp, "json") else None
+                    if callable(data):
+                        data = data()
+                    if isinstance(data, dict):
+                        anns = data.get("announcements")
+                        if isinstance(anns, list):
+                            captured_announcements.extend(anns)
+            except Exception:
+                pass
+            return resp
+
         try:
             ak = self._ak()
             with AKSHARE_CALL_LOCK:
-                df = ak.stock_zh_a_disclosure_relation_cninfo(
-                    symbol=code,
-                    market=market,
-                    start_date=start_yyyymmdd,
-                    end_date=end_yyyymmdd,
-                )
+                requests.post = _capturing_post
+                try:
+                    df = ak.stock_zh_a_disclosure_relation_cninfo(
+                        symbol=code,
+                        market=market,
+                        start_date=start_yyyymmdd,
+                        end_date=end_yyyymmdd,
+                    )
+                finally:
+                    requests.post = orig_post
         except KeyError as exc:
             _provider_logger.warning("AKShare cninfo relation KeyError (provider_failure): %s", exc)
             return CninfoDisclosureEnvelope(
@@ -5179,6 +5269,25 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 error=f"{type(exc).__name__}: {exc}",
                 source_type=SOURCE_TYPE_IR_SURVEY,
             )
+
+        if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+            has_adjunct = any(c in df.columns for c in ("adjunctUrl", "adjunct_url", "pdf_url", "adjunct", "附件链接"))
+            if not has_adjunct:
+                raw_anns = captured_announcements
+                if not raw_anns:
+                    try:
+                        raw_anns = self._query_cninfo_raw_announcements(
+                            symbol=code,
+                            market=market,
+                            start_date=start_yyyymmdd,
+                            end_date=end_yyyymmdd,
+                            tab_name="relation",
+                        )
+                    except Exception as exc:
+                        _provider_logger.debug("Fallback query cninfo raw announcements failed: %s", exc)
+                        raw_anns = []
+                if raw_anns:
+                    df = attach_adjunct_url_to_df(df, raw_anns)
 
         return parse_cninfo_disclosure_df(
             df,

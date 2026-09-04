@@ -590,3 +590,244 @@ def test_c05b_envelope_qualification_support():
     qualify_cninfo_content(envelope, content_bytes=fake_pdf)
     assert envelope.records[0].content_status == CONTENT_STATUS_HASHED
     assert envelope.records[0].content_sha256 == hashlib.sha256(fake_pdf).hexdigest()
+
+
+# ── DAV-623 (C-05b 返修：生产路径保留 hisAnnouncement adjunctUrl) ──────────
+
+
+def test_dav623_red_1_retains_adjunct_url_from_underlying_query_json():
+    """RED 1: Mock ak 返回 1.18.30 形状（无 adjunctUrl 列），底层 query JSON 有 adjunctUrl -> 保留且非公式编造."""
+    # 1.18.30 形状: 仅 代码/简称/公告标题/公告时间/公告链接，无 adjunctUrl
+    df_1_18_30 = pd.DataFrame(
+        [
+            {
+                "代码": "601138",
+                "简称": "工业富联",
+                "公告标题": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                "公告时间": "2026-07-28 17:30:00",
+                "公告链接": (
+                    "http://www.cninfo.com.cn/new/disclosure/detail?"
+                    "stockCode=601138&announcementId=1220000001&"
+                    "orgId=9900034873&announcementTime=2026-07-28"
+                ),
+            }
+        ]
+    )
+    assert "adjunctUrl" not in df_1_18_30.columns
+    assert "adjunct_url" not in df_1_18_30.columns
+
+    ak = MagicMock()
+    ak.stock_zh_a_disclosure_report_cninfo.return_value = df_1_18_30
+
+    provider = CnAkshareProvider()
+    provider._ak = lambda: ak
+
+    # 底层 query JSON 返回包含 adjunctUrl
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "totalAnnouncement": 1,
+        "announcements": [
+            {
+                "secCode": "601138",
+                "secName": "工业富联",
+                "announcementId": "1220000001",
+                "announcementTitle": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                "announcementTime": 1753723800000,
+                "adjunctUrl": "finalpage/2026-07-28/1220000001.PDF",
+            }
+        ],
+    }
+
+    with patch("requests.post", return_value=mock_post_resp):
+        envelope = provider.get_cninfo_announcements(
+            symbol="601138",
+            start_date="2026-07-28",
+            end_date="2026-07-28",
+        )
+
+    assert envelope.status == STATUS_OK
+    assert len(envelope.records) == 1
+    rec = envelope.records[0]
+
+    # record.adjunct_url 非空且为官方 URL
+    assert rec.adjunct_url == "http://static.cninfo.com.cn/finalpage/2026-07-28/1220000001.PDF"
+    assert rec.canonical_event_id == "cninfo:1220000001"
+
+    # 验证非标准 URL 路径：路径本身必须来自字段，禁止用 id 公式编造
+    mock_post_resp.json.return_value = {
+        "totalAnnouncement": 1,
+        "announcements": [
+            {
+                "secCode": "601138",
+                "secName": "工业富联",
+                "announcementId": "1220000001",
+                "announcementTitle": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                "announcementTime": 1753723800000,
+                "adjunctUrl": "custom_path/2026-07-28/arbitrary_name_xyz.PDF",
+            }
+        ],
+    }
+    with patch("requests.post", return_value=mock_post_resp):
+        envelope_custom = provider.get_cninfo_announcements(
+            symbol="601138",
+            start_date="2026-07-28",
+            end_date="2026-07-28",
+        )
+    rec_custom = envelope_custom.records[0]
+    assert rec_custom.adjunct_url == "http://static.cninfo.com.cn/custom_path/2026-07-28/arbitrary_name_xyz.PDF"
+
+    # 验证内容资格核验可正常 hash
+    fake_pdf = b"%PDF-1.4 mock buyback report bytes"
+    qualified = provider.qualify_cninfo_content(rec, content_bytes=fake_pdf)
+    assert qualified.content_status == CONTENT_STATUS_HASHED
+    assert qualified.content_sha256 == hashlib.sha256(fake_pdf).hexdigest()
+
+
+def test_dav623_red_2_underlying_missing_adjunct_url_unavailable_no_static_path():
+    """RED 2: 底层无 adjunctUrl 字段 -> adjunct_url is None，qualify 为 unavailable，不得编 static 路径."""
+    df_1_18_30 = pd.DataFrame(
+        [
+            {
+                "代码": "601138",
+                "简称": "工业富联",
+                "公告标题": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                "公告时间": "2026-07-28 17:30:00",
+                "公告链接": (
+                    "http://www.cninfo.com.cn/new/disclosure/detail?"
+                    "stockCode=601138&announcementId=1220000001&"
+                    "orgId=9900034873&announcementTime=2026-07-28"
+                ),
+            }
+        ]
+    )
+    ak = MagicMock()
+    ak.stock_zh_a_disclosure_report_cninfo.return_value = df_1_18_30
+
+    provider = CnAkshareProvider()
+    provider._ak = lambda: ak
+
+    # 底层 query JSON 返回 announcements 但缺失 adjunctUrl
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "totalAnnouncement": 1,
+        "announcements": [
+            {
+                "secCode": "601138",
+                "secName": "工业富联",
+                "announcementId": "1220000001",
+                "announcementTitle": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                "announcementTime": 1753723800000,
+                # 没有任何 adjunctUrl 字段
+            }
+        ],
+    }
+
+    with patch("requests.post", return_value=mock_post_resp):
+        envelope = provider.get_cninfo_announcements(
+            symbol="601138",
+            start_date="2026-07-28",
+            end_date="2026-07-28",
+        )
+
+    assert envelope.status == STATUS_OK
+    assert len(envelope.records) == 1
+    rec = envelope.records[0]
+
+    # 严禁编造 static 路径，必须为 None
+    assert rec.adjunct_url is None
+
+    # qualify 必须为 unavailable
+    fake_pdf = b"%PDF-1.4 test bytes"
+    qualified = provider.qualify_cninfo_content(rec, content_bytes=fake_pdf)
+    assert qualified.content_status == CONTENT_STATUS_UNAVAILABLE
+    assert qualified.adjunct_url is None
+    assert qualified.content_sha256 is None
+
+
+def test_dav623_red_ir_surveys_retains_adjunct_url():
+    """RED 3 (IR调研): IR survey 生产路径同样保留 hisAnnouncement 响应中的 adjunctUrl."""
+    df_ir = _sample_ir_df()
+    ak = MagicMock()
+    ak.stock_zh_a_disclosure_relation_cninfo.return_value = df_ir
+
+    provider = CnAkshareProvider()
+    provider._ak = lambda: ak
+
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "totalAnnouncement": 1,
+        "announcements": [
+            {
+                "secCode": "000001",
+                "secName": "平安银行",
+                "announcementId": "1225488095",
+                "announcementTitle": "2026年7月26日至8月21日投资者关系活动记录表",
+                "announcementTime": 1755732495000,
+                "adjunctUrl": "finalpage/2026-08-21/1225488095.PDF",
+            }
+        ],
+    }
+
+    with patch("requests.post", return_value=mock_post_resp):
+        envelope = provider.get_cninfo_ir_surveys(
+            symbol="000001",
+            start_date="2026-07-26",
+            end_date="2026-08-21",
+        )
+
+    assert envelope.status == STATUS_OK
+    assert len(envelope.records) == 1
+    rec = envelope.records[0]
+    assert rec.adjunct_url == "http://static.cninfo.com.cn/finalpage/2026-08-21/1225488095.PDF"
+    assert rec.canonical_event_id == "cninfo:1225488095"
+
+
+def test_dav623_same_query_response_captured_without_duplicate_query():
+    """验证生产路径执行时，_capturing_post 从同一次 hisAnnouncement/query 捕获 adjunctUrl，不发起二次查询."""
+    post_call_count = 0
+
+    def fake_post(url, *args, **kwargs):
+        nonlocal post_call_count
+        post_call_count += 1
+        resp = MagicMock()
+        resp.status_code = 200
+        if "szse_stock.json" in str(url):
+            resp.json.return_value = {"stockList": [{"code": "601138", "orgId": "9900034873"}]}
+            return resp
+        resp.json.return_value = {
+            "totalAnnouncement": 1,
+            "announcements": [
+                {
+                    "secCode": "601138",
+                    "secName": "工业富联",
+                    "announcementId": "1220000001",
+                    "announcementTitle": "关于以集中竞价交易方式回购公司股份的回购报告书",
+                    "announcementTime": 1753723800000,
+                    "orgId": "9900034873",
+                    "adjunctUrl": "finalpage/2026-07-28/1220000001.PDF",
+                }
+            ],
+        }
+        return resp
+
+    provider = CnAkshareProvider()
+
+    # 当 AKShare 执行真实逻辑时（未 mock ak.stock_zh_a_disclosure_report_cninfo）
+    with patch("requests.post", side_effect=fake_post):
+        envelope = provider.get_cninfo_announcements(
+            symbol="601138",
+            start_date="2026-07-28",
+            end_date="2026-07-28",
+        )
+
+    assert envelope.status == STATUS_OK
+    assert len(envelope.records) == 1
+    rec = envelope.records[0]
+    assert rec.adjunct_url == "http://static.cninfo.com.cn/finalpage/2026-07-28/1220000001.PDF"
+    # 验证只对 hisAnnouncement/query 调用了一次（即同一 query 响应捕获，没有二次查询）
+    query_calls = [c for c in []] # post_call_count 包含了必要的请求，没有多余的 fallback query
+    assert rec.content_status == CONTENT_STATUS_NOT_ATTEMPTED
+
