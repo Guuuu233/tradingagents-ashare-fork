@@ -61,6 +61,13 @@ from ..financial_announce import (
     periods_used_dropped_yoy,
     resolve_earnings_forecast_report_period,
 )
+from ..cninfo_disclosure import (
+    SOURCE_TYPE_ANNOUNCEMENT,
+    SOURCE_TYPE_IR_SURVEY,
+    STATUS_PROVIDER_FAILURE,
+    CninfoDisclosureEnvelope,
+    parse_cninfo_disclosure_df,
+)
 
 _provider_logger = logging.getLogger(__name__)
 
@@ -5051,3 +5058,128 @@ class CnAkshareProvider(BaseMarketDataProvider):
         result_md = build_major_assets_markdown(results, curr_date, source="cn_akshare")
         self._set_macro_cache(cache_key, result_md)
         return result_md
+
+    # ── 巨潮资讯信息披露与 IR 调研元数据 (C-05a) ─────────────────────────────
+
+    def get_cninfo_announcements(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        keyword: str = "",
+        category: str = "",
+        market: str = "沪深京",
+        cutoff: str | None = None,
+    ) -> CninfoDisclosureEnvelope:
+        """获取巨潮 A 股公司公告标题级元数据。
+
+        注：标题级元数据只能证明事件存在，不得据此下财务或经营结论。
+        """
+        try:
+            code = self._normalize_symbol(symbol)
+        except Exception as exc:
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"normalize_symbol failed: {type(exc).__name__}: {exc}",
+                source_type=SOURCE_TYPE_ANNOUNCEMENT,
+            )
+
+        start_yyyymmdd = str(start_date).replace("-", "").replace("/", "")[:8]
+        end_yyyymmdd = str(end_date).replace("-", "").replace("/", "")[:8]
+
+        try:
+            ak = self._ak()
+            with AKSHARE_CALL_LOCK:
+                df = ak.stock_zh_a_disclosure_report_cninfo(
+                    symbol=code,
+                    market=market,
+                    keyword=keyword,
+                    category=category,
+                    start_date=start_yyyymmdd,
+                    end_date=end_yyyymmdd,
+                )
+        except KeyError as exc:
+            # AKShare 1.18.30 在无结果分类拼列时抛 KeyError，这是 adapter 崩溃而非 confirmed_empty
+            _provider_logger.warning("AKShare cninfo report KeyError (provider_failure): %s", exc)
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"KeyError: {exc}",
+                source_type=SOURCE_TYPE_ANNOUNCEMENT,
+            )
+        except Exception as exc:
+            _provider_logger.warning("AKShare cninfo report failed: %s: %s", type(exc).__name__, exc)
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"{type(exc).__name__}: {exc}",
+                source_type=SOURCE_TYPE_ANNOUNCEMENT,
+            )
+
+        return parse_cninfo_disclosure_df(
+            df,
+            source_type=SOURCE_TYPE_ANNOUNCEMENT,
+            cutoff=cutoff,
+        )
+
+    def get_cninfo_ir_surveys(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        market: str = "沪深京",
+        cutoff: str | None = None,
+    ) -> CninfoDisclosureEnvelope:
+        """获取巨潮 A 股投资者关系活动/调研记录标题级元数据。
+
+        注：标题级元数据只能证明事件存在，不得据此下财务或经营结论。
+        """
+        try:
+            code = self._normalize_symbol(symbol)
+        except Exception as exc:
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"normalize_symbol failed: {type(exc).__name__}: {exc}",
+                source_type=SOURCE_TYPE_IR_SURVEY,
+            )
+
+        start_yyyymmdd = str(start_date).replace("-", "").replace("/", "")[:8]
+        end_yyyymmdd = str(end_date).replace("-", "").replace("/", "")[:8]
+
+        try:
+            ak = self._ak()
+            with AKSHARE_CALL_LOCK:
+                df = ak.stock_zh_a_disclosure_relation_cninfo(
+                    symbol=code,
+                    market=market,
+                    start_date=start_yyyymmdd,
+                    end_date=end_yyyymmdd,
+                )
+        except KeyError as exc:
+            _provider_logger.warning("AKShare cninfo relation KeyError (provider_failure): %s", exc)
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"KeyError: {exc}",
+                source_type=SOURCE_TYPE_IR_SURVEY,
+            )
+        except Exception as exc:
+            _provider_logger.warning("AKShare cninfo relation failed: %s: %s", type(exc).__name__, exc)
+            return CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error=f"{type(exc).__name__}: {exc}",
+                source_type=SOURCE_TYPE_IR_SURVEY,
+            )
+
+        return parse_cninfo_disclosure_df(
+            df,
+            source_type=SOURCE_TYPE_IR_SURVEY,
+            cutoff=cutoff,
+        )
+
+    # 别名支持
+    get_cninfo_disclosure_report = get_cninfo_announcements
+    get_cninfo_disclosure_relation = get_cninfo_ir_surveys
