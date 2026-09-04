@@ -238,6 +238,7 @@ _TUSHARE_THS_SOURCE = "tushare_ths_moneyflow_ths"
 _TUSHARE_DC_FIELD_SEMANTICS = "今日主力净流入额（万元）"
 _TUSHARE_THS_FIELD_SEMANTICS = "资金净流入（万元）"
 _TUSHARE_THS_D5_SEMANTICS = "5日主力净额（万元）"
+_TUSHARE_THS_LG_FIELD_SEMANTICS = "大单净额 / 平台主力口径参考（万元）"
 _TUSHARE_REQUEST_FIELDS = {
     # Keep each request aligned with the endpoint's documented schema; an
     # unsupported field can make an otherwise valid token request fail.
@@ -2209,23 +2210,28 @@ class CnAkshareProvider(BaseMarketDataProvider):
         api_name: str,
         row: dict,
         raw_fields: dict,
+        upstream_field: str = "net_amount",
     ) -> None:
         is_dc = api_name == _TUSHARE_DC_API
+        is_ths_lg = (not is_dc) and (upstream_field == "buy_lg_amount")
         normalized_fields = {
             field: self._tushare_yi_text(value)
             for field, value in raw_fields.items()
             if field.endswith("_amount") and self._tushare_yi_text(value) is not None
         }
+        if is_dc:
+            semantics = _TUSHARE_DC_FIELD_SEMANTICS
+        elif is_ths_lg:
+            semantics = _TUSHARE_THS_LG_FIELD_SEMANTICS
+        else:
+            semantics = _TUSHARE_THS_FIELD_SEMANTICS
+
         record.update(
             {
                 "transport_provider": "tushare",
                 "upstream_api": api_name,
-                "upstream_field": "net_amount",
-                "upstream_field_semantics": (
-                    _TUSHARE_DC_FIELD_SEMANTICS
-                    if is_dc
-                    else _TUSHARE_THS_FIELD_SEMANTICS
-                ),
+                "upstream_field": upstream_field,
+                "upstream_field_semantics": semantics,
                 "upstream_unit": "万元",
                 "vendor_raw_fields": raw_fields,
                 "vendor_raw_field_units": {
@@ -2233,9 +2239,12 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 },
                 "vendor_normalized_fields": normalized_fields,
                 "vendor_raw_field_status": "audited",
+                "reference_only": True,
             }
         )
-        if not is_dc and row.get("net_d5_amount") is not None:
+        if is_ths_lg:
+            record.setdefault("field_semantics", {})["r0_net"] = _TUSHARE_THS_LG_FIELD_SEMANTICS
+        if not is_dc and row.get("net_d5_amount") is not None and not is_ths_lg:
             net_d5_yi = self._tushare_yi_text(row.get("net_d5_amount"))
             if net_d5_yi is not None:
                 record.update(
@@ -2259,33 +2268,85 @@ class CnAkshareProvider(BaseMarketDataProvider):
         retrieved_at: str,
     ) -> list[dict]:
         is_dc = api_name == _TUSHARE_DC_API
-        source = _TUSHARE_DC_SOURCE if is_dc else _TUSHARE_THS_SOURCE
-        canonical_field = "r0_net" if is_dc else "netamount"
-        source_row = {
-            # The API row has YYYYMMDD; evidence alignment uses ISO dates.
+        raw_fields = self._tushare_raw_fields(row, api_name)
+        if is_dc:
+            source = _TUSHARE_DC_SOURCE
+            source_row = {
+                # The API row has YYYYMMDD; evidence alignment uses ISO dates.
+                "trade_date": requested_date,
+                "r0_net": row.get("net_amount"),
+                "r0_net_unit": "万元",
+                "period_kind": "historical_daily",
+                "time_window": "1d",
+                "raw_unit": "万元",
+            }
+            records = build_source_evidence(
+                [source_row],
+                symbol=symbol,
+                requested_as_of=requested_date,
+                retrieved_at=retrieved_at,
+                source=source,
+                raw_unit="万元",
+                algorithm_group="new_algorithm_group",
+                period_kind="historical_daily",
+                window="1d",
+            )
+            for record in records:
+                self._tushare_attach_record(record, api_name, row, raw_fields, upstream_field="net_amount")
+            return records
+
+        # For THS:
+        # 1. Total funds net (netamount from net_amount)
+        records: list[dict] = []
+        source_row_total = {
             "trade_date": requested_date,
-            canonical_field: row.get("net_amount"),
-            f"{canonical_field}_unit": "万元",
+            "netamount": row.get("net_amount"),
+            "netamount_unit": "万元",
             "period_kind": "historical_daily",
             "time_window": "1d",
             "raw_unit": "万元",
         }
-        records = build_source_evidence(
-            [source_row],
+        total_records = build_source_evidence(
+            [source_row_total],
             symbol=symbol,
             requested_as_of=requested_date,
             retrieved_at=retrieved_at,
-            source=source,
+            source=_TUSHARE_THS_SOURCE,
             raw_unit="万元",
             algorithm_group="new_algorithm_group",
             period_kind="historical_daily",
             window="1d",
         )
-        if not records:
-            return []
-        raw_fields = self._tushare_raw_fields(row, api_name)
-        for record in records:
-            self._tushare_attach_record(record, api_name, row, raw_fields)
+        for record in total_records:
+            self._tushare_attach_record(record, api_name, row, raw_fields, upstream_field="net_amount")
+        records.extend(total_records)
+
+        # 2. Large order net (r0_net from buy_lg_amount) as peer evidence to Eastmoney
+        buy_lg_val = row.get("buy_lg_amount")
+        if buy_lg_val is not None and self._tushare_yi_text(buy_lg_val) is not None:
+            source_row_lg = {
+                "trade_date": requested_date,
+                "r0_net": buy_lg_val,
+                "r0_net_unit": "万元",
+                "period_kind": "historical_daily",
+                "time_window": "1d",
+                "raw_unit": "万元",
+            }
+            lg_records = build_source_evidence(
+                [source_row_lg],
+                symbol=symbol,
+                requested_as_of=requested_date,
+                retrieved_at=retrieved_at,
+                source=_TUSHARE_THS_SOURCE,
+                raw_unit="万元",
+                algorithm_group="new_algorithm_group",
+                period_kind="historical_daily",
+                window="1d",
+            )
+            for record in lg_records:
+                self._tushare_attach_record(record, api_name, row, raw_fields, upstream_field="buy_lg_amount")
+            records.extend(lg_records)
+
         return records
 
     def _fetch_tushare_api_records(
@@ -2389,12 +2450,24 @@ class CnAkshareProvider(BaseMarketDataProvider):
     @staticmethod
     def _tushare_text_line(record: dict) -> str:
         is_dc = record.get("upstream_api") == _TUSHARE_DC_API
-        field = "r0_net" if is_dc else "netamount"
-        label = "今日主力净流入额" if is_dc else "资金净流入"
-        value = record.get(field) or ""
+        is_ths_lg = (not is_dc) and (
+            record.get("upstream_field") == "buy_lg_amount"
+            or record.get("upstream_field_semantics") == _TUSHARE_THS_LG_FIELD_SEMANTICS
+            or (record.get("field") == "r0_net" and "r0_net" in record)
+        )
         source_label = "东方财富 moneyflow_dc" if is_dc else "同花顺 moneyflow_ths"
+        if is_dc:
+            field = "r0_net"
+            label = "今日主力净流入额（统计口径参考，非身份结论）"
+        elif is_ths_lg:
+            field = "r0_net"
+            label = "大单净额（平台主力口径参考，非身份结论）"
+        else:
+            field = "netamount"
+            label = "资金净流入（总资金旁证，非主力口径）"
+        value = record.get(field) or ""
         line = f"- {source_label}：{label} {value} 亿元（上游单位：万元）"
-        if not is_dc and record.get("net_d5_amount") is not None:
+        if not is_dc and record.get("net_d5_amount") is not None and not is_ths_lg:
             line += (
                 f"；5日主力净额 {record['net_d5_amount']} 亿元"
                 f"（原值 {record.get('net_d5_amount_raw')} 万元；周期：5d，"
@@ -2414,21 +2487,30 @@ class CnAkshareProvider(BaseMarketDataProvider):
     ) -> FundFlowText:
         records = [*dc_records, *ths_records]
         lines = [
-            f"【数据源：Tushare Pro】{symbol} 资金流（交易日：{requested_date}；单位：亿元）",
-            "（仅接受 trade_date 精确匹配；东方财富与同花顺字段语义分别保留）",
+            f"【数据源：Tushare Pro】{symbol} 资金流（交易日：{requested_date}；单位：亿元；主力/大单为统计口径参考，非账户级身份真相）",
+            "（仅接受 trade_date 精确匹配；东方财富与同花顺字段语义分别保留；参考价值优先，非主力身份/流向最终结论）",
         ]
         lines.extend(self._tushare_text_line(record) for record in records)
         selection = self._tushare_consensus(dc_records, ths_records)
-        consensus_audit = (
-            self._tushare_incomparable_consensus(dc_records, ths_records)
-            if dc_records and ths_records
-            else build_consensus_evidence(
+        has_r0 = any(r.get("r0_net") is not None for r in records)
+        if has_r0:
+            consensus_audit = build_consensus_evidence(
                 records,
                 symbol=records[0].get("symbol") if records else None,
                 requested_as_of=records[0].get("requested_as_of") if records else None,
-                field="r0_net" if dc_records else "netamount",
+                field="r0_net",
             )
-        )
+        else:
+            consensus_audit = (
+                self._tushare_incomparable_consensus(dc_records, ths_records)
+                if dc_records and ths_records
+                else build_consensus_evidence(
+                    records,
+                    symbol=records[0].get("symbol") if records else None,
+                    requested_as_of=records[0].get("requested_as_of") if records else None,
+                    field="netamount",
+                )
+            )
         status = "available" if len(failures) == 0 else "partial"
         metadata = {
             "symbol": symbol,

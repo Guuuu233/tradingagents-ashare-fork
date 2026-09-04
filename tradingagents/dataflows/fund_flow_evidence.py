@@ -1141,7 +1141,7 @@ def _field_semantics_are_valid(record: Mapping[str, Any], field: str) -> bool:
             and "主力" not in text
         )
     if field == "r0_net":
-        return "主力" in text and "净" in text and (
+        return ("主力" in text or "大单" in text) and "净" in text and (
             "流入" in text or "流出" in text or "净额" in text
         )
     if field == "r0_in":
@@ -1381,12 +1381,157 @@ def _selection_group_summary(
     return summary_data, None
 
 
+def score_large_order_reference_credibility(
+    records: Iterable[Mapping[str, Any]],
+    price_change: Decimal | float | str | None = None,
+) -> dict[str, Any]:
+    """Score large-order / main-force reference credibility across multiple sources.
+
+    Platform main force is a statistical large-order proxy, not account-level truth.
+    - >=2 sources concordant in direction -> high credibility (偏高)
+    - single source -> medium-low credibility (中等偏低) + single_source=True
+    - >=2 sources divergent in direction -> low credibility (偏低) + divergence=True + divergence details
+    - weak weighting with price change (optional, never absolute)
+    """
+    r0_items: list[Mapping[str, Any]] = []
+    for r in records or ():
+        if not isinstance(r, Mapping):
+            continue
+        val = r.get("r0_net")
+        if val is None and r.get("field") == "r0_net":
+            val = r.get("value")
+        if val is not None and decimal_value(val) is not None:
+            r0_items.append(r)
+
+    sources_seen: set[str] = set()
+    unique_sources: list[dict[str, Any]] = []
+    for item in r0_items:
+        src = str(item.get("source") or item.get("source_family") or "unknown")
+        val = decimal_value(item.get("r0_net") if item.get("r0_net") is not None else item.get("value"))
+        direction = item.get("direction")
+        if direction not in {"inflow", "outflow", "neutral"}:
+            if val is not None:
+                direction = "inflow" if val > 0 else ("outflow" if val < 0 else "neutral")
+            else:
+                direction = "neutral"
+        if src not in sources_seen:
+            sources_seen.add(src)
+            unique_sources.append({
+                "source": src,
+                "source_family": item.get("source_family"),
+                "value": _decimal_text(val),
+                "direction": direction,
+                "raw_item": item,
+            })
+
+    source_count = len(unique_sources)
+    source_directions = {s["source"]: s["direction"] for s in unique_sources}
+    source_values = {s["source"]: s["value"] for s in unique_sources}
+
+    pc_val = decimal_value(price_change) if price_change is not None else None
+
+    if source_count == 0:
+        return {
+            "credibility": "low",
+            "credibility_score": 0.20,
+            "credibility_level": "偏低",
+            "credibility_reason": "无有效大单/主力统计口径数据，仅作旁证参考",
+            "single_source": True,
+            "divergence": False,
+            "reference_only": True,
+            "source_count": 0,
+            "source_directions": {},
+            "source_values": {},
+            "price_aligned": None,
+        }
+
+    if source_count == 1:
+        base_score = Decimal("0.50")
+        reason = "单数据源提供大单/主力统计口径，缺乏交叉印证，参考可信度中等偏低"
+        aligned = None
+        s0_dir = unique_sources[0]["direction"]
+        if pc_val is not None and pc_val != 0:
+            if (s0_dir == "inflow" and pc_val > 0) or (s0_dir == "outflow" and pc_val < 0):
+                base_score += Decimal("0.05")
+                reason += "；与当日行情同向弱共振"
+                aligned = True
+            else:
+                base_score -= Decimal("0.05")
+                reason += "；与当日行情存在背离"
+                aligned = False
+        return {
+            "credibility": "medium_low",
+            "credibility_score": float(base_score),
+            "credibility_level": "中等偏低",
+            "credibility_reason": reason,
+            "single_source": True,
+            "divergence": False,
+            "reference_only": True,
+            "source_count": 1,
+            "source_directions": source_directions,
+            "source_values": source_values,
+            "price_aligned": aligned,
+        }
+
+    # >= 2 sources
+    directions = [s["direction"] for s in unique_sources if s["direction"] in {"inflow", "outflow"}]
+    has_inflow = "inflow" in directions
+    has_outflow = "outflow" in directions
+
+    if has_inflow and has_outflow:
+        base_score = Decimal("0.30")
+        details = "，".join(f"{s['source']}:{s['value']}亿({s['direction']})" for s in unique_sources)
+        reason = f"多源大单/主力口径存在方向分歧（{details}），参考可信度偏低，方向仅作弱参考，请保留分源原值"
+        return {
+            "credibility": "low",
+            "credibility_score": float(base_score),
+            "credibility_level": "偏低",
+            "credibility_reason": reason,
+            "single_source": False,
+            "divergence": True,
+            "reference_only": True,
+            "source_count": source_count,
+            "source_directions": source_directions,
+            "source_values": source_values,
+            "price_aligned": None,
+        }
+    else:
+        base_score = Decimal("0.80")
+        common_dir = directions[0] if directions else "neutral"
+        dir_label = "流入" if common_dir == "inflow" else ("流出" if common_dir == "outflow" else "平衡")
+        reason = f"多源大单/主力统计口径同向{dir_label}，具较高参考价值（非绝对主力身份定性）"
+        aligned = None
+        if pc_val is not None and pc_val != 0:
+            if (common_dir == "inflow" and pc_val > 0) or (common_dir == "outflow" and pc_val < 0):
+                base_score += Decimal("0.05")
+                reason += "；与当日行情变动同向弱共振"
+                aligned = True
+            else:
+                base_score -= Decimal("0.05")
+                reason += "；与当日行情走势背离，需结合量价综合参考"
+                aligned = False
+        return {
+            "credibility": "high",
+            "credibility_score": float(base_score),
+            "credibility_level": "偏高",
+            "credibility_reason": reason,
+            "single_source": False,
+            "divergence": False,
+            "reference_only": True,
+            "source_count": source_count,
+            "source_directions": source_directions,
+            "source_values": source_values,
+            "price_aligned": aligned,
+        }
+
+
 def select_fund_flow_source(
     records: Iterable[Mapping[str, Any]],
     *,
     symbol: str | None = None,
     requested_as_of: str | None = None,
     field: str | None = None,
+    price_change: Decimal | float | str | None = None,
 ) -> dict[str, Any]:
     """Select the first valid source instead of requiring multi-source consensus.
 
@@ -1503,12 +1648,27 @@ def select_fund_flow_source(
                 "direction_allowed": False,
                 "reason": "all_sources_unavailable",
             },
+            "credibility": "none",
+            "credibility_score": 0.0,
+            "credibility_level": "无",
+            "credibility_reason": "所有来源均不可用",
+            "single_source": True,
+            "divergence": False,
+            "reference_only": True,
+            "large_order_credibility": {},
         }
         return result
 
     is_legacy = bool(selected["legacy_web_algorithm"])
     new_fields = {item["field"] for item in new_groups}
-    incomparable_fields = len(new_fields) >= 2
+    has_r0_net = "r0_net" in new_fields
+    if has_r0_net and selected.get("field") == "r0_net":
+        # Having r0_net means netamount acts as total funds side evidence (旁证)
+        # It must not trigger incomparable_field_semantics to block r0_net direction
+        non_side_fields = {f for f in new_fields if f != "netamount"}
+        incomparable_fields = len(non_side_fields) >= 2
+    else:
+        incomparable_fields = len(new_fields) >= 2
     alternatives = [
         item
         for item in valid_groups
@@ -1526,7 +1686,7 @@ def select_fund_flow_source(
     ]
     if incomparable_fields:
         selection_reason = "incomparable_field_semantics"
-        reason = "新算法组存在多个不同字段（如主力净额与总净额）同时有效，字段语义不可比，禁止放行方向"
+        reason = "新算法组存在多个不同字段同时有效，字段语义不可比，禁止放行方向"
         direction_allowed = False
         hard_guard_blocked = True
         status = "data_conflict"
@@ -1566,6 +1726,12 @@ def select_fund_flow_source(
             direction_summary = f"{label}偏流入"
         else:
             direction_summary = f"{label}接近平衡"
+
+    r0_candidates = [item for item in valid_groups if item.get("field") == "r0_net"]
+    cred_info = score_large_order_reference_credibility(
+        r0_candidates,
+        price_change=price_change,
+    )
 
     result = {
         "status": status,
@@ -1609,6 +1775,14 @@ def select_fund_flow_source(
             "reason": selection_reason,
         },
         "direction_summary": direction_summary,
+        "credibility": cred_info["credibility"],
+        "credibility_score": cred_info["credibility_score"],
+        "credibility_level": cred_info["credibility_level"],
+        "credibility_reason": cred_info["credibility_reason"],
+        "single_source": cred_info["single_source"],
+        "divergence": cred_info["divergence"],
+        "reference_only": True,
+        "large_order_credibility": cred_info,
     }
     if is_legacy:
         result["legacy_warning"] = "legacy_web_algorithm：新浪旧 Web，仅供参考，不得冒充新算法来源"
@@ -1939,16 +2113,26 @@ def consensus_prompt_instruction(consensus: Mapping[str, Any] | None) -> str:
         value = consensus.get("selected_value")
         if value is None:
             value = consensus.get("value")
+        credibility_level = consensus.get("credibility_level") or (
+            "偏高" if consensus.get("credibility") == "high"
+            else ("偏低" if consensus.get("credibility") == "low" else "中等偏低")
+        )
+        credibility_reason = consensus.get("credibility_reason") or ""
+        cred_text = f"【参考可信度：{credibility_level}】{credibility_reason}；" if credibility_reason else f"【参考可信度：{credibility_level}】；"
         if consensus.get("legacy_reference") or consensus.get("legacy_web_algorithm"):
             return (
                 f"仅有新浪 legacy_web_algorithm 可用，已选择 {source}/{field}={value}；"
                 "可以展示该来源自身方向，但必须醒目标注 legacy/旧算法/仅供参考，"
                 "不得称为 Eastmoney/THS 新算法，也不得与新算法平均。"
+                "平台资金流仅具统计口径参考价值，非主力真实身份或资金流向最终结论。"
             )
         return (
-            f"已按固定优先级选择 {source}/{field}={value}，方向来自该来源自身，"
-            "单一有效新算法来源即可允许方向；其他来源仅作旁证/差异说明，"
-            "不得跨字段、日期、窗口或单位平均。"
+            f"已按固定优先级选择 {source}/{field}={value}，方向来自该来源自身；"
+            f"{cred_text}"
+            "单一有效新算法来源即可允许方向；其他来源仅作旁证/差异说明，不得跨字段、日期、窗口或单位平均。"
+            "【强制约束】平台「主力资金/大单」仅为统计口径代理参考，具有参考价值，"
+            "严禁断言为账户级主力身份真相或资金流向最终确定结论；"
+            "若同花顺大单与东财主力同向，参考可信度偏高；若存在分歧，必须如实陈述分歧并将方向仅作弱参考。"
         )
     return (
         "资金流来源选择不可用（全部来源失败、日期/字段/单位/窗口不合格）；"

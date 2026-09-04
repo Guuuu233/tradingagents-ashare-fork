@@ -272,6 +272,18 @@ def create_smart_money_analyst(llm, data_collector=None):
                 "仅供参考，不得视为 Eastmoney/THS 新算法结论。\n"
                 + full_content
             )
+        elif isinstance(selection, dict) and selection.get("selected_field") == "r0_net":
+            credibility_level = selection.get("credibility_level") or (
+                "偏高" if selection.get("credibility") == "high"
+                else ("偏低" if selection.get("credibility") == "low" else "中等偏低")
+            )
+            credibility_reason = selection.get("credibility_reason") or "统计口径参考"
+            header = (
+                f"【大单/主力资金统计口径参考（参考可信度：{credibility_level}）】"
+                f"说明：平台主力/大单指标系公开统计口径代理参考，具参考价值，非账户级主力真实身份与资金流向终局定性。"
+                f"{credibility_reason}\n\n"
+            )
+            full_content = header + full_content
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -312,6 +324,14 @@ def create_smart_money_analyst(llm, data_collector=None):
                 "legacy_reference",
                 "legacy_web_algorithm",
                 "selection_reason",
+                "credibility",
+                "credibility_score",
+                "credibility_level",
+                "credibility_reason",
+                "single_source",
+                "divergence",
+                "reference_only",
+                "large_order_credibility",
             ):
                 if key in selection:
                     consensus_guard[key] = selection[key]

@@ -179,8 +179,8 @@ def test_tushare_dc_ths_success_keeps_transport_and_field_semantics(monkeypatch)
         "buy_lg_amount",
     ]
     assert out is not None
-    assert len(out.fund_flow_evidence) == 2
-    dc_record, ths_record = out.fund_flow_evidence
+    assert len(out.fund_flow_evidence) == 3
+    dc_record, ths_record, ths_lg_record = out.fund_flow_evidence
     assert dc_record["transport_provider"] == "tushare"
     assert dc_record["date"] == "2026-08-14"
     assert dc_record["source_family"] == "eastmoney"
@@ -194,17 +194,18 @@ def test_tushare_dc_ths_success_keeps_transport_and_field_semantics(monkeypatch)
     assert ths_record["net_d5_amount"] == "5.6"
     assert ths_record["net_d5_amount_raw"] == "56000"
     assert ths_record["net_d5_amount_period_kind"] == "five_day_cumulative"
+    assert ths_lg_record["source_family"] == "ths"
+    assert ths_lg_record["r0_net"] == "0.03"
+    assert ths_lg_record["upstream_field"] == "buy_lg_amount"
+    assert "大单净额" in ths_lg_record["upstream_field_semantics"]
     assert meta["transport_provider"] == "tushare"
     assert meta["selection"]["selected_source"] == "tushare_eastmoney_moneyflow_dc"
     assert meta["selection"]["selected_field"] == "r0_net"
-    assert meta["selection"]["direction_allowed"] is False
-    assert meta["selection"]["hard_guard"]["blocked"] is True
-    assert meta["selection"]["reason_code"] == "incomparable_field_semantics"
-    assert meta["selection"]["alternative_sources"][0]["source"] == "tushare_ths_moneyflow_ths"
-    assert meta["same_field_consensus_audit"]["reason_code"] == "incomparable_field_semantics"
-    assert meta["consensus_audit"]["reason_code"] == "incomparable_field_semantics"
-    if "consensus" in meta:
-        assert meta["consensus"].get("selected_source") is None or meta["consensus"].get("direction_allowed") is False
+    assert meta["selection"]["direction_allowed"] is True
+    assert meta["selection"]["hard_guard"]["blocked"] is False
+    assert meta["selection"]["reason_code"] == "new_algorithm_source_priority"
+    assert meta["selection"]["reference_only"] is True
+    assert meta["selection"]["credibility"] == "high"
 
 
 def test_tushare_token_missing_is_typed_and_does_not_call_network(monkeypatch):
