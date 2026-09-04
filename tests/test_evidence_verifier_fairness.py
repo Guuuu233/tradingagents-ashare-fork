@@ -122,3 +122,110 @@ def test_debate_state_prompt_templates_symmetry():
     # Both blocks should have `"resolved_claim_ids": []`
     assert '"resolved_claim_ids": []' in bull_match.group(1), f"Bull prompt resolved_claim_ids is not [] in: {bull_match.group(1)}"
     assert '"resolved_claim_ids": []' in bear_match.group(1), f"Bear prompt resolved_claim_ids is not [] in: {bear_match.group(1)}"
+
+
+# ── DAV-595: Metric-Number Binding & Pseudo Contradiction Tests ──────────────
+
+
+def test_reproduce_inv6_pseudo_contradiction_falsified_as_unsupported(evaluator):
+    """INV-6 pseudo contradiction: '应收账款增长17.10%''营收增长3.55%' must NOT contradict '概率：25%'."""
+    seven_reports = {
+        "macro_report": (
+            "| **乐观情景 (Bull Case)**<br>*(概率：25%)* | - 宏观逆周期货币与财政双发力；"
+            "- 海外OBM出海营收加速上行；- 预期收益弹性空间：+8% 至 +15%。 |"
+        )
+    }
+    raw_evidence = "2026Q2应收账款619.55亿元同比大增17.10%，严重背离营收3.55%的微弱增速"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence=raw_evidence,
+        seven_reports=seven_reports,
+        claim_id="INV-6",
+    )
+    assert res["status"] == STATUS_UNSUPPORTED
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_same_line_multi_metric_no_cross_binding_verified(evaluator):
+    """Same-line multiple metrics must bind numbers to their specific metrics, preventing cross-value verification."""
+    seven_reports = {
+        "fundamentals_report": (
+            "- **财务表现**：2026年Q2营业收入2600.42亿元，同比增长3.55%；综合毛利率达25.57%，净利率为9.81%。"
+        )
+    }
+    # 正确匹配自身指标
+    res_rev = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2营业收入同比增长3.55%",
+        seven_reports=seven_reports,
+    )
+    assert res_rev["status"] == STATUS_VERIFIED
+
+    res_margin = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2综合毛利率达25.57%",
+        seven_reports=seven_reports,
+    )
+    assert res_margin["status"] == STATUS_VERIFIED
+
+
+def test_same_line_multi_metric_cross_value_negative_not_verified(evaluator):
+    """Negative test: Claiming gross margin is 3.55% or revenue growth is 25.57% must NOT be verified against the same line."""
+    seven_reports = {
+        "fundamentals_report": (
+            "- **财务表现**：2026年Q2营业收入2600.42亿元，同比增长3.55%；综合毛利率达25.57%，净利率为9.81%。"
+        )
+    }
+    # 串值负例 1: 将毛利率说成 3.55% (3.55% 属于营收，不属于毛利率)
+    res_fake_margin = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2综合毛利率为3.55%",
+        seven_reports=seven_reports,
+    )
+    assert res_fake_margin["status"] == STATUS_CONTRADICTED
+
+    # 串值负例 2: 将营收增速说成 25.57% (25.57% 属于毛利率，不属于营收)
+    res_fake_rev = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2营业收入同比增长25.57%",
+        seven_reports=seven_reports,
+    )
+    assert res_fake_rev["status"] == STATUS_CONTRADICTED
+
+
+def test_compound_sentence_atomic_evidence_splitting(evaluator):
+    """Compound sentence split into atomic statements: each atomic fact must verify against its corresponding report line."""
+    seven_reports = {
+        "fundamentals_report": (
+            "- **营业收入**：2026年Q2单季实现营业收入2600.42亿元，同比增长3.55%。\n"
+            "- **营运指标**：2026Q2末应收账款为619.55亿元，同比增长17.10%。"
+        )
+    }
+    compound_ev = "2026Q2应收账款619.55亿元同比大增17.10%，严重背离营收3.55%的微弱增速"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence=compound_ev,
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_percentage_conflict_requires_same_metric_unit_period(evaluator):
+    """Conflict detection must require matching metric name, unit, and period. Mismatched metric or period cannot trigger contradiction."""
+    seven_reports = {
+        "macro_report": "| **乐观情景** (概率：25%) | 预计2026Q3海外营收恢复增长 |",
+    }
+    # 概率 25% 不得与营收 3.55% 冲突
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q2营业收入同比增长3.55%",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_UNSUPPORTED
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_true_conflict_positive_case(evaluator):
+    """True conflict positive case: when metric name, unit, and period match but numbers disagree, trigger CONTRADICTED."""
+    seven_reports = {
+        "fundamentals_report": "2026年Q2综合毛利率为25.57%，营业收入同比增长3.55%。",
+    }
+    res_conflict = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2综合毛利率为15.00%",
+        seven_reports=seven_reports,
+    )
+    assert res_conflict["status"] == STATUS_CONTRADICTED
+    assert "毛利率" in res_conflict.get("details", "")

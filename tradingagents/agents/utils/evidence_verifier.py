@@ -91,9 +91,43 @@ _DATE_MASK_PATTERN = re.compile(
     r"(?<![\d.])\d{4}年\d{1,2}月\d{1,2}日?(?![\d.])|"
     r"(?<![\d.])\d{1,2}月\d{1,2}日?(?![\d.])|"
     r"(?<![\d.])(0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])(?![\d.])|"
-    r"(?<![\d.])\d{4}[hHqQ][1-4](?![\d.])|"
-    r"(?<![\d.])[hHqQ][1-4](?![\d.])"
+    r"(?<![\d.])\d{4}年?[hHqQ][1-4](?![\d.])|"
+    r"(?<![\d.])[hHqQ][1-4](?![\d.])|"
+    r"(?<![\d.])\d{4}年?[hH][1-2](?![\d.])|"
+    r"(?<![\d.])\d{4}年度?(?![\d.])"
 )
+
+_PERIOD_QUARTER_RE = re.compile(r"(\d{4})年?[-_]?[qQ]([1-4])")
+_PERIOD_SINGLE_QUARTER_RE = re.compile(r"(?<!\w)[qQ]([1-4])(?!\w)")
+_PERIOD_HALF_RE = re.compile(r"(\d{4})年?[-_]?[hH]([1-2])")
+_PERIOD_DATE_RE = re.compile(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?")
+_PERIOD_MD_RE = re.compile(r"(\d{1,2})月(\d{1,2})日?")
+_PERIOD_YEAR_RE = re.compile(r"(\d{4})年(?:度)?")
+
+
+def normalize_period(text: str) -> str | None:
+    """Extract and normalize period string (e.g. 2026Q2, 2026-08-24, 08-20, 2026)."""
+    if not text:
+        return None
+    m = _PERIOD_QUARTER_RE.search(text)
+    if m:
+        return f"{m.group(1)}Q{m.group(2)}"
+    m = _PERIOD_HALF_RE.search(text)
+    if m:
+        return f"{m.group(1)}H{m.group(2)}"
+    m = _PERIOD_DATE_RE.search(text)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = _PERIOD_SINGLE_QUARTER_RE.search(text)
+    if m:
+        return f"Q{m.group(1)}"
+    m = _PERIOD_MD_RE.search(text)
+    if m:
+        return f"{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    m = _PERIOD_YEAR_RE.search(text)
+    if m:
+        return m.group(1)
+    return None
 
 _ISO_DATE_RE = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)")
 _CN_DATE_RE = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日?")
@@ -232,6 +266,210 @@ def _extract_metric_keywords(text: str) -> list[str]:
         if kw in text_lower:
             found.append(kw)
     return found
+
+
+_STRICT_METRICS = {
+    "营收", "毛利率", "毛利", "净利率", "净利润", "成本", "应收账款", "存货", "现金流",
+    "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
+    "主力", "超大单", "大单", "两融", "概率", "预期收益", "降息", "降准", "关税",
+    "lpr", "cpi", "ppi", "m2", "gdp"
+}
+
+_METRIC_CANONICAL_MAP: dict[str, str] = {
+    # 营收 / 收入
+    "营业收入": "营收", "主营业务收入": "营收", "单季营收": "营收", "海外营收": "营收", "营收": "营收", "收入": "营收", "revenue": "营收",
+    # 毛利率 / 毛利
+    "综合毛利率": "毛利率", "销售毛利率": "毛利率", "毛利率": "毛利率", "毛利": "毛利",
+    # 净利率
+    "归母净利率": "净利率", "扣非净利率": "净利率", "净利率": "净利率", "净利润率": "净利率",
+    # 净利润
+    "归母净利润": "净利润", "归母净利": "净利润", "扣非净利润": "净利润", "扣非净利": "净利润", "净利润": "净利润", "净利": "净利润",
+    # 成本
+    "营业成本": "成本", "生产成本": "成本", "成本": "成本",
+    # 应收账款
+    "应收账款": "应收账款", "应收款项": "应收账款", "应收账期": "应收账款",
+    # 存货
+    "存货": "存货", "库存": "存货",
+    # 现金流
+    "经营活动产生的现金流量净额": "现金流", "经营性现金流": "现金流", "经营现金流": "现金流", "自由现金流": "现金流", "现金流": "现金流", "fcf": "现金流",
+    # 资产负债率
+    "资产负债率": "资产负债率", "负债率": "资产负债率",
+    # 估值 / 收益率
+    "加权净资产收益率": "roe", "净资产收益率": "roe", "roe": "roe",
+    "总资产收益率": "roa", "roa": "roa",
+    "每股收益": "eps", "eps": "eps",
+    "市盈率": "pe", "pe": "pe",
+    "市净率": "pb", "pb": "pb",
+    "市销率": "ps", "ps": "ps",
+    "分红率": "股息率", "股息率": "股息率", "分红": "股息率", "股息": "股息率",
+    # 交易 / 资金
+    "换手率": "换手率", "换手": "换手率",
+    "量比": "量比",
+    "成交量": "成交量", "成交额": "成交额",
+    "主力净流入": "主力", "主力净流出": "主力", "主力": "主力",
+    "超大单净流入": "超大单", "超大单净流出": "超大单", "超大单": "超大单",
+    "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
+    "散户小单净买入": "散户小单", "散户小单": "散户小单",
+    "融资净偿还": "两融", "融资净买入": "两融", "融券净卖出": "两融", "两融": "两融", "融资": "两融", "融券": "两融",
+    # 宏观 / 情景
+    "情景概率": "概率", "概率": "概率", "情景": "概率",
+    "预期收益": "预期收益",
+    "降息": "降息", "降准": "降准", "关税": "关税",
+    "lpr": "lpr", "cpi": "cpi", "ppi": "ppi", "m2": "m2", "gdp": "gdp",
+}
+
+
+def _canonicalize_metric(raw_metric: str | None, unit: str) -> str | None:
+    if not raw_metric:
+        return None
+    m = _METRIC_CANONICAL_MAP.get(raw_metric, raw_metric)
+    if unit == "%":
+        if m == "毛利":
+            return "毛利率"
+        if m in ("净利", "净利润"):
+            return "净利率"
+    elif unit in ("元", "股"):
+        if m == "毛利率":
+            return "毛利"
+        if m == "净利率":
+            return "净利润"
+    return m
+
+
+_SORTED_METRIC_MAP_KEYS = sorted(_METRIC_CANONICAL_MAP.keys(), key=len, reverse=True)
+
+
+class BoundNumber:
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric")
+
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None):
+        self.val = val
+        self.unit = unit
+        self.raw = raw
+        self.metric = metric
+        self.period = period
+        self.raw_metric = raw_metric
+
+    def __repr__(self) -> str:
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r})"
+
+
+def extract_bound_numbers(text: str, default_period: str | None = None) -> list[BoundNumber]:
+    """Extract numbers from text and bind each number to its closest specific metric and period."""
+    if not text:
+        return []
+    period = normalize_period(text) or default_period
+    cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), text)
+    text_lower = text.lower()
+    metric_spans = []
+    for kw in _SORTED_METRIC_MAP_KEYS:
+        start = 0
+        while True:
+            idx = text_lower.find(kw.lower(), start)
+            if idx == -1:
+                break
+            metric_spans.append((idx, idx + len(kw), kw))
+            start = idx + len(kw)
+    metric_spans.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+    filtered_spans = []
+    for s in metric_spans:
+        if not filtered_spans or s[0] >= filtered_spans[-1][1]:
+            filtered_spans.append(s)
+
+    matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
+    res = []
+    for i, m in enumerate(matches):
+        val_str = m.group(1)
+        unit_str = m.group(2) or ""
+        if not unit_str and i + 1 < len(matches):
+            between = cleaned[m.end():matches[i+1].start()]
+            if re.fullmatch(r"\s*[-~至到]\s*", between) and matches[i+1].group(2):
+                unit_str = matches[i+1].group(2)
+        norm = normalize_numeric_value(val_str, unit_str)
+        if norm is None:
+            continue
+        val, unit = norm
+        raw = m.group(0).strip()
+        n_start, n_end = m.span()
+
+        closest_prec = None
+        min_prec_dist = 9999
+        for m_start, m_end, m_raw in filtered_spans:
+            if m_end <= n_start and (n_start - m_end) < 40:
+                intervening = text[m_end:n_start]
+                if "；" in intervening or ";" in intervening or "。" in intervening:
+                    continue
+                dist = n_start - m_end
+                if dist < min_prec_dist:
+                    min_prec_dist = dist
+                    closest_prec = m_raw
+
+        closest_succ = None
+        min_succ_dist = 9999
+        for m_start, m_end, m_raw in filtered_spans:
+            if m_start >= n_end and (m_start - n_end) < 15:
+                dist = m_start - n_end
+                if dist < min_succ_dist:
+                    min_succ_dist = dist
+                    closest_succ = m_raw
+
+        raw_metric = closest_prec or closest_succ
+        metric = _canonicalize_metric(raw_metric, unit)
+        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric))
+    return res
+
+
+_COMPOUND_SPLIT_RE = re.compile(
+    r"[;；]|(?<!\d)[,，](?!\d)|(?<=[%\d元股点])\s*(?:且|并且|严重背离|背离|同时)\s*"
+)
+
+
+def split_compound_evidence(text: str) -> list[str]:
+    """Split a compound evidence sentence into atomic statements."""
+    if not text:
+        return []
+    parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(text) if p.strip()]
+    return parts if parts else [text.strip()]
+
+
+def _is_bound_num_match(
+    ev_bn: BoundNumber,
+    l_bn: BoundNumber,
+    rel_tol: float = 0.02,
+    abs_tol: float = 0.05,
+) -> bool:
+    """Check if evidence bound number matches line bound number without metric cross-binding."""
+    if not _is_num_match(ev_bn.val, ev_bn.unit, l_bn.val, l_bn.unit, rel_tol, abs_tol):
+        return False
+    ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
+    l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
+    if ev_strict and l_strict and ev_strict != l_strict:
+        return False
+    return True
+
+
+def _is_bound_num_contradicted(
+    ev_bn: BoundNumber,
+    l_bn: BoundNumber,
+) -> bool:
+    """Check if evidence bound number contradicts line bound number.
+
+    Requires matching metric name, unit, and period (for percentages) before judging conflict.
+    """
+    ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
+    l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
+    if not ev_strict or not l_strict or ev_strict != l_strict:
+        return False
+    if ev_bn.unit != l_bn.unit or ev_bn.unit not in {"%", "元", "股"}:
+        return False
+    if ev_bn.unit == "%":
+        if ev_bn.period != l_bn.period:
+            return False
+    else:
+        if ev_bn.period and l_bn.period and ev_bn.period != l_bn.period:
+            return False
+    diff_pct = abs(abs(ev_bn.val) - abs(l_bn.val)) / (abs(l_bn.val) + 1e-9)
+    return diff_pct > 0.05
 
 
 class EvidenceFactualTruthEvaluator:
@@ -433,7 +671,6 @@ class EvidenceFactualTruthEvaluator:
             }
 
         # 3. Deterministic Matching against 7 Reports
-        ev_numbers = _extract_numbers_and_units(raw_text)
         ev_keywords = _extract_metric_keywords(raw_text)
 
         # 3.1 Exact substring match in any report
@@ -454,6 +691,14 @@ class EvidenceFactualTruthEvaluator:
                     "details": f"在 {role_key} 中找到精确匹配事实",
                 }
 
+        parent_period = normalize_period(raw_text)
+        atomic_clauses = split_compound_evidence(raw_text)
+        all_ev_bns: list[BoundNumber] = []
+        for clause in atomic_clauses:
+            clause_period = normalize_period(clause) or parent_period
+            c_bns = extract_bound_numbers(clause, default_period=clause_period)
+            all_ev_bns.extend(c_bns)
+
         # 3.2 Single-line full match in reports
         for role_key in SEVEN_REPORT_KEYS:
             if self._is_report_unavailable(role_key, unavailable_sources):
@@ -467,12 +712,13 @@ class EvidenceFactualTruthEvaluator:
                 if not line_text:
                     continue
 
-                # Check keyword overlap
                 line_keywords = _extract_metric_keywords(line_text)
-                common_kw = set(ev_keywords).intersection(set(line_keywords))
+                ev_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in ev_keywords}
+                line_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in line_keywords}
+                common_kw = ev_canon.intersection(line_canon)
+                line_bns = extract_bound_numbers(line_text)
 
-                line_numbers = _extract_numbers_and_units(line_text)
-                if not line_numbers and not ev_numbers:
+                if not line_bns and not all_ev_bns:
                     # Pure qualitative text match if keywords strongly match
                     if len(common_kw) >= 2 and any(kw in line_text for kw in ev_keywords):
                         return {
@@ -486,19 +732,20 @@ class EvidenceFactualTruthEvaluator:
                         }
                     continue
 
-                # If numbers exist, check single-line full value match
-                if ev_numbers:
+                # If numbers exist, check single-line full value match with metric binding
+                if all_ev_bns:
                     matched_all_numbers = True
                     found_match = False
-                    for ev_num, ev_unit, ev_raw in ev_numbers:
+                    for ev_bn in all_ev_bns:
                         num_found_in_line = False
-                        for l_num, l_unit, l_raw in line_numbers:
-                            if _is_num_match(ev_num, ev_unit, l_num, l_unit, self.rel_tol, self.abs_tol):
+                        for l_bn in line_bns:
+                            if _is_bound_num_match(ev_bn, l_bn, self.rel_tol, self.abs_tol):
                                 num_found_in_line = True
                                 found_match = True
                                 break
                         if not num_found_in_line:
                             matched_all_numbers = False
+                            break
 
                     if found_match and matched_all_numbers:
                         if not ev_keywords or len(common_kw) >= 1:
@@ -512,12 +759,12 @@ class EvidenceFactualTruthEvaluator:
                                 "details": f"在 {role_key} 中验证数值与关键词匹配",
                             }
 
-        # 3.3 Multi-line aggregation mode (when single line did not match all numbers)
-        if ev_numbers:
+        # 3.3 Multi-line / atomic aggregation mode (when single line did not match all numbers)
+        if all_ev_bns:
             num_hits_by_report: dict[str, set[int]] = {}
             all_hit_num_indices: set[int] = set()
 
-            for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+            for num_idx, ev_bn in enumerate(all_ev_bns):
                 for role_key in SEVEN_REPORT_KEYS:
                     if self._is_report_unavailable(role_key, unavailable_sources):
                         continue
@@ -530,13 +777,15 @@ class EvidenceFactualTruthEvaluator:
                         if not line_text:
                             continue
                         line_keywords = _extract_metric_keywords(line_text)
-                        common_kw = set(ev_keywords).intersection(set(line_keywords))
-                        # Each hit line must share >= 1 keyword with the evidence sentence
+                        ev_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in ev_keywords}
+                        line_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in line_keywords}
+                        common_kw = ev_canon.intersection(line_canon)
+                        # Each hit line must share >= 1 canonical keyword with the evidence sentence
                         if ev_keywords and not common_kw:
                             continue
-                        line_numbers = _extract_numbers_and_units(line_text)
-                        for l_num, l_unit, l_raw in line_numbers:
-                            if _is_num_match(ev_num, ev_unit, l_num, l_unit, self.rel_tol, self.abs_tol):
+                        line_bns = extract_bound_numbers(line_text)
+                        for l_bn in line_bns:
+                            if _is_bound_num_match(ev_bn, l_bn, self.rel_tol, self.abs_tol):
                                 num_hits_by_report.setdefault(role_key, set()).add(num_idx)
                                 all_hit_num_indices.add(num_idx)
                                 matched_in_report = True
@@ -544,7 +793,7 @@ class EvidenceFactualTruthEvaluator:
                         if matched_in_report:
                             break
 
-            total_nums = len(ev_numbers)
+            total_nums = len(all_ev_bns)
             # Check single-report multi-line aggregation first
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -581,7 +830,7 @@ class EvidenceFactualTruthEvaluator:
 
         # 3.4 Contradiction check across reports when evidence is not verified
         contradicted_candidate = None
-        if ev_numbers and ev_keywords:
+        if all_ev_bns:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
                     continue
@@ -592,31 +841,25 @@ class EvidenceFactualTruthEvaluator:
                     line_text = line.strip()
                     if not line_text:
                         continue
-                    line_keywords = _extract_metric_keywords(line_text)
-                    common_kw = set(ev_keywords).intersection(set(line_keywords))
-                    # Match specific metric keywords (avoid generic tokens triggering false contradiction)
-                    metric_overlap = [kw for kw in common_kw if kw in {
-                        "毛利率", "毛利", "净利率", "净利润", "净利", "营收", "收入",
-                        "roe", "eps", "pe", "pb", "m2", "cpi", "ppi", "gdp", "lpr",
-                        "主力", "净流入", "净流出", "降息", "降准", "关税", "量比", "换手率"
-                    }]
-                    if not metric_overlap:
-                        continue
-                    line_numbers = _extract_numbers_and_units(line_text)
-                    for num_idx, (ev_num, ev_unit, ev_raw) in enumerate(ev_numbers):
+                    line_bns = extract_bound_numbers(line_text)
+                    for num_idx, ev_bn in enumerate(all_ev_bns):
                         if num_idx in all_hit_num_indices:
                             continue
-                        for l_num, l_unit, l_raw in line_numbers:
-                            if ev_unit == l_unit and ev_unit in {"%", "元", "股"}:
-                                diff_pct = abs(abs(ev_num) - abs(l_num)) / (abs(l_num) + 1e-9)
-                                if diff_pct > 0.05:
-                                    contradicted_candidate = (
-                                        role_key,
-                                        f"在 {role_key} 中关键词 '{', '.join(metric_overlap)}' 数据冲突: 证据声称 {ev_raw}，报告记录为 {l_raw}",
-                                    )
-                                    break
+                        if not ev_bn.metric:
+                            continue
+                        for l_bn in line_bns:
+                            if not l_bn.metric:
+                                continue
+                            if _is_bound_num_contradicted(ev_bn, l_bn):
+                                contradicted_candidate = (
+                                    role_key,
+                                    f"在 {role_key} 中指标 '{ev_bn.metric}' 数据冲突: 证据声称 {ev_bn.raw}，报告记录为 {l_bn.raw}",
+                                )
+                                break
                         if contradicted_candidate:
                             break
+                    if contradicted_candidate:
+                        break
                 if contradicted_candidate:
                     break
 
