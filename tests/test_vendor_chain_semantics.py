@@ -17,10 +17,15 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from tradingagents.dataflows import interface as iface
+from tradingagents.dataflows.news_event_evidence import (
+    build_news_event_coverage,
+    parse_news_markdown_to_evidences,
+)
 from tradingagents.dataflows.providers.base import ProviderResourcePolicy
 from tradingagents.dataflows.providers.cn_akshare_provider import CnAkshareProvider
 from tradingagents.dataflows.trade_calendar import CN_TZ, cn_today_str
@@ -274,6 +279,144 @@ def test_akshare_historical_news_rejects_invalid_timestamps():
     out = p.get_news("600519", "2026-08-01", "2026-08-04")
     assert isinstance(out, VendorFail)
     assert "发布时间" in out.error
+
+
+def test_akshare_get_news_emits_link_by_column_name_and_normalizes_to_evidence_url():
+    """DAV-615 Contract 1 & 2:
+
+    Mock ak.stock_news_em returning DataFrame with '新闻链接' (non-empty, non-nan).
+    - Fetches by column name (out-of-order columns, forbidding positional slicing).
+    - Output markdown must include 'Link: <url>'.
+    - parse_news_markdown_to_evidences parses it into evidence.url with URL normalization.
+    - URL feeds into coverage url (clusters contain normalized url).
+    """
+    class _LinkNewsAk:
+        def stock_news_em(self, symbol):
+            # Columns in non-standard order to verify access by column name, not positional slicing
+            return pd.DataFrame(
+                {
+                    "发布时间": ["2026-08-04 10:00:00", "2026-08-04 14:00:00"],
+                    "新闻内容": ["半年报公布净利润增长", "新签日常经营重大合同"],
+                    "新闻链接": [
+                        "https://finance.eastmoney.com/a/202608041000.html?id=1#report",
+                        "https://finance.eastmoney.com/a/202608041400.html",
+                    ],
+                    "新闻标题": ["茅台发布2026半年报", "茅台签订海外供货战略合同"],
+                    "文章来源": ["东方财富网", "证券时报"],
+                }
+            )
+
+    p = CnAkshareProvider()
+    p._ak = lambda: _LinkNewsAk()
+    out = p.get_news("600519", "2026-08-01", "2026-08-04")
+
+    # Contract 1: markdown must contain Link: <url>
+    assert "Link: https://finance.eastmoney.com/a/202608041000.html?id=1#report" in out
+    assert "Link: https://finance.eastmoney.com/a/202608041400.html" in out
+
+    # Contract 2: parse_news_markdown_to_evidences normalizes url
+    evidences, unparseable = parse_news_markdown_to_evidences(out, default_entity="600519")
+    assert len(unparseable) == 0
+    assert len(evidences) == 2
+    # Fragment stripped, normalized
+    assert evidences[0].url == "https://finance.eastmoney.com/a/202608041000.html?id=1"
+    assert evidences[1].url == "https://finance.eastmoney.com/a/202608041400.html"
+
+    # Coverage integration: clusters contain normalized url
+    coverage = build_news_event_coverage(evidences, cutoff="2026-08-04")
+    assert coverage["hit_count"] >= 1
+    cluster_evs = coverage["clusters"][0]["evidences"]
+    assert any(e["url"] for e in cluster_evs)
+
+
+def test_akshare_get_news_omits_link_when_missing_empty_or_nan():
+    """DAV-615 Contract 3:
+
+    '新闻链接' missing / empty / nan / None / pd.NA / whitespace:
+    - Must NOT fabricate URL.
+    - Must NOT write fake 'Link:'.
+    - parse_news_markdown_to_evidences evidence.url must be None.
+    """
+    class _NoLinkNewsAk:
+        def stock_news_em(self, symbol):
+            return pd.DataFrame(
+                {
+                    "发布时间": ["2026-08-04 09:00:00"] * 8,
+                    "新闻标题": [f"title_{i}" for i in range(8)],
+                    "新闻内容": [f"content_{i}" for i in range(8)],
+                    "新闻链接": [
+                        None,
+                        np.nan,
+                        float("nan"),
+                        pd.NA,
+                        "",
+                        "   ",
+                        "nan",
+                        "NaN",
+                    ],
+                }
+            )
+
+    p = CnAkshareProvider()
+    p._ak = lambda: _NoLinkNewsAk()
+    out = p.get_news("600519", "2026-08-01", "2026-08-04")
+
+    # Strictly forbid fake Link: lines
+    assert "Link:" not in out
+
+    evidences, unparseable = parse_news_markdown_to_evidences(out)
+    assert len(unparseable) == 0
+    assert len(evidences) == 8
+    for ev in evidences:
+        assert ev.url is None
+
+
+def test_akshare_get_news_omits_link_when_column_not_present():
+    """DAV-615 Contract 3: DataFrame completely lacks '新闻链接' and '链接'."""
+    class _MissingColAk:
+        def stock_news_em(self, symbol):
+            return pd.DataFrame(
+                {
+                    "发布时间": ["2026-08-04 09:00:00"],
+                    "新闻标题": ["无链接列新闻"],
+                    "新闻内容": ["无链接正文"],
+                    "文章来源": ["来源A"],
+                }
+            )
+
+    p = CnAkshareProvider()
+    p._ak = lambda: _MissingColAk()
+    out = p.get_news("600519", "2026-08-01", "2026-08-04")
+
+    assert "Link:" not in out
+    evidences, unparseable = parse_news_markdown_to_evidences(out)
+    assert len(unparseable) == 0
+    assert len(evidences) == 1
+    assert evidences[0].url is None
+
+
+def test_akshare_get_news_fallback_to_lianjie_column():
+    """DAV-615: When column name is '链接' instead of '新闻链接', correctly emits Link:."""
+    class _LianjieAk:
+        def stock_news_em(self, symbol):
+            return pd.DataFrame(
+                {
+                    "发布时间": ["2026-08-04 11:00:00"],
+                    "新闻标题": ["备用链接列新闻"],
+                    "新闻内容": ["备用链接正文"],
+                    "链接": ["https://finance.eastmoney.com/a/202608049999.html"],
+                }
+            )
+
+    p = CnAkshareProvider()
+    p._ak = lambda: _LianjieAk()
+    out = p.get_news("600519", "2026-08-01", "2026-08-04")
+
+    assert "Link: https://finance.eastmoney.com/a/202608049999.html" in out
+    evidences, unparseable = parse_news_markdown_to_evidences(out)
+    assert len(unparseable) == 0
+    assert len(evidences) == 1
+    assert evidences[0].url == "https://finance.eastmoney.com/a/202608049999.html"
 
 
 # ── Provider: yfinance typed semantics ────────────────────────────────

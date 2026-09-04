@@ -1465,11 +1465,16 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     title = str(row.get("新闻标题", row.get("标题", "No title")))
                     src = str(row.get("文章来源", row.get("来源", "Unknown")))
                     summary = str(row.get("新闻内容", row.get("内容", "")))
-                    link = str(row.get("新闻链接", row.get("链接", "")))
+                    raw_link = row.get("新闻链接", row.get("链接", None))
+                    link = ""
+                    if raw_link is not None and not isinstance(raw_link, bool) and not pd.isna(raw_link):
+                        candidate = str(raw_link).strip()
+                        if candidate and candidate.lower() not in ("none", "null", "nan", "unknown", "未知"):
+                            link = candidate
                     rows.append(f"### {title} [发布时间：{published_at}] (source: {src})")
                     if summary and summary != "nan":
                         rows.append(summary[:400])
-                    if link and link != "nan":
+                    if link:
                         rows.append(f"Link: {link}")
                     rows.append("")
 
