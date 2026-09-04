@@ -21,7 +21,10 @@ from tradingagents.dataflows.news_event_evidence import (
     EventCluster,
     NewsEvidence,
     build_news_event_coverage,
+    compute_source_hash,
+    extract_url_from_raw,
     format_event_coverage_summary,
+    normalize_url,
     parse_news_markdown_to_evidences,
 )
 from tradingagents.prompts import get_prompt
@@ -503,3 +506,106 @@ def test_news_analyst_with_focus_areas_retains_manifest():
     assert coverage["recall_status"] == "partial_vs_manifest"
     assert coverage["query_manifest"] == ["财报", "行业政策"]
     assert coverage["requested_themes"] == ["财报", "行业政策"]
+
+
+def test_url_deduplication_different_source_and_differing_titles():
+    """DAV-610 RED acceptance: same normalized URL, different sources, non-identical titles -> hit_count==1."""
+    raw_items = [
+        {
+            "title": "东财快讯：重组取得重大进展",
+            "published_at": "2026-07-29 10:00:00",
+            "source": "东方财富",
+            "url": "https://finance.example.com/article/12345#ref1",
+            "summary": "重组进展详细内容...",
+            "entity": "000001",
+            "theme": "公司治理",
+        },
+        {
+            "title": "突发！某公司资本运作迎来新突破",
+            "published_at": "2026-07-29 11:00:00",
+            "source": "新浪财经",
+            "url": "https://finance.example.com/article/12345",
+            "summary": "资本运作内容完全不一样的摘要说明...",
+            "entity": "000001",
+            "theme": "公司治理",
+        },
+    ]
+
+    coverage = build_news_event_coverage(
+        raw_items,
+        cutoff="2026-07-30",
+        requested_themes=["公司治理"],
+    )
+
+    assert coverage["hit_count"] == 1
+    assert coverage["valid_evidence_count"] == 2
+    assert len(coverage["clusters"]) == 1
+    cluster = coverage["clusters"][0]
+    assert cluster["evidence_count"] == 2
+    # Ensure URL is properly normalized on evidences
+    for ev in cluster["evidences"]:
+        assert ev["url"] == "https://finance.example.com/article/12345"
+        # DAV-610 forbidden: no canonical_event_id invented
+        assert "canonical_event_id" not in ev
+    assert "canonical_event_id" not in cluster
+
+
+def test_normalize_url_trim_and_strip_fragment():
+    """DAV-610: URL normalization trims whitespace, strips fragments, and returns None on failure."""
+    assert normalize_url("  https://example.com/news/100  ") == "https://example.com/news/100"
+    assert normalize_url("https://example.com/news/100#comments") == "https://example.com/news/100"
+    assert normalize_url("https://example.com/news?id=123&sort=desc#frag") == "https://example.com/news?id=123&sort=desc"
+    # Unparseable / missing / falsy returns None, never empty string or current date
+    assert normalize_url(None) is None
+    assert normalize_url("") is None
+    assert normalize_url("   ") is None
+    assert normalize_url("nan") is None
+    assert normalize_url("null") is None
+    assert normalize_url("未知") is None
+    assert normalize_url("http://[invalid-ipv6") is None
+    assert normalize_url("http://example.com:999999/") is None
+
+
+def test_extract_url_from_raw_column_keys():
+    """DAV-610: extract_url_from_raw checks url/链接/link/新闻链接 and returns None if missing."""
+    assert extract_url_from_raw({"url": "https://example.com/1"}) == "https://example.com/1"
+    assert extract_url_from_raw({"链接": "https://example.com/2"}) == "https://example.com/2"
+    assert extract_url_from_raw({"link": "https://example.com/3"}) == "https://example.com/3"
+    assert extract_url_from_raw({"新闻链接": "https://example.com/4"}) == "https://example.com/4"
+    assert extract_url_from_raw({"title": "无链接新闻"}) is None
+    assert extract_url_from_raw({"url": "", "link": "nan"}) is None
+
+
+def test_compute_source_hash_incorporates_url():
+    """DAV-610: compute_source_hash incorporates normalized URL when present, keeps legacy without URL."""
+    base_hash = compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要")
+    # Calling without url or with None must yield exact legacy hash
+    assert compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要", url=None) == base_hash
+    assert compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要", url="") == base_hash
+
+    # URL presence alters the hash
+    hash_with_url = compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要", url="https://example.com/1")
+    assert hash_with_url != base_hash
+
+    # Fragment does not alter the hash because of normalization
+    hash_with_frag = compute_source_hash("东财", "标题", "2026-07-29 10:00:00", "摘要", url="https://example.com/1#section")
+    assert hash_with_frag == hash_with_url
+
+    # Source is preserved in hash (different source -> different hash)
+    hash_diff_src = compute_source_hash("新浪", "标题", "2026-07-29 10:00:00", "摘要", url="https://example.com/1")
+    assert hash_diff_src != hash_with_url
+
+
+def test_parse_news_markdown_extracts_link_url():
+    """DAV-610: parse_news_markdown_to_evidences extracts Link: as normalized url."""
+    md = """### 标题1 [发布时间：2026-07-29 10:00:00] (source: 源1)
+内容摘要
+Link: https://example.com/item/1#frag
+
+### 标题2 [发布时间：2026-07-29 11:00:00] (source: 源2)
+内容摘要无链接
+"""
+    evidences, unparseable = parse_news_markdown_to_evidences(md)
+    assert len(evidences) == 2
+    assert evidences[0].url == "https://example.com/item/1"
+    assert evidences[1].url is None

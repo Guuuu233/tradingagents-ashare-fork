@@ -16,6 +16,7 @@ import json
 import logging
 import re
 from typing import Any, Iterable, Mapping, Sequence
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,43 @@ def infer_theme_from_text(title: str, summary: str = "") -> str:
     return "综合新闻"
 
 
+def normalize_url(url: Any) -> str | None:
+    """Normalize news URL: trim, remove fragment. Returns None on failure or missing.
+
+    Strictly forbids filling default URL or empty string.
+    """
+    if url is None or isinstance(url, bool):
+        return None
+    text = str(url).strip()
+    if not text or text.lower() in ("none", "null", "nan", "unknown", "未知"):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(text)
+        _ = parsed.port
+        cleaned = urllib.parse.urlunsplit(
+            (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
+        ).strip()
+        if not cleaned:
+            return None
+        return cleaned
+    except Exception:
+        return None
+
+
+def extract_url_from_raw(raw_dict: Mapping[str, Any]) -> str | None:
+    """Extract raw URL from news item dictionary using known column names.
+
+    Returns None if missing, empty, or nan.
+    """
+    for key in ("url", "链接", "link", "新闻链接", "news_url", "URL", "Link"):
+        val = raw_dict.get(key)
+        if val is not None and not isinstance(val, bool):
+            text = str(val).strip()
+            if text and text.lower() not in ("none", "null", "nan", "unknown", "未知"):
+                return text
+    return None
+
+
 def normalize_title_for_dedupe(title: str) -> str:
     """Normalize news title for fuzzy matching and deduplication."""
     t = str(title or "").strip().lower()
@@ -131,9 +169,23 @@ def normalize_title_for_dedupe(title: str) -> str:
     return t
 
 
-def compute_source_hash(source: str, title: str, published_at: str, summary: str = "") -> str:
-    """Compute deterministic hash for source verification and deduplication."""
-    raw = f"{str(source).strip()}:{str(title).strip()}:{str(published_at).strip()}:{str(summary).strip()[:100]}"
+def compute_source_hash(
+    source: str,
+    title: str,
+    published_at: str,
+    summary: str = "",
+    url: str | None = None,
+) -> str:
+    """Compute deterministic hash for source verification and deduplication.
+
+    When normalized URL is provided, incorporates it into the hash.
+    When URL is absent, preserves legacy title/source/published_at/summary behavior.
+    """
+    norm_url = normalize_url(url)
+    if norm_url:
+        raw = f"{str(source).strip()}:{str(title).strip()}:{str(published_at).strip()}:{str(summary).strip()[:100]}:{norm_url}"
+    else:
+        raw = f"{str(source).strip()}:{str(title).strip()}:{str(published_at).strip()}:{str(summary).strip()[:100]}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -163,9 +215,11 @@ class NewsEvidence:
         self.theme = str(self.theme or "").strip()
         if not self.theme and self.title:
             self.theme = infer_theme_from_text(self.title, self.summary)
+        if self.url is not None:
+            self.url = normalize_url(self.url)
         if not self.source_hash:
             self.source_hash = compute_source_hash(
-                self.source, self.title, self.published_at, self.summary
+                self.source, self.title, self.published_at, self.summary, url=self.url
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -214,8 +268,24 @@ def cluster_news_evidences(
             rep_dt = parse_datetime_or_none(rep.published_at)
 
             # Match criteria:
-            # 1. Same source_hash
-            # 2. Or same entity & theme AND (same normalized title OR high title overlap)
+            # 1. URL match: both have non-empty normalized URL and they are equal
+            ev_norm_url = normalize_url(ev.url) if ev.url else None
+            same_url = bool(
+                ev_norm_url
+                and any(
+                    normalize_url(e.url) == ev_norm_url
+                    for e in cluster_evs
+                    if e.url
+                )
+            )
+            if same_url:
+                matched_cluster = cluster_evs
+                break
+
+            # 2. Same source_hash
+            same_hash = bool(ev.source_hash and ev.source_hash == rep.source_hash)
+
+            # 3. Or same entity & theme AND (same normalized title OR high title overlap)
             same_entity = (ev.entity == rep.entity) if (ev.entity and rep.entity) else True
             same_theme = (ev.theme == rep.theme) if (ev.theme and rep.theme) else True
 
@@ -230,7 +300,7 @@ def cluster_news_evidences(
                 elif (ev_norm_title in rep_norm_title or rep_norm_title in ev_norm_title) and time_close:
                     title_matches = True
 
-            if (ev.source_hash and ev.source_hash == rep.source_hash) or (
+            if same_hash or (
                 same_entity and same_theme and title_matches and time_close
             ):
                 matched_cluster = cluster_evs
@@ -317,6 +387,9 @@ def build_news_event_coverage(
             raw_entity = item.entity or default_entity
             raw_theme = item.theme
             raw_dict = item.to_dict()
+            raw_url = item.url
+            if raw_url is None and item.raw_item:
+                raw_url = extract_url_from_raw(item.raw_item)
         else:
             raw_dict = dict(item or {})
             raw_title = raw_dict.get("title", raw_dict.get("新闻标题", raw_dict.get("标题", "")))
@@ -326,6 +399,7 @@ def build_news_event_coverage(
             raw_summary = raw_dict.get("summary", raw_dict.get("新闻内容", raw_dict.get("内容", "")))
             raw_entity = raw_dict.get("entity", raw_dict.get("标的", default_entity))
             raw_theme = raw_dict.get("theme", raw_dict.get("主题", ""))
+            raw_url = extract_url_from_raw(raw_dict)
 
         # 1. Strict published_at verification
         pub_dt = parse_datetime_or_none(raw_pub)
@@ -366,6 +440,7 @@ def build_news_event_coverage(
             theme=raw_theme,
             first_seen_at=str(raw_first_seen) if raw_first_seen else None,
             public_before_cutoff=True,
+            url=normalize_url(raw_url),
             raw_item=raw_dict,
         )
         valid_evidences.append(evidence)
@@ -476,12 +551,15 @@ def parse_news_markdown_to_evidences(
             continue
 
         formatted_pub = pub_dt.strftime("%Y-%m-%d %H:%M:%S")
+        url_match = re.search(r"(?im)^\s*(?:link|url|链接|新闻链接)\s*[:：]\s*(?P<url>\S+)", body)
+        raw_url = url_match.group("url") if url_match else None
         evidence = NewsEvidence(
             title=title,
             published_at=formatted_pub,
             source=source,
             summary=body,
             entity=default_entity,
+            url=normalize_url(raw_url),
         )
         evidences.append(evidence)
 
