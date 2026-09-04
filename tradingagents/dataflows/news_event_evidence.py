@@ -208,6 +208,7 @@ class NewsEvidence:
     cluster_id: str | None = None
     url: str | None = None
     raw_item: dict[str, Any] | None = None
+    canonical_event_id: str | None = None
 
     def __post_init__(self):
         self.title = str(self.title or "").strip()
@@ -217,13 +218,18 @@ class NewsEvidence:
             self.theme = infer_theme_from_text(self.title, self.summary)
         if self.url is not None:
             self.url = normalize_url(self.url)
+        if self.canonical_event_id is not None:
+            self.canonical_event_id = str(self.canonical_event_id).strip() or None
         if not self.source_hash:
             self.source_hash = compute_source_hash(
                 self.source, self.title, self.published_at, self.summary, url=self.url
             )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        res = asdict(self)
+        if self.canonical_event_id is None:
+            res.pop("canonical_event_id", None)
+        return res
 
 
 @dataclass
@@ -240,71 +246,164 @@ class EventCluster:
     evidences: list[NewsEvidence] = field(default_factory=list)
     source_hashes: list[str] = field(default_factory=list)
     summary: str = ""
+    canonical_event_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         res = asdict(self)
         res["evidences"] = [e.to_dict() if hasattr(e, "to_dict") else e for e in self.evidences]
+        if self.canonical_event_id is None:
+            res.pop("canonical_event_id", None)
         return res
+
+
+def cninfo_record_to_evidence(
+    record: Any,
+    default_entity: str = "",
+) -> NewsEvidence | None:
+    """Convert a CninfoDisclosureRecord into NewsEvidence, copying canonical_event_id verbatim.
+
+    Enforces contract (C-05c / DAV-625):
+    - Only copy CninfoDisclosureRecord.canonical_event_id verbatim.
+    - Strictly forbids inventing canonical_event_id from title or hash.
+    """
+    if record is None:
+        return None
+    if isinstance(record, dict):
+        raw_dict = dict(record)
+        title = raw_dict.get("title", raw_dict.get("公告标题", ""))
+        pub = raw_dict.get("announced_at", raw_dict.get("published_at", raw_dict.get("公告时间", "")))
+        source = raw_dict.get("source_type", raw_dict.get("source", "cninfo"))
+        url = raw_dict.get("url", raw_dict.get("公告链接"))
+        entity = raw_dict.get("symbol", raw_dict.get("代码", default_entity))
+        canonical_id = raw_dict.get("canonical_event_id")
+    else:
+        title = getattr(record, "title", "")
+        pub = getattr(record, "announced_at", getattr(record, "published_at", ""))
+        source = getattr(record, "source_type", getattr(record, "source", "cninfo"))
+        url = getattr(record, "url", None)
+        entity = getattr(record, "symbol", getattr(record, "entity", default_entity))
+        canonical_id = getattr(record, "canonical_event_id", None)
+        raw_dict = record.to_dict() if hasattr(record, "to_dict") else None
+
+    if not pub or not title:
+        return None
+
+    pub_dt = parse_datetime_or_none(pub)
+    if pub_dt is None:
+        return None
+    formatted_pub = pub_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    canonical_id_str = str(canonical_id).strip() if canonical_id else None
+
+    return NewsEvidence(
+        title=str(title).strip(),
+        published_at=formatted_pub,
+        source=str(source).strip(),
+        entity=str(entity or default_entity).strip(),
+        url=normalize_url(url),
+        canonical_event_id=canonical_id_str,
+        raw_item=raw_dict,
+    )
 
 
 def cluster_news_evidences(
     evidences: Sequence[NewsEvidence],
     time_window_days: int = 3,
 ) -> list[EventCluster]:
-    """Group NewsEvidence instances into deduplicated EventCluster objects."""
+    """Group NewsEvidence instances into deduplicated EventCluster objects.
+
+    Enforces C-05c / DAV-625 contracts:
+    - Same non-empty canonical_event_id must merge into the same cluster regardless
+      of title, URL, or source.
+    - Differing canonical_event_ids must never merge into the same cluster (title fuzzy
+      matching is strictly forbidden).
+    - If only one side has canonical_event_id, it may merge via URL / source_hash / title,
+      without inventing an ID for the other side.
+    """
     if not evidences:
         return []
 
+    # Partition: evidences with canonical_event_id first to establish stable anchor clusters,
+    # with stable ordering preserved within each group.
+    sorted_evidences = sorted(
+        evidences,
+        key=lambda e: 0 if getattr(e, "canonical_event_id", None) else 1,
+    )
+
     clusters: list[list[NewsEvidence]] = []
 
-    for ev in evidences:
+    for ev in sorted_evidences:
         matched_cluster = None
+        ev_cid = ev.canonical_event_id.strip() if getattr(ev, "canonical_event_id", None) else None
         ev_norm_title = normalize_title_for_dedupe(ev.title)
         ev_dt = parse_datetime_or_none(ev.published_at)
 
-        for cluster_evs in clusters:
-            rep = cluster_evs[0]
-            rep_norm_title = normalize_title_for_dedupe(rep.title)
-            rep_dt = parse_datetime_or_none(rep.published_at)
+        # Priority 1: If ev has canonical_event_id, must merge with any cluster sharing that exact id.
+        # Contract 3: 两边都有非空且相等的 canonical_event_id 时必须归入同一簇，即使标题/URL/来源不同。
+        if ev_cid:
+            for cluster_evs in clusters:
+                if any(getattr(e, "canonical_event_id", None) == ev_cid for e in cluster_evs):
+                    matched_cluster = cluster_evs
+                    break
 
-            # Match criteria:
-            # 1. URL match: both have non-empty normalized URL and they are equal
-            ev_norm_url = normalize_url(ev.url) if ev.url else None
-            same_url = bool(
-                ev_norm_url
-                and any(
-                    normalize_url(e.url) == ev_norm_url
+        # Priority 2: Fall back to existing URL / source_hash / semantic matching rules
+        if matched_cluster is None:
+            for cluster_evs in clusters:
+                cluster_cids = {
+                    getattr(e, "canonical_event_id", None)
                     for e in cluster_evs
-                    if e.url
+                    if getattr(e, "canonical_event_id", None)
+                }
+                # Contract 3: 不等的 id 不得因标题模糊匹配并成一簇。
+                # If both sides have canonical_event_id and they are unequal, strictly forbid merging.
+                if ev_cid and cluster_cids and ev_cid not in cluster_cids:
+                    continue
+
+                rep = cluster_evs[0]
+                rep_norm_title = normalize_title_for_dedupe(rep.title)
+                rep_dt = parse_datetime_or_none(rep.published_at)
+
+                # Match criteria:
+                # 1. URL match: both have non-empty normalized URL and they are equal
+                ev_norm_url = normalize_url(ev.url) if ev.url else None
+                same_url = bool(
+                    ev_norm_url
+                    and any(
+                        normalize_url(e.url) == ev_norm_url
+                        for e in cluster_evs
+                        if e.url
+                    )
                 )
-            )
-            if same_url:
-                matched_cluster = cluster_evs
-                break
+                if same_url:
+                    matched_cluster = cluster_evs
+                    break
 
-            # 2. Same source_hash
-            same_hash = bool(ev.source_hash and ev.source_hash == rep.source_hash)
+                # 2. Same source_hash
+                same_hash = bool(
+                    ev.source_hash
+                    and any(ev.source_hash == e.source_hash for e in cluster_evs if e.source_hash)
+                )
 
-            # 3. Or same entity & theme AND (same normalized title OR high title overlap)
-            same_entity = (ev.entity == rep.entity) if (ev.entity and rep.entity) else True
-            same_theme = (ev.theme == rep.theme) if (ev.theme and rep.theme) else True
+                # 3. Or same entity & theme AND (same normalized title OR high title overlap)
+                same_entity = (ev.entity == rep.entity) if (ev.entity and rep.entity) else True
+                same_theme = (ev.theme == rep.theme) if (ev.theme and rep.theme) else True
 
-            time_close = True
-            if ev_dt and rep_dt:
-                time_close = abs((ev_dt - rep_dt).total_seconds()) <= (time_window_days * 86400)
+                time_close = True
+                if ev_dt and rep_dt:
+                    time_close = abs((ev_dt - rep_dt).total_seconds()) <= (time_window_days * 86400)
 
-            title_matches = False
-            if ev_norm_title and rep_norm_title:
-                if ev_norm_title == rep_norm_title:
-                    title_matches = True
-                elif (ev_norm_title in rep_norm_title or rep_norm_title in ev_norm_title) and time_close:
-                    title_matches = True
+                title_matches = False
+                if ev_norm_title and rep_norm_title:
+                    if ev_norm_title == rep_norm_title:
+                        title_matches = True
+                    elif (ev_norm_title in rep_norm_title or rep_norm_title in ev_norm_title) and time_close:
+                        title_matches = True
 
-            if same_hash or (
-                same_entity and same_theme and title_matches and time_close
-            ):
-                matched_cluster = cluster_evs
-                break
+                if same_hash or (
+                    same_entity and same_theme and title_matches and time_close
+                ):
+                    matched_cluster = cluster_evs
+                    break
 
         if matched_cluster is not None:
             matched_cluster.append(ev)
@@ -333,6 +432,12 @@ def cluster_news_evidences(
         for e in cluster_evs:
             e.cluster_id = cluster_id
 
+        # Contract 5: EventCluster 可回显该 id（有则带上，无则字段缺省/None）
+        cluster_canonical_id = next(
+            (e.canonical_event_id for e in cluster_evs if getattr(e, "canonical_event_id", None)),
+            None,
+        )
+
         event_cluster = EventCluster(
             cluster_id=cluster_id,
             theme=theme,
@@ -344,6 +449,7 @@ def cluster_news_evidences(
             evidences=cluster_evs,
             source_hashes=list({e.source_hash for e in cluster_evs if e.source_hash}),
             summary=rep.summary,
+            canonical_event_id=cluster_canonical_id,
         )
         event_clusters.append(event_cluster)
 
@@ -390,16 +496,29 @@ def build_news_event_coverage(
             raw_url = item.url
             if raw_url is None and item.raw_item:
                 raw_url = extract_url_from_raw(item.raw_item)
+            raw_canonical_event_id = item.canonical_event_id
+        elif hasattr(item, "canonical_event_id") and hasattr(item, "announced_at"):
+            raw_dict = item.to_dict() if hasattr(item, "to_dict") else asdict(item)
+            raw_title = getattr(item, "title", "")
+            raw_pub = getattr(item, "announced_at", "")
+            raw_first_seen = None
+            raw_src = getattr(item, "source_type", "cninfo")
+            raw_summary = getattr(item, "summary", "")
+            raw_entity = getattr(item, "symbol", default_entity) or default_entity
+            raw_theme = getattr(item, "theme", "")
+            raw_url = getattr(item, "url", None)
+            raw_canonical_event_id = getattr(item, "canonical_event_id", None)
         else:
             raw_dict = dict(item or {})
             raw_title = raw_dict.get("title", raw_dict.get("新闻标题", raw_dict.get("标题", "")))
-            raw_pub = raw_dict.get("published_at", raw_dict.get("发布时间", raw_dict.get("date", None)))
+            raw_pub = raw_dict.get("published_at", raw_dict.get("发布时间", raw_dict.get("date", raw_dict.get("announced_at", None))))
             raw_first_seen = raw_dict.get("first_seen_at", raw_dict.get("抓取时间", None))
-            raw_src = raw_dict.get("source", raw_dict.get("文章来源", raw_dict.get("来源", "")))
+            raw_src = raw_dict.get("source", raw_dict.get("文章来源", raw_dict.get("来源", raw_dict.get("source_type", ""))))
             raw_summary = raw_dict.get("summary", raw_dict.get("新闻内容", raw_dict.get("内容", "")))
-            raw_entity = raw_dict.get("entity", raw_dict.get("标的", default_entity))
+            raw_entity = raw_dict.get("entity", raw_dict.get("标的", raw_dict.get("symbol", default_entity)))
             raw_theme = raw_dict.get("theme", raw_dict.get("主题", ""))
             raw_url = extract_url_from_raw(raw_dict)
+            raw_canonical_event_id = raw_dict.get("canonical_event_id")
 
         # 1. Strict published_at verification
         pub_dt = parse_datetime_or_none(raw_pub)
@@ -442,6 +561,7 @@ def build_news_event_coverage(
             public_before_cutoff=True,
             url=normalize_url(raw_url),
             raw_item=raw_dict,
+            canonical_event_id=str(raw_canonical_event_id).strip() if raw_canonical_event_id else None,
         )
         valid_evidences.append(evidence)
 

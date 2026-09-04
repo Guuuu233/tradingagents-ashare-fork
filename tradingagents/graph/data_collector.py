@@ -52,7 +52,9 @@ from tradingagents.dataflows.fund_flow_evidence import (
     summarize_evidence,
 )
 from tradingagents.dataflows.news_event_evidence import (
+    NewsEvidence,
     build_news_event_coverage,
+    cninfo_record_to_evidence,
     parse_news_markdown_to_evidences,
 )
 from tradingagents.dataflows.trade_calendar import (
@@ -1970,8 +1972,19 @@ def _fetch_all(
     global_news_text = results.get("global_news", "")
     stock_evs, stock_unp = parse_news_markdown_to_evidences(news_text, default_entity=ticker)
     glob_evs, glob_unp = parse_news_markdown_to_evidences(global_news_text, default_entity="宏观/行业")
+    cninfo_evs: list[NewsEvidence] = []
+    for key in ("cninfo_records", "cninfo_announcements", "cninfo_ir_surveys"):
+        val = results.get(key)
+        if not val:
+            continue
+        records = getattr(val, "records", None) if hasattr(val, "records") else (val if isinstance(val, (list, tuple)) else [])
+        for rec in records:
+            ev = cninfo_record_to_evidence(rec, default_entity=ticker)
+            if ev is not None:
+                cninfo_evs.append(ev)
+
     event_cov = build_news_event_coverage(
-        stock_evs + glob_evs + stock_unp + glob_unp,
+        stock_evs + glob_evs + cninfo_evs + stock_unp + glob_unp,
         requested_themes=None,
         cutoff=trade_date,
         window=f"{lookback}天",

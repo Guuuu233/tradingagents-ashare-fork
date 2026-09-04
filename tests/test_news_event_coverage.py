@@ -21,6 +21,8 @@ from tradingagents.dataflows.news_event_evidence import (
     EventCluster,
     NewsEvidence,
     build_news_event_coverage,
+    cluster_news_evidences,
+    cninfo_record_to_evidence,
     compute_source_hash,
     extract_url_from_raw,
     format_event_coverage_summary,
@@ -575,6 +577,235 @@ def test_extract_url_from_raw_column_keys():
     assert extract_url_from_raw({"链接": "https://example.com/2"}) == "https://example.com/2"
     assert extract_url_from_raw({"link": "https://example.com/3"}) == "https://example.com/3"
     assert extract_url_from_raw({"新闻链接": "https://example.com/4"}) == "https://example.com/4"
+
+
+# ==============================================================================
+# C-05c / DAV-625 Acceptance Tests: canonical_event_id cross-source clustering
+# ==============================================================================
+
+def test_c05c_red1_canonical_event_id_cross_source_same_id_one_cluster():
+    """RED 1 (C-05c / DAV-625):
+    两条 NewsEvidence：标题不同、URL 不同，但 canonical_event_id 同为 cninfo:1225488095 → 一个 cluster。
+    """
+    ev1 = NewsEvidence(
+        title="东财：某公司签订战略合作框架协议",
+        published_at="2026-07-29 10:00:00",
+        source="东方财富",
+        url="https://finance.eastmoney.com/a/202607290001.html",
+        entity="000001",
+        theme="重大合同",
+        canonical_event_id="cninfo:1225488095",
+    )
+    ev2 = NewsEvidence(
+        title="巨潮公告：关于签署重大项目投资意向书的提示性公告",
+        published_at="2026-07-29 15:30:00",
+        source="cninfo_announcement",
+        url="http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488095",
+        entity="000001",
+        theme="公司治理",
+        canonical_event_id="cninfo:1225488095",
+    )
+    clusters = cluster_news_evidences([ev1, ev2])
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert cluster.evidence_count == 2
+    assert cluster.canonical_event_id == "cninfo:1225488095"
+    assert cluster.to_dict()["canonical_event_id"] == "cninfo:1225488095"
+
+
+def test_c05c_red2_differing_canonical_event_ids_two_clusters():
+    """RED 2 (C-05c / DAV-625):
+    两条标题极相似、时间接近，id 分别为 cninfo:1 与 cninfo:2 → 两个 cluster。
+    不等的 id 不得因标题模糊匹配并成一簇。
+    """
+    ev1 = NewsEvidence(
+        title="某公司关于重大合同的公告",
+        published_at="2026-07-29 10:00:00",
+        source="东方财富",
+        entity="000001",
+        theme="重大合同",
+        canonical_event_id="cninfo:1",
+    )
+    ev2 = NewsEvidence(
+        title="某公司关于重大合同的公告（更新）",
+        published_at="2026-07-29 10:05:00",
+        source="证券时报",
+        entity="000001",
+        theme="重大合同",
+        canonical_event_id="cninfo:2",
+    )
+    clusters = cluster_news_evidences([ev1, ev2])
+    assert len(clusters) == 2
+    c_ids = {c.canonical_event_id for c in clusters}
+    assert c_ids == {"cninfo:1", "cninfo:2"}
+    for c in clusters:
+        assert c.evidence_count == 1
+        assert c.to_dict()["canonical_event_id"] in ("cninfo:1", "cninfo:2")
+
+
+def test_c05c_red3_parse_news_markdown_canonical_event_id_none():
+    """RED 3 (C-05c / DAV-625):
+    markdown 解析路径仍无 canonical_event_id 键或值为 None。
+    DAV-610 测试「parse_news_markdown 不得发明 id」仍成立：解析媒体 markdown 不得用标题/source_hash 填 id。
+    """
+    markdown_text = """### 东方财富：某公司签订重大战略合作协议 [发布时间：2026-07-29 10:00:00] (source: 东方财富)
+公司签署重大合作。
+Link: https://finance.eastmoney.com/a/202607290001.html
+"""
+    evidences, unparseable = parse_news_markdown_to_evidences(markdown_text, default_entity="000001")
+    assert len(evidences) == 1
+    ev = evidences[0]
+    # Dataclass attribute is None
+    assert ev.canonical_event_id is None
+    # to_dict() has no canonical_event_id key or value is None
+    ev_dict = ev.to_dict()
+    assert "canonical_event_id" not in ev_dict or ev_dict["canonical_event_id"] is None
+
+    # Clustering markdown-only evidences: cluster echo is also absent / None
+    clusters = cluster_news_evidences(evidences)
+    assert len(clusters) == 1
+    c = clusters[0]
+    assert c.canonical_event_id is None
+    c_dict = c.to_dict()
+    assert "canonical_event_id" not in c_dict or c_dict["canonical_event_id"] is None
+
+
+def test_c05c_contract4_one_side_has_id_merges_without_inventing_id():
+    """Contract 4 (C-05c / DAV-625):
+    仅一侧有 id：不得为另一侧编造 id；仍可走现有 URL/source_hash/标题规则。
+    """
+    ev_media = NewsEvidence(
+        title="关于某公司重大投资的公告",
+        published_at="2026-07-29 10:00:00",
+        source="新浪财经",
+        url="https://finance.example.com/item/999",
+        entity="000001",
+        theme="公司治理",
+        canonical_event_id=None,
+    )
+    ev_cninfo = NewsEvidence(
+        title="关于某公司重大投资的公告",
+        published_at="2026-07-29 10:02:00",
+        source="cninfo_announcement",
+        url="http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488095",
+        entity="000001",
+        theme="公司治理",
+        canonical_event_id="cninfo:1225488095",
+    )
+    clusters = cluster_news_evidences([ev_media, ev_cninfo])
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert cluster.evidence_count == 2
+    assert cluster.canonical_event_id == "cninfo:1225488095"
+
+    # Verify no id was invented for ev_media
+    media_ev = next(e for e in cluster.evidences if e.source == "新浪财经")
+    assert media_ev.canonical_event_id is None
+    assert "canonical_event_id" not in media_ev.to_dict()
+
+    cninfo_ev = next(e for e in cluster.evidences if e.source == "cninfo_announcement")
+    assert cninfo_ev.canonical_event_id == "cninfo:1225488095"
+    assert cninfo_ev.to_dict()["canonical_event_id"] == "cninfo:1225488095"
+
+
+def test_c05c_cninfo_record_to_evidence_copies_verbatim():
+    """Contract 2 (C-05c / DAV-625):
+    只有调用方把巨潮 CninfoDisclosureRecord.canonical_event_id 原样拷到 evidence 时才有值。
+    """
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureRecord
+
+    rec = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：2026年半年度报告",
+        announced_at="2026-07-28 17:00:00",
+        url="http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488095",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488095",
+        canonical_event_id="cninfo:1225488095",
+        adjunct_url="http://static.cninfo.com.cn/finalpage/2026-07-28/1225488095.PDF",
+    )
+    ev = cninfo_record_to_evidence(rec, default_entity="000001")
+    assert ev is not None
+    assert ev.canonical_event_id == "cninfo:1225488095"
+    assert ev.title == "平安银行：2026年半年度报告"
+    assert ev.published_at == "2026-07-28 17:00:00"
+    assert ev.source == "cninfo_announcement"
+    assert ev.entity == "000001"
+    assert ev.url == "http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488095"
+
+
+def test_c05c_build_news_event_coverage_with_cninfo_record():
+    """build_news_event_coverage correctly integrates CninfoDisclosureRecord and clusters with media news."""
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureRecord
+
+    rec = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：关于重大合作的公告",
+        announced_at="2026-07-29 10:00:00",
+        url="http://www.cninfo.com.cn/detail?announcementId=1225488095",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488095",
+        canonical_event_id="cninfo:1225488095",
+    )
+    media_item = {
+        "title": "平安银行：关于重大合作的公告",
+        "published_at": "2026-07-29 10:05:00",
+        "source": "东方财富",
+        "url": "https://finance.eastmoney.com/a/123.html",
+        "entity": "000001",
+        "theme": "重大合同",
+    }
+    coverage = build_news_event_coverage(
+        [rec, media_item],
+        cutoff="2026-07-30",
+        requested_themes=["重大合同"],
+    )
+    assert coverage["hit_count"] == 1
+    assert coverage["valid_evidence_count"] == 2
+    cluster = coverage["clusters"][0]
+    assert cluster["evidence_count"] == 2
+    assert cluster["canonical_event_id"] == "cninfo:1225488095"
+    media_ev = next(e for e in cluster["evidences"] if e["source"] == "东方财富")
+    assert "canonical_event_id" not in media_ev
+
+
+def test_c05c_data_collector_cninfo_records_copied_to_event_coverage():
+    """data_collector copies already-fetched cninfo records' canonical_event_id to event_coverage."""
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureRecord, CninfoDisclosureEnvelope
+
+    rec = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行关于重大重组的公告",
+        announced_at="2026-07-29 09:30:00",
+        url="http://www.cninfo.com.cn/detail?announcementId=1225488095",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488095",
+        canonical_event_id="cninfo:1225488095",
+    )
+    envelope = CninfoDisclosureEnvelope(status="ok", records=[rec])
+
+    mock_results = {
+        "news": "### 东方财富：平安银行关于重大重组的公告 [发布时间：2026-07-29 10:00:00] (source: 东方财富)\n重组内容\n",
+        "global_news": "",
+        "cninfo_announcements": envelope,
+    }
+    ticker = "000001"
+    trade_date = "2026-07-30"
+
+    stock_evs, stock_unp = parse_news_markdown_to_evidences(mock_results["news"], default_entity=ticker)
+    glob_evs, glob_unp = parse_news_markdown_to_evidences(mock_results["global_news"], default_entity="宏观/行业")
+    cninfo_evs = [cninfo_record_to_evidence(r, default_entity=ticker) for r in envelope.records]
+    cov = build_news_event_coverage(
+        stock_evs + glob_evs + cninfo_evs + stock_unp + glob_unp,
+        cutoff=trade_date,
+        default_entity=ticker,
+    )
+    assert cov["hit_count"] == 1
+    assert cov["clusters"][0]["canonical_event_id"] == "cninfo:1225488095"
+    assert cov["clusters"][0]["evidence_count"] == 2
     assert extract_url_from_raw({"title": "无链接新闻"}) is None
     assert extract_url_from_raw({"url": "", "link": "nan"}) is None
 
