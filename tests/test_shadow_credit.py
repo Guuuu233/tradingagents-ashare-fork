@@ -13,6 +13,10 @@ from tradingagents.agents.utils.agent_states import (
 from tradingagents.agents.utils.shadow_credit import (
     SCHEMA_VERSION,
     calculate_shadow_credit_metrics,
+    extract_sample_cohort,
+    is_cohort_homogeneous,
+    assert_cohort_homogeneity,
+    filter_reports_by_cohort,
 )
 from api.services.report_service import (
     canonicalize_report_result_data,
@@ -367,3 +371,92 @@ class TestShadowCreditMetricsComputation:
 
         after_copy = json.dumps(fixture, sort_keys=True, ensure_ascii=False)
         assert raw_copy == after_copy
+
+
+class TestCohortMetadataAndHomogeneity:
+    """Test suite for DAV-601: Cohort extraction, filtering, and homogeneity checks."""
+
+    def test_extract_sample_cohort_from_different_locations(self):
+        """extract_sample_cohort retrieves triad and commit sha from top-level or nested structures."""
+        # 1. Top-level
+        sample_top = {
+            "decision_model_version": "decision_model.v1",
+            "evidence_contract_version": "evidence_contract.v0",
+            "price_basis_version": "price_basis.unspecified",
+            "generated_by_commit_sha": "e10b106df9d3173258b0a3fefc90ba7f3559f109",
+        }
+        res = extract_sample_cohort(sample_top)
+        assert res["decision_model_version"] == "decision_model.v1"
+        assert res["evidence_contract_version"] == "evidence_contract.v0"
+        assert res["price_basis_version"] == "price_basis.unspecified"
+        assert res["generated_by_commit_sha"] == "e10b106df9d3173258b0a3fefc90ba7f3559f109"
+
+        # 2. Nested under result_data
+        sample_nested = {
+            "result_data": {
+                "decision_model_version": "decision_model.v1",
+                "evidence_contract_version": "evidence_contract.v0",
+                "price_basis_version": "price_basis.unspecified",
+                "generated_by_commit_sha": "e10b106df9d3173258b0a3fefc90ba7f3559f109",
+            }
+        }
+        res_nested = extract_sample_cohort(sample_nested)
+        assert res_nested["decision_model_version"] == "decision_model.v1"
+        assert res_nested["evidence_contract_version"] == "evidence_contract.v0"
+        assert res_nested["price_basis_version"] == "price_basis.unspecified"
+        assert res_nested["generated_by_commit_sha"] == "e10b106df9d3173258b0a3fefc90ba7f3559f109"
+
+        # 3. Unlabeled / legacy sample -> all None
+        sample_legacy = {"symbol": "600519.SH"}
+        res_legacy = extract_sample_cohort(sample_legacy)
+        assert res_legacy["decision_model_version"] is None
+        assert res_legacy["evidence_contract_version"] is None
+        assert res_legacy["price_basis_version"] is None
+        assert res_legacy["generated_by_commit_sha"] is None
+
+    def test_cohort_homogeneity_pure_vs_mixed(self):
+        """Homogeneity checker returns True for single cohort pool, False for mixed generations."""
+        pure_legacy = [
+            {"symbol": "600519.SH"},
+            {"symbol": "000858.SZ", "decision_model_version": "decision_model.legacy_unversioned"},
+        ]
+        is_homo, cohort_key = is_cohort_homogeneous(pure_legacy)
+        assert is_homo is True
+        assert cohort_key == "legacy_unversioned"
+        assert_cohort_homogeneity(pure_legacy)
+
+        pure_v1 = [
+            {
+                "symbol": "600519.SH",
+                "decision_model_version": "decision_model.v1",
+                "evidence_contract_version": "evidence_contract.v0",
+                "price_basis_version": "price_basis.unspecified",
+                "generated_by_commit_sha": "sha_111",
+            },
+            {
+                "symbol": "000858.SZ",
+                "decision_model_version": "decision_model.v1",
+                "evidence_contract_version": "evidence_contract.v0",
+                "price_basis_version": "price_basis.unspecified",
+                "generated_by_commit_sha": "sha_222",
+            },
+        ]
+        is_homo_v1, cohort_key_v1 = is_cohort_homogeneous(pure_v1)
+        assert is_homo_v1 is True
+        assert cohort_key_v1 == "decision_model.v1:evidence_contract.v0:price_basis.unspecified"
+        assert_cohort_homogeneity(pure_v1)
+
+        # Mixed generations: legacy + v1
+        mixed = pure_legacy + pure_v1
+        is_homo_m, _ = is_cohort_homogeneous(mixed)
+        assert is_homo_m is False
+        with pytest.raises(ValueError, match="Mixed cohort generations detected"):
+            assert_cohort_homogeneity(mixed)
+
+    def test_filter_reports_by_cohort_fail_closed_on_empty_spec(self):
+        """filter_reports_by_cohort raises ValueError if cohort spec is missing or empty."""
+        samples = [{"symbol": "600519.SH"}]
+        with pytest.raises(ValueError, match="Cohort specification is required"):
+            filter_reports_by_cohort(samples, cohort=None)
+        with pytest.raises(ValueError, match="Cohort specification is required"):
+            filter_reports_by_cohort(samples, cohort="")

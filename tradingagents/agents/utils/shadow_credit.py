@@ -41,6 +41,14 @@ from tradingagents.agents.utils.debate_metrics import (
 SCHEMA_VERSION: str = "h1a_json_v1"
 H1B_SCHEMA_VERSION: str = "h1b_json_v1"
 
+# ── Cohort Isolation Constants (DAV-601) ──────────────────────────────────────
+COHORT_LEGACY_UNVERSIONED: str = "legacy_unversioned"
+DECISION_MODEL_LEGACY: str = "decision_model.legacy_unversioned"
+DECISION_MODEL_V1: str = "decision_model.v1"
+EVIDENCE_CONTRACT_V0: str = "evidence_contract.v0"
+PRICE_BASIS_UNSPECIFIED: str = "price_basis.unspecified"
+
+
 # Mapping from report key to canonical role slug
 REPORT_KEY_TO_ROLE: dict[str, str] = {
     "macro_report": "macro",
@@ -628,11 +636,234 @@ def filter_v2_completed_reports(
     return qualifying
 
 
+# ── Cohort Isolation Helpers (DAV-601) ────────────────────────────────────────
+
+def extract_sample_cohort(sample: Mapping[str, Any]) -> dict[str, Optional[str]]:
+    """Extract cohort triad and commit sha from report/sample dictionary."""
+    if not isinstance(sample, Mapping):
+        return {
+            "decision_model_version": None,
+            "evidence_contract_version": None,
+            "price_basis_version": None,
+            "generated_by_commit_sha": None,
+        }
+
+    res_data = sample.get("result_data") if isinstance(sample.get("result_data"), Mapping) else {}
+    inv_state = sample.get("investment_debate_state") if isinstance(sample.get("investment_debate_state"), Mapping) else (
+        res_data.get("investment_debate_state") if isinstance(res_data.get("investment_debate_state"), Mapping) else {}
+    )
+    meta = sample.get("metadata") if isinstance(sample.get("metadata"), Mapping) else (
+        res_data.get("metadata") if isinstance(res_data.get("metadata"), Mapping) else {}
+    )
+
+    def _find_field(key: str) -> Optional[str]:
+        val = (
+            sample.get(key)
+            or res_data.get(key)
+            or inv_state.get(key)
+            or meta.get(key)
+        )
+        if val is not None and str(val).strip():
+            return str(val).strip()
+        return None
+
+    return {
+        "decision_model_version": _find_field("decision_model_version"),
+        "evidence_contract_version": _find_field("evidence_contract_version"),
+        "price_basis_version": _find_field("price_basis_version"),
+        "generated_by_commit_sha": _find_field("generated_by_commit_sha") or _find_field("commit_sha"),
+    }
+
+
+def is_legacy_unversioned_sample(sample: Mapping[str, Any]) -> bool:
+    """Return True if sample lacks decision_model_version or is explicitly marked legacy_unversioned."""
+    cohort_info = extract_sample_cohort(sample)
+    dmv = cohort_info["decision_model_version"]
+    if not dmv or dmv in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+        return True
+    return False
+
+
+def parse_cohort_spec(cohort: Union[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Parse cohort specification into canonical structured representation.
+
+    Fail-closed: raises ValueError if cohort is missing or empty.
+    """
+    if cohort is None:
+        raise ValueError("Cohort specification is required and cannot be empty (fail-closed)")
+
+    if isinstance(cohort, Mapping):
+        cohort_type = str(cohort.get("cohort_type") or "").strip().lower()
+        dmv = cohort.get("decision_model_version")
+        ecv = cohort.get("evidence_contract_version")
+        pbv = cohort.get("price_basis_version")
+        if cohort_type == COHORT_LEGACY_UNVERSIONED or dmv in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+            return {
+                "cohort_type": COHORT_LEGACY_UNVERSIONED,
+                "decision_model_version": DECISION_MODEL_LEGACY,
+                "evidence_contract_version": None,
+                "price_basis_version": None,
+                "canonical_key": COHORT_LEGACY_UNVERSIONED,
+            }
+        dmv_str = str(dmv or DECISION_MODEL_V1).strip()
+        ecv_str = str(ecv or EVIDENCE_CONTRACT_V0).strip()
+        pbv_str = str(pbv or PRICE_BASIS_UNSPECIFIED).strip()
+        return {
+            "cohort_type": "triad",
+            "decision_model_version": dmv_str,
+            "evidence_contract_version": ecv_str,
+            "price_basis_version": pbv_str,
+            "canonical_key": f"{dmv_str}:{ecv_str}:{pbv_str}",
+        }
+
+    s = str(cohort).strip()
+    if not s:
+        raise ValueError("Cohort specification is required and cannot be empty (fail-closed)")
+
+    if s in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+        return {
+            "cohort_type": COHORT_LEGACY_UNVERSIONED,
+            "decision_model_version": DECISION_MODEL_LEGACY,
+            "evidence_contract_version": None,
+            "price_basis_version": None,
+            "canonical_key": COHORT_LEGACY_UNVERSIONED,
+        }
+
+    if s.startswith("{"):
+        try:
+            parsed_json = json.loads(s)
+            if isinstance(parsed_json, Mapping):
+                return parse_cohort_spec(parsed_json)
+        except Exception:
+            pass
+
+    sep = ":" if ":" in s else ("/" if "/" in s else None)
+    if sep:
+        parts = [p.strip() for p in s.split(sep)]
+        dmv_str = parts[0]
+        ecv_str = parts[1] if len(parts) > 1 and parts[1] else EVIDENCE_CONTRACT_V0
+        pbv_str = parts[2] if len(parts) > 2 and parts[2] else PRICE_BASIS_UNSPECIFIED
+        return {
+            "cohort_type": "triad",
+            "decision_model_version": dmv_str,
+            "evidence_contract_version": ecv_str,
+            "price_basis_version": pbv_str,
+            "canonical_key": f"{dmv_str}:{ecv_str}:{pbv_str}",
+        }
+
+    return {
+        "cohort_type": "triad",
+        "decision_model_version": s,
+        "evidence_contract_version": EVIDENCE_CONTRACT_V0,
+        "price_basis_version": PRICE_BASIS_UNSPECIFIED,
+        "canonical_key": f"{s}:{EVIDENCE_CONTRACT_V0}:{PRICE_BASIS_UNSPECIFIED}",
+    }
+
+
+def is_cohort_homogeneous(
+    reports: Sequence[Mapping[str, Any]],
+) -> Tuple[bool, Optional[str]]:
+    """Check if all reports in collection belong to the same cohort generation."""
+    reps = list(reports or [])
+    if not reps:
+        return True, None
+
+    keys = set()
+    for r in reps:
+        if is_legacy_unversioned_sample(r):
+            keys.add(COHORT_LEGACY_UNVERSIONED)
+        else:
+            c_info = extract_sample_cohort(r)
+            dmv = c_info["decision_model_version"]
+            ecv = c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0
+            pbv = c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED
+            keys.add(f"{dmv}:{ecv}:{pbv}")
+
+    if len(keys) == 1:
+        return True, list(keys)[0]
+    return False, None
+
+
+def assert_cohort_homogeneity(
+    reports: Sequence[Mapping[str, Any]],
+) -> None:
+    """Assert all reports belong to single cohort generation; raise ValueError if mixed."""
+    is_homo, cohort_key = is_cohort_homogeneous(reports)
+    if not is_homo:
+        reps = list(reports or [])
+        cohort_keys = set()
+        for r in reps:
+            if is_legacy_unversioned_sample(r):
+                cohort_keys.add(COHORT_LEGACY_UNVERSIONED)
+            else:
+                c = extract_sample_cohort(r)
+                cohort_keys.add(f"{c['decision_model_version']}:{c['evidence_contract_version']}:{c['price_basis_version']}")
+        raise ValueError(f"Mixed cohort generations detected in evaluation pool: {sorted(cohort_keys)}")
+
+
+def filter_reports_by_cohort(
+    reports: Sequence[Mapping[str, Any]],
+    cohort: Union[str, Mapping[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Filter reports strictly by cohort specification.
+
+    Rules:
+    - --cohort=legacy_unversioned: only samples lacking version fields or marked legacy; never label as v1.
+    - Triad version: strictly all 3 fields matching; commit SHA is provenance metadata, not filter key.
+    - Fail-closed on invalid or empty cohort specification.
+    """
+    spec = parse_cohort_spec(cohort)
+    reps = list(reports or [])
+    filtered: List[Dict[str, Any]] = []
+    shas: set[str] = set()
+
+    if spec["cohort_type"] == COHORT_LEGACY_UNVERSIONED:
+        for r in reps:
+            if is_legacy_unversioned_sample(r):
+                c_info = extract_sample_cohort(r)
+                if c_info["decision_model_version"] not in (None, "", COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+                    continue
+                filtered.append(dict(r))
+                sha = c_info["generated_by_commit_sha"]
+                if sha:
+                    shas.add(sha)
+    else:
+        target_dmv = spec["decision_model_version"]
+        target_ecv = spec["evidence_contract_version"]
+        target_pbv = spec["price_basis_version"]
+
+        for r in reps:
+            if is_legacy_unversioned_sample(r):
+                continue
+            c_info = extract_sample_cohort(r)
+            if (
+                c_info["decision_model_version"] == target_dmv
+                and c_info["evidence_contract_version"] == target_ecv
+                and c_info["price_basis_version"] == target_pbv
+            ):
+                filtered.append(dict(r))
+                sha = c_info["generated_by_commit_sha"]
+                if sha:
+                    shas.add(sha)
+
+    cohort_meta = {
+        "cohort_type": spec["cohort_type"],
+        "canonical_key": spec["canonical_key"],
+        "decision_model_version": spec["decision_model_version"],
+        "evidence_contract_version": spec["evidence_contract_version"],
+        "price_basis_version": spec["price_basis_version"],
+        "commit_shas": sorted(shas),
+    }
+    return filtered, cohort_meta
+
+
+
 # ── 7-Dimension Gate Threshold Evaluation (P3-H1b) ───────────────────────────
 
 def evaluate_h1b_system_gates(
     samples_or_reports: Sequence[Mapping[str, Any]],
     *,
+    cohort: Optional[Union[str, Mapping[str, Any]]] = None,
     thresholds: Optional[Mapping[str, Any]] = None,
     as_of: Optional[Union[str, date, datetime]] = None,
     trading_calendar: Optional[Sequence[Union[str, date]]] = None,
@@ -671,7 +902,29 @@ def evaluate_h1b_system_gates(
     else:
         as_of_date = now_cn().date()
 
-    samples = list(samples_or_reports or [])
+    cohort_meta: dict[str, Any] = {}
+    homogeneity_passed = True
+    homogeneity_reason = None
+
+    if cohort is not None and str(cohort).strip():
+        filtered_samples, cohort_meta = filter_reports_by_cohort(samples_or_reports, cohort=cohort)
+        samples = filtered_samples
+    else:
+        samples = list(samples_or_reports or [])
+        is_homo, c_key = is_cohort_homogeneous(samples)
+        if not is_homo:
+            homogeneity_passed = False
+            homogeneity_reason = "Mixed cohort generations detected in evaluation samples: cannot merge across cohorts"
+        cohort_meta = {
+            "cohort_type": c_key or "unspecified",
+            "canonical_key": c_key or "unspecified",
+            "commit_shas": sorted({
+                extract_sample_cohort(s)["generated_by_commit_sha"]
+                for s in samples
+                if extract_sample_cohort(s)["generated_by_commit_sha"]
+            }),
+        }
+
     sample_count = len(samples)
 
     # ── Dimension 1: N (Sample Count & Diversity) ─────────────────────────────
@@ -1037,8 +1290,16 @@ def evaluate_h1b_system_gates(
         "dimension_magnitude": dim_magnitude,
     }
 
+    if not homogeneity_passed:
+        matrix["cohort_homogeneity"] = {
+            "passed": False,
+            "reason": homogeneity_reason,
+        }
+
     all_passed = bool(
-        dim_n["passed"]
+        homogeneity_passed
+        and (sample_count > 0)
+        and dim_n["passed"]
         and dim_side["passed"]
         and dim_time["passed"]
         and dim_t5["passed"]
@@ -1057,8 +1318,12 @@ def evaluate_h1b_system_gates(
             "sample_count": sample_count,
             "system_gate_status": "PASS" if all_passed else "FAIL",
             "recommendation": recommendation,
+            "cohort": cohort_meta.get("canonical_key"),
+            "commit_shas": cohort_meta.get("commit_shas", []),
         },
         "recommendation": recommendation,
+        "cohort": cohort_meta.get("canonical_key"),
+        "cohort_info": cohort_meta,
     }
 
 
@@ -1247,26 +1512,56 @@ def resolve_claim_credit_weights_for_manager(
     claim_evidence_summary: Mapping[str, Any],
     historical_samples: Optional[Sequence[Mapping[str, Any]]] = None,
     credit_weighting_enabled: bool = False,
+    cohort: Optional[Union[str, Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Resolve claim credit weights for research_manager using live H1b gates.
 
-    Fail-closed: empty/missing historical samples → system_gate_passed=False → flat 1.0.
-    When flag is off, weights stay flat regardless of gate status.
+    Rules (DAV-601):
+    1. Fail-closed: empty/missing historical samples -> flat 1.0.
+    2. When flag is off, weights stay flat regardless of gate status.
+    3. Unlabeled samples (missing version fields) or mixed cohort generations:
+       safely degrade / hold flat weights 1.0 without breaking the main trading pipeline.
+    4. Only homogeneous qualifying cohort samples can activate non-flat credit weights.
     """
     history = list(historical_samples or [])
-    if history:
-        gate_res = evaluate_h1b_system_gates(history)
-    else:
+
+    # Check for unlabeled samples or mixed cohorts in historical_samples
+    has_unlabeled = any(is_legacy_unversioned_sample(s) for s in history) if history else False
+    is_homo, c_key = is_cohort_homogeneous(history) if history else (True, None)
+
+    if not history or has_unlabeled or not is_homo:
         gate_res = {
             "passed": False,
             "recommendation": "KEEP_FALSE",
             "matrix": {},
         }
-    system_gate_passed = bool(gate_res.get("passed", False))
-    isolation = evaluate_model_bias_and_weights(
-        history,
-        system_gate_passed=system_gate_passed,
-    )
+        system_gate_passed = False
+        reasons: dict[str, str] = {}
+        if has_unlabeled:
+            reasons["unlabeled_samples"] = "Historical samples contain unversioned/legacy reports (downgraded to flat 1.0)"
+        if not is_homo:
+            reasons["mixed_cohorts"] = "Historical samples contain mixed cohort generations (downgraded to flat 1.0)"
+        isolation = {
+            "model_weights": {},
+            "bias_freeze_reasons": reasons,
+            "global_fallback_shadow": True,
+        }
+    else:
+        try:
+            gate_res = evaluate_h1b_system_gates(history, cohort=cohort)
+        except Exception as exc:
+            logger.warning("[shadow_credit] evaluate_h1b_system_gates failed: %s, falling back to flat 1.0", exc)
+            gate_res = {
+                "passed": False,
+                "recommendation": "KEEP_FALSE",
+                "matrix": {},
+            }
+        system_gate_passed = bool(gate_res.get("passed", False))
+        isolation = evaluate_model_bias_and_weights(
+            history,
+            system_gate_passed=system_gate_passed,
+        )
+
     weights_res = calculate_claim_credit_weights(
         claims=claims,
         claim_evidence_summary=claim_evidence_summary,

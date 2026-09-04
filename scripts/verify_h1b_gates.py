@@ -15,7 +15,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 # Ensure project root in sys.path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +28,10 @@ from tradingagents.agents.utils.shadow_credit import (
     evaluate_h1b_system_gates,
     evaluate_model_bias_and_weights,
     extract_report_industry,
+    extract_sample_cohort,
+    filter_reports_by_cohort,
     filter_v2_completed_reports,
+    is_cohort_homogeneous,
     is_qualifying_v2_report,
     normalize_report_for_evaluation,
 )
@@ -183,16 +186,21 @@ def load_reports_from_db(
     return v2_reports
 
 
-def format_gates_matrix_text(evaluation: Dict[str, Any]) -> str:
+def format_gates_matrix_text(evaluation: Dict[str, Any], cohort_info: Optional[Dict[str, Any]] = None) -> str:
     """Format evaluation matrix to clean terminal table."""
     matrix = evaluation.get("matrix", {})
     summary = evaluation.get("summary", {})
     passed = evaluation.get("passed", False)
     rec = evaluation.get("recommendation", "KEEP_FALSE")
+    cohort_key = evaluation.get("cohort") or (cohort_info.get("canonical_key") if cohort_info else "unspecified")
+    shas = (cohort_info.get("commit_shas") if cohort_info else None) or evaluation.get("commit_shas") or summary.get("commit_shas") or []
+    sha_str = f"{len(shas)} SHAs ({', '.join(shas[:2])}...)" if len(shas) > 2 else (', '.join(shas) if shas else "None")
 
     lines = [
         "=" * 80,
-        "P3-H1b 信用加权门槛校验报告 (7维门槛矩阵)",
+        "P3-H1b 信用加权门槛校验报告 (7维门槛矩阵 - Cohort 隔离版)",
+        f"【评测 Cohort】: {cohort_key}",
+        f"【Commit SHAs】: {sha_str}",
         "=" * 80,
     ]
 
@@ -281,16 +289,34 @@ def run_verify(
     input_file: Optional[str] = None,
     input_dir: Optional[str] = None,
     as_of: Optional[str] = None,
+    cohort: Optional[Union[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Execute gate verification and generate structured report."""
+    """Execute gate verification and generate structured report under cohort isolation."""
     reports = load_reports_from_db(
         db_path=db_path,
         input_file=input_file,
         input_dir=input_dir,
     )
 
+    cohort_meta: Dict[str, Any] = {}
+    if cohort is not None and str(cohort).strip():
+        filtered_reports, cohort_meta = filter_reports_by_cohort(reports, cohort=cohort)
+        reports = filtered_reports
+    else:
+        # Check homogeneity if cohort not specified
+        is_homo, c_key = is_cohort_homogeneous(reports)
+        cohort_meta = {
+            "cohort_type": c_key or "unspecified",
+            "canonical_key": c_key or "unspecified",
+            "commit_shas": sorted({
+                extract_sample_cohort(r)["generated_by_commit_sha"]
+                for r in reports
+                if extract_sample_cohort(r)["generated_by_commit_sha"]
+            }),
+        }
+
     # 1. 7-dimension gate evaluation
-    gate_eval = evaluate_h1b_system_gates(reports, as_of=as_of)
+    gate_eval = evaluate_h1b_system_gates(reports, as_of=as_of, cohort=cohort)
 
     # 2. Model isolation evaluation
     isolation_eval = evaluate_model_bias_and_weights(
@@ -298,9 +324,12 @@ def run_verify(
         system_gate_passed=gate_eval["passed"],
     )
 
+    cohort_label = cohort_meta.get("canonical_key") or (str(cohort) if cohort else "unspecified")
     report_result: Dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "task_id": "P3-H1b",
+        "cohort": cohort_label,
+        "cohort_info": cohort_meta,
         "sample_count": len(reports),
         "gate_evaluation": gate_eval,
         "model_isolation": isolation_eval,
@@ -308,7 +337,7 @@ def run_verify(
     }
 
     # Print terminal output
-    print(format_gates_matrix_text(gate_eval))
+    print(format_gates_matrix_text(gate_eval, cohort_info=cohort_meta))
     print(f"分层隔离状态: credit_weighting_active={isolation_eval.get('credit_weighting_active')}, global_fallback_shadow={isolation_eval.get('global_fallback_shadow')}")
     print(f"模型权重分配: {isolation_eval.get('model_weights')}")
     if isolation_eval.get("bias_freeze_reasons"):
@@ -327,12 +356,23 @@ def run_verify(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="P3-H1b 信用加权门槛校验脚本")
+    parser.add_argument(
+        "--cohort",
+        type=str,
+        default=None,
+        help="Cohort 标识 (必填, 如 legacy_unversioned 或三元版本 decision_model.v1:evidence_contract.v0:price_basis.unspecified)",
+    )
     parser.add_argument("--db-path", type=str, default=None, help="SQLite 数据库路径")
     parser.add_argument("--input-file", type=str, default=None, help="指定评测 JSON 文件路径")
     parser.add_argument("--input-dir", type=str, default=None, help="指定评测 JSON 目录路径")
     parser.add_argument("--output-json", type=str, default="work/h1b_gates_report.json", help="输出汇总 JSON 路径")
     parser.add_argument("--as-of", type=str, default=None, help="评估基准日期 (YYYY-MM-DD)")
     args = parser.parse_args()
+
+    # Fail-closed: 未传 --cohort 必须非零退出，严禁输出 PASS 报告
+    if not args.cohort or not args.cohort.strip():
+        logger.error("未传 --cohort 参数：必须显式指定 cohort（如 --cohort=legacy_unversioned 或三元版本）（fail-closed）")
+        sys.exit(2)
 
     try:
         res = run_verify(
@@ -341,6 +381,7 @@ if __name__ == "__main__":
             input_file=args.input_file,
             input_dir=args.input_dir,
             as_of=args.as_of,
+            cohort=args.cohort,
         )
     except Exception as exc:
         logger.error("门槛校验执行失败: %s", exc)

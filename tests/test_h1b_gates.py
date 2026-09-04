@@ -36,6 +36,8 @@ from tradingagents.agents.utils.shadow_credit import (
     is_qualifying_v2_report,
     normalize_report_for_evaluation,
     filter_v2_completed_reports,
+    filter_reports_by_cohort,
+    assert_cohort_homogeneity,
 )
 
 
@@ -44,6 +46,10 @@ def _build_mock_debate_sample(
     symbol: str = "600519.SH",
     industry: str = "白酒",
     trade_date: str = "2026-08-01",
+    decision_model_version: str | None = "decision_model.v1",
+    evidence_contract_version: str | None = "evidence_contract.v0",
+    price_basis_version: str | None = "price_basis.unspecified",
+    generated_by_commit_sha: str | None = "e10b106df9d3173258b0a3fefc90ba7f3559f109",
     bull_model: str = "deepseek-r1",
     bear_model: str = "qwen-max",
     manager_model: str = "gpt-4o",
@@ -62,7 +68,7 @@ def _build_mock_debate_sample(
     sample_idx: int = 0,
 ) -> dict:
     """Helper to construct a mock v2 debate report with structured shadow metrics."""
-    return {
+    res = {
         "symbol": symbol,
         "industry": industry,
         "trade_date": trade_date,
@@ -165,6 +171,15 @@ def _build_mock_debate_sample(
             },
         },
     }
+    if decision_model_version:
+        res["decision_model_version"] = decision_model_version
+    if evidence_contract_version:
+        res["evidence_contract_version"] = evidence_contract_version
+    if price_basis_version:
+        res["price_basis_version"] = price_basis_version
+    if generated_by_commit_sha:
+        res["generated_by_commit_sha"] = generated_by_commit_sha
+    return res
 
 
 def _build_qualifying_sample_pool(n: int = 60) -> list[dict]:
@@ -971,7 +986,7 @@ class TestH1bVerifyGatesDbPath:
         )
         out_json = str(tmp_path / "cli_out.json")
         proc = subprocess.run(
-            [sys.executable, script_path, "--db-path", custom_sqlite_db, "--output-json", out_json],
+            [sys.executable, script_path, "--cohort", "legacy_unversioned", "--db-path", custom_sqlite_db, "--output-json", out_json],
             capture_output=True,
             text=True,
         )
@@ -1328,4 +1343,241 @@ class TestH1bTPlus5DueInference:
         )
         assert proc.returncode != 0
         assert not os.path.exists(out_json)
+
+
+class TestH1bCohortIsolation:
+    """Test suite for DAV-601: H1b cohort isolation (CLI + evaluation entry)."""
+
+    def test_cli_missing_cohort_fails_closed_nonzero_exit_and_no_pass_report(self, tmp_path):
+        """1. 未传 --cohort: 必须非零退出，严禁输出 PASS 报告。"""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        out_json = str(tmp_path / "cli_no_cohort.json")
+        proc = subprocess.run(
+            [sys.executable, script_path, "--output-json", out_json],
+            capture_output=True,
+            text=True,
+        )
+        # Must exit non-zero
+        assert proc.returncode != 0
+        # Must NOT write a PASS report
+        if os.path.exists(out_json):
+            with open(out_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            assert data.get("gate_evaluation", {}).get("passed") is not True
+
+    def test_cli_empty_cohort_fails_closed_nonzero_exit(self, tmp_path):
+        """CLI with empty or whitespace --cohort must exit non-zero."""
+        import subprocess
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        out_json = str(tmp_path / "cli_empty_cohort.json")
+        proc = subprocess.run(
+            [sys.executable, script_path, "--cohort", "", "--output-json", out_json],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode != 0
+
+    def test_cohort_legacy_unversioned_includes_only_unversioned_samples(self):
+        """2. --cohort=legacy_unversioned: 只纳入缺版本字段的旧样本，不得标成 v1。"""
+        legacy_samples = _build_qualifying_sample_pool(n=60)
+        # Ensure legacy samples have no version triad fields
+        for s in legacy_samples:
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+
+        # Create v1 samples
+        v1_samples = _build_qualifying_sample_pool(n=10)
+        for s in v1_samples:
+            s["decision_model_version"] = "decision_model.v1"
+            s["evidence_contract_version"] = "evidence_contract.v0"
+            s["price_basis_version"] = "price_basis.unspecified"
+            s["generated_by_commit_sha"] = "e10b106df9d3173258b0a3fefc90ba7f3559f109"
+
+        mixed_pool = legacy_samples + v1_samples
+        filtered, meta = filter_reports_by_cohort(mixed_pool, cohort="legacy_unversioned")
+
+        # Exactly 60 legacy samples included, 10 v1 samples excluded
+        assert len(filtered) == 60
+        assert meta["cohort_type"] == "legacy_unversioned"
+
+        # Must NOT re-label legacy samples to v1
+        for s in filtered:
+            dmv = s.get("decision_model_version") or s.get("result_data", {}).get("decision_model_version")
+            assert dmv != "decision_model.v1"
+
+    def test_cohort_triad_version_filtering_exact_match_and_ignores_commit_sha(self):
+        """3. 指定三元版本时：只纳入三字段全等的样本；SHA 只进 JSON 摘要，不当过滤主键。"""
+        # Target triad
+        target_triad = "decision_model.v1:evidence_contract.v0:price_basis.unspecified"
+
+        sample_sha1 = _build_mock_debate_sample(symbol="600519.SH")
+        sample_sha1["decision_model_version"] = "decision_model.v1"
+        sample_sha1["evidence_contract_version"] = "evidence_contract.v0"
+        sample_sha1["price_basis_version"] = "price_basis.unspecified"
+        sample_sha1["generated_by_commit_sha"] = "1111111111111111111111111111111111111111"
+
+        sample_sha2 = _build_mock_debate_sample(symbol="000858.SZ")
+        sample_sha2["decision_model_version"] = "decision_model.v1"
+        sample_sha2["evidence_contract_version"] = "evidence_contract.v0"
+        sample_sha2["price_basis_version"] = "price_basis.unspecified"
+        sample_sha2["generated_by_commit_sha"] = "2222222222222222222222222222222222222222"
+
+        # Mismatch in decision_model_version
+        sample_diff_dmv = _build_mock_debate_sample(symbol="600276.SH")
+        sample_diff_dmv["decision_model_version"] = "decision_model.v2"
+        sample_diff_dmv["evidence_contract_version"] = "evidence_contract.v0"
+        sample_diff_dmv["price_basis_version"] = "price_basis.unspecified"
+
+        # Mismatch in evidence_contract_version
+        sample_diff_ecv = _build_mock_debate_sample(symbol="300750.SZ")
+        sample_diff_ecv["decision_model_version"] = "decision_model.v1"
+        sample_diff_ecv["evidence_contract_version"] = "evidence_contract.v1"
+        sample_diff_ecv["price_basis_version"] = "price_basis.unspecified"
+
+        # Mismatch in price_basis_version
+        sample_diff_pbv = _build_mock_debate_sample(symbol="601398.SH")
+        sample_diff_pbv["decision_model_version"] = "decision_model.v1"
+        sample_diff_pbv["evidence_contract_version"] = "evidence_contract.v0"
+        sample_diff_pbv["price_basis_version"] = "price_basis.pit_adjusted"
+
+        # Unversioned legacy sample
+        sample_legacy = _build_mock_debate_sample(
+            symbol="600036.SH",
+            decision_model_version=None,
+            evidence_contract_version=None,
+            price_basis_version=None,
+            generated_by_commit_sha=None,
+        )
+
+        pool = [sample_sha1, sample_sha2, sample_diff_dmv, sample_diff_ecv, sample_diff_pbv, sample_legacy]
+        filtered, meta = filter_reports_by_cohort(pool, cohort=target_triad)
+
+        # Only sample_sha1 and sample_sha2 match the triad
+        assert len(filtered) == 2
+        symbols = [s["symbol"] for s in filtered]
+        assert symbols == ["600519.SH", "000858.SZ"]
+
+        # Commit SHAs must not filter samples out, but appear in commit_shas summary
+        assert set(meta["commit_shas"]) == {
+            "1111111111111111111111111111111111111111",
+            "2222222222222222222222222222222222222222",
+        }
+
+    def test_empty_cohort_fails_closed_due_count_zero_not_pass(self):
+        """4. 空结果：passed=false，due_count==0 不得 PASS。"""
+        res = evaluate_h1b_system_gates([], cohort="decision_model.v1:evidence_contract.v0:price_basis.unspecified")
+        assert res["passed"] is False
+        assert res["summary"]["system_gate_status"] == "FAIL"
+        assert res["summary"]["recommendation"] == "KEEP_FALSE"
+        assert res["matrix"]["dimension_t5"]["details"]["due_count"] == 0
+        assert res["matrix"]["dimension_t5"]["passed"] is False
+
+    def test_mixed_cohorts_rejected_not_silently_merged(self):
+        """5. 混世代同一次评价：拒绝（明确 FAIL / 非零），不得静默合并。"""
+        legacy_samples = _build_qualifying_sample_pool(n=30)
+        for s in legacy_samples:
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+        v1_samples = _build_qualifying_sample_pool(n=30)
+        for s in v1_samples:
+            s["decision_model_version"] = "decision_model.v1"
+            s["evidence_contract_version"] = "evidence_contract.v0"
+            s["price_basis_version"] = "price_basis.unspecified"
+
+        mixed_pool = legacy_samples + v1_samples
+        # Calling evaluate_h1b_system_gates directly on mixed pool without cohort filter
+        res = evaluate_h1b_system_gates(mixed_pool)
+        assert res["passed"] is False
+        assert res["summary"]["system_gate_status"] == "FAIL"
+        assert res["recommendation"] == "KEEP_FALSE"
+        assert res.get("matrix", {}).get("cohort_homogeneity", {}).get("passed") is False
+
+        # assert_cohort_homogeneity must raise ValueError
+        with pytest.raises(ValueError, match="Mixed cohort generations"):
+            assert_cohort_homogeneity(mixed_pool)
+
+    def test_online_manager_resolution_unlabeled_samples_fallback_to_flat_1_0(self):
+        """6. 线上加权解析遇未标记样本：保持/降级权重 1.0，不抛崩主链路。"""
+        claims = [
+            {"claim_id": "C1", "speaker": "Bull", "model_name": "deepseek-r1", "status": "verified"},
+            {"claim_id": "C2", "speaker": "Bear", "model_name": "qwen-max", "status": "verified"},
+        ]
+        summary = {
+            "C1": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+            "C2": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+        }
+        # 60 unlabeled legacy samples
+        unlabeled_samples = _build_qualifying_sample_pool(n=60)
+        for s in unlabeled_samples:
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+
+        # Must not raise an exception!
+        res = resolve_claim_credit_weights_for_manager(
+            claims=claims,
+            claim_evidence_summary=summary,
+            historical_samples=unlabeled_samples,
+            credit_weighting_enabled=True,
+        )
+
+        assert res["credit_weighting_active"] is False
+        assert res["system_gate_passed"] is False
+        assert res["recommendation"] == "KEEP_FALSE"
+        assert res["claim_weights"]["C1"] == 1.0
+        assert res["claim_weights"]["C2"] == 1.0
+        assert res["global_fallback_shadow"] is True
+
+    def test_online_manager_resolution_mixed_cohorts_fallback_to_flat_1_0(self):
+        """6b. 线上加权解析遇混世代样本：保持/降级权重 1.0，不抛崩主链路。"""
+        claims = [
+            {"claim_id": "C1", "speaker": "Bull", "model_name": "deepseek-r1", "status": "verified"},
+        ]
+        summary = {
+            "C1": {"decision": "adopt", "counts": {"verified": 1, "total": 1}},
+        }
+        legacy_samples = _build_qualifying_sample_pool(n=30)
+        for s in legacy_samples:
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+        v1_samples = _build_qualifying_sample_pool(n=30)
+        for s in v1_samples:
+            s["decision_model_version"] = "decision_model.v1"
+            s["evidence_contract_version"] = "evidence_contract.v0"
+            s["price_basis_version"] = "price_basis.unspecified"
+
+        mixed_pool = legacy_samples + v1_samples
+
+        # Must not raise an exception!
+        res = resolve_claim_credit_weights_for_manager(
+            claims=claims,
+            claim_evidence_summary=summary,
+            historical_samples=mixed_pool,
+            credit_weighting_enabled=True,
+        )
+
+        assert res["credit_weighting_active"] is False
+        assert res["system_gate_passed"] is False
+        assert res["claim_weights"]["C1"] == 1.0
+        assert res["global_fallback_shadow"] is True
 
