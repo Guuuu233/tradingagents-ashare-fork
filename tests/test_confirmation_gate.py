@@ -13,6 +13,8 @@ Ensures that:
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -38,6 +40,7 @@ from tradingagents.agents.utils.decision_status import (
     DIRECTION_NEUTRAL,
     DecisionStatus,
     apply_decision_status_to_result,
+    evaluate_confirmation_state,
     is_calibration_eligible,
     is_non_executable_status,
     status_from_manager_verdict,
@@ -462,4 +465,423 @@ def test_apply_decision_status_with_wait_strips_targets():
     assert result["confidence"] is None
     assert result["probability"] is None
     assert result["numeric_ranges"] == []
+
+
+# ── Card A: Confirmation Gate Claim Lifecycle Tests ─────────────────────────
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "decision_semantics"
+MIDEA_FIXTURE_PATH = FIXTURES_DIR / "midea_confirmation_fixture.json"
+
+
+def test_midea_real_fixture_non_core_rejected_contradiction_does_not_block():
+    """1. Midea 000333.SZ fixture: rejected + deterministic reject of non-core INV-6 does NOT block confirmation."""
+    assert MIDEA_FIXTURE_PATH.exists() is True
+    with open(MIDEA_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    mv = data["manager_verdict"]
+    inv = data["investment_debate_state"]
+    ev_ver = data["evidence_verification"]
+    ev_summary = inv.get("claim_evidence_summary") or mv.get("claim_evidence_summary")
+
+    # Verify setup: INV-6 is rejected with contradiction
+    assert "INV-6" in mv["rejected_claim_ids"]
+    assert "INV-6" not in inv["focus_claim_ids"]
+    inv6_summary = ev_summary["INV-6"]
+    assert inv6_summary["decision"] == "reject"
+    assert inv6_summary["counts"]["contradicted"] > 0
+
+    # Confirmation state must be CONFIRMED (not blocked by INV-6)
+    confirm_state, reason_codes = evaluate_confirmation_state(
+        focus_claim_ids=inv["focus_claim_ids"],
+        unresolved_claim_ids=inv["unresolved_claim_ids"],
+        claims_verification=ev_ver,
+        claim_evidence_summary=ev_summary,
+        claims=inv["claims"],
+        adopted_claim_ids=mv["adopted_claim_ids"],
+        partially_adopted_claims=mv["partially_adopted_claims"],
+        rejected_claim_ids=mv["rejected_claim_ids"],
+    )
+    assert confirm_state == CONFIRM_CONFIRMED
+    assert "all_core_claims_verified:INV-1,INV-2" in reason_codes
+    assert any("audited_rejected_claims:" in c and "INV-6" in c for c in reason_codes)
+    assert not any("fatal_contradicted_claims" in c for c in reason_codes)
+
+    # Manager verdict terminal status must be VALID + BUY + CONFIRMED
+    status = status_from_manager_verdict(
+        mv,
+        investment_debate_state=inv,
+        claims_verification=ev_ver,
+        claim_evidence_summary=ev_summary,
+        focus_claim_ids=inv["focus_claim_ids"],
+        unresolved_claim_ids=inv["unresolved_claim_ids"],
+        claims=inv["claims"],
+        market_data_context=data.get("market_data_context"),
+    )
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.confirmation_state == CONFIRM_CONFIRMED
+    assert status.trade_action == ACTION_BUY
+    assert status.direction == DIRECTION_BULL
+    assert status.risk_status == "OK"
+    assert is_non_executable_status(status) is False
+
+    # apply_decision_status_to_result keeps actionable BUY and targets
+    raw_result = {
+        "company_of_interest": "000333.SZ",
+        "target_price": 88.5,
+        "stop_loss_price": 83.8,
+        "confidence": 70,
+        "probability": 0.75,
+    }
+    applied = apply_decision_status_to_result(raw_result, status)
+    assert applied["decision"] == ACTION_BUY
+    assert applied["trade_action"] == ACTION_BUY
+    assert applied["confirmation_state"] == CONFIRM_CONFIRMED
+    assert applied["target_price"] == 88.5
+    assert applied["stop_loss_price"] == 83.8
+    assert applied["confidence"] == 70
+    assert applied["probability"] == 0.75
+
+
+def test_focus_or_adopted_claim_contradicted_remains_wait():
+    """2. Contradiction on focus claim, adopted claim, or partially adopted claim must force WAIT."""
+    # 2a. Focus claim contradicted
+    mv_base = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+    ev_summary_focus_contra = {
+        "CLM-1": {
+            "counts": {"total": 1, "verified": 0, "unsupported": 0, "contradicted": 1, "source_unavailable": 0},
+            "coverage": 0.0,
+            "decision": "reject",
+        }
+    }
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=ev_summary_focus_contra,
+        adopted_claim_ids=["CLM-1"],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert "fatal_core_claims:CLM-1" in r_codes
+    st = status_from_manager_verdict(
+        mv_base,
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=ev_summary_focus_contra,
+    )
+    assert st.confirmation_state == CONFIRM_UNRESOLVED
+    assert st.trade_action == ACTION_WAIT
+
+    # 2b. Adopted claim contradicted (outside focus)
+    mv_adopted_contra = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1", "CLM-2"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+    ev_summary_adopted_contra = {
+        "CLM-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+        "CLM-2": {"counts": {"total": 1, "verified": 0, "unsupported": 0, "contradicted": 1, "source_unavailable": 0}, "coverage": 0.0, "decision": "reject"},
+    }
+    c_state2, r_codes2 = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=ev_summary_adopted_contra,
+        adopted_claim_ids=["CLM-1", "CLM-2"],
+    )
+    assert c_state2 == CONFIRM_UNRESOLVED
+    assert "fatal_adopted_claims:CLM-2" in r_codes2
+    st2 = status_from_manager_verdict(
+        mv_adopted_contra,
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=ev_summary_adopted_contra,
+    )
+    assert st2.confirmation_state == CONFIRM_UNRESOLVED
+    assert st2.trade_action == ACTION_WAIT
+
+
+def test_rejected_with_deterministic_adopt_must_abstain_no_trade():
+    """3. rejected + deterministic adopt -> verdict consistency failure -> ABSTAIN + NO_TRADE."""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": ["CLM-2"],
+    }
+    # CLM-2 is rejected by manager, but evidence aggregator determined decision='adopt' (100% verified)
+    claim_evidence_summary = {
+        "CLM-1": {
+            "counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        },
+        "CLM-2": {
+            "counts": {"total": 2, "verified": 2, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        },
+    }
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=claim_evidence_summary,
+        adopted_claim_ids=["CLM-1"],
+        rejected_claim_ids=["CLM-2"],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert "verdict_consistency_rejected_adopt:CLM-2" in r_codes
+
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.trade_action == ACTION_NO_TRADE
+    assert status.risk_status == "BLOCKED"
+    assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert is_non_executable_status(status) is True
+    assert is_calibration_eligible(status) is False
+
+
+def test_rejected_with_partial_evidence_conservatively_waits():
+    """4. rejected + partial -> must NOT be silently ignored -> conservative PARTIAL + WAIT."""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": ["CLM-2"],
+    }
+    # CLM-2 has partial evidence (e.g. 3 of 4 verified, coverage=75%)
+    claim_evidence_summary = {
+        "CLM-1": {
+            "counts": {"total": 2, "verified": 2, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        },
+        "CLM-2": {
+            "counts": {"total": 4, "verified": 3, "unsupported": 1, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 0.75,
+            "decision": "partial",
+        },
+    }
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=claim_evidence_summary,
+        adopted_claim_ids=["CLM-1"],
+        rejected_claim_ids=["CLM-2"],
+    )
+    assert c_state == CONFIRM_PARTIAL
+    assert any("rejected_partial_claims:CLM-2" in c for c in r_codes)
+
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    assert status.confirmation_state == CONFIRM_PARTIAL
+    assert status.trade_action == ACTION_WAIT
+    assert status.direction == DIRECTION_BULL
+    assert is_non_executable_status(status) is True
+
+
+def test_bull_bear_symmetry_lifecycle():
+    """5. Bull and Bear symmetry: rules must behave identically in both directions."""
+    # 5a. Bear winner with rejected bull contradiction does NOT block
+    mv_bear = {
+        "direction": "看空",
+        "winner": "bear",
+        "position_pct": 15,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["BEAR-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": ["BULL-1"],
+    }
+    summary_bear = {
+        "BEAR-1": {"counts": {"total": 2, "verified": 2, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+        "BULL-1": {"counts": {"total": 2, "verified": 1, "unsupported": 0, "contradicted": 1, "source_unavailable": 0}, "coverage": 0.5, "decision": "reject"},
+    }
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["BEAR-1"],
+        claim_evidence_summary=summary_bear,
+        adopted_claim_ids=["BEAR-1"],
+        rejected_claim_ids=["BULL-1"],
+    )
+    assert c_state == CONFIRM_CONFIRMED
+    assert "all_core_claims_verified:BEAR-1" in r_codes
+    assert "audited_rejected_claims:BULL-1" in r_codes
+
+    status_bear = status_from_manager_verdict(
+        mv_bear,
+        focus_claim_ids=["BEAR-1"],
+        claim_evidence_summary=summary_bear,
+    )
+    assert status_bear.confirmation_state == CONFIRM_CONFIRMED
+    assert status_bear.trade_action == ACTION_SELL
+    assert status_bear.direction == DIRECTION_BEAR
+    assert is_non_executable_status(status_bear) is False
+
+    # 5b. Bear winner with contradicted bear focus claim -> WAIT
+    summary_bear_contra = {
+        "BEAR-1": {"counts": {"total": 1, "verified": 0, "unsupported": 0, "contradicted": 1, "source_unavailable": 0}, "coverage": 0.0, "decision": "reject"},
+        "BULL-1": {"counts": {"total": 1, "verified": 0, "unsupported": 1, "contradicted": 0, "source_unavailable": 0}, "coverage": 0.0, "decision": "reject"},
+    }
+    status_bear_contra = status_from_manager_verdict(
+        mv_bear,
+        focus_claim_ids=["BEAR-1"],
+        claim_evidence_summary=summary_bear_contra,
+    )
+    assert status_bear_contra.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_bear_contra.trade_action == ACTION_WAIT
+
+    # 5c. Bear winner with rejected bull claim having adopt -> ABSTAIN + NO_TRADE
+    summary_bear_rej_adopt = {
+        "BEAR-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+        "BULL-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+    }
+    status_bear_rej_adopt = status_from_manager_verdict(
+        mv_bear,
+        focus_claim_ids=["BEAR-1"],
+        claim_evidence_summary=summary_bear_rej_adopt,
+    )
+    assert status_bear_rej_adopt.analysis_status == ANALYSIS_ABSTAIN
+    assert status_bear_rej_adopt.trade_action == ACTION_NO_TRADE
+
+
+def test_fallback_behavior_when_no_focus_claims():
+    """6. Fallback behavior when focus_claim_ids is empty or None."""
+    # 6a. Fallback to unresolved_claim_ids
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["U-1"],
+        "rejected_claim_ids": [],
+    }
+    summary_ok = {
+        "U-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+    }
+    c_state_u, r_codes_u = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        unresolved_claim_ids=["U-1"],
+        claim_evidence_summary=summary_ok,
+        adopted_claim_ids=["U-1"],
+    )
+    assert c_state_u == CONFIRM_CONFIRMED
+    assert "all_core_claims_verified:U-1" in r_codes_u
+
+    # 6b. Both focus and unresolved empty -> fallback to adopted claims
+    c_state_ad, r_codes_ad = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        unresolved_claim_ids=[],
+        claim_evidence_summary=summary_ok,
+        adopted_claim_ids=["U-1"],
+    )
+    assert c_state_ad == CONFIRM_CONFIRMED
+    assert "all_core_claims_verified:U-1" in r_codes_ad
+
+    # 6c. All empty, no fatal contradictions -> CONFIRMED
+    c_state_empty, _ = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        unresolved_claim_ids=[],
+        adopted_claim_ids=[],
+        rejected_claim_ids=[],
+    )
+    assert c_state_empty == CONFIRM_CONFIRMED
+
+
+def test_unadjudicated_material_claims_integrity_check():
+    """Unadjudicated claims with adopt or partial evidence must trigger integrity / consistency check."""
+    # Claim CLM-OMIT was in claims and verified (adopt), but completely omitted from manager verdict
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+    summary = {
+        "CLM-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+        "CLM-OMIT": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
+    }
+    claims = [
+        {"claim_id": "CLM-1", "claim": "论点1"},
+        {"claim_id": "CLM-OMIT", "claim": "重大遗漏论点"},
+    ]
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=summary,
+        claims=claims,
+        adopted_claim_ids=["CLM-1"],
+        rejected_claim_ids=[],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert "unadjudicated_material_claims_adopt:CLM-OMIT" in r_codes
+
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-1"],
+        claim_evidence_summary=summary,
+        claims=claims,
+    )
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.trade_action == ACTION_NO_TRADE
+    assert status.risk_status == "BLOCKED"
+
+
+def test_trader_risk_and_db_consistency_contract():
+    """8. Trader / Risk / DB decision consistency contract across BUY, WAIT, and NO_TRADE paths."""
+    # BUY path: Trader and Risk execute, DB receives BUY
+    status_buy = DecisionStatus(
+        analysis_status=ANALYSIS_VALID,
+        direction=DIRECTION_BULL,
+        trade_action=ACTION_BUY,
+        risk_status="OK",
+        confirmation_state=CONFIRM_CONFIRMED,
+        confidence=80,
+        probability=0.75,
+    )
+    result_buy = apply_decision_status_to_result(
+        {"target_price": 50.0, "stop_loss_price": 45.0, "confidence": 80, "probability": 0.75},
+        status_buy,
+    )
+    assert result_buy["decision"] == ACTION_BUY
+    assert result_buy["trade_action"] == ACTION_BUY
+    assert result_buy["confirmation_state"] == CONFIRM_CONFIRMED
+    assert result_buy["target_price"] == 50.0
+    assert result_buy["stop_loss_price"] == 45.0
+    assert result_buy.get("not_applicable") is not True
+
+    # WAIT path: stubbed, targets stripped
+    status_wait = DecisionStatus(
+        analysis_status=ANALYSIS_VALID,
+        direction=DIRECTION_BULL,
+        trade_action=ACTION_WAIT,
+        risk_status="OK",
+        confirmation_state=CONFIRM_UNRESOLVED,
+    )
+    result_wait = apply_decision_status_to_result(
+        {"target_price": 50.0, "stop_loss_price": 45.0, "confidence": 80, "probability": 0.75},
+        status_wait,
+    )
+    assert result_wait["decision"] == ACTION_WAIT
+    assert result_wait["trade_action"] == ACTION_WAIT
+    assert result_wait["confirmation_state"] == CONFIRM_UNRESOLVED
+    assert result_wait["target_price"] is None
+    assert result_wait["stop_loss_price"] is None
 

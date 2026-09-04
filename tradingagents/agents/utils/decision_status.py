@@ -8,6 +8,7 @@ not be collapsed into Neutral/HOLD.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
 
 # analysis_status
@@ -281,18 +282,32 @@ def evaluate_confirmation_state(
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
     claim_evidence_summary: Mapping[str, Mapping[str, Any]] | None = None,
     claims: Sequence[Mapping[str, Any]] | None = None,
+    adopted_claim_ids: Sequence[Any] | None = None,
+    partially_adopted_claims: Sequence[Any] | None = None,
+    rejected_claim_ids: Sequence[Any] | None = None,
 ) -> tuple[str, list[str]]:
     """Determine confirmation_state (CONFIRMED / PARTIAL / UNRESOLVED) and diagnostic codes.
 
-    Deterministic rules (D-009 P0-5b):
-    - Core claims: focus_claim_ids if non-empty; else unresolved_claim_ids; else empty.
-    - If core claims exist with fatal/contradicted or 0 verified -> UNRESOLVED.
-    - If core claims have partial verified (>0 and <total) without fatal -> PARTIAL.
-    - If all core claims verified without fatal conflict -> CONFIRMED.
-    - If no core claims exist, but verification has fatal/contradicted -> UNRESOLVED; else CONFIRMED.
+    Deterministic rules (D-009 P0-5b / Confirmation Gate Claim Lifecycle):
+    - confirmation_relevant_claims = focus ∪ adopted ∪ partially_adopted ∪ rejected_but_deterministically_adopted
+    - focus / adopted with reject or fatal -> UNRESOLVED -> WAIT
+    - partially adopted (incomplete evidence) -> PARTIAL + WAIT
+    - rejected, non-core with reject -> do NOT block confirmation; keep audited reason/log
+    - rejected with partial -> conservative -> PARTIAL + WAIT
+    - rejected with adopt -> verdict consistency failure -> ABSTAIN + NO_TRADE (evaluated as UNRESOLVED here)
+    - unadjudicated material claims with adopt/partial -> completeness/consistency check
     """
     focus_ids = [str(x).strip() for x in (focus_claim_ids or []) if str(x).strip()]
     unresolved_ids = [str(x).strip() for x in (unresolved_claim_ids or []) if str(x).strip()]
+    adopted_ids = [str(x).strip() for x in (adopted_claim_ids or []) if str(x).strip()]
+    partially_adopted_ids = [str(x).strip() for x in (partially_adopted_claims or []) if str(x).strip()]
+    rejected_ids = [str(x).strip() for x in (rejected_claim_ids or []) if str(x).strip()]
+
+    adjudication_provided = (
+        adopted_claim_ids is not None
+        or partially_adopted_claims is not None
+        or rejected_claim_ids is not None
+    )
 
     if focus_ids:
         core_claim_ids = focus_ids
@@ -315,27 +330,7 @@ def evaluate_confirmation_state(
         if cid:
             ver_by_cid.setdefault(cid, []).append(v)
 
-    global_fatal_cids: set[str] = set()
-    for cid, sm in summary_map.items():
-        cnt = sm.get("counts") or {}
-        if cnt.get("contradicted", 0) > 0 or cnt.get("source_unavailable", 0) > 0:
-            global_fatal_cids.add(cid)
-    for v in (claims_verification or []):
-        if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
-            cid = str(v.get("claim_id", "") or "").strip()
-            if cid:
-                global_fatal_cids.add(cid)
-
-    has_global_fatal = bool(global_fatal_cids)
-
-    if not core_claim_ids:
-        if has_global_fatal:
-            return CONFIRM_UNRESOLVED, [f"fatal_contradicted_claims:{','.join(sorted(global_fatal_cids))}"]
-        return CONFIRM_CONFIRMED, []
-
     def _is_claim_fatal(cid: str) -> bool:
-        if cid in global_fatal_cids:
-            return True
         sm = summary_map.get(cid)
         if sm:
             cnt = sm.get("counts") or {}
@@ -346,36 +341,180 @@ def evaluate_confirmation_state(
                 return True
         return False
 
+    def _get_claim_decision(cid: str) -> str:
+        if _is_claim_fatal(cid):
+            return "reject"
+        sm = summary_map.get(cid)
+        if sm:
+            dec = sm.get("decision")
+            if dec in {"adopt", "partial", "reject"}:
+                return str(dec)
+            cnt = sm.get("counts") or {}
+            total = cnt.get("total", 0)
+            verified = cnt.get("verified", 0)
+            cov = sm.get("coverage", (verified / total) if total > 0 else 0.0)
+            if total > 0 and verified == total:
+                return "adopt"
+            elif verified > 0 and (cov >= 0.67 or math.isclose(cov, 2 / 3, abs_tol=1e-3)):
+                return "partial"
+            return "reject"
+        v_list = ver_by_cid.get(cid, [])
+        if not v_list:
+            return "reject"
+        total = len(v_list)
+        verified = sum(1 for v in v_list if v.get("status") == "verified")
+        if verified == total and total > 0:
+            return "adopt"
+        elif verified > 0 and (verified / total >= 0.67 or math.isclose(verified / total, 2 / 3, abs_tol=1e-3)):
+            return "partial"
+        return "reject"
+
     def _is_claim_verified(cid: str) -> bool:
         if _is_claim_fatal(cid):
             return False
-        sm = summary_map.get(cid)
-        if sm:
-            cnt = sm.get("counts") or {}
-            if cnt.get("verified", 0) > 0:
-                return True
-        for v in ver_by_cid.get(cid, []):
-            if v.get("status") == "verified":
-                return True
-        return False
+        return _get_claim_decision(cid) == "adopt"
 
+    # Row 5: rejected + deterministic adopt -> verdict consistency failure
+    rejected_adopt_cids = [
+        cid for cid in rejected_ids
+        if _get_claim_decision(cid) == "adopt"
+    ]
+    if rejected_adopt_cids:
+        return CONFIRM_UNRESOLVED, [
+            f"verdict_consistency_rejected_adopt:{','.join(sorted(rejected_adopt_cids))}"
+        ]
+
+    # Row 6: Unadjudicated material claims check
+    unadjudicated_adopt_cids: list[str] = []
+    unadjudicated_partial_cids: list[str] = []
+    if adjudication_provided:
+        decided_cids = set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids)
+        known_debate_cids = list(dict.fromkeys(
+            [str(c.get("claim_id", "") or "").strip() for c in (claims or []) if str(c.get("claim_id", "") or "").strip()]
+            + list(summary_map.keys())
+            + list(ver_by_cid.keys())
+            + core_claim_ids
+        ))
+        for cid in known_debate_cids:
+            if cid not in decided_cids:
+                dec = _get_claim_decision(cid)
+                if dec == "adopt":
+                    unadjudicated_adopt_cids.append(cid)
+                elif dec == "partial":
+                    unadjudicated_partial_cids.append(cid)
+
+    if unadjudicated_adopt_cids:
+        return CONFIRM_UNRESOLVED, [
+            f"unadjudicated_material_claims_adopt:{','.join(sorted(unadjudicated_adopt_cids))}"
+        ]
+
+    # Row 3: rejected, non-core with reject -> audit record, does not block
+    rejected_reject_cids = [
+        cid for cid in rejected_ids
+        if cid not in core_claim_ids and _get_claim_decision(cid) == "reject"
+    ]
+    audit_rejected_codes: list[str] = []
+    if rejected_reject_cids:
+        audit_rejected_codes.append(
+            f"audited_rejected_claims:{','.join(sorted(rejected_reject_cids))}"
+        )
+
+    # Row 4: rejected with partial
+    rejected_partial_cids = [
+        cid for cid in rejected_ids
+        if _get_claim_decision(cid) == "partial"
+    ]
+
+    # Row 1: Fatal check across core, adopted, and partially adopted claims
     core_fatal = [cid for cid in core_claim_ids if _is_claim_fatal(cid)]
-    core_verified = [cid for cid in core_claim_ids if _is_claim_verified(cid)]
-    core_unverified = [cid for cid in core_claim_ids if not _is_claim_verified(cid) and not _is_claim_fatal(cid)]
+    adopted_fatal = [cid for cid in adopted_ids if _is_claim_fatal(cid)]
+    partially_adopted_fatal = [cid for cid in partially_adopted_ids if _is_claim_fatal(cid)]
 
     if core_fatal:
-        return CONFIRM_UNRESOLVED, [f"fatal_core_claims:{','.join(core_fatal)}"]
-    if has_global_fatal:
-        return CONFIRM_UNRESOLVED, [f"fatal_contradicted_claims:{','.join(sorted(global_fatal_cids))}"]
+        return CONFIRM_UNRESOLVED, [f"fatal_core_claims:{','.join(sorted(core_fatal))}"]
+    if adopted_fatal:
+        return CONFIRM_UNRESOLVED, [f"fatal_adopted_claims:{','.join(sorted(adopted_fatal))}"]
+    if partially_adopted_fatal:
+        return CONFIRM_UNRESOLVED, [f"fatal_partially_adopted_claims:{','.join(sorted(partially_adopted_fatal))}"]
 
-    if len(core_verified) == 0:
-        return CONFIRM_UNRESOLVED, [f"unverified_core_claims:{','.join(core_claim_ids)}"]
-    elif len(core_verified) < len(core_claim_ids):
-        return CONFIRM_PARTIAL, [
-            f"partial_core_claims:verified={','.join(core_verified)};unverified={','.join(core_unverified)}"
-        ]
+    # If neither core claims nor adopted claims exist
+    if not core_claim_ids and not adopted_ids:
+        unadjudicated_fatal_cids: set[str] = set()
+        for cid, sm in summary_map.items():
+            if _is_claim_fatal(cid):
+                if cid in rejected_ids and _get_claim_decision(cid) == "reject":
+                    continue
+                unadjudicated_fatal_cids.add(cid)
+        for v in (claims_verification or []):
+            if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
+                cid = str(v.get("claim_id", "") or "").strip()
+                if cid:
+                    if cid in rejected_ids and _get_claim_decision(cid) == "reject":
+                        continue
+                    unadjudicated_fatal_cids.add(cid)
+
+        if unadjudicated_fatal_cids:
+            return CONFIRM_UNRESOLVED, [
+                f"fatal_contradicted_claims:{','.join(sorted(unadjudicated_fatal_cids))}"
+            ]
+        if rejected_partial_cids or unadjudicated_partial_cids:
+            p_codes: list[str] = []
+            if rejected_partial_cids:
+                p_codes.append(f"rejected_partial_claims:{','.join(sorted(rejected_partial_cids))}")
+            if unadjudicated_partial_cids:
+                p_codes.append(f"unadjudicated_partial_claims:{','.join(sorted(unadjudicated_partial_cids))}")
+            return CONFIRM_PARTIAL, p_codes + audit_rejected_codes
+        return CONFIRM_CONFIRMED, audit_rejected_codes
+
+    # Core claims verification
+    if core_claim_ids:
+        core_verified = [cid for cid in core_claim_ids if _is_claim_verified(cid)]
+        core_unverified = [cid for cid in core_claim_ids if not _is_claim_verified(cid) and not _is_claim_fatal(cid)]
+        if len(core_verified) == 0:
+            return CONFIRM_UNRESOLVED, [f"unverified_core_claims:{','.join(core_claim_ids)}"]
+        core_has_partial = len(core_verified) < len(core_claim_ids)
     else:
-        return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(core_verified)}"]
+        core_verified = []
+        core_unverified = []
+        core_has_partial = False
+
+    # Adopted claims verification
+    adopted_unverified = [cid for cid in adopted_ids if _get_claim_decision(cid) == "reject"]
+    if adopted_unverified:
+        return CONFIRM_UNRESOLVED, [f"unverified_adopted_claims:{','.join(sorted(adopted_unverified))}"]
+    adopted_partial = [cid for cid in adopted_ids if _get_claim_decision(cid) == "partial"]
+
+    # Assemble partial reasons
+    partial_codes: list[str] = []
+    if core_has_partial:
+        partial_codes.append(
+            f"partial_core_claims:verified={','.join(core_verified)};unverified={','.join(core_unverified)}"
+        )
+    if adopted_partial:
+        partial_codes.append(
+            f"partial_adopted_claims:{','.join(sorted(adopted_partial))}"
+        )
+    if partially_adopted_ids:
+        partial_codes.append(
+            f"partially_adopted_claims:{','.join(sorted(partially_adopted_ids))}"
+        )
+    if rejected_partial_cids:
+        partial_codes.append(
+            f"rejected_partial_claims:{','.join(sorted(rejected_partial_cids))}"
+        )
+    if unadjudicated_partial_cids:
+        partial_codes.append(
+            f"unadjudicated_partial_claims:{','.join(sorted(unadjudicated_partial_cids))}"
+        )
+
+    if partial_codes:
+        return CONFIRM_PARTIAL, partial_codes + audit_rejected_codes
+
+    # Everything confirmed
+    verified_core = core_verified if core_claim_ids else [cid for cid in adopted_ids if _is_claim_verified(cid)]
+    if verified_core:
+        return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(verified_core)}"] + audit_rejected_codes
+    return CONFIRM_CONFIRMED, audit_rejected_codes
 
 
 def status_from_manager_verdict(
@@ -415,30 +554,47 @@ def status_from_manager_verdict(
         )
 
     deb_state = investment_debate_state if isinstance(investment_debate_state, Mapping) else {}
+    mv_in_deb = deb_state.get("manager_verdict") if isinstance(deb_state.get("manager_verdict"), Mapping) else {}
+
     f_ids = (
         focus_claim_ids
         if focus_claim_ids is not None
-        else (deb_state.get("focus_claim_ids") or mv.get("focus_claim_ids"))
+        else (deb_state.get("focus_claim_ids") or mv.get("focus_claim_ids") or mv_in_deb.get("focus_claim_ids"))
     )
     u_ids = (
         unresolved_claim_ids
         if unresolved_claim_ids is not None
-        else (deb_state.get("unresolved_claim_ids") or mv.get("unresolved_claim_ids"))
+        else (deb_state.get("unresolved_claim_ids") or mv.get("unresolved_claim_ids") or mv_in_deb.get("unresolved_claim_ids"))
     )
     ver = (
         claims_verification
         if claims_verification is not None
-        else (deb_state.get("evidence_verification") or mv.get("evidence_verification"))
+        else (deb_state.get("evidence_verification") or mv.get("evidence_verification") or mv_in_deb.get("evidence_verification"))
     )
     ev_summary = (
         claim_evidence_summary
         if claim_evidence_summary is not None
-        else (deb_state.get("claim_evidence_summary") or mv.get("claim_evidence_summary"))
+        else (deb_state.get("claim_evidence_summary") or mv.get("claim_evidence_summary") or mv_in_deb.get("claim_evidence_summary"))
     )
     cl_list = (
         claims
         if claims is not None
-        else (deb_state.get("claims") or mv.get("claims"))
+        else (deb_state.get("claims") or mv.get("claims") or mv_in_deb.get("claims"))
+    )
+    adopted_ids = (
+        mv.get("adopted_claim_ids")
+        if mv.get("adopted_claim_ids") is not None
+        else (mv_in_deb.get("adopted_claim_ids") or deb_state.get("adopted_claim_ids"))
+    )
+    partially_adopted_ids = (
+        mv.get("partially_adopted_claims")
+        if mv.get("partially_adopted_claims") is not None
+        else (mv_in_deb.get("partially_adopted_claims") or deb_state.get("partially_adopted_claims"))
+    )
+    rejected_ids = (
+        mv.get("rejected_claim_ids")
+        if mv.get("rejected_claim_ids") is not None
+        else (mv_in_deb.get("rejected_claim_ids") or deb_state.get("rejected_claim_ids"))
     )
 
     confirmation_state, confirm_codes = evaluate_confirmation_state(
@@ -447,7 +603,22 @@ def status_from_manager_verdict(
         claims_verification=ver,
         claim_evidence_summary=ev_summary,
         claims=cl_list,
+        adopted_claim_ids=adopted_ids,
+        partially_adopted_claims=partially_adopted_ids,
+        rejected_claim_ids=rejected_ids,
     )
+
+    # Consistency hard gate: rejected + adopt or unadjudicated material claim with adopt
+    if any(
+        code.startswith("verdict_consistency_rejected_adopt:")
+        or code.startswith("unadjudicated_material_claims_adopt:")
+        for code in confirm_codes
+    ):
+        return abstain_status(
+            reason_codes=["manager_consistency_hard_gate", *confirm_codes],
+            trade_action=ACTION_NO_TRADE,
+            risk_status=RISK_BLOCKED,
+        )
 
     # VPA candidate / reversal feature evaluation (D-009 P1-2)
     vpa = vpa_context
@@ -498,12 +669,30 @@ def status_from_manager_verdict(
     if direction == DIRECTION_NA and trade_action in NON_DIRECTIONAL_TRADE_ACTIONS and confirmation_state == CONFIRM_CONFIRMED:
         return abstain_status(reason_codes=["manager_direction_na", *confirm_codes, *vpa_codes])
 
+    raw_conf = mv.get("confidence")
+    raw_prob = mv.get("probability")
+    conf_val: Optional[int] = None
+    prob_val: Optional[float] = None
+    if confirmation_state == CONFIRM_CONFIRMED and trade_action not in NON_DIRECTIONAL_TRADE_ACTIONS:
+        if raw_conf is not None:
+            try:
+                conf_val = int(raw_conf)
+            except (ValueError, TypeError):
+                conf_val = None
+        if raw_prob is not None:
+            try:
+                prob_val = float(raw_prob)
+            except (ValueError, TypeError):
+                prob_val = None
+
     return valid_status(
         direction=direction if direction != DIRECTION_NA else DIRECTION_NEUTRAL,
         trade_action=trade_action if trade_action != ACTION_NO_TRADE else ACTION_HOLD,
         risk_status=RISK_OK,
         confirmation_state=confirmation_state,
         reason_codes=["manager_terminal", *confirm_codes, *vpa_codes],
+        confidence=conf_val,
+        probability=prob_val,
     )
 
 
