@@ -4,7 +4,9 @@ import json
 import json_repair
 import logging
 import math
+import os
 import re
+import subprocess
 from decimal import Decimal, InvalidOperation
 from numbers import Real
 
@@ -50,6 +52,11 @@ REPORT_SUMMARY_COLUMNS = (
 
 ACTIVE_REPORT_STATUSES = ("pending", "running")
 STALE_REPORT_ERROR_MESSAGE = "分析任务已中断，请重新发起分析"
+
+# DAV-604: H1b cohort metadata constants
+DECISION_MODEL_V1: str = "decision_model.v1"
+EVIDENCE_CONTRACT_V1: str = "evidence_contract.v1"
+PRICE_BASIS_UNSPECIFIED: str = "price_basis.unspecified"
 
 
 # ─── Structured extraction schemas ───────────────────────────────────────────
@@ -735,6 +742,108 @@ def ensure_report_industry_persisted(
     return result_data
 
 
+def resolve_current_commit_sha() -> Optional[str]:
+    """Resolve 40-character hex commit SHA for provenance tracking.
+
+    Resolution order:
+    1. os.getenv("GIT_COMMIT_SHA")
+    2. git rev-parse HEAD (via subprocess)
+
+    Constraints:
+    - Must be exactly 40 lowercase hexadecimal characters.
+    - If resolution fails or unavailable, returns None (explicit missing marker).
+    - Prohibited: never fabricate today's date, timestamp, uuid, or random values.
+    """
+    env_sha = os.getenv("GIT_COMMIT_SHA")
+    if env_sha:
+        val = env_sha.strip()
+        if len(val) == 40 and all(c in "0123456789abcdefABCDEF" for c in val):
+            return val.lower()
+
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if res.returncode == 0:
+            val = res.stdout.strip()
+            if len(val) == 40 and all(c in "0123456789abcdefABCDEF" for c in val):
+                return val.lower()
+    except Exception as exc:
+        logger.debug("Failed to resolve git rev-parse HEAD: %s", exc)
+
+    return None
+
+
+def ensure_report_cohort_persisted(
+    result_data: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Persist H1b cohort triad and commit SHA into result_data root dictionary.
+
+    Fields written:
+    - decision_model_version: 'decision_model.v1'
+    - evidence_contract_version: 'evidence_contract.v1'
+    - price_basis_version: 'price_basis.unspecified'
+    - generated_by_commit_sha: 40-character hex commit SHA (or None if resolution fails)
+
+    Rules:
+    - Written to ReportDB.result_data root dictionary (prohibiting parallel tables).
+    - Legacy samples (legacy_unversioned or explicit None) are NOT backfilled to v1.
+    - If dual-horizon nested horizons exist, also propagate cohort metadata to nested dictionaries.
+    """
+    if not isinstance(result_data, dict):
+        return result_data
+
+    from tradingagents.agents.utils.shadow_credit import (
+        COHORT_LEGACY_UNVERSIONED,
+        DECISION_MODEL_LEGACY,
+    )
+
+    # 1. Check if sample is legacy - do NOT backfill or overwrite
+    existing_dmv = result_data.get("decision_model_version")
+    if existing_dmv in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+        return result_data
+    if "decision_model_version" in result_data and result_data["decision_model_version"] is None:
+        return result_data
+
+    # 2. Populate triad + sha in root dictionary
+    if "decision_model_version" not in result_data:
+        result_data["decision_model_version"] = DECISION_MODEL_V1
+
+    if "evidence_contract_version" not in result_data:
+        result_data["evidence_contract_version"] = EVIDENCE_CONTRACT_V1
+
+    if "price_basis_version" not in result_data:
+        result_data["price_basis_version"] = PRICE_BASIS_UNSPECIFIED
+
+    if "generated_by_commit_sha" not in result_data:
+        result_data["generated_by_commit_sha"] = resolve_current_commit_sha()
+
+    # 3. If investment_debate_state dictionary exists, sync metadata there as well
+    inv_state = result_data.get("investment_debate_state")
+    if isinstance(inv_state, dict):
+        if "decision_model_version" not in inv_state:
+            inv_state["decision_model_version"] = result_data["decision_model_version"]
+        if "evidence_contract_version" not in inv_state:
+            inv_state["evidence_contract_version"] = result_data["evidence_contract_version"]
+        if "price_basis_version" not in inv_state:
+            inv_state["price_basis_version"] = result_data["price_basis_version"]
+        if "generated_by_commit_sha" not in inv_state:
+            inv_state["generated_by_commit_sha"] = result_data["generated_by_commit_sha"]
+
+    # 4. Handle dual_horizon nested horizons if present
+    for nested_key in ("short_term", "medium_term"):
+        nested = result_data.get(nested_key)
+        if isinstance(nested, dict):
+            ensure_report_cohort_persisted(nested)
+
+    return result_data
+
+
 def canonicalize_report_result_data(
     result_data: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
@@ -1074,7 +1183,8 @@ def update_report_partial(
     db_report = db.query(ReportDB).filter(ReportDB.id == report_id).first()
     if not db_report:
         return None
-    
+    prior_status = db_report.status
+
     canonical_fields: Dict[str, Any] = {}
     try:
         for key, value in fields.items():
@@ -1105,6 +1215,10 @@ def update_report_partial(
     if db_report.status == "completed":
         if isinstance(db_report.result_data, dict):
             ensure_report_industry_persisted(db_report.result_data, symbol=db_report.symbol)
+            # DAV-604: Only persist cohort metadata on first completion (pending/running -> completed).
+            # Already completed historical rows must NOT be backfilled with v1.
+            if status == "completed" and prior_status != "completed":
+                ensure_report_cohort_persisted(db_report.result_data)
             from sqlalchemy.orm.attributes import flag_modified
             flag_modified(db_report, "result_data")
             from tradingagents.agents.utils.shadow_credit import extract_report_industry
@@ -1287,6 +1401,17 @@ def create_report(
             if h_status and all(st == "failed" for st in h_status.values()):
                 target_status = "failed"
 
+    # Check if we should update an existing record (initialized via init_report)
+    db_report = None
+    if report_id:
+        db_report = db.query(ReportDB).filter(ReportDB.id == report_id).first()
+    prior_status = db_report.status if db_report else None
+
+    # DAV-604: Persist H1b cohort metadata on newly completed reports (first completion).
+    # Already completed historical rows must NOT be backfilled with v1.
+    if target_status == "completed" and prior_status != "completed" and isinstance(canonical_result_data, dict):
+        ensure_report_cohort_persisted(canonical_result_data)
+
     # Track A13: Determine resolved industry for SQL column
     resolved_industry = None
     if target_status == "completed":
@@ -1300,11 +1425,6 @@ def create_report(
             mapped = _map_stock_to_industry(symbol)
             if mapped and str(mapped).strip() and str(mapped).strip() != "未知行业":
                 resolved_industry = str(mapped).strip()
-
-    # Check if we should update an existing record (initialized via init_report)
-    db_report = None
-    if report_id:
-        db_report = db.query(ReportDB).filter(ReportDB.id == report_id).first()
 
     if db_report:
         # Update existing
