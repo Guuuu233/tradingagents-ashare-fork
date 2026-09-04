@@ -847,3 +847,276 @@ Link: https://example.com/item/1#frag
     assert len(evidences) == 2
     assert evidences[0].url == "https://example.com/item/1"
     assert evidences[1].url is None
+
+
+# ==============================================================================
+# C-05d / DAV-627 Acceptance Tests: cninfo query_manifest / recall_gap
+# ==============================================================================
+
+def test_c05d_red1_no_cninfo_no_themes_remains_unknown_empty_manifest():
+    """RED 1 (C-05d / DAV-627):
+    无 cninfo、无 requested_themes → 仍 unknown，manifest []。
+    禁止说法：编五主题；「无明显主题缺失」。
+    source_manifest 只回显实际查过的源，未查则不要假装查过。
+    """
+    media_item = {
+        "title": "东财快讯：某上市公司发布临时公告",
+        "published_at": "2026-07-29 10:00:00",
+        "source": "东方财富",
+        "url": "https://finance.eastmoney.com/a/1.html",
+        "entity": "000001",
+    }
+    coverage = build_news_event_coverage(
+        [media_item],
+        cutoff="2026-07-30",
+        requested_themes=None,
+        query_manifest=None,
+    )
+
+    assert coverage["recall_status"] == "unknown"
+    assert coverage["query_manifest"] == []
+    assert coverage["requested_themes"] == []
+    assert coverage["suspected_gaps"] == []
+    assert coverage["recall_gap"] == []
+
+    # source_manifest must not fake cninfo
+    source_manifest = coverage.get("source_manifest", [])
+    assert "cninfo_announcement" not in source_manifest
+    assert "cninfo_ir_survey" not in source_manifest
+
+    # Forbid fabricating default 5 themes
+    for default_theme in ("跨市场", "财报", "行业政策", "公司治理", "重大合同"):
+        assert default_theme not in coverage["query_manifest"]
+        assert default_theme not in coverage["requested_themes"]
+
+    summary = format_event_coverage_summary(coverage)
+    assert "无明显主题缺失" not in summary
+    assert "unknown" in summary or "未知" in summary
+
+
+def test_c05d_red2_two_cninfo_records_enter_query_manifest_forbid_no_apparent_gap():
+    """RED 2 (C-05d / DAV-627):
+    传入两条 cninfo:1225488095 等 records → manifest 含这些 id；coverage 不得写「无明显主题缺失」。
+    契约：
+    - 巨潮 envelope ok 且有 records: recall_status='partial_vs_manifest'
+    - query_manifest 原样列入 canonical_event_id 或标题（有 id 优先 id）
+    - 禁止把未 hashed 当成无事件
+    - source_manifest 回显实际查过的源（如 cninfo_announcement）
+    """
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CninfoDisclosureEnvelope,
+        CONTENT_STATUS_NOT_ATTEMPTED,
+        CONTENT_STATUS_UNAVAILABLE,
+    )
+
+    rec1 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：2026年半年度报告",
+        announced_at="2026-07-28 17:00:00",
+        url="http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488095",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488095",
+        canonical_event_id="cninfo:1225488095",
+        content_status=CONTENT_STATUS_NOT_ATTEMPTED,  # 未 hashed，但仍是真实事件
+    )
+    rec2 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：关于重大投资的公告",
+        announced_at="2026-07-29 10:00:00",
+        url="http://www.cninfo.com.cn/new/disclosure/detail?announcementId=1225488096",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488096",
+        canonical_event_id="cninfo:1225488096",
+        content_status=CONTENT_STATUS_UNAVAILABLE,  # 未 hashed，但仍是真实事件
+    )
+
+    # 路径 A：直接传 records
+    coverage_records = build_news_event_coverage(
+        [rec1, rec2],
+        cutoff="2026-07-30",
+        default_entity="000001",
+    )
+    assert coverage_records["recall_status"] == "partial_vs_manifest"
+    assert "cninfo:1225488095" in coverage_records["query_manifest"]
+    assert "cninfo:1225488096" in coverage_records["query_manifest"]
+    assert "cninfo_announcement" in coverage_records["source_manifest"]
+    assert coverage_records["hit_count"] == 2
+
+    summary_records = format_event_coverage_summary(coverage_records)
+    assert "无明显主题缺失" not in summary_records
+    assert "无明显主题缺失" not in str(coverage_records)
+
+    # 路径 B：通过 cninfo_envelopes 传入
+    envelope = CninfoDisclosureEnvelope(
+        status="ok",
+        records=[rec1, rec2],
+        source_type="cninfo_announcement",
+    )
+    coverage_env = build_news_event_coverage(
+        [],
+        cutoff="2026-07-30",
+        default_entity="000001",
+        cninfo_envelopes=[envelope],
+    )
+    assert coverage_env["recall_status"] == "partial_vs_manifest"
+    assert "cninfo:1225488095" in coverage_env["query_manifest"]
+    assert "cninfo:1225488096" in coverage_env["query_manifest"]
+    assert "cninfo_announcement" in coverage_env["source_manifest"]
+    assert coverage_env["hit_count"] == 2
+
+    summary_env = format_event_coverage_summary(coverage_env)
+    assert "无明显主题缺失" not in summary_env
+    assert "无明显主题缺失" not in str(coverage_env)
+
+
+def test_c05d_red2_record_without_id_uses_title_verbatim():
+    """RED 2 Contract extension:
+    若记录无 canonical_event_id，原样列入标题（有 id 优先 id）。
+    """
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureRecord
+
+    rec_no_id = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行关于股东大会通知的提示性公告",
+        announced_at="2026-07-29 09:30:00",
+        url="http://www.cninfo.com.cn/detail?id=999",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id=None,
+        canonical_event_id=None,
+    )
+    coverage = build_news_event_coverage([rec_no_id], cutoff="2026-07-30")
+    assert coverage["recall_status"] == "partial_vs_manifest"
+    assert "平安银行关于股东大会通知的提示性公告" in coverage["query_manifest"]
+    assert "无明显主题缺失" not in format_event_coverage_summary(coverage)
+
+
+def test_c05d_red3_cninfo_provider_failure_not_confirmed_empty_has_gap():
+    """RED 3 (C-05d / DAV-627):
+    传入 provider_failure envelope → 不是 confirmed empty，有 gap。
+    契约：
+    - 巨潮 provider_failure / KeyError: 不得当 confirmed empty
+    - 记 recall_gap / provider_failure
+    - 禁止说法：「确认无公告」
+    """
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureEnvelope
+
+    envelope = CninfoDisclosureEnvelope(
+        status="provider_failure",
+        records=[],
+        error="KeyError: 'category'",
+        source_type="cninfo_announcement",
+    )
+    assert not envelope.is_confirmed_empty
+
+    coverage = build_news_event_coverage(
+        [],
+        cutoff="2026-07-30",
+        cninfo_envelopes=[envelope],
+    )
+
+    # 1. 不得当 confirmed empty
+    assert coverage["recall_status"] != "confirmed_empty"
+    assert coverage.get("is_confirmed_empty") is not True
+
+    # 2. 有 gap，且记 recall_gap / provider_failure
+    assert len(coverage["recall_gap"]) > 0
+    assert len(coverage["suspected_gaps"]) > 0
+    assert coverage["has_gap"] is True
+
+    gap = coverage["recall_gap"][0]
+    assert gap["status"] == "provider_failure"
+    assert "cninfo_announcement" in gap["source"]
+    assert "KeyError" in gap["reason"] or "KeyError" in gap["message"]
+
+    # 3. 回显真实查询的源
+    assert "cninfo_announcement" in coverage["source_manifest"]
+
+    # 4. 禁止说法：「确认无公告」、「全市场无新闻」
+    summary = format_event_coverage_summary(coverage)
+    assert "确认无公告" not in summary
+    assert "确认无公告" not in str(coverage)
+    assert "全市场无新闻" not in summary
+    assert "无明显主题缺失" not in summary
+
+
+def test_c05d_contract4_cninfo_confirmed_empty_does_not_generalize_to_whole_market():
+    """Contract 4 (C-05d / DAV-627):
+    巨潮 confirmed_empty（带齐列空表）：可记该次查询空；仍不得推广成全市场无新闻。
+    禁止说法：媒体新闻缺失 ≠ 无公告。
+    """
+    from tradingagents.dataflows.cninfo_disclosure import CninfoDisclosureEnvelope
+
+    envelope = CninfoDisclosureEnvelope(
+        status="confirmed_empty",
+        records=[],
+        source_type="cninfo_announcement",
+    )
+    assert envelope.is_confirmed_empty is True
+
+    coverage = build_news_event_coverage(
+        [],
+        cutoff="2026-07-30",
+        cninfo_envelopes=[envelope],
+    )
+
+    # 可记该次巨潮查询空
+    assert coverage.get("cninfo_status") == "confirmed_empty"
+    assert "cninfo_announcement" in coverage["source_manifest"]
+
+    # 仍不得推广成全市场无新闻
+    assert coverage["recall_status"] != "confirmed_empty"
+    assert coverage["query_manifest"] == []
+
+    summary = format_event_coverage_summary(coverage)
+    assert "全市场无新闻" not in summary
+    assert "全市场查全" not in summary
+    assert "无明显主题缺失" not in summary
+    assert "确认无公告" not in summary
+
+
+def test_c05d_data_collector_integrates_cninfo_envelopes_into_coverage():
+    """data_collector passes existing cninfo envelopes into coverage without modifying eastmoney get_news."""
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CninfoDisclosureEnvelope,
+    )
+
+    rec = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行重大公告",
+        announced_at="2026-07-29 10:00:00",
+        url="http://www.cninfo.com.cn/detail?id=1225488095",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1225488095",
+        canonical_event_id="cninfo:1225488095",
+    )
+    ok_env = CninfoDisclosureEnvelope(status="ok", records=[rec], source_type="cninfo_announcement")
+
+    mock_results = {
+        "news": "### 东方财富：平安银行动态 [发布时间：2026-07-29 10:30:00] (source: 东方财富)\n内容\n",
+        "global_news": "",
+        "cninfo_announcements": ok_env,
+    }
+    ticker = "000001"
+    trade_date = "2026-07-30"
+
+    stock_evs, stock_unp = parse_news_markdown_to_evidences(mock_results["news"], default_entity=ticker)
+    glob_evs, glob_unp = parse_news_markdown_to_evidences(mock_results["global_news"], default_entity="宏观/行业")
+    cninfo_evs = [cninfo_record_to_evidence(r, default_entity=ticker) for r in ok_env.records]
+
+    cov = build_news_event_coverage(
+        stock_evs + glob_evs + cninfo_evs + stock_unp + glob_unp,
+        requested_themes=None,
+        cutoff=trade_date,
+        default_entity=ticker,
+        cninfo_envelopes=[ok_env],
+    )
+    assert cov["recall_status"] == "partial_vs_manifest"
+    assert "cninfo:1225488095" in cov["query_manifest"]
+    assert "cninfo_announcement" in cov["source_manifest"]
+    assert "无明显主题缺失" not in format_event_coverage_summary(cov)

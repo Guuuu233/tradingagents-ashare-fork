@@ -1973,10 +1973,13 @@ def _fetch_all(
     stock_evs, stock_unp = parse_news_markdown_to_evidences(news_text, default_entity=ticker)
     glob_evs, glob_unp = parse_news_markdown_to_evidences(global_news_text, default_entity="宏观/行业")
     cninfo_evs: list[NewsEvidence] = []
+    cninfo_envelopes: list[Any] = []
     for key in ("cninfo_records", "cninfo_announcements", "cninfo_ir_surveys"):
         val = results.get(key)
         if not val:
             continue
+        if hasattr(val, "status") or (isinstance(val, dict) and "status" in val):
+            cninfo_envelopes.append(val)
         records = getattr(val, "records", None) if hasattr(val, "records") else (val if isinstance(val, (list, tuple)) else [])
         for rec in records:
             ev = cninfo_record_to_evidence(rec, default_entity=ticker)
@@ -1989,6 +1992,7 @@ def _fetch_all(
         cutoff=trade_date,
         window=f"{lookback}天",
         default_entity=ticker,
+        cninfo_envelopes=cninfo_envelopes,
     )
     results["event_coverage"] = event_cov
 

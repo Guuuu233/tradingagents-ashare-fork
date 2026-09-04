@@ -24,6 +24,7 @@ DEFAULT_NEWS_WINDOW = "14天"
 GAP_UNVERIFIABLE_MESSAGE = "未检索到/不可验证"
 RECALL_STATUS_UNKNOWN = "unknown"
 RECALL_STATUS_PARTIAL_VS_MANIFEST = "partial_vs_manifest"
+RECALL_STATUS_PROVIDER_FAILURE = "provider_failure"
 LEGACY_DEFAULT_THEMES = ("跨市场", "财报", "行业政策", "公司治理", "重大合同")
 
 _THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -457,12 +458,15 @@ def cluster_news_evidences(
 
 
 def build_news_event_coverage(
-    items_or_evidences: Iterable[Mapping[str, Any] | NewsEvidence],
+    items_or_evidences: Iterable[Mapping[str, Any] | NewsEvidence | Any],
     requested_themes: Sequence[str] | None = None,
     query_manifest: Sequence[str] | None = None,
     cutoff: str | datetime | None = None,
     window: str | int = DEFAULT_NEWS_WINDOW,
     default_entity: str = "",
+    cninfo_envelopes: Sequence[Any] | None = None,
+    envelopes: Sequence[Any] | None = None,
+    source_manifest: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build structured event_coverage and qualification dictionary from news items.
 
@@ -472,18 +476,87 @@ def build_news_event_coverage(
     - Deduplication: near-duplicate items form a single EventCluster.
     - Suspected gaps: requested themes with 0 hits are documented with
       '未检索到/不可验证', strictly forbidding '确认无相关新闻'.
-    - Recall honesty (DAV-608): recall_status is 'unknown' when no manifest/themes provided;
-      'partial_vs_manifest' when manifest/themes explicitly supplied. No theme fabrication.
+    - Recall honesty (DAV-608 & C-05d):
+      - recall_status is 'unknown' and manifest [] when no manifest/cninfo provided;
+      - 'partial_vs_manifest' when manifest/themes or cninfo records provided;
+      - 'provider_failure' when cninfo provider failure occurs (strictly forbidden from
+        being classified as confirmed_empty);
+      - source_manifest only echoes actually queried/checked sources (e.g. cninfo_announcement);
+      - Never fabricates default five themes.
     """
     cutoff_dt = parse_cutoff_datetime(cutoff)
     cutoff_str = cutoff.strftime("%Y-%m-%d") if isinstance(cutoff, datetime) else str(cutoff or "")
     window_str = str(window or DEFAULT_NEWS_WINDOW)
 
+    # 1. Collect and inspect cninfo envelopes
+    all_envelopes: list[Any] = []
+    if cninfo_envelopes:
+        all_envelopes.extend(cninfo_envelopes)
+    if envelopes:
+        all_envelopes.extend(envelopes)
+
+    raw_items_list: list[Any] = []
+    for item in items_or_evidences:
+        if (hasattr(item, "status") and hasattr(item, "records")) or (
+            isinstance(item, dict)
+            and "status" in item
+            and "records" in item
+            and ("source_type" in item or "disclaimer" in item or "is_confirmed_empty" in item)
+        ):
+            all_envelopes.append(item)
+        else:
+            raw_items_list.append(item)
+
+    detected_sources: list[str] = []
+    cninfo_manifest_items: list[str] = []
+    failure_gaps: list[dict[str, Any]] = []
+    cninfo_confirmed_empty = False
+    has_provider_failure = False
+
+    for env in all_envelopes:
+        env_status = getattr(env, "status", None) if not isinstance(env, dict) else env.get("status")
+        env_src = getattr(env, "source_type", None) if not isinstance(env, dict) else env.get("source_type")
+        env_src = str(env_src).strip() if env_src else "cninfo_announcement"
+        if env_src not in detected_sources:
+            detected_sources.append(env_src)
+
+        if env_status == "ok":
+            recs = getattr(env, "records", []) if not isinstance(env, dict) else env.get("records", [])
+            for rec in recs:
+                cid = getattr(rec, "canonical_event_id", None) if not isinstance(rec, dict) else rec.get("canonical_event_id")
+                title = getattr(rec, "title", "") if not isinstance(rec, dict) else rec.get("title", "")
+                id_or_title = (str(cid).strip() if cid else "") or (str(title).strip() if title else "")
+                if id_or_title and id_or_title not in cninfo_manifest_items:
+                    cninfo_manifest_items.append(id_or_title)
+
+                rec_already_in_raw = any(
+                    (hasattr(x, "canonical_event_id") and getattr(x, "canonical_event_id", None) == cid and cid is not None)
+                    or (isinstance(x, dict) and x.get("canonical_event_id") == cid and cid is not None)
+                    for x in raw_items_list
+                )
+                if not rec_already_in_raw:
+                    raw_items_list.append(rec)
+
+        elif env_status == "provider_failure":
+            has_provider_failure = True
+            err = getattr(env, "error", "") if not isinstance(env, dict) else env.get("error", "")
+            failure_gaps.append({
+                "source": env_src,
+                "theme": env_src,
+                "item": env_src,
+                "status": "provider_failure",
+                "reason": err or "provider_failure",
+                "message": f"{env_src}：巨潮数据拉取异常（{err or 'provider_failure'}），不可验证（异常非空表，不得推断无相关记录）",
+            })
+
+        elif env_status == "confirmed_empty":
+            cninfo_confirmed_empty = True
+
     valid_evidences: list[NewsEvidence] = []
     unverifiable_items: list[dict[str, Any]] = []
     future_rejected_items: list[dict[str, Any]] = []
 
-    for item in items_or_evidences:
+    for item in raw_items_list:
         if isinstance(item, NewsEvidence):
             raw_title = item.title
             raw_pub = item.published_at
@@ -497,12 +570,12 @@ def build_news_event_coverage(
             if raw_url is None and item.raw_item:
                 raw_url = extract_url_from_raw(item.raw_item)
             raw_canonical_event_id = item.canonical_event_id
-        elif hasattr(item, "canonical_event_id") and hasattr(item, "announced_at"):
+        elif hasattr(item, "canonical_event_id") and (hasattr(item, "announced_at") or hasattr(item, "announcement_id")):
             raw_dict = item.to_dict() if hasattr(item, "to_dict") else asdict(item)
             raw_title = getattr(item, "title", "")
             raw_pub = getattr(item, "announced_at", "")
             raw_first_seen = None
-            raw_src = getattr(item, "source_type", "cninfo")
+            raw_src = getattr(item, "source_type", "cninfo_announcement")
             raw_summary = getattr(item, "summary", "")
             raw_entity = getattr(item, "symbol", default_entity) or default_entity
             raw_theme = getattr(item, "theme", "")
@@ -519,6 +592,21 @@ def build_news_event_coverage(
             raw_theme = raw_dict.get("theme", raw_dict.get("主题", ""))
             raw_url = extract_url_from_raw(raw_dict)
             raw_canonical_event_id = raw_dict.get("canonical_event_id")
+
+        # Track cninfo source and manifest items from records/evidences (C-05d)
+        is_cninfo_item = bool(
+            raw_canonical_event_id
+            or (raw_src and any(k in str(raw_src).lower() for k in ("cninfo", "巨潮")))
+            or hasattr(item, "announced_at")
+            or (isinstance(item, dict) and "announced_at" in item)
+        )
+        if is_cninfo_item:
+            clean_src = str(raw_src).strip() if raw_src else "cninfo_announcement"
+            if clean_src not in detected_sources:
+                detected_sources.append(clean_src)
+            cid_or_title = (str(raw_canonical_event_id).strip() if raw_canonical_event_id else "") or (str(raw_title).strip() if raw_title else "")
+            if cid_or_title and cid_or_title not in cninfo_manifest_items:
+                cninfo_manifest_items.append(cid_or_title)
 
         # 1. Strict published_at verification
         pub_dt = parse_datetime_or_none(raw_pub)
@@ -570,32 +658,80 @@ def build_news_event_coverage(
     hit_cluster_ids = [c.cluster_id for c in clusters]
     hit_count = len(clusters)
 
-    # 4. Suspected gaps evaluation (DAV-608: no fabrication of default 5 themes)
-    manifest_source = query_manifest if query_manifest is not None else requested_themes
-    if manifest_source:
-        manifest_list = list(manifest_source)
-        recall_status = RECALL_STATUS_PARTIAL_VS_MANIFEST
-        themes_to_check = manifest_list
-    else:
-        manifest_list = []
-        recall_status = RECALL_STATUS_UNKNOWN
-        themes_to_check = []
+    # 4. Manifest list evaluation (DAV-608 & C-05d: no fabrication of default 5 themes)
+    manifest_list: list[str] = []
+    if query_manifest is not None:
+        manifest_list.extend(query_manifest)
+    elif requested_themes is not None:
+        manifest_list.extend(requested_themes)
 
-    hit_themes = {c.theme for c in clusters}
+    for m in cninfo_manifest_items:
+        if m not in manifest_list:
+            manifest_list.append(m)
+
+    # Determine recall_status
+    if manifest_list:
+        recall_status = RECALL_STATUS_PARTIAL_VS_MANIFEST
+    elif has_provider_failure:
+        recall_status = RECALL_STATUS_PROVIDER_FAILURE
+    else:
+        recall_status = RECALL_STATUS_UNKNOWN
+
+    # Determine source_manifest
+    if source_manifest is not None:
+        source_manifest_list = list(source_manifest)
+    else:
+        source_manifest_list = list(dict.fromkeys(detected_sources))
+
+    # Evaluate suspected_gaps and recall_gap
     suspected_gaps: list[dict[str, Any]] = []
 
-    for theme in themes_to_check:
-        matched = any(
-            (c.theme == theme or theme in c.title or theme in c.summary)
-            for c in clusters
-        )
-        if not matched:
+    for manifest_item in manifest_list:
+        is_hit = False
+        # 1. By canonical_event_id
+        for c in clusters:
+            if c.canonical_event_id and c.canonical_event_id == manifest_item:
+                is_hit = True
+                break
+            if any(getattr(e, "canonical_event_id", None) == manifest_item for e in c.evidences):
+                is_hit = True
+                break
+        # 2. By title
+        if not is_hit:
+            norm_manifest = normalize_title_for_dedupe(manifest_item)
+            for c in clusters:
+                if manifest_item == c.title or (norm_manifest and norm_manifest == normalize_title_for_dedupe(c.title)):
+                    is_hit = True
+                    break
+        # 3. By theme
+        if not is_hit:
+            for c in clusters:
+                if c.theme == manifest_item or manifest_item in c.theme or manifest_item in c.title or manifest_item in c.summary:
+                    is_hit = True
+                    break
+
+        if not is_hit:
             suspected_gaps.append({
-                "theme": theme,
+                "item": manifest_item,
+                "theme": manifest_item,
                 "status": "unverified_or_not_found",
-                "message": f"{theme}：{GAP_UNVERIFIABLE_MESSAGE}",
+                "message": f"{manifest_item}：{GAP_UNVERIFIABLE_MESSAGE}",
                 "reason": GAP_UNVERIFIABLE_MESSAGE,
             })
+
+    for fg in failure_gaps:
+        if fg not in suspected_gaps:
+            suspected_gaps.append(fg)
+
+    recall_gap = list(suspected_gaps)
+
+    cninfo_status = None
+    if has_provider_failure:
+        cninfo_status = "provider_failure"
+    elif cninfo_confirmed_empty:
+        cninfo_status = "confirmed_empty"
+    elif cninfo_manifest_items:
+        cninfo_status = "ok"
 
     return {
         "cutoff": cutoff_str,
@@ -603,12 +739,18 @@ def build_news_event_coverage(
         "recall_status": recall_status,
         "query_manifest": manifest_list,
         "requested_themes": manifest_list,
+        "source_manifest": source_manifest_list,
         "hit_count": hit_count,
         "hit_cluster_ids": hit_cluster_ids,
         "unverifiable_count": len(unverifiable_items),
         "future_rejected_count": len(future_rejected_items),
         "valid_evidence_count": len(valid_evidences),
         "suspected_gaps": suspected_gaps,
+        "recall_gap": recall_gap,
+        "recall_gaps": recall_gap,
+        "has_gap": len(suspected_gaps) > 0,
+        "is_confirmed_empty": False,
+        "cninfo_status": cninfo_status,
         "clusters": [c.to_dict() for c in clusters],
         "unverifiable_items": unverifiable_items,
         "future_rejected_items": future_rejected_items,
@@ -693,24 +835,30 @@ def format_event_coverage_summary(coverage: Mapping[str, Any]) -> str:
     recall_status = coverage.get("recall_status", RECALL_STATUS_UNKNOWN)
     manifest = coverage.get("query_manifest") or coverage.get("requested_themes") or []
     themes_str = ", ".join(manifest) if manifest else "未指定（无应查清单）"
+    sources = coverage.get("source_manifest") or []
     hit_count = coverage.get("hit_count", 0)
     unverifiable_count = coverage.get("unverifiable_count", 0)
     future_count = coverage.get("future_rejected_count", 0)
-    gaps = coverage.get("suspected_gaps", [])
+    gaps = coverage.get("suspected_gaps") or coverage.get("recall_gap") or []
 
-    recall_explanation = (
-        "召回完整性未知；未提供应查清单，仅证明时间资格"
-        if recall_status == RECALL_STATUS_UNKNOWN
-        else "仅对比调用方声明清单，非全市场核验"
-    )
+    if recall_status == RECALL_STATUS_UNKNOWN:
+        recall_explanation = "召回完整性未知；未提供应查清单，仅证明时间资格"
+    elif recall_status == RECALL_STATUS_PROVIDER_FAILURE:
+        recall_explanation = "数据源拉取失败/异常，不可验证"
+    else:
+        recall_explanation = "仅对比调用方声明清单/已知公告，非全市场核验"
 
     lines = [
         "【新闻事件结构化覆盖度（event_coverage）】",
         f"- 截断基准日（cutoff）：{cutoff}（观察窗口：{window}）",
         f"- 召回完整性（recall_status）：{recall_status}（{recall_explanation}）",
+    ]
+    if sources:
+        lines.append(f"- 实际查验数据源（source_manifest）：{', '.join(sources)}")
+    lines.extend([
         f"- 重点覆盖主题（query_manifest）：{themes_str}",
         f"- 命中有效事件簇：{hit_count} 个",
-    ]
+    ])
 
     if unverifiable_count > 0:
         lines.append(
@@ -721,17 +869,24 @@ def format_event_coverage_summary(coverage: Mapping[str, Any]) -> str:
             f"- 截断后未来事件：{future_count} 条（晚于截断日，已防窥探过滤）"
         )
 
+    if coverage.get("cninfo_status") == "confirmed_empty":
+        lines.append("- 巨潮资讯检索结果：官方披露为空（注：仅代表该数据源在此区间无披露，媒体新闻缺失不等于无公告，不可外推）")
+
     if gaps:
         lines.append("- 潜在数据缺口（suspected_gaps）：")
         for g in gaps:
-            theme_name = g.get("theme", "")
-            lines.append(
-                f"  * {theme_name}：{GAP_UNVERIFIABLE_MESSAGE}（注：未检索到不等于无相关事件，不可验证项不得作为利多/利空依据）"
-            )
+            msg = g.get("message")
+            if not msg:
+                item_name = g.get("item") or g.get("theme") or g.get("source") or "未知项"
+                status_str = g.get("status", "")
+                reason = g.get("reason", GAP_UNVERIFIABLE_MESSAGE)
+                msg = f"{item_name}：{reason}（状态：{status_str}）"
+            suffix = "（注：未检索到不等于无相关事件，不可验证项不得作为利多/利空依据）" if "注：" not in msg else ""
+            lines.append(f"  * {msg}{suffix}")
     else:
         if recall_status == RECALL_STATUS_UNKNOWN:
             lines.append("- 潜在数据缺口：未知（未提供应查清单，不作缺口假设）")
         else:
-            lines.append("- 潜在数据缺口：清单内主题均已检索到对应事件（注：仅限声明清单，非全市场核验）")
+            lines.append("- 潜在数据缺口：清单内条目均已检索到对应事件（注：仅限声明清单，非全市场核验）")
 
     return "\n".join(lines)
