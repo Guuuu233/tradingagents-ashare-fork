@@ -7,6 +7,7 @@ import threading
 import contextvars
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 import pandas as pd
 from stockstats import wrap
@@ -62,11 +63,16 @@ from ..financial_announce import (
     resolve_earnings_forecast_report_period,
 )
 from ..cninfo_disclosure import (
+    CONTENT_STATUS_HASHED,
+    CONTENT_STATUS_NOT_ATTEMPTED,
+    CONTENT_STATUS_UNAVAILABLE,
     SOURCE_TYPE_ANNOUNCEMENT,
     SOURCE_TYPE_IR_SURVEY,
     STATUS_PROVIDER_FAILURE,
     CninfoDisclosureEnvelope,
+    CninfoDisclosureRecord,
     parse_cninfo_disclosure_df,
+    qualify_cninfo_content,
 )
 
 _provider_logger = logging.getLogger(__name__)
@@ -5179,6 +5185,34 @@ class CnAkshareProvider(BaseMarketDataProvider):
             source_type=SOURCE_TYPE_IR_SURVEY,
             cutoff=cutoff,
         )
+
+    def qualify_cninfo_content(
+        self,
+        record: CninfoDisclosureRecord,
+        *,
+        content_bytes: bytes | None = None,
+        fetch_fn: Any | None = None,
+        timeout: float = 10.0,
+        cutoff: str | None = None,
+    ) -> CninfoDisclosureRecord:
+        """为单条巨潮公告/IR补充内容资格与 hash（C-05b）。
+
+        严格规则：
+        - 缺原生 announcementId：canonical_event_id 为 null，不得进入 hashed。
+        - 缺官方附件字段：content_status=unavailable，严禁编造 static.cninfo URL。
+        - 403 / 超时 / 非 PDF 字节 / KeyError：content_status=unavailable，非 confirmed_empty。
+        - 验证通过：%PDF 开头且有 announcementId 与附件 URL -> content_status=hashed, 64 位 hex sha256。
+        """
+        return qualify_cninfo_content(
+            record,
+            content_bytes=content_bytes,
+            fetch_fn=fetch_fn,
+            timeout=timeout,
+            cutoff=cutoff,
+        )
+
+    qualify_cninfo_announcement_content = qualify_cninfo_content
+    get_cninfo_announcement_content = qualify_cninfo_content
 
     # 别名支持
     get_cninfo_disclosure_report = get_cninfo_announcements

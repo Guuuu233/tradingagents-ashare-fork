@@ -1,6 +1,6 @@
 """Structured CNINFO (巨潮资讯) announcement and IR survey metadata ingestion.
 
-Implements C-05a requirements:
+Implements C-05a & C-05b requirements:
 - Data source reuse: AKShare stock_zh_a_disclosure_report_cninfo and
   stock_zh_a_disclosure_relation_cninfo.
 - Canonical event ID: extracted ONLY from native announcementId or URL query.
@@ -12,11 +12,24 @@ Implements C-05a requirements:
   provider_failure, never confirmed_empty.
 - Title-level metadata ONLY proves event existence; cannot be used to infer
   financial or operational conclusions.
+- Single announcement/IR content qualification and hashing (C-05b):
+  - Retain official adjunctUrl from hisAnnouncement/query response without inventing
+    static.cninfo.com.cn/finalpage/... formulas.
+  - Contract fields: content_status ('hashed' | 'unavailable' | 'not_attempted'),
+    content_sha256 (64-char hex or None).
+  - Strict verification: bytes must start with magic %PDF; sha256 computed on bytes.
+  - content_bytes never written to logs/prompt/test goldens.
+  - Missing announcementId: canonical_event_id is None, cannot be hashed.
+  - 403 / Timeout / non-2xx / KeyError -> content_status=unavailable / provider_failure,
+    never confirmed_empty.
+  - Cutoff enforcement: announced_at <= cutoff required for qualification.
+  - Existence semantics: title metadata proves existence only; hash != extracted net profit.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, time, timedelta, timezone
+import hashlib
 import logging
 import re
 from typing import Any, Mapping
@@ -34,6 +47,17 @@ SOURCE_TYPE_IR_SURVEY = "cninfo_ir_survey"
 STATUS_OK = "ok"
 STATUS_CONFIRMED_EMPTY = "confirmed_empty"
 STATUS_PROVIDER_FAILURE = "provider_failure"
+
+# Content qualification statuses (C-05b)
+CONTENT_STATUS_HASHED = "hashed"
+CONTENT_STATUS_UNAVAILABLE = "unavailable"
+CONTENT_STATUS_NOT_ATTEMPTED = "not_attempted"
+
+_VALID_CONTENT_STATUSES = {
+    CONTENT_STATUS_HASHED,
+    CONTENT_STATUS_UNAVAILABLE,
+    CONTENT_STATUS_NOT_ATTEMPTED,
+}
 
 # Disclaimer semantics: Title metadata only proves event existence
 DISCLAIMER_TEXT = (
@@ -57,6 +81,9 @@ class CninfoDisclosureRecord:
         cutoff_eligible: announced_at <= cutoff（纯日期含当日 23:59:59.999999）.
         announcement_id: 原生 ID 字符串；缺失为 None.
         canonical_event_id: 有原生 ID 则为 'cninfo:{announcementId}'；否则 None.
+        adjunct_url: 官方附件/PDF 下载 URL；无官方字段则为 None，严禁编造公式.
+        content_status: 'hashed' | 'unavailable' | 'not_attempted'.
+        content_sha256: 64-char hex SHA256 (仅 hashed 时有效)；否则 None.
     """
 
     symbol: str
@@ -67,6 +94,27 @@ class CninfoDisclosureRecord:
     cutoff_eligible: bool
     announcement_id: str | None
     canonical_event_id: str | None
+    adjunct_url: str | None = None
+    content_status: str = CONTENT_STATUS_NOT_ATTEMPTED
+    content_sha256: str | None = None
+
+    def qualify_content(
+        self,
+        *,
+        content_bytes: bytes | None = None,
+        fetch_fn: Any | None = None,
+        session: Any | None = None,
+        timeout: float = 10.0,
+        cutoff: str | None = None,
+    ) -> CninfoDisclosureRecord:
+        return qualify_cninfo_content(
+            self,
+            content_bytes=content_bytes,
+            fetch_fn=fetch_fn,
+            session=session,
+            timeout=timeout,
+            cutoff=cutoff,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -159,6 +207,53 @@ def extract_announcement_id(
                 val = qs["announcementId"][0].strip()
                 if val and val.lower() not in ("none", "null", "nan"):
                     return val
+        except Exception:
+            pass
+
+    return None
+
+
+def resolve_adjunct_url(raw_adjunct: Any) -> str | None:
+    """Normalize and resolve raw adjunct URL to full URL without inventing formulas.
+
+    Strict rule: Only accepts non-empty string or official relative path from
+    cninfo hisAnnouncement/query response (e.g. 'finalpage/2026-08-01/123.PDF').
+    Never invents static.cninfo.com.cn/finalpage/... formulas from scratch.
+    """
+    if raw_adjunct is None or pd.isna(raw_adjunct):
+        return None
+    text = str(raw_adjunct).strip()
+    if not text or text.lower() in ("none", "null", "nan", ""):
+        return None
+    if text.startswith(("http://", "https://")):
+        return text
+    # Official relative path from cninfo hisAnnouncement/query e.g. finalpage/2026-08-01/123.PDF
+    if text.startswith("/"):
+        return f"http://static.cninfo.com.cn{text}"
+    return f"http://static.cninfo.com.cn/{text}"
+
+
+def extract_adjunct_url(
+    row: Mapping[str, Any] | pd.Series,
+    url: str | None = None,
+) -> str | None:
+    """Extract official adjunct/PDF URL from row fields or verified direct link.
+
+    Strict rule: Never invents static.cninfo.com.cn/finalpage/... formulas.
+    URL must come from response field (adjunctUrl) or verified attachment in URL.
+    """
+    for col in ("adjunctUrl", "adjunct_url", "pdf_url", "adjunct", "附件链接"):
+        if col in row:
+            val = resolve_adjunct_url(row[col])
+            if val:
+                return val
+
+    # Check if URL itself is a verified direct attachment link ending with PDF
+    if url and isinstance(url, str):
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.path.lower().endswith((".pdf", ".doc", ".docx")):
+                return url
         except Exception:
             pass
 
@@ -294,6 +389,9 @@ def build_cninfo_record(
     announcement_id = extract_announcement_id(row, url=url)
     canonical_event_id = f"cninfo:{announcement_id}" if announcement_id else None
 
+    # Adjunct URL extraction (from row field, never fabricated)
+    adjunct_url = extract_adjunct_url(row, url=url)
+
     # Cutoff eligibility check
     if cutoff is None:
         cutoff_eligible = True
@@ -304,6 +402,16 @@ def build_cninfo_record(
         else:
             cutoff_eligible = False
 
+    # Content status handling
+    raw_status = row.get("content_status", CONTENT_STATUS_NOT_ATTEMPTED) if "content_status" in row else CONTENT_STATUS_NOT_ATTEMPTED
+    status_str = str(raw_status).strip() if raw_status is not None and not pd.isna(raw_status) else CONTENT_STATUS_NOT_ATTEMPTED
+    content_status = status_str if status_str in _VALID_CONTENT_STATUSES else CONTENT_STATUS_NOT_ATTEMPTED
+
+    raw_sha = row.get("content_sha256", None) if "content_sha256" in row else None
+    content_sha256 = str(raw_sha).strip() if raw_sha is not None and not pd.isna(raw_sha) else None
+    if content_status != CONTENT_STATUS_HASHED:
+        content_sha256 = None
+
     return CninfoDisclosureRecord(
         symbol=symbol,
         title=title,
@@ -313,6 +421,9 @@ def build_cninfo_record(
         cutoff_eligible=cutoff_eligible,
         announcement_id=announcement_id,
         canonical_event_id=canonical_event_id,
+        adjunct_url=adjunct_url,
+        content_status=content_status,
+        content_sha256=content_sha256,
     )
 
 
@@ -383,3 +494,134 @@ def parse_cninfo_disclosure_df(
         records=records,
         source_type=source_type,
     )
+
+
+def qualify_cninfo_content(
+    target: CninfoDisclosureRecord | CninfoDisclosureEnvelope,
+    *,
+    record_index: int = 0,
+    content_bytes: bytes | None = None,
+    fetch_fn: Any | None = None,
+    session: Any | None = None,
+    timeout: float = 10.0,
+    cutoff: str | None = None,
+) -> CninfoDisclosureRecord | CninfoDisclosureEnvelope:
+    """Qualify content eligibility for a single announcement/IR record and compute SHA256.
+
+    Strict rules (C-05b):
+    1. Missing native announcementId: canonical_event_id is None, content_status=unavailable,
+       cannot enter hashed.
+    2. Missing adjunct/PDF URL: content_status=unavailable; never invents static.cninfo URL formulas.
+    3. announced_at > cutoff: content_status=unavailable.
+    4. 403 / Timeout / HTTP non-2xx / KeyError: content_status=unavailable, never confirmed_empty.
+    5. Non-PDF bytes (missing %PDF magic header): content_status=unavailable.
+    6. Valid %PDF bytes + announcementId + adjunctUrl: content_status=hashed,
+       content_sha256=hashlib.sha256(bytes).hexdigest() (64 hex characters).
+    7. content_bytes are NEVER stored in record, logs, or prompt.
+    """
+    if isinstance(target, CninfoDisclosureEnvelope):
+        if target.records and 0 <= record_index < len(target.records):
+            qualify_cninfo_content(
+                target.records[record_index],
+                content_bytes=content_bytes,
+                fetch_fn=fetch_fn,
+                session=session,
+                timeout=timeout,
+                cutoff=cutoff,
+            )
+        return target
+
+    record = target
+
+    # Rule 1: Missing native announcementId
+    if not record.announcement_id or not record.canonical_event_id:
+        record.content_status = CONTENT_STATUS_UNAVAILABLE
+        record.content_sha256 = None
+        return record
+
+    # Rule 2: Cutoff eligibility
+    effective_cutoff = cutoff
+    if effective_cutoff is not None:
+        cutoff_dt = parse_cutoff_datetime(effective_cutoff)
+        announced_dt, _ = parse_announced_at(record.announced_at)
+        if cutoff_dt is not None and announced_dt is not None:
+            if announced_dt > cutoff_dt:
+                record.cutoff_eligible = False
+                record.content_status = CONTENT_STATUS_UNAVAILABLE
+                record.content_sha256 = None
+                return record
+    elif not record.cutoff_eligible:
+        record.content_status = CONTENT_STATUS_UNAVAILABLE
+        record.content_sha256 = None
+        return record
+
+    # Rule 3: Missing adjunct_url (no formula fabrication)
+    if not record.adjunct_url:
+        record.content_status = CONTENT_STATUS_UNAVAILABLE
+        record.content_sha256 = None
+        return record
+
+    # Rule 4: Fetch bytes
+    raw_bytes: bytes | None = None
+    if content_bytes is not None:
+        raw_bytes = content_bytes
+    elif fetch_fn is not None:
+        try:
+            raw_bytes = fetch_fn(record.adjunct_url)
+        except Exception as exc:
+            logger.warning(
+                "PDF fetch_fn failed (%s: %s) for url=%s",
+                type(exc).__name__,
+                exc,
+                record.adjunct_url,
+            )
+            record.content_status = CONTENT_STATUS_UNAVAILABLE
+            record.content_sha256 = None
+            return record
+    else:
+        try:
+            import requests
+            s = session or requests
+            resp = s.get(
+                record.adjunct_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=timeout,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "PDF download returned HTTP %s for url=%s",
+                    resp.status_code,
+                    record.adjunct_url,
+                )
+                record.content_status = CONTENT_STATUS_UNAVAILABLE
+                record.content_sha256 = None
+                return record
+            raw_bytes = resp.content
+        except Exception as exc:
+            logger.warning(
+                "PDF download failed (%s: %s) for url=%s",
+                type(exc).__name__,
+                exc,
+                record.adjunct_url,
+            )
+            record.content_status = CONTENT_STATUS_UNAVAILABLE
+            record.content_sha256 = None
+            return record
+
+    # Rule 5: Non-PDF check (magic header %PDF)
+    if not raw_bytes or not raw_bytes.startswith(b"%PDF"):
+        logger.warning(
+            "Content for url=%s does not start with magic %%PDF",
+            record.adjunct_url,
+        )
+        record.content_status = CONTENT_STATUS_UNAVAILABLE
+        record.content_sha256 = None
+        return record
+
+    # Rule 6: Success -> hashed, sha256 64-hex
+    record.content_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    record.content_status = CONTENT_STATUS_HASHED
+    return record
+
+
+qualify_and_hash_cninfo_content = qualify_cninfo_content
