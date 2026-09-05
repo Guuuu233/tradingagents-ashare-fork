@@ -48,10 +48,12 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.dataflows.interface import _registry, route_to_vendor
 from tradingagents.dataflows.cninfo_disclosure import (
     CninfoDisclosureEnvelope,
+    CONTENT_STATUS_UNAVAILABLE,
     STATUS_OK,
     STATUS_PROVIDER_FAILURE,
     SOURCE_TYPE_ANNOUNCEMENT,
     SOURCE_TYPE_IR_SURVEY,
+    qualify_cninfo_content,
 )
 from tradingagents.dataflows.fund_flow_evidence import (
     build_gap_meta,
@@ -1890,6 +1892,34 @@ def _fetch_all(
             error=str(ir_val) if ir_val else "cninfo_ir_surveys unavailable",
             source_type=SOURCE_TYPE_IR_SURVEY,
         )
+
+    # ── 对巨潮 envelope 调用 qualify_cninfo_content (C-05 Slice 9) ──
+    cn_provider = cn_provider or _registry.get("cn_akshare")
+    for key in ("cninfo_announcements", "cninfo_ir_surveys"):
+        env = results.get(key)
+        if (
+            env is not None
+            and hasattr(env, "status")
+            and env.status != STATUS_PROVIDER_FAILURE
+            and hasattr(env, "records")
+            and isinstance(env.records, list)
+        ):
+            qualify_fn = (
+                getattr(cn_provider, "qualify_cninfo_content", None)
+                if cn_provider is not None
+                else None
+            ) or qualify_cninfo_content
+            for i, rec in enumerate(env.records):
+                try:
+                    qualified = qualify_fn(rec, cutoff=norm_trade_date)
+                    if qualified is not None:
+                        env.records[i] = qualified
+                except Exception as exc:
+                    logger.warning("qualify_cninfo_content 异常 (%s): %s", key, exc)
+                    if hasattr(rec, "content_status"):
+                        rec.content_status = CONTENT_STATUS_UNAVAILABLE
+                    if hasattr(rec, "content_sha256"):
+                        rec.content_sha256 = None
 
     # ── 产业链数据层采集 (MVP: 消费电子 / 新能源车 / 27 行业) ─────────────
     industry = _map_stock_to_industry(ticker)
