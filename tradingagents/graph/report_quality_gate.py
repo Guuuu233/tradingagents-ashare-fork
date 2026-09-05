@@ -637,6 +637,7 @@ INDETERMINATE_OR_UNAVAILABLE_MARKERS = (
     "样本不足",
     "覆盖不足",
     "不可用",
+    "未采集",
     "【数据缺失】",
     "【数据获取失败】",
     "数据缺失",
@@ -647,6 +648,118 @@ INDETERMINATE_OR_UNAVAILABLE_MARKERS = (
     "中性观察",
     "保持中性",
 )
+
+# Semantic lock markers required when social data is unavailable / direction not allowed
+SOCIAL_GAP_SEMANTIC_LOCK_MARKERS = (
+    "不可用",
+    "未采集",
+    "样本不足",
+    "数据不足",
+    "不可判断",
+    "覆盖不足",
+    "【数据缺失】",
+    "【数据获取失败】",
+    "数据缺失",
+    "数据获取失败",
+    "暂无数据",
+    "未获取到",
+    "无数据",
+    "not_applicable",
+    "方向未解锁",
+    "方向不可判断",
+)
+
+# Negation and rule markers: statements with these are disclaimers or rule warnings, not factual claims
+_RULE_OR_NEGATION_MARKERS = (
+    "严禁",
+    "禁止",
+    "不得",
+    "不能",
+    "不代表",
+    "不等于",
+    "并非",
+    "不应",
+    "不要",
+    "并不",
+    "非",
+    "避免",
+    "未形成",
+    "警惕",
+    "并非意味着",
+    "免责",
+    "提示",
+    "警告",
+    "声明",
+)
+
+# Patterns that improperly assert market state/facts from missing social data
+_FORBIDDEN_GAP_FACT_PATTERNS = [
+    # 市场/散户没有讨论、讨论真空、讨论氛围完全冷却
+    re.compile(r"(?:没有讨论|无讨论|缺乏讨论|无人讨论|讨论真空|关注度真空|舆情真空)"),
+    re.compile(r"(?:讨论氛围|讨论环境|讨论状态).{0,10}(?:处于|陷入|表现为|为).{0,10}(?:完全冷却|冷却|真空|极低活跃度)"),
+    re.compile(r"(?:散户|零售端|大众投资者|市场).{0,15}(?:讨论处于极低活跃度|讨论氛围处于完全冷却|缺乏自发性的情绪共振|没有讨论|无讨论|无人关注)"),
+    # 市场冷淡、处于冷淡期/沉寂期/休眠期
+    re.compile(r"(?:处于|陷入|表现为|定性为|归为).{0,10}(?:冷淡|真空|休眠期|沉寂期|冷淡期|完全冷却)"),
+    re.compile(r"(?:标的|社交端|舆情端|情绪层面|情绪现状|社交情绪).{0,15}(?:维持冷淡|处于冷淡|处于真空|处于休眠|处于沉寂)"),
+    re.compile(r"(?:冷淡/关注度真空|冷淡/休眠期|无关注度/冷淡沉寂期)"),
+    # 无人关注、无关注度作为事实
+    re.compile(r"(?:无人关注|缺乏关注度|无关注度)"),
+    # 经分析得出的中性
+    re.compile(r"(?:经分析得出的中性|分析表明散户态度中性|散户多空情绪平衡处于中性)"),
+]
+
+# Patterns where social is improperly used as directional evidence when unavailable
+_FORBIDDEN_DIRECTIONAL_PATTERNS = [
+    re.compile(r"(?:社交|舆情|散户情绪|讨论热度).{0,15}(?:构成|作为|提供|形成|支持).{0,10}(?:看多|看空|偏多|偏空|利多|利空|买入|卖出).{0,10}(?:证据|依据|支撑|动能|信号)"),
+    re.compile(r"(?:社交|舆情|散户).{0,10}(?:看多|看空|偏多|偏空|利多|利空).{0,10}(?:信号|评级|结论|走势)"),
+]
+
+
+def check_forbidden_social_gap_claims(text: str) -> List[str]:
+    """Identify statements that improperly turn data gaps into market facts without negation."""
+    if not text or not isinstance(text, str):
+        return []
+    sentences = re.split(r"[。！？\n；;]+", text)
+    violations: List[str] = []
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        for p in _FORBIDDEN_GAP_FACT_PATTERNS:
+            if p.search(s_clean):
+                if not any(neg in s_clean for neg in _RULE_OR_NEGATION_MARKERS):
+                    violations.append(s_clean)
+                    break
+    return violations
+
+
+def check_forbidden_social_directional_claims(text: str) -> List[str]:
+    """Identify statements using social sentiment as directional evidence without negation."""
+    if not text or not isinstance(text, str):
+        return []
+    sentences = re.split(r"[。！？\n；;]+", text)
+    violations: List[str] = []
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+        for p in _FORBIDDEN_DIRECTIONAL_PATTERNS:
+            if p.search(s_clean):
+                if not any(neg in s_clean for neg in _RULE_OR_NEGATION_MARKERS):
+                    violations.append(s_clean)
+                    break
+    # Also check machine verdict in text
+    verdict_match = re.search(r'<!--\s*VERDICT:\s*(\{[^}]+\})\s*-->', text)
+    if verdict_match:
+        try:
+            import json
+            v_data = json.loads(verdict_match.group(1))
+            v_dir = str(v_data.get("direction", "")).strip()
+            if v_dir in ("看多", "偏多", "看空", "偏空", "BULLISH", "LEAN_BULLISH", "BEARISH", "LEAN_BEARISH"):
+                violations.append(f"machine verdict direction='{v_dir}'")
+        except Exception:
+            pass
+    return violations
 
 
 def evaluate_social_depth(
@@ -662,6 +775,9 @@ def evaluate_social_depth(
     - In active mode when social data is insufficient, empty, failed, timeout, refused, or direction_allowed=False:
       Requires the report text to contain indeterminate / unavailable / missing markers ("不可判断", "数据不足", etc.).
       Does NOT force quantitative directional metrics (e.g. bullish/bearish score or probability).
+    - When social data is unavailable or direction_allowed=False (across all modes):
+      Strictly enforces that data gap is NOT misinterpreted as market facts (coldness, no discussion, vacuum)
+      and social sentiment is NOT used as directional evidence.
     - In active mode when social data is available and direction_allowed=True:
       Evaluates 4-segment coverage: data status, sentiment/opinions, attention/heat, reflexivity/lifecycle.
     """
@@ -691,37 +807,58 @@ def evaluate_social_depth(
             status = str(s_ctx.get("status", "not_applicable")).lower()
             direction_allowed = bool(s_ctx.get("direction_allowed", False))
 
-    # In disabled or shadow mode (or not_applicable when not active): basic validity check
-    if mode in ("disabled", "shadow") or (status == "not_applicable" and mode != "active"):
-        has_sentiment = bool(
-            re.search(
-                r"(?:情绪|舆情|情绪面|市场情绪|关注度|热度|散户|观点|偏多|偏空|看多|看空|中性|分歧|乐观|悲观|恐慌|贪婪|新闻|数据)",
-                t,
-            )
-        )
-        has_missing = _has_explicit_missing(t) or any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS)
-        if not (has_sentiment or has_missing):
-            failed_dims.append("sentiment_content_missing")
-            return False, 0.0, failed_dims, "sentiment报告正文缺少有效情绪分析或数据说明"
-        return True, 1.0, [], ""
-
-    # Active mode:
     is_insufficient_state = (
         not direction_allowed
         or status in ("insufficient", "empty", "failed", "timeout", "refused", "not_applicable")
     )
 
     if is_insufficient_state:
-        # Insufficient / disallowed direction in active mode:
-        # Must acknowledge insufficiency or indeterminate status
-        has_indeterminate = any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS) or _has_explicit_missing(t)
-        if not has_indeterminate:
-            failed_dims.append("indeterminate_or_missing_marker")
+        # 1. Anti-fabrication check: gap cannot be turned into market facts
+        gap_fact_violations = check_forbidden_social_gap_claims(t)
+        if gap_fact_violations:
+            failed_dims.append("gap_misinterpreted_as_market_fact")
 
-        # Do NOT force directional quantification metrics
+        # 2. Directional guard check: social cannot be directional evidence
+        directional_violations = check_forbidden_social_directional_claims(t)
+        if directional_violations:
+            failed_dims.append("social_used_as_directional_evidence")
+
+        # 3. Semantic lock check
+        is_explicit_social_report = any(
+            kw in t for kw in ("社交", "舆情", "小红书", "抖音", "归档状态", "not_applicable", "direction_allowed")
+        )
+        if mode == "active" or is_explicit_social_report:
+            has_indeterminate = (
+                any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS)
+                or any(m in t for m in SOCIAL_GAP_SEMANTIC_LOCK_MARKERS)
+                or _has_explicit_missing(t)
+            )
+            if not has_indeterminate:
+                failed_dims.append("indeterminate_or_missing_marker")
+        else:
+            # Legacy disabled/shadow proxy report without explicit social sections
+            has_sentiment = bool(
+                re.search(
+                    r"(?:情绪|舆情|情绪面|市场情绪|关注度|热度|散户|观点|偏多|偏空|看多|看空|中性|分歧|乐观|悲观|恐慌|贪婪|新闻|数据)",
+                    t,
+                )
+            )
+            has_missing = _has_explicit_missing(t) or any(m in t for m in INDETERMINATE_OR_UNAVAILABLE_MARKERS)
+            if not (has_sentiment or has_missing):
+                failed_dims.append("sentiment_content_missing")
+
         passed = len(failed_dims) == 0
         score = 1.0 if passed else 0.0
-        reason_str = "social深度不足：社交数据不足或不可用时，正文必须包含不可判断/数据不足/不可用或数据缺失标记" if not passed else ""
+        reasons: List[str] = []
+        if "gap_misinterpreted_as_market_fact" in failed_dims:
+            reasons.append(f"社交数据不可用时，正文违规将缺口推导为市场事实（如市场冷淡/真空/无讨论，{len(gap_fact_violations)}处违规）")
+        if "social_used_as_directional_evidence" in failed_dims:
+            reasons.append(f"社交数据不可用时，违规将社交作为方向性证据或输出方向性verdict（{len(directional_violations)}处违规）")
+        if "indeterminate_or_missing_marker" in failed_dims:
+            reasons.append("社交数据不足或不可用时，正文必须包含不可判断/数据不足/不可用/未采集或数据缺失标记")
+        if "sentiment_content_missing" in failed_dims:
+            reasons.append("sentiment报告正文缺少有效情绪分析或数据说明")
+        reason_str = f"social深度不足：{'；'.join(reasons)}" if not passed else ""
         return passed, score, failed_dims, reason_str
 
     # Available & direction_allowed mode: 4 dimensions

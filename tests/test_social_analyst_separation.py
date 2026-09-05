@@ -495,3 +495,75 @@ def test_adapter_and_formatter_cutoff_and_reason_code_l1():
     )
     assert "截断时间 unknown" in formatted_unknown
 
+
+# ============================================================================
+# 5. DAV-649 / Track B-1 Semantic Gap & Market Coldness Tests
+# ============================================================================
+
+
+def test_prompt_formatter_gap_semantics_unavailable_not_market_cold():
+    """DAV-649: When social data is unavailable / direction not allowed, prompt enforces
+    unavailable != market coldness, independent market attention columns, and anti-hallucination."""
+    formatted = format_social_sections(
+        bundle={"status": "not_applicable", "direction_allowed": False},
+        market_attention={
+            "zt_pool": {"status": "available", "as_of": "2026-08-27", "raw": "连板最高6板"},
+            "hot_stocks": {"status": "refused", "gap": "数据源拒绝"},
+        },
+        ticker_display="601012 (隆基绿能)",
+        current_date="2026-08-27",
+        direction_allowed=False,
+    )
+
+    # 1. Section 1 must enforce unavailable != market coldness and semantic lock
+    assert "【一、数据状态与数据源有效性】" in formatted
+    assert "【社交方向不可判断】" in formatted
+    assert "不可用 ≠ 市场冷淡" in formatted
+    assert "严禁将数据不可用、未采集、样本不足或接口关闭推导为「市场冷淡」、「无人关注」、「散户没有讨论」、「讨论真空」" in formatted
+    assert "不进入有效中性票或校准样本" in formatted
+
+    # 2. Section 2 must indicate data unavailable, forbidding interpreting as blank retail stance
+    assert "【二、社交观点与立场解构】" in formatted
+    assert "严禁主观推断散户观点为空白或市场无多空分歧" in formatted
+
+    # 3. Section 3 must indicate volume unavailable, forbidding interpreting as zero retail interest
+    assert "【三、社交热度与互动特征】" in formatted
+    assert "严禁将数据缺失解释为「讨论热度为零」、「市场冷淡」、「无人讨论」或「处于冷淡真空期」" in formatted
+
+    # 4. Section 4 must be independently columns and forbid masquerading as social media
+    assert "【四、市场关注度（盘面与榜单生态）】" in formatted
+    assert "【分栏独立声明】" in formatted
+    assert "严禁冒充社交正文" in formatted
+
+
+def test_social_analyst_trace_records_unavailable_key_finding_when_direction_disallowed():
+    """DAV-649: When direction_allowed=False, analyst trace explicitly records unavailable key_finding."""
+    collector = DataCollector()
+    collector._cache["601012_2026-08-27"] = {
+        "social_data_context": {
+            "status": "not_applicable",
+            "mode": "disabled",
+            "requested_as_of": "2026-08-27",
+            "direction_allowed": False,
+            "reason_codes": ["social_not_applicable"],
+            "bundle": None,
+            "source_provenance": {},
+            "data_failure_ledger": [],
+        },
+    }
+
+    mock_llm = CaptureLLM(response_text='【报告正文】数据不可用。\n<!-- VERDICT: {"direction": "中性", "reason": "不可用"} -->')
+    node = create_social_media_analyst(mock_llm, collector)
+
+    state = {
+        "trade_date": "2026-08-27",
+        "company_of_interest": "601012",
+        "mode": "disabled",
+    }
+
+    result = asyncio.run(node(state))
+    trace = result["analyst_traces"][0]
+    assert trace["direction_allowed"] is False
+    assert trace["verdict"] == "中性"
+    assert "（社交数据不可用/方向不可判断）" in trace["key_finding"]
+

@@ -155,12 +155,17 @@ def create_social_media_analyst(llm, data_collector=None):
             degraded=full_content.endswith("本项不可用"),
         )
         verdict, confidence = extract_verdict(full_content)
+        key_finding = (
+            f"舆情分析结论：{verdict}（社交数据不可用/方向不可判断）"
+            if not resolved.direction_allowed
+            else f"舆情分析结论：{verdict}"
+        )
 
         trace_item: TraceItem = {
             "agent": "social_media_analyst",
             "horizon": horizon,
             "data_window": "7天",
-            "key_finding": f"舆情分析结论：{verdict}",
+            "key_finding": key_finding,
             "verdict": verdict,
             "confidence": confidence,
             "source_status": resolved.source_status,

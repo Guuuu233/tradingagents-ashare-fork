@@ -305,6 +305,20 @@ def test_social_system_message_deep_framework():
     # 3. 深度分析框架要素：反身性、极值、持续性判断、生命周期
     assert any(term in prompt for term in ("反身性", "极值", "极度贪婪", "极度恐惧"))
     assert any(term in prompt for term in ("持续性判断", "扩散路径", "生命周期"))
+    # 4. DAV-649 / Track B-1 核心语义：不可用 ≠ 市场冷淡、独立分栏与不得冒充社交正文
+    assert "不可用 ≠ 市场冷淡" in prompt or "不可用不代表市场冷淡" in prompt
+    assert "严禁将数据缺口" in prompt and any(term in prompt for term in ("市场冷淡", "无人关注", "散户没有讨论", "讨论真空"))
+    assert "市场关注度独立分栏" in prompt or "不得冒充社交正文" in prompt
+    assert "direction_allowed=false" in prompt
+
+
+def test_social_system_message_en_gap_semantics():
+    """DAV-649: EN social_system_message enforces data unavailable != market indifference and separation."""
+    prompt = EN_PROMPTS["social_system_message"]
+    assert "Data Unavailable != Market Indifference" in prompt
+    assert "market indifference" in prompt or "discussion vacuum" in prompt
+    assert "Market Attention Separation" in prompt
+    assert "NEUTRAL" in prompt
 
 
 def test_market_system_message_deep_framework():

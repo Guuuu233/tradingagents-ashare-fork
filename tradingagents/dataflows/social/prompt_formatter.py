@@ -117,8 +117,11 @@ def format_social_sections(
 
     if not direction_allowed or bundle_status != "available":
         status_lines.append(
-            "【社交方向不可判断】社交归档数据覆盖不足、为空或不可用。根据系统硬约束，"
-            "禁止主观推断或编造看多/看空方向，分析结论必须判定为中性。"
+            "【社交方向不可判断】社交归档数据处于不可用/未采集/样本不足状态"
+            f"（社交归档状态：{bundle_status}，direction_allowed=False）。\n"
+            "【核心语义铁律（不可用 ≠ 市场冷淡）】：\n"
+            "1. 严禁将数据不可用、未采集、样本不足或接口关闭推导为「市场冷淡」、「无人关注」、「散户没有讨论」、「讨论真空」或「处于休眠/沉寂期」等市场事实！数据缺失仅代表采集与系统归档状态，绝不等于市场真实情绪冷淡。\n"
+            "2. 社交方向不可判断：因社交数据不可用，无法进行实质多空分析，社交不得作为方向性证据；机器结论兼容保留「中性（不可判断）」，但严禁当作经分析得出的实质中性观点，该中性不进入有效中性票或校准样本。"
         )
 
     status_lines.append(
@@ -166,7 +169,12 @@ def format_social_sections(
     else:
         sentiment_lines.append("- 典型社交正文与评论样本：无可用样本")
 
-    if not direction_allowed:
+    if not direction_allowed or bundle_status != "available":
+        sentiment_lines.append(
+            "【语义提示】由于社交数据不可用/未采集/方向未解锁，严禁主观推断散户观点为空白或市场无多空分歧，"
+            "正文必须如实说明数据不可用/未采集，禁止将数据缺失编造为市场事实，不得作为多空方向依据。"
+        )
+    elif not direction_allowed:
         sentiment_lines.append("【提示】由于方向判断未解锁，上述样本仅供背景参考，不得作为多空方向依据。")
 
     section_2_text = "\n".join(sentiment_lines)
@@ -179,13 +187,22 @@ def format_social_sections(
     vel = attention_dict.get("interaction_velocity")
     vel_str = f"{vel:.2f}/小时" if vel is not None else "无/未统计"
 
-    attention_lines = [
-        "【三、社交热度与互动特征】",
-        f"- 讨论样本量：发帖数 {p_cnt} | 评论数 {c_cnt} | 独立作者数 {a_cnt}",
-        f"- 互动总量（点赞/收藏/分享）：{tot_inter}",
-        f"- 互动扩散速度：{vel_str}",
-        "【重要提示】社交热度仅衡量注意力与讨论活跃度，热度≠看多。严禁将热度高直接视为看多信号！",
-    ]
+    if not direction_allowed or bundle_status != "available":
+        attention_lines = [
+            "【三、社交热度与互动特征】",
+            f"- 讨论样本量：发帖数 {p_cnt} | 评论数 {c_cnt} | 独立作者数 {a_cnt}（数据不可用/未采集/样本不足）",
+            f"- 互动总量（点赞/收藏/分享）：{tot_inter}（无有效统计）",
+            f"- 互动扩散速度：{vel_str}",
+            "【重要提示】当前社交热度数据处于不可用/未采集状态，严禁将数据缺失解释为「讨论热度为零」、「市场冷淡」、「无人讨论」或「处于冷淡真空期」！热度≠看多。严禁将热度高直接视为看多信号！",
+        ]
+    else:
+        attention_lines = [
+            "【三、社交热度与互动特征】",
+            f"- 讨论样本量：发帖数 {p_cnt} | 评论数 {c_cnt} | 独立作者数 {a_cnt}",
+            f"- 互动总量（点赞/收藏/分享）：{tot_inter}",
+            f"- 互动扩散速度：{vel_str}",
+            "【重要提示】社交热度仅衡量注意力与讨论活跃度，热度≠看多。严禁将热度高直接视为看多信号！",
+        ]
     section_3_text = "\n".join(attention_lines)
 
     # ── Section 4: 【市场关注度】 ─────────────────────────────────────
@@ -226,7 +243,7 @@ def format_social_sections(
         mkt_lines.append("【涨停池与热门股票数据】\n无市场关注度数据")
 
     mkt_lines.append(
-        "\n【重要提示】市场关注度数据源自涨停池连板生态与雪球热门榜，反映短线交易资金聚焦度，禁止据此主观推断散户多空情绪。"
+        "\n【分栏独立声明】市场关注度数据源自涨停池连板生态与雪球热门榜，反映短线交易资金聚焦度，已在此独立分栏并注明来源；严禁冒充社交正文，严禁在社交数据不可用时用市场关注度倒推散户讨论事实，禁止据此主观推断散户多空情绪偏好。"
     )
     section_4_text = "\n".join(mkt_lines)
 
