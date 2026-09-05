@@ -289,6 +289,15 @@ _TUSHARE_REPURCHASE_REQUIRED_FIELDS = (
     "high_limit",
     "low_limit",
 )
+_TUSHARE_DISCLOSURE_DATE_API = "disclosure_date"
+_TUSHARE_DISCLOSURE_DATE_REQUIRED_FIELDS = (
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "pre_date",
+    "actual_date",
+    "modify_date",
+)
 _TUSHARE_DC_SOURCE = "tushare_eastmoney_moneyflow_dc"
 _TUSHARE_THS_SOURCE = "tushare_ths_moneyflow_ths"
 _TUSHARE_DC_FIELD_SEMANTICS = "今日主力净流入额（万元）"
@@ -317,6 +326,9 @@ _TUSHARE_REQUEST_FIELDS = {
     ),
     _TUSHARE_REPURCHASE_API: (
         "ts_code,ann_date,end_date,proc,exp_date,vol,amount,high_limit,low_limit"
+    ),
+    _TUSHARE_DISCLOSURE_DATE_API: (
+        "ts_code,ann_date,end_date,pre_date,actual_date,modify_date"
     ),
 }
 _TUSHARE_COMPONENT_FIELDS = {
@@ -3443,6 +3455,306 @@ class CnAkshareProvider(BaseMarketDataProvider):
             return (
                 [],
                 self._tushare_error(_TUSHARE_REPURCHASE_API, "collateral_empty"),
+                "collateral_empty",
+            )
+
+        records.sort(key=lambda r: str(r.get("ann_date") or ""), reverse=True)
+        return records, None, None
+
+    def _fetch_tushare_disclosure_date(
+        self,
+        symbol: str,
+        as_of: str | None = None,
+        end_date: str | None = None,
+        pre_date: str | None = None,
+        actual_date: str | None = None,
+        ann_date: str | None = None,
+    ) -> tuple[list[dict], str | None, str | None]:
+        """Fetch structured disclosure_date (财报披露计划) collateral records via Tushare transport.
+
+        Enforces contract (C-05 Slice 4 / DAV-644):
+        1. PIT boundary guard: rows with ann_date > as_of are discarded. Strictly forbids
+           using end_date, pre_date, actual_date, or modify_date for truncation.
+        2. actual_date is preserved as a collateral field as-is (if present in row);
+           strictly forbidden from deciding historical visibility or PIT.
+        3. Column access by name (no iloc); missing ann_date in schema -> schema_drift/missing_field.
+           Schema drift check must occur before checking items emptiness (empty table cannot mask missing columns).
+        4. 403/token_missing -> provider_failure; 0 rows -> collateral_empty (text must never contain "确认无公告").
+        5. canonical_event_id is ALWAYS None (strictly forbids inventing cninfo ID).
+        6. Fields extracted by column name: ts_code, ann_date, end_date, pre_date, actual_date, modify_date
+           (missing columns typed as None / typed missing, strictly forbids inventing values).
+        7. Reuses existing _tushare_post without creating a new HTTP client.
+
+        Returns:
+            (records, error_str, failure_category)
+            - records: list of dicts containing disclosure_date collateral fields by name,
+                       with canonical_event_id=None, or [] on failure/empty.
+            - error_str: typed error string formatted as tushare.disclosure_date:<category>(detail)
+            - failure_category: category slug (provider_failure, collateral_empty,
+                                schema_drift, json_shape, validation, etc.)
+        """
+        # 1. PIT as_of normalization & validation
+        norm_as_of = None
+        if as_of:
+            norm_as_of = self._tushare_date(as_of)
+            if not norm_as_of:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "as_of"),
+                    "validation",
+                )
+
+        # 2. Token check (must not make network call if token is missing; maps to provider_failure)
+        token = os.getenv("TUSHARE_TOKEN", "").strip()
+        if not token:
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_DISCLOSURE_DATE_API, "provider_failure", "token_missing"
+                ),
+                "provider_failure",
+            )
+
+        # 3. Symbol conversion
+        try:
+            ts_code = self._tushare_ts_code(symbol)
+        except (ValueError, Exception):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "symbol"),
+                "validation",
+            )
+
+        # 4. Build request parameters and call gateway via existing _tushare_post
+        params = {"ts_code": ts_code}
+        if end_date:
+            norm_end = self._tushare_date(end_date)
+            if not norm_end:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "end_date"),
+                    "validation",
+                )
+            params["end_date"] = norm_end.replace("-", "")
+        if pre_date:
+            norm_pre = self._tushare_date(pre_date)
+            if not norm_pre:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "pre_date"),
+                    "validation",
+                )
+            params["pre_date"] = norm_pre.replace("-", "")
+        if actual_date:
+            norm_actual = self._tushare_date(actual_date)
+            if not norm_actual:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "actual_date"),
+                    "validation",
+                )
+            params["actual_date"] = norm_actual.replace("-", "")
+        if ann_date:
+            norm_ann = self._tushare_date(ann_date)
+            if not norm_ann:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "validation", "ann_date"),
+                    "validation",
+                )
+            params["ann_date"] = norm_ann.replace("-", "")
+
+        payload, error, category = self._tushare_post(
+            _TUSHARE_DISCLOSURE_DATE_API, token, ts_code, params=params
+        )
+        if error:
+            if category == "permission_denied" or "403" in str(error) or "403" in str(category):
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_DISCLOSURE_DATE_API, "provider_failure", "403_forbidden"
+                    ),
+                    "provider_failure",
+                )
+            return [], error, category
+
+        if not isinstance(payload, dict):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "json_shape"),
+                "json_shape",
+            )
+
+        # 5. Business code check (permission and token errors map to provider_failure per §4.1)
+        code = payload.get("code")
+        try:
+            code_value = int(code)
+        except (TypeError, ValueError):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "api_code_invalid"),
+                "api_code_invalid",
+            )
+        if code_value != 0:
+            msg_lower = str(payload.get("msg") or "").lower()
+            is_perm_or_token = (
+                code_value in (2001, 2002, 40101, 40102, 40103)
+                or any(k in msg_lower for k in ("权限", "permission", "unauthor", "403", "token"))
+            )
+            cat = self._tushare_api_failure_category(code, payload.get("msg"))
+            if cat == "permission_denied" or is_perm_or_token:
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_DISCLOSURE_DATE_API,
+                        "provider_failure",
+                        f"permission_denied:code={code}",
+                    ),
+                    "provider_failure",
+                )
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, cat, f"code={code}"),
+                cat,
+            )
+
+        # 6. Response structure check
+        if "data" not in payload:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "json_shape", "data_missing"),
+                "json_shape",
+            )
+        data = payload.get("data")
+        if data is None:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "collateral_empty"),
+                "collateral_empty",
+            )
+        if not isinstance(data, dict):
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_DISCLOSURE_DATE_API, "json_shape", "data_not_object"
+                ),
+                "json_shape",
+            )
+        fields = data.get("fields")
+        items = data.get("items")
+        if not isinstance(fields, (list, tuple)):
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_DISCLOSURE_DATE_API, "json_shape", "fields_not_list"
+                ),
+                "json_shape",
+            )
+        if not isinstance(items, (list, tuple)):
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_DISCLOSURE_DATE_API, "json_shape", "items_not_list"
+                ),
+                "json_shape",
+            )
+
+        # 7. Required fields check (by name, not by index; 缺 ann_date -> schema_drift/missing_field)
+        # Check schema before checking items emptiness, preventing schema drift from masquerading as empty result
+        field_names = [str(f) for f in fields]
+        if "ann_date" not in field_names:
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_DISCLOSURE_DATE_API, "schema_drift", "missing_field:ann_date"
+                ),
+                "schema_drift",
+            )
+        if not items:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "collateral_empty"),
+                "collateral_empty",
+            )
+
+        # 8. Row extraction by column names (no iloc) & PIT filtering (ann_date <= as_of)
+        records: list[dict] = []
+        for item in items:
+            if isinstance(item, dict):
+                raw_row = dict(item)
+            elif isinstance(item, (list, tuple)) and len(item) >= len(field_names):
+                raw_row = dict(zip(field_names, item))
+            else:
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_DISCLOSURE_DATE_API, "schema_drift", "malformed_row"
+                    ),
+                    "schema_drift",
+                )
+
+            row_ann_date_raw = raw_row.get("ann_date")
+            if not row_ann_date_raw:
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_DISCLOSURE_DATE_API, "schema_drift", "missing_field:ann_date"
+                    ),
+                    "schema_drift",
+                )
+            norm_ann_date = self._tushare_date(row_ann_date_raw)
+            if not norm_ann_date:
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_DISCLOSURE_DATE_API, "schema_drift", "invalid_date:ann_date"
+                    ),
+                    "schema_drift",
+                )
+
+            # PIT boundary check: discard row if ann_date > as_of
+            # Strictly forbidden: never truncate with end_date, pre_date, actual_date, or modify_date!
+            if norm_as_of and norm_ann_date > norm_as_of:
+                continue
+
+            row_ts_code = str(raw_row.get("ts_code") or "").strip()
+            if row_ts_code and row_ts_code != ts_code:
+                continue
+
+            row_end_date = str(raw_row.get("end_date") or "").strip()
+            pre_date = raw_row.get("pre_date")
+            actual_date = raw_row.get("actual_date")
+            modify_date = raw_row.get("modify_date")
+
+            collateral_id = f"tushare:disclosure_date:{row_ts_code or ts_code}:{norm_ann_date}"
+            if row_end_date:
+                collateral_id = f"{collateral_id}:{row_end_date}"
+
+            # Contract 5: canonical_event_id MUST be None (strictly forbids inventing cninfo ID)
+            record = {
+                "canonical_event_id": None,
+                "collateral_id": collateral_id,
+                "source_type": "tushare_disclosure_date",
+                "symbol": symbol,
+                "ts_code": row_ts_code or ts_code,
+                "ann_date": norm_ann_date,
+                "end_date": row_end_date,
+                "pre_date": pre_date,
+                "actual_date": actual_date,
+                "modify_date": modify_date,
+                "payload": {
+                    "end_date": row_end_date,
+                    "pre_date": pre_date,
+                    "actual_date": actual_date,
+                    "modify_date": modify_date,
+                },
+            }
+            records.append(record)
+
+        if not records:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_DISCLOSURE_DATE_API, "collateral_empty"),
                 "collateral_empty",
             )
 
