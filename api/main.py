@@ -87,6 +87,20 @@ from tradingagents.graph.intent_parser import parse_intent as _parse_intent
 from tradingagents.agents.utils.context_utils import USER_CONTEXT_KEYS, normalize_user_context
 from tradingagents.agents.utils.agent_states import current_tracker_var, get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
+from tradingagents.graph.horizon_profile import (
+    HORIZON_PROFILE_V1,
+    HORIZON_SHORT,
+    HORIZON_MEDIUM,
+    RESOLUTION_SOURCE_DEFAULT,
+    RESOLUTION_SOURCE_EXPLICIT,
+    SUPPORTED_HORIZONS,
+    T_PLUS_10,
+    T_PLUS_40,
+    HorizonResolution,
+    horizon_profile_v1,
+    resolve_analysis_horizons,
+    _HORIZONS_UNSET,
+)
 
 
 def _cors_allow_origins() -> list[str]:
@@ -1077,44 +1091,20 @@ def _get_horizon_analysts(horizon: str, available: List[str]) -> List[str]:
     return list(available)
 
 
-_SUPPORTED_ANALYSIS_HORIZONS = ("short", "medium")
-_DUAL_HORIZON_QUERY_RE = re.compile(
-    r"(?:短线|短期).{0,16}(?:中线|中期)|(?:中线|中期).{0,16}(?:短线|短期)"
-    r"|short(?:[- ]term)?.{0,24}medium(?:[- ]term)?"
-    r"|medium(?:[- ]term)?.{0,24}short(?:[- ]term)?",
-    re.IGNORECASE,
-)
-_MEDIUM_HORIZON_QUERY_RE = re.compile(
-    r"中线|中期|几个月|季度|长期|趋势投资|medium(?:[- ]term)?",
-    re.IGNORECASE,
-)
+_SUPPORTED_ANALYSIS_HORIZONS = SUPPORTED_HORIZONS
 
 
 def _normalize_analysis_horizons(
-    raw: Any,
+    raw: Any = _HORIZONS_UNSET,
     *,
     query: Optional[str] = None,
+    explicit: Optional[bool] = None,
 ) -> List[str]:
-    """Normalize API horizon intent without changing upstream analyst windows.
+    """Normalize API horizon intent by delegating exclusively to horizon_profile.
 
-    The API accepts only the two supported horizon names and treats an
-    explicit natural-language request for both horizons as authoritative.
-    Unknown or missing values retain the historical short-horizon default.
+    Prevents dual resolution logic by delegating to resolve_analysis_horizons.
     """
-    values = raw if isinstance(raw, (list, tuple)) else []
-    normalized = {
-        str(value).strip().lower()
-        for value in values
-        if str(value).strip().lower() in _SUPPORTED_ANALYSIS_HORIZONS
-    }
-    query_text = str(query or "")
-    if _DUAL_HORIZON_QUERY_RE.search(query_text):
-        normalized.update(_SUPPORTED_ANALYSIS_HORIZONS)
-    elif not normalized and _MEDIUM_HORIZON_QUERY_RE.search(query_text):
-        normalized.add("medium")
-    if not normalized:
-        normalized.add("short")
-    return [horizon for horizon in _SUPPORTED_ANALYSIS_HORIZONS if horizon in normalized]
+    return resolve_analysis_horizons(raw, query=query, explicit=explicit).resolved
 
 
 def _announcements_file() -> Path:
@@ -1170,9 +1160,32 @@ class AnalyzeRequest(UserContextInput):
     dry_run: bool = False
     # When set, triggers intent-driven analysis via streaming dual-horizon path
     query: Optional[str] = Field(default=None, description="自然语言查询，如：分析贵州茅台短线机会")
-    horizons: List[str] = Field(default_factory=lambda: ["short"], description="分析周期列表，如 ['short'] 或 ['short','medium']")
+    horizons: Optional[List[str]] = Field(
+        default=None,
+        description="分析周期列表，如 ['short'] 或 ['short','medium']",
+    )
+    horizons_explicit: Optional[bool] = Field(default=None, exclude=True, repr=False)
+    horizons_resolution_source: Optional[str] = Field(default=None, exclude=True, repr=False)
+    horizons_notice: Optional[str] = Field(default=None, exclude=True, repr=False)
     # Pre-parsed intent from _ai_extract_symbol_and_date (avoids second LLM call in _run_job)
     user_intent: Optional[Dict[str, Any]] = Field(default=None, description="预解析的用户意图，由 chat_completions 传入")
+
+    @model_validator(mode="after")
+    def _resolve_and_validate_horizons(self) -> "AnalyzeRequest":
+        is_explicit = self.horizons_explicit
+        if is_explicit is None:
+            is_explicit = "horizons" in self.model_fields_set
+
+        if not is_explicit:
+            res = resolve_analysis_horizons(_HORIZONS_UNSET, query=self.query, explicit=False)
+        else:
+            res = resolve_analysis_horizons(self.horizons, query=self.query, explicit=True)
+
+        self.horizons = res.resolved
+        self.horizons_explicit = (res.resolution_source == RESOLUTION_SOURCE_EXPLICIT)
+        self.horizons_resolution_source = res.resolution_source
+        self.horizons_notice = res.notice
+        return self
 
 
 class AnalyzeResponse(BaseModel):
@@ -2858,7 +2871,11 @@ async def _run_job_inner(
         )
         final_state: Optional[Dict[str, Any]] = None
 
-        request.horizons = _normalize_analysis_horizons(request.horizons, query=request.query)
+        request.horizons = _normalize_analysis_horizons(
+            request.horizons,
+            query=request.query,
+            explicit=request.horizons_explicit,
+        )
 
         # ── Dual-horizon intent-driven path ──────────────────────────────────
         if request.query or len(request.horizons) > 1:
@@ -2870,7 +2887,7 @@ async def _run_job_inner(
             if request.user_intent:
                 user_intent = dict(request.user_intent)
                 user_intent["ticker"] = ticker
-                user_intent["horizons"] = request.horizons
+                user_intent["horizons"] = list(request.horizons)
             else:
                 if request.query:
                     # 直接 POST /v1/analyze 时的兜底（无预解析 intent）
@@ -2880,12 +2897,7 @@ async def _run_job_inner(
                         graph.quick_thinking_llm,
                         fallback_ticker=ticker,
                     )
-                    if not request.horizons:
-                        request.horizons = user_intent["horizons"]
-                    request.horizons = _normalize_analysis_horizons(
-                        request.horizons,
-                        query=request.query,
-                    )
+                    user_intent["horizons"] = list(request.horizons)
                 else:
                     # Explicit structured dual-horizon requests have no
                     # natural-language parser input; keep the API contract
@@ -2893,11 +2905,11 @@ async def _run_job_inner(
                     user_intent = {
                         "raw_query": "",
                         "ticker": ticker,
-                        "horizons": request.horizons,
+                        "horizons": list(request.horizons),
                         "focus_areas": [],
                         "specific_questions": [],
                     }
-                user_intent["horizons"] = request.horizons
+                user_intent["horizons"] = list(request.horizons)
             _log(f"[Timer] Intent Parsing took {time.time() - intent_start_t:.2f}s")
 
             inferred_user_context = user_intent.get("user_context") or {}
@@ -4823,9 +4835,12 @@ async def chat_completions(
                 request_source="chat",
             )
             try:
-                symbol, trade_date, horizons, focus_areas, specific_questions, inferred_user_context = \
+                symbol, trade_date, _extracted_horizons, focus_areas, specific_questions, inferred_user_context = \
                     await _ai_extract_symbol_and_date_streaming(text, config, job_id)
-                horizons = _normalize_analysis_horizons(horizons, query=text)
+                # Chat natural language extraction is NOT an explicit user selection;
+                # treat as unprovided (default short) with resolution_source=default.
+                horizons_res = resolve_analysis_horizons(_HORIZONS_UNSET, query=text, explicit=False)
+                horizons = horizons_res.resolved
                 date_explicit = bool(str(trade_date or "").strip())
                 try:
                     trade_date = _normalize_analysis_trade_date(
@@ -4871,6 +4886,7 @@ async def chat_completions(
                     dry_run=request.dry_run,
                     query=text,
                     horizons=horizons,
+                    horizons_explicit=False,
                     user_intent=pre_intent,
                     objective=merged_user_context.get("objective"),
                     risk_profile=merged_user_context.get("risk_profile"),
@@ -4931,9 +4947,12 @@ async def chat_completions(
         )
 
     # ── 非流式模式：保持原有阻塞行为 ─────────────────────────────────────────────
-    symbol, trade_date, horizons, focus_areas, specific_questions, inferred_user_context = \
+    symbol, trade_date, _extracted_horizons, focus_areas, specific_questions, inferred_user_context = \
         await asyncio.to_thread(_ai_extract_symbol_and_date, text, config)
-    horizons = _normalize_analysis_horizons(horizons, query=text)
+    # Chat natural language extraction is NOT an explicit user selection;
+    # treat as unprovided (default short) with resolution_source=default.
+    horizons_res = resolve_analysis_horizons(_HORIZONS_UNSET, query=text, explicit=False)
+    horizons = horizons_res.resolved
     date_explicit = bool(str(trade_date or "").strip())
     try:
         trade_date = _normalize_analysis_trade_date(
@@ -4978,6 +4997,7 @@ async def chat_completions(
         dry_run=request.dry_run,
         query=text,
         horizons=horizons,
+        horizons_explicit=False,
         user_intent=pre_intent,
         objective=merged_user_context.get("objective"),
         risk_profile=merged_user_context.get("risk_profile"),

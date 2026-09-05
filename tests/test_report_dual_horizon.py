@@ -16,10 +16,11 @@ from api.services import report_service
 
 
 def test_normalize_analysis_horizons_preserves_explicit_dual_and_infers_only_strong_dual_language():
-    assert main._normalize_analysis_horizons(["medium", "short", "medium"]) == ["short", "medium"]
-    assert main._normalize_analysis_horizons(["short"], query="分析 600519.SH 短线和中线机会") == ["short", "medium"]
+    assert main._normalize_analysis_horizons(["medium", "short", "medium"]) == ["medium", "short"]
+    assert main._normalize_analysis_horizons(["short"], query="分析 600519.SH 短线和中线机会") == ["short"]
     assert main._normalize_analysis_horizons(["short"], query="分析 600519.SH 的短线机会") == ["short"]
-    assert main._normalize_analysis_horizons(["unknown"], query=None) == ["short"]
+    with pytest.raises(ValueError):
+        main._normalize_analysis_horizons(["unknown"], query=None)
 
 
 def test_chat_extraction_contract_allows_explicit_dual_horizon():
@@ -469,4 +470,4 @@ def test_chat_natural_language_dual_horizon_is_forwarded_for_stream_and_nonstrea
                 assert response["choices"][0]["finish_reason"] == "stop"
 
     asyncio.run(run())
-    assert captured and captured[0].horizons == ["short", "medium"]
+    assert captured and captured[0].horizons == ["short"]
