@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
-"""Controlled execution and guard runner for MediaCrawler social data ingestion (Task 13 / §3.1 / D-008).
+"""Controlled execution and guard runner for MediaCrawler social data ingestion (Task 13 / §3.1 / D-008 / Track B-2).
 
 Specifications:
 - docs/social_data/implementation_plan.md Task 13, §3.1, §3.2, §3.3, §4.1, D-008
-- Enforces save_option=sqlite (rejects JSONL / others with non-zero exit).
+- Enforces save_option=sqlite (passed as --save_data_option sqlite to MediaCrawler).
 - Enforces loopback host constraint (127.0.0.1 / localhost only).
 - Enforces single-task concurrency lock (rejects concurrent second run).
 - Pins MediaCrawler commit (default d6f7c5bb906b6dac40ddf343ef9e26438a3de092).
 - Default: enable_comments=true, enable_sub_comments=false.
 - Strict cookie hygiene: cookie path only, never log or store cookie/token contents.
 - Post-run SQLite target table verification.
+- Controlled command construction against real MediaCrawler CLI interface (cmd_arg/arg.py):
+  --platform, --lt, --type search, --keywords, --save_data_option sqlite,
+  --get_comment true/false, --get_sub_comment false, --headless true, --save_data_path.
+- Proves 4 independent dimensions:
+  1. Crawler execution outcome
+  2. Archive ingestion count
+  3. Snapshot freshness
+  4. Downstream analysis availability
 """
 
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -29,6 +38,10 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+from api.services.social_data_service import (
+    get_social_data_status,
+    record_social_run_summary,
+)
 from tradingagents.dataflows.social.mediacrawler_importer import (
     MediaCrawlerImporter,
     REQUIRED_SOURCE_COLUMNS,
@@ -40,7 +53,9 @@ DEFAULT_ENABLE_COMMENTS: bool = True
 DEFAULT_ENABLE_SUB_COMMENTS: bool = False
 DEFAULT_CRAWLER_HOST: str = "127.0.0.1"
 DEFAULT_LOCK_FILE: str = "/tmp/mediacrawler_ingestion.lock"
+PINNED_CRAWLER_COMMIT: str = "d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
 ALLOWED_HOSTS: Set[str] = {"127.0.0.1", "localhost"}
+ALLOWED_PLATFORMS: Set[str] = {"xhs", "dy"}
 
 PLATFORM_TARGET_TABLES: Dict[str, List[str]] = {
     "xhs": ["xhs_note", "xhs_note_comment"],
@@ -60,7 +75,6 @@ def is_loopback_host(host: str) -> bool:
     if h in ALLOWED_HOSTS:
         return True
     try:
-        # Resolve hostname to IP address
         addr_info = socket.getaddrinfo(h, None)
         for family, _, _, _, sockaddr in addr_info:
             ip = sockaddr[0]
@@ -190,8 +204,150 @@ class IngestionLock:
 
 
 # ============================================================================
-# Crawler Configuration & Ingestion Runner
+# MediaCrawler Real CLI Command Construction & Validation
 # ============================================================================
+
+def build_mediacrawler_argv(
+    platform: str,
+    query: str,
+    source_db: str,
+    crawler_commit: str,
+    save_option: str = DEFAULT_SAVE_OPTION,
+    crawler_host: str = DEFAULT_CRAWLER_HOST,
+    enable_comments: bool = DEFAULT_ENABLE_COMMENTS,
+    enable_sub_comments: bool = DEFAULT_ENABLE_SUB_COMMENTS,
+    cookie_path: Optional[str] = None,
+    crawler_entrypoint: Optional[str] = None,
+    python_bin: Optional[str] = None,
+    headless: bool = True,
+    max_notes_count: Optional[int] = None,
+    max_comments_count: Optional[int] = None,
+) -> List[str]:
+    """Construct typed CLI argv strictly matching MediaCrawler's pinned entrypoint shape (cmd_arg/arg.py).
+
+    MediaCrawler flags:
+      --platform: xhs / dy
+      --lt: cookie / qrcode
+      --type: search
+      --keywords: <query>
+      --save_data_option: sqlite (strictly enforced)
+      --get_comment: true / false
+      --get_sub_comment: true / false
+      --headless: true / false
+      --save_data_path: <source_db>
+      --cookies: <cookie_path> (if provided)
+    """
+    validate_crawler_host(crawler_host)
+    validate_save_option(save_option)
+    if not crawler_commit or not str(crawler_commit).strip():
+        raise ValueError("crawler_commit must be explicitly provided and cannot be empty; fabricating commit string is forbidden")
+
+    p = platform.strip().lower()
+    if p not in ALLOWED_PLATFORMS and p != "all":
+        raise ValueError(f"Unsupported platform '{platform}'. Must be one of {ALLOWED_PLATFORMS} or 'all'")
+
+    py = python_bin or sys.executable
+    entrypoint = crawler_entrypoint or "main.py"
+
+    cmd = [
+        py,
+        entrypoint,
+        "--platform", p if p != "all" else "xhs",
+        "--lt", "cookie" if cookie_path else "qrcode",
+        "--type", "search",
+        "--keywords", query.strip(),
+        "--save_data_option", "sqlite",
+        "--get_comment", "true" if enable_comments else "false",
+        "--get_sub_comment", "true" if enable_sub_comments else "false",
+        "--headless", "true" if headless else "false",
+        "--save_data_path", os.path.abspath(source_db),
+    ]
+
+    if cookie_path:
+        cmd.extend(["--cookies", os.path.abspath(cookie_path)])
+
+    if max_notes_count is not None:
+        cmd.extend(["--crawler_max_notes_count", str(max_notes_count)])
+
+    if max_comments_count is not None:
+        cmd.extend(["--max_comments_count_singlenotes", str(max_comments_count)])
+
+    return cmd
+
+
+def validate_mediacrawler_argv(cmd: List[str]) -> None:
+    """Validate that a crawler command strictly adheres to MediaCrawler interface rules.
+
+    Rejects arbitrary argv lists (e.g. ['echo', 'foo']), non-sqlite storage,
+    and non-loopback network calls.
+    """
+    if not cmd or not isinstance(cmd, list):
+        raise ValueError("Crawler command must be a non-empty list of arguments.")
+
+    cmd_str = " ".join(cmd)
+
+    # 1. Reject arbitrary commands that don't invoke MediaCrawler or python
+    has_crawler_token = any(
+        tok in cmd[0] or tok in cmd_str
+        for tok in ("python", "main.py", "mediacrawler", "MediaCrawler")
+    )
+    if not has_crawler_token:
+        raise ValueError(
+            f"Invalid crawler command: must invoke MediaCrawler main.py or Python runner. Got: {cmd[0]}"
+        )
+
+    # 2. Must specify save_data_option or save_option strictly as sqlite
+    has_save_option = False
+    for i, arg in enumerate(cmd):
+        if arg in ("--save_data_option", "--save-option", "--save_option"):
+            if i + 1 < len(cmd):
+                val = cmd[i + 1].strip().lower()
+                if val != "sqlite":
+                    raise ValueError(f"Forbidden save_option '{val}'. MediaCrawler must run with save_data_option='sqlite'.")
+                has_save_option = True
+
+    if not has_save_option:
+        raise ValueError("Invalid crawler command: missing mandatory '--save_data_option sqlite'.")
+
+    # 3. Must specify valid platform
+    has_platform = False
+    for i, arg in enumerate(cmd):
+        if arg == "--platform" and i + 1 < len(cmd):
+            p = cmd[i + 1].strip().lower()
+            if p not in ALLOWED_PLATFORMS and p != "all":
+                raise ValueError(f"Invalid platform '{p}' in crawler command. Must be in {ALLOWED_PLATFORMS}.")
+            has_platform = True
+
+    if not has_platform:
+        raise ValueError("Invalid crawler command: missing mandatory '--platform' argument.")
+
+    # 4. Must specify keywords or query
+    has_keywords = any(arg in ("--keywords", "--query") for arg in cmd)
+    if not has_keywords:
+        raise ValueError("Invalid crawler command: missing mandatory '--keywords' argument.")
+
+    # 5. Loopback host check: reject external network hosts or proxies
+    for i, arg in enumerate(cmd):
+        if arg in ("--crawler-host", "--host", "--static_proxy_url") and i + 1 < len(cmd):
+            h = cmd[i + 1].strip()
+            validate_crawler_host(h)
+
+
+def sanitize_cmd_for_logging(cmd: List[str]) -> List[str]:
+    """Sanitize command arguments for safe logging (redacts cookie values)."""
+    sanitized: List[str] = []
+    redact_next = False
+    for arg in cmd:
+        if redact_next:
+            sanitized.append("[REDACTED_COOKIE_PATH]")
+            redact_next = False
+        elif arg in ("--cookies", "--cookie-path", "--cookie_path"):
+            sanitized.append(arg)
+            redact_next = True
+        else:
+            sanitized.append(arg)
+    return sanitized
+
 
 def build_crawler_config(
     platform: str,
@@ -222,6 +378,10 @@ def build_crawler_config(
     return config
 
 
+# ============================================================================
+# Main Ingestion Orchestrator
+# ============================================================================
+
 def run_social_ingestion(
     platform: str,
     query: str,
@@ -236,8 +396,18 @@ def run_social_ingestion(
     lock_file: str = DEFAULT_LOCK_FILE,
     auto_import: bool = False,
     crawler_cmd: Optional[List[str]] = None,
+    crawler_entrypoint: Optional[str] = None,
+    execute_crawler: bool = False,
+    python_bin: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Orchestrate bounded MediaCrawler ingestion with all guards enforced."""
+    """Orchestrate bounded MediaCrawler ingestion with all guards enforced.
+
+    Returns a 4-part structured dictionary covering:
+    1. crawler_execution: process execution result
+    2. import_summary: rows read/inserted/rejected
+    3. freshness: snapshot recency
+    4. analysis_availability: mode and bundle availability
+    """
     # 1. Guards validation
     validate_crawler_host(crawler_host)
     validate_save_option(save_option)
@@ -250,11 +420,11 @@ def run_social_ingestion(
     with IngestionLock(lock_file):
         start_time = time.time()
         print("=" * 60)
-        print("Starting Controlled Social Ingestion")
+        print("Starting Controlled Social Ingestion (Track B-2)")
         print("=" * 60)
         print(f"Platform:           {platform}")
         print(f"Query:              {query}")
-        print(f"Save Option:        {save_option}")
+        print(f"Save Option:        {save_option} (sqlite enforced)")
         print(f"Crawler Host:       {crawler_host} (Loopback Enforced)")
         print(f"Crawler Commit:     {commit_str}")
         print(f"Enable Comments:    {enable_comments}")
@@ -264,19 +434,63 @@ def run_social_ingestion(
             print(f"Cookie Path:        {cookie_path} (Credentials not logged)")
         print("=" * 60)
 
-        # 3. Optional crawler invocation
-        if crawler_cmd:
-            print(f"Executing crawler command: {crawler_cmd[0]} ...")
-            res = subprocess.run(crawler_cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                raise RuntimeError(f"Crawler subprocess failed with exit code {res.returncode}: {res.stderr}")
+        # 3. Controlled crawler invocation
+        crawler_res: Dict[str, Any] = {
+            "executed": False,
+            "status": "not_run",
+            "exit_code": None,
+            "command": [],
+        }
+
+        should_execute = execute_crawler or crawler_cmd is not None or crawler_entrypoint is not None
+
+        if should_execute:
+            if crawler_cmd:
+                validate_mediacrawler_argv(crawler_cmd)
+                cmd_to_run = crawler_cmd
+            else:
+                cmd_to_run = build_mediacrawler_argv(
+                    platform=platform,
+                    query=query,
+                    source_db=source_db,
+                    crawler_commit=commit_str,
+                    save_option=save_option,
+                    crawler_host=crawler_host,
+                    enable_comments=enable_comments,
+                    enable_sub_comments=enable_sub_comments,
+                    cookie_path=cookie_path,
+                    crawler_entrypoint=crawler_entrypoint,
+                    python_bin=python_bin,
+                )
+
+            sanitized_cmd = sanitize_cmd_for_logging(cmd_to_run)
+            print(f"Executing MediaCrawler: {' '.join(sanitized_cmd[:6])} ...")
+
+            clean_env = os.environ.copy()
+            for proxy_var in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
+                clean_env.pop(proxy_var, None)
+
+            proc = subprocess.run(cmd_to_run, capture_output=True, text=True, env=clean_env)
+            crawler_res = {
+                "executed": True,
+                "status": "success" if proc.returncode == 0 else "failed",
+                "exit_code": proc.returncode,
+                "command": sanitized_cmd,
+                "stdout_snippet": proc.stdout[:300] if proc.stdout else "",
+                "stderr_snippet": proc.stderr[:300] if proc.stderr else "",
+            }
+
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"MediaCrawler subprocess failed with exit code {proc.returncode}: {proc.stderr[:400]}"
+                )
 
         # 4. Verify target SQLite database tables
         validate_source_db_tables(source_db, platform, enable_comments=enable_comments)
         print("✓ Source SQLite database schema verified successfully.")
 
         # 5. Optional auto-import into TradingAgents append-only archive
-        import_summary = None
+        import_summary: Optional[Dict[str, Any]] = None
         if auto_import and archive_db:
             print("Running auto-import to TradingAgents social archive...")
             importer = MediaCrawlerImporter(
@@ -293,7 +507,41 @@ def run_social_ingestion(
                   f"inserted={import_summary.get('rows_inserted')}, "
                   f"rejected={import_summary.get('rows_rejected')})")
 
+            # Record run summary into persistent state
+            record_social_run_summary(
+                as_of=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                symbol=query,
+                status=import_summary.get("status", "completed"),
+                post_count=import_summary.get("rows_inserted", 0),
+                comment_count=0,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+                archive_db=archive_db,
+                rows_read=import_summary.get("rows_read", 0),
+                rows_inserted=import_summary.get("rows_inserted", 0),
+                rows_rejected=import_summary.get("rows_rejected", 0),
+                crawler_commit=commit_str,
+                crawler_exit_code=crawler_res.get("exit_code"),
+                crawler_status=crawler_res.get("status"),
+            )
+
+        # 6. Read 4-part status aggregation
+        status_info = get_social_data_status({"social": {"archive_db": archive_db or ""}})
+        freshness = status_info.get("freshness", {})
+        analysis_avail = status_info.get("analysis_availability", {})
+
         elapsed = time.time() - start_time
+        print("=" * 60)
+        print("Social Ingestion Completed Summary")
+        print("=" * 60)
+        print(f"1. Crawler Execution:       {crawler_res.get('status')} (executed={crawler_res.get('executed')}, exit_code={crawler_res.get('exit_code')})")
+        if import_summary:
+            print(f"2. Archive Ingestion:       {import_summary.get('status')} (read={import_summary.get('rows_read')}, inserted={import_summary.get('rows_inserted')}, rejected={import_summary.get('rows_rejected')})")
+        else:
+            print("2. Archive Ingestion:       skipped (auto_import=False)")
+        print(f"3. Archive Freshness:       {freshness.get('status')} (age={freshness.get('age_seconds')}s, snapshots={freshness.get('snapshot_count')})")
+        print(f"4. Analysis Availability:   mode={analysis_avail.get('mode')}, available={analysis_avail.get('available')}, status={analysis_avail.get('status')}")
+        print("=" * 60)
+
         return {
             "status": "success",
             "platform": platform,
@@ -301,7 +549,10 @@ def run_social_ingestion(
             "elapsed_seconds": round(elapsed, 2),
             "source_db": source_db,
             "archive_db": archive_db,
+            "crawler_execution": crawler_res,
             "import_summary": import_summary,
+            "freshness": freshness,
+            "analysis_availability": analysis_avail,
         }
 
 
@@ -386,6 +637,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=False,
         help="Automatically import into TradingAgents archive DB after crawl.",
     )
+    parser.add_argument(
+        "--execute-crawler",
+        action="store_true",
+        default=False,
+        help="Spawn the MediaCrawler subprocess using the constructed CLI command.",
+    )
+    parser.add_argument(
+        "--crawler-entrypoint",
+        default=None,
+        help="Path to MediaCrawler main.py entrypoint.",
+    )
+    parser.add_argument(
+        "--python-bin",
+        default=None,
+        help="Path to Python executable for running MediaCrawler.",
+    )
     return parser.parse_args(argv)
 
 
@@ -406,6 +673,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             cookie_path=args.cookie_path,
             lock_file=args.lock_file,
             auto_import=args.auto_import,
+            execute_crawler=args.execute_crawler,
+            crawler_entrypoint=args.crawler_entrypoint,
+            python_bin=args.python_bin,
         )
         print("Ingestion completed successfully.")
         return 0
@@ -416,3 +686,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

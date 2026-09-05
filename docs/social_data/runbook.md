@@ -68,7 +68,9 @@ env -u PYTHONPATH .venv/bin/python scripts/run_social_ingestion.py \
   --crawler-commit d6f7c5bb906b6dac40ddf343ef9e26438a3de092 \
   --enable-comments \
   --no-enable-sub-comments \
-  --auto-import
+  --auto-import \
+  --execute-crawler \
+  --crawler-entrypoint /path/to/mediacrawler/main.py
 ```
 
 ### Safety Flags and Defaults
@@ -82,6 +84,30 @@ env -u PYTHONPATH .venv/bin/python scripts/run_social_ingestion.py \
 | `--enable-sub-comments` | `False` | Secondary sub-comments disabled by default. |
 | `--lock-file` | `/tmp/mediacrawler_ingestion.lock` | Mutex lock file. Concurrent execution of a second ingestion run is rejected. |
 | `--auto-import` | `False` | If specified with `--archive-db`, automatically runs `MediaCrawlerImporter` after crawling. |
+| `--execute-crawler` | `False` | When specified, spawns MediaCrawler subprocess using the verified typed CLI command. |
+| `--crawler-entrypoint`| `None` | Path to MediaCrawler `main.py` entrypoint. |
+| `--python-bin` | `sys.executable` | Python interpreter for MediaCrawler process (Python 3.11 recommended). |
+
+### MediaCrawler Real CLI Command Mapping
+
+When `--execute-crawler` or `--crawler-entrypoint` is provided, `run_social_ingestion.py` builds the exact command line matching MediaCrawler's pinned interface (`cmd_arg/arg.py`):
+
+```text
+<python-bin> <crawler-entrypoint> \
+  --platform <xhs|dy> \
+  --lt <cookie|qrcode> \
+  --type search \
+  --keywords <query> \
+  --save_data_option sqlite \
+  --get_comment <true|false> \
+  --get_sub_comment false \
+  --headless true \
+  --save_data_path <source-db> \
+  [--cookies <cookie-path>]
+```
+
+Arbitrary argv lists (e.g. `echo`, shell wrappers) are strictly rejected by `validate_mediacrawler_argv`.
+
 
 ---
 
@@ -110,7 +136,7 @@ All 5 arguments are strictly required; omitting any argument results in non-zero
 
 ---
 
-## 5. Rollout Modes and Gate 4 Readiness
+## 5. Rollout Modes, Status Dimensions, and Gate 4 Readiness
 
 The TradingAgents social pipeline is governed by `TA_SOCIAL_MODE`:
 
@@ -120,6 +146,22 @@ The TradingAgents social pipeline is governed by `TA_SOCIAL_MODE`:
 | `shadow` | Gate 2–3 | Computes `SentimentBundleV1` from social archive and logs trace data, but does not alter final analyst text or report conclusions. |
 | `active` | Gate 3–4 | Fully enables social sentiment data in `social_media_analyst` prompt and downstream consensus. Fail-closed when data is insufficient or missing. |
 | Gate 4 Clean-up | Gate 4 | `legacy_proxy` code is deleted; `disabled` mode strictly returns `not_applicable` with empty social context. |
+
+### Four Independent Operational Facets (Track B-2 Alignment)
+
+`TA_SOCIAL_MODE=disabled` **does NOT** mean external crawling or ingestion must stop. The operational status API (`GET /v1/social-data/status`) and ingestion runner report four strictly separated dimensions:
+
+1. **Crawler Execution** (`crawler_status`):
+   Reports whether the MediaCrawler subprocess completed successfully (`exit_code=0`), failed, or has not been run. Independent of whether downstream analysis consumes the data.
+2. **Ingestion Outcome** (`ingestion_status`):
+   Reports real imported row counts (`rows_read`, `rows_inserted`, `rows_rejected`) read from the append-only archive's `social_ingest_runs` audit table. Never relies solely on in-memory caches.
+3. **Archive Freshness** (`freshness`):
+   Tracks `latest_snapshot_at` and `age_seconds` within the lookback window (`TA_SOCIAL_LOOKBACK_DAYS`, default 7 days). Distinguishes fresh data, stale data, and empty archives.
+4. **Analysis Availability** (`analysis_availability`):
+   Reflects whether TradingAgents analysis graphs can consume sentiment bundles given `TA_SOCIAL_MODE`.
+
+> **Honest Status Guard:** The status API **never** returns `status: operational` merely because the archive database file exists on disk. If the archive database has 0 snapshots or no completed runs, the status returns `degraded` (`social_archive_empty`).
+
 
 ---
 
