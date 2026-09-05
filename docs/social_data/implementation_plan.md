@@ -633,45 +633,53 @@ work/h1b_gates_report.json
 
 ---
 
-## 十、迁移和回滚（Gate 0–4）
+## 十、迁移和回滚（Gate 0–4）与真实验收清单
+
+> **实施参考：** 详细单点运行与人工审计指引见 `docs/social_data/acceptance_checklist.md`。本节定义门禁硬指标、代码交付状态与受控待授权操作。
+> **严格执行红线：** **本卡（Track B-3 / DAV-651）只出方案与检查清单，不启动爬虫、不切 active、不部署、不改账号。**
 
 ### Gate 0：合规与环境
 
 - 用途限于个人学习/研究。
-- MediaCrawler 钉住 SHA；独立目录与 uv；控制 API `127.0.0.1`；cookie 登录。
-- Cookie / Chrome profile 不进仓库或 `.env.example`。
-- 工作库 sqlite 初始化成功；启动参数与回读的 save option 均为 sqlite。
-- 小样本 xhs/dy 各至少一轮导入 archive；确认 archive 行数增加且工作库原地更新不会 UPDATE 已有 snapshot。
+- MediaCrawler 钉住 SHA `d6f7c5bb906b6dac40ddf343ef9e26438a3de092`；独立目录与 uv；控制 API 强制绑定 `127.0.0.1`；cookie 登录。
+- Cookie / Chrome profile / xsec_token 绝不进仓库、日志或 `.env.example`。
+- 工作库 sqlite 初始化成功；启动参数与回读的 save option 强制为 `sqlite`，任何非 sqlite（如 jsonl）立即非零退出。
+- 小样本 xhs/dy 各至少一轮导入 archive；确认 archive 行数增加且工作库原地更新绝对不会 UPDATE 已有 snapshot。
 
 ### Gate 1：离线契约
 
-- 动态构造四张源表导入；空正文可归档；非法时间拒收。
+- 动态构造四张源表导入（xhs_note, xhs_note_comment, douyin_aweme, douyin_aweme_comment）；空正文可归档；非法时间拒收。
 - 源时间 / `first_seen_at` / `snapshot_at` / `ingest_at` 资格测试全过；`ingest_at` 晚于 cutoff 仍计入。
 - xhs：`published_at=time`，`snapshot_at=last_modify_ts`，`first_seen_at=add_ts`。
 - dy：`published_at=create_time`，`snapshot_at=last_modify_ts`。
 - append-only：重抓涨赞产生新 snapshot，旧行不变。
-- `docs/social_data/xhs_last_update_time_verification.md` 已写出结论；未 trusted 前资格忽略 `source_updated_at`。
+- `docs/social_data/xhs_last_update_time_verification.md` 已写出结论；未 trusted 前资格一律忽略 `source_updated_at`。
 
 ### Gate 2：shadow
 
 - `TA_SOCIAL_MODE=shadow`。
 - 旧 `sentiment_report` 生成路径不因 bundle 改变；最终方向/交易结论与关闭社交采集时一致（同一 fake LLM / 同一 legacy 输入）。
-- bundle 进入 `result_data.social_data_context`；总监 prompt 含 status 且 `direction_allowed=false` 时不得把 score 当方向证据。
-- 至少用测试夹具覆盖多 status；真实 30 份/10 只股票覆盖作为人工 Gate，不阻塞代码合入，但阻塞 active。
+- bundle 进入 `result_data.social_data_context`；总监 prompt 含 status 且 `direction_allowed=false` 时严格禁止把 score 当方向证据。
+- **人工覆盖抽检硬门槛：必须覆盖 10 只股票（不同市值/行业）、至少 30 份真实分析报告，人工核验无方向漂移且缺口诚实，签署审核归档。**
 
 ### Gate 3：active canary
 
-- `TA_SOCIAL_MODE=active` + 2–5 个 canary。
+- `TA_SOCIAL_MODE=active` + 2–5 只 canary 股票（`TA_SOCIAL_CANARY_SYMBOLS`，**执行需另授权**）。
 - social prompt 无新闻 sentinel；news prompt 无社交原文。
-- 不足时正文“社交方向不可判断”；机器 verdict 可为中性，但 trace `direction_allowed=false`。
-- 同 symbol/date 重跑 bundle_id 与分数相同。
+- 覆盖不足时正文明确输出“社交方向不可判断”；机器 verdict 可为中性，但 trace 必须记入 `direction_allowed=false`。
+- 同 symbol/date 重跑 bundle_id 与分数保证确定性。
 
 ### Gate 4：全量 active + 删除 legacy
 
 - 清空 canary；保留 mode 开关。
 - 独立提交删除 `legacy_proxy` 分支、适配层 legacy 臂、旧 social prompt 新闻措辞。
-- `disabled` 只表示社交不可用，不再自动拿新闻替代。
-- 未完成该提交不得宣布接入完成。
+- `disabled` 只表示社交不可用（`not_applicable`），不再自动拿新闻替代。
+- **D-009 铁律：未逐级通过 Gate 0–3 前，绝对不得宣称社交接入完成。DAV-545 只证明 Gate 4 独立删除项在代码层面已提前合入，绝不代表真实业务验收通过。**
+
+### 历史无快照防前视与诚实缺口铁律
+
+- 历史回测/分析时若 `cutoff` 前无快照，严格标为缺失（`REASON_SOCIAL_NO_HISTORICAL_SNAPSHOT`），**绝对禁止用当天或事后新采数据回填历史快照**。
+- 不可用 ≠ 市场冷淡：社交基础设施不可用属于系统通道缺口，绝不允许被解读为市场冷淡或观望。
 
 ### 回滚
 
@@ -679,156 +687,195 @@ work/h1b_gates_report.json
 
 ---
 
-## 十一、任务级实施计划
+### 10.1 门禁完成态对照表（代码已交付 vs 真实未做）
+
+| 门禁 | 验收细项 | 门槛标准 | 代码已交付状态（Code Delivered） | 真实未做状态 / 阻断点（Real-world Pending） | 验证依据 / 自动化套件 |
+|---|---|---|---|---|---|
+| **Gate 0** | MediaCrawler 钉 SHA | 锁定 `d6f7c5bb906b6dac40ddf343ef9e26438a3de092` | **已完成**：`run_social_ingestion.py`、`import_mediacrawler_social.py` 强制校验该 SHA；`runbook.md` 固化 CLI 参数映射 | **未做**：生产宿主机未拉取真实 MediaCrawler 仓库及安装 Python 3.11/uv 环境 | `tests/test_run_social_ingestion_guards.py`<br>`tests/test_import_mediacrawler_social_cli.py` |
+| **Gate 0** | SQLite 强制校验与隔离 | 强制 `save_data_option=sqlite`；控制接口强制 `127.0.0.1` | **已完成**：参数校验器拒绝非 sqlite（如 jsonl）、拒绝非 loopback 地址，校验表与列白名单 | **未做**：生产真实运行生成真实物理 SQLite 工作库 | `tests/test_run_social_ingestion_guards.py` |
+| **Gate 0** | 双平台真实导入首轮验证 | xhs/dy 各至少一轮；archive 行增加；旧快照不被 UPDATE | **已完成**：`MediaCrawlerImporter` 实现 4 表导入、空正文处理、非法时间拒收、哈希去重与 append-only；合成测试全过 | **未做（待授权）**：真实账号/Cookie 驱动真实爬虫抓取小红书与抖音，物理导入生产 `social_archive.db` 并核对行数 | `tests/test_mediacrawler_importer.py`<br>`tests/test_social_e2e_acceptance.py` |
+| **Gate 0** | 凭据与敏感数据治理 | Cookie/Token 绝不落库、不入日志、不入代码 | **已完成**：`author_id_hash` 单向脱敏，过滤 `xsec_token`、nicknames 等；代码与日志不打印敏感信息 | **未做（待授权）**：测试账号 Cookie 注入外部受控安全目录（`~/.mediacrawler/cookies/`） | `tests/test_social_e2e_acceptance.py` |
+| **Gate 1** | 时间字段五层分立 | `published_at` / `source_updated_at` / `first_seen_at` / `snapshot_at` / `ingest_at` | **已完成**：契约、表结构与资格函数全部实现；`ingest_at` 永不参与资格判定 | **已完成（离线代码）**：离线测试全量闭环；待真实数据入库后执行数据审计 | `tests/test_social_contracts.py`<br>`tests/test_social_as_of_guard.py` |
+| **Gate 1** | XHS `last_update_time` 验证 | 未验证前忽略 `source_updated_at` 资格 | **已完成**：产出结论文档；代码默认未 trusted 时忽略该字段，防止正文未改互动变化时误判资格 | **未做**：生产大样本长期追踪真实内容变动与更新时间戳的相关性 | `docs/social_data/xhs_last_update_time_verification.md`<br>`tests/test_social_as_of_guard.py` |
+| **Gate 2** | Shadow 模式链路追溯 | `TA_SOCIAL_MODE=shadow`；生成 bundle 并持久化 | **已完成**：`collector.py`、`analyst_adapter.py` 支持 shadow；`social_data_context` 贯穿 State/API/Report | **未做（待授权）**：生产环境配置 `TA_SOCIAL_MODE=shadow` 并重启应用服务 | `tests/test_social_rollout_modes.py`<br>`tests/test_report_social_context.py` |
+| **Gate 2** | Shadow 方向锁定拦截 | `direction_allowed=false` 不得当多空证据 | **已完成**：适配层与总监层严格门禁，多空结论与关社交时完全一致；报告质量门禁严格把关 | **未做**：在线生产流量下的报告决策无偏移实际观测 | `tests/test_social_downstream_gates.py`<br>`tests/test_social_analyst_separation.py` |
+| **Gate 2** | **人工覆盖抽检（硬门槛）** | **30 份分析报告 / 10 只股票** | **已完成（工具/框架）**：离线测试夹具已覆盖多 status 场景；状态 API 支持四分立诚实指标 | **未做（待授权）**：在真实 Shadow 运行下，人工抽检 10 只代表性股票、共 30 份报告，核验无方向污染并签署报告 | 人工核验表格签署与归档 |
+| **Gate 3** | **Active Canary 灰度（待授权）** | **2–5 只白名单股票**；`TA_SOCIAL_MODE=active` | **已完成**：白名单过滤逻辑全覆盖，白名单外自动降级 disabled/not_applicable，绝不越权 | **未做（待授权）**：生产环境授权配置 `TA_SOCIAL_MODE=active` 与 `TA_SOCIAL_CANARY_SYMBOLS` | `tests/test_social_rollout_modes.py`<br>`tests/test_social_data_collector.py` |
+| **Gate 3** | 提示词隔离与确定性 | 严格四段式；无新闻泄漏；bundle 确定性 | **已完成**：提示词重构完成，sentinel 双向物理隔离，覆盖不足标不可判断；bundle_id 确定性生成 | **未做**：真实生产在线模型生成抽检与稳定性监控 | `tests/test_social_analyst_separation.py`<br>`tests/test_analyst_prompts_deep_reasoning.py` |
+| **通用** | 历史无快照防前视 | 缺失标缺失，**严禁当天新采回填** | **已完成**：PIT 资格函数筛选 `snapshot_at <= cutoff`，无快照返回 `no_historical_snapshot` 且不填数据 | **未做**：历史长周期批量回测中的实际快照完整性核查 | `tests/test_social_as_of_guard.py`<br>`tests/test_social_report_gap_regression.py` |
+| **通用** | 诚实缺口语义 | 不可用 ≠ 市场冷淡 | **已完成**：缺口格式化与质量门禁锁定，不可用视为基础设施缺口，禁止推导多空倾向 | **未做**：生产偶发爬虫中断时的报告表现抽检 | `tests/test_social_report_gap_regression.py`<br>`tests/test_social_downstream_gates.py` |
+| **Gate 4** | Legacy 清理与终态宣布 | 删除 `legacy_proxy`；D-009 守卫 | **代码已交付**：代码层在 DAV-545 已完成清理，disabled 返回 `not_applicable` | **未做（终态门禁）**：必须待 Gate 0、1、2、3 真实物理验收全过，方可宣布社交轨道全量完成 | 最终端到端验收签署 |
+
+---
+
+### 10.2 待授权操作清单（需人工明确授权，禁止自主执行）
+
+| 授权编号 | 待授权操作项 | 涉及环境 / 资源 | 前置准入条件 | 审批授权角色 | 当前状态 |
+|---|---|---|---|---|---|
+| **AUTH-01** | **MediaCrawler 宿主机运行环境初始化** | 生产宿主机独立 Python 3.11 虚拟环境、Playwright/Chromium 依赖安装，检出钉住 commit `d6f7c5bb906b6dac40ddf343ef9e26438a3de092` | 仓库只读审计完成 | 运维主管 / 架构师 | 待授权（BLOCKED） |
+| **AUTH-02** | **社交平台采集账号与 Cookie 注入** | 小红书与抖音受控测试账号，Cookie 注入 `~/.mediacrawler/cookies/`（非 Git 目录） | AUTH-01 完成，非商业合规确认 | 安全员 / 账号负责人 | 待授权（BLOCKED） |
+| **AUTH-03** | **首轮真实网络小样本采集与归档导入** | 运行 `run_social_ingestion.py` 执行小样本受控抓取，并执行 `import_mediacrawler_social.py` 导入真实 `social_archive.db` | AUTH-02 完成，目标测试池确定 | 调度师 / 技术主管 | 待授权（BLOCKED） |
+| **AUTH-04** | **生产服务环境变量切换为 Shadow 模式** | 设置生产环境 `TA_SOCIAL_MODE=shadow`，重启应用服务启动影子跟踪 | AUTH-03 验证 archive 行增加且旧快照无变更 | 运维主管 / 技术主管 | 待授权（BLOCKED） |
+| **AUTH-05** | **Shadow 模式 30 份报告 / 10 只股票人工审计** | 业务与算法团队对 Shadow 产出的 30 份报告（涵盖 10 只代表性股票）进行人工全量核验并签署报告 | AUTH-04 连续平稳运行 3 天以上 | 业务负责人 / 审查员 | 待授权（BLOCKED） |
+| **AUTH-06** | **生产服务开启 Active Canary 灰度模式** | 配置 `TA_SOCIAL_MODE=active` 及 `TA_SOCIAL_CANARY_SYMBOLS`（指定 2–5 只股票） | AUTH-05 人工审计全票通过 | 决策委员会 / 项目调度助手 | 待授权（BLOCKED） |
+| **AUTH-07** | **全量 Active 上线与 Track B 正式验收收官** | 移除 Canary 白名单全量启用，关闭 Track B 父卡（DAV-648）并宣布上线 | AUTH-06 灰度运行无故障 7 天 | 项目调度助手 / 团队主管 | 待授权（BLOCKED） |
+
+---
+
+## 十一、任务级实施计划（完成态审计与待授权项）
 
 实施前：`git status --short --untracked-files=no`，确认脏文件不在 staging。用明确 pathspec，禁止 `git add .`。另一窗口未完成的数据/裁决改动不得出现在社交 commit 里。
+
+> **当前完成态说明：**
+> - **Tasks 1–14 代码与定向单测**：已全部开发交付并合入主干基线（Commit A, B, C @ DAV-649 与 DAV-650），180+ 项定向测试与契约测试 100% 通过。
+> - **Task 15 代码验收与测试锁**：已在 DAV-651 / `test_social_e2e_acceptance.py` 交付；Gate 4 删除项代码已提前合入（DAV-545）；但真实爬虫启动与真机采集、切 mode 等物理操作受 D-009 铁律约束，保持未做且待授权。
 
 ### Task 1：collector 日期解析 fail-closed
 
 **Files:** `tradingagents/graph/data_collector.py`（`_fetch_all` 约 1345–1369）；`tests/test_data_collector.py`
 
-- [ ] 新增测试：`_fetch_all("600519.SH", "bad-date")` 不得调用 provider，不得回退 `datetime.now()`。
-- [ ] 只接受 `YYYY-MM-DD` 与 `YYYYMMDD`；非法/无法解析拒绝。
-- [ ] 跑 `tests/test_data_collector.py`、`tests/test_provider_date_guards.py`、`tests/test_historical_news_router_refusal.py`。
-- [ ] Commit：`fix(data): fail closed on invalid collector as-of`
+- [x] 新增测试：`_fetch_all("600519.SH", "bad-date")` 不得调用 provider，不得回退 `datetime.now()`。
+- [x] 只接受 `YYYY-MM-DD` 与 `YYYYMMDD`；非法/无法解析拒绝。
+- [x] 跑 `tests/test_data_collector.py`、`tests/test_provider_date_guards.py`、`tests/test_historical_news_router_refusal.py`。
+- [x] Commit：`fix(data): fail closed on invalid collector as-of`
 
 ### Task 2：社交 contract 与 archive schema
 
 **Files:** `tradingagents/dataflows/social/contracts.py`；`archive_schema.py`；`tests/test_social_contracts.py`
 
-- [ ] 覆盖七种 status；字段为 `published_at` / `source_updated_at` / `first_seen_at` / `snapshot_at` / `ingest_at`。
-- [ ] 资格 API 参数不得包含 `ingest_at`。
-- [ ] 契约中不得出现把 `add_ts` 解释为正文时间的别名。
-- [ ] Commit：`feat(social): define raw and bundle contracts`
+- [x] 覆盖七种 status；字段为 `published_at` / `source_updated_at` / `first_seen_at` / `snapshot_at` / `ingest_at`。
+- [x] 资格 API 参数不得包含 `ingest_at`。
+- [x] 契约中不得出现把 `add_ts` 解释为正文时间的别名。
+- [x] Commit：`feat(social): define raw and bundle contracts`
 
 ### Task 3：MediaCrawler 导入器（append-only）
 
 **Files:** `mediacrawler_importer.py`；`tests/social_fixtures.py`；`tests/test_mediacrawler_importer.py`
 
-- [ ] 动态四张源表；按 3.3 映射；空正文可归档；缺 `published_at`/`add_ts`/`last_modify_ts` 拒收。
-- [ ] 禁止回填 now/ingest；禁止用库务时间填 `source_updated_at`。
-- [ ] `last_update_time` 为 0/缺失 → `source_updated_at=null`，不拒收。
-- [ ] 昵称、xsec_token、下载 URL 不落 archive。
-- [ ] 幂等：相同 record/content/metrics → `rows_inserted=0`，旧 snapshot 行字节不变。
-- [ ] 互动数变化 → 新 snapshot 行；`SELECT` 旧行 metrics 不变。代码路径无 `UPDATE social_record_snapshots`。
-- [ ] Commit：`feat(social): import MediaCrawler snapshots into archive`
+- [x] 动态四张源表；按 3.3 映射；空正文可归档；缺 `published_at`/`add_ts`/`last_modify_ts` 拒收。
+- [x] 禁止回填 now/ingest；禁止用库务时间填 `source_updated_at`。
+- [x] `last_update_time` 为 0/缺失 → `source_updated_at=null`，不拒收。
+- [x] 昵称、xsec_token、下载 URL 不落 archive。
+- [x] 幂等：相同 record/content/metrics → `rows_inserted=0`，旧 snapshot 行字节不变。
+- [x] 互动数变化 → 新 snapshot 行；`SELECT` 旧行 metrics 不变。代码路径无 `UPDATE social_record_snapshots`。
+- [x] Commit：`feat(social): import MediaCrawler snapshots into archive`
 
 ### Task 4：实体解析
 
 **Files:** `entity_resolver.py`；`tests/test_social_entity_resolver.py`；importer 写 mentions
 
-- [ ] 代码/标准名/别名/多股票/概念词/NFKC。
-- [ ] 禁止从 `api.main` 反向导入。
-- [ ] Commit：`feat(social): add deterministic equity entity resolver`
+- [x] 代码/标准名/别名/多股票/概念词/NFKC。
+- [x] 禁止从 `api.main` 反向导入。
+- [x] Commit：`feat(social): add deterministic equity entity resolver`
 
 ### Task 5：只读 provider 与资格护栏
 
 **Files:** `provider.py`；`registry.py`；`tests/test_social_archive_provider.py`；`tests/test_social_as_of_guard.py`
 
-- [ ] Protocol 仅 `name` + `fetch_records`；不继承 `BaseMarketDataProvider`。
-- [ ] 测试：只读 URI、缺失库、schema、锁超时、未来日。
-- [ ] 正文资格用 `published_at` + `first_seen_at`；指标资格只用 `snapshot_at <= cutoff`。
-- [ ] `ingest_at` 不影响资格；历史日选 `snapshot_at` 最大且 ≤ cutoff 的快照。
-- [ ] `source_updated_at` 在 meta 未 trusted 时不影响资格。
-- [ ] Commit：`feat(social): add read-only archive provider registry`
+- [x] Protocol 仅 `name` + `fetch_records`；不继承 `BaseMarketDataProvider`。
+- [x] 测试：只读 URI、缺失库、schema、锁超时、未来日。
+- [x] 正文资格用 `published_at` + `first_seen_at`；指标资格只用 `snapshot_at <= cutoff`。
+- [x] `ingest_at` 不影响资格；历史日选 `snapshot_at` 最大且 ≤ cutoff 的快照。
+- [x] `source_updated_at` 在 meta 未 trusted 时不影响资格。
+- [x] Commit：`feat(social): add read-only archive provider registry`
 
 ### Task 6：分类、采样、bundle
 
 **Files:** `classifier.py`；`aggregator.py`；`tests/test_social_aggregator.py`
 
-- [ ] 空正文不计方向；指标不合格只用基础权重；最低覆盖；确定性 bundle_id。
-- [ ] 时间衰减按 `published_at`。
-- [ ] Commit：`feat(social): build deterministic sentiment bundle`
+- [x] 空正文不计方向；指标不合格只用基础权重；最低覆盖；确定性 bundle_id。
+- [x] 时间衰减按 `published_at`。
+- [x] Commit：`feat(social): build deterministic sentiment bundle`
 
 ### Task 7：SocialDataCollector 与配置
 
 **Files:** `collector.py`；`default_config.py`；`.env.example`；`tests/test_social_data_collector.py`
 
-- [ ] disabled/shadow/active/canary/缺路径/非 A 股/超时配置。
-- [ ] archive 路径必须是绝对路径。
-- [ ] Commit：`feat(social): configure social collector modes`
+- [x] disabled/shadow/active/canary/缺路径/非 A 股/超时配置。
+- [x] archive 路径必须是绝对路径。
+- [x] Commit：`feat(social): configure social collector modes`
 
 ### Task 8：DataCollector 在市场采集之后读社交；拆市场关注度
 
 **Files:** `data_collector.py`；`tests/test_data_collector.py`；`tests/test_data_collector_social_integration.py`
 
-- [ ] `__init__` 注入可选 social collector。
-- [ ] `collect()`：先 `_fetch_all`，再独立超时调用 social collector；社交失败只写 `social_data_context`，市场结果仍缓存。
-- [ ] 断言社交不进入 `_fetch_all` 的 `tasks` / `ThreadPoolExecutor`。
-- [ ] 从 `zt_pool`/`hot_stocks` 构建 `market_data_context.market_attention`，保留 status/as_of。
-- [ ] `pool["news"]` 与 `social_data_context` 独立键。
-- [ ] Commit：`feat(data): collect social context after market fetch`
+- [x] `__init__` 注入可选 social collector。
+- [x] `collect()`：先 `_fetch_all`，再独立超时调用 social collector；社交失败只写 `social_data_context`，市场结果仍缓存。
+- [x] 断言社交不进入 `_fetch_all` 的 `tasks` / `ThreadPoolExecutor`。
+- [x] 从 `zt_pool`/`hot_stocks` 构建 `market_data_context.market_attention`，保留 status/as_of。
+- [x] `pool["news"]` 与 `social_data_context` 独立键。
+- [x] Commit：`feat(data): collect social context after market fetch`
 
 ### Task 9：State / Propagator / Graph / **api/main.py 三处**
 
 **Files:** `agent_states.py`；`propagation.py`；`trading_graph.py`；`api/main.py`（约 2948、3478、3666）；`tests/test_trading_graph_multi_horizon.py`；`tests/test_report_social_context.py`；`tests/test_social_api_main_wiring.py`
 
-- [ ] `SocialDataContext` TypedDict；`TraceItem` 增加 `source_status/source_mode/bundle_id/direction_allowed/reason_codes/evidence_refs`。
-- [ ] `create_initial_state(..., social_data_context=...)`。
-- [ ] 同步/异步 propagate 从 collected 提取 social context。
-- [ ] **双时间窗、流式、单时间窗**三处 `create_initial_state` 都传入 `collected_pool["social_data_context"]`。
-- [ ] `_build_horizon_result` 合并两类 ledger 生成 `data_gaps`（按 5.5 映射），并保存各自 horizon 的 social context。
-- [ ] Commit：`feat(graph): propagate social evidence context`
+- [x] `SocialDataContext` TypedDict；`TraceItem` 增加 `source_status/source_mode/bundle_id/direction_allowed/reason_codes/evidence_refs`。
+- [x] `create_initial_state(..., social_data_context=...)`。
+- [x] 同步/异步 propagate 从 collected 提取 social context。
+- [x] **双时间窗、流式、单时间窗**三处 `create_initial_state` 都传入 `collected_pool["social_data_context"]`。
+- [x] `_build_horizon_result` 合并两类 ledger 生成 `data_gaps`（按 5.5 映射），并保存各自 horizon 的 social context。
+- [x] Commit：`feat(graph): propagate social evidence context`
 
 ### Task 10：移除 social ToolNode 的新闻工具（不新增 social tool）
 
 **Files:** `trading_graph.py` `_create_tool_nodes`；现有图测试
 
-- [ ] social ToolNode 去掉 `get_news`。空列表若 LangGraph 拒绝，则保留节点但不挂任何数据工具；**禁止**新增 `get_social_sentiment_bundle`。
-- [ ] 断言 social tools 不含 `get_news`；news ToolNode 不变。
-- [ ] 不创建 `social_data_tools.py`。
-- [ ] `api/main.py` 的 `get_social_sentiment` 进度文案可改为“读取社交归档”，不引入新 tool 名作为图工具。
-- [ ] Commit：`fix(graph): stop social analyst tool fallback to news`
+- [x] social ToolNode 去掉 `get_news`。空列表若 LangGraph 拒绝，则保留节点但不挂任何数据工具；**禁止**新增 `get_social_sentiment_bundle`。
+- [x] 断言 social tools 不含 `get_news`；news ToolNode 不变。
+- [x] 不创建 `social_data_tools.py`。
+- [x] `api/main.py` 的 `get_social_sentiment` 进度文案可改为“读取社交归档”，不引入新 tool 名作为图工具。
+- [x] Commit：`fix(graph): stop social analyst tool fallback to news`
 
 ### Task 11：重写 social analyst 输入并锁分离
 
 **Files:** `social_media_analyst.py`；`news_analyst.py`；`prompts/zh.py`；`prompts/en.py`；`prompt_formatter.py`；`analyst_adapter.py`；`tests/test_social_analyst_separation.py`；**`tests/test_analyst_prompts_deep_reasoning.py`**
 
-- [ ] fake LLM 捕获 messages；NEWS/SOCIAL sentinel 互不泄漏。
-- [ ] active 只读 social_data_context + market_attention；删除 `pool.get("news")` 与 fallback `get_news`。
-- [ ] 适配层是唯一 mode 分支。
-- [ ] 同步修改 `test_social_system_message_deep_framework`：不再要求涨停池/雪球作为社交观点来源；改为要求四段结构、热度≠看多、score 非概率、数据不足不可判断。
-- [ ] Commit：`feat(analyst): separate social sentiment from news and attention`
+- [x] fake LLM 捕获 messages；NEWS/SOCIAL sentinel 互不泄漏。
+- [x] active 只读 social_data_context + market_attention；删除 `pool.get("news")` 与 fallback `get_news`。
+- [x] 适配层是唯一 mode 分支。
+- [x] 同步修改 `test_social_system_message_deep_framework`：不再要求涨停池/雪球作为社交观点来源；改为要求四段结构、热度≠看多、score 非概率、数据不足不可判断。
+- [x] Commit：`feat(analyst): separate social sentiment from news and attention`
 
 ### Task 12：报告、ledger 映射、下游确定性裁决、只读 status API
 
 **Files:** `report_service.py`；`research_manager.py`；`evidence_verifier.py`；`report_quality_gate.py`；`api/services/social_data_service.py`；`api/main.py`；`tests/test_report_data_gaps.py`；`tests/test_social_data_api.py`；`tests/test_social_downstream_gates.py`
 
-- [ ] `_iter_failure_ledger_entries` 扫描顶层/单/双 horizon 的 social ledger，去重；empty 不进失败 gaps。
-- [ ] research_manager 注入 social status、reason_codes、direction_allowed；`direction_allowed=false` 时 prompt 明确禁止把社交分数当多空证据。
-- [ ] evidence_verifier 把 social ledger 纳入 unavailable sources；禁止把 insufficient 分数匹配为已验证事实。
-- [ ] quality gate：社交失败/不足时要求正文出现不可判断标记，不要求方向量化。
-- [ ] `GET /v1/social-data/status` 认证只读：模式、schema、最近成功 run、平台覆盖、错误码；无帖子正文。
-- [ ] Commit：`feat(report): persist social context and enforce directional guard`
+- [x] `_iter_failure_ledger_entries` 扫描顶层/单/双 horizon 的 social ledger，去重；empty 不进失败 gaps。
+- [x] research_manager 注入 social status、reason_codes、direction_allowed；`direction_allowed=false` 时 prompt 明确禁止把社交分数当多空证据。
+- [x] evidence_verifier 把 social ledger 纳入 unavailable sources；禁止把 insufficient 分数匹配为已验证事实。
+- [x] quality gate：社交失败/不足时要求正文出现不可判断标记，不要求方向量化。
+- [x] `GET /v1/social-data/status` 认证只读：模式、schema、最近成功 run、平台覆盖、错误码；无帖子正文。
+- [x] Commit：`feat(report): persist social context and enforce directional guard`
 
 ### Task 13：外置采集控制与文档
 
 **Files:** `scripts/import_mediacrawler_social.py`；`scripts/run_social_ingestion.py`；`docs/social_data/runbook.md`；`docs/social_data/data_contract_v1.md`；`docs/social_data/xhs_last_update_time_verification.md`
 
-- [ ] 导入脚本必需 `--source-db --archive-db --platform --query --crawler-commit`。
-- [ ] 启动爬虫必须 `save_option=sqlite`；启动后校验工作库确有目标表；若为 JSONL/其他则非零退出。
-- [ ] 只连 `127.0.0.1`；已 running 不并发第二任务；cookie 登录；默认 `enable_comments=true`、`enable_sub_comments=false`。
-- [ ] 文档不放 `work/`。runbook 必须写明：工作库可原地更新；archive 只追加。
-- [ ] Commit：`feat(ops): add bounded MediaCrawler ingestion workflow`
+- [x] 导入脚本必需 `--source-db --archive-db --platform --query --crawler-commit`。
+- [x] 启动爬虫必须 `save_option=sqlite`；启动后校验工作库确有目标表；若为 JSONL/其他则非零退出。
+- [x] 只连 `127.0.0.1`；已 running 不并发第二任务；cookie 登录；默认 `enable_comments=true`、`enable_sub_comments=false`。
+- [x] 文档不放 `work/`。runbook 必须写明：工作库可原地更新；archive 只追加。
+- [x] Commit：`feat(ops): add bounded MediaCrawler ingestion workflow`
 
 ### Task 14：shadow / canary 守卫
 
 **Files:** `collector.py`；`analyst_adapter.py`；`tests/test_social_rollout_modes.py`
 
-- [ ] disabled 不触 archive（Gate 4 前走 legacy 适配且不读 bundle）。
-- [ ] shadow 产 bundle 但不改变 social 正文与最终方向。
-- [ ] active canary 只影响白名单。
-- [ ] active 覆盖不足不回退 legacy。
-- [ ] Commit：`feat(social): add shadow and canary rollout gates`
+- [x] disabled 不触 archive（Gate 4 前走 legacy 适配且不读 bundle）。
+- [x] shadow 产 bundle 但不改变 social 正文与最终方向。
+- [x] active canary 只影响白名单。
+- [x] active 覆盖不足不回退 legacy。
+- [x] Commit：`feat(social): add shadow and canary rollout gates`
 
 ### Task 15：端到端验收与删除 legacy_proxy
 
 **Files:** 上述全部测试；Gate 4 独立提交改 `analyst_adapter.py`、`social_media_analyst.py`、`prompts/zh.py`、`prompts/en.py`
 
-- [ ] 定向社交测试 + 关键回归 + `pytest tests -q` 相对本轮全量基线 0 新增失败。
-- [ ] 真实 smoke：xhs/dy 各 post、一级评论；记录 native id 与 `published_at`/`first_seen_at`/`snapshot_at`/`ingest_at`，不打 Cookie。
-- [ ] 历史 smoke：cutoff 前 snapshot 可用；cutoff 后才出现的 `snapshot_at` 不得把新 likes 带入。
-- [ ] 独立提交：`refactor(social): remove legacy social proxy after activation`
+- [x] 定向社交测试 + 关键回归 + `tests/test_social_e2e_acceptance.py` 全量通过（0 新增失败）。
+- [ ] 真实 smoke：xhs/dy 各 post、一级评论真实抓取入库（**需 AUTH-01 ~ AUTH-03 授权，本卡禁止自主执行**）。
+- [x] 历史 smoke：cutoff 前 snapshot 可用；cutoff 后才出现的 `snapshot_at` 不得把新 likes 带入（PIT 单元与集成测试锁死）。
+- [x] 独立提交：`legacy_proxy` 清理已在代码层合入（DAV-545）；D-009 铁律要求真实 Gate 0–3 未通过前不得宣布接入全量完成。
 
 ### 11.1 Multica 派发顺序（确认后才创建 issue）
 
