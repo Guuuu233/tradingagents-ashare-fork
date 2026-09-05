@@ -249,6 +249,19 @@ _TUSHARE_FUND_FLOW_MAX_ATTEMPTS = 2
 _TUSHARE_FUND_FLOW_RETRY_DELAY = 0.2
 _TUSHARE_DC_API = "moneyflow_dc"
 _TUSHARE_THS_API = "moneyflow_ths"
+_TUSHARE_DAILY_BASIC_API = "daily_basic"
+_TUSHARE_DAILY_BASIC_REQUIRED_FIELDS = (
+    "ts_code",
+    "trade_date",
+    "close",
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "free_share",
+    "circ_mv",
+    "total_mv",
+    "amount",
+)
 _TUSHARE_DC_SOURCE = "tushare_eastmoney_moneyflow_dc"
 _TUSHARE_THS_SOURCE = "tushare_ths_moneyflow_ths"
 _TUSHARE_DC_FIELD_SEMANTICS = "今日主力净流入额（万元）"
@@ -265,6 +278,10 @@ _TUSHARE_REQUEST_FIELDS = {
     _TUSHARE_THS_API: (
         "ts_code,trade_date,net_amount,buy_sm_amount,buy_md_amount,"
         "buy_lg_amount"
+    ),
+    _TUSHARE_DAILY_BASIC_API: (
+        "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
+        "free_share,circ_mv,total_mv,amount"
     ),
 }
 _TUSHARE_COMPONENT_FIELDS = {
@@ -2032,7 +2049,13 @@ class CnAkshareProvider(BaseMarketDataProvider):
         except (TypeError, ValueError):
             status_code = 0
         if status_code >= 400:
-            category = "rate_limited" if status_code == 429 else "http_error"
+            category = (
+                "rate_limited"
+                if status_code == 429
+                else "permission_denied"
+                if status_code == 403
+                else "http_error"
+            )
             return (
                 None,
                 self._tushare_error(api_name, category, f"status={status_code}"),
@@ -2655,6 +2678,199 @@ class CnAkshareProvider(BaseMarketDataProvider):
             requested_as_of=requested_as_of,
         )
         return value, errors, value.fund_flow_evidence_meta
+
+    def _fetch_tushare_daily_basic(
+        self,
+        symbol: str,
+        trade_date: str,
+        as_of: str | None = None,
+    ) -> tuple[dict | None, str | None, str | None]:
+        """Fetch single-day daily_basic indicators via Tushare transport.
+
+        Returns:
+            (basic_row, error_str, failure_category)
+            - basic_row: dict containing fields by name (at least close, turnover_rate,
+                         turnover_rate_f, volume_ratio, free_share, circ_mv, total_mv, amount)
+            - error_str: typed error string formatted as tushare.daily_basic:<category>(detail)
+            - failure_category: category slug (token_missing, date_exceeds_as_of,
+                                permission_denied, no_rows, missing_field, json_shape, etc.)
+        """
+        # 1. Date normalization and PIT boundary check (trade_date <= as_of)
+        norm_trade_date = self._tushare_date(trade_date)
+        if not norm_trade_date:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "validation", "trade_date"),
+                "validation",
+            )
+        if as_of:
+            norm_as_of = self._tushare_date(as_of)
+            if not norm_as_of:
+                return (
+                    None,
+                    self._tushare_error(_TUSHARE_DAILY_BASIC_API, "validation", "as_of"),
+                    "validation",
+                )
+            if norm_trade_date > norm_as_of:
+                return (
+                    None,
+                    self._tushare_error(
+                        _TUSHARE_DAILY_BASIC_API,
+                        "date_exceeds_as_of",
+                        f"{norm_trade_date}>{norm_as_of}",
+                    ),
+                    "date_exceeds_as_of",
+                )
+
+        # 2. Token check (must not make network call if token is missing)
+        token = os.getenv("TUSHARE_TOKEN", "").strip()
+        if not token:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "token_missing"),
+                "token_missing",
+            )
+
+        # 3. Symbol conversion
+        try:
+            ts_code = self._tushare_ts_code(symbol)
+        except (ValueError, Exception):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "validation", "symbol"),
+                "validation",
+            )
+
+        # 4. Request gateway via existing _tushare_post
+        formatted_trade_date = norm_trade_date.replace("-", "")
+        payload, error, category = self._tushare_post(
+            _TUSHARE_DAILY_BASIC_API, token, ts_code, formatted_trade_date
+        )
+        if error:
+            return None, error, category
+
+        if not isinstance(payload, dict):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape"),
+                "json_shape",
+            )
+
+        # 5. Business code check
+        code = payload.get("code")
+        try:
+            code_value = int(code)
+        except (TypeError, ValueError):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "api_code_invalid"),
+                "api_code_invalid",
+            )
+        if code_value != 0:
+            cat = self._tushare_api_failure_category(code, payload.get("msg"))
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, cat, f"code={code}"),
+                cat,
+            )
+
+        # 6. Response structure check
+        if "data" not in payload:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape", "data_missing"),
+                "json_shape",
+            )
+        data = payload.get("data")
+        if data is None:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "no_rows"),
+                "no_rows",
+            )
+        if not isinstance(data, dict):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape", "data_not_object"),
+                "json_shape",
+            )
+        fields = data.get("fields")
+        items = data.get("items")
+        if not isinstance(fields, (list, tuple)):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape", "fields_not_list"),
+                "json_shape",
+            )
+        if not isinstance(items, (list, tuple)):
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape", "items_not_list"),
+                "json_shape",
+            )
+        if not items:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "no_rows"),
+                "no_rows",
+            )
+
+        # 7. Required fields check (by name, not by index)
+        field_names = [str(f) for f in fields]
+        missing_fields = [f for f in _TUSHARE_DAILY_BASIC_REQUIRED_FIELDS if f not in field_names]
+        if missing_fields:
+            return (
+                None,
+                self._tushare_error(
+                    _TUSHARE_DAILY_BASIC_API, "missing_field", ",".join(missing_fields)
+                ),
+                "missing_field",
+            )
+
+        # 8. Row extraction by column names (no iloc)
+        matches: list[dict] = []
+        malformed_rows = 0
+        for item in items:
+            if isinstance(item, dict):
+                row = dict(item)
+            elif isinstance(item, (list, tuple)) and len(item) >= len(field_names):
+                row = dict(zip(field_names, item))
+            else:
+                malformed_rows += 1
+                continue
+            if self._tushare_date(row.get("trade_date")) == norm_trade_date:
+                matches.append(row)
+
+        if not matches:
+            if malformed_rows == len(items):
+                return (
+                    None,
+                    self._tushare_error(_TUSHARE_DAILY_BASIC_API, "json_shape", "row_shape"),
+                    "json_shape",
+                )
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "no_rows"),
+                "no_rows",
+            )
+
+        if len(matches) > 1:
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "duplicate_date", norm_trade_date),
+                "duplicate_date",
+            )
+
+        matched_row = matches[0]
+        returned_ts_code = str(matched_row.get("ts_code") or "").strip().upper()
+        if returned_ts_code and returned_ts_code != ts_code.upper():
+            return (
+                None,
+                self._tushare_error(_TUSHARE_DAILY_BASIC_API, "symbol_mismatch"),
+                "symbol_mismatch",
+            )
+
+        return dict(matched_row), None, None
 
     def get_individual_fund_flow(self, symbol: str, curr_date: str = None) -> str:
         """获取个股近期主力资金净流向，并按 curr_date 截断。
