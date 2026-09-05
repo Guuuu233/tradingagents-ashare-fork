@@ -262,6 +262,21 @@ _TUSHARE_DAILY_BASIC_REQUIRED_FIELDS = (
     "total_mv",
     "amount",
 )
+_TUSHARE_FORECAST_API = "forecast"
+_TUSHARE_FORECAST_REQUIRED_FIELDS = (
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "type",
+    "p_change_min",
+    "p_change_max",
+    "net_profit_min",
+    "net_profit_max",
+    "last_parent_net",
+    "first_ann_date",
+    "summary",
+    "change_reason",
+)
 _TUSHARE_DC_SOURCE = "tushare_eastmoney_moneyflow_dc"
 _TUSHARE_THS_SOURCE = "tushare_ths_moneyflow_ths"
 _TUSHARE_DC_FIELD_SEMANTICS = "今日主力净流入额（万元）"
@@ -282,6 +297,11 @@ _TUSHARE_REQUEST_FIELDS = {
     _TUSHARE_DAILY_BASIC_API: (
         "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
         "free_share,circ_mv,total_mv,amount"
+    ),
+    _TUSHARE_FORECAST_API: (
+        "ts_code,ann_date,end_date,type,p_change_min,p_change_max,"
+        "net_profit_min,net_profit_max,last_parent_net,first_ann_date,"
+        "summary,change_reason"
     ),
 }
 _TUSHARE_COMPONENT_FIELDS = {
@@ -2031,12 +2051,19 @@ class CnAkshareProvider(BaseMarketDataProvider):
         api_name: str,
         token: str,
         ts_code: str,
-        trade_date: str,
+        trade_date: str = "",
+        params: dict | None = None,
     ) -> tuple[dict | None, str | None, str | None, bool]:
+        if params is not None:
+            request_params = dict(params)
+        elif trade_date:
+            request_params = {"ts_code": ts_code, "trade_date": trade_date}
+        else:
+            request_params = {"ts_code": ts_code} if ts_code else {}
         payload = {
             "api_name": api_name,
             "token": token,
-            "params": {"ts_code": ts_code, "trade_date": trade_date},
+            "params": request_params,
             "fields": _TUSHARE_REQUEST_FIELDS[api_name],
         }
         response, error, category, retryable = self._tushare_transport_post(
@@ -2072,9 +2099,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
         api_name: str,
         token: str,
         ts_code: str,
-        trade_date: str,
+        trade_date: str = "",
+        params: dict | None = None,
     ) -> tuple[dict | None, str | None, str | None]:
-        """POST one exact-date Tushare request without leaking the token."""
+        """POST one Tushare request without leaking the token."""
         if _TUSHARE_FUND_FLOW_MAX_ATTEMPTS <= 0:
             return (
                 None,
@@ -2084,7 +2112,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
         result: tuple[dict | None, str | None, str | None, bool]
         for attempt in range(_TUSHARE_FUND_FLOW_MAX_ATTEMPTS):
             result = self._tushare_post_once(
-                api_name, token, ts_code, trade_date
+                api_name, token, ts_code, trade_date, params=params
             )
             payload, error, category, retryable = result
             if not retryable or attempt + 1 >= _TUSHARE_FUND_FLOW_MAX_ATTEMPTS:
@@ -2871,6 +2899,254 @@ class CnAkshareProvider(BaseMarketDataProvider):
             )
 
         return dict(matched_row), None, None
+
+    def _fetch_tushare_forecast(
+        self,
+        symbol: str,
+        as_of: str | None = None,
+        ann_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[list[dict], str | None, str | None]:
+        """Fetch structured forecast (业绩预告) collateral records via Tushare transport.
+
+        Enforces contract (C-05 Slice 2 / DAV-640):
+        1. PIT boundary guard: rows with ann_date > as_of are discarded. Strictly forbids
+           using end_date for truncation.
+        2. Column access by name (no iloc); missing ann_date in schema -> schema_drift/missing_field.
+        3. 403/token_missing -> provider_failure; 0 rows -> collateral_empty (never confirmed_empty).
+        4. canonical_event_id is ALWAYS None (strictly forbids inventing cninfo ID).
+        5. Reuses existing _tushare_post without creating a new HTTP client.
+
+        Returns:
+            (records, error_str, failure_category)
+            - records: list of dicts containing forecast collateral fields by name,
+                       with canonical_event_id=None, or [] on failure/empty.
+            - error_str: typed error string formatted as tushare.forecast:<category>(detail)
+            - failure_category: category slug (provider_failure, collateral_empty,
+                                schema_drift, json_shape, validation, etc.)
+        """
+        # 1. PIT as_of normalization & validation
+        norm_as_of = None
+        if as_of:
+            norm_as_of = self._tushare_date(as_of)
+            if not norm_as_of:
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_FORECAST_API, "validation", "as_of"),
+                    "validation",
+                )
+
+        # 2. Token check (must not make network call if token is missing; maps to provider_failure)
+        token = os.getenv("TUSHARE_TOKEN", "").strip()
+        if not token:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "provider_failure", "token_missing"),
+                "provider_failure",
+            )
+
+        # 3. Symbol conversion
+        try:
+            ts_code = self._tushare_ts_code(symbol)
+        except (ValueError, Exception):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "validation", "symbol"),
+                "validation",
+            )
+
+        # 4. Build request parameters and call gateway via existing _tushare_post
+        params = {"ts_code": ts_code}
+        if ann_date:
+            norm_ann = self._tushare_date(ann_date)
+            if norm_ann:
+                params["ann_date"] = norm_ann.replace("-", "")
+        if start_date:
+            norm_start = self._tushare_date(start_date)
+            if norm_start:
+                params["start_date"] = norm_start.replace("-", "")
+        if end_date:
+            norm_end = self._tushare_date(end_date)
+            if norm_end:
+                params["end_date"] = norm_end.replace("-", "")
+
+        payload, error, category = self._tushare_post(
+            _TUSHARE_FORECAST_API, token, ts_code, params=params
+        )
+        if error:
+            if category == "permission_denied" or "403" in str(error) or "403" in str(category):
+                return (
+                    [],
+                    self._tushare_error(_TUSHARE_FORECAST_API, "provider_failure", "403_forbidden"),
+                    "provider_failure",
+                )
+            return [], error, category
+
+        if not isinstance(payload, dict):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "json_shape"),
+                "json_shape",
+            )
+
+        # 5. Business code check (permission errors map to provider_failure)
+        code = payload.get("code")
+        try:
+            code_value = int(code)
+        except (TypeError, ValueError):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "api_code_invalid"),
+                "api_code_invalid",
+            )
+        if code_value != 0:
+            cat = self._tushare_api_failure_category(code, payload.get("msg"))
+            if cat == "permission_denied" or code_value in (2001, 2002, 40101, 40102, 40103):
+                return (
+                    [],
+                    self._tushare_error(
+                        _TUSHARE_FORECAST_API, "provider_failure", f"permission_denied:code={code}"
+                    ),
+                    "provider_failure",
+                )
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, cat, f"code={code}"),
+                cat,
+            )
+
+        # 6. Response structure check
+        if "data" not in payload:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "json_shape", "data_missing"),
+                "json_shape",
+            )
+        data = payload.get("data")
+        if data is None:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "collateral_empty"),
+                "collateral_empty",
+            )
+        if not isinstance(data, dict):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "json_shape", "data_not_object"),
+                "json_shape",
+            )
+        fields = data.get("fields")
+        items = data.get("items")
+        if not isinstance(fields, (list, tuple)):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "json_shape", "fields_not_list"),
+                "json_shape",
+            )
+        if not isinstance(items, (list, tuple)):
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "json_shape", "items_not_list"),
+                "json_shape",
+            )
+        if not items:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "collateral_empty"),
+                "collateral_empty",
+            )
+
+        # 7. Required fields check (by name, not by index; 缺 ann_date -> schema_drift/missing_field)
+        field_names = [str(f) for f in fields]
+        if "ann_date" not in field_names:
+            return (
+                [],
+                self._tushare_error(
+                    _TUSHARE_FORECAST_API, "schema_drift", "missing_field:ann_date"
+                ),
+                "schema_drift",
+            )
+
+        # 8. Row extraction by column names (no iloc) & PIT filtering (ann_date <= as_of)
+        records: list[dict] = []
+        for item in items:
+            if isinstance(item, dict):
+                raw_row = dict(item)
+            elif isinstance(item, (list, tuple)) and len(item) >= len(field_names):
+                raw_row = dict(zip(field_names, item))
+            else:
+                continue
+
+            row_ann_date_raw = raw_row.get("ann_date")
+            if not row_ann_date_raw:
+                continue
+            norm_ann_date = self._tushare_date(row_ann_date_raw)
+            if not norm_ann_date:
+                continue
+
+            # PIT boundary check: discard row if ann_date > as_of
+            # Strictly forbidden: never truncate with end_date!
+            if norm_as_of and norm_ann_date > norm_as_of:
+                continue
+
+            row_ts_code = str(raw_row.get("ts_code") or "").strip()
+            row_end_date = str(raw_row.get("end_date") or "").strip()
+            forecast_type = raw_row.get("type")
+            p_change_min = raw_row.get("p_change_min")
+            p_change_max = raw_row.get("p_change_max")
+            net_profit_min = raw_row.get("net_profit_min")
+            net_profit_max = raw_row.get("net_profit_max")
+            last_parent_net = raw_row.get("last_parent_net")
+            first_ann_date = raw_row.get("first_ann_date")
+            summary = raw_row.get("summary")
+            change_reason = raw_row.get("change_reason")
+
+            collateral_id = f"tushare:forecast:{row_ts_code or ts_code}:{norm_ann_date}"
+            if row_end_date:
+                collateral_id = f"{collateral_id}:{row_end_date}"
+
+            # Contract 4: canonical_event_id MUST be None
+            record = {
+                "canonical_event_id": None,
+                "collateral_id": collateral_id,
+                "source_type": "tushare_forecast",
+                "symbol": symbol,
+                "ts_code": row_ts_code or ts_code,
+                "ann_date": norm_ann_date,
+                "end_date": row_end_date,
+                "type": forecast_type,
+                "p_change_min": p_change_min,
+                "p_change_max": p_change_max,
+                "net_profit_min": net_profit_min,
+                "net_profit_max": net_profit_max,
+                "last_parent_net": last_parent_net,
+                "first_ann_date": first_ann_date,
+                "summary": summary,
+                "change_reason": change_reason,
+                "payload": {
+                    "type": forecast_type,
+                    "p_change_min": p_change_min,
+                    "p_change_max": p_change_max,
+                    "net_profit_min": net_profit_min,
+                    "net_profit_max": net_profit_max,
+                    "last_parent_net": last_parent_net,
+                    "first_ann_date": first_ann_date,
+                    "summary": summary,
+                    "change_reason": change_reason,
+                },
+            }
+            records.append(record)
+
+        if not records:
+            return (
+                [],
+                self._tushare_error(_TUSHARE_FORECAST_API, "collateral_empty"),
+                "collateral_empty",
+            )
+
+        records.sort(key=lambda r: str(r.get("ann_date") or ""), reverse=True)
+        return records, None, None
 
     def get_individual_fund_flow(self, symbol: str, curr_date: str = None) -> str:
         """获取个股近期主力资金净流向，并按 curr_date 截断。
