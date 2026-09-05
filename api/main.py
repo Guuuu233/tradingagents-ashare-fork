@@ -2053,6 +2053,9 @@ def _mount_or_refresh_protocol_metadata_and_metrics(
 def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
     market_context = final_state.get("market_context") or {}
     market_data_context = final_state.get("market_data_context") or {}
+    social_data_context = final_state.get("social_data_context")
+    if social_data_context is None:
+        social_data_context = {}
     daily_context = market_data_context.get("daily") or {}
     failure_ledger = market_data_context.get("data_failure_ledger") or []
     data_gaps = [
@@ -2080,6 +2083,7 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "instrument_context": final_state.get("instrument_context"),
         "market_context": market_context,
         "market_data_context": market_data_context,
+        "social_data_context": social_data_context,
         "user_context": final_state.get("user_context"),
         "workflow_context": final_state.get("workflow_context"),
         "market_report": final_state.get("market_report"),
@@ -3287,6 +3291,15 @@ async def _run_job_inner(
                         for horizon in request.horizons
                         if horizon_results[horizon].get("status") == "completed"
                     },
+                    "social_data_context": {
+                        horizon: (
+                            horizon_results[horizon].get("social_data_context")
+                            if horizon_results[horizon].get("social_data_context") is not None
+                            else {}
+                        )
+                        for horizon in request.horizons
+                        if horizon_results[horizon].get("status") == "completed"
+                    },
                     "short_term": short_r,
                     "medium_term": medium_r,
                     "horizons": {"short": short_r, "medium": medium_r},
@@ -3414,6 +3427,11 @@ async def _run_job_inner(
                 "user_intent": user_intent,
                 "model_config_snapshot": model_snapshot,
                 "market_data_context": primary_r.get("market_data_context"),
+                "social_data_context": (
+                    primary_r.get("social_data_context")
+                    if primary_r.get("social_data_context") is not None
+                    else {}
+                ),
                 "short_term": short_r,
                 "medium_term": medium_r,
                 "decision": graph_decision or "UNKNOWN",
@@ -5121,6 +5139,9 @@ def get_report_endpoint(
     code_to_name = _get_report_reverse_stock_map()
     report.name = code_to_name.get(report.symbol, report.symbol)
     _attach_job_runtime_state(report, report_id)
+    if report.result_data and isinstance(report.result_data, dict):
+        if "social_data_context" not in report.result_data or report.result_data["social_data_context"] is None:
+            report.result_data["social_data_context"] = {}
     return report
 
 

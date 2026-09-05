@@ -358,3 +358,215 @@ def test_log_state_includes_safe_social_data_context_summary():
     summary_str = str(summary)
     assert "敏感正文内容不应入日志" not in summary_str
     assert "sensitive_session_cookie" not in summary_str
+
+
+# ============================================================================
+# API Level & Database Persistence Tests (Commit B / Contract 4 / DAV-649)
+# ============================================================================
+
+
+def test_api_build_result_payload_preserves_social_data_context():
+    """DAV-649 Commit B: _build_result_payload must preserve social_data_context (empty dict fallback)."""
+    from api.main import _build_result_payload
+
+    # 1. State with populated social_data_context
+    social_ctx = {
+        "status": "available",
+        "mode": "active",
+        "requested_as_of": "2026-08-27",
+        "direction_allowed": True,
+        "reason_codes": [],
+        "bundle": {"bundle_id": "sha256:b1"},
+    }
+    final_state_with_social = {
+        "company_of_interest": "601012.SH",
+        "trade_date": "2026-08-27",
+        "market_data_context": {"daily": {"as_of": "2026-08-27"}},
+        "social_data_context": social_ctx,
+        "final_trade_decision": "买入",
+    }
+    result = _build_result_payload(final_state_with_social)
+    assert "social_data_context" in result
+    assert result["social_data_context"] == social_ctx
+    assert result["social_data_context"]["direction_allowed"] is True
+
+    # 2. State with social_data_context=None -> must fall back to empty dict (key MUST be present)
+    final_state_none_social = {
+        "company_of_interest": "601012.SH",
+        "trade_date": "2026-08-27",
+        "market_data_context": {"daily": {"as_of": "2026-08-27"}},
+        "social_data_context": None,
+        "final_trade_decision": "买入",
+    }
+    result_none = _build_result_payload(final_state_none_social)
+    assert "social_data_context" in result_none
+    assert isinstance(result_none["social_data_context"], dict)
+    assert result_none["social_data_context"] == {}
+
+
+def test_api_single_and_dual_horizon_create_report_persistence_and_read_roundtrip():
+    """DAV-649 Commit B: Single and dual horizon reports roundtrip social_data_context through DB.
+
+    Tests:
+    1. Single horizon payload -> create_report -> DB -> get_report has social_data_context.
+    2. Dual horizon payload -> create_report -> DB -> get_report has top-level & per-horizon social_data_context.
+    3. Legacy report missing social_data_context guarantees key on read.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from api.database import Base, ReportDB
+    from api.main import _build_result_payload
+    from api.services import report_service
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = session_factory()
+
+    try:
+        # 1. Single-horizon roundtrip
+        social_ctx = {
+            "status": "not_applicable",
+            "mode": "disabled",
+            "requested_as_of": "2026-08-27",
+            "direction_allowed": False,
+            "reason_codes": ["social_not_applicable"],
+            "bundle": None,
+            "data_failure_ledger": [],
+        }
+        final_state = {
+            "company_of_interest": "601012.SH",
+            "horizon": "short",
+            "trade_date": "2026-08-27",
+            "market_data_context": {"daily": {"as_of": "2026-08-27"}},
+            "social_data_context": social_ctx,
+            "final_trade_decision": "中性",
+            "decision": "WAIT",
+        }
+        single_result = _build_result_payload(final_state)
+        single_result["decision"] = "WAIT"
+
+        created_single = report_service.create_report(
+            db=db,
+            symbol="601012.SH",
+            trade_date="2026-08-27",
+            decision="WAIT",
+            result_data=single_result,
+            user_id="user_test_single",
+            data_gaps=single_result.get("data_gaps", []),
+            falsification_conditions=[],
+        )
+
+        fetched_single = report_service.get_report(db, created_single.id, user_id="user_test_single")
+        assert fetched_single is not None
+        assert fetched_single.result_data is not None
+        assert "social_data_context" in fetched_single.result_data
+        persisted_ctx = fetched_single.result_data["social_data_context"]
+        assert persisted_ctx["status"] == "not_applicable"
+        assert persisted_ctx["mode"] == "disabled"
+        assert persisted_ctx["direction_allowed"] is False
+        assert persisted_ctx["reason_codes"] == ["social_not_applicable"]
+
+        # 2. Dual-horizon roundtrip
+        short_social_ctx = {
+            "status": "not_applicable",
+            "mode": "disabled",
+            "requested_as_of": "2026-08-27",
+            "direction_allowed": False,
+            "reason_codes": ["social_not_applicable"],
+        }
+        medium_social_ctx = {
+            "status": "not_applicable",
+            "mode": "disabled",
+            "requested_as_of": "2026-08-27",
+            "direction_allowed": False,
+            "reason_codes": ["social_not_applicable"],
+        }
+        dual_result = {
+            "symbol": "300015.SZ",
+            "trade_date": "2026-08-27",
+            "mode": "dual_horizon",
+            "decision": "WAIT",
+            "market_data_context": {
+                "short": {"daily": {"as_of": "2026-08-27"}},
+                "medium": {"daily": {"as_of": "2026-08-27"}},
+            },
+            "social_data_context": {
+                "short": short_social_ctx,
+                "medium": medium_social_ctx,
+            },
+            "short_term": {
+                "horizon": "short",
+                "status": "completed",
+                "market_data_context": {"daily": {"as_of": "2026-08-27"}},
+                "social_data_context": short_social_ctx,
+                "final_trade_decision": "中性",
+            },
+            "medium_term": {
+                "horizon": "medium",
+                "status": "completed",
+                "market_data_context": {"daily": {"as_of": "2026-08-27"}},
+                "social_data_context": medium_social_ctx,
+                "final_trade_decision": "中性",
+            },
+            "data_gaps": [],
+            "falsification_conditions": [],
+            "not_applicable": False,
+        }
+
+        created_dual = report_service.create_report(
+            db=db,
+            symbol="300015.SZ",
+            trade_date="2026-08-27",
+            decision="WAIT",
+            result_data=dual_result,
+            user_id="user_test_dual",
+            data_gaps=[],
+            falsification_conditions=[],
+        )
+
+        fetched_dual = report_service.get_report(db, created_dual.id, user_id="user_test_dual")
+        assert fetched_dual is not None
+        assert fetched_dual.result_data is not None
+        assert "social_data_context" in fetched_dual.result_data
+        top_social = fetched_dual.result_data["social_data_context"]
+        assert "short" in top_social
+        assert top_social["short"]["status"] == "not_applicable"
+        assert top_social["short"]["direction_allowed"] is False
+        assert "medium" in top_social
+        assert top_social["medium"]["direction_allowed"] is False
+        # Nested horizons must also preserve social_data_context
+        assert "social_data_context" in fetched_dual.result_data["short_term"]
+        assert fetched_dual.result_data["short_term"]["social_data_context"]["status"] == "not_applicable"
+        assert "social_data_context" in fetched_dual.result_data["medium_term"]
+
+        # 3. Legacy report without social_data_context guarantees empty dict key on read
+        legacy_result = {
+            "symbol": "600000.SH",
+            "trade_date": "2026-08-27",
+            "market_data_context": {},
+            "final_trade_decision": "买入",
+        }
+        # Directly insert into DB to simulate pre-existing historical DB row
+        import uuid
+        legacy_id = str(uuid.uuid4())
+        legacy_row = ReportDB(
+            id=legacy_id,
+            user_id="user_test_legacy",
+            symbol="600000.SH",
+            trade_date="2026-08-27",
+            status="completed",
+            decision="BUY",
+            result_data=legacy_result,
+        )
+        db.add(legacy_row)
+        db.commit()
+
+        fetched_legacy = report_service.get_report(db, legacy_id, user_id="user_test_legacy")
+        assert fetched_legacy is not None
+        assert "social_data_context" in fetched_legacy.result_data
+        assert isinstance(fetched_legacy.result_data["social_data_context"], dict)
+        assert fetched_legacy.result_data["social_data_context"] == {}
+    finally:
+        db.close()
+        engine.dispose()
