@@ -51,6 +51,7 @@ from tradingagents.dataflows.cninfo_disclosure import (
     STATUS_OK,
     STATUS_PROVIDER_FAILURE,
     SOURCE_TYPE_ANNOUNCEMENT,
+    SOURCE_TYPE_IR_SURVEY,
 )
 from tradingagents.dataflows.fund_flow_evidence import (
     build_gap_meta,
@@ -1803,6 +1804,22 @@ def _fetch_all(
                 "cutoff": norm_trade_date,
             },
         ),
+        "cninfo_ir_surveys": (
+            cn_provider.get_cninfo_ir_surveys
+            if cn_provider and hasattr(cn_provider, "get_cninfo_ir_surveys")
+            else lambda **kw: CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error="cn_akshare provider unavailable",
+                source_type=SOURCE_TYPE_IR_SURVEY,
+            ),
+            {
+                "symbol": ticker,
+                "start_date": news_start_date,
+                "end_date": norm_trade_date,
+                "cutoff": norm_trade_date,
+            },
+        ),
         "global_news": (get_global_news, {"curr_date": norm_trade_date, "look_back_days": lookback, "limit": 30}),
         "fund_flow_board": (get_board_fund_flow, {"curr_date": norm_trade_date}),
         "fund_flow_individual": (get_individual_fund_flow, {"symbol": ticker, "curr_date": norm_trade_date}),
@@ -1858,6 +1875,20 @@ def _fetch_all(
             status=STATUS_OK,
             records=[],
             source_type=SOURCE_TYPE_ANNOUNCEMENT,
+        )
+
+    # 保证 cninfo_ir_surveys 始终为 envelope
+    ir_val = results.get("cninfo_ir_surveys")
+    if (
+        ir_val is None
+        or isinstance(ir_val, str)
+        or not (hasattr(ir_val, "status") and hasattr(ir_val, "records"))
+    ):
+        results["cninfo_ir_surveys"] = CninfoDisclosureEnvelope(
+            status=STATUS_PROVIDER_FAILURE,
+            records=[],
+            error=str(ir_val) if ir_val else "cninfo_ir_surveys unavailable",
+            source_type=SOURCE_TYPE_IR_SURVEY,
         )
 
     # ── 产业链数据层采集 (MVP: 消费电子 / 新能源车 / 27 行业) ─────────────
