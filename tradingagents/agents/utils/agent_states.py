@@ -395,6 +395,18 @@ class RiskFeedbackState(TypedDict):
     revision_reason: Annotated[str, "Why the plan was sent back"]
 
 
+class HorizonRunMetadata(TypedDict, total=False):
+    requested: Annotated[Optional[List[str]], "User-requested horizon list or None if unprovided"]
+    resolved: Annotated[List[str], "Resolved horizon list, e.g. ['short'] or ['short', 'medium']"]
+    resolution_source: Annotated[str, "Resolution source: default, explicit, or legacy"]
+    profile_id: Annotated[str, "Horizon profile contract identifier"]
+    primary_eval_offsets: Annotated[dict[str, int], "Planned evaluation step offsets per resolved horizon"]
+    cutoff: Annotated[Optional[str], "Confirmed data cutoff date identical to workflow_context.data_as_of"]
+    investment_horizon: Annotated[Optional[str], "User's intended holding horizon from user_context"]
+    notice: Annotated[Optional[str], "Optional non-blocking notice regarding horizon selection"]
+    evaluation_eligible: Annotated[bool, "Whether run is eligible for evaluation (defaults to False/omitted)"]
+
+
 class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     trade_date: Annotated[str, "What date we are trading at"]
@@ -433,6 +445,9 @@ class AgentState(MessagesState):
     event_coverage: Annotated[dict[str, Any], "Structured news event evidence and coverage summary"]
     user_intent: Annotated[Optional[UserIntent], "Parsed user intent from natural language"]
     horizon: Annotated[str, "Current analysis horizon: short or medium"]
+    horizon_run_metadata: Annotated[
+        HorizonRunMetadata, "Analysis horizon run metadata and resolution profile"
+    ]
     analyst_traces: Annotated[List[TraceItem], operator.add]
     manager_verdict: Annotated[dict[str, Any], "Structured research manager verdict"]
     evidence_verification: Annotated[list[dict[str, Any]], "Deterministic evidence factual verification results"]

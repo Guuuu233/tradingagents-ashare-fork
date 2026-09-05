@@ -1,9 +1,10 @@
 # TradingAgents/graph/propagation.py
 
 import copy
-from typing import Dict, Any, List, Optional, Mapping
+from typing import Dict, Any, List, Optional, Mapping, Union
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_PROTOCOL_METADATA,
+    HorizonRunMetadata,
     InvestDebateState,
     PROTOCOL_VERSION_V1_LEGACY,
     PROTOCOL_VERSION_V2_STRUCTURED,
@@ -23,6 +24,13 @@ from tradingagents.agents.utils.debate_utils import (
     default_round_goal,
 )
 from .data_collector import default_market_data_context
+from .horizon_profile import (
+    HORIZON_PROFILE_V1,
+    HorizonResolution,
+    RESOLUTION_SOURCE_DEFAULT,
+    RESOLUTION_SOURCE_EXPLICIT,
+    resolve_analysis_horizons,
+)
 from tradingagents.dataflows.social.contracts import create_default_social_data_context
 
 
@@ -56,6 +64,7 @@ class Propagator:
         market_data_context: Optional[Dict[str, Any]] = None,
         social_data_context: Optional[Dict[str, Any]] = None,
         runtime_config: Optional[Mapping[str, Any]] = None,
+        horizon_resolution: Optional[Union[HorizonResolution, Mapping[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
         instrument_context = infer_instrument_context(company_name)
@@ -72,6 +81,64 @@ class Propagator:
             protocol_meta["protocol_version"] = PROTOCOL_VERSION_V2_STRUCTURED
             protocol_meta["protocol_stage"] = "opening"
             protocol_meta["feature_flags"]["v2_debate_enabled"] = True
+
+        # Resolve horizon run metadata according to H-02a contract
+        if horizon_resolution is None:
+            # Unprovided path: default short even if horizon="medium" slice was passed
+            hr = resolve_analysis_horizons()
+            resolved = list(hr.resolved)
+            resolution_source = hr.resolution_source
+            notice = hr.notice
+            requested = None
+        elif isinstance(horizon_resolution, HorizonResolution):
+            resolved = list(horizon_resolution.resolved)
+            resolution_source = horizon_resolution.resolution_source
+            notice = horizon_resolution.notice
+            requested_attr = getattr(horizon_resolution, "requested", None)
+            if requested_attr is not None:
+                requested = list(requested_attr)
+            elif resolution_source == RESOLUTION_SOURCE_EXPLICIT:
+                requested = list(resolved)
+            else:
+                requested = None
+        elif isinstance(horizon_resolution, Mapping):
+            resolved = list(horizon_resolution.get("resolved") or ["short"])
+            resolution_source = str(
+                horizon_resolution.get("resolution_source") or RESOLUTION_SOURCE_DEFAULT
+            )
+            notice = horizon_resolution.get("notice")
+            if "requested" in horizon_resolution and horizon_resolution["requested"] is not None:
+                requested = list(horizon_resolution["requested"])
+            elif resolution_source == RESOLUTION_SOURCE_EXPLICIT:
+                requested = list(resolved)
+            else:
+                requested = None
+        else:
+            hr = resolve_analysis_horizons(horizon_resolution)
+            resolved = list(hr.resolved)
+            resolution_source = hr.resolution_source
+            notice = hr.notice
+            requested = list(resolved) if resolution_source == RESOLUTION_SOURCE_EXPLICIT else None
+
+        primary_eval_offsets = {
+            h: HORIZON_PROFILE_V1[h]["primary_eval_offset"]
+            for h in resolved
+            if h in HORIZON_PROFILE_V1
+        }
+        cutoff = market_context.get("data_as_of") if market_context else None
+        investment_horizon = normalized_user_context.get("investment_horizon") or None
+
+        horizon_run_metadata: Dict[str, Any] = {
+            "requested": requested,
+            "resolved": resolved,
+            "resolution_source": resolution_source,
+            "profile_id": "horizon_profile_v1",
+            "primary_eval_offsets": primary_eval_offsets,
+            "cutoff": cutoff,
+            "investment_horizon": investment_horizon,
+        }
+        if notice is not None:
+            horizon_run_metadata["notice"] = notice
 
         investment_debate_state_dict: Dict[str, Any] = {
             "history": "",
@@ -140,6 +207,7 @@ class Propagator:
             "metadata": {},
             "analyst_traces": [],
             "horizon": horizon,
+            "horizon_run_metadata": horizon_run_metadata,
             "short_term_result": None,
             "medium_term_result": None,
             # D-009 P0-1 placeholders (filled by Research Manager when applicable)
