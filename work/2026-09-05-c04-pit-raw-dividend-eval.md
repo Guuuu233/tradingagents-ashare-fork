@@ -1,243 +1,293 @@
-# C-04 切片 1：dividend + raw daily 的 PIT 风险与落点评估 (DAV-628)
+# C-04 切片 1（只读）：dividend + raw daily 的 PIT 风险与落点评估 (DAV-667)
 
-> **制定日期**：2026-09-05  
-> **责任角色**：资深开发1 (`6050b57e-f551-4756-8ad9-3af522d7d4e3`)  
-> **基线分支**：`agent/1/4eca31d2d738`  
-> **基线 SHA**：`d6f75dddb396d35e5102c66b67a5e13f8d0650bb`  
-> **依据文件**：`work/2026-09-05-tushare-private-gateway-matrix.md` (DAV-618)  
-> **唯一关注点**：冻结「如何用私有网关 `dividend` + raw daily 做 PIT/RAW，以及为何不能用当前 `adj_factor` 回填历史」。  
-> **六大禁止红线**：
-> 1. 严禁改动 `tradingagents/` 业务代码；
-> 2. 严禁在代码、配置、文档、日志或评论中记录或打印任何真实 Token；
-> 3. 严禁修改 providers 契约与实现；
-> 4. 严禁启停或重启任何正在运行的 uvicorn 进程与服务；
-> 5. 严禁实现复权计算引擎（本卡仅冻结只读评估与契约设计，不写数学复权引擎）；
-> 6. 严禁混入 C-09（`daily_basic` 规模归一等）施工范围。
+> **制定日期**：2026-09-05<br>
+> **责任角色**：资深开发2 (`5fd6e9a0-8540-40ea-a9d6-e358ab37a0fc`)<br>
+> **基线分支**：`origin/codex/dav-4-p2a-trunk`<br>
+> **基线 SHA**：`c83881809da88686c30f097b1c3872187a5733ca` (经 `git fetch origin` 严格校验)<br>
+> **依据文件**：`work/2026-09-05-tushare-private-gateway-matrix.md` (DAV-618，commit `141c702`；注：任务提示中提及文件名 `work/2026-09-05-tushare-gateway-matrix.md`，经主干路径实核，仓库中实际存在且已冻结的文件名为 `work/2026-09-05-tushare-private-gateway-matrix.md`)<br>
+> **唯一关注点**：冻结「如何用私有网关 `dividend` + raw daily 做 PIT/RAW，以及为何不能用当前截面 `adj_factor` 回填历史」。<br>
+> **执行红线（全量遵守）**：
+> 1. 严禁改动 `tradingagents/`、`api/`、`frontend/`、`tests/` 代码；
+> 2. 严禁修改 Token、`.env`、`role_bindings`、`providers` 权重或配置；
+> 3. 严禁启停或重启任何正在运行的 uvicorn 进程与后台服务；
+> 4. 严禁实现复权计算引擎（本卡仅冻结只读评估、契约与工程纪律，不写数学复权引擎）；
+> 5. 严禁接线 `dividend` / `adj_factor` / raw `daily` 业务代码；
+> 6. 严禁混入 C-09-3 或 C-05 范围（C-05 采集/覆盖度诚实路径已合入主干）；
+> 7. 严禁直连官方 `api.tushare.pro`，严禁在文档、日志或评论中打印任何真实 Token；
+> 8. 严禁 Fast-Forward 或部署生产；严禁 push 主干；本卡评论禁止 @独立代码审核员、不要自建审核卡。
 
 ---
 
-## 一、双通道剖析：raw 收盘价通道 vs 前复权（Vendor QFQ）
+## 一、主干现网行情与价格通道审计：前复权 vs 未接入 Raw 收盘价通道
 
-在量化投研与多智能体（Multi-Agent）金融决策体系中，价格序列不仅是数值走势的记录，更是撮合交易、特征工程、均线判定与风险敞口计算的数学基础。
+通过对当前主干（commit `c838818`）进行全量静态 grep 审计，现网行情通道与价格基础声明的真实代码状态如下：
 
-### 1.1 概念定义与物理真实性对比
+### 1.1 主干代码静态 Grep 证据链（带精确路径与行号）
 
-| 比较维度 | raw 收盘价通道（未复权 / Raw Daily） | 前复权通道（Forward-Adjusted / Vendor QFQ） |
+1. **现网行情默认硬编码为前复权（`adjust="qfq"`）**：
+   - 路径：`tradingagents/dataflows/providers/cn_akshare_provider.py`
+   - 行号：`829-895`（在主函数 `get_stock_daily` 中，所有 A 股/ETF 日线数据获取源均明确传入 `adjust="qfq"`）：
+     - 行 `832`：`df = ak.fund_etf_hist_em(..., adjust="qfq")`（ETF 日线前复权）
+     - 行 `852`：`df = ak.stock_zh_a_hist(..., adjust="qfq")`（东财主源前复权）
+     - 行 `870`：`df = ak.stock_zh_a_daily(..., adjust="qfq")`（新浪备源前复权）
+     - 行 `886`：`df = ak.stock_zh_a_hist_tx(..., adjust="qfq")`（腾讯备源前复权）
+2. **Baostock 备用源同样硬编码为前复权**：
+   - 路径：`tradingagents/dataflows/providers/cn_baostock_provider.py`
+   - 行号：`84`：`adjustflag="2"`（Baostock 官方协议中 `"2"` 明确代表前复权）
+3. **回测与校准服务默认价格基础标定为 `vendor_qfq`**：
+   - 路径：`api/services/backtest_service.py`
+     - 行 `38`：`PRICE_BASIS_VENDOR_QFQ: str = "vendor_qfq"`
+     - 行 `39`：`PRICE_BASIS_UNSPECIFIED: str = "unspecified"`
+     - 行 `258`：`price_basis = final_state.get("price_basis") or PRICE_BASIS_VENDOR_QFQ`
+     - 行 `464`：`price_basis = analysis.get("price_basis") or PRICE_BASIS_VENDOR_QFQ`
+   - 路径：`api/services/calibration_service.py`
+     - 行 `34-35, 41-42`：导入并导出 `PRICE_BASIS_VENDOR_QFQ`
+     - 行 `756`：`"price_basis": PRICE_BASIS_VENDOR_QFQ`
+4. **单元测试锁定防伪断言**：
+   - 路径：`tests/test_backtest_calibration_isolation.py`
+     - 行 `407-409`：测试断言常量定义
+     - 行 `411-425`：`test_single_analysis_defaults_to_vendor_qfq_and_never_raw` 严格断言：
+       ```python
+       assert res["price_basis"] == "vendor_qfq"
+       assert res["price_basis"] != "raw"
+       ```
+5. **真正未复权（Raw Daily）收盘价通道尚未接入**：
+   - 静态检索结果：全库 `git grep -n '"daily"' tradingagents/dataflows/providers/` 仅命中上述 AKShare 的 `period="daily"`（前复权），没有任何从 Tushare 或其他源拉取未复权日线（Raw Daily）的函数或请求入口；
+   - 结论：**真正不复权 raw 收盘价通道在现网尚未接入**。
+
+### 1.2 前复权（Vendor QFQ）vs Raw 收盘价的时序差异与 Lookahead Bias 机理
+
+| 维度 | raw 收盘价通道（未复权 / Raw Daily） | 前复权通道（Vendor QFQ / Forward-Adjusted） |
 |---|---|---|
-| **物理本质** | 交易所撮合形成的**真实物理成交价格**，对应历史挂单簿真实交易。 | 以最新交易日为基准点，向前折算历史价格的**数学投影序列**。 |
-| **时序稳定性** | **绝对时间不变性（Immutable across Time）**。<br>历史 $T$ 日的 Close 价格一经确定，未来任何时刻读取永远恒定。 | **时间动态漂移（Dynamic Instability）**。<br>未来任意时点发生分红送转，历史所有交易日的价格均会被重新折算缩放。 |
-| **除权除息表现** | 表现为**真实的除权跳空缺口**（如 10 送 10 导致股价从 100 元跌至 50 元）。 | 人为平滑掉跳空缺口，保持价格序列在除权日的连续性。 |
-| **挂单撮合能力** | **完全契合真实撮合机制**。<br>真实限价单、止损单必须基于当日真实价格判定是否触发。 | **无法用于真实限价撮合**。<br>前复权价格在历史上从未真实在交易所撮合系统中存在过。 |
-| **Point-in-Time (PIT)** | **原生支持 PIT**。<br>不存在任何未来信息泄露风险。 | **严重破坏 PIT**。<br>存在显式的未来信息穿越（Lookahead Bias）。 |
+| **物理本质** | 交易所撮合系统形成的**真实成交价格**。 | 以未来最新日为基准向前折算的**数学投影序列**。 |
+| **时序不变性 (PIT)** | **严格具备时间不变性**：历史 $t$ 日价格一经成交永不改变。 | **动态漂移**：未来任意时点发生除权，历史全序列被重算缩放。 |
+| **除权跳空表现** | **客观呈现物理跳空缺口**（如 10 送 10 价格从 100 元断崖至 50 元）。 | **人为平滑跳空缺口**，抹杀真实跳空。 |
+| **撮合逻辑相符度** | **真实撮合**：限价单、止损线基于真实挂单簿判定。 | **虚假撮合**：前复权价格在历史上从未在撮合系统中存在。 |
+| **Lookahead Bias** | **0 未来信息泄露**。 | **严重未来信息穿越**：分母依赖未来累计因子。 |
 
-### 1.2 前复权在时序决策中的致命缺陷（Lookahead Bias 机制分析）
-
-前复权计算公式如下：
-设当前评估日为 $T_{eval}$，历史某交易日为 $t$（$t < T_{eval}$），该股票在 $t$ 日至 $T_{eval}$ 之间发生了一次或多次除权事件。前复权价格序列表示为：
+**数学证明（Lookahead Bias 泄露机制）**：
+设评估时点为 $T_{eval}$，历史交易日为 $t$（$t < T_{eval}$）。前复权序列表示为：
 $$P_{qfq}(t \mid T_{eval}) = P_{raw}(t) \times \frac{F(t)}{F(T_{eval})}$$
-其中 $F(t)$ 为累积复权因子。
-
-此公式暴露出前复权用于历史回溯与量化回测时的三大致命缺陷：
-
-1. **分母未来泄露（Denominator Future Leakage）**：
-   分母 $F(T_{eval})$ 取决于未来最终评估时刻的累计因子。如果回测系统在模拟历史 $t$ 时刻的交易逻辑，而输入的价格是 $P_{qfq}(t \mid T_{eval})$，那么：
-   - 算法实际上提前获知了在 $t$ 到 $T_{eval}$ 之间会发生的分红送转规模；
-   - 在除权除息事件发生前，历史股价已被预先缩放，导致波动率、技术形态被人为重塑。
-2. **技术指标与均线失真**：
-   前复权序列平滑了除权除息造成的跳空。在真实历史中，均线可能因为除权跳空而出现死叉，导致系统执行止损；但若读取了前复权，均线依然保持平滑，系统错过了当时的真实交易决策点。
-3. **特征与新闻事件错位**：
-   在 Multi-Agent 架构中，基本面分析员（Fundamentals Analyst）与新闻事件分析员（News Analyst）读取的公告是在历史时间点 $t$ 发生的真实事件。如果技术分析员（Technical Analyst）读取的是未来折算后的前复权价格，会导致不同智能体在时间维度上的认知脱节，造成决策共识逻辑崩溃。
-
-### 1.3 现有系统认知误区纠正（DAV-606 关键正名回顾）
-
-在历史代码实现中，由于数据源（AkShare、Baostock）默认调用了前复权接口（如 `ak.stock_zh_a_hist(..., adjust="qfq")` 或 Baostock `adjustflag="2"`），但部分下游服务（`backtest_service.py`、`calibration_service.py`）却将输出字段默认标记为 `"raw"`。
-
-**DAV-606 实施了关键拨乱反正**：
-- 明确指出：**严禁把第三方前复权序列误标为 raw**；
-- 引入具名常量 `PRICE_BASIS_VENDOR_QFQ = "vendor_qfq"`，将回测与校准的默认输出正名为 `vendor_qfq`；
-- 确立规则：只有真正未复权的原生撮合价格才能声明为 `raw`。
-
-本卡在此基础上进一步明确架构定位：
-- `vendor_qfq` 仅作为前端展示或初级非严格时序分析的妥协通道；
-- 面向严格 PIT、量化回测与校准的核心链路，必须全面演进至 **raw 收盘价通道 + dividend 事件驱动旁证** 架构。
+其中 $F(t)$ 为累积复权因子。分母 $F(T_{eval})$ 包含了自 $t$ 日至 $T_{eval}$ 之间发生的所有分红送转事件。若在历史 $t$ 时刻的模拟交易中向智能体提供 $P_{qfq}(t \mid T_{eval})$：
+1. 算法隐式获知了未来是否会发生大比例送转或分红；
+2. 均线在历史除权日不会发生真实破位，导致技术分析师智能体的止损策略无法按真实市场反应触发；
+3. 基本面与新闻智能体读取的是当时 $t$ 的历史未发生公告，而技术面读取的是未来折算价，导致 Multi-Agent 决策共识崩溃。
 
 ---
 
-## 二、`adj_factor` 风险审计：为何严禁回填历史，只可核验或自今日起归档
+## 二、`adj_factor` 风险审计：矩阵可用但未进代码，严禁回填历史
 
-### 2.1 Tushare `adj_factor` 接口物理行为
+### 2.1 主干代码与网关矩阵静态 Grep 证据链
 
-Tushare 兼容网关提供 `adj_factor` 接口，输出包含 `ts_code`、`trade_date`、`adj_factor`。
-- 其表现形式为一个阶梯形递增序列：在无除权交易日，`adj_factor` 保持不变；在除权除息日（Ex-Dividend Date），`adj_factor` 发生跳阶放大；
-- 供应商在每日收盘后更新当天的 `adj_factor`。
+1. **`_TUSHARE_REQUEST_FIELDS` 现网代码未进 `adj_factor` 与 raw `daily`**：
+   - 路径：`tradingagents/dataflows/providers/cn_akshare_provider.py`
+   - 行号：`307-333`：
+     ```python
+     _TUSHARE_REQUEST_FIELDS = {
+         _TUSHARE_DC_API: (
+             "ts_code,trade_date,net_amount,buy_sm_amount,buy_md_amount,"
+             "buy_lg_amount,buy_elg_amount"
+         ),
+         _TUSHARE_THS_API: (
+             "ts_code,trade_date,net_amount,buy_sm_amount,buy_md_amount,"
+             "buy_lg_amount"
+         ),
+         _TUSHARE_DAILY_BASIC_API: (
+             "ts_code,trade_date,close,turnover_rate,turnover_rate_f,volume_ratio,"
+             "free_share,circ_mv,total_mv,amount"
+         ),
+         _TUSHARE_FORECAST_API: (
+             "ts_code,ann_date,end_date,type,p_change_min,p_change_max,"
+             "net_profit_min,net_profit_max,last_parent_net,first_ann_date,"
+             "summary,change_reason"
+         ),
+         _TUSHARE_REPURCHASE_API: (
+             "ts_code,ann_date,end_date,proc,exp_date,vol,amount,high_limit,low_limit"
+         ),
+         _TUSHARE_DISCLOSURE_DATE_API: (
+             "ts_code,ann_date,end_date,pre_date,actual_date,modify_date"
+         ),
+     }
+     ```
+     静态实核：字典中包含资金流（`_TUSHARE_DC_API`, `_TUSHARE_THS_API`）、`daily_basic`、`forecast`、`repurchase`、`disclosure_date` 共 6 个接口；**明确不含 `dividend`、`adj_factor`、raw `daily`**。
+   - 路径：全库静态 grep：`git grep -n "adj_factor" tradingagents/` 返回 0 条记录，证明代码库完全未接线 `adj_factor`。
+2. **网关矩阵状态记录**：
+   - 路径：`work/2026-09-05-tushare-private-gateway-matrix.md`
+     - 行 `54`：`| adj_factor | 可用 | 未接入。后续归入 C-04。关键纪律：仅允许作为当日核验或自上线起按日归档，严禁使用当前截面最新复权因子回填历史破坏 PIT。 |`
+     - 行 `82`：`| adj_factor | 未调用 | 无（后续建议 C-04 因子核验） | 暂无（尚未封装） | 尚未接入 |`
+     - 行 `128-140`：明确要求「绝对禁止在回测、离线评估或历史事件回溯中，直接拿当前最新截面的 `adj_factor` 去覆写或回填历史日线」。
 
-### 2.2 严禁拿当前最新 `adj_factor` 回填历史的四大技术原因
+### 2.2 为何严禁使用当前最新截面 `adj_factor` 回填历史
+
+即使私有网关的 `adj_factor` 接口可用，**绝对禁止全量拉取当前因子回填历史数据库**，技术根因如下：
 
 1. **不可逆的时态污染（Irreversible Temporal Contamination）**：
-   如果在今天从网关拉取全量历史 `adj_factor` 并将其洗入本地历史数据库，这批因子实际上是“站在 2026-09-05 视角下的全知全能状态”。如果在回溯 2024 年或 2025 年的切片时读取此表，系统就失去了获知“历史那一天因子到底是几”的真实 PIT 状态。
-2. **更正与补充公告的后验性（Post-Hoc Adjustments & Restatements）**：
-   在证券市场实践中，上市公司的分红送转方案可能经历预案、股东大会否决、方案调整、实施公告延期、除权日调整等变数。第三方数据供应商也偶有因除权日录入错误而在数日后回溯修正因子的情况。如果回填，历史回溯将无法捕捉真实市场中出现过的不确定性与修正震荡。
-3. **跨源口径不一致与不可逆偏差**：
-   不同数据源（Tushare、恒生聚源、东财、通达信）对送股、配股缴款、转增股的除权基准价与除数处理口径存在细微差异。直接把当前 Tushare 的因子强行回填到原本来自东财/网易的历史价格上，会导致不可逆的乘法误差放大。
-4. **与事件流证据链脱节**：
-   单纯的浮点数因子是一个“黑盒乘数”，缺乏事件因果解释。如果下游智能体只看到因子从 1.5 变成 3.0，而不知道是因为每 10 股送 10 股还是因为大额派现，智能体就无法生成合规的投研推理链。
+   当前拉取的 `adj_factor` 序列是站在 2026-09-05 视角的最终计算结果。若将其回填历史，历史切片 $T_{hist}$（如 2024 年）将丢失“在 2024 年当时已知因子为多少”的真实 PIT 状态，构成了全知全能的作弊视角。
+2. **更正与补充公告的后验性（Post-Hoc Restatements）**：
+   上市公司送转方案存在预案调整、股东大会否决、实施公告延期、除权日临时变更等现实情况，供应商也常在数日后修正录入错误。直接回填抹平了市场真实经历过的信息不确定性。
+3. **跨源口径不可逆偏差（Cross-Vendor Basis Mismatch）**：
+   不同数据服务商对转增股、配股除权参考价计算公式中的除数取整与保留小数存在细微差异。将 Tushare 当期因子强行乘在原本来自东财的历史价格上，会引入复合乘法误差。
+4. **因果解释链缺失（Loss of Causal Chain）**：
+   因子仅仅是浮点数乘数，缺乏因果解释。智能体只看到价格被缩放，却无法获知送转股数与派现金额，无法形成具有逻辑说服力的研报。
 
-### 2.3 `adj_factor` 的合法合规使用落地规范
-
-针对私有网关的 `adj_factor`，确立不可违背的“二分法”工程纪律：
+### 2.3 `adj_factor` 合法使用工程纪律（二分法）
 
 ```
-                    ┌────────────────────────────────────────┐
-                    │ Tushare 私有网关 adj_factor 接口       │
-                    └───────────────────┬────────────────────┘
-                                        │
-                 ┌──────────────────────┴──────────────────────┐
-                 ▼                                             ▼
-    【用途 1：当日横向交叉核验】                  【用途 2：自上线日起按日只追加归档】
-    • 仅取当日 T 截面因子                          • 每日收盘后 17:30 拉取当日快照
-    • 与 AkShare/巨潮等渠道比对                    • 严格打上 created_at 物理时间戳
-    • 校验当日是否存在未申报除权                  • 查询时强制限定 created_at <= as_of
-    • 发现跳变则告警或触发旁证核实                • 【绝对禁止】批量覆写历史数据
+                         ┌────────────────────────────────────┐
+                         │ Tushare 网关 adj_factor 接口       │
+                         └─────────────────┬──────────────────┘
+                                           │
+                    ┌──────────────────────┴──────────────────────┐
+                    ▼                                             ▼
+       【途径 1：当期横向交叉核验】                  【途径 2：自今日起按日只追加归档】
+       • 仅取当日 T 截面因子                          • 每日收盘后定时拉取当日快照
+       • 与外部数据源交叉比对                        • 记录 (ts_code, trade_date, adj_factor,
+       • 发现因子突变即报警触发除权核实                 snapshot_date, recorded_at)
+       • 【严禁】向历史库覆写                        • 查询强制约束: snapshot_date <= as_of
+                                                     • 【严禁】向前回填历史历史记录
 ```
 
-1. **用途 1：当期横向交叉核验（Cross-Verification for Current Day Only）**：
-   - 允许在每日收盘后拉取当日 T 的 `adj_factor`，计算当日相比前一交易日是否有跳阶：
-     $$\Delta F_T = \frac{adj\_factor(T)}{adj\_factor(T-1)}$$
-   - 若 $\Delta F_T \neq 1.0$，表明今日发生除权除息，以此触发对今日数据源的完整性校验。
-2. **用途 2：自今日（上线日）起按日归档（Daily Snapshot Archiving）**：
-   - 建立只追加（Append-Only）的日度快照归档表，字段规范包含：
-     `(ts_code, trade_date, adj_factor, snapshot_date, recorded_at)`；
-   - 每日仅拉取并写入当日记录，**绝对禁止向前覆盖或刷新更早历史日期的记录**；
-   - 当回测引擎以 `as_of = T_hist` 回放时，只允许查询 `snapshot_date <= T_hist` 且 `recorded_at <= T_hist` 的记录，从根源上杜绝时空穿越。
+1. **途径 1：当期横向交叉核验（Current-Day Cross-Verification）**：
+   每日收盘后仅请求当日截面因子，计算 $\Delta F_T = \frac{adj\_factor(T)}{adj\_factor(T-1)}$。若发生跳变，触发对当日除权除息公告与行情的交叉核验，告警潜在数据异常。
+2. **途径 2：自今日起按日归档（Append-Only Daily Archiving）**：
+   自本功能上线日起，每日定时追加归档当天快照，打上物理时间戳 `recorded_at`。当系统回放历史切片 $T_{hist}$ 时，查询条件必须硬性限定 `snapshot_date <= T_{hist} AND recorded_at <= T_{hist}`，从根源杜绝数据穿越。
 
 ---
 
-## 三、除权除息事件驱动：`dividend` 接口作为 PIT/RAW 旁证
+## 三、`dividend` 接口作为除权事件旁证的 PIT 规范
 
-### 3.1 Tushare `dividend` 接口核心元数据字段
+### 3.1 核心字段与 PIT 关键时态特征
 
-Tushare `dividend` 接口提供了 A 股上市公司完整的现金分红、送股与转增股本生命周期明细：
+依据 Tushare 规范与私有网关定义，`dividend` 接口核心列名如下：
 
-| 字段名称 | 业务含义 | PIT 关键时态特征 |
+| 字段名称 | 业务含义 | PIT 时态角色 |
 |---|---|---|
-| `ts_code` | 股票代码 | 标的唯一标识。 |
-| `end_date` | 分红年度/基准截止日 | 财报所属会计期间。 |
-| `ann_date` | 预案公告日 (Announcement Date) | **市场首次获知预期**的物理时间点。在此之前该信息不可见。 |
-| `div_proc` | 实施进度 (预案/通过/实施/结束) | 进度状态机标识。 |
-| `stk_div` | 每股送红股比例 (股) | 增加股东股数，导致除权下折。 |
-| `stk_bo_rate` | 每股转增股比例 (股) | 资本公积转增，导致除权下折。 |
-| `cash_div` | 每股现金分红 (元，税前) | 派发现金，导致除息下折。 |
-| `cash_div_tax` | 每股现金分红 (元，税后) | 扣税后现金流。 |
-| `record_date` | 股权登记日 (Record Date) | 享权利的最终持仓交易日。 |
-| `ex_date` | 除权除息日 (Ex-Dividend Date) | **二级市场价格发生物理跳空的准确日期**。 |
-| `pay_date` | 派息日 (Cash Payment Date) | 现金实际到账日。 |
-| `imp_ann_date` | 实施公告日 | 确立准确 `record_date` 与 `ex_date` 的正式公告日。 |
+| `ts_code` | 股票代码 | 标的唯一识别码。 |
+| `end_date` | 分红年度/基准截止日 | 会计年度截止日（**严禁用于时态截断**）。 |
+| `ann_date` | 预案公告日 | 董事会首次披露分红预案日（预期形成时点）。 |
+| `div_proc` | 实施进度 | 方案状态（预案/股东大会通过/实施中/完结）。 |
+| `stk_div` | 每股送红股比例 (股) | 除权下折核心参数。 |
+| `stk_bo_rate` | 每股转增股比例 (股) | 资本公积转增下折核心参数。 |
+| `cash_div` | 每股现金分红 (元，税前) | 除息下折核心参数。 |
+| `record_date` | 股权登记日 | 享权最终持仓交易日。 |
+| `ex_date` | 除权除息日 | **二级市场物理价格发生跳空的交易日**。 |
+| `pay_date` | 派息日 | 现金红利到账日。 |
+| `imp_ann_date` | 实施公告日 | **确立确切除权除息日与方案最终落地的法定公告日**。 |
 
-### 3.2 为什么 `dividend` 是 Raw Daily 的完美解药（旁证机制）
+### 3.2 作除权事件旁证的 PIT 日期字段该用哪一列（按列名，禁止位置切片）
 
-采用 Raw Daily 时，最大的痛点在于除权日当天股价会发生结构性断崖跳空。例如某股票 10 送 10 股，价格从 100 元物理降至 50 元：
-- **没有旁证时的严重后果**：基于技术分析或价格阈值的智能体会误将 50% 的除权缺口识别为崩盘砸盘、暴跌破位，从而错误触发清仓或极端看空信号；
-- **引入 `dividend` 旁证时的正确处理**：
-  1. 系统在回放或分析到 `ex_date` 时，并行挂载 `dividend` 证据对象；
-  2. 智能体识别到：今日发生除权除息，每股送转 $stk\_div + stk\_bo\_rate = 1.0$；
-  3. 智能体计算出除权理论参考价（Ex-Rights Reference Price）：
-     $$P_{ref} = \frac{P_{pre\_close} - cash\_div}{1 + stk\_div + stk\_bo\_rate}$$
-  4. 实际开盘价与 $P_{ref}$ 的差值才是真正的市场博弈涨跌幅（贴权或填权），从而对跌幅做出完全客观、合规的解释，既保留了物理价格真实性，又避免了决策误判。
+1. **除权事件物理跳空对齐列：必须使用 `ex_date`**：
+   - 只有在交易日 `trade_date == ex_date` 当天，二级市场撮合成交价才会发生断崖下折；
+   - 智能体在处理 Raw Daily 行情时，必须且只能将日线的 `trade_date` 与分红记录中的 `ex_date` 建立主外键对齐。
+2. **PIT 信息可见性时态边界列：必须使用 `imp_ann_date`（实施公告日）**：
+   - 在历史回放或回测评估到时点 $T_{eval}$ 时，只有满足 `imp_ann_date <= T_{eval}` 的分红记录，智能体才能获知其确切的 `ex_date` 和实施参数；
+   - 若 $T_{eval} < imp\_ann\_date$，该次除权的具体实施尚未对市场公开，严禁将该记录中的 `ex_date` 提前注入时序；
+   - 预案阶段（`ann_date <= T_{eval} < imp_ann_date`）仅能作为无确切除权日的“分红预期事件”存在，严禁触发除权价计算；
+   - **严格禁止使用 `end_date` 作为时态判断依据**（同主干 C-05 契约 `tradingagents/dataflows/providers/cn_akshare_provider.py:2942` 要求）。
+3. **字段访问规范：严格按列名访问，禁止位置切片**：
+   - 必须通过具名键值提取（如 `row["ex_date"]`、`row["imp_ann_date"]`、`df["ex_date"]`）；
+   - **绝对禁止使用位置切片索引**（例如 `row[9]`、`df.iloc[:, 9]`），防止网关因底层字段顺序变动或版本迭代引发列错位灾难（schema drift）；
+   - 若返回数据中缺少 `ex_date` 或 `imp_ann_date` 等核心列，必须判定为 `schema_drift` 或 `missing_field` 并显式记录，严禁盲目按索引 fallback。
 
-### 3.3 时态流转与信息隔离原则
+### 3.3 诚实性原则：不得把空表写成确认无分红
 
-```
-时间轴 t ──►
-───────┬───────────────────┬────────────────────┬─────────────────────►
-       │                   │                    │
-       ▼                   ▼                    ▼
-   [ann_date]        [imp_ann_date]         [ex_date]
-  董事会预案公布        实施公告发布 (明确日期)    除权除息实施日 (物理跳空)
-  -----------------  --------------------  ----------------------
-  • 仅作为利好预期     • 确定确切 ex_date     • raw 价格真实跳空
-  • 不改动任何价格     • 进入除权准备窗口      • 挂载 dividend 旁证
-  • 不触发除权计算     • 仍不改动任何价格      • 智能体正确识别填权/贴权
-```
+结合主干 C-05 巨潮与旁证的覆盖度诚实性设计（`tradingagents/dataflows/cninfo_disclosure.py:10-24, 685`；`tradingagents/dataflows/news_event_evidence.py:287, 1343`；`tradingagents/dataflows/providers/cn_akshare_provider.py:2944, 3192`）：
 
-- **在 $t < ann\_date$**：接口严禁向该时点的分析提供任何分红字段；
-- **在 $ann\_date \le t < imp\_ann\_date$**：作为“分红预案事件”注入证据链，供基本面或情绪智能体参考；
-- **在 $imp\_ann\_date \le t < ex\_date$**：明确除权日即将到来；
-- **在 $t = ex\_date$**：作为确凿的除权因果旁证，绑定在当天的行情元数据中。
+- **严禁把网关返回的空表（0 行）写成「确认无分红（confirmed no dividend）」**：
+  网关返回空结果可能源于：
+  1. 标的历史数据尚未同步或网关接口限流；
+  2. 网络抖动或接口临时降级；
+  3. 私有网关对特定代码 coverage 存在盲区；
+  4. 标的在指定区间内确实无分红。
+- **正规落地点**：
+  - 当查询结果为空时，必须分类为 `collateral_empty` 或 `status="unknown"`；
+  - 严禁将 `is_confirmed_empty` 置为 `True`，严禁向下游交付 `confirmed_no_dividend = True`；
+  - 必须诚实向评估与智能体上下文输出“数据源未见分红记录（未确认无分红）”，防止系统在数据缺失状态下，将未捕获的除权跳空误判为基本面崩盘或恶性砸盘。
 
 ---
 
-## 四、对接现有 `price_basis`（DAV-606）标签体系
+## 四、与 DAV-606 `price_basis` 标签体系严格对接
 
-### 4.1 现有标签与元数据体系梳理
+### 4.1 现网状态回顾与红线
 
-根据代码库静态审计，现有与 `price_basis` 相关的核心文件与结构如下：
+在 DAV-606 中，已确立了以下核心工程规范（`api/services/backtest_service.py:38`、`tests/test_backtest_calibration_isolation.py:416`）：
+- 现网由于底层依赖 AkShare / Baostock 前复权数据源，回测与校准的默认输出必须正名为 `PRICE_BASIS_VENDOR_QFQ = "vendor_qfq"`；
+- 单元测试明确断言：系统输出严禁伪称 `"raw"`。
 
-1. **服务与回测层**（`api/services/backtest_service.py` & `api/services/calibration_service.py`）：
-   - 提取了具名常量：
-     ```python
-     PRICE_BASIS_VENDOR_QFQ: str = "vendor_qfq"
-     PRICE_BASIS_UNSPECIFIED: str = "unspecified"
-     ```
-   - 回测记录与校准输出显式注入 `"price_basis": PRICE_BASIS_VENDOR_QFQ`；
-   - 严格约束：禁止未声明口径时输出 `"raw"`，禁止把前复权误标为 raw。
-2. **报告元数据与影子信贷评估**（`api/services/report_service.py`、`tradingagents/agents/utils/shadow_credit.py`、`scripts/verify_h1b_gates.py`）：
-   - 支持三元组队列（Cohort Triad）：
-     $$\text{Cohort} = \text{decision\_model\_version} : \text{evidence\_contract\_version} : \text{price\_basis\_version}$$
-   - 现有测试用例已支持且验证了以下版本标签：
-     - `"price_basis.unspecified"`（当前历史报告默认缺省）
-     - `"price_basis.vendor_qfq"`（第三方前复权）
-     - `"price_basis.pit_adjusted"`（严格 PIT 调整因子构建的序列）
+### 4.2 未接入 Raw 时不得声称 `raw` / `PIT_ADJUSTED`
 
-### 4.2 C-04 raw 与 dividend 接入时的标准对接规范
+**不可突破的声明红线**：
+1. **未接入真正未复权日线前，严禁输出 `raw`**：
+   只要当前底层数据仍然走 `ak.stock_zh_a_hist(adjust="qfq")` 或 Baostock `adjustflag="2"`，无论是单次分析、批量回测还是影子信贷评估，`price_basis` 必须诚实声明为 `"vendor_qfq"`。任何在现网前复权数据上打上 `"raw"` 标签的行为均属严重的数据造假与伪证。
+2. **未建立日度只追加因子归档前，严禁声称 `PIT_ADJUSTED`**：
+   `price_basis_version = "price_basis.pit_adjusted"` 仅能赋予完全基于日度快照归档引擎（强制 `recorded_at <= as_of`）重构的历史序列。在归档引擎与 raw daily 建立前，严禁声明该标签。
 
-为了保证下游与历史数据的无缝兼容，C-04 演进应严格复用并扩展现有标签体系：
+### 4.3 未来接入时的标准映射矩阵
 
-| 标签值 (price_basis) | price_basis_version 映射 | 数据构成与口径定义 | 证据链要求 |
+| 标签值 (price_basis) | price_basis_version 映射 | 真实底层数据结构 | 准入前置条件 |
 |---|---|---|---|
-| `vendor_qfq` | `price_basis.vendor_qfq` | 来自 AkShare/Baostock 的第三方前复权日线。 | 维持现有行为，标记可能含有未来信息偏差。 |
-| `raw` | `price_basis.raw` | 来自 Tushare `daily` 或未复权数据源的纯原始日线。 | 基础撮合行情，不含事件旁证。 |
-| `pit_raw` | `price_basis.pit_raw` | **原始日线（Raw Daily）+ 同期 `dividend` 除权事件旁证对象。** | **C-04 核心目标口径**。<br>必须在行情元数据或证据链中附带 `dividend_events` 列表。 |
-| `pit_adjusted` | `price_basis.pit_adjusted` | 仅由日度快照归档引擎基于历史 $t \le T$ 因子重构的复权序列。 | 必须能追溯每个因子的 `snapshot_recorded_at` 时间戳。 |
-
-### 4.3 标签对接交互契约规范（未来切片遵循准则）
-
-1. **输入输出对齐检查**：
-   在回测单次分析（`_run_single_analysis`）与批量回测任务（`_run_backtest`）中，若调用方传入带有 `price_basis="pit_raw"` 或 `"raw"` 的数据，系统必须予以保留，禁止被隐式回落为 `"vendor_qfq"`。
-2. **双重防伪断言**：
-   - 若数据序列中存在前复权处理（例如日线收盘价与交易所原始价不符），断言 `price_basis != "raw"` 且 `price_basis != "pit_raw"`；
-   - 若声明为 `pit_raw`，系统校验在所有发生除权跳空的交易日是否均绑定了有效的 `dividend` 旁证。
-3. **Cohort 版本继承**：
-   生成的分析报告在写入 `result_data["price_basis_version"]` 时，根据所使用的价格通道准确赋予 `"price_basis.vendor_qfq"` 或 `"price_basis.pit_raw"`，确保 H1B 门禁与影子信贷（Shadow Credit）准确区分评估队列。
+| `vendor_qfq` | `price_basis.vendor_qfq` | 第三方前复权日线（现网）。 | **现网默认缺省**。 |
+| `raw` | `price_basis.raw` | 交易所未复权撮合价序列。 | 接入真正的 Tushare/主源 Raw Daily 通道。 |
+| `pit_raw` | `price_basis.pit_raw` | **未复权日线（Raw Daily）+ 同期 `dividend` 除权事件旁证对象。** | **C-04 核心演进目标**：需接入 Raw Daily 并完成 `dividend` 事件软对齐。 |
+| `pit_adjusted` | `price_basis.pit_adjusted` | 严格由日度追加因子序列重构的 PIT 调整价。 | 需建立严格的 `recorded_at` 日度归档库。 |
 
 ---
 
-## 五、C-04 后续切片演进路线与架构约束声明
+## 五、建议下一刀（只写计划，本卡不施工）
 
-本卡作为 C-04 切片 1，严格贯彻“只读评估与风险冻结”的工程定位，后续切片推进路线规划如下：
+根据架构解耦与小步演进原则，针对后续切片提供客观规划建议：
+
+### 5.1 方案比选：单独开「只读探针」vs「只接线 dividend 旁证」
+
+- **方案 A：单独开「只读探针」卡**
+  - 内容：编写独立的单测或探针工具（如 `scripts/probe_tushare_dividend_gateway.py`），对私有网关的 `dividend`、`adj_factor`、`daily` 进行只读调用测试，核验真实 HTTP 状态、业务返回码、字段列名与空表结构。
+  - 优点：先探明私有网关真实环境表现，发现潜在的 schema 差异或权限限制。
+  - 缺点：占用一个完整迭代卡片周期，但未向业务链路交付任何数据管道代码。
+- **方案 B：直接开「只接线 dividend 旁证」卡（推荐）**
+  - 内容：遵循主干 C-05 结构化旁证成熟模式（参考 `_fetch_tushare_forecast_records` 在 `cn_akshare_provider.py:2938` 的设计），在 `cn_akshare_provider.py` 中新增 `_fetch_tushare_dividend_records`，将其接入 `_TUSHARE_REQUEST_FIELDS` 与数据采集器（`data_collector.py`），同时在单测中配套 mock 测试与条件跳过的真实网关探针用例。
+  - 论据：C-05 已验证了旁证接入范式的稳定性（不改动日线主链路、不涉及复权引擎），直接挂载 `dividend` 旁证风险最低且收益最高。
+
+### 5.2 实施路线规划（三步走）
 
 ```
-[切片 1：DAV-628（本卡）] ───► 冻结 PIT 风险、对比 raw 与 QFQ、确立 dividend 旁证机制与标签规范（只读）
+[切片 1：DAV-667（本卡）] ──► 冻结 PIT 风险、对比 raw 与 QFQ、确立 dividend 旁证纪律与列名规范（只读文档）
            │
            ▼
-[切片 2：C-04-2 数据契约] ──► 封装私有网关 Tushare daily (raw) + dividend 读取契约与单元测试（不改业务流）
+[切片 2：C-04 切片 2] ────► 实施 dividend 旁证接线（cn_akshare_provider 封装 + 单元测试覆盖，0 业务侵入）
            │
            ▼
-[切片 3：C-04-3 链路对接] ──► 在数据提供层支持 price_basis="pit_raw" 输出，对接回测与报告生成
+[切片 3：C-04 切片 3] ────► 接入 Tushare 未复权日线（Raw Daily），与 dividend 联合支撑 price_basis="pit_raw"
 ```
 
-### 5.1 六大纪律合规性逐项核验结果
+---
 
-根据资深开发行为准则与本卡任务描述，本卡执行严格落实了六大红线：
+## 六、工程红线审计与只读探针规范声明
 
-1. **零业务代码修改**：
-   未修改 `tradingagents/`、`api/`、`tests/` 下的任何代码，`git status` 显示仅新增本评估文档。
-2. **零 Token 打印与泄露**：
-   全篇文档无任何真实 Token 字符串，无任何敏感 URL 凭据，恪守环境变量与安全凭据管理原则。
-3. **未改动 providers 契约**：
-   未对现有的 `cn_akshare_provider.py`、`cn_baostock_provider.py` 等做任何接口调整。
-4. **未启停或重启任何服务**：
-   未重启后台 uvicorn、nginx 或任何工作流进程。
-5. **未实现复权引擎**：
-   恪守切片边界，严禁在当前只读评估卡内编写数学复权计算或因子运算引擎。
-6. **未混入 C-09 范围**：
-   文档完全聚焦于 `dividend` 与 `raw daily`，绝未引入 `daily_basic`、换手率或流通盘归一化等 C-09 议题。
+### 6.1 六大纪律合规性终审确认
+
+1. **未改动业务与测试代码**：
+   未改动 `tradingagents/`、`api/`、`frontend/`、`tests/` 下的任何代码，`git diff` 严格限定在本文档。
+2. **未改动服务与权重**：
+   未改动任何 `role_bindings`、`providers` 权重分配；未改动 `.env`，未修改现网运行配置。
+3. **未启停或重启服务**：
+   未重启后台 uvicorn、nginx 或任何工作流进程，生产环境保持静默。
+4. **未实现复权引擎**：
+   严格贯彻只读约束，不编写任何数学复权计算或因子连乘引擎。
+5. **未接线业务代码**：
+   未在 `cn_akshare_provider.py` 中接入 `dividend`、`adj_factor` 或 raw `daily`。
+6. **未混入 C-09-3 或 C-05**：
+   完全聚焦于 `dividend` 与 `raw daily` 的 PIT 评估，不越界修改 C-05 公告流或 C-09 规模归一逻辑。
+7. **未打印真实凭证**：
+   全篇无任何真实 Token 字符串，无任何敏感 URL 凭据泄露。
+
+### 6.2 只读探针设计规范（未来若实施探针的硬性约束）
+
+若后续切片需要实施真实网关只读探针，输出必须遵循以下脱敏与最小化原则：
+- **严禁输出**：Token、Authorization 头、完整请求体、未经脱敏的敏感内网 URL；
+- **只记录五类标准元数据**：
+  1. `http_status`：HTTP 状态码（如 200, 403, 404, 500）；
+  2. `business_code`：Tushare 响应体的 `code` 字段（0 表示成功，非 0 为具体错误码）；
+  3. `row_count`：返回记录行数（整数）；
+  4. `field_names`：返回字段名列表（如 `["ts_code", "ann_date", "ex_date", ...]`），用于 schema 漂移核验；
+  5. `failure_category`：标准故障归类（`provider_failure` / `collateral_empty` / `schema_drift` / `token_missing`）。
+- **默认准则**：本卡完全以主干静态 grep + 现有 `work/2026-09-05-tushare-private-gateway-matrix.md` 矩阵为准，严格不向真实网关发送网络请求。
