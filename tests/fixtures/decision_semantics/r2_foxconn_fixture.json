@@ -1,0 +1,137 @@
+{
+  "manifest": {
+    "fixture_id": "R2",
+    "name": "工业富联",
+    "symbol": "601138.SH",
+    "trade_date": "2026-07-30",
+    "baseline_date": "2026-07-30",
+    "description": "R2 regression sample: Foxconn 601138.SH as of 2026-07-30 with news PIT cutoff and lookahead denial frozen semantics.",
+    "coverage_boundaries": {
+      "coverage_scope": "Point-in-Time (PIT) 2026-07-30 news cutoff, anti-lookahead rejection, near-duplicate clustering, fail-closed data gaps, calibration exclusion.",
+      "boundary_notes": "Frozen offline decision semantics regression fixture. Missing fields explicitly marked missing/unavailable without fabricating uncollected data."
+    },
+    "expected_contract": {
+      "symbol": "601138.SH",
+      "trade_date": "2026-07-30",
+      "analysis_status": "unavailable",
+      "confirmation_state": "UNRESOLVED",
+      "trade_action": "NO_TRADE",
+      "direction": "N/A",
+      "is_non_executable": true,
+      "calibration_eligible": false
+    }
+  },
+  "company_of_interest": "601138.SH",
+  "trade_date": "2026-07-30",
+  "horizon": "medium",
+  "market_data_context": {
+    "analysis_baseline_date": "2026-07-30",
+    "source_provenance": {
+      "stock_data": {
+        "status": "unavailable",
+        "as_of": "unavailable",
+        "source": "unavailable"
+      },
+      "news_data": {
+        "status": "available",
+        "as_of": "2026-07-30",
+        "source": "tests/fixtures/news_events/r2_news_fixture.json"
+      },
+      "financial_data": {
+        "status": "unavailable",
+        "as_of": "unavailable",
+        "source": "unavailable"
+      },
+      "fund_flow_data": {
+        "status": "unavailable",
+        "as_of": "unavailable",
+        "source": "unavailable"
+      }
+    }
+  },
+  "investment_debate_state": {
+    "history": "多空辩论未执行：工业富联截至2026-07-30仅具备新闻PIT切片，缺失价格与基本面数据，辩论状态不可用。",
+    "bull_history": "unavailable",
+    "bear_history": "unavailable",
+    "current_speaker": "unavailable",
+    "current_response": "unavailable",
+    "count": "unavailable",
+    "claim_counter": "unavailable",
+    "protocol_version": "v2.0_structured",
+    "feature_flags": {
+      "v2_debate_enabled": false
+    },
+    "tiebreak_skipped": false,
+    "claims": [],
+    "round_messages": [],
+    "challenges": [],
+    "focus_claim_ids": [],
+    "open_claim_ids": [],
+    "resolved_claim_ids": [],
+    "unresolved_claim_ids": [],
+    "round_summary": "unavailable",
+    "round_goal": "unavailable",
+    "claims_verification": [],
+    "claim_evidence_summary": {}
+  },
+  "seven_reports": {
+    "macro_report": "unavailable",
+    "market_report": "unavailable",
+    "sentiment_report": "unavailable",
+    "news_report": "新闻舆情报告：截至2026-07-30，工业富联（601138.SH）新闻舆情在PIT截止日内仅命中跨市场合作与半导体业务进展相关资讯（2条报道聚类为1个有效事件）；2026年半年报因发布时间为2026-08-11晚于截止日予以防前视剔除；另有2条流言与公告因缺少或格式错误的时间戳判定为不可验证；财报与行业政策主题未检索到有效信息，存在数据缺口。",
+    "fundamentals_report": "unavailable",
+    "smart_money_report": "unavailable",
+    "volume_price_report": "unavailable"
+  },
+  "macro_report": "unavailable",
+  "market_report": "unavailable",
+  "sentiment_report": "unavailable",
+  "news_report": "新闻舆情报告：截至2026-07-30，工业富联（601138.SH）新闻舆情在PIT截止日内仅命中跨市场合作与半导体业务进展相关资讯（2条报道聚类为1个有效事件）；2026年半年报因发布时间为2026-08-11晚于截止日予以防前视剔除；另有2条流言与公告因缺少或格式错误的时间戳判定为不可验证；财报与行业政策主题未检索到有效信息，存在数据缺口。",
+  "fundamentals_report": "unavailable",
+  "smart_money_report": "unavailable",
+  "volume_price_report": "unavailable",
+  "fund_flow_consensus_guard": {
+    "blocked": "unavailable",
+    "direction_allowed": "unavailable",
+    "status": "unavailable"
+  },
+  "manager_verdict": {
+    "direction": "unavailable",
+    "winner": "unavailable",
+    "reason": "unavailable",
+    "position_pct": "unavailable",
+    "entry": "unavailable",
+    "target": "unavailable",
+    "stop_loss": "unavailable",
+    "confidence": "unavailable",
+    "probability": "unavailable",
+    "consistency_check_passed": "unavailable",
+    "failed_checks": [
+      "missing_analyst_reports",
+      "missing_price_data"
+    ]
+  },
+  "decision_status": {
+    "analysis_status": "unavailable",
+    "direction": "N/A",
+    "trade_action": "NO_TRADE",
+    "risk_status": "unavailable",
+    "confirmation_state": "UNRESOLVED",
+    "failure_class": "unavailable",
+    "reason_codes": [
+      "offline_fixture_uncalibrated:R2",
+      "missing_market_and_financial_data"
+    ],
+    "confidence": "unavailable",
+    "probability": "unavailable"
+  },
+  "investment_plan": "R2 离线决策语义夹具：截至 2026-07-30 仅冻结新闻 PIT 切片（含跨市场有效事件与未来/无效时间戳剔除），价格/财报/资金流数据缺失（显式标记 unavailable），不生成投资决策计划。",
+  "trader_investment_plan": "【离线夹具不可交易】由于 R2 仅具备新闻 PIT 切片，缺失价格与基本面数据，交易端处于不可执行状态，不生成交易计划。",
+  "data_gaps": [
+    "stock_data:unavailable",
+    "financial_data:unavailable",
+    "fund_flow_data:unavailable",
+    "news_gap:财报(未来新闻剔除)",
+    "news_gap:行业政策(未检索到)"
+  ]
+}

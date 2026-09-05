@@ -36,12 +36,13 @@
       "name": "工业富联",
       "symbol": "601138.SH",
       "trade_date": "2026-07-30",
-      "fixture_file": "../news_events/r2_news_fixture.json",
+      "fixture_file": "r2_foxconn_fixture.json",
       "scenario": "新闻舆情时间戳 PIT cutoff 严格校验、未来新闻防前视阻断与重复新闻聚类",
       "expected_cutoff": "2026-07-30",
       "expected_hit_count": 1,
       "expected_unverifiable_count": 2,
       "expected_future_rejected_count": 1,
+      "calibration_eligible": false,
       "coverage_boundaries": {
         "covered": [
           "News published_at timestamp validation",

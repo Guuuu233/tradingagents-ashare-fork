@@ -49,7 +49,8 @@ from tradingagents.dataflows.news_event_evidence import build_news_event_coverag
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "decision_semantics"
 MANIFEST_PATH = FIXTURES_DIR / "manifest.json"
 R1_FIXTURE_PATH = FIXTURES_DIR / "r1_goertek_fixture.json"
-R2_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "news_events" / "r2_news_fixture.json"
+R2_FIXTURE_PATH = FIXTURES_DIR / "r2_foxconn_fixture.json"
+R2_NEWS_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "news_events" / "r2_news_fixture.json"
 R3_FIXTURE_PATH = FIXTURES_DIR / "r3_lens_fixture.json"
 
 
@@ -98,6 +99,12 @@ def test_decision_semantics_manifest_catalog():
     assert r2_meta["fixture_id"] == "R2"
     assert r2_meta["symbol"] == "601138.SH"
     assert r2_meta["trade_date"] == "2026-07-30"
+    assert r2_meta["fixture_file"] == "r2_foxconn_fixture.json"
+    assert r2_meta["expected_cutoff"] == "2026-07-30"
+    assert r2_meta["expected_hit_count"] == 1
+    assert r2_meta["expected_unverifiable_count"] == 2
+    assert r2_meta["expected_future_rejected_count"] == 1
+    assert r2_meta["calibration_eligible"] is False
     assert (FIXTURES_DIR / r2_meta["fixture_file"]).resolve().exists() is True
 
     # R3 check
@@ -317,7 +324,131 @@ def test_r1_goertek_evidence_verification_transition():
     assert is_non_executable_status(status) is False
 
 
-# ── 3. R3 Lens: 7/7 Analyst Failures & Calibration Isolation ─────────────────
+# ── 3. R2 Foxconn: Decision Semantics Offline Fixture & News PIT ────────────
+
+
+def test_r2_foxconn_fixture_structure_and_key_parity_with_r1():
+    """Verify R2 fixture loading, metadata, and complete key parity with R1."""
+    assert R2_FIXTURE_PATH.exists() is True
+    assert R1_FIXTURE_PATH.exists() is True
+
+    with open(R1_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        r1_data = json.load(f)
+    with open(R2_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        r2_data = json.load(f)
+
+    # 1. Key parity with R1 across top-level and sub-dictionaries
+    assert set(r2_data.keys()) == set(r1_data.keys())
+    assert set(r2_data["manifest"].keys()) == set(r1_data["manifest"].keys())
+    assert set(r2_data["manifest"]["coverage_boundaries"].keys()) == set(
+        r1_data["manifest"]["coverage_boundaries"].keys()
+    )
+    assert set(r2_data["manifest"]["expected_contract"].keys()) == set(
+        r1_data["manifest"]["expected_contract"].keys()
+    )
+    assert set(r2_data["market_data_context"].keys()) == set(r1_data["market_data_context"].keys())
+    assert set(r2_data["market_data_context"]["source_provenance"].keys()) == set(
+        r1_data["market_data_context"]["source_provenance"].keys()
+    )
+    for prov_key in ("stock_data", "news_data", "financial_data", "fund_flow_data"):
+        assert set(r2_data["market_data_context"]["source_provenance"][prov_key].keys()) == set(
+            r1_data["market_data_context"]["source_provenance"][prov_key].keys()
+        )
+    assert set(r2_data["investment_debate_state"].keys()) == set(r1_data["investment_debate_state"].keys())
+    assert set(r2_data["investment_debate_state"]["feature_flags"].keys()) == set(
+        r1_data["investment_debate_state"]["feature_flags"].keys()
+    )
+    assert set(r2_data["seven_reports"].keys()) == set(r1_data["seven_reports"].keys())
+    assert set(r2_data["fund_flow_consensus_guard"].keys()) == set(r1_data["fund_flow_consensus_guard"].keys())
+    assert set(r2_data["manager_verdict"].keys()) == set(r1_data["manager_verdict"].keys())
+    assert set(r2_data["decision_status"].keys()) == set(r1_data["decision_status"].keys())
+
+    # 2. R2 core identity contract
+    assert r2_data["company_of_interest"] == "601138.SH"
+    assert r2_data["trade_date"] == "2026-07-30"
+    assert r2_data["manifest"]["fixture_id"] == "R2"
+    assert r2_data["manifest"]["symbol"] == "601138.SH"
+    assert r2_data["manifest"]["trade_date"] == "2026-07-30"
+    assert r2_data["manifest"]["baseline_date"] == "2026-07-30"
+
+    # 3. Missing fields explicitly marked unavailable/missing, not fabricated with 0 or today
+    missing_markers = {"missing", "unavailable"}
+    prov = r2_data["market_data_context"]["source_provenance"]
+    for prov_key in ("stock_data", "financial_data", "fund_flow_data"):
+        assert prov[prov_key]["status"] in missing_markers
+        assert prov[prov_key]["as_of"] in missing_markers
+        assert prov[prov_key]["source"] in missing_markers
+
+    assert prov["news_data"]["status"] == "available"
+    assert prov["news_data"]["as_of"] == "2026-07-30"
+
+    mv = r2_data["manager_verdict"]
+    for field in ("position_pct", "entry", "target", "stop_loss", "confidence", "probability"):
+        assert mv[field] in missing_markers
+        assert mv[field] != 0 and mv[field] != "0"
+
+    # Confirm today date was not used in any field
+    assert "2026-09-05" not in json.dumps(r2_data)
+
+    # 4. Non-executable and calibration ineligibility strictly enforced
+    assert r2_data["manifest"]["expected_contract"]["is_non_executable"] is True
+    assert is_non_executable_status(r2_data["decision_status"]) is True
+    assert r2_data["manifest"]["expected_contract"]["calibration_eligible"] is False
+    assert is_calibration_eligible(r2_data) is False
+    assert is_calibration_eligible(r2_data, allow_winner_only=True) is False
+
+
+def test_r2_foxconn_news_pit_and_suspected_gaps():
+    """Verify R2 news PIT assertions on existing news fixture remain strictly green."""
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    r2_meta = manifest["samples"]["R2"]
+
+    assert R2_NEWS_FIXTURE_PATH.exists() is True
+    with open(R2_NEWS_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        r2_news_data = json.load(f)
+
+    coverage = build_news_event_coverage(
+        r2_news_data["items"],
+        cutoff=r2_news_data["cutoff"],
+        window=r2_news_data["window"],
+        requested_themes=r2_news_data["requested_themes"],
+        default_entity=r2_news_data.get("entity", ""),
+    )
+    assert coverage["cutoff"] == "2026-07-30"
+    assert coverage["hit_count"] == 1
+    assert coverage["unverifiable_count"] == 2
+    assert coverage["future_rejected_count"] == 1
+    assert coverage["valid_evidence_count"] == 2
+
+    # Verify coverage results match manifest expected_* contract
+    assert coverage["cutoff"] == r2_meta["expected_cutoff"]
+    assert coverage["hit_count"] == r2_meta["expected_hit_count"]
+    assert coverage["unverifiable_count"] == r2_meta["expected_unverifiable_count"]
+    assert coverage["future_rejected_count"] == r2_meta["expected_future_rejected_count"]
+
+    gap_themes = [g["theme"] for g in coverage["suspected_gaps"]]
+    assert "财报" in gap_themes
+    assert "行业政策" in gap_themes
+    for gap in coverage["suspected_gaps"]:
+        assert "未检索到/不可验证" in gap["message"]
+        assert "确认无相关新闻" not in gap["message"]
+
+
+def test_r2_foxconn_unrepaired_case_authority_contract():
+    """Authoritative rule check: R2 offline fixture does not claim historical case is repaired."""
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    assert "R1/R2/R3 离线 fixture 齐备并通过前，不得声称历史案例已修复。" in manifest["authority_rule"]
+
+    with open(R2_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        r2_data = json.load(f)
+    # Confirm R2 remains uncalibrated / non-repaired fixture
+    assert r2_data["manifest"]["expected_contract"]["calibration_eligible"] is False
+    assert is_calibration_eligible(r2_data) is False
+
+
+# ── 4. R3 Lens: 7/7 Analyst Failures & Calibration Isolation ─────────────────
 
 
 def test_r3_lens_fixture_structure_and_seven_failures():
@@ -485,7 +616,7 @@ def test_r3_lens_calibration_isolation_and_db_exclusion():
         db.close()
 
 
-# ── 4. Unified R1, R2, R3 Regression Suite Verification ──────────────────────
+# ── 5. Unified R1, R2, R3 Regression Suite Verification ──────────────────────
 
 
 def test_all_three_regression_samples_offline_acceptance():
@@ -500,16 +631,24 @@ def test_all_three_regression_samples_offline_acceptance():
     assert r1_data["decision_status"]["confirmation_state"] == "UNRESOLVED"
     assert is_calibration_eligible(r1_data["decision_status"]) is False
 
-    # R2: Foxconn news timestamp PIT cutoff & event coverage
+    # R2: Foxconn decision semantics offline fixture & news timestamp PIT cutoff
     assert R2_FIXTURE_PATH.exists() is True
     with open(R2_FIXTURE_PATH, "r", encoding="utf-8") as f:
         r2_data = json.load(f)
+    assert r2_data["company_of_interest"] == "601138.SH"
+    assert r2_data["trade_date"] == "2026-07-30"
+    assert r2_data["manifest"]["expected_contract"]["calibration_eligible"] is False
+    assert is_calibration_eligible(r2_data) is False
+
+    assert R2_NEWS_FIXTURE_PATH.exists() is True
+    with open(R2_NEWS_FIXTURE_PATH, "r", encoding="utf-8") as f:
+        r2_news_data = json.load(f)
     r2_coverage = build_news_event_coverage(
-        r2_data["items"],
-        cutoff=r2_data["cutoff"],
-        window=r2_data["window"],
-        requested_themes=r2_data["requested_themes"],
-        default_entity=r2_data.get("entity", ""),
+        r2_news_data["items"],
+        cutoff=r2_news_data["cutoff"],
+        window=r2_news_data["window"],
+        requested_themes=r2_news_data["requested_themes"],
+        default_entity=r2_news_data.get("entity", ""),
     )
     assert r2_coverage["cutoff"] == "2026-07-30"
     assert r2_coverage["hit_count"] == 1
