@@ -72,8 +72,23 @@ def test_historical_snapshot_no_backfill_invariant():
     """Historical missing snapshot must be flagged missing; backfilling with new data is forbidden."""
     for filepath in (CHECKLIST_FILE, PLAN_FILE):
         content = filepath.read_text(encoding="utf-8")
-        assert "禁止用当天新采回填" in content or "严禁当天新采回填" or "禁止用当天或事后新采" in content
+        assert (
+            "禁止用当天新采回填" in content
+            or "严禁当天新采回填" in content
+            or "禁止用当天或事后新采" in content
+        )
         assert "缺失" in content
+
+
+def test_historical_snapshot_no_backfill_invariant_negative():
+    """Verify that temporary content lacking backfill prohibition phrases fails assertion."""
+    for bad_content in ("", "历史快照缺失标为缺失，但未包含任何回填禁令短语"):
+        with pytest.raises(AssertionError):
+            assert (
+                "禁止用当天新采回填" in bad_content
+                or "严禁当天新采回填" in bad_content
+                or "禁止用当天或事后新采" in bad_content
+            )
 
 
 def test_d009_rule_and_delivery_status_separation():
