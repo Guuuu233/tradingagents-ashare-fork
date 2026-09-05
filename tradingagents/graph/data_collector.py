@@ -46,6 +46,12 @@ from tradingagents.agents.utils.agent_utils import (
     get_northbound_flow,
 )
 from tradingagents.dataflows.interface import _registry, route_to_vendor
+from tradingagents.dataflows.cninfo_disclosure import (
+    CninfoDisclosureEnvelope,
+    STATUS_OK,
+    STATUS_PROVIDER_FAILURE,
+    SOURCE_TYPE_ANNOUNCEMENT,
+)
 from tradingagents.dataflows.fund_flow_evidence import (
     build_gap_meta,
     build_provider_text,
@@ -1067,6 +1073,8 @@ def _build_source_provenance(
     """Persist per-source cutoff evidence beside the compact failure ledger."""
     provenance: Dict[str, Dict[str, Any]] = {}
     for source, value in results.items():
+        if source in ("cninfo_announcements", "cninfo_records", "cninfo_ir_surveys"):
+            continue
         if source == "industry_linkage":
             status, reason = _determine_industry_linkage_status(value)
             actual_as_of = _extract_industry_linkage_actual_as_of(value, requested_as_of)
@@ -1768,6 +1776,9 @@ def _fetch_all(
     # 为了计算指标准确（如 200 SMA），需要比分析窗口更长的历史数据
     fetch_lookback = 365
     start_str = (end_dt - timedelta(days=fetch_lookback)).strftime("%Y-%m-%d")
+    news_start_date = (end_dt - timedelta(days=lookback)).strftime("%Y-%m-%d")
+
+    cn_provider = _registry.get("cn_akshare")
 
     tasks: Dict[str, tuple] = {
         "stock_data": (get_stock_data, {"symbol": ticker, "start_date": start_str, "end_date": norm_trade_date}),
@@ -1775,7 +1786,23 @@ def _fetch_all(
         "global_indices": (get_global_indices, {"curr_date": norm_trade_date, "look_back_days": lookback}),
         "major_assets": (get_major_assets, {"curr_date": norm_trade_date, "look_back_days": lookback}),
         "realtime": (_fetch_realtime_context, {"ticker": ticker, "trade_date": norm_trade_date}),
-        "news": (get_news, {"ticker": ticker, "start_date": (end_dt - timedelta(days=lookback)).strftime("%Y-%m-%d"), "end_date": norm_trade_date}),
+        "news": (get_news, {"ticker": ticker, "start_date": news_start_date, "end_date": norm_trade_date}),
+        "cninfo_announcements": (
+            cn_provider.get_cninfo_announcements
+            if cn_provider and hasattr(cn_provider, "get_cninfo_announcements")
+            else lambda **kw: CninfoDisclosureEnvelope(
+                status=STATUS_PROVIDER_FAILURE,
+                records=[],
+                error="cn_akshare provider unavailable",
+                source_type=SOURCE_TYPE_ANNOUNCEMENT,
+            ),
+            {
+                "symbol": ticker,
+                "start_date": news_start_date,
+                "end_date": norm_trade_date,
+                "cutoff": norm_trade_date,
+            },
+        ),
         "global_news": (get_global_news, {"curr_date": norm_trade_date, "look_back_days": lookback, "limit": 30}),
         "fund_flow_board": (get_board_fund_flow, {"curr_date": norm_trade_date}),
         "fund_flow_individual": (get_individual_fund_flow, {"symbol": ticker, "curr_date": norm_trade_date}),
@@ -1816,6 +1843,22 @@ def _fetch_all(
         # Provider routing has bounded timeouts, so completing the executor here
         # is finite and keeps stuck worker/socket threads from outliving the job.
         executor.shutdown(wait=True, cancel_futures=True)
+
+    # 保证 cninfo_announcements 始终为 envelope
+    ann_val = results.get("cninfo_announcements")
+    if ann_val is None or (isinstance(ann_val, str) and ("调用失败" in ann_val or "超时" in ann_val)):
+        results["cninfo_announcements"] = CninfoDisclosureEnvelope(
+            status=STATUS_PROVIDER_FAILURE,
+            records=[],
+            error=str(ann_val) if ann_val else "cninfo_announcements unavailable",
+            source_type=SOURCE_TYPE_ANNOUNCEMENT,
+        )
+    elif ann_val == "":
+        results["cninfo_announcements"] = CninfoDisclosureEnvelope(
+            status=STATUS_OK,
+            records=[],
+            source_type=SOURCE_TYPE_ANNOUNCEMENT,
+        )
 
     # ── 产业链数据层采集 (MVP: 消费电子 / 新能源车 / 27 行业) ─────────────
     industry = _map_stock_to_industry(ticker)
@@ -1986,7 +2029,7 @@ def _fetch_all(
             if ev is not None:
                 cninfo_evs.append(ev)
 
-    cn_provider = _registry.get("cn_akshare")
+    cn_provider = cn_provider or _registry.get("cn_akshare")
     event_cov = build_news_event_coverage(
         stock_evs + glob_evs + cninfo_evs + stock_unp + glob_unp,
         requested_themes=None,
