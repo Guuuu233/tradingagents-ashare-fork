@@ -813,6 +813,8 @@ class NewsEvidence:
     raw_item: dict[str, Any] | None = None
     canonical_event_id: str | None = None
     collateral_records: list[CollateralRecord] = field(default_factory=list)
+    content_status: str = "not_attempted"
+    content_sha256: str | None = None
 
     def __post_init__(self):
         self.title = str(self.title or "").strip()
@@ -835,6 +837,11 @@ class NewsEvidence:
             elif isinstance(c, Mapping):
                 norm_collaterals.append(CollateralRecord.from_dict(c))
         self.collateral_records = norm_collaterals
+        if self.content_status is None:
+            self.content_status = "not_attempted"
+        self.content_status = str(self.content_status).strip() or "not_attempted"
+        if self.content_sha256 is not None:
+            self.content_sha256 = str(self.content_sha256).strip() or None
 
     @property
     def collaterals(self) -> list[CollateralRecord]:
@@ -863,6 +870,8 @@ class NewsEvidence:
             ]
             res["collaterals"] = res["collateral_records"]
             res["collateral_evidences"] = res["collateral_records"]
+        if self.content_sha256 is None:
+            res.pop("content_sha256", None)
         return res
 
 
@@ -930,6 +939,8 @@ def cninfo_record_to_evidence(
         entity = raw_dict.get("symbol", raw_dict.get("代码", default_entity))
         canonical_id = raw_dict.get("canonical_event_id")
         col_records = raw_dict.get("collateral_records", [])
+        content_status = raw_dict.get("content_status")
+        content_sha256 = raw_dict.get("content_sha256")
     else:
         title = getattr(record, "title", "")
         pub = getattr(record, "announced_at", getattr(record, "published_at", ""))
@@ -938,7 +949,14 @@ def cninfo_record_to_evidence(
         entity = getattr(record, "symbol", getattr(record, "entity", default_entity))
         canonical_id = getattr(record, "canonical_event_id", None)
         col_records = getattr(record, "collateral_records", [])
+        content_status = getattr(record, "content_status", None)
+        content_sha256 = getattr(record, "content_sha256", None)
         raw_dict = record.to_dict() if hasattr(record, "to_dict") else None
+        if raw_dict:
+            if content_status is None:
+                content_status = raw_dict.get("content_status")
+            if content_sha256 is None:
+                content_sha256 = raw_dict.get("content_sha256")
 
     if not pub or not title:
         return None
@@ -958,6 +976,8 @@ def cninfo_record_to_evidence(
         url=normalize_url(url),
         canonical_event_id=canonical_id_str,
         raw_item=raw_dict,
+        content_status=content_status or "not_attempted",
+        content_sha256=content_sha256,
     )
     if col_records:
         for c in col_records:
@@ -1241,11 +1261,44 @@ def build_news_event_coverage(
                     if id_or_title and id_or_title not in cninfo_manifest_items:
                         cninfo_manifest_items.append(id_or_title)
 
-                    rec_already_in_raw = any(
-                        (hasattr(x, "canonical_event_id") and getattr(x, "canonical_event_id", None) == cid and cid is not None)
-                        or (isinstance(x, dict) and x.get("canonical_event_id") == cid and cid is not None)
-                        for x in raw_items_list
-                    )
+                    rec_cstatus = getattr(rec, "content_status", None) if not isinstance(rec, dict) else rec.get("content_status")
+                    rec_csha = getattr(rec, "content_sha256", None) if not isinstance(rec, dict) else rec.get("content_sha256")
+                    rec_pub = getattr(rec, "announced_at", None) if not isinstance(rec, dict) else (rec.get("announced_at") or rec.get("published_at"))
+
+                    rec_already_in_raw = False
+                    for x in raw_items_list:
+                        if x is rec:
+                            rec_already_in_raw = True
+                            break
+                        x_cid = getattr(x, "canonical_event_id", None) if not isinstance(x, dict) else x.get("canonical_event_id")
+                        if cid and x_cid and cid == x_cid:
+                            rec_already_in_raw = True
+                            if rec_cstatus and getattr(x, "content_status", None) in (None, "not_attempted"):
+                                if hasattr(x, "content_status"):
+                                    x.content_status = rec_cstatus
+                                if hasattr(x, "raw_item") and isinstance(x.raw_item, dict):
+                                    x.raw_item["content_status"] = rec_cstatus
+                            if rec_csha and not getattr(x, "content_sha256", None):
+                                if hasattr(x, "content_sha256"):
+                                    x.content_sha256 = rec_csha
+                                if hasattr(x, "raw_item") and isinstance(x.raw_item, dict):
+                                    x.raw_item["content_sha256"] = rec_csha
+                            break
+                        x_title = getattr(x, "title", None) if not isinstance(x, dict) else x.get("title")
+                        x_pub = getattr(x, "published_at", None) if not isinstance(x, dict) else (x.get("published_at") or x.get("announced_at"))
+                        if title and x_title and title == x_title and rec_pub and x_pub and (str(rec_pub)[:10] == str(x_pub)[:10]):
+                            rec_already_in_raw = True
+                            if rec_cstatus and getattr(x, "content_status", None) in (None, "not_attempted"):
+                                if hasattr(x, "content_status"):
+                                    x.content_status = rec_cstatus
+                                if hasattr(x, "raw_item") and isinstance(x.raw_item, dict):
+                                    x.raw_item["content_status"] = rec_cstatus
+                            if rec_csha and not getattr(x, "content_sha256", None):
+                                if hasattr(x, "content_sha256"):
+                                    x.content_sha256 = rec_csha
+                                if hasattr(x, "raw_item") and isinstance(x.raw_item, dict):
+                                    x.raw_item["content_sha256"] = rec_csha
+                            break
                     if not rec_already_in_raw:
                         raw_items_list.append(rec)
 
@@ -1297,8 +1350,13 @@ def build_news_event_coverage(
     valid_evidences: list[NewsEvidence] = []
     unverifiable_items: list[dict[str, Any]] = []
     future_rejected_items: list[dict[str, Any]] = []
+    cninfo_content_hashed_count = 0
+    cninfo_content_unavailable_count = 0
+    cninfo_content_not_attempted_count = 0
 
     for item in raw_items_list:
+        raw_content_status = None
+        raw_content_sha256 = None
         if isinstance(item, NewsEvidence):
             raw_title = item.title
             raw_pub = item.published_at
@@ -1313,6 +1371,12 @@ def build_news_event_coverage(
                 raw_url = extract_url_from_raw(item.raw_item)
             raw_canonical_event_id = item.canonical_event_id
             item_collaterals = list(item.collateral_records)
+            raw_content_status = getattr(item, "content_status", None)
+            raw_content_sha256 = getattr(item, "content_sha256", None)
+            if raw_content_status is None and item.raw_item:
+                raw_content_status = item.raw_item.get("content_status")
+            if raw_content_sha256 is None and item.raw_item:
+                raw_content_sha256 = item.raw_item.get("content_sha256")
         elif hasattr(item, "canonical_event_id") and (hasattr(item, "announced_at") or hasattr(item, "announcement_id")):
             raw_dict = item.to_dict() if hasattr(item, "to_dict") else asdict(item)
             raw_title = getattr(item, "title", "")
@@ -1325,6 +1389,8 @@ def build_news_event_coverage(
             raw_url = getattr(item, "url", None)
             raw_canonical_event_id = getattr(item, "canonical_event_id", None)
             item_collaterals = list(getattr(item, "collateral_records", []))
+            raw_content_status = getattr(item, "content_status", None)
+            raw_content_sha256 = getattr(item, "content_sha256", None)
         else:
             raw_dict = dict(item or {})
             raw_title = raw_dict.get("title", raw_dict.get("新闻标题", raw_dict.get("标题", "")))
@@ -1337,13 +1403,19 @@ def build_news_event_coverage(
             raw_url = extract_url_from_raw(raw_dict)
             raw_canonical_event_id = raw_dict.get("canonical_event_id")
             item_collaterals = list(raw_dict.get("collateral_records", []))
+            raw_content_status = raw_dict.get("content_status")
+            raw_content_sha256 = raw_dict.get("content_sha256")
 
         # Track cninfo source and manifest items from records/evidences (C-05d)
         is_cninfo_item = bool(
-            raw_canonical_event_id
+            (raw_canonical_event_id and str(raw_canonical_event_id).startswith("cninfo:"))
             or (raw_src and any(k in str(raw_src).lower() for k in ("cninfo", "巨潮")))
             or hasattr(item, "announced_at")
+            or hasattr(item, "announcement_id")
             or (isinstance(item, dict) and "announced_at" in item)
+            or (isinstance(item, dict) and "announcement_id" in item)
+            or (isinstance(item, dict) and item.get("source_type") in ("cninfo_announcement", "cninfo_ir_survey"))
+            or (isinstance(raw_dict, dict) and raw_dict.get("source_type") in ("cninfo_announcement", "cninfo_ir_survey"))
         )
         if is_cninfo_item:
             clean_src = str(raw_src).strip() if raw_src else "cninfo_announcement"
@@ -1352,6 +1424,15 @@ def build_news_event_coverage(
             cid_or_title = (str(raw_canonical_event_id).strip() if raw_canonical_event_id else "") or (str(raw_title).strip() if raw_title else "")
             if cid_or_title and cid_or_title not in cninfo_manifest_items:
                 cninfo_manifest_items.append(cid_or_title)
+
+            # Contract 1: count content qualification status for CNINFO primary records
+            c_status_str = str(raw_content_status).strip().lower() if raw_content_status else ""
+            if c_status_str == "hashed":
+                cninfo_content_hashed_count += 1
+            elif c_status_str == "unavailable":
+                cninfo_content_unavailable_count += 1
+            else:
+                cninfo_content_not_attempted_count += 1
 
         # 1. Strict published_at verification
         pub_dt = parse_datetime_or_none(raw_pub)
@@ -1396,6 +1477,8 @@ def build_news_event_coverage(
             raw_item=raw_dict,
             canonical_event_id=str(raw_canonical_event_id).strip() if raw_canonical_event_id else None,
             collateral_records=item_collaterals,
+            content_status=raw_content_status or "not_attempted",
+            content_sha256=raw_content_sha256,
         )
         valid_evidences.append(evidence)
 
@@ -1554,6 +1637,9 @@ def build_news_event_coverage(
         "clusters": [c.to_dict() for c in clusters],
         "unverifiable_items": unverifiable_items,
         "future_rejected_items": future_rejected_items,
+        "cninfo_content_hashed_count": cninfo_content_hashed_count,
+        "cninfo_content_unavailable_count": cninfo_content_unavailable_count,
+        "cninfo_content_not_attempted_count": cninfo_content_not_attempted_count,
     }
 
 
@@ -1679,6 +1765,22 @@ def format_event_coverage_summary(coverage: Mapping[str, Any]) -> str:
         lines.append(
             f"- 结构化旁证挂载（collateral_records）：共 {total_c} 条（主源挂载 {att_c} 条，独立留存 {ind_c} 条；标签：[结构化旁证]）"
         )
+
+    cninfo_hashed_c = coverage.get("cninfo_content_hashed_count", 0)
+    cninfo_unavail_c = coverage.get("cninfo_content_unavailable_count", 0)
+    cninfo_not_att_c = coverage.get("cninfo_content_not_attempted_count", 0)
+    total_cninfo_content = cninfo_hashed_c + cninfo_unavail_c + cninfo_not_att_c
+
+    has_cninfo_source = any(
+        isinstance(s, str) and ("cninfo" in s.lower() or "巨潮" in s)
+        for s in sources
+    )
+    if total_cninfo_content > 0 or has_cninfo_source or ("cninfo_content_hashed_count" in coverage and not sources):
+        if coverage.get("cninfo_status") != "confirmed_empty" or total_cninfo_content > 0:
+            lines.append(
+                f"- 巨潮正文资质核验（content_status）：hashed {cninfo_hashed_c} 条，unavailable {cninfo_unavail_c} 条，not_attempted {cninfo_not_att_c} 条"
+                "（说明：hashed 只证明 cutoff 前取得 PDF 字节，不是已抽取财务数字；unavailable/not_attempted 仅代表正文未获取或未尝试，不等于无公告）"
+            )
 
     if gaps:
         lines.append("- 潜在数据缺口（suspected_gaps）：")

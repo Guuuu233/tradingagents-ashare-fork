@@ -1120,3 +1120,282 @@ def test_c05d_data_collector_integrates_cninfo_envelopes_into_coverage():
     assert "cninfo:1225488095" in cov["query_manifest"]
     assert "cninfo_announcement" in cov["source_manifest"]
     assert "无明显主题缺失" not in format_event_coverage_summary(cov)
+
+
+# ==============================================================================
+# C-05 Slice 10 Acceptance Tests: honest reporting of cninfo content_status
+# ==============================================================================
+
+def test_c05_slice10_cninfo_content_status_mixed_counts_and_media_exclusion():
+    """Contract 1, 2, 5:
+    - Mixed counts of hashed, unavailable, and not_attempted records.
+    - Media markdown is strictly excluded from cninfo content counts.
+    - Contract 2: hashed records are counted as hit events, and non-hashed records
+      are not dropped from query_manifest or hit events.
+    """
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CONTENT_STATUS_HASHED,
+        CONTENT_STATUS_UNAVAILABLE,
+        CONTENT_STATUS_NOT_ATTEMPTED,
+    )
+
+    mock_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    rec1 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：2026年半年度报告",
+        announced_at="2026-07-28 17:00:00",
+        url="http://www.cninfo.com.cn/ann/101",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="101",
+        canonical_event_id="cninfo:101",
+        content_status=CONTENT_STATUS_HASHED,
+        content_sha256=mock_sha,
+    )
+    rec2 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：关于重大投资进展公告",
+        announced_at="2026-07-29 09:30:00",
+        url="http://www.cninfo.com.cn/ann/102",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="102",
+        canonical_event_id="cninfo:102",
+        content_status=CONTENT_STATUS_UNAVAILABLE,
+        content_sha256=None,
+    )
+    rec3 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：关于董事会决议公告",
+        announced_at="2026-07-29 10:00:00",
+        url="http://www.cninfo.com.cn/ann/103",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="103",
+        canonical_event_id="cninfo:103",
+        content_status=CONTENT_STATUS_NOT_ATTEMPTED,
+        content_sha256=None,
+    )
+    media_item = {
+        "title": "东方财富：某上市公司发布临时公告",
+        "published_at": "2026-07-29 10:30:00",
+        "source": "东方财富",
+        "url": "https://finance.eastmoney.com/a/999.html",
+        "entity": "000001",
+        "theme": "公司治理",
+    }
+    media_md = "### 新浪财经：行业动态快报 [发布时间：2026-07-29 11:00:00] (source: 新浪财经)\n行业内容"
+    media_evs, _ = parse_news_markdown_to_evidences(media_md, default_entity="000001")
+
+    coverage = build_news_event_coverage(
+        [rec1, rec2, rec3, media_item] + media_evs,
+        cutoff="2026-07-30",
+        default_entity="000001",
+    )
+
+    # Contract 1: exact counts for cninfo primary records
+    assert coverage["cninfo_content_hashed_count"] == 1
+    assert coverage["cninfo_content_unavailable_count"] == 1
+    assert coverage["cninfo_content_not_attempted_count"] == 1
+
+    # Media markdown and external news must NOT be counted into cninfo counts
+    total_cninfo = (
+        coverage["cninfo_content_hashed_count"]
+        + coverage["cninfo_content_unavailable_count"]
+        + coverage["cninfo_content_not_attempted_count"]
+    )
+    assert total_cninfo == 3
+
+    # Contract 2: hashed record enters hit events, unhashed records remain hit events
+    assert coverage["hit_count"] == 5
+    assert "cninfo:101" in coverage["query_manifest"]
+    assert "cninfo:102" in coverage["query_manifest"]
+    assert "cninfo:103" in coverage["query_manifest"]
+
+
+def test_c05_slice10_missing_content_status_field_defaults_to_not_attempted():
+    """Contract 1: records missing content_status field default to 'not_attempted'."""
+    raw_dict = {
+        "title": "平安银行：日常关联交易公告",
+        "announced_at": "2026-07-29 09:30:00",
+        "source_type": "cninfo_announcement",
+        "symbol": "000001",
+        "announcement_id": "104",
+        "canonical_event_id": "cninfo:104",
+        # 'content_status' is intentionally omitted
+    }
+    coverage = build_news_event_coverage([raw_dict], cutoff="2026-07-30")
+
+    assert coverage["cninfo_content_hashed_count"] == 0
+    assert coverage["cninfo_content_unavailable_count"] == 0
+    assert coverage["cninfo_content_not_attempted_count"] == 1
+
+
+def test_c05_slice10_summary_contains_qualification_counts_and_anti_misinterpretation():
+    """Contract 3 & 4:
+    - Summary includes content qualification counts (hashed, unavailable, not_attempted).
+    - Summary explicitly states: hashed only proves PDF bytes obtained before cutoff, not extracted financial numbers;
+      unavailable/not_attempted is not confirmation of no announcement.
+    - Contract 4 strictly forbids: '确认无公告', '已验证净利润', '已读年报'.
+    """
+    coverage = {
+        "cutoff": "2026-07-30",
+        "window": "14天",
+        "recall_status": "partial_vs_manifest",
+        "source_manifest": ["cninfo_announcement"],
+        "query_manifest": ["cninfo:101", "cninfo:102"],
+        "hit_count": 2,
+        "cninfo_content_hashed_count": 1,
+        "cninfo_content_unavailable_count": 1,
+        "cninfo_content_not_attempted_count": 0,
+    }
+
+    summary = format_event_coverage_summary(coverage)
+
+    # Positive assertions: counts present
+    assert "hashed 1 条" in summary
+    assert "unavailable 1 条" in summary
+    assert "not_attempted 0 条" in summary
+
+    # Positive assertions: explanations present
+    assert "hashed 只证明 cutoff 前取得 PDF 字节，不是已抽取财务数字" in summary
+    assert "unavailable/not_attempted" in summary
+    assert "不等于无公告" in summary
+
+    # Contract 4 negative assertions: strictly forbids misinterpretations
+    assert "确认无公告" not in summary
+    assert "已验证净利润" not in summary
+    assert "已读年报" not in summary
+    assert "确认无公告" not in str(coverage)
+
+
+def test_c05_slice10_unavailable_does_not_change_provider_failure_semantics():
+    """Contract 5:
+    - unavailable status on records does NOT change provider_failure semantics:
+      1. Normal ok envelope with unavailable records remains ok (not provider_failure).
+      2. provider_failure envelope remains provider_failure even when records are passed.
+    """
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CninfoDisclosureEnvelope,
+        CONTENT_STATUS_UNAVAILABLE,
+    )
+
+    rec_unavail = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行公告",
+        announced_at="2026-07-29 09:30:00",
+        url="http://www.cninfo.com.cn/ann/105",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="105",
+        canonical_event_id="cninfo:105",
+        content_status=CONTENT_STATUS_UNAVAILABLE,
+    )
+
+    # 1. Ok envelope with unavailable record: status must be ok, not provider_failure
+    ok_env = CninfoDisclosureEnvelope(
+        status="ok",
+        records=[rec_unavail],
+        source_type="cninfo_announcement",
+    )
+    cov_ok = build_news_event_coverage([], cninfo_envelopes=[ok_env], cutoff="2026-07-30")
+    assert cov_ok["recall_status"] == "partial_vs_manifest"
+    assert cov_ok["cninfo_status"] == "ok"
+    assert not any(g.get("status") == "provider_failure" for g in cov_ok.get("suspected_gaps", []))
+    assert cov_ok["cninfo_content_unavailable_count"] == 1
+    assert cov_ok["cninfo_content_hashed_count"] == 0
+
+    # 2. provider_failure envelope: status remains provider_failure, not converted to ok or empty
+    fail_env = CninfoDisclosureEnvelope(
+        status="provider_failure",
+        records=[],
+        error="Gateway 504 Timeout",
+        source_type="cninfo_announcement",
+    )
+    cov_fail = build_news_event_coverage([], cninfo_envelopes=[fail_env], cutoff="2026-07-30")
+    assert cov_fail["recall_status"] == "provider_failure"
+    assert cov_fail["cninfo_status"] == "provider_failure"
+    assert any(g.get("status") == "provider_failure" for g in cov_fail.get("suspected_gaps", []))
+    fail_summary = format_event_coverage_summary(cov_fail)
+    assert "确认无公告" not in fail_summary
+
+
+def test_c05_slice10_via_cninfo_envelopes_and_evidences_dedup_no_double_count():
+    """Verify that passing both cninfo_envelopes and pre-converted evidences does NOT double count."""
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CninfoDisclosureEnvelope,
+        CONTENT_STATUS_HASHED,
+        CONTENT_STATUS_UNAVAILABLE,
+    )
+
+    rec1 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行年报",
+        announced_at="2026-07-28 17:00:00",
+        url="http://www.cninfo.com.cn/ann/201",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="201",
+        canonical_event_id="cninfo:201",
+        content_status=CONTENT_STATUS_HASHED,
+        content_sha256="abc" * 21 + "a",
+    )
+    rec2 = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行半年报",
+        announced_at="2026-07-29 17:00:00",
+        url="http://www.cninfo.com.cn/ann/202",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="202",
+        canonical_event_id="cninfo:202",
+        content_status=CONTENT_STATUS_UNAVAILABLE,
+    )
+
+    env = CninfoDisclosureEnvelope(status="ok", records=[rec1, rec2], source_type="cninfo_announcement")
+    evs = [cninfo_record_to_evidence(r, default_entity="000001") for r in env.records]
+
+    # Both passed: evidences in items, env in cninfo_envelopes (matching data_collector behavior)
+    coverage = build_news_event_coverage(
+        evs,
+        cninfo_envelopes=[env],
+        cutoff="2026-07-30",
+        default_entity="000001",
+    )
+
+    assert coverage["cninfo_content_hashed_count"] == 1
+    assert coverage["cninfo_content_unavailable_count"] == 1
+    assert coverage["cninfo_content_not_attempted_count"] == 0
+    assert coverage["hit_count"] == 2
+
+
+def test_c05_slice10_ir_surveys_included_in_cninfo_content_counts():
+    """Verify cninfo_ir_survey records are also recognized as CNINFO primary records and counted."""
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CninfoDisclosureRecord,
+        CONTENT_STATUS_HASHED,
+    )
+
+    ir_rec = CninfoDisclosureRecord(
+        symbol="000001",
+        title="平安银行：2026年7月投资者关系活动记录表",
+        announced_at="2026-07-29 15:00:00",
+        url="http://www.cninfo.com.cn/ir/301",
+        source_type="cninfo_ir_survey",
+        cutoff_eligible=True,
+        announcement_id="301",
+        canonical_event_id="cninfo:301",
+        content_status=CONTENT_STATUS_HASHED,
+        content_sha256="def" * 21 + "d",
+    )
+    coverage = build_news_event_coverage([ir_rec], cutoff="2026-07-30")
+
+    assert coverage["cninfo_content_hashed_count"] == 1
+    assert coverage["cninfo_content_unavailable_count"] == 0
+    assert coverage["cninfo_content_not_attempted_count"] == 0
+    assert coverage["hit_count"] == 1
+
