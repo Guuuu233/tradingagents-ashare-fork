@@ -45,7 +45,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_margin_trading,
     get_northbound_flow,
 )
-from tradingagents.dataflows.interface import route_to_vendor
+from tradingagents.dataflows.interface import _registry, route_to_vendor
 from tradingagents.dataflows.fund_flow_evidence import (
     build_gap_meta,
     build_provider_text,
@@ -1986,6 +1986,7 @@ def _fetch_all(
             if ev is not None:
                 cninfo_evs.append(ev)
 
+    cn_provider = _registry.get("cn_akshare")
     event_cov = build_news_event_coverage(
         stock_evs + glob_evs + cninfo_evs + stock_unp + glob_unp,
         requested_themes=None,
@@ -1993,6 +1994,7 @@ def _fetch_all(
         window=f"{lookback}天",
         default_entity=ticker,
         cninfo_envelopes=cninfo_envelopes,
+        provider=cn_provider,
     )
     results["event_coverage"] = event_cov
 
