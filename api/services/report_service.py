@@ -861,6 +861,13 @@ def canonicalize_report_result_data(
     validate_report_machine_blocks(result_data)
     _validate_fund_flow_evidence(result_data)
     canonical_data = dict(result_data)
+    if "social_data_context" not in canonical_data or canonical_data["social_data_context"] is None:
+        canonical_data["social_data_context"] = {}
+    for nested_key in ("short_term", "medium_term"):
+        nested = canonical_data.get(nested_key)
+        if isinstance(nested, dict):
+            if "social_data_context" not in nested or nested["social_data_context"] is None:
+                nested["social_data_context"] = {}
     if "structured" not in canonical_data:
         return canonical_data
 
@@ -1596,7 +1603,13 @@ def get_report(db: Session, report_id: str, user_id: Optional[str] = None) -> Op
     query = db.query(ReportDB).filter(ReportDB.id == report_id)
     if user_id:
         query = query.filter(ReportDB.user_id == user_id)
-    return query.first()
+    report = query.first()
+    if report and report.result_data and isinstance(report.result_data, dict):
+        if "social_data_context" not in report.result_data or report.result_data["social_data_context"] is None:
+            rd = dict(report.result_data)
+            rd["social_data_context"] = {}
+            report.result_data = rd
+    return report
 
 
 def get_reports_by_user(
