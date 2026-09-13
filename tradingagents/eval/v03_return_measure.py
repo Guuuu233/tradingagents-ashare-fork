@@ -210,8 +210,9 @@ class MeasurementOutcomeStatus(str, Enum):
 BASELINE_MODEL: str = "gemini-3.8-flash-high"
 BASELINE_GLOBAL_PROMPT_HASH: str = "5489166b"
 HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA: str = "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
-# Retained as baseline historical sample generator alias; not to be confused with live running service SHA
-BASELINE_RUNNING_SERVICE_SHA: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+OFFLINE_REPLAY_GAP: str = "offline_replay_gap"
+# Retained for legacy compatibility; explicitly points to offline replay gap, no longer represents live running service nor points to historical sample generating SHA
+BASELINE_RUNNING_SERVICE_SHA: str = OFFLINE_REPLAY_GAP
 BASELINE_DISCLAIMER: str = "半成品基线,非定性判断"
 BASELINE_DISCLAIMER_DETAIL: str = (
     "系统尚未施工完成，舆情等真实数据源未接入。本引擎仅为进度基线与测量工具，"
@@ -433,7 +434,7 @@ class EvaluationStamp:
         default_factory=lambda: f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}"
     )
     code_sha: str = field(default_factory=get_current_code_sha)
-    running_service_sha: str = BASELINE_RUNNING_SERVICE_SHA
+    running_service_sha: str = OFFLINE_REPLAY_GAP
     sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     historical_sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     running_service_provenance_source: Optional[str] = None
@@ -481,7 +482,7 @@ class SnapshotManifest:
     code_sha: str = field(default_factory=get_current_code_sha)
     sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     historical_sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
-    running_service_sha: Optional[str] = None
+    running_service_sha: Optional[str] = OFFLINE_REPLAY_GAP
     running_service_provenance_source: Optional[str] = None
     model_name: str = BASELINE_MODEL
     temperature: float = 0.0
@@ -1847,23 +1848,22 @@ class V03ReturnMeasureEngine:
             user_failed = self.target_user_stats.get("failed")
             acc_stats = dict(self.target_user_stats)
 
-        # Provenance: running_service_sha handling
-        # EvaluationStamp preserves BASELINE_RUNNING_SERVICE_SHA if not passed (for RT-9 compatibility)
-        # SnapshotManifest outputs typed gap / offline replay marker unless explicitly provided
-        running_sha_stamp = (
+        # Provenance: running_service_sha handling (DAV-865 & DAV-866)
+        # When running_service_sha is not explicitly provided, both stamp and manifest
+        # output the explicit offline replay gap ("offline_replay_gap"), never falling back to historical SHA
+        running_sha = (
             self.running_service_sha
             if self.running_service_sha is not None
-            else BASELINE_RUNNING_SERVICE_SHA
-        )
-        running_sha_manifest = (
-            self.running_service_sha
-            if self.running_service_sha is not None
-            else "offline_replay_gap"
+            else OFFLINE_REPLAY_GAP
         )
         prov_source = (
             self.running_service_provenance
             if self.running_service_provenance is not None
-            else ("healthz_probe" if self.running_service_sha is not None else "offline_replay_gap")
+            else (
+                "healthz_probe"
+                if self.running_service_sha is not None
+                else "offline_replay_gap: probe unavailable or offline"
+            )
         )
 
         stamp = EvaluationStamp(
@@ -1874,13 +1874,13 @@ class V03ReturnMeasureEngine:
             target_user_completed=user_completed,
             target_user_failed=user_failed,
             account_stats=acc_stats,
-            running_service_sha=running_sha_stamp,
+            running_service_sha=running_sha,
             sample_generating_service_sha=self.sample_generating_service_sha,
             historical_sample_generating_service_sha=self.sample_generating_service_sha,
             running_service_provenance_source=prov_source,
         )
 
-        # Snapshot Manifest (V-03a-3 Section 1 & DAV-865)
+        # Snapshot Manifest (V-03a-3 Section 1 & DAV-865 & DAV-866)
         manifest = SnapshotManifest(
             manifest_id=f"manifest-{hashlib.sha256(f'{self.target_user_id}:{len(report_list)}:{get_current_code_sha()}'.encode()).hexdigest()[:12]}",
             target_user_id=self.target_user_id or DEFAULT_TARGET_USER_ID,
@@ -1900,7 +1900,7 @@ class V03ReturnMeasureEngine:
             code_sha=get_current_code_sha(),
             sample_generating_service_sha=self.sample_generating_service_sha,
             historical_sample_generating_service_sha=self.sample_generating_service_sha,
-            running_service_sha=running_sha_manifest,
+            running_service_sha=running_sha,
             running_service_provenance_source=prov_source,
             model_name=BASELINE_MODEL,
             temperature=0.0,

@@ -35,6 +35,7 @@ from tradingagents.eval.v03_return_measure import (
     DEFAULT_STATUS_FILTER,
     DEFAULT_TARGET_USER_ID,
     HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
+    OFFLINE_REPLAY_GAP,
     CostModel,
     OfflineReplayHarness,
     SnapshotManifest,
@@ -366,13 +367,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Running service SHA provenance resolution (DAV-865)
+    # Running service SHA provenance resolution (DAV-865 & DAV-866)
     running_sha = args.running_service_sha
     prov_source = "explicit_cli_argument" if running_sha else None
 
     if not running_sha:
         if args.offline:
-            running_sha = "offline_replay_gap"
+            running_sha = OFFLINE_REPLAY_GAP
             prov_source = "offline_replay_explicit_flag"
         else:
             probed_sha, prov = probe_running_service_sha(args.healthz_url, timeout_sec=1.0)
@@ -380,7 +381,7 @@ def main() -> None:
                 running_sha = probed_sha
                 prov_source = prov
             else:
-                running_sha = "offline_replay_gap"
+                running_sha = OFFLINE_REPLAY_GAP
                 prov_source = prov
 
     replica_sha = ""

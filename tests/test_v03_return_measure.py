@@ -34,6 +34,7 @@ from tradingagents.eval.v03_return_measure import (
     DEFAULT_TARGET_USER_ID,
     HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     MINIMUM_AUDIT_FIELDS,
+    OFFLINE_REPLAY_GAP,
     REGRESSION_SYMBOLS,
     AblationConfig,
     AblationVariantResult,
@@ -1573,18 +1574,22 @@ def test_rt16_honest_forward_oos_zero_reporting(mock_price_provider):
 def test_dav865_provenance_service_sha_differentiation():
     """DAV-865: 明确区分历史样本生成服务 SHA 与当前运行服务 SHA，字段语义准确表达."""
     assert HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA == "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
-    # Legacy alias points to historical generator SHA
-    assert BASELINE_RUNNING_SERVICE_SHA == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    # Legacy alias no longer points to historical generator SHA, points to offline replay gap (DAV-866)
+    assert BASELINE_RUNNING_SERVICE_SHA != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert BASELINE_RUNNING_SERVICE_SHA == OFFLINE_REPLAY_GAP
 
     # EvaluationStamp & SnapshotManifest differentiate historical sample generator vs running service
     stamp = EvaluationStamp()
     assert stamp.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     assert stamp.historical_sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.running_service_sha == OFFLINE_REPLAY_GAP
 
     manifest = SnapshotManifest(manifest_id="test_man_diff")
     assert manifest.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     assert manifest.historical_sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
-    assert manifest.running_service_sha is None
+    assert manifest.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert manifest.running_service_sha == OFFLINE_REPLAY_GAP
 
 
 def test_dav865_provenance_healthz_probe_service_available(monkeypatch):
@@ -1752,3 +1757,46 @@ def test_dav865_real_stats_accurate_readback_when_provided(mock_price_provider):
     assert "520" in md
     assert "380" in md
     assert "140" in md
+
+
+# ===========================================================================
+# DAV-866: 通用引擎无参数默认路径 provenance 一致性与禁止回填历史 SHA 测试
+# ===========================================================================
+
+
+def test_dav866_evaluation_stamp_default_running_service_sha_not_historical():
+    """DAV-866: EvaluationStamp() 无参数默认运行服务字段不得等于历史样本生成 SHA，显式标识离线缺口."""
+    stamp = EvaluationStamp()
+    assert stamp.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.running_service_sha != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+    assert stamp.running_service_sha == OFFLINE_REPLAY_GAP
+    assert stamp.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.historical_sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+
+
+def test_dav866_measure_dataset_default_stamp_and_manifest_consistent_offline_gap(mock_price_provider):
+    """DAV-866: V03ReturnMeasureEngine().measure_dataset([]) 的 stamp 与 manifest 对当前运行字段一致且显式标识离线缺口."""
+    engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
+    res = engine.measure_dataset([])
+
+    # Stamp and manifest running_service_sha must be strictly equal
+    assert res.stamp.running_service_sha == res.snapshot_manifest.running_service_sha
+    assert res.stamp.running_service_sha == OFFLINE_REPLAY_GAP
+    assert res.snapshot_manifest.running_service_sha == OFFLINE_REPLAY_GAP
+
+    # Strictly verify neither fills in historical sample generator SHA
+    assert res.stamp.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert res.snapshot_manifest.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert res.stamp.running_service_sha != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+    assert res.snapshot_manifest.running_service_sha != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+
+    # Historical generator SHA continues to be honestly stamped
+    assert res.stamp.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert res.snapshot_manifest.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+
+
+def test_dav866_baseline_running_service_sha_legacy_symbol():
+    """DAV-866: 旧 BASELINE_RUNNING_SERVICE_SHA 符号保留但明确不再代表当前运行服务，不指向 a6d..."""
+    assert BASELINE_RUNNING_SERVICE_SHA != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert BASELINE_RUNNING_SERVICE_SHA != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+    assert BASELINE_RUNNING_SERVICE_SHA == OFFLINE_REPLAY_GAP
