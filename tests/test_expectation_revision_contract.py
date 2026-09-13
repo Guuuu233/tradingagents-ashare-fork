@@ -784,5 +784,193 @@ def test_case_12_prompt_guard_invariants_preserved_zh_and_en():
         rewritten_en = rewritten_en.replace(old, new)
     # Ensure no forbidden terms in EN
     assert not _RELATION_PROMPT_FORBIDDEN["en"].search(rewritten_en), "Forbidden token survived in EN prompt"
-    # Ensure no forbidden terms in EN
-    assert not _RELATION_PROMPT_FORBIDDEN["en"].search(rewritten_en), "Forbidden token survived in EN prompt"
+
+
+# ==============================================================================
+# 端到端红队穿透复核专项回归测试 (DAV-870 复核闭环)
+# ==============================================================================
+
+def test_end_to_end_announcement_title_or_url_cannot_become_actual():
+    """Announcement titles or PDF URLs containing amounts must not penetrate into actual numbers."""
+    outputs = {
+        "fundamentals": "公告标题: 关于2024Q2净利润5000万元业绩预告的澄清说明 http://cninfo.com.cn/2024Q2净利润5000万元.pdf",
+        "income_statement": "公告正文链接: http://example.com/2024Q2营业收入100亿元.pdf",
+    }
+    actual, gaps = _extract_structured_actual(outputs, current_date="2024-06-30")
+    assert actual["status"] == STATUS_GAP
+    assert actual["value"] is None
+    assert "actual_incomplete_elements" in gaps
+
+    er = build_fundamentals_expectation_revision(outputs, pool={}, current_date="2024-06-30")
+    assert er["actual"]["value"] is None
+    assert er["actual"]["status"] == STATUS_GAP
+    assert er["revision"]["type"] != REVISION_NUMERIC
+
+
+def test_end_to_end_future_as_of_date_blocked_cannot_become_numeric_revision():
+    """Future statement date beyond cutoff cannot be silently rewritten to current_date or generate numeric revision."""
+    outputs = {
+        "fundamentals": "2024Q3 净利润 150.0 亿元",
+    }
+    # Current date is 2024-05-15, but 2024Q3 as_of is 2024-09-30
+    actual, gaps = _extract_structured_actual(outputs, current_date="2024-05-15")
+    assert actual["status"] == STATUS_GAP
+    assert actual["value"] is None
+    assert "future_date" in gaps
+
+    pool = {
+        "baseline": {
+            "type": BASELINE_MANAGEMENT_GUIDANCE,
+            "source": "业绩指引",
+            "metric": "净利润",
+            "value": 140.0,
+            "unit": "亿元",
+            "period": "2024Q3",
+            "as_of": "2024-09-30",
+        }
+    }
+    er = build_fundamentals_expectation_revision(outputs, pool=pool, current_date="2024-05-15")
+    assert er["actual"]["value"] is None
+    assert er["actual"]["status"] == STATUS_GAP
+    assert er["revision"]["type"] != REVISION_NUMERIC
+    assert "future_date" in er["gaps"]
+    assert er["status"] == STATUS_GAP
+
+
+def test_end_to_end_earnings_forecast_without_source_cannot_fabricate_baseline():
+    """earnings_forecast lacking explicit source and type cannot masquerade as management_guidance."""
+    actual = {
+        "status": STATUS_AVAILABLE,
+        "metric": "净利润",
+        "value": 100.0,
+        "unit": "亿元",
+        "report_period": "2024Q2",
+        "as_of": "2024-06-30",
+    }
+    # Forecast without source and without type
+    pool = {
+        "earnings_forecast": {
+            "metric": "净利润",
+            "value": 80.0,
+            "unit": "亿元",
+            "period": "2024Q2",
+        }
+    }
+    baseline, revision, gaps = _extract_baseline_and_revision(actual, pool, current_date="2024-06-30")
+    assert baseline["type"] == BASELINE_NONE
+    assert "baseline_source_missing" in gaps
+    assert revision["type"] != REVISION_NUMERIC
+    assert revision["value"] is None
+    assert revision["percent"] is None
+
+
+def test_end_to_end_compliance_violation_blocks_numeric_revision():
+    """Compliance period violations (cumulative labeled as single quarter) force revision to gap."""
+    outputs = {
+        "fundamentals": "2024Q2 营业收入 50.0 亿元",
+    }
+    pool = {
+        "baseline": {
+            "type": BASELINE_MANAGEMENT_GUIDANCE,
+            "source": "管理层指引",
+            "metric": "营业收入",
+            "value": 25.0,
+            "unit": "亿元",
+            "period": "2024Q2",
+            "as_of": "2024-06-30",
+        }
+    }
+    compliance = {
+        "compliance_status": "violations_found",
+        "violations": [
+            {
+                "kind": "cumulative_labeled_as_single_quarter",
+                "message": "H1 累计值被误标为 Q2 单季值",
+            }
+        ],
+    }
+    er = build_fundamentals_expectation_revision(
+        outputs=outputs,
+        pool=pool,
+        current_date="2024-06-30",
+        compliance=compliance,
+    )
+    assert "period_mismatch" in er["gaps"]
+    assert any("cumulative_labeled_as_single_quarter" in g for g in er["gaps"])
+    assert er["actual"]["status"] == STATUS_GAP
+    assert er["actual"]["value"] is None
+    assert er["revision"]["type"] == REVISION_GAP
+    assert er["revision"]["value"] is None
+
+
+def test_end_to_end_manager_raw_response_hallucination_blocked_even_with_clean_verdict_reason():
+    """validate_manager_expectation_revision_consumption inspects raw_response to catch body hallucinations."""
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_GAP)
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_GAP)
+
+    # 15-word reason is completely clean and innocent
+    manager_verdict = {
+        "winner": "tie",
+        "direction": "NEUTRAL",
+        "reason": "多空证据分歧，保持中性观望等待确定性",
+    }
+    # But body text hallucinates "超预期" without baseline
+    body_with_beat = """【投资裁决报告】
+经深入分析，公司二季度业绩大幅超预期，核心驱动力强劲。
+<!-- MANAGER_VERDICT: ... -->"""
+    is_valid, violations = validate_manager_expectation_revision_consumption(
+        manager_verdict=manager_verdict,
+        raw_response=body_with_beat,
+        expectation_revisions={"fundamentals": fund_er, "news": news_er},
+    )
+    assert not is_valid
+    assert any("超预期" in v for v in violations)
+
+    # Body text hallucinates financial numbers without actual
+    body_with_fake_num = """【投资裁决报告】
+根据非公开渠道，本季度营业收入达到9999亿元，大幅看好。
+<!-- MANAGER_VERDICT: ... -->"""
+    is_valid_num, violations_num = validate_manager_expectation_revision_consumption(
+        manager_verdict=manager_verdict,
+        raw_response=body_with_fake_num,
+        expectation_revisions={"fundamentals": fund_er, "news": news_er},
+    )
+    assert not is_valid_num
+    assert any("9999亿元" in v for v in violations_num)
+
+    # Body text claims priced-in without evidence
+    body_with_priced_in = """【投资裁决报告】
+市场已充分定价该利好消息，后续无预期差空间。
+<!-- MANAGER_VERDICT: ... -->"""
+    is_valid_pi, violations_pi = validate_manager_expectation_revision_consumption(
+        manager_verdict=manager_verdict,
+        raw_response=body_with_priced_in,
+        expectation_revisions={"fundamentals": fund_er, "news": news_er},
+    )
+    assert not is_valid_pi
+    assert any("已定价" in v for v in violations_pi)
+
+
+def test_end_to_end_double_count_guard_audit_in_verdict():
+    """double_count_guard blocks duplicate voting and records double_count_guard_audit."""
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_AVAILABLE)
+    news_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_ACCOUNTED_FOR,
+        "prevent_double_voting": True,
+        "description": "已计入预测",
+    }
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+
+    manager_verdict = {
+        "direction": "BULLISH",
+        "reason": "多头胜出",
+    }
+    # Attempting duplicate voting
+    body_with_double_vote = "该事件已计入盈利预测，但多头逻辑继续重复计入该利好加一票。"
+    is_valid, violations = validate_manager_expectation_revision_consumption(
+        manager_verdict=manager_verdict,
+        raw_response=body_with_double_vote,
+        expectation_revisions={"news": news_er, "fundamentals": fund_er},
+    )
+    assert not is_valid
+    assert any("double_count_guard" in v for v in violations)

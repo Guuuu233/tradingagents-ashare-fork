@@ -450,26 +450,44 @@ def validate_manager_expectation_revision_consumption(
     fund_pi = (fund_er.get("priced_in") or {}).get("status", "unknown")
     news_pi = (news_er.get("priced_in") or {}).get("status", "unknown")
 
-    reason = str(manager_verdict.get("reason") or "")
+    texts_to_check = [
+        str(manager_verdict.get("reason") or ""),
+        str(raw_response or ""),
+    ]
 
     if fund_pi == "unknown" and news_pi == "unknown":
-        if "已充分定价" in reason or "已完全定价" in reason or "市场已定价" in reason or "已定价" in reason:
-            violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价”当作已确证事实引用")
+        for t in texts_to_check:
+            if any(term in t for term in ("已充分定价", "已完全定价", "市场已定价", "已定价")):
+                violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价”当作已确证事实引用")
+                break
 
     # 2. Check if beat/miss claimed without comparable baseline
     if fund_base_type == "none" or fund_base_val is None:
-        if "超预期" in reason or "不及预期" in reason:
-            violations.append("E-04 守卫拦截：基本面无有效旧基线，经理不得在裁决理由中断言业绩“超预期”或“不及预期”")
+        for t in texts_to_check:
+            if re.search(r"(?<!无)(?<!无法)(?<!不构成)(?<!未)(?:业绩|净利润|营收|营业收入)?(?:超预期|不及预期)", t):
+                violations.append("E-04 守卫拦截：基本面无有效旧基线，经理不得在裁决理由或正文中判断业绩“超预期”或“不及预期”")
+                break
 
     # 3. Check if financial numbers hallucinated when analyst reported gap
     fund_act_val = (fund_er.get("actual") or {}).get("value")
     if fund_act_val is None:
-        m = re.search(
-            r"(?:营业收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,12}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
-            reason,
-        )
-        if m:
-            violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值，经理不得擅自断言财务指标数值（{m.group(0)}）")
+        for t in texts_to_check:
+            m = re.search(
+                r"(?:营业收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,12}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
+                t,
+            )
+            if m:
+                violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值，经理不得擅自断言财务指标数值（{m.group(0)}）")
+                break
+
+    # 4. Check double count guard violation
+    news_dcg = news_er.get("double_count_guard") or {}
+    fund_dcg = fund_er.get("double_count_guard") or {}
+    if news_dcg.get("prevent_double_voting", True) or fund_dcg.get("prevent_double_voting", True):
+        for t in texts_to_check:
+            if any(term in t for term in ("重复计入", "再次计入", "计入两票", "双重计入", "重复投票")):
+                violations.append("E-04 守卫拦截：double_count_guard 阻止对已计入或未知事件重复计入或重复投票")
+                break
 
     return len(violations) == 0, violations
 
@@ -566,6 +584,11 @@ def _blocked_manager_payload(
         "evidence_relation_status": claim_cluster_metrics.get("relation_graph_status", "pending"),
         "evidence_relation_reason": claim_cluster_metrics.get("relation_graph_reason", ""),
         "expectation_revision": dict(expectation_revision or {}),
+        "double_count_guard_audit": {
+            "news_prevent_double_voting": (dict(expectation_revision or {}).get("news", {}).get("double_count_guard", {})).get("prevent_double_voting", True),
+            "fundamentals_prevent_double_voting": (dict(expectation_revision or {}).get("fundamentals", {}).get("double_count_guard", {})).get("prevent_double_voting", True),
+            "duplicate_voting_prevented": True,
+        },
     }
     payload = {
         "fund_flow_consensus_guard": fund_flow_guard,
@@ -1261,6 +1284,11 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         manager_verdict["evidence_relation_status"] = claim_cluster_metrics.get("relation_graph_status", "pending")
         manager_verdict["evidence_relation_reason"] = claim_cluster_metrics.get("relation_graph_reason", "")
         manager_verdict["expectation_revision"] = expectation_revisions
+        manager_verdict["double_count_guard_audit"] = {
+            "news_prevent_double_voting": (dict(expectation_revisions or {}).get("news", {}).get("double_count_guard", {})).get("prevent_double_voting", True),
+            "fundamentals_prevent_double_voting": (dict(expectation_revisions or {}).get("fundamentals", {}).get("double_count_guard", {})).get("prevent_double_voting", True),
+            "duplicate_voting_prevented": True,
+        }
 
         er_valid, er_violations = validate_manager_expectation_revision_consumption(
             manager_verdict=manager_verdict,

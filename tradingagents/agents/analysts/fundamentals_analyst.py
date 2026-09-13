@@ -107,50 +107,85 @@ def _extract_structured_actual(
     # 2. Search for a structured metric with all 5 elements
     fund_text = outputs.get("fundamentals")
     inc_stmt = outputs.get("income_statement")
-    search_texts = [str(fund_text or ""), str(inc_stmt or "")]
+    bal_sheet = outputs.get("balance_sheet")
+    search_texts = [str(fund_text or ""), str(inc_stmt or ""), str(bal_sheet or "")]
+
+    _DISQUALIFYING_LINE_MARKERS = (
+        "公告", "预告", "澄清", "说明", "提示", "http:", "https:", ".pdf", ".html",
+        "标题", "链接", "快报", "新闻", "意见", "方案", "预案", "摘要", "草案", "简况",
+    )
 
     for text in search_texts:
         if not text or text == "无数据":
             continue
-        m = re.search(
-            r"(?P<period>\d{4}(?:Q[1-4]|H[1-2]|年报|\-\d{2}\-\d{2}))[^\n]*?"
-            r"(?P<metric>营业收入|营业总收入|主营业务收入|营收|净利润|归属于母公司所有者的净利润|归母净利润|毛利率)\s*"
-            r"(?P<val>[0-9]+(?:\.[0-9]+)?)\s*"
-            r"(?P<unit>亿元|万元|元|万|亿|%|万亿元)",
-            text,
-        )
-        if m:
-            period = m.group("period")
-            metric = m.group("metric")
-            val = float(m.group("val"))
-            unit = m.group("unit")
+        for line in text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if any(marker in line_str for marker in _DISQUALIFYING_LINE_MARKERS):
+                continue
+            m = re.search(
+                r"(?P<period>\d{4}(?:Q[1-4]|H[1-2]|年报|\-\d{2}\-\d{2}))[^\n]*?"
+                r"(?P<metric>营业收入|营业总收入|主营业务收入|营收|净利润|归属于母公司所有者的净利润|归母净利润|毛利率)\s*"
+                r"(?P<val>[0-9]+(?:\.[0-9]+)?)\s*"
+                r"(?P<unit>亿元|万元|元|万|亿|%|万亿元)",
+                line_str,
+            )
+            if m:
+                period = m.group("period")
+                metric = m.group("metric")
+                val = float(m.group("val"))
+                unit = m.group("unit")
 
-            as_of = None
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
-                as_of = period
-            elif "Q1" in period:
-                as_of = f"{period[:4]}-03-31"
-            elif "Q2" in period or "H1" in period:
-                as_of = f"{period[:4]}-06-30"
-            elif "Q3" in period:
-                as_of = f"{period[:4]}-09-30"
-            elif "Q4" in period or "年报" in period:
-                as_of = f"{period[:4]}-12-31"
+                as_of = None
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
+                    as_of = period
+                elif "Q1" in period:
+                    as_of = f"{period[:4]}-03-31"
+                elif "Q2" in period or "H1" in period:
+                    as_of = f"{period[:4]}-06-30"
+                elif "Q3" in period:
+                    as_of = f"{period[:4]}-09-30"
+                elif "Q4" in period or "年报" in period:
+                    as_of = f"{period[:4]}-12-31"
 
-            if as_of and current_date and as_of > current_date:
-                gaps.append("future_date")
-                as_of = current_date
+                # Check future date: strictly block lookahead and forbid actual numbers!
+                if as_of and current_date and str(as_of)[:10] > str(current_date)[:10]:
+                    gaps.append("future_date")
+                    return {
+                        "status": STATUS_GAP,
+                        "metric": metric,
+                        "value": None,
+                        "unit": unit,
+                        "report_period": period,
+                        "as_of": as_of,
+                        "source": "fundamentals",
+                        "reason": f"财务报表截至日期({as_of})晚于当前截断日期({current_date})，存在前瞻未来数据，记为缺口",
+                    }, gaps
 
-            return {
-                "status": STATUS_AVAILABLE,
-                "metric": metric,
-                "value": val,
-                "unit": unit,
-                "report_period": period,
-                "as_of": as_of or current_date or "2026-06-30",
-                "source": "fundamentals",
-                "reason": None,
-            }, gaps
+                if not as_of:
+                    gaps.append("missing_as_of_date")
+                    return {
+                        "status": STATUS_GAP,
+                        "metric": None,
+                        "value": None,
+                        "unit": None,
+                        "report_period": period,
+                        "as_of": None,
+                        "source": "fundamentals",
+                        "reason": "缺少明确截至日期五要素，记为缺口",
+                    }, gaps
+
+                return {
+                    "status": STATUS_AVAILABLE,
+                    "metric": metric,
+                    "value": val,
+                    "unit": unit,
+                    "report_period": period,
+                    "as_of": as_of,
+                    "source": "fundamentals",
+                    "reason": None,
+                }, gaps
 
     # If no 5 elements simultaneously found:
     gaps.append("actual_incomplete_elements")
@@ -213,18 +248,36 @@ def _extract_baseline_and_revision(
                 "as_of": explicit_baseline.get("as_of"),
             }
     elif isinstance(ef, dict):
-        b_source = ef.get("source") or "earnings_forecast"
-        b_type = ef.get("type") or BASELINE_MANAGEMENT_GUIDANCE
-        baseline = {
-            "type": b_type,
-            "source": b_source,
-            "metric": ef.get("metric"),
-            "value": ef.get("value"),
-            "unit": ef.get("unit"),
-            "period": ef.get("period") or ef.get("report_period"),
-            "report_period": ef.get("period") or ef.get("report_period"),
-            "as_of": ef.get("as_of") or current_date,
-        }
+        b_source = ef.get("source")
+        b_type = ef.get("type")
+        if not b_source or not str(b_source).strip() or not b_type or b_type not in (
+            BASELINE_MANAGEMENT_GUIDANCE,
+            BASELINE_CONSENSUS_EXPECTATION,
+            BASELINE_PRIOR_SELF_FORECAST,
+            BASELINE_IMPLICIT_MODEL,
+        ):
+            gaps.append("baseline_source_missing")
+            baseline = {
+                "type": BASELINE_NONE,
+                "source": None,
+                "metric": None,
+                "value": None,
+                "unit": None,
+                "period": None,
+                "report_period": None,
+                "as_of": None,
+            }
+        else:
+            baseline = {
+                "type": b_type,
+                "source": b_source,
+                "metric": ef.get("metric"),
+                "value": ef.get("value"),
+                "unit": ef.get("unit"),
+                "period": ef.get("period") or ef.get("report_period"),
+                "report_period": ef.get("period") or ef.get("report_period"),
+                "as_of": ef.get("as_of"),
+            }
     else:
         baseline = {
             "type": BASELINE_NONE,
@@ -343,15 +396,54 @@ def build_fundamentals_expectation_revision(
     )
     all_gaps.extend(base_gaps)
 
+    # ── P1 Fix: 严格审查 compliance 合规结果，拦截期间错配与累计值冒充 ──
+    if isinstance(compliance, dict):
+        comp_status = str(compliance.get("compliance_status") or "").strip().lower()
+        violations = compliance.get("violations") or []
+        if comp_status == "violations_found" or violations:
+            for v in violations:
+                kind = v.get("kind") if isinstance(v, dict) else str(v)
+                all_gaps.append(f"compliance_violation:{kind}")
+            # 报告期违规（如累计值冒充单季度），严禁 numeric 修正并将实际数值置为缺口
+            all_gaps.append("period_mismatch")
+            if revision.get("type") == REVISION_NUMERIC:
+                revision = {
+                    "type": REVISION_GAP,
+                    "value": None,
+                    "percent": None,
+                    "unit": None,
+                    "direction": "gap",
+                    "detail": "财务期间合规检测存在违规（累计值冒充单季度或期间错配），禁止数值修正",
+                }
+            if actual.get("status") == STATUS_AVAILABLE:
+                actual["status"] = STATUS_GAP
+                actual["value"] = None
+                actual["reason"] = "财务期间合规检测存在违规，实际数值被标记为不可信缺口"
+
+    # ── P2 Fix: 计算财务报表输入的真实 SHA-256 数据源 Hash ──────────
+    import hashlib
+    raw_content = ""
+    for k in ("fundamentals", "income_statement", "balance_sheet", "cashflow"):
+        v = outputs.get(k)
+        if v and v != "无数据":
+            raw_content += f"{k}:{v}\n"
+    stmt_hash = f"sha256:{hashlib.sha256(raw_content.encode('utf-8')).hexdigest()}" if raw_content else None
+
     has_provider_failure = any(g.startswith("provider_failure") for g in all_gaps)
     pub_date = actual.get("as_of") or current_date
+    has_actual_num = (actual.get("value") is not None and actual.get("status") == STATUS_AVAILABLE)
+
     publication = {
         "publish_time": pub_date,
         "published_at": pub_date,
         "source": "financial_statement",
-        "source_hash": f"fin_{actual.get('report_period') or 'NA'}_{pub_date or 'NA'}",
-        "content_qualification": CONTENT_QUALIFIED if not has_provider_failure else CONTENT_UNAVAILABLE,
-        "qualification_status": CONTENT_QUALIFIED if not has_provider_failure else CONTENT_UNAVAILABLE,
+        "source_hash": stmt_hash or f"fin_{actual.get('report_period') or 'NA'}_{pub_date or 'NA'}",
+        "content_qualification": CONTENT_QUALIFIED if has_actual_num else (
+            CONTENT_UNAVAILABLE if has_provider_failure else CONTENT_NOT_OBTAINED
+        ),
+        "qualification_status": CONTENT_QUALIFIED if has_actual_num else (
+            CONTENT_UNAVAILABLE if has_provider_failure else CONTENT_NOT_OBTAINED
+        ),
     }
 
     priced_in = {

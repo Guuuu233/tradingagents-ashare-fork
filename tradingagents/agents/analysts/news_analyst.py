@@ -411,7 +411,20 @@ def build_news_expectation_revision(
 
     primary_ev = None
     if ev_list:
-        primary_ev = ev_list[0]
+        # 遍历证据列表，优先选取包含可信发布时间与来源的合格证据
+        for ev in ev_list:
+            t = (
+                getattr(ev, "published_at", None)
+                or getattr(ev, "publish_time", None)
+                or (ev.get("published_at") if isinstance(ev, dict) else None)
+                or (ev.get("publish_time") if isinstance(ev, dict) else None)
+            )
+            s = getattr(ev, "source", None) or (ev.get("source") if isinstance(ev, dict) else None)
+            if t and s:
+                primary_ev = ev
+                break
+        if primary_ev is None:
+            primary_ev = ev_list[0]
     elif cov.get("clusters"):
         clusters = cov["clusters"]
         if isinstance(clusters, list) and clusters:
