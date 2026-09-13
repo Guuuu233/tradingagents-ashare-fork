@@ -869,6 +869,14 @@ def create_game_theory_node(
     return RunnableLambda(_execute_node, afunc=_async_node)
 
 
+class GameTheoryTopologyError(ValueError):
+    """Raised when Game Theory node cannot be wired due to topology defects."""
+
+    def __init__(self, message: str, reason_code: str = "missing_anchor_edge"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 def wire_game_theory_node(
     workflow: StateGraph,
     llm: Any = None,
@@ -880,19 +888,58 @@ def wire_game_theory_node(
     Replaces ('Research Manager', 'Trader') with:
     ('Research Manager', 'Game Theory') -> ('Game Theory', 'Trader').
     """
+    if not hasattr(workflow, "nodes"):
+        raise GameTheoryTopologyError(
+            "Cannot wire Game Theory node: workflow object has no 'nodes' attribute",
+            reason_code="builder_missing",
+        )
+
+    if not hasattr(workflow, "edges"):
+        raise GameTheoryTopologyError(
+            "Cannot wire Game Theory node: workflow object has no 'edges' attribute",
+            reason_code="builder_missing",
+        )
+
+    edge_pair = ("Research Manager", "Trader")
+    has_rm_to_trader = edge_pair in workflow.edges
+
     if NODE_NAME in workflow.nodes:
-        return
-
-    node_runnable = create_game_theory_node(llm=llm, data_collector=data_collector)
-    workflow.add_node(NODE_NAME, node_runnable)
-
-    if hasattr(workflow, "edges"):
-        edge_pair = ("Research Manager", "Trader")
-        if edge_pair in workflow.edges:
-            workflow.edges.remove(edge_pair)
-            workflow.add_edge("Research Manager", NODE_NAME)
-            workflow.add_edge(NODE_NAME, "Trader")
-            logger.info("[GameTheoryNode] Successfully wired between Research Manager and Trader")
+        # Check if already properly wired with both incoming and outgoing edges
+        has_in = any(isinstance(e, tuple) and len(e) >= 2 and e[1] == NODE_NAME for e in workflow.edges)
+        has_out = any(isinstance(e, tuple) and len(e) >= 2 and e[0] == NODE_NAME for e in workflow.edges)
+        if has_in and has_out:
             return
+        if not has_rm_to_trader and not has_in:
+            raise GameTheoryTopologyError(
+                "Cannot wire Game Theory node: node exists but anchor edge ('Research Manager', 'Trader') not found",
+                reason_code="missing_anchor_edge",
+            )
 
+    # Check anchor nodes exist in the graph
+    has_rm = "Research Manager" in workflow.nodes
+    has_trader = "Trader" in workflow.nodes
+    if not (has_rm and has_trader):
+        missing = [n for n in ("Research Manager", "Trader") if n not in workflow.nodes]
+        raise GameTheoryTopologyError(
+            f"Cannot wire Game Theory node: anchor nodes {missing} missing from graph",
+            reason_code="missing_anchor_edge",
+        )
+
+    if not has_rm_to_trader:
+        has_rm_to_gt = ("Research Manager", NODE_NAME) in workflow.edges
+        has_gt_to_trader = (NODE_NAME, "Trader") in workflow.edges
+        if has_rm_to_gt and has_gt_to_trader:
+            return
+        raise GameTheoryTopologyError(
+            "Cannot wire Game Theory node: anchor edge ('Research Manager', 'Trader') not found in workflow.edges",
+            reason_code="missing_anchor_edge",
+        )
+
+    if NODE_NAME not in workflow.nodes:
+        node_runnable = create_game_theory_node(llm=llm, data_collector=data_collector)
+        workflow.add_node(NODE_NAME, node_runnable)
+
+    workflow.edges.remove(edge_pair)
+    workflow.add_edge("Research Manager", NODE_NAME)
     workflow.add_edge(NODE_NAME, "Trader")
+    logger.info("[GameTheoryNode] Successfully wired between Research Manager and Trader")

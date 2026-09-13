@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import json
 import logging
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, TypedDict
 
 
 from langgraph.prebuilt import ToolNode
@@ -51,6 +51,22 @@ from tradingagents.agents.utils.model_tier_warning import check_model_tier_warni
 
 
 _logger = logging.getLogger(__name__)
+
+
+class GameTheoryWiringError(RuntimeError):
+    """Raised when Game Theory node cannot be wired into the trading graph."""
+
+    def __init__(self, message: str, reason_code: str = "wiring_failed"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+class GameTheoryUnavailable(TypedDict, total=False):
+    status: str
+    reason_code: str
+    message: str
+    error_type: Optional[str]
+    wired: bool
 
 
 def _state_logging_enabled() -> bool:
@@ -138,6 +154,7 @@ class TradingAgentsGraph:
         data_collector: Optional["DataCollector"] = None,
         custom_prompts: Optional[Dict[str, str]] = None,
         custom_prompt_placement: str = DEFAULT_PLACEMENT,
+        strict_game_theory_wiring: Optional[bool] = None,
     ):
         """Initialize the trading agents graph and components."""
         self.debug = debug
@@ -145,6 +162,15 @@ class TradingAgentsGraph:
         self.callbacks = callbacks or []
         self.custom_prompts: Dict[str, str] = custom_prompts if custom_prompts is not None else {}
         self.custom_prompt_placement: str = custom_prompt_placement
+
+        # Determine strict wiring mode: explicit arg takes precedence, then config flag (DAV-881 / P0-B)
+        if strict_game_theory_wiring is not None:
+            self.strict_game_theory_wiring = bool(strict_game_theory_wiring)
+        else:
+            self.strict_game_theory_wiring = bool(self.config.get("strict_game_theory_wiring", False))
+
+        self.game_theory_wired: bool = False
+        self.game_theory_unavailable: Optional[Dict[str, Any]] = None
 
         # Update the interface's config
         set_config(self.config)
@@ -277,32 +303,186 @@ class TradingAgentsGraph:
         self.graph = self._wire_game_theory_into_graph(raw_graph)
 
     def _wire_game_theory_into_graph(self, raw_graph: Any) -> Any:
-        """Wire Game Theory node into the compiled graph (DAV-829)."""
+        """Wire Game Theory node into the compiled graph with hardened contract (P0-B / DAV-881)."""
         if raw_graph is None:
+            self.game_theory_wired = False
+            self.game_theory_unavailable = {
+                "status": "unavailable",
+                "reason_code": "raw_graph_none",
+                "message": "Raw graph is None; Game Theory node cannot be wired",
+                "error_type": "ValueError",
+                "wired": False,
+            }
+            if getattr(self, "strict_game_theory_wiring", False):
+                raise GameTheoryWiringError(
+                    self.game_theory_unavailable["message"],
+                    reason_code="raw_graph_none",
+                )
+            _logger.warning("[TradingAgentsGraph] %s", self.game_theory_unavailable["message"])
             return raw_graph
+
         try:
             from unittest.mock import Mock
             if isinstance(raw_graph, Mock):
+                self.game_theory_wired = False
+                self.game_theory_unavailable = {
+                    "status": "unavailable",
+                    "reason_code": "mock_graph_unwired",
+                    "message": "Raw graph is a Mock instance; Game Theory node not wired",
+                    "error_type": "MockType",
+                    "wired": False,
+                }
+                if getattr(self, "strict_game_theory_wiring", False):
+                    raise GameTheoryWiringError(
+                        self.game_theory_unavailable["message"],
+                        reason_code="mock_graph_unwired",
+                    )
                 return raw_graph
         except ImportError:
             pass
 
         builder = getattr(raw_graph, "builder", None)
         if builder is None or not hasattr(builder, "nodes") or not hasattr(builder, "edges"):
+            self.game_theory_wired = False
+            self.game_theory_unavailable = {
+                "status": "unavailable",
+                "reason_code": "builder_missing",
+                "message": "Graph builder is missing or lacks required nodes/edges attributes",
+                "error_type": "AttributeError",
+                "wired": False,
+            }
+            if getattr(self, "strict_game_theory_wiring", False):
+                raise GameTheoryWiringError(
+                    self.game_theory_unavailable["message"],
+                    reason_code="builder_missing",
+                )
+            _logger.warning("[TradingAgentsGraph] %s", self.game_theory_unavailable["message"])
             return raw_graph
 
         try:
-            from .game_theory_node import wire_game_theory_node
+            from .game_theory_node import wire_game_theory_node, NODE_NAME
             builder.compiled = False
             wire_game_theory_node(
                 builder,
-                llm=self.quick_thinking_llm,
-                data_collector=self.data_collector,
+                llm=getattr(self, "quick_thinking_llm", None),
+                data_collector=getattr(self, "data_collector", None),
             )
-            return builder.compile(checkpointer=self.checkpointer)
+            compiled_graph = builder.compile(checkpointer=getattr(self, "checkpointer", None))
+
+            if hasattr(compiled_graph, "nodes") and NODE_NAME not in compiled_graph.nodes:
+                raise GameTheoryWiringError(
+                    f"Node '{NODE_NAME}' missing from compiled graph nodes after wiring",
+                    reason_code="node_missing_after_compile",
+                )
+
+            self.game_theory_wired = True
+            self.game_theory_unavailable = None
+            _logger.info("[TradingAgentsGraph] Successfully wired Game Theory node into graph")
+            return compiled_graph
         except Exception as exc:
-            _logger.warning("[TradingAgentsGraph] Failed to wire game theory node: %s", exc)
+            reason_code = getattr(exc, "reason_code", None)
+            if not reason_code:
+                msg = str(exc)
+                if "anchor" in msg or "Research Manager" in msg:
+                    reason_code = "missing_anchor_edge"
+                elif "compile" in msg.lower():
+                    reason_code = "compile_failed"
+                else:
+                    reason_code = "wiring_exception"
+
+            self.game_theory_wired = False
+            self.game_theory_unavailable = {
+                "status": "unavailable",
+                "reason_code": reason_code,
+                "message": str(exc),
+                "error_type": type(exc).__name__,
+                "wired": False,
+            }
+            _logger.warning(
+                "[TradingAgentsGraph] Failed to wire game theory node (%s): %s",
+                reason_code,
+                exc,
+            )
+            if getattr(self, "strict_game_theory_wiring", False):
+                raise GameTheoryWiringError(
+                    f"Failed to wire Game Theory node into graph: {exc}",
+                    reason_code=reason_code,
+                ) from exc
             return raw_graph
+
+    def _ensure_game_theory_state(self, state: Dict[str, Any], horizon: str = "short") -> None:
+        """Enforce the Game Theory contract on final graph state (DAV-881 / P0-B).
+
+        Guarantees:
+        1. If the node ran and completed (normal or degraded):
+           - Preserves existing game_theory_report and game_theory_signals verbatim.
+           - Strictly retains valid fail-closed degradations (Requirement 2).
+        2. If the node did not run or was not wired:
+           - Injects typed game_theory_unavailable, reason_code, degraded report, and fail trace.
+           - Forbids disguising unwired/unexecuted state as normal completion.
+           - Ensures game_theory_signals is strictly None (atomic consistency with degraded report).
+        """
+        if not isinstance(state, dict):
+            return
+
+        report = state.get("game_theory_report")
+
+        # Case 1: Node already executed and produced report (normal report or explicit fail-closed)
+        if report is not None and str(report).strip() != "":
+            if state.get("game_theory_signals") is None and not str(report).startswith("【博弈论分析不可用】"):
+                state["game_theory_report"] = "【博弈论分析不可用】原因：信号计算缺失，保持原子性降级。"
+            return
+
+        # Case 2: Node was not wired or did not execute
+        from .game_theory_node import AGENT_NAME
+
+        if not getattr(self, "game_theory_wired", False):
+            unavail = getattr(self, "game_theory_unavailable", None) or {
+                "status": "unavailable",
+                "reason_code": "not_wired",
+                "message": "博弈论节点未挂载到分析图中",
+                "error_type": "WiringNotApplied",
+                "wired": False,
+            }
+        else:
+            route_info = state.get("integrity_route") or "unreached"
+            unavail = {
+                "status": "unavailable",
+                "reason_code": "route_unreached",
+                "message": f"图执行未到达博弈论节点（流程早停或未被路由，route={route_info}）",
+                "error_type": "RouteUnreached",
+                "wired": True,
+            }
+
+        reason_code = unavail.get("reason_code", "unknown")
+        message = unavail.get("message", "")
+
+        state["game_theory_report"] = f"【博弈论分析不可用】原因：博弈论接线未生效或未被路由（{reason_code}: {message}），该项未在图路由中执行。"
+        state["game_theory_signals"] = None
+        state["game_theory_unavailable"] = unavail
+
+        fail_trace = {
+            "agent": AGENT_NAME,
+            "horizon": horizon,
+            "data_window": "短期博弈",
+            "key_finding": f"博弈论分析未执行: {reason_code}",
+            "verdict": "中性",
+            "confidence": "低",
+            "source_status": "failed",
+            "source_mode": "deterministic_game_theory",
+            "bundle_id": "game_theory_v1",
+            "direction_allowed": False,
+            "reason_codes": [f"wiring_or_routing_{reason_code}"],
+            "evidence_refs": [],
+            "financial_period_compliance": {},
+        }
+
+        traces = state.get("analyst_traces")
+        if traces is None or not isinstance(traces, list):
+            state["analyst_traces"] = [fail_trace]
+        else:
+            if not any(isinstance(t, dict) and t.get("agent") == AGENT_NAME for t in traces):
+                traces.append(fail_trace)
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -463,6 +643,8 @@ class TradingAgentsGraph:
             # Standard mode without tracing
             final_state = self.graph.invoke(init_agent_state, **args)
 
+        self._ensure_game_theory_state(final_state, horizon=effective_horizon)
+
         # Store current state for reflection
         self.curr_state = final_state
         apply_report_quality_gate(final_state)
@@ -531,6 +713,8 @@ class TradingAgentsGraph:
         )
         final_state = await self.graph.ainvoke(state, **graph_args)
 
+        self._ensure_game_theory_state(final_state, horizon="short")
+
         # Evict cached data to free memory
         self.data_collector.evict(ticker, trade_date)
 
@@ -578,6 +762,14 @@ class TradingAgentsGraph:
                     if gap_str not in data_gaps:
                         data_gaps.append(gap_str)
 
+        gt_unavail = final_state.get("game_theory_unavailable") or (
+            getattr(self, "game_theory_unavailable", None)
+            if not getattr(self, "game_theory_wired", True)
+            else None
+        )
+        if gt_unavail and "game_theory_unavailable" not in data_gaps:
+            data_gaps.append("game_theory_unavailable")
+
         raw_inv_state = final_state.get("investment_debate_state")
         inv_state = dict(raw_inv_state) if isinstance(raw_inv_state, dict) else None
 
@@ -611,6 +803,7 @@ class TradingAgentsGraph:
             "volume_price_report": final_state.get("volume_price_report", ""),
             "game_theory_report": final_state.get("game_theory_report"),
             "game_theory_signals": final_state.get("game_theory_signals"),
+            "game_theory_unavailable": gt_unavail,
             # D-009 P0-1 status fields (must survive dual-horizon packaging)
             "run_integrity": final_state.get("run_integrity"),
             "decision_status": final_state.get("decision_status"),

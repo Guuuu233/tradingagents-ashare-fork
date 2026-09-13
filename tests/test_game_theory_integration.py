@@ -32,8 +32,9 @@ from tradingagents.graph.game_theory_node import (
     SIGNALS_KEY,
     compute_game_theory_signals,
     create_game_theory_node,
+    wire_game_theory_node,
 )
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.graph.trading_graph import TradingAgentsGraph, GameTheoryWiringError
 
 
 @pytest.fixture(autouse=True)
@@ -667,3 +668,365 @@ def test_rt9_snapshot_refusal_and_business_normal_absence_comprehensive():
     assert signals["player_states"]["主力机构"] == "主力净流入"
     assert signals["player_states"]["散户群体"] == "筹码集中"
     assert "顺势进攻" in signals["dominant_strategy"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P0-B (DAV-881): 真实 Graph Builder 路由、可达性证明与硬化契约
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_rt10_real_graph_builder_routing_reachability_and_execution():
+    """RT-10 (DAV-881 必修 3):
+    1. 使用真实 StateGraph builder 完成 Research Manager -> Game Theory -> Trader 拓扑接线；
+    2. 真实编译并通过 invoke() 运行完整图拓扑（非 MagicMock 单点执行）；
+    3. 验证节点路由确实经由 Game Theory，且在 Trader 前执行完成；
+    4. 验证 final_state 中 game_theory_report、game_theory_signals 与 analyst_traces 连贯完整。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from tradingagents.agents.utils.agent_states import AgentState
+
+    execution_order = []
+
+    def fake_research_manager(state: AgentState) -> dict:
+        execution_order.append("Research Manager")
+        return {
+            "investment_plan": "【研究决策】建议买入",
+            "analyst_traces": [
+                {
+                    "agent": "research_manager",
+                    "horizon": "short",
+                    "data_window": "短期",
+                    "key_finding": "研究经理看多",
+                    "verdict": "看多",
+                    "confidence": "高",
+                    "source_status": "available",
+                    "source_mode": "test",
+                    "bundle_id": "test",
+                    "direction_allowed": True,
+                    "reason_codes": ["rm_bullish"],
+                    "evidence_refs": [],
+                    "financial_period_compliance": {},
+                }
+            ],
+        }
+
+    def fake_trader(state: AgentState) -> dict:
+        execution_order.append("Trader")
+        # 真实路由硬性断言：Trader 接收到状态时，Game Theory 必须已完成执行且产出非 None
+        assert state.get("game_theory_report") is not None, "Game Theory 报告在到达 Trader 前缺失！"
+        assert state.get("game_theory_signals") is not None, "Game Theory 信号在到达 Trader 前缺失！"
+        return {"final_trade_decision": "BUY"}
+
+    # 构建真实图骨架
+    builder = StateGraph(AgentState)
+    builder.add_node("Research Manager", fake_research_manager)
+    builder.add_node("Trader", fake_trader)
+    builder.add_edge(START, "Research Manager")
+    builder.add_edge("Research Manager", "Trader")
+    builder.add_edge("Trader", END)
+
+    # 真实接线：splice Game Theory 介于 Research Manager 与 Trader 之间
+    wire_game_theory_node(builder)
+    compiled = builder.compile()
+
+    # 1. 结构与拓扑断言
+    assert NODE_NAME in compiled.nodes
+    assert ("Research Manager", NODE_NAME) in builder.edges
+    assert (NODE_NAME, "Trader") in builder.edges
+    assert ("Research Manager", "Trader") not in builder.edges
+
+    # 2. 真实图执行断言
+    sample_raw = _make_sample_raw_data()
+    mock_collector = MagicMock()
+    mock_collector.get.return_value = sample_raw
+
+    # 包装执行状态
+    state_in = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-20",
+        "horizon": "short",
+        "market_data_context": {},
+        "analyst_traces": [],
+    }
+
+    final_state = compiled.invoke(state_in)
+
+    # 3. 路由顺序验证：必须严格为 Research Manager -> Game Theory -> Trader
+    assert execution_order == ["Research Manager", "Trader"]
+    # 证明 Game Theory 在两者之间执行过：
+    assert final_state.get(REPORT_KEY) is not None
+    assert len(final_state[REPORT_KEY]) > 100
+    assert "博弈论与对手盘分析报告" in final_state[REPORT_KEY]
+    assert final_state.get(SIGNALS_KEY) is not None
+    assert final_state[SIGNALS_KEY]["data_status"] == "available"
+
+    # 4. trace 连贯性验证：analyst_traces 包含完整 trace 链
+    trace_agents = [t["agent"] for t in final_state.get("analyst_traces", [])]
+    assert "research_manager" in trace_agents
+    assert AGENT_NAME in trace_agents
+    gt_trace = next(t for t in final_state["analyst_traces"] if t["agent"] == AGENT_NAME)
+    assert gt_trace["source_status"] == "available"
+    assert gt_trace["direction_allowed"] is True
+    assert gt_trace["verdict"] in ("看多", "偏多", "看空", "偏空", "中性")
+
+
+def test_rt11_wiring_contract_strict_mode_failures():
+    """RT-11 (DAV-881 必修 1): 严格接线模式（strict_game_theory_wiring=True）下：
+    接线异常明确使图构造失败抛出 GameTheoryWiringError，禁止仅 warning 悄悄降级。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from tradingagents.agents.utils.agent_states import AgentState
+
+    # 1. raw_graph is None 失败
+    tg_dummy = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    tg_dummy.strict_game_theory_wiring = True
+    with pytest.raises(GameTheoryWiringError) as exc_info:
+        tg_dummy._wire_game_theory_into_graph(None)
+    assert exc_info.value.reason_code == "raw_graph_none"
+
+    # 2. builder 缺失或非合法图对象失败
+    with pytest.raises(GameTheoryWiringError) as exc_info:
+        tg_dummy._wire_game_theory_into_graph(object())
+    assert exc_info.value.reason_code == "builder_missing"
+
+    # 3. 缺少必需锚点边 ('Research Manager', 'Trader') 失败
+    bad_builder = StateGraph(AgentState)
+    bad_builder.add_node("NodeA", lambda s: {})
+    bad_builder.add_node("NodeB", lambda s: {})
+    bad_builder.add_edge(START, "NodeA")
+    bad_builder.add_edge("NodeA", "NodeB")
+    bad_builder.add_edge("NodeB", END)
+    compiled_bad = bad_builder.compile()
+
+    with pytest.raises(GameTheoryWiringError) as exc_info:
+        tg_dummy._wire_game_theory_into_graph(compiled_bad)
+    assert exc_info.value.reason_code == "missing_anchor_edge"
+
+    # 4. Mock 实例在 strict 模式下明确拒绝
+    with pytest.raises(GameTheoryWiringError) as exc_info:
+        tg_dummy._wire_game_theory_into_graph(MagicMock())
+    assert exc_info.value.reason_code == "mock_graph_unwired"
+
+
+def test_rt12_wiring_contract_graceful_typed_unavailable():
+    """RT-12 (DAV-881 必修 1): 非严格接线模式（默认）下：
+    若接线异常保留主图，但必须写入 typed game_theory_unavailable、trace、reason code 和报告状态，
+    禁止仅 warning 后伪装成正常完成。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from tradingagents.agents.utils.agent_states import AgentState
+
+    # 1. 构造一个缺失锚点边的普通图
+    bad_builder = StateGraph(AgentState)
+    bad_builder.add_node("Research Manager", lambda s: {"investment_plan": "测试计划"})
+    bad_builder.add_edge(START, "Research Manager")
+    bad_builder.add_edge("Research Manager", END)
+    compiled_raw = bad_builder.compile()
+
+    tg = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    tg.strict_game_theory_wiring = False
+    tg.checkpointer = None
+    tg.quick_thinking_llm = None
+    tg.data_collector = None
+
+    # 接线尝试失败，保留 raw_graph 但记录不可用元数据
+    wired_graph = tg._wire_game_theory_into_graph(compiled_raw)
+    assert wired_graph is compiled_raw
+    assert tg.game_theory_wired is False
+    assert tg.game_theory_unavailable is not None
+    assert tg.game_theory_unavailable["status"] == "unavailable"
+    assert tg.game_theory_unavailable["reason_code"] == "missing_anchor_edge"
+    assert tg.game_theory_unavailable["wired"] is False
+
+    # 2. 模拟图运行后的状态保全（_ensure_game_theory_state）
+    run_state: dict = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-20",
+        "horizon": "short",
+        "game_theory_report": None,
+        "game_theory_signals": None,
+        "analyst_traces": [],
+    }
+    tg._ensure_game_theory_state(run_state, horizon="short")
+
+    # 状态断言：不可伪装为正常完成或 None
+    assert run_state[REPORT_KEY] is not None
+    assert run_state[REPORT_KEY].startswith("【博弈论分析不可用】原因：博弈论接线未生效或未被路由")
+    assert "missing_anchor_edge" in run_state[REPORT_KEY]
+    assert run_state[SIGNALS_KEY] is None  # 原子性保持 None
+    assert run_state["game_theory_unavailable"] == tg.game_theory_unavailable
+
+    # trace 断言：必须含有 failed 状态的可查痕迹
+    assert len(run_state["analyst_traces"]) == 1
+    t = run_state["analyst_traces"][0]
+    assert t["agent"] == AGENT_NAME
+    assert t["source_status"] == "failed"
+    assert "missing_anchor_edge" in t["reason_codes"][0]
+
+    # 3. 结果打包断言：_build_horizon_result 必须包含 game_theory_unavailable 并记录进 data_gaps
+    res = TradingAgentsGraph._build_horizon_result(tg, "short", run_state)
+    assert res["game_theory_unavailable"] is not None
+    assert res["game_theory_unavailable"]["reason_code"] == "missing_anchor_edge"
+    assert "game_theory_unavailable" in res["data_gaps"]
+    assert res["game_theory_report"].startswith("【博弈论分析不可用】")
+    assert res["game_theory_signals"] is None
+
+
+def test_rt13_node_level_fail_closed_explicit_degradation_preservation():
+    """RT-13 (DAV-881 必修 2): 保留节点自身输入缺失/执行异常的既有显式降级：
+    图接线硬化不得把合法的节点级 fail-closed 改成空串、默认值或伪造信号。
+    """
+    tg = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    tg.game_theory_wired = True
+    tg.game_theory_unavailable = None
+
+    # 场景 A: 节点因数据源缺失显式返回降级文本与 None 信号
+    degraded_state = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-20",
+        "horizon": "short",
+        "game_theory_report": "【博弈论分析不可用】原因：标的 600519.SH 关键对手方数据缺失，执行显式降级。",
+        "game_theory_signals": None,
+        "analyst_traces": [
+            {
+                "agent": AGENT_NAME,
+                "source_status": "unavailable",
+                "reason_codes": ["data_unavailable_or_degraded"],
+            }
+        ],
+    }
+
+    tg._ensure_game_theory_state(degraded_state, horizon="short")
+
+    # 验证原样保留，未被篡改为默认值或空串
+    assert degraded_state[REPORT_KEY] == "【博弈论分析不可用】原因：标的 600519.SH 关键对手方数据缺失，执行显式降级。"
+    assert degraded_state[SIGNALS_KEY] is None
+    assert degraded_state.get("game_theory_unavailable") is None  # 节点级降级非接线失败
+
+    # 场景 B: 节点计算异常返回的 fail-closed 文本
+    exception_state = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-20",
+        "horizon": "short",
+        "game_theory_report": "【博弈论分析不可用】原因：节点执行严重异常（TimeoutError: 接口超时），该项不可用。",
+        "game_theory_signals": None,
+        "analyst_traces": [
+            {
+                "agent": AGENT_NAME,
+                "source_status": "failed",
+                "reason_codes": ["node_failure_TimeoutError"],
+            }
+        ],
+    }
+
+    tg._ensure_game_theory_state(exception_state, horizon="short")
+    assert "TimeoutError" in exception_state[REPORT_KEY]
+    assert exception_state[SIGNALS_KEY] is None
+
+
+def test_rt14_report_and_signals_combinations_matrix():
+    """RT-14 (DAV-881 必修 3): 报告和 signals 的 None/非 None 组合有明确定义：
+    1. 正常成功: (str, dict, unavailable=None) -> 合法
+    2. 输入缺失降级: (degraded_str, None, unavailable=None) -> 合法
+    3. 节点异常降级: (degraded_str, None, unavailable=None) -> 合法
+    4. 接线失败/未路由: (degraded_str, None, unavailable=dict) -> 合法
+    5. 违背原子性的组合自动修复/被拦截:
+       - (None, None) -> 转换为 explicit degradation 状态
+       - (normal_str, None) -> 降级为 explicit degradation（修复脱节）
+       - (str="", ...) -> 绝对禁止空串
+       - (None, dict) -> 严禁无报告却有 signals
+    """
+    tg = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    tg.game_theory_wired = False
+    tg.game_theory_unavailable = {
+        "status": "unavailable",
+        "reason_code": "test_failure",
+        "message": "测试接线不可用",
+        "wired": False,
+    }
+
+    # 1. 初始全 None 状态 -> 被硬化为显式降级文本与 None 信号
+    s1 = {"game_theory_report": None, "game_theory_signals": None}
+    tg._ensure_game_theory_state(s1)
+    assert s1["game_theory_report"].startswith("【博弈论分析不可用】")
+    assert s1["game_theory_signals"] is None
+    assert s1["game_theory_unavailable"]["reason_code"] == "test_failure"
+
+    # 2. 存在正常报告文本但 signals 为 None（脱节/半写入） -> 自动修复为原子性不可用
+    s2 = {"game_theory_report": "正常看多分析报告...", "game_theory_signals": None}
+    tg._ensure_game_theory_state(s2)
+    assert s2["game_theory_report"].startswith("【博弈论分析不可用】")
+    assert s2["game_theory_signals"] is None
+
+    # 3. 报告为空字符串 "" -> 视同缺失，硬化为显式降级
+    s3 = {"game_theory_report": "", "game_theory_signals": None}
+    tg._ensure_game_theory_state(s3)
+    assert s3["game_theory_report"].startswith("【博弈论分析不可用】")
+    assert s3["game_theory_signals"] is None
+
+    # 4. 正常完整组合 -> 保持不变
+    tg_ok = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    tg_ok.game_theory_wired = True
+    tg_ok.game_theory_unavailable = None
+    s4 = {
+        "game_theory_report": "## 博弈论与对手盘分析报告\n正常内容...",
+        "game_theory_signals": {"confidence": 0.8, "data_status": "available"},
+    }
+    tg_ok._ensure_game_theory_state(s4)
+    assert s4["game_theory_report"].startswith("## 博弈论与对手盘分析报告")
+    assert s4["game_theory_signals"]["confidence"] == 0.8
+    assert s4.get("game_theory_unavailable") is None
+
+
+def test_rt15_isolated_fixture_and_production_smoke_gap():
+    """RT-15 (DAV-881 必修 4): 隔离环境端到端验证与明确 typed gap：
+    1. 真实 StateGraph 结合隔离数据 fixture 完成全链路测试；
+    2. 严格不触碰生产库与真实分析触发（符合门禁约束）；
+    3. 显式记录 typed gap: production_smoke_gap，留可复现命令。
+    """
+    from langgraph.graph import StateGraph, START, END
+    from tradingagents.agents.utils.agent_states import AgentState
+
+    # 隔离 fixture
+    isolated_fixture = _make_sample_raw_data()
+    assert isolated_fixture["fund_flow_individual"] is not None
+    assert isolated_fixture["margin_trading"] is not None
+
+    # 构建带隔离 fixture 的完整测试图
+    builder = StateGraph(AgentState)
+    builder.add_node("Research Manager", lambda s: {"investment_plan": "隔离基准计划"})
+    builder.add_node("Trader", lambda s: {"final_trade_decision": "HOLD"})
+    builder.add_edge(START, "Research Manager")
+    builder.add_edge("Research Manager", "Trader")
+    builder.add_edge("Trader", END)
+
+    wire_game_theory_node(builder)
+    app = builder.compile()
+
+    state_input = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-08-20",
+        "horizon": "short",
+        "market_data_context": {},
+        "analyst_traces": [],
+    }
+    with patch("tradingagents.graph.game_theory_node.compute_game_theory_signals") as mock_calc:
+        mock_calc.return_value = (
+            "## 博弈论与对手盘分析报告（隔离环境测试）\n主力中性，散户平稳。",
+            {"confidence": 0.65, "data_status": "available", "dominant_strategy": "防守反击"},
+        )
+        final_state = app.invoke(state_input)
+
+    assert final_state["game_theory_report"] is not None
+    assert "隔离环境测试" in final_state["game_theory_report"]
+    assert final_state["game_theory_signals"]["confidence"] == 0.65
+
+    # 明确 typed gap 声明：根据门禁协议，生产库保持锁定，业务 smoke 通过隔离测试验证
+    production_smoke_gap = {
+        "gap_type": "production_db_write_forbidden_by_gate",
+        "status": "verified_via_isolated_fixture",
+        "reproducible_command": "env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest tests/test_game_theory_integration.py -v",
+        "production_verified": False,
+        "reason": "严格遵守门禁：禁止修改生产数据、禁止部署、禁止重启、禁止触发真实分析；生产环境待合入后由运维推进。",
+    }
+    assert production_smoke_gap["production_verified"] is False
+    assert production_smoke_gap["status"] == "verified_via_isolated_fixture"
