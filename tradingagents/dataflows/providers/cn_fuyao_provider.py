@@ -42,6 +42,7 @@ from ..financial_announce import (
 from ..trade_calendar import (
     CN_TZ,
     DateDataUnavailable,
+    DateFetchFatalError,
     dedupe_daily_bars,
     drop_incomplete_today_bar,
     fetch_with_date_fallback,
@@ -146,7 +147,7 @@ _FUYAO_SCOPE_FIELD_ALIASES = {
 }
 
 
-class FuyaoApiError(Exception):
+class FuyaoApiError(DateFetchFatalError):
     """业务错误：HTTP 恒为 200，错误经信封 ``code`` 字段表达。"""
 
     def __init__(self, code: int, message: str):
@@ -990,7 +991,12 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         except DateDataUnavailable:
             pass
 
-        result = fetch_with_date_fallback(_fetch_one, date, max_back=3)
+        try:
+            result = fetch_with_date_fallback(
+                _fetch_one, date, max_back=3, fatal_exceptions=(FuyaoApiError,)
+            )
+        except FuyaoApiError as exc:
+            return self._map_api_error(exc)
         if not result.ok:
             return VendorFail(f"涨停板情绪池数据获取失败（同花顺 fuyao）：{result.error}")
         return (
@@ -1061,7 +1067,9 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             return f"{symbol} 龙虎榜明细（{day}，同花顺 fuyao）：\n{table}"
 
         try:
-            result = fetch_with_date_fallback(_fetch_one, date, max_back=3)
+            result = fetch_with_date_fallback(
+                _fetch_one, date, max_back=3, fatal_exceptions=(FuyaoApiError,)
+            )
         except FuyaoApiError as exc:
             return self._map_api_error(exc)
 

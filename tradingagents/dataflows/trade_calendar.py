@@ -38,6 +38,14 @@ class DateDataUnavailable(Exception):
     """Raised by a date-scoped fetch when that specific day has no usable data yet."""
 
 
+class DateFetchFatalError(Exception):
+    """Raised when a date-scoped fetch encounters a fatal error and must abort fallback."""
+
+
+DateDataFatalError = DateFetchFatalError
+FatalDateFetchError = DateFetchFatalError
+
+
 class DuplicateBarConflictError(ValueError):
     """Raised when a daily series has same-date rows with conflicting OHLCV/Volume.
 
@@ -509,12 +517,16 @@ def fetch_with_date_fallback(
     *,
     max_back: int = 5,
     start_offset: int = 0,
+    fatal_exceptions: tuple[type[Exception], ...] | type[Exception] | None = None,
 ) -> DateFetchResult:
     """Try ``fetch_fn(day)`` over a backward trading-day window.
 
     ``fetch_fn`` should return data on success and raise
-    :class:`DateDataUnavailable` (or any Exception) when that day should be
-    skipped. All failures produce an error that includes the attempted range.
+    :class:`DateDataUnavailable` (or any non-fatal Exception) when that day
+    should be skipped. Fatal exceptions (:class:`DateFetchFatalError` or those
+    configured via ``fatal_exceptions``) immediately abort date fallback and are
+    re-raised to the caller. All non-fatal failures produce an error that includes
+    the attempted range.
     """
     request_date = _format_date(_parse_date(date_str))
     try:
@@ -534,6 +546,15 @@ def fetch_with_date_fallback(
             error=f"交易日历不可用：{type(exc).__name__}: {exc}",
         )
 
+    if fatal_exceptions is None:
+        fatal_types: tuple[type[Exception], ...] = (DateFetchFatalError,)
+    elif isinstance(fatal_exceptions, tuple):
+        fatal_types = (DateFetchFatalError, *fatal_exceptions)
+    elif isinstance(fatal_exceptions, type) and issubclass(fatal_exceptions, Exception):
+        fatal_types = (DateFetchFatalError, fatal_exceptions)
+    else:
+        fatal_types = (DateFetchFatalError,)
+
     last_err: Optional[str] = None
     attempted: list[str] = []
     for day in candidates:
@@ -550,6 +571,8 @@ def fetch_with_date_fallback(
         except DateDataUnavailable as exc:
             last_err = str(exc) or type(exc).__name__
             continue
+        except fatal_types:
+            raise
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             continue

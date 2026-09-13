@@ -752,6 +752,159 @@ def test_get_lhb_detail_not_on_board_is_normal_empty():
     tc.clear_cn_trade_date_cache()
 
 
+def _seed_fuyao_calendar(days: list[str]) -> None:
+    from datetime import date
+    from tradingagents.dataflows import trade_calendar as tc
+
+    dates = [date.fromisoformat(d) for d in days]
+    tc.clear_cn_trade_date_cache()
+    tc._TRADE_DATES_CACHE["dates"] = dates
+    tc._TRADE_DATES_CACHE["dates_set"] = set(dates)
+    tc._TRADE_DATES_CACHE["loaded_at"] = 1e18
+
+
+def test_get_lhb_detail_4001_aborts_date_fallback_and_returns_vendor_fail():
+    from tradingagents.dataflows import trade_calendar as tc
+
+    _seed_fuyao_calendar(["2026-08-03", "2026-08-04", "2026-08-05"])
+    rate_limited_body = {"code": 4001, "message": "频率超限", "data": None}
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch.object(provider, "_RATE_LIMIT_RETRIES", 0), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(rate_limited_body),
+         ) as mock_get:
+        out = provider.get_lhb_detail("600519", "2026-08-05")
+
+    assert isinstance(out, VendorFail)
+    assert "4001" in out.error
+    assert "频率超限" in out.error
+    # 核心断言：收到 4001 fatal 错误立即中止日期回退，不得触发第二个日期的请求
+    assert mock_get.call_count == 1
+    assert mock_get.call_args[1]["params"]["date"] == "2026-08-05"
+    tc.clear_cn_trade_date_cache()
+
+
+def test_get_lhb_detail_4001_with_retries_exhausted_never_calls_second_date():
+    from tradingagents.dataflows import trade_calendar as tc
+
+    _seed_fuyao_calendar(["2026-08-03", "2026-08-04", "2026-08-05"])
+    rate_limited_body = {"code": 4001, "message": "频率超限", "data": None}
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch.object(provider, "_RATE_LIMIT_RETRIES", 2), \
+         patch.object(provider, "_RATE_LIMIT_BACKOFF_SECONDS", 0), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(rate_limited_body),
+         ) as mock_get:
+        out = provider.get_lhb_detail("600519", "2026-08-05")
+
+    assert isinstance(out, VendorFail)
+    assert "4001" in out.error
+    assert "频率超限" in out.error
+    # 内部重试 2 次（共 3 次），全部针对请求日 2026-08-05，不得请求更早交易日 2026-08-04
+    assert mock_get.call_count == 3
+    for call in mock_get.call_args_list:
+        assert call[1]["params"]["date"] == "2026-08-05"
+    tc.clear_cn_trade_date_cache()
+
+
+@pytest.mark.parametrize("code,message", [(3001, "标的不存在"), (3002, "数据未就绪")])
+def test_get_lhb_detail_3001_and_3002_allow_fallback(code, message):
+    from tradingagents.dataflows import trade_calendar as tc
+
+    _seed_fuyao_calendar(["2026-08-04", "2026-08-05"])
+    empty_body = {"code": code, "message": message, "data": None}
+    success_body = {
+        "code": 0,
+        "message": "success",
+        "request_id": "r1",
+        "data": {
+            "trade_date": "2026-08-04",
+            "stock_items": [
+                {
+                    "thscode": "600519.SH",
+                    "name": "贵州茅台",
+                    "change": 0.05,
+                    "net_value": 5000000.0,
+                    "net_rate": 0.02,
+                    "buy_value": 10000000.0,
+                    "sell_value": 5000000.0,
+                    "range_days": 1,
+                    "limit_reason": "白酒反弹",
+                }
+            ],
+            "hot_money_items": [],
+        },
+    }
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             side_effect=[_mock_json_response(empty_body), _mock_json_response(success_body)],
+         ) as mock_get:
+        out = provider.get_lhb_detail("600519", "2026-08-05")
+
+    assert isinstance(out, str)
+    assert "龙虎榜明细（2026-08-04，同花顺 fuyao）" in out
+    assert "贵州茅台" in out
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[0][1]["params"]["date"] == "2026-08-05"
+    assert mock_get.call_args_list[1][1]["params"]["date"] == "2026-08-04"
+    tc.clear_cn_trade_date_cache()
+
+
+def test_get_lhb_detail_3001_then_4001_aborts_at_second_date_without_third_date():
+    from tradingagents.dataflows import trade_calendar as tc
+
+    _seed_fuyao_calendar(["2026-08-03", "2026-08-04", "2026-08-05"])
+    body_3001 = {"code": 3001, "message": "标的不存在", "data": None}
+    body_4001 = {"code": 4001, "message": "频率超限", "data": None}
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch.object(provider, "_RATE_LIMIT_RETRIES", 0), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             side_effect=[_mock_json_response(body_3001), _mock_json_response(body_4001)],
+         ) as mock_get:
+        out = provider.get_lhb_detail("600519", "2026-08-05")
+
+    assert isinstance(out, VendorFail)
+    assert "4001" in out.error
+    assert "频率超限" in out.error
+    # 第一次 2026-08-05（3001 回退），第二次 2026-08-04（4001 限流立即中止），严禁请求第三天 2026-08-03
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[0][1]["params"]["date"] == "2026-08-05"
+    assert mock_get.call_args_list[1][1]["params"]["date"] == "2026-08-04"
+    tc.clear_cn_trade_date_cache()
+
+
+def test_get_lhb_detail_all_dates_3001_returns_vendor_fail():
+    from tradingagents.dataflows import trade_calendar as tc
+
+    _seed_fuyao_calendar(["2026-08-03", "2026-08-04", "2026-08-05"])
+    body_3001 = {"code": 3001, "message": "标的不存在", "data": None}
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             side_effect=[
+                 _mock_json_response(body_3001),
+                 _mock_json_response(body_3001),
+                 _mock_json_response(body_3001),
+             ],
+         ) as mock_get:
+        out = provider.get_lhb_detail("600519", "2026-08-05")
+
+    assert isinstance(out, VendorFail)
+    assert "龙虎榜数据获取失败（同花顺 fuyao）" in out.error
+    assert "已尝试 2026-08-05 至 2026-08-03 共 3 个交易日，均无数据" in out.error
+    assert mock_get.call_count == 3
+    tc.clear_cn_trade_date_cache()
+
+
 # ── 交易日历 ──────────────────────────────────────────────────────────
 
 
