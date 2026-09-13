@@ -754,7 +754,7 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         ``curr_date`` 必填（内部层不得默认今天）；窗口以 curr_date 为终点，
         避免把未来报告期注入历史分析。
         """
-        if not curr_date:
+        if not curr_date or not str(curr_date).strip():
             return (
                 f"【数据获取失败】{title_cn} 缺少 curr_date，"
                 "内部层不得默认今天，本项不可用。"
@@ -830,15 +830,15 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         )
 
     @staticmethod
-    def _latest_report_period(curr_date: str | None) -> str:
+    def _latest_report_period(curr_date: str) -> str:
         """分析日 → 最接近且通常已披露的报告期（``yyyy-N``）。
 
         披露截止（约）：一季报 4/30、中报 8/31、三季报 10/31、年报次年 4/30。
+        ``curr_date`` 必填，内部层不得默认当前时间推断报告期。
         """
-        if curr_date:
-            d = datetime.strptime(str(curr_date).strip(), "%Y-%m-%d")
-        else:
-            d = datetime.now(CN_TZ)
+        if curr_date is None or not str(curr_date).strip():
+            raise ValueError("[cn_fuyao] 缺少 curr_date，禁止推断当前报告期")
+        d = datetime.strptime(str(curr_date).strip(), "%Y-%m-%d")
         md = (d.month, d.day)
         if md >= (10, 31):
             return f"{d.year}-3"
@@ -850,6 +850,11 @@ class CnFuyaoProvider(BaseMarketDataProvider):
 
     def get_fundamentals(self, ticker: str, curr_date: str = None) -> Any:
         """财务指标：``GET /api/a-share/financials/indicators``（五类能力）。"""
+        if curr_date is None or not str(curr_date).strip():
+            return (
+                "【数据获取失败】财务指标缺少 curr_date，"
+                "内部层不得默认今天，本项不可用。"
+            )
         thscode = self._normalize_thscode(ticker)
         if not thscode:
             raise ValueError(f"[cn_fuyao] 无法解析证券代码: {ticker}")

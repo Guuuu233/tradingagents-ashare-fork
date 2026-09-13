@@ -417,6 +417,90 @@ def test_get_fundamentals_indicators():
     assert mock_get.call_args[1]["params"]["report"] == "2026-1"
 
 
+@pytest.mark.parametrize("missing_date", [None, "", "   ", "\t\n"])
+def test_get_fundamentals_missing_curr_date_refuses_without_request(missing_date):
+    provider = CnFuyaoProvider()
+    with patch.object(
+        provider,
+        "_request_fuyao",
+        side_effect=AssertionError("must not call _request_fuyao without curr_date"),
+    ) as mock_request, patch.object(
+        provider,
+        "_latest_report_period",
+        side_effect=AssertionError("must not infer report period without curr_date"),
+    ) as mock_infer:
+        out = provider.get_fundamentals("600519.SH", curr_date=missing_date)
+
+    mock_request.assert_not_called()
+    mock_infer.assert_not_called()
+    assert isinstance(out, str)
+    assert "【数据获取失败】" in out
+    assert "缺少 curr_date" in out
+    assert "内部层不得默认今天，本项不可用。" in out
+
+
+@pytest.mark.parametrize("invalid_date", [None, "", "   ", "\t\n"])
+def test_latest_report_period_missing_date_raises(invalid_date):
+    with pytest.raises(ValueError, match="缺少 curr_date"):
+        CnFuyaoProvider._latest_report_period(invalid_date)
+
+
+@pytest.mark.parametrize(
+    ("curr_date", "expected_report"),
+    [
+        ("2026-01-01", "2025-4"),
+        ("2026-04-29", "2025-4"),
+        ("2026-04-30", "2026-1"),
+        ("2026-08-05", "2026-1"),
+        ("2026-08-30", "2026-1"),
+        ("2026-08-31", "2026-2"),
+        ("2026-10-30", "2026-2"),
+        ("2026-10-31", "2026-3"),
+        ("2026-12-31", "2026-3"),
+    ],
+)
+def test_latest_report_period_effective_mapping(curr_date, expected_report):
+    assert CnFuyaoProvider._latest_report_period(curr_date) == expected_report
+
+
+@pytest.mark.parametrize(
+    ("curr_date", "expected_report"),
+    [
+        ("2026-01-15", "2025-4"),
+        ("2026-04-30", "2026-1"),
+        ("2026-08-31", "2026-2"),
+        ("2026-10-31", "2026-3"),
+    ],
+)
+def test_get_fundamentals_valid_curr_date_preserves_request_param(curr_date, expected_report):
+    body = {
+        "code": 0,
+        "message": "success",
+        "request_id": "r1",
+        "data": {
+            "thscode": "600519.SH",
+            "report": expected_report,
+            "abilities": [
+                {
+                    "ability": "growth",
+                    "indicators": [{"index_id": "total_assets_growth_ratio", "value": "10.5"}],
+                }
+            ],
+        },
+    }
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ) as mock_get:
+        out = provider.get_fundamentals("600519.SH", curr_date=curr_date)
+
+    assert "Fundamentals" in out
+    assert mock_get.call_args[1]["params"]["report"] == expected_report
+    assert mock_get.call_args[1]["params"]["thscode"] == "600519.SH"
+
+
 # ── 财务路径 3001/3002 分治（fuyao 主源 → 弱源降级）──────────────────
 
 
