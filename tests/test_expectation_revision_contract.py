@@ -18,6 +18,7 @@ Covers all 12 Red-Team verification scenarios:
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import pytest
 
@@ -1739,3 +1740,188 @@ def test_build_fundamentals_expectation_revision_fails_closed_on_fabricated_fin_
         assert "fabricated_source_hash" in er["gaps"]
         assert er["priced_in"]["status"] == PRICED_IN_UNKNOWN
         assert er["double_count_guard"]["status"] == DOUBLE_COUNT_UNKNOWN
+
+
+# ==============================================================================
+# 13. DAV-883: 公告 publication 时间的严格公历校验
+# ==============================================================================
+
+def test_dav883_publication_valid_calendar_dates_and_timestamps_pass():
+    """DAV-883 Positive test: Valid YYYY-MM-DD and valid timestamps pass validation and builder."""
+    valid_times = [
+        "2024-05-15",
+        "2024-02-29",  # Leap year
+        "2020-02-29",  # Leap year
+        "2024-05-15 10:30:00",
+        "2024-05-15 10:30",
+        "2024-05-15T10:30:00",
+        "2024-05-15T10:30:00Z",
+        "2024-05-15T10:30:00+08:00",
+        "2024-05-15 10:30:00.123456",
+        "2024/05/15 10:30:00",
+        "2024年05月15日 10:30:00",
+        "2024年5月15日",
+        1715767200,
+        "1715767200",
+        datetime.datetime(2024, 5, 15, 10, 30, 0),
+        datetime.date(2024, 5, 15),
+    ]
+
+    for val_time in valid_times:
+        evidence_pool = {
+            "news_items": [
+                {
+                    "title": "合法时间新闻",
+                    "publish_time": val_time,
+                    "source": "官方公告",
+                    "source_hash": "sha256:1122334455667788",
+                    "content_status": "qualified",
+                    "body": "合法日期新闻正文",
+                }
+            ]
+        }
+        er = build_news_expectation_revision(evidence_pool, cutoff_date="2025-01-01")
+        assert "invalid_publish_time" not in er["gaps"]
+        assert "future_date" not in er["gaps"]
+        assert er["status"] in (STATUS_PARTIAL, STATUS_AVAILABLE)
+        assert er["revision"]["type"] == REVISION_QUALITATIVE
+        if isinstance(val_time, (datetime.datetime, datetime.date)):
+            assert er["publication"]["publish_time"] == str(val_time)
+            assert er["publication"]["published_at"] == str(val_time)
+        else:
+            assert er["publication"]["publish_time"] == val_time
+            assert er["publication"]["published_at"] == val_time
+        assert er["publication"]["source"] == "官方公告"
+
+        # Validator cleanly validates positive contracts
+        is_val, viols = validate_expectation_revision(er, cutoff_date="2025-01-01")
+        assert is_val, f"Validation failed for {val_time!r}: {viols}"
+
+
+def test_dav883_publication_illegal_calendar_dates_blocked_and_enter_gap():
+    """DAV-883 Negative test: Impossible calendar dates (2024-02-31, 0000-00-00, etc.) enter typed gap and block qualification/numeric revision."""
+    invalid_calendar_dates = [
+        "2024-02-31",
+        "0000-00-00",
+        "2024-04-31",
+        "2023-02-29",  # Non-leap year
+        "1900-02-29",  # 1900 is not a leap year in Gregorian calendar
+        "2024-13-01",
+        "2024-00-10",
+        "2024-02-31 10:00:00",
+        "2024-04-31T12:00:00Z",
+        "0000-00-00 00:00:00",
+    ]
+
+    for inv_date in invalid_calendar_dates:
+        # 1. Builder demotes to gap, records invalid_publish_time, denies qualified content, blocks numeric revision
+        evidence_pool = {
+            "news_items": [
+                {
+                    "title": "非法公历日期新闻",
+                    "publish_time": inv_date,
+                    "source": "非法源",
+                    "source_hash": "sha256:aabbccddeeff0011",
+                    "content_status": "qualified",
+                    "body": "公告正文",
+                }
+            ]
+        }
+        er = build_news_expectation_revision(evidence_pool, cutoff_date="2025-01-01")
+        assert "invalid_publish_time" in er["gaps"], f"Failed to record invalid_publish_time for {inv_date}"
+        assert er["status"] == STATUS_GAP
+        assert er["actual"]["value"] is None
+        assert er["revision"]["type"] != REVISION_NUMERIC
+        assert er["revision"]["type"] == REVISION_GAP
+        assert er["revision"]["value"] is None
+        # Qualification is downgraded - cannot masquerade as qualified
+        assert er["publication"]["content_qualification"] != CONTENT_QUALIFIED
+        # Publication readback semantics preserved
+        assert er["publication"]["publish_time"] == inv_date
+        assert er["publication"]["published_at"] == inv_date
+
+        # 2. Contract validator strictly rejects non-calendar dates when attempting qualification or numeric revision
+        fake_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_AVAILABLE)
+        fake_er["publication"]["publish_time"] = inv_date
+        fake_er["publication"]["content_qualification"] = CONTENT_QUALIFIED
+        fake_er["actual"]["value"] = 100.0
+        fake_er["revision"]["type"] = REVISION_NUMERIC
+        fake_er["revision"]["value"] = 10.0
+        is_val, viols = validate_expectation_revision(fake_er)
+        assert not is_val, f"Validator unexpectedly accepted {inv_date!r}"
+        assert any("invalid calendar date" in v for v in viols)
+        assert any("content_qualification cannot be 'qualified'" in v for v in viols)
+        assert any("actual.value must be None" in v for v in viols)
+        assert any("revision cannot be 'numeric'" in v for v in viols)
+
+
+def test_dav883_publication_format_errors_blocked_and_enter_gap():
+    """DAV-883 Negative test: Malformed format strings enter typed gap and are rejected by validator."""
+    format_errors = [
+        "invalid_date_format",
+        "not_a_date",
+        "2024-99-99",
+        "abc-def-ghi",
+        "2024-02-29 25:00:00",
+        "2024-02-29 10:60:00",
+    ]
+
+    for fmt_err in format_errors:
+        evidence_pool = {
+            "news_items": [
+                {
+                    "title": "格式错误新闻",
+                    "publish_time": fmt_err,
+                    "source": "测试源",
+                    "source_hash": "sha256:1234567890abcdef",
+                    "content_status": "qualified",
+                }
+            ]
+        }
+        er = build_news_expectation_revision(evidence_pool, cutoff_date="2025-01-01")
+        assert "invalid_publish_time" in er["gaps"]
+        assert er["status"] == STATUS_GAP
+        assert er["revision"]["type"] == REVISION_GAP
+        assert er["publication"]["content_qualification"] != CONTENT_QUALIFIED
+        assert er["publication"]["publish_time"] == fmt_err
+
+        # Validator rejects
+        fake_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_AVAILABLE)
+        fake_er["publication"]["publish_time"] = fmt_err
+        is_val, viols = validate_expectation_revision(fake_er)
+        assert not is_val
+        assert any("invalid calendar date" in v for v in viols)
+
+
+def test_dav883_publication_future_date_regression_and_cutoff_preservation():
+    """DAV-883 Future date test: Future dates beyond cutoff enter future_date gap, not invalid_publish_time, preserving readback."""
+    evidence_pool = {
+        "news_items": [
+            {
+                "title": "未来新闻",
+                "publish_time": "2025-06-01 10:00:00",
+                "source": "未来公告",
+                "source_hash": "sha256:abcdef1234567890",
+                "content_status": "qualified",
+                "body": "未来真实正文",
+            }
+        ]
+    }
+    er = build_news_expectation_revision(evidence_pool, cutoff_date="2025-05-15")
+    assert "future_date" in er["gaps"]
+    assert "invalid_publish_time" not in er["gaps"]
+    assert er["status"] == STATUS_GAP
+    assert er["actual"]["value"] is None
+    assert er["revision"]["type"] == REVISION_GAP
+    assert er["publication"]["publish_time"] == "2025-06-01 10:00:00"
+    assert er["publication"]["published_at"] == "2025-06-01 10:00:00"
+    assert er["publication"]["content_qualification"] != CONTENT_QUALIFIED
+
+    # Validator checks future date against cutoff
+    fake_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_AVAILABLE)
+    fake_er["publication"]["publish_time"] = "2025-06-01 10:00:00"
+    fake_er["publication"]["content_qualification"] = CONTENT_QUALIFIED
+    is_val, viols = validate_expectation_revision(fake_er, cutoff_date="2025-05-15")
+    assert not is_val
+    assert any("later than cutoff" in v for v in viols)
+    assert any("content_qualification cannot be 'qualified'" in v for v in viols)

@@ -106,6 +106,86 @@ def make_json_safe(obj: Any) -> Any:
     return str(obj)
 
 
+def parse_valid_publish_datetime(val: Any) -> datetime.datetime | None:
+    """Strict calendar date and timestamp parser for publication times.
+
+    Accepts:
+    - datetime.datetime or datetime.date (strictly calendar valid)
+    - int or float (valid Unix epoch timestamp between 1970 and 2100)
+    - Valid YYYY-MM-DD strings and valid timestamp strings (ISO, standard formats)
+
+    Rejects:
+    - Impossible calendar dates (e.g. 2024-02-31, 0000-00-00, 2024-04-31)
+    - Malformed format strings (e.g. invalid_date_format)
+    - None, empty strings, boolean
+    """
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, datetime.datetime):
+        if val.tzinfo is not None:
+            return val.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return val
+    if isinstance(val, datetime.date):
+        return datetime.datetime(val.year, val.month, val.day)
+    if isinstance(val, (int, float)):
+        try:
+            ts = float(val)
+            if ts > 1e11:
+                ts /= 1000.0
+            if 0 <= ts <= 4102444800:
+                return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).replace(tzinfo=None)
+        except Exception:
+            return None
+        return None
+
+    text = str(val).strip()
+    if not text or text.lower() in ("none", "null", "nan", "未知", "unknown", "nat"):
+        return None
+
+    if text.isdigit() and len(text) in (10, 13):
+        try:
+            ts = float(text)
+            if len(text) == 13:
+                ts /= 1000.0
+            if 0 <= ts <= 4102444800:
+                return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+
+    iso_cand = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.datetime.fromisoformat(iso_cand)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return dt
+    except (ValueError, TypeError):
+        pass
+
+    _FMTS = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+        "%Y年%m月%d日 %H:%M:%S",
+        "%Y年%m月%d日 %H:%M",
+        "%Y年%m月%d日",
+    )
+    for fmt in _FMTS:
+        try:
+            dt = datetime.datetime.strptime(text, fmt)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            return dt
+        except (ValueError, TypeError):
+            continue
+
+    return None
+
+
 def make_default_expectation_revision(
     event_type: str = EVENT_TYPE_NONE,
     status: str = STATUS_NOT_APPLICABLE,
@@ -207,22 +287,73 @@ def validate_expectation_revision(
     if not isinstance(pub, dict):
         violations.append("publication must be a dictionary")
     else:
-        pub_time = pub.get("publish_time") or pub.get("published_at")
+        pub_time = pub.get("publish_time")
+        pub_at = pub.get("published_at")
         content_qual = pub.get("content_qualification") or pub.get("qualification_status") or CONTENT_NOT_ATTEMPTED
         content_qual = str(content_qual).strip().lower()
 
-        # Check future date
-        if pub_time and cutoff_date:
-            try:
-                pub_date_str = str(pub_time)[:10]
-                cut_date_str = str(cutoff_date)[:10]
-                if pub_date_str > cut_date_str:
-                    if "future_date" not in er.get("gaps", []):
-                        violations.append(
-                            f"publication date ({pub_time}) is later than cutoff ({cutoff_date}), must be recorded in gaps"
-                        )
-            except Exception:
-                pass
+        # Strict calendar date and format check on publication publish_time / published_at
+        times_to_check = []
+        if pub_time is not None:
+            times_to_check.append(("publish_time", pub_time))
+        if pub_at is not None and pub_at != pub_time:
+            times_to_check.append(("published_at", pub_at))
+
+        for pt_name, pt_val in times_to_check:
+            pt_dt = parse_valid_publish_datetime(pt_val)
+            if pt_dt is None:
+                violations.append(
+                    f"publication {pt_name} {pt_val!r} is invalid calendar date; must be valid YYYY-MM-DD or timestamp"
+                )
+                if "invalid_publish_time" not in er.get("gaps", []):
+                    violations.append(f"invalid {pt_name} in publication must be recorded in gaps as 'invalid_publish_time'")
+                if content_qual == CONTENT_QUALIFIED:
+                    violations.append(
+                        f"publication {pt_name} ({pt_val}) is invalid calendar date; content_qualification cannot be 'qualified'"
+                    )
+                actual = er.get("actual") or {}
+                if isinstance(actual, dict) and actual.get("value") is not None:
+                    violations.append(
+                        f"publication {pt_name} ({pt_val}) is invalid calendar date; actual.value must be None"
+                    )
+                revision = er.get("revision") or {}
+                if isinstance(revision, dict) and (revision.get("type") == REVISION_NUMERIC or revision.get("value") is not None):
+                    violations.append(
+                        f"publication {pt_name} ({pt_val}) is invalid calendar date; revision cannot be 'numeric'"
+                    )
+                if status == STATUS_AVAILABLE:
+                    violations.append(
+                        f"publication {pt_name} ({pt_val}) is invalid calendar date; status cannot be 'available'"
+                    )
+            elif cutoff_date:
+                try:
+                    pub_date_str = pt_dt.strftime("%Y-%m-%d")
+                    cut_date_str = str(cutoff_date)[:10]
+                    if pub_date_str > cut_date_str:
+                        if "future_date" not in er.get("gaps", []):
+                            violations.append(
+                                f"publication date ({pt_val}) is later than cutoff ({cutoff_date}), must be recorded in gaps"
+                            )
+                        if content_qual == CONTENT_QUALIFIED:
+                            violations.append(
+                                f"publication date ({pt_val}) is later than cutoff ({cutoff_date}); content_qualification cannot be 'qualified'"
+                            )
+                        actual = er.get("actual") or {}
+                        if isinstance(actual, dict) and actual.get("value") is not None:
+                            violations.append(
+                                f"publication date ({pt_val}) is later than cutoff ({cutoff_date}); actual.value must be None"
+                            )
+                        revision = er.get("revision") or {}
+                        if isinstance(revision, dict) and (revision.get("type") == REVISION_NUMERIC or revision.get("value") is not None):
+                            violations.append(
+                                f"publication date ({pt_val}) is later than cutoff ({cutoff_date}); revision cannot be 'numeric'"
+                            )
+                        if status == STATUS_AVAILABLE:
+                            violations.append(
+                                f"publication date ({pt_val}) is later than cutoff ({cutoff_date}); status cannot be 'available'"
+                            )
+                except Exception:
+                    pass
 
         # Check source_hash authenticness (Defect 6: no fabricated fin_ prefix)
         s_hash = pub.get("source_hash")
@@ -397,6 +528,8 @@ def validate_expectation_revision(
                 "missing_as_of",
                 "invalid_as_of",
                 "baseline_as_of_missing",
+                "invalid_publish_time",
+                "unparseable_publish_time",
             }
             er_gaps = set(er.get("gaps") or [])
             if any(fg in er_gaps or any(str(g).startswith("compliance_violation") for g in er_gaps) for fg in fatal_gaps):
@@ -529,15 +662,15 @@ def build_news_expectation_revision(
             "source_hash": s_h,
             "content_qualification": c_st,
         })
-        if p_t:
-            p_str = str(p_t).strip()
-            import re
-            if not re.match(r"^\d{4}-\d{2}-\d{2}", p_str):
+        if p_t is not None:
+            p_dt = parse_valid_publish_datetime(p_t)
+            if p_dt is None:
                 if "invalid_publish_time" not in gaps:
                     gaps.append("invalid_publish_time")
             elif cutoff:
                 try:
-                    if p_str[:10] > str(cutoff)[:10] and "future_date" not in gaps:
+                    p_date_str = p_dt.strftime("%Y-%m-%d")
+                    if p_date_str > str(cutoff)[:10] and "future_date" not in gaps:
                         gaps.append("future_date")
                 except Exception:
                     pass
@@ -575,18 +708,28 @@ def build_news_expectation_revision(
         )
         content_status = str(content_status or CONTENT_NOT_ATTEMPTED).strip().lower()
 
-    if pub_time:
-        pub_str = str(pub_time).strip()
-        import re
-        if not re.match(r"^\d{4}-\d{2}-\d{2}", pub_str):
+    if pub_time is not None:
+        pub_dt = parse_valid_publish_datetime(pub_time)
+        if pub_dt is None:
             if "invalid_publish_time" not in gaps:
                 gaps.append("invalid_publish_time")
         elif cutoff:
             try:
-                if pub_str[:10] > str(cutoff)[:10] and "future_date" not in gaps:
+                pub_date_str = pub_dt.strftime("%Y-%m-%d")
+                if pub_date_str > str(cutoff)[:10] and "future_date" not in gaps:
                     gaps.append("future_date")
             except Exception:
                 pass
+
+    has_fatal_gap = any(
+        g in gaps for g in ("provider_failure", "future_date", "unparseable_publish_time", "invalid_publish_time")
+    )
+
+    # Downgrade content qualification if invalid publish time or fatal gap
+    if (has_fatal_gap or "invalid_publish_time" in gaps) and content_status == CONTENT_QUALIFIED:
+        content_status = CONTENT_HASHED if source_hash else CONTENT_UNAVAILABLE
+        if "content_not_obtained" not in gaps:
+            gaps.append("content_not_obtained")
 
     if content_status in (CONTENT_HASHED, CONTENT_UNAVAILABLE, CONTENT_NOT_ATTEMPTED, CONTENT_NOT_OBTAINED):
         if "content_not_obtained" not in gaps:
