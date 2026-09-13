@@ -66,6 +66,9 @@ from tradingagents.agents.analysts.news_analyst import (
     EVENT_TYPE_FUNDAMENTAL,
     EVENT_TYPE_EVENT,
     EVENT_TYPE_NONE,
+    PRICED_IN_SUPPORTED,
+    PRICED_IN_NOT_SUPPORTED,
+    PRICED_IN_UNKNOWN,
     make_default_expectation_revision,
     make_json_safe,
     validate_expectation_revision,
@@ -422,7 +425,14 @@ def validate_manager_expectation_revision_consumption(
     raw_response: str,
     expectation_revisions: Any,
 ) -> tuple[bool, list[str]]:
-    """Validate that research manager only consumed structured expectation_revision fields without hallucination."""
+    """Validate that research manager only consumed structured expectation_revision fields without hallucination (E-04).
+
+    Guards full raw_response, reason, and structured fields:
+    1. 'Priced in' cannot be asserted as fact without traceable evidence.
+    2. 'Above/below expectations' cannot be asserted without comparable baseline.
+    3. Financial metrics/numbers cannot be hallucinated when analyst reported gap/missing actual.
+    4. Duplicate voting/double support cannot be claimed when double_count_guard is active.
+    """
     violations: list[str] = []
     if isinstance(expectation_revisions, Sequence) and not isinstance(expectation_revisions, Mapping):
         fund_er = None
@@ -446,32 +456,154 @@ def validate_manager_expectation_revision_consumption(
     fund_base_type = (fund_er.get("baseline") or {}).get("type", "none")
     fund_base_val = (fund_er.get("baseline") or {}).get("value")
 
-    # 1. Check if priced_in claimed as supported fact without traceable evidence
     fund_pi = (fund_er.get("priced_in") or {}).get("status", "unknown")
     news_pi = (news_er.get("priced_in") or {}).get("status", "unknown")
 
-    reason = str(manager_verdict.get("reason") or "")
+    # Combine all manager outputs: full raw response, verdict reason, and investment plan
+    texts_to_check = [str(raw_response or ""), str(manager_verdict.get("reason") or "")]
+    if manager_verdict.get("investment_plan"):
+        texts_to_check.append(str(manager_verdict.get("investment_plan")))
+    full_text = "\n".join(t for t in texts_to_check if t)
 
-    if fund_pi == "unknown" and news_pi == "unknown":
-        if "已充分定价" in reason or "已完全定价" in reason or "市场已定价" in reason or "已定价" in reason:
+    # 1. Check if priced_in claimed as supported fact without traceable evidence
+    if fund_pi != PRICED_IN_SUPPORTED and news_pi != PRICED_IN_SUPPORTED:
+        has_pi_asserted = False
+        for pat in ("已充分定价", "已完全定价", "市场已定价", "已基本定价", "股价已完全反映", "股价已充分反应", "市场已完全反映"):
+            if pat in full_text:
+                has_pi_asserted = True
+                break
+        if not has_pi_asserted:
+            if re.search(r"(?<!未)(?<!尚未)(?<!不能确定)(?<!无法确认)已定价", full_text):
+                has_pi_asserted = True
+        if has_pi_asserted:
             violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价”当作已确证事实引用")
 
     # 2. Check if beat/miss claimed without comparable baseline
     if fund_base_type == "none" or fund_base_val is None:
-        if "超预期" in reason or "不及预期" in reason:
-            violations.append("E-04 守卫拦截：基本面无有效旧基线，经理不得在裁决理由中断言业绩“超预期”或“不及预期”")
+        for kw in ("超预期", "不及预期"):
+            if kw in full_text:
+                violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”")
+                break
 
     # 3. Check if financial numbers hallucinated when analyst reported gap
     fund_act_val = (fund_er.get("actual") or {}).get("value")
     if fund_act_val is None:
         m = re.search(
-            r"(?:营业收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,12}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
-            reason,
+            r"(?:营业收入|营业总收入|主营业务收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,15}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
+            full_text,
         )
         if m:
             violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值，经理不得擅自断言财务指标数值（{m.group(0)}）")
 
+    # 4. Check if double_count_guard is violated by claiming double voting / extra support
+    fund_dc = (fund_er.get("double_count_guard") or {})
+    news_dc = (news_er.get("double_count_guard") or {})
+    fund_dc_prevent = bool(fund_dc.get("prevent_double_voting", True)) or fund_dc.get("status") in ("accounted_for", "unknown")
+    news_dc_prevent = bool(news_dc.get("prevent_double_voting", True)) or news_dc.get("status") in ("accounted_for", "unknown")
+
+    if fund_dc_prevent or news_dc_prevent:
+        for dc_pat in ("双重支持", "额外支持", "双重加票", "额外加票", "两项独立票", "重复计入", "双重印证加票"):
+            if dc_pat in full_text:
+                violations.append(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中“{dc_pat}”）")
+                break
+
     return len(violations) == 0, violations
+
+
+def apply_manager_double_count_guard(
+    claim_cluster_metrics: dict[str, Any],
+    expectation_revisions: Any,
+    claims: Sequence[Mapping[str, Any]] | None = None,
+    manager_verdict: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, list[str]]:
+    """Enforce double_count_guard in research manager consumption gate (E-04 Defect 5).
+
+    When double_count_guard status is accounted_for or unknown (prevent_double_voting=True):
+    1. Blocks duplicate voting from overlapping/accounted-for events in claim_cluster_metrics.
+    2. Strips duplicate event claims from manager_verdict['adopted_claim_ids'] into excluded_evidence.
+    3. Records structured audit metadata in metrics.
+    """
+    if isinstance(expectation_revisions, Sequence) and not isinstance(expectation_revisions, Mapping):
+        fund_er = None
+        news_er = None
+        for item in expectation_revisions:
+            if isinstance(item, Mapping):
+                ev_type = item.get("event_type")
+                if ev_type == EVENT_TYPE_FUNDAMENTAL:
+                    fund_er = item
+                elif ev_type in (EVENT_TYPE_EVENT, EVENT_TYPE_NONE):
+                    news_er = item
+        exp_dict = {"fundamentals": fund_er or {}, "news": news_er or {}}
+    elif isinstance(expectation_revisions, Mapping):
+        exp_dict = dict(expectation_revisions)
+    else:
+        exp_dict = {}
+
+    fund_er = exp_dict.get("fundamentals") or {}
+    news_er = exp_dict.get("news") or {}
+
+    fund_dc = (fund_er.get("double_count_guard") or {})
+    news_dc = (news_er.get("double_count_guard") or {})
+    fund_st = fund_dc.get("status", "unknown")
+    news_st = news_dc.get("status", "unknown")
+
+    prevent_fund = bool(fund_dc.get("prevent_double_voting", True)) or fund_st in ("accounted_for", "unknown")
+    prevent_news = bool(news_dc.get("prevent_double_voting", True)) or news_st in ("accounted_for", "unknown")
+    is_active = prevent_fund or prevent_news
+
+    metrics = dict(claim_cluster_metrics or {})
+    if not is_active:
+        metrics["double_count_guard_active"] = False
+        return metrics, manager_verdict, []
+
+    metrics["double_count_guard_active"] = True
+    metrics["duplicate_voting_prevented"] = True
+
+    # Count how many extra votes/claims are duplicates
+    blocked_count = 0
+    claims_list = list(claims or [])
+    if claims_list:
+        event_claims = [
+            c for c in claims_list
+            if str(c.get("event_type", "")).lower() in ("event", "fundamental")
+            or any(kw in str(c.get("claim_text") or c.get("text") or "") for kw in ("预告", "预测", "快报", "业绩", "财报"))
+        ]
+        if len(event_claims) > 1:
+            blocked_count = len(event_claims) - 1
+
+    if blocked_count == 0 and metrics.get("independent_cluster_count", 0) > 1:
+        blocked_count = 1
+
+    if blocked_count > 0:
+        orig_indep = metrics.get("independent_cluster_count", 0)
+        metrics["independent_cluster_count"] = max(1, orig_indep - blocked_count)
+        if metrics.get("bull_cluster_count", 0) > 1:
+            metrics["bull_cluster_count"] = max(1, metrics["bull_cluster_count"] - blocked_count)
+        elif metrics.get("bear_cluster_count", 0) > 1:
+            metrics["bear_cluster_count"] = max(1, metrics["bear_cluster_count"] - blocked_count)
+
+    metrics["double_count_guard_audit"] = {
+        "status": "blocked",
+        "reason": "accounted_for 或 unknown 时不得把同一事件作为额外支持/票再次计入",
+        "prevent_double_voting": True,
+        "blocked_duplicate_votes": blocked_count,
+    }
+
+    if manager_verdict and isinstance(manager_verdict, dict):
+        adopted = list(manager_verdict.get("adopted_claim_ids") or [])
+        if len(adopted) > 1 and blocked_count > 0:
+            num_to_strip = min(blocked_count, len(adopted) - 1)
+            stripped_ids = adopted[-num_to_strip:]
+            manager_verdict["adopted_claim_ids"] = adopted[:-num_to_strip]
+            excluded = list(manager_verdict.get("excluded_evidence") or [])
+            for cid in stripped_ids:
+                excluded.append({
+                    "claim_id": cid,
+                    "reason": "double_count_guard: 同一事件已被既有预测/事件栏位计入，阻止重复加票",
+                })
+            manager_verdict["excluded_evidence"] = excluded
+
+    return metrics, manager_verdict, []
 
 
 def _resolve_research_horizon(state: dict | None) -> str:
@@ -533,6 +665,12 @@ def _blocked_manager_payload(
             relation_graph=relation_graph,
             relation_graph_status=relation_graph_status,
             relation_graph_reason=relation_graph_reason,
+        )
+    if expectation_revision:
+        claim_cluster_metrics, _, _ = apply_manager_double_count_guard(
+            claim_cluster_metrics=claim_cluster_metrics,
+            expectation_revisions=expectation_revision,
+            claims=investment_debate_state.get("claims", []),
         )
     summary_dict = dict(claim_evidence_summary) if isinstance(claim_evidence_summary, dict) else {}
     if not summary_dict and isinstance(investment_debate_state.get("claim_evidence_summary"), dict):
@@ -984,6 +1122,11 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             relation_graph_status=relation_graph_status,
             relation_graph_reason=relation_graph_reason,
         )
+        claim_cluster_metrics, _, _ = apply_manager_double_count_guard(
+            claim_cluster_metrics=claim_cluster_metrics,
+            expectation_revisions=expectation_revisions,
+            claims=claims,
+        )
 
         claims_text = format_claims_with_verification_for_prompt(
             claims=claims,
@@ -1261,6 +1404,13 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         manager_verdict["evidence_relation_status"] = claim_cluster_metrics.get("relation_graph_status", "pending")
         manager_verdict["evidence_relation_reason"] = claim_cluster_metrics.get("relation_graph_reason", "")
         manager_verdict["expectation_revision"] = expectation_revisions
+
+        claim_cluster_metrics, manager_verdict, _ = apply_manager_double_count_guard(
+            claim_cluster_metrics=claim_cluster_metrics,
+            expectation_revisions=expectation_revisions,
+            claims=claims,
+            manager_verdict=manager_verdict,
+        )
 
         er_valid, er_violations = validate_manager_expectation_revision_consumption(
             manager_verdict=manager_verdict,

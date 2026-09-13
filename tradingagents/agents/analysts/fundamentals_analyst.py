@@ -73,7 +73,8 @@ def _extract_structured_actual(
 ) -> tuple[dict[str, Any], list[str]]:
     """Extract structured financial actual record (E-04).
 
-    Only populates value when metric, value, unit, report_period, as_of are simultaneously present.
+    Only populates value when metric, value, unit, report_period, as_of are simultaneously present
+    in authentic structured financial records. Disallows headline, URL, PDF filename, or hash regex extraction.
     """
     gaps: list[str] = []
 
@@ -104,7 +105,65 @@ def _extract_structured_actual(
                 "reason": f"报表数据获取失败（{stmt_k}包含失败标记: {matched_err}）",
             }, gaps
 
-    # 2. Search for a structured metric with all 5 elements
+    # 2. Check for explicit structured financial record dict
+    explicit_actual = (
+        outputs.get("structured_financials")
+        or outputs.get("financial_records")
+        or outputs.get("structured_actual")
+        or outputs.get("actual")
+    )
+    if isinstance(explicit_actual, dict):
+        metric = explicit_actual.get("metric")
+        val = explicit_actual.get("value")
+        unit = explicit_actual.get("unit")
+        period = explicit_actual.get("report_period") or explicit_actual.get("period")
+        as_of = explicit_actual.get("as_of")
+        if metric and val is not None and unit and period and as_of:
+            as_of_str = str(as_of).strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_str):
+                gaps.append("invalid_as_of")
+                return {
+                    "status": STATUS_GAP,
+                    "metric": str(metric).strip(),
+                    "value": None,
+                    "unit": str(unit).strip(),
+                    "report_period": str(period).strip(),
+                    "as_of": None,
+                    "source": "structured_financials",
+                    "reason": f"截至日期格式不合法({as_of_str})",
+                }, gaps
+            if current_date and as_of_str > str(current_date)[:10]:
+                gaps.append("future_date")
+                return {
+                    "status": STATUS_GAP,
+                    "metric": str(metric).strip(),
+                    "value": None,
+                    "unit": str(unit).strip(),
+                    "report_period": str(period).strip(),
+                    "as_of": as_of_str,
+                    "source": "structured_financials",
+                    "reason": f"截至日期({as_of_str})晚于当前分析基准日({current_date})，属于未来数据",
+                }, gaps
+            try:
+                numeric_val = float(val)
+                return {
+                    "status": STATUS_AVAILABLE,
+                    "metric": str(metric).strip(),
+                    "value": numeric_val,
+                    "unit": str(unit).strip(),
+                    "report_period": str(period).strip(),
+                    "as_of": as_of_str,
+                    "source": explicit_actual.get("source") or "structured_financials",
+                    "reason": None,
+                }, gaps
+            except (ValueError, TypeError):
+                pass
+
+    # 3. Search structured financial statement lines (strictly excluding announcement headlines, URLs, PDF files, hashes)
+    _FORBIDDEN_KEYWORDS = (
+        "http://", "https://", "www.", ".pdf", ".html", ".htm", ".doc", ".docx",
+        "公告", "澄清", "说明", "提示", "标题", "预告", "预测", "快报", "title", "hash", "url", "pdf",
+    )
     fund_text = outputs.get("fundamentals")
     inc_stmt = outputs.get("income_statement")
     search_texts = [str(fund_text or ""), str(inc_stmt or "")]
@@ -112,45 +171,77 @@ def _extract_structured_actual(
     for text in search_texts:
         if not text or text == "无数据":
             continue
-        m = re.search(
-            r"(?P<period>\d{4}(?:Q[1-4]|H[1-2]|年报|\-\d{2}\-\d{2}))[^\n]*?"
-            r"(?P<metric>营业收入|营业总收入|主营业务收入|营收|净利润|归属于母公司所有者的净利润|归母净利润|毛利率)\s*"
-            r"(?P<val>[0-9]+(?:\.[0-9]+)?)\s*"
-            r"(?P<unit>亿元|万元|元|万|亿|%|万亿元)",
-            text,
-        )
-        if m:
-            period = m.group("period")
-            metric = m.group("metric")
-            val = float(m.group("val"))
-            unit = m.group("unit")
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line_lower = line.lower()
+            if any(kw in line_lower or kw in line for kw in _FORBIDDEN_KEYWORDS):
+                continue
 
-            as_of = None
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
-                as_of = period
-            elif "Q1" in period:
-                as_of = f"{period[:4]}-03-31"
-            elif "Q2" in period or "H1" in period:
-                as_of = f"{period[:4]}-06-30"
-            elif "Q3" in period:
-                as_of = f"{period[:4]}-09-30"
-            elif "Q4" in period or "年报" in period:
-                as_of = f"{period[:4]}-12-31"
+            m = re.search(
+                r"(?P<period>\d{4}(?:Q[1-4]|H[1-2]|年报|FY|\-\d{2}\-\d{2}))\s*?"
+                r"(?:[|,:，\t\s]+)?\s*?"
+                r"(?P<metric>营业收入|营业总收入|主营业务收入|营收|净利润|归属于母公司所有者的净利润|归母净利润|毛利率)\s*"
+                r"(?:[|,:，\t\s]+)?\s*?"
+                r"(?P<val>[0-9]+(?:\.[0-9]+)?)\s*"
+                r"(?P<unit>亿元|万元|元|万|亿|%|万亿元)",
+                line,
+            )
+            if m:
+                period = m.group("period")
+                metric = m.group("metric")
+                val = float(m.group("val"))
+                unit = m.group("unit")
 
-            if as_of and current_date and as_of > current_date:
-                gaps.append("future_date")
-                as_of = current_date
+                as_of = None
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", period):
+                    as_of = period
+                elif "Q1" in period:
+                    as_of = f"{period[:4]}-03-31"
+                elif "Q2" in period or "H1" in period:
+                    as_of = f"{period[:4]}-06-30"
+                elif "Q3" in period:
+                    as_of = f"{period[:4]}-09-30"
+                elif "Q4" in period or "年报" in period or "FY" in period:
+                    as_of = f"{period[:4]}-12-31"
 
-            return {
-                "status": STATUS_AVAILABLE,
-                "metric": metric,
-                "value": val,
-                "unit": unit,
-                "report_period": period,
-                "as_of": as_of or current_date or "2026-06-30",
-                "source": "fundamentals",
-                "reason": None,
-            }, gaps
+                if not as_of or not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of):
+                    gaps.append("missing_as_of")
+                    return {
+                        "status": STATUS_GAP,
+                        "metric": metric,
+                        "value": None,
+                        "unit": unit,
+                        "report_period": period,
+                        "as_of": None,
+                        "source": "fundamentals",
+                        "reason": "缺少合法截至日期",
+                    }, gaps
+
+                if current_date and as_of > str(current_date)[:10]:
+                    gaps.append("future_date")
+                    return {
+                        "status": STATUS_GAP,
+                        "metric": metric,
+                        "value": None,
+                        "unit": unit,
+                        "report_period": period,
+                        "as_of": as_of,
+                        "source": "fundamentals",
+                        "reason": f"截至日期({as_of})晚于当前分析基准日({current_date})，属于未来数据",
+                    }, gaps
+
+                return {
+                    "status": STATUS_AVAILABLE,
+                    "metric": metric,
+                    "value": val,
+                    "unit": unit,
+                    "report_period": period,
+                    "as_of": as_of,
+                    "source": "fundamentals",
+                    "reason": None,
+                }, gaps
 
     # If no 5 elements simultaneously found:
     gaps.append("actual_incomplete_elements")
@@ -170,9 +261,22 @@ def _extract_baseline_and_revision(
     actual: dict[str, Any],
     pool: dict[str, Any] | None,
     current_date: str | None = None,
+    compliance: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     """Extract baseline and compute revision with strict contract checks (E-04)."""
     gaps: list[str] = []
+
+    # 1. Inspect compliance results (E-04 Defect 3)
+    has_compliance_violation = False
+    if isinstance(compliance, dict):
+        st = compliance.get("status")
+        violations = compliance.get("violations") or []
+        if st == "violations_found" or len(violations) > 0:
+            has_compliance_violation = True
+            for v in violations:
+                v_kind = v.get("kind") if isinstance(v, dict) else str(v)
+                gaps.append(f"compliance_violation:{v_kind}")
+            gaps.append("period_mismatch")
 
     ef = pool.get("earnings_forecast") if isinstance(pool, dict) else None
     if ef:
@@ -187,24 +291,26 @@ def _extract_baseline_and_revision(
 
     baseline: dict[str, Any]
     if isinstance(explicit_baseline, dict):
-        b_type = explicit_baseline.get("type", BASELINE_NONE)
+        b_type = explicit_baseline.get("type")
         b_source = explicit_baseline.get("source")
-        if b_type != BASELINE_NONE and (not b_source or not str(b_source).strip()):
+        has_real_source = bool(b_source and str(b_source).strip())
+        has_real_type = bool(b_type and str(b_type).strip() and str(b_type).strip() != BASELINE_NONE)
+        if not has_real_source or not has_real_type:
             gaps.append("baseline_source_missing")
             baseline = {
                 "type": BASELINE_NONE,
-                "source": None,
-                "metric": None,
+                "source": b_source if has_real_source else None,
+                "metric": explicit_baseline.get("metric"),
                 "value": None,
-                "unit": None,
-                "period": None,
-                "report_period": None,
-                "as_of": None,
+                "unit": explicit_baseline.get("unit"),
+                "period": explicit_baseline.get("period") or explicit_baseline.get("report_period"),
+                "report_period": explicit_baseline.get("period") or explicit_baseline.get("report_period"),
+                "as_of": explicit_baseline.get("as_of"),
             }
         else:
             baseline = {
-                "type": b_type,
-                "source": b_source,
+                "type": str(b_type).strip(),
+                "source": str(b_source).strip(),
                 "metric": explicit_baseline.get("metric"),
                 "value": explicit_baseline.get("value"),
                 "unit": explicit_baseline.get("unit"),
@@ -213,18 +319,33 @@ def _extract_baseline_and_revision(
                 "as_of": explicit_baseline.get("as_of"),
             }
     elif isinstance(ef, dict):
-        b_source = ef.get("source") or "earnings_forecast"
-        b_type = ef.get("type") or BASELINE_MANAGEMENT_GUIDANCE
-        baseline = {
-            "type": b_type,
-            "source": b_source,
-            "metric": ef.get("metric"),
-            "value": ef.get("value"),
-            "unit": ef.get("unit"),
-            "period": ef.get("period") or ef.get("report_period"),
-            "report_period": ef.get("period") or ef.get("report_period"),
-            "as_of": ef.get("as_of") or current_date,
-        }
+        raw_source = ef.get("source")
+        raw_type = ef.get("type")
+        has_real_source = bool(raw_source and str(raw_source).strip())
+        has_real_type = bool(raw_type and str(raw_type).strip() and str(raw_type).strip() != BASELINE_NONE)
+        if not has_real_source or not has_real_type:
+            gaps.append("baseline_source_missing")
+            baseline = {
+                "type": BASELINE_NONE,
+                "source": raw_source if has_real_source else None,
+                "metric": ef.get("metric"),
+                "value": None,
+                "unit": ef.get("unit"),
+                "period": ef.get("period") or ef.get("report_period"),
+                "report_period": ef.get("period") or ef.get("report_period"),
+                "as_of": ef.get("as_of"),
+            }
+        else:
+            baseline = {
+                "type": str(raw_type).strip(),
+                "source": str(raw_source).strip(),
+                "metric": ef.get("metric"),
+                "value": ef.get("value"),
+                "unit": ef.get("unit"),
+                "period": ef.get("period") or ef.get("report_period"),
+                "report_period": ef.get("period") or ef.get("report_period"),
+                "as_of": ef.get("as_of") or current_date,
+            }
     else:
         baseline = {
             "type": BASELINE_NONE,
@@ -244,7 +365,7 @@ def _extract_baseline_and_revision(
 
     if b_type == BASELINE_NONE or b_val is None:
         # Case 4: No old baseline -> revision cannot be numeric, value and percent must be None
-        rev_type = REVISION_QUALITATIVE if act_status == STATUS_AVAILABLE else REVISION_GAP
+        rev_type = REVISION_QUALITATIVE if (act_status == STATUS_AVAILABLE and act_val is not None) else REVISION_GAP
         revision = {
             "type": rev_type,
             "value": None,
@@ -262,7 +383,19 @@ def _extract_baseline_and_revision(
             "percent": None,
             "unit": None,
             "direction": "gap",
-            "detail": "实际财务数据缺失，无法计算修正",
+            "detail": "实际财务数据缺失或存在缺口，无法计算修正",
+        }
+        return baseline, revision, gaps
+
+    # Case 3 / Defect 3: Block numeric revision when compliance reports period violations
+    if has_compliance_violation:
+        revision = {
+            "type": REVISION_GAP,
+            "value": None,
+            "percent": None,
+            "unit": None,
+            "direction": "gap",
+            "detail": "财务期间合规校验存在违规（如累计值误标单季或期间错配），阻断数值修正计算",
         }
         return baseline, revision, gaps
 
@@ -340,18 +473,37 @@ def build_fundamentals_expectation_revision(
         actual=actual,
         pool=pool,
         current_date=current_date,
+        compliance=compliance,
     )
     all_gaps.extend(base_gaps)
 
     has_provider_failure = any(g.startswith("provider_failure") for g in all_gaps)
+    has_compliance_violation = any(g.startswith("compliance_violation") for g in all_gaps)
+    if has_compliance_violation:
+        all_gaps.append("compliance_violation")
+        all_gaps.append("period_mismatch")
+
     pub_date = actual.get("as_of") or current_date
+    real_source_hash = None
+    if isinstance(outputs, dict):
+        real_source_hash = (
+            outputs.get("source_hash")
+            or outputs.get("content_hash")
+            or (outputs.get("structured_financials") or {}).get("source_hash")
+        )
+    if not real_source_hash:
+        source_hash = None
+        all_gaps.append("source_hash_missing")
+    else:
+        source_hash = str(real_source_hash).strip()
+
     publication = {
         "publish_time": pub_date,
         "published_at": pub_date,
         "source": "financial_statement",
-        "source_hash": f"fin_{actual.get('report_period') or 'NA'}_{pub_date or 'NA'}",
-        "content_qualification": CONTENT_QUALIFIED if not has_provider_failure else CONTENT_UNAVAILABLE,
-        "qualification_status": CONTENT_QUALIFIED if not has_provider_failure else CONTENT_UNAVAILABLE,
+        "source_hash": source_hash,
+        "content_qualification": CONTENT_QUALIFIED if (not has_provider_failure and source_hash) else (CONTENT_HASHED if source_hash else CONTENT_UNAVAILABLE),
+        "qualification_status": CONTENT_QUALIFIED if (not has_provider_failure and source_hash) else (CONTENT_HASHED if source_hash else CONTENT_UNAVAILABLE),
     }
 
     priced_in = {
@@ -365,7 +517,7 @@ def build_fundamentals_expectation_revision(
         "description": "无法证明该影响是否已被已有预测/事件栏位计入，保持 unknown 且阻止再次加票",
     }
 
-    if has_provider_failure or "future_date" in all_gaps:
+    if has_provider_failure or "future_date" in all_gaps or has_compliance_violation or actual.get("status") == STATUS_GAP:
         status = STATUS_GAP
     elif revision.get("type") == REVISION_NUMERIC and actual.get("status") == STATUS_AVAILABLE:
         status = STATUS_AVAILABLE

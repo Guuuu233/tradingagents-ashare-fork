@@ -222,6 +222,13 @@ def validate_expectation_revision(
             except Exception:
                 pass
 
+        # Check source_hash authenticness (Defect 6: no fabricated fin_ prefix)
+        s_hash = pub.get("source_hash")
+        if s_hash and str(s_hash).startswith("fin_"):
+            violations.append(
+                f"source_hash {s_hash!r} uses fabricated prefix 'fin_'; must be an authentic hash or None with gap"
+            )
+
         # Case 1 & 2: if text not obtained, actual MUST NOT have numeric values
         text_not_obtained = content_qual in (
             CONTENT_HASHED,
@@ -243,6 +250,21 @@ def validate_expectation_revision(
     elif isinstance(actual, dict):
         act_status = actual.get("status")
         act_val = actual.get("value")
+        act_as_of = actual.get("as_of")
+
+        # Future date check on actual
+        if act_as_of and cutoff_date:
+            try:
+                if str(act_as_of)[:10] > str(cutoff_date)[:10]:
+                    if act_val is not None:
+                        violations.append(
+                            f"actual as_of ({act_as_of}) is later than cutoff ({cutoff_date}); actual.value must be None"
+                        )
+                    if "future_date" not in er.get("gaps", []):
+                        violations.append("future as_of in actual must be recorded in gaps")
+            except Exception:
+                pass
+
         # Check all 5 required elements when value is present
         if act_val is not None:
             missing_elements = []
@@ -324,6 +346,11 @@ def validate_expectation_revision(
             base_metric = str(baseline.get("metric") or "").strip()
             if act_metric != base_metric:
                 violations.append(f"revision is 'numeric' but metric mismatch: actual {act_metric!r} vs baseline {base_metric!r}")
+
+            fatal_gaps = {"future_date", "period_mismatch", "actual_incomplete_elements", "missing_as_of"}
+            er_gaps = set(er.get("gaps") or [])
+            if any(fg in er_gaps or any(str(g).startswith("compliance_violation") for g in er_gaps) for fg in fatal_gaps):
+                violations.append("revision cannot be 'numeric' when gaps contain violations")
 
         # Case 7: Beat / Miss ("超预期" / "不及预期") requires comparable baseline
         rev_direction = str(revision.get("direction") or "").strip().lower()
@@ -420,6 +447,54 @@ def build_news_expectation_revision(
             if c_evs and isinstance(c_evs, list) and c_evs:
                 primary_ev = c_evs[0]
 
+    all_evidences_summary: list[dict[str, Any]] = []
+    has_any_source_hash = False
+    for ev in ev_list:
+        p_t = (
+            getattr(ev, "published_at", None)
+            or getattr(ev, "publish_time", None)
+            or (ev.get("published_at") if isinstance(ev, dict) else None)
+            or (ev.get("publish_time") if isinstance(ev, dict) else None)
+        )
+        s_src = getattr(ev, "source", None) or (ev.get("source") if isinstance(ev, dict) else None)
+        s_h = (
+            getattr(ev, "source_hash", None)
+            or getattr(ev, "content_hash", None)
+            or (ev.get("source_hash") if isinstance(ev, dict) else None)
+            or (ev.get("content_hash") if isinstance(ev, dict) else None)
+        )
+        c_st = (
+            getattr(ev, "content_status", None)
+            or getattr(ev, "content_qualification", None)
+            or (ev.get("content_status") if isinstance(ev, dict) else None)
+            or (ev.get("content_qualification") if isinstance(ev, dict) else None)
+            or CONTENT_NOT_ATTEMPTED
+        )
+        c_st = str(c_st or CONTENT_NOT_ATTEMPTED).strip().lower()
+        if s_h:
+            has_any_source_hash = True
+        all_evidences_summary.append({
+            "publish_time": p_t,
+            "source": s_src,
+            "source_hash": s_h,
+            "content_qualification": c_st,
+        })
+        if p_t:
+            p_str = str(p_t).strip()
+            import re
+            if not re.match(r"^\d{4}-\d{2}-\d{2}", p_str):
+                if "invalid_publish_time" not in gaps:
+                    gaps.append("invalid_publish_time")
+            elif cutoff:
+                try:
+                    if p_str[:10] > str(cutoff)[:10] and "future_date" not in gaps:
+                        gaps.append("future_date")
+                except Exception:
+                    pass
+        if c_st in (CONTENT_HASHED, CONTENT_UNAVAILABLE, CONTENT_NOT_ATTEMPTED, CONTENT_NOT_OBTAINED):
+            if "content_not_obtained" not in gaps:
+                gaps.append("content_not_obtained")
+
     pub_time = None
     source = None
     source_hash = None
@@ -467,6 +542,10 @@ def build_news_expectation_revision(
         if "content_not_obtained" not in gaps:
             gaps.append("content_not_obtained")
 
+    if not source_hash and not has_any_source_hash and ev_list:
+        if "source_hash_missing" not in gaps:
+            gaps.append("source_hash_missing")
+
     publication = {
         "publish_time": pub_time,
         "published_at": pub_time,
@@ -474,6 +553,8 @@ def build_news_expectation_revision(
         "source_hash": source_hash,
         "content_qualification": content_status,
         "qualification_status": content_status,
+        "evidence_count": len(ev_list),
+        "evidences": all_evidences_summary,
     }
 
     actual = {
