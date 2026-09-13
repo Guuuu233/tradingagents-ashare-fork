@@ -184,6 +184,124 @@ def test_calendar_returns_empty_when_all_sources_fail_and_no_cache():
             tc.require_cn_trade_dates()
 
 
+# ── fuyao 日历 Key 解析与 API 调用参数 ──────────────────────────
+
+
+def test_fetch_fuyao_trade_dates_uses_config_key(monkeypatch):
+    """配置 fuyao_api_key 存在时，去首尾空白后传给底层 API，不依赖环境变量。"""
+    monkeypatch.delenv("FUYAO_API_KEY", raising=False)
+    with patch.object(tc, "get_config", return_value={"fuyao_api_key": "  test-config-key  "}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=["20260803", "20260804"]) as mock_fetch:
+        dates = tc._fetch_cn_trade_dates_from_fuyao()
+    assert dates == [date(2026, 8, 3), date(2026, 8, 4)]
+    mock_fetch.assert_called_once_with("test-config-key")
+
+
+def test_fetch_fuyao_trade_dates_config_priority_over_env(monkeypatch):
+    """配置 fuyao_api_key 优先于环境变量 FUYAO_API_KEY。"""
+    monkeypatch.setenv("FUYAO_API_KEY", "env-key-fallback")
+    with patch.object(tc, "get_config", return_value={"fuyao_api_key": "cfg-priority-key"}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=["20260803"]) as mock_fetch:
+        dates = tc._fetch_cn_trade_dates_from_fuyao()
+    assert dates == [date(2026, 8, 3)]
+    mock_fetch.assert_called_once_with("cfg-priority-key")
+
+
+@pytest.mark.parametrize("empty_cfg_val", ["", "   ", None])
+def test_fetch_fuyao_trade_dates_env_fallback_when_config_empty(monkeypatch, empty_cfg_val):
+    """配置为空/空格/None 时，环境变量 FUYAO_API_KEY 能够正常单独兜底。"""
+    monkeypatch.setenv("FUYAO_API_KEY", "  env-key-standalone  ")
+    with patch.object(tc, "get_config", return_value={"fuyao_api_key": empty_cfg_val}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=["20260803"]) as mock_fetch:
+        dates = tc._fetch_cn_trade_dates_from_fuyao()
+    assert dates == [date(2026, 8, 3)]
+    mock_fetch.assert_called_once_with("env-key-standalone")
+
+
+def test_fetch_fuyao_trade_dates_env_fallback_when_config_key_missing(monkeypatch):
+    """配置字典中缺少 fuyao_api_key 键时，环境变量 FUYAO_API_KEY 能够正常兜底。"""
+    monkeypatch.setenv("FUYAO_API_KEY", "env-key-only")
+    with patch.object(tc, "get_config", return_value={}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=["20260803"]) as mock_fetch:
+        dates = tc._fetch_cn_trade_dates_from_fuyao()
+    assert dates == [date(2026, 8, 3)]
+    mock_fetch.assert_called_once_with("env-key-only")
+
+
+@pytest.mark.parametrize(
+    "cfg_val,env_val",
+    [
+        ("", ""),
+        ("   ", ""),
+        (None, ""),
+        ("", "   "),
+        ("   ", "   "),
+        (None, "   "),
+    ],
+)
+def test_fetch_fuyao_trade_dates_raises_when_both_missing(monkeypatch, cfg_val, env_val):
+    """配置与环境变量均为空时，显式抛出 TradeCalendarUnavailableError，不发网络请求。"""
+    monkeypatch.setenv("FUYAO_API_KEY", env_val)
+    with patch.object(tc, "get_config", return_value={"fuyao_api_key": cfg_val}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths") as mock_fetch:
+        with pytest.raises(tc.TradeCalendarUnavailableError) as exc_info:
+            tc._fetch_cn_trade_dates_from_fuyao()
+    assert "未配置" in str(exc_info.value)
+    mock_fetch.assert_not_called()
+
+
+def test_fetch_fuyao_trade_dates_raises_when_config_none_and_env_unset(monkeypatch):
+    """配置为 None 且无环境变量时，抛出 TradeCalendarUnavailableError。"""
+    monkeypatch.delenv("FUYAO_API_KEY", raising=False)
+    with patch.object(tc, "get_config", return_value=None), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths") as mock_fetch:
+        with pytest.raises(tc.TradeCalendarUnavailableError) as exc_info:
+            tc._fetch_cn_trade_dates_from_fuyao()
+    assert "未配置" in str(exc_info.value)
+    mock_fetch.assert_not_called()
+
+
+def test_fetch_fuyao_trade_dates_raises_when_api_returns_empty(monkeypatch):
+    """API 返回空列表时，抛出 TradeCalendarUnavailableError。"""
+    monkeypatch.delenv("FUYAO_API_KEY", raising=False)
+    with patch.object(tc, "get_config", return_value={"fuyao_api_key": "cfg-key"}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=[]) as mock_fetch:
+        with pytest.raises(tc.TradeCalendarUnavailableError, match="fuyao 交易日历无有效日期"):
+            tc._fetch_cn_trade_dates_from_fuyao()
+    mock_fetch.assert_called_once_with("cfg-key")
+
+
+def test_calendar_load_falls_back_to_fuyao_using_config_key(monkeypatch):
+    """集成路径：akshare 失败，fuyao 通过配置 Key（环境变量为空）成功获取日期并写入缓存。"""
+    monkeypatch.delenv("FUYAO_API_KEY", raising=False)
+    tc.clear_cn_trade_date_cache()
+    fuyao_raw = ["20260803", "20260804", "20260805"]
+    expected_dates = [date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5)]
+    with patch.object(tc, "_fetch_cn_trade_dates_from_akshare", side_effect=RuntimeError("akshare down")), \
+         patch.object(tc, "get_config", return_value={"fuyao_api_key": "config-fuyao-secret"}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", return_value=fuyao_raw) as mock_fetch:
+        dates, dates_set = tc._load_cn_trade_dates()
+    assert dates == expected_dates
+    assert dates_set == set(expected_dates)
+    assert tc._TRADE_DATES_CACHE["dates"] == expected_dates
+    mock_fetch.assert_called_once_with("config-fuyao-secret")
+
+
+def test_fuyao_fallback_does_not_log_key_content(caplog):
+    """底层调用失败时，日志不记录 Key 内容。"""
+    import logging
+    tc.clear_cn_trade_date_cache()
+    secret_key = "super-secret-key-12345"
+    with patch.object(tc, "_fetch_cn_trade_dates_from_akshare", side_effect=RuntimeError("ak down")), \
+         patch.object(tc, "get_config", return_value={"fuyao_api_key": secret_key}), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.fetch_trading_days_ths", side_effect=RuntimeError("simulated network error")):
+        with caplog.at_level(logging.DEBUG):
+            dates, _ = tc._load_cn_trade_dates()
+    assert dates == []
+    for record in caplog.records:
+        assert secret_key not in record.message
+
+
 # ── fetch_with_date_fallback ──────────────────────────────────────────
 
 

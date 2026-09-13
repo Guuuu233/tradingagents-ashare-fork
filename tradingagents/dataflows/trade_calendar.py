@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from .config import get_config
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 logger = logging.getLogger(__name__)
@@ -211,13 +213,15 @@ def _fetch_cn_trade_dates_from_akshare() -> list[date]:
 def _fetch_cn_trade_dates_from_fuyao() -> list[date]:
     """同花顺 fuyao 交易日历（近一年）作 akshare 失败后的在线对照/备用源。
 
-    仅在配置了 ``FUYAO_API_KEY`` 时尝试；失败抛异常，由调用方决定兜底。
+    仅在配置了 ``fuyao_api_key`` 或环境变量 ``FUYAO_API_KEY`` 时尝试；失败抛异常，由调用方决定兜底。
     近一年窗口不足以覆盖所有历史查询，因此仅作 fallback，不替代主源。
     """
-    api_key = os.getenv("FUYAO_API_KEY", "").strip()
+    config = get_config()
+    raw_key = config.get("fuyao_api_key", "") if isinstance(config, dict) else ""
+    api_key = str(raw_key or "").strip() or os.getenv("FUYAO_API_KEY", "").strip()
     if not api_key:
         raise TradeCalendarUnavailableError(
-            "交易日历不可用：未配置 FUYAO_API_KEY（无 fuyao 在线对照源）"
+            "交易日历不可用：未配置 fuyao_api_key 或 FUYAO_API_KEY（无 fuyao 在线对照源）"
         )
     from .providers.cn_fuyao_provider import fetch_trading_days_ths
 
