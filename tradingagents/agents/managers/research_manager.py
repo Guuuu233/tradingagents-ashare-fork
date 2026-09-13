@@ -424,10 +424,12 @@ def validate_manager_expectation_revision_consumption(
     manager_verdict: Mapping[str, Any],
     raw_response: str,
     expectation_revisions: Any,
+    claims: Sequence[Mapping[str, Any]] | None = None,
+    seven_reports: Mapping[str, Any] | None = None,
 ) -> tuple[bool, list[str]]:
     """Validate that research manager only consumed structured expectation_revision fields without hallucination (E-04).
 
-    Guards full raw_response, reason, and structured fields:
+    Guards full raw_response, reason, and structured fields across Chinese and English:
     1. 'Priced in' cannot be asserted as fact without traceable evidence.
     2. 'Above/below expectations' cannot be asserted without comparable baseline.
     3. Financial metrics/numbers cannot be hallucinated when analyst reported gap/missing actual.
@@ -465,35 +467,132 @@ def validate_manager_expectation_revision_consumption(
         texts_to_check.append(str(manager_verdict.get("investment_plan")))
     full_text = "\n".join(t for t in texts_to_check if t)
 
-    # 1. Check if priced_in claimed as supported fact without traceable evidence
+    # 1. Check if priced_in claimed as supported fact without traceable evidence (Chinese & English)
     if fund_pi != PRICED_IN_SUPPORTED and news_pi != PRICED_IN_SUPPORTED:
         has_pi_asserted = False
-        for pat in ("已充分定价", "已完全定价", "市场已定价", "已基本定价", "股价已完全反映", "股价已充分反应", "市场已完全反映"):
+        pi_patterns_zh = (
+            "已充分定价", "已完全定价", "市场已定价", "已基本定价",
+            "股价已完全反映", "股价已充分反应", "市场已完全反映",
+            "完全定价", "充分定价", "已被市场消化", "已被充分消化", "已被完全消化",
+        )
+        for pat in pi_patterns_zh:
             if pat in full_text:
                 has_pi_asserted = True
                 break
         if not has_pi_asserted:
-            if re.search(r"(?<!未)(?<!尚未)(?<!不能确定)(?<!无法确认)已定价", full_text):
+            if re.search(r"(?<!未)(?<!尚未)(?<!不能确定)(?<!无法确认)(?:已定价|已在股价中反映|已反映在股价中)", full_text):
+                has_pi_asserted = True
+        if not has_pi_asserted:
+            if re.search(
+                r"(?<!not\s)(?<!un)(?:already\s+|fully\s+|largely\s+|mostly\s+|market\s+has\s+)?priced\s*[- ]?in\b",
+                full_text,
+                re.IGNORECASE,
+            ):
+                has_pi_asserted = True
+            elif re.search(r"\b(?:fully|largely)\s+discounted\b", full_text, re.IGNORECASE):
+                has_pi_asserted = True
+            elif re.search(r"\b(?:fully|largely)\s+reflected\s+in\s+(?:the\s+)?(?:stock\s+)?price\b", full_text, re.IGNORECASE):
                 has_pi_asserted = True
         if has_pi_asserted:
-            violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价”当作已确证事实引用")
+            violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用")
 
-    # 2. Check if beat/miss claimed without comparable baseline
+    # 2. Check if beat/miss claimed without comparable baseline (Chinese & English & Synonyms)
     if fund_base_type == "none" or fund_base_val is None:
-        for kw in ("超预期", "不及预期"):
+        has_beat_miss = False
+        beat_miss_kws_zh = (
+            "超预期", "超出预期", "超越预期", "好于预期", "优于预期", "高于预期",
+            "不及预期", "低于预期", "未达预期", "差于预期", "弱于预期", "逊于预期", "落后于预期",
+        )
+        for kw in beat_miss_kws_zh:
             if kw in full_text:
+                has_beat_miss = True
                 violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”")
                 break
+        if not has_beat_miss:
+            m_en_beat = re.search(
+                r"\b(?:beat|beats|beating|exceeded|exceeds|exceeding|surpassed|surpasses|above|better than|ahead of)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?)\b|\b(?:earnings|profit|revenue)\s+beat\b",
+                full_text,
+                re.IGNORECASE,
+            )
+            if m_en_beat:
+                violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩超预期（命中 {m_en_beat.group(0)!r}）")
+                has_beat_miss = True
+            else:
+                m_en_miss = re.search(
+                    r"\b(?:missed?|misses|missing|below|fell short of|falls short of|worse than|lagged|behind)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?)\b|\b(?:earnings|profit|revenue)\s+miss\b",
+                    full_text,
+                    re.IGNORECASE,
+                )
+                if m_en_miss:
+                    violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩不及预期（命中 {m_en_miss.group(0)!r}）")
+                    has_beat_miss = True
 
-    # 3. Check if financial numbers hallucinated when analyst reported gap
+    # 3. Check if financial numbers hallucinated when analyst reported gap / missing structured actual
     fund_act_val = (fund_er.get("actual") or {}).get("value")
-    if fund_act_val is None:
-        m = re.search(
-            r"(?:营业收入|营业总收入|主营业务收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,15}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
-            full_text,
-        )
-        if m:
-            violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值，经理不得擅自断言财务指标数值（{m.group(0)}）")
+    fund_act_status = (fund_er.get("actual") or {}).get("status")
+
+    # Build corpus of all verified / existing evidence from input reports and debate claims
+    evidence_tokens: list[str] = []
+    if claims:
+        for c in claims:
+            if isinstance(c, Mapping):
+                ev = c.get("evidence")
+                if isinstance(ev, list):
+                    evidence_tokens.extend(str(x) for x in ev)
+                elif ev:
+                    evidence_tokens.append(str(ev))
+                cl = c.get("claim") or c.get("claim_text") or c.get("text")
+                if cl:
+                    evidence_tokens.append(str(cl))
+    if seven_reports and isinstance(seven_reports, Mapping):
+        for rep_k, rep_v in seven_reports.items():
+            if rep_v and isinstance(rep_v, str):
+                evidence_tokens.append(rep_v)
+    ev_verif = manager_verdict.get("evidence_verification")
+    if isinstance(ev_verif, list):
+        for ev_item in ev_verif:
+            if isinstance(ev_item, Mapping):
+                evidence_tokens.append(str(ev_item.get("matched_text") or ""))
+                evidence_tokens.append(str(ev_item.get("evidence_snippet") or ""))
+    evidence_corpus = " \n ".join(evidence_tokens)
+
+    # Check financial metrics in full text
+    metric_matches = list(re.finditer(
+        r"(?:营业收入|营业总收入|主营业务收入|营收|总收入|净利润|归属于母公司所有者的净利润|归属于上市公司股东的净利润|归母净利润|扣非净利润|毛利率|营业利润)[^\d\n]{0,20}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%|万亿元))",
+        full_text,
+    ))
+    en_metric_matches = list(re.finditer(
+        r"\b(?:revenue|total revenue|net profit|net income|gross margin|gross profit|operating profit)[^\d\n]{0,25}(\$?[0-9]+(?:\.[0-9]+)?\s*(?:billion|million|bn|m|b|%|yuan|rmb)?)",
+        full_text,
+        re.IGNORECASE,
+    ))
+
+    all_metric_matches = metric_matches + en_metric_matches
+    if all_metric_matches:
+        for m in all_metric_matches:
+            matched_full = m.group(0).strip()
+            num_part = m.group(1).strip() if m.lastindex and m.lastindex >= 1 else ""
+            clean_num = re.sub(r"[^\d.]", "", num_part)
+
+            # Supported if matches structured actual
+            if fund_act_val is not None and fund_act_status == STATUS_AVAILABLE:
+                try:
+                    if abs(float(clean_num) - float(fund_act_val)) < 1e-4:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            # Supported if present in existing evidence corpus (claims, seven reports, etc.)
+            if evidence_corpus:
+                if num_part and num_part in evidence_corpus:
+                    continue
+                if clean_num and len(clean_num) >= 2 and clean_num in evidence_corpus:
+                    continue
+                if matched_full in evidence_corpus:
+                    continue
+
+            # Otherwise, unevidenced hallucination!
+            violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值且无既有证据支持，经理不得擅自断言财务指标数值（{matched_full}）")
 
     # 4. Check if double_count_guard is violated by claiming double voting / extra support
     fund_dc = (fund_er.get("double_count_guard") or {})
@@ -502,10 +601,21 @@ def validate_manager_expectation_revision_consumption(
     news_dc_prevent = bool(news_dc.get("prevent_double_voting", True)) or news_dc.get("status") in ("accounted_for", "unknown")
 
     if fund_dc_prevent or news_dc_prevent:
-        for dc_pat in ("双重支持", "额外支持", "双重加票", "额外加票", "两项独立票", "重复计入", "双重印证加票"):
+        has_dc_violation = False
+        dc_pats_zh = ("双重支持", "额外支持", "双重加票", "额外加票", "两项独立票", "重复计入", "双重印证加票")
+        for dc_pat in dc_pats_zh:
             if dc_pat in full_text:
+                has_dc_violation = True
                 violations.append(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中“{dc_pat}”）")
                 break
+        if not has_dc_violation:
+            m_en_dc = re.search(
+                r"\b(?:double|dual|extra|additional)\s+(?:support|voting|votes?)\b|\b(?:counted twice|double counted)\b",
+                full_text,
+                re.IGNORECASE,
+            )
+            if m_en_dc:
+                violations.append(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中 {m_en_dc.group(0)!r}）")
 
     return len(violations) == 0, violations
 
@@ -516,12 +626,14 @@ def apply_manager_double_count_guard(
     claims: Sequence[Mapping[str, Any]] | None = None,
     manager_verdict: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, list[str]]:
-    """Enforce double_count_guard in research manager consumption gate (E-04 Defect 5).
+    """Enforce double_count_guard in research manager consumption gate (E-04 Defect 4).
 
     When double_count_guard status is accounted_for or unknown (prevent_double_voting=True):
-    1. Blocks duplicate voting from overlapping/accounted-for events in claim_cluster_metrics.
-    2. Strips duplicate event claims from manager_verdict['adopted_claim_ids'] into excluded_evidence.
-    3. Records structured audit metadata in metrics.
+    1. Deduplicates multiple claims covering the SAME event based on authentic event identity.
+    2. Does NOT reduce independent clusters when events are distinct and independent.
+    3. Is fully idempotent: repeat invocations do not subtract again.
+    4. Strips duplicate event claims from manager_verdict['adopted_claim_ids'] into excluded_evidence.
+    5. Records structured audit metadata in metrics.
     """
     if isinstance(expectation_revisions, Sequence) and not isinstance(expectation_revisions, Mapping):
         fund_er = None
@@ -542,6 +654,13 @@ def apply_manager_double_count_guard(
     fund_er = exp_dict.get("fundamentals") or {}
     news_er = exp_dict.get("news") or {}
 
+    fund_status = fund_er.get("status")
+    news_status = news_er.get("status")
+    if fund_status == STATUS_NOT_APPLICABLE and news_status == STATUS_NOT_APPLICABLE:
+        metrics = dict(claim_cluster_metrics or {})
+        metrics["double_count_guard_active"] = False
+        return metrics, manager_verdict, []
+
     fund_dc = (fund_er.get("double_count_guard") or {})
     news_dc = (news_er.get("double_count_guard") or {})
     fund_st = fund_dc.get("status", "unknown")
@@ -556,52 +675,133 @@ def apply_manager_double_count_guard(
         metrics["double_count_guard_active"] = False
         return metrics, manager_verdict, []
 
+    if metrics.get("double_count_guard_applied"):
+        if manager_verdict and isinstance(manager_verdict, dict):
+            excluded = list(manager_verdict.get("excluded_evidence") or [])
+            audit = metrics.get("double_count_guard_audit") or {}
+            excluded_ids = set(audit.get("excluded_claim_ids") or [])
+            if excluded_ids:
+                adopted = list(manager_verdict.get("adopted_claim_ids") or [])
+                manager_verdict["adopted_claim_ids"] = [cid for cid in adopted if cid not in excluded_ids]
+                for cid in excluded_ids:
+                    if not any(e.get("claim_id") == cid for e in excluded):
+                        excluded.append({
+                            "claim_id": cid,
+                            "reason": "double_count_guard: 同一事件已被既有预测/事件栏位计入，阻止重复加票",
+                        })
+                manager_verdict["excluded_evidence"] = excluded
+        return metrics, manager_verdict, []
+
     metrics["double_count_guard_active"] = True
-    metrics["duplicate_voting_prevented"] = True
+    metrics["double_count_guard_applied"] = True
 
-    # Count how many extra votes/claims are duplicates
-    blocked_count = 0
     claims_list = list(claims or [])
-    if claims_list:
-        event_claims = [
-            c for c in claims_list
-            if str(c.get("event_type", "")).lower() in ("event", "fundamental")
-            or any(kw in str(c.get("claim_text") or c.get("text") or "") for kw in ("预告", "预测", "快报", "业绩", "财报"))
-        ]
-        if len(event_claims) > 1:
-            blocked_count = len(event_claims) - 1
+    duplicate_claims: list[Mapping[str, Any]] = []
+    seen_event_keys: set[str] = set()
 
-    if blocked_count == 0 and metrics.get("independent_cluster_count", 0) > 1:
-        blocked_count = 1
+    for c in claims_list:
+        if not isinstance(c, Mapping):
+            continue
+        ev_type = str(c.get("event_type") or "").lower()
+        txt = str(c.get("claim_text") or c.get("claim") or c.get("text") or "")
+        event_id = c.get("event_id")
+        cluster_id = c.get("cluster_id")
+        evidence = c.get("evidence") or []
+
+        is_event_claim = (
+            ev_type in ("event", "fundamental")
+            or bool(event_id)
+            or any(kw in txt for kw in ("预告", "预测", "快报", "业绩", "财报", "公告", "earnings", "forecast"))
+        )
+        if not is_event_claim:
+            continue
+
+        if event_id:
+            event_key = f"event_id:{event_id}"
+        elif cluster_id:
+            event_key = f"cluster_id:{cluster_id}"
+        elif evidence:
+            ev_key_str = "|".join(sorted(str(e) for e in evidence))
+            event_key = f"evidence:{ev_key_str}"
+        else:
+            core_subjects = (
+                "业绩预告", "业绩预测", "业绩快报", "业绩", "财报", "定期报告", "年报", "半年报", "一季报", "三季报",
+                "重大合同", "中标", "采购合同", "采购", "投资", "发明专利", "专利", "增持", "减持", "回购",
+            )
+            matched_subj = None
+            for s in core_subjects:
+                if s in txt:
+                    matched_subj = s
+                    break
+            core_preds = (
+                "大幅增长", "大幅预增", "预增", "增长", "超预期", "大幅下滑", "预减", "下滑", "扭亏", "减亏", "亏损",
+            )
+            matched_pred = None
+            for p in core_preds:
+                if p in txt:
+                    matched_pred = p
+                    break
+            if matched_subj:
+                event_key = f"subject:{matched_subj}:{matched_pred or ''}"
+            else:
+                topic = re.sub(r"^(?:公司|新闻报道|市场传闻|根据公告|基本面|公告|新闻)+", "", txt).strip()
+                topic = re.sub(r"[^\w]", "", topic)
+                event_key = f"topic:{topic}"
+
+        if event_key in seen_event_keys:
+            duplicate_claims.append(c)
+        else:
+            seen_event_keys.add(event_key)
+
+    blocked_count = len(duplicate_claims)
 
     if blocked_count > 0:
         orig_indep = metrics.get("independent_cluster_count", 0)
         metrics["independent_cluster_count"] = max(1, orig_indep - blocked_count)
-        if metrics.get("bull_cluster_count", 0) > 1:
-            metrics["bull_cluster_count"] = max(1, metrics["bull_cluster_count"] - blocked_count)
-        elif metrics.get("bear_cluster_count", 0) > 1:
-            metrics["bear_cluster_count"] = max(1, metrics["bear_cluster_count"] - blocked_count)
+        for dup in duplicate_claims:
+            stance = str(dup.get("stance") or "").lower()
+            if "bull" in stance or stance == "positive":
+                if metrics.get("bull_cluster_count", 0) > 1:
+                    metrics["bull_cluster_count"] -= 1
+            elif "bear" in stance or stance == "negative":
+                if metrics.get("bear_cluster_count", 0) > 1:
+                    metrics["bear_cluster_count"] -= 1
+            else:
+                if metrics.get("bull_cluster_count", 0) > 1:
+                    metrics["bull_cluster_count"] -= 1
 
-    metrics["double_count_guard_audit"] = {
-        "status": "blocked",
-        "reason": "accounted_for 或 unknown 时不得把同一事件作为额外支持/票再次计入",
-        "prevent_double_voting": True,
-        "blocked_duplicate_votes": blocked_count,
-    }
+        metrics["duplicate_voting_prevented"] = True
+        metrics["double_count_guard_audit"] = {
+            "status": "blocked",
+            "reason": "accounted_for 或 unknown 时不得把同一事件作为额外支持/票再次计入",
+            "prevent_double_voting": True,
+            "blocked_duplicate_votes": blocked_count,
+            "excluded_claim_ids": [c.get("claim_id") for c in duplicate_claims if c.get("claim_id")],
+        }
+    else:
+        metrics["duplicate_voting_prevented"] = False
+        metrics["double_count_guard_audit"] = {
+            "status": "passed",
+            "reason": "未检测到针对同一事件的重复计票",
+            "prevent_double_voting": True,
+            "blocked_duplicate_votes": 0,
+            "excluded_claim_ids": [],
+        }
 
-    if manager_verdict and isinstance(manager_verdict, dict):
+    if manager_verdict and isinstance(manager_verdict, dict) and blocked_count > 0:
+        dup_ids = {c.get("claim_id") for c in duplicate_claims if c.get("claim_id")}
         adopted = list(manager_verdict.get("adopted_claim_ids") or [])
-        if len(adopted) > 1 and blocked_count > 0:
-            num_to_strip = min(blocked_count, len(adopted) - 1)
-            stripped_ids = adopted[-num_to_strip:]
-            manager_verdict["adopted_claim_ids"] = adopted[:-num_to_strip]
-            excluded = list(manager_verdict.get("excluded_evidence") or [])
-            for cid in stripped_ids:
+        manager_verdict["adopted_claim_ids"] = [cid for cid in adopted if cid not in dup_ids]
+
+        excluded = list(manager_verdict.get("excluded_evidence") or [])
+        for dup in duplicate_claims:
+            cid = dup.get("claim_id")
+            if cid and not any(e.get("claim_id") == cid for e in excluded):
                 excluded.append({
                     "claim_id": cid,
                     "reason": "double_count_guard: 同一事件已被既有预测/事件栏位计入，阻止重复加票",
                 })
-            manager_verdict["excluded_evidence"] = excluded
+        manager_verdict["excluded_evidence"] = excluded
 
     return metrics, manager_verdict, []
 
@@ -1416,6 +1616,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             manager_verdict=manager_verdict,
             raw_response=full_content,
             expectation_revisions=expectation_revisions,
+            claims=claims,
+            seven_reports=seven_reports,
         )
         if not er_valid:
             manager_verdict["consistency_check_passed"] = False

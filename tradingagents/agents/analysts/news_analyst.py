@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Mapping, Sequence, Optional
 from tradingagents.agents.utils.context_utils import get_cn_stock_name, format_phase1_reports
 import asyncio
@@ -297,6 +298,19 @@ def validate_expectation_revision(
                 violations.append(
                     f"baseline type is {b_type!r} but source is missing or empty; cannot masquerade without source"
                 )
+            b_as_of = baseline.get("as_of")
+            if not b_as_of or not str(b_as_of).strip():
+                violations.append(
+                    f"baseline type is {b_type!r} but as_of date is missing; cannot masquerade without as_of"
+                )
+            elif not re.match(r"^\d{4}-\d{2}-\d{2}$", str(b_as_of).strip()):
+                violations.append(
+                    f"baseline as_of {b_as_of!r} is invalid format; must be YYYY-MM-DD"
+                )
+            elif cutoff_date and str(b_as_of).strip()[:10] > str(cutoff_date)[:10]:
+                violations.append(
+                    f"baseline as_of {b_as_of!r} is in the future relative to cutoff {cutoff_date!r}"
+                )
         else:
             # Case 4: if b_type == none, value must be None
             if baseline.get("value") is not None:
@@ -347,7 +361,14 @@ def validate_expectation_revision(
             if act_metric != base_metric:
                 violations.append(f"revision is 'numeric' but metric mismatch: actual {act_metric!r} vs baseline {base_metric!r}")
 
-            fatal_gaps = {"future_date", "period_mismatch", "actual_incomplete_elements", "missing_as_of"}
+            fatal_gaps = {
+                "future_date",
+                "period_mismatch",
+                "actual_incomplete_elements",
+                "missing_as_of",
+                "invalid_as_of",
+                "baseline_as_of_missing",
+            }
             er_gaps = set(er.get("gaps") or [])
             if any(fg in er_gaps or any(str(g).startswith("compliance_violation") for g in er_gaps) for fg in fatal_gaps):
                 violations.append("revision cannot be 'numeric' when gaps contain violations")
