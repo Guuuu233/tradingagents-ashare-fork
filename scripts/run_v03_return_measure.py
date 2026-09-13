@@ -29,6 +29,7 @@ from tradingagents.eval.v03_return_measure import (
     BASELINE_MODEL,
     BASELINE_RUNNING_SERVICE_SHA,
     DEFAULT_BENCHMARK_SYMBOL,
+    DEFAULT_FORWARD_OOS_END_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATETIME,
     DEFAULT_HOLD_DAYS,
@@ -177,14 +178,14 @@ def run_measurement_and_ablations(
     status_filter: str = DEFAULT_STATUS_FILTER,
     cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
     dev_cutoff_date: str = "2025-12-31",
-    forward_oos_end_date: Optional[str] = None,
+    forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE,
     run_ablations: bool = True,
     running_service_sha: Optional[str] = None,
     running_service_provenance: Optional[str] = None,
 ) -> None:
     """Execute measurement engine and ablation harness on replica database."""
     user_stats = V03ReturnMeasureEngine.get_user_report_counts(
-        replica_db_path, target_user_id=target_user_id, cutoff_date=cutoff_date
+        replica_db_path, target_user_id=target_user_id, cutoff_date=None
     )
     cutoff_datetime = f"{cutoff_date} 23:59:59"
 
@@ -227,7 +228,7 @@ def run_measurement_and_ablations(
         limit=limit,
         target_user_id=target_user_id,
         status_filter=status_filter,
-        cutoff_date=cutoff_date,
+        cutoff_date=None,
     )
     print(f"      Loaded {len(reports)} reports from replica database. Executing measurement...")
 
@@ -358,8 +359,8 @@ def main() -> None:
     parser.add_argument(
         "--forward-oos-end-date",
         type=str,
-        default=None,
-        help="Upper bound trade date for forward OOS segment",
+        default=DEFAULT_FORWARD_OOS_END_DATE,
+        help=f"Upper bound trade date for forward OOS segment (default: {DEFAULT_FORWARD_OOS_END_DATE})",
     )
     parser.add_argument(
         "--running-service-sha",

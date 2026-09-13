@@ -186,13 +186,14 @@ DEFAULT_TARGET_USER_ID: str = "429163f7-50b6-4982-8bdf-96ae99506843"
 DEFAULT_STATUS_FILTER: str = "completed"
 DEFAULT_HISTORICAL_CUTOFF_DATE: str = "2026-09-08"
 DEFAULT_HISTORICAL_CUTOFF_DATETIME: str = "2026-09-08 23:59:59"
+DEFAULT_FORWARD_OOS_END_DATE: str = "2026-09-09"
 
 
 def classify_oos_segment(
     trade_date: str,
     dev_cutoff: str = "2025-12-31",
     historical_cutoff: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
-    forward_oos_end: Optional[str] = None,
+    forward_oos_end: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE,
 ) -> OOSSegment:
     """Classify a trade date (YYYY-MM-DD) into its OOS segment."""
     clean_date = str(trade_date).strip()[:10]
@@ -573,7 +574,7 @@ class EvaluationStamp:
     account_stats: Optional[Dict[str, Any]] = None
     dev_cutoff_date: str = "2025-12-31"
     historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE
-    forward_oos_end_date: Optional[str] = None
+    forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE
 
 
 @dataclass
@@ -590,7 +591,7 @@ class SnapshotManifest:
     snapshot_created_at: str = ""
     dev_cutoff_date: str = "2025-12-31"
     historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE
-    forward_oos_end_date: Optional[str] = None
+    forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE
     cutoff_datetime: str = DEFAULT_HISTORICAL_CUTOFF_DATETIME
     requested_as_of: str = DEFAULT_HISTORICAL_CUTOFF_DATE
     cutoff_requested_distinction: str = (
@@ -941,7 +942,7 @@ class VendorPriceDataProvider:
 
     _GLOBAL_A_SHARE_META: Optional[Dict[str, Dict[str, str]]] = None
 
-    def __init__(self, forward_oos_end_date: Optional[str] = None) -> None:
+    def __init__(self, forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE) -> None:
         self.forward_oos_end_date = forward_oos_end_date
         self._bar_cache: Dict[Tuple[str, str], Optional[DailyBar]] = {}
         self._series_cache: Dict[Tuple[str, str, str], Any] = {}
@@ -958,11 +959,14 @@ class VendorPriceDataProvider:
             return None
 
     def get_bar(self, symbol: str, date: str) -> Optional[DailyBar]:
-        cache_key = (symbol, date)
+        clean_date = str(date).strip()[:10]
+        if self.forward_oos_end_date is not None and clean_date > self.forward_oos_end_date:
+            return None
+        cache_key = (symbol, clean_date)
         if cache_key in self._bar_cache:
             return self._bar_cache[cache_key]
 
-        bar = self._fetch_bar(symbol, date)
+        bar = self._fetch_bar(symbol, clean_date)
         self._bar_cache[cache_key] = bar
         return bar
 
@@ -1030,7 +1034,11 @@ class VendorPriceDataProvider:
 
     def _fetch_benchmark_bar(self, date: str) -> Optional[DailyBar]:
         """Fetch CSI 300 index daily bar via Tencent akshare provider."""
-        cache_key = ("__CSI300__", date)
+        clean_date = str(date).strip()[:10]
+        if self.forward_oos_end_date is not None and clean_date > self.forward_oos_end_date:
+            return None
+
+        cache_key = ("__CSI300__", clean_date)
         if cache_key in self._bar_cache:
             return self._bar_cache[cache_key]
 
@@ -1046,12 +1054,12 @@ class VendorPriceDataProvider:
                 else:
                     return None
             df = self._series_cache["__CSI300_DF__"]
-            match = df[df["date"] == date]
+            match = df[df["date"] == clean_date]
             if match.empty:
                 return None
             r = match.iloc[0]
             bar = DailyBar(
-                date=date,
+                date=clean_date,
                 open=float(r["open"]),
                 high=float(r["high"]),
                 low=float(r["low"]),
@@ -1140,19 +1148,83 @@ class VendorPriceDataProvider:
         return None
 
     def is_st(self, symbol: str, date: str) -> Optional[bool]:
-        cache_key = (symbol, date)
+        """Check if stock was ST/*ST on date (strict Point-In-Time).
+
+        Returns True if ST on date, False if normal on date, None if unknown/unverifiable (fail-closed).
+        """
+        norm_sym = symbol.upper()
+        if not norm_sym.endswith((".SH", ".SZ")):
+            code = norm_sym[:6]
+            if code.startswith(("5", "6", "9")):
+                norm_sym = f"{code}.SH"
+            elif code.startswith(("0", "3")):
+                norm_sym = f"{code}.SZ"
+            else:
+                return None
+
+        clean_date = str(date).strip()[:10]
+        cache_key = (norm_sym, clean_date)
         if cache_key in self._st_cache:
             return self._st_cache[cache_key]
 
-        meta = self._get_stock_metadata(symbol)
+        meta = self._get_stock_metadata(norm_sym)
         if meta is None:
             self._st_cache[cache_key] = None
             return None
 
-        name = meta.get("name", "").upper()
-        is_st_name = "ST" in name
-        self._st_cache[cache_key] = is_st_name
-        return is_st_name
+        code_6 = norm_sym[:6]
+        bs_prefix = "sh" if norm_sym.endswith(".SH") or code_6.startswith(("5", "6", "9")) else "sz"
+        bs_code = f"{bs_prefix}.{code_6}"
+
+        pit_st: Optional[bool] = None
+        try:
+            import baostock as bs
+            lg = bs.login()
+            if lg.error_code == "0":
+                try:
+                    # 1. First try exact date query
+                    rs = bs.query_history_k_data_plus(
+                        bs_code,
+                        "date,isST",
+                        start_date=clean_date,
+                        end_date=clean_date,
+                        frequency="d",
+                        adjustflag="3",
+                    )
+                    if rs and rs.error_code == "0":
+                        while rs.next():
+                            row = rs.get_row_data()
+                            if row and len(row) >= 2:
+                                pit_st = (row[1] == "1")
+                                break
+                    # 2. If exact date returned no bar (e.g. suspension, weekend, or holiday),
+                    # look back up to 30 calendar days for the latest known trading day
+                    if pit_st is None:
+                        d = datetime.strptime(clean_date, "%Y-%m-%d").date()
+                        start_d = (d - timedelta(days=30)).strftime("%Y-%m-%d")
+                        rs = bs.query_history_k_data_plus(
+                            bs_code,
+                            "date,isST",
+                            start_date=start_d,
+                            end_date=clean_date,
+                            frequency="d",
+                            adjustflag="3",
+                        )
+                        if rs and rs.error_code == "0":
+                            while rs.next():
+                                row = rs.get_row_data()
+                                if row and len(row) >= 2:
+                                    pit_st = (row[1] == "1")
+                finally:
+                    try:
+                        bs.logout()
+                    except Exception:
+                        pass
+        except Exception:
+            pit_st = None
+
+        self._st_cache[cache_key] = pit_st
+        return pit_st
 
     def is_listed_for_n_days(
         self, symbol: str, date: str, min_days: int = 60
@@ -1360,7 +1432,7 @@ class V03ReturnMeasureEngine:
         requested_as_of: Optional[str] = None,
         dev_cutoff_date: str = "2025-12-31",
         historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
-        forward_oos_end_date: Optional[str] = None,
+        forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE,
         snapshot_manifest: Optional[SnapshotManifest] = None,
         masked_fields: Sequence[str] = (),
         enable_evidence_deduplication: bool = True,
@@ -1387,7 +1459,7 @@ class V03ReturnMeasureEngine:
                 requested_as_of = snapshot_manifest.requested_as_of
             if historical_cutoff_date == DEFAULT_HISTORICAL_CUTOFF_DATE and hasattr(snapshot_manifest, "historical_cutoff_date"):
                 historical_cutoff_date = snapshot_manifest.historical_cutoff_date
-            if forward_oos_end_date is None and hasattr(snapshot_manifest, "forward_oos_end_date"):
+            if (forward_oos_end_date is None or forward_oos_end_date == DEFAULT_FORWARD_OOS_END_DATE) and hasattr(snapshot_manifest, "forward_oos_end_date") and snapshot_manifest.forward_oos_end_date is not None:
                 forward_oos_end_date = snapshot_manifest.forward_oos_end_date
             if dev_cutoff_date == "2025-12-31" and hasattr(snapshot_manifest, "dev_cutoff_date"):
                 dev_cutoff_date = snapshot_manifest.dev_cutoff_date
@@ -1426,7 +1498,7 @@ class V03ReturnMeasureEngine:
     def get_user_report_counts(
         db_path: str,
         target_user_id: str = DEFAULT_TARGET_USER_ID,
-        cutoff_date: Optional[str] = DEFAULT_HISTORICAL_CUTOFF_DATE,
+        cutoff_date: Optional[str] = None,
     ) -> Dict[str, int]:
         """Query total, completed, failed counts for a given user_id from database."""
         db_file = Path(db_path).resolve()
@@ -1468,7 +1540,7 @@ class V03ReturnMeasureEngine:
         limit: Optional[int] = None,
         target_user_id: Optional[str] = DEFAULT_TARGET_USER_ID,
         status_filter: Optional[str] = DEFAULT_STATUS_FILTER,
-        cutoff_date: Optional[str] = DEFAULT_HISTORICAL_CUTOFF_DATE,
+        cutoff_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Load reports from SQLite database strictly in read-only mode with scope filtering."""
         db_file = Path(db_path).resolve()
@@ -2300,11 +2372,16 @@ class V03ReturnMeasureEngine:
             if result.snapshot_manifest
             else SYSTEM_COMPLETENESS_DICT
         )
-        gt_val = (
-            f"{sc.get('game_theory_report_fill_rate') * 100:.1f}%"
-            if isinstance(sc.get("game_theory_report_fill_rate"), (int, float))
-            else str(sc.get("game_theory_report_fill_rate", "0.0%"))
-        )
+        gt_rate = sc.get("game_theory_report_fill_rate")
+        if isinstance(gt_rate, (int, float)):
+            if gt_rate == 0.0:
+                gt_val = f"{gt_rate * 100:.1f}% (未接入/未填充)"
+            elif gt_rate >= 1.0:
+                gt_val = f"{gt_rate * 100:.1f}% (已完全接入)"
+            else:
+                gt_val = f"{gt_rate * 100:.1f}% (部分接入)"
+        else:
+            gt_val = f"{sc.get('game_theory_report_fill_rate', 'unknown')}"
         news_val = (
             "已接入真实源"
             if sc.get("sentiment_news_real_source_connected") is True
@@ -2350,7 +2427,7 @@ class V03ReturnMeasureEngine:
 ### 系统完整度盖章 (System Completeness)
 | 输入项 / 数据源 | 接入 / 填充状态 | 影响说明 |
 |---|---|---|
-| **博弈论报告 (Game Theory)** | `{gt_val}` (完全未接入) | 核心对抗博弈决策缺失 |
+| **博弈论报告 (Game Theory)** | `{gt_val}` | 核心对抗博弈决策缺失与否说明 |
 | **真实舆情源 (Sentiment/News)** | `{news_val}` | 情绪面输入为半成品 |
 | **量价报告 (Volume-Price)** | `{vp_val}` | 部分技术面特征缺失 |
 | **宏观报告 (Macro)** | `{macro_val}` | 宏观环境输入部分缺失 |

@@ -27,6 +27,7 @@ from tradingagents.eval.v03_return_measure import (
     BASELINE_MODEL,
     BASELINE_RUNNING_SERVICE_SHA,
     DEFAULT_BENCHMARK_SYMBOL,
+    DEFAULT_FORWARD_OOS_END_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATETIME,
     DEFAULT_HOLD_DAYS,
@@ -563,14 +564,18 @@ def test_rt5_cost_model_rates_and_no_dupes():
 
 
 def test_rt6_oos_segment_boundaries():
-    """RT-6: DEV <= 2025-12-31, HISTORICAL_OOS 2026-01-01~09-08, FORWARD_OOS >= 2026-09-09."""
+    """RT-6: DEV <= 2025-12-31, HISTORICAL_OOS 2026-01-01~09-08, FORWARD_OOS 2026-09-09~DEFAULT_FORWARD_OOS_END_DATE."""
     assert classify_oos_segment("2024-01-15") == OOSSegment.DEV
     assert classify_oos_segment("2025-12-31") == OOSSegment.DEV
     assert classify_oos_segment("2026-01-01") == OOSSegment.HISTORICAL_OOS
     assert classify_oos_segment("2026-05-20") == OOSSegment.HISTORICAL_OOS
     assert classify_oos_segment("2026-09-08") == OOSSegment.HISTORICAL_OOS
     assert classify_oos_segment("2026-09-09") == OOSSegment.FORWARD_OOS
-    assert classify_oos_segment("2026-10-01") == OOSSegment.FORWARD_OOS
+    # Under closed default bound (2026-09-09), dates beyond bound are FUTURE_DATA
+    assert classify_oos_segment("2026-10-01") == OOSSegment.FUTURE_DATA
+    # When explicitly unconstrained or wider bound, forward date is FORWARD_OOS
+    assert classify_oos_segment("2026-10-01", forward_oos_end=None) == OOSSegment.FORWARD_OOS
+    assert classify_oos_segment("2026-10-01", forward_oos_end="2026-10-31") == OOSSegment.FORWARD_OOS
 
     # Verify dataset partitioning has zero leakage
     engine = V03ReturnMeasureEngine(price_provider=DictPriceDataProvider(), hold_days=5)
@@ -1183,16 +1188,21 @@ def test_rt3_minimum_25_field_offline_audit_table(mock_price_provider):
 
 
 def test_rt4_three_segment_oos_boundaries():
-    """RT-4: DEV <= 2025-12-31, HISTORICAL_OOS 2026-01-01~09-08, FORWARD_OOS >= 2026-09-09 零泄漏."""
+    """RT-4: DEV <= 2025-12-31, HISTORICAL_OOS 2026-01-01~09-08, FORWARD_OOS 2026-09-09~DEFAULT_FORWARD_OOS_END_DATE 零泄漏."""
     # Boundary checks
     assert classify_oos_segment("2025-12-31") == OOSSegment.DEV
     assert classify_oos_segment("2026-01-01") == OOSSegment.HISTORICAL_OOS
     assert classify_oos_segment("2026-09-08") == OOSSegment.HISTORICAL_OOS
     assert classify_oos_segment("2026-09-09") == OOSSegment.FORWARD_OOS
-    assert classify_oos_segment("2026-09-10") == OOSSegment.FORWARD_OOS
+    assert classify_oos_segment("2026-09-10") == OOSSegment.FUTURE_DATA
+    assert classify_oos_segment("2026-09-10", forward_oos_end="2026-09-30") == OOSSegment.FORWARD_OOS
 
-    # Dataset partition verification
-    engine = V03ReturnMeasureEngine(price_provider=DictPriceDataProvider(), hold_days=5)
+    # Dataset partition verification with explicit forward OOS window
+    engine = V03ReturnMeasureEngine(
+        price_provider=DictPriceDataProvider(),
+        hold_days=5,
+        forward_oos_end_date="2026-09-30",
+    )
     reports = [
         {"id": "r_dev", "symbol": "600519.SH", "trade_date": "2025-12-31"},
         {"id": "r_hist_start", "symbol": "600519.SH", "trade_date": "2026-01-01"},
@@ -1997,19 +2007,31 @@ def test_p0_real_provider_verifiable_metadata():
     """P0-C/D-4: 真实 VendorPriceDataProvider 对 A 股元数据可核验，未知代码 typed unknown，forward 上界零前视."""
     provider = VendorPriceDataProvider(forward_oos_end_date="2026-09-08")
 
-    # Known stock: Moutai 600519.SH listed in 2001, not ST
+    # 1. PIT ST check on historical de-ST'd stock: 600518.SH was ST on 2021-06-01 (must return True)
+    is_st_kangmei = provider.is_st("600518.SH", "2021-06-01")
+    assert is_st_kangmei is True
+
+    # 2. PIT ST check on normal stock: 600053.SH on 2023-01-05 (must return False)
+    is_st_600053 = provider.is_st("600053.SH", "2023-01-05")
+    assert is_st_600053 is False
+
+    # 3. Known stock: Moutai 600519.SH listed in 2001, not ST
     is_st_moutai = provider.is_st("600519.SH", "2026-03-02")
     assert is_st_moutai is False
     is_listed_moutai = provider.is_listed_for_n_days("600519.SH", "2026-03-02", 60)
     assert is_listed_moutai is True
 
-    # Unknown stock code: must return None (fail-closed)
+    # 4. Unknown stock code: must return None (fail-closed)
     assert provider.is_st("999999.SZ", "2026-03-02") is None
     assert provider.is_listed_for_n_days("999999.SZ", "2026-03-02", 60) is None
 
-    # Forward OOS upper bound: fetching bar beyond forward_oos_end_date is forbidden
+    # 5. Forward OOS upper bound: fetching stock bar beyond forward_oos_end_date is forbidden
     bar_future = provider.get_bar("600519.SH", "2026-09-09")
     assert bar_future is None
+
+    # 6. Forward OOS upper bound: fetching benchmark bar beyond forward_oos_end_date is forbidden
+    bmk_future = provider._fetch_benchmark_bar("2026-09-09")
+    assert bmk_future is None
 
 
 def test_p0_cross_date_reruns_reproducibility():
@@ -2086,3 +2108,105 @@ def test_p0_system_completeness_measured_from_data_or_unknown():
     assert comp["game_theory_report_fill_rate"] == 0.0
     # overall missing is measured
     assert isinstance(comp["overall_missing_items_rate"], float)
+
+
+def test_p0_runner_and_engine_no_sql_truncation(tmp_path, mock_price_provider):
+    """P0-C/D-7: 数据库加载层不得在 SQL 中物理截断 cutoff_date，由内存引擎精确划分 OOS 与 FUTURE_DATA."""
+    db_path = tmp_path / "test_no_sql_truncation.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE reports (id TEXT, user_id TEXT, symbol TEXT, trade_date TEXT, status TEXT, "
+        "decision TEXT, direction TEXT, confidence INT, target_price REAL, "
+        "stop_loss_price REAL, result_data TEXT, created_at TEXT)"
+    )
+    david_id = DEFAULT_TARGET_USER_ID
+    conn.execute(
+        f"INSERT INTO reports VALUES ('r_dev', '{david_id}', '600519.SH', '2025-10-31', 'completed', 'BUY', '偏多', 80, 1500, 1350, '{{}}', '2025-10-31 15:00:00')"
+    )
+    conn.execute(
+        f"INSERT INTO reports VALUES ('r_hist', '{david_id}', '600519.SH', '2026-05-15', 'completed', 'BUY', '偏多', 80, 1500, 1350, '{{}}', '2026-05-15 15:00:00')"
+    )
+    conn.execute(
+        f"INSERT INTO reports VALUES ('r_fwd', '{david_id}', '600519.SH', '2026-09-09', 'completed', 'BUY', '偏多', 80, 1500, 1350, '{{}}', '2026-09-09 15:00:00')"
+    )
+    conn.execute(
+        f"INSERT INTO reports VALUES ('r_future', '{david_id}', '600519.SH', '2026-09-10', 'completed', 'BUY', '偏多', 80, 1500, 1350, '{{}}', '2026-09-10 15:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    # 1. SQL loader with cutoff_date=None returns all 4 completed reports
+    loaded_reports = V03ReturnMeasureEngine.load_reports_from_db(
+        str(db_path), target_user_id=david_id, status_filter="completed", cutoff_date=None
+    )
+    assert len(loaded_reports) == 4
+
+    # 2. Engine partitions into DEV, HISTORICAL_OOS, FORWARD_OOS, and FUTURE_DATA
+    engine = V03ReturnMeasureEngine(
+        price_provider=mock_price_provider,
+        hold_days=5,
+        target_user_id=david_id,
+        historical_cutoff_date="2026-09-08",
+        forward_oos_end_date="2026-09-09",
+    )
+    res = engine.measure_dataset(loaded_reports)
+    assert res.all_metrics.total_reports == 4
+    assert res.dev_metrics.total_reports == 1
+    assert res.historical_oos_metrics.total_reports == 1
+    assert res.forward_oos_metrics.total_reports == 1
+
+    future_records = [r for r in res.records if r.sample_role == SampleRole.FUTURE_DATA.value]
+    assert len(future_records) == 1
+    assert future_records[0].report_id == "r_future"
+    assert future_records[0].evaluation_eligible is False
+    assert future_records[0].exclusion_reason == "future_data_beyond_forward_oos_end"
+
+
+def test_p0_closed_forward_oos_upper_bound_default():
+    """P0-C/D-8: forward_oos_end_date 默认闭合为 DEFAULT_FORWARD_OOS_END_DATE (2026-09-09)."""
+    assert DEFAULT_FORWARD_OOS_END_DATE == "2026-09-09"
+
+    # classify_oos_segment default behavior
+    assert classify_oos_segment("2026-09-09") == OOSSegment.FORWARD_OOS
+    assert classify_oos_segment("2026-09-10") == OOSSegment.FUTURE_DATA
+
+    # Dataclass and Engine defaults
+    stamp = EvaluationStamp()
+    assert stamp.forward_oos_end_date == DEFAULT_FORWARD_OOS_END_DATE
+
+    manifest = SnapshotManifest(manifest_id="test_man_fwd")
+    assert manifest.forward_oos_end_date == DEFAULT_FORWARD_OOS_END_DATE
+
+    provider = VendorPriceDataProvider()
+    assert provider.forward_oos_end_date == DEFAULT_FORWARD_OOS_END_DATE
+
+    engine = V03ReturnMeasureEngine()
+    assert engine.forward_oos_end_date == DEFAULT_FORWARD_OOS_END_DATE
+
+
+def test_p0_markdown_dynamic_game_theory_text(mock_price_provider):
+    """P0-C/D-9: 报告 Markdown 中博弈论状态文字根据实测值动态生成，无硬编码 '(完全未接入)'."""
+    engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
+
+    # 1. Zero fill rate
+    rep_zero = [
+        {"id": "r1", "symbol": "600519.SH", "trade_date": "2026-03-02", "result_data": "{}"}
+    ]
+    res_zero = engine.measure_dataset(rep_zero)
+    md_zero = engine.generate_report_markdown(res_zero)
+    assert "(完全未接入)" not in md_zero
+    assert "未接入/未填充" in md_zero
+
+    # 2. Complete fill rate
+    rep_full = [
+        {
+            "id": "r2",
+            "symbol": "600519.SH",
+            "trade_date": "2026-03-02",
+            "result_data": json.dumps({"game_theory_report": "bullish game analysis"}),
+        }
+    ]
+    res_full = engine.measure_dataset(rep_full)
+    md_full = engine.generate_report_markdown(res_full)
+    assert "(完全未接入)" not in md_full
+    assert "已完全接入" in md_full
