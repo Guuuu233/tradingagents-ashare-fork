@@ -36,6 +36,7 @@ from tradingagents.eval.v03_return_measure import (
     MINIMUM_AUDIT_FIELDS,
     OFFLINE_REPLAY_GAP,
     REGRESSION_SYMBOLS,
+    SYSTEM_COMPLETENESS_DICT,
     AblationConfig,
     AblationVariantResult,
     CostModel,
@@ -53,10 +54,12 @@ from tradingagents.eval.v03_return_measure import (
     SnapshotManifest,
     V03MeasurementResult,
     V03ReturnMeasureEngine,
+    VendorPriceDataProvider,
     apply_evidence_deduplication,
     apply_purging_and_embargo,
     classify_oos_segment,
     compute_file_sha256,
+    compute_system_completeness,
     probe_running_service_sha,
     evaluate_proposition_claim,
     validate_audit_row,
@@ -109,7 +112,20 @@ def mock_price_provider(sample_trade_dates):
     provider = DictPriceDataProvider(
         trade_dates=sample_trade_dates,
         st_stocks={"000002.SZ"},  # ST test stock
-        listing_dates={"000003.SZ": "2026-08-01"},  # New listing <60 days
+        listing_dates={
+            "600519.SH": "2001-08-27",
+            "000001.SZ": "1991-04-03",
+            "000002.SZ": "1991-01-29",
+            "000003.SZ": "2026-02-15",  # New listing <60 days
+            "600000.SH": "1999-11-10",
+            "600006.SH": "1999-06-18",
+            "300433.SZ": "2015-03-18",
+            "002241.SZ": "2008-05-22",
+            "601138.SH": "2018-06-08",
+            "000333.SZ": "2013-09-18",
+            "601012.SH": "2012-04-11",
+            "300015.SZ": "2009-10-30",
+        },
     )
 
     # 1. Normal stock 600519.SH (Moutai)
@@ -938,7 +954,9 @@ def test_rt_s4_david_account_clean_population_counts(mock_price_provider):
 
     # Query counts from database
     counts = V03ReturnMeasureEngine.get_user_report_counts(
-        prod_db_path, target_user_id=DEFAULT_TARGET_USER_ID
+        prod_db_path,
+        target_user_id=DEFAULT_TARGET_USER_ID,
+        cutoff_date=DEFAULT_HISTORICAL_CUTOFF_DATE,
     )
     assert counts["total"] == 317
     assert counts["completed"] == 231
@@ -949,6 +967,7 @@ def test_rt_s4_david_account_clean_population_counts(mock_price_provider):
         prod_db_path,
         target_user_id=DEFAULT_TARGET_USER_ID,
         status_filter=DEFAULT_STATUS_FILTER,
+        cutoff_date=DEFAULT_HISTORICAL_CUTOFF_DATE,
     )
     assert len(reports) == 231
 
@@ -979,8 +998,11 @@ def test_rt_s4_david_account_clean_population_counts(mock_price_provider):
     assert abs(res.all_metrics.directional_candidate_count - 217) <= 15
     assert res.dev_metrics.total_reports == 0
     assert res.forward_oos_metrics.total_reports == 0
-    assert res.historical_oos_metrics.total_reports == 231
-    assert abs(res.historical_oos_metrics.directional_candidate_count - 217) <= 15
+    # 6 golden regression symbols permanently isolated (21 reports) from OOS metrics
+    assert res.regression_metrics.total_reports == 21
+    assert res.historical_oos_metrics.total_reports == 210
+    assert res.historical_oos_metrics.total_reports + res.regression_metrics.total_reports == 231
+    assert abs(res.historical_oos_metrics.directional_candidate_count - 206) <= 15
 
 
 # ===========================================================================
@@ -1800,3 +1822,267 @@ def test_dav866_baseline_running_service_sha_legacy_symbol():
     assert BASELINE_RUNNING_SERVICE_SHA != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
     assert BASELINE_RUNNING_SERVICE_SHA != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
     assert BASELINE_RUNNING_SERVICE_SHA == OFFLINE_REPLAY_GAP
+
+
+# ===========================================================================
+# P0-C/D: V-03a Provider 与 Forward OOS 安全边界测试 (DAV-882)
+# ===========================================================================
+
+
+def test_p0_fixed_date_changes_parameterization():
+    """P0-C/D-1: 历史 cutoff、forward OOS 当前上界和 dev cutoff 必须支持显式参数化，拒绝硬编码日期作为固定事实."""
+    dev_cutoff = "2025-10-31"
+    hist_cutoff = "2026-06-30"
+    fwd_end = "2026-09-08"
+
+    # Segment classification with custom dynamic boundaries
+    assert (
+        classify_oos_segment(
+            "2025-10-31",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.DEV
+    )
+    assert (
+        classify_oos_segment(
+            "2025-11-01",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.HISTORICAL_OOS
+    )
+    assert (
+        classify_oos_segment(
+            "2026-06-30",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.HISTORICAL_OOS
+    )
+    assert (
+        classify_oos_segment(
+            "2026-07-01",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.FORWARD_OOS
+    )
+    assert (
+        classify_oos_segment(
+            "2026-09-08",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.FORWARD_OOS
+    )
+    # Dates strictly beyond forward_oos_end are classified as FUTURE_DATA
+    assert (
+        classify_oos_segment(
+            "2026-09-09",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.FUTURE_DATA
+    )
+    assert (
+        classify_oos_segment(
+            "2026-09-10",
+            dev_cutoff=dev_cutoff,
+            historical_cutoff=hist_cutoff,
+            forward_oos_end=fwd_end,
+        )
+        == OOSSegment.FUTURE_DATA
+    )
+
+    # Engine parameterized execution
+    engine = V03ReturnMeasureEngine(
+        price_provider=DictPriceDataProvider(
+            listing_dates={"600519.SH": "2001-08-27"}
+        ),
+        dev_cutoff_date=dev_cutoff,
+        historical_cutoff_date=hist_cutoff,
+        forward_oos_end_date=fwd_end,
+    )
+    assert engine.dev_cutoff_date == dev_cutoff
+    assert engine.historical_cutoff_date == hist_cutoff
+    assert engine.forward_oos_end_date == fwd_end
+
+    reports = [
+        {"id": "r_dev", "symbol": "600519.SH", "trade_date": "2025-10-31"},
+        {"id": "r_hist", "symbol": "600519.SH", "trade_date": "2025-11-15"},
+        {"id": "r_fwd", "symbol": "600519.SH", "trade_date": "2026-07-15"},
+        {"id": "r_future", "symbol": "600519.SH", "trade_date": "2026-09-10"},
+    ]
+    res = engine.measure_dataset(reports)
+    assert res.dev_metrics.total_reports == 1
+    assert res.historical_oos_metrics.total_reports == 1
+    assert res.forward_oos_metrics.total_reports == 1
+    # Future data record is excluded from evaluation
+    future_rec = [r for r in res.records if r.report_id == "r_future"][0]
+    assert future_rec.sample_role == SampleRole.FUTURE_DATA.value
+    assert future_rec.evaluation_eligible is False
+    assert future_rec.exclusion_reason == "future_data_beyond_forward_oos_end"
+
+    # Manifest and Stamp accurately reflect dynamic parameters
+    assert res.stamp.dev_cutoff_date == dev_cutoff
+    assert res.stamp.historical_cutoff_date == hist_cutoff
+    assert res.stamp.forward_oos_end_date == fwd_end
+    assert res.snapshot_manifest.dev_cutoff_date == dev_cutoff
+    assert res.snapshot_manifest.historical_cutoff_date == hist_cutoff
+    assert res.snapshot_manifest.forward_oos_end_date == fwd_end
+
+
+def test_p0_empty_forward_window():
+    """P0-C/D-2: Forward 窗口为空时，如实报告 0，无幽灵指标，不产生除以零异常."""
+    engine = V03ReturnMeasureEngine(
+        price_provider=DictPriceDataProvider(
+            listing_dates={"600519.SH": "2001-08-27"}
+        ),
+        dev_cutoff_date="2025-12-31",
+        historical_cutoff_date="2026-09-08",
+        forward_oos_end_date="2026-09-08",  # No forward window
+    )
+    reports = [
+        {"id": "r1", "symbol": "600519.SH", "trade_date": "2026-03-02", "decision": "BUY"},
+        {"id": "r2", "symbol": "600519.SH", "trade_date": "2026-09-08", "decision": "BUY"},
+    ]
+    res = engine.measure_dataset(reports)
+    assert res.forward_oos_metrics.total_reports == 0
+    assert res.forward_oos_metrics.return_sample_count == 0
+    assert res.forward_oos_metrics.coverage_rate == 0.0
+    assert res.forward_oos_metrics.evaluability_rate == 0.0
+    assert res.forward_oos_metrics.mean_net_return is None
+    assert res.snapshot_manifest.forward_oos_count == 0
+    assert "未产生或未纳入已完成前向验证样本" in res.snapshot_manifest.forward_oos_zero_reason
+
+
+def test_p0_missing_metadata_fail_closed():
+    """P0-C/D-3: 股票元数据缺失或不可解析时，返回 typed excluded_unknown，严禁 fail-open 放流入池."""
+    provider = DictPriceDataProvider(
+        listing_dates={"600519.SH": "2001-08-27"},
+        unknown_metadata_stocks={"000999.SZ"},  # explicit unknown metadata
+    )
+    engine = V03ReturnMeasureEngine(price_provider=provider, hold_days=5)
+
+    # 1. Stock with explicitly unknown metadata
+    st_unknown = engine.evaluate_stock_pool("000999.SZ", "2026-03-02")
+    assert st_unknown[0] == PoolFilterStatus.EXCLUDED_UNKNOWN
+    assert st_unknown[1] == "000999.SZ"
+
+    # 2. Stock completely unobserved in listing dates (missing metadata)
+    st_missing = engine.evaluate_stock_pool("600888.SH", "2026-03-02")
+    assert st_missing[0] == PoolFilterStatus.EXCLUDED_UNKNOWN
+    assert st_missing[1] == "600888.SH"
+
+    # 3. Measurement outcome records typed exclude, not IN_POOL
+    res = engine.measure_dataset([
+        {"id": "r_unobs", "symbol": "600888.SH", "trade_date": "2026-03-02", "decision": "BUY"}
+    ])
+    rec = res.records[0]
+    assert rec.pool_status == PoolFilterStatus.EXCLUDED_UNKNOWN.value
+    assert rec.outcome_status == MeasurementOutcomeStatus.EXCLUDED_POOL.value
+    assert rec.evaluation_eligible is False
+    assert rec.exclusion_reason == PoolFilterStatus.EXCLUDED_UNKNOWN.value
+    assert rec.included_in_return_metrics is False
+
+
+def test_p0_real_provider_verifiable_metadata():
+    """P0-C/D-4: 真实 VendorPriceDataProvider 对 A 股元数据可核验，未知代码 typed unknown，forward 上界零前视."""
+    provider = VendorPriceDataProvider(forward_oos_end_date="2026-09-08")
+
+    # Known stock: Moutai 600519.SH listed in 2001, not ST
+    is_st_moutai = provider.is_st("600519.SH", "2026-03-02")
+    assert is_st_moutai is False
+    is_listed_moutai = provider.is_listed_for_n_days("600519.SH", "2026-03-02", 60)
+    assert is_listed_moutai is True
+
+    # Unknown stock code: must return None (fail-closed)
+    assert provider.is_st("999999.SZ", "2026-03-02") is None
+    assert provider.is_listed_for_n_days("999999.SZ", "2026-03-02", 60) is None
+
+    # Forward OOS upper bound: fetching bar beyond forward_oos_end_date is forbidden
+    bar_future = provider.get_bar("600519.SH", "2026-09-09")
+    assert bar_future is None
+
+
+def test_p0_cross_date_reruns_reproducibility():
+    """P0-C/D-5: 跨日期复跑重现性：相同参数快照一致，不同 cutoff 参数按时序语义可预测变化."""
+    provider = DictPriceDataProvider(
+        listing_dates={"600519.SH": "2001-08-27"}
+    )
+    engine_run1 = V03ReturnMeasureEngine(
+        price_provider=provider,
+        dev_cutoff_date="2025-12-31",
+        historical_cutoff_date="2026-09-08",
+        forward_oos_end_date="2026-09-08",
+    )
+    engine_run2 = V03ReturnMeasureEngine(
+        price_provider=provider,
+        dev_cutoff_date="2025-12-31",
+        historical_cutoff_date="2026-09-08",
+        forward_oos_end_date="2026-09-08",
+    )
+    reports = [
+        {"id": "r1", "symbol": "600519.SH", "trade_date": "2026-03-02"},
+        {"id": "r2", "symbol": "600519.SH", "trade_date": "2026-05-15"},
+    ]
+    res1 = engine_run1.measure_dataset(reports)
+    res2 = engine_run2.measure_dataset(reports)
+
+    # Identical configuration yields identical manifest and metric results
+    assert res1.all_metrics.total_reports == res2.all_metrics.total_reports
+    assert res1.snapshot_manifest.cutoff_datetime == res2.snapshot_manifest.cutoff_datetime
+    assert res1.snapshot_manifest.historical_cutoff_date == res2.snapshot_manifest.historical_cutoff_date
+    assert res1.snapshot_manifest.forward_oos_end_date == res2.snapshot_manifest.forward_oos_end_date
+
+
+def test_p0_system_completeness_measured_from_data_or_unknown():
+    """P0-C/D-6: 系统完整度必须是实测值或 typed unknown；不得用硬编码近似数（0.55/0.70/0.30）."""
+    # 1. Default dict must contain typed 'unknown' for unobserved rates, never 0.55/0.70/0.30
+    assert SYSTEM_COMPLETENESS_DICT["volume_price_fill_rate"] == "unknown"
+    assert SYSTEM_COMPLETENESS_DICT["macro_report_fill_rate"] == "unknown"
+    assert SYSTEM_COMPLETENESS_DICT["overall_missing_items_rate"] == "unknown"
+    assert SYSTEM_COMPLETENESS_DICT["volume_price_fill_rate_approx"] == "unknown"
+    assert SYSTEM_COMPLETENESS_DICT["macro_report_fill_rate_approx"] == "unknown"
+    assert SYSTEM_COMPLETENESS_DICT["overall_missing_items_rate_approx"] == "unknown"
+
+    # 2. Empty dataset -> fill rates default to typed 'unknown'
+    comp_empty = compute_system_completeness([])
+    assert comp_empty["volume_price_fill_rate"] == "unknown"
+    assert comp_empty["macro_report_fill_rate"] == "unknown"
+    assert comp_empty["overall_missing_items_rate"] == "unknown"
+
+    # 3. Dataset with actual sections -> measured from empirical data
+    reports = [
+        {
+            "id": "r1",
+            "symbol": "600519.SH",
+            "result_data": json.dumps({
+                "volume_price_analysis": "upward trend with strong volume",
+                "macro_analysis": "favorable interest rate environment",
+            }),
+        },
+        {
+            "id": "r2",
+            "symbol": "000001.SZ",
+            "result_data": json.dumps({
+                "volume_price_analysis": "consolidation",
+            }),
+        },
+    ]
+    comp = compute_system_completeness(reports)
+    # volume_price is present in both reports (2/2 = 1.0)
+    assert comp["volume_price_fill_rate"] == 1.0
+    # macro is present in 1 of 2 reports (1/2 = 0.5)
+    assert comp["macro_report_fill_rate"] == 0.5
+    # game_theory is 0.0
+    assert comp["game_theory_report_fill_rate"] == 0.0
+    # overall missing is measured
+    assert isinstance(comp["overall_missing_items_rate"], float)

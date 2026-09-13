@@ -76,11 +76,12 @@ from tradingagents.agents.utils.symbol_canonical import (
 
 
 class OOSSegment(str, Enum):
-    """Out-of-sample partition segments frozen on 2026-09-09."""
+    """Out-of-sample partition segments."""
 
-    DEV = "DEV"  # trade_date <= 2025-12-31
-    HISTORICAL_OOS = "HISTORICAL_OOS"  # 2026-01-01 ~ 2026-09-08
-    FORWARD_OOS = "FORWARD_OOS"  # trade_date >= 2026-09-09
+    DEV = "DEV"  # trade_date <= dev_cutoff
+    HISTORICAL_OOS = "HISTORICAL_OOS"  # dev_cutoff < trade_date <= historical_cutoff
+    FORWARD_OOS = "FORWARD_OOS"  # historical_cutoff < trade_date <= forward_oos_end
+    FUTURE_DATA = "FUTURE_DATA"  # trade_date > forward_oos_end
 
 
 class SampleRole(str, Enum):
@@ -91,6 +92,7 @@ class SampleRole(str, Enum):
     HISTORICAL_OOS = "historical_oos"  # 2026-01-01 ~ 2026-09-08
     FORWARD_OOS = "forward_oos"  # trade_date >= 2026-09-09
     CALIBRATION = "calibration"  # calibration cohort
+    FUTURE_DATA = "future_data"  # trade_date > forward_oos_end
 
 
 class OrderAblationMode(str, Enum):
@@ -172,13 +174,34 @@ def validate_audit_row(row: Dict[str, Any]) -> None:
             raise ValueError(f"Audit record mandatory field '{mandatory}' cannot be None")
 
 
-def classify_oos_segment(trade_date: str) -> OOSSegment:
-    """Classify a trade date (YYYY-MM-DD) into its frozen OOS segment."""
+# Default Cost Rates & Parameters (Codex / David 2026 Frozen)
+DEFAULT_COMMISSION_RATE: float = 0.00025  # 0.025% = 2.5 bps (<= 3‰)
+DEFAULT_MIN_COMMISSION: float = 5.0  # 5 RMB minimum
+DEFAULT_TRANSFER_FEE_RATE: float = 0.00001  # 0.01‰ = 0.1 bps (both buy & sell)
+DEFAULT_STAMP_DUTY_RATE: float = 0.0005  # 0.5‰ = 5 bps (sell side only)
+DEFAULT_SLIPPAGE_BPS: float = 5.0  # 5 bps single side (0.0005)
+DEFAULT_HOLD_DAYS: int = 5
+DEFAULT_BENCHMARK_SYMBOL: str = "000300.SH"
+DEFAULT_TARGET_USER_ID: str = "429163f7-50b6-4982-8bdf-96ae99506843"
+DEFAULT_STATUS_FILTER: str = "completed"
+DEFAULT_HISTORICAL_CUTOFF_DATE: str = "2026-09-08"
+DEFAULT_HISTORICAL_CUTOFF_DATETIME: str = "2026-09-08 23:59:59"
+
+
+def classify_oos_segment(
+    trade_date: str,
+    dev_cutoff: str = "2025-12-31",
+    historical_cutoff: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
+    forward_oos_end: Optional[str] = None,
+) -> OOSSegment:
+    """Classify a trade date (YYYY-MM-DD) into its OOS segment."""
     clean_date = str(trade_date).strip()[:10]
-    if clean_date <= "2025-12-31":
+    if clean_date <= dev_cutoff:
         return OOSSegment.DEV
-    if clean_date <= "2026-09-08":
+    if clean_date <= historical_cutoff:
         return OOSSegment.HISTORICAL_OOS
+    if forward_oos_end is not None and clean_date > forward_oos_end:
+        return OOSSegment.FUTURE_DATA
     return OOSSegment.FORWARD_OOS
 
 
@@ -191,6 +214,8 @@ class PoolFilterStatus(str, Enum):
     EXCLUDED_NEW_LISTING = "excluded_new_listing"
     EXCLUDED_UNMAPPABLE = "excluded_unmappable"
     EXCLUDED_UNKNOWN_PREFIX = "excluded_unknown_prefix"
+    EXCLUDED_UNKNOWN = "excluded_unknown"
+    EXCLUDED_METADATA_UNKNOWN = "excluded_unknown"
 
 
 class MeasurementOutcomeStatus(str, Enum):
@@ -222,24 +247,116 @@ BASELINE_DISCLAIMER_DETAIL: str = (
 SYSTEM_COMPLETENESS_DICT: Dict[str, Any] = {
     "game_theory_report_fill_rate": 0.0,
     "sentiment_news_real_source_connected": False,
-    "volume_price_fill_rate_approx": 0.55,
-    "macro_report_fill_rate_approx": 0.70,
-    "overall_missing_items_rate_approx": 0.30,
+    "volume_price_fill_rate": "unknown",
+    "macro_report_fill_rate": "unknown",
+    "overall_missing_items_rate": "unknown",
+    "volume_price_fill_rate_approx": "unknown",
+    "macro_report_fill_rate_approx": "unknown",
+    "overall_missing_items_rate_approx": "unknown",
     "status_note": BASELINE_DISCLAIMER,
 }
 
-# Default Cost Rates (Codex / David 2026 Frozen)
-DEFAULT_COMMISSION_RATE: float = 0.00025  # 0.025% = 2.5 bps (<= 3‰)
-DEFAULT_MIN_COMMISSION: float = 5.0  # 5 RMB minimum
-DEFAULT_TRANSFER_FEE_RATE: float = 0.00001  # 0.01‰ = 0.1 bps (both buy & sell)
-DEFAULT_STAMP_DUTY_RATE: float = 0.0005  # 0.5‰ = 5 bps (sell side only)
-DEFAULT_SLIPPAGE_BPS: float = 5.0  # 5 bps single side (0.0005)
-DEFAULT_HOLD_DAYS: int = 5
-DEFAULT_BENCHMARK_SYMBOL: str = "000300.SH"
-DEFAULT_TARGET_USER_ID: str = "429163f7-50b6-4982-8bdf-96ae99506843"
-DEFAULT_STATUS_FILTER: str = "completed"
-DEFAULT_HISTORICAL_CUTOFF_DATE: str = "2026-09-08"
-DEFAULT_HISTORICAL_CUTOFF_DATETIME: str = "2026-09-08 23:59:59"
+
+def compute_system_completeness(reports: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute verified system completeness metrics from report dataset.
+
+    Strictly avoids hardcoded approximate numbers. Returns measured rates
+    when reports are available, or typed unknown ('unknown') when unobserved.
+    """
+    if not reports:
+        return {
+            "game_theory_report_fill_rate": 0.0,
+            "sentiment_news_real_source_connected": False,
+            "volume_price_fill_rate": "unknown",
+            "macro_report_fill_rate": "unknown",
+            "overall_missing_items_rate": "unknown",
+            "volume_price_fill_rate_approx": "unknown",
+            "macro_report_fill_rate_approx": "unknown",
+            "overall_missing_items_rate_approx": "unknown",
+            "status_note": BASELINE_DISCLAIMER,
+        }
+
+    total = len(reports)
+    gt_count = 0
+    vp_count = 0
+    macro_count = 0
+    core_sections = [
+        "market_report",
+        "sentiment_report",
+        "news_report",
+        "fundamentals_report",
+        "macro_report",
+        "volume_price_report",
+        "game_theory_report",
+    ]
+    missing_sections_count = 0
+
+    for r in reports:
+        res_data: Dict[str, Any] = {}
+        rd_raw = r.get("result_data")
+        if rd_raw:
+            if isinstance(rd_raw, dict):
+                res_data = rd_raw
+            elif isinstance(rd_raw, str):
+                try:
+                    res_data = json.loads(rd_raw)
+                except Exception:
+                    pass
+
+        gt = (
+            r.get("game_theory_report")
+            or res_data.get("game_theory_report")
+            or r.get("game_theory_analysis")
+            or res_data.get("game_theory_analysis")
+        )
+        if gt is not None and str(gt).strip():
+            gt_count += 1
+
+        vp = (
+            r.get("volume_price_report")
+            or res_data.get("volume_price_report")
+            or r.get("volume_price_analysis")
+            or res_data.get("volume_price_analysis")
+        )
+        if vp is not None and str(vp).strip():
+            vp_count += 1
+
+        mc = (
+            r.get("macro_report")
+            or res_data.get("macro_report")
+            or r.get("macro_analysis")
+            or res_data.get("macro_analysis")
+        )
+        if mc is not None and str(mc).strip():
+            macro_count += 1
+
+        for sec in core_sections:
+            alt_sec = sec.replace("_report", "_analysis")
+            val = (
+                r.get(sec)
+                or res_data.get(sec)
+                or r.get(alt_sec)
+                or res_data.get(alt_sec)
+            )
+            if val is None or not str(val).strip():
+                missing_sections_count += 1
+
+    gt_rate = round(gt_count / total, 4)
+    vp_rate = round(vp_count / total, 4)
+    mc_rate = round(macro_count / total, 4)
+    missing_rate = round(missing_sections_count / (total * len(core_sections)), 4)
+
+    return {
+        "game_theory_report_fill_rate": gt_rate,
+        "sentiment_news_real_source_connected": False,
+        "volume_price_fill_rate": vp_rate,
+        "macro_report_fill_rate": mc_rate,
+        "overall_missing_items_rate": missing_rate,
+        "volume_price_fill_rate_approx": vp_rate,
+        "macro_report_fill_rate_approx": mc_rate,
+        "overall_missing_items_rate_approx": missing_rate,
+        "status_note": BASELINE_DISCLAIMER,
+    }
 
 
 def compute_file_sha256(file_path: str | Path) -> str:
@@ -454,6 +571,9 @@ class EvaluationStamp:
     target_user_completed: Optional[int] = None
     target_user_failed: Optional[int] = None
     account_stats: Optional[Dict[str, Any]] = None
+    dev_cutoff_date: str = "2025-12-31"
+    historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE
+    forward_oos_end_date: Optional[str] = None
 
 
 @dataclass
@@ -468,6 +588,9 @@ class SnapshotManifest:
     replica_db_path: str = ""
     replica_file_hash: str = ""
     snapshot_created_at: str = ""
+    dev_cutoff_date: str = "2025-12-31"
+    historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE
+    forward_oos_end_date: Optional[str] = None
     cutoff_datetime: str = DEFAULT_HISTORICAL_CUTOFF_DATETIME
     requested_as_of: str = DEFAULT_HISTORICAL_CUTOFF_DATE
     cutoff_requested_distinction: str = (
@@ -727,14 +850,14 @@ class PriceDataProvider(Protocol):
         """Get the N-th trading day after base_date."""
         ...
 
-    def is_st(self, symbol: str, date: str) -> bool:
-        """Check if stock was ST/*ST on date."""
+    def is_st(self, symbol: str, date: str) -> Optional[bool]:
+        """Check if stock was ST/*ST on date. Returns None if unknown (fail-closed)."""
         ...
 
     def is_listed_for_n_days(
         self, symbol: str, date: str, min_days: int = 60
-    ) -> bool:
-        """Check if stock has been listed for at least min_days trading days."""
+    ) -> Optional[bool]:
+        """Check if stock has been listed for at least min_days trading days. Returns None if unknown."""
         ...
 
 
@@ -747,11 +870,13 @@ class DictPriceDataProvider:
         trade_dates: Optional[List[str]] = None,
         st_stocks: Optional[Set[str]] = None,
         listing_dates: Optional[Dict[str, str]] = None,
+        unknown_metadata_stocks: Optional[Set[str]] = None,
     ):
         self._bars: Dict[Tuple[str, str], DailyBar] = dict(bars or {})
         self._trade_dates: List[str] = sorted(trade_dates or [])
         self._st_stocks: Set[str] = set(st_stocks or [])
         self._listing_dates: Dict[str, str] = dict(listing_dates or {})
+        self._unknown_metadata_stocks: Set[str] = set(unknown_metadata_stocks or [])
 
     def add_bar(self, symbol: str, bar: DailyBar) -> None:
         self._bars[(symbol, bar.date)] = bar
@@ -783,27 +908,46 @@ class DictPriceDataProvider:
             return dates[target_idx]
         return None
 
-    def is_st(self, symbol: str, date: str) -> bool:
+    def is_st(self, symbol: str, date: str) -> Optional[bool]:
+        if symbol in self._unknown_metadata_stocks:
+            return None
         return symbol in self._st_stocks
 
     def is_listed_for_n_days(
         self, symbol: str, date: str, min_days: int = 60
-    ) -> bool:
+    ) -> Optional[bool]:
+        if symbol in self._unknown_metadata_stocks:
+            return None
         list_date = self._listing_dates.get(symbol)
         if not list_date:
-            return True  # If unknown, assume qualified
-        # Count trade dates between list_date and date
-        count = sum(1 for d in self._trade_dates if list_date <= d <= date)
-        return count >= min_days
+            # Missing/unknown listing date: typed unknown, forbidden to fail-open
+            return None
+        try:
+            d_list = datetime.strptime(str(list_date)[:10], "%Y-%m-%d").date()
+            d_as_of = datetime.strptime(str(date)[:10], "%Y-%m-%d").date()
+            cal_days = (d_as_of - d_list).days
+            if cal_days < min_days:
+                return False
+            if cal_days >= min_days * 2:
+                return True
+            count = sum(1 for d in self._trade_dates if str(list_date) <= d <= str(date))
+            return count >= min_days
+        except Exception:
+            return None
 
 
 class VendorPriceDataProvider:
     """Live/cached price provider backed by TradingAgents dataflows / trade_calendar."""
 
-    def __init__(self) -> None:
+    _GLOBAL_A_SHARE_META: Optional[Dict[str, Dict[str, str]]] = None
+
+    def __init__(self, forward_oos_end_date: Optional[str] = None) -> None:
+        self.forward_oos_end_date = forward_oos_end_date
         self._bar_cache: Dict[Tuple[str, str], Optional[DailyBar]] = {}
         self._series_cache: Dict[Tuple[str, str, str], Any] = {}
-        self._st_cache: Dict[str, bool] = {}
+        self._st_cache: Dict[Tuple[str, str], Optional[bool]] = {}
+        self._listing_cache: Dict[Tuple[str, str, int], Optional[bool]] = {}
+        self._meta_cache: Dict[str, Optional[Dict[str, str]]] = {}
 
     def get_t_plus_n_date(self, base_date: str, n: int) -> Optional[str]:
         from tradingagents.dataflows.trade_calendar import get_t_plus_n_trading_day
@@ -835,7 +979,12 @@ class VendorPriceDataProvider:
                 import pandas as pd
 
                 today_str = cn_today_str()
-                end_str = min("2026-09-09", today_str)
+                # Dynamic forward OOS upper bound: must not be hardcoded to 2026-09-09
+                if self.forward_oos_end_date:
+                    end_str = self.forward_oos_end_date
+                else:
+                    end_str = today_str
+
                 # Cache full historical window for the symbol
                 csv_data = route_to_vendor("get_stock_data", symbol, "2024-01-01", end_str)
                 if not csv_data or str(csv_data).startswith("【数据获取失败】"):
@@ -914,14 +1063,125 @@ class VendorPriceDataProvider:
         except Exception:
             return None
 
-    def is_st(self, symbol: str, date: str) -> bool:
-        # Canonical symbols with ST in name or specific list
-        return False
+    @classmethod
+    def _ensure_global_metadata(cls) -> Dict[str, Dict[str, str]]:
+        if cls._GLOBAL_A_SHARE_META is not None:
+            return cls._GLOBAL_A_SHARE_META
+
+        meta: Dict[str, Dict[str, str]] = {}
+        try:
+            import akshare as ak
+            for sym_type in ("主板A股", "科创板"):
+                try:
+                    df = ak.stock_info_sh_name_code(symbol=sym_type)
+                    if df is not None and not df.empty:
+                        for _, row in df.iterrows():
+                            c = str(row.get("证券代码", "")).zfill(6)
+                            if c:
+                                meta[c] = {
+                                    "name": str(row.get("证券简称", "")),
+                                    "list_date": str(row.get("上市日期", ""))[:10],
+                                }
+                except Exception:
+                    pass
+            try:
+                df_sz = ak.stock_info_sz_name_code(symbol="A股列表")
+                if df_sz is not None and not df_sz.empty:
+                    for _, row in df_sz.iterrows():
+                        c = str(row.get("A股代码", "")).zfill(6)
+                        if c:
+                            meta[c] = {
+                                "name": str(row.get("A股简称", "")),
+                                "list_date": str(row.get("A股上市日期", ""))[:10],
+                            }
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        cls._GLOBAL_A_SHARE_META = meta
+        return meta
+
+    def _get_stock_metadata(self, symbol: str) -> Optional[Dict[str, str]]:
+        norm_sym = symbol.strip().upper()
+        if norm_sym in self._meta_cache:
+            return self._meta_cache[norm_sym]
+
+        code = norm_sym[:6]
+        meta_dict = self._ensure_global_metadata()
+        m = meta_dict.get(code)
+        if m is not None and m.get("list_date"):
+            self._meta_cache[norm_sym] = m
+            return m
+
+        # Fallback to baostock query_stock_basic
+        try:
+            import baostock as bs
+            bs_market = "sh" if norm_sym.endswith(".SH") or code.startswith(("5", "6", "9")) else "sz"
+            bs_code = f"{bs_market}.{code}"
+            lg = bs.login()
+            if lg.error_code == "0":
+                try:
+                    rs = bs.query_stock_basic(code=bs_code)
+                    if rs.error_code == "0" and rs.next():
+                        row = dict(zip(rs.fields, rs.get_row_data()))
+                        ipo = str(row.get("ipoDate", "")).strip()[:10]
+                        cname = str(row.get("code_name", "")).strip()
+                        if ipo:
+                            res = {"name": cname, "list_date": ipo}
+                            self._meta_cache[norm_sym] = res
+                            return res
+                finally:
+                    bs.logout()
+        except Exception:
+            pass
+
+        self._meta_cache[norm_sym] = None
+        return None
+
+    def is_st(self, symbol: str, date: str) -> Optional[bool]:
+        cache_key = (symbol, date)
+        if cache_key in self._st_cache:
+            return self._st_cache[cache_key]
+
+        meta = self._get_stock_metadata(symbol)
+        if meta is None:
+            self._st_cache[cache_key] = None
+            return None
+
+        name = meta.get("name", "").upper()
+        is_st_name = "ST" in name
+        self._st_cache[cache_key] = is_st_name
+        return is_st_name
 
     def is_listed_for_n_days(
         self, symbol: str, date: str, min_days: int = 60
-    ) -> bool:
-        return True
+    ) -> Optional[bool]:
+        cache_key = (symbol, date, min_days)
+        if cache_key in self._listing_cache:
+            return self._listing_cache[cache_key]
+
+        meta = self._get_stock_metadata(symbol)
+        if meta is None:
+            self._listing_cache[cache_key] = None
+            return None
+
+        list_date = meta.get("list_date", "").strip()[:10]
+        if not list_date:
+            self._listing_cache[cache_key] = None
+            return None
+
+        try:
+            from tradingagents.dataflows.trade_calendar import require_cn_trade_dates
+            all_dates, _ = require_cn_trade_dates()
+            clean_date = date[:10]
+            count = sum(1 for d in all_dates if list_date <= d.isoformat() <= clean_date)
+            qualified = count >= min_days
+            self._listing_cache[cache_key] = qualified
+            return qualified
+        except Exception:
+            self._listing_cache[cache_key] = None
+            return None
 
 
 def calculate_roll_days(trade_date_str: str, entry_date_str: str) -> int:
@@ -1096,8 +1356,12 @@ class V03ReturnMeasureEngine:
         production_db_path: Optional[str] = None,
         replica_db_path: Optional[str] = None,
         replica_sha256: Optional[str] = None,
-        cutoff_datetime: str = DEFAULT_HISTORICAL_CUTOFF_DATETIME,
-        requested_as_of: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
+        cutoff_datetime: Optional[str] = None,
+        requested_as_of: Optional[str] = None,
+        dev_cutoff_date: str = "2025-12-31",
+        historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
+        forward_oos_end_date: Optional[str] = None,
+        snapshot_manifest: Optional[SnapshotManifest] = None,
         masked_fields: Sequence[str] = (),
         enable_evidence_deduplication: bool = True,
         enable_claim_verification: bool = True,
@@ -1110,14 +1374,37 @@ class V03ReturnMeasureEngine:
         self.cost_model = cost_model or CostModel()
         self.hold_days = hold_days
         self.benchmark_symbol = benchmark_symbol
-        self.price_provider = price_provider or VendorPriceDataProvider()
         self.target_user_id = target_user_id
         self.status_filter = status_filter
         self.production_db_path = production_db_path or ""
         self.replica_db_path = replica_db_path or ""
         self.replica_sha256 = replica_sha256 or ""
-        self.cutoff_datetime = cutoff_datetime
-        self.requested_as_of = requested_as_of
+
+        if snapshot_manifest is not None:
+            if cutoff_datetime is None:
+                cutoff_datetime = snapshot_manifest.cutoff_datetime
+            if requested_as_of is None:
+                requested_as_of = snapshot_manifest.requested_as_of
+            if historical_cutoff_date == DEFAULT_HISTORICAL_CUTOFF_DATE and hasattr(snapshot_manifest, "historical_cutoff_date"):
+                historical_cutoff_date = snapshot_manifest.historical_cutoff_date
+            if forward_oos_end_date is None and hasattr(snapshot_manifest, "forward_oos_end_date"):
+                forward_oos_end_date = snapshot_manifest.forward_oos_end_date
+            if dev_cutoff_date == "2025-12-31" and hasattr(snapshot_manifest, "dev_cutoff_date"):
+                dev_cutoff_date = snapshot_manifest.dev_cutoff_date
+
+        self.dev_cutoff_date = dev_cutoff_date
+        self.historical_cutoff_date = historical_cutoff_date
+        self.forward_oos_end_date = forward_oos_end_date
+        self.cutoff_datetime = cutoff_datetime or f"{self.historical_cutoff_date} 23:59:59"
+        self.requested_as_of = requested_as_of or self.historical_cutoff_date
+
+        if price_provider is not None:
+            self.price_provider = price_provider
+            if hasattr(price_provider, "forward_oos_end_date") and getattr(price_provider, "forward_oos_end_date", None) is None:
+                setattr(price_provider, "forward_oos_end_date", self.forward_oos_end_date)
+        else:
+            self.price_provider = VendorPriceDataProvider(forward_oos_end_date=self.forward_oos_end_date)
+
         self.masked_fields = tuple(masked_fields)
         self.enable_evidence_deduplication = enable_evidence_deduplication
         self.enable_claim_verification = enable_claim_verification
@@ -1139,7 +1426,7 @@ class V03ReturnMeasureEngine:
     def get_user_report_counts(
         db_path: str,
         target_user_id: str = DEFAULT_TARGET_USER_ID,
-        cutoff_date: Optional[str] = None,
+        cutoff_date: Optional[str] = DEFAULT_HISTORICAL_CUTOFF_DATE,
     ) -> Dict[str, int]:
         """Query total, completed, failed counts for a given user_id from database."""
         db_file = Path(db_path).resolve()
@@ -1181,7 +1468,7 @@ class V03ReturnMeasureEngine:
         limit: Optional[int] = None,
         target_user_id: Optional[str] = DEFAULT_TARGET_USER_ID,
         status_filter: Optional[str] = DEFAULT_STATUS_FILTER,
-        cutoff_date: Optional[str] = None,
+        cutoff_date: Optional[str] = DEFAULT_HISTORICAL_CUTOFF_DATE,
     ) -> List[Dict[str, Any]]:
         """Load reports from SQLite database strictly in read-only mode with scope filtering."""
         db_file = Path(db_path).resolve()
@@ -1274,11 +1561,17 @@ class V03ReturnMeasureEngine:
             return PoolFilterStatus.EXCLUDED_UNKNOWN_PREFIX, canonical
 
         # 4. Check ST / *ST
-        if self.price_provider.is_st(canonical, trade_date):
+        st_res = self.price_provider.is_st(canonical, trade_date)
+        if st_res is None:
+            return PoolFilterStatus.EXCLUDED_UNKNOWN, canonical
+        if st_res:
             return PoolFilterStatus.EXCLUDED_ST, canonical
 
         # 5. Check Listing Days (< 60 trading days)
-        if not self.price_provider.is_listed_for_n_days(canonical, trade_date, 60):
+        listed_res = self.price_provider.is_listed_for_n_days(canonical, trade_date, 60)
+        if listed_res is None:
+            return PoolFilterStatus.EXCLUDED_UNKNOWN, canonical
+        if not listed_res:
             return PoolFilterStatus.EXCLUDED_NEW_LISTING, canonical
 
         return PoolFilterStatus.IN_POOL, canonical
@@ -1338,7 +1631,12 @@ class V03ReturnMeasureEngine:
                     or st_dict.get("direction")
                 )
 
-        oos_seg = classify_oos_segment(trade_date).value
+        oos_seg = classify_oos_segment(
+            trade_date,
+            dev_cutoff=self.dev_cutoff_date,
+            historical_cutoff=self.historical_cutoff_date,
+            forward_oos_end=self.forward_oos_end_date,
+        ).value
         user_id = report.get("user_id")
 
         cost_assump = {
@@ -1379,7 +1677,11 @@ class V03ReturnMeasureEngine:
                 else (
                     SampleRole.HISTORICAL_OOS.value
                     if oos_seg == OOSSegment.HISTORICAL_OOS.value
-                    else SampleRole.FORWARD_OOS.value
+                    else (
+                        SampleRole.FORWARD_OOS.value
+                        if oos_seg == OOSSegment.FORWARD_OOS.value
+                        else SampleRole.FUTURE_DATA.value
+                    )
                 )
             ),
             evaluation_eligible=True,
@@ -1413,6 +1715,16 @@ class V03ReturnMeasureEngine:
             return rec
 
         assert canonical_sym is not None
+
+        # Check FUTURE_DATA status
+        if oos_seg == OOSSegment.FUTURE_DATA.value:
+            rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
+            rec.missing_reason = "future_data_beyond_forward_oos_end"
+            rec.performance_category = "future_data"
+            rec.evaluation_eligible = False
+            rec.exclusion_reason = "future_data_beyond_forward_oos_end"
+            rec.included_in_return_metrics = False
+            return rec
 
         # Check Six Regression Symbols (V-03 / DAV-799: permanent regression role, isolated from OOS)
         is_regression = (
@@ -1878,7 +2190,12 @@ class V03ReturnMeasureEngine:
             sample_generating_service_sha=self.sample_generating_service_sha,
             historical_sample_generating_service_sha=self.sample_generating_service_sha,
             running_service_provenance_source=prov_source,
+            dev_cutoff_date=self.dev_cutoff_date,
+            historical_cutoff_date=self.historical_cutoff_date,
+            forward_oos_end_date=self.forward_oos_end_date,
         )
+
+        measured_completeness = compute_system_completeness(report_list)
 
         # Snapshot Manifest (V-03a-3 Section 1 & DAV-865 & DAV-866)
         manifest = SnapshotManifest(
@@ -1890,8 +2207,11 @@ class V03ReturnMeasureEngine:
             replica_db_path=self.replica_db_path,
             replica_file_hash=self.replica_sha256,
             snapshot_created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            cutoff_datetime=self.cutoff_datetime or DEFAULT_HISTORICAL_CUTOFF_DATETIME,
-            requested_as_of=self.requested_as_of or DEFAULT_HISTORICAL_CUTOFF_DATE,
+            cutoff_datetime=self.cutoff_datetime or f"{self.historical_cutoff_date} 23:59:59",
+            requested_as_of=self.requested_as_of or self.historical_cutoff_date,
+            dev_cutoff_date=self.dev_cutoff_date,
+            historical_cutoff_date=self.historical_cutoff_date,
+            forward_oos_end_date=self.forward_oos_end_date,
             target_user_total=user_total,
             target_user_completed=user_completed,
             target_user_failed=user_failed,
@@ -1912,7 +2232,7 @@ class V03ReturnMeasureEngine:
                 "stamp_duty_rate": self.cost_model.stamp_duty_rate,
                 "slippage_bps": self.cost_model.slippage_bps,
             },
-            system_completeness=dict(SYSTEM_COMPLETENESS_DICT),
+            system_completeness=measured_completeness,
             forward_oos_count=forward_metrics.total_reports,
             forward_oos_zero_reason=(
                 "当前数据库截止基准日期未产生或未纳入已完成前向验证样本，严格杜绝将历史样本改名充作前向样本。"
@@ -1970,6 +2290,42 @@ class V03ReturnMeasureEngine:
         else:
             acc_str = "未统计/数据源缺口 (typed gap: None)"
 
+        hist_header = f"HISTORICAL_OOS ({s.dev_cutoff_date}~{s.historical_cutoff_date})"
+        fwd_end = f"~{s.forward_oos_end_date}" if s.forward_oos_end_date else ""
+        fwd_header = f"FORWARD_OOS (>{s.historical_cutoff_date}{fwd_end})"
+
+        # Dynamic System Completeness Table (measured from data or typed unknown)
+        sc = (
+            result.snapshot_manifest.system_completeness
+            if result.snapshot_manifest
+            else SYSTEM_COMPLETENESS_DICT
+        )
+        gt_val = (
+            f"{sc.get('game_theory_report_fill_rate') * 100:.1f}%"
+            if isinstance(sc.get("game_theory_report_fill_rate"), (int, float))
+            else str(sc.get("game_theory_report_fill_rate", "0.0%"))
+        )
+        news_val = (
+            "已接入真实源"
+            if sc.get("sentiment_news_real_source_connected") is True
+            else "未接入真实源 (仅占位/代理)"
+        )
+        vp_val = (
+            f"{sc.get('volume_price_fill_rate') * 100:.1f}%"
+            if isinstance(sc.get("volume_price_fill_rate"), (int, float))
+            else str(sc.get("volume_price_fill_rate", "unknown"))
+        )
+        macro_val = (
+            f"{sc.get('macro_report_fill_rate') * 100:.1f}%"
+            if isinstance(sc.get("macro_report_fill_rate"), (int, float))
+            else str(sc.get("macro_report_fill_rate", "unknown"))
+        )
+        missing_val = (
+            f"{sc.get('overall_missing_items_rate') * 100:.1f}%"
+            if isinstance(sc.get("overall_missing_items_rate"), (int, float))
+            else str(sc.get("overall_missing_items_rate", "unknown"))
+        )
+
         md = f"""# V-03a 收益对照测量引擎报告（进度基线 · 只读）
 
 > **⚠️ 核心定位声明**
@@ -1994,11 +2350,11 @@ class V03ReturnMeasureEngine:
 ### 系统完整度盖章 (System Completeness)
 | 输入项 / 数据源 | 接入 / 填充状态 | 影响说明 |
 |---|---|---|
-| **博弈论报告 (Game Theory)** | `0.0%` (完全未接入) | 核心对抗博弈决策缺失 |
-| **真实舆情源 (Sentiment/News)** | `未接入真实源` (仅占位/代理) | 情绪面输入为半成品 |
-| **量价报告 (Volume-Price)** | `~55%` | 部分技术面特征缺失 |
-| **宏观报告 (Macro)** | `~70%` | 宏观环境输入部分缺失 |
-| **整体报告缺项率** | `~30%` | 综合输入未完工 |
+| **博弈论报告 (Game Theory)** | `{gt_val}` (完全未接入) | 核心对抗博弈决策缺失 |
+| **真实舆情源 (Sentiment/News)** | `{news_val}` | 情绪面输入为半成品 |
+| **量价报告 (Volume-Price)** | `{vp_val}` | 部分技术面特征缺失 |
+| **宏观报告 (Macro)** | `{macro_val}` | 宏观环境输入部分缺失 |
+| **整体报告缺项率** | `{missing_val}` | 综合输入未完工 |
 
 ---
 
@@ -2017,7 +2373,7 @@ class V03ReturnMeasureEngine:
 ---
 
 ## 3. OOS 三段切分与覆盖率统计 (Coverage & Evaluability)
-| 指标项 | DEV (≤2025-12-31) | HISTORICAL_OOS (2026-01-01~09-08) | FORWARD_OOS (≥2026-09-09) | 全量汇总 (ALL) |
+| 指标项 | DEV (≤{s.dev_cutoff_date}) | {hist_header} | {fwd_header} | 全量汇总 (ALL) |
 |---|---|---|---|---|
 | **总报告数 (Total Reports)** | {m_dev.total_reports} | {m_hist.total_reports} | {m_fwd.total_reports} | {m_all.total_reports} |
 | **评估候选数 (Candidates)** | {m_dev.directional_candidate_count} | {m_hist.directional_candidate_count} | {m_fwd.directional_candidate_count} | {m_all.directional_candidate_count} |
@@ -2037,7 +2393,7 @@ class V03ReturnMeasureEngine:
 ## 4. 收益绩效与超额指标 (Return & Excess Return Metrics)
 *(注：以下收益指标严格在经验证的有效评测样本上计算，Typed-Missing 与 Untradable 样本不进入收益均值/胜率计算，杜绝污染)*
 
-| 收益指标 | DEV (≤2025-12-31) | HISTORICAL_OOS (2026-01-01~09-08) | FORWARD_OOS (≥2026-09-09) | 全量汇总 (ALL) |
+| 收益指标 | DEV (≤{s.dev_cutoff_date}) | {hist_header} | {fwd_header} | 全量汇总 (ALL) |
 |---|---|---|---|---|
 | **有效样本数 (Sample Count)** | {m_dev.return_sample_count} | {m_hist.return_sample_count} | {m_fwd.return_sample_count} | {m_all.return_sample_count} |
 | **平均毛收益率 (Gross Return)** | {f"{m_dev.mean_gross_return * 100:.2f}%" if m_dev.mean_gross_return is not None else "N/A"} | {f"{m_hist.mean_gross_return * 100:.2f}%" if m_hist.mean_gross_return is not None else "N/A"} | {f"{m_fwd.mean_gross_return * 100:.2f}%" if m_fwd.mean_gross_return is not None else "N/A"} | {f"{m_all.mean_gross_return * 100:.2f}%" if m_all.mean_gross_return is not None else "N/A"} |

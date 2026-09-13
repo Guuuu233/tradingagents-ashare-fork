@@ -176,6 +176,8 @@ def run_measurement_and_ablations(
     target_user_id: str = DEFAULT_TARGET_USER_ID,
     status_filter: str = DEFAULT_STATUS_FILTER,
     cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
+    dev_cutoff_date: str = "2025-12-31",
+    forward_oos_end_date: Optional[str] = None,
     run_ablations: bool = True,
     running_service_sha: Optional[str] = None,
     running_service_provenance: Optional[str] = None,
@@ -191,6 +193,7 @@ def run_measurement_and_ablations(
     print(f"      Target User: {target_user_id}")
     print(f"      Status Scope: {status_filter} (仅 completed)")
     print(f"      Cutoff Date: {cutoff_date} (PIT cutoff datetime: {cutoff_datetime})")
+    print(f"      Forward OOS End Date: {forward_oos_end_date or 'None (Open-ended)'}")
     print(
         f"      Account Stats: Total={user_stats['total']}, "
         f"Completed={user_stats['completed']}, Failed={user_stats['failed']}"
@@ -202,7 +205,7 @@ def run_measurement_and_ablations(
         cost_model=CostModel(),
         hold_days=hold_days,
         benchmark_symbol=DEFAULT_BENCHMARK_SYMBOL,
-        price_provider=VendorPriceDataProvider(),
+        price_provider=VendorPriceDataProvider(forward_oos_end_date=forward_oos_end_date),
         target_user_id=target_user_id,
         status_filter=status_filter,
         target_user_stats=user_stats,
@@ -211,6 +214,9 @@ def run_measurement_and_ablations(
         replica_sha256=replica_sha256,
         cutoff_datetime=cutoff_datetime,
         requested_as_of=cutoff_date,
+        dev_cutoff_date=dev_cutoff_date,
+        historical_cutoff_date=cutoff_date,
+        forward_oos_end_date=forward_oos_end_date,
         running_service_sha=running_service_sha,
         running_service_provenance=running_service_provenance,
         sample_generating_service_sha=HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
@@ -249,9 +255,10 @@ def run_measurement_and_ablations(
     print(f"覆盖率 (Coverage Rate): {m_all.coverage_rate * 100:.2f}%")
     print(f"可评估率 (Evaluability Rate): {m_all.evaluability_rate * 100:.2f}%")
     print("-" * 70)
-    print(f"DEV 样本数 (<=2025-12-31): {m_dev.total_reports}")
-    print(f"HISTORICAL_OOS 样本数 (2026-01-01~2026-09-08): {m_hist.total_reports} (有效评测={m_hist.evaluated_count})")
-    print(f"FORWARD_OOS 样本数 (>=2026-09-09): {m_fwd.total_reports} (如实输出0，杜绝伪造)")
+    fwd_range = f">{cutoff_date}" if not forward_oos_end_date else f"{cutoff_date}~{forward_oos_end_date}"
+    print(f"DEV 样本数 (<={dev_cutoff_date}): {m_dev.total_reports}")
+    print(f"HISTORICAL_OOS 样本数 ({dev_cutoff_date}~{cutoff_date}): {m_hist.total_reports} (有效评测={m_hist.evaluated_count})")
+    print(f"FORWARD_OOS 样本数 ({fwd_range}): {m_fwd.total_reports} (如实输出，杜绝伪造)")
     print(f"六只回归标的永久隔离数: {m_reg.total_reports} (不计入OOS指标)")
     if m_all.mean_net_return is not None:
         print(f"平均净收益率: {m_all.mean_net_return * 100:.2f}%")
@@ -343,6 +350,18 @@ def main() -> None:
         help=f"Cutoff trade date (default: {DEFAULT_HISTORICAL_CUTOFF_DATE})",
     )
     parser.add_argument(
+        "--dev-cutoff-date",
+        type=str,
+        default="2025-12-31",
+        help="Dev cutoff trade date (default: 2025-12-31)",
+    )
+    parser.add_argument(
+        "--forward-oos-end-date",
+        type=str,
+        default=None,
+        help="Upper bound trade date for forward OOS segment",
+    )
+    parser.add_argument(
         "--running-service-sha",
         type=str,
         default=None,
@@ -410,6 +429,8 @@ def main() -> None:
         target_user_id=args.target_user_id,
         status_filter=args.status_filter,
         cutoff_date=args.cutoff_date,
+        dev_cutoff_date=args.dev_cutoff_date,
+        forward_oos_end_date=args.forward_oos_end_date,
         run_ablations=not args.no_ablations,
         running_service_sha=running_sha,
         running_service_provenance=prov_source,
