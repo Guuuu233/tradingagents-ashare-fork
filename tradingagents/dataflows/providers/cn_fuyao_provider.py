@@ -42,6 +42,7 @@ from ..financial_announce import (
 from ..trade_calendar import (
     CN_TZ,
     DateDataUnavailable,
+    DateFetchFatalError,
     dedupe_daily_bars,
     drop_incomplete_today_bar,
     fetch_with_date_fallback,
@@ -153,6 +154,10 @@ class FuyaoApiError(Exception):
         super().__init__(f"code={code} message={message}")
         self.code = int(code)
         self.message = str(message or "")
+
+
+class FuyaoRateLimitFatalError(FuyaoApiError, DateFetchFatalError):
+    """Fuyao 4001 频率超限专用 fatal 异常，用于中止日期回退。"""
 
 
 class CnFuyaoProvider(BaseMarketDataProvider):
@@ -1029,6 +1034,8 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             except FuyaoApiError as exc:
                 if exc.code in (3001, 3002):
                     raise DateDataUnavailable(f"{day} 龙虎榜无数据") from exc
+                if exc.code == 4001:
+                    raise FuyaoRateLimitFatalError(exc.code, exc.message) from exc
                 raise
             data = payload.get("data") or {}
             stock_items = data.get("stock_items") or []
