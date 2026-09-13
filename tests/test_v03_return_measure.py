@@ -32,6 +32,7 @@ from tradingagents.eval.v03_return_measure import (
     DEFAULT_HOLD_DAYS,
     DEFAULT_STATUS_FILTER,
     DEFAULT_TARGET_USER_ID,
+    HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     MINIMUM_AUDIT_FIELDS,
     REGRESSION_SYMBOLS,
     AblationConfig,
@@ -55,6 +56,7 @@ from tradingagents.eval.v03_return_measure import (
     apply_purging_and_embargo,
     classify_oos_segment,
     compute_file_sha256,
+    probe_running_service_sha,
     evaluate_proposition_claim,
     validate_audit_row,
 )
@@ -1561,3 +1563,192 @@ def test_rt16_honest_forward_oos_zero_reporting(mock_price_provider):
     assert res.snapshot_manifest is not None
     assert res.snapshot_manifest.forward_oos_count == 0
     assert "未产生或未纳入已完成前向验证样本" in res.snapshot_manifest.forward_oos_zero_reason
+
+
+# ===========================================================================
+# DAV-865: Provenance 与统计缺失（禁止硬编码回退）测试
+# ===========================================================================
+
+
+def test_dav865_provenance_service_sha_differentiation():
+    """DAV-865: 明确区分历史样本生成服务 SHA 与当前运行服务 SHA，字段语义准确表达."""
+    assert HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA == "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+    # Legacy alias points to historical generator SHA
+    assert BASELINE_RUNNING_SERVICE_SHA == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+
+    # EvaluationStamp & SnapshotManifest differentiate historical sample generator vs running service
+    stamp = EvaluationStamp()
+    assert stamp.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.historical_sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+
+    manifest = SnapshotManifest(manifest_id="test_man_diff")
+    assert manifest.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert manifest.historical_sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert manifest.running_service_sha is None
+
+
+def test_dav865_provenance_healthz_probe_service_available(monkeypatch):
+    """DAV-865: 当前服务可用时，只读 healthz 探针可提取 commit_sha 并标注明确来源 (Mock 无网络依赖)."""
+    import json
+
+    class DummyResponse:
+        status = 200
+
+        def read(self):
+            return json.dumps({
+                "status": "ok",
+                "commit_sha": "a227cdc3bb466edf2e910419cb6013cfc021d309",
+                "build_identity": "tradingagents-api@a227cdc3bb466edf2e910419cb6013cfc021d309",
+            }).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=1.0: DummyResponse())
+
+    sha, prov = probe_running_service_sha("http://127.0.0.1:8000/healthz")
+    assert sha == "a227cdc3bb466edf2e910419cb6013cfc021d309"
+    assert "healthz_probe" in prov
+    assert "http://127.0.0.1:8000/healthz" in prov
+
+
+def test_dav865_provenance_healthz_probe_service_unavailable_offline(monkeypatch):
+    """DAV-865: 服务不可用/离线重放时，返回 typed gap (None) 与显式 offline_replay_gap，不悄悄填旧常量."""
+    import urllib.error
+    import urllib.request
+
+    def mock_urlopen_fail(req, timeout=1.0):
+        raise urllib.error.URLError("Connection refused [mocked offline]")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_fail)
+
+    sha, prov = probe_running_service_sha("http://127.0.0.1:8000/healthz")
+    assert sha is None
+    assert "offline_replay_gap" in prov
+    assert sha != BASELINE_RUNNING_SERVICE_SHA
+    assert sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+
+
+def test_dav865_engine_stamps_explicit_running_service_and_provenance(mock_price_provider):
+    """DAV-865: 传入运行服务 SHA 时，stamp 与 manifest 精确记录且与历史生成版本明确共存."""
+    live_sha = "a227cdc3bb466edf2e910419cb6013cfc021d309"
+    engine = V03ReturnMeasureEngine(
+        price_provider=mock_price_provider,
+        hold_days=5,
+        running_service_sha=live_sha,
+        running_service_provenance="healthz_probe: http://127.0.0.1:8000/healthz",
+    )
+    res = engine.measure_dataset([])
+    stamp = res.stamp
+    manifest = res.snapshot_manifest
+
+    assert stamp.running_service_sha == live_sha
+    assert stamp.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert stamp.running_service_provenance_source == "healthz_probe: http://127.0.0.1:8000/healthz"
+
+    assert manifest.running_service_sha == live_sha
+    assert manifest.sample_generating_service_sha == HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert manifest.running_service_provenance_source == "healthz_probe: http://127.0.0.1:8000/healthz"
+
+    # Markdown report contains both clearly distinguished
+    md = engine.generate_report_markdown(res)
+    assert live_sha in md
+    assert HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA in md
+    assert "历史样本生成服务 SHA" in md
+    assert "当前运行服务 SHA" in md
+
+
+def test_dav865_engine_offline_replay_stamps_typed_gap(mock_price_provider):
+    """DAV-865: 离线重放环境无法取得运行服务时，manifest 必须输出 typed gap / offline replay 标记，禁止冒充常量."""
+    engine = V03ReturnMeasureEngine(
+        price_provider=mock_price_provider,
+        hold_days=5,
+        running_service_sha="offline_replay_gap",
+        running_service_provenance="offline_replay_gap: probe unavailable",
+    )
+    res = engine.measure_dataset([])
+    manifest = res.snapshot_manifest
+
+    assert manifest.running_service_sha == "offline_replay_gap"
+    assert manifest.running_service_sha != HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    assert manifest.running_service_sha != "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+
+
+def test_dav865_no_hardcoded_stats_fallback_fail_closed_or_typed_gap(mock_price_provider):
+    """DAV-865: 彻底删除 317/231/86/217 硬编码回退；缺统计时输出显式 typed gap (None)，不生成貌似真实幽灵指标."""
+    # 1. Dataclass defaults are None (typed gap), strictly not 317/231/86/217
+    stamp_default = EvaluationStamp()
+    assert stamp_default.target_user_total is None
+    assert stamp_default.target_user_completed is None
+    assert stamp_default.target_user_failed is None
+    assert stamp_default.account_stats is None
+
+    manifest_default = SnapshotManifest(manifest_id="test_no_ghost")
+    assert manifest_default.target_user_total is None
+    assert manifest_default.target_user_completed is None
+    assert manifest_default.target_user_failed is None
+    assert manifest_default.candidate_reports is None
+    assert manifest_default.account_stats is None
+
+    # 2. Engine initialized with no target_user_stats (default None)
+    engine = V03ReturnMeasureEngine(
+        price_provider=mock_price_provider,
+        hold_days=5,
+        target_user_id=DEFAULT_TARGET_USER_ID,
+        target_user_stats=None,
+    )
+    assert engine.target_user_stats is None
+
+    # 3. Running measurement on dataset yields None typed gaps, NEVER 317/231/86
+    res = engine.measure_dataset([])
+    assert res.stamp.target_user_total is None
+    assert res.stamp.target_user_completed is None
+    assert res.stamp.target_user_failed is None
+    assert res.stamp.account_stats is None
+
+    assert res.snapshot_manifest.target_user_total is None
+    assert res.snapshot_manifest.target_user_completed is None
+    assert res.snapshot_manifest.target_user_failed is None
+
+    # Strictly verify none of the ghost metrics appear
+    assert res.stamp.target_user_total != 317
+    assert res.stamp.target_user_completed != 231
+    assert res.stamp.target_user_failed != 86
+    assert res.snapshot_manifest.target_user_total != 317
+    assert res.snapshot_manifest.target_user_completed != 231
+    assert res.snapshot_manifest.target_user_failed != 86
+
+    # 4. Markdown report explicitly marks typed gap instead of phantom numbers
+    md = engine.generate_report_markdown(res)
+    assert "未统计/数据源缺口 (typed gap: None)" in md
+
+
+def test_dav865_real_stats_accurate_readback_when_provided(mock_price_provider):
+    """DAV-865: 正常传入真实统计时，准确回读与盖章，不被任何默认值干扰."""
+    real_stats = {"total": 520, "completed": 380, "failed": 140}
+    engine = V03ReturnMeasureEngine(
+        price_provider=mock_price_provider,
+        hold_days=5,
+        target_user_id=DEFAULT_TARGET_USER_ID,
+        target_user_stats=real_stats,
+    )
+    res = engine.measure_dataset([])
+
+    assert res.stamp.target_user_total == 520
+    assert res.stamp.target_user_completed == 380
+    assert res.stamp.target_user_failed == 140
+    assert res.stamp.account_stats == real_stats
+
+    assert res.snapshot_manifest.target_user_total == 520
+    assert res.snapshot_manifest.target_user_completed == 380
+    assert res.snapshot_manifest.target_user_failed == 140
+    assert res.snapshot_manifest.account_stats == real_stats
+
+    md = engine.generate_report_markdown(res)
+    assert "520" in md
+    assert "380" in md
+    assert "140" in md

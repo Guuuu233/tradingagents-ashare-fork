@@ -34,6 +34,7 @@ from tradingagents.eval.v03_return_measure import (
     DEFAULT_HOLD_DAYS,
     DEFAULT_STATUS_FILTER,
     DEFAULT_TARGET_USER_ID,
+    HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     CostModel,
     OfflineReplayHarness,
     SnapshotManifest,
@@ -42,6 +43,7 @@ from tradingagents.eval.v03_return_measure import (
     compute_file_sha256,
     get_code_prompt_sha,
     get_current_code_sha,
+    probe_running_service_sha,
 )
 
 DEFAULT_PROD_DB = "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db"
@@ -174,6 +176,8 @@ def run_measurement_and_ablations(
     status_filter: str = DEFAULT_STATUS_FILTER,
     cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
     run_ablations: bool = True,
+    running_service_sha: Optional[str] = None,
+    running_service_provenance: Optional[str] = None,
 ) -> None:
     """Execute measurement engine and ablation harness on replica database."""
     user_stats = V03ReturnMeasureEngine.get_user_report_counts(
@@ -190,6 +194,8 @@ def run_measurement_and_ablations(
         f"      Account Stats: Total={user_stats['total']}, "
         f"Completed={user_stats['completed']}, Failed={user_stats['failed']}"
     )
+    print(f"      Historical Sample Generating SHA: {HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA}")
+    print(f"      Running Service SHA: {running_service_sha} (provenance: {running_service_provenance})")
 
     engine = V03ReturnMeasureEngine(
         cost_model=CostModel(),
@@ -204,6 +210,9 @@ def run_measurement_and_ablations(
         replica_sha256=replica_sha256,
         cutoff_datetime=cutoff_datetime,
         requested_as_of=cutoff_date,
+        running_service_sha=running_service_sha,
+        running_service_provenance=running_service_provenance,
+        sample_generating_service_sha=HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     )
 
     reports = engine.load_reports_from_db(
@@ -333,12 +342,46 @@ def main() -> None:
         help=f"Cutoff trade date (default: {DEFAULT_HISTORICAL_CUTOFF_DATE})",
     )
     parser.add_argument(
+        "--running-service-sha",
+        type=str,
+        default=None,
+        help="Explicit running service SHA (overrides healthz probe)",
+    )
+    parser.add_argument(
+        "--healthz-url",
+        type=str,
+        default="http://127.0.0.1:8000/healthz",
+        help="URL of read-only healthz probe endpoint",
+    )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Force offline execution mode without healthz probe",
+    )
+    parser.add_argument(
         "--skip-backup", action="store_true", help="Skip backup if replica already exists"
     )
     parser.add_argument(
         "--no-ablations", action="store_true", help="Skip running ablation controls"
     )
     args = parser.parse_args()
+
+    # Running service SHA provenance resolution (DAV-865)
+    running_sha = args.running_service_sha
+    prov_source = "explicit_cli_argument" if running_sha else None
+
+    if not running_sha:
+        if args.offline:
+            running_sha = "offline_replay_gap"
+            prov_source = "offline_replay_explicit_flag"
+        else:
+            probed_sha, prov = probe_running_service_sha(args.healthz_url, timeout_sec=1.0)
+            if probed_sha is not None:
+                running_sha = probed_sha
+                prov_source = prov
+            else:
+                running_sha = "offline_replay_gap"
+                prov_source = prov
 
     replica_sha = ""
     if not args.skip_backup or not Path(args.replica_db).exists():
@@ -367,6 +410,8 @@ def main() -> None:
         status_filter=args.status_filter,
         cutoff_date=args.cutoff_date,
         run_ablations=not args.no_ablations,
+        running_service_sha=running_sha,
+        running_service_provenance=prov_source,
     )
 
 

@@ -209,7 +209,9 @@ class MeasurementOutcomeStatus(str, Enum):
 
 BASELINE_MODEL: str = "gemini-3.8-flash-high"
 BASELINE_GLOBAL_PROMPT_HASH: str = "5489166b"
-BASELINE_RUNNING_SERVICE_SHA: str = "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA: str = "a6d4540feaa8043ff36b0607a31c1d2d5f004149"
+# Retained as baseline historical sample generator alias; not to be confused with live running service SHA
+BASELINE_RUNNING_SERVICE_SHA: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
 BASELINE_DISCLAIMER: str = "半成品基线,非定性判断"
 BASELINE_DISCLAIMER_DETAIL: str = (
     "系统尚未施工完成，舆情等真实数据源未接入。本引擎仅为进度基线与测量工具，"
@@ -249,6 +251,39 @@ def compute_file_sha256(file_path: str | Path) -> str:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
+
+
+def probe_running_service_sha(
+    healthz_url: str = "http://127.0.0.1:8000/healthz",
+    timeout_sec: float = 1.0,
+) -> Tuple[Optional[str], str]:
+    """Probe live running service SHA via read-only /healthz probe (DAV-865).
+
+    Returns:
+        (commit_sha, provenance_source)
+        If healthz available: (commit_sha, f"healthz_probe: {healthz_url}")
+        If unreachable or offline: (None, f"offline_replay_gap: service unavailable ({reason})")
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            healthz_url, headers={"User-Agent": "v03-return-measure-runner"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            if resp.status == 200:
+                payload = json.loads(resp.read().decode("utf-8"))
+                commit_sha = payload.get("commit_sha")
+                if commit_sha:
+                    return str(commit_sha), f"healthz_probe: {healthz_url}"
+                return (
+                    None,
+                    f"offline_replay_gap: commit_sha missing in healthz response from {healthz_url}",
+                )
+            return None, f"offline_replay_gap: healthz probe HTTP {resp.status}"
+    except Exception as e:
+        return None, f"offline_replay_gap: healthz probe unreachable ({type(e).__name__})"
 
 
 def get_code_prompt_sha() -> str:
@@ -399,6 +434,9 @@ class EvaluationStamp:
     )
     code_sha: str = field(default_factory=get_current_code_sha)
     running_service_sha: str = BASELINE_RUNNING_SERVICE_SHA
+    sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    historical_sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    running_service_provenance_source: Optional[str] = None
     disclaimer: str = BASELINE_DISCLAIMER
     disclaimer_detail: str = BASELINE_DISCLAIMER_DETAIL
     system_completeness: Dict[str, Any] = field(
@@ -407,25 +445,19 @@ class EvaluationStamp:
     evaluated_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    # V-03a-2 Scope Stamping (DAV-804)
+    # V-03a-2 Scope Stamping (DAV-804 & DAV-865)
     target_user_id: Optional[str] = DEFAULT_TARGET_USER_ID
     status_filter: Optional[str] = DEFAULT_STATUS_FILTER
     scope_filter_description: str = "仅 completed"
-    target_user_total: int = 317
-    target_user_completed: int = 231
-    target_user_failed: int = 86
-    account_stats: Dict[str, int] = field(
-        default_factory=lambda: {
-            "total": 317,
-            "completed": 231,
-            "failed": 86,
-        }
-    )
+    target_user_total: Optional[int] = None
+    target_user_completed: Optional[int] = None
+    target_user_failed: Optional[int] = None
+    account_stats: Optional[Dict[str, Any]] = None
 
 
 @dataclass
 class SnapshotManifest:
-    """Read-only data snapshot manifest & audit metadata (V-03a-3 Section 1)."""
+    """Read-only data snapshot manifest & audit metadata (V-03a-3 Section 1 & DAV-865)."""
 
     manifest_id: str
     target_user_id: str = DEFAULT_TARGET_USER_ID
@@ -441,13 +473,16 @@ class SnapshotManifest:
         "cutoff_datetime 为 PIT 数据观察硬边界（在此之后产生的数据严禁可见）；"
         "requested_as_of 为请求发起锚定日期/时点，二者在回测与离线重放中具有明确时序因果区分，严禁混用。"
     )
-    target_user_total: int = 317
-    target_user_completed: int = 231
-    target_user_failed: int = 86
-    candidate_reports: int = 217
-    account_stats: Dict[str, int] = field(default_factory=dict)
+    target_user_total: Optional[int] = None
+    target_user_completed: Optional[int] = None
+    target_user_failed: Optional[int] = None
+    candidate_reports: Optional[int] = None
+    account_stats: Optional[Dict[str, Any]] = None
     code_sha: str = field(default_factory=get_current_code_sha)
-    running_service_sha: str = BASELINE_RUNNING_SERVICE_SHA
+    sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    historical_sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA
+    running_service_sha: Optional[str] = None
+    running_service_provenance_source: Optional[str] = None
     model_name: str = BASELINE_MODEL
     temperature: float = 0.0
     prompt_hash: str = field(
@@ -1067,6 +1102,9 @@ class V03ReturnMeasureEngine:
         enable_claim_verification: bool = True,
         check_required_grouping_fields: bool = False,
         apply_purging: bool = False,
+        running_service_sha: Optional[str] = None,
+        running_service_provenance: Optional[str] = None,
+        sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     ):
         self.cost_model = cost_model or CostModel()
         self.hold_days = hold_days
@@ -1084,12 +1122,13 @@ class V03ReturnMeasureEngine:
         self.enable_claim_verification = enable_claim_verification
         self.check_required_grouping_fields = check_required_grouping_fields
         self.apply_purging = apply_purging
+        self.running_service_sha = running_service_sha
+        self.running_service_provenance = running_service_provenance
+        self.sample_generating_service_sha = sample_generating_service_sha
         if target_user_stats is not None:
             self.target_user_stats = dict(target_user_stats)
-        elif self.target_user_id == DEFAULT_TARGET_USER_ID:
-            self.target_user_stats = {"total": 317, "completed": 231, "failed": 86}
         else:
-            self.target_user_stats = {"total": 0, "completed": 0, "failed": 0}
+            self.target_user_stats = None
 
     # -----------------------------------------------------------------------
     # Database Loading (Read-Only)
@@ -1797,17 +1836,51 @@ class V03ReturnMeasureEngine:
             forward_records, OOSSegment.FORWARD_OOS.value
         )
 
+        # Scope stats handling (DAV-865: fail-closed / typed gap, no 317/231/86 fallback)
+        user_total: Optional[int] = None
+        user_completed: Optional[int] = None
+        user_failed: Optional[int] = None
+        acc_stats: Optional[Dict[str, Any]] = None
+        if self.target_user_stats is not None:
+            user_total = self.target_user_stats.get("total")
+            user_completed = self.target_user_stats.get("completed")
+            user_failed = self.target_user_stats.get("failed")
+            acc_stats = dict(self.target_user_stats)
+
+        # Provenance: running_service_sha handling
+        # EvaluationStamp preserves BASELINE_RUNNING_SERVICE_SHA if not passed (for RT-9 compatibility)
+        # SnapshotManifest outputs typed gap / offline replay marker unless explicitly provided
+        running_sha_stamp = (
+            self.running_service_sha
+            if self.running_service_sha is not None
+            else BASELINE_RUNNING_SERVICE_SHA
+        )
+        running_sha_manifest = (
+            self.running_service_sha
+            if self.running_service_sha is not None
+            else "offline_replay_gap"
+        )
+        prov_source = (
+            self.running_service_provenance
+            if self.running_service_provenance is not None
+            else ("healthz_probe" if self.running_service_sha is not None else "offline_replay_gap")
+        )
+
         stamp = EvaluationStamp(
             target_user_id=self.target_user_id,
             status_filter=self.status_filter,
             scope_filter_description="仅 completed" if self.status_filter == "completed" else (self.status_filter or "全部"),
-            target_user_total=self.target_user_stats.get("total", 0),
-            target_user_completed=self.target_user_stats.get("completed", 0),
-            target_user_failed=self.target_user_stats.get("failed", 0),
-            account_stats=dict(self.target_user_stats),
+            target_user_total=user_total,
+            target_user_completed=user_completed,
+            target_user_failed=user_failed,
+            account_stats=acc_stats,
+            running_service_sha=running_sha_stamp,
+            sample_generating_service_sha=self.sample_generating_service_sha,
+            historical_sample_generating_service_sha=self.sample_generating_service_sha,
+            running_service_provenance_source=prov_source,
         )
 
-        # Snapshot Manifest (V-03a-3 Section 1)
+        # Snapshot Manifest (V-03a-3 Section 1 & DAV-865)
         manifest = SnapshotManifest(
             manifest_id=f"manifest-{hashlib.sha256(f'{self.target_user_id}:{len(report_list)}:{get_current_code_sha()}'.encode()).hexdigest()[:12]}",
             target_user_id=self.target_user_id or DEFAULT_TARGET_USER_ID,
@@ -1819,13 +1892,16 @@ class V03ReturnMeasureEngine:
             snapshot_created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             cutoff_datetime=self.cutoff_datetime or DEFAULT_HISTORICAL_CUTOFF_DATETIME,
             requested_as_of=self.requested_as_of or DEFAULT_HISTORICAL_CUTOFF_DATE,
-            target_user_total=self.target_user_stats.get("total", 317),
-            target_user_completed=self.target_user_stats.get("completed", 231),
-            target_user_failed=self.target_user_stats.get("failed", 86),
+            target_user_total=user_total,
+            target_user_completed=user_completed,
+            target_user_failed=user_failed,
             candidate_reports=all_metrics.directional_candidate_count,
-            account_stats=dict(self.target_user_stats),
+            account_stats=acc_stats,
             code_sha=get_current_code_sha(),
-            running_service_sha=BASELINE_RUNNING_SERVICE_SHA,
+            sample_generating_service_sha=self.sample_generating_service_sha,
+            historical_sample_generating_service_sha=self.sample_generating_service_sha,
+            running_service_sha=running_sha_manifest,
+            running_service_provenance_source=prov_source,
             model_name=BASELINE_MODEL,
             temperature=0.0,
             prompt_hash=f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}",
@@ -1879,6 +1955,21 @@ class V03ReturnMeasureEngine:
         m_hist = result.historical_oos_metrics
         m_fwd = result.forward_oos_metrics
 
+        if s.account_stats:
+            acc_str = (
+                f"总计: `{s.account_stats.get('total')}` \\| "
+                f"completed: `{s.account_stats.get('completed')}` \\| "
+                f"failed: `{s.account_stats.get('failed')}`"
+            )
+        elif s.target_user_total is not None or s.target_user_completed is not None:
+            acc_str = (
+                f"总计: `{s.target_user_total}` \\| "
+                f"completed: `{s.target_user_completed}` \\| "
+                f"failed: `{s.target_user_failed}`"
+            )
+        else:
+            acc_str = "未统计/数据源缺口 (typed gap: None)"
+
         md = f"""# V-03a 收益对照测量引擎报告（进度基线 · 只读）
 
 > **⚠️ 核心定位声明**
@@ -1893,10 +1984,11 @@ class V03ReturnMeasureEngine:
 | **评测基线模型** | `{s.model}` | 生产 DB `role_bindings` 权威绑定 |
 | **Prompt Hash** | `{s.prompt_hash}` | 全局用户提示词 (`5489166b`) + 内置代码 Prompt @SHA |
 | **代码 SHA** | `{s.code_sha}` | 当前评估代码精确 Commit SHA |
-| **运行服务 SHA** | `{s.running_service_sha}` | 线上运行服务 SHA |
+| **历史样本生成服务 SHA** | `{s.sample_generating_service_sha}` | 2026-09-08 历史样本生成基线服务 SHA (`{HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA[:8]}...`) |
+| **当前运行服务 SHA** | `{s.running_service_sha}` | 现场运行服务 SHA ({s.running_service_provenance_source or '只读探针/离线缺口'}) |
 | **目标评测账号 (Target User)** | `{s.target_user_id}` | 单一指定评估账号（排除多账号混用污染） |
 | **样本状态限定 (Status Scope)** | `{s.status_filter}` (`{s.scope_filter_description}`) | 严格限定已完成报告（排除 failed 等未完成样本） |
-| **该账号总体分布 (Account Stats)** | 总计: `{s.account_stats.get('total', s.target_user_total)}` \\| completed: `{s.account_stats.get('completed', s.target_user_completed)}` \\| failed: `{s.account_stats.get('failed', s.target_user_failed)}` | 该账号全量生命周期状态分布 |
+| **该账号总体分布 (Account Stats)** | {acc_str} | 该账号全量生命周期状态分布 |
 | **评估生成时间** | `{s.evaluated_at}` | UTC 时间戳 |
 
 ### 系统完整度盖章 (System Completeness)
@@ -2085,6 +2177,9 @@ class OfflineReplayHarness:
             masked_fields=config.masked_fields,
             enable_evidence_deduplication=config.enable_evidence_deduplication,
             enable_claim_verification=config.enable_claim_verification,
+            running_service_sha=self.engine.running_service_sha,
+            running_service_provenance=self.engine.running_service_provenance,
+            sample_generating_service_sha=self.engine.sample_generating_service_sha,
         )
 
         res = engine.measure_dataset(ordered_reports)
