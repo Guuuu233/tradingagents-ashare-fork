@@ -58,6 +58,18 @@ from tradingagents.graph.intent_parser import (
     build_horizon_context,
     get_bound_research_horizon,
 )
+from tradingagents.agents.analysts.news_analyst import (
+    STATUS_AVAILABLE,
+    STATUS_PARTIAL,
+    STATUS_GAP,
+    STATUS_NOT_APPLICABLE,
+    EVENT_TYPE_FUNDAMENTAL,
+    EVENT_TYPE_EVENT,
+    EVENT_TYPE_NONE,
+    make_default_expectation_revision,
+    make_json_safe,
+    validate_expectation_revision,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -235,6 +247,233 @@ def _format_relation_prompt_guard(relation_graph_status: str, language: str) -> 
     )
 
 
+def extract_expectation_revisions_from_traces(
+    traces: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Extract structured E-04 expectation_revision payloads from analyst_traces."""
+    fund_er = None
+    news_er = None
+    for trace in (traces or []):
+        if not isinstance(trace, Mapping):
+            continue
+        agent = trace.get("agent")
+        er = trace.get("expectation_revision")
+        if agent == "fundamentals_analyst" and isinstance(er, Mapping):
+            fund_er = dict(er)
+        elif agent == "news_analyst" and isinstance(er, Mapping):
+            news_er = dict(er)
+
+    if fund_er is None:
+        fund_er = make_default_expectation_revision(
+            event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_NOT_APPLICABLE
+        )
+    if news_er is None:
+        news_er = make_default_expectation_revision(
+            event_type=EVENT_TYPE_EVENT, status=STATUS_NOT_APPLICABLE
+        )
+
+    return {
+        "fundamentals": make_json_safe(fund_er),
+        "news": make_json_safe(news_er),
+    }
+
+
+def format_expectation_revisions_for_prompt(
+    expectation_revisions: Mapping[str, Any],
+    language: str = "zh",
+) -> str:
+    """Format structured E-04 expectation_revision context for research manager prompt."""
+    fund_er = expectation_revisions.get("fundamentals") or {}
+    news_er = expectation_revisions.get("news") or {}
+
+    if language == "en":
+        lines = [
+            "- Structured Expectation Revision Context (E-04 Contract):",
+            "  * Fundamentals Analyst (fundamentals_analyst):",
+            f"    - status: {fund_er.get('status', 'not_applicable')}",
+        ]
+        act = fund_er.get("actual") or {}
+        if act.get("value") is not None:
+            lines.append(
+                f"    - actual: {act.get('metric')}={act.get('value')}{act.get('unit')} "
+                f"(period={act.get('report_period')}, as_of={act.get('as_of')})"
+            )
+        else:
+            lines.append(f"    - actual: gap ({act.get('reason') or 'no verified metric'})")
+        base = fund_er.get("baseline") or {}
+        if base.get("type") and base.get("type") != "none":
+            lines.append(
+                f"    - baseline: {base.get('type')} source={base.get('source')} "
+                f"{base.get('metric')}={base.get('value')}{base.get('unit')} (period={base.get('period')})"
+            )
+        else:
+            lines.append("    - baseline: none (no historical baseline)")
+        rev = fund_er.get("revision") or {}
+        lines.append(
+            f"    - revision: type={rev.get('type')} dir={rev.get('direction')} "
+            f"val={rev.get('value')} pct={rev.get('percent')}% detail={rev.get('detail')}"
+        )
+        lines.append(
+            f"    - priced_in: status={fund_er.get('priced_in', {}).get('status', 'unknown')}"
+        )
+        lines.append(
+            f"    - double_count_guard: status={fund_er.get('double_count_guard', {}).get('status', 'unknown')} "
+            f"(prevent_double_voting={fund_er.get('double_count_guard', {}).get('prevent_double_voting', True)})"
+        )
+        if fund_er.get("gaps"):
+            lines.append(f"    - gaps: {', '.join(str(g) for g in fund_er.get('gaps', []))}")
+
+        lines.append("  * News Analyst (news_analyst):")
+        lines.append(f"    - status: {news_er.get('status', 'not_applicable')}")
+        pub = news_er.get("publication") or {}
+        lines.append(
+            f"    - publication: time={pub.get('publish_time')} source={pub.get('source')} "
+            f"hash={pub.get('source_hash')} qualification={pub.get('content_qualification')}"
+        )
+        n_act = news_er.get("actual") or {}
+        lines.append(f"    - actual: {n_act.get('status', 'gap')} ({n_act.get('reason', 'no metrics extracted')})")
+        lines.append(f"    - baseline: {news_er.get('baseline', {}).get('type', 'none')}")
+        n_rev = news_er.get("revision") or {}
+        lines.append(f"    - revision: type={n_rev.get('type')} detail={n_rev.get('detail')}")
+        lines.append(f"    - priced_in: status={news_er.get('priced_in', {}).get('status', 'unknown')}")
+        lines.append(
+            f"    - double_count_guard: status={news_er.get('double_count_guard', {}).get('status', 'unknown')} "
+            f"(prevent_double_voting={news_er.get('double_count_guard', {}).get('prevent_double_voting', True)})"
+        )
+        if news_er.get("gaps"):
+            lines.append(f"    - gaps: {', '.join(str(g) for g in news_er.get('gaps', []))}")
+
+        lines.append(
+            "  * [E-04 Output Discipline] The manager consumes only structured expectation_revision fields; "
+            "do not fabricate numbers from free text. When baseline is none, no percentage or numeric revision is allowed. "
+            "Priced-in status without traceable evidence remains unknown. Double count guard prevents duplicate voting."
+        )
+        return "\n".join(lines)
+
+    lines = [
+        "- 预期修正分栏与事件结构化记录（E-04 契约）：",
+        "  * 基本面分析师（fundamentals_analyst）：",
+        f"    - 状态: {fund_er.get('status', 'not_applicable')}",
+    ]
+    act = fund_er.get("actual") or {}
+    if act.get("value") is not None:
+        lines.append(
+            f"    - 实际数值 (actual): {act.get('metric')}={act.get('value')}{act.get('unit')} "
+            f"（报告期={act.get('report_period')}，截至={act.get('as_of')}，来源={act.get('source')}）"
+        )
+    else:
+        lines.append(f"    - 实际数值 (actual): 缺口 gap（{act.get('reason') or '未同时具备指标、数值、单位、报告期、截至日期五要素'}）")
+    base = fund_er.get("baseline") or {}
+    if base.get("type") and base.get("type") != "none":
+        lines.append(
+            f"    - 旧基线 (baseline): 类型={base.get('type')}，来源={base.get('source')}，"
+            f"{base.get('metric')}={base.get('value')}{base.get('unit')}（期间={base.get('period')}）"
+        )
+    else:
+        lines.append("    - 旧基线 (baseline): 无 none（无旧基线，严禁计算数值修正幅度）")
+    rev = fund_er.get("revision") or {}
+    lines.append(
+        f"    - 修正分栏 (revision): 类型={rev.get('type')}，方向={rev.get('direction')}，"
+        f"差额={rev.get('value')}，百分比={rev.get('percent')}%，详情={rev.get('detail')}"
+    )
+    lines.append(
+        f"    - 已定价状态 (priced_in): {fund_er.get('priced_in', {}).get('status', 'unknown')} "
+        f"（证据: {fund_er.get('priced_in', {}).get('evidence') or '无可回溯证据'}）"
+    )
+    lines.append(
+        f"    - 防重复计入 (double_count_guard): 状态={fund_er.get('double_count_guard', {}).get('status', 'unknown')} "
+        f"（prevent_double_voting={fund_er.get('double_count_guard', {}).get('prevent_double_voting', True)}）"
+    )
+    if fund_er.get("gaps"):
+        lines.append(f"    - 数据缺口 (gaps): {', '.join(str(g) for g in fund_er.get('gaps', []))}")
+
+    lines.append("  * 新闻事件分析师（news_analyst）：")
+    lines.append(f"    - 状态: {news_er.get('status', 'not_applicable')}")
+    pub = news_er.get("publication") or {}
+    lines.append(
+        f"    - 发布与资质 (publication): 发布时间={pub.get('publish_time')}，来源={pub.get('source')}，"
+        f"哈希={pub.get('source_hash')}，正文资质={pub.get('content_qualification')}"
+    )
+    n_act = news_er.get("actual") or {}
+    lines.append(f"    - 实际数值 (actual): {n_act.get('status', 'gap')}（{n_act.get('reason', '正文未抽取财务数字')}）")
+    lines.append(f"    - 旧基线 (baseline): {news_er.get('baseline', {}).get('type', 'none')}")
+    n_rev = news_er.get("revision") or {}
+    lines.append(f"    - 修正分栏 (revision): 类型={n_rev.get('type')}，详情={n_rev.get('detail')}")
+    lines.append(
+        f"    - 已定价状态 (priced_in): {news_er.get('priced_in', {}).get('status', 'unknown')} "
+        f"（无回溯证据时严禁断言为已定价事实）"
+    )
+    lines.append(
+        f"    - 防重复计入 (double_count_guard): 状态={news_er.get('double_count_guard', {}).get('status', 'unknown')} "
+        f"（prevent_double_voting={news_er.get('double_count_guard', {}).get('prevent_double_voting', True)}）"
+    )
+    if news_er.get("gaps"):
+        lines.append(f"    - 数据缺口 (gaps): {', '.join(str(g) for g in news_er.get('gaps', []))}")
+
+    lines.append(
+        "  * 【E-04 纪律约束】经理只能引用已提供结构化栏位，严禁自行填数、重复计入或把 unknown 改成事实；"
+        "缺少基线时不得输出数值修正幅度；正文未取得时公告存在不构成财务数字。"
+    )
+    return "\n".join(lines)
+
+
+def validate_manager_expectation_revision_consumption(
+    manager_verdict: Mapping[str, Any],
+    raw_response: str,
+    expectation_revisions: Any,
+) -> tuple[bool, list[str]]:
+    """Validate that research manager only consumed structured expectation_revision fields without hallucination."""
+    violations: list[str] = []
+    if isinstance(expectation_revisions, Sequence) and not isinstance(expectation_revisions, Mapping):
+        fund_er = None
+        news_er = None
+        for item in expectation_revisions:
+            if isinstance(item, Mapping):
+                ev_type = item.get("event_type")
+                if ev_type == EVENT_TYPE_FUNDAMENTAL:
+                    fund_er = item
+                elif ev_type in (EVENT_TYPE_EVENT, EVENT_TYPE_NONE):
+                    news_er = item
+        exp_dict = {"fundamentals": fund_er or {}, "news": news_er or {}}
+    elif isinstance(expectation_revisions, Mapping):
+        exp_dict = dict(expectation_revisions)
+    else:
+        exp_dict = {}
+
+    fund_er = exp_dict.get("fundamentals") or {}
+    news_er = exp_dict.get("news") or {}
+
+    fund_base_type = (fund_er.get("baseline") or {}).get("type", "none")
+    fund_base_val = (fund_er.get("baseline") or {}).get("value")
+
+    # 1. Check if priced_in claimed as supported fact without traceable evidence
+    fund_pi = (fund_er.get("priced_in") or {}).get("status", "unknown")
+    news_pi = (news_er.get("priced_in") or {}).get("status", "unknown")
+
+    reason = str(manager_verdict.get("reason") or "")
+
+    if fund_pi == "unknown" and news_pi == "unknown":
+        if "已充分定价" in reason or "已完全定价" in reason or "市场已定价" in reason or "已定价" in reason:
+            violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价”当作已确证事实引用")
+
+    # 2. Check if beat/miss claimed without comparable baseline
+    if fund_base_type == "none" or fund_base_val is None:
+        if "超预期" in reason or "不及预期" in reason:
+            violations.append("E-04 守卫拦截：基本面无有效旧基线，经理不得在裁决理由中断言业绩“超预期”或“不及预期”")
+
+    # 3. Check if financial numbers hallucinated when analyst reported gap
+    fund_act_val = (fund_er.get("actual") or {}).get("value")
+    if fund_act_val is None:
+        m = re.search(
+            r"(?:营业收入|营收|净利润|归母净利润|毛利率)[^\d\n]{0,12}([0-9]+(?:\.[0-9]+)?\s*(?:亿元|万元|元|万|亿|%))",
+            reason,
+        )
+        if m:
+            violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值，经理不得擅自断言财务指标数值（{m.group(0)}）")
+
+    return len(violations) == 0, violations
+
+
 def _resolve_research_horizon(state: dict | None) -> str:
     """Resolve the active research horizon for the current run.
 
@@ -283,6 +522,7 @@ def _blocked_manager_payload(
     relation_graph: Any = None,
     relation_graph_status: str | None = None,
     relation_graph_reason: str | None = None,
+    expectation_revision: Mapping[str, Any] | None = None,
 ) -> dict:
     """Shared early-return shape for INVALID/ABSTAIN manager short-circuits."""
     if claim_cluster_metrics is None:
@@ -325,6 +565,7 @@ def _blocked_manager_payload(
         "research_horizon": research_horizon,
         "evidence_relation_status": claim_cluster_metrics.get("relation_graph_status", "pending"),
         "evidence_relation_reason": claim_cluster_metrics.get("relation_graph_reason", ""),
+        "expectation_revision": dict(expectation_revision or {}),
     }
     payload = {
         "fund_flow_consensus_guard": fund_flow_guard,
@@ -344,6 +585,7 @@ def _blocked_manager_payload(
             "judge_decision": blocked_plan,
             "current_response": blocked_plan,
             "manager_verdict": manager_verdict,
+            "expectation_revision": dict(expectation_revision or {}),
             "evidence_verification": ev_list,
             "claim_evidence_summary": summary_dict,
             "report_manifest": report_manifest,
@@ -363,6 +605,11 @@ def _blocked_manager_payload(
 def create_research_manager(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
     async def research_manager_node(state) -> dict:
         research_horizon = _resolve_research_horizon(state)
+        analyst_traces = state.get("analyst_traces") or []
+        expectation_revisions = extract_expectation_revisions_from_traces(analyst_traces)
+        config = get_config()
+        prompt_language = _resolve_language(config)
+
         user_intent = state.get("user_intent") or {}
         focus_areas = user_intent.get("focus_areas", [])
         specific_questions = user_intent.get("specific_questions", [])
@@ -508,6 +755,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                     relation_graph=relation_graph,
                     relation_graph_status=relation_graph_status,
                     relation_graph_reason=relation_graph_reason,
+                    expectation_revision=expectation_revisions,
                 )
 
         # ── P0-1: Run integrity before any Neutral/HOLD collapse ────────────
@@ -537,6 +785,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 relation_graph=relation_graph,
                 relation_graph_status=relation_graph_status,
                 relation_graph_reason=relation_graph_reason,
+                expectation_revision=expectation_revisions,
             )
 
         # ── Provenance & Data Failure Context ──────────────────────────────
@@ -582,6 +831,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
 
         if data_gaps:
             prov_lines.append(f"- 已知数据缺口 (data_gaps): {', '.join(str(g) for g in data_gaps)}")
+        prov_lines.append(format_expectation_revisions_for_prompt(expectation_revisions, language=prompt_language))
         provenance_context = "\n".join(prov_lines)
 
         market_evidence_summary = build_evidence_summary(market_research_report)
@@ -593,7 +843,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if macro_evidence_summary:
             label = (
                 "宏观/板块证据摘要："
-                if _resolve_language(get_config()) == "zh"
+                if prompt_language == "zh"
                 else "Macro/sector evidence summary: "
             )
             macro_evidence_line = f"{label}{macro_evidence_summary}"
@@ -618,6 +868,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 relation_graph=relation_graph,
                 relation_graph_status=relation_graph_status,
                 relation_graph_reason=relation_graph_reason,
+                expectation_revision=expectation_revisions,
             )
 
         # ── 辩论前置硬闸检查 (Debate Pre-Gate Hard Gate - fail-closed before LLM) ──
@@ -674,6 +925,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 relation_graph=relation_graph,
                 relation_graph_status=relation_graph_status,
                 relation_graph_reason=relation_graph_reason,
+                expectation_revision=expectation_revisions,
             )
             # Preserve pre-gate debate bookkeeping fields
             debate_state = payload["investment_debate_state"]
@@ -840,6 +1092,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                     evidence_verification=claims_verification,
                     claim_cluster_metrics=claim_cluster_metrics,
                     research_horizon=research_horizon,
+                    expectation_revision=expectation_revisions,
                 )
 
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="research_manager")
@@ -872,6 +1125,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 evidence_verification=claims_verification,
                 claim_cluster_metrics=claim_cluster_metrics,
                 research_horizon=research_horizon,
+                expectation_revision=expectation_revisions,
             )
         base_prompt = prompt_template.format(
             past_memory_str=past_memory_str,
@@ -1006,6 +1260,16 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         manager_verdict["research_horizon"] = research_horizon
         manager_verdict["evidence_relation_status"] = claim_cluster_metrics.get("relation_graph_status", "pending")
         manager_verdict["evidence_relation_reason"] = claim_cluster_metrics.get("relation_graph_reason", "")
+        manager_verdict["expectation_revision"] = expectation_revisions
+
+        er_valid, er_violations = validate_manager_expectation_revision_consumption(
+            manager_verdict=manager_verdict,
+            raw_response=full_content,
+            expectation_revisions=expectation_revisions,
+        )
+        if not er_valid:
+            manager_verdict["consistency_check_passed"] = False
+            manager_verdict["failed_checks"].extend(er_violations)
 
         if not manager_verdict["consistency_check_passed"]:
             failed_reasons = "; ".join(manager_verdict["failed_checks"])
@@ -1078,6 +1342,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "round_goal": investment_debate_state.get("round_goal", ""),
             "claim_counter": investment_debate_state.get("claim_counter", 0),
             "manager_verdict": manager_verdict,
+            "expectation_revision": expectation_revisions,
             "evidence_verification": claims_verification,
             "claim_evidence_summary": claim_evidence_summary,
             "challenge_verification": challenges_verification,
@@ -1129,13 +1394,16 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             "confirmation_state": status_dict["confirmation_state"],
             "horizon": research_horizon,
             "research_horizon": research_horizon,
+            "expectation_revision": expectation_revisions,
         }
         new_investment_debate_state["manager_verdict"] = manager_verdict
+        new_investment_debate_state["expectation_revision"] = expectation_revisions
 
         payload = {
             "investment_debate_state": new_investment_debate_state,
             "investment_plan": final_plan,
             "manager_verdict": manager_verdict,
+            "expectation_revision": expectation_revisions,
             "evidence_verification": claims_verification,
             "claim_evidence_summary": claim_evidence_summary,
             "challenge_verification": challenges_verification,
