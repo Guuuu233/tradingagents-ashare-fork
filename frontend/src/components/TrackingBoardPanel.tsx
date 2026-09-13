@@ -21,6 +21,7 @@ import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/authStore'
 import type { PortfolioPositionInput, TrackingBoardItem, TrackingBoardResponse } from '@/types'
 import { formatNumber, formatWithChineseUnit } from '@/utils/format'
+import { localizeDirection } from '@/utils/reportText'
 
 const CLAMP_TWO_LINES_STYLE: CSSProperties = {
     display: '-webkit-box',
@@ -646,7 +647,7 @@ function DetailedBoardView({
     )
 }
 
-function DetailedTrackingRow({
+export function DetailedTrackingRow({
     item,
     onAnalyze,
     onOpenReport,
@@ -824,7 +825,7 @@ function DetailedTrackingRow({
                             <>
                                 <div className="mt-3 flex items-center gap-2 text-xs">
                                     <span className={`rounded-full px-2 py-1 font-semibold ${decisionToneClass}`}>
-                                        {analysis.direction || analysis.decision || '待定'}
+                                        {localizeDirection(analysis.direction) || analysis.decision || '待定'}
                                     </span>
                                     <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-500 dark:bg-slate-700 dark:text-slate-300">
                                         {analysis.trade_date}

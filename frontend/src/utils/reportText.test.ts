@@ -28,13 +28,40 @@ describe('isLegacyEnglishDirection', () => {
 describe('localizeDirection', () => {
     it('maps legacy English directions to Chinese display labels', () => {
         expect(localizeDirection('BULLISH')).toBe('看多')
+        expect(localizeDirection('LEAN_BULLISH')).toBe('偏多')
+        expect(localizeDirection('BEARISH')).toBe('看空')
         expect(localizeDirection('lean_bearish')).toBe('偏空')
         expect(localizeDirection('NEUTRAL')).toBe('中性')
         expect(localizeDirection('CAUTIOUS')).toBe('谨慎')
+        expect(localizeDirection('BULL')).toBe('看多')
+        expect(localizeDirection('BEAR')).toBe('看空')
+        expect(localizeDirection('N/A')).toBe('不适用')
+        expect(localizeDirection('NA')).toBe('不适用')
     })
 
-    it('passes through Chinese directions and empty values unchanged', () => {
+    it('handles case-insensitivity for legacy English directions', () => {
+        expect(localizeDirection('bullish')).toBe('看多')
+        expect(localizeDirection('Lean_Bullish')).toBe('偏多')
+        expect(localizeDirection('Bearish')).toBe('看空')
+        expect(localizeDirection('cautious')).toBe('谨慎')
+    })
+
+    it('passes through Chinese directions unchanged', () => {
         expect(localizeDirection('看多')).toBe('看多')
+        expect(localizeDirection('偏多')).toBe('偏多')
+        expect(localizeDirection('中性')).toBe('中性')
+        expect(localizeDirection('偏空')).toBe('偏空')
+        expect(localizeDirection('看空')).toBe('看空')
+        expect(localizeDirection('增持')).toBe('增持')
+        expect(localizeDirection('减持')).toBe('减持')
+    })
+
+    it('passes through unknown direction values unchanged', () => {
+        expect(localizeDirection('UNKNOWN_DIR')).toBe('UNKNOWN_DIR')
+        expect(localizeDirection('SIDEWAYS')).toBe('SIDEWAYS')
+    })
+
+    it('returns null for empty or nullish values', () => {
         expect(localizeDirection('')).toBe(null)
         expect(localizeDirection(null)).toBe(null)
         expect(localizeDirection(undefined)).toBe(null)

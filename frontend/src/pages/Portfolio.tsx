@@ -8,6 +8,7 @@ import {
 import { api } from '@/services/api'
 import type { WatchlistItem, ScheduledAnalysis, StockSearchResult, Report, AnalysisHorizon } from '@/types'
 import { HORIZON_LABELS } from '@/utils/reportDualHorizon'
+import { localizeDirection } from '@/utils/reportText'
 
 const WATCHLIST_BATCH_SPLIT_RE = /[,\s，、；;]+/
 const SCHEDULED_TEST_TOOLTIP =
@@ -618,7 +619,7 @@ export default function Portfolio() {
                                                 <p className="text-xs text-slate-400">{item.symbol}</p>
                                                 {report && (
                                                     <p className="text-xs text-slate-400 mt-0.5">
-                                                        最近：{report.trade_date} · {report.direction || report.decision || '—'}
+                                                        最近：{report.trade_date} · {localizeDirection(report.direction) || report.decision || '—'}
                                                     </p>
                                                 )}
                                             </div>

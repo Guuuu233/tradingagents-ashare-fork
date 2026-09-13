@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HorizonSwitch } from '@/pages/Portfolio'
 import { api } from '@/services/api'
 import type { ScheduledAnalysis, WatchlistItem } from '@/types'
+import { localizeDirection } from '@/utils/reportText'
 
 describe('HorizonSwitch component (H-03c)', () => {
     it('renders "短线" and "中线" options with "短线" active by default', () => {
@@ -395,5 +396,95 @@ describe('Portfolio fetch request body verification (H-03c)', () => {
         expect(globalThis.alert).toHaveBeenCalledWith('定时分析暂不支持多周期/双档，仅支持单周期 (short 或 medium)')
 
         globalThis.alert = originalAlert
+    })
+})
+
+describe('Portfolio latest report direction localization (P1-C)', () => {
+    function renderLatestReportLine(report: {
+        trade_date: string
+        direction?: string | null
+        decision?: string | null
+    }) {
+        return renderToStaticMarkup(
+            <p className="text-xs text-slate-400 mt-0.5">
+                最近：{report.trade_date} · {localizeDirection(report.direction) || report.decision || '—'}
+            </p>,
+        )
+    }
+
+    it('localizes legacy English directions to Chinese labels', () => {
+        const testCases = [
+            { raw: 'BULLISH', expected: '看多' },
+            { raw: 'LEAN_BULLISH', expected: '偏多' },
+            { raw: 'BEARISH', expected: '看空' },
+            { raw: 'LEAN_BEARISH', expected: '偏空' },
+            { raw: 'NEUTRAL', expected: '中性' },
+            { raw: 'CAUTIOUS', expected: '谨慎' },
+        ]
+
+        for (const tc of testCases) {
+            const html = renderLatestReportLine({
+                trade_date: '2026-09-01',
+                direction: tc.raw,
+            })
+            expect(html).toContain(`最近：2026-09-01 · ${tc.expected}`)
+            expect(html).not.toContain(tc.raw)
+        }
+    })
+
+    it('passes through current Chinese directions unchanged', () => {
+        const chineseDirections = ['看多', '偏多', '中性', '偏空', '看空']
+        for (const dir of chineseDirections) {
+            const html = renderLatestReportLine({
+                trade_date: '2026-09-01',
+                direction: dir,
+            })
+            expect(html).toContain(`最近：2026-09-01 · ${dir}`)
+        }
+    })
+
+    it('falls back to report.decision when direction is null, empty, or undefined', () => {
+        const htmlWithDecision = renderLatestReportLine({
+            trade_date: '2026-09-01',
+            direction: null,
+            decision: 'BUY',
+        })
+        expect(htmlWithDecision).toContain('最近：2026-09-01 · BUY')
+
+        const htmlWithEmptyDir = renderLatestReportLine({
+            trade_date: '2026-09-01',
+            direction: '',
+            decision: 'HOLD',
+        })
+        expect(htmlWithEmptyDir).toContain('最近：2026-09-01 · HOLD')
+
+        const htmlWithUndefined = renderLatestReportLine({
+            trade_date: '2026-09-01',
+            direction: undefined,
+            decision: 'SELL',
+        })
+        expect(htmlWithUndefined).toContain('最近：2026-09-01 · SELL')
+    })
+
+    it('falls back to "—" when both direction and decision are missing', () => {
+        const htmlBothNull = renderLatestReportLine({
+            trade_date: '2026-09-01',
+            direction: null,
+            decision: null,
+        })
+        expect(htmlBothNull).toContain('最近：2026-09-01 · —')
+
+        const htmlEmpty = renderLatestReportLine({
+            trade_date: '2026-09-01',
+        })
+        expect(htmlEmpty).toContain('最近：2026-09-01 · —')
+    })
+
+    it('passes through unknown direction values', () => {
+        const html = renderLatestReportLine({
+            trade_date: '2026-09-01',
+            direction: 'UNKNOWN_SIGNAL',
+        })
+        expect(html).toContain('最近：2026-09-01 · UNKNOWN_SIGNAL')
     })
 })
