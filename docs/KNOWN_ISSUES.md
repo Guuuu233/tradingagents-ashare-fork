@@ -2,7 +2,7 @@
 
 ## Legacy report English direction leaks on secondary surfaces
 
-**Status:** Open (minor, display-layer only)  
+**Status:** Source fix merged in DAV-887 (`4e6266b`); live frontend deployment not separately verified
 **Discovered:** 2026-08-04 during M5 wrap-up
 
 ### Symptom
@@ -12,24 +12,28 @@ Pre-Chinese-localization reports store their direction in English (`BULLISH` /
 report list and detail view show a「旧版报告」badge, and the DecisionCard maps
 English directions to Chinese via `DIRECTION_ALIAS` (`localizeDirection` in
 `frontend/src/utils/reportText.ts`). Secondary surfaces that render a report's
-raw `direction` field are not mapped yet:
+raw `direction` field were not mapped yet:
 
 - `TrackingBoardPanel`（跟踪看板）— renders `analysis.direction` directly
 - `Portfolio`（持仓页）— renders `report.direction` in the latest-report line
 
-So a legacy report can still display「方向：BULLISH」in those spots.
+DAV-887 now applies the existing `localizeDirection` mapping to both surfaces.
+The remaining gap is frontend build/deployment and entry-point smoke evidence;
+do not call the live product fixed until that check is recorded.
 
 ### Suggested fix
 
-Apply the same display-layer mapping the DecisionCard uses
-(`localizeDirection`) to the tracking board and portfolio list. Low risk; no
-data migration involved.
+The source change is complete and adds component coverage. The remaining
+verification is `npm test`, `npm run build`, and a real entry-point smoke against
+the deployed bundle. No data migration is required.
 
 ---
 
 ## Vendor chain collapses three outcomes into two behaviors
 
-**Status:** Fixed in DAV-69 (typed vendor results). The result-type redesign below is implemented in `tradingagents/dataflows/vendor_result.py` and consumed by `route_to_vendor` in `tradingagents/dataflows/interface.py`.
+**Status:** Core result-type redesign fixed in DAV-69. The remaining provider
+boundaries are listed below; DAV-889, DAV-895 and DAV-898 are resolved in the
+current release `63d5648`.
 **Discovered:** 2026-07-29 during historical-news refusal work
 
 ### Symptom
@@ -177,19 +181,21 @@ access for those two roles is a candidate next step.
 
 ## Custom prompt history is not retained — old versions are unrecoverable
 
-Status: **known gap, by design for Phase B. Must be closed in Phase C.**
+Status: **Partially resolved in DAV-808; standalone prompt-row history remains a known gap.**
 
 ### Symptom
 
 `PATCH /v1/custom-prompts` replaces the user's whole prompt set (delete + insert in
-one transaction), mirroring `update_role_bindings`.  Each row carries a
-`prompt_hash` (sha256[:12]) that identifies *which version* a prompt was, but the
-previous row — and therefore the previous prompt **text** — is gone after any edit.
+one transaction), mirroring `update_role_bindings`. Each row carries a
+`prompt_hash` (sha256[:12]), but the previous standalone row — and therefore the
+previous prompt **text** — is gone after any edit.
 
 ### Why it matters
 
-This bites the project's end goal (statistical calibration of historical-date
-analyses), not just tidiness.
+This remains relevant to the project's end goal (statistical calibration of
+historical-date analyses), not just tidiness. It does not invalidate reports
+already produced after DAV-808, because those reports carry a self-contained
+resolved snapshot.
 
 In Phase E's A/B runs, each report can be tagged with the prompt hash that produced
 it.  Months later, when calibration is computed across a batch of reports, a report
@@ -198,15 +204,15 @@ batches used *different* prompts, but not *what the older prompt said*.  Attribu
 a calibration shift to a specific prompt change — which is precisely the question the
 custom-prompt work exists to answer — becomes impossible.
 
-### Suggested fix (Phase C, when injection is implemented)
+### Current implementation and remaining gap
 
-Do **not** build a prompt-history table.  Instead, at injection time write the full
-**resolved prompt text itself** into the report snapshot, alongside its hash and
-length.  Attribution then becomes self-contained: no lookup against
-`user_custom_prompts` is ever needed, and later user edits cannot invalidate the
-record.  The resolved text is capped at 6000 chars
-(`custom_prompt_service.RESOLVED_PROMPT_MAX_CHARS`), which is negligible next to a
-report that is already hundreds of KB.
+DAV-808 writes the full **resolved prompt text itself** into the report snapshot,
+alongside its hash and length. Attribution for those reports is therefore
+self-contained: no lookup against `user_custom_prompts` is needed, and later user
+edits cannot invalidate the record. The resolved text is capped at 6000 chars
+(`custom_prompt_service.RESOLVED_PROMPT_MAX_CHARS`). A future history feature may
+retain standalone prompt versions, but it must not replace or silently rewrite
+the existing report snapshots.
 
 Retrieve the text via `custom_prompt_service.resolve_role_prompt()` /
 `resolve_all_roles_prompts()` — do not re-concatenate global + override at the call
@@ -244,20 +250,13 @@ site, or the two implementations will drift.
   前视剔除（与 Investoday 现有实现一致）；对临近披露窗口的极端历史回测可能存在轻微前视。
 - 财务指标 `get_fundamentals` 的报告期（`yyyy-N`）按披露截止日启发式选取
   （一季报 4/30、中报 8/31、三季报 10/31、年报次年 4/30），非逐票公告日精确映射。
-- **`get_fundamentals` 缺 `curr_date` 回退 `now()`**：`_latest_report_period` 在
-  `curr_date=None` 时用 `datetime.now(CN_TZ)` 推算报告期。路由层
-  `route_to_vendor` 对 `get_fundamentals` 做 as-of 必填拒绝，正常调用不会缺失；
-  但绕过路由直接调用 provider 时存在「未显式传日期却取到当前报告期」的语义缺口。
+- **`get_fundamentals` 缺 `curr_date`：已由 DAV-889 修复**。Fuyao provider
+  对该缺失输入不再回退到当前日期或取实时报告期；相关测试已进入当前发布。
 - 龙虎榜 `date` 仅支持一年内（接口约束）；超出返回参数错误。
-- **`get_lhb_detail` 首次 4001 被 `fetch_with_date_fallback` 吞掉**：`_fetch_one` 对
-  `4001` 频率超限直接抛 `FuyaoApiError`，而 `fetch_with_date_fallback` 的通用
-  `except Exception` 会把它当作「该日无数据」继续向前回退，首日 4001 不做退避重试，
-  导致静默回退到更早日（而非重试当日）。频率超限未达退避上限时语义被弱化。
-- **交易日历 fallback 仅读 env，与 provider 配置优先不一致**：`trade_calendar`
-  的 `_fetch_cn_trade_dates_from_fuyao` 只读 `os.getenv("FUYAO_API_KEY")`，
-  而 `CnFuyaoProvider._resolve_api_key` 先读配置 `fuyao_api_key` 再读 env。
-  若仅配置了 `fuyao_api_key`（未设 env），日历 fallback 不会启用，但 provider 本身可用。
+- **`get_lhb_detail` 首次 4001：已由 DAV-895 修复**。龙虎榜路径不再把
+  频率超限误当作日期无数据而静默回退；相关行为和回退边界已有测试。
+- **交易日历 fallback 配置优先级：已由 DAV-898 修复**。日历路径现在与
+  Fuyao provider 一样优先读取配置中的 `fuyao_api_key`，再回退到环境变量。
 - 交易日历 fallback 依赖 `FUYAO_API_KEY`；近一年窗口不足以覆盖更早历史查询。
 - 涨跌停/龙虎榜备用链依赖 `cn_akshare.get_zt_pool` / `get_lhb_detail` 在东财失败时返回
   `VendorFail`（已改为显式 VendorFail），否则纯字符串会截断 vendor 链。
-
