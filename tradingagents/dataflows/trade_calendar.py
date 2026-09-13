@@ -38,6 +38,10 @@ class DateDataUnavailable(Exception):
     """Raised by a date-scoped fetch when that specific day has no usable data yet."""
 
 
+class DateFetchFatalError(Exception):
+    """Raised when a date-scoped fetch encounters a fatal error and must abort fallback."""
+
+
 class DuplicateBarConflictError(ValueError):
     """Raised when a daily series has same-date rows with conflicting OHLCV/Volume.
 
@@ -513,8 +517,10 @@ def fetch_with_date_fallback(
     """Try ``fetch_fn(day)`` over a backward trading-day window.
 
     ``fetch_fn`` should return data on success and raise
-    :class:`DateDataUnavailable` (or any Exception) when that day should be
-    skipped. All failures produce an error that includes the attempted range.
+    :class:`DateDataUnavailable` (or any non-fatal Exception) when that day
+    should be skipped. Fatal exceptions (:class:`DateFetchFatalError`) immediately
+    abort date fallback and are re-raised to the caller. All non-fatal failures
+    produce an error that includes the attempted range.
     """
     request_date = _format_date(_parse_date(date_str))
     try:
@@ -550,6 +556,8 @@ def fetch_with_date_fallback(
         except DateDataUnavailable as exc:
             last_err = str(exc) or type(exc).__name__
             continue
+        except DateFetchFatalError:
+            raise
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             continue

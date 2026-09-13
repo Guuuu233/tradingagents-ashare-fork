@@ -261,6 +261,59 @@ def test_fetch_fallback_calendar_unavailable_message():
     assert "交易日历不可用" in result.error
 
 
+def test_fetch_fallback_fatal_error_aborts_immediately_without_second_date():
+    _seed_calendar(["2026-07-27", "2026-07-28", "2026-07-29"])
+    calls: list[str] = []
+
+    def fetch_fn(day: str):
+        calls.append(day)
+        raise tc.DateFetchFatalError(f"fatal error on {day}")
+
+    with pytest.raises(tc.DateFetchFatalError, match="fatal error on 2026-07-29"):
+        tc.fetch_with_date_fallback(fetch_fn, "2026-07-29", max_back=3)
+
+    assert calls == ["2026-07-29"]
+
+
+def test_fetch_fallback_non_fatal_generic_exception_continues_fallback():
+    _seed_calendar(["2026-07-27", "2026-07-28", "2026-07-29"])
+    calls: list[str] = []
+
+    def fetch_fn(day: str):
+        calls.append(day)
+        if len(calls) == 1:
+            raise RuntimeError(f"transient scrape failure on {day}")
+        return f"success-{day}"
+
+    result = tc.fetch_with_date_fallback(fetch_fn, "2026-07-29", max_back=3)
+    assert result.ok is True
+    assert result.as_of == "2026-07-28"
+    assert result.data == "success-2026-07-28"
+    assert calls == ["2026-07-29", "2026-07-28"]
+
+
+def test_fetch_fallback_fatal_error_on_second_day_aborts_further_fallback():
+    _seed_calendar(["2026-07-25", "2026-07-28", "2026-07-29"])
+    calls: list[str] = []
+
+    def fetch_fn(day: str):
+        calls.append(day)
+        if len(calls) == 1:
+            raise tc.DateDataUnavailable(f"{day} not ready")
+        raise tc.DateFetchFatalError(f"rate limited on {day}")
+
+    with pytest.raises(tc.DateFetchFatalError, match="rate limited on 2026-07-28"):
+        tc.fetch_with_date_fallback(fetch_fn, "2026-07-29", max_back=3)
+
+    assert calls == ["2026-07-29", "2026-07-28"]
+
+
+def test_trade_calendar_has_no_redundant_fatal_aliases():
+    assert hasattr(tc, "DateFetchFatalError")
+    assert not hasattr(tc, "DateDataFatalError")
+    assert not hasattr(tc, "FatalDateFetchError")
+
+
 # ── function-level: margin / lhb / zt ─────────────────────────────────
 
 
