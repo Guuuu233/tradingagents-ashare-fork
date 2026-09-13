@@ -1280,6 +1280,51 @@ def test_negative_manager_guard_covers_chinese_english_and_synonyms():
     assert not is_valid
     assert any("财务指标数值" in v or "net profit" in v.lower() for v in viols)
 
+    # 8. DAV-875 Red Team additions: exceed / surpass base forms
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Company results exceed market expectations", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("超预期" in v or "exceed" in v.lower() for v in viols)
+
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Company profits surpass market estimates", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("超预期" in v or "surpass" in v.lower() for v in viols)
+
+    # 9. DAV-875 Red Team additions: expected comparison expressions
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Earnings were better than expected", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("超预期" in v or "better than" in v.lower() for v in viols)
+
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Results were worse than expected", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("不及预期" in v or "worse than" in v.lower() for v in viols)
+
+    # 10. DAV-875 Red Team additions: fell short / falls short / fall short
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Company quarterly performance fell short", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("不及预期" in v or "fell short" in v.lower() for v in viols)
+
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Company quarterly performance falls short", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("不及预期" in v or "falls short" in v.lower() for v in viols)
+
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "Operating results fall short of analyst consensus", [fund_er_gap, news_er_unknown]
+    )
+    assert not is_valid
+    assert any("不及预期" in v or "fall short" in v.lower() for v in viols)
+
 
 def test_negative_double_count_guard_deduplicates_by_real_identity_and_is_idempotent():
     """DAV-874 Item 4: Distinct events not deduplicated; identical events deduplicated once; guard is idempotent."""
@@ -1384,3 +1429,313 @@ def test_negative_publication_missing_provenance_stays_gap_without_faking_publis
     assert "source_hash_missing" in er["gaps"]
     assert er["publication"]["content_qualification"] in (CONTENT_UNAVAILABLE, CONTENT_NOT_ATTEMPTED)
     assert er["status"] == STATUS_GAP
+
+
+def test_negative_manager_guard_covers_english_exceed_surpass_expected_and_fall_short():
+    """DAV-877 Item 1 & 3: Manager English guard intercepts exceed/surpass base forms, expected comparisons, and fall short phrases."""
+    from tradingagents.agents.utils.decision_status import status_from_manager_verdict
+
+    fund_er_gap = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_GAP)
+    news_er_unknown = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_GAP)
+    verdict = {"direction": "BULLISH", "reason": "保持中性"}
+
+    # 1. Base form: exceed / surpass
+    cases_exceed_surpass = [
+        ("Company results exceed market expectations", "exceed"),
+        ("Quarterly earnings exceed analyst consensus", "exceed"),
+        ("Results surpass expectations", "surpass"),
+        ("Revenues surpass market forecasts", "surpass"),
+    ]
+    for text, kw in cases_exceed_surpass:
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, [fund_er_gap, news_er_unknown]
+        )
+        assert not is_valid, f"Failed to intercept {text!r}"
+        assert any("超预期" in v or kw in v.lower() for v in viols)
+
+        # End-to-end: consistency failure enters NO_TRADE path
+        v_copy = dict(verdict)
+        v_copy["consistency_check_passed"] = False
+        v_copy["failed_checks"] = viols
+        st = status_from_manager_verdict(v_copy)
+        assert st.trade_action == "NO_TRADE"
+        assert st.risk_status == "BLOCKED"
+
+    # 2. expected comparison expressions
+    cases_expected = [
+        ("Earnings were better than expected", "better than"),
+        ("Revenues were higher than expected", "higher than"),
+        ("Results were worse than expected", "worse than"),
+        ("Operating profits were lower than expected", "lower than"),
+    ]
+    for text, kw in cases_expected:
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, [fund_er_gap, news_er_unknown]
+        )
+        assert not is_valid, f"Failed to intercept {text!r}"
+        assert any("预期" in v or kw in v.lower() for v in viols)
+
+    # 3. fell short / falls short / fall short phrases (standalone and with of)
+    cases_fall_short = [
+        ("Company quarterly performance fell short", "fell short"),
+        ("Company performance falls short", "falls short"),
+        ("Results fall short", "fall short"),
+        ("Quarterly numbers fell short of market expectations", "fell short"),
+        ("Operating performance falls short of analyst consensus", "falls short"),
+        ("Revenues fall short of estimates", "fall short"),
+    ]
+    for text, kw in cases_fall_short:
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, [fund_er_gap, news_er_unknown]
+        )
+        assert not is_valid, f"Failed to intercept {text!r}"
+        assert any("不及预期" in v or kw in v.lower() for v in viols)
+
+    # 4. Positive test: when valid baseline is present, manager can cite beat/miss/exceed
+    fund_er_valid = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+    fund_er_valid["baseline"] = {
+        "type": "forecast",
+        "value": 100.0,
+        "unit": "亿元",
+        "as_of": "2024-05-01",
+        "source": "structured_forecast",
+    }
+    fund_er_valid["actual"] = {
+        "status": STATUS_AVAILABLE,
+        "metric": "净利润",
+        "value": 120.0,
+        "unit": "亿元",
+        "report_period": "2024Q2",
+        "as_of": "2024-06-30",
+    }
+    is_valid_pos, viols_pos = validate_manager_expectation_revision_consumption(
+        verdict, "Company results exceed market expectations", [fund_er_valid, news_er_unknown]
+    )
+    assert is_valid_pos
+    assert len(viols_pos) == 0
+
+
+def test_double_count_guard_cluster_id_deduplication_and_idempotency():
+    """DAV-877 Item 2 & 3: Double count guard incorporates bool(cluster_id) in is_event_claim; deduplicates once; idempotent."""
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+    fund_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_ACCOUNTED_FOR,
+        "prevent_double_voting": True,
+        "description": "已在基线中计入",
+    }
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_PARTIAL)
+    news_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_UNKNOWN,
+        "prevent_double_voting": True,
+        "description": "阻止再次加票",
+    }
+    exp_revs = {"fundamentals": fund_er, "news": news_er}
+
+    # 1. Claims with cluster_id but NO event_id, neutral event_type, and no financial keywords in claim_text
+    # Previously, is_event_claim evaluated to False because cluster_id was omitted from is_event_claim
+    claims_same_cluster = [
+        {
+            "claim_id": "c1",
+            "cluster_id": "cluster_industry_expansion_001",
+            "claim_text": "行业景气度持续上升拉动产能利用率达到历史高位水平",
+            "stance": "bull",
+        },
+        {
+            "claim_id": "c2",
+            "cluster_id": "cluster_industry_expansion_001",
+            "claim_text": "下游需求旺盛带动产销两旺产线处于饱和运转状态",
+            "stance": "bull",
+        },
+    ]
+    initial_metrics = {
+        "independent_cluster_count": 2,
+        "bull_cluster_count": 2,
+        "bear_cluster_count": 0,
+    }
+    initial_verdict = {
+        "adopted_claim_ids": ["c1", "c2"],
+        "excluded_evidence": [],
+    }
+
+    m_out, v_out, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics=dict(initial_metrics),
+        expectation_revisions=exp_revs,
+        claims=claims_same_cluster,
+        manager_verdict=dict(initial_verdict),
+    )
+
+    # Identical cluster_id claims ARE deduplicated once!
+    assert m_out["double_count_guard_active"] is True
+    assert m_out["duplicate_voting_prevented"] is True
+    assert m_out["independent_cluster_count"] == 1
+    assert m_out["bull_cluster_count"] == 1
+    assert v_out["adopted_claim_ids"] == ["c1"]
+    assert len(v_out["excluded_evidence"]) == 1
+    assert v_out["excluded_evidence"][0]["claim_id"] == "c2"
+
+    # Idempotent re-invocation: calling again does not subtract again
+    m_out2, v_out2, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics=m_out,
+        expectation_revisions=exp_revs,
+        claims=claims_same_cluster,
+        manager_verdict=v_out,
+    )
+    assert m_out2["independent_cluster_count"] == 1
+    assert m_out2["bull_cluster_count"] == 1
+    assert v_out2["adopted_claim_ids"] == ["c1"]
+    assert len(v_out2["excluded_evidence"]) == 1
+
+    # 2. Distinct cluster_ids are NOT deduplicated
+    claims_diff_cluster = [
+        {
+            "claim_id": "c1",
+            "cluster_id": "cluster_expansion_001",
+            "claim_text": "行业景气度持续上升拉动产能利用率达到历史高位水平",
+            "stance": "bull",
+        },
+        {
+            "claim_id": "c2",
+            "cluster_id": "cluster_patent_002",
+            "claim_text": "获得新型固态电池核心材料发明专利授权",
+            "stance": "bull",
+        },
+    ]
+    m_diff, v_diff, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics=dict(initial_metrics),
+        expectation_revisions=exp_revs,
+        claims=claims_diff_cluster,
+        manager_verdict=dict(initial_verdict),
+    )
+    assert m_diff["independent_cluster_count"] == 2
+    assert m_diff["bull_cluster_count"] == 2
+    assert v_diff["adopted_claim_ids"] == ["c1", "c2"]
+    assert len(v_diff["excluded_evidence"]) == 0
+
+
+def test_calendar_date_validation_downgrades_gap_and_forbids_numeric():
+    """DAV-877 Item 4: Non-calendar dates (2024-02-31, 0000-00-00) must downgrade to gap and forbid numeric revision."""
+    invalid_dates = ["2024-02-31", "0000-00-00", "2024-04-31", "2024-13-01"]
+
+    for inv_date in invalid_dates:
+        # A. _extract_structured_actual downgrades to gap and value=None
+        outputs = {
+            "structured_financials": {
+                "metric": "净利润",
+                "value": 150.0,
+                "unit": "亿元",
+                "report_period": "2024Q2",
+                "as_of": inv_date,
+            }
+        }
+        act, act_gaps = _extract_structured_actual(outputs, current_date="2024-07-01")
+        assert act["status"] == STATUS_GAP
+        assert act["value"] is None
+        assert "invalid_as_of" in act_gaps
+
+        # B. Baseline with invalid calendar date is demoted to type=none and forbids numeric revision
+        pool_inv_baseline = {
+            "earnings_forecast": {
+                "metric": "净利润",
+                "value": 120.0,
+                "unit": "亿元",
+                "report_period": "2024Q2",
+                "as_of": inv_date,
+                "source": "structured_forecast",
+                "type": "forecast",
+            }
+        }
+        outputs_valid_act = {
+            "structured_financials": {
+                "metric": "净利润",
+                "value": 150.0,
+                "unit": "亿元",
+                "report_period": "2024Q2",
+                "as_of": "2024-06-30",
+            }
+        }
+        act_valid, _ = _extract_structured_actual(outputs_valid_act, current_date="2024-07-01")
+        base, rev, base_gaps = _extract_baseline_and_revision(
+            actual=act_valid, pool=pool_inv_baseline, current_date="2024-07-01"
+        )
+        assert base["type"] == BASELINE_NONE
+        assert base["value"] is None
+        assert "invalid_as_of" in base_gaps
+        assert rev["type"] != REVISION_NUMERIC
+        assert rev["value"] is None
+
+        # C. Full build_fundamentals_expectation_revision produces gap without numeric revision
+        outputs_full_inv = {
+            "publish_time": "2024-07-01 10:00:00",
+            "source": "上交所",
+            "source_hash": "sha256:abcd1234abcd1234",
+            "structured_financials": {
+                "metric": "净利润",
+                "value": 150.0,
+                "unit": "亿元",
+                "report_period": "2024Q2",
+                "as_of": inv_date,
+            },
+        }
+        er = build_fundamentals_expectation_revision(outputs_full_inv, current_date="2024-07-01")
+        assert er["status"] == STATUS_GAP
+        assert er["actual"]["status"] == STATUS_GAP
+        assert er["actual"]["value"] is None
+        assert er["revision"]["type"] != REVISION_NUMERIC
+        assert er["revision"]["value"] is None
+        assert "invalid_as_of" in er["gaps"]
+
+        # D. Contract validator strictly rejects non-calendar dates
+        fake_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+        fake_er["actual"]["as_of"] = inv_date
+        fake_er["actual"]["value"] = 100.0
+        fake_er["actual"]["metric"] = "净利润"
+        fake_er["actual"]["unit"] = "亿元"
+        fake_er["actual"]["report_period"] = "2024Q2"
+        is_val, viols = validate_expectation_revision(fake_er)
+        assert not is_val
+        assert any("invalid calendar date" in v for v in viols)
+
+
+def test_build_fundamentals_expectation_revision_fails_closed_on_fabricated_fin_hash():
+    """DAV-877 Item 5: Builder must fail closed on fin_<period>_<date> fabricated fingerprints without qualified status."""
+    fabricated_hashes = [
+        "fin_2024Q2_2024-06-30",
+        "fin_NA_NA",
+        "fin_2024Q1_2024-03-31",
+    ]
+    for fake_hash in fabricated_hashes:
+        outputs = {
+            "publish_time": "2024-07-01 10:00:00",
+            "source": "巨潮资讯网",
+            "source_hash": fake_hash,
+            "structured_financials": {
+                "metric": "净利润",
+                "value": 100.0,
+                "unit": "亿元",
+                "report_period": "2024Q2",
+                "as_of": "2024-06-30",
+                "source_hash": fake_hash,
+            },
+        }
+        pool = {
+            "baseline": {
+                "type": "forecast",
+                "source": "broker_consensus",
+                "metric": "净利润",
+                "value": 80.0,
+                "unit": "亿元",
+                "period": "2024Q2",
+                "as_of": "2024-05-01",
+            }
+        }
+        er = build_fundamentals_expectation_revision(outputs, pool=pool, current_date="2024-07-01")
+
+        # Builder must fail-closed!
+        assert er["status"] == STATUS_GAP
+        assert er["publication"]["content_qualification"] != CONTENT_QUALIFIED
+        assert er["publication"]["content_qualification"] in (CONTENT_UNAVAILABLE, CONTENT_NOT_ATTEMPTED)
+        assert er["publication"]["source_hash"] is None
+        assert "source_hash_missing" in er["gaps"]
+        assert "fabricated_source_hash" in er["gaps"]
+        assert er["priced_in"]["status"] == PRICED_IN_UNKNOWN
+        assert er["double_count_guard"]["status"] == DOUBLE_COUNT_UNKNOWN

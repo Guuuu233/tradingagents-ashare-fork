@@ -510,7 +510,7 @@ def validate_manager_expectation_revision_consumption(
                 break
         if not has_beat_miss:
             m_en_beat = re.search(
-                r"\b(?:beat|beats|beating|exceeded|exceeds|exceeding|surpassed|surpasses|above|better than|ahead of)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?)\b|\b(?:earnings|profit|revenue)\s+beat\b",
+                r"\b(?:beat|beats|beating|exceed|exceeded|exceeds|exceeding|surpass|surpassed|surpasses|surpassing|above|better than|higher than|ahead of)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected)\b|\b(?:earnings|profit|revenue)\s+beat\b",
                 full_text,
                 re.IGNORECASE,
             )
@@ -519,7 +519,9 @@ def validate_manager_expectation_revision_consumption(
                 has_beat_miss = True
             else:
                 m_en_miss = re.search(
-                    r"\b(?:missed?|misses|missing|below|fell short of|falls short of|worse than|lagged|behind)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?)\b|\b(?:earnings|profit|revenue)\s+miss\b",
+                    r"\b(?:fell short|falls short|fall short)(?:\s+of\b(?:\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected))?)?\b|"
+                    r"\b(?:missed?|misses|missing|below|worse than|lower than|lagged|behind)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected)\b|"
+                    r"\b(?:earnings|profit|revenue)\s+miss\b",
                     full_text,
                     re.IGNORECASE,
                 )
@@ -711,6 +713,7 @@ def apply_manager_double_count_guard(
         is_event_claim = (
             ev_type in ("event", "fundamental")
             or bool(event_id)
+            or bool(cluster_id)
             or any(kw in txt for kw in ("预告", "预测", "快报", "业绩", "财报", "公告", "earnings", "forecast"))
         )
         if not is_event_claim:

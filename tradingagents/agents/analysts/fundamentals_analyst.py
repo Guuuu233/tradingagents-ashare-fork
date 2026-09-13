@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import datetime
 import re
 import time as _time
 from typing import Any, Mapping, Optional, Sequence
@@ -134,7 +135,14 @@ def _extract_structured_actual(
         )
         if has_all_elements:
             as_of_str = str(as_of).strip()
-            if not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_str):
+            is_valid_cal_date = False
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_str):
+                try:
+                    datetime.datetime.strptime(as_of_str, "%Y-%m-%d")
+                    is_valid_cal_date = True
+                except ValueError:
+                    is_valid_cal_date = False
+            if not is_valid_cal_date:
                 gaps.append("invalid_as_of")
                 return {
                     "status": STATUS_GAP,
@@ -144,7 +152,7 @@ def _extract_structured_actual(
                     "report_period": str(period).strip(),
                     "as_of": None,
                     "source": str(source).strip(),
-                    "reason": f"截至日期格式不合法({as_of_str})",
+                    "reason": f"截至日期不是合法公历日期({as_of_str})",
                 }, gaps
             if current_date and as_of_str > str(current_date)[:10]:
                 gaps.append("future_date")
@@ -222,7 +230,14 @@ def _extract_baseline_and_revision(
         if not raw_as_of or not str(raw_as_of).strip():
             return None, ["baseline_as_of_missing", "missing_as_of"]
         as_of_str = str(raw_as_of).strip()
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_str):
+        is_valid_cal_date = False
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_str):
+            try:
+                datetime.datetime.strptime(as_of_str, "%Y-%m-%d")
+                is_valid_cal_date = True
+            except ValueError:
+                is_valid_cal_date = False
+        if not is_valid_cal_date:
             return as_of_str, ["invalid_as_of"]
         if current_date and as_of_str > str(current_date)[:10]:
             return as_of_str, ["future_date"]
@@ -466,16 +481,20 @@ def build_fundamentals_expectation_revision(
         pub_source = None
         all_gaps.append("missing_source")
 
-    if real_source_hash and str(real_source_hash).strip():
-        source_hash = str(real_source_hash).strip()
+    real_source_hash_str = str(real_source_hash).strip() if real_source_hash else ""
+    is_fabricated_hash = bool(real_source_hash_str.startswith("fin_"))
+    if real_source_hash_str and not is_fabricated_hash:
+        source_hash = real_source_hash_str
     else:
         source_hash = None
         all_gaps.append("source_hash_missing")
+        if is_fabricated_hash:
+            all_gaps.append("fabricated_source_hash")
 
     # Qualification status
     if has_provider_failure:
         content_status = CONTENT_UNAVAILABLE
-    elif source_hash and pub_time and pub_source and not has_compliance_violation:
+    elif source_hash and pub_time and pub_source and not has_compliance_violation and "invalid_as_of" not in all_gaps:
         content_status = CONTENT_QUALIFIED
     elif source_hash:
         content_status = CONTENT_HASHED
@@ -505,6 +524,11 @@ def build_fundamentals_expectation_revision(
     if (
         has_provider_failure
         or "future_date" in all_gaps
+        or "invalid_as_of" in all_gaps
+        or "missing_as_of" in all_gaps
+        or "baseline_as_of_missing" in all_gaps
+        or "source_hash_missing" in all_gaps
+        or "fabricated_source_hash" in all_gaps
         or has_compliance_violation
         or actual.get("status") == STATUS_GAP
         or not source_hash

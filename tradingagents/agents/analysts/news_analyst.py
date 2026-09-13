@@ -1,4 +1,5 @@
 import logging
+import datetime
 import re
 from typing import Any, Mapping, Sequence, Optional
 from tradingagents.agents.utils.context_utils import get_cn_stock_name, format_phase1_reports
@@ -253,18 +254,37 @@ def validate_expectation_revision(
         act_val = actual.get("value")
         act_as_of = actual.get("as_of")
 
-        # Future date check on actual
-        if act_as_of and cutoff_date:
-            try:
-                if str(act_as_of)[:10] > str(cutoff_date)[:10]:
-                    if act_val is not None:
-                        violations.append(
-                            f"actual as_of ({act_as_of}) is later than cutoff ({cutoff_date}); actual.value must be None"
-                        )
-                    if "future_date" not in er.get("gaps", []):
-                        violations.append("future as_of in actual must be recorded in gaps")
-            except Exception:
-                pass
+        # Future date and calendar date check on actual
+        if act_as_of:
+            act_as_of_clean = str(act_as_of).strip()
+            is_valid_act_cal = False
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", act_as_of_clean):
+                try:
+                    datetime.datetime.strptime(act_as_of_clean, "%Y-%m-%d")
+                    is_valid_act_cal = True
+                except ValueError:
+                    is_valid_act_cal = False
+            if not is_valid_act_cal:
+                violations.append(
+                    f"actual as_of {act_as_of!r} is invalid calendar date; must be valid YYYY-MM-DD"
+                )
+                if act_val is not None:
+                    violations.append(
+                        f"actual as_of ({act_as_of}) is invalid calendar date; actual.value must be None"
+                    )
+                if "invalid_as_of" not in er.get("gaps", []):
+                    violations.append("invalid as_of in actual must be recorded in gaps")
+            elif cutoff_date:
+                try:
+                    if str(act_as_of)[:10] > str(cutoff_date)[:10]:
+                        if act_val is not None:
+                            violations.append(
+                                f"actual as_of ({act_as_of}) is later than cutoff ({cutoff_date}); actual.value must be None"
+                            )
+                        if "future_date" not in er.get("gaps", []):
+                            violations.append("future as_of in actual must be recorded in gaps")
+                except Exception:
+                    pass
 
         # Check all 5 required elements when value is present
         if act_val is not None:
@@ -303,14 +323,23 @@ def validate_expectation_revision(
                 violations.append(
                     f"baseline type is {b_type!r} but as_of date is missing; cannot masquerade without as_of"
                 )
-            elif not re.match(r"^\d{4}-\d{2}-\d{2}$", str(b_as_of).strip()):
-                violations.append(
-                    f"baseline as_of {b_as_of!r} is invalid format; must be YYYY-MM-DD"
-                )
-            elif cutoff_date and str(b_as_of).strip()[:10] > str(cutoff_date)[:10]:
-                violations.append(
-                    f"baseline as_of {b_as_of!r} is in the future relative to cutoff {cutoff_date!r}"
-                )
+            else:
+                b_as_of_clean = str(b_as_of).strip()
+                is_valid_b_cal = False
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", b_as_of_clean):
+                    try:
+                        datetime.datetime.strptime(b_as_of_clean, "%Y-%m-%d")
+                        is_valid_b_cal = True
+                    except ValueError:
+                        is_valid_b_cal = False
+                if not is_valid_b_cal:
+                    violations.append(
+                        f"baseline as_of {b_as_of!r} is invalid calendar date; must be valid YYYY-MM-DD"
+                    )
+                elif cutoff_date and b_as_of_clean[:10] > str(cutoff_date)[:10]:
+                    violations.append(
+                        f"baseline as_of {b_as_of!r} is in the future relative to cutoff {cutoff_date!r}"
+                    )
         else:
             # Case 4: if b_type == none, value must be None
             if baseline.get("value") is not None:
