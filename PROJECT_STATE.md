@@ -4,10 +4,11 @@
 
 ## 当前结论
 
-- 远端施工主干 `origin/codex/dav-4-p2a-trunk` 当前为
-  `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`，直接父为
-  `b22e42d9ee3f185c67cc81f9f16fdbf30250d03d`。
-- 线上服务已部署同一完整 SHA；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修均已进入运行副本。
+- 远端施工主干 `origin/codex/dav-4-p2a-trunk` 当前为文档-only 后代
+  `2baeaf24077152174c05e03847fa44a7e86dd770`，直接父为
+  `2e6cced6cfe1dae598ad332afc703a30cfda4147`；线上服务仍运行业务 SHA
+  `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`。
+- 远端与服务的业务代码树一致，文档提交不需要重部署；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修已进入运行副本。
 - 主干与线上版本的最近一次同口径全量对照为：基线 `4f1a1aa3` 有 18 failed / 4356 passed，候选 `63d5648` 有 18 failed / 4406 passed；失败集合逐项一致，新增失败为 0，候选多通过 50 项。
 - V-03a 已在生产库的隔离备份上完成只读进度基线，但不是正式收益实验，也不是“能否盈利”的结论；forward OOS 当前没有可评估样本。
 - 生产库未被本轮部署和评估改写；信用加权、真实社交采集、社交 active 和历史重写均未执行。
