@@ -5,6 +5,7 @@
 ## 当前结论
 
 - 当前远端目标主线与治理记录已推送；线上运行发布对象为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`。`f094d6a...` 的代码变更来自 DAV-922 最终候选 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`，其后只追加治理文档。P2-55 的策略层与运行时接线已受控发布，尚未调用真实模型或执行真实分析。生产库未被写入；当前远端完整 SHA 以开工时 `git fetch origin` 后回读为准。
+- 2026-09-14 后续只读观察已记录于 `work/2026-09-14-runtime-observation.md`：目标主线回读为 `a24c7d7a68ed0ac5f3784965aa8f43ad463cc19b`，线上仍为 `f094d6a...`；两个固定回归标的各返回两日 K 线，生产库计数和完整性未变。Docker Desktop 上下文存在但 daemon socket 不可用，因此 Compose 容器级挂载核验仍未执行。
 - 看板本次逐页核对为 924 总 / 840 done / 84 cancelled / 0 非终态；此前 4 张旧 blocked 卡已按替代关系取消，详见 `work/2026-09-14-board-stale-cards-closeout.md`。
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
@@ -146,7 +147,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
 | P2 | LLM client 模型校验策略与运行接线 | 策略层与 DAV-922 运行时接线已合入并随 `f094d6a...` 受控发布；同口径 RT-FULL 相对线上基线失败集合差集为 0，`get_llm()`/启动硬门禁仍未启用，也没有真实 warmup 证据 | 发布门已完成；后续只做受控只读核验，若要取得真实 warmup/业务报告证据需另按数据写入边界执行。不得把静态白名单变成硬门禁，也不得重复派 DAV-916/DAV-918/DAV-921/DAV-922。 |
-| P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
+| P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；当前 Docker daemon 不可用，未启动容器；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
 2026-09-14 只读盘点：Git 共登记 198 个 worktree，其中 135 个元数据标记为 `prunable`，63 个
@@ -197,4 +198,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [DAV-922 全量回归对照证据](work/2026-09-14-rt-full-p2-55b.md)
 - [DAV-922 受控发布收口](work/2026-09-14-dav922-release-f094d6a.md)
 - [看板旧 blocked 卡收口](work/2026-09-14-board-stale-cards-closeout.md)
+- [运行态只读观察](work/2026-09-14-runtime-observation.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
