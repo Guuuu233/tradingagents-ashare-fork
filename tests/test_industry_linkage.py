@@ -804,10 +804,10 @@ class TestIndustryLinkageSuite:
         assert short_metrics["mom_change"] == 10.0
         assert short_metrics["trend"] == "上升"
 
-        # 4. as_of 过滤致空或异常解析
+        # 4. as_of 过滤致空或异常解析 (非法日期必须失败关闭返回 None，杜绝前视数据泄露)
         assert provider._calculate_series_metrics(short_df, as_of="2020-01-01") is None
         res_bad_date = provider._calculate_series_metrics(short_df, as_of="invalid-date-format")
-        assert res_bad_date is not None
+        assert res_bad_date is None
 
     def test_provider_handles_empty_dataframe_returns(self):
         """测试外部接口返回空 DataFrame 时指标优雅降级。"""
@@ -844,3 +844,87 @@ class TestIndustryLinkageSuite:
         assert res["current_value"] is None
         assert res["trend"] == "数据缺失"
         assert res["confidence"] == "低（待实现）"
+
+    def test_calculate_series_metrics_invalid_as_of_fails_closed(self):
+        """测试 DAV-947: as_of 非法日期必须失败关闭返回 None，绝对杜绝未来行泄露。"""
+        provider = IndustryLinkageProvider()
+
+        # 审计复现基准样本：两行固定数据 2026-01-01 与 2026-09-01
+        audit_df = pd.DataFrame({
+            "date": ["2026-01-01", "2026-09-01"],
+            "close": [100.0, 200.0],
+        })
+
+        # 1. 契约 2 & 3: 非法日期必须失败关闭，不得返回未过滤数据或未来的 actual_as_of
+        assert provider._calculate_series_metrics(audit_df, as_of="invalid-date-format") is None
+        assert provider._calculate_series_metrics(audit_df, as_of="not-a-date") is None
+        assert provider._calculate_series_metrics(audit_df, as_of="2026-13-45") is None
+        assert provider._calculate_series_metrics(audit_df, as_of="9999-99-99") is None
+        assert provider._calculate_series_metrics(audit_df, as_of="   ") is None
+
+        # 2. 契约 1: 合法日期保持正确截止语义，结果不得包含晚于截止日的数据
+        res_early = provider._calculate_series_metrics(audit_df, as_of="2026-01-01")
+        assert res_early is not None
+        assert res_early["actual_as_of"] == "2026-01-01"
+        assert res_early["current_value"] == 100.0
+
+        res_late = provider._calculate_series_metrics(audit_df, as_of="2026-09-01")
+        assert res_late is not None
+        assert res_late["actual_as_of"] == "2026-09-01"
+        assert res_late["current_value"] == 200.0
+
+        # 支持不同格式 (YYYYMMDD / 紧凑格式)
+        res_compact = provider._calculate_series_metrics(audit_df, as_of="20260101")
+        assert res_compact is not None
+        assert res_compact["actual_as_of"] == "2026-01-01"
+
+        # 3. 契约 3: 保留合法截止日后无数据则为空的语义
+        assert provider._calculate_series_metrics(audit_df, as_of="2025-12-31") is None
+
+        # 4. as_of 为 None 时保留全量数据计算语义
+        res_none = provider._calculate_series_metrics(audit_df, as_of=None)
+        assert res_none is not None
+        assert res_none["actual_as_of"] == "2026-09-01"
+        assert res_none["current_value"] == 200.0
+
+    def test_invalid_as_of_does_not_penetrate_to_public_entry(self):
+        """测试 DAV-947 契约 5: 异常日期在供应商/公开入口层不会穿透到最终结果，严格 fail-closed。"""
+        provider = IndustryLinkageProvider()
+
+        # 构造带有未来行 (2026-09-01) 的两行时序数据
+        mock_series_df = pd.DataFrame({
+            "date": pd.to_datetime(["2026-01-01", "2026-09-01"]),
+            "close": [100.0, 200.0],
+        })
+
+        ind = IndustryLinkageIndicator(
+            name="LME铜价",
+            source="akshare",
+            symbol="铜",
+        )
+
+        # 1. 窄集成断言：_fetch_indicator 传入非法日期时，指标结果必须 fail-closed
+        with patch("akshare.futures_foreign_hist", return_value=mock_series_df):
+            res = provider._fetch_indicator(ind, as_of="invalid-date-format")
+            assert res["status"] == "unavailable"
+            assert res["current_value"] is None
+            assert res["actual_as_of"] is None
+            assert res["trend"] == "数据缺失"
+
+        # 2. 公开入口断言：get_industry_linkage 传入非法日期时，各有效计算指标必须 fail-closed
+        with patch("akshare.futures_foreign_hist", return_value=mock_series_df), \
+             patch("yfinance.Ticker") as mock_yf, \
+             patch("requests.post", side_effect=Exception("Offline test")):
+            mock_yf.return_value.history.return_value = mock_series_df
+            data = provider.get_industry_linkage("消费电子", as_of="invalid-date-format", use_cache=False)
+            assert data is not None
+            assert data["as_of"] == "invalid-date-format"
+
+            # 遍历所有指标，证明未来日期 (2026-09-01) 绝不会作为 actual_as_of 穿透
+            for category_key in ("upstream_cost", "downstream_demand", "international_benchmark"):
+                for indicator in data[category_key]:
+                    assert indicator.get("actual_as_of") != "2026-09-01", (
+                        f"未来日期穿透泄露: {indicator['name']} actual_as_of={indicator.get('actual_as_of')}"
+                    )
+                    assert indicator.get("actual_as_of") is None
+                    assert indicator.get("current_value") is None
