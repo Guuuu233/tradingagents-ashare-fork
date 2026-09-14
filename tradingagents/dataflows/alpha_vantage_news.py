@@ -52,17 +52,21 @@ def get_global_news(curr_date, look_back_days: int = 7, limit: int = 50) -> dict
     return _make_api_request("NEWS_SENTIMENT", params)
 
 
-def get_insider_transactions(symbol: str) -> dict[str, str] | str:
+def get_insider_transactions(symbol: str, curr_date: str = None) -> dict[str, str] | str:
     """Returns latest and historical insider transactions by key stakeholders.
 
     Covers transactions by founders, executives, board members, etc.
 
     Args:
         symbol: Ticker symbol. Example: "IBM".
+        curr_date: Current date in yyyy-mm-dd format (optional).
 
     Returns:
         Dictionary containing insider transaction data or JSON string.
     """
+    from .trade_calendar import is_historical_analysis_date
+    if is_historical_analysis_date(curr_date):
+        return f"【数据获取失败】Alpha Vantage 内部人交易仅提供最新记录，无法用于历史日期（{curr_date}）分析，本项不可用。"
 
     params = {
         "symbol": symbol,

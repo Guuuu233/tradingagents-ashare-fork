@@ -1,4 +1,6 @@
 from .base import BaseMarketDataProvider
+from ..trade_calendar import is_historical_analysis_date
+from ..vendor_result import VendorRefuse
 from ..alpha_vantage import (
     get_stock as get_alpha_vantage_stock,
     get_indicator as get_alpha_vantage_indicator,
@@ -26,21 +28,46 @@ class AlphaVantageProvider(BaseMarketDataProvider):
         return get_alpha_vantage_indicator(symbol, indicator, curr_date, look_back_days)
 
     def get_fundamentals(self, ticker: str, curr_date: str = None) -> str:
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】Alpha Vantage 基本面概况仅提供当前快照，无法用于历史日期（{curr_date}）分析，本项不可用。"
+            )
         return get_alpha_vantage_fundamentals(ticker, curr_date)
 
     def get_balance_sheet(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
     ) -> str:
+        if curr_date is None and freq and freq not in ("annual", "quarterly", "annually"):
+            curr_date = freq
+            freq = "quarterly"
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】Alpha Vantage 资产负债表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_alpha_vantage_balance_sheet(ticker, freq, curr_date)
 
     def get_cashflow(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
     ) -> str:
+        if curr_date is None and freq and freq not in ("annual", "quarterly", "annually"):
+            curr_date = freq
+            freq = "quarterly"
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】Alpha Vantage 现金流量表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_alpha_vantage_cashflow(ticker, freq, curr_date)
 
     def get_income_statement(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
     ) -> str:
+        if curr_date is None and freq and freq not in ("annual", "quarterly", "annually"):
+            curr_date = freq
+            freq = "quarterly"
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】Alpha Vantage 利润表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_alpha_vantage_income_statement(ticker, freq, curr_date)
 
     def get_news(self, ticker: str, start_date: str, end_date: str) -> str:
@@ -52,4 +79,8 @@ class AlphaVantageProvider(BaseMarketDataProvider):
         return get_alpha_vantage_global_news(curr_date, look_back_days, limit)
 
     def get_insider_transactions(self, symbol: str, curr_date: str = None) -> str:
-        return get_alpha_vantage_insider_transactions(symbol)
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】Alpha Vantage 内部人交易仅提供最新记录，无法用于历史日期（{curr_date}）分析，本项不可用。"
+            )
+        return get_alpha_vantage_insider_transactions(symbol, curr_date=curr_date)
