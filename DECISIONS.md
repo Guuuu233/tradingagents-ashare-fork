@@ -161,17 +161,16 @@
 - 前端发布副本重建后为 17 个测试文件/171 个测试全过，生产构建成功；Vite 既有配置/包体提示已如实记录。
   本决定只完成代码发布和只读运行核验，不授权真实分析、生产库写入、真实社交采集、Cookie、信用加权或历史重写。
 
-### D-028：LLM 模型名校验先定策略、后接运行链（有效）
+### D-028：LLM 模型名校验策略与离线契约实现（有效，代码已就绪待审）
 
-- 当前 `validate_model()` 只作为 client 的显式能力检查存在，尚未被 `get_llm()` 或启动
-  流程调用。现有设置页允许自由填写模型名，并支持 `/v1/models/fetch` 动态拉取；OpenAI
-  兼容服务、OpenRouter、Ollama、DeepSeek 和角色级绑定也不能由一份静态列表完整代表。
-- 因此不得直接把 `VALID_MODELS` 接成启动硬门禁，也不得把静态列表当作 provider 实时能力
-  证明。先在独立窄卡中定义 advisory、provider discovery 与 warmup failure 的语义，
-  再决定是否增加运行时告警或探测；已有合法自定义模型不能因旧列表而无法启动。
-- 本决定不改变当前 API key 映射、Anthropic `base_url` 处理或 Google SDK 边界，不触发真实
-  模型调用、生产库写入、凭据操作、部署或重启。实施代码仍须由**代码审核员**对同一完整
-  SHA 只读审查并按风险执行回归。
+- 当前 `validate_model()` 已升级为具备三层状态分类（Advisory、Provider Discovery、Warmup Failure）的健壮策略，并在 `tradingagents/llm_clients/validators.py` 与各 client 中落地：
+  1. Advisory 层：`VALID_MODELS` 作为本地参考目录，未收录模型在默认模式下标记为非阻断的 `ADVISORY_UNRECOGNIZED`，绝不作为 `get_llm()` 或启动时的硬阻断门禁；
+  2. Provider Discovery 层：通过 `/v1/models/fetch` 动态匹配对端服务能力（`DISCOVERED_MATCH`）；
+  3. Warmup Failure 层：通过轻量探活（`_probe_runtime_config` / `_invoke_runtime_warmup`，`max_retries=0`）做连通性硬校验，Fail-closed 拦截 401、404、限流与代理路由故障。
+- 自定义 OpenAI 兼容地址（如 DashScope、Moonshot、Baichuan、本地代理）自动标记为 `CUSTOM_ENDPOINT_ALLOWED` 并放行；开放提供商（`ollama`、`openrouter`）原生放行（`PERMISSIVE_PROVIDER`）；角色级配置支持多角色独立评估与全局 fallback。
+- 交付完整离线契约测试 `tests/test_llm_model_validation_contract.py`（50 项全过，全套 LLM 关联测试 170 项全过），全量覆盖构造、fake transport（MockTransport）、角色继承与错误分类，不发起真实外部请求。
+- 本决定不改变当前 API key 映射、Anthropic `base_url` 去 `/v1` 处理或 Google SDK 边界，不触发真实模型调用、生产库写入、凭据操作、部署或重启。实施代码候选仍须由**代码审核员**对同一完整 SHA 做只读审查。
+
 
 ### 当前不变的原则
 

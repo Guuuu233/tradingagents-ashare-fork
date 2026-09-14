@@ -103,16 +103,11 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 - DAV-914 候选已由**代码审核员**对同一完整 SHA `8ccecb8d59de31835f9d0f67578123db9a358e7b` 只读 PASS，合入后独立前端全量为 17 个测试文件/171 个测试通过，构建成功；Vite 既有配置/包体提示已如实保留。
 - 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；已随 `79757a6...` 发布并完成 live bundle HTTP 200/资源 hash 核验。后续发布仍须重建并复验 bundle，不能沿用本次 hash。
 
-### P2-55 LLM client 遗留 TODO 复核
+### P2-55 LLM client 模型校验策略与契约落地（DAV-916）
 
-- `tradingagents/llm_clients/TODO.md` 的四条旧描述已按当前代码重新核对：只有
-  `validate_model()` 尚未进入运行调用链是实际策略缺口；统一 `api_key` 入口和
-  Anthropic `base_url` 处理已经存在，Google 的公共 `base_url` 参数是共享代理检查
-  边界；当前设置页是自由文本并支持 `/v1/models/fetch` 动态模型列表，不存在可直接
-  同步的静态 CLI 清单。
-- 当前不直接把 `VALID_MODELS` 接入启动硬门禁，避免误伤 OpenAI 兼容服务和自定义模型。
-  后续需另立窄卡定义 advisory/discovery/warmup 语义，并用离线构造测试覆盖全局配置、
-  角色绑定、动态模型拉取和 warmup。详见 `work/2026-09-14-p2-55-llm-client-audit.md`。
+- `tradingagents/llm_clients/TODO.md` 已全面更新，确立三层校验状态语义（Advisory、Provider Discovery、Warmup Failure）。
+- `VALID_MODELS` 确立为本地静态参考目录，未收录模型在默认模式下标记为非阻断的 `ADVISORY_UNRECOGNIZED`，绝不作为 `get_llm()` 或启动硬门禁；OpenAI 兼容端点（如 DashScope `qwen-plus`）自动判定为 `CUSTOM_ENDPOINT_ALLOWED` 并放行；开放提供商原生放行；多角色支持独立评估与全局 fallback。
+- 交付完整离线契约测试 `tests/test_llm_model_validation_contract.py`（50 项全过，全套 LLM 相关测试 170 项全过），全量覆盖构造、fake transport、角色继承与错误分类，零外部打网。详见 `work/2026-09-14-p2-55-llm-model-validation-strategy.md`。
 
 ## 当前剩余施工项（按依赖排序）
 
@@ -126,8 +121,9 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
-| P2 | LLM client 模型校验策略 | 旧 TODO 已复核；`validate_model()` 未接入运行链，但静态白名单不能直接充当硬门禁 | 先完成 advisory/discovery/warmup 语义设计和离线测试，再决定是否改 client；不得因旧列表阻断合法自定义模型。 |
+| P2 | LLM client 模型校验策略 | DAV-916 已完成策略分层与 50 项离线契约测试；待同 SHA 代码审核 | 代码审核员只读复核通过后方可合入；本项不自动部署，不触发服务重启。 |
 | P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
+
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
 2026-09-14 只读盘点：Git 共登记 198 个 worktree，其中 135 个元数据标记为 `prunable`，63 个
@@ -170,4 +166,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [DAV-914 前端 direction 展示本地化与合入证据](work/2026-09-14-p2-direction-localization.md)
 - [DAV-914 受控发布与 live bundle 证据](work/2026-09-14-dav914-release-79757a6.md)
 - [P2-55 LLM client 遗留 TODO 复核](work/2026-09-14-p2-55-llm-client-audit.md)
+- [P2-55 LLM client 模型校验策略与契约落地报告](work/2026-09-14-p2-55-llm-model-validation-strategy.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
