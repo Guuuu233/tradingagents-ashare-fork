@@ -926,10 +926,21 @@ class IndustryLinkageProvider:
         if as_of:
             try:
                 as_of_str = str(as_of).strip()
+                if not as_of_str:
+                    logger.warning("IndustryLinkageProvider: 解析 as_of 日期 '%s' 失败: 字符串全为空格", as_of)
+                    return None
                 as_of_dt = pd.to_datetime(as_of_str, format="mixed")
+                if pd.isna(as_of_dt):
+                    logger.warning("IndustryLinkageProvider: 解析 as_of 日期 '%s' 失败: 结果为 NaT", as_of)
+                    return None
+                if getattr(as_of_dt, "tz", None) is not None and df_work["_std_date"].dt.tz is None:
+                    as_of_dt = as_of_dt.tz_convert(None)
+                elif getattr(as_of_dt, "tz", None) is None and df_work["_std_date"].dt.tz is not None:
+                    as_of_dt = as_of_dt.tz_localize(df_work["_std_date"].dt.tz)
                 df_work = df_work[df_work["_std_date"] <= as_of_dt]
             except Exception as e:
                 logger.warning("IndustryLinkageProvider: 解析 as_of 日期 '%s' 失败: %s", as_of, e)
+                return None
 
         if df_work.empty:
             return None
