@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 当前远端目标主线已线性合入 DAV-922 最终候选代码 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`（直接父 `807464e5784240554efac0f5c3d1110d00a450a1`）；P2-55 的策略层与运行时接线均已进入主线，但尚未部署。线上运行代码仍为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`。本轮治理文档完整 HEAD 为 `17e8ecb80e60e9c0585377f90bc8109ce6fdd2cb`；本次没有重启服务或写生产库。
+- 当前远端目标主线与线上运行发布对象均为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`；其代码变更来自 DAV-922 最终候选 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`，后续提交只增加全量回归证据和治理文档。P2-55 的策略层与运行时接线已受控发布，尚未调用真实模型或执行真实分析。本轮治理文档完整 HEAD 为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`；生产库未被写入。
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
   `d816a8c7c57c850ff2e1d57d852d3ad7f6e0d477`）及此前 P1-E 的治理文档和发布代码；此前线上
@@ -42,14 +42,14 @@
 
 | 项目 | 当前核验值 |
 |---|---|
-| 服务 PID | `42225`（uvicorn，父进程 `71186`；旧 PID `29528` 已优雅停止） |
-| 服务工作目录 | `/private/tmp/ta-release-main-79757a6-20260914` |
-| `/healthz` | HTTP 200，`commit_sha=79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
+| 服务 PID | `59324`（uvicorn，父进程 `71186`；旧 PID `42225` 已优雅停止） |
+| 服务工作目录 | `/private/tmp/ta-release-p2-55b-f094d6a-20260914` |
+| `/healthz` | HTTP 200，`commit_sha=f094d6a78bc699fc6224e57164d38455c2ad55a9`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
 | 数据库 | `/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db` |
 | 数据库完整性 | `PRAGMA quick_check=ok` |
 | reports | 总数 1409；`status=completed` 793；`status=failed` 616 |
 | 数据库写入保护 | 部署前后 reports 计数、文件大小和 SHA-256 未变；只读评估输入为隔离副本，不是运行中的库 |
-| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-79757a6`，SQLite `quick_check=ok`，reports `1409/793/616`；一致性备份 SHA 为 `df628f4293069a820ef69a136a1acbb0e7a517f6638dd24a9faeea30f5b51b9e` |
+| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-f094d6a`，SQLite `quick_check/integrity_check=ok`，reports `1409/793/616`；备份 SHA-256 为 `94d2f6740db4f2065100479dd5cb3ccf5d8a504447a55fa8f19635927ce83010` |
 | 部署回退点 | 旧发布 worktree `/private/tmp/ta-release-p1f-6cc4e-20260914` 保留，供受控回退核验 |
 
 本轮只读运行态烟测：provider health 返回正常；social-data 保持 `disabled`；历史 K 线接口返回数据；前端 Dashboard 与新 bundle HTTP 200。未发起分析任务，因此没有新增报告字段可作为生产业务链路证明。
@@ -129,8 +129,8 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 - 固定 Python 3.10 环境的关联集合在最终候选与合入后均为 `159 passed, 79 warnings`，合入后
   耗时 `31.36s`；工作区 clean、`git diff --check` 通过。详见
   `work/2026-09-14-p2-55b-runtime-wiring.md`。
-- 这只是代码合入和离线证据，未部署、未重启、未调用真实模型/外部网络、未写生产库；线上仍为
-  `79757a6...`。发布必须另走备份、预启动、精确 `/healthz`、只读烟测和数据库回读门。
+- 代码合入、离线证据和受控发布均已完成；线上目前为 `f094d6a...`。发布过程没有调用真实模型
+  或执行真实分析，仍没有真实模型 warmup 或生产业务报告证据。
 
 ## 当前剩余施工项（按依赖排序）
 
@@ -144,7 +144,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
-| P2 | LLM client 模型校验策略与运行接线 | 策略层与 DAV-922 运行时接线已合入目标主线；同口径 RT-FULL 相对线上基线失败集合差集为 0，`get_llm()`/启动硬门禁仍未启用，线上尚未部署 DAV-922，也没有真实 warmup 证据 | 按 D-013 另走独立发布门；发布后只做受控只读核验。不得把静态白名单变成硬门禁，也不得重复派 DAV-916/DAV-918/DAV-921/DAV-922。 |
+| P2 | LLM client 模型校验策略与运行接线 | 策略层与 DAV-922 运行时接线已合入并随 `f094d6a...` 受控发布；同口径 RT-FULL 相对线上基线失败集合差集为 0，`get_llm()`/启动硬门禁仍未启用，也没有真实 warmup 证据 | 发布门已完成；后续只做受控只读核验，若要取得真实 warmup/业务报告证据需另按数据写入边界执行。不得把静态白名单变成硬门禁，也不得重复派 DAV-916/DAV-918/DAV-921/DAV-922。 |
 | P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -167,7 +167,7 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - DAV-913/P1-G 已完成单文件 `uv.lock` 对齐、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变运行时代码，不需要单独部署。
 - DAV-914 已完成三个剩余前端 direction 展示入口的本地化、**代码审核员**同 SHA 审查、合入后前端测试与构建，并已随 `79757a6...` 受控发布；不得重复派工。后续发布需按发布门重建/复验前端 bundle。
 - DAV-916/DAV-918/DAV-921 已完成 P2-55 策略层实施、两轮兼容/安全返修、**代码审核员**对最终 SHA `54bfb621250711571ba5a75b6dc64e0db6dcf645` 的同 SHA PASS、相关回归和线性合入；不得重复派工。运行链接线仍是独立后续边界。
-- DAV-922/DAV-923/DAV-924 已完成 P2-55b 运行时接线、R1/R2 复审和最终 SHA `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699` 的线性合入；最终复审由**代码审核员**完成，R1 候选已被 R2 修复版取代，不得重复派工。该版本尚未部署，真实 warmup/生产业务证据仍未取得。
+- DAV-922/DAV-923/DAV-924 已完成 P2-55b 运行时接线、R1/R2 复审、RT-FULL 和最终 SHA `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699` 的线性合入；最终复审由**代码审核员**完成，R1 候选已被 R2 修复版取代。随后已按 D-031 随主线 tip `f094d6a...` 受控发布；不得重复派工。真实 warmup/生产业务证据仍未取得。
 - 旧文档中“DAV-808 尚未决策”“E-04 尚未实现”“P0-B/C/D 仍待编码”“主干仍为 `bdb95f8` / 服务仍为 `a227cdc`”均是历史快照，不能据此新建重复卡。
 - “全量无新增失败”只证明对应候选相对基线的测试差异；它不替代部署后的业务烟测、数据库回读或真实数据授权。
 
@@ -193,4 +193,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [P2-55 LLM client 策略层最终合入证据](work/2026-09-14-p2-55-llm-client-final.md)
 - [P2-55b DAV-922 runtime 接线合入证据](work/2026-09-14-p2-55b-runtime-wiring.md)
 - [DAV-922 全量回归对照证据](work/2026-09-14-rt-full-p2-55b.md)
+- [DAV-922 受控发布收口](work/2026-09-14-dav922-release-f094d6a.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。

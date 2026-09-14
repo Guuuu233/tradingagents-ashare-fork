@@ -204,10 +204,26 @@
   `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`；后续发布必须另走 D-013 的备份、启动、精确
   `/healthz`、只读烟测和数据库回读门。
 
+### D-031：DAV-922 / P2-55b 受控发布（有效，已完成）
+
+- 日期：2026-09-14。发布对象为目标主线完整 SHA
+  `f094d6a78bc699fc6224e57164d38455c2ad55a9`；其代码变更来自 DAV-922 最终候选
+  `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`，中间仅追加回归证据和治理文档。
+- 发布前 SQLite 已备份并核对 `quick_check/integrity_check=ok`，reports 为 `1409/793/616`；
+  发布后生产库大小和 SHA-256 仍未变化。8001 预启动的 `/healthz` 精确匹配发布 SHA 后，旧
+  PID `42225` 优雅停止，新 PID `59324` 在 `/private/tmp/ta-release-p2-55b-f094d6a-20260914`
+  运行；8000 `/healthz`、provider health、只读行情、social disabled、Dashboard/bundle
+  HTTP 200 和未知 API 404 均通过。
+- 预启动期间未用默认密钥绕过安全闸；因新 worktree 没有旧发布副本的 `data` 软链接，发布进程
+  显式使用已核对的生产库绝对路径。没有复制、迁移或写生产数据库，也没有更换凭据。
+- 本决定只完成受控代码发布和只读运行核验，不授权真实模型 warmup、真实分析、生产报告写入、
+  真实社交采集、Cookie、信用加权或历史重写。详见
+  `work/2026-09-14-dav922-release-f094d6a.md`。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前施工主干已包含 P2-55 策略层及 DAV-922 runtime 接线最终候选 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`；本轮治理记录完整 HEAD 为 `17e8ecb80e60e9c0585377f90bc8109ce6fdd2cb`；线上运行代码发布对象仍为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`（代码父为 DAV-914 `8ccecb8d59de31835f9d0f67578123db9a358e7b`），并包含 P1-G 候选 `054a76210f799029fe8d390512c763c36f0fb585`、P1-F 候选
+- 当前施工主干已包含 P2-55 策略层及 DAV-922 runtime 接线最终候选 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`；本轮治理记录完整 HEAD 为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`；线上运行代码发布对象为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`（代码变更来自 DAV-922，代码父为 DAV-914 `8ccecb8d59de31835f9d0f67578123db9a358e7b`），并包含 P1-G 候选 `054a76210f799029fe8d390512c763c36f0fb585`、P1-F 候选
   `6612aea82e0fb3212d3682c5d09835f529ffec16`、P2-65 候选
   `2daad463ff004dac97986e39983100be03599521`、P2-54 候选
   `80d87b5f1fd9b242b0ce22d430933fca5e07afe2` 及其治理文档；线上服务运行发布 SHA
