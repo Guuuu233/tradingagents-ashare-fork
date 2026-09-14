@@ -5783,7 +5783,11 @@ def _should_probe_runtime_config(
 
 
 def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
-    from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients import (
+        FailureCategory,
+        classify_llm_failure,
+        create_llm_client,
+    )
 
     provider = str(config.get("llm_provider") or "openai")
     base_url = config.get("backend_url")
@@ -5807,17 +5811,25 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
         raw = response if isinstance(response, str) else getattr(response, "content", str(response))
         preview = str(raw).strip().replace("\n", " ")[:80] or "<empty>"
         return {"status": "ok", "model": model, "preview": preview}
+    except HTTPException:
+        raise
     except Exception as exc:
-        detail = str(exc).strip()
-        lowered = detail.lower()
-        if "401" in lowered or "invalid authentication" in lowered or "authenticationerror" in lowered:
+        cat, msg = classify_llm_failure(exc)
+        logger.warning(
+            "[LLM Probe] user=%s model=%s failed (%s): %s",
+            config.get("user_id", "unknown"),
+            model,
+            cat.value,
+            msg,
+        )
+        if cat == FailureCategory.AUTH_FAILURE:
             raise HTTPException(
                 status_code=400,
-                detail="模型 Key 验证失败：上游返回 401 Invalid Authentication，请检查 API Key 是否正确。",
+                detail=msg,
             ) from exc
         raise HTTPException(
             status_code=400,
-            detail=f"模型连接验证失败：{detail[:200] or 'unknown error'}",
+            detail=f"模型连接验证失败：{msg}",
         ) from exc
 
 
@@ -5827,7 +5839,13 @@ def _invoke_runtime_warmup(
     user_id: str,
     timeout: float = _CONFIG_WARMUP_TIMEOUT_SECONDS,
 ) -> List[Dict[str, Any]]:
-    from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients import (
+        FailureCategory,
+        classify_llm_failure,
+        create_llm_client,
+        resolve_role_base_url,
+    )
+    from tradingagents.llm_clients.validators import _sanitize_error_detail
 
     provider = str(config.get("llm_provider") or "openai")
     base_url = config.get("backend_url")
@@ -5846,7 +5864,12 @@ def _invoke_runtime_warmup(
             for r_key, r_cfg in resolved_roles.items():
                 m = str(r_cfg.get("model_name") or "").strip()
                 prov = str(r_cfg.get("provider_type") or provider)
-                b_url = r_cfg.get("base_url") or base_url
+                b_url = resolve_role_base_url(
+                    role_provider=prov,
+                    role_base_url=r_cfg.get("base_url"),
+                    global_provider=provider,
+                    global_base_url=base_url,
+                )
                 a_key = r_cfg.get("api_key") or api_key
                 if m:
                     lbl = f"角色: {r_key}"
@@ -5854,16 +5877,18 @@ def _invoke_runtime_warmup(
                     if lbl not in lbls:
                         lbls.append(lbl)
     except Exception as err:
-        logger.warning(f"[LLM Warmup] Failed resolving roles for warmup: {err}")
+        sanitized_err = _sanitize_error_detail(str(err))
+        logger.warning(f"[LLM Warmup] Failed resolving roles for warmup: {sanitized_err}")
 
     targets = [(prov, model, b_url, a_key, lbls) for (prov, model, b_url, a_key), lbls in targets_dict.items()]
 
     if not targets:
         raise HTTPException(status_code=400, detail="请先配置至少一个可用模型。")
 
+    safe_base_url = _sanitize_error_detail(base_url) if base_url else "default"
     _log(
         f"[LLM Warmup] user={user_id} invoking provider={provider} "
-        f"models={[t[1] for t in targets]} base_url={base_url or 'default'}"
+        f"models={[t[1] for t in targets]} base_url={safe_base_url}"
     )
 
     results: List[Dict[str, Any]] = []
@@ -5891,19 +5916,20 @@ def _invoke_runtime_warmup(
                 "error": None,
             })
         except Exception as exc:
-            detail = str(exc).strip() or "unknown error"
-            errors.append(f"{model}: {detail}")
+            cat, failure_msg = classify_llm_failure(exc)
+            errors.append(f"{model}: {failure_msg}")
             logger.warning(
-                "[LLM Warmup] user=%s model=%s failed: %s",
+                "[LLM Warmup] user=%s model=%s failed (%s): %s",
                 user_id,
                 model,
-                exc,
+                cat.value,
+                failure_msg,
             )
             results.append({
                 "model": model,
                 "targets": labels,
                 "content": None,
-                "error": detail[:200],
+                "error": failure_msg[:200],
             })
 
     if not any(item.get("content") for item in results):

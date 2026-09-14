@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional, Union, TypedDict
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
 
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.agents.utils.memory import FinancialSituationMemory
@@ -218,7 +218,12 @@ class TradingAgentsGraph:
             p_type = r_cfg.get("provider_type") or self.config.get("llm_provider") or "openai"
             default_tier = ROLE_DEFAULT_TIERS.get(role_key, "quick")
             m_name = r_cfg.get("model_name") or (self.config.get("deep_think_llm") if default_tier == "deep" else self.config.get("quick_think_llm")) or "gpt-4o-mini"
-            b_url = r_cfg.get("base_url") or self.config.get("backend_url")
+            b_url = resolve_role_base_url(
+                role_provider=p_type,
+                role_base_url=r_cfg.get("base_url"),
+                global_provider=self.config.get("llm_provider", "openai"),
+                global_base_url=self.config.get("backend_url"),
+            )
             a_key = r_cfg.get("api_key") or self.config.get("api_key")
 
             r_kwargs = dict(llm_kwargs)

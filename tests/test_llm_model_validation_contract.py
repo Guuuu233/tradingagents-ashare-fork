@@ -29,6 +29,7 @@ from tradingagents.llm_clients import (
     evaluate_model_policy,
     evaluate_role_configurations,
     is_custom_base_url,
+    resolve_role_base_url,
     validate_model,
 )
 from tradingagents.llm_clients.anthropic_client import AnthropicClient
@@ -331,6 +332,80 @@ class TestRoleLevelConfigurations:
         # 4. Custom Anthropic agent keeps its own base_url
         assert results["custom_anthropic_agent"].base_url == "https://my-anthropic-proxy.internal/v1"
 
+    def test_resolve_role_base_url_contract(self):
+        """Unit contract tests for resolve_role_base_url."""
+        # 1. Same provider without explicit base_url inherits global
+        assert (
+            resolve_role_base_url(
+                role_provider="openai",
+                role_base_url=None,
+                global_provider="openai",
+                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+            == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        # Case insensitive provider match
+        assert (
+            resolve_role_base_url(
+                role_provider="OpenAI",
+                role_base_url="",
+                global_provider="openai",
+                global_base_url="https://api.openai.com/v1",
+            )
+            == "https://api.openai.com/v1"
+        )
+
+        # 2. Heterogeneous provider without explicit base_url returns None
+        assert (
+            resolve_role_base_url(
+                role_provider="anthropic",
+                role_base_url=None,
+                global_provider="openai",
+                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+            is None
+        )
+        assert (
+            resolve_role_base_url(
+                role_provider="deepseek",
+                role_base_url=None,
+                global_provider="openai",
+                global_base_url="https://api.moonshot.cn/v1",
+            )
+            is None
+        )
+
+        # 3. Explicit role base_url is preserved
+        assert (
+            resolve_role_base_url(
+                role_provider="anthropic",
+                role_base_url="https://my-anthropic-proxy.internal/v1",
+                global_provider="openai",
+                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+            == "https://my-anthropic-proxy.internal/v1"
+        )
+        assert (
+            resolve_role_base_url(
+                role_provider="openai",
+                role_base_url="https://my-openai-proxy.internal/v1",
+                global_provider="openai",
+                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+            == "https://my-openai-proxy.internal/v1"
+        )
+
+        # 4. Accidental heterogeneous leak of global base_url is prevented (returns None)
+        assert (
+            resolve_role_base_url(
+                role_provider="anthropic",
+                role_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                global_provider="openai",
+                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+            is None
+        )
+
 
 class TestClientMethodsAndContract:
     """Tests for client validate_model() and evaluate_model() methods."""
@@ -597,6 +672,12 @@ class TestFailureClassification:
         assert "admin:very_secret_pwd@" not in msg
         assert "very_secret_pwd" not in msg
         assert "[REDACTED_USER]:[REDACTED_PASS]@" in msg
+
+        # Header Basic Auth
+        exc_header = Exception("Request failed with Authorization: Basic dXNlcjpwYXNzd29yZDEyMw==")
+        _, msg_header = classify_llm_failure(exc_header)
+        assert "dXNlcjpwYXNzd29yZDEyMw==" not in msg_header
+        assert "Basic [REDACTED]" in msg_header
 
 
 class TestBackwardCompatibility:

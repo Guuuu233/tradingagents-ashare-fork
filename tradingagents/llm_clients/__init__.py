@@ -9,6 +9,7 @@ from .validators import (
     evaluate_model_policy,
     evaluate_role_configurations,
     is_custom_base_url,
+    resolve_role_base_url,
     validate_model,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "evaluate_model_policy",
     "evaluate_role_configurations",
     "is_custom_base_url",
+    "resolve_role_base_url",
     "validate_model",
     "classify_llm_failure",
     "FailureCategory",

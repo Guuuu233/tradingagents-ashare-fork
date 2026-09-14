@@ -325,6 +325,36 @@ def validate_model(provider: str, model: str, base_url: Optional[str] = None) ->
     return True
 
 
+def resolve_role_base_url(
+    role_provider: Optional[str],
+    role_base_url: Optional[str],
+    global_provider: Optional[str],
+    global_base_url: Optional[str],
+) -> Optional[str]:
+    """Resolve base_url for an agent role enforcing provider isolation.
+
+    Rules:
+    1. If role has an explicit base_url:
+       - Preserved as-is, UNLESS it is an accidental leak of a heterogeneous global_base_url
+         (i.e. role_provider != global_provider and role_base_url == global_base_url).
+    2. If role has no explicit base_url (None or empty):
+       - Homogeneous provider (role_provider == global_provider): inherits global_base_url.
+       - Heterogeneous provider (role_provider != global_provider): does NOT inherit (returns None).
+    """
+    r_prov = (role_provider or "").strip().lower()
+    g_prov = (global_provider or "").strip().lower()
+    is_same_provider = bool(r_prov and g_prov and r_prov == g_prov)
+
+    if not role_base_url:
+        return global_base_url if is_same_provider else None
+
+    cleaned_role_url = str(role_base_url).strip()
+    if not is_same_provider and global_base_url and cleaned_role_url == str(global_base_url).strip():
+        return None
+
+    return cleaned_role_url
+
+
 def evaluate_role_configurations(
     global_config: Dict[str, Any],
     resolved_roles: Dict[str, Dict[str, Any]],
@@ -345,15 +375,12 @@ def evaluate_role_configurations(
     results: Dict[str, ModelValidationResult] = {}
     for role_key, role_cfg in resolved_roles.items():
         prov = str(role_cfg.get("provider_type") or global_provider)
-        b_url = role_cfg.get("base_url")
-        if not b_url:
-            # Only inherit global_base_url if role uses the same provider as global.
-            # Heterogeneous providers (e.g. Anthropic/DeepSeek when global is OpenAI)
-            # must not inherit global_base_url (e.g. OpenAI-specific custom endpoint).
-            if prov == global_provider:
-                b_url = global_base_url
-            else:
-                b_url = None
+        b_url = resolve_role_base_url(
+            role_provider=prov,
+            role_base_url=role_cfg.get("base_url"),
+            global_provider=global_provider,
+            global_base_url=global_base_url,
+        )
         m_name = role_cfg.get("model_name")
         if not m_name:
             # Default tiers: research_manager and risk_manager default to deep tier
@@ -383,6 +410,12 @@ def _sanitize_error_detail(text: str) -> str:
     # 1. 过滤 Bearer token（按非空白 token 整体脱敏，不限最小长度，支持 +/=/ 等 Base64/JWT 符号）与标准 sk- 风格 key
     sanitized = re.sub(
         r"(Bearer\s+)[^\s'\",;]+",
+        r"\1[REDACTED]",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        r"(Basic\s+)[^\s'\",;]+",
         r"\1[REDACTED]",
         sanitized,
         flags=re.IGNORECASE,
