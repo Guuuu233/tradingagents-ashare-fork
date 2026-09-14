@@ -6,20 +6,21 @@
 
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
-  `d816a8c7c57c850ff2e1d57d852d3ad7f6e0d477`）及此前 P1-E 的治理文档和发布代码；当前线上
-  发布版本为 `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，其代码树包含上述候选。P1-F 已审查、RT-FULL、线性合入并受控发布；完整远端文档 HEAD 以 push 后回读为准。
+  `d816a8c7c57c850ff2e1d57d852d3ad7f6e0d477`）及此前 P1-E 的治理文档和发布代码；此前线上
+  发布版本为 `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，已由本轮 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`
+  受控发布替换。P1-F 已审查、RT-FULL、线性合入并受控发布；完整远端文档 HEAD 以 push 后回读为准。
 - P1-D（trader 与最终 risk_manager 的 bounded 七源一手证据摘要）已完成代码审核、同口径全量对照、线性合入并部署；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修均在当前运行副本。
 - P1-D 与上线前线上基线 `63d5648` 的同口径全量对照为：基线 18 failed / 4406 passed，候选 18 failed / 4415 passed；失败集合逐项一致，新增失败为 0，候选多通过 9 项。
 - P1-E 与线上基线 `9d702e7` 的同口径全量对照为：基线 18 failed / 4415 passed，候选 18 failed / 4426 passed；失败集合逐项一致，新增失败为 0，候选多通过 11 项。
 - V-03a 已在生产库的隔离备份上完成只读进度基线，但不是正式收益实验，也不是“能否盈利”的结论；forward OOS 当前没有可评估样本。
 - 生产库未被本轮部署和评估改写；信用加权、真实社交采集、社交 active 和历史重写均未执行。
 - `/limit-up-ladder` 已按 D-022 完成实施、返修、**代码审核员**同 SHA 复审、RT-FULL、线性合入和受控发布；代码候选为
-  `6612aea82e0fb3212d3682c5d09835f529ffec16`，当前服务版本为 `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。已完成只读运行烟测，但尚未调用真实天梯上游或真实分析入口。
+  `6612aea82e0fb3212d3682c5d09835f529ffec16`，此前发布版本为 `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，现已随 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a` 继续运行。已完成只读运行烟测，但尚未调用真实天梯上游或真实分析入口。
 - P2-65（DAV-910）已完成：只移除生产 `docker-compose.yml` 的 `./tests:/app/tests` 与
   `./scripts:/app/scripts` 两项源码挂载，保留 `data/api/tradingagents` 三项运行挂载；候选
   `2daad463ff004dac97986e39983100be03599521` 经**代码审核员**同 SHA 只读 PASS、Compose 配置
-  校验通过后已线性合入目标主线。此配置提交尚未部署，线上仍为 `6cc4e152...`；详见
-  `work/2026-09-14-p2-65-compose-mounts.md`。
+  校验通过后已线性合入目标主线，并进入当前发布代码树；本次服务使用 uvicorn 发布副本而非
+  Compose 容器，挂载效果尚未做容器级运行核验；详见 `work/2026-09-14-p2-65-compose-mounts.md`。
 - P2-54（DAV-911）已完成：只删除误提交的 `frontend/.vade-report` 一次性工件；候选
   `80d87b5f1fd9b242b0ce22d430933fca5e07afe2` 经**代码审核员**同 SHA 只读 PASS 后，已从
   `a6dfd86981491cc4452927d671625f42bc47056e` 线性合入目标主线。它没有运行时引用，不需要
@@ -32,24 +33,25 @@
 - DAV-914 已完成：三个前端 secondary direction 展示入口统一复用 `localizeDirection`；候选
   `8ccecb8d59de31835f9d0f67578123db9a358e7b`（直接父 `59ec435306b8c2e49c5ec4a66d433db30df2450c`）
   只改 6 个前端组件/测试文件，经**代码审核员**同 SHA 只读 PASS、合入后前端 17 个测试文件
-  /171 个测试和生产构建通过后已线性合入目标主线。该项只改显示层，未部署；线上仍为
-  `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，详见 `work/2026-09-14-p2-direction-localization.md`。
+  /171 个测试和生产构建通过后已线性合入目标主线，并随 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`
+  受控发布。详见 `work/2026-09-14-p2-direction-localization.md` 与
+  `work/2026-09-14-dav914-release-79757a6.md`。
 
 ## 运行态
 
 | 项目 | 当前核验值 |
 |---|---|
-| 服务 PID | `29528`（uvicorn，父进程 `71186`；旧 PID `19944` 已优雅停止） |
-| 服务工作目录 | `/private/tmp/ta-release-p1f-6cc4e-20260914` |
-| `/healthz` | HTTP 200，`commit_sha=6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
+| 服务 PID | `42225`（uvicorn，父进程 `71186`；旧 PID `29528` 已优雅停止） |
+| 服务工作目录 | `/private/tmp/ta-release-main-79757a6-20260914` |
+| `/healthz` | HTTP 200，`commit_sha=79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
 | 数据库 | `/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db` |
 | 数据库完整性 | `PRAGMA quick_check=ok` |
 | reports | 总数 1409；`status=completed` 793；`status=failed` 616 |
 | 数据库写入保护 | 部署前后 reports 计数、文件大小和 SHA-256 未变；只读评估输入为隔离副本，不是运行中的库 |
-| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-6cc4e1`，SQLite `quick_check=ok`，reports `1409/793/616`；一致性备份 SHA 为 `df628f4293069a820ef69a136a1acbb0e7a517f6638dd24a9faeea30f5b51b9e` |
-| 部署回退点 | 旧发布 worktree `/private/tmp/ta-release-p1e-0263496-20260914` 保留，供受控回退核验 |
+| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-79757a6`，SQLite `quick_check=ok`，reports `1409/793/616`；一致性备份 SHA 为 `df628f4293069a820ef69a136a1acbb0e7a517f6638dd24a9faeea30f5b51b9e` |
+| 部署回退点 | 旧发布 worktree `/private/tmp/ta-release-p1f-6cc4e-20260914` 保留，供受控回退核验 |
 
-本轮只读运行态烟测：provider health 返回正常；social-data 保持 `disabled`；历史 K 线接口返回数据。未发起分析任务，因此没有新增报告字段可作为生产业务链路证明。
+本轮只读运行态烟测：provider health 返回正常；social-data 保持 `disabled`；历史 K 线接口返回数据；前端 Dashboard 与新 bundle HTTP 200。未发起分析任务，因此没有新增报告字段可作为生产业务链路证明。
 
 ## 已完成的施工线
 
@@ -98,7 +100,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 
 - DAV-887 已覆盖 TrackingBoardPanel 与 Portfolio；DAV-914 覆盖 ChatCopilotPanel 的完成/恢复/通知、AgentCollaboration 的 verdict 标签和 HistoricalDebateDrawer 的总监裁决方向。
 - DAV-914 候选已由**代码审核员**对同一完整 SHA `8ccecb8d59de31835f9d0f67578123db9a358e7b` 只读 PASS，合入后独立前端全量为 17 个测试文件/171 个测试通过，构建成功；Vite 既有配置/包体提示已如实保留。
-- 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；后续发布主线时必须重建并复验 live bundle，不能把源码测试当作线上 bundle 已更新的证据。
+- 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；已随 `79757a6...` 发布并完成 live bundle HTTP 200/资源 hash 核验。后续发布仍须重建并复验 bundle，不能沿用本次 hash。
 
 ## 当前剩余施工项（按依赖排序）
 
@@ -112,7 +114,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
-| P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入主线，尚未随服务部署 | 后续正常发布时再按独立发布门重建/切换；本卡不触发部署。 |
+| P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
 2026-09-14 只读盘点：Git 共登记 198 个 worktree，其中 135 个元数据标记为 `prunable`，63 个
@@ -129,10 +131,10 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 ## 已确认不应重复派工
 
 - DAV-828/829/830/844/846–852/854、DAV-808/856/859、E-04 三轮返修、V-03a provenance 返修和 Fuyao 已列窄修均已有代码、审查或发布证据；DAV-902/903 已完成代码、回归和受控发布门禁。
-- DAV-910/P2-65 已完成单文件 Compose 清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它尚未部署，不改变线上服务 SHA。
+- DAV-910/P2-65 已完成单文件 Compose 清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。变更已进入当前发布代码树，但本次服务不是 Compose 容器，挂载效果仍未做容器级运行核验。
 - DAV-911/P2-54 已完成单文件前端工件清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变线上服务行为，也没有单独部署动作。
 - DAV-913/P1-G 已完成单文件 `uv.lock` 对齐、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变运行时代码，不需要单独部署。
-- DAV-914 已完成三个剩余前端 direction 展示入口的本地化、**代码审核员**同 SHA 审查、合入后前端测试与构建；不得重复派工。它未部署，不改变线上服务 SHA；后续发布时只需按发布门重建/复验前端 bundle。
+- DAV-914 已完成三个剩余前端 direction 展示入口的本地化、**代码审核员**同 SHA 审查、合入后前端测试与构建，并已随 `79757a6...` 受控发布；不得重复派工。后续发布需按发布门重建/复验前端 bundle。
 - 旧文档中“DAV-808 尚未决策”“E-04 尚未实现”“P0-B/C/D 仍待编码”“主干仍为 `bdb95f8` / 服务仍为 `a227cdc`”均是历史快照，不能据此新建重复卡。
 - “全量无新增失败”只证明对应候选相对基线的测试差异；它不替代部署后的业务烟测、数据库回读或真实数据授权。
 
@@ -153,4 +155,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [P2-54 前端工件清理与合入证据](work/2026-09-14-p2-54-vade-report.md)
 - [P1-G `uv.lock` 对齐与合入证据](work/2026-09-14-p1-g-uv-lock.md)
 - [DAV-914 前端 direction 展示本地化与合入证据](work/2026-09-14-p2-direction-localization.md)
+- [DAV-914 受控发布与 live bundle 证据](work/2026-09-14-dav914-release-79757a6.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。

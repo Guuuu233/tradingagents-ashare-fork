@@ -2,7 +2,7 @@
 
 ## Legacy report English direction on secondary surfaces
 
-**Status:** Known audited surfaces are fixed in DAV-887 and DAV-914. Current release `6cc4e15` predates DAV-914, so the source fix is in the target mainline but the live bundle must be rebuilt and re-verified by the next release.
+**Status:** Known audited surfaces are fixed in DAV-887 and DAV-914. Release `79757a6` includes DAV-914, rebuilt the live bundle, and passed the HTTP asset check; future releases must rebuild and re-verify their own bundle.
 **Discovered:** 2026-08-04 during M5 wrap-up
 
 ### Symptom
@@ -24,17 +24,17 @@ DAV-887 applies the existing `localizeDirection` mapping to the first two
 surfaces; DAV-914 applies it to the latter three. The target mainline has
 independent coverage of 17 test files/171 tests and a successful production
 build; this does not cover browser interaction, login, or a real analysis run.
-The current release's live bundle check predates DAV-914, so the next release
-must rebuild and re-check its assets.
+Release `79757a6` rebuilt and served the bundle used by the running API process;
+the evidence records the asset path and hash. This does not cover browser
+interaction, login, or a real analysis run.
 
 ### Suggested fix
 
 The source changes are complete and add component coverage. DAV-914 passed
-`npm test -- --run` (17 files / 171 tests) and `npm run build`; no data migration
-is required. The current live-bundle evidence is still the earlier
-DAV-887/D-021 release evidence, so see
+`npm test -- --run` (17 files / 171 tests) and `npm run build`; release `79757a6`
+rebuilt and served the live bundle. No data migration is required. See
 `work/2026-09-14-p2-direction-localization.md` for the source merge and
-`work/2026-09-14-frontend-live-bundle.md` for the older live check.
+`work/2026-09-14-dav914-release-79757a6.md` for the current live check.
 
 ---
 
