@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 当前远端目标主线文档 HEAD 为 `2329db511967c8342018da058b9a44caa7b1b157`；线上运行代码 SHA 为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`。两者之间是本轮审计与发布治理文档提交，不包含运行代码变化。
+- 当前远端目标主线已线性合入 P2-55 候选代码 `54bfb621250711571ba5a75b6dc64e0db6dcf645`（直接父 `223f553c234b6244edd7fa760dc2dc710fd5dc2c`）；线上运行代码仍为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`。本次只合入策略层与离线契约代码，未部署、未重启服务；治理文档 HEAD 以本轮证据提交 push 后回读为准。
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
   `d816a8c7c57c850ff2e1d57d852d3ad7f6e0d477`）及此前 P1-E 的治理文档和发布代码；此前线上
@@ -103,16 +103,20 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 - DAV-914 候选已由**代码审核员**对同一完整 SHA `8ccecb8d59de31835f9d0f67578123db9a358e7b` 只读 PASS，合入后独立前端全量为 17 个测试文件/171 个测试通过，构建成功；Vite 既有配置/包体提示已如实保留。
 - 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；已随 `79757a6...` 发布并完成 live bundle HTTP 200/资源 hash 核验。后续发布仍须重建并复验 bundle，不能沿用本次 hash。
 
-### P2-55 LLM client 遗留 TODO 复核
+### P2-55 LLM client 遗留 TODO 复核与策略层合入
 
-- `tradingagents/llm_clients/TODO.md` 的四条旧描述已按当前代码重新核对：只有
-  `validate_model()` 尚未进入运行调用链是实际策略缺口；统一 `api_key` 入口和
-  Anthropic `base_url` 处理已经存在，Google 的公共 `base_url` 参数是共享代理检查
-  边界；当前设置页是自由文本并支持 `/v1/models/fetch` 动态模型列表，不存在可直接
-  同步的静态 CLI 清单。
-- 当前不直接把 `VALID_MODELS` 接入启动硬门禁，避免误伤 OpenAI 兼容服务和自定义模型。
-  后续需另立窄卡定义 advisory/discovery/warmup 语义，并用离线构造测试覆盖全局配置、
-  角色绑定、动态模型拉取和 warmup。详见 `work/2026-09-14-p2-55-llm-client-audit.md`。
+- `tradingagents/llm_clients/TODO.md` 的四条旧描述已完成核对；P2-55 候选
+  `54bfb621250711571ba5a75b6dc64e0db6dcf645` 已线性合入目标主线，并由**代码审核员**在
+  DAV-921 对同一完整 SHA 只读复审 PASS。候选基于 `133668c0a9ac39fbb806e1a6e3322824ff60b898`，
+  直接父为 `223f553c234b6244edd7fa760dc2dc710fd5dc2c`，变更严格限于卡面 8 个白名单文件。
+- 本次落地的是策略层和离线契约：`evaluate_model_policy`、角色级配置隔离、provider
+  catalog/custom endpoint/discovery 状态、失败分类与统一凭据脱敏，以及旧
+  `validate_model()` 对未知 provider 空模型的兼容行为。固定 Python 3.10 环境下相关测试
+  `193 passed`，契约测试 `62 passed`，注入代理变量后契约测试仍为 `62 passed`；另有独立
+  短 Bearer、Base64 字符集和未知 provider 空模型探针通过。
+- `VALID_MODELS` 仍不得充当启动硬门禁；本次没有把策略接入 `get_llm()`、启动流程或真实
+  warmup，没有调用真实模型、写生产库或部署。若要接入运行链，必须另立窄卡定义告警/探活
+  时机和失败语义，不得重复派 DAV-916/DAV-918。
 
 ## 当前剩余施工项（按依赖排序）
 
@@ -126,7 +130,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
-| P2 | LLM client 模型校验策略 | 旧 TODO 已复核；`validate_model()` 未接入运行链，但静态白名单不能直接充当硬门禁 | 先完成 advisory/discovery/warmup 语义设计和离线测试，再决定是否改 client；不得因旧列表阻断合法自定义模型。 |
+| P2 | LLM client 模型校验策略 | 策略层与离线契约已由 DAV-916/DAV-918 合入；`get_llm()`、启动流程和真实 warmup 仍未接线 | 若要接入运行链，另立窄卡定义告警/探活时机和失败语义；不得把静态白名单变成硬门禁，也不得重复派已完成卡。 |
 | P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -148,6 +152,7 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - DAV-911/P2-54 已完成单文件前端工件清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变线上服务行为，也没有单独部署动作。
 - DAV-913/P1-G 已完成单文件 `uv.lock` 对齐、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变运行时代码，不需要单独部署。
 - DAV-914 已完成三个剩余前端 direction 展示入口的本地化、**代码审核员**同 SHA 审查、合入后前端测试与构建，并已随 `79757a6...` 受控发布；不得重复派工。后续发布需按发布门重建/复验前端 bundle。
+- DAV-916/DAV-918/DAV-921 已完成 P2-55 策略层实施、两轮兼容/安全返修、**代码审核员**对最终 SHA `54bfb621250711571ba5a75b6dc64e0db6dcf645` 的同 SHA PASS、相关回归和线性合入；不得重复派工。运行链接线仍是独立后续边界。
 - 旧文档中“DAV-808 尚未决策”“E-04 尚未实现”“P0-B/C/D 仍待编码”“主干仍为 `bdb95f8` / 服务仍为 `a227cdc`”均是历史快照，不能据此新建重复卡。
 - “全量无新增失败”只证明对应候选相对基线的测试差异；它不替代部署后的业务烟测、数据库回读或真实数据授权。
 
@@ -170,4 +175,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [DAV-914 前端 direction 展示本地化与合入证据](work/2026-09-14-p2-direction-localization.md)
 - [DAV-914 受控发布与 live bundle 证据](work/2026-09-14-dav914-release-79757a6.md)
 - [P2-55 LLM client 遗留 TODO 复核](work/2026-09-14-p2-55-llm-client-audit.md)
+- [P2-55 LLM client 策略层最终合入证据](work/2026-09-14-p2-55-llm-client-final.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
