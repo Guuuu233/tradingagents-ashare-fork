@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { localizeDirection } from '@/utils/reportText'
 import type {
     ReportDetail,
     InvestmentDebateState,
@@ -114,6 +115,7 @@ export interface HistoricalDebateDrawerProps {
     isOpen: boolean
     onClose: () => void
     reportData?: ReportDetail | null
+    initialTab?: 'timeline' | 'claims' | 'verdict' | 'evidence' | 'legacy'
 }
 
 export function extractDebateState(
@@ -276,8 +278,9 @@ export default function HistoricalDebateDrawer({
     isOpen,
     onClose,
     reportData,
+    initialTab = 'timeline',
 }: HistoricalDebateDrawerProps) {
-    const [activeTab, setActiveTab] = useState<'timeline' | 'claims' | 'verdict' | 'evidence' | 'legacy'>('timeline')
+    const [activeTab, setActiveTab] = useState<'timeline' | 'claims' | 'verdict' | 'evidence' | 'legacy'>(initialTab)
     const [selectedHorizon, setSelectedHorizon] = useState<'short' | 'medium' | 'default'>('default')
     const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({})
     const [expandedAttempts, setExpandedAttempts] = useState<Record<string, boolean>>({})
@@ -1623,7 +1626,7 @@ export default function HistoricalDebateDrawer({
                                                         <div className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-center">
                                                             <span className="text-[10px] text-slate-400 block">推荐方向</span>
                                                             <span className="text-sm font-bold text-blue-400">
-                                                                {managerVerdict.direction || '中性'}
+                                                                {localizeDirection(managerVerdict.direction) || '中性'}
                                                             </span>
                                                         </div>
                                                         {managerVerdict.position_pct !== undefined && managerVerdict.position_pct !== null && (

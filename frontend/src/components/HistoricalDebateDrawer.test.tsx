@@ -877,3 +877,111 @@ describe('ReportViewer Debate Integration', () => {
         expect(html).toContain('最终交易决策')
     })
 })
+
+describe('HistoricalDebateDrawer direction localization (DAV-914)', () => {
+    function createReportWithVerdictDirection(direction?: string | null): ReportDetail {
+        const report = makeMockStructuredReport()
+        if (report.result_data?.investment_debate_state?.manager_verdict) {
+            report.result_data.investment_debate_state.manager_verdict.direction = direction as string
+        }
+        return report
+    }
+
+    it('localizes legacy English directions (BULLISH, LEAN_BEARISH, NEUTRAL, CAUTIOUS) in manager verdict recommendation', () => {
+        const testCases = [
+            { raw: 'BULLISH', expected: '看多' },
+            { raw: 'LEAN_BULLISH', expected: '偏多' },
+            { raw: 'BEARISH', expected: '看空' },
+            { raw: 'LEAN_BEARISH', expected: '偏空' },
+            { raw: 'NEUTRAL', expected: '中性' },
+            { raw: 'CAUTIOUS', expected: '谨慎' },
+            { raw: 'BULL', expected: '看多' },
+            { raw: 'BEAR', expected: '看空' },
+        ]
+
+        for (const tc of testCases) {
+            const report = createReportWithVerdictDirection(tc.raw)
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={report}
+                    initialTab="verdict"
+                />,
+            )
+
+            expect(html).toContain('推荐方向')
+            expect(html).toContain(tc.expected)
+            expect(html).not.toContain(`>${tc.raw}<`)
+        }
+    })
+
+    it('renders current Chinese directions unchanged in manager verdict', () => {
+        const chineseDirections = ['看多', '偏多', '中性', '偏空', '看空', '谨慎']
+
+        for (const dir of chineseDirections) {
+            const report = createReportWithVerdictDirection(dir)
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={report}
+                    initialTab="verdict"
+                />,
+            )
+
+            expect(html).toContain('推荐方向')
+            expect(html).toContain(dir)
+        }
+    })
+
+    it('falls back to "中性" when manager verdict direction is null, undefined, or empty', () => {
+        const cases = [null, undefined, '']
+
+        for (const emptyDir of cases) {
+            const report = createReportWithVerdictDirection(emptyDir)
+            const html = renderToStaticMarkup(
+                <HistoricalDebateDrawer
+                    isOpen={true}
+                    onClose={() => {}}
+                    reportData={report}
+                    initialTab="verdict"
+                />,
+            )
+
+            expect(html).toContain('推荐方向')
+            expect(html).toContain('中性')
+        }
+    })
+
+    it('passes through unknown direction values as-is', () => {
+        const report = createReportWithVerdictDirection('CUSTOM_SIGNAL')
+        const html = renderToStaticMarkup(
+            <HistoricalDebateDrawer
+                isOpen={true}
+                onClose={() => {}}
+                reportData={report}
+                initialTab="verdict"
+            />,
+        )
+
+        expect(html).toContain('推荐方向')
+        expect(html).toContain('CUSTOM_SIGNAL')
+    })
+
+    it('does NOT mutate the underlying manager_verdict object (display layer only)', () => {
+        const report = createReportWithVerdictDirection('BULLISH')
+        const html = renderToStaticMarkup(
+            <HistoricalDebateDrawer
+                isOpen={true}
+                onClose={() => {}}
+                reportData={report}
+                initialTab="verdict"
+            />,
+        )
+
+        expect(html).toContain('看多')
+        // Check that raw direction in data structure remains BULLISH
+        expect(report.result_data?.investment_debate_state?.manager_verdict?.direction).toBe('BULLISH')
+    })
+})

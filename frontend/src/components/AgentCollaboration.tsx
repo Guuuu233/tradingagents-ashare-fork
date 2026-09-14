@@ -19,7 +19,7 @@ import {
     Brain, Briefcase, Flame, Scale, Shield, CheckCircle2, Loader2,
     Activity,
 } from 'lucide-react'
-import { extractVerdict, type Verdict } from '@/utils/reportText'
+import { extractVerdict, localizeDirection, type Verdict } from '@/utils/reportText'
 
 // ── Agent 元数据 ──────────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ const STATUS_LABEL: Record<AgentStatus, string> = {
     pending: '待命', in_progress: '分析中', completed: '完成', skipped: '跳过', error: '异常',
 }
 
-const VERDICT_COLORS: Record<string, string> = {
+export const VERDICT_COLORS: Record<string, string> = {
     '看多': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
     '偏多': 'bg-teal-100 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300',
     '中性': 'bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400',
@@ -172,7 +172,7 @@ type GroupLabelNodeData = {
 type GroupLabelFlowNode = Node<GroupLabelNodeData, 'groupLabel'>
 type CollaborationNode = AgentFlowNode | GroupLabelFlowNode
 
-function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
+export function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
     const { meta, status, verdict, isParticipating, selected } = data
     const active = status === 'in_progress'
     const done = status === 'completed'
@@ -243,16 +243,19 @@ function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
             )}
 
             {/* 第二行：完成后的判定结果 */}
-            {done && verdict && (
-                <div className="flex items-start gap-2 mt-2 min-w-0">
-                    <span className={`shrink-0 mt-0.5 text-[11px] font-black px-2 py-0.5 rounded-full leading-none ${VERDICT_COLORS[verdict.direction] ?? VERDICT_COLORS._default}`}>
-                        {verdict.direction}
-                    </span>
-                    <span className="text-[12px] text-slate-500 dark:text-slate-400 leading-snug line-clamp-2">
-                        {verdict.reason}
-                    </span>
-                </div>
-            )}
+            {done && verdict && (() => {
+                const localizedDirection = localizeDirection(verdict.direction) || verdict.direction
+                return (
+                    <div className="flex items-start gap-2 mt-2 min-w-0">
+                        <span className={`shrink-0 mt-0.5 text-[11px] font-black px-2 py-0.5 rounded-full leading-none ${VERDICT_COLORS[localizedDirection] ?? VERDICT_COLORS[verdict.direction] ?? VERDICT_COLORS._default}`}>
+                            {localizedDirection}
+                        </span>
+                        <span className="text-[12px] text-slate-500 dark:text-slate-400 leading-snug line-clamp-2">
+                            {verdict.reason}
+                        </span>
+                    </div>
+                )
+            })()}
 
             {done && !verdict && (
                 <div className="flex items-center gap-1.5 mt-2">

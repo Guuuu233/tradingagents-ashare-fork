@@ -19,6 +19,7 @@ import {
     RECOVERY_POLL_TIMEOUT_MESSAGE,
 } from '@/utils/jobLifecycle'
 import AnalysisHorizonSelector from '@/components/AnalysisHorizonSelector'
+import { localizeDirection } from '@/utils/reportText'
 import type {
     AgentReportEvent,
     AgentSnapshotEvent,
@@ -39,6 +40,23 @@ interface ChatCopilotPanelProps {
 interface StreamEvent {
     event: string
     data: Record<string, unknown>
+}
+
+export function formatAnalysisCompleteMessage(direction?: string | null, decision?: string | null): string {
+    const localized = localizeDirection(direction) || '未知'
+    const action = String(decision || 'HOLD')
+    return `**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+}
+
+export function formatAnalysisRecoveryMessage(direction?: string | null, decision?: string | null): string {
+    const localized = localizeDirection(direction) || '未知'
+    const action = String(decision || 'HOLD')
+    return `**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+}
+
+export function formatAnalysisNotificationBody(direction?: string | null, decision?: string | null): string {
+    const localized = localizeDirection(direction)
+    return localized ? `方向：${localized} · 动作：${String(decision || 'HOLD')}` : '点击查看完整报告'
 }
 
 const PRESET_PROMPTS = [
@@ -257,7 +275,7 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
             forceUpdate(n => n + 1)
             markAgentMessagesComplete()
             pushAssistant(
-                `**分析完成（已从中断连接恢复）**\n\n方向倾向：**${String(result.direction || '未知')}**\n\n执行动作：**${String(dbReport.decision || result.decision || 'HOLD')}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+                formatAnalysisRecoveryMessage(result.direction, dbReport.decision || result.decision)
             )
             setCurrentHorizon(null)
             setIsAnalyzing(false)
@@ -333,7 +351,7 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                     forceUpdate(n => n + 1)
                     markAgentMessagesComplete()
                     pushAssistant(
-                        `**分析完成（已从中断连接恢复）**\n\n方向倾向：**${String(result.result.direction || '未知')}**\n\n执行动作：**${String(result.decision || 'HOLD')}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+                        formatAnalysisRecoveryMessage(result.result.direction, result.decision)
                     )
                     setCurrentHorizon(null)
                     setIsAnalyzing(false)
@@ -486,12 +504,14 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                     targetPrice: data.target_price as number | null,
                     stopLoss: data.stop_loss_price as number | null,
                 })
+                const rawDirection = typeof data.direction === 'string' ? data.direction : (data.direction != null ? String(data.direction) : null)
+                const rawDecision = typeof data.decision === 'string' ? data.decision : (data.decision != null ? String(data.decision) : null)
                 pushAssistant(
-                    `**分析完成**\n\n方向倾向：**${String(data.direction || '未知')}**\n\n执行动作：**${String(data.decision || 'HOLD')}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+                    formatAnalysisCompleteMessage(rawDirection, rawDecision)
                 )
                 if ('Notification' in window && Notification.permission === 'granted') {
                     new Notification('TradingAgents 分析完成', {
-                        body: data.direction ? `方向：${String(data.direction)} · 动作：${String(data.decision || 'HOLD')}` : '点击查看完整报告',
+                        body: formatAnalysisNotificationBody(rawDirection, rawDecision),
                         icon: '/favicon.ico',
                     })
                 }
