@@ -620,3 +620,199 @@ def test_route_generic_value_error_still_falls_back():
     assert out == "## fallback csv"
     broken.get_stock_data.assert_called_once()
     second.get_stock_data.assert_called_once()
+
+
+# ── DAV-950: slice_hist_df fail-closed on invalid dates and out-of-order bounds ──
+
+
+@pytest.mark.parametrize(
+    "start_date,end_date",
+    [
+        ("not-a-date", "2024-02-15"),
+        ("", "2024-02-15"),
+        ("   ", "2024-02-15"),
+        (None, "2024-02-15"),
+        (True, "2024-02-15"),
+        ("2024-02-30", "2024-03-15"),  # invalid leap-year day
+        ("2024-13-01", "2024-12-31"),  # invalid month
+        ("today", "2024-02-15"),       # keyword string must not rewrite to today
+        ("now", "2024-02-15"),
+        ("2024", "2024-02-15"),        # incomplete year string
+        ("2024-01-01", "not-a-date"),
+        ("2024-01-01", ""),
+        ("2024-01-01", "   "),
+        ("2024-01-01", None),
+        ("2024-01-01", False),
+        ("2024-01-01", "2024-04-31"),  # April has only 30 days
+        ("2024-01-01", "2024-00-01"),  # month 0 does not exist
+        ("2024-01-01", "today"),
+        ("2024-01-01", "now"),
+        ("2024-01-01", "2024"),
+    ],
+)
+def test_slice_hist_df_fail_closed_on_invalid_boundaries(start_date, end_date):
+    """DAV-950: Missing, blank, illegal calendar, keyword, or unparseable dates must fail closed (empty DataFrame)."""
+    from tradingagents.dataflows.utils import slice_hist_df
+
+    df = pd.DataFrame(
+        {
+            "Date": ["2024-01-01", "2024-02-15", "2024-03-01"],
+            "Open": [10.0, 11.0, 12.0],
+            "High": [10.5, 11.5, 12.5],
+            "Low": [9.5, 10.5, 11.5],
+            "Close": [10.2, 11.2, 12.2],
+            "Volume": [1000.0, 2000.0, 3000.0],
+        }
+    )
+    res = slice_hist_df(df, start_date, end_date)
+    assert res.empty
+    assert isinstance(res, pd.DataFrame)
+
+
+@pytest.mark.parametrize(
+    "start_date,end_date",
+    [
+        ("2024-03-01", "2024-02-15"),
+        ("2024-02-16", "2024-02-15"),
+        ("2024-12-31", "2024-01-01"),
+    ],
+)
+def test_slice_hist_df_rejects_start_after_end(start_date, end_date):
+    """DAV-950: start_date > end_date must fail closed, never return raw df or swap boundaries."""
+    from tradingagents.dataflows.utils import slice_hist_df
+
+    df = pd.DataFrame(
+        {
+            "Date": ["2024-01-01", "2024-02-15", "2024-03-01"],
+            "Open": [10.0, 11.0, 12.0],
+            "High": [10.5, 11.5, 12.5],
+            "Low": [9.5, 10.5, 11.5],
+            "Close": [10.2, 11.2, 12.2],
+            "Volume": [1000.0, 2000.0, 3000.0],
+        }
+    )
+    res = slice_hist_df(df, start_date, end_date)
+    assert res.empty
+    assert isinstance(res, pd.DataFrame)
+
+
+def test_slice_hist_df_inclusive_window_and_sort_order():
+    """DAV-950: Legal boundaries perform inclusive [start_date, end_date] slice and ascending sort."""
+    from tradingagents.dataflows.utils import slice_hist_df
+
+    df = pd.DataFrame(
+        {
+            "Date": ["2024-02-15", "2024-01-01", "2024-03-01", "2024-01-15", "2024-02-01"],
+            "Close": [11.2, 9.9, 12.2, 10.5, 10.8],
+        }
+    )
+    res = slice_hist_df(df, "2024-01-15", "2024-02-15")
+    assert list(res["Date"].dt.strftime("%Y-%m-%d")) == ["2024-01-15", "2024-02-01", "2024-02-15"]
+    assert list(res["Close"]) == [10.5, 10.8, 11.2]
+    assert list(res.index) == [0, 1, 2]
+
+
+def test_slice_hist_df_drops_corrupt_date_rows_and_preserves_zero_price_volume():
+    """DAV-950: Drops corrupt/unparseable Date rows; preserves valid rows with zero price or zero volume."""
+    from tradingagents.dataflows.utils import slice_hist_df
+
+    df = pd.DataFrame(
+        {
+            "Date": ["corrupt-date", "2024-01-15", None, "2024-02-01", "2024-02-15"],
+            "Open": [10.0, 0.0, 5.0, 10.0, 11.0],
+            "High": [10.5, 0.0, 5.5, 10.5, 11.5],
+            "Low": [9.5, 0.0, 4.5, 9.5, 10.5],
+            "Close": [10.2, 0.0, 5.0, 10.0, 11.2],
+            "Volume": [1000.0, 0.0, 100.0, 0.0, 2000.0],
+        }
+    )
+    res = slice_hist_df(df, "2024-01-01", "2024-02-15")
+    assert list(res["Date"].dt.strftime("%Y-%m-%d")) == ["2024-01-15", "2024-02-01", "2024-02-15"]
+    zero_bar = res.iloc[0]
+    assert zero_bar["Open"] == 0.0
+    assert zero_bar["Close"] == 0.0
+    assert zero_bar["Volume"] == 0.0
+    assert res.iloc[1]["Volume"] == 0.0
+
+
+def test_investoday_shared_call_does_not_leak_out_of_window_bars():
+    """DAV-950: cn_investoday provider direct call fail-closed on invalid dates and prevents leaking out-of-window bars."""
+    provider = CnInvestodayProvider()
+    raw_bars = pd.DataFrame(
+        {
+            "Date": ["2024-01-01", "2024-02-15", "2024-03-01"],
+            "Open": [10.0, 11.0, 12.0],
+            "High": [10.5, 11.5, 12.5],
+            "Low": [9.5, 10.5, 11.5],
+            "Close": [10.2, 11.2, 12.2],
+            "Volume": [1000.0, 2000.0, 3000.0],
+        }
+    )
+    with patch.object(provider, "_require_api_key", return_value="dummy"), \
+         patch.object(provider, "_fetch_adjusted_hist_df", return_value=raw_bars):
+        # 1. Invalid start date -> fail closed (no data found)
+        out_bad_start = provider.get_stock_data("600519", "not-a-date", "2024-02-15")
+        assert "No data found for symbol '600519' between not-a-date and 2024-02-15" in out_bad_start
+        assert "2024-01-01" not in out_bad_start
+        assert "2024-03-01" not in out_bad_start
+        assert "Total records: 3" not in out_bad_start
+
+        # 2. start_date > end_date -> fail closed (no data found)
+        out_inverted = provider.get_stock_data("600519", "2024-03-01", "2024-01-01")
+        assert out_inverted.startswith("No data found for symbol '600519' between 2024-03-01 and 2024-01-01")
+        assert "Total records:" not in out_inverted
+        assert "Dividends" not in out_inverted
+        assert "2024-02-15" not in out_inverted
+
+        # 3. Illegal calendar date -> fail closed (no data found)
+        out_bad_cal = provider.get_stock_data("600519", "2024-02-30", "2024-03-15")
+        assert "No data found" in out_bad_cal
+
+        # 4. Valid window -> normal slice without leaking 2024-03-01
+        out_valid = provider.get_stock_data("600519", "2024-01-01", "2024-02-15")
+        assert "Total records: 2" in out_valid
+        assert "2024-01-01" in out_valid
+        assert "2024-02-15" in out_valid
+        assert "2024-03-01" not in out_valid
+
+
+def test_akshare_shared_call_does_not_leak_out_of_window_bars():
+    """DAV-950: cn_akshare provider direct call fail-closed on invalid dates and prevents leaking out-of-window bars."""
+    provider = CnAkshareProvider()
+    raw_bars = pd.DataFrame(
+        {
+            "Date": ["2024-01-01", "2024-02-15", "2024-03-01"],
+            "Open": [10.0, 11.0, 12.0],
+            "High": [10.5, 11.5, 12.5],
+            "Low": [9.5, 10.5, 11.5],
+            "Close": [10.2, 11.2, 12.2],
+            "Volume": [1000.0, 2000.0, 3000.0],
+        }
+    )
+    fake_ak = MagicMock()
+    fake_ak.stock_zh_a_hist.return_value = raw_bars
+    with patch.object(provider, "_ak", return_value=fake_ak):
+        # 1. Invalid start date -> fail closed (no data found)
+        out_bad_start = provider.get_stock_data("600519", "not-a-date", "2024-02-15")
+        assert "No data found for symbol '600519' between not-a-date and 2024-02-15" in out_bad_start
+        assert "2024-01-01" not in out_bad_start
+        assert "2024-03-01" not in out_bad_start
+        assert "Total records: 3" not in out_bad_start
+
+        # 2. start_date > end_date -> fail closed (no data found)
+        out_inverted = provider.get_stock_data("600519", "2024-03-01", "2024-01-01")
+        assert out_inverted.startswith("No data found for symbol '600519' between 2024-03-01 and 2024-01-01")
+        assert "Total records:" not in out_inverted
+        assert "Dividends" not in out_inverted
+        assert "2024-02-15" not in out_inverted
+
+        # 3. Illegal calendar date -> fail closed (no data found)
+        out_bad_cal = provider.get_stock_data("600519", "2024-02-30", "2024-03-15")
+        assert "No data found" in out_bad_cal
+
+        # 4. Valid window -> normal slice without leaking 2024-03-01
+        out_valid = provider.get_stock_data("600519", "2024-01-01", "2024-02-15")
+        assert "Total records: 2" in out_valid
+        assert "2024-01-01" in out_valid
+        assert "2024-02-15" in out_valid
+        assert "2024-03-01" not in out_valid

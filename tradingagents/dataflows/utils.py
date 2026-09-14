@@ -27,21 +27,60 @@ def safe_float(value: Any, round_to: Optional[int] = None) -> Optional[float]:
     return f
 
 
+def _parse_slice_boundary(val: Any) -> Optional[pd.Timestamp]:
+    """Parse and strictly validate a slice boundary date.
+
+    Returns a normalized (midnight) Timestamp, or None if invalid/missing/unparseable.
+    Rejects relative keywords (e.g. 'today'), invalid calendar dates (e.g. '2024-02-30'),
+    and non-date strings.
+    """
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, (datetime, date, pd.Timestamp)):
+        ts = pd.Timestamp(val)
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        return ts.normalize()
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    if len(s) == 8 and s.isdigit():
+        s = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    else:
+        s = s.replace("/", "-")
+        if "T" in s:
+            s = s.replace("T", " ")
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return pd.Timestamp(dt).normalize()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def slice_hist_df(df: "pd.DataFrame", start_date: str, end_date: str) -> "pd.DataFrame":
     """Slice a OHLCV frame by ``Date`` into ``[start_date, end_date]``.
 
-    Shared by cn_akshare and cn_investoday providers (audit P2-1).
+    Shared by cn_akshare and cn_investoday providers (audit P2-1, DAV-950).
+    Fails closed (returns empty DataFrame) on missing, blank, illegal, or unparseable dates,
+    or when ``start_date > end_date``.
     """
-    if df is None or df.empty:
+    if df is None or getattr(df, "empty", True) or "Date" not in df.columns:
         return pd.DataFrame()
-    start_dt = pd.to_datetime(start_date, errors="coerce")
-    end_dt = pd.to_datetime(end_date, errors="coerce")
-    if pd.isna(start_dt) or pd.isna(end_dt):
-        return df
+    start_dt = _parse_slice_boundary(start_date)
+    end_dt = _parse_slice_boundary(end_date)
+    if start_dt is None or end_dt is None or start_dt > end_dt:
+        return pd.DataFrame()
     out = df.copy()
-    out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
+    out["Date"] = pd.to_datetime(out["Date"], errors="coerce", format="mixed")
     out = out.dropna(subset=["Date"])
-    out = out[(out["Date"] >= start_dt) & (out["Date"] <= end_dt)]
+    if hasattr(out["Date"].dt, "tz") and out["Date"].dt.tz is not None:
+        out["Date"] = out["Date"].dt.tz_localize(None)
+    date_normalized = out["Date"].dt.normalize()
+    out = out[(date_normalized >= start_dt) & (date_normalized <= end_dt)]
     return out.sort_values("Date").reset_index(drop=True)
 
 
