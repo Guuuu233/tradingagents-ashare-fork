@@ -13,6 +13,8 @@
 - P1-E 与线上基线 `9d702e7` 的同口径全量对照为：基线 18 failed / 4415 passed，候选 18 failed / 4426 passed；失败集合逐项一致，新增失败为 0，候选多通过 11 项。
 - V-03a 已在生产库的隔离备份上完成只读进度基线，但不是正式收益实验，也不是“能否盈利”的结论；forward OOS 当前没有可评估样本。
 - 生产库未被本轮部署和评估改写；信用加权、真实社交采集、社交 active 和历史重写均未执行。
+- `/limit-up-ladder` 已完成只读来源核验和实施设计冻结，设计记录见
+  `work/2026-09-14-p1f-limit-up-ladder-design.md`；尚未改代码、建实施卡或派工。
 
 ## 运行态
 
@@ -77,6 +79,7 @@
 | P1 | 裁决者一手证据 | 代码已合入并上线；尚无真实业务链路证据 | 不触发真实分析的前提下，保留代码/回归门禁；若要证明生产图可达，另走明确的数据写入授权和 trace/report/readback 取证。 |
 | P1 | 财务披露日 PIT | 代码已审查、RT-FULL 通过、已合入并发布；尚无生产业务证据 | 发布版本 `0263496` 已通过备份、健康检查、只读烟测和数据库回读；若要证明生产图/报告行为，另走明确的数据写入授权，不把只读烟测当成业务样本。 |
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
+| P1 | `/limit-up-ladder` 能力 | 设计已冻结，代码未实施 | 以 `work/2026-09-14-p1f-limit-up-ladder-design.md` 开实施卡；固定当前滚动窗口、历史 fail-closed、仅 Fuyao 来源，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -102,4 +105,5 @@
 - [前端 DAV-887 验收](work/2026-09-14-frontend-dav887.md)
 - [前端 live bundle 验收](work/2026-09-14-frontend-live-bundle.md)
 - [本次计划审计收口](work/2026-09-14-plan-audit-closeout.md)
+- [P1-F 连板天梯接入设计](work/2026-09-14-p1f-limit-up-ladder-design.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。

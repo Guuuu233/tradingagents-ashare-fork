@@ -76,6 +76,20 @@
   `work/2026-09-14-frontend-live-bundle.md`。后续发布不得沿用本次 hash，必须重建并复验。
 - 本决定只覆盖构建物和 HTTP 入口，不等于浏览器交互、登录、真实分析或生产数据库写入授权。
 
+### D-022：P1-F 连板天梯只按固定当前窗口接入（有效，设计已冻结）
+
+- 官方 Fuyao `/api/a-share/special-data/limit-up-ladder` 不接受日期参数，只返回固定近 30
+  个交易日矩阵；因此内部能力 `get_limit_up_ladder` 必须把请求基准日期用于本地 PIT 门禁，
+  不能把当前窗口伪装成历史快照。
+- `cn_fuyao` 是唯一来源；不得从 `get_zt_pool` 合成、不得自动回退到其他 provider、不得
+  裁剪未来日期或用 `iloc`/日期回退掩盖窗口不匹配。六个板块、来源、窗口、`seal_nextday`
+  的未知值和 typed failure/unavailable 语义必须保留。
+- 天梯只进入独立的 `market_attention.limit_up_ladder` 背景字段，不接入交易方向、博弈论
+  信号、收益评估、H1b、数据库回填或前端；历史分析遇到该能力时 fail-closed，但不阻断整单。
+- 设计和红队清单见 `work/2026-09-14-p1f-limit-up-ladder-design.md`。实施卡交付后必须由
+  **代码审核员**对同一完整 SHA 只读审查，再跑与当前发布版本同口径 RT-FULL；本决定不授权
+  部署、真实分析、生产数据写入或真实社交采集。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
