@@ -50,6 +50,24 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".*",
+    "build",
+    "dist",
+    "CVS",
+    "_darcs",
+    "{arch}",
+    "*.egg",
+    "venv",
+    "node_modules",
+    "frontend/node_modules",
+    "work",
+    "data",
+    "eval_results",
+    "reports",
+    "results",
+]
 markers = [
     "network: tests that require real network access (run with: pytest -m network)",
 ]
