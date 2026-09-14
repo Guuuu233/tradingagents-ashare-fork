@@ -585,7 +585,19 @@ class TestBackwardCompatibility:
         assert validate_model("ollama", "anything") is True
         assert validate_model("openrouter", "anything") is True
         assert validate_model("unknown_provider_xyz", "anything") is True
+        # Legacy behavior: uncataloged provider returns True even when model is empty
+        assert validate_model("unknown_provider_xyz", "") is True
         # Custom base_url enables permissive behavior for compatible models
         assert validate_model(
             "openai", "qwen-plus", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         ) is True
+
+    def test_legacy_validate_model_unknown_provider_empty_model_regression(self):
+        """Regression test for DAV-918: legacy validate_model accepts empty model on uncataloged providers."""
+        assert validate_model("unknown_provider_xyz", "") is True
+        assert validate_model("unknown_provider_xyz", "   ") is True
+        assert validate_model("ollama", "") is True
+        assert validate_model("openrouter", "") is True
+        # Known providers must still reject empty models
+        assert validate_model("openai", "") is False
+        assert validate_model("anthropic", "") is False

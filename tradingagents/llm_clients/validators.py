@@ -315,8 +315,6 @@ def validate_model(provider: str, model: str, base_url: Optional[str] = None) ->
     """
     prov = (provider or "").strip().lower()
     if prov not in VALID_MODELS:
-        if not (model or "").strip():
-            return False
         return True
 
     res = evaluate_model_policy(provider, model, base_url, strict=True)
