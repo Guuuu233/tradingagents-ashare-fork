@@ -5,8 +5,8 @@
 ## 当前结论
 
 - 远端施工主干 `origin/codex/dav-4-p2a-trunk` 当前为文档-only 后代
-  `2baeaf24077152174c05e03847fa44a7e86dd770`，直接父为
-  `2e6cced6cfe1dae598ad332afc703a30cfda4147`；线上服务仍运行业务 SHA
+  `a9293ffa7e4e4ceac1be5a3999168505b714a311`，直接父为
+  `2baeaf24077152174c05e03847fa44a7e86dd770`；线上服务仍运行业务 SHA
   `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`。
 - 远端与服务的业务代码树一致，文档提交不需要重部署；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修已进入运行副本。
 - 主干与线上版本的最近一次同口径全量对照为：基线 `4f1a1aa3` 有 18 failed / 4356 passed，候选 `63d5648` 有 18 failed / 4406 passed；失败集合逐项一致，新增失败为 0，候选多通过 50 项。
