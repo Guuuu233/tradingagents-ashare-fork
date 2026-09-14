@@ -97,21 +97,19 @@ Implementation notes (DAV-69):
 
 ---
 
-## Adjudicators have no first-hand access to analyst reports
+## Adjudicators previously lacked first-hand access to analyst reports
 
-**Status:** Partially resolved in DAV-68 M2 (`research_manager` now receives
-first-hand evidence summaries for market/news/fundamentals/macro; `trader` and
-`risk_manager` custom-prompt injection landed; trader/risk_manager analyst-report
-access remains a follow-up)  
+**Status:** Resolved for bounded first-hand evidence access in P1-D/DAV-901.
+`trader` and `risk_manager` now receive the same deterministic seven-source summary;
+full report passthrough remains intentionally out of scope.
 **Discovered:** 2026-07-29 during 1.58MB output investigation
 
-### Symptom
+### Historical symptom
 
-`research_manager`, `risk_manager`, and `trader` do **not** receive any analyst
-report directly in their prompt.  They only see debate history and summary fields.
-`fundamentals_report` (and others) are read from state only to construct
-`curr_situation`, which is used exclusively as a memory-retrieval embedding query —
-the string is never injected into the prompt template.
+Before P1-D, `research_manager`, `risk_manager`, and `trader` did not receive
+bounded first-hand analyst evidence directly in their prompts.  The reports were
+available in state and some fields were used for memory retrieval, but that did not
+provide an evidence block for adjudication.
 
 ### Prompt template coverage map (from `tradingagents/prompts/zh.py`)
 
@@ -126,15 +124,16 @@ the string is never injected into the prompt template.
 | conservative_debator | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
 | neutral_debator | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
 | **research_manager** | ✓(摘要) | ✓ | ✓(摘要) | ✓(摘要) | ✓ | ✓ | ✓(摘要) |
-| **trader** | — | — | — | — | — | — | — |
-| **risk_manager** | — | — | — | — | — | — | — |
+| **trader** | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) |
+| **risk_manager** | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) | ✓(七源摘要) |
 
 `research_manager` receives `smart_money_report`, `volume_price_report`, and
-`sentiment_report` as raw data for its "expected-value gap analysis", plus
-bounded evidence summaries of market/news/fundamentals/macro for evidence-level
-cross-checks.  The macro analyst's report — previously consumed by nobody — is now
-wired in.  `trader` and `risk_manager` receive only structured summaries built by
-`build_agent_context_view` — no analyst reports at all.
+`sentiment_report` as raw data for its "expected-value gap analysis", plus bounded
+evidence summaries of market/news/fundamentals/macro for evidence-level cross-checks.
+The macro analyst's report — previously consumed by nobody — is now wired in.
+`trader` and `risk_manager` receive the deterministic output of
+`build_seven_source_evidence_summary`: fixed source order, per-source limits and a
+2400-character total ceiling.  They do not receive full analyst reports.
 
 ### Why it matters
 
@@ -170,13 +169,14 @@ to the wiring — if the evidence summaries (or the plan hand-off) are ever
 dropped, the available-fact count collapses and the test fails even though a
 mock LLM would still return the fixed golden output.
 
-### Remaining gap (follow-up)
+### Current boundary
 
-`trader` and `risk_manager` still do not receive analyst reports (only
-`build_agent_context_view` summaries).  They DO now receive the 3000-char
-custom-prompt injection (confidence-ceiling / falsification constraints), so the
-adjudication-affecting constraints reach them, but first-hand analyst-evidence
-access for those two roles is a candidate next step.
+Full analyst-report passthrough is not an open wiring bug: bounded summaries are the
+deliberate context and provenance boundary.  If full reports are ever considered,
+that requires a separate design covering context limits, source provenance and
+evidence independence.  The remaining production evidence gap is different: a
+real, authorized business path still needs trace, persisted report fields and
+readback consistency; offline tests and read-only HTTP smoke tests do not prove it.
 
 ---
 

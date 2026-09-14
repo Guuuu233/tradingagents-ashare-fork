@@ -123,13 +123,29 @@
   合入，不触发服务重启、部署、生产库写入、真实数据采集或凭据操作；线上继续运行
   `6cc4e152...`。
 
+### D-025：同步 `uv.lock` 与 `pyproject.toml`（有效，代码已合入）
+
+- 当前 `pyproject.toml` 已为项目版本 `0.6.0`，并声明 `python-dotenv` 与 dev 依赖
+  `fakeredis`；旧 `uv.lock` 仍记录 `0.2.0`、保留 `langchain-experimental` 且缺少 `fakeredis`，
+  `uv lock --check` 实测失败。P1-G 只修复这一锁文件漂移。
+- DAV-913 候选完整 SHA 为 `054a76210f799029fe8d390512c763c36f0fb585`，直接父为
+  `78d7b09a2e1f664d9d5e44ee581660a16ef734f3`；变更清单严格只有 `M uv.lock`，
+  `git diff --check` 通过。**代码审核员**已对同一完整 SHA 做只读 PASS。
+- 候选通过 `uv lock --check`（resolved 114 packages）和
+  `uv sync --frozen --dry-run`（would install 106 packages），随后以 `--ff-only` 线性合入
+  `origin/codex/dav-4-p2a-trunk`。除依赖声明对齐及其孤儿传递依赖清理外，没有无关依赖版本变动。
+- 本决定只覆盖锁文件合入，不触发服务重启、部署、生产库写入、真实分析、真实社交采集或凭据操作；
+  线上仍运行 `6cc4e152...`。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前施工主干已包含 P1-F 候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`、P2-65 候选
-  `2daad463ff004dac97986e39983100be03599521` 及其治理文档；线上服务运行发布 SHA
-  `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。完整远端文档 HEAD、运行态、数据库计数和剩余
-  工作以 `PROJECT_STATE.md` 及发布后回读为准。
+- 当前施工主干已包含 P1-G 候选 `054a76210f799029fe8d390512c763c36f0fb585`、P1-F 候选
+  `6612aea82e0fb3212d3682c5d09835f529ffec16`、P2-65 候选
+  `2daad463ff004dac97986e39983100be03599521`、P2-54 候选
+  `80d87b5f1fd9b242b0ce22d430933fca5e07afe2` 及其治理文档；线上服务运行发布 SHA
+  `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。完整远端文档 HEAD、运行态、数据库计数和
+  剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
