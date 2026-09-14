@@ -98,10 +98,26 @@
   的受控发布：预启动、优雅切换、`/healthz`、provider/行情/social disabled 烟测和数据库回读均通过；
   生产库未写入，未启动真实分析或真实天梯上游请求。
 
+### D-023：生产 Compose 只保留运行所需源码挂载（有效，代码已合入）
+
+- 生产 `docker-compose.yml` 只保留 `./data:/app/data`、`./api:/app/api` 和
+  `./tradingagents:/app/tradingagents` 三项运行挂载；移除测试与脚本源码的
+  `./tests:/app/tests`、`./scripts:/app/scripts` 挂载，减少生产容器暴露面。
+- 本决定不改变 `Dockerfile`、`docker-entrypoint.py`、`docker-compose.split.yml`、端口、环境变量、
+  数据库路径或重启策略；不允许借此卡构建镜像、启动/重启/部署、写生产库或采集真实数据。
+- DAV-910 候选完整 SHA 为 `2daad463ff004dac97986e39983100be03599521`，直接父为
+  `1e634c1f91f8f8b05b6a5754c1549c1d47030059`；**代码审核员**已对同一 SHA 只读 PASS，
+  `docker compose config --quiet` 退出码为 `0`，候选已线性合入 `origin/codex/dav-4-p2a-trunk`。
+- 本决定只记录代码合入，不等于线上部署；线上当前仍为 P1-F 发布 SHA `6cc4e152...`。P2-54
+  前端 `.vade-report` 工件清理另行立卡，不与本决定合并。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前施工主干已包含 P1-F 候选 `6612aea82e0fb3212d3682c5d09835f529ffec16` 及其后续治理文档；线上服务运行发布 SHA `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。完整远端文档 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
+- 当前施工主干已包含 P1-F 候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`、P2-65 候选
+  `2daad463ff004dac97986e39983100be03599521` 及其治理文档；线上服务运行发布 SHA
+  `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。完整远端文档 HEAD、运行态、数据库计数和剩余
+  工作以 `PROJECT_STATE.md` 及发布后回读为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
