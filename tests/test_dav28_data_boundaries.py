@@ -239,6 +239,96 @@ def test_baostock_rejects_conflicting_duplicate_dates():
             provider._fetch_hist_df("600519", "2026-07-01", "2026-07-28")
 
 
+def test_baostock_lower_bound_filters_out_prior_bars():
+    """DAV-951: _fetch_hist_df must filter out bars earlier than start_date."""
+    provider = CnBaoStockProvider()
+    rs = _FakeBaostockResultSet(
+        [
+            ["2026-06-30", "1.0", "1.3", "0.9", "1.2", "100"],  # prior to start_date
+            ["2026-07-01", "1.1", "1.4", "1.0", "1.3", "110"],  # on start_date
+            ["2026-07-15", "1.2", "1.5", "1.1", "1.4", "120"],  # in window
+        ]
+    )
+    fake_bs = MagicMock()
+    fake_bs.query_history_k_data_plus.return_value = rs
+    with patch.object(provider, "_session", return_value=nullcontext(fake_bs)):
+        out = provider._fetch_hist_df("600519", "2026-07-01", "2026-07-28")
+
+    dates = list(out["Date"].dt.strftime("%Y-%m-%d"))
+    assert "2026-06-30" not in dates
+    assert dates == ["2026-07-01", "2026-07-15"]
+
+
+def test_baostock_upper_bound_filters_out_future_bars():
+    """DAV-951: _fetch_hist_df must filter out bars later than end_date."""
+    provider = CnBaoStockProvider()
+    rs = _FakeBaostockResultSet(
+        [
+            ["2026-07-15", "1.2", "1.5", "1.1", "1.4", "120"],  # in window
+            ["2026-07-28", "1.3", "1.6", "1.2", "1.5", "130"],  # on end_date
+            ["2026-07-29", "1.4", "1.7", "1.3", "1.6", "140"],  # after end_date
+        ]
+    )
+    fake_bs = MagicMock()
+    fake_bs.query_history_k_data_plus.return_value = rs
+    with patch.object(provider, "_session", return_value=nullcontext(fake_bs)):
+        out = provider._fetch_hist_df("600519", "2026-07-01", "2026-07-28")
+
+    dates = list(out["Date"].dt.strftime("%Y-%m-%d"))
+    assert "2026-07-29" not in dates
+    assert dates == ["2026-07-15", "2026-07-28"]
+
+
+def test_baostock_inclusive_boundaries_preserves_flat_bars_zero_volume_and_dedupes():
+    """DAV-951: boundaries [start_date, end_date] are inclusive; zero volume, flat bars, and identical duplicates handled."""
+    provider = CnBaoStockProvider()
+    rs = _FakeBaostockResultSet(
+        [
+            ["2026-07-01", "10.0", "10.0", "10.0", "10.0", "0.0"],   # flat bar & zero volume on start_date
+            ["2026-07-15", "10.5", "11.0", "10.2", "10.8", "500.0"], # identical duplicate 1
+            ["2026-07-15", "10.5", "11.0", "10.2", "10.8", "500.0"], # identical duplicate 2
+            ["2026-07-28", "11.0", "11.5", "10.9", "11.2", "300.0"], # on end_date
+        ]
+    )
+    fake_bs = MagicMock()
+    fake_bs.query_history_k_data_plus.return_value = rs
+    with patch.object(provider, "_session", return_value=nullcontext(fake_bs)):
+        out = provider._fetch_hist_df("600519", "2026-07-01", "2026-07-28")
+
+    assert list(out["Date"].dt.strftime("%Y-%m-%d")) == ["2026-07-01", "2026-07-15", "2026-07-28"]
+    assert list(out["Volume"]) == [0.0, 500.0, 300.0]
+    start_row = out.iloc[0]
+    assert start_row["Open"] == start_row["High"] == start_row["Low"] == start_row["Close"] == 10.0
+    assert start_row["Volume"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "start_date,end_date",
+    [
+        ("2026-07-28", "2026-07-01"),  # start_date > end_date
+        ("not-a-date", "2026-07-28"),  # invalid start_date
+        ("2026-07-01", "not-a-date"),  # invalid end_date
+        ("", "2026-07-28"),            # empty start_date
+        ("2026-07-01", ""),            # empty end_date
+        (None, "2026-07-28"),          # None start_date
+        ("2026-07-01", None),          # None end_date
+    ],
+)
+def test_baostock_rejects_invalid_window_and_malformed_dates(start_date, end_date):
+    """DAV-951: start_date > end_date or missing/invalid dates must fail explicitly and not return raw upstream rows."""
+    provider = CnBaoStockProvider()
+    rs = _FakeBaostockResultSet(
+        [
+            ["2026-07-01", "1.0", "1.3", "0.9", "1.2", "100"],
+        ]
+    )
+    fake_bs = MagicMock()
+    fake_bs.query_history_k_data_plus.return_value = rs
+    with patch.object(provider, "_session", return_value=nullcontext(fake_bs)):
+        with pytest.raises(ValueError):
+            provider._fetch_hist_df("600519", start_date, end_date)
+
+
 # ── DataCollector: date filtering before indicators/VPA/prompt ─────────
 
 

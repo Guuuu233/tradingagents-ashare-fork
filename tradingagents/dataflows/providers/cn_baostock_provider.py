@@ -73,6 +73,16 @@ class CnBaoStockProvider(BaseMarketDataProvider):
                 bs.logout()
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+        start_boundary = pd.to_datetime(start_date, errors="coerce")
+        end_boundary = pd.to_datetime(end_date, errors="coerce")
+        if pd.isna(start_boundary) or pd.isna(end_boundary):
+            raise ValueError(
+                f"Invalid date parameter for cn_baostock: start_date={start_date!r}, end_date={end_date!r}"
+            )
+        if start_boundary > end_boundary:
+            raise ValueError(
+                f"Invalid date range for cn_baostock: start_date ({start_date!r}) cannot be after end_date ({end_date!r})"
+            )
         code = self._normalize_symbol(symbol)
         with self._session() as bs:
             rs = bs.query_history_k_data_plus(
@@ -107,9 +117,7 @@ class CnBaoStockProvider(BaseMarketDataProvider):
             df[c] = pd.to_numeric(df[c], errors="coerce")
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"])
-        boundary = pd.to_datetime(end_date, errors="coerce")
-        if pd.notna(boundary):
-            df = df[df["Date"] <= boundary]
+        df = df[(df["Date"] >= start_boundary) & (df["Date"] <= end_boundary)]
         return dedupe_daily_bars(
             df, "Date", ["Open", "High", "Low", "Close", "Volume"]
         )
