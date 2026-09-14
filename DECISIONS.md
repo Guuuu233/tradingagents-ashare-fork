@@ -33,10 +33,27 @@
 - 候选完整 SHA `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，直接父 `51b8b155ef3d47e99dead8ce4960562cd9a77c9e`；DAV-901 已由**代码审核员**对同一 SHA 只读通过，关联集合 160 项通过；对线上 `63d5648` 的 RT-FULL 为双方各 18 failed、候选 4415 passed、基线 4406 passed，失败集合双向差集为 0。
 - 上线前已备份并校验生产 SQLite；上线后 `/healthz` 精确回读 `9d702e7`，provider health、只读行情和 social disabled 烟测通过，reports 计数与数据库 SHA 未变。本决定不授权真实分析、生产数据写入、社交采集、信用加权或历史重写。
 
+### D-019：P1-E Fuyao 财务披露日 PIT fail-closed（有效，代码已合入，待发布）
+
+- DAV-902 候选完整 SHA 为 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`，直接父为
+  `251fd00aa8a9584850cae5d4ab5adfbd3c5d3b94`；白名单严格为
+  `tradingagents/dataflows/providers/cn_fuyao_provider.py` 与
+  `tests/test_cn_fuyao_provider.py`。
+- DAV-903 已由**代码审核员**对同一完整 SHA 只读 PASS。固定 Python 3.10 的专项关联集合为
+  `91 passed` 与 `295 passed, 3 deselected`；没有把开发方 Python 3.14 的输出当作证据。
+- 同口径 RT-FULL 使用 `env -u PYTHONPATH .../.venv310/bin/python -m pytest -q`：基线
+  `9d702e7` 为 `18 failed / 4415 passed`，候选为 `18 failed / 4426 passed`，双方失败集合
+  双向差集均为空，新增失败为 0。
+- 候选已从 `251fd00` 线性合入 `cd7456`；治理文档随后作为线性后代落账。此决定不把代码合入
+  视为部署：线上仍运行 `9d702e7`，发布前必须重新备份 SQLite、核对完整性/计数、受控启动、
+  `/healthz` 精确回读和只读烟测。
+- 本决定不授权真实分析、生产数据写入、真实采集、Cookie、信用加权或历史重写；P1-E 只改变
+  Fuyao provider 的可见性判断和对应测试。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前远端主干为 `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，直接父为 `51b8b155ef3d47e99dead8ce4960562cd9a77c9e`；线上服务已运行同一业务 SHA。当前运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 为准。
+- 当前施工主干已包含 P1-E 代码候选 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`，其上有本次治理文档线性提交；线上服务仍运行 `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`。完整远端 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
