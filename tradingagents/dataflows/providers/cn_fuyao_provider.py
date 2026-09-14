@@ -1253,6 +1253,7 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             req_d = _parse_date(clean_date)
         except (TypeError, ValueError):
             return f"【数据获取失败】分析日期无法解析：{clean_date!r}，本项不可用。"
+        clean_date = req_d.strftime("%Y-%m-%d")
 
         if req_d > now_cn().date():
             return f"【数据获取失败】分析日期 {clean_date} 晚于当前日期，拒绝未来数据，本项不可用。"
@@ -1296,8 +1297,13 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             )
 
         board_caps = window.get("board_caps")
-        if board_caps is not None and not isinstance(board_caps, dict):
-            return VendorFail("[cn_fuyao] 连板天梯 window.board_caps 类型错误")
+        if board_caps is None or not isinstance(board_caps, dict):
+            return VendorFail("[cn_fuyao] 连板天梯缺少有效 window.board_caps 结构")
+        missing_caps = [k for k in _LADDER_BOARD_KEYS if k not in board_caps]
+        if missing_caps:
+            return VendorFail(
+                f"[cn_fuyao] 连板天梯 window.board_caps 缺失板块键: {missing_caps}"
+            )
 
         iso_date_list: list[str] = []
         for d_raw in date_list:
@@ -1329,6 +1335,10 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             if day_iso > clean_date:
                 return VendorFail(
                     f"[cn_fuyao] 连板天梯 item[{idx}] 包含晚于请求基准日期的日期：{day_iso} > {clean_date}，拒绝未来数据"
+                )
+            if day_iso != iso_date_list[idx]:
+                return VendorFail(
+                    f"[cn_fuyao] 连板天梯 item[{idx}] 日期与 window.date_list[{idx}] 不一致: {day_iso} vs {iso_date_list[idx]}"
                 )
             boards = day_record.get("boards")
             if not isinstance(boards, dict):
@@ -1366,7 +1376,7 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             as_of=as_of,
             length=length,
             date_list=iso_date_list,
-            board_caps=board_caps or {},
+            board_caps=board_caps,
         )
 
     def get_lhb_detail(self, symbol: str, date: str) -> Any:

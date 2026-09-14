@@ -252,6 +252,61 @@ def test_envelope_validation_failures():
                 "item": [],
             },
         },
+        # Window missing board_caps
+        {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "timestamp": 123,
+                "window": {
+                    "length": 1,
+                    "date_list": [today_str.replace("-", "")],
+                },
+                "item": [{"date": today_str.replace("-", ""), "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
+            },
+        },
+        # Window board_caps not dict
+        {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "timestamp": 123,
+                "window": {
+                    "length": 1,
+                    "date_list": [today_str.replace("-", "")],
+                    "board_caps": "not_a_dict",
+                },
+                "item": [{"date": today_str.replace("-", ""), "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
+            },
+        },
+        # Window board_caps missing keys
+        {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "timestamp": 123,
+                "window": {
+                    "length": 1,
+                    "date_list": [today_str.replace("-", "")],
+                    "board_caps": {"two_board": 4},
+                },
+                "item": [{"date": today_str.replace("-", ""), "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
+            },
+        },
+        # Item date mismatch with window.date_list
+        {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "timestamp": 123,
+                "window": {
+                    "length": 1,
+                    "date_list": [today_str.replace("-", "")],
+                    "board_caps": {k: 4 for k in _LADDER_BOARD_KEYS},
+                },
+                "item": [{"date": "20240101", "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
+            },
+        },
         # Illegal date in date_list
         {
             "code": 0,
@@ -261,6 +316,7 @@ def test_envelope_validation_failures():
                 "window": {
                     "length": 1,
                     "date_list": ["99999999"],
+                    "board_caps": {k: 4 for k in _LADDER_BOARD_KEYS},
                 },
                 "item": [{"date": "99999999", "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
             },
@@ -274,6 +330,7 @@ def test_envelope_validation_failures():
                 "window": {
                     "length": 2,
                     "date_list": _make_date_list(today_str, 2),
+                    "board_caps": {k: 4 for k in _LADDER_BOARD_KEYS},
                 },
                 "item": [{"date": today_str.replace("-", ""), "boards": {k: [] for k in _LADDER_BOARD_KEYS}}],
             },
@@ -287,6 +344,7 @@ def test_envelope_validation_failures():
                 "window": {
                     "length": 1,
                     "date_list": [today_str.replace("-", "")],
+                    "board_caps": {k: 4 for k in _LADDER_BOARD_KEYS},
                 },
                 "item": [
                     {
@@ -305,6 +363,7 @@ def test_envelope_validation_failures():
                 "window": {
                     "length": 1,
                     "date_list": [today_str.replace("-", "")],
+                    "board_caps": {k: 4 for k in _LADDER_BOARD_KEYS},
                 },
                 "item": [
                     {
@@ -322,6 +381,87 @@ def test_envelope_validation_failures():
             res = provider.get_limit_up_ladder(curr_date=today_str)
             assert isinstance(res, VendorFail), f"Expected VendorFail for {bad_payload}, got {type(res)}: {res}"
             assert res.error.startswith("[cn_fuyao]")
+
+
+def test_missing_or_incomplete_board_caps_refused():
+    """DAV-907 / Issue 3: window.board_caps 缺失、非 dict 或缺键必须返回 VendorFail。"""
+    provider = CnFuyaoProvider()
+    today_str = cn_today_str()
+
+    # Case 1: Missing board_caps key entirely
+    payload_missing = _make_valid_ladder_payload(base_date=today_str, count=30)
+    del payload_missing["data"]["window"]["board_caps"]
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload_missing)):
+        res = provider.get_limit_up_ladder(curr_date=today_str)
+    assert isinstance(res, VendorFail)
+    assert "缺少有效 window.board_caps 结构" in res.error
+
+    # Case 2: board_caps is None
+    payload_none = _make_valid_ladder_payload(base_date=today_str, count=30)
+    payload_none["data"]["window"]["board_caps"] = None
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload_none)):
+        res = provider.get_limit_up_ladder(curr_date=today_str)
+    assert isinstance(res, VendorFail)
+    assert "缺少有效 window.board_caps 结构" in res.error
+
+    # Case 3: board_caps is not a dict (e.g. list)
+    payload_list = _make_valid_ladder_payload(base_date=today_str, count=30)
+    payload_list["data"]["window"]["board_caps"] = [4, 4, 4, 4, 4, 4]
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload_list)):
+        res = provider.get_limit_up_ladder(curr_date=today_str)
+    assert isinstance(res, VendorFail)
+    assert "缺少有效 window.board_caps 结构" in res.error
+
+    # Case 4: board_caps is empty dict
+    payload_empty = _make_valid_ladder_payload(base_date=today_str, count=30)
+    payload_empty["data"]["window"]["board_caps"] = {}
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload_empty)):
+        res = provider.get_limit_up_ladder(curr_date=today_str)
+    assert isinstance(res, VendorFail)
+    assert "window.board_caps 缺失板块键" in res.error
+
+    # Case 5: board_caps is missing one of the six keys
+    for missing_key in _LADDER_BOARD_KEYS:
+        payload_partial = _make_valid_ladder_payload(base_date=today_str, count=30)
+        del payload_partial["data"]["window"]["board_caps"][missing_key]
+        with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+             patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload_partial)):
+            res = provider.get_limit_up_ladder(curr_date=today_str)
+        assert isinstance(res, VendorFail)
+        assert "window.board_caps 缺失板块键" in res.error
+        assert missing_key in res.error
+
+
+def test_window_date_list_and_item_date_mismatch_refused():
+    """DAV-907 / Issue 2: item[idx].date 与 window.date_list[idx] 不一致必须返回 VendorFail。"""
+    provider = CnFuyaoProvider()
+    today_str = cn_today_str()
+
+    # Case 1: item[0].date altered to a different date
+    payload1 = _make_valid_ladder_payload(base_date=today_str, count=30)
+    payload1["data"]["item"][0]["date"] = "20240101"
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload1)):
+        res1 = provider.get_limit_up_ladder(curr_date=today_str)
+
+    assert isinstance(res1, VendorFail)
+    assert res1.error.startswith("[cn_fuyao]")
+    assert "item[0] 日期与 window.date_list[0] 不一致" in res1.error
+
+    # Case 2: item[15].date altered
+    payload2 = _make_valid_ladder_payload(base_date=today_str, count=30)
+    payload2["data"]["item"][15]["date"] = "20240101"
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload2)):
+        res2 = provider.get_limit_up_ladder(curr_date=today_str)
+
+    assert isinstance(res2, VendorFail)
+    assert res2.error.startswith("[cn_fuyao]")
+    assert "item[15] 日期与 window.date_list[15] 不一致" in res2.error
 
 
 # ── 4. 错误语义（HTTP 4xx/5xx、4001、无效Key、无数据）与不切换 AkShare ────
@@ -459,6 +599,43 @@ def test_future_date_in_window_refused_without_cropping():
     assert isinstance(res, VendorFail)
     assert "晚于请求基准日期" in res.error
     assert "拒绝未来数据" in res.error
+
+
+def test_compact_date_future_window_refused():
+    """DAV-907 / Issue 1: 紧凑日期 curr_date="YYYYMMDD" 时，返回窗口含未来日期必须 fail-closed。"""
+    provider = CnFuyaoProvider()
+    today_str = cn_today_str()
+    today_compact = today_str.replace("-", "")
+    tomorrow_str = (now_cn().date() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Case 1: Window contains tomorrow date, curr_date is compact YYYYMMDD
+    payload = _make_valid_ladder_payload(base_date=today_str, count=30, future_date=tomorrow_str)
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(payload)):
+        res = provider.get_limit_up_ladder(curr_date=today_compact)
+
+    assert isinstance(res, VendorFail)
+    assert "晚于请求基准日期" in res.error
+    assert "拒绝未来数据" in res.error
+
+    # Case 2: Window date_list is today, but item[0].date contains tomorrow date
+    valid_payload = _make_valid_ladder_payload(base_date=today_str, count=30)
+    valid_payload["data"]["item"][0]["date"] = tomorrow_str.replace("-", "")
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(valid_payload)):
+        res_item = provider.get_limit_up_ladder(curr_date=today_compact)
+
+    assert isinstance(res_item, VendorFail)
+    assert "晚于请求基准日期" in res_item.error
+    assert "拒绝未来数据" in res_item.error
+
+    # Case 3: Legal compact date without future dates succeeds and normalizes curr_date
+    clean_payload = _make_valid_ladder_payload(base_date=today_str, count=30)
+    with patch.object(provider, "_resolve_api_key", return_value="test_key"), \
+         patch("tradingagents.dataflows.providers.cn_fuyao_provider.requests.get", return_value=_mock_json_response(clean_payload)):
+        res_ok = provider.get_limit_up_ladder(curr_date=today_compact)
+    assert isinstance(res_ok, LimitUpLadderText)
+    assert res_ok.curr_date == today_str
 
 
 # ── 7. seal_nextday=null 保真 ──────────────────────────────────────────
