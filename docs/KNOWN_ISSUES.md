@@ -1,8 +1,8 @@
 # Known Issues
 
-## Legacy report English direction leaks on secondary surfaces
+## Legacy report English direction on secondary surfaces
 
-**Status:** Source fix merged in DAV-887 (`4e6266b`); current release `0263496` has a freshly built and HTTP-verified live bundle. Future releases must rebuild and re-verify the bundle.
+**Status:** Known audited surfaces are fixed in DAV-887 and DAV-914. Current release `6cc4e15` predates DAV-914, so the source fix is in the target mainline but the live bundle must be rebuilt and re-verified by the next release.
 **Discovered:** 2026-08-04 during M5 wrap-up
 
 ### Symptom
@@ -11,22 +11,30 @@ Pre-Chinese-localization reports store their direction in English (`BULLISH` /
 `LEAN_BEARISH` / `NEUTRAL` / …). The main report surfaces now handle this — the
 report list and detail view show a「旧版报告」badge, and the DecisionCard maps
 English directions to Chinese via `DIRECTION_ALIAS` (`localizeDirection` in
-`frontend/src/utils/reportText.ts`). Secondary surfaces that render a report's
-raw `direction` field were not mapped yet:
+`frontend/src/utils/reportText.ts`). The audit found these historical secondary
+surfaces that could render a report's raw `direction` field:
 
 - `TrackingBoardPanel`（跟踪看板）— renders `analysis.direction` directly
 - `Portfolio`（持仓页）— renders `report.direction` in the latest-report line
+- `ChatCopilotPanel`（分析完成/断线恢复/浏览器通知）— rendered completion direction directly
+- `AgentCollaboration`（协作图完成节点）— rendered verdict direction directly
+- `HistoricalDebateDrawer`（历史总监裁决）— rendered manager verdict direction directly
 
-DAV-887 now applies the existing `localizeDirection` mapping to both surfaces.
-The current release's live bundle check is recorded; this does not cover browser
-interaction, login, or a real analysis run.
+DAV-887 applies the existing `localizeDirection` mapping to the first two
+surfaces; DAV-914 applies it to the latter three. The target mainline has
+independent coverage of 17 test files/171 tests and a successful production
+build; this does not cover browser interaction, login, or a real analysis run.
+The current release's live bundle check predates DAV-914, so the next release
+must rebuild and re-check its assets.
 
 ### Suggested fix
 
-The source change is complete and adds component coverage. The current release
-passed `npm test -- --run` (15 files / 144 tests), `npm run build`, and an HTTP
-smoke against the actual bundle served by the running API process. No data
-migration is required. See `work/2026-09-14-frontend-live-bundle.md`.
+The source changes are complete and add component coverage. DAV-914 passed
+`npm test -- --run` (17 files / 171 tests) and `npm run build`; no data migration
+is required. The current live-bundle evidence is still the earlier
+DAV-887/D-021 release evidence, so see
+`work/2026-09-14-p2-direction-localization.md` for the source merge and
+`work/2026-09-14-frontend-live-bundle.md` for the older live check.
 
 ---
 

@@ -29,6 +29,11 @@
   仅修改 `uv.lock`，经**代码审核员**同 SHA 只读 PASS、`uv lock --check` 和
   `uv sync --frozen --dry-run` 通过后已线性合入。锁文件不改变当前运行代码，不单独部署；详见
   `work/2026-09-14-p1-g-uv-lock.md`。
+- DAV-914 已完成：三个前端 secondary direction 展示入口统一复用 `localizeDirection`；候选
+  `8ccecb8d59de31835f9d0f67578123db9a358e7b`（直接父 `59ec435306b8c2e49c5ec4a66d433db30df2450c`）
+  只改 6 个前端组件/测试文件，经**代码审核员**同 SHA 只读 PASS、合入后前端 17 个测试文件
+  /171 个测试和生产构建通过后已线性合入目标主线。该项只改显示层，未部署；线上仍为
+  `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`，详见 `work/2026-09-14-p2-direction-localization.md`。
 
 ## 运行态
 
@@ -89,6 +94,12 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 分析。详见 `work/2026-09-14-p1f-live-probe.md`。补齐受控 key 后仍需重新探测，不能把模拟红队
 和 RT-FULL 当作真实上游证据。
 
+### P2 前端 direction 展示
+
+- DAV-887 已覆盖 TrackingBoardPanel 与 Portfolio；DAV-914 覆盖 ChatCopilotPanel 的完成/恢复/通知、AgentCollaboration 的 verdict 标签和 HistoricalDebateDrawer 的总监裁决方向。
+- DAV-914 候选已由**代码审核员**对同一完整 SHA `8ccecb8d59de31835f9d0f67578123db9a358e7b` 只读 PASS，合入后独立前端全量为 17 个测试文件/171 个测试通过，构建成功；Vite 既有配置/包体提示已如实保留。
+- 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；后续发布主线时必须重建并复验 live bundle，不能把源码测试当作线上 bundle 已更新的证据。
+
 ## 当前剩余施工项（按依赖排序）
 
 | 优先级 | 项目 | 当前状态 | 下一步边界 |
@@ -121,6 +132,7 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - DAV-910/P2-65 已完成单文件 Compose 清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它尚未部署，不改变线上服务 SHA。
 - DAV-911/P2-54 已完成单文件前端工件清理、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变线上服务行为，也没有单独部署动作。
 - DAV-913/P1-G 已完成单文件 `uv.lock` 对齐、**代码审核员**同 SHA 审查和线性合入；不得重复派工。它不改变运行时代码，不需要单独部署。
+- DAV-914 已完成三个剩余前端 direction 展示入口的本地化、**代码审核员**同 SHA 审查、合入后前端测试与构建；不得重复派工。它未部署，不改变线上服务 SHA；后续发布时只需按发布门重建/复验前端 bundle。
 - 旧文档中“DAV-808 尚未决策”“E-04 尚未实现”“P0-B/C/D 仍待编码”“主干仍为 `bdb95f8` / 服务仍为 `a227cdc`”均是历史快照，不能据此新建重复卡。
 - “全量无新增失败”只证明对应候选相对基线的测试差异；它不替代部署后的业务烟测、数据库回读或真实数据授权。
 
@@ -140,4 +152,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [P2-65 Compose 挂载清理与合入证据](work/2026-09-14-p2-65-compose-mounts.md)
 - [P2-54 前端工件清理与合入证据](work/2026-09-14-p2-54-vade-report.md)
 - [P1-G `uv.lock` 对齐与合入证据](work/2026-09-14-p1-g-uv-lock.md)
+- [DAV-914 前端 direction 展示本地化与合入证据](work/2026-09-14-p2-direction-localization.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
