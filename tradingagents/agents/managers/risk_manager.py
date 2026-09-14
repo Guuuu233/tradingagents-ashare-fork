@@ -13,6 +13,9 @@ from tradingagents.agents.utils.decision_status import (
     is_non_executable_status,
     status_from_risk_verdict,
 )
+from tradingagents.agents.utils.evidence_summary import (
+    build_seven_source_evidence_summary,
+)
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 
 
@@ -108,8 +111,10 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
         # Custom-prompt injection (3000-char constraints e.g. confidence ceiling /
         # falsification conditions) must reach the risk adjudicator too.
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="risk_manager")
+        evidence_summary = build_seven_source_evidence_summary(state)
         prompt = get_prompt("risk_manager_prompt", config=get_config()).format(
             trader_plan=trader_plan,
+            evidence_summary=evidence_summary,
             past_memory_str=past_memory_str,
             history=history,
             market_context_summary=context_view["market_context_summary"],

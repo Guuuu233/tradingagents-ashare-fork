@@ -27,6 +27,7 @@ import pytest
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.managers.risk_manager import create_risk_manager
 from tradingagents.agents.trader.trader import create_trader
+from tradingagents.agents.utils.evidence_summary import build_seven_source_evidence_summary
 from tests.fund_flow_fixtures import valid_fund_flow_consensus_guard
 
 
@@ -52,12 +53,15 @@ GOLDEN_REPORTS = {
         '<!-- VERDICT: {"direction": "偏多", "reason": "政策与资金共振"} -->'
     ),
     "sentiment_report": "情绪：中性偏热，无极端值。",
-    "smart_money_report": "主力资金：净流入。",
-    "volume_price_report": "量价：放量突破。",
+    "smart_money_report": "主力资金：超大单净流入 5.8 亿。",
+    "volume_price_report": "量价：放量突破，日成交量放大 35%。",
 }
 
 # Concrete evidence facts an adjudicator must be able to cite back.
 EVIDENCE_FACTS = ["RSI 48.2", "1835.5", "12%", "+15%", "45%", "23 亿"]
+
+# Facts unique to the raw first-hand reports that are deliberately absent from upstream plans.
+UNIQUE_FIRST_HAND_FACTS = ["5.8 亿", "35%"]
 
 # Golden adjudicator outputs — each deliberately cites a dense subset of the
 # facts its input carried, the way a well-behaved model is instructed to.
@@ -69,14 +73,14 @@ RESEARCH_MANAGER_GOLDEN = (
 )
 
 TRADER_GOLDEN = (
-    "最终交易建议：买入。依据研究经理方案：RSI 48.2 未超买、股价 1835.5 站稳均线、"
-    "净利 +15% 支撑估值。仓位 20%，入场区间 1800–1835，止损 1780。\n"
+    "最终交易建议：买入。依据研究经理方案与一手证据：RSI 48.2 未超买、股价 1835.5 站稳均线、"
+    "净利 +15% 支撑估值、毛利率 45% 稳定。仓位 20%，入场区间 1800–1835，止损 1780。\n"
     '<!-- VERDICT: {"direction": "看多", "reason": "技术+基本面共振"} -->'
 )
 
 RISK_MANAGER_GOLDEN = (
-    "风控通过。硬约束：仓位≤20%，止损 1780。前提：净利 +15% 兑现、RSI 48.2 不破位。"
-    "触发：股价跌破 1780。\n"
+    "风控通过。硬约束：仓位≤20%，止损 1780。前提：净利 +15% 兑现、毛利率 45% 维持、"
+    "RSI 48.2 与 1835.5 均线不破位。触发：股价跌破 1780。\n"
     '<!-- RISK_JUDGE: {"verdict": "pass", "revision_reason": "", '
     '"hard_constraints": ["仓位≤20%"], "soft_constraints": [], '
     '"execution_preconditions": ["净利+15%兑现"], "de_risk_triggers": ["跌破1780"]} -->'
@@ -232,7 +236,7 @@ def test_adjudication_chain_cites_evidence_densely():
     rm_density = citation_density(rm_result["investment_plan"], rm_available)
     assert rm_density >= 0.67, f"research_manager citation density too low: {rm_density:.2f}"
 
-    # ── hop 2: trader (input = research_manager plan) ────────────────────
+    # ── hop 2: trader (input = research_manager plan + first-hand evidence summaries)
     state["investment_plan"] = rm_result["investment_plan"]
     state["trader_investment_plan"] = ""
     trader_captured: list = []
@@ -242,16 +246,35 @@ def test_adjudication_chain_cites_evidence_densely():
     )
     trader_result = asyncio.run(trader_node(state))
 
-    # Trader streams a [system, user] message list; the user message carries
-    # the investment plan, which is where the evidence facts must live.
     trader_messages = trader_captured[0]
     trader_input = trader_messages[1]["content"]
+
+    # 1. P1-D: Trader prompt contains shared 7-source evidence summary block
+    shared_evidence_block = build_seven_source_evidence_summary(state)
+    assert shared_evidence_block, "7-source evidence summary must not be empty"
+    assert shared_evidence_block in trader_input, "trader input must contain shared 7-source evidence block"
+
+    # 2. P1-D: Unique facts in raw reports absent from investment_plan are present in trader input
+    assert all(f not in state["investment_plan"] for f in UNIQUE_FIRST_HAND_FACTS), (
+        "Unique facts must not exist in research_manager plan"
+    )
+    assert all(f in trader_input for f in UNIQUE_FIRST_HAND_FACTS), (
+        "Trader input must receive unique first-hand facts directly from reports"
+    )
+
+    # 3. P1-D: Full raw reports not dumped verbatim; evidence summary and plan fields separate
+    assert '<!-- VERDICT: {"direction": "偏多", "reason": "趋势向上"} -->' not in trader_input
+    assert "分析师一手证据摘要" in trader_input
+    assert "研究经理方案内容：" in trader_input
+    assert trader_input.find("分析师一手证据摘要") < trader_input.find("研究经理方案内容：")
+
+    # 4. Trader citation density on first-hand facts available in its input
     trader_available = available_facts(trader_input, EVIDENCE_FACTS)
-    assert trader_available, "trader input carries no evidence via the investment plan"
+    assert len(trader_available) >= 4, "trader input must carry first-hand evidence summaries"
     trader_density = citation_density(trader_result["trader_investment_plan"], trader_available)
     assert trader_density >= 0.5, f"trader citation density too low: {trader_density:.2f}"
 
-    # ── hop 3: risk_manager (input = trader plan) ────────────────────────
+    # ── hop 3: risk_manager (input = trader plan + first-hand evidence summaries) ──
     state["trader_investment_plan"] = trader_result["trader_investment_plan"]
     risk_captured: list = []
     risk_node = create_risk_manager(
@@ -261,8 +284,29 @@ def test_adjudication_chain_cites_evidence_densely():
     risk_result = asyncio.run(risk_node(state))
 
     risk_prompt = risk_captured[0]
+
+    # 1. P1-D: Risk manager prompt contains byte-identical shared 7-source evidence summary block
+    assert shared_evidence_block in risk_prompt, (
+        "risk_manager prompt must contain byte-identical shared 7-source evidence block"
+    )
+
+    # 2. P1-D: Unique facts absent from trader plan are present in risk_manager prompt
+    assert all(f not in state["trader_investment_plan"] for f in UNIQUE_FIRST_HAND_FACTS), (
+        "Unique facts must not exist in trader plan"
+    )
+    assert all(f in risk_prompt for f in UNIQUE_FIRST_HAND_FACTS), (
+        "Risk manager prompt must receive unique first-hand facts directly from reports"
+    )
+
+    # 3. P1-D: Full raw reports not dumped verbatim; evidence summary and trader plan separate
+    assert '<!-- VERDICT: {"direction": "偏多", "reason": "趋势向上"} -->' not in risk_prompt
+    assert "交易员方案：" in risk_prompt
+    assert "分析师一手证据摘要" in risk_prompt
+    assert risk_prompt.find("交易员方案：") < risk_prompt.rfind("分析师一手证据摘要")
+
+    # 4. Risk manager citation density on first-hand facts available in its input
     risk_available = available_facts(risk_prompt, EVIDENCE_FACTS)
-    assert risk_available, "risk_manager input carries no evidence via the trader plan"
+    assert len(risk_available) >= 4, "risk_manager input must carry first-hand evidence summaries"
     risk_density = citation_density(risk_result["final_trade_decision"], risk_available)
     assert risk_density >= 0.5, f"risk_manager citation density too low: {risk_density:.2f}"
 
