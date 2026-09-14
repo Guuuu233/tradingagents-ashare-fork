@@ -60,7 +60,7 @@
 
 ### Fuyao / D 线窄修
 
-- DAV-887（`4e6266b171b8431c1b979f7d70f0c075370c9b9d`）：TrackingBoard/Portfolio 的 raw direction 显示源代码已接入 `localizeDirection`；隔离副本前端 15 个测试文件/144 个测试通过，生产构建和入口 HTTP smoke 通过；live bundle 尚未部署核验。
+- DAV-887（`4e6266b171b8431c1b979f7d70f0c075370c9b9d`）：TrackingBoard/Portfolio 的 raw direction 显示源代码已接入 `localizeDirection`；发布副本前端 15 个测试文件/144 个测试通过，生产构建和 live bundle 入口 HTTP smoke 通过。当前 bundle 指纹见 `work/2026-09-14-frontend-live-bundle.md`；后续发布必须重建并复验。
 - DAV-889（`8d42c466518fae6afa39e4e465886547bca04d84`）：Fuyao fundamentals 缺失 `curr_date` 不再回退到实时报告期。
 - DAV-895（`b22e42d9ee3f185c67cc81f9f16fdbf30250d03d`）：Fuyao 龙虎榜首个 4001 不再被当作日期无数据而静默回退。
 - DAV-898（`63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`）：交易日历 fallback 优先读取 provider 配置 `fuyao_api_key`，再读环境变量。
@@ -76,7 +76,7 @@
 | P1 | 真实社交 Gate 0–4 | 外部条件未满足，功能保持 disabled | 需要独立 MediaCrawler 环境、受控账号/Cookie 和逐级授权；不得用离线 fixture 代替真实采集。 |
 | P1 | 裁决者一手证据 | 代码已合入并上线；尚无真实业务链路证据 | 不触发真实分析的前提下，保留代码/回归门禁；若要证明生产图可达，另走明确的数据写入授权和 trace/report/readback 取证。 |
 | P1 | 财务披露日 PIT | 代码已审查、RT-FULL 通过、已合入并发布；尚无生产业务证据 | 发布版本 `0263496` 已通过备份、健康检查、只读烟测和数据库回读；若要证明生产图/报告行为，另走明确的数据写入授权，不把只读烟测当成业务样本。 |
-| P1 | 前端产品验收 | 源码、测试、构建和入口 HTTP smoke 已过；live bundle 未核验 | 在不改后端语义的前提下核对实际部署 bundle；不把临时 Vite 服务当成生产前端。 |
+| P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -100,5 +100,6 @@
 - [P1-E 同口径全量回归](work/2026-09-14-rt-full-p1e-cd7456.md)
 - [V-03a 只读基线](work/2026-09-14-v03a-readonly-63d.md)
 - [前端 DAV-887 验收](work/2026-09-14-frontend-dav887.md)
+- [前端 live bundle 验收](work/2026-09-14-frontend-live-bundle.md)
 - [本次计划审计收口](work/2026-09-14-plan-audit-closeout.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。

@@ -2,7 +2,7 @@
 
 ## Legacy report English direction leaks on secondary surfaces
 
-**Status:** Source fix merged in DAV-887 (`4e6266b`); frontend tests/build and isolated entry HTTP smoke pass; live frontend deployment not separately verified
+**Status:** Source fix merged in DAV-887 (`4e6266b`); current release `0263496` has a freshly built and HTTP-verified live bundle. Future releases must rebuild and re-verify the bundle.
 **Discovered:** 2026-08-04 during M5 wrap-up
 
 ### Symptom
@@ -18,16 +18,15 @@ raw `direction` field were not mapped yet:
 - `Portfolio`（持仓页）— renders `report.direction` in the latest-report line
 
 DAV-887 now applies the existing `localizeDirection` mapping to both surfaces.
-The remaining gap is only the live frontend deployment/runtime bundle check; do
-not call the live product fixed until that check is recorded.
+The current release's live bundle check is recorded; this does not cover browser
+interaction, login, or a real analysis run.
 
 ### Suggested fix
 
-The source change is complete and adds component coverage. In an isolated
-worktree, `npm test` passed (15 files / 144 tests), `npm run build` succeeded,
-and the Vite entry point returned the expected React shell over HTTP. A smoke
-against the deployed frontend bundle is still separate. No data migration is
-required. See `work/2026-09-14-frontend-dav887.md`.
+The source change is complete and adds component coverage. The current release
+passed `npm test -- --run` (15 files / 144 tests), `npm run build`, and an HTTP
+smoke against the actual bundle served by the running API process. No data
+migration is required. See `work/2026-09-14-frontend-live-bundle.md`.
 
 ---
 
