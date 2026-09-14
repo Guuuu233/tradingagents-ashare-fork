@@ -5,7 +5,7 @@
 ## 当前结论
 
 - 当前远端目标主线与治理记录已推送；线上运行发布对象为 `f094d6a78bc699fc6224e57164d38455c2ad55a9`。`f094d6a...` 的代码变更来自 DAV-922 最终候选 `c1ce3ab31ac22de1c28931f94fa2e98b0fa2e699`，其后只追加治理文档。P2-55 的策略层与运行时接线已受控发布，尚未调用真实模型或执行真实分析。生产库未被写入；当前远端完整 SHA 以开工时 `git fetch origin` 后回读为准。
-- 2026-09-14 后续只读观察已记录于 `work/2026-09-14-runtime-observation.md`：目标主线回读为 `a24c7d7a68ed0ac5f3784965aa8f43ad463cc19b`，线上仍为 `f094d6a...`；两个固定回归标的各返回两日 K 线，生产库计数和完整性未变。Docker Desktop 上下文存在但 daemon socket 不可用，因此 Compose 容器级挂载核验仍未执行。
+- 2026-09-14 后续只读观察已记录于 `work/2026-09-14-runtime-observation.md`：观察时目标主线回读为 `a24c7d7a68ed0ac5f3784965aa8f43ad463cc19b`，随后仅追加台账链接提交 `94e0457fd559a9a4ece35f45484bd9a66b7be56e`；线上仍为 `f094d6a...`。两个固定回归标的各返回两日 K 线，生产库计数和完整性未变。Docker Desktop 上下文存在但 daemon socket 不可用，因此 Compose 容器级挂载核验仍未执行。
 - 看板本次逐页核对为 924 总 / 840 done / 84 cancelled / 0 非终态；此前 4 张旧 blocked 卡已按替代关系取消，详见 `work/2026-09-14-board-stale-cards-closeout.md`。
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
