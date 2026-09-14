@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+import re
 from typing import Any, Optional
 
 import pandas as pd
@@ -202,6 +206,25 @@ FINANCIAL_COLUMN_PRIORITIES: dict[str, tuple[str, ...]] = {
 DEFAULT_TABLE_PROMPT_MAX_CHARS = 3500
 _NULL_RATIO_DROP = 0.80
 
+# Report and announcement date column candidates in descending priority order.
+FINANCIAL_DATE_COLUMN_CANDIDATES: tuple[str, ...] = (
+    "报告日",
+    "报告期",
+    "报告日期",
+    "公告日期",
+    "公告日",
+    "实际公告日",
+    "end_date",
+    "report_date",
+    "REPORT_DATE",
+    "ann_date",
+    "f_ann_date",
+    "actual_ann_date",
+    "NOTICE_DATE",
+    "日期",
+    "date",
+)
+
 
 def _is_nullish(value) -> bool:
 
@@ -239,6 +262,67 @@ def _resolve_column(columns, candidates: tuple[str, ...] | list[str]) -> str | N
     return None
 
 
+def _parse_date_cell(val: Any) -> Any:
+    """Parse a single date cell to naive pd.Timestamp or pd.NaT without guessing default dates."""
+    if val is None or _is_nullish(val):
+        return pd.NaT
+    if isinstance(val, (pd.Timestamp, datetime, date)):
+        dt = pd.Timestamp(val)
+        if dt.tzinfo is not None:
+            dt = dt.tz_localize(None)
+        return dt
+    if isinstance(val, (int, float)):
+        try:
+            val_int = int(val)
+            s_int = str(val_int)
+            if len(s_int) == 8 and 19000000 <= val_int <= 21000000:
+                dt = pd.to_datetime(s_int, format="%Y%m%d", errors="coerce")
+                if not pd.isna(dt):
+                    return dt
+        except (ValueError, OverflowError):
+            pass
+    s = str(val).strip()
+    if not s or s.lower() in {"nan", "none", "null", "<na>", "nat"}:
+        return pd.NaT
+    try:
+        dt = pd.to_datetime(s, format="mixed", errors="coerce")
+        if not pd.isna(dt):
+            if dt.tzinfo is not None:
+                dt = dt.tz_localize(None)
+            return dt
+    except Exception:
+        pass
+    digits = re.sub(r"[^0-9]", "", s)
+    if len(digits) >= 8:
+        try:
+            dt = pd.to_datetime(digits[:8], format="%Y%m%d", errors="coerce")
+            if not pd.isna(dt):
+                return dt
+        except Exception:
+            pass
+    return pd.NaT
+
+
+def _find_date_sort_column(
+    columns: list[str], df: "pd.DataFrame"
+) -> tuple[str | None, "pd.Series" | None]:
+    """Find recognizable report/announcement date column for descending sorting."""
+    fallback_col = None
+    fallback_series = None
+    for cand in FINANCIAL_DATE_COLUMN_CANDIDATES:
+        col = _resolve_column(columns, (cand,))
+        if col is not None and col in df.columns:
+            parsed = pd.Series([_parse_date_cell(v) for v in df[col]], index=df.index)
+            if parsed.notna().any():
+                return col, parsed
+            if fallback_col is None:
+                fallback_col = col
+                fallback_series = parsed
+    if fallback_col is not None:
+        return fallback_col, fallback_series
+    return None, None
+
+
 def resolve_core_financial_columns(columns) -> dict[str, str | None]:
     """Map canonical core labels to actual column names present in ``columns``."""
     return {
@@ -257,7 +341,7 @@ def _priority_column_order(columns, table_kind: str | None) -> list:
     kind = (table_kind or "generic").strip().lower()
     preferred = list(FINANCIAL_COLUMN_PRIORITIES.get(kind, ()))
     # Always pin identity-like columns first when present.
-    for pin in ("报告日", "公告日期", "选项", "指标", "日期", "code", "symbol"):
+    for pin in ("报告日", "报告期", "公告日期", "选项", "指标", "日期", "code", "symbol"):
         if pin not in preferred:
             preferred.insert(0, pin)
 
@@ -391,6 +475,15 @@ def shrink_table(
     work = df.copy()
     # Normalize column labels to strings for stable name selection.
     work.columns = [str(c) for c in work.columns]
+    work = work.reset_index(drop=True)
+
+    # Sort descending stably by parseable date before row truncation and budget fitting.
+    date_col, dt_series = _find_date_sort_column(list(work.columns), work)
+    if date_col is not None and dt_series is not None:
+        sorted_pos = dt_series.sort_values(
+            ascending=False, na_position="last", kind="mergesort"
+        ).index
+        work = work.iloc[sorted_pos].reset_index(drop=True)
 
     if max_rows is not None and int(max_rows) > 0:
         work = work.head(int(max_rows))
@@ -398,7 +491,7 @@ def shrink_table(
     # Protect identity + core columns from sparse-drop so residual nulls become
     # explicit markers instead of silent column deletion.
     pre_protected: list = []
-    for pin in ("报告日", "公告日期", "选项", "指标"):
+    for pin in ("报告日", "报告期", "公告日期", "选项", "指标"):
         hit = _resolve_column(work.columns, (pin,))
         if hit is not None:
             pre_protected.append(hit)
