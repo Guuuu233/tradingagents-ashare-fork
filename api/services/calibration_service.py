@@ -900,7 +900,7 @@ def _get_price_after_strict(symbol: str, base_date: str, hold_days: int) -> Opti
         if not csv_data:
             return None
 
-        df = pd.read_csv(pd.io.common.StringIO(csv_data))
+        df = pd.read_csv(pd.io.common.StringIO(csv_data), comment="#")
         close_cols = [c for c in df.columns if "close" in c.lower() or "收盘" in c]
         date_cols = [c for c in df.columns if "date" in c.lower() or "日期" in c or "time" in c.lower()]
         if not close_cols or not date_cols:
@@ -909,9 +909,21 @@ def _get_price_after_strict(symbol: str, base_date: str, hold_days: int) -> Opti
         date_col = date_cols[0]
         close_col = close_cols[0]
         df[date_col] = df[date_col].astype(str).str[:10]
-        df = df.sort_values(date_col).drop_duplicates(subset=[date_col]).reset_index(drop=True)
 
-        from tradingagents.dataflows.trade_calendar import trading_days_forward
+        from tradingagents.dataflows.trade_calendar import (
+            dedupe_daily_bars,
+            trading_days_forward,
+        )
+
+        ohlcv_candidates = [
+            "Open", "High", "Low", "Close", "Volume",
+            "open", "high", "low", "close", "volume",
+            "开盘", "最高", "最低", "收盘", "成交量",
+        ]
+        val_cols = [close_col] + [c for c in ohlcv_candidates if c in df.columns and c != close_col]
+        val_cols = list(dict.fromkeys(val_cols))
+        df = dedupe_daily_bars(df, date_col, val_cols)
+        df = df.sort_values(date_col).reset_index(drop=True)
 
         df_dates = sorted(df[date_col].unique())
         try:

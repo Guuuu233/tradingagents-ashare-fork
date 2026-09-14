@@ -995,15 +995,15 @@ class VendorPriceDataProvider:
                     self._series_cache[symbol] = None
                     return None
 
-                lines = [l for l in str(csv_data).splitlines() if not l.startswith("#") and l.strip()]
-                if not lines:
-                    self._series_cache[symbol] = None
-                    return None
-                df = pd.read_csv(io.StringIO("\n".join(lines)))
+                df = pd.read_csv(io.StringIO(str(csv_data)), comment="#")
                 if df.empty or "Date" not in df.columns:
                     self._series_cache[symbol] = None
                     return None
                 df["Date"] = df["Date"].astype(str).str[:10]
+                from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+                val_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+                df = dedupe_daily_bars(df, "Date", val_cols)
                 self._series_cache[symbol] = df
 
             df = self._series_cache.get(symbol)
@@ -1013,6 +1013,13 @@ class VendorPriceDataProvider:
             row = df[df["Date"] == date]
             if row.empty:
                 return None
+            if len(row) > 1:
+                from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+                val_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in row.columns]
+                row = dedupe_daily_bars(row, "Date", val_cols)
+                if len(row) != 1:
+                    return None
             r = row.iloc[0]
             open_val = float(r["Open"])
             high_val = float(r["High"])
@@ -1049,14 +1056,28 @@ class VendorPriceDataProvider:
             if "__CSI300_DF__" not in self._series_cache:
                 df = ak.stock_zh_index_daily_tx(symbol="sh000300")
                 if df is not None and not df.empty:
+                    df = df.copy()
                     df["date"] = df["date"].astype(str).str[:10]
+                    from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+                    val_cols = [c for c in ["open", "high", "low", "close", "amount"] if c in df.columns]
+                    df = dedupe_daily_bars(df, "date", val_cols)
                     self._series_cache["__CSI300_DF__"] = df
                 else:
                     return None
-            df = self._series_cache["__CSI300_DF__"]
+            df = self._series_cache.get("__CSI300_DF__")
+            if df is None or df.empty:
+                return None
             match = df[df["date"] == clean_date]
             if match.empty:
                 return None
+            if len(match) > 1:
+                from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+                val_cols = [c for c in ["open", "high", "low", "close", "amount"] if c in match.columns]
+                match = dedupe_daily_bars(match, "date", val_cols)
+                if len(match) != 1:
+                    return None
             r = match.iloc[0]
             bar = DailyBar(
                 date=clean_date,

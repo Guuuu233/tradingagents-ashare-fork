@@ -275,14 +275,24 @@ def _get_price_after(
         date_col = date_cols[0]
         close_col = close_cols[0]
         df[date_col] = df[date_col].astype(str).str[:10]
-        df = df.sort_values(date_col).drop_duplicates(subset=[date_col]).reset_index(drop=True)
-
-        df_dates = sorted(df[date_col].unique())
 
         from tradingagents.dataflows.trade_calendar import (
+            dedupe_daily_bars,
             is_cn_trading_day,
             trading_days_forward,
         )
+
+        ohlcv_candidates = [
+            "Open", "High", "Low", "Close", "Volume",
+            "open", "high", "low", "close", "volume",
+            "开盘", "最高", "最低", "收盘", "成交量",
+        ]
+        val_cols = [close_col] + [c for c in ohlcv_candidates if c in df.columns and c != close_col]
+        val_cols = list(dict.fromkeys(val_cols))
+        df = dedupe_daily_bars(df, date_col, val_cols)
+        df = df.sort_values(date_col).reset_index(drop=True)
+
+        df_dates = sorted(df[date_col].unique())
 
         target_date: Optional[str] = None
         candidate_dates: list[str] = []
@@ -429,10 +439,27 @@ def _get_price_on(
         date_cols = [c for c in df.columns if "date" in c.lower() or "日期" in c or "time" in c.lower()]
         if not close_cols or not date_cols:
             return None
-        df = df.sort_values(date_cols[0]).reset_index(drop=True)
+        date_col = date_cols[0]
+        close_col = close_cols[0]
+        df[date_col] = df[date_col].astype(str).str[:10]
+        # Must not use bars strictly after the requested date (lookahead guard)
+        df = df[df[date_col] <= date]
         if df.empty:
             return None
-        return float(df[close_cols[0]].iloc[-1])
+        from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+        ohlcv_candidates = [
+            "Open", "High", "Low", "Close", "Volume",
+            "open", "high", "low", "close", "volume",
+            "开盘", "最高", "最低", "收盘", "成交量",
+        ]
+        val_cols = [close_col] + [c for c in ohlcv_candidates if c in df.columns and c != close_col]
+        val_cols = list(dict.fromkeys(val_cols))
+        df = dedupe_daily_bars(df, date_col, val_cols)
+        df = df.sort_values(date_col).reset_index(drop=True)
+        if df.empty:
+            return None
+        return float(df[close_col].iloc[-1])
     except Exception as exc:
         logger.warning(
             "_get_price_on failed for %s @ %s (price_basis=%s): %s",

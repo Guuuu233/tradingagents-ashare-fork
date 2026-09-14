@@ -639,13 +639,23 @@ def resolve_horizon_return_label(
             if not csv_data or str(csv_data).startswith("【数据获取失败】") or str(csv_data).startswith("No data found"):
                 provider_failed = True
             else:
-                lines = [l for l in str(csv_data).splitlines() if not l.startswith("#") and l.strip()]
+                lines = [l for l in str(csv_data).splitlines() if not l.strip().startswith("#") and l.strip()]
                 if lines:
                     df = pd.read_csv(io.StringIO("\n".join(lines)))
                     date_cols = [c for c in df.columns if "date" in c.lower() or "日期" in c or "time" in c.lower()]
-                    if date_cols:
+                    if date_cols and not df.empty:
                         d_col = date_cols[0]
                         df[d_col] = df[d_col].astype(str).str[:10]
+                        from tradingagents.dataflows.trade_calendar import dedupe_daily_bars
+
+                        ohlcv_candidates = [
+                            "Open", "High", "Low", "Close", "Volume",
+                            "open", "high", "low", "close", "volume",
+                            "amount", "Amount", "Dividends", "Stock Splits",
+                            "开盘", "最高", "最低", "收盘", "成交量",
+                        ]
+                        val_cols = [c for c in ohlcv_candidates if c in df.columns]
+                        df = dedupe_daily_bars(df, d_col, val_cols)
                         for _, row in df.iterrows():
                             fetched_bars[str(row[d_col])] = dict(row)
         except Exception:
