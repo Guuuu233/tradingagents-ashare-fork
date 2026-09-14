@@ -84,6 +84,11 @@
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
+2026-09-14 只读盘点：Git 共登记 198 个 worktree，其中 135 个元数据标记为 `prunable`，63 个
+仍为非 prunable；另发现 90 个 unreachable commit、206 个 unreachable tree、116 个 unreachable
+blob 及 1 个临时 garbage object。没有执行清理；详见
+`work/2026-09-14-worktree-artifact-inventory.md`。
+
 ## H1b / 信用加权红线
 
 - `credit_weighting_enabled` 继续为 `False`（`KEEP_FALSE`）。
