@@ -12,10 +12,11 @@ Covers:
 """
 
 from unittest.mock import patch
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import app, _parse_stock_csv, _is_cn_index_symbol
+from api.main import app, _parse_stock_csv, _normalize_kline_df, _is_cn_index_symbol
 
 
 @pytest.fixture
@@ -273,3 +274,57 @@ class TestKlineApiIntegrity:
         assert _is_cn_index_symbol("000001.SH") is True
         assert _is_cn_index_symbol("399001.SZ") is True
         assert _is_cn_index_symbol("600519.SH") is False
+
+    """Requirement 4: Index DataFrame path folding and conflict rejection."""
+
+    def test_normalize_kline_df_identical_duplicates_collapsed(self):
+        df_dup = pd.DataFrame({
+            "日期": ["2026-01-05", "2026-01-05"],
+            "开盘": [3000.0, 3000.0],
+            "最高": [3050.0, 3050.0],
+            "最低": [2980.0, 2980.0],
+            "收盘": [3020.0, 3020.0],
+            "成交量": [10000.0, 10000.0],
+        })
+        norm = _normalize_kline_df(df_dup)
+        assert len(norm) == 1
+        assert norm.iloc[0]["Close"] == 3020.0
+
+    def test_normalize_kline_df_conflicts_rejected_as_empty(self):
+        # Conflicting close price on the same date
+        df_conflict = pd.DataFrame({
+            "日期": ["2026-01-05", "2026-01-05"],
+            "开盘": [3000.0, 3000.0],
+            "最高": [3050.0, 3050.0],
+            "最低": [2980.0, 2980.0],
+            "收盘": [3020.0, 3035.0],
+            "成交量": [10000.0, 10000.0],
+        })
+        norm = _normalize_kline_df(df_conflict)
+        assert norm.empty
+
+    def test_normalize_kline_df_volume_conflicts_rejected(self):
+        df_conflict_vol = pd.DataFrame({
+            "日期": ["2026-01-05", "2026-01-05"],
+            "开盘": [3000.0, 3000.0],
+            "最高": [3050.0, 3050.0],
+            "最低": [2980.0, 2980.0],
+            "收盘": [3020.0, 3020.0],
+            "成交量": [10000.0, 20000.0],
+        })
+        norm = _normalize_kline_df(df_conflict_vol)
+        assert norm.empty
+
+    def test_kline_endpoint_index_conflicting_duplicates_returns_404(self, client):
+        df_conflict = pd.DataFrame({
+            "日期": ["2026-01-05", "2026-01-05"],
+            "开盘": [3000.0, 3000.0],
+            "最高": [3050.0, 3050.0],
+            "最低": [2980.0, 2980.0],
+            "收盘": [3020.0, 3030.0],
+            "成交量": [10000.0, 10000.0],
+        })
+        with patch("api.main._fetch_index_kline", return_value=[]):
+            resp = client.get("/v1/market/kline?symbol=000001.SH&start_date=2026-01-01&end_date=2026-01-10")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "no kline data"

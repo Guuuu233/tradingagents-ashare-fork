@@ -4452,6 +4452,21 @@ def _normalize_kline_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     out = out.dropna(subset=["Open", "High", "Low", "Close"])
+    if out.empty:
+        return pd.DataFrame()
+
+    if out["Date"].dt.tz is not None:
+        out["Date"] = out["Date"].dt.tz_localize(None)
+    out["Date"] = out["Date"].dt.normalize()
+
+    from tradingagents.dataflows.trade_calendar import dedupe_daily_bars, DuplicateBarConflictError
+
+    value_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in out.columns]
+    try:
+        out = dedupe_daily_bars(out, "Date", value_cols)
+    except (DuplicateBarConflictError, ValueError):
+        return pd.DataFrame()
+
     return out.reset_index(drop=True)
 
 
