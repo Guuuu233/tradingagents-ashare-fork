@@ -67,6 +67,7 @@ class AnthropicClient(BaseLLMClient):
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
+        self.provider = "anthropic"
 
     def get_llm(self) -> Any:
         """Return configured ChatAnthropic instance."""
@@ -87,4 +88,4 @@ class AnthropicClient(BaseLLMClient):
 
     def validate_model(self) -> bool:
         """Validate model for Anthropic."""
-        return validate_model("anthropic", self.model)
+        return validate_model("anthropic", self.model, base_url=self.base_url)

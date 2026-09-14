@@ -33,6 +33,7 @@ class GoogleClient(BaseLLMClient):
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
+        self.provider = "google"
 
     def get_llm(self) -> Any:
         """Return configured ChatGoogleGenerativeAI instance."""
@@ -64,4 +65,4 @@ class GoogleClient(BaseLLMClient):
 
     def validate_model(self) -> bool:
         """Validate model for Google."""
-        return validate_model("google", self.model)
+        return validate_model("google", self.model, base_url=self.base_url)
