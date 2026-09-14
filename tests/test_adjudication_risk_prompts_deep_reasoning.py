@@ -174,6 +174,20 @@ def test_trader_system_prompt_deep_framework():
     assert "【输出纪律】只输出正式报告正文" in prompt
     assert "最终交易建议：买入 / 卖出 / 观望" in prompt
 
+    # 5. P1-D: 一手证据独立核验与禁止按票数计票
+    assert "一手证据摘要仅供独立核验" in prompt
+    assert "VERDICT 不是票数" in prompt
+    assert "禁止按分析师/角色/摘要数量计票" in prompt
+
+
+def test_trader_user_prompt_evidence_summary_section():
+    """P1-D: trader_user_prompt must include the first-hand evidence summary placeholder and non-voting instruction."""
+    prompt = ZH_PROMPTS["trader_user_prompt"]
+    assert "{evidence_summary}" in prompt
+    assert "一手证据摘要（仅供独立核验" in prompt
+    assert "VERDICT 不是票数" in prompt
+    assert "禁止按分析师/角色/摘要数量计票" in prompt
+
 
 def test_aggressive_debator_prompt_framework():
     """T10: aggressive_prompt must advocate macro tailwinds, supply chain expansion,
@@ -260,6 +274,13 @@ def test_risk_manager_prompt_framework():
     assert "<!-- RISK_JUDGE:" in prompt
     assert "verdict 只可填：pass / revise / reject" in prompt
     assert '<!-- VERDICT: {{"direction": "看多", "reason": "不超过20字的一句话核心结论"}} -->' in prompt
+
+    # 4. P1-D: 一手证据独立核验与禁止按票数计票
+    assert "一手证据摘要仅供独立核验" in prompt
+    assert "VERDICT 不是票数" in prompt
+    assert "禁止按分析师/角色/摘要数量计票" in prompt
+    assert "分析师一手证据摘要（仅供独立核验" in prompt
+    assert "{evidence_summary}" in prompt
 
 
 def test_node_execution_smoke():

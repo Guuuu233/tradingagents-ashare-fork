@@ -12,6 +12,9 @@ from tradingagents.agents.utils.decision_status import (
     decision_status_from_state,
     is_non_executable_status,
 )
+from tradingagents.agents.utils.evidence_summary import (
+    build_seven_source_evidence_summary,
+)
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
 
 
@@ -72,9 +75,11 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
         # Custom-prompt injection (3000-char constraints e.g. confidence ceiling /
         # falsification conditions) must reach the trader like any other data-fed role.
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="trader")
+        evidence_summary = build_seven_source_evidence_summary(state)
         user_prompt = get_prompt("trader_user_prompt", config=config).format(
             company_name=company_name,
             investment_plan=investment_plan,
+            evidence_summary=evidence_summary,
             previous_trader_plan=previous_trader_plan or "无",
             instrument_context_summary=context_view["instrument_context_summary"],
             market_context_summary=context_view["market_context_summary"],
