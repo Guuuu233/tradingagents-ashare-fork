@@ -5,8 +5,8 @@
 ## 当前结论
 
 - 远端施工主干 `origin/codex/dav-4-p2a-trunk` 当前为文档-only 后代
-  `a9293ffa7e4e4ceac1be5a3999168505b714a311`，直接父为
-  `2baeaf24077152174c05e03847fa44a7e86dd770`；线上服务仍运行业务 SHA
+  `bbadd29132c261a51be320ed17d032544a4da388`，直接父为
+  `a9293ffa7e4e4ceac1be5a3999168505b714a311`；线上服务仍运行业务 SHA
   `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`。
 - 远端与服务的业务代码树一致，文档提交不需要重部署；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修已进入运行副本。
 - 主干与线上版本的最近一次同口径全量对照为：基线 `4f1a1aa3` 有 18 failed / 4356 passed，候选 `63d5648` 有 18 failed / 4406 passed；失败集合逐项一致，新增失败为 0，候选多通过 50 项。
@@ -17,7 +17,7 @@
 
 | 项目 | 当前核验值 |
 |---|---|
-| 服务 PID | `90090`（uvicorn，父进程 `71186`） |
+| 服务 PID | `98772`（uvicorn，父进程 `71186`；旧 PID `90090` 退出后的安全重启） |
 | 服务工作目录 | `/private/tmp/ta-release-63d5648-20260914` |
 | `/healthz` | HTTP 200，`commit_sha=63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`，`executor_queued=0`，`executor_threads=1` |
 | 数据库 | `/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db` |
