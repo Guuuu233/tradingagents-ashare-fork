@@ -27,10 +27,16 @@
 - DAV-866 的 provenance 返修已合入；随后随 E-04/Fuyao 修复部署到 `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`。
 - V-03a 仍只能作为隔离副本上的半成品进度基线，不能写成正式收益结论；详见 `PROJECT_STATE.md` 和 `work/2026-09-14-v03a-readonly-63d.md`。
 
+### D-018：P1-D bounded 七源一手证据摘要（有效，已合入并部署）
+
+- trader 与最终 `risk_manager` 只接收由代码确定性组合的七源证据摘要：固定来源顺序、单源/总长度上限、空/失败状态和来源标签均保留；不把七份报告全文透传给模型，不把分析师数量当作票数。
+- 候选完整 SHA `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，直接父 `51b8b155ef3d47e99dead8ce4960562cd9a77c9e`；DAV-901 已由**代码审核员**对同一 SHA 只读通过，关联集合 160 项通过；对线上 `63d5648` 的 RT-FULL 为双方各 18 failed、候选 4415 passed、基线 4406 passed，失败集合双向差集为 0。
+- 上线前已备份并校验生产 SQLite；上线后 `/healthz` 精确回读 `9d702e7`，provider health、只读行情和 social disabled 烟测通过，reports 计数与数据库 SHA 未变。本决定不授权真实分析、生产数据写入、社交采集、信用加权或历史重写。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前远端主干为文档-only 后代 `bbadd29132c261a51be320ed17d032544a4da388`，直接父为 `a9293ffa7e4e4ceac1be5a3999168505b714a311`；线上服务仍运行业务 SHA `63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`。两者业务代码树一致，当前运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 为准。
+- 当前远端主干为 `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，直接父为 `51b8b155ef3d47e99dead8ce4960562cd9a77c9e`；线上服务已运行同一业务 SHA。当前运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
