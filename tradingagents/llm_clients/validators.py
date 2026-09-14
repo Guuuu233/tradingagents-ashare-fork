@@ -380,9 +380,9 @@ def _sanitize_error_detail(text: str) -> str:
 
     sanitized = text
 
-    # 1. 过滤 Bearer token 与标准 sk- 风格 key
+    # 1. 过滤 Bearer token（按非空白 token 整体脱敏，不限最小长度，支持 +/=/ 等 Base64/JWT 符号）与标准 sk- 风格 key
     sanitized = re.sub(
-        r"(Bearer\s+)[A-Za-z0-9_\-\.]{6,}",
+        r"(Bearer\s+)[^\s'\",;]+",
         r"\1[REDACTED]",
         sanitized,
         flags=re.IGNORECASE,

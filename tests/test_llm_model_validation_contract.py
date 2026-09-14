@@ -540,10 +540,34 @@ class TestFailureClassification:
         assert "[REDACTED_API_KEY]" in msg
 
     def test_classify_llm_failure_bearer_token_redaction(self):
+        # 1. Standard JWT Bearer token
         exc = Exception("Request Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 rejected")
         _, msg = classify_llm_failure(exc)
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in msg
         assert "[REDACTED]" in msg
+
+        # 2. Short Bearer token (e.g. length < 6, e.g. "short", "x")
+        exc_short = Exception("Bearer short")
+        _, msg_short = classify_llm_failure(exc_short)
+        assert "short" not in msg_short
+        assert "Bearer [REDACTED]" in msg_short
+
+        exc_short_tiny = Exception("Failed with Authorization: Bearer x in header")
+        _, msg_short_tiny = classify_llm_failure(exc_short_tiny)
+        assert "Bearer x" not in msg_short_tiny
+        assert "Bearer [REDACTED]" in msg_short_tiny
+
+        # 3. Base64 style Bearer token with +, /, =
+        exc_b64 = Exception("Request with Bearer dXNlcjpwYXNz+token/123== failed")
+        _, msg_b64 = classify_llm_failure(exc_b64)
+        assert "dXNlcjpwYXNz+token/123==" not in msg_b64
+        assert "token/123==" not in msg_b64
+        assert "Bearer [REDACTED]" in msg_b64
+
+        exc_b64_json = Exception("Headers: {'Authorization': 'Bearer abc+def/ghi=='}")
+        _, msg_b64_json = classify_llm_failure(exc_b64_json)
+        assert "abc+def/ghi==" not in msg_b64_json
+        assert "Bearer [REDACTED]" in msg_b64_json
 
     def test_classify_llm_failure_cookie_redaction(self):
         exc = Exception("Error processing request with Cookie: session_token=secret987654; path=/")
