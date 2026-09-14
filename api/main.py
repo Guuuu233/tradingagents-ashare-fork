@@ -4351,11 +4351,7 @@ def _parse_stock_csv(raw: str) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-    if "Date" not in df.columns:
-        return []
-
-    rename_map = {k: k.strip() for k in df.columns}
-    df = df.rename(columns=rename_map)
+    df = df.rename(columns={k: str(k).strip() for k in df.columns})
     required = ["Date", "Open", "High", "Low", "Close"]
     for col in required:
         if col not in df.columns:
@@ -4366,6 +4362,21 @@ def _parse_stock_csv(raw: str) -> List[Dict[str, Any]]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date", "Open", "High", "Low", "Close"]).sort_values("Date")
+    if df.empty:
+        return []
+
+    if df["Date"].dt.tz is not None:
+        df["Date"] = df["Date"].dt.tz_localize(None)
+    df["Date"] = df["Date"].dt.normalize()
+
+    from tradingagents.dataflows.trade_calendar import dedupe_daily_bars, DuplicateBarConflictError
+
+    value_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+    try:
+        df = dedupe_daily_bars(df, "Date", value_cols)
+    except (DuplicateBarConflictError, ValueError):
+        return []
+
     if df.empty:
         return []
 
