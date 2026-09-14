@@ -38,6 +38,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_individual_fund_flow,
     get_lhb_detail,
     get_zt_pool,
+    get_limit_up_ladder,
     get_hot_stocks_xq,
     get_restricted_release,
     get_share_pledge,
@@ -871,6 +872,7 @@ _DATA_FAILURE_SOURCE_ORDER = (
     "lhb",
     "insider_transactions",
     "zt_pool",
+    "limit_up_ladder",
     "hot_stocks",
     "restricted_release",
     "share_pledge",
@@ -1604,7 +1606,7 @@ def _build_market_attention(
     - Preserves raw source payload for downstream consumption without inferring retail sentiment scores.
     """
     attention: Dict[str, Any] = {}
-    for key in ("zt_pool", "hot_stocks"):
+    for key in ("zt_pool", "limit_up_ladder", "hot_stocks"):
         raw_val = results.get(key)
         prov = source_provenance.get(key) if isinstance(source_provenance, dict) else None
 
@@ -2586,6 +2588,7 @@ def _fetch_all(
         "lhb": (get_lhb_detail, {"symbol": ticker, "date": norm_trade_date}),
         "insider_transactions": (get_insider_transactions, {"ticker": ticker, "curr_date": norm_trade_date}),
         "zt_pool": (get_zt_pool, {"date": norm_trade_date}),
+        "limit_up_ladder": (get_limit_up_ladder, {"curr_date": norm_trade_date}),
         "hot_stocks": (get_hot_stocks_xq, {"curr_date": norm_trade_date}),
         "restricted_release": (get_restricted_release, {"symbol": ticker, "curr_date": norm_trade_date}),
         "share_pledge": (get_share_pledge, {"symbol": ticker, "curr_date": norm_trade_date}),

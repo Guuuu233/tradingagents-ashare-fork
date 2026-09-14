@@ -43,9 +43,11 @@ from ..trade_calendar import (
     CN_TZ,
     DateDataUnavailable,
     DateFetchFatalError,
+    _parse_date,
     dedupe_daily_bars,
     drop_incomplete_today_bar,
     fetch_with_date_fallback,
+    now_cn,
     snapshot_historical_refusal,
 )
 from ..utils import format_hist_csv, safe_float, shrink_table, slice_hist_df
@@ -60,8 +62,27 @@ _HISTORICAL_PATH = "/api/a-share/prices/historical"
 _FINANCIALS_BASE = "/api/a-share/financials"
 _INDICATORS_PATH = "/api/a-share/financials/indicators"
 _LIMIT_UP_POOL_PATH = "/api/a-share/special-data/limit-up-pool"
+_LIMIT_UP_LADDER_PATH = "/api/a-share/special-data/limit-up-ladder"
 _DRAGON_TIGER_LIST_PATH = "/api/a-share/special-data/dragon-tiger-list"
 _TRADING_DAYS_PATH = "/api/a-share/calendar/trading-days"
+
+_LADDER_BOARD_KEYS = (
+    "two_board",
+    "three_board",
+    "four_board",
+    "five_board",
+    "six_board",
+    "seven_over",
+)
+
+_LADDER_BOARD_LABELS = {
+    "two_board": "2连板",
+    "three_board": "3连板",
+    "four_board": "4连板",
+    "five_board": "5连板",
+    "six_board": "6连板",
+    "seven_over": "7连板及以上",
+}
 
 _REQUEST_TIMEOUT_SECONDS = 20.0
 _RATE_LIMIT_RETRIES = 2
@@ -158,6 +179,64 @@ class FuyaoApiError(Exception):
 
 class FuyaoRateLimitFatalError(FuyaoApiError, DateFetchFatalError):
     """Fuyao 4001 频率超限专用 fatal 异常，用于中止日期回退。"""
+
+
+class LimitUpLadderText(str):
+    """Prompt-compatible limit-up ladder text carrying structured source metadata."""
+
+    timestamp: int | None
+    window: dict[str, Any]
+    item: list[dict[str, Any]]
+    source: str
+    curr_date: str
+    as_of: str
+    length: int
+    date_list: list[str]
+    board_caps: dict[str, Any]
+
+    def __new__(
+        cls,
+        text: str,
+        *,
+        timestamp: int | None = None,
+        window: dict[str, Any] | None = None,
+        item: list[dict[str, Any]] | None = None,
+        source: str = "cn_fuyao",
+        curr_date: str = "",
+        as_of: str = "",
+        length: int = 0,
+        date_list: list[str] | None = None,
+        board_caps: dict[str, Any] | None = None,
+    ):
+        obj = super().__new__(cls, text)
+        obj.timestamp = timestamp
+        obj.window = window or {}
+        obj.item = item or []
+        obj.source = source
+        obj.curr_date = curr_date
+        obj.as_of = as_of
+        obj.length = length
+        obj.date_list = date_list or []
+        obj.board_caps = board_caps or {}
+        obj._data = {
+            "timestamp": timestamp,
+            "window": obj.window,
+            "item": obj.item,
+            "source": source,
+            "curr_date": curr_date,
+            "as_of": as_of,
+        }
+        return obj
+
+    def __getitem__(self, key):
+        if isinstance(key, str) and hasattr(self, "_data") and key in self._data:
+            return self._data[key]
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if hasattr(self, "_data") and key in self._data:
+            return self._data[key]
+        return default
 
 
 class CnFuyaoProvider(BaseMarketDataProvider):
@@ -1091,6 +1170,203 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             f"【实际数据日期】{result.as_of}\n"
             f"【回退尝试】{','.join(result.attempted)}\n"
             f"{result.data}"
+        )
+
+    @classmethod
+    def _format_limit_up_ladder(
+        cls,
+        data: dict[str, Any],
+        curr_date: str,
+        as_of: str,
+        iso_date_list: list[str],
+    ) -> str:
+        ts = data.get("timestamp")
+        window = data.get("window") or {}
+        length = window.get("length", len(iso_date_list))
+        start_date = min(iso_date_list) if iso_date_list else as_of
+        end_date = max(iso_date_list) if iso_date_list else as_of
+        lines = [
+            f"【数据日期】{as_of}",
+            f"【请求日期】{curr_date}",
+            "【数据来源】cn_fuyao",
+            f"【更新时间戳】{ts}",
+            f"【窗口范围】{start_date} ~ {end_date}（共 {length} 个交易日）",
+            "【说明】市场关注度背景，非方向证据、非交易信号",
+            "",
+            f"连板天梯（同花顺 fuyao，固定近 {length} 个交易日）：",
+        ]
+        items = data.get("item") or []
+        all_empty = True
+        for day_record in items:
+            if not isinstance(day_record, dict):
+                continue
+            day_iso = cls._date_like_to_iso(day_record.get("date")) or str(day_record.get("date"))
+            boards = day_record.get("boards") or {}
+            day_stock_count = sum(
+                len(boards.get(k, [])) for k in _LADDER_BOARD_KEYS if isinstance(boards.get(k), list)
+            )
+            if day_stock_count == 0:
+                lines.append(f"- **{day_iso}**：各梯队无连板标的")
+            else:
+                all_empty = False
+                lines.append(f"- **{day_iso}**（共 {day_stock_count} 只）：")
+                for b_key in _LADDER_BOARD_KEYS:
+                    stocks = boards.get(b_key, [])
+                    label = _LADDER_BOARD_LABELS.get(b_key, b_key)
+                    if stocks:
+                        stock_descs = []
+                        for s in stocks:
+                            if not isinstance(s, dict):
+                                continue
+                            name = s.get("name") or s.get("ticker") or "?"
+                            ths = s.get("thscode") or ""
+                            board_num = s.get("board_num")
+                            sign = s.get("sign_level")
+                            seal = s.get("seal_nextday")
+                            seal_txt = "null" if seal is None else str(seal)
+                            stock_descs.append(
+                                f"{name}（{ths}，连板数:{board_num}，标记:{sign}，次日封板:{seal_txt}）"
+                            )
+                        lines.append(f"  - {label} ({b_key}) [{len(stocks)}只]：{'；'.join(stock_descs)}")
+                    else:
+                        lines.append(f"  - {label} ({b_key})：空")
+
+        if all_empty and items:
+            lines.append("（近 30 个交易日各梯队均无连板标的）")
+        return "\n".join(lines)
+
+    def get_limit_up_ladder(self, curr_date: str = None) -> Any:
+        """连板天梯：``GET /api/a-share/special-data/limit-up-ladder``（固定近 30 交易日矩阵）。
+
+        内部调用强制带请求基准日期 curr_date，用于本地 PIT 门禁；上游端点无日期参数。
+        严格早于当前中国日期的分析日期，在发起网络请求前直接 fail-closed 拒绝（请求次数为 0）。
+        返回窗口若含晚于请求基准日期的日期、日期非法、长度矛盾或信封不完整，显式返回 VendorFail，
+        不裁剪、不日期回退、不 iloc 切片、不合成。
+        """
+        if curr_date is None or not str(curr_date).strip():
+            return (
+                "【数据获取失败】连板天梯缺少 curr_date，"
+                "内部层不得默认今天，本项不可用。"
+            )
+        clean_date = str(curr_date).strip()
+        try:
+            req_d = _parse_date(clean_date)
+        except (TypeError, ValueError):
+            return f"【数据获取失败】分析日期无法解析：{clean_date!r}，本项不可用。"
+
+        if req_d > now_cn().date():
+            return f"【数据获取失败】分析日期 {clean_date} 晚于当前日期，拒绝未来数据，本项不可用。"
+
+        refusal = snapshot_historical_refusal(
+            clean_date, source_label="连板天梯（同花顺 fuyao 快照）"
+        )
+        if refusal:
+            return VendorRefuse(refusal)
+
+        try:
+            payload = self._request_fuyao(_LIMIT_UP_LADDER_PATH, {})
+        except FuyaoApiError as exc:
+            return self._map_api_error(exc)
+        except requests.RequestException as exc:
+            return VendorFail(f"[cn_fuyao] HTTP 请求失败: {type(exc).__name__}: {exc}")
+
+        data = payload.get("data")
+        if data is None or not isinstance(data, dict):
+            return VendorFail("[cn_fuyao] 连板天梯响应信封异常：data 非 dict 或缺失")
+
+        ts = data.get("timestamp")
+        if ts is None or not isinstance(ts, (int, float)):
+            return VendorFail("[cn_fuyao] 连板天梯响应信封异常：缺少有效 timestamp 字段")
+
+        window = data.get("window")
+        if window is None or not isinstance(window, dict):
+            return VendorFail("[cn_fuyao] 连板天梯响应信封异常：缺少有效 window 结构")
+
+        length = window.get("length")
+        if length is None or not isinstance(length, int) or length < 0:
+            return VendorFail("[cn_fuyao] 连板天梯 window.length 缺失或类型错误")
+
+        date_list = window.get("date_list")
+        if date_list is None or not isinstance(date_list, list):
+            return VendorFail("[cn_fuyao] 连板天梯 window.date_list 缺失或非 list")
+
+        if len(date_list) != length:
+            return VendorFail(
+                f"[cn_fuyao] 连板天梯窗口长度矛盾：length={length} 但 date_list 长度为 {len(date_list)}"
+            )
+
+        board_caps = window.get("board_caps")
+        if board_caps is not None and not isinstance(board_caps, dict):
+            return VendorFail("[cn_fuyao] 连板天梯 window.board_caps 类型错误")
+
+        iso_date_list: list[str] = []
+        for d_raw in date_list:
+            iso_d = self._date_like_to_iso(d_raw)
+            if not iso_d:
+                return VendorFail(f"[cn_fuyao] 连板天梯窗口包含非法日期：{d_raw!r}")
+            if iso_d > clean_date:
+                return VendorFail(
+                    f"[cn_fuyao] 连板天梯返回窗口包含晚于请求基准日期的日期：{iso_d} > {clean_date}，拒绝未来数据"
+                )
+            iso_date_list.append(iso_d)
+
+        item = data.get("item")
+        if item is None or not isinstance(item, list):
+            return VendorFail("[cn_fuyao] 连板天梯缺少有效 item 列表")
+
+        if len(item) != length:
+            return VendorFail(
+                f"[cn_fuyao] 连板天梯 item 列表长度与 window.length 矛盾：item={len(item)} vs length={length}"
+            )
+
+        for idx, day_record in enumerate(item):
+            if not isinstance(day_record, dict):
+                return VendorFail(f"[cn_fuyao] 连板天梯 item[{idx}] 非 dict")
+            day_date_raw = day_record.get("date")
+            day_iso = self._date_like_to_iso(day_date_raw)
+            if not day_iso:
+                return VendorFail(f"[cn_fuyao] 连板天梯 item[{idx}] 日期非法：{day_date_raw!r}")
+            if day_iso > clean_date:
+                return VendorFail(
+                    f"[cn_fuyao] 连板天梯 item[{idx}] 包含晚于请求基准日期的日期：{day_iso} > {clean_date}，拒绝未来数据"
+                )
+            boards = day_record.get("boards")
+            if not isinstance(boards, dict):
+                return VendorFail(f"[cn_fuyao] 连板天梯 item[{idx}].boards 非 dict")
+            missing_boards = [k for k in _LADDER_BOARD_KEYS if k not in boards]
+            if missing_boards:
+                return VendorFail(
+                    f"[cn_fuyao] 连板天梯 item[{idx}].boards 缺失必要板块键：{missing_boards}"
+                )
+            for b_key in _LADDER_BOARD_KEYS:
+                stock_list = boards[b_key]
+                if not isinstance(stock_list, list):
+                    return VendorFail(f"[cn_fuyao] 连板天梯 item[{idx}].boards[{b_key}] 非 list")
+                for s_idx, stock in enumerate(stock_list):
+                    if not isinstance(stock, dict):
+                        return VendorFail(f"[cn_fuyao] 连板天梯 item[{idx}].boards[{b_key}][{s_idx}] 非 dict")
+
+        if length == 0:
+            return VendorEmpty("[cn_fuyao] 连板天梯无数据（窗口长度为0）")
+
+        as_of = max(iso_date_list) if iso_date_list else clean_date
+        text = self._format_limit_up_ladder(
+            data=data,
+            curr_date=clean_date,
+            as_of=as_of,
+            iso_date_list=iso_date_list,
+        )
+        return LimitUpLadderText(
+            text,
+            timestamp=int(ts),
+            window=window,
+            item=item,
+            source="cn_fuyao",
+            curr_date=clean_date,
+            as_of=as_of,
+            length=length,
+            date_list=iso_date_list,
+            board_caps=board_caps or {},
         )
 
     def get_lhb_detail(self, symbol: str, date: str) -> Any:

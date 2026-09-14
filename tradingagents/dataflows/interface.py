@@ -63,6 +63,7 @@ TOOLS_CATEGORIES = {
             "get_individual_fund_flow",
             "get_lhb_detail",
             "get_zt_pool",
+            "get_limit_up_ladder",
             "get_hot_stocks_xq",
             "get_shareholder_count",
             "get_margin_trading",
@@ -157,6 +158,9 @@ def get_vendor(category: str, method: str = None) -> str:
 
 
 def _resolve_vendor_chain(method: str, configured_vendor: str) -> list[str]:
+    if method == "get_limit_up_ladder":
+        return ["cn_fuyao"]
+
     configured = [v.strip() for v in configured_vendor.split(",") if v.strip()]
     fallback = configured.copy()
 
@@ -200,6 +204,7 @@ def _extract_as_of(method: str, args: tuple, kwargs: dict) -> str | None:
         "get_global_news": 0,
         "get_board_fund_flow": 0,
         "get_zt_pool": 0,
+        "get_limit_up_ladder": 0,
         "get_hot_stocks_xq": 0,
         "get_global_indices": 0,
         "get_major_assets": 0,
@@ -252,6 +257,7 @@ _DATE_REQUIRED_METHODS = {
     "get_individual_fund_flow",
     "get_lhb_detail",
     "get_zt_pool",
+    "get_limit_up_ladder",
     "get_hot_stocks_xq",
     "get_fundamentals",
     "get_balance_sheet",

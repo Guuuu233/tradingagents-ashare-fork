@@ -225,6 +225,38 @@ def format_social_sections(
         else:
             mkt_lines.append("【涨停池数据】\n无数据")
 
+        ladder_entry = market_attention.get("limit_up_ladder")
+        if isinstance(ladder_entry, dict):
+            ladder_status = ladder_entry.get("status", "available")
+            ladder_as_of = ladder_entry.get("as_of") or ladder_entry.get("requested_as_of") or ""
+            ladder_raw = ladder_entry.get("raw")
+            ladder_gap = ladder_entry.get("gap")
+            if ladder_status == "available" and ladder_raw:
+                mkt_lines.append(
+                    f"\n【连板天梯数据】(时效: {ladder_as_of} | 来源: cn_fuyao | 状态: {ladder_status})\n"
+                    f"【说明】市场关注度背景，非方向证据、非交易信号。\n"
+                    f"{ladder_raw}"
+                )
+            else:
+                reason = ladder_gap or "无数据"
+                mkt_lines.append(
+                    f"\n【连板天梯数据】(状态: {ladder_status} | 来源: cn_fuyao)\n"
+                    f"【不可用原因】{reason}\n"
+                    f"【说明】市场关注度背景，非方向证据、非交易信号。"
+                )
+        elif ladder_entry:
+            mkt_lines.append(
+                f"\n【连板天梯数据】(来源: cn_fuyao)\n"
+                f"【说明】市场关注度背景，非方向证据、非交易信号。\n"
+                f"{ladder_entry}"
+            )
+        else:
+            mkt_lines.append(
+                "\n【连板天梯数据】(状态: unavailable | 来源: cn_fuyao)\n"
+                "【不可用原因】无数据\n"
+                "【说明】市场关注度背景，非方向证据、非交易信号。"
+            )
+
         hot_entry = market_attention.get("hot_stocks")
         if isinstance(hot_entry, dict):
             hot_status = hot_entry.get("status", "available")
@@ -243,7 +275,7 @@ def format_social_sections(
         mkt_lines.append("【涨停池与热门股票数据】\n无市场关注度数据")
 
     mkt_lines.append(
-        "\n【分栏独立声明】市场关注度数据源自涨停池连板生态与雪球热门榜，反映短线交易资金聚焦度，已在此独立分栏并注明来源；严禁冒充社交正文，严禁在社交数据不可用时用市场关注度倒推散户讨论事实，禁止据此主观推断散户多空情绪偏好。"
+        "\n【分栏独立声明】市场关注度数据源自涨停池连板生态、连板天梯矩阵与雪球热门榜，反映短线交易资金聚焦度与市场关注度背景，已在此独立分栏并注明来源；连板天梯为市场关注度背景，非方向证据、非交易信号；严禁冒充社交正文，严禁在社交数据不可用时用市场关注度倒推散户讨论事实，禁止据此主观推断散户多空情绪偏好。"
     )
     section_4_text = "\n".join(mkt_lines)
 

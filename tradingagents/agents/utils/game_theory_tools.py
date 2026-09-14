@@ -41,6 +41,17 @@ def get_zt_pool(
 
 
 @tool
+def get_limit_up_ladder(
+    curr_date: Annotated[
+        str,
+        "当前请求基准日期 YYYY-MM-DD；连板天梯反映固定近30个交易日市场关注度背景，非方向证据、非交易信号；历史分析日期拒绝天梯快照",
+    ],
+) -> str:
+    """获取同花顺连板天梯（固定近30个交易日矩阵）。市场关注度背景，非方向证据、非交易信号。"""
+    return route_to_vendor("get_limit_up_ladder", curr_date=curr_date)
+
+
+@tool
 def get_hot_stocks_xq(
     curr_date: Annotated[str | None, "分析日期 YYYY-MM-DD；历史日拒绝雪球热搜快照"] = None,
 ) -> str:
@@ -90,6 +101,11 @@ def fetch_lhb_detail(symbol: str, date: str) -> str:
 def fetch_zt_pool(date: str) -> str:
     """直接调用获取市场涨停板情绪池。"""
     return route_to_vendor("get_zt_pool", date)
+
+
+def fetch_limit_up_ladder(curr_date: str) -> str:
+    """直接调用获取同花顺连板天梯。"""
+    return route_to_vendor("get_limit_up_ladder", curr_date=curr_date)
 
 
 def fetch_hot_stocks_xq(curr_date: str | None = None) -> str:

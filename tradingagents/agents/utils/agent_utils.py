@@ -29,6 +29,7 @@ from tradingagents.agents.utils.game_theory_tools import (
     get_individual_fund_flow,
     get_lhb_detail,
     get_zt_pool,
+    get_limit_up_ladder,
     get_hot_stocks_xq,
     get_shareholder_count,
     get_margin_trading,

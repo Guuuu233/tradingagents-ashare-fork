@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
         "get_board_fund_flow": "cn_akshare",
         "get_individual_fund_flow": "cn_akshare",
         "get_hot_stocks_xq": "cn_akshare",
+        "get_limit_up_ladder": "cn_fuyao",
     },
 
     # Social data configuration (Task 7 / §7)
