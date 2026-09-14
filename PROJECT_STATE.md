@@ -4,10 +4,10 @@
 
 ## 当前结论
 
-- 施工主干已线性接入 P1-E 候选 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`，其直接父为
-  `251fd00aa8a9584850cae5d4ab5adfbd3c5d3b94`；本次治理文档提交是该候选的线性后代，
-  远端完整 HEAD 以 push 后回读为准。线上服务仍为 `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，
-  尚未切换到 P1-E。
+- 施工主干已包含 P1-E 候选 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`（直接父
+  `251fd00aa8a9584850cae5d4ab5adfbd3c5d3b94`）及其治理文档后代；本次发布版本为
+  `026349614a3f1b92a95dc06c0515f10ebec193bc`。线上服务已切换到同一发布 SHA；完整远端
+  文档 HEAD 以 push 后回读为准。
 - P1-D（trader 与最终 risk_manager 的 bounded 七源一手证据摘要）已完成代码审核、同口径全量对照、线性合入并部署；E-04、V-03a provenance 返修、DAV-887 和 Fuyao E2b 窄修均在当前运行副本。
 - P1-D 与上线前线上基线 `63d5648` 的同口径全量对照为：基线 18 failed / 4406 passed，候选 18 failed / 4415 passed；失败集合逐项一致，新增失败为 0，候选多通过 9 项。
 - P1-E 与线上基线 `9d702e7` 的同口径全量对照为：基线 18 failed / 4415 passed，候选 18 failed / 4426 passed；失败集合逐项一致，新增失败为 0，候选多通过 11 项。
@@ -18,15 +18,15 @@
 
 | 项目 | 当前核验值 |
 |---|---|
-| 服务 PID | `6509`（uvicorn，父进程 `71186`；旧 PID `98772` 已优雅停止） |
-| 服务工作目录 | `/private/tmp/ta-release-9d702e7-20260914` |
-| `/healthz` | HTTP 200，`commit_sha=9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
+| 服务 PID | `19213`（uvicorn，父进程 `71186`；旧 PID `6509` 已优雅停止） |
+| 服务工作目录 | `/private/tmp/ta-release-p1e-0263496-20260914` |
+| `/healthz` | HTTP 200，`commit_sha=026349614a3f1b92a95dc06c0515f10ebec193bc`，`build_identity` 同 SHA，`executor_queued=0`，`executor_threads=1` |
 | 数据库 | `/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db` |
 | 数据库完整性 | `PRAGMA quick_check=ok` |
 | reports | 总数 1409；`status=completed` 793；`status=failed` 616 |
 | 数据库写入保护 | 部署前后 reports 计数、文件大小和 SHA-256 未变；只读评估输入为隔离副本，不是运行中的库 |
-| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-9d702e7`，与运行库 SHA-256 完全一致 |
-| 部署回退点 | 旧发布 worktree `/private/tmp/ta-release-63d5648-20260914` 保留，供受控回退核验 |
+| 本次部署备份 | `work/tradingagents.db.bak-20260914-predeploy-0263496`，SQLite `quick_check=ok`，reports `1409/793/616`；一致性备份 SHA 为 `df628f4293069a820ef69a136a1acbb0e7a517f6638dd24a9faeea30f5b51b9e` |
+| 部署回退点 | 旧发布 worktree `/private/tmp/ta-release-9d702e7-20260914` 保留，供受控回退核验 |
 
 本轮只读运行态烟测：provider health 返回正常；social-data 保持 `disabled`；历史 K 线接口返回数据。未发起分析任务，因此没有新增报告字段可作为生产业务链路证明。
 
@@ -38,6 +38,9 @@
 - E-03 多头、空头、证据核验、总监以及普通命题被反驳时恢复 `WAIT` 的修复已合入；PIT/前视失败继续 `NO_TRADE`。
 - E-04 预期修正分栏、`cluster_id`、严格日历日期/时间戳和防伪造 hash 的返修已合入并随当前发布上线。
 - P1-D 已把七个既有报告字段组合成固定顺序、单源上限和总长度上限的无 LLM 摘要，并接入 trader 与最终 risk_manager；候选 `9d702e7` 已通过 DAV-901 **代码审核员**同 SHA 复审和 RT-FULL 后上线。当前没有触发真实分析，因此尚无生产报告字段/trace/readback 证据。
+- P1-E DAV-902 已由**代码审核员**同 SHA 审查、关联回归和 RT-FULL 通过后合入，并随发布版本
+  `026349614a3f1b92a95dc06c0515f10ebec193bc` 上线；发布后只做只读烟测，尚无生产财务报告的
+  披露日 PIT trace/report/readback 证据。
 - E-04 代码的全量无新增失败已由上述同口径 RT-FULL 证明；但仍需单独积累真实业务报告的字段/trace/readback 证据，不能把离线回归当作生产行为证明。
 
 ### P0-B/C/D 审计缺口
@@ -61,8 +64,8 @@
 - DAV-889（`8d42c466518fae6afa39e4e465886547bca04d84`）：Fuyao fundamentals 缺失 `curr_date` 不再回退到实时报告期。
 - DAV-895（`b22e42d9ee3f185c67cc81f9f16fdbf30250d03d`）：Fuyao 龙虎榜首个 4001 不再被当作日期无数据而静默回退。
 - DAV-898（`63d5648bca7c49f57e1211d848cbc1d02ff6b3a5`）：交易日历 fallback 优先读取 provider 配置 `fuyao_api_key`，再读环境变量。
-- DAV-902（`cd7456012fe2e0b03bd33333e6972301c1c76ddc`）：Fuyao 财务链已按披露日和报告期做 fail-closed 可见性约束；DAV-903 已由**代码审核员**同 SHA 通过，RT-FULL 相对 `9d702e7` 零新增失败。代码已合入，尚待受控发布。
-- 仍开放：P1-E 受控发布、`/limit-up-ladder` 能力补齐及其对应的来源/缺失语义；不能把“连板分布”写成已接入连板天梯。
+- DAV-902（`cd7456012fe2e0b03bd33333e6972301c1c76ddc`）：Fuyao 财务链已按披露日和报告期做 fail-closed 可见性约束；DAV-903 已由**代码审核员**同 SHA 通过，RT-FULL 相对 `9d702e7` 零新增失败。代码已合入并随 `026349614a3f1b92a95dc06c0515f10ebec193bc` 受控发布。
+- 仍开放：生产财务报告的披露日 PIT 业务证据、`/limit-up-ladder` 能力补齐及其对应的来源/缺失语义；不能把“连板分布”写成已接入连板天梯。
 
 ## 当前剩余施工项（按依赖排序）
 
@@ -72,7 +75,7 @@
 | P1 | V-03a 正式化 | 只能做进度基线 | 等待真实到期窗口；把 provider 元数据、forward OOS、动态 completeness、purge/embargo 和 prompt/model provenance 一起纳入正式实验。 |
 | P1 | 真实社交 Gate 0–4 | 外部条件未满足，功能保持 disabled | 需要独立 MediaCrawler 环境、受控账号/Cookie 和逐级授权；不得用离线 fixture 代替真实采集。 |
 | P1 | 裁决者一手证据 | 代码已合入并上线；尚无真实业务链路证据 | 不触发真实分析的前提下，保留代码/回归门禁；若要证明生产图可达，另走明确的数据写入授权和 trace/report/readback 取证。 |
-| P1 | 财务披露日 PIT | 代码已审查、RT-FULL 通过、已合入，待发布 | 发布前保留 `cd7456` 与线上 `9d702e7` 的证据链；上线后重新核对备份、健康检查和只读烟测；不扩到数据库写入或真实采集。 |
+| P1 | 财务披露日 PIT | 代码已审查、RT-FULL 通过、已合入并发布；尚无生产业务证据 | 发布版本 `0263496` 已通过备份、健康检查、只读烟测和数据库回读；若要证明生产图/报告行为，另走明确的数据写入授权，不把只读烟测当成业务样本。 |
 | P1 | 前端产品验收 | 源码、测试、构建和入口 HTTP smoke 已过；live bundle 未核验 | 在不改后端语义的前提下核对实际部署 bundle；不把临时 Vite 服务当成生产前端。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
@@ -85,7 +88,7 @@
 
 ## 已确认不应重复派工
 
-- DAV-828/829/830/844/846–852/854、DAV-808/856/859、E-04 三轮返修、V-03a provenance 返修和 Fuyao 已列窄修均已有代码、审查或发布证据；DAV-902/903 已完成代码与回归门禁，等待受控发布。
+- DAV-828/829/830/844/846–852/854、DAV-808/856/859、E-04 三轮返修、V-03a provenance 返修和 Fuyao 已列窄修均已有代码、审查或发布证据；DAV-902/903 已完成代码、回归和受控发布门禁。
 - 旧文档中“DAV-808 尚未决策”“E-04 尚未实现”“P0-B/C/D 仍待编码”“主干仍为 `bdb95f8` / 服务仍为 `a227cdc`”均是历史快照，不能据此新建重复卡。
 - “全量无新增失败”只证明对应候选相对基线的测试差异；它不替代部署后的业务烟测、数据库回读或真实数据授权。
 

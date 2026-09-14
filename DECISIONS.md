@@ -33,7 +33,7 @@
 - 候选完整 SHA `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`，直接父 `51b8b155ef3d47e99dead8ce4960562cd9a77c9e`；DAV-901 已由**代码审核员**对同一 SHA 只读通过，关联集合 160 项通过；对线上 `63d5648` 的 RT-FULL 为双方各 18 failed、候选 4415 passed、基线 4406 passed，失败集合双向差集为 0。
 - 上线前已备份并校验生产 SQLite；上线后 `/healthz` 精确回读 `9d702e7`，provider health、只读行情和 social disabled 烟测通过，reports 计数与数据库 SHA 未变。本决定不授权真实分析、生产数据写入、社交采集、信用加权或历史重写。
 
-### D-019：P1-E Fuyao 财务披露日 PIT fail-closed（有效，代码已合入，待发布）
+### D-019：P1-E Fuyao 财务披露日 PIT fail-closed（有效，代码已合入）
 
 - DAV-902 候选完整 SHA 为 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`，直接父为
   `251fd00aa8a9584850cae5d4ab5adfbd3c5d3b94`；白名单严格为
@@ -50,10 +50,26 @@
 - 本决定不授权真实分析、生产数据写入、真实采集、Cookie、信用加权或历史重写；P1-E 只改变
   Fuyao provider 的可见性判断和对应测试。
 
+### D-020：P1-E 受控发布（有效，已完成）
+
+- 发布版本为 `026349614a3f1b92a95dc06c0515f10ebec193bc`，其代码父为 P1-E 候选
+  `cd7456012fe2e0b03bd33333e6972301c1c76ddc`；发布副本为
+  `/private/tmp/ta-release-p1e-0263496-20260914`。
+- 旧服务 PID `6509` 已正常停止；新服务 PID `19213` 在 8000 运行，工作目录已核对；
+  `/healthz` 的完整 `commit_sha`/`build_identity` 均精确匹配发布 SHA。
+- provider health、600519.SH 两日只读 K 线、social disabled 三项烟测通过；未调用真实分析入口。
+- 生产 SQLite 仍为 285339648 bytes、SHA-256
+  `94d2f6740db4f2065100479dd5cb3ccf5d8a504447a55fa8f19635927ce83010`，`quick_check=ok`，
+  reports `1409/793/616`。发布备份 `work/tradingagents.db.bak-20260914-predeploy-0263496` 的
+  `quick_check=ok`、reports `1409/793/616`；其 SQLite 一致性备份 SHA 为
+  `df628f4293069a820ef69a136a1acbb0e7a517f6638dd24a9faeea30f5b51b9e`。
+- 本决定只完成代码发布和只读运行核验，不授权生产业务写入、真实采集、Cookie、信用加权、
+  历史重写或将本次发布宣称为生产财务 PIT 业务证据。
+
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前施工主干已包含 P1-E 代码候选 `cd7456012fe2e0b03bd33333e6972301c1c76ddc`，其上有本次治理文档线性提交；线上服务仍运行 `9d702e7522c94bf3ac983cb1ede10943cfca1a4b`。完整远端 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
+- 当前施工主干已包含 P1-E 代码候选 `cd7456012fe2e0b03bd33333e6972301c1c76ddc` 及发布文档后代；线上服务已运行发布 SHA `026349614a3f1b92a95dc06c0515f10ebec193bc`。完整远端文档 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
