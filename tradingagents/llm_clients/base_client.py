@@ -23,3 +23,21 @@ class BaseLLMClient(ABC):
     def validate_model(self) -> bool:
         """Validate that the model is supported by this client."""
         pass
+
+    def evaluate_model(
+        self,
+        *,
+        discovered_models: Optional[list] = None,
+        strict: bool = False,
+    ) -> Any:
+        """Evaluate model support against advisory policy, returning ModelValidationResult."""
+        from .validators import evaluate_model_policy
+
+        provider = getattr(self, "provider", "unknown")
+        return evaluate_model_policy(
+            provider=provider,
+            model=self.model,
+            base_url=self.base_url,
+            discovered_models=discovered_models,
+            strict=strict,
+        )

@@ -155,4 +155,4 @@ class OpenAIClient(BaseLLMClient):
         return max(0, value)
 
     def validate_model(self) -> bool:
-        return validate_model(self.provider, self.model)
+        return validate_model(self.provider, self.model, base_url=self.base_url)
