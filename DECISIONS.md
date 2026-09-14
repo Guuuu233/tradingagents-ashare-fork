@@ -76,7 +76,7 @@
   `work/2026-09-14-frontend-live-bundle.md`。后续发布不得沿用本次 hash，必须重建并复验。
 - 本决定只覆盖构建物和 HTTP 入口，不等于浏览器交互、登录、真实分析或生产数据库写入授权。
 
-### D-022：P1-F 连板天梯只按固定当前窗口接入（有效，已实施合入，尚未部署）
+### D-022：P1-F 连板天梯只按固定当前窗口接入（有效，已实施合入并受控发布）
 
 - 官方 Fuyao `/api/a-share/special-data/limit-up-ladder` 不接受日期参数，只返回固定近 30
   个交易日矩阵；因此内部能力 `get_limit_up_ladder` 必须把请求基准日期用于本地 PIT 门禁，
@@ -88,18 +88,20 @@
   信号、收益评估、H1b、数据库回填或前端；历史分析遇到该能力时 fail-closed，但不阻断整单。
 - 设计和红队清单见 `work/2026-09-14-p1f-limit-up-ladder-design.md`。实施卡交付后必须由
   **代码审核员**对同一完整 SHA 只读审查，再跑与当前发布版本同口径 RT-FULL；本决定不授权
-  部署、真实分析、生产数据写入或真实社交采集。
+  自动部署、真实分析、生产数据写入或真实社交采集；部署另由 DAV-909 独立发布门执行。
 - 实施候选为 `6612aea82e0fb3212d3682c5d09835f529ffec16`，直接父为
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`。DAV-908 的**代码审核员**同 SHA 复审 PASS；
   与线上发布基线 `026349614a3f1b92a95dc06c0515f10ebec193bc` 的 RT-FULL 为基线
   `19 failed / 4425 passed / 1 skipped / 3 deselected`、候选
   `19 failed / 4445 passed / 1 skipped / 3 deselected`，失败集合双向差集为空。候选已线性合入
-  `origin/codex/dav-4-p2a-trunk`，但本决定仍不授权本次部署；线上服务继续运行 `0263496...`。
+  `origin/codex/dav-4-p2a-trunk`。随后按独立发布门完成 `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`
+  的受控发布：预启动、优雅切换、`/healthz`、provider/行情/social disabled 烟测和数据库回读均通过；
+  生产库未写入，未启动真实分析或真实天梯上游请求。
 
 ### 当前不变的原则
 
 - D-009 的状态拆分、PIT、证据独立性和统计排除原则仍有效；D-012 的红队完备性、逐条实跑和 RT-FULL 仍是行为类候选的硬门槛。
-- 当前施工主干已包含 P1-F 候选 `6612aea82e0fb3212d3682c5d09835f529ffec16` 及其后续治理文档；线上服务仍运行发布 SHA `026349614a3f1b92a95dc06c0515f10ebec193bc`。完整远端文档 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
+- 当前施工主干已包含 P1-F 候选 `6612aea82e0fb3212d3682c5d09835f529ffec16` 及其后续治理文档；线上服务运行发布 SHA `6cc4e15227efcb602d63f1ec9a49a4d7ca7cc8e1`。完整远端文档 HEAD、运行态、数据库计数和剩余工作以 `PROJECT_STATE.md` 及发布后回读为准。
 
 ## D-009：决策语义四元拆分优先于继续堆局部闸（已采纳）
 
