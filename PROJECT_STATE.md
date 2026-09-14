@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-- 当前远端目标主线文档 HEAD 为 `0770deda496e1a229f7a2a87d20099fae6302610`；线上运行代码 SHA 为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`。两者之间仅有本次发布证据文档提交，不包含运行代码变化。
+- 当前远端目标主线文档 HEAD 为 `5cb93279290bba3a5c8ba41d5d87bac8bc631f22`；线上运行代码 SHA 为 `79757a6a2dd98f9487bb1fed6466ba71e7e6a31a`。两者之间仅有本次发布证据文档提交，不包含运行代码变化。
 - 施工主干已包含 P1-F 连板天梯候选 `6612aea82e0fb3212d3682c5d09835f529ffec16`（直接父
   `623c37a71f7a50fdf9945f9158f78cf9f57e5b0a`，根设计基线
   `d816a8c7c57c850ff2e1d57d852d3ad7f6e0d477`）及此前 P1-E 的治理文档和发布代码；此前线上
@@ -103,6 +103,17 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 - DAV-914 候选已由**代码审核员**对同一完整 SHA `8ccecb8d59de31835f9d0f67578123db9a358e7b` 只读 PASS，合入后独立前端全量为 17 个测试文件/171 个测试通过，构建成功；Vite 既有配置/包体提示已如实保留。
 - 该项只改变用户可见文本与颜色查找，不迁移或改写历史方向值；已随 `79757a6...` 发布并完成 live bundle HTTP 200/资源 hash 核验。后续发布仍须重建并复验 bundle，不能沿用本次 hash。
 
+### P2-55 LLM client 遗留 TODO 复核
+
+- `tradingagents/llm_clients/TODO.md` 的四条旧描述已按当前代码重新核对：只有
+  `validate_model()` 尚未进入运行调用链是实际策略缺口；统一 `api_key` 入口和
+  Anthropic `base_url` 处理已经存在，Google 的公共 `base_url` 参数是共享代理检查
+  边界；当前设置页是自由文本并支持 `/v1/models/fetch` 动态模型列表，不存在可直接
+  同步的静态 CLI 清单。
+- 当前不直接把 `VALID_MODELS` 接入启动硬门禁，避免误伤 OpenAI 兼容服务和自定义模型。
+  后续需另立窄卡定义 advisory/discovery/warmup 语义，并用离线构造测试覆盖全局配置、
+  角色绑定、动态模型拉取和 warmup。详见 `work/2026-09-14-p2-55-llm-client-audit.md`。
+
 ## 当前剩余施工项（按依赖排序）
 
 | 优先级 | 项目 | 当前状态 | 下一步边界 |
@@ -115,6 +126,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
+| P2 | LLM client 模型校验策略 | 旧 TODO 已复核；`validate_model()` 未接入运行链，但静态白名单不能直接充当硬门禁 | 先完成 advisory/discovery/warmup 语义设计和离线测试，再决定是否改 client；不得因旧列表阻断合法自定义模型。 |
 | P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -157,4 +169,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [P1-G `uv.lock` 对齐与合入证据](work/2026-09-14-p1-g-uv-lock.md)
 - [DAV-914 前端 direction 展示本地化与合入证据](work/2026-09-14-p2-direction-localization.md)
 - [DAV-914 受控发布与 live bundle 证据](work/2026-09-14-dav914-release-79757a6.md)
+- [P2-55 LLM client 遗留 TODO 复核](work/2026-09-14-p2-55-llm-client-audit.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
