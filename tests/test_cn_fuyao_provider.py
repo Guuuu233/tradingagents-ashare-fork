@@ -347,6 +347,8 @@ def test_get_income_statement_markdown():
                 "thscode": "600519.SH",
                 "fiscal_year": 2024,
                 "fiscal_period": "FY",
+                "period_end_ms": CnFuyaoProvider._date_to_ms("2024-12-31"),
+                "report_date_ms": CnFuyaoProvider._date_to_ms("2025-04-20"),
                 "operating_income": 174144000000,
                 "net_profit": 93000000000,
                 "basic_eps": 68.50,
@@ -384,6 +386,7 @@ def test_get_fundamentals_indicators():
         "data": {
             "thscode": "600519.SH",
             "report": "2026-1",
+            "report_date": "2026-04-25",
             "abilities": [
                 {
                     "ability": "growth",
@@ -480,6 +483,7 @@ def test_get_fundamentals_valid_curr_date_preserves_request_param(curr_date, exp
         "data": {
             "thscode": "600519.SH",
             "report": expected_report,
+            "report_date": curr_date,
             "abilities": [
                 {
                     "ability": "growth",
@@ -1272,3 +1276,353 @@ def test_akshare_get_lhb_detail_double_failure_is_vendor_fail():
     assert isinstance(out, VendorFail)
     assert "龙虎榜数据获取失败" in out.error
     tc.clear_cn_trade_date_cache()
+
+
+# ── P1-E: Fuyao 披露日 PIT Fail-Closed 红队与边界测试 ─────────────────
+
+
+def test_fuyao_verified_report_date_exposes_amounts_and_preserves_zero_and_negatives():
+    """已核验披露日 + 不晚于分析日：金额可见，0/负数原值保留。"""
+    row = {
+        "thscode": "600873.SH",
+        "ticker": "600873",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-08-15"),
+        "currency": "CNY",
+        "act_cash_flow_net": 0.0,
+        "invest_cash_flow_net": -1775150000.0,
+        "financing_cash_flow_net": 22626600.0,
+    }
+    body = _ok_payload(item=[row])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_cashflow("600873.SH", "quarterly", "2026-09-10")
+
+    assert isinstance(out, str)
+    assert "2026-08-15" in out
+    assert "2026-06-30" in out
+    assert "-1.77515" in out
+    assert "missing（不可用）" not in out
+    assert "future（不可用）" not in out
+
+
+def test_fuyao_missing_report_date_with_amounts_sanitizes_values_and_sets_missing_status():
+    """披露日缺失但有金额：金额不进入模型可见文本，状态明确为 missing/unavailable。"""
+    row_verified = {
+        "thscode": "600873.SH",
+        "ticker": "600873",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q1",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-03-31"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-04-20"),
+        "currency": "CNY",
+        "operating_income": 500000.0,
+    }
+    row_missing = {
+        "thscode": "600873.SH",
+        "ticker": "600873",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": 0,
+        "currency": "CNY",
+        "operating_income": 1134640000.0,
+    }
+    body = _ok_payload(item=[row_verified, row_missing])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_income_statement("600873.SH", "quarterly", "2026-09-10")
+
+    assert isinstance(out, str)
+    assert "500000" in out
+    assert "1134640000" not in out
+    assert "missing（不可用）" in out
+    assert "missing 披露日行仅保留日期元数据，金额不可用于分析" in out
+
+
+def test_fuyao_all_rows_missing_report_date_returns_vendor_refuse():
+    """一张报表没有可核验可见行时，返回带原因的 VendorRefuse(allow_peers=('cn_akshare',))。"""
+    row_missing1 = {
+        "thscode": "600873.SH",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q1",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-03-31"),
+        "report_date_ms": 0,
+        "act_cash_flow_net": 1000.0,
+    }
+    row_missing2 = {
+        "thscode": "600873.SH",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": 0,
+        "act_cash_flow_net": 2000.0,
+    }
+    body = _ok_payload(item=[row_missing1, row_missing2])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_cashflow("600873.SH", "quarterly", "2026-09-10")
+
+    assert isinstance(out, VendorRefuse)
+    assert out.allow_peers == ("cn_akshare",)
+    assert "无可核验披露日" in out.reason
+    assert not isinstance(out, VendorFail)
+    assert not isinstance(out, VendorEmpty)
+
+
+def test_fuyao_future_report_date_cannot_enter_h1_q1_derivation():
+    """披露日晚于分析日：金额不可见，不能进入 H1−Q1。"""
+    q1_verified = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q1",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-03-31"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-04-20"),
+        "act_cash_flow_net": 100.0,
+    }
+    h1_future = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-09-15"),
+        "act_cash_flow_net": 300.0,
+    }
+    body = _ok_payload(item=[q1_verified, h1_future])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_cashflow("600873.SH", "quarterly", "2026-09-10")
+
+    assert isinstance(out, str)
+    assert "300" not in out
+    assert "future（不可用）" in out
+    assert "Q2_single_quarter=N/A" in out
+    assert "reason=future_report_date" in out
+    assert "derivation_formula=H1-Q1" not in out
+
+
+def test_fuyao_period_end_after_curr_date_with_early_report_date_is_not_visible():
+    """报告期晚于分析日但披露日异常较早：仍不可见。"""
+    row_verified = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-08-15"),
+        "operating_income": 1000.0,
+    }
+    row_anomalous = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q3",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-09-30"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-08-20"),
+        "operating_income": 99999999.0,
+    }
+    body = _ok_payload(item=[row_verified, row_anomalous])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_income_statement("600873.SH", "quarterly", "2026-09-10")
+
+    assert isinstance(out, str)
+    assert "1000" in out
+    assert "99999999" not in out
+    assert "future_period（不可用）" in out
+
+
+def test_fuyao_q2_derivation_refuses_when_h1_verified_but_q1_missing_report_date():
+    """H1 已核验、Q1 缺失披露日：不得派生，原因可读且非静默零值。"""
+    h1_verified = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q2",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-06-30"),
+        "report_date_ms": CnFuyaoProvider._date_to_ms("2026-08-15"),
+        "act_cash_flow_net": 389140000.0,
+    }
+    q1_missing = {
+        "thscode": "600873.SH",
+        "period": "quarterly",
+        "fiscal_year": 2026,
+        "fiscal_period": "Q1",
+        "period_end_ms": CnFuyaoProvider._date_to_ms("2026-03-31"),
+        "report_date_ms": 0,
+        "act_cash_flow_net": -1155560000.0,
+    }
+    body = _ok_payload(item=[h1_verified, q1_missing])
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_cashflow("600873.SH", "quarterly", "2026-09-10")
+
+    assert "Q2_single_quarter=N/A" in out
+    assert "reason=missing_q1" in out
+    assert "同年度一季度（0331）财报未在当前分析日之前公开" in out
+    assert "禁止把 H1 累计当作 Q2 单季使用" in out
+    assert "派生金额" not in out
+
+
+def test_fuyao_q2_derivation_refuses_when_q1_verified_but_h1_missing_report_date():
+    """H1 缺失披露日、Q1 已核验：不得派生，原因可读且非静默零值。"""
+    df = pd.DataFrame([
+        {
+            "period_end": "2026-06-30",
+            "report_date_status": "missing",
+            "fiscal_period": "Q2",
+            "operating_income": 1000.0,
+        },
+        {
+            "period_end": "2026-03-31",
+            "report_date_status": "verified",
+            "fiscal_period": "Q1",
+            "operating_income": 400.0,
+        },
+    ])
+    block = CnFuyaoProvider._q2_derivation_block(df, "income", "2026-09-10")
+    assert "Q2_single_quarter=N/A" in block
+    assert "reason=missing_report_date" in block
+    assert "禁止把 H1 累计当作 Q2 单季使用" in block
+    assert "派生金额" not in block
+
+
+def test_fuyao_fundamentals_without_report_date_returns_vendor_refuse():
+    """只有 report=yyyy-N 没有逐票披露日的指标响应：不得标 PIT 成功；受限回退。"""
+    body = {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "thscode": "600519.SH",
+            "report": "2026-1",
+            "abilities": [
+                {
+                    "ability": "growth",
+                    "indicators": [{"index_id": "total_assets_growth_ratio", "value": "10.5"}],
+                }
+            ],
+        },
+    }
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_fundamentals("600519.SH", "2026-08-05")
+
+    assert isinstance(out, VendorRefuse)
+    assert out.allow_peers == ("cn_akshare",)
+    assert "未提供逐票可核验公告披露日" in out.reason
+
+
+def test_fuyao_fundamentals_future_report_date_returns_vendor_refuse():
+    """财务指标披露日晚于分析日：VendorRefuse 受限回退。"""
+    body = {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "thscode": "600519.SH",
+            "report": "2026-2",
+            "report_date": "2026-09-15",
+            "abilities": [
+                {
+                    "ability": "growth",
+                    "indicators": [{"index_id": "total_assets_growth_ratio", "value": "10.5"}],
+                }
+            ],
+        },
+    }
+    provider = CnFuyaoProvider()
+    with patch.object(provider, "_resolve_api_key", return_value="k"), \
+         patch(
+             "tradingagents.dataflows.providers.cn_fuyao_provider.requests.get",
+             return_value=_mock_json_response(body),
+         ):
+        out = provider.get_fundamentals("600519.SH", "2026-08-05")
+
+    assert isinstance(out, VendorRefuse)
+    assert out.allow_peers == ("cn_akshare",)
+    assert "晚于分析日" in out.reason
+
+
+def test_route_fundamentals_fuyao_without_pit_falls_back_to_akshare():
+    """路由联动：Fuyao 指标无逐票披露日触发 VendorRefuse(allow_peers=('cn_akshare',))，正确降级至 cn_akshare。"""
+    fuyao = _FakeProvider(
+        "cn_fuyao",
+        lambda *a, **k: VendorRefuse(
+            "未提供逐票可核验公告披露日，无法证明时点有效性（PIT）",
+            allow_peers=("cn_akshare",),
+        ),
+        method="get_fundamentals",
+    )
+    akshare = _FakeProvider(
+        "cn_akshare",
+        lambda *a, **k: "## Fundamentals（cn_akshare 公告日截断）",
+        method="get_fundamentals",
+    )
+    out = _route(
+        {"cn_fuyao": fuyao, "cn_akshare": akshare},
+        "cn_fuyao,cn_akshare",
+        "get_fundamentals",
+        "600519.SH",
+        "2026-08-05",
+    )
+    assert "cn_akshare" in out
+
+
+def test_route_income_statement_fuyao_no_verified_rows_falls_back_to_akshare():
+    """路由联动：Fuyao 三大报表无可核验披露日触发 VendorRefuse(allow_peers=('cn_akshare',))，正确降级至 cn_akshare。"""
+    fuyao = _FakeProvider(
+        "cn_fuyao",
+        lambda *a, **k: VendorRefuse(
+            "截至分析日无可核验披露日的有效报表行，拒绝日期盲回退",
+            allow_peers=("cn_akshare",),
+        ),
+        method="get_income_statement",
+    )
+    akshare = _FakeProvider(
+        "cn_akshare",
+        lambda *a, **k: "## 利润表（cn_akshare 公告日截断）",
+        method="get_income_statement",
+    )
+    out = _route(
+        {"cn_fuyao": fuyao, "cn_akshare": akshare},
+        "cn_fuyao,cn_akshare",
+        "get_income_statement",
+        "600519.SH",
+        "annual",
+        "2026-08-05",
+    )
+    assert "cn_akshare" in out

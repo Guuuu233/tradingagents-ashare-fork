@@ -49,7 +49,7 @@ from ..trade_calendar import (
     snapshot_historical_refusal,
 )
 from ..utils import format_hist_csv, safe_float, shrink_table, slice_hist_df
-from ..vendor_result import VendorEmpty, VendorFail
+from ..vendor_result import VendorEmpty, VendorFail, VendorRefuse
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +340,7 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             return pd.DataFrame()
 
         df = pd.DataFrame(annotated)
+        df.attrs["curr_date"] = curr_date
         metadata_columns = [
             "report_date",
             "period_end",
@@ -352,7 +353,21 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         ordered_columns = metadata_columns + [
             c for c in df.columns if c not in metadata_columns
         ]
-        return df.loc[:, ordered_columns]
+        result_df = df.loc[:, ordered_columns]
+        result_df.attrs["curr_date"] = curr_date
+        return result_df
+
+    @classmethod
+    def _is_row_verified_visible(
+        cls, row: pd.Series | dict[str, Any], curr_date: str | None = None
+    ) -> bool:
+        """Row is visible iff period_end <= curr_date and report_date_status == 'verified'."""
+        period_end = str(row.get("period_end") or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", period_end):
+            return False
+        if curr_date is not None and period_end > curr_date:
+            return False
+        return str(row.get("report_date_status") or "") == "verified"
 
     @classmethod
     def _derivation_frame(
@@ -362,11 +377,9 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         aliases = _FUYAO_DERIVATION_FIELD_ALIASES.get(statement_kind, {})
         rows: list[dict[str, Any]] = []
         for _, source in df.iterrows():
+            if not cls._is_row_verified_visible(source, curr_date):
+                continue
             period_end = str(source.get("period_end") or "")
-            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", period_end):
-                continue
-            if period_end > curr_date or source.get("report_date_status") == "future":
-                continue
             derived_row: dict[str, Any] = {"报告日": period_end}
             for raw_name, canonical_name in aliases.items():
                 if raw_name in source.index:
@@ -420,12 +433,22 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             return ""
 
         eligible_h1 = h1_rows[
-            (h1_rows["period_end"].astype(str) <= curr_date)
-            & (h1_rows["report_date_status"] != "future")
+            h1_rows.apply(lambda r: cls._is_row_verified_visible(r, curr_date), axis=1)
         ]
         if eligible_h1.empty:
-            h1_period = str(h1_rows.iloc[0]["period_end"]).replace("-", "")
+            first_h1 = h1_rows.iloc[0]
+            h1_period = str(first_h1.get("period_end", "")).replace("-", "")
             q1_period = h1_period[:4] + "0331" if len(h1_period) >= 4 else ""
+            status = str(first_h1.get("report_date_status") or "")
+            p_end = str(first_h1.get("period_end") or "")
+            if status == "future":
+                reason = "future_report_date"
+            elif status == "missing":
+                reason = "missing_report_date"
+            elif p_end > curr_date:
+                reason = "future_report_date"
+            else:
+                reason = "not_verified_report_date"
             result = Q2DerivationResult(
                 reported_period_label=(
                     f"{h1_period[:4]}Q2" if len(h1_period) >= 4 else "unknown"
@@ -436,21 +459,22 @@ class CnFuyaoProvider(BaseMarketDataProvider):
                 q1_period=q1_period,
                 values={},
                 missing=(),
-                reason="future_report_date",
+                reason=reason,
             )
         else:
             frame = cls._derivation_frame(df, statement_kind, curr_date)
             result = derive_q2_from_h1_q1(statement_kind, frame)
         return format_q2_derivation_block(result)
 
-    @staticmethod
-    def _sanitize_future_rows(df: pd.DataFrame) -> pd.DataFrame:
-        """Keep future-date evidence while removing its financial values."""
+    @classmethod
+    def _sanitize_future_rows(
+        cls, df: pd.DataFrame, curr_date: str | None = None
+    ) -> pd.DataFrame:
+        """Keep unverified/future/missing evidence while removing financial values."""
         if df.empty or "report_date_status" not in df.columns:
             return df
-        future_mask = df["report_date_status"].astype(str).eq("future")
-        if not future_mask.any():
-            return df
+        if curr_date is None:
+            curr_date = getattr(df, "attrs", {}).get("curr_date")
         metadata_columns = {
             "report_date",
             "period_end",
@@ -461,14 +485,31 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             "report_date_status",
         }
         sanitized = df.astype(object).copy()
-        for column in sanitized.columns:
-            if column not in metadata_columns:
-                sanitized.loc[future_mask, column] = "future（不可用）"
+        for idx, row in sanitized.iterrows():
+            if cls._is_row_verified_visible(row, curr_date):
+                continue
+            status = str(row.get("report_date_status") or "")
+            p_end = str(row.get("period_end") or "")
+            is_valid_p_end = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", p_end))
+            if status == "future":
+                placeholder = "future（不可用）"
+            elif status == "missing":
+                placeholder = "missing（不可用）"
+            elif curr_date and is_valid_p_end and p_end > curr_date:
+                placeholder = "future_period（不可用）"
+            else:
+                placeholder = "unavailable（不可用）"
+
+            for column in sanitized.columns:
+                if column not in metadata_columns:
+                    sanitized.at[idx, column] = placeholder
+
+        sanitized.attrs = dict(getattr(df, "attrs", {}))
         return sanitized
 
-    @staticmethod
+    @classmethod
     def _financial_semantic_notes(
-        df: pd.DataFrame, statement_kind: str, curr_date: str
+        cls, df: pd.DataFrame, statement_kind: str, curr_date: str
     ) -> str:
         kinds = []
         if "period_kind" in df.columns:
@@ -478,12 +519,11 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         kind_note = ", ".join(f"period_kind={kind}" for kind in kinds) or "period_kind=unknown"
         report_dates = []
         if "report_date" in df.columns:
-            for value, status in zip(
-                df["report_date"].astype(str),
-                df.get("report_date_status", pd.Series(dtype=str)).astype(str),
-            ):
-                if status == "verified" and re.fullmatch(r"20\d{2}-\d{2}-\d{2}", value):
-                    report_dates.append(value)
+            for _, r in df.iterrows():
+                if cls._is_row_verified_visible(r, curr_date):
+                    val = str(r.get("report_date", ""))
+                    if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", val):
+                        report_dates.append(val)
         latest_report_date = max(report_dates) if report_dates else None
         notes = [
             f"分析日 {curr_date}",
@@ -498,8 +538,11 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         ]
         if statement_kind in ("income", "cashflow") and "half_year_cumulative" in kinds:
             notes.append("0630/H1 为累计口径，禁止把 H1 累计当作 Q2 单季使用")
-        if "future" in set(df.get("report_date_status", pd.Series(dtype=str)).astype(str)):
+        statuses = set(df.get("report_date_status", pd.Series(dtype=str)).astype(str))
+        if "future" in statuses:
             notes.append("future 报告日行仅保留日期元数据，金额不可用于分析")
+        if "missing" in statuses:
+            notes.append("missing 披露日行仅保留日期元数据，金额不可用于分析")
         return "；".join(notes)
 
     @staticmethod
@@ -789,18 +832,41 @@ class CnFuyaoProvider(BaseMarketDataProvider):
 
         items = ((payload.get("data") or {}).get("item")) or []
         if not items:
-            return (
-                f"## {title_cn} ({ticker})\n\n"
-                f"未获取到报表数据（同花顺 fuyao {path}，截至 {curr_date}）。"
+            return VendorRefuse(
+                f"[cn_fuyao] {title_cn} ({ticker}) 截至 {curr_date} 无报表行数据，"
+                "拒绝日期盲回退",
+                allow_peers=("cn_akshare",),
             )
         records = [r for r in items if isinstance(r, dict)]
+        if not records:
+            return VendorRefuse(
+                f"[cn_fuyao] {title_cn} ({ticker}) 截至 {curr_date} 接口返回的报表行不可解析，"
+                "拒绝日期盲回退",
+                allow_peers=("cn_akshare",),
+            )
         df = self._annotate_financial_rows(records, kind, curr_date)
         if df.empty:
-            return (
-                f"## {title_cn} ({ticker}) — 同花顺 fuyao {path}\n\n"
-                f"【数据获取失败】接口返回的报表行不可解析（分析日 {curr_date}）。"
+            return VendorRefuse(
+                f"[cn_fuyao] {title_cn} ({ticker}) 截至 {curr_date} 报表行解析后为空，"
+                "拒绝日期盲回退",
+                allow_peers=("cn_akshare",),
             )
-        visible_df = self._sanitize_future_rows(df)
+
+        verified_mask = df.apply(
+            lambda r: self._is_row_verified_visible(r, curr_date), axis=1
+        )
+        has_verified = bool(verified_mask.any())
+        future_mask = df["report_date_status"].astype(str).eq("future")
+        has_future = bool(future_mask.any())
+
+        if not has_verified and not has_future:
+            return VendorRefuse(
+                f"[cn_fuyao] {title_cn} ({ticker}) 截至 {curr_date} 无可核验披露日的有效报表行，"
+                "拒绝日期盲回退",
+                allow_peers=("cn_akshare",),
+            )
+
+        visible_df = self._sanitize_future_rows(df, curr_date)
         table = self._shrink_table(
             visible_df, max_rows=12, max_cols=18, table_kind="generic"
         )
@@ -871,6 +937,25 @@ class CnFuyaoProvider(BaseMarketDataProvider):
             return self._map_api_error(exc, fundamentals_3001_fail=True)
 
         data = payload.get("data") or {}
+        ann_date = (
+            self._ms_to_date_str(data.get("report_date_ms"))
+            or self._ms_to_date_str(data.get("ann_date_ms"))
+            or self._date_like_to_iso(data.get("report_date"))
+            or self._date_like_to_iso(data.get("ann_date"))
+        )
+        if ann_date is None:
+            return VendorRefuse(
+                f"[cn_fuyao] {ticker} 财务指标接口（report={report}）未提供逐票可核验公告披露日，"
+                "无法证明时点有效性（PIT），按受限规则回退至公告日感知数据源",
+                allow_peers=("cn_akshare",),
+            )
+        if ann_date > curr_date:
+            return VendorRefuse(
+                f"[cn_fuyao] {ticker} 财务指标实际披露日 {ann_date} 晚于分析日 {curr_date}，"
+                "无法用于历史分析，按受限规则回退至公告日感知数据源",
+                allow_peers=("cn_akshare",),
+            )
+
         abilities = data.get("abilities") or []
         lines: list[str] = []
         for block in abilities:
@@ -893,7 +978,10 @@ class CnFuyaoProvider(BaseMarketDataProvider):
                 f"[cn_fuyao] {ticker} 在 {report} 报告期暂无财务指标数据"
                 "（code=0 但 abilities 为空）。"
             )
-        header = f"## Fundamentals for {ticker}（同花顺 fuyao 财务指标，report={report}）"
+        header = (
+            f"## Fundamentals for {ticker}（同花顺 fuyao 财务指标，"
+            f"实际报告日 {ann_date}，report={report}）"
+        )
         return header + "\n\n" + "\n".join(lines)
 
     # ── 涨跌停池（含连板分布）/ 龙虎榜 ─────────────────────────────────
