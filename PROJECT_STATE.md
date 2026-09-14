@@ -144,7 +144,7 @@ P1-F 真实上游的隔离只读探测已于 2026-09-14 执行：因发布环境
 | P1 | 前端产品验收 | 当前发布副本的源码、测试、构建和 live bundle HTTP smoke 已过 | 后续版本发布时重建并复验 bundle；当前证据不覆盖浏览器交互、登录或真实分析业务。 |
 | P1 | `/limit-up-ladder` 能力 | 代码已合入并受控发布；尚无真实业务样本 | 候选 `6612aea...` 已通过 DAV-908 **代码审核员**同 SHA 复审、RT-FULL，并随 `6cc4e15...` 发布；后续真实上游调用仍须按设计的日期/来源/失败语义取证，不改 `get_zt_pool` 或交易信号。 |
 | P2 | standalone custom prompt 历史 | 报告 snapshot 已自包含；独立提示词版本仍不保留 | 如需补历史功能，另立卡；不得删除或重写既有报告 snapshot。 |
-| P2 | LLM client 模型校验策略与运行接线 | 策略层与 DAV-922 运行时接线已合入目标主线；`get_llm()`/启动硬门禁仍未启用，线上尚未部署 DAV-922，也没有真实 warmup 证据 | 另走独立发布门；发布后只做受控只读核验。不得把静态白名单变成硬门禁，也不得重复派 DAV-916/DAV-918/DAV-921/DAV-922。 |
+| P2 | LLM client 模型校验策略与运行接线 | 策略层与 DAV-922 运行时接线已合入目标主线；同口径 RT-FULL 相对线上基线失败集合差集为 0，`get_llm()`/启动硬门禁仍未启用，线上尚未部署 DAV-922，也没有真实 warmup 证据 | 按 D-013 另走独立发布门；发布后只做受控只读核验。不得把静态白名单变成硬门禁，也不得重复派 DAV-916/DAV-918/DAV-921/DAV-922。 |
 | P2 | 生产 Compose 测试/脚本源码挂载 | DAV-910 已合入并进入当前发布代码树；本次服务不是 Compose 容器 | 若实际使用 Compose，另做容器级 config/挂载核验；不把 uvicorn 发布当作 Compose 运行证据。 |
 | P2 | worktree/历史工件清理 | 未授权 | 先只读盘点，再逐项取得清理授权；不得广泛 prune、reset 或删除证据。 |
 
@@ -192,4 +192,5 @@ blob 及 1 个临时 garbage object。没有执行清理；详见
 - [P2-55 LLM client 遗留 TODO 复核](work/2026-09-14-p2-55-llm-client-audit.md)
 - [P2-55 LLM client 策略层最终合入证据](work/2026-09-14-p2-55-llm-client-final.md)
 - [P2-55b DAV-922 runtime 接线合入证据](work/2026-09-14-p2-55b-runtime-wiring.md)
+- [DAV-922 全量回归对照证据](work/2026-09-14-rt-full-p2-55b.md)
 - 当前决定见 `DECISIONS.md`；已知代码边界见 `docs/KNOWN_ISSUES.md`；实现细节以当前代码和卡内白名单为准。
