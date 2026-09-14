@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from api.database import UserLLMConfigDB, ProviderDB, ModelProfileDB, RoleBindingDB
 from api.services.auth_service import decrypt_secret, encrypt_secret
+from tradingagents.llm_clients.validators import resolve_role_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -172,9 +173,14 @@ def resolve_role_model_config(
     # Helper to resolve Profile & Provider DB objects
     def _build_resolution(profile: ModelProfileDB, provider: ProviderDB, via: str) -> Dict[str, Any]:
         api_key = decrypt_secret(provider.api_key_encrypted) if provider and provider.api_key_encrypted else runtime_config.get("api_key")
-        base_url = provider.base_url if provider and provider.base_url else runtime_config.get("backend_url")
         provider_type = provider.provider_type if provider and provider.provider_type else (runtime_config.get("llm_provider") or "openai")
-        
+        base_url = resolve_role_base_url(
+            role_provider=provider_type,
+            role_base_url=provider.base_url if provider else None,
+            global_provider=runtime_config.get("llm_provider") or "openai",
+            global_base_url=runtime_config.get("backend_url"),
+        )
+
         is_fallback = (via != "role_binding")
 
         return {

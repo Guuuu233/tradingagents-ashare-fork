@@ -395,13 +395,51 @@ class TestRoleLevelConfigurations:
             == "https://my-openai-proxy.internal/v1"
         )
 
-        # 4. Accidental heterogeneous leak of global base_url is prevented (returns None)
+        # 4. Explicit role address is preserved EVEN IF it matches global_base_url (同地址显式保留)
         assert (
             resolve_role_base_url(
                 role_provider="anthropic",
-                role_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                role_base_url="https://shared-compatible.example/v1",
                 global_provider="openai",
-                global_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                global_base_url="https://shared-compatible.example/v1",
+            )
+            == "https://shared-compatible.example/v1"
+        )
+        assert (
+            resolve_role_base_url(
+                role_provider="deepseek",
+                role_base_url="  https://shared-compatible.example/v1  ",
+                global_provider="openai",
+                global_base_url="https://shared-compatible.example/v1",
+            )
+            == "https://shared-compatible.example/v1"
+        )
+
+        # 5. Pure whitespace strings are treated as unconfigured (纯空白未配置)
+        assert (
+            resolve_role_base_url(
+                role_provider="anthropic",
+                role_base_url="   \t\n  ",
+                global_provider="openai",
+                global_base_url="https://shared-compatible.example/v1",
+            )
+            is None
+        )
+        assert (
+            resolve_role_base_url(
+                role_provider="openai",
+                role_base_url="   \t\n  ",
+                global_provider="openai",
+                global_base_url="https://shared-compatible.example/v1",
+            )
+            == "https://shared-compatible.example/v1"
+        )
+        assert (
+            resolve_role_base_url(
+                role_provider="openai",
+                role_base_url="   ",
+                global_provider="openai",
+                global_base_url="   ",
             )
             is None
         )

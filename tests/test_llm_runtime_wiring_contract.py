@@ -465,6 +465,234 @@ class TestRoleProviderAndBaseUrlInheritance:
         openai_role_calls = [c for c in captured_calls if c["provider"] == "openai"]
         assert any(c["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1" for c in openai_role_calls)
 
+    def test_role_explicit_same_address_preserved_in_warmup_and_graph(self):
+        """Assertion category 1: 同地址显式保留.
+        When a heterogeneous role explicitly configures a base_url that is identical
+        to global_base_url (e.g. multi-provider enterprise proxy), it must be preserved!
+        """
+        shared_url = "https://shared-compatible.example/v1"
+
+        # 1. Warmup check
+        captured_client_calls = []
+
+        def _recording_create_client(provider, model, base_url=None, **kwargs):
+            captured_client_calls.append({"provider": provider, "model": model, "base_url": base_url})
+            client = MagicMock()
+            client.get_llm.return_value.invoke.return_value = "OK"
+            return client
+
+        mock_resolved_roles = {
+            "anthropic_shared": {
+                "provider_type": "anthropic",
+                "model_name": "claude-3-5-sonnet-20241022",
+                "base_url": shared_url,  # Explicitly matches global
+            },
+        }
+
+        with patch("tradingagents.llm_clients.create_llm_client", side_effect=_recording_create_client), \
+             patch("api.database.get_db_ctx") as mock_db_ctx, \
+             patch("api.services.role_routing_service.resolve_all_roles", return_value=mock_resolved_roles):
+            mock_db_ctx.return_value.__enter__.return_value = MagicMock()
+
+            cfg = {
+                "llm_provider": "openai",
+                "backend_url": shared_url,
+                "quick_think_llm": "gpt-4o-mini",
+                "api_key": "sk-test",
+            }
+            results = _invoke_runtime_warmup(cfg, "ping", "user-1")
+            assert any(r["model"] == "claude-3-5-sonnet-20241022" for r in results)
+
+            anthropic_call = next(c for c in captured_client_calls if c["provider"] == "anthropic")
+            assert anthropic_call["base_url"] == shared_url  # Preserved!
+
+    def test_role_pure_whitespace_treated_as_unconfigured(self):
+        """Assertion category 2: 纯空白未配置.
+        When role base_url is pure whitespace, it must be treated as unconfigured:
+        - Heterogeneous provider does NOT inherit (returns None)
+        - Homogeneous provider inherits global base_url
+        """
+        captured_calls = []
+
+        def _recording_create_client(provider, model, base_url=None, **kwargs):
+            captured_calls.append({"provider": provider, "model": model, "base_url": base_url})
+            client = MagicMock()
+            client.get_llm.return_value.invoke.return_value = "OK"
+            return client
+
+        mock_resolved_roles = {
+            "anthropic_whitespace": {
+                "provider_type": "anthropic",
+                "model_name": "claude-3-5-sonnet-20241022",
+                "base_url": "   \t\n  ",  # Pure whitespace
+            },
+            "openai_whitespace": {
+                "provider_type": "openai",
+                "model_name": "qwen-turbo",
+                "base_url": "   ",  # Pure whitespace
+            },
+        }
+
+        with patch("tradingagents.llm_clients.create_llm_client", side_effect=_recording_create_client), \
+             patch("api.database.get_db_ctx") as mock_db_ctx, \
+             patch("api.services.role_routing_service.resolve_all_roles", return_value=mock_resolved_roles):
+            mock_db_ctx.return_value.__enter__.return_value = MagicMock()
+
+            cfg = {
+                "llm_provider": "openai",
+                "backend_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "quick_think_llm": "gpt-4o-mini",
+                "api_key": "sk-test",
+            }
+            _invoke_runtime_warmup(cfg, "ping", "user-1")
+
+            anthropic_call = next(c for c in captured_calls if c["provider"] == "anthropic")
+            assert anthropic_call["base_url"] is None  # Heterogeneous whitespace -> None
+
+            openai_call = next(c for c in captured_calls if c["model"] == "qwen-turbo")
+            assert openai_call["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"  # Homogeneous whitespace -> inherits global
+
+    def test_role_routing_service_resolution_heterogeneous_implicit_isolation(self):
+        """Assertion category 3: 异构隐式隔离.
+        Verify role_routing_service._build_resolution directly:
+        - When ProviderDB has provider_type='anthropic' and base_url=None, resolution.base_url is None
+        - When ProviderDB has provider_type='anthropic' and base_url='https://shared.example/v1', preserved
+        - When ProviderDB has provider_type='openai' and base_url=None, resolution.base_url inherits global
+        """
+        from uuid import uuid4
+        from api.database import ModelProfileDB, ProviderDB
+        from api.services.role_routing_service import resolve_role_model_config
+
+        runtime_config = {
+            "llm_provider": "openai",
+            "backend_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "quick_think_llm": "gpt-4o-mini",
+            "deep_think_llm": "gpt-4o",
+            "api_key": "sk-global-test",
+        }
+
+        # Mock DB session and queries
+        mock_db = MagicMock()
+
+        # 1. Heterogeneous provider without base_url -> None
+        p_anthropic = ProviderDB(
+            id="p-ant-1",
+            user_id="user-test",
+            provider_type="anthropic",
+            base_url=None,  # Implicit unconfigured
+            api_key_encrypted=None,
+            display_name="Anthropic Provider",
+            enabled=True,
+        )
+        prof_ant = ModelProfileDB(
+            id="prof-ant-1",
+            user_id="user-test",
+            provider_id="p-ant-1",
+            model_name="claude-3-5-sonnet-20241022",
+            display_name="Claude Sonnet",
+            tier="quick",
+            is_default=True,
+        )
+
+        mock_db.query.return_value.filter.return_value.first.return_value = prof_ant
+        mock_db.query.return_value.filter.return_value.all.return_value = [p_anthropic]
+
+        with patch("api.services.role_routing_service.migrate_legacy_user_llm_config"):
+            # Set up profiles_by_id and providers_by_id
+            def _fake_query(model_cls):
+                q = MagicMock()
+                if model_cls == ModelProfileDB:
+                    q.filter.return_value.all.return_value = [prof_ant]
+                    q.filter.return_value.first.return_value = prof_ant
+                elif model_cls == ProviderDB:
+                    q.filter.return_value.all.return_value = [p_anthropic]
+                    q.filter.return_value.first.return_value = p_anthropic
+                else:
+                    q.filter.return_value.first.return_value = None
+                return q
+
+            mock_db.query = MagicMock(side_effect=_fake_query)
+
+            res = resolve_role_model_config(mock_db, "user-test", "market", runtime_config)
+            assert res["provider_type"] == "anthropic"
+            # Crucial: heterogeneous provider without base_url MUST NOT inherit OpenAI backend_url
+            assert res["base_url"] is None
+
+            # 2. Heterogeneous provider with explicit base_url matching global -> Preserved
+            p_anthropic_explicit = ProviderDB(
+                id="p-ant-2",
+                user_id="user-test",
+                provider_type="anthropic",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",  # Explicitly matches global
+                api_key_encrypted=None,
+                display_name="Anthropic Provider Shared",
+                enabled=True,
+            )
+            prof_ant_explicit = ModelProfileDB(
+                id="prof-ant-2",
+                user_id="user-test",
+                provider_id="p-ant-2",
+                model_name="claude-3-5-sonnet-20241022",
+                display_name="Claude Sonnet Explicit",
+                tier="quick",
+                is_default=True,
+            )
+
+            def _fake_query_explicit(model_cls):
+                q = MagicMock()
+                if model_cls == ModelProfileDB:
+                    q.filter.return_value.all.return_value = [prof_ant_explicit]
+                    q.filter.return_value.first.return_value = prof_ant_explicit
+                elif model_cls == ProviderDB:
+                    q.filter.return_value.all.return_value = [p_anthropic_explicit]
+                    q.filter.return_value.first.return_value = p_anthropic_explicit
+                else:
+                    q.filter.return_value.first.return_value = None
+                return q
+
+            mock_db.query = MagicMock(side_effect=_fake_query_explicit)
+            res_explicit = resolve_role_model_config(mock_db, "user-test", "market", runtime_config)
+            assert res_explicit["provider_type"] == "anthropic"
+            assert res_explicit["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+            # 3. Homogeneous provider without base_url -> Inherits global backend_url
+            p_openai = ProviderDB(
+                id="p-oai-1",
+                user_id="user-test",
+                provider_type="openai",
+                base_url=None,  # Implicit
+                api_key_encrypted=None,
+                display_name="OpenAI Provider",
+                enabled=True,
+            )
+            prof_oai = ModelProfileDB(
+                id="prof-oai-1",
+                user_id="user-test",
+                provider_id="p-oai-1",
+                model_name="qwen-plus",
+                display_name="Qwen Plus",
+                tier="quick",
+                is_default=True,
+            )
+
+            def _fake_query_openai(model_cls):
+                q = MagicMock()
+                if model_cls == ModelProfileDB:
+                    q.filter.return_value.all.return_value = [prof_oai]
+                    q.filter.return_value.first.return_value = prof_oai
+                elif model_cls == ProviderDB:
+                    q.filter.return_value.all.return_value = [p_openai]
+                    q.filter.return_value.first.return_value = p_openai
+                else:
+                    q.filter.return_value.first.return_value = None
+                return q
+
+            mock_db.query = MagicMock(side_effect=_fake_query_openai)
+            res_oai = resolve_role_model_config(mock_db, "user-test", "market", runtime_config)
+            assert res_oai["provider_type"] == "openai"
+            assert res_oai["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
 
 # ---------------------------------------------------------------------------
 # 4. Host Proxy Environment Contamination Tests

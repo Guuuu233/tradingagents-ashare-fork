@@ -334,25 +334,29 @@ def resolve_role_base_url(
     """Resolve base_url for an agent role enforcing provider isolation.
 
     Rules:
-    1. If role has an explicit base_url:
-       - Preserved as-is, UNLESS it is an accidental leak of a heterogeneous global_base_url
-         (i.e. role_provider != global_provider and role_base_url == global_base_url).
-    2. If role has no explicit base_url (None or empty):
-       - Homogeneous provider (role_provider == global_provider): inherits global_base_url.
+    1. Explicit role address:
+       - Any non-empty (after strip) role_base_url is preserved as-is,
+         including when it happens to match global_base_url (e.g. shared gateway).
+    2. Unconfigured role address (None, empty string, or whitespace-only):
+       - Treated as unconfigured.
+       - Homogeneous provider (role_provider == global_provider): inherits global_base_url
+         (stripped non-empty string, or None if global_base_url is empty/whitespace).
        - Heterogeneous provider (role_provider != global_provider): does NOT inherit (returns None).
     """
+    cleaned_role_url = str(role_base_url).strip() if role_base_url is not None else ""
+    if cleaned_role_url:
+        return cleaned_role_url
+
+    # Role has no explicit base_url (None or pure whitespace)
     r_prov = (role_provider or "").strip().lower()
     g_prov = (global_provider or "").strip().lower()
     is_same_provider = bool(r_prov and g_prov and r_prov == g_prov)
 
-    if not role_base_url:
-        return global_base_url if is_same_provider else None
+    if is_same_provider and global_base_url is not None:
+        cleaned_global = str(global_base_url).strip()
+        return cleaned_global if cleaned_global else None
 
-    cleaned_role_url = str(role_base_url).strip()
-    if not is_same_provider and global_base_url and cleaned_role_url == str(global_base_url).strip():
-        return None
-
-    return cleaned_role_url
+    return None
 
 
 def evaluate_role_configurations(
