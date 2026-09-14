@@ -89,9 +89,23 @@ class TestDefaultAndVendorQfqPath:
         ):
             price = bt._get_price_on("600519.SH", "2024-01-05")
 
-        assert price == 11.0
+        # 契约 1：请求 2024-01-05 时返回当天价格 10.6，不再使用 2024-01-09 的未来价格 11.0
+        assert price == 10.6
         mock_route.assert_called_once()
         mock_prov.get_stock_data.assert_not_called()
+
+        # 契约 3 直接回归断言：CSV 含有请求日之后的更高价格时，_get_price_on 仍返回请求日的价格
+        csv_higher_future = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2024-01-02,10.0,10.5,9.8,10.0,1000\n"
+            "2024-01-05,10.3,10.8,10.1,10.6,1300\n"
+            "2024-01-08,99.0,99.0,99.0,99.0,1000\n"
+        )
+        with (
+            patch("tradingagents.dataflows.interface.route_to_vendor", return_value=csv_higher_future),
+            patch.dict(_registry._providers, {"cn_akshare": mock_prov}),
+        ):
+            assert bt._get_price_on("600519.SH", "2024-01-05") == 10.6
 
     def test_get_price_after_default_routes_to_vendor_qfq(self):
         """_get_price_after 缺省走 route_to_vendor，不调用 cn_akshare raw。"""
@@ -115,7 +129,8 @@ class TestDefaultAndVendorQfqPath:
         ):
             price = bt._get_price_on("600519.SH", "2024-01-05", price_basis=PRICE_BASIS_VENDOR_QFQ)
 
-        assert price == 11.0
+        # 契约 1：显式 vendor_qfq 请求 2024-01-05 返回当天价格 10.6，不使用未来价格 11.0
+        assert price == 10.6
         mock_route.assert_called_once()
         mock_prov.get_stock_data.assert_not_called()
 
@@ -167,8 +182,11 @@ class TestDefaultAndVendorQfqPath:
         record = job["records"][0]
         assert record["price_basis"] == "vendor_qfq"
         assert record["price_basis"] != "raw"
-        assert record["entry_price"] == 11.0
+        # 契约 1 & 2：回测入场日 2024-01-02 的 vendor_qfq 入场价严格为当天价格 10.0（不使用未来行 11.0）
+        assert record["entry_price"] == 10.0
         assert record["exit_price"] == 10.4
+        # vendor_qfq return: (10.4 - 10.0) / 10.0 * 100 = 4.0%
+        assert record["return_pct"] == 4.0
         assert record["outcome_status"] == "ok"
         assert mock_route.call_count == 2
         mock_prov.get_stock_data.assert_not_called()
@@ -188,12 +206,29 @@ class TestExplicitRawPath:
         ):
             price = bt._get_price_on("600519.SH", "2024-01-05", price_basis=PRICE_BASIS_RAW)
 
-        assert price == 110.0
+        # 契约 1：显式 raw 请求 2024-01-05 返回当天 raw 价格 106.0，不使用未来行价格 110.0
+        assert price == 106.0
         mock_route.assert_not_called()
         mock_prov.get_stock_data.assert_called_once()
         kwargs = mock_prov.get_stock_data.call_args[1]
         assert kwargs.get("price_basis") == PRICE_BASIS_RAW
         assert kwargs.get("symbol") == "600519.SH"
+
+        # 契约 3 直接回归断言：raw CSV 含有请求日之后的更高价格时，_get_price_on 仍返回请求日价格
+        raw_csv_higher_future = (
+            "# Stock data for 600519.SH\n"
+            "# price_basis: raw\n"
+            "Date,Open,High,Low,Close,Volume,Dividends,Stock Splits\n"
+            "2024-01-02,100.0,105.0,98.0,100.0,1000,0.0,0.0\n"
+            "2024-01-05,103.0,108.0,101.0,106.0,1300,0.0,0.0\n"
+            "2024-01-08,999.0,999.0,999.0,999.0,1000,0.0,0.0\n"
+        )
+        mock_prov_spike = _make_mock_akshare_provider(raw_csv_higher_future)
+        with (
+            patch("tradingagents.dataflows.interface.route_to_vendor") as mock_route,
+            patch.dict(_registry._providers, {"cn_akshare": mock_prov_spike}),
+        ):
+            assert bt._get_price_on("600519.SH", "2024-01-05", price_basis=PRICE_BASIS_RAW) == 106.0
 
     def test_get_price_after_explicit_raw_routes_to_provider(self):
         """_get_price_after 显式 raw 调用 cn_akshare 并带 price_basis='raw'。"""
@@ -246,10 +281,11 @@ class TestExplicitRawPath:
         assert job is not None
         record = job["records"][0]
         assert record["price_basis"] == "raw"
-        assert record["entry_price"] == 110.0
+        # 契约 1 & 2：回测入场日 2024-01-02 的 raw 入场价严格为当天价格 100.0（不使用未来行 110.0）
+        assert record["entry_price"] == 100.0
         assert record["exit_price"] == 104.0
-        # raw return: (104.0 - 110.0) / 110.0 * 100 = -5.45%
-        assert record["return_pct"] == -5.45
+        # raw return: (104.0 - 100.0) / 100.0 * 100 = 4.0%
+        assert record["return_pct"] == 4.0
         assert record["outcome_status"] == "ok"
         mock_route.assert_not_called()
         assert mock_prov.get_stock_data.call_count == 2
@@ -437,7 +473,8 @@ class TestCallingShapesAndSignatures:
             price_on = bt._get_price_on("600519.SH", "2024-01-05", "raw")
             price_after = bt._get_price_after("600519.SH", "2024-01-01", 3, "raw")
 
-        assert price_on == 110.0
+        # 契约 1 & 5：位置参数传递 raw 时，请求 2024-01-05 返回当天 raw 价格 106.0，不使用未来行 110.0
+        assert price_on == 106.0
         assert price_after == 104.0
         mock_route.assert_not_called()
         assert mock_prov.get_stock_data.call_count == 2
