@@ -392,6 +392,136 @@ def classify_financial_period_kind(
     )
 
 
+def _is_empty_or_na(val: object) -> bool:
+    """Return True if val is None, NaN, or an empty/null string token."""
+    if val is None:
+        return True
+    if isinstance(val, float) and pd.isna(val):
+        return True
+    if pd.isna(val):
+        return True
+    if isinstance(val, str) and val.strip().lower() in ("", "nan", "none", "nat", "null", "--"):
+        return True
+    return False
+
+
+def _announce_dates_consistent(v0: object, v1: object) -> bool:
+    """Check announcement date semantic consistency between duplicate rows."""
+    empty0 = _is_empty_or_na(v0)
+    empty1 = _is_empty_or_na(v1)
+    if empty0 and empty1:
+        return True
+    if empty0 != empty1:
+        return False
+    d0 = parse_yyyymmdd(v0)
+    d1 = parse_yyyymmdd(v1)
+    if d0 is not None and d1 is not None:
+        return d0 == d1
+    if (d0 is None) != (d1 is None):
+        return False
+    return str(v0).strip() == str(v1).strip()
+
+
+def _normalize_scope_val(val: object) -> Optional[str]:
+    """Normalize scope metadata string, treating empty/null tokens as None."""
+    if _is_empty_or_na(val):
+        return None
+    return str(val).strip()
+
+
+def _scope_values_consistent(v0: object, v1: object) -> bool:
+    """Check scope metadata consistency between duplicate rows."""
+    return _normalize_scope_val(v0) == _normalize_scope_val(v1)
+
+
+def _derivation_values_consistent(v0: object, v1: object) -> bool:
+    """Check derivation key value consistency between duplicate rows."""
+    empty0 = _is_empty_or_na(v0)
+    empty1 = _is_empty_or_na(v1)
+    if empty0 and empty1:
+        return True
+    if empty0 != empty1:
+        return False
+    num0 = pd.to_numeric(v0, errors="coerce")
+    num1 = pd.to_numeric(v1, errors="coerce")
+    num0_valid = not pd.isna(num0)
+    num1_valid = not pd.isna(num1)
+    if num0_valid and num1_valid:
+        try:
+            f0 = float(num0)
+            f1 = float(num1)
+            return abs(f0 - f1) < 1e-9
+        except (ValueError, TypeError, OverflowError):
+            return False
+    if num0_valid != num1_valid:
+        return False
+    return str(v0).strip() == str(v1).strip()
+
+
+def _dedupe_period_rows(
+    rows: list[pd.Series],
+    statement_kind: str,
+    df_columns: Sequence[str],
+) -> tuple[Optional[pd.Series], Optional[str]]:
+    """Deduplicate rows for a single report period.
+
+    Returns:
+        (resolved_row, conflict_reason)
+        - If conflict detected: (None, "duplicate_conflict")
+        - If no conflict: (folded_row, None)
+    """
+    if not rows:
+        return None, None
+    if len(rows) == 1:
+        return rows[0], None
+
+    if statement_kind == "income":
+        whitelist = INCOME_DERIVATION_WHITELIST
+    else:
+        whitelist = CASHFLOW_DERIVATION_WHITELIST
+
+    derivation_cols = [
+        c
+        for c in whitelist
+        if c in df_columns
+        and not any(k in c for k in PER_SHARE_COL_KEYWORDS)
+        and not any(p in c for p in PERCENTAGE_COL_KEYWORDS)
+        and not (
+            statement_kind == "cashflow"
+            and any(s in c for s in CASHFLOW_STOCK_COL_KEYWORDS)
+        )
+    ]
+    scope_cols = [c for c in df_columns if _is_scope_comparison_column(c)]
+    ann_cols = [
+        c
+        for c in df_columns
+        if c in ANNOUNCE_COL_CANDIDATES
+        or c in (
+            "公告日期",
+            "实际公告日",
+            "f_ann_date",
+            "ann_date",
+            "actual_ann_date",
+            "NOTICE_DATE",
+            "ann_dt",
+        )
+    ]
+
+    base = rows[0]
+    for r in rows[1:]:
+        for col in ann_cols:
+            if not _announce_dates_consistent(base.get(col), r.get(col)):
+                return None, "duplicate_conflict"
+        for col in scope_cols:
+            if not _scope_values_consistent(base.get(col), r.get(col)):
+                return None, "duplicate_conflict"
+        for col in derivation_cols:
+            if not _derivation_values_consistent(base.get(col), r.get(col)):
+                return None, "duplicate_conflict"
+
+    return base, None
+
+
 def derive_q2_from_h1_q1(
     statement_kind: str,
     df: pd.DataFrame,
@@ -405,6 +535,7 @@ def derive_q2_from_h1_q1(
     - df is empty or missing report-period column ("no_eligible_fields")
     - latest report period is not YYYY0630 ("not_h1_latest")
     - same-year Q1 (YYYY0331) is not in the filtered df ("missing_q1")
+    - conflicting duplicate rows in same report period ("duplicate_conflict")
     - comparability / scope columns differ ("scope_mismatch")
     - all candidate fields are percentage-only ("percent_only")
     - no computable whitelist fields found ("no_eligible_fields")
@@ -524,8 +655,31 @@ def derive_q2_from_h1_q1(
             reason="missing_q1",
         )
 
-    h1_row = h1_rows[0]
-    q1_row = q1_rows[0]
+    h1_row, h1_conflict = _dedupe_period_rows(h1_rows, statement_kind, df.columns)
+    if h1_conflict:
+        return Q2DerivationResult(
+            reported_period_label=reported_period_label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period=h1_period,
+            q1_period=q1_period,
+            values={},
+            missing=(),
+            reason=h1_conflict,
+        )
+
+    q1_row, q1_conflict = _dedupe_period_rows(q1_rows, statement_kind, df.columns)
+    if q1_conflict:
+        return Q2DerivationResult(
+            reported_period_label=reported_period_label,
+            period_kind="unknown",
+            derivation_formula="not_derived",
+            h1_period=h1_period,
+            q1_period=q1_period,
+            values={},
+            missing=(),
+            reason=q1_conflict,
+        )
 
     # Scope / comparability column check
     scope_cols = [
@@ -697,6 +851,7 @@ def format_q2_derivation_block(
             "balance_is_stock": "资产负债表为期末时点存量指标，不可做单季流量派生",
             "missing_q1": "同年度一季度（0331）财报未在当前分析日之前公开",
             "q1_not_public": "同年度一季度（0331）财报未在当前分析日之前公开",
+            "duplicate_conflict": "同一报告期存在冲突的重复行",
             "scope_mismatch": "半年度与一季度合并范围/币种/单位/会计口径不一致",
             "no_eligible_fields": "无可用的同口径可减金额字段",
             "percent_only": "候选字段均为百分比/比率字段，不可做差值派生",

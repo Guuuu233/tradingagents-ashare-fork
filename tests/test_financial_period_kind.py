@@ -6,6 +6,7 @@ D-009 / audit plan §P0-3a contract tests.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from datetime import date
 from pathlib import Path
 
@@ -566,3 +567,251 @@ def test_derive_q2_operating_unit_string_column_does_not_block_income_derivation
     assert res.period_kind == "single_quarter_derived"
     assert res.reason == "ok"
     assert res.values["净利润"] == 150.0
+
+
+# ── DAV-939: Same-period duplicate row rejection and deterministic folding ─
+
+
+def test_derive_q2_identical_duplicates_fold_deterministically_order_invariant():
+    """Identical duplicate rows fold deterministically with order-invariant result."""
+    for h1_first in (True, False):
+        rows = [
+            {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0, "营业收入": 100.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0, "营业收入": 250.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0, "营业收入": 250.0},
+        ]
+        if not h1_first:
+            rows[1], rows[2] = rows[2], rows[1]
+        res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+        assert res.period_kind == "single_quarter_derived"
+        assert res.derivation_formula == "H1-Q1"
+        assert res.reason == "ok"
+        assert res.values["净利润"] == 30.0
+        assert res.values["营业收入"] == 150.0
+
+
+def test_derive_q2_identical_duplicates_q1_and_h1_order_invariant():
+    """Identical duplicates in both H1 and Q1 fold deterministically regardless of row order."""
+    for h1_first in (True, False):
+        for q1_first in (True, False):
+            rows = [
+                {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0},
+                {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0},
+                {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0},
+                {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0},
+            ]
+            if not q1_first:
+                rows[0], rows[1] = rows[1], rows[0]
+            if not h1_first:
+                rows[2], rows[3] = rows[3], rows[2]
+            res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+            assert res.period_kind == "single_quarter_derived"
+            assert res.values["净利润"] == 30.0
+
+
+def test_derive_q2_announce_date_semantic_equality_folds():
+    """Announce date differing only in format (e.g. 2025-08-20 vs 20250820) folds cleanly."""
+    rows = [
+        {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0},
+        {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0},
+        {"报告日": "2025-06-30", "公告日期": "20250820", "净利润": 40.0},
+    ]
+    res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+    assert res.period_kind == "single_quarter_derived"
+    assert res.reason == "ok"
+    assert res.values["净利润"] == 30.0
+
+
+def test_derive_q2_conflicting_h1_values_fail_closed_order_invariant():
+    """DAV-939 reproduction: conflicting H1 values fail closed and reject both candidates."""
+    for h1_first in (True, False):
+        rows = [
+            {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0 if h1_first else 90.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-25", "净利润": 90.0 if h1_first else 40.0},
+        ]
+        res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+        assert res.period_kind == "unknown"
+        assert res.derivation_formula == "not_derived"
+        assert res.reason == "duplicate_conflict"
+        assert len(res.values) == 0
+        assert "净利润" not in res.values
+
+
+def test_derive_q2_conflicting_q1_values_fail_closed_order_invariant():
+    """Conflicting Q1 duplicate values fail closed and reject both candidate results."""
+    for q1_first in (True, False):
+        rows = [
+            {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0 if q1_first else 25.0},
+            {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 25.0 if q1_first else 10.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 50.0},
+        ]
+        res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+        assert res.period_kind == "unknown"
+        assert res.derivation_formula == "not_derived"
+        assert res.reason == "duplicate_conflict"
+        assert len(res.values) == 0
+
+
+@pytest.mark.parametrize(
+    "scope_col, val_a, val_b",
+    [
+        ("合并范围", "合并报表", "母公司报表"),
+        ("合并范围", "合并报表", None),
+        ("币种", "CNY", "USD"),
+        ("单位", "元", "万元"),
+        ("会计口径", "新准则", "旧准则"),
+        ("单位：元", "元", "万元"),
+        ("币种（CNY）", "CNY", "USD"),
+    ],
+)
+def test_derive_q2_conflicting_scope_in_duplicate_rows_fails_closed(scope_col, val_a, val_b):
+    """Scope/comparability conflicts within duplicate rows fail closed regardless of order."""
+    for first in (True, False):
+        rows = [
+            {
+                "报告日": "2025-03-31",
+                "公告日期": "2025-04-20",
+                "净利润": 10.0,
+                scope_col: (
+                    "合并报表"
+                    if "合并" in scope_col
+                    else "CNY"
+                    if "币种" in scope_col
+                    else "元"
+                    if "单位" in scope_col
+                    else "新准则"
+                ),
+            },
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0, scope_col: val_a if first else val_b},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20", "净利润": 40.0, scope_col: val_b if first else val_a},
+        ]
+        res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+        assert res.period_kind == "unknown"
+        assert res.derivation_formula == "not_derived"
+        assert res.reason == "duplicate_conflict"
+        assert len(res.values) == 0
+
+
+def test_derive_q2_conflicting_announce_dates_fail_closed():
+    """Conflicting announce dates for the same period fail closed even with identical financial values."""
+    for h1_first in (True, False):
+        rows = [
+            {"报告日": "2025-03-31", "公告日期": "2025-04-20", "净利润": 10.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-20" if h1_first else "2025-08-25", "净利润": 40.0},
+            {"报告日": "2025-06-30", "公告日期": "2025-08-25" if h1_first else "2025-08-20", "净利润": 40.0},
+        ]
+        res = derive_q2_from_h1_q1("income", pd.DataFrame(rows))
+        assert res.period_kind == "unknown"
+        assert res.derivation_formula == "not_derived"
+        assert res.reason == "duplicate_conflict"
+        assert len(res.values) == 0
+
+
+def test_derive_q2_legal_zero_and_missing_semantics():
+    """Legal zero values participate in H1-Q1 while missing/non-numeric semantics are preserved."""
+    # 1. Legal zero in H1: 0.0 - 10.0 = -10.0
+    rows1 = [
+        {"报告日": "2025-03-31", "净利润": 10.0},
+        {"报告日": "2025-06-30", "净利润": 0.0},
+    ]
+    res1 = derive_q2_from_h1_q1("income", pd.DataFrame(rows1))
+    assert res1.period_kind == "single_quarter_derived"
+    assert res1.values["净利润"] == -10.0
+
+    # 2. Decimal(0) in H1: Decimal(0) - 0.0 = 0.0
+    rows2 = [
+        {"报告日": "2025-03-31", "净利润": 0.0},
+        {"报告日": "2025-06-30", "净利润": Decimal("0")},
+    ]
+    res2 = derive_q2_from_h1_q1("income", pd.DataFrame(rows2))
+    assert res2.period_kind == "single_quarter_derived"
+    assert res2.values["净利润"] == 0.0
+
+    # 3. Duplicate rows both containing legal zero fold cleanly
+    rows3 = [
+        {"报告日": "2025-03-31", "净利润": 0.0},
+        {"报告日": "2025-06-30", "净利润": 0.0},
+        {"报告日": "2025-06-30", "净利润": 0.0},
+    ]
+    res3 = derive_q2_from_h1_q1("income", pd.DataFrame(rows3))
+    assert res3.period_kind == "single_quarter_derived"
+    assert res3.values["净利润"] == 0.0
+
+    # 4. Legal zero vs missing in duplicate rows must conflict (zero != missing)
+    rows4 = [
+        {"报告日": "2025-03-31", "净利润": 10.0},
+        {"报告日": "2025-06-30", "净利润": 0.0},
+        {"报告日": "2025-06-30", "净利润": None},
+    ]
+    res4 = derive_q2_from_h1_q1("income", pd.DataFrame(rows4))
+    assert res4.period_kind == "unknown"
+    assert res4.derivation_formula == "not_derived"
+    assert res4.reason == "duplicate_conflict"
+
+    # 5. Missing in both duplicate rows folds as missing without being altered to zero
+    rows5 = [
+        {"报告日": "2025-03-31", "净利润": 10.0, "营业收入": 50.0},
+        {"报告日": "2025-06-30", "净利润": None, "营业收入": 100.0},
+        {"报告日": "2025-06-30", "净利润": float("nan"), "营业收入": 100.0},
+    ]
+    res5 = derive_q2_from_h1_q1("income", pd.DataFrame(rows5))
+    assert res5.period_kind == "single_quarter_derived"
+    assert res5.values["营业收入"] == 50.0
+    assert "净利润" not in res5.values
+    assert "净利润" in res5.missing
+
+    # 6. Non-numeric string vs numeric in duplicate rows must conflict
+    rows6 = [
+        {"报告日": "2025-03-31", "净利润": 10.0},
+        {"报告日": "2025-06-30", "净利润": "未披露"},
+        {"报告日": "2025-06-30", "净利润": 40.0},
+    ]
+    res6 = derive_q2_from_h1_q1("income", pd.DataFrame(rows6))
+    assert res6.period_kind == "unknown"
+    assert res6.reason == "duplicate_conflict"
+
+
+def test_derive_q2_cashflow_duplicate_conflicts_and_folding():
+    """Cashflow statement duplicate row folding and conflict rejection."""
+    # Identical cashflow duplicates fold cleanly
+    rows_identical = [
+        {"报告日": "2025-03-31", "经营活动产生的现金流量净额": 200.0},
+        {"报告日": "2025-06-30", "经营活动产生的现金流量净额": 500.0},
+        {"报告日": "2025-06-30", "经营活动产生的现金流量净额": 500.0},
+    ]
+    res_id = derive_q2_from_h1_q1("cashflow", pd.DataFrame(rows_identical))
+    assert res_id.period_kind == "single_quarter_derived"
+    assert res_id.reason == "ok"
+    assert res_id.values["经营活动产生的现金流量净额"] == 300.0
+
+    # Conflicting cashflow duplicates fail closed
+    for cf_first in (True, False):
+        rows_conflict = [
+            {"报告日": "2025-03-31", "经营活动产生的现金流量净额": 200.0},
+            {"报告日": "2025-06-30", "经营活动产生的现金流量净额": 500.0 if cf_first else 800.0},
+            {"报告日": "2025-06-30", "经营活动产生的现金流量净额": 800.0 if cf_first else 500.0},
+        ]
+        res_cf = derive_q2_from_h1_q1("cashflow", pd.DataFrame(rows_conflict))
+        assert res_cf.period_kind == "unknown"
+        assert res_cf.derivation_formula == "not_derived"
+        assert res_cf.reason == "duplicate_conflict"
+        assert len(res_cf.values) == 0
+
+
+def test_format_q2_derivation_block_duplicate_conflict():
+    """format_q2_derivation_block formats explicit notice for duplicate_conflict reason."""
+    res = Q2DerivationResult(
+        reported_period_label="2025Q2",
+        period_kind="unknown",
+        derivation_formula="not_derived",
+        h1_period="20250630",
+        q1_period="20250331",
+        values={},
+        missing=(),
+        reason="duplicate_conflict",
+    )
+    block = format_q2_derivation_block(res)
+    assert "reason=duplicate_conflict" in block
+    assert "同一报告期存在冲突的重复行" in block
+    assert "禁止把 H1 累计当作 Q2 单季" in block or "禁止把H1累计当作Q2单季" in block
