@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
@@ -322,6 +323,9 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         mock_resp.encoding = "gbk"
 
         with patch("requests.get", return_value=mock_resp), patch(
+            "tradingagents.dataflows.providers.cn_akshare_provider.is_historical_analysis_date",
+            return_value=False,
+        ), patch(
             "tradingagents.dataflows.providers.cn_akshare_provider._get_latest_us_session_date",
             return_value="2026-08-21",
         ):
@@ -467,3 +471,150 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         assert "标普500" in snapshots
         assert snapshots["标普500"]["as_of"] == "2026-08-21"
         assert snapshots["标普500"]["latest_close"] == 5600.5
+
+    def test_eastmoney_historical_rejects_missing_invalid_and_future_timestamp(self):
+        """历史分析不得把无效快照时间伪装成分析日。"""
+        provider = CnAkshareProvider()
+        future_ts = int(datetime(2026, 8, 24, 12, tzinfo=timezone.utc).timestamp())
+
+        for timestamp in (None, "not-a-timestamp", future_ts):
+            with self.subTest(timestamp=timestamp):
+                mock_resp = MagicMock()
+                mock_resp.json.return_value = {
+                    "rc": 0,
+                    "data": {
+                        "diff": [
+                            {
+                                "f12": "SPX",
+                                "f2": 5600.5,
+                                "f3": 0.75,
+                                "f124": timestamp,
+                            }
+                        ]
+                    },
+                }
+                with patch("requests.get", return_value=mock_resp):
+                    snapshots = provider._fetch_global_indices_em_ulist(
+                        curr_date="2026-08-21"
+                    )
+
+                assert snapshots == {}
+
+    def test_eastmoney_valid_timestamp_and_live_missing_timestamp_compatibility(self):
+        """有效历史时间可保留；实时路径仍可接收无时间字段的当前快照。"""
+        provider = CnAkshareProvider()
+        valid_ts = int(datetime(2026, 8, 21, 20, tzinfo=timezone.utc).timestamp())
+
+        def fetch(timestamp, curr_date):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {
+                "rc": 0,
+                "data": {
+                    "diff": [
+                        {
+                            "f12": "SPX",
+                            "f2": 5600.5,
+                            "f3": 0.0,
+                            "f124": timestamp,
+                        }
+                    ]
+                },
+            }
+            with patch("requests.get", return_value=mock_resp), patch(
+                "tradingagents.dataflows.providers.cn_akshare_provider.is_historical_analysis_date",
+                return_value=curr_date == "2026-08-21",
+            ):
+                return provider._fetch_global_indices_em_ulist(curr_date=curr_date)
+
+        historical = fetch(valid_ts, "2026-08-21")
+        live = fetch(None, "2026-09-15")
+
+        assert historical["标普500"]["as_of"] == "2026-08-21"
+        assert historical["标普500"]["change_1d_pct"] == 0.0
+        assert live["标普500"]["as_of"] == "2026-09-15"
+
+    def test_eastmoney_missing_change_pct_remains_unknown(self):
+        """缺失涨跌幅不能伪造为真实的零涨跌。"""
+        provider = CnAkshareProvider()
+        valid_ts = int(datetime(2026, 8, 21, 20, tzinfo=timezone.utc).timestamp())
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "rc": 0,
+            "data": {
+                "diff": [
+                    {"f12": "SPX", "f2": 5600.5, "f3": None, "f124": valid_ts}
+                ]
+            },
+        }
+
+        with patch("requests.get", return_value=mock_resp):
+            snapshots = provider._fetch_global_indices_em_ulist(
+                curr_date="2026-08-21"
+            )
+
+        assert snapshots["标普500"]["change_1d_pct"] is None
+
+    def test_sina_historical_rejects_undated_int_hk_and_europe_snapshots(self):
+        """新浪各快照格式缺少/非法日期时均不能进入历史结果。"""
+        provider = CnAkshareProvider()
+        response_text = (
+            'var hq_str_int_sp500="标普指数,6643.70,38.98,0.59";\n'
+            'var hq_str_int_nikkei="日经指数,44946.64,-408.35,-0.90";\n'
+            'var hq_str_rt_hkHSI="HSI,恒生指数,25807.610,25698.490,26009.460,25807.610,26009.459,310.970,1.210,0,0,0,0,0,0,0,0,not-a-date,16:09:01";\n'
+            'var hq_str_b_DAX="德国DAX指数,26136.5605,153.52,0.59,no-date,no-time";\n'
+        )
+        mock_resp = MagicMock(text=response_text, encoding="gbk")
+
+        with patch("requests.get", return_value=mock_resp), patch(
+            "tradingagents.dataflows.providers.cn_akshare_provider._get_latest_us_session_date",
+            return_value="2026-08-21",
+        ):
+            snapshots = provider._fetch_global_indices_sina_hq(
+                curr_date="2026-08-21"
+            )
+
+        assert snapshots == {}
+
+    def test_sina_valid_timestamp_future_rejection_and_live_compatibility(self):
+        """新浪有效日期受 as-of 上界约束，实时 int_* 无日期格式保持兼容。"""
+        provider = CnAkshareProvider()
+        response_text = (
+            'var hq_str_int_nikkei="日经指数,44946.64,-408.35,-0.90";\n'
+            'var hq_str_rt_hkHSI="HSI,恒生指数,25807.610,25698.490,26009.460,25807.610,26009.459,310.970,1.210,0,0,0,0,0,0,0,0,2026/08/21,16:09:01";\n'
+            'var hq_str_rt_hkHSTECH="HSTECH,恒生科技指数,4710.410,4700.530,4767.790,4697.600,4766.160,65.630,1.400,0,0,0,0,0,0,0,0,2026/08/22,16:08:30";\n'
+            'var hq_str_b_FTSE="富时100指数,10816.5600,68.40,0.64,,,2026-08-21,23:35:00";\n'
+        )
+        mock_resp = MagicMock(text=response_text, encoding="gbk")
+
+        with patch("requests.get", return_value=mock_resp):
+            historical = provider._fetch_global_indices_sina_hq(
+                curr_date="2026-08-21"
+            )
+        with patch("requests.get", return_value=mock_resp), patch(
+            "tradingagents.dataflows.providers.cn_akshare_provider.is_historical_analysis_date",
+            return_value=False,
+        ):
+            live = provider._fetch_global_indices_sina_hq(curr_date="2026-09-15")
+
+        assert historical["恒生指数"]["as_of"] == "2026-08-21"
+        assert historical["英国富时100"]["as_of"] == "2026-08-21"
+        assert "恒生科技指数" not in historical
+        assert "日经225" not in historical
+        assert live["日经225"]["as_of"] == "2026-09-15"
+
+    def test_sina_missing_change_pct_remains_unknown(self):
+        """新浪合法快照的缺失涨跌幅保持 None，合法 0.0 仍保留。"""
+        provider = CnAkshareProvider()
+        response_text = (
+            'var hq_str_rt_hkHSI="HSI,恒生指数,25807.610,25698.490,26009.460,25807.610,26009.459,310.970,,0,0,0,0,0,0,0,0,2026/08/21,16:09:01";\n'
+            'var hq_str_rt_hkHSTECH="HSTECH,恒生科技指数,4710.410,4700.530,4767.790,4697.600,4766.160,65.630,0.0,0,0,0,0,0,0,0,0,2026/08/21,16:08:30";\n'
+        )
+        mock_resp = MagicMock(text=response_text, encoding="gbk")
+
+        with patch("requests.get", return_value=mock_resp):
+            snapshots = provider._fetch_global_indices_sina_hq(
+                curr_date="2026-08-21"
+            )
+
+        assert snapshots["恒生指数"]["change_1d_pct"] is None
+        assert snapshots["恒生科技指数"]["change_1d_pct"] == 0.0
