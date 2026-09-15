@@ -122,7 +122,15 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
         prices: Dict[str, float] = {}
         for _, row in df.iterrows():
             d_str = row["_p_date"].strftime("%Y-%m-%d")
-            prices[d_str] = float(row["_p_close"])
+            close = float(row["_p_close"])
+            existing_close = prices.get(d_str)
+            if existing_close is not None and existing_close != close:
+                logger.warning(
+                    "Conflicting close prices for %s in stock data CSV",
+                    d_str,
+                )
+                return {}
+            prices[d_str] = close
         return prices
     except Exception as exc:
         logger.debug("Failed to parse stock data CSV: %s", exc)
