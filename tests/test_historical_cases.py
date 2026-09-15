@@ -190,6 +190,265 @@ def test_calculate_t1_return_normal():
         assert outcome_str == "+2.50%"
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            "2024-05-10,99,101,98,100,1000",
+            "2024-05-10,99,101,98,100.0,1000",
+            "2024-05-13,109,111,108,110,1200",
+            "2024-05-13,109,111,108,110.0,1200",
+        ],
+        [
+            "2024-05-13,109,111,108,110.0,1200",
+            "2024-05-13,109,111,108,110,1200",
+            "2024-05-10,99,101,98,100.0,1000",
+            "2024-05-10,99,101,98,100,1000",
+        ],
+    ],
+    ids=["forward", "reversed"],
+)
+def test_calculate_t1_return_identical_ohlcv_duplicates_are_order_independent(rows):
+    """完整 OHLCV 完全重复行应折叠，交换行序不改变 T+1 结果。"""
+    sample_csv = "date,open,high,low,close,volume\n" + "\n".join(rows) + "\n"
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.now_cn",
+        return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value=sample_csv,
+    ):
+        assert calculate_t1_return("600519", "2024-05-10") == (
+            "2024-05-13",
+            10.0,
+            "+10.00%",
+        )
+
+
+@pytest.mark.parametrize(
+    "conflicting_field,first_value,second_value",
+    [
+        ("open", "99", "99.5"),
+        ("high", "101", "101.5"),
+        ("low", "98", "97.5"),
+        ("volume", "1000", "1100"),
+    ],
+)
+def test_calculate_t1_return_same_close_but_conflicting_ohlcv_fields_fail_closed(
+    conflicting_field, first_value, second_value, caplog
+):
+    """Close 相同但其他可用 OHLCV 字段冲突时，无论行序都必须拒绝。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    columns = ["date", "open", "high", "low", "close", "volume"]
+    first = ["2024-05-10", "99", "101", "98", "100", "1000"]
+    second = first.copy()
+    field_index = columns.index(conflicting_field)
+    second[field_index] = second_value
+    first[field_index] = first_value
+    base_t1 = ["2024-05-13", "109", "111", "108", "110", "1200"]
+    csv_variants = [
+        [first, second, base_t1],
+        [base_t1, second, first],
+    ]
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+
+    for rows in csv_variants:
+        sample_csv = ",".join(columns) + "\n" + "\n".join(
+            ",".join(row) for row in rows
+        ) + "\n"
+        with patch(
+            "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+            return_value=(fake_dates, set(fake_dates)),
+        ), patch(
+            "tradingagents.knowledge.historical_cases.now_cn",
+            return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+        ), patch(
+            "tradingagents.dataflows.interface.route_to_vendor",
+            return_value=sample_csv,
+        ):
+            result = calculate_t1_return("600519", "2024-05-10")
+            assert result[:2] == ("2024-05-13", None)
+            assert result[2] == DATA_MISSING_PLACEHOLDER
+            assert isinstance(result[2], VendorRefuse)
+            assert result[2].code == "duplicate_bar_conflict"
+            assert "2024-05-10" in result[2].reason
+
+    assert "2024-05-10" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "trade_date,eval_date,code",
+    [
+        ("2024-05-10", "", "invalid_eval_date"),
+        ("2024-05-10", "2024-05-10", "non_t1_eval_date"),
+        ("2024-05-10", "2024-05-09", "non_t1_eval_date"),
+        ("2024-05-10", "2024-05-14", "non_t1_eval_date"),
+        ("2024-05-10", "2024-05-13 00:00:00", "invalid_eval_date"),
+        ("not-a-date", "2024-05-13", "invalid_trade_date"),
+    ],
+)
+def test_calculate_t1_return_rejects_invalid_dates_before_provider_call(
+    trade_date, eval_date, code
+):
+    """非法/空/非严格 T+1 日期必须在 provider 调用前类型化拒绝。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13), date(2024, 5, 14)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value="date,close\n2024-05-10,100\n2024-05-13,110\n",
+    ) as route:
+        result = calculate_t1_return("600519", trade_date, eval_date=eval_date)
+
+    assert result[1] is None
+    assert result[2] == DATA_MISSING_PLACEHOLDER
+    assert isinstance(result[2], VendorRefuse)
+    assert result[2].code == code
+    route.assert_not_called()
+
+
+def test_calculate_t1_return_preserves_explicit_empty_eval_date():
+    """显式空 eval_date 必须返回可识别拒绝，而不是自动采用 T+1。"""
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value="date,close\n2024-05-10,100\n2024-05-13,110\n",
+    ) as route:
+        result = calculate_t1_return("600519", "2024-05-10", eval_date="")
+
+    assert result == ("", None, DATA_MISSING_PLACEHOLDER)
+    assert getattr(result[2], "code", None) == "invalid_eval_date"
+    route.assert_not_called()
+
+
+def test_calculate_t1_return_rejects_non_trading_trade_date_before_provider_call():
+    """非交易日 trade_date 不得回退到下一交易日或调用 provider。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    fake_dates = [date(2024, 5, 13), date(2024, 5, 14)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value="date,close\n2024-05-12,100\n2024-05-13,110\n",
+    ) as route:
+        result = calculate_t1_return("600519", "2024-05-12")
+
+    assert result[0] is None
+    assert result[1] is None
+    assert isinstance(result[2], VendorRefuse)
+    assert result[2].code == "non_trading_trade_date"
+    route.assert_not_called()
+
+
+def test_calculate_t1_return_preserves_vendor_refusal_type():
+    """route 返回 VendorRefuse 时，消费者不得将其降级为普通数据缺失。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    refusal = VendorRefuse("duplicate daily bars for 2024-05-10")
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.now_cn",
+        return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value=refusal,
+    ):
+        result = calculate_t1_return("600519", "2024-05-10")
+
+    assert result[0] == "2024-05-13"
+    assert result[1] is None
+    assert isinstance(result[2], VendorRefuse)
+    assert result[2].code == "vendor_refuse"
+    assert result[2].reason == refusal.reason
+    assert result[2].status == "refused"
+    assert result[2] == DATA_MISSING_PLACEHOLDER
+
+
+def test_record_historical_case_keeps_typed_refusal_on_case(test_db_session):
+    """落库边界保留拒绝类型/原因且绝不产生实际收益率。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    report = ReportDB(
+        id="rep-refusal-1",
+        symbol="600519",
+        trade_date="2024-05-10",
+        status="completed",
+        decision="BUY",
+        direction="看多",
+    )
+    test_db_session.add(report)
+    test_db_session.commit()
+    refusal = VendorRefuse("duplicate daily bars for 2024-05-10")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        case = record_historical_case(test_db_session, report)
+
+    assert case.actual_change_pct is None
+    assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
+    assert isinstance(case.actual_outcome, VendorRefuse)
+    assert case.actual_outcome.code == "vendor_refuse"
+    assert case.actual_outcome.reason == refusal.reason
+    assert case.refusal_code == "vendor_refuse"
+    assert case.refusal_reason == refusal.reason
+    persisted = test_db_session.query(HistoricalCaseDB).filter(
+        HistoricalCaseDB.id == case.id
+    ).one()
+    assert persisted.actual_outcome == DATA_MISSING_PLACEHOLDER
+
+
+def test_backfill_pending_cases_keeps_typed_refusal(test_db_session):
+    """回填边界遇到拒绝时保持缺口状态、原因与 None 收益。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    case = HistoricalCaseDB(
+        id="case-refusal-1",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+    refusal = VendorRefuse("duplicate daily bars for 2024-05-10")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["backfilled"] == 0
+    assert stats["still_missing"] == 1
+    assert case.actual_change_pct is None
+    assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
+    assert isinstance(case.actual_outcome, VendorRefuse)
+    assert case.actual_outcome.code == "vendor_refuse"
+    assert case.actual_outcome.reason == refusal.reason
+    assert case.refusal_code == "vendor_refuse"
+    assert case.refusal_reason == refusal.reason
+
+
 def test_calculate_t1_return_missing_data_future_or_incomplete():
     """验证当评估日为未来或盘中未收盘时严格返回【数据缺失】，禁止填 0 或今天。"""
     fake_dates = [date(2026, 8, 20), date(2026, 8, 21), date(2026, 8, 24)]
