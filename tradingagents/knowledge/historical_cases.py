@@ -100,7 +100,6 @@ def _coerce_refusal(
         )
         if is_duplicate_conflict:
             return _refusal("duplicate_bar_conflict", reason)
-        return _refusal(default_code, reason)
     return None
 
 
@@ -377,13 +376,27 @@ def calculate_t1_return(
     today_cn = now_cn().date()
     # 若评估日晚于今日，则未来数据不可知
     if eval_d > today_cn:
-        return target_eval_date, None, DATA_MISSING_PLACEHOLDER
+        return _return_case_refusal(
+            _refusal(
+                "future_eval_date",
+                f"历史案例 T+1 拒绝：评估日 {target_eval_date} 晚于当前日期 "
+                f"{today_cn}（代码 future_eval_date）。",
+            ),
+            target_eval_date,
+        )
 
     # 若评估日恰为今日，需检查今日是否已经收盘
     if eval_d == today_cn:
         phase = cn_market_phase()
         if phase != "post_close":
-            return target_eval_date, None, DATA_MISSING_PLACEHOLDER
+            return _return_case_refusal(
+                _refusal(
+                    "eval_date_not_closed",
+                    f"历史案例 T+1 拒绝：评估日 {target_eval_date} 尚未收盘 "
+                    "（代码 eval_date_not_closed）。",
+                ),
+                target_eval_date,
+            )
 
     # 调用已有行情接口获取价格数据
     try:

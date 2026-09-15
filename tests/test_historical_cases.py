@@ -315,6 +315,49 @@ def test_calculate_t1_return_rejects_invalid_dates_before_provider_call(
     route.assert_not_called()
 
 
+def test_calculate_t1_return_future_and_intraday_results_are_typed_refusals():
+    """未来/未收盘保护也保留可识别拒绝类型，同时不调用 provider。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    fake_dates = [date(2026, 8, 20), date(2026, 8, 21)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.now_cn",
+        return_value=datetime(2026, 8, 20, 10, 0, tzinfo=timezone.utc),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value="date,close\n2026-08-20,100\n2026-08-21,110\n",
+    ) as route:
+        future_result = calculate_t1_return("600519", "2026-08-20")
+
+    assert future_result == ("2026-08-21", None, DATA_MISSING_PLACEHOLDER)
+    assert isinstance(future_result[2], VendorRefuse)
+    assert future_result[2].code == "future_eval_date"
+    route.assert_not_called()
+
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.now_cn",
+        return_value=datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.cn_market_phase",
+        return_value="in_session",
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value="date,close\n2026-08-20,100\n2026-08-21,110\n",
+    ) as route:
+        intraday_result = calculate_t1_return("600519", "2026-08-20")
+
+    assert intraday_result == ("2026-08-21", None, DATA_MISSING_PLACEHOLDER)
+    assert isinstance(intraday_result[2], VendorRefuse)
+    assert intraday_result[2].code == "eval_date_not_closed"
+    route.assert_not_called()
+
+
 def test_calculate_t1_return_preserves_explicit_empty_eval_date():
     """显式空 eval_date 必须返回可识别拒绝，而不是自动采用 T+1。"""
     fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
