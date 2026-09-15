@@ -29,10 +29,12 @@ from sqlalchemy.orm import Session
 
 from api.database import HistoricalCaseDB, ReportDB, get_db_ctx
 from tradingagents.dataflows.trade_calendar import (
+    DuplicateBarConflictError,
     TradeCalendarUnavailableError,
     _load_cn_trade_dates,
     _parse_date,
     cn_market_phase,
+    dedupe_daily_bars,
     is_cn_trading_day,
     now_cn,
 )
@@ -110,14 +112,38 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
             return {}
 
         cols_map = {str(c).lower().strip(): c for c in df.columns}
-        date_col = cols_map.get("date")
-        close_col = cols_map.get("close")
+        aliases = {
+            "date": ("date", "trade_date", "tradedate", "datetime", "time", "timestamp", "日期", "交易日期", "时间"),
+            "open": ("open", "open_price", "openprice", "开盘", "开盘价"),
+            "high": ("high", "high_price", "highprice", "最高", "最高价"),
+            "low": ("low", "low_price", "lowprice", "最低", "最低价"),
+            "close": ("close", "close_price", "closeprice", "收盘", "收盘价"),
+            "volume": ("volume", "vol", "成交量", "成交量(股)", "成交量（股）", "成交量(手)", "成交量（手）", "成交股数"),
+        }
+        resolved_cols = {
+            name: next((cols_map[alias] for alias in names if alias in cols_map), None)
+            for name, names in aliases.items()
+        }
+        date_col = resolved_cols["date"]
+        close_col = resolved_cols["close"]
         if not date_col or not close_col:
             return {}
 
-        df["_p_date"] = pd.to_datetime(df[date_col], errors="coerce")
+        df["_p_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
         df["_p_close"] = pd.to_numeric(df[close_col], errors="coerce")
+        value_cols = ["_p_close"]
+        for name in ("open", "high", "low", "volume"):
+            source_col = resolved_cols[name]
+            if source_col:
+                normalized_col = f"_p_{name}"
+                df[normalized_col] = pd.to_numeric(df[source_col], errors="coerce")
+                value_cols.append(normalized_col)
         df = df.dropna(subset=["_p_date", "_p_close"])
+        try:
+            df = dedupe_daily_bars(df, "_p_date", value_cols)
+        except DuplicateBarConflictError as exc:
+            logger.warning("Conflicting daily bars in stock data CSV: %s", exc)
+            return {}
 
         prices: Dict[str, float] = {}
         for _, row in df.iterrows():
