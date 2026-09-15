@@ -4670,6 +4670,17 @@ def _normalize_ths_code(code: str) -> str:
     return code
 
 
+def _parse_hot_stock_float(value: Any) -> Optional[float]:
+    """Parse a provider quote without turning unavailable values into zero."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 @app.get("/v1/market/hot-stocks")
 def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
     """Return hot A-share stocks from different sources.
@@ -4684,8 +4695,6 @@ def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
     Returns:
         Dict with stocks list, total count, source info, and fallback status
     """
-    import akshare as ak
-
     # 定义数据源尝试顺序（如果主数据源失败，自动尝试备用源）
     source_configs = {
         "em": ("stock_hot_rank_em", None, "东方财富热榜"),
@@ -4695,6 +4704,10 @@ def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
 
     if source not in source_configs:
         raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+    if limit < 0:
+        raise HTTPException(status_code=400, detail="limit must be non-negative")
+
+    import akshare as ak
 
     # 尝试主数据源，失败则尝试其他源
     sources_to_try = [source] + [s for s in ["xq", "em", "ths"] if s != source]
@@ -4719,9 +4732,9 @@ def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
                         "rank": i + 1,
                         "symbol": _normalize_ths_code(str(row.get("代码", ""))),
                         "name": str(row.get("股票名称", "")),
-                        "price": float(row.get("最新价", 0) or 0),
-                        "change": float(row.get("涨跌额", 0) or 0),
-                        "change_pct": float(row.get("涨跌幅", 0) or 0),
+                        "price": _parse_hot_stock_float(row.get("最新价")),
+                        "change": _parse_hot_stock_float(row.get("涨跌额")),
+                        "change_pct": _parse_hot_stock_float(row.get("涨跌幅")),
                         "extra": "",
                     })
 
@@ -4731,22 +4744,22 @@ def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
                         "rank": i + 1,
                         "symbol": _normalize_ths_code(str(row.get("股票代码", ""))),
                         "name": str(row.get("股票简称", "")),
-                        "price": float(row.get("最新价", 0) or 0),
-                        "change": 0.0,
-                        "change_pct": 0.0,
+                        "price": _parse_hot_stock_float(row.get("最新价")),
+                        "change": None,
+                        "change_pct": None,
                         "extra": f"关注 {int(row.get('关注', 0)):,}",
                     })
 
             elif src == "ths":
                 for i, (_, row) in enumerate(df.iterrows()):
                     days = int(row.get("连涨天数", 0) or 0)
-                    change_pct = float(row.get("连续涨跌幅", 0) or 0)
+                    change_pct = _parse_hot_stock_float(row.get("连续涨跌幅"))
                     stocks.append({
                         "rank": i + 1,
                         "symbol": _normalize_ths_code(str(row.get("股票代码", ""))),
                         "name": str(row.get("股票简称", "")),
-                        "price": float(row.get("收盘价", 0) or 0),
-                        "change": 0.0,
+                        "price": _parse_hot_stock_float(row.get("收盘价")),
+                        "change": None,
                         "change_pct": change_pct,
                         "extra": f"连涨{days}天",
                     })
