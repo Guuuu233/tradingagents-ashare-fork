@@ -184,6 +184,21 @@ _HISTORICAL_NEAR_WINDOW_NEWS_PROVIDER_ALLOWLIST = {
     "get_global_news": frozenset({"cn_investoday"}),
 }
 
+# Historical fundamental and insider methods must not use date-blind providers
+# (e.g. yfinance overview/statements, Alpha Vantage overview/statements/insider).
+_HISTORICAL_DATE_BLIND_METHODS = frozenset({
+    "get_fundamentals",
+    "get_balance_sheet",
+    "get_cashflow",
+    "get_income_statement",
+    "get_insider_transactions",
+})
+_HISTORICAL_DATE_BLIND_PROVIDERS = frozenset({
+    "yfinance",
+    "alpha_vantage",
+})
+_REPORT_FREQUENCIES = frozenset(("annual", "quarterly", "annually"))
+
 
 def _extract_as_of(method: str, args: tuple, kwargs: dict) -> str | None:
     """Return the as-of/analysis date for a routed method call, if present."""
@@ -228,7 +243,7 @@ def _extract_as_of(method: str, args: tuple, kwargs: dict) -> str | None:
             return str(args[2])
         if len(args) == 2 and args[1] is not None:
             cand = str(args[1])
-            if cand not in ("annual", "quarterly", "annually"):
+            if cand.strip().lower() not in _REPORT_FREQUENCIES:
                 return cand
 
     idx = positional.get(method)
@@ -329,6 +344,23 @@ def _historical_news_failure(method: str) -> str:
     )
 
 
+def _historical_fundamental_failure(method: str, as_of: str | None) -> str:
+    """Keep historical fundamental/insider failures explicit without accepting date-blind sources."""
+    date_str = f"（{as_of}）" if as_of else ""
+    method_labels = {
+        "get_fundamentals": "基本面概况",
+        "get_balance_sheet": "资产负债表",
+        "get_cashflow": "现金流量表",
+        "get_income_statement": "利润表",
+        "get_insider_transactions": "内部人交易",
+    }
+    label = method_labels.get(method, method)
+    return (
+        f"【数据获取失败】历史{label}{date_str}未获取到可验证数据，"
+        "且不得回退到日期盲供应商（yfinance/Alpha Vantage），本项不可用。"
+    )
+
+
 def _resource_policy_for(provider_name: str) -> ProviderResourcePolicy:
     resolver = getattr(_registry, "resource_policy", None)
     if callable(resolver):
@@ -395,6 +427,17 @@ def route_to_vendor(method: str, *args, **kwargs):
             vendor
             for vendor in fallback_vendors
             if vendor in historical_provider_allowlist
+        ]
+    as_of = _extract_as_of(method, args, kwargs)
+    is_historical_date_blind = (
+        method in _HISTORICAL_DATE_BLIND_METHODS
+        and is_historical_analysis_date(as_of)
+    )
+    if is_historical_date_blind:
+        fallback_vendors = [
+            vendor
+            for vendor in fallback_vendors
+            if vendor not in _HISTORICAL_DATE_BLIND_PROVIDERS
         ]
     args_summary = _summarize_args(args, kwargs)
     last_exc = None
@@ -579,6 +622,12 @@ def route_to_vendor(method: str, *args, **kwargs):
     if refusal_reason is not None:
         _trace(f"method={method} {args_summary} status=refuse-sticky reason=no-peer-hit")
         return refusal_reason
+    if is_historical_date_blind:
+        _trace(
+            f"method={method} {args_summary} status=historical-failure "
+            "reason=no-verified-historical-fundamental-data"
+        )
+        return _historical_fundamental_failure(method, as_of)
     _trace(f"method={method} {args_summary} status=failed reason=no-available-vendor")
     if last_exc is not None:
         raise RuntimeError(

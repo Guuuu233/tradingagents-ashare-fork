@@ -4,9 +4,25 @@ from dateutil.relativedelta import relativedelta
 import logging
 import yfinance as yf
 from .stockstats_utils import StockstatsUtils
-from .trade_calendar import cn_no_data_reason, is_cn_symbol
+from .trade_calendar import cn_no_data_reason, is_cn_symbol, is_historical_analysis_date
+from .vendor_result import VendorRefuse
 
 logger = logging.getLogger(__name__)
+
+_REPORT_FREQUENCIES = frozenset(("annual", "quarterly", "annually"))
+
+
+def _normalize_statement_args(
+    freq: str | None, curr_date: str | None
+) -> tuple[str | None, str | None]:
+    normalized_freq = str(freq).strip().lower() if freq is not None else freq
+    if (
+        curr_date is None
+        and freq is not None
+        and normalized_freq not in _REPORT_FREQUENCIES
+    ):
+        return "quarterly", freq
+    return normalized_freq, curr_date
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
@@ -311,9 +327,13 @@ def _missing_indicator_reason(symbol: str, date_str: str) -> str:
 
 def get_fundamentals(
     ticker: Annotated[str, "ticker symbol of the company"],
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
-):
+    curr_date: Annotated[str, "current date (not used for yfinance)"] = None,
+) -> str | VendorRefuse:
     """Get company fundamentals overview from yfinance."""
+    if is_historical_analysis_date(curr_date):
+        return VendorRefuse(
+            f"【数据获取失败】yfinance 基本面概况仅提供当前快照，无法用于历史日期（{curr_date}）分析，本项不可用。"
+        )
     try:
         ticker_obj = yf.Ticker(ticker.upper())
         info = ticker_obj.info
@@ -368,28 +388,33 @@ def get_fundamentals(
 def get_balance_sheet(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
-):
+    curr_date: Annotated[str, "current date (not used for yfinance)"] = None,
+) -> str | VendorRefuse:
     """Get balance sheet data from yfinance."""
+    freq, curr_date = _normalize_statement_args(freq, curr_date)
+    if is_historical_analysis_date(curr_date):
+        return VendorRefuse(
+            f"【数据获取失败】yfinance 资产负债表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+        )
     try:
         ticker_obj = yf.Ticker(ticker.upper())
-        
+
         if freq.lower() == "quarterly":
             data = ticker_obj.quarterly_balance_sheet
         else:
             data = ticker_obj.balance_sheet
-            
+
         if data.empty:
             return f"No balance sheet data found for symbol '{ticker}'"
-            
+
         # Convert to CSV string for consistency with other functions
         csv_string = data.to_csv()
-        
+
         # Add header information
         header = f"# Balance Sheet data for {ticker.upper()} ({freq})\n"
-        
+
         return header + csv_string
-        
+
     except Exception as e:
         return f"Error retrieving balance sheet for {ticker}: {str(e)}"
 
@@ -397,28 +422,33 @@ def get_balance_sheet(
 def get_cashflow(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
-):
+    curr_date: Annotated[str, "current date (not used for yfinance)"] = None,
+) -> str | VendorRefuse:
     """Get cash flow data from yfinance."""
+    freq, curr_date = _normalize_statement_args(freq, curr_date)
+    if is_historical_analysis_date(curr_date):
+        return VendorRefuse(
+            f"【数据获取失败】yfinance 现金流量表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+        )
     try:
         ticker_obj = yf.Ticker(ticker.upper())
-        
+
         if freq.lower() == "quarterly":
             data = ticker_obj.quarterly_cashflow
         else:
             data = ticker_obj.cashflow
-            
+
         if data.empty:
             return f"No cash flow data found for symbol '{ticker}'"
-            
+
         # Convert to CSV string for consistency with other functions
         csv_string = data.to_csv()
-        
+
         # Add header information
         header = f"# Cash Flow data for {ticker.upper()} ({freq})\n"
-        
+
         return header + csv_string
-        
+
     except Exception as e:
         return f"Error retrieving cash flow for {ticker}: {str(e)}"
 
@@ -426,36 +456,46 @@ def get_cashflow(
 def get_income_statement(
     ticker: Annotated[str, "ticker symbol of the company"],
     freq: Annotated[str, "frequency of data: 'annual' or 'quarterly'"] = "quarterly",
-    curr_date: Annotated[str, "current date (not used for yfinance)"] = None
-):
+    curr_date: Annotated[str, "current date (not used for yfinance)"] = None,
+) -> str | VendorRefuse:
     """Get income statement data from yfinance."""
+    freq, curr_date = _normalize_statement_args(freq, curr_date)
+    if is_historical_analysis_date(curr_date):
+        return VendorRefuse(
+            f"【数据获取失败】yfinance 利润表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+        )
     try:
         ticker_obj = yf.Ticker(ticker.upper())
-        
+
         if freq.lower() == "quarterly":
             data = ticker_obj.quarterly_income_stmt
         else:
             data = ticker_obj.income_stmt
-            
+
         if data.empty:
             return f"No income statement data found for symbol '{ticker}'"
-            
+
         # Convert to CSV string for consistency with other functions
         csv_string = data.to_csv()
-        
+
         # Add header information
         header = f"# Income Statement data for {ticker.upper()} ({freq})\n"
-        
+
         return header + csv_string
-        
+
     except Exception as e:
         return f"Error retrieving income statement for {ticker}: {str(e)}"
 
 
 def get_insider_transactions(
-    ticker: Annotated[str, "ticker symbol of the company"]
-):
+    ticker: Annotated[str, "ticker symbol of the company"],
+    curr_date: Annotated[str, "current date (not used for yfinance)"] = None,
+) -> str | VendorRefuse:
     """Get insider transactions data from yfinance."""
+    if is_historical_analysis_date(curr_date):
+        return VendorRefuse(
+            f"【数据获取失败】yfinance 内部人交易仅提供最新记录，无法用于历史日期（{curr_date}）分析，本项不可用。"
+        )
     try:
         ticker_obj = yf.Ticker(ticker.upper())
         data = ticker_obj.insider_transactions

@@ -9,7 +9,8 @@ from ..y_finance import (
     get_insider_transactions as get_yfinance_insider_transactions,
 )
 from ..yfinance_news import get_news_yfinance, get_global_news_yfinance
-from ..vendor_result import VendorEmpty, VendorFail
+from ..trade_calendar import is_historical_analysis_date
+from ..vendor_result import VendorEmpty, VendorFail, VendorRefuse
 
 
 def _classify_text_result(
@@ -35,6 +36,22 @@ def _classify_text_result(
     return result
 
 
+_REPORT_FREQUENCIES = frozenset(("annual", "quarterly", "annually"))
+
+
+def _normalize_statement_args(
+    freq: str | None, curr_date: str | None
+) -> tuple[str | None, str | None]:
+    normalized_freq = str(freq).strip().lower() if freq is not None else freq
+    if (
+        curr_date is None
+        and freq is not None
+        and normalized_freq not in _REPORT_FREQUENCIES
+    ):
+        return "quarterly", freq
+    return normalized_freq, curr_date
+
+
 class YFinanceProvider(BaseMarketDataProvider):
     @property
     def name(self) -> str:
@@ -57,22 +74,43 @@ class YFinanceProvider(BaseMarketDataProvider):
             self._normalize_symbol(symbol), indicator, curr_date, look_back_days
         )
 
-    def get_fundamentals(self, ticker: str, curr_date: str = None) -> str:
+    def get_fundamentals(
+        self, ticker: str, curr_date: str = None
+    ) -> str | VendorRefuse:
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】yfinance 基本面概况仅提供当前快照，无法用于历史日期（{curr_date}）分析，本项不可用。"
+            )
         return get_yfinance_fundamentals(self._normalize_symbol(ticker), curr_date)
 
     def get_balance_sheet(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
-    ) -> str:
+    ) -> str | VendorRefuse:
+        freq, curr_date = _normalize_statement_args(freq, curr_date)
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】yfinance 资产负债表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_yfinance_balance_sheet(self._normalize_symbol(ticker), freq, curr_date)
 
     def get_cashflow(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
-    ) -> str:
+    ) -> str | VendorRefuse:
+        freq, curr_date = _normalize_statement_args(freq, curr_date)
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】yfinance 现金流量表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_yfinance_cashflow(self._normalize_symbol(ticker), freq, curr_date)
 
     def get_income_statement(
         self, ticker: str, freq: str = "quarterly", curr_date: str = None
-    ) -> str:
+    ) -> str | VendorRefuse:
+        freq, curr_date = _normalize_statement_args(freq, curr_date)
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】yfinance 利润表无法提供历史日期（{curr_date}）时点数据，本项不可用。"
+            )
         return get_yfinance_income_statement(self._normalize_symbol(ticker), freq, curr_date)
 
     def get_news(self, ticker: str, start_date: str, end_date: str) -> str:
@@ -93,8 +131,14 @@ class YFinanceProvider(BaseMarketDataProvider):
             fail_prefixes=("Error fetching global news",),
         )
 
-    def get_insider_transactions(self, symbol: str, curr_date: str = None) -> str:
-        result = get_yfinance_insider_transactions(self._normalize_symbol(symbol))
+    def get_insider_transactions(
+        self, symbol: str, curr_date: str = None
+    ) -> str | VendorRefuse:
+        if is_historical_analysis_date(curr_date):
+            return VendorRefuse(
+                f"【数据获取失败】yfinance 内部人交易仅提供最新记录，无法用于历史日期（{curr_date}）分析，本项不可用。"
+            )
+        result = get_yfinance_insider_transactions(self._normalize_symbol(symbol), curr_date=curr_date)
         return _classify_text_result(
             result,
             empty_prefixes=("No insider transactions data found",),
