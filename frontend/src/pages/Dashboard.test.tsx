@@ -21,6 +21,17 @@ describe('getDashboardDecisionDisplay', () => {
         expect(getDashboardDecisionDisplay({ decision: '无效运行' }).label).toBe('无效运行')
     })
 
+    it.each(['BUY', 'HOLD'])('prioritizes PARTIAL over %s fallback action', (fallbackAction) => {
+        expect(getDashboardDecisionDisplay({
+            analysis_status: 'PARTIAL',
+            trade_action: fallbackAction,
+            decision: fallbackAction,
+        })).toEqual({
+            label: '观望',
+            colorClass: 'text-slate-500 dark:text-slate-400',
+        })
+    })
+
     it('preserves unknown values but does not fabricate an action for missing values', () => {
         expect(getDashboardDecisionDisplay({ decision: 'CUSTOM_ACTION' }).label).toBe('CUSTOM_ACTION')
         expect(getDashboardDecisionDisplay({ decision: '' }).label).toBe('—')

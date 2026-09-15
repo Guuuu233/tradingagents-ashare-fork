@@ -34,7 +34,8 @@ const DASHBOARD_DECISION_DISPLAY: Record<DecisionAction, DashboardDecisionDispla
 
 // eslint-disable-next-line react-refresh/only-export-components -- kept here by the Dashboard-only change boundary
 export function getDashboardDecisionDisplay(report: DashboardDecisionInput): DashboardDecisionDisplay {
-    const statusAction = parseDecisionAction(report.analysis_status)
+    const status = report.analysis_status?.trim().toUpperCase()
+    const statusAction = status === 'PARTIAL' ? 'watch' : parseDecisionAction(report.analysis_status)
     const rawDecision = report.trade_action?.trim() || report.decision?.trim()
     const action = statusAction || parseDecisionAction(rawDecision)
 
