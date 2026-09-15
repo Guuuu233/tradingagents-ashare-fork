@@ -6,8 +6,44 @@ import { api } from '@/services/api'
 import { useAnalysisStore } from '@/stores/analysisStore'
 import { useAuthStore } from '@/stores/authStore'
 import type { Report, TrackingBoardResponse } from '@/types'
+import { parseDecisionAction, type DecisionAction } from '@/utils/reportText'
 import CalibrationPanel from '@/components/CalibrationPanel'
 import PromoBanner from '@/components/PromoBanner'
+
+interface DashboardDecisionInput {
+    decision?: string | null
+    trade_action?: string | null
+    analysis_status?: string | null
+}
+
+interface DashboardDecisionDisplay {
+    label: string
+    colorClass: string
+}
+
+const DASHBOARD_DECISION_DISPLAY: Record<DecisionAction, DashboardDecisionDisplay> = {
+    buy: { label: '增持', colorClass: 'text-red-600 dark:text-red-400' },
+    add: { label: '增持', colorClass: 'text-red-600 dark:text-red-400' },
+    sell: { label: '减持', colorClass: 'text-green-600 dark:text-green-400' },
+    reduce: { label: '减持', colorClass: 'text-green-600 dark:text-green-400' },
+    hold: { label: '持有', colorClass: 'text-slate-500 dark:text-slate-400' },
+    watch: { label: '观望', colorClass: 'text-slate-500 dark:text-slate-400' },
+    no_trade: { label: '不交易', colorClass: 'text-amber-600 dark:text-amber-400' },
+    invalid: { label: '无效运行', colorClass: 'text-amber-600 dark:text-amber-400' },
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- kept here by the Dashboard-only change boundary
+export function getDashboardDecisionDisplay(report: DashboardDecisionInput): DashboardDecisionDisplay {
+    const statusAction = parseDecisionAction(report.analysis_status)
+    const rawDecision = report.trade_action?.trim() || report.decision?.trim()
+    const action = statusAction || parseDecisionAction(rawDecision)
+
+    if (action) return DASHBOARD_DECISION_DISPLAY[action]
+    return {
+        label: rawDecision || '—',
+        colorClass: 'text-slate-500 dark:text-slate-400',
+    }
+}
 
 export default function Dashboard() {
     const { agents, isAnalyzing } = useAnalysisStore()
@@ -157,11 +193,7 @@ export default function Dashboard() {
                 ) : (
                     <div className="divide-y divide-slate-100 dark:divide-slate-700">
                         {recentReports.map(report => {
-                            const decisionColor = report.decision?.toUpperCase().includes('BUY') || report.decision?.includes('增持')
-                                ? 'text-red-600 dark:text-red-400'
-                                : report.decision?.toUpperCase().includes('SELL') || report.decision?.includes('减持')
-                                    ? 'text-green-600 dark:text-green-400'
-                                    : 'text-slate-500 dark:text-slate-400'
+                            const decisionDisplay = getDashboardDecisionDisplay(report)
                             return (
                                 <div
                                     key={report.id}
@@ -178,8 +210,8 @@ export default function Dashboard() {
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-4">
-                                        <span className={`text-sm font-medium ${decisionColor}`}>
-                                            {report.decision || '-'}
+                                        <span className={`text-sm font-medium ${decisionDisplay.colorClass}`}>
+                                            {decisionDisplay.label}
                                         </span>
                                         {report.confidence != null && (
                                             <span className="text-xs text-slate-400">{report.confidence}%</span>
