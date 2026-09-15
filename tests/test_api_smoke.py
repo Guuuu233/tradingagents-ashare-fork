@@ -11,6 +11,7 @@ Covers:
 import asyncio
 import json
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -140,8 +141,9 @@ def _wait_job(client: TestClient, token: str, job_id: str, timeout: float = 5.0)
 
 class TestAnalyzeEndpoint:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -300,8 +302,9 @@ class TestAnalyzeEndpoint:
 
 class TestChatCompletionsEndpoint:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -445,7 +448,11 @@ class TestRuntimeIdentity:
         )
         monkeypatch.setattr(main_mod, "_RUNTIME_IDENTITY_CACHE", identity)
 
-        response = _get_client().get("/healthz")
+        client = _get_client()
+        try:
+            response = client.get("/healthz")
+        finally:
+            client.close()
 
         assert response.status_code == 200
         body = response.json()
@@ -472,6 +479,7 @@ class TestRuntimeIdentity:
         from api import main as main_mod
 
         monkeypatch.setattr(main_mod, "_RUNTIME_IDENTITY_CACHE", None)
+        shared_executor = main_mod._executor
 
         async def _run_lifespans():
             with (
@@ -495,7 +503,18 @@ class TestRuntimeIdentity:
                 async with main_mod.lifespan(main_mod.app):
                     pass
 
+            result = await asyncio.wrap_future(
+                shared_executor.submit(lambda: "shared executor is usable")
+            )
+            assert result == "shared executor is usable"
+
         asyncio.run(_run_lifespans())
+
+        assert main_mod._default_executor is None
+        assert not any(
+            thread.name.startswith("ta-asyncio") and thread.is_alive()
+            for thread in threading.enumerate()
+        )
 
     def test_lifespan_logs_same_safe_identity_as_healthz(self, caplog):
         from api import main as main_mod
@@ -532,20 +551,29 @@ class TestRuntimeIdentity:
 class TestOpenAPISchema:
     def test_analyze_request_has_query_field(self):
         client = _get_client()
-        r = client.get("/openapi.json")
+        try:
+            r = client.get("/openapi.json")
+        finally:
+            client.close()
         assert r.status_code == 200
         schema = r.json()["components"]["schemas"]["AnalyzeRequest"]
         assert "query" in schema["properties"]
 
     def test_analyze_request_symbol_not_required(self):
         client = _get_client()
-        r = client.get("/openapi.json")
+        try:
+            r = client.get("/openapi.json")
+        finally:
+            client.close()
         schema = r.json()["components"]["schemas"]["AnalyzeRequest"]
         assert "symbol" not in schema.get("required", [])
 
     def test_healthz(self):
         client = _get_client()
-        r = client.get("/healthz")
+        try:
+            r = client.get("/healthz")
+        finally:
+            client.close()
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
@@ -558,8 +586,9 @@ class TestOpenAPISchema:
 
 class TestRuntimeConfigWarmup:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -665,8 +694,9 @@ class TestWecomRuntimeConfig:
     WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e1d21302-1925-4247-ad5a-6bc023c7fd2a"
 
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth_unique(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -737,8 +767,9 @@ class TestWecomRuntimeConfig:
 
 class TestWatchlistAddEndpoint:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth_unique(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -778,8 +809,9 @@ class TestWatchlistAddEndpoint:
 
 class TestReportsEndpoint:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth_unique(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -897,8 +929,9 @@ class TestReportsEndpoint:
 
 class TestPortfolioOverviewEndpoint:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth_unique(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
         self.name_to_code = {
@@ -999,8 +1032,9 @@ class TestPortfolioOverviewEndpoint:
 
 class TestScheduledBatchEndpoints:
     @pytest.fixture(autouse=True)
-    def setup(self):
+    def setup(self, request):
         self.client = _get_client()
+        request.addfinalizer(self.client.close)
         self.token = _auth_unique(self.client)
         self.headers = {"Authorization": f"Bearer {self.token}"}
         self.code_to_name = {

@@ -438,9 +438,16 @@ async def lifespan(app: FastAPI):
 
     yield
     _log("Shutting down: Cleaning up resources...")
-    _executor.shutdown(wait=True)
     if new_default_executor is not None:
-        new_default_executor.shutdown(wait=False)
+        # This executor belongs to this lifespan only.  Wait for its workers
+        # before releasing the reference so no ta-asyncio threads survive the
+        # application's shutdown, while leaving the process-wide executor
+        # available to later lifespans and callers.
+        try:
+            new_default_executor.shutdown(wait=True)
+        finally:
+            if _default_executor is new_default_executor:
+                _default_executor = None
     _log("Executor shutdown complete.")
 
 
