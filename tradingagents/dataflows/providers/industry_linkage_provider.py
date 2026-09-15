@@ -919,9 +919,6 @@ class IndustryLinkageProvider:
         if df_work.empty:
             return None
 
-        # 严格按日期升序排序
-        df_work = df_work.sort_values("_std_date", ascending=True).reset_index(drop=True)
-
         # 防前视纪律过滤
         if as_of:
             try:
@@ -944,6 +941,17 @@ class IndustryLinkageProvider:
 
         if df_work.empty:
             return None
+
+        values_per_date = df_work.groupby("_std_date")["_std_price"].nunique()
+        if (values_per_date > 1).any():
+            logger.warning("IndustryLinkageProvider: 同一日期存在冲突的关键值")
+            return None
+
+        df_work = (
+            df_work.sort_values("_std_date", ascending=True)
+            .drop_duplicates(subset=["_std_date"])
+            .reset_index(drop=True)
+        )
 
         total_rows = len(df_work)
         latest_row = df_work.iloc[-1]

@@ -8,6 +8,9 @@ from tradingagents.dataflows.macro_market_utils import (
     build_global_indices_markdown,
     build_major_assets_markdown,
 )
+from tradingagents.dataflows.providers.industry_linkage_provider import (
+    IndustryLinkageProvider,
+)
 
 
 def test_calculate_series_metrics_strictly_truncates_at_as_of_date():
@@ -31,7 +34,7 @@ def test_calculate_series_metrics_strictly_truncates_at_as_of_date():
 def test_calculate_series_metrics_handles_chinese_columns_and_dedupes():
     df = pd.DataFrame({
         "日期": ["2026-08-01", "2026-08-02", "2026-08-02", "2026-08-03"],
-        "收盘": [3000.0, 3050.0, 3060.0, 3100.0],
+        "收盘": [3000.0, 3050.0, 3050.0, 3100.0],
         "成交量": [5000, 6000, 6500, 7000],
     })
 
@@ -42,6 +45,129 @@ def test_calculate_series_metrics_handles_chinese_columns_and_dedupes():
     # Deduplicated: 3 unique daily dates
     assert metrics["bars_count"] == 3
     assert metrics["change_1d_pct"] > 0
+
+
+def test_calculate_series_metrics_duplicate_contract_is_order_independent():
+    same_value_rows = [
+        ("2026-08-01", 100.0),
+        ("2026-08-02", 105.0),
+        ("2026-08-02", 105),
+        ("2026-08-03", 110.0),
+    ]
+    same_value_frames = [
+        pd.DataFrame(same_value_rows, columns=["date", "close"]),
+        pd.DataFrame(
+            [same_value_rows[0], same_value_rows[2], same_value_rows[1], same_value_rows[3]],
+            columns=["date", "close"],
+        ),
+    ]
+
+    same_value_metrics = [
+        calculate_series_metrics(frame, "2026-08-03") for frame in same_value_frames
+    ]
+
+    assert same_value_metrics[0] == same_value_metrics[1]
+    assert same_value_metrics[0]["bars_count"] == 3
+
+    conflict_rows = same_value_rows.copy()
+    conflict_rows[2] = ("2026-08-02", 205.0)
+    conflict_frames = [
+        pd.DataFrame(conflict_rows, columns=["date", "close"]),
+        pd.DataFrame(
+            [conflict_rows[0], conflict_rows[2], conflict_rows[1], conflict_rows[3]],
+            columns=["date", "close"],
+        ),
+    ]
+
+    assert all(
+        calculate_series_metrics(frame, "2026-08-03") is None
+        for frame in conflict_frames
+    )
+
+
+def test_calculate_series_metrics_checks_duplicates_within_cutoff_only():
+    in_scope_conflict = pd.DataFrame({
+        "date": ["2026-08-01", "2026-08-02", "2026-08-02", "2026-08-04"],
+        "close": [100.0, 105.0, 205.0, 999.0],
+    })
+    future_conflict = pd.DataFrame({
+        "date": ["2026-08-01", "2026-08-02", "2026-08-04", "2026-08-04"],
+        "close": [100.0, 105.0, 120.0, 220.0],
+    })
+
+    assert calculate_series_metrics(in_scope_conflict, "2026-08-03") is None
+    metrics = calculate_series_metrics(future_conflict, "2026-08-03")
+    assert metrics is not None
+    assert metrics["as_of"] == "2026-08-02"
+    assert metrics["latest_close"] == 105.0
+
+
+def test_calculate_series_metrics_preserves_zero_and_alias_semantics():
+    df = pd.DataFrame({
+        "trade_date": ["2026-08-01", "2026-08-01", "2026-08-02"],
+        "value": [0, 0.0, 10.0],
+    })
+
+    metrics = calculate_series_metrics(df, "2026-08-02", price_col="missing")
+
+    assert metrics is not None
+    assert metrics["bars_count"] == 2
+    assert metrics["latest_close"] == 10.0
+    assert metrics["change_1d_pct"] == 0.0
+
+
+def test_industry_series_metrics_duplicate_contract_and_cutoff():
+    provider = IndustryLinkageProvider()
+    dates = pd.date_range("2026-05-01", periods=65, freq="D")
+    base = pd.DataFrame({"Date": dates, "Adj Close": range(100, 165)})
+    duplicate = base.iloc[[22]].copy()
+    duplicate["Adj Close"] = 122.0
+    same_value_frames = [
+        pd.concat([base.iloc[:23], duplicate, base.iloc[23:]], ignore_index=True),
+        pd.concat([base.iloc[:22], duplicate, base.iloc[22:]], ignore_index=True),
+    ]
+
+    same_value_metrics = [
+        provider._calculate_series_metrics(
+            frame,
+            as_of="2026-07-04",
+            price_col="Adj Close",
+            date_col="Date",
+        )
+        for frame in same_value_frames
+    ]
+
+    assert same_value_metrics[0] == same_value_metrics[1]
+    assert same_value_metrics[0]["current_value"] == 164.0
+    assert same_value_metrics[0]["mom_change"] is not None
+    assert same_value_metrics[0]["qoq_change"] is not None
+
+    conflict = duplicate.copy()
+    conflict["Adj Close"] = 222.0
+    conflict_frames = [
+        pd.concat([base.iloc[:23], conflict, base.iloc[23:]], ignore_index=True),
+        pd.concat([base.iloc[:22], conflict, base.iloc[22:]], ignore_index=True),
+    ]
+    assert all(
+        provider._calculate_series_metrics(
+            frame,
+            as_of="2026-07-04",
+            price_col="Adj Close",
+            date_col="Date",
+        ) is None
+        for frame in conflict_frames
+    )
+
+    future_conflict = pd.DataFrame({
+        "date": ["2026-08-01", "2026-08-02", "2026-08-04", "2026-08-04"],
+        "close": [0, 10.0, 20.0, 30.0],
+    })
+    future_metrics = provider._calculate_series_metrics(
+        future_conflict, as_of="2026-08-03"
+    )
+    assert future_metrics is not None
+    assert future_metrics["current_value"] == 10.0
+    assert future_metrics["mom_change"] is None
 
 
 def test_calculate_series_metrics_returns_none_on_empty_or_invalid():
@@ -57,6 +183,12 @@ def test_calculate_series_metrics_returns_none_on_empty_or_invalid():
 
     # Invalid as_of
     assert calculate_series_metrics(df, "invalid-date") is None
+
+    invalid_dates = pd.DataFrame({
+        "date": ["not-a-date", None],
+        "close": [100.0, 101.0],
+    })
+    assert calculate_series_metrics(invalid_dates, "2026-08-10") is None
 
 
 def test_build_cn_indices_markdown_formats_table_and_handles_failures():

@@ -62,7 +62,12 @@ def calculate_series_metrics(
     if df_work.empty:
         return None
 
-    df_work = df_work.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+    values_per_date = df_work.groupby("date")["close"].nunique()
+    if (values_per_date > 1).any():
+        logger.warning("Series contains conflicting close values for the same date")
+        return None
+
+    df_work = df_work.sort_values("date").drop_duplicates(subset=["date"])
     if df_work.empty:
         return None
 
