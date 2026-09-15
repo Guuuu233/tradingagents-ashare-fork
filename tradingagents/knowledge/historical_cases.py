@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
@@ -105,7 +106,13 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
         return {}
 
     try:
-        df = pd.read_csv(io.StringIO("\n".join(clean_lines)))
+        # Keep close values as source strings.  Converting through pandas/numpy
+        # float first can erase distinctions that must be checked for conflicts.
+        df = pd.read_csv(
+            io.StringIO("\n".join(clean_lines)),
+            dtype=str,
+            keep_default_na=False,
+        )
         if df.empty:
             return {}
 
@@ -116,14 +123,44 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
             return {}
 
         df["_p_date"] = pd.to_datetime(df[date_col], errors="coerce")
-        df["_p_close"] = pd.to_numeric(df[close_col], errors="coerce")
-        df = df.dropna(subset=["_p_date", "_p_close"])
 
-        prices: Dict[str, float] = {}
+        # Validate and compare exact decimal values before converting to the
+        # float representation used by the existing return calculation.
+        exact_prices: Dict[str, Decimal] = {}
+        invalid_dates: set[str] = set()
         for _, row in df.iterrows():
-            d_str = row["_p_date"].strftime("%Y-%m-%d")
-            prices[d_str] = float(row["_p_close"])
-        return prices
+            parsed_date = row["_p_date"]
+            if pd.isna(parsed_date):
+                continue
+
+            d_str = parsed_date.strftime("%Y-%m-%d")
+            close: Optional[Decimal]
+            try:
+                close = Decimal(str(row[close_col]).strip())
+            except (InvalidOperation, ValueError, TypeError):
+                close = None
+
+            if close is None or not close.is_finite():
+                # An invalid close for a valid date makes that date unusable,
+                # even when another row for the date contains a valid close.
+                invalid_dates.add(d_str)
+                exact_prices.pop(d_str, None)
+                continue
+
+            if d_str in invalid_dates:
+                continue
+
+            existing_close = exact_prices.get(d_str)
+            if existing_close is not None and existing_close != close:
+                logger.warning(
+                    "Conflicting close prices for %s in stock data CSV",
+                    d_str,
+                )
+                return {}
+            exact_prices[d_str] = close
+
+        # Do this only after all same-date comparisons have used exact values.
+        return {d_str: float(close) for d_str, close in exact_prices.items()}
     except Exception as exc:
         logger.debug("Failed to parse stock data CSV: %s", exc)
         return {}

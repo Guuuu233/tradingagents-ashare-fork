@@ -127,6 +127,9 @@ def test_get_next_cn_trading_day():
         assert get_next_cn_trading_day("invalid-date") is None
         assert get_next_cn_trading_day("") is None
 
+    with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=([], set())):
+        assert get_next_cn_trading_day("2024-05-10") is None
+
 
 def test_extract_claims_from_report():
     """验证从各种格式中提取结构化 Claims 列表。"""
@@ -190,6 +193,126 @@ def test_calculate_t1_return_normal():
         assert outcome_str == "+2.50%"
 
 
+def test_calculate_t1_return_identical_duplicates_are_order_independent():
+    """同日同收盘值重复应幂等折叠，交换 CSV 行序不改变 T+1 结果。"""
+    csv_variants = [
+        """# Stock data for 600519
+# Total records: 4
+date,close
+2024-05-10,100
+2024-05-10,100.0
+2024-05-13,110
+2024-05-13,110.0
+""",
+        """# Total records: 4
+# Stock data for 600519
+date,close
+2024-05-13,110.0
+2024-05-13,110
+2024-05-10,100.0
+2024-05-10,100
+""",
+    ]
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+
+    results = []
+    for sample_csv in csv_variants:
+        with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+             patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc)), \
+             patch("tradingagents.dataflows.interface.route_to_vendor", return_value=sample_csv):
+            results.append(calculate_t1_return("600519", "2024-05-10"))
+
+    assert results == [
+        ("2024-05-13", 10.0, "+10.00%"),
+        ("2024-05-13", 10.0, "+10.00%"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        ["2024-05-10,100", "2024-05-10,80", "2024-05-13,110"],
+        ["2024-05-10,80", "2024-05-10,100", "2024-05-13,110"],
+        ["2024-05-10,100", "2024-05-13,110", "2024-05-13,120"],
+        ["2024-05-10,100", "2024-05-13,120", "2024-05-13,110"],
+    ],
+    ids=["t0-forward", "t0-reversed", "t1-forward", "t1-reversed"],
+)
+def test_calculate_t1_return_conflicting_duplicates_fail_closed(rows):
+    """T0 或 T1 同日冲突无论行序如何都应沿用既有数据缺失语义。"""
+    sample_csv = "date,close\n" + "\n".join(rows) + "\n"
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+         patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc)), \
+         patch("tradingagents.dataflows.interface.route_to_vendor", return_value=sample_csv):
+        assert calculate_t1_return("600519", "2024-05-10") == (
+            "2024-05-13",
+            None,
+            DATA_MISSING_PLACEHOLDER,
+        )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        ["2024-05-10,100", "2024-05-10,not-a-price", "2024-05-13,110"],
+        ["2024-05-10,not-a-price", "2024-05-10,100", "2024-05-13,110"],
+        ["2024-05-10,100", "2024-05-13,110", "2024-05-13,not-a-price"],
+        ["2024-05-10,100", "2024-05-13,not-a-price", "2024-05-13,110"],
+    ],
+    ids=["t0-valid-then-invalid", "t0-invalid-then-valid", "t1-valid-then-invalid", "t1-invalid-then-valid"],
+)
+def test_calculate_t1_return_invalid_close_mixed_with_valid_fails_closed(rows):
+    """同日合法 close 与非法 close 混合时，无论行序均应数据缺失。"""
+    sample_csv = "date,close\n" + "\n".join(rows) + "\n"
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+         patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc)), \
+         patch("tradingagents.dataflows.interface.route_to_vendor", return_value=sample_csv):
+        assert calculate_t1_return("600519", "2024-05-10") == (
+            "2024-05-13",
+            None,
+            DATA_MISSING_PLACEHOLDER,
+        )
+
+
+def test_calculate_t1_return_decimal_precision_conflict_fails_closed():
+    """精确 decimal close 的微小差异不能被 float 舍入为同值。"""
+    sample_csv = """date,close
+2024-05-10,1.00000000000000000
+2024-05-10,1.00000000000000001
+2024-05-13,1.1
+"""
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+         patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc)), \
+         patch("tradingagents.dataflows.interface.route_to_vendor", return_value=sample_csv):
+        assert calculate_t1_return("600519", "2024-05-10") == (
+            "2024-05-13",
+            None,
+            DATA_MISSING_PLACEHOLDER,
+        )
+
+
+def test_calculate_t1_return_zero_close_keeps_missing_semantics_with_comments():
+    """canonical 注释行继续忽略；合法 close=0 不视为冲突或补成收益率。"""
+    sample_csv = """# Stock data for 600519
+# Total records: 2
+date,close
+2024-05-10,0
+2024-05-13,110
+"""
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+         patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc)), \
+         patch("tradingagents.dataflows.interface.route_to_vendor", return_value=sample_csv):
+        assert calculate_t1_return("600519", "2024-05-10") == (
+            "2024-05-13",
+            None,
+            DATA_MISSING_PLACEHOLDER,
+        )
+
+
 def test_calculate_t1_return_missing_data_future_or_incomplete():
     """验证当评估日为未来或盘中未收盘时严格返回【数据缺失】，禁止填 0 或今天。"""
     fake_dates = [date(2026, 8, 20), date(2026, 8, 21), date(2026, 8, 24)]
@@ -222,6 +345,17 @@ def test_calculate_t1_return_missing_data_future_or_incomplete():
         assert eval_date == "2026-08-21"
         assert change_pct is None
         assert outcome_str == DATA_MISSING_PLACEHOLDER
+
+    # 4. 空响应或格式异常同样沿用数据缺失语义
+    for invalid_csv in ("", "message,error\nno price,unavailable\n"):
+        with patch("tradingagents.knowledge.historical_cases._load_cn_trade_dates", return_value=(fake_dates, set(fake_dates))), \
+             patch("tradingagents.knowledge.historical_cases.now_cn", return_value=datetime(2026, 8, 25, 16, 0, tzinfo=timezone.utc)), \
+             patch("tradingagents.dataflows.interface.route_to_vendor", return_value=invalid_csv):
+            assert calculate_t1_return("600519", "2026-08-20") == (
+                "2026-08-21",
+                None,
+                DATA_MISSING_PLACEHOLDER,
+            )
 
 
 def test_evaluate_prediction_error():
