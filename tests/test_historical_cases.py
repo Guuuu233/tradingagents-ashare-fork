@@ -190,6 +190,96 @@ def test_calculate_t1_return_normal():
         assert outcome_str == "+2.50%"
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            "2024-05-10,99,101,98,100,1000",
+            "2024-05-10,99,101,98,100.0,1000",
+            "2024-05-13,109,111,108,110,1200",
+            "2024-05-13,109,111,108,110.0,1200",
+        ],
+        [
+            "2024-05-13,109,111,108,110.0,1200",
+            "2024-05-13,109,111,108,110,1200",
+            "2024-05-10,99,101,98,100.0,1000",
+            "2024-05-10,99,101,98,100,1000",
+        ],
+    ],
+    ids=["forward", "reversed"],
+)
+def test_calculate_t1_return_identical_ohlcv_duplicates_are_order_independent(rows):
+    """完整 OHLCV 完全重复行应折叠，交换行序不改变 T+1 结果。"""
+    sample_csv = "date,open,high,low,close,volume\n" + "\n".join(rows) + "\n"
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ):
+        with patch(
+            "tradingagents.knowledge.historical_cases.now_cn",
+            return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+        ):
+            with patch(
+                "tradingagents.dataflows.interface.route_to_vendor",
+                return_value=sample_csv,
+            ):
+                assert calculate_t1_return("600519", "2024-05-10") == (
+                    "2024-05-13",
+                    10.0,
+                    "+10.00%",
+                )
+
+
+@pytest.mark.parametrize(
+    "conflicting_field,first_value,second_value",
+    [
+        ("open", "99", "99.5"),
+        ("high", "101", "101.5"),
+        ("low", "98", "97.5"),
+        ("volume", "1000", "1100"),
+    ],
+)
+def test_calculate_t1_return_same_close_but_conflicting_ohlcv_fields_fail_closed(
+    conflicting_field, first_value, second_value
+):
+    """Close 相同但其他可用 OHLCV 字段冲突时，无论行序都必须拒绝。"""
+    columns = ["date", "open", "high", "low", "close", "volume"]
+    first = ["2024-05-10", "99", "101", "98", "100", "1000"]
+    second = first.copy()
+    field_index = columns.index(conflicting_field)
+    second[field_index] = second_value
+    first[field_index] = first_value
+    base_t1 = ["2024-05-13", "109", "111", "108", "110", "1200"]
+    csv_variants = [
+        [first, second, base_t1],
+        [base_t1, second, first],
+    ]
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+
+    for rows in csv_variants:
+        sample_csv = ",".join(columns) + "\n" + "\n".join(
+            ",".join(row) for row in rows
+        ) + "\n"
+        with patch(
+            "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+            return_value=(fake_dates, set(fake_dates)),
+        ):
+            with patch(
+                "tradingagents.knowledge.historical_cases.now_cn",
+                return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+            ):
+                with patch(
+                    "tradingagents.dataflows.interface.route_to_vendor",
+                    return_value=sample_csv,
+                ):
+                    assert calculate_t1_return("600519", "2024-05-10") == (
+                        "2024-05-13",
+                        None,
+                        DATA_MISSING_PLACEHOLDER,
+                    )
+
+
 def test_calculate_t1_return_missing_data_future_or_incomplete():
     """验证当评估日为未来或盘中未收盘时严格返回【数据缺失】，禁止填 0 或今天。"""
     fake_dates = [date(2026, 8, 20), date(2026, 8, 21), date(2026, 8, 24)]
