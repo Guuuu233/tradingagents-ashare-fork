@@ -6591,6 +6591,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
         }
 
         retrieved_at = datetime.now(timezone.utc).isoformat()
+        is_historical = is_historical_analysis_date(curr_date)
         out = {}
         for item in diff:
             if not isinstance(item, dict):
@@ -6603,32 +6604,55 @@ class CnAkshareProvider(BaseMarketDataProvider):
             change_1d_pct = safe_float(item.get("f3"))
             if price is None or price <= 0:
                 continue
-            if change_1d_pct is None:
-                change_1d_pct = 0.0
 
             ts_raw = item.get("f124")
-            as_of = curr_date
-            if ts_raw:
-                try:
-                    ts_int = int(ts_raw)
-                    if ts_int > 1000000000:
-                        if code_raw in ("SPX", "NDX", "DJIA"):
-                            as_of = _get_latest_us_session_date(ts_int)
-                        elif code_raw in ("HSI", "HSTECH"):
-                            as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
-                        elif code_raw == "N225":
-                            as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
-                        elif code_raw == "KS11":
-                            as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
-                        elif code_raw in ("GDAXI", "FTSE", "FCHI"):
-                            as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Europe/London")).strftime("%Y-%m-%d")
-                        else:
-                            as_of = datetime.fromtimestamp(ts_int, timezone.utc).strftime("%Y-%m-%d")
-                except (ValueError, TypeError, OverflowError):
-                    pass
+            as_of = None
+            try:
+                ts_int = int(ts_raw)
+                if ts_int <= 1000000000:
+                    raise ValueError("invalid snapshot timestamp")
+                if code_raw in ("SPX", "NDX", "DJIA"):
+                    as_of = _get_latest_us_session_date(ts_int)
+                elif code_raw in ("HSI", "HSTECH"):
+                    as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+                elif code_raw == "N225":
+                    as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
+                elif code_raw == "KS11":
+                    as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
+                elif code_raw in ("GDAXI", "FTSE", "FCHI"):
+                    as_of = datetime.fromtimestamp(ts_int, ZoneInfo("Europe/London")).strftime("%Y-%m-%d")
+                else:
+                    as_of = datetime.fromtimestamp(ts_int, timezone.utc).strftime("%Y-%m-%d")
+            except (ValueError, TypeError, OverflowError, OSError):
+                _provider_logger.debug(
+                    "Ignoring invalid Eastmoney snapshot timestamp for %s",
+                    code_raw,
+                )
 
-            if as_of > curr_date:
+            if as_of is None:
+                if is_historical:
+                    continue
+                as_of = curr_date
+
+            try:
+                snapshot_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+                analysis_date = datetime.strptime(curr_date, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                _provider_logger.debug(
+                    "Ignoring Eastmoney snapshot with invalid date for %s",
+                    code_raw,
+                )
                 continue
+            if snapshot_date > analysis_date:
+                continue
+
+            trend_desc = "涨跌幅数据缺失"
+            if change_1d_pct is not None:
+                trend_desc = (
+                    "上涨反弹"
+                    if change_1d_pct > 0.5
+                    else ("回调下跌" if change_1d_pct < -0.5 else "平稳震荡")
+                )
 
             out[std_name] = {
                 "name": std_name,
@@ -6641,7 +6665,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 "period_kind": "session_snapshot",
                 "retrieved_at": retrieved_at,
                 "source": "eastmoney_ulist",
-                "trend_desc": "上涨反弹" if change_1d_pct > 0.5 else ("回调下跌" if change_1d_pct < -0.5 else "平稳震荡"),
+                "trend_desc": trend_desc,
             }
         return out
 
@@ -6687,6 +6711,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             res_map[raw_code] = raw_fields
 
         retrieved_at = datetime.now(timezone.utc).isoformat()
+        is_historical = is_historical_analysis_date(curr_date)
         out = {}
         for name, code, sina_symbol in symbols:
             raw = res_map.get(sina_symbol) or res_map.get(sina_symbol.split("_")[-1])
@@ -6697,12 +6722,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     # fields: [name, latest, change_amt, change_pct]
                     price = safe_float(raw[1])
                     change_1d_pct = safe_float(raw[3])
-                    if sina_symbol in ("int_sp500", "int_nasdaq", "int_dji"):
+                    if not is_historical and sina_symbol in ("int_sp500", "int_nasdaq", "int_dji"):
                         as_of = _get_latest_us_session_date()
-                    elif sina_symbol == "int_nikkei":
-                        as_of = curr_date
                     else:
-                        as_of = curr_date
+                        as_of = None
                 elif sina_symbol.startswith("gb_"):
                     # fields: [name, price, change_pct, datetime, change_amt, ...]
                     price = safe_float(raw[1])
@@ -6713,44 +6736,81 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             dt_cst = datetime.strptime(raw_dt[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("Asia/Shanghai"))
                             as_of = _get_latest_us_session_date(dt_cst)
                         except Exception:
-                            as_of = raw_dt[:10]
+                            as_of = None
                     else:
-                        as_of = curr_date
+                        as_of = None
                 elif sina_symbol.startswith("rt_hk"):
                     # fields: [symbol, name, prev_close, open, high, low, latest, change_amt, change_pct, ..., date, time]
                     price = safe_float(raw[6])
                     change_1d_pct = safe_float(raw[8])
-                    as_of = raw[17].replace("/", "-") if len(raw) > 17 and len(raw[17]) >= 10 else curr_date
+                    raw_date = raw[17] if len(raw) > 17 else ""
+                    try:
+                        as_of = datetime.strptime(raw_date, "%Y/%m/%d").strftime("%Y-%m-%d")
+                    except (TypeError, ValueError):
+                        as_of = None
                 elif sina_symbol.startswith("b_"):
                     # fields: [name, latest, change_amt, change_pct, ...]
                     price = safe_float(raw[1])
                     change_1d_pct = safe_float(raw[3])
-                    date_val, time_val = None, None
+                    dated_values = []
                     for i, f in enumerate(raw):
                         if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", f):
-                            date_val = f
-                            if i + 1 < len(raw) and re.fullmatch(r"\d{2}:\d{2}:\d{2}", raw[i+1]):
-                                time_val = raw[i+1]
+                            time_val = raw[i + 1] if i + 1 < len(raw) and re.fullmatch(r"\d{2}:\d{2}:\d{2}", raw[i + 1]) else None
+                            dated_values.append((f, time_val))
                     tz_target = "Europe/Berlin" if "DAX" in sina_symbol else ("Europe/London" if "FTSE" in sina_symbol else ("Europe/Paris" if "CAC" in sina_symbol else "Asia/Seoul"))
-                    if date_val and time_val:
+                    timed_values = [
+                        value for value in dated_values if value[1] is not None
+                    ]
+                    date_val, time_val = (
+                        timed_values or dated_values or [(None, None)]
+                    )[-1]
+                    if date_val is not None and time_val is not None:
                         try:
                             dt_cst = datetime.strptime(f"{date_val} {time_val}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("Asia/Shanghai"))
                             as_of = dt_cst.astimezone(ZoneInfo(tz_target)).strftime("%Y-%m-%d")
-                        except Exception:
-                            candidates = [f for f in raw if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", f) and f <= curr_date]
-                            as_of = max(candidates) if candidates else curr_date
+                        except (TypeError, ValueError, OverflowError):
+                            as_of = None
+                    elif date_val is not None:
+                        try:
+                            as_of = datetime.strptime(date_val, "%Y-%m-%d").strftime("%Y-%m-%d")
+                        except (TypeError, ValueError):
+                            as_of = None
                     else:
-                        candidates = [f for f in raw if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", f) and f <= curr_date]
-                        as_of = max(candidates) if candidates else curr_date
+                        as_of = None
                 else:
                     continue
 
                 if price is None or price <= 0:
                     continue
-                if change_1d_pct is None:
-                    change_1d_pct = 0.0
-                if as_of > curr_date:
+                if as_of is None:
+                    if is_historical:
+                        _provider_logger.debug(
+                            "Ignoring undated Sina snapshot for %s in historical analysis",
+                            sina_symbol,
+                        )
+                        continue
+                    as_of = curr_date
+                try:
+                    snapshot_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+                    analysis_date = datetime.strptime(curr_date, "%Y-%m-%d").date()
+                except (TypeError, ValueError):
+                    _provider_logger.debug(
+                        "Ignoring Sina snapshot with invalid date for %s",
+                        sina_symbol,
+                    )
                     continue
+                if snapshot_date > analysis_date:
+                    continue
+
+                trend_desc = "涨跌幅数据缺失"
+                if change_1d_pct is not None:
+                    trend_desc = (
+                        "上涨反弹"
+                        if change_1d_pct > 0.5
+                        else (
+                            "回调下跌" if change_1d_pct < -0.5 else "平稳震荡"
+                        )
+                    )
 
                 out[name] = {
                     "name": name,
@@ -6763,9 +6823,14 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     "period_kind": "session_snapshot",
                     "retrieved_at": retrieved_at,
                     "source": "sina_hq",
-                    "trend_desc": "上涨反弹" if change_1d_pct > 0.5 else ("回调下跌" if change_1d_pct < -0.5 else "平稳震荡"),
+                    "trend_desc": trend_desc,
                 }
-            except Exception:
+            except Exception as exc:
+                _provider_logger.debug(
+                    "Ignoring malformed Sina snapshot for %s: %s",
+                    sina_symbol,
+                    exc,
+                )
                 continue
         return out
 
