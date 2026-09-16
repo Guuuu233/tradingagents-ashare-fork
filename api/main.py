@@ -332,6 +332,7 @@ async def lifespan(app: FastAPI):
     # development (TA_ALLOW_DEFAULT_SECRET=1). Must run before init_db() so no
     # data is ever written using the well-known default key.
     auth_service.ensure_secure_secret_configured()
+    prior_socket_timeout = socket.getdefaulttimeout()
     # 全局 socket 默认超时：akshare 等库内部的 requests 调用不传 timeout，
     # 网络丢包时 TLS 握手/读会永久阻塞，僵尸线程逐渐占满线程池（见 healthz 探针）。
     # uvicorn/asyncio 的服务端 socket 显式 setblocking(False)，不受此影响；
@@ -357,7 +358,9 @@ async def lifespan(app: FastAPI):
     # default is `min(32, cpu_count + 4)`, which is too small when many
     # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
     # DB writes, LLM extraction, and akshare data collection.
-    global _default_executor
+    global _default_executor, _executor
+    if getattr(_executor, "_shutdown", False):
+        _executor = ThreadPoolExecutor(max_workers=int(os.getenv("TA_MAX_WORKERS", "2")))
     new_default_executor: Optional[ThreadPoolExecutor] = None
     try:
         loop = asyncio.get_running_loop()
@@ -438,6 +441,7 @@ async def lifespan(app: FastAPI):
 
     yield
     _log("Shutting down: Cleaning up resources...")
+    socket.setdefaulttimeout(prior_socket_timeout)
     _executor.shutdown(wait=True)
     if new_default_executor is not None:
         new_default_executor.shutdown(wait=False)

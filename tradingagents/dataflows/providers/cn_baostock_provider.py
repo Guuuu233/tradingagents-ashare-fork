@@ -15,6 +15,32 @@ from ..trade_calendar import (
 )
 
 
+def _cleanup_baostock_context():
+    """Clean up baostock's module-level context socket and singleton instance.
+
+    baostock stores its active connection on `baostock.common.context.default_socket`
+    and caches a singleton on `SocketUtil.instance`. If logout is missed or if the peer
+    closes the socket, subsequent calls can hang in socket select() or spin in busy-loops.
+    """
+    try:
+        import baostock.common.context as conx
+        sock = getattr(conx, "default_socket", None)
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            conx.default_socket = None
+    except Exception:
+        pass
+
+    try:
+        import baostock.util.socketutil as sockutil
+        sockutil.SocketUtil.instance = None
+    except Exception:
+        pass
+
+
 class CnBaoStockProvider(BaseMarketDataProvider):
     """A-share provider backed by BaoStock."""
 
@@ -62,15 +88,19 @@ class CnBaoStockProvider(BaseMarketDataProvider):
     @contextmanager
     def _session(self):
         bs = self._bs()
-        with redirect_stdout(io.StringIO()):
-            lg = bs.login()
-        if getattr(lg, "error_code", "1") != "0":
-            raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
         try:
+            with redirect_stdout(io.StringIO()):
+                lg = bs.login()
+            if getattr(lg, "error_code", "1") != "0":
+                raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
             yield bs
         finally:
             with redirect_stdout(io.StringIO()):
-                bs.logout()
+                try:
+                    bs.logout()
+                except Exception:
+                    pass
+            _cleanup_baostock_context()
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start_boundary = pd.to_datetime(start_date, errors="coerce")

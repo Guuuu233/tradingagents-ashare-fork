@@ -23,6 +23,27 @@ from fastapi.testclient import TestClient
 from api.database import ImportedPortfolioPositionDB, get_db_ctx
 
 
+@pytest.fixture(autouse=True)
+def _isolate_api_smoke_db():
+    """Ensure database records and vendor queries from api_smoke tests do not leak."""
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2026-03-31", 1.0, "+1.00%"),
+    ):
+        yield
+    from api.database import (
+        HistoricalCaseDB,
+        ImportedPortfolioPositionDB,
+        ReportDB,
+        get_db_ctx,
+    )
+    with get_db_ctx() as db:
+        db.query(ReportDB).delete()
+        db.query(HistoricalCaseDB).delete()
+        db.query(ImportedPortfolioPositionDB).delete()
+        db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Schema-only test (no server needed)
 # ---------------------------------------------------------------------------
