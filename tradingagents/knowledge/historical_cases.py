@@ -22,7 +22,7 @@ import os
 import re
 import subprocess
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -52,6 +52,44 @@ _BASELINE_FALLBACK_SHA = "dcc871dff13878803881bdbb9aed55f7cc10dbeb"
 _STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REFUSAL_METADATA_KEY = "__historical_case_refusal__"
 
+RETRYABLE_REFUSAL_CODES: Set[str] = {
+    "future_eval_date",
+    "eval_date_not_closed",
+    "calendar_unavailable",
+    "t1_date_unavailable",
+}
+
+TERMINAL_REFUSAL_CODES: Set[str] = {
+    "invalid_trade_date",
+    "invalid_eval_date",
+    "non_trading_trade_date",
+    "non_t1_eval_date",
+    "duplicate_bar_conflict",
+    "snapshot_refusal",
+    "vendor_refuse",
+}
+
+
+def is_terminal_refusal_code(code: str) -> bool:
+    """Return whether a refusal code represents an unrecoverable terminal state.
+
+    Terminal codes represent permanent defects or source limitations (e.g.
+    invalid dates, weekend trade dates, conflicting bars, snapshot-only sources)
+    that will never resolve on subsequent retries.
+
+    Retryable codes represent transient conditions (e.g. T+1 evaluation date
+    in the future, market session not closed yet, temporary calendar unavailability)
+    that should stay in the backfill queue until data becomes available.
+
+    Unknown codes default to False (retryable) to ensure legacy or unclassified
+    cases are not permanently excluded by accident.
+    """
+    if code in TERMINAL_REFUSAL_CODES:
+        return True
+    if code in RETRYABLE_REFUSAL_CODES:
+        return False
+    return False
+
 
 class HistoricalCaseRefusal(str, VendorRefuse):
     """Typed fail-closed outcome that remains equal to the legacy placeholder.
@@ -64,18 +102,36 @@ class HistoricalCaseRefusal(str, VendorRefuse):
 
     code: str
     status: str = "refused"
+    terminal: bool
 
-    def __new__(cls, code: str, reason: str):
+    def __new__(
+        cls,
+        code: str,
+        reason: str,
+        terminal: Optional[bool] = None,
+    ):
         return str.__new__(cls, DATA_MISSING_PLACEHOLDER)
 
-    def __init__(self, code: str, reason: str):
+    def __init__(
+        self,
+        code: str,
+        reason: str,
+        terminal: Optional[bool] = None,
+    ):
         VendorRefuse.__init__(self, reason=reason, allow_peers=())
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "status", "refused")
+        if terminal is None:
+            terminal = is_terminal_refusal_code(code)
+        object.__setattr__(self, "terminal", bool(terminal))
 
 
-def _refusal(code: str, reason: str) -> HistoricalCaseRefusal:
-    return HistoricalCaseRefusal(code, reason)
+def _refusal(
+    code: str,
+    reason: str,
+    terminal: Optional[bool] = None,
+) -> HistoricalCaseRefusal:
+    return HistoricalCaseRefusal(code, reason, terminal=terminal)
 
 
 def _classify_refusal_code(reason: str, default_code: str) -> str:
@@ -105,16 +161,19 @@ def _classify_refusal_code(reason: str, default_code: str) -> str:
 def _coerce_refusal(
     value: Any,
     default_code: str = "vendor_refuse",
+    terminal: Optional[bool] = None,
 ) -> Optional[HistoricalCaseRefusal]:
     if isinstance(value, HistoricalCaseRefusal):
         return value
     if isinstance(value, VendorRefuse):
         reason = str(value.reason).strip()
-        return _refusal(_classify_refusal_code(reason, default_code), reason)
+        code = _classify_refusal_code(reason, default_code)
+        return _refusal(code, reason, terminal=terminal)
     if isinstance(value, str):
         reason = value.strip()
         if reason.startswith("【数据获取失败】"):
-            return _refusal(_classify_refusal_code(reason, default_code), reason)
+            code = _classify_refusal_code(reason, default_code)
+            return _refusal(code, reason, terminal=terminal)
     return None
 
 
@@ -138,6 +197,7 @@ def _claims_with_refusal_metadata(
             _REFUSAL_METADATA_KEY: {
                 "code": refusal.code,
                 "reason": refusal.reason,
+                "terminal": refusal.terminal,
             }
         })
     return clean_claims
@@ -156,7 +216,9 @@ def _refusal_from_claims(claims: Any) -> Optional[HistoricalCaseRefusal]:
         if not reason:
             continue
         code = str(metadata.get("code") or "vendor_refuse").strip()
-        return _refusal(code, reason)
+        raw_terminal = metadata.get("terminal")
+        terminal = bool(raw_terminal) if raw_terminal is not None else None
+        return _refusal(code, reason, terminal=terminal)
     return None
 
 
@@ -187,6 +249,15 @@ def _restore_case_refusal(
     case_obj.historical_case_refusal = refusal
     case_obj.refusal_code = refusal.code
     case_obj.refusal_reason = refusal.reason
+    case_obj.refusal_terminal = refusal.terminal
+
+
+def _is_terminal_case(case_obj: Any) -> bool:
+    """Return whether a case has a persisted terminal refusal."""
+    refusal = _case_refusal(case_obj)
+    if refusal is None:
+        return False
+    return bool(refusal.terminal)
 
 
 def get_current_run_sha() -> str:
@@ -790,12 +861,12 @@ def backfill_pending_cases(
             .order_by(HistoricalCaseDB.trade_date.asc())
             .all()
         )
-        # A persisted refusal uses the legacy missing marker for compatibility,
-        # but its JSON metadata means it is a terminal refusal, not an ordinary
-        # quote gap that should be retried on every process start.
+        # Only cases with terminal refusals are excluded from backfill scanning.
+        # Transient/retryable refusals (e.g. future_eval_date, eval_date_not_closed,
+        # calendar_unavailable) remain in the queue so they can complete the T+1 loop.
         pending_cases = [
             case for case in pending_candidates
-            if _refusal_from_claims(case.claims) is None
+            if not _is_terminal_case(case)
         ]
 
         stats: Dict[str, int] = {
@@ -870,6 +941,11 @@ def backfill_pending_cases(
                 case.claims = _claims_without_refusal_metadata(case.claims)
                 case.is_error = is_error
                 case.updated_at = datetime.now(timezone.utc)
+                if hasattr(case, "historical_case_refusal"):
+                    case.historical_case_refusal = None
+                    case.refusal_code = None
+                    case.refusal_reason = None
+                    case.refusal_terminal = None
                 stats["backfilled"] += 1
                 modified = True
                 logger.info(
