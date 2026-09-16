@@ -163,6 +163,18 @@ class TestOfflineGuardrailInterception:
         finally:
             s.close()
 
+    def test_curl_cffi_blocked_fail_fast(self):
+        """curl_cffi perform must be intercepted to prevent C-level libcurl bypass."""
+        try:
+            import curl_cffi.curl
+            c = curl_cffi.curl.Curl()
+            c.setopt(curl_cffi.curl.CurlOpt.URL, b"https://example.com")
+            with pytest.raises(OfflineTestGuardrailError) as exc_info:
+                c.perform()
+            assert "curl_cffi" in str(exc_info.value)
+        except ImportError:
+            pytest.skip("curl_cffi not installed")
+
 
 class TestLocalLoopbackAndIpcAllowed:
     """Verify that loopback, in-process clients, and IPC operate completely unhindered."""

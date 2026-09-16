@@ -292,12 +292,39 @@ def run_guardrail_sentinel() -> None:
 
 
 def _install_guardrail_hooks() -> None:
-    """Install dual audit hooks into interpreter. Hook order: Observation FIRST, Interception SECOND."""
+    """Install dual audit hooks and CFFI guards. Hook order: Observation FIRST, Interception SECOND."""
     global _hooks_installed
     if not _hooks_installed:
         sys.addaudithook(_observation_hook)
         sys.addaudithook(_interception_hook)
+        _install_curl_cffi_guard()
         _hooks_installed = True
+
+
+def _install_curl_cffi_guard() -> None:
+    """Guard C-level curl_cffi requests which bypass Python socket audit hooks."""
+    try:
+        import curl_cffi.curl
+        _orig_perform = getattr(curl_cffi.curl.Curl, "perform", None)
+        if _orig_perform is None or getattr(_orig_perform, "_is_guarded", False):
+            return
+
+        def _guarded_perform(self, *args, **kwargs):
+            if is_network_enabled():
+                return _orig_perform(self, *args, **kwargs)
+            _log_observation("curl_cffi.perform", "external_curl_cffi", False)
+            _log_deny("curl_cffi.perform", "external_curl_cffi")
+            nodeid = _current_nodeid or "INIT"
+            phase = _current_phase or "init"
+            raise OfflineTestGuardrailError(
+                f"OfflineTestGuardrail: outbound curl_cffi connection is disallowed in offline test suite. "
+                f"[nodeid={nodeid}, phase={phase}]"
+            )
+
+        _guarded_perform._is_guarded = True
+        curl_cffi.curl.Curl.perform = _guarded_perform
+    except ImportError:
+        pass
 
 
 def _reset_baostock_context() -> None:
