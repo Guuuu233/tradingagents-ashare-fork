@@ -22,7 +22,7 @@ import os
 import re
 import subprocess
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -52,6 +52,52 @@ _BASELINE_FALLBACK_SHA = "dcc871dff13878803881bdbb9aed55f7cc10dbeb"
 _STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _REFUSAL_METADATA_KEY = "__historical_case_refusal__"
 
+RETRYABLE_REFUSAL_CODES: Set[str] = {
+    "future_eval_date",
+    "eval_date_not_closed",
+    "calendar_unavailable",
+    "t1_date_unavailable",
+    "vendor_refuse",
+    "vendor_timeout",
+    "connection_refused",
+    "provider_unavailable",
+    "connection_closed",
+}
+
+TERMINAL_REFUSAL_CODES: Set[str] = {
+    "invalid_trade_date",
+    "invalid_eval_date",
+    "non_trading_trade_date",
+    "non_t1_eval_date",
+    "duplicate_bar_conflict",
+    "snapshot_refusal",
+}
+
+
+def is_terminal_refusal_code(code: Optional[str]) -> bool:
+    """Return whether a refusal code represents an unrecoverable terminal state.
+
+    【设计原则：默认可重试，终态必须正面识别】
+    在 T+1 历史案例闭环与回填体系中，两类误判代价严重不对称：
+    - 误判「可重试」：仅导致在后续回填任务中多扫描一次，成本廉价、具备幂等性与自愈性；
+    - 误判「终态」：案例收益将被永久冻结在【数据缺失】，T+1 学习闭环永久丢失，不可逆且静默。
+
+    因此：
+    1. 终态集合 TERMINAL_REFUSAL_CODES 仅保留能正面证明「重试也永远不会成功」的确定性缺陷：
+       - 无效日期 (invalid_trade_date, invalid_eval_date)
+       - 非交易日 (non_trading_trade_date)
+       - 评估日非严格 T+1 (non_t1_eval_date)
+       - 重复日线冲突 (duplicate_bar_conflict)
+       - 快照源能力限制无法提供历史日线 (snapshot_refusal)
+    2. 网络超时、连接被拒、供应商不可用、连接被对端关闭、供应商拒绝 (vendor_refuse) 以及
+       未来评估日 (future_eval_date)、盘中未收盘 (eval_date_not_closed)、日历暂不可用 (calendar_unavailable)
+       等所有暂态网络/环境/供应商异常，一律按可重试处理（返回 False）。
+    3. 未知、未显式分类或新扩展的 code，一律安全回退为可重试（返回 False），绝不允许默认进入终态。
+    """
+    if not code:
+        return False
+    return code in TERMINAL_REFUSAL_CODES
+
 
 class HistoricalCaseRefusal(str, VendorRefuse):
     """Typed fail-closed outcome that remains equal to the legacy placeholder.
@@ -64,18 +110,40 @@ class HistoricalCaseRefusal(str, VendorRefuse):
 
     code: str
     status: str = "refused"
+    terminal: bool
 
-    def __new__(cls, code: str, reason: str):
+    def __new__(
+        cls,
+        code: str,
+        reason: str,
+        terminal: Optional[bool] = None,
+    ):
         return str.__new__(cls, DATA_MISSING_PLACEHOLDER)
 
-    def __init__(self, code: str, reason: str):
+    def __init__(
+        self,
+        code: str,
+        reason: str,
+        terminal: Optional[bool] = None,
+    ):
         VendorRefuse.__init__(self, reason=reason, allow_peers=())
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "status", "refused")
+        # 强制执行正面识别原则：只有当 code 本身属于确定性终态集合时，terminal 才能为 True。
+        # 任何未知 code 或暂态 code（如 vendor_refuse/超时/连接中断等），terminal 恒为 False。
+        if terminal is None:
+            is_terminal = is_terminal_refusal_code(code)
+        else:
+            is_terminal = bool(terminal) and is_terminal_refusal_code(code)
+        object.__setattr__(self, "terminal", is_terminal)
 
 
-def _refusal(code: str, reason: str) -> HistoricalCaseRefusal:
-    return HistoricalCaseRefusal(code, reason)
+def _refusal(
+    code: str,
+    reason: str,
+    terminal: Optional[bool] = None,
+) -> HistoricalCaseRefusal:
+    return HistoricalCaseRefusal(code, reason, terminal=terminal)
 
 
 def _classify_refusal_code(reason: str, default_code: str) -> str:
@@ -105,16 +173,19 @@ def _classify_refusal_code(reason: str, default_code: str) -> str:
 def _coerce_refusal(
     value: Any,
     default_code: str = "vendor_refuse",
+    terminal: Optional[bool] = None,
 ) -> Optional[HistoricalCaseRefusal]:
     if isinstance(value, HistoricalCaseRefusal):
         return value
     if isinstance(value, VendorRefuse):
         reason = str(value.reason).strip()
-        return _refusal(_classify_refusal_code(reason, default_code), reason)
+        code = _classify_refusal_code(reason, default_code)
+        return _refusal(code, reason, terminal=terminal)
     if isinstance(value, str):
         reason = value.strip()
         if reason.startswith("【数据获取失败】"):
-            return _refusal(_classify_refusal_code(reason, default_code), reason)
+            code = _classify_refusal_code(reason, default_code)
+            return _refusal(code, reason, terminal=terminal)
     return None
 
 
@@ -138,6 +209,7 @@ def _claims_with_refusal_metadata(
             _REFUSAL_METADATA_KEY: {
                 "code": refusal.code,
                 "reason": refusal.reason,
+                "terminal": refusal.terminal,
             }
         })
     return clean_claims
@@ -156,7 +228,15 @@ def _refusal_from_claims(claims: Any) -> Optional[HistoricalCaseRefusal]:
         if not reason:
             continue
         code = str(metadata.get("code") or "vendor_refuse").strip()
-        return _refusal(code, reason)
+        raw_terminal = metadata.get("terminal")
+        if raw_terminal is not None:
+            # 兼容既有/已落库数据：即使元数据中曾标记 terminal=True，
+            # 若 code 不在 TERMINAL_REFUSAL_CODES（如历史误标的 vendor_refuse），
+            # 依然纠正为可重试（terminal=False），绝不允许既有数据被永久排除。
+            terminal = bool(raw_terminal) and is_terminal_refusal_code(code)
+        else:
+            terminal = is_terminal_refusal_code(code)
+        return _refusal(code, reason, terminal=terminal)
     return None
 
 
@@ -187,6 +267,15 @@ def _restore_case_refusal(
     case_obj.historical_case_refusal = refusal
     case_obj.refusal_code = refusal.code
     case_obj.refusal_reason = refusal.reason
+    case_obj.refusal_terminal = refusal.terminal
+
+
+def _is_terminal_case(case_obj: Any) -> bool:
+    """Return whether a case has a persisted terminal refusal."""
+    refusal = _case_refusal(case_obj)
+    if refusal is None:
+        return False
+    return bool(refusal.terminal) and is_terminal_refusal_code(refusal.code)
 
 
 def get_current_run_sha() -> str:
@@ -495,7 +584,7 @@ def calculate_t1_return(
             target_eval_date,
             exc,
         )
-        return target_eval_date, None, DATA_MISSING_PLACEHOLDER
+        return target_eval_date, None, _refusal("vendor_refuse", str(exc), terminal=False)
 
     p_t0 = prices.get(trade_date_str)
     p_t1 = prices.get(target_eval_date)
@@ -790,12 +879,12 @@ def backfill_pending_cases(
             .order_by(HistoricalCaseDB.trade_date.asc())
             .all()
         )
-        # A persisted refusal uses the legacy missing marker for compatibility,
-        # but its JSON metadata means it is a terminal refusal, not an ordinary
-        # quote gap that should be retried on every process start.
+        # Only cases with terminal refusals are excluded from backfill scanning.
+        # Transient/retryable refusals (e.g. future_eval_date, eval_date_not_closed,
+        # calendar_unavailable) remain in the queue so they can complete the T+1 loop.
         pending_cases = [
             case for case in pending_candidates
-            if _refusal_from_claims(case.claims) is None
+            if not _is_terminal_case(case)
         ]
 
         stats: Dict[str, int] = {
@@ -870,6 +959,11 @@ def backfill_pending_cases(
                 case.claims = _claims_without_refusal_metadata(case.claims)
                 case.is_error = is_error
                 case.updated_at = datetime.now(timezone.utc)
+                if hasattr(case, "historical_case_refusal"):
+                    case.historical_case_refusal = None
+                    case.refusal_code = None
+                    case.refusal_reason = None
+                    case.refusal_terminal = None
                 stats["backfilled"] += 1
                 modified = True
                 logger.info(
