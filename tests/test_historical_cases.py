@@ -60,6 +60,12 @@ from tradingagents.knowledge.historical_cases import (
     DATA_MISSING_PLACEHOLDER,
     HISTORICAL_CASE_MISSING_BLOCK,
     HISTORICAL_CASE_MISSING_FALLBACK,
+    RETRYABLE_REFUSAL_CODES,
+    TERMINAL_REFUSAL_CODES,
+    HistoricalCaseRefusal,
+    _REFUSAL_METADATA_KEY,
+    _case_refusal,
+    _refusal,
     backfill_pending_cases,
     calculate_t1_return,
     evaluate_prediction_error,
@@ -67,6 +73,7 @@ from tradingagents.knowledge.historical_cases import (
     format_historical_cases_context,
     get_current_run_sha,
     get_next_cn_trading_day,
+    is_terminal_refusal_code,
     record_historical_case,
     retrieve_similar_historical_cases,
 )
@@ -530,19 +537,70 @@ def test_backfill_pending_cases_persists_typed_refusal_for_empty_outcomes(
         entry for entry in (persisted.claims or [])
         if isinstance(entry, dict) and "__historical_case_refusal__" in entry
     ]
+    # 暂态异常（provider unavailable -> vendor_refuse）的 terminal 必须为 False
     assert refusal_entries == [{
         "__historical_case_refusal__": {
             "code": "vendor_refuse",
             "reason": refusal.reason,
+            "terminal": False,
         }
     }]
 
+    # 暂态 refusal 绝不能被排除，下次回填必须继续扫描
     with patch(
         "tradingagents.knowledge.historical_cases.calculate_t1_return",
-        side_effect=AssertionError("persisted refusal must not be rescanned"),
+        return_value=("2024-05-13", None, refusal),
     ):
         second_stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
-    assert second_stats["total_scanned"] == 0
+    assert second_stats["total_scanned"] == 1
+    assert second_stats["still_missing"] == 1
+
+    # 对照：真正的终态 refusal（snapshot_refusal）持久化后必须为 terminal=True，且不被重新扫描
+    case_terminal = HistoricalCaseDB(
+        id=f"case-terminal-snapshot-{initial_outcome!r}",
+        symbol="000001",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=initial_outcome,
+    )
+    test_db_session.add(case_terminal)
+    test_db_session.commit()
+    snapshot_refusal = VendorRefuse("该数据源仅提供当前快照，无法用于历史日期分析")
+    def _calc_mock(symbol, trade_date, eval_date=None):
+        if symbol == "000001":
+            return ("2024-05-13", None, snapshot_refusal)
+        return ("2024-05-13", None, refusal)
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        side_effect=_calc_mock,
+    ):
+        stats_snap = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+    assert stats_snap["total_scanned"] == 2  # 包含 case 与 case_terminal
+
+    test_db_session.expire_all()
+    persisted_snap = test_db_session.query(HistoricalCaseDB).filter_by(id=case_terminal.id).one()
+    snap_entries = [
+        entry for entry in (persisted_snap.claims or [])
+        if isinstance(entry, dict) and "__historical_case_refusal__" in entry
+    ]
+    assert snap_entries == [{
+        "__historical_case_refusal__": {
+            "code": "snapshot_refusal",
+            "reason": snapshot_refusal.reason,
+            "terminal": True,
+        }
+    }]
+
+    # 再次回填时，终态 snapshot_refusal 被排除（只有暂态的 case 会被扫描）
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        third_stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+    assert third_stats["total_scanned"] == 1
 
 
 @pytest.mark.parametrize(
@@ -621,6 +679,7 @@ def test_refusal_metadata_is_serializable_after_reload_and_formatting(test_db_se
         "__historical_case_refusal__": {
             "code": "snapshot_refusal",
             "reason": refusal.reason,
+            "terminal": True,
         }
     } in payload["claims"]
 
@@ -1507,3 +1566,489 @@ def test_api_lifespan_triggers_backfill():
         assert updated.is_error is False
         check_session.close()
         session.close()
+
+
+# ── DAV-998: Acceptance Criteria Tests (AC-1 to AC-4) ──────────────────────────
+
+
+def test_is_terminal_refusal_code_inventory():
+    """验证所有 refusal code 的终态/可重试归类完整性与默认行为。
+
+    遵循原则：默认可重试，终态必须正面识别。
+    """
+    for code in (
+        "future_eval_date",
+        "eval_date_not_closed",
+        "calendar_unavailable",
+        "t1_date_unavailable",
+        "vendor_refuse",
+        "vendor_timeout",
+        "connection_refused",
+        "provider_unavailable",
+        "connection_closed",
+    ):
+        assert code in RETRYABLE_REFUSAL_CODES
+        assert is_terminal_refusal_code(code) is False
+
+    for code in (
+        "invalid_trade_date",
+        "invalid_eval_date",
+        "non_trading_trade_date",
+        "non_t1_eval_date",
+        "duplicate_bar_conflict",
+        "snapshot_refusal",
+    ):
+        assert code in TERMINAL_REFUSAL_CODES
+        assert is_terminal_refusal_code(code) is True
+
+    # 未知 code 必须安全回退为可重试（False），绝不默认终态
+    assert is_terminal_refusal_code("some_unknown_or_custom_code") is False
+    assert is_terminal_refusal_code(None) is False
+    assert is_terminal_refusal_code("") is False
+
+
+def test_backfill_pending_cases_ac1_reproduces_and_resolves_t1_closure(test_db_session):
+    """AC-1: 落库时携带可重试 refusal 的案例，到期后能进入回填队列并成功回填。"""
+    report = ReportDB(
+        id="rep-ac1-repro",
+        symbol="600519",
+        trade_date="2024-05-10",
+        status="completed",
+        decision="BUY",
+        direction="看多",
+    )
+    test_db_session.add(report)
+    test_db_session.commit()
+
+    # ① 新建案例落库时，T+1 尚未到来，产生 future_eval_date refusal (terminal=False)
+    future_refusal = _refusal(
+        "future_eval_date",
+        "历史案例 T+1 拒绝：评估日 2024-05-13 晚于当前日期 2024-05-10（代码 future_eval_date）。",
+    )
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, future_refusal),
+    ):
+        case = record_historical_case(test_db_session, report)
+
+    assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
+    assert case.actual_change_pct is None
+    assert case.refusal_code == "future_eval_date"
+    assert case.refusal_terminal is False
+
+    # ② T+1 到期后（as_of = 2024-05-15），执行回填
+    # 证明：total_scanned 必须 > 0，不能被当成终态永久排除，且数据可用时正确回填
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 5.2, "+5.20%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 1
+    assert stats["backfilled"] == 1
+    assert stats["still_missing"] == 0
+
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == "+5.20%"
+    assert persisted.actual_change_pct == 5.2
+    assert persisted.is_error is False
+    assert _case_refusal(persisted) is None
+
+
+def test_backfill_pending_cases_ac2_retry_future_eval_date(test_db_session):
+    """AC-2: future_eval_date 路径在到达评估日后被重新扫描并回填。"""
+    case = HistoricalCaseDB(
+        id="case-ac2-future",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "future_eval_date",
+                "reason": "评估日尚未到来",
+                "terminal": False,
+            }
+        }],
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 3.0, "+3.00%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 1
+    assert stats["backfilled"] == 1
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == "+3.00%"
+
+
+def test_backfill_pending_cases_ac2_retry_eval_date_not_closed(test_db_session):
+    """AC-2: eval_date_not_closed 路径在收盘后被重新扫描并回填。"""
+    case = HistoricalCaseDB(
+        id="case-ac2-notclosed",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "eval_date_not_closed",
+                "reason": "评估日尚未收盘",
+                "terminal": False,
+            }
+        }],
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 2.1, "+2.10%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 1
+    assert stats["backfilled"] == 1
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == "+2.10%"
+
+
+def test_backfill_pending_cases_ac2_retry_calendar_unavailable(test_db_session):
+    """AC-2: calendar_unavailable 路径在日历恢复后被重新扫描并回填。"""
+    case = HistoricalCaseDB(
+        id="case-ac2-calendar",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "calendar_unavailable",
+                "reason": "交易日历不可用",
+                "terminal": False,
+            }
+        }],
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 1.8, "+1.80%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 1
+    assert stats["backfilled"] == 1
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == "+1.80%"
+
+
+def test_backfill_pending_cases_ac3_terminal_refusal_preserved_not_retried(test_db_session):
+    """AC-3: 真正的终态 refusal（如 duplicate_bar_conflict/snapshot_refusal）不会被反复重试。"""
+    case_conflict = HistoricalCaseDB(
+        id="case-ac3-conflict",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "duplicate_bar_conflict",
+                "reason": "conflicting daily bars for 2024-05-10",
+                "terminal": True,
+            }
+        }],
+    )
+    case_snapshot = HistoricalCaseDB(
+        id="case-ac3-snapshot",
+        symbol="000001",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "snapshot_refusal",
+                "reason": "该数据源仅提供当前快照",
+                "terminal": True,
+            }
+        }],
+    )
+    test_db_session.add_all([case_conflict, case_snapshot])
+    test_db_session.commit()
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        side_effect=AssertionError("calculate_t1_return must not be called for terminal refusals"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 0
+    assert stats["backfilled"] == 0
+
+
+def test_backfill_pending_cases_ac4_legacy_format_compatibility(test_db_session):
+    """AC-4: 向后兼容既有无 terminal 字段的旧格式 refusal 记录。
+
+    设计规则：
+    1. 缺少 terminal 字段的既有记录，根据 code 进行识别；
+    2. 若 code 属于已知可重试（如 future_eval_date、calendar_unavailable），识别为可重试（terminal=False），
+       进入回填队列并成功回填，不被永久排除；
+    3. 若 code 属于已知终态（如 snapshot_refusal、duplicate_bar_conflict），识别为终态（terminal=True），
+       排除出扫描队列，不反复重试；
+    4. 若 code 为未知自定义 code，安全默认识别为可重试（terminal=False），绝不让既有数据意外被永久排除。
+    """
+    # 1. 旧格式可重试案例（无 terminal 字段）
+    legacy_future = HistoricalCaseDB(
+        id="case-ac4-legacy-future",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "future_eval_date",
+                "reason": "历史案例 T+1 拒绝：评估日晚于当前日期（旧格式无 terminal 字段）",
+            }
+        }],
+    )
+    # 2. 旧格式终态案例（无 terminal 字段）
+    legacy_terminal = HistoricalCaseDB(
+        id="case-ac4-legacy-terminal",
+        symbol="000002",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "snapshot_refusal",
+                "reason": "仅支持当日快照（旧格式无 terminal 字段）",
+            }
+        }],
+    )
+    # 3. 旧格式未知 code 案例（无 terminal 字段）
+    legacy_unknown = HistoricalCaseDB(
+        id="case-ac4-legacy-unknown",
+        symbol="000003",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "unknown_custom_code",
+                "reason": "未知原因（旧格式无 terminal 字段）",
+            }
+        }],
+    )
+    # 4. 旧格式带 vendor_refuse（无 terminal 字段）
+    legacy_vendor = HistoricalCaseDB(
+        id="case-ac4-legacy-vendor",
+        symbol="000004",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "vendor_refuse",
+                "reason": "供应商超时（旧格式无 terminal 字段）",
+            }
+        }],
+    )
+    # 5. 历史误写了 terminal=True 的暂态 vendor_refuse 记录（必须具备自愈能力）
+    legacy_erroneous_terminal = HistoricalCaseDB(
+        id="case-ac4-erroneous-terminal",
+        symbol="000005",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+        claims=[{
+            _REFUSAL_METADATA_KEY: {
+                "code": "vendor_refuse",
+                "reason": "历史误将暂态网络错误标记为 terminal=True",
+                "terminal": True,
+            }
+        }],
+    )
+    test_db_session.add_all([legacy_future, legacy_terminal, legacy_unknown, legacy_vendor, legacy_erroneous_terminal])
+    test_db_session.commit()
+
+    # 扫描队列应包含 4 条可重试案例（future, unknown, vendor, erroneous_terminal），排除 1 条终态（terminal）
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 4.0, "+4.00%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats["total_scanned"] == 4
+    assert stats["backfilled"] == 4
+
+    test_db_session.expire_all()
+    persisted_future = test_db_session.query(HistoricalCaseDB).filter_by(id="case-ac4-legacy-future").one()
+    assert persisted_future.actual_outcome == "+4.00%"
+
+    persisted_unknown = test_db_session.query(HistoricalCaseDB).filter_by(id="case-ac4-legacy-unknown").one()
+    assert persisted_unknown.actual_outcome == "+4.00%"
+
+    persisted_vendor = test_db_session.query(HistoricalCaseDB).filter_by(id="case-ac4-legacy-vendor").one()
+    assert persisted_vendor.actual_outcome == "+4.00%"
+
+    persisted_erroneous = test_db_session.query(HistoricalCaseDB).filter_by(id="case-ac4-erroneous-terminal").one()
+    assert persisted_erroneous.actual_outcome == "+4.00%"
+
+    persisted_terminal = test_db_session.query(HistoricalCaseDB).filter_by(id="case-ac4-legacy-terminal").one()
+    assert persisted_terminal.actual_outcome == DATA_MISSING_PLACEHOLDER
+
+
+# ── DAV-998 Rework: Ops Scenarios & E2E Transient Recovery Tests ──────────────
+
+
+def test_ops_refusal_scenarios_classification_and_terminal():
+    """精准对照运维在候选工作树上实测的 6 种场景，验证 code 分类与 terminal 判定。
+
+    | 场景 | 判定 code | terminal |
+    |---|---|---|
+    | 供应商超时 60s | vendor_refuse | False ✅ |
+    | ConnectionRefusedError | vendor_refuse | False ✅ |
+    | provider unavailable | vendor_refuse | False ✅ |
+    | baostock 连接被对端关闭 | vendor_refuse | False ✅ |
+    | 对照：快照源限制 | snapshot_refusal | True ✅ 正确 |
+    | 对照：日线冲突 | duplicate_bar_conflict | True ✅ 正确 |
+    """
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+    from tradingagents.knowledge.historical_cases import (
+        _classify_refusal_code,
+        _coerce_refusal,
+    )
+
+    scenarios = [
+        ("供应商超时 60s", "vendor_refuse", False),
+        ("ConnectionRefusedError: [Errno 61] Connection refused", "vendor_refuse", False),
+        ("provider unavailable", "vendor_refuse", False),
+        ("baostock 连接被对端关闭", "vendor_refuse", False),
+        ("该数据源仅提供当前快照，无法用于历史日期分析", "snapshot_refusal", True),
+        ("duplicate daily bars for 2024-05-10", "duplicate_bar_conflict", True),
+    ]
+
+    for reason, expected_code, expected_terminal in scenarios:
+        # 1. 验证 code 分类
+        classified_code = _classify_refusal_code(reason, default_code="vendor_refuse")
+        assert classified_code == expected_code, f"Reason {reason!r} expected code {expected_code}, got {classified_code}"
+
+        # 2. 验证 is_terminal_refusal_code
+        assert is_terminal_refusal_code(classified_code) is expected_terminal
+
+        # 3. 验证 _coerce_refusal 转换生成的 HistoricalCaseRefusal 的 terminal 属性
+        refusal_obj = _coerce_refusal(VendorRefuse(reason))
+        assert refusal_obj is not None
+        assert refusal_obj.code == expected_code
+        assert refusal_obj.terminal is expected_terminal, (
+            f"Scenario {reason!r} expected terminal={expected_terminal}, got {refusal_obj.terminal}"
+        )
+
+
+@pytest.mark.parametrize(
+    "failure_scenario,vendor_failure_reason",
+    [
+        ("timeout", "供应商超时 60s"),
+        ("connection_refused", "ConnectionRefusedError: [Errno 61] Connection refused"),
+        ("provider_unavailable", "provider unavailable: 502 Bad Gateway"),
+        ("peer_closed", "baostock 连接被对端关闭"),
+    ],
+)
+def test_e2e_transient_vendor_failure_and_subsequent_recovery(
+    test_db_session, failure_scenario, vendor_failure_reason
+):
+    """【端到端回归】验证暂态供应商失败从拒绝进入回填队列，到后续调用恢复成功的全链路闭环。
+
+    链路契约：
+    第一次调用 vendor 失败（超时 / 连接拒绝 / 供应商不可用 / 对端关闭）
+      → 案例进入回填队列，total_scanned > 0
+    第二次调用 vendor 成功
+      → 收益正确回填，actual_outcome 不再是【数据缺失】
+    """
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    report = ReportDB(
+        id=f"rep-e2e-{failure_scenario}",
+        symbol="600519",
+        trade_date="2024-05-10",
+        status="completed",
+        decision="BUY",
+        direction="看多",
+        confidence=0.85,
+    )
+    test_db_session.add(report)
+    test_db_session.commit()
+
+    # 第一次：模拟 vendor 失败（抛出暂态 refusal）
+    transient_failure = VendorRefuse(vendor_failure_reason)
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, transient_failure),
+    ):
+        case = record_historical_case(test_db_session, report)
+
+    # 验证第一次落库状态：进入【数据缺失】，带有可重试 refusal，terminal 必须为 False
+    assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
+    assert case.actual_change_pct is None
+    assert case.refusal_code == "vendor_refuse"
+    assert case.refusal_terminal is False
+
+    # 验证第一次回填扫描：案例必须成功进入待回填队列（total_scanned > 0）
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, transient_failure),
+    ):
+        stats_retry = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats_retry["total_scanned"] == 1
+    assert stats_retry["backfilled"] == 0
+    assert stats_retry["still_missing"] == 1
+
+    # 第二次：vendor 恢复正常，返回正确 T+1 涨跌行情
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 3.85, "+3.85%"),
+    ):
+        stats_recovered = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    # 验证第二次回填：扫描并成功回填
+    assert stats_recovered["total_scanned"] == 1
+    assert stats_recovered["backfilled"] == 1
+    assert stats_recovered["still_missing"] == 0
+
+    # 验证数据库持久化结果：actual_outcome 不再是【数据缺失】，涨跌幅与误差被正确回填
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == "+3.85%"
+    assert persisted.actual_change_pct == 3.85
+    assert persisted.is_error is False  # BUY + 看多 + 涨 3.85% => is_error = False
+    assert _case_refusal(persisted) is None  # claims 中的 refusal 元数据已被完全清理

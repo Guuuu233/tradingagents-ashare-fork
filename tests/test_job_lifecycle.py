@@ -19,10 +19,13 @@ def test_soft_timeout_emits_overtime_then_allows_completion():
     store = InMemoryJobStore()
     events: list[tuple[str, dict]] = []
     store.set_job("job-1", status="running", error="stale error")
+    overtime_emitted = asyncio.Event()
 
     def capture_event(job_id: str, event: str, data: dict) -> None:
         events.append((event, data))
         store.emit_event(job_id, event, data)
+        if event == "job.overtime":
+            overtime_emitted.set()
 
     async def scenario() -> None:
         release_inner = asyncio.Event()
@@ -48,7 +51,7 @@ def test_soft_timeout_emits_overtime_then_allows_completion():
             patch.object(main, "_emit_job_event", side_effect=capture_event),
         ):
             wrapper = asyncio.create_task(main._run_job("job-1", _request()))
-            await asyncio.sleep(0.02)
+            await asyncio.wait_for(overtime_emitted.wait(), timeout=1.0)
             assert not wrapper.done(), "soft deadline must not release the wrapper/scheduler slot"
             assert [event for event, _ in events] == ["job.overtime"]
             assert store.get_job("job-1")["status"] == "running"

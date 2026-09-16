@@ -97,6 +97,36 @@ def _offline_trade_calendar(request):
     tc.clear_cn_trade_date_cache()
 
 
+@pytest.fixture(autouse=True)
+def _guard_socket_default_timeout():
+    """Prevent tests from leaking a modified global socket default timeout or baostock state."""
+    import socket
+    import sys
+
+    prior_timeout = socket.getdefaulttimeout()
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(prior_timeout)
+        for mod_name in ("baostock.common.context", "baostock.util.socketutil"):
+            mod = sys.modules.get(mod_name)
+            if mod is not None:
+                ctx = getattr(mod, "context", None) if mod_name.endswith("socketutil") else mod
+                if ctx is not None:
+                    sock = getattr(ctx, "default_socket", None)
+                    if sock is not None:
+                        try:
+                            sock.close()
+                        except OSError:
+                            pass
+                        setattr(ctx, "default_socket", None)
+                if mod_name.endswith("socketutil"):
+                    sockutil = getattr(mod, "SocketUtil", None)
+                    if sockutil is not None:
+                        sockutil.instance = None
+
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Restore the caller's DATABASE_URL and remove the temp SQLite dir."""
     if _ORIGINAL_DATABASE_URL is None:

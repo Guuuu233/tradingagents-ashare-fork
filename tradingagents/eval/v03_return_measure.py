@@ -1145,7 +1145,8 @@ class VendorPriceDataProvider:
 
         # Fallback to baostock query_stock_basic
         try:
-            import baostock as bs
+            from tradingagents.dataflows.providers.cn_baostock_provider import get_hardened_baostock
+            bs = get_hardened_baostock()
             bs_market = "sh" if norm_sym.endswith(".SH") or code.startswith(("5", "6", "9")) else "sz"
             bs_code = f"{bs_market}.{code}"
             lg = bs.login()
@@ -1199,7 +1200,8 @@ class VendorPriceDataProvider:
 
         pit_st: Optional[bool] = None
         try:
-            import baostock as bs
+            from tradingagents.dataflows.providers.cn_baostock_provider import get_hardened_baostock
+            bs = get_hardened_baostock()
             lg = bs.login()
             if lg.error_code == "0":
                 try:
