@@ -2003,6 +2003,7 @@ def test_p0_missing_metadata_fail_closed():
     assert rec.included_in_return_metrics is False
 
 
+@pytest.mark.network
 def test_p0_real_provider_verifiable_metadata():
     """P0-C/D-4: 真实 VendorPriceDataProvider 对 A 股元数据可核验，未知代码 typed unknown，forward 上界零前视."""
     provider = VendorPriceDataProvider(forward_oos_end_date="2026-09-08")
