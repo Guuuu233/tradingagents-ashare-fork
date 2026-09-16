@@ -60,7 +60,7 @@ if "RT_DENY_LOG" not in os.environ:
 
 def is_network_enabled() -> bool:
     """Return True if explicit network authorization is granted.
-    
+
     Fail-closed: returns False if RT_NETWORK_ENABLED is missing, unset, empty,
     or anything other than exactly '1'.
     """
@@ -291,6 +291,15 @@ def run_guardrail_sentinel() -> None:
     _sentinel_executed = True
 
 
+_CURL_CFFI_GUARD_STATUS: str = "uninitialized"
+
+
+def get_curl_cffi_guard_status() -> str:
+    """Return the status of curl_cffi guard installation."""
+    global _CURL_CFFI_GUARD_STATUS
+    return _CURL_CFFI_GUARD_STATUS
+
+
 def _install_guardrail_hooks() -> None:
     """Install dual audit hooks and CFFI guards. Hook order: Observation FIRST, Interception SECOND."""
     global _hooks_installed
@@ -303,10 +312,16 @@ def _install_guardrail_hooks() -> None:
 
 def _install_curl_cffi_guard() -> None:
     """Guard C-level curl_cffi requests which bypass Python socket audit hooks."""
+    global _CURL_CFFI_GUARD_STATUS
     try:
         import curl_cffi.curl
         _orig_perform = getattr(curl_cffi.curl.Curl, "perform", None)
-        if _orig_perform is None or getattr(_orig_perform, "_is_guarded", False):
+        if _orig_perform is None:
+            _CURL_CFFI_GUARD_STATUS = "unsupported_missing_perform"
+            _log_observation("guard.curl_cffi", "unsupported_missing_perform", True)
+            return
+        if getattr(_orig_perform, "_is_guarded", False):
+            _CURL_CFFI_GUARD_STATUS = "installed:Curl.perform"
             return
 
         def _guarded_perform(self, *args, **kwargs):
@@ -323,8 +338,14 @@ def _install_curl_cffi_guard() -> None:
 
         _guarded_perform._is_guarded = True
         curl_cffi.curl.Curl.perform = _guarded_perform
-    except ImportError:
-        pass
+        _CURL_CFFI_GUARD_STATUS = "installed:Curl.perform"
+        _log_observation("guard.curl_cffi", "installed:Curl.perform", True)
+    except ImportError as e:
+        _CURL_CFFI_GUARD_STATUS = f"not_installed:{e}"
+        _log_observation("guard.curl_cffi", f"not_installed:{e}", True)
+    except Exception as e:
+        _CURL_CFFI_GUARD_STATUS = f"error:{type(e).__name__}:{e}"
+        _log_observation("guard.curl_cffi", f"error:{type(e).__name__}:{e}", True)
 
 
 def _reset_baostock_context() -> None:

@@ -165,6 +165,11 @@ class TestOfflineGuardrailInterception:
 
     def test_curl_cffi_blocked_fail_fast(self):
         """curl_cffi perform must be intercepted to prevent C-level libcurl bypass."""
+        from tests.conftest import get_curl_cffi_guard_status
+        status = get_curl_cffi_guard_status()
+        assert status.startswith("installed:") or status.startswith("not_installed:"), (
+            f"Unexpected curl_cffi guard status: {status}"
+        )
         try:
             import curl_cffi.curl
             c = curl_cffi.curl.Curl()
@@ -270,10 +275,10 @@ class TestLocalLoopbackAndIpcAllowed:
 
 class TestExistingSocketMockCompatibility:
     """Targeted compatibility tests for existing test-level socket mocks (门禁 ②).
-    
+
     1. tests/test_fund_flow_scale_consumption.py:48 autouse guard_no_network_calls (patch socket.socket.connect)
     2. tests/test_horizon_return_labels.py:806 monkeypatch.setattr(socket, "socket", block_socket)
-    
+
     Must prove:
     - No cascade crash across tests.
     - Guardrail detects tampering and reports exact nodeid and phase without crashing with AttributeError.
@@ -281,7 +286,7 @@ class TestExistingSocketMockCompatibility:
 
     def test_compatibility_with_patch_socket_connect(self):
         """Verify compatibility with test_fund_flow_scale_consumption.py:48 pattern.
-        
+
         Using patch('socket.socket.connect', side_effect=RuntimeError(...)) must coexist with audit hook.
         """
         from unittest.mock import patch
@@ -305,7 +310,7 @@ class TestExistingSocketMockCompatibility:
 
     def test_compatibility_with_monkeypatch_socket_class(self, monkeypatch):
         """Verify compatibility with test_horizon_return_labels.py:806 pattern.
-        
+
         monkeypatch.setattr(socket, 'socket', block_socket) replaces the socket.socket class
         with a function. Guardrail must:
         1. Not crash with AttributeError when checking or handling socket.
@@ -371,7 +376,7 @@ class TestNetworkSwitchFailClosed:
 
     def test_forgetting_switch_subprocess_fail_closed(self):
         """Dedicated subprocess test covering 'forgetting to set switch' path.
-        
+
         Even when running pytest directly without RT_NETWORK_ENABLED, the process
         defaults to offline mode and denies external outbound connections.
         """
