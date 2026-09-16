@@ -1,5 +1,6 @@
-import re
 import io
+import re
+import socket
 from contextlib import contextmanager
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
@@ -59,18 +60,74 @@ class CnBaoStockProvider(BaseMarketDataProvider):
             return f"sh.{code}"
         return f"sz.{code}"
 
+    def _cleanup_context(self, bs):
+        try:
+            conx = getattr(getattr(bs, "common", None), "context", None)
+            if conx and hasattr(conx, "default_socket"):
+                sock = getattr(conx, "default_socket", None)
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    setattr(conx, "default_socket", None)
+        except Exception:
+            pass
+
+    def _probe_server(self, bs, timeout: float = 2.0) -> None:
+        host = "public-api.baostock.com"
+        port = 10030
+        try:
+            contants = getattr(getattr(bs, "common", None), "contants", None)
+            if contants:
+                val_ip = getattr(contants, "BAOSTOCK_SERVER_IP", None)
+                if isinstance(val_ip, str):
+                    host = val_ip
+                val_port = getattr(contants, "BAOSTOCK_SERVER_PORT", None)
+                if isinstance(val_port, (int, str)) and not isinstance(val_port, bool):
+                    port = int(val_port)
+        except Exception:
+            pass
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            sock.close()
+        except Exception as exc:
+            raise NotImplementedError(
+                f"baostock server unreachable ({host}:{port}): {exc}"
+            ) from exc
+
     @contextmanager
     def _session(self):
         bs = self._bs()
-        with redirect_stdout(io.StringIO()):
-            lg = bs.login()
-        if getattr(lg, "error_code", "1") != "0":
-            raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
+        self._probe_server(bs)
+        prev_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(15.0)
         try:
-            yield bs
+            lg = None
+            try:
+                with redirect_stdout(io.StringIO()):
+                    lg = bs.login()
+            except Exception as exc:
+                self._cleanup_context(bs)
+                raise NotImplementedError(f"baostock login error: {exc}") from exc
+
+            if getattr(lg, "error_code", "1") != "0":
+                error_msg = getattr(lg, "error_msg", "unknown error")
+                self._cleanup_context(bs)
+                raise NotImplementedError(f"baostock login failed: {error_msg}")
+            try:
+                yield bs
+            finally:
+                try:
+                    with redirect_stdout(io.StringIO()):
+                        bs.logout()
+                except Exception:
+                    pass
+                self._cleanup_context(bs)
         finally:
-            with redirect_stdout(io.StringIO()):
-                bs.logout()
+            socket.setdefaulttimeout(prev_timeout)
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start_boundary = pd.to_datetime(start_date, errors="coerce")
@@ -85,14 +142,17 @@ class CnBaoStockProvider(BaseMarketDataProvider):
             )
         code = self._normalize_symbol(symbol)
         with self._session() as bs:
-            rs = bs.query_history_k_data_plus(
-                code,
-                "date,open,high,low,close,volume",
-                start_date=start_date,
-                end_date=end_date,
-                frequency="d",
-                adjustflag="2",
-            )
+            try:
+                rs = bs.query_history_k_data_plus(
+                    code,
+                    "date,open,high,low,close,volume",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="2",
+                )
+            except Exception as exc:
+                raise NotImplementedError(f"baostock query error: {exc}") from exc
             if rs.error_code != "0":
                 raise NotImplementedError(
                     f"baostock query failed: {rs.error_code} {rs.error_msg}"

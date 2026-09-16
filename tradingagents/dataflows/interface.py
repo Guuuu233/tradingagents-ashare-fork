@@ -481,9 +481,9 @@ def route_to_vendor(method: str, *args, **kwargs):
                     vendor, policy, impl_func, args, kwargs
                 )
                 result = future.result(timeout=policy.timeout_seconds)
-            except (AlphaVantageRateLimitError, NotImplementedError) as exc:
+            except (AlphaVantageRateLimitError, NotImplementedError, ConnectionRefusedError) as exc:
                 last_exc = exc
-                # Try next provider for transient/routing issues or placeholder providers.
+                # Try next provider for transient/routing issues, placeholder providers, or immediate refusal.
                 _trace(
                     f"method={method} {args_summary} vendor={vendor} status=fallback "
                     f"reason={type(exc).__name__}: {exc}"
