@@ -26,16 +26,20 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from api.database import HistoricalCaseDB, ReportDB, get_db_ctx
 from tradingagents.dataflows.trade_calendar import (
+    DuplicateBarConflictError,
     TradeCalendarUnavailableError,
     _load_cn_trade_dates,
     _parse_date,
     cn_market_phase,
     is_cn_trading_day,
+    dedupe_daily_bars,
     now_cn,
 )
+from tradingagents.dataflows.vendor_result import VendorRefuse
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,144 @@ HISTORICAL_CASE_MISSING_FALLBACK: str = "【历史案例未命中】"
 HISTORICAL_CASE_MISSING_BLOCK: str = "【历史案例复盘】\n【历史案例未命中】"
 
 _BASELINE_FALLBACK_SHA = "dcc871dff13878803881bdbb9aed55f7cc10dbeb"
+_STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_REFUSAL_METADATA_KEY = "__historical_case_refusal__"
+
+
+class HistoricalCaseRefusal(str, VendorRefuse):
+    """Typed fail-closed outcome that remains equal to the legacy placeholder.
+
+    The historical-case API has always exposed ``【数据缺失】`` as its third
+    tuple item.  Keeping that text as the string value preserves existing
+    consumers, while the vendor-refusal fields retain an actionable reason at
+    the boundary where the data became unusable.
+    """
+
+    code: str
+    status: str = "refused"
+
+    def __new__(cls, code: str, reason: str):
+        return str.__new__(cls, DATA_MISSING_PLACEHOLDER)
+
+    def __init__(self, code: str, reason: str):
+        VendorRefuse.__init__(self, reason=reason, allow_peers=())
+        object.__setattr__(self, "code", code)
+        object.__setattr__(self, "status", "refused")
+
+
+def _refusal(code: str, reason: str) -> HistoricalCaseRefusal:
+    return HistoricalCaseRefusal(code, reason)
+
+
+def _classify_refusal_code(reason: str, default_code: str) -> str:
+    """Map legacy refusal text to a stable code at the consumer boundary."""
+    lowered = reason.lower()
+    if (
+        "duplicate daily bars" in lowered
+        or "conflicting daily bars" in lowered
+        or "conflicting close prices" in lowered
+        or ("duplicate" in lowered and "bar" in lowered)
+        or "重复日线" in reason
+        or "日线冲突" in reason
+    ):
+        return "duplicate_bar_conflict"
+    if (
+        "snapshot" in lowered
+        or "快照" in reason
+        or "仅提供当前" in reason
+        or "实时行情" in reason
+        or "无法用于历史" in reason
+        or "历史日期分析" in reason
+    ):
+        return "snapshot_refusal"
+    return default_code
+
+
+def _coerce_refusal(
+    value: Any,
+    default_code: str = "vendor_refuse",
+) -> Optional[HistoricalCaseRefusal]:
+    if isinstance(value, HistoricalCaseRefusal):
+        return value
+    if isinstance(value, VendorRefuse):
+        reason = str(value.reason).strip()
+        return _refusal(_classify_refusal_code(reason, default_code), reason)
+    if isinstance(value, str):
+        reason = value.strip()
+        if reason.startswith("【数据获取失败】"):
+            return _refusal(_classify_refusal_code(reason, default_code), reason)
+    return None
+
+
+def _claims_without_refusal_metadata(claims: Any) -> List[Any]:
+    if isinstance(claims, list):
+        return [entry for entry in claims if not (
+            isinstance(entry, dict) and _REFUSAL_METADATA_KEY in entry
+        )]
+    if claims is None:
+        return []
+    return [claims]
+
+
+def _claims_with_refusal_metadata(
+    claims: Any,
+    refusal: Optional[HistoricalCaseRefusal],
+) -> List[Any]:
+    clean_claims = _claims_without_refusal_metadata(claims)
+    if refusal is not None:
+        clean_claims.append({
+            _REFUSAL_METADATA_KEY: {
+                "code": refusal.code,
+                "reason": refusal.reason,
+            }
+        })
+    return clean_claims
+
+
+def _refusal_from_claims(claims: Any) -> Optional[HistoricalCaseRefusal]:
+    if not isinstance(claims, list):
+        return None
+    for entry in reversed(claims):
+        if not isinstance(entry, dict):
+            continue
+        metadata = entry.get(_REFUSAL_METADATA_KEY)
+        if not isinstance(metadata, dict):
+            continue
+        reason = str(metadata.get("reason") or "").strip()
+        if not reason:
+            continue
+        code = str(metadata.get("code") or "vendor_refuse").strip()
+        return _refusal(code, reason)
+    return None
+
+
+def _case_refusal(case_obj: Any) -> Optional[HistoricalCaseRefusal]:
+    live_refusal = getattr(case_obj, "historical_case_refusal", None)
+    if isinstance(live_refusal, HistoricalCaseRefusal):
+        return live_refusal
+    claims = getattr(case_obj, "claims", None)
+    if isinstance(case_obj, Mapping):
+        claims = case_obj.get("claims")
+    return _refusal_from_claims(claims)
+
+
+def _restore_case_refusal(
+    case_obj: HistoricalCaseDB,
+    refusal: Optional[HistoricalCaseRefusal],
+) -> None:
+    """Expose an already-persisted refusal as a typed value on this ORM object.
+
+    The database stores the legacy marker in ``actual_outcome`` and the
+    serializable code/reason pair in the existing JSON ``claims`` column.  This
+    helper is called only after commit/refresh, so marking the typed string as
+    committed cannot hide a pending database update.
+    """
+    if refusal is None:
+        return
+    set_committed_value(case_obj, "actual_outcome", refusal)
+    case_obj.historical_case_refusal = refusal
+    case_obj.refusal_code = refusal.code
+    case_obj.refusal_reason = refusal.reason
 
 
 def get_current_run_sha() -> str:
@@ -92,7 +234,9 @@ def get_next_cn_trading_day(date_str: str) -> Optional[str]:
     return None
 
 
-def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
+def _parse_prices_from_stock_data(
+    data_str: str,
+) -> Union[Dict[str, float], HistoricalCaseRefusal]:
     """从 get_stock_data 返回的 CSV 文本中解析日期到收盘价的映射。"""
     if not data_str or not isinstance(data_str, str):
         return {}
@@ -110,14 +254,45 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
             return {}
 
         cols_map = {str(c).lower().strip(): c for c in df.columns}
-        date_col = cols_map.get("date")
-        close_col = cols_map.get("close")
+        aliases = {
+            "date": (
+                "date", "trade_date", "tradedate", "datetime", "time",
+                "timestamp", "日期", "交易日期", "时间",
+            ),
+            "open": ("open", "open_price", "openprice", "开盘", "开盘价"),
+            "high": ("high", "high_price", "highprice", "最高", "最高价"),
+            "low": ("low", "low_price", "lowprice", "最低", "最低价"),
+            "close": ("close", "close_price", "closeprice", "收盘", "收盘价"),
+            "volume": (
+                "volume", "vol", "成交量", "成交量(股)", "成交量（股）",
+                "成交量(手)", "成交量（手）", "成交股数",
+            ),
+        }
+        resolved_cols = {
+            name: next((cols_map[alias] for alias in names if alias in cols_map), None)
+            for name, names in aliases.items()
+        }
+        date_col = resolved_cols["date"]
+        close_col = resolved_cols["close"]
         if not date_col or not close_col:
             return {}
 
-        df["_p_date"] = pd.to_datetime(df[date_col], errors="coerce")
+        df["_p_date"] = pd.to_datetime(df[date_col], errors="coerce").dt.normalize()
         df["_p_close"] = pd.to_numeric(df[close_col], errors="coerce")
+        value_cols = ["_p_close"]
+        for name in ("open", "high", "low", "volume"):
+            source_col = resolved_cols[name]
+            if source_col:
+                normalized_col = f"_p_{name}"
+                df[normalized_col] = pd.to_numeric(df[source_col], errors="coerce")
+                value_cols.append(normalized_col)
         df = df.dropna(subset=["_p_date", "_p_close"])
+
+        try:
+            df = dedupe_daily_bars(df, "_p_date", value_cols)
+        except DuplicateBarConflictError as exc:
+            logger.warning("Conflicting daily bars in stock data CSV: %s", exc)
+            return _refusal("duplicate_bar_conflict", str(exc))
 
         prices: Dict[str, float] = {}
         for _, row in df.iterrows():
@@ -129,65 +304,200 @@ def _parse_prices_from_stock_data(data_str: str) -> Dict[str, float]:
         return {}
 
 
+def _parse_strict_case_date(
+    value: Any,
+    code: str,
+) -> Tuple[Optional[str], Optional[date], Optional[HistoricalCaseRefusal]]:
+    """Parse a case date without accepting compact or partial date formats."""
+    if not isinstance(value, str) or not value.strip():
+        normalized = value.strip() if isinstance(value, str) else None
+        return normalized, None, _refusal(
+            code,
+            f"历史案例 T+1 拒绝：日期为空或类型无效（代码 {code}）。",
+        )
+
+    normalized = value.strip()
+    if not _STRICT_DATE_RE.fullmatch(normalized):
+        return normalized, None, _refusal(
+            code,
+            f"历史案例 T+1 拒绝：日期必须为 YYYY-MM-DD（收到 {value!r}，代码 {code}）。",
+        )
+
+    try:
+        return normalized, _parse_date(normalized), None
+    except (TypeError, ValueError) as exc:
+        return normalized, None, _refusal(
+            code,
+            f"历史案例 T+1 拒绝：日期无法解析（收到 {value!r}，代码 {code}）：{exc}",
+        )
+
+
+def _return_case_refusal(
+    refusal: HistoricalCaseRefusal,
+    eval_date: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[float], HistoricalCaseRefusal]:
+    logger.warning("%s", refusal.reason)
+    return eval_date, None, refusal
+
+
 def calculate_t1_return(
     symbol: str,
     trade_date: str,
     eval_date: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[float], str]:
+) -> Tuple[Optional[str], Optional[float], Union[str, HistoricalCaseRefusal]]:
     """对比 trade_date 之后的下一交易日（T+1 收盘）涨跌。
 
     严格遵循契约：
     1. as_of 必须 <= 评估日；
-    2. 日历缺失、未来未到日、行情获取失败统一写【数据缺失】，禁止填 0 或今天。
+    2. 显式评估日必须是 trade_date 的严格下一交易日；
+    3. 日历缺失、未来未到日、行情获取失败统一写【数据缺失】，禁止填 0 或今天。
 
-    返回三元组：(eval_date, actual_change_pct, actual_outcome_str)
+    返回三元组：(eval_date, actual_change_pct, actual_outcome_str)。
+    日期/供应商拒绝会返回仍等于 ``【数据缺失】`` 的类型化结果，供调用方
+    保留稳定拒绝原因而不改变既有字符串消费者的行为。
     """
-    if not symbol or not trade_date:
+    if not symbol:
         return None, None, DATA_MISSING_PLACEHOLDER
 
-    # 1. 确定评估日（下一交易日）
-    target_eval_date = eval_date or get_next_cn_trading_day(trade_date)
-    if not target_eval_date:
-        return None, None, DATA_MISSING_PLACEHOLDER
+    trade_date_str, trade_d, trade_refusal = _parse_strict_case_date(
+        trade_date, "invalid_trade_date"
+    )
+    if trade_refusal:
+        return _return_case_refusal(trade_refusal)
+
+    explicit_eval_date: Optional[str] = None
+    explicit_eval_d: Optional[date] = None
+    if eval_date is not None:
+        explicit_eval_date, explicit_eval_d, eval_refusal = _parse_strict_case_date(
+            eval_date, "invalid_eval_date"
+        )
+        if eval_refusal:
+            return _return_case_refusal(eval_refusal, explicit_eval_date)
 
     try:
-        eval_d = _parse_date(target_eval_date)
-    except Exception:
-        return None, None, DATA_MISSING_PLACEHOLDER
+        dates, dates_set = _load_cn_trade_dates()
+    except TradeCalendarUnavailableError as exc:
+        return _return_case_refusal(
+            _refusal("calendar_unavailable", f"历史案例 T+1 拒绝：{exc}（代码 calendar_unavailable）。")
+        )
+    except Exception as exc:
+        logger.warning("Historical-case trade calendar lookup failed: %s", exc)
+        return _return_case_refusal(
+            _refusal(
+                "calendar_unavailable",
+                "历史案例 T+1 拒绝：交易日历不可用（代码 calendar_unavailable）。",
+            )
+        )
+
+    if not dates:
+        return _return_case_refusal(
+            _refusal(
+                "calendar_unavailable",
+                "历史案例 T+1 拒绝：交易日历为空（代码 calendar_unavailable）。",
+            )
+        )
+    if trade_d not in dates_set:
+        return _return_case_refusal(
+            _refusal(
+                "non_trading_trade_date",
+                f"历史案例 T+1 拒绝：trade_date {trade_date_str} 不是交易日 "
+                "（代码 non_trading_trade_date）。",
+            )
+        )
+
+    trade_idx = bisect.bisect_left(dates, trade_d)
+    if trade_idx + 1 >= len(dates):
+        return _return_case_refusal(
+            _refusal(
+                "t1_date_unavailable",
+                f"历史案例 T+1 拒绝：{trade_date_str} 没有可用的下一交易日 "
+                "（代码 t1_date_unavailable）。",
+            )
+        )
+
+    expected_eval_d = dates[trade_idx + 1]
+    expected_eval_date = expected_eval_d.strftime("%Y-%m-%d")
+
+    # ``None`` means the caller did not provide an evaluation date.  An empty
+    # string is explicit input and must not silently trigger the default T+1.
+    if eval_date is None:
+        target_eval_date = expected_eval_date
+        eval_d = expected_eval_d
+    else:
+        target_eval_date = explicit_eval_date
+        eval_d = explicit_eval_d
+        if eval_d != expected_eval_d:
+            return _return_case_refusal(
+                _refusal(
+                    "non_t1_eval_date",
+                    f"历史案例 T+1 拒绝：eval_date {target_eval_date} 不是 "
+                    f"{trade_date_str} 的严格下一交易日 {expected_eval_date} "
+                    "（代码 non_t1_eval_date）。",
+                ),
+                target_eval_date,
+            )
 
     today_cn = now_cn().date()
     # 若评估日晚于今日，则未来数据不可知
     if eval_d > today_cn:
-        return target_eval_date, None, DATA_MISSING_PLACEHOLDER
+        return _return_case_refusal(
+            _refusal(
+                "future_eval_date",
+                f"历史案例 T+1 拒绝：评估日 {target_eval_date} 晚于当前日期 "
+                f"{today_cn}（代码 future_eval_date）。",
+            ),
+            target_eval_date,
+        )
 
     # 若评估日恰为今日，需检查今日是否已经收盘
     if eval_d == today_cn:
         phase = cn_market_phase()
         if phase != "post_close":
-            return target_eval_date, None, DATA_MISSING_PLACEHOLDER
+            return _return_case_refusal(
+                _refusal(
+                    "eval_date_not_closed",
+                    f"历史案例 T+1 拒绝：评估日 {target_eval_date} 尚未收盘 "
+                    "（代码 eval_date_not_closed）。",
+                ),
+                target_eval_date,
+            )
 
-    # 2. 调用已有行情接口获取价格数据
+    # 调用已有行情接口获取价格数据
     try:
         from tradingagents.dataflows.interface import route_to_vendor
 
         raw_csv = route_to_vendor(
             "get_stock_data",
             symbol,
-            trade_date,
+            trade_date_str,
             target_eval_date,
         )
+        route_refusal = _coerce_refusal(raw_csv)
+        if route_refusal:
+            logger.warning(
+                "Historical-case vendor refusal for %s (%s -> %s): %s",
+                symbol,
+                trade_date_str,
+                target_eval_date,
+                route_refusal.reason,
+            )
+            return target_eval_date, None, route_refusal
+
         prices = _parse_prices_from_stock_data(raw_csv)
+        parser_refusal = _coerce_refusal(prices)
+        if parser_refusal:
+            return target_eval_date, None, parser_refusal
     except Exception as exc:
         logger.warning(
             "calculate_t1_return failed for %s (%s -> %s): %s",
             symbol,
-            trade_date,
+            trade_date_str,
             target_eval_date,
             exc,
         )
         return target_eval_date, None, DATA_MISSING_PLACEHOLDER
 
-    p_t0 = prices.get(trade_date)
+    p_t0 = prices.get(trade_date_str)
     p_t1 = prices.get(target_eval_date)
 
     if p_t0 is None or p_t1 is None or p_t0 <= 0:
@@ -362,6 +672,11 @@ def record_historical_case(
 
     # 4. 计算 T+1 实际表现
     eval_date, change_pct, outcome_str = calculate_t1_return(symbol, trade_date)
+    refusal = _coerce_refusal(outcome_str)
+    if refusal:
+        change_pct = None
+        outcome_str = DATA_MISSING_PLACEHOLDER
+        claims = _claims_with_refusal_metadata(claims, refusal)
     is_error = evaluate_prediction_error(decision, direction, change_pct)
 
     # 5. 幂等检查与保存
@@ -420,6 +735,7 @@ def record_historical_case(
     try:
         db.commit()
         db.refresh(case_obj)
+        _restore_case_refusal(case_obj, refusal)
         logger.info(
             "[historical_cases] Recorded case for %s on %s (outcome: %s, error: %s)",
             symbol,
@@ -464,7 +780,7 @@ def backfill_pending_cases(
         else:
             as_of_str = str(as_of).strip()
 
-        pending_cases = (
+        pending_candidates = (
             session.query(HistoricalCaseDB)
             .filter(
                 (HistoricalCaseDB.actual_outcome == DATA_MISSING_PLACEHOLDER)
@@ -474,6 +790,13 @@ def backfill_pending_cases(
             .order_by(HistoricalCaseDB.trade_date.asc())
             .all()
         )
+        # A persisted refusal uses the legacy missing marker for compatibility,
+        # but its JSON metadata means it is a terminal refusal, not an ordinary
+        # quote gap that should be retried on every process start.
+        pending_cases = [
+            case for case in pending_candidates
+            if _refusal_from_claims(case.claims) is None
+        ]
 
         stats: Dict[str, int] = {
             "total_scanned": len(pending_cases),
@@ -487,6 +810,7 @@ def backfill_pending_cases(
             return stats
 
         modified = False
+        refusal_by_case_id: Dict[str, HistoricalCaseRefusal] = {}
         for case in pending_cases:
             target_eval_date = case.eval_date or get_next_cn_trading_day(case.trade_date)
             if not target_eval_date:
@@ -534,10 +858,16 @@ def backfill_pending_cases(
                 case.eval_date = new_eval_date
                 modified = True
 
-            if outcome_str != DATA_MISSING_PLACEHOLDER and change_pct is not None:
+            refusal = _coerce_refusal(outcome_str)
+            if (
+                refusal is None
+                and outcome_str != DATA_MISSING_PLACEHOLDER
+                and change_pct is not None
+            ):
                 is_error = evaluate_prediction_error(case.decision, case.direction, change_pct)
                 case.actual_change_pct = change_pct
                 case.actual_outcome = outcome_str
+                case.claims = _claims_without_refusal_metadata(case.claims)
                 case.is_error = is_error
                 case.updated_at = datetime.now(timezone.utc)
                 stats["backfilled"] += 1
@@ -554,6 +884,12 @@ def backfill_pending_cases(
                 case.actual_outcome = DATA_MISSING_PLACEHOLDER
                 case.actual_change_pct = None
                 case.is_error = None
+                modified = True
+                if refusal:
+                    case.claims = _claims_with_refusal_metadata(case.claims, refusal)
+                    case.updated_at = datetime.now(timezone.utc)
+                    refusal_by_case_id[case.id] = refusal
+                    modified = True
                 stats["still_missing"] += 1
                 logger.warning(
                     "[historical_cases] Backfill unresolved for %s (%s -> %s): market data unavailable",
@@ -565,6 +901,10 @@ def backfill_pending_cases(
         if modified:
             try:
                 session.commit()
+                for case in pending_cases:
+                    refusal = refusal_by_case_id.get(case.id)
+                    if refusal is not None:
+                        _restore_case_refusal(case, refusal)
             except Exception as exc:
                 session.rollback()
                 logger.error("[historical_cases] Failed to commit backfilled cases: %s", exc)
@@ -637,6 +977,7 @@ def retrieve_similar_historical_cases(
 def _format_single_case_block(index: int, case: Any) -> str:
     """格式化单个历史案例详情。"""
     c_dict = case.to_dict() if hasattr(case, "to_dict") else dict(case)
+    refusal = _case_refusal(case)
 
     sym = c_dict.get("symbol") or "未知标的"
     ind = c_dict.get("industry") or "未知行业"
@@ -667,20 +1008,29 @@ def _format_single_case_block(index: int, case: Any) -> str:
     eval_str = f"（评估日 {eval_d}）" if eval_d else ""
     is_err = c_dict.get("is_error")
 
-    if outcome == DATA_MISSING_PLACEHOLDER:
+    if refusal is not None:
+        outcome_note = (
+            f"【数据拒绝】{refusal.code}：{refusal.reason}"
+        )
+        review_note = "该案例因数据源拒绝而不可评估，不得按普通缺失行情解读。"
+    elif outcome == DATA_MISSING_PLACEHOLDER:
+        outcome_note = outcome
         review_note = "实际行情未到或数据缺失，待后续评估。"
     elif is_err is True:
+        outcome_note = outcome
         review_note = "【偏差复盘】预测方向与次日实际走势相悖，需重点核验假设漏洞与反转风险。"
     elif is_err is False:
+        outcome_note = outcome
         review_note = "【验证一致】预测方向与次日实际走势一致，逻辑与催化传导有效。"
     else:
+        outcome_note = outcome
         review_note = "行情已记录，需结合中长期周期持续跟踪。"
 
     return (
         f"[案例 {index}] 标的：{sym}（行业：{ind}）| 历史分析日：{t_date}\n"
         f"- 历史研判：{dec_display}\n"
         f"- 核心论据 (Claims)：\n{claims_block}\n"
-        f"- T+1 实际表现：{outcome}{eval_str}\n"
+        f"- T+1 实际表现：{outcome_note}{eval_str}\n"
         f"- 案例启示：{review_note}"
     )
 
