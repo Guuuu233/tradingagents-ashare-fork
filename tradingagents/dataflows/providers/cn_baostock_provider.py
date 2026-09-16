@@ -1,5 +1,7 @@
+import os
 import re
 import io
+import socket
 from contextlib import contextmanager
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
@@ -13,6 +15,92 @@ from ..trade_calendar import (
     dedupe_daily_bars,
     drop_incomplete_today_bar,
 )
+
+_BAOSTOCK_HARDENED = False
+DEFAULT_BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "5.0"))
+
+
+def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT) -> None:
+    """Harden baostock client socketutil: enforce socket timeout and break EOF liveloop."""
+    global _BAOSTOCK_HARDENED
+    if _BAOSTOCK_HARDENED:
+        return
+    try:
+        import zlib
+        import baostock.util.socketutil as bssock
+
+        cons = bssock.cons
+        context = bssock.context
+
+        orig_connect = bssock.SocketUtil.connect
+
+        def safe_connect(self):
+            mySockect = None
+            try:
+                mySockect = bssock.socket.socket(bssock.socket.AF_INET, bssock.socket.SOCK_STREAM)
+                mySockect.settimeout(timeout)
+                mySockect.connect((cons.BAOSTOCK_SERVER_IP, cons.BAOSTOCK_SERVER_PORT))
+                setattr(context, "default_socket", mySockect)
+            except Exception:
+                if mySockect is not None:
+                    try:
+                        mySockect.close()
+                    except Exception:
+                        pass
+                setattr(context, "default_socket", None)
+                raise
+
+        def safe_send_msg(msg):
+            default_socket = getattr(context, "default_socket", None)
+            if default_socket is None:
+                return None
+            try:
+                default_socket.settimeout(timeout)
+                msg_bytes = (msg + "\n").encode("utf-8")
+                default_socket.sendall(msg_bytes)
+                receive = b""
+                while True:
+                    recv = default_socket.recv(8192)
+                    if not recv:
+                        try:
+                            default_socket.close()
+                        except Exception:
+                            pass
+                        setattr(context, "default_socket", None)
+                        raise ConnectionResetError("baostock socket connection closed by peer (EOF)")
+                    receive += recv
+                    if receive[-13:] == b"<![CDATA[]]>\n":
+                        break
+                head_bytes = receive[0:cons.MESSAGE_HEADER_LENGTH]
+                head_str = bytes.decode(head_bytes)
+                head_arr = head_str.split(cons.MESSAGE_SPLIT)
+                if head_arr[1] in cons.COMPRESSED_MESSAGE_TYPE_TUPLE:
+                    head_inner_length = int(head_arr[2])
+                    body_str = bytes.decode(
+                        zlib.decompress(
+                            receive[
+                                cons.MESSAGE_HEADER_LENGTH : cons.MESSAGE_HEADER_LENGTH
+                                + head_inner_length
+                            ]
+                        )
+                    )
+                    return head_str + body_str
+                else:
+                    return bytes.decode(receive)
+            except Exception:
+                try:
+                    if default_socket:
+                        default_socket.close()
+                except Exception:
+                    pass
+                setattr(context, "default_socket", None)
+                raise
+
+        bssock.SocketUtil.connect = safe_connect
+        bssock.send_msg = safe_send_msg
+        _BAOSTOCK_HARDENED = True
+    except Exception:
+        pass
 
 
 class CnBaoStockProvider(BaseMarketDataProvider):
@@ -45,6 +133,7 @@ class CnBaoStockProvider(BaseMarketDataProvider):
             raise NotImplementedError(
                 "cn_baostock requires 'baostock'. Install it with: pip install baostock"
             ) from exc
+        ensure_baostock_socket_hardening()
         return bs
 
     def _normalize_symbol(self, symbol: str) -> str:
@@ -60,17 +149,38 @@ class CnBaoStockProvider(BaseMarketDataProvider):
         return f"sz.{code}"
 
     @contextmanager
-    def _session(self):
+    def _session(self, timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
         bs = self._bs()
-        with redirect_stdout(io.StringIO()):
-            lg = bs.login()
+        orig_default_timeout = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(timeout)
+            with redirect_stdout(io.StringIO()):
+                lg = bs.login()
+        finally:
+            socket.setdefaulttimeout(orig_default_timeout)
+
         if getattr(lg, "error_code", "1") != "0":
             raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
         try:
             yield bs
         finally:
             with redirect_stdout(io.StringIO()):
-                bs.logout()
+                try:
+                    bs.logout()
+                except Exception:
+                    pass
+            # Clean up module-level context socket
+            try:
+                import baostock.common.context as bs_ctx
+                sock = getattr(bs_ctx, "default_socket", None)
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    bs_ctx.default_socket = None
+            except Exception:
+                pass
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start_boundary = pd.to_datetime(start_date, errors="coerce")
