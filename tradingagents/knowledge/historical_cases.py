@@ -50,6 +50,7 @@ HISTORICAL_CASE_MISSING_BLOCK: str = "【历史案例复盘】\n【历史案例�
 
 _BASELINE_FALLBACK_SHA = "dcc871dff13878803881bdbb9aed55f7cc10dbeb"
 _STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_REFUSAL_METADATA_KEY = "__historical_case_refusal__"
 
 
 class HistoricalCaseRefusal(str, VendorRefuse):
@@ -77,6 +78,30 @@ def _refusal(code: str, reason: str) -> HistoricalCaseRefusal:
     return HistoricalCaseRefusal(code, reason)
 
 
+def _classify_refusal_code(reason: str, default_code: str) -> str:
+    """Map legacy refusal text to a stable code at the consumer boundary."""
+    lowered = reason.lower()
+    if (
+        "duplicate daily bars" in lowered
+        or "conflicting daily bars" in lowered
+        or "conflicting close prices" in lowered
+        or ("duplicate" in lowered and "bar" in lowered)
+        or "重复日线" in reason
+        or "日线冲突" in reason
+    ):
+        return "duplicate_bar_conflict"
+    if (
+        "snapshot" in lowered
+        or "快照" in reason
+        or "仅提供当前" in reason
+        or "实时行情" in reason
+        or "无法用于历史" in reason
+        or "历史日期分析" in reason
+    ):
+        return "snapshot_refusal"
+    return default_code
+
+
 def _coerce_refusal(
     value: Any,
     default_code: str = "vendor_refuse",
@@ -84,41 +109,80 @@ def _coerce_refusal(
     if isinstance(value, HistoricalCaseRefusal):
         return value
     if isinstance(value, VendorRefuse):
-        return _refusal(default_code, value.reason)
+        reason = str(value.reason).strip()
+        return _refusal(_classify_refusal_code(reason, default_code), reason)
     if isinstance(value, str):
         reason = value.strip()
-        if not reason.startswith("【数据获取失败】"):
-            return None
-        lowered = reason.lower()
-        is_duplicate_conflict = (
-            "duplicate daily bars" in lowered
-            or "conflicting daily bars" in lowered
-            or "conflicting close prices" in lowered
-            or ("duplicate" in lowered and "bar" in lowered)
-            or "重复日线" in reason
-            or "日线冲突" in reason
-        )
-        if is_duplicate_conflict:
-            return _refusal("duplicate_bar_conflict", reason)
+        if reason.startswith("【数据获取失败】"):
+            return _refusal(_classify_refusal_code(reason, default_code), reason)
     return None
+
+
+def _claims_without_refusal_metadata(claims: Any) -> List[Any]:
+    if isinstance(claims, list):
+        return [entry for entry in claims if not (
+            isinstance(entry, dict) and _REFUSAL_METADATA_KEY in entry
+        )]
+    if claims is None:
+        return []
+    return [claims]
+
+
+def _claims_with_refusal_metadata(
+    claims: Any,
+    refusal: Optional[HistoricalCaseRefusal],
+) -> List[Any]:
+    clean_claims = _claims_without_refusal_metadata(claims)
+    if refusal is not None:
+        clean_claims.append({
+            _REFUSAL_METADATA_KEY: {
+                "code": refusal.code,
+                "reason": refusal.reason,
+            }
+        })
+    return clean_claims
+
+
+def _refusal_from_claims(claims: Any) -> Optional[HistoricalCaseRefusal]:
+    if not isinstance(claims, list):
+        return None
+    for entry in reversed(claims):
+        if not isinstance(entry, dict):
+            continue
+        metadata = entry.get(_REFUSAL_METADATA_KEY)
+        if not isinstance(metadata, dict):
+            continue
+        reason = str(metadata.get("reason") or "").strip()
+        if not reason:
+            continue
+        code = str(metadata.get("code") or "vendor_refuse").strip()
+        return _refusal(code, reason)
+    return None
+
+
+def _case_refusal(case_obj: Any) -> Optional[HistoricalCaseRefusal]:
+    live_refusal = getattr(case_obj, "historical_case_refusal", None)
+    if isinstance(live_refusal, HistoricalCaseRefusal):
+        return live_refusal
+    claims = getattr(case_obj, "claims", None)
+    if isinstance(case_obj, Mapping):
+        claims = case_obj.get("claims")
+    return _refusal_from_claims(claims)
 
 
 def _restore_case_refusal(
     case_obj: HistoricalCaseDB,
     refusal: Optional[HistoricalCaseRefusal],
 ) -> None:
-    """Keep refusal metadata available on the live ORM object.
+    """Expose an already-persisted refusal as a typed value on this ORM object.
 
-    ``actual_outcome`` is an existing String column, so the persisted legacy
-    value remains ``【数据缺失】``.  The typed object and its reason are restored
-    after SQLAlchemy refresh/commit for callers in this process; no schema or
-    migration is introduced by this feature.
+    The database stores the legacy marker in ``actual_outcome`` and the
+    serializable code/reason pair in the existing JSON ``claims`` column.  This
+    helper is called only after commit/refresh, so marking the typed string as
+    committed cannot hide a pending database update.
     """
     if refusal is None:
         return
-    # The database column remains the legacy String field.  Mark the typed
-    # value as already committed so callers can inspect it without making the
-    # next unrelated SQLAlchemy commit try to bind a VendorRefuse instance.
     set_committed_value(case_obj, "actual_outcome", refusal)
     case_obj.historical_case_refusal = refusal
     case_obj.refusal_code = refusal.code
@@ -610,7 +674,9 @@ def record_historical_case(
     eval_date, change_pct, outcome_str = calculate_t1_return(symbol, trade_date)
     refusal = _coerce_refusal(outcome_str)
     if refusal:
+        change_pct = None
         outcome_str = DATA_MISSING_PLACEHOLDER
+        claims = _claims_with_refusal_metadata(claims, refusal)
     is_error = evaluate_prediction_error(decision, direction, change_pct)
 
     # 5. 幂等检查与保存
@@ -714,7 +780,7 @@ def backfill_pending_cases(
         else:
             as_of_str = str(as_of).strip()
 
-        pending_cases = (
+        pending_candidates = (
             session.query(HistoricalCaseDB)
             .filter(
                 (HistoricalCaseDB.actual_outcome == DATA_MISSING_PLACEHOLDER)
@@ -724,6 +790,13 @@ def backfill_pending_cases(
             .order_by(HistoricalCaseDB.trade_date.asc())
             .all()
         )
+        # A persisted refusal uses the legacy missing marker for compatibility,
+        # but its JSON metadata means it is a terminal refusal, not an ordinary
+        # quote gap that should be retried on every process start.
+        pending_cases = [
+            case for case in pending_candidates
+            if _refusal_from_claims(case.claims) is None
+        ]
 
         stats: Dict[str, int] = {
             "total_scanned": len(pending_cases),
@@ -737,6 +810,7 @@ def backfill_pending_cases(
             return stats
 
         modified = False
+        refusal_by_case_id: Dict[str, HistoricalCaseRefusal] = {}
         for case in pending_cases:
             target_eval_date = case.eval_date or get_next_cn_trading_day(case.trade_date)
             if not target_eval_date:
@@ -785,10 +859,15 @@ def backfill_pending_cases(
                 modified = True
 
             refusal = _coerce_refusal(outcome_str)
-            if outcome_str != DATA_MISSING_PLACEHOLDER and change_pct is not None:
+            if (
+                refusal is None
+                and outcome_str != DATA_MISSING_PLACEHOLDER
+                and change_pct is not None
+            ):
                 is_error = evaluate_prediction_error(case.decision, case.direction, change_pct)
                 case.actual_change_pct = change_pct
                 case.actual_outcome = outcome_str
+                case.claims = _claims_without_refusal_metadata(case.claims)
                 case.is_error = is_error
                 case.updated_at = datetime.now(timezone.utc)
                 stats["backfilled"] += 1
@@ -805,8 +884,12 @@ def backfill_pending_cases(
                 case.actual_outcome = DATA_MISSING_PLACEHOLDER
                 case.actual_change_pct = None
                 case.is_error = None
+                modified = True
                 if refusal:
-                    _restore_case_refusal(case, refusal)
+                    case.claims = _claims_with_refusal_metadata(case.claims, refusal)
+                    case.updated_at = datetime.now(timezone.utc)
+                    refusal_by_case_id[case.id] = refusal
+                    modified = True
                 stats["still_missing"] += 1
                 logger.warning(
                     "[historical_cases] Backfill unresolved for %s (%s -> %s): market data unavailable",
@@ -818,6 +901,10 @@ def backfill_pending_cases(
         if modified:
             try:
                 session.commit()
+                for case in pending_cases:
+                    refusal = refusal_by_case_id.get(case.id)
+                    if refusal is not None:
+                        _restore_case_refusal(case, refusal)
             except Exception as exc:
                 session.rollback()
                 logger.error("[historical_cases] Failed to commit backfilled cases: %s", exc)
@@ -890,6 +977,7 @@ def retrieve_similar_historical_cases(
 def _format_single_case_block(index: int, case: Any) -> str:
     """格式化单个历史案例详情。"""
     c_dict = case.to_dict() if hasattr(case, "to_dict") else dict(case)
+    refusal = _case_refusal(case)
 
     sym = c_dict.get("symbol") or "未知标的"
     ind = c_dict.get("industry") or "未知行业"
@@ -920,20 +1008,29 @@ def _format_single_case_block(index: int, case: Any) -> str:
     eval_str = f"（评估日 {eval_d}）" if eval_d else ""
     is_err = c_dict.get("is_error")
 
-    if outcome == DATA_MISSING_PLACEHOLDER:
+    if refusal is not None:
+        outcome_note = (
+            f"【数据拒绝】{refusal.code}：{refusal.reason}"
+        )
+        review_note = "该案例因数据源拒绝而不可评估，不得按普通缺失行情解读。"
+    elif outcome == DATA_MISSING_PLACEHOLDER:
+        outcome_note = outcome
         review_note = "实际行情未到或数据缺失，待后续评估。"
     elif is_err is True:
+        outcome_note = outcome
         review_note = "【偏差复盘】预测方向与次日实际走势相悖，需重点核验假设漏洞与反转风险。"
     elif is_err is False:
+        outcome_note = outcome
         review_note = "【验证一致】预测方向与次日实际走势一致，逻辑与催化传导有效。"
     else:
+        outcome_note = outcome
         review_note = "行情已记录，需结合中长期周期持续跟踪。"
 
     return (
         f"[案例 {index}] 标的：{sym}（行业：{ind}）| 历史分析日：{t_date}\n"
         f"- 历史研判：{dec_display}\n"
         f"- 核心论据 (Claims)：\n{claims_block}\n"
-        f"- T+1 实际表现：{outcome}{eval_str}\n"
+        f"- T+1 实际表现：{outcome_note}{eval_str}\n"
         f"- 案例启示：{review_note}"
     )
 

@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -417,7 +418,7 @@ def test_calculate_t1_return_preserves_vendor_refusal_type():
     assert result[0] == "2024-05-13"
     assert result[1] is None
     assert isinstance(result[2], VendorRefuse)
-    assert result[2].code == "vendor_refuse"
+    assert result[2].code == "duplicate_bar_conflict"
     assert result[2].reason == refusal.reason
     assert result[2].status == "refused"
     assert result[2] == DATA_MISSING_PLACEHOLDER
@@ -448,9 +449,9 @@ def test_record_historical_case_keeps_typed_refusal_on_case(test_db_session):
     assert case.actual_change_pct is None
     assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
     assert isinstance(case.actual_outcome, VendorRefuse)
-    assert case.actual_outcome.code == "vendor_refuse"
+    assert case.actual_outcome.code == "duplicate_bar_conflict"
     assert case.actual_outcome.reason == refusal.reason
-    assert case.refusal_code == "vendor_refuse"
+    assert case.refusal_code == "duplicate_bar_conflict"
     assert case.refusal_reason == refusal.reason
     persisted = test_db_session.query(HistoricalCaseDB).filter(
         HistoricalCaseDB.id == case.id
@@ -486,10 +487,147 @@ def test_backfill_pending_cases_keeps_typed_refusal(test_db_session):
     assert case.actual_change_pct is None
     assert case.actual_outcome == DATA_MISSING_PLACEHOLDER
     assert isinstance(case.actual_outcome, VendorRefuse)
-    assert case.actual_outcome.code == "vendor_refuse"
-    assert case.actual_outcome.reason == refusal.reason
-    assert case.refusal_code == "vendor_refuse"
-    assert case.refusal_reason == refusal.reason
+    assert case.actual_outcome.code == "duplicate_bar_conflict"
+
+
+@pytest.mark.parametrize("initial_outcome", [None, ""])
+def test_backfill_pending_cases_persists_typed_refusal_for_empty_outcomes(
+    test_db_session, initial_outcome
+):
+    """NULL/空缺案例的拒绝结果必须落库并从下一轮待处理扫描中消失。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    case = HistoricalCaseDB(
+        id=f"case-refusal-{initial_outcome!r}",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=initial_outcome,
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+    refusal = VendorRefuse("provider unavailable for historical T+1")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    assert stats == {
+        "total_scanned": 1,
+        "backfilled": 0,
+        "still_missing": 1,
+        "skipped_future": 0,
+        "errors": 0,
+    }
+    test_db_session.expire_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert persisted.actual_outcome == DATA_MISSING_PLACEHOLDER
+    refusal_entries = [
+        entry for entry in (persisted.claims or [])
+        if isinstance(entry, dict) and "__historical_case_refusal__" in entry
+    ]
+    assert refusal_entries == [{
+        "__historical_case_refusal__": {
+            "code": "vendor_refuse",
+            "reason": refusal.reason,
+        }
+    }]
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        side_effect=AssertionError("persisted refusal must not be rescanned"),
+    ):
+        second_stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+    assert second_stats["total_scanned"] == 0
+
+
+@pytest.mark.parametrize(
+    "legacy_reason,expected_code",
+    [
+        (
+            "【数据获取失败】该数据源仅提供当前快照，无法用于历史日期分析，本项不可用",
+            "snapshot_refusal",
+        ),
+        ("【数据获取失败】provider unavailable", "vendor_refuse"),
+        (
+            "【数据获取失败】duplicate daily bars for 2024-05-10",
+            "duplicate_bar_conflict",
+        ),
+    ],
+)
+def test_calculate_t1_return_converts_all_legacy_refusal_strings(
+    legacy_reason, expected_code
+):
+    """route 的 legacy 拒绝字符串统一转换成可识别的 typed refusal。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    fake_dates = [date(2024, 5, 10), date(2024, 5, 13)]
+    with patch(
+        "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+        return_value=(fake_dates, set(fake_dates)),
+    ), patch(
+        "tradingagents.knowledge.historical_cases.now_cn",
+        return_value=datetime(2024, 5, 20, 16, 0, tzinfo=timezone.utc),
+    ), patch(
+        "tradingagents.dataflows.interface.route_to_vendor",
+        return_value=legacy_reason,
+    ):
+        result = calculate_t1_return("600519", "2024-05-10")
+
+    assert result[:2] == ("2024-05-13", None)
+    assert isinstance(result[2], VendorRefuse)
+    assert result[2] == DATA_MISSING_PLACEHOLDER
+    assert result[2].code == expected_code
+    assert result[2].reason == legacy_reason
+
+
+def test_refusal_metadata_is_serializable_after_reload_and_formatting(test_db_session):
+    """拒绝原因跨 ORM session/API to_dict 与格式化层保持可识别。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    report = ReportDB(
+        id="rep-refusal-serializable",
+        symbol="600519",
+        trade_date="2024-05-10",
+        status="completed",
+        decision="BUY",
+        direction="看多",
+    )
+    test_db_session.add(report)
+    test_db_session.commit()
+    refusal = VendorRefuse(
+        "【数据获取失败】该数据源仅提供当前快照，无法用于历史日期分析，本项不可用"
+    )
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        record_historical_case(test_db_session, report)
+
+    test_db_session.expunge_all()
+    persisted = test_db_session.query(HistoricalCaseDB).filter_by(
+        report_id=report.id
+    ).one()
+    payload = persisted.to_dict()
+    json.dumps(payload, ensure_ascii=False)
+    assert payload["actual_outcome"] == DATA_MISSING_PLACEHOLDER
+    assert {
+        "__historical_case_refusal__": {
+            "code": "snapshot_refusal",
+            "reason": refusal.reason,
+        }
+    } in payload["claims"]
+
+    formatted = format_historical_cases_context([persisted])
+    assert "【数据拒绝】" in formatted
+    assert "snapshot_refusal" in formatted
+    assert refusal.reason in formatted
+    assert "实际行情未到或数据缺失" not in formatted
 
 
 def test_calculate_t1_return_missing_data_future_or_incomplete():
