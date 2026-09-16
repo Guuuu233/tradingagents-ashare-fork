@@ -1452,9 +1452,28 @@ class CnAkshareProvider(BaseMarketDataProvider):
             rename_dict = {orig: target for orig, target in mapping.items() if orig in df.columns}
             df = df.rename(columns=rename_dict)
 
-            # Drop duplicates by report date keeping first
+            # Drop duplicates by report date keeping first only if identical; reject on conflict
             rep_col = "报告日" if "报告日" in df.columns else "end_date"
-            df = df.drop_duplicates(subset=[rep_col]).reset_index(drop=True)
+            periods = df[rep_col].dropna().unique()
+            has_conflict = False
+            for period in periods:
+                group = df[df[rep_col] == period]
+                if len(group) > 1:
+                    deduped_group = group.drop_duplicates()
+                    if len(deduped_group) > 1:
+                        errors.append(
+                            self._tushare_error(
+                                api_name,
+                                "duplicate_conflict",
+                                f"end_date={period}",
+                            )
+                        )
+                        has_conflict = True
+                        break
+            if has_conflict:
+                continue
+
+            df = df.drop_duplicates().drop_duplicates(subset=[rep_col]).reset_index(drop=True)
             out[report_name] = df
 
         return out, errors
@@ -5562,6 +5581,23 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     period_kind="realtime_single_day",
                 )
                 return FundFlowText(str(value), evidence=evidence, evidence_meta=metadata)
+            if len(matched) > 1:
+                duplicate_values = [
+                    _usable_fund_amount_text(val) for val in matched["净额"].tolist()
+                ]
+                if any(v is None for v in duplicate_values) or len(set(duplicate_values)) > 1:
+                    metadata["manual_calibration_gap"] = build_gap_meta(
+                        symbol=symbol,
+                        requested_as_of=curr_date,
+                        source="ths_instant_snapshot",
+                        status="blocked",
+                        reason="同花顺即时快照存在同标的冲突行，拒绝生成证据",
+                        retrieved_at=self._sina_retrieved_at(),
+                        algorithm_group="new_algorithm_group",
+                        period_kind="realtime_single_day",
+                    )
+                    metadata["consensus_source_warning"] = "ths_instant_snapshot: duplicate_symbol_conflict"
+                    return FundFlowText(str(value), evidence=evidence, evidence_meta=metadata)
             ths_row = matched.iloc[0]
             ths_records = build_ths_evidence(
                 [{
@@ -6090,56 +6126,153 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 df = ak.stock_gpzy_pledge_ratio_em()
 
             if df is None or df.empty:
-                res = DataResult(ok=True, data=None, source=source_name, title=title)
-                return res.to_prompt()
-
-            stock_df = df[df["股票代码"].astype(str).str.zfill(6) == code.zfill(6)]
-            if stock_df.empty:
-                res = DataResult(ok=True, data="【股权质押排查】无大股东高比例质押记录，质押风险处于安全水平。", source=source_name, title=title)
-                return res.to_prompt()
-
-            row = stock_df.iloc[0]
-
-            def _field(col: str):
-                if col not in stock_df.columns:
-                    return None
-                val = row[col]
-                if pd.isna(val):
-                    return None
-                text = str(val).strip()
-                return text if text != "" else None
-
-            ratio = _field("质押比例")
-            count = _field("质押笔数")
-            industry = _field("所属行业")
-
-            missing = [name for name, val in (("质押比例", ratio), ("质押笔数", count)) if val is None]
-            if missing:
                 res = DataResult(
                     ok=False,
                     data=None,
-                    error=f"{'、'.join(missing)}字段缺失，质押风险未排查",
+                    error="股权质押全市场数据为空，质押风险未排查",
                     source=source_name,
                     title=title,
                 )
                 return res.to_prompt()
+
+            code_col = None
+            for cand in ("股票代码", "证券代码", "代码"):
+                if cand in df.columns:
+                    code_col = cand
+                    break
+            if code_col is None:
+                res = DataResult(
+                    ok=False,
+                    data=None,
+                    error="股权质押数据缺少股票代码列，质押风险未排查",
+                    source=source_name,
+                    title=title,
+                )
+                return res.to_prompt()
+
+            stock_df = df[df[code_col].astype(str).str.zfill(6) == code.zfill(6)]
+            if stock_df.empty:
+                res = DataResult(ok=True, data="【股权质押排查】无大股东高比例质押记录，质押风险处于安全水平。", source=source_name, title=title)
+                return res.to_prompt()
+
+            date_col = None
+            for cand in ("交易日期", "日期", "date", "截止日期", "公告日期"):
+                if cand in stock_df.columns:
+                    date_col = cand
+                    break
+            if date_col and curr_date:
+                try:
+                    clean_curr_date = curr_date.replace("-", "")[:8]
+                    for raw_d in stock_df[date_col]:
+                        if pd.notna(raw_d):
+                            clean_d = str(raw_d).replace("-", "").strip()[:8]
+                            if len(clean_d) == 8 and clean_d.isdigit() and clean_d > clean_curr_date:
+                                res = DataResult(
+                                    ok=False,
+                                    data=None,
+                                    error=f"质押数据包含晚于请求日（{curr_date}）的记录，质押风险未排查",
+                                    source=source_name,
+                                    title=title,
+                                )
+                                return res.to_prompt()
+                except Exception:
+                    pass
+
+            missing_cols = [c for c in ("质押比例", "质押笔数") if c not in stock_df.columns]
+            if missing_cols:
+                res = DataResult(
+                    ok=False,
+                    data=None,
+                    error=f"{'、'.join(missing_cols)}字段缺失，质押风险未排查",
+                    source=source_name,
+                    title=title,
+                )
+                return res.to_prompt()
+
+            parsed_rows = []
+            for _, row in stock_df.iterrows():
+                raw_ratio = row.get("质押比例")
+                raw_count = row.get("质押笔数")
+                raw_ind = row.get("所属行业") if "所属行业" in stock_df.columns else None
+
+                val_ratio = None if pd.isna(raw_ratio) else str(raw_ratio).strip()
+                val_count = None if pd.isna(raw_count) else str(raw_count).strip()
+                val_ind = None if pd.isna(raw_ind) else str(raw_ind).strip()
+                if val_ratio == "":
+                    val_ratio = None
+                if val_count == "":
+                    val_count = None
+
+                missing = [name for name, val in (("质押比例", val_ratio), ("质押笔数", val_count)) if val is None]
+                if missing:
+                    res = DataResult(
+                        ok=False,
+                        data=None,
+                        error=f"{'、'.join(missing)}字段缺失，质押风险未排查",
+                        source=source_name,
+                        title=title,
+                    )
+                    return res.to_prompt()
+
+                try:
+                    ratio_val = float(val_ratio.replace("%", ""))
+                except (TypeError, ValueError):
+                    res = DataResult(
+                        ok=False,
+                        data=None,
+                        error=f"质押比例字段不可解析（raw={val_ratio!r}），质押风险未排查",
+                        source=source_name,
+                        title=title,
+                    )
+                    return res.to_prompt()
+
+                try:
+                    count_val = int(float(val_count))
+                except (TypeError, ValueError):
+                    res = DataResult(
+                        ok=False,
+                        data=None,
+                        error=f"质押笔数字段不可解析（raw={val_count!r}），质押风险未排查",
+                        source=source_name,
+                        title=title,
+                    )
+                    return res.to_prompt()
+
+                parsed_rows.append({
+                    "ratio": val_ratio,
+                    "ratio_val": ratio_val,
+                    "count": val_count,
+                    "count_val": count_val,
+                    "industry": val_ind,
+                })
+
+            unique_ratios = {r["ratio_val"] for r in parsed_rows}
+            unique_counts = {r["count_val"] for r in parsed_rows}
+            if len(unique_ratios) > 1 or len(unique_counts) > 1:
+                conflicts = []
+                if len(unique_ratios) > 1:
+                    conflicts.append("质押比例")
+                if len(unique_counts) > 1:
+                    conflicts.append("质押笔数")
+                res = DataResult(
+                    ok=False,
+                    data=None,
+                    error=f"质押数据存在冲突（同标的多行{'、'.join(conflicts)}不一致），质押风险未排查",
+                    source=source_name,
+                    title=title,
+                )
+                return res.to_prompt()
+
+            target = parsed_rows[0]
+            ratio = target["ratio"]
+            ratio_val = target["ratio_val"]
+            count = target["count"]
+            industry = target["industry"]
 
             msg = (
                 f"【股权质押排查】整体质押比例：{ratio}% "
                 f"(质押笔数: {count} 笔, 行业: {industry or '未知'})"
             )
-            try:
-                ratio_val = float(str(ratio).replace("%", ""))
-            except (TypeError, ValueError):
-                res = DataResult(
-                    ok=False,
-                    data=None,
-                    error=f"质押比例字段不可解析（raw={ratio!r}），质押风险未排查",
-                    source=source_name,
-                    title=title,
-                )
-                return res.to_prompt()
-
             if ratio_val > 30:
                 msg += " ⚠️ [高风险警示] 该股票大股东质押比例超30%，需高度警惕平仓与流动性风险。"
 
@@ -6384,34 +6517,72 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 # 全市场有表但该票无明细：视为该日已发布、标的无记录，停止回退
                 return f"【融资融券】{day} 暂无该标的融资融券明细。"
 
-            row = stock_df.iloc[0]
+            date_col = None
+            for cand in ("信用交易日期", "交易日期", "日期", "date"):
+                if cand in stock_df.columns:
+                    date_col = cand
+                    break
+            if date_col:
+                clean_req_date = request_date.replace("-", "")[:8]
+                for raw_d in stock_df[date_col]:
+                    if pd.notna(raw_d):
+                        clean_d = str(raw_d).replace("-", "").strip()[:8]
+                        if len(clean_d) == 8 and clean_d.isdigit() and clean_d > clean_req_date:
+                            return (
+                                f"【融资融券】{day} 数据包含晚于请求日（{request_date}）的记录，"
+                                f"融资融券风险未排查"
+                            )
 
-            def _margin_field(col: str):
-                if col not in stock_df.columns:
-                    return None
-                val = row[col]
-                if pd.isna(val):
-                    return None
-                text = str(val).strip()
-                return text if text != "" else None
-
-            rzye = _margin_field("融资余额")
-            rzbuy = _margin_field("融资买入额")
-            rqyl = _margin_field("融券余量")
-            missing = [
-                name
-                for name, val in (
-                    ("融资余额", rzye),
-                    ("融资买入额", rzbuy),
-                    ("融券余量", rqyl),
-                )
-                if val is None
-            ]
-            if missing:
+            key_cols = ("融资余额", "融资买入额", "融券余量")
+            missing_cols = [c for c in key_cols if c not in stock_df.columns]
+            if missing_cols:
                 return (
-                    f"【融资融券】{day} 关键字段缺失（{'、'.join(missing)}），"
+                    f"【融资融券】{day} 关键字段缺失（{'、'.join(missing_cols)}），"
                     f"融资融券风险未排查"
                 )
+
+            parsed_rows = []
+            for _, row in stock_df.iterrows():
+                row_vals = {}
+                missing_in_row = []
+                for col in key_cols:
+                    val = row.get(col)
+                    if pd.isna(val) or str(val).strip() == "":
+                        missing_in_row.append(col)
+                    else:
+                        text_val = str(val).strip()
+                        try:
+                            num_val = float(text_val.replace(",", ""))
+                        except (TypeError, ValueError):
+                            return (
+                                f"【融资融券】{day} 关键字段 {col} 不可解析（raw={text_val!r}），"
+                                f"融资融券风险未排查"
+                            )
+                        row_vals[col] = (text_val, num_val)
+
+                if missing_in_row:
+                    return (
+                        f"【融资融券】{day} 关键字段缺失（{'、'.join(missing_in_row)}），"
+                        f"融资融券风险未排查"
+                    )
+                parsed_rows.append(row_vals)
+
+            conflicts = []
+            for col in key_cols:
+                distinct_nums = {r[col][1] for r in parsed_rows}
+                if len(distinct_nums) > 1:
+                    conflicts.append(col)
+
+            if conflicts:
+                return (
+                    f"【融资融券】{day} 关键字段（{'、'.join(conflicts)}）存在冲突，"
+                    f"融资融券风险未排查"
+                )
+
+            target = parsed_rows[0]
+            rzye = target["融资余额"][0]
+            rzbuy = target["融资买入额"][0]
+            rqyl = target["融券余量"][0]
             return (
                 f"【融资融券数据】日期: {day} | 融资余额: {rzye} 元"
                 f" | 融资买入额: {rzbuy} 元 | 融券余量: {rqyl}"
