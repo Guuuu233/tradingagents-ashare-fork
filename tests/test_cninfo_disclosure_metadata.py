@@ -788,15 +788,25 @@ def test_dav623_red_ir_surveys_retains_adjunct_url():
 def test_dav623_same_query_response_captured_without_duplicate_query():
     """验证生产路径执行时，_capturing_post 从同一次 hisAnnouncement/query 捕获 adjunctUrl，不发起二次查询."""
     post_call_count = 0
+    query_post_count = 0
+    get_call_count = 0
 
-    def fake_post(url, *args, **kwargs):
-        nonlocal post_call_count
-        post_call_count += 1
+    def fake_get(url, *args, **kwargs):
+        # akshare __get_stock_json fetches the stock->orgId dict via requests.get
+        nonlocal get_call_count
+        get_call_count += 1
         resp = MagicMock()
         resp.status_code = 200
-        if "szse_stock.json" in str(url):
-            resp.json.return_value = {"stockList": [{"code": "601138", "orgId": "9900034873"}]}
-            return resp
+        resp.json.return_value = {"stockList": [{"code": "601138", "orgId": "9900034873"}]}
+        return resp
+
+    def fake_post(url, *args, **kwargs):
+        nonlocal post_call_count, query_post_count
+        post_call_count += 1
+        if "hisAnnouncement/query" in str(url):
+            query_post_count += 1
+        resp = MagicMock()
+        resp.status_code = 200
         resp.json.return_value = {
             "totalAnnouncement": 1,
             "announcements": [
@@ -816,7 +826,7 @@ def test_dav623_same_query_response_captured_without_duplicate_query():
     provider = CnAkshareProvider()
 
     # 当 AKShare 执行真实逻辑时（未 mock ak.stock_zh_a_disclosure_report_cninfo）
-    with patch("requests.post", side_effect=fake_post):
+    with patch("requests.post", side_effect=fake_post), patch("requests.get", side_effect=fake_get):
         envelope = provider.get_cninfo_announcements(
             symbol="601138",
             start_date="2026-07-28",
@@ -827,7 +837,11 @@ def test_dav623_same_query_response_captured_without_duplicate_query():
     assert len(envelope.records) == 1
     rec = envelope.records[0]
     assert rec.adjunct_url == "http://static.cninfo.com.cn/finalpage/2026-07-28/1220000001.PDF"
-    # 验证只对 hisAnnouncement/query 调用了一次（即同一 query 响应捕获，没有二次查询）
-    query_calls = [c for c in []] # post_call_count 包含了必要的请求，没有多余的 fallback query
+    # akshare 内部对同一次 hisAnnouncement/query 恰好发两次 POST（totalAnnouncement 计数 + 第 1 页数据）。
+    # 若 _capturing_post 未捕获到 adjunctUrl，provider 会走 _query_cninfo_raw_announcements 兜底，
+    # 再产生一次 hisAnnouncement/query POST，使计数 > 2。
+    assert query_post_count == 2
+    assert post_call_count == 2
+    assert get_call_count == 1
     assert rec.content_status == CONTENT_STATUS_NOT_ATTEMPTED
 

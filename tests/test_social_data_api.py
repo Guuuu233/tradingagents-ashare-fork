@@ -126,6 +126,17 @@ def test_status_proves_four_dimensions_independent(tmp_path, monkeypatch):
     2. Merely creating/touching an empty archive file must NOT return operational in active mode.
     3. When archive contains valid snapshots, active mode returns operational.
     """
+    # Freeze wall-clock so freshness is deterministic relative to the fixed
+    # fixture snapshot at 2026-08-26T06:10:00Z (tests/social_fixtures.py).
+    # Frozen now = 2026-08-30T12:00:00Z -> age ~4.25 days: fresh under a
+    # 14-day lookback, stale under a 3-day lookback.
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(social_data_service, "datetime", _FrozenDatetime)
+
     archive_db = str(tmp_path / "social_archive.db")
     init_archive_db(archive_db)
 
