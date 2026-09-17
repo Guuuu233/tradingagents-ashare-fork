@@ -102,24 +102,46 @@ def _filter_csv_by_date_range(csv_data: str, start_date: str, end_date: str) -> 
     if not csv_data or csv_data.strip() == "":
         return csv_data
 
+    # Fail-closed: never return the raw payload when filtering cannot be
+    # guaranteed. Unparseable date rows are dropped explicitly; structurally
+    # unusable input yields an empty (unavailable) result.
+    try:
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+    except Exception as e:
+        logger.warning(
+            "Warning: invalid date range arguments (%r, %r): %s",
+            start_date, end_date, e,
+        )
+        return ""
+
     try:
         # Parse CSV data
         df = pd.read_csv(StringIO(csv_data))
-
-        # Assume the first column is the date column (timestamp)
-        date_col = df.columns[0]
-        df[date_col] = pd.to_datetime(df[date_col])
-
-        # Filter by date range
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
-
-        filtered_df = df[(df[date_col] >= start_dt) & (df[date_col] <= end_dt)]
-
-        # Convert back to CSV string
-        return filtered_df.to_csv(index=False)
-
     except Exception as e:
-        # If filtering fails, return original data with a warning
-        logger.warning("Warning: Failed to filter CSV data by date range: %s", e)
-        return csv_data
+        logger.warning("Warning: Failed to parse CSV data for date filtering: %s", e)
+        return ""
+
+    if df.empty or len(df.columns) == 0:
+        # Non-tabular / header-only payload: nothing verifiably in-range.
+        return ""
+
+    # Assume the first column is the date column (timestamp). Rows whose
+    # date cannot be parsed are dropped rather than silently kept.
+    date_col = df.columns[0]
+    parsed_dates = pd.to_datetime(df[date_col], errors="coerce")
+    valid_mask = parsed_dates.notna()
+    dropped = int((~valid_mask).sum())
+    if dropped:
+        logger.warning(
+            "Warning: dropping %d row(s) with unparseable %s values",
+            dropped, date_col,
+        )
+    df = df.loc[valid_mask].copy()
+    df[date_col] = parsed_dates[valid_mask]
+
+    # Filter by date range
+    filtered_df = df[(df[date_col] >= start_dt) & (df[date_col] <= end_dt)]
+
+    # Convert back to CSV string
+    return filtered_df.to_csv(index=False)
