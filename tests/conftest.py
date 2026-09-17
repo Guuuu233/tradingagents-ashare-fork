@@ -189,18 +189,32 @@ def _reset_baostock_context():
                     sockutil.instance = None
 
 
+def _patch_socket_class(attr, value):
+    """Best-effort attribute assignment on socket.socket, tolerant of tests that
+    have temporarily replaced the class object itself (e.g. monkeypatch with a
+    plain function). If the class is unavailable the write is skipped; integrity
+    is verified separately by _verify_guardrail_integrity at test boundaries."""
+    target = getattr(socket, "socket", None)
+    if target is None:
+        return
+    try:
+        setattr(target, attr, value)
+    except (AttributeError, TypeError):
+        pass
+
+
 def enable_offline_network_guard():
     """Install socket interceptors to block outbound non-local network traffic."""
     global _guard_active_depth
     if _guard_active_depth == 0:
-        socket.socket.connect = _guarded_connect
-        socket.socket.connect_ex = _guarded_connect_ex
-        socket.socket.sendto = _guarded_sendto
+        _patch_socket_class("connect", _guarded_connect)
+        _patch_socket_class("connect_ex", _guarded_connect_ex)
+        _patch_socket_class("sendto", _guarded_sendto)
         socket.create_connection = _guarded_create_connection
-        socket.socket.send = _guarded_send
-        socket.socket.sendall = _guarded_sendall
-        socket.socket.recv = _guarded_recv
-        socket.socket.recv_into = _guarded_recv_into
+        _patch_socket_class("send", _guarded_send)
+        _patch_socket_class("sendall", _guarded_sendall)
+        _patch_socket_class("recv", _guarded_recv)
+        _patch_socket_class("recv_into", _guarded_recv_into)
     _guard_active_depth += 1
 
 
@@ -209,14 +223,14 @@ def disable_offline_network_guard(force: bool = False):
     global _guard_active_depth
     if force or _guard_active_depth <= 1:
         _guard_active_depth = 0
-        socket.socket.connect = _ORIG_SOCKET_CONNECT
-        socket.socket.connect_ex = _ORIG_SOCKET_CONNECT_EX
-        socket.socket.sendto = _ORIG_SOCKET_SENDTO
+        _patch_socket_class("connect", _ORIG_SOCKET_CONNECT)
+        _patch_socket_class("connect_ex", _ORIG_SOCKET_CONNECT_EX)
+        _patch_socket_class("sendto", _ORIG_SOCKET_SENDTO)
         socket.create_connection = _ORIG_CREATE_CONNECTION
-        socket.socket.send = _ORIG_SOCKET_SEND
-        socket.socket.sendall = _ORIG_SOCKET_SENDALL
-        socket.socket.recv = _ORIG_SOCKET_RECV
-        socket.socket.recv_into = _ORIG_SOCKET_RECV_INTO
+        _patch_socket_class("send", _ORIG_SOCKET_SEND)
+        _patch_socket_class("sendall", _ORIG_SOCKET_SENDALL)
+        _patch_socket_class("recv", _ORIG_SOCKET_RECV)
+        _patch_socket_class("recv_into", _ORIG_SOCKET_RECV_INTO)
     else:
         _guard_active_depth -= 1
 
@@ -224,6 +238,56 @@ def disable_offline_network_guard(force: bool = False):
 def is_offline_network_guard_active() -> bool:
     """Return whether the offline network guardrail is currently active."""
     return _guard_active_depth > 0
+
+
+def _expected_guarded_callables():
+    """Mapping of guarded attribute -> (owner_getter, expected callable)."""
+    return {
+        "socket.socket.connect": (_guarded_connect, "socket.socket"),
+        "socket.socket.connect_ex": (_guarded_connect_ex, "socket.socket"),
+        "socket.socket.sendto": (_guarded_sendto, "socket.socket"),
+        "socket.create_connection": (_guarded_create_connection, "socket"),
+        "socket.socket.send": (_guarded_send, "socket.socket"),
+        "socket.socket.sendall": (_guarded_sendall, "socket.socket"),
+        "socket.socket.recv": (_guarded_recv, "socket.socket"),
+        "socket.socket.recv_into": (_guarded_recv_into, "socket.socket"),
+    }
+
+
+def _verify_guardrail_integrity(nodeid: str, phase: str) -> None:
+    """Fail with attribution if a test permanently replaced guardrail callables.
+
+    Per-test fixtures/monkeypatches that temporarily override socket callables
+    (e.g. patch('socket.socket.connect')) compose fine: they are restored before
+    this check runs at test boundaries. A failure here means the override leaked
+    past the test, or socket.socket itself was left in a non-class state.
+    """
+    if not is_offline_network_guard_active():
+        raise OfflineTestGuardrailError(
+            f"OfflineTestGuardrail: guardrail is inactive at {phase} of {nodeid}; "
+            "a previous test disabled it without restoring."
+        )
+    drifted = []
+    for name, (expected, owner) in _expected_guarded_callables().items():
+        try:
+            if owner == "socket.socket":
+                cls = getattr(socket, "socket", None)
+                if not isinstance(cls, type):
+                    drifted.append(f"{name} (socket.socket is {cls!r}, not a class)")
+                    continue
+                current = getattr(cls, name.rsplit(".", 1)[-1])
+            else:
+                current = getattr(socket, name.rsplit(".", 1)[-1])
+        except AttributeError:
+            drifted.append(f"{name} (attribute unreadable)")
+            continue
+        if current is not expected:
+            drifted.append(f"{name} is {current!r}")
+    if drifted:
+        raise OfflineTestGuardrailError(
+            f"OfflineTestGuardrail: callable identity drift detected at {phase} of {nodeid}: "
+            + "; ".join(drifted)
+        )
 
 
 @contextmanager
@@ -269,10 +333,16 @@ def offline_network_guard(request):
 
     if not is_offline_network_guard_active():
         enable_offline_network_guard()
+    else:
+        # Guard is on, but a previous test may have left the callables replaced.
+        _verify_guardrail_integrity(request.node.nodeid, "setup")
     try:
         yield
     finally:
-        _reset_baostock_context()
+        try:
+            _verify_guardrail_integrity(request.node.nodeid, "teardown")
+        finally:
+            _reset_baostock_context()
 
 
 def pytest_sessionstart(session):
