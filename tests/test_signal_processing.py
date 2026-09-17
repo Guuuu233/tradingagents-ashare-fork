@@ -4,13 +4,14 @@ from tradingagents.graph.signal_processing import _extract_decision_keyword
 
 
 def test_negated_buy_phrase_is_not_buy():
+    # D-009: 观望结论映射为 WAIT（非方向性动作），否定买入不得被识别为买入
     text = "最终建议: 不建议买入，维持观望"
-    assert _extract_decision_keyword(text) == "HOLD"
+    assert _extract_decision_keyword(text) == "WAIT"
 
 
 def test_negated_build_position_is_not_buy():
     text = "风险大于收益，不宜建仓，建议持有观望"
-    assert _extract_decision_keyword(text) == "HOLD"
+    assert _extract_decision_keyword(text) == "WAIT"
 
 
 def test_avoid_chasing_and_negated_build_position_is_sell():
@@ -22,8 +23,9 @@ def test_plain_sell_is_sell():
     assert _extract_decision_keyword("最终建议：卖出") == "SELL"
 
 
-def test_plain_hold_is_hold():
-    assert _extract_decision_keyword("最终建议：观望为主") == "HOLD"
+def test_plain_hold_is_wait():
+    # D-009: “观望”是 WAIT，不是旧 HOLD 别名
+    assert _extract_decision_keyword("最终建议：观望为主") == "WAIT"
 
 
 def test_plain_buy_is_buy():
