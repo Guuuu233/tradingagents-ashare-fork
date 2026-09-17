@@ -57,6 +57,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set, Tuple
@@ -1428,15 +1429,43 @@ class OfflineSnapshotPriceDataProvider:
             )
         for sym, m in meta.items():
             if isinstance(m, dict):
+                st_dates_meta = m.get("st_dates")
+                if st_dates_meta is not None:
+                    if not isinstance(st_dates_meta, list):
+                        raise PriceSnapshotValidationError(
+                            f"price snapshot {p}: metadata.st_dates for {sym} must be a list"
+                        )
+                    for d in st_dates_meta:
+                        # Strict full-string check: no [:10] truncation bypass.
+                        self._validate_strict_date(
+                            str(d).strip(), p, f"metadata.st_dates for {sym}"
+                        )
                 self._metadata[self._norm_symbol(sym)] = dict(m)
 
         self._trade_dates = sorted(dates)
 
-    def _check_date_bound(self, ds: str, p: Path) -> None:
-        if not ds or len(ds) != 10:
+    _STRICT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    @classmethod
+    def _validate_strict_date(cls, ds: str, p: Path, what: str = "date") -> None:
+        """Fail-closed strict YYYY-MM-DD calendar validation.
+
+        Rejects malformed shapes (2026/09/18, 2026-0a-10) and non-existent
+        calendar dates (2026-99-99, 2026-02-30) alike.
+        """
+        if not cls._STRICT_DATE_RE.match(ds):
             raise PriceSnapshotValidationError(
-                f"price snapshot {p}: invalid trade date {ds!r}"
+                f"price snapshot {p}: invalid {what} {ds!r} (must be YYYY-MM-DD)"
             )
+        try:
+            datetime.strptime(ds, "%Y-%m-%d")
+        except ValueError as exc:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: invalid {what} {ds!r} (not a calendar date)"
+            ) from exc
+
+    def _check_date_bound(self, ds: str, p: Path) -> None:
+        self._validate_strict_date(ds, p, "trade date")
         if self.forward_oos_end_date is not None and ds > self.forward_oos_end_date:
             raise PriceSnapshotValidationError(
                 f"price snapshot {p}: date {ds} exceeds forward_oos_end_date "
@@ -1558,7 +1587,7 @@ class OfflineSnapshotPriceDataProvider:
             return clean_date in {str(d)[:10] for d in st_dates}
         if "st" in meta:
             return bool(meta.get("st"))
-        return False
+        return None  # fail-closed: metadata present but ST status unknown -> typed gap
 
     def is_listed_for_n_days(
         self, symbol: str, date: str, min_days: int = 60

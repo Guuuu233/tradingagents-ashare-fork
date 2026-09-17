@@ -85,7 +85,13 @@ def _full_snapshot(tmp_path: Path) -> Path:
         {
             "trade_dates": SNAP_TRADE_DATES,
             "bars": bars,
-            "metadata": {"600519.SH": {"list_date": "2001-08-27", "name": "贵州茅台"}},
+            "metadata": {
+                "600519.SH": {
+                    "list_date": "2001-08-27",
+                    "name": "贵州茅台",
+                    "st": False,
+                }
+            },
         },
     )
 
@@ -205,7 +211,7 @@ def test_rt2_snapshot_with_metadata_but_no_bars_gives_traceable_gap(tmp_path):
                 }
                 for d in SNAP_TRADE_DATES
             ],
-            "metadata": {"600519.SH": {"list_date": "2001-08-27"}},
+            "metadata": {"600519.SH": {"list_date": "2001-08-27", "st": False}},
         },
     )
     provider = OfflineSnapshotPriceDataProvider(
@@ -436,3 +442,171 @@ def test_rt5_pool_exclusion_st_still_excluded_offline(tmp_path):
     rec = res.records[0]
     assert rec.pool_status == PoolFilterStatus.EXCLUDED_ST.value
     assert rec.outcome_status == MeasurementOutcomeStatus.EXCLUDED_POOL.value
+
+
+# ---------------------------------------------------------------------------
+# DAV-1052 rework: unknown ST must be typed-missing; strict calendar dates
+# ---------------------------------------------------------------------------
+
+
+def test_dav1052_metadata_without_st_fields_is_typed_missing(tmp_path):
+    """metadata 存在但既无 st 也无 st_dates: ST 状态未知,不得当作已验证非 ST."""
+    snap = _write_snapshot(
+        tmp_path,
+        {
+            "trade_dates": SNAP_TRADE_DATES,
+            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES],
+            "metadata": {"600519.SH": {"list_date": "2001-08-27"}},
+        },
+    )
+    provider = OfflineSnapshotPriceDataProvider(
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+    )
+    # Provider level: unknown ST -> None (typed gap), NOT False (verified non-ST)
+    assert provider.is_st("600519.SH", "2026-09-10") is None
+
+    engine = V03ReturnMeasureEngine(
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+    )
+    res = engine.measure_dataset([_buy_report()])
+    rec = res.records[0]
+
+    assert rec.pool_status == PoolFilterStatus.EXCLUDED_UNKNOWN.value
+    assert rec.outcome_status == MeasurementOutcomeStatus.TYPED_MISSING.value
+    assert rec.performance_category == "typed_missing"
+    assert rec.missing_reason == "offline_metadata_unavailable"
+    assert rec.net_return is None
+    assert rec.gross_return is None
+    assert rec.included_in_return_metrics is False
+    # Coverage denominator conserved: sample counted, not silently dropped
+    assert res.forward_oos_metrics.total_reports == 1
+    assert res.forward_oos_metrics.typed_missing_count == 1
+    assert res.forward_oos_metrics.evaluated_count == 0
+    assert res.forward_oos_metrics.mean_net_return is None
+
+
+def test_dav1052_explicit_st_false_still_evaluated(tmp_path):
+    """显式 st:false 语义不变: 正常进入测量."""
+    snap = _write_snapshot(
+        tmp_path,
+        {
+            "trade_dates": SNAP_TRADE_DATES,
+            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES],
+            "metadata": {"600519.SH": {"list_date": "2001-08-27", "st": False}},
+        },
+    )
+    provider = OfflineSnapshotPriceDataProvider(
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+    )
+    assert provider.is_st("600519.SH", "2026-09-10") is False
+    engine = V03ReturnMeasureEngine(
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+    )
+    res = engine.measure_dataset([_buy_report()])
+    rec = res.records[0]
+    assert rec.outcome_status == MeasurementOutcomeStatus.EVALUATED.value
+    assert rec.net_return is not None
+
+
+def test_dav1052_explicit_st_true_still_excluded(tmp_path):
+    """显式 st:true 语义不变: 真实 ST 排除,不放宽."""
+    snap = _write_snapshot(
+        tmp_path,
+        {
+            "trade_dates": SNAP_TRADE_DATES,
+            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES],
+            "metadata": {"600519.SH": {"list_date": "2001-08-27", "st": True}},
+        },
+    )
+    provider = OfflineSnapshotPriceDataProvider(
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+    )
+    assert provider.is_st("600519.SH", "2026-09-10") is True
+    engine = V03ReturnMeasureEngine(
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+    )
+    res = engine.measure_dataset([_buy_report()])
+    rec = res.records[0]
+    assert rec.pool_status == PoolFilterStatus.EXCLUDED_ST.value
+    assert rec.outcome_status == MeasurementOutcomeStatus.EXCLUDED_POOL.value
+    assert rec.included_in_return_metrics is False
+
+
+def test_dav1052_explicit_st_dates_semantics_unchanged(tmp_path):
+    """显式 st_dates 语义不变: 窗口内 True,窗口外 False."""
+    snap = _write_snapshot(
+        tmp_path,
+        {
+            "trade_dates": SNAP_TRADE_DATES,
+            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES],
+            "metadata": {
+                "600519.SH": {
+                    "list_date": "2001-08-27",
+                    "st_dates": ["2021-06-01", "2026-09-10"],
+                }
+            },
+        },
+    )
+    provider = OfflineSnapshotPriceDataProvider(
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+    )
+    assert provider.is_st("600519.SH", "2026-09-10") is True
+    assert provider.is_st("600519.SH", "2026-09-11") is False
+
+
+BAD_DATES = ["2026-99-99", "2026-02-30", "2026/09/18", "2026-0a-10", "2026-9-8"]
+
+
+@pytest.mark.parametrize("bad_date", BAD_DATES)
+def test_dav1052_invalid_trade_dates_rejected(tmp_path, bad_date):
+    """trade_dates 中的非法日历日期 fail-closed."""
+    snap = _write_snapshot(
+        tmp_path,
+        {"trade_dates": [bad_date], "bars": [_bar("2026-09-10")]},
+    )
+    with pytest.raises(PriceSnapshotValidationError):
+        OfflineSnapshotPriceDataProvider(
+            snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        )
+
+
+@pytest.mark.parametrize("bad_date", BAD_DATES)
+def test_dav1052_invalid_bar_dates_rejected(tmp_path, bad_date):
+    """bars[].date 中的非法日历日期 fail-closed(与 trade_dates 同一严格校验)."""
+    snap = _write_snapshot(tmp_path, {"bars": [_bar(bad_date)]})
+    with pytest.raises(PriceSnapshotValidationError):
+        OfflineSnapshotPriceDataProvider(
+            snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        )
+
+
+@pytest.mark.parametrize("bad_date", BAD_DATES)
+def test_dav1052_invalid_st_dates_rejected(tmp_path, bad_date):
+    """metadata.st_dates 中的非法日历日期不得通过 [:10] 截断绕过."""
+    snap = _write_snapshot(
+        tmp_path,
+        {
+            "bars": [_bar("2026-09-10")],
+            "metadata": {"600519.SH": {"st_dates": [bad_date]}},
+        },
+    )
+    with pytest.raises(PriceSnapshotValidationError):
+        OfflineSnapshotPriceDataProvider(
+            snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        )
+
+
+def test_dav1052_legal_dates_still_measure_t1_t5(tmp_path):
+    """合法日期快照不受影响: T+1 open 入场 / T+5 close 出场测量正常."""
+    provider = OfflineSnapshotPriceDataProvider(
+        snapshot_path=str(_full_snapshot(tmp_path)), forward_oos_end_date=FWD_END
+    )
+    engine = V03ReturnMeasureEngine(
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+    )
+    res = engine.measure_dataset([_buy_report()])
+    rec = res.records[0]
+    assert rec.outcome_status == MeasurementOutcomeStatus.EVALUATED.value
+    assert rec.entry_date == "2026-09-11"
+    assert rec.exit_date == "2026-09-18"
+    assert rec.net_return is not None
