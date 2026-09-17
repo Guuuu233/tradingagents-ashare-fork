@@ -448,13 +448,6 @@ async def lifespan(app: FastAPI):
 
         yield
 
-        # Normal shutdown path: stop the module-level executor now that the
-        # app is draining; a later lifespan re-creates it via the entry check.
-        try:
-            _executor.shutdown(wait=True)
-        except Exception as exc:
-            _log(f"Could not shutdown module executor: {exc}")
-
     finally:
         _log("Shutting down: Cleaning up resources...")
         try:
