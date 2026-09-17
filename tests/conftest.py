@@ -651,6 +651,24 @@ def offline_network_guard(request):
             _reset_baostock_context()
 
 
+@pytest.fixture
+def forbid_external_network():
+    """Reusable per-test entry point to the unified offline guardrail.
+
+    Tests that previously layered ad-hoc ``patch("socket.socket.connect")``
+    blocks should request this fixture instead. The session-wide guardrail
+    already intercepts outbound non-local traffic; this fixture fail-closes
+    if enforcement is not active, so dropping the ad-hoc patch does not
+    weaken denial strength.
+    """
+    if not is_offline_network_guard_active():
+        raise OfflineTestGuardrailError(
+            "OfflineTestGuardrail: forbid_external_network requested but the "
+            "unified offline guardrail is not enforcing."
+        )
+    yield
+
+
 def pytest_addoption(parser):
     """Add dedicated network authorization flag to pytest CLI."""
     parser.addoption(

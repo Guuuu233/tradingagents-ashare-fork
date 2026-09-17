@@ -46,13 +46,14 @@ from tests.test_research_manager_seven_reports_and_verdict_gate import _make_sev
 
 
 @pytest.fixture(autouse=True)
-def guard_no_network_calls():
-    """Ensure no real network calls can be made in this test suite."""
+def guard_no_network_calls(forbid_external_network):
+    """Ensure no real network calls can be made in this test suite.
+
+    Socket-level denial is enforced by the unified offline guardrail via the
+    ``forbid_external_network`` conftest fixture; only requests-level seams
+    are patched here.
+    """
     with (
-        patch(
-            "socket.socket.connect",
-            side_effect=RuntimeError("Network access forbidden in offline tests"),
-        ),
         patch(
             "requests.post",
             side_effect=RuntimeError("requests.post forbidden in offline tests"),
