@@ -65,6 +65,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+from tradingagents.dataflows.interface import NetworkAccessDeniedError
 from tradingagents.agents.utils.symbol_canonical import (
     CanonicalStatus,
     CanonicalSymbolResult,
@@ -1161,6 +1162,8 @@ class VendorPriceDataProvider:
                         res = {"name": cname, "list_date": ipo}
                         self._meta_cache[norm_sym] = res
                         return res
+        except NetworkAccessDeniedError:
+            raise
         except Exception as exc:
             logger.debug("v03_return_measure baostock query_stock_basic fallback failed for %s: %s", norm_sym, exc)
 
@@ -1233,6 +1236,8 @@ class VendorPriceDataProvider:
                             row = rs.get_row_data()
                             if row and len(row) >= 2:
                                 pit_st = (row[1] == "1")
+        except NetworkAccessDeniedError:
+            raise
         except Exception as exc:
             logger.debug("v03_return_measure baostock is_st check failed for %s on %s: %s", bs_code, clean_date, exc)
             pit_st = None

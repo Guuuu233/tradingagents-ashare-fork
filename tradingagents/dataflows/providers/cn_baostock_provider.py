@@ -163,7 +163,7 @@ def baostock_session(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
     if getattr(lg, "error_code", "1") != "0":
         _cleanup_context_socket()
         err_msg = getattr(lg, "error_msg", "unknown login error")
-        raise ConnectionError(f"baostock login failed: {err_msg}")
+        raise NotImplementedError(f"baostock login failed: {err_msg}")
     try:
         yield bs
     finally:

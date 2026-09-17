@@ -449,31 +449,111 @@ class TestBaoStockSocketOperationsHardened:
 
 
 class TestV03SessionIntegration:
-    """Verify v03 return measurement engine uses unified baostock_session."""
+    """Verify v03 return measurement engine uses unified baostock_session and propagates NetworkAccessDeniedError."""
 
-    def test_v03_paths_use_baostock_session(self, monkeypatch):
-        """Verify v03 query_stock_basic invokes baostock_session."""
+    def test_v03_query_stock_basic_uses_baostock_session(self, monkeypatch):
+        """Verify v03 query_stock_basic invokes baostock_session on fallback."""
         from contextlib import contextmanager
         from tradingagents.eval.v03_return_measure import VendorPriceDataProvider
         import tradingagents.dataflows.providers.cn_baostock_provider as bp
 
         session_calls = []
-        orig_session = bp.baostock_session
 
         @contextmanager
-        def spy_session(*args, **kwargs):
+        def mock_baostock_session():
             session_calls.append("called")
-            with orig_session(*args, **kwargs) as bs:
-                yield bs
+            mock_bs = MagicMock()
+            mock_rs = MagicMock()
+            mock_rs.error_code = "0"
+            mock_rs.next.return_value = True
+            mock_rs.fields = ["code", "code_name", "ipoDate", "outDate", "type", "status"]
+            mock_rs.get_row_data.return_value = ["sz.000001", "平安银行", "1991-04-03", "", "1", "1"]
+            mock_bs.query_stock_basic.return_value = mock_rs
+            yield mock_bs
 
-        monkeypatch.setattr(bp, "baostock_session", spy_session)
+        monkeypatch.setattr(bp, "baostock_session", mock_baostock_session)
 
         provider = VendorPriceDataProvider(Path("/tmp/nonexistent_db.sqlite"))
         provider._meta_cache.clear()
-        provider._get_stock_metadata("000001.SZ")
+        # Force global metadata cache miss to drive into baostock fallback
+        provider._ensure_global_metadata = lambda: {}
+        res = provider._get_stock_metadata("000001.SZ")
 
-        # Must have invoked baostock_session
+        # Must have invoked baostock_session and parsed result
         assert len(session_calls) >= 1
+        assert res == {"name": "平安银行", "list_date": "1991-04-03"}
+
+    def test_v03_is_st_uses_baostock_session(self, monkeypatch):
+        """Verify v03 is_st invokes baostock_session."""
+        from contextlib import contextmanager
+        from tradingagents.eval.v03_return_measure import VendorPriceDataProvider
+        import tradingagents.dataflows.providers.cn_baostock_provider as bp
+
+        st_calls = []
+
+        @contextmanager
+        def mock_baostock_session():
+            st_calls.append("called")
+            mock_bs = MagicMock()
+            mock_rs = MagicMock()
+            mock_rs.error_code = "0"
+            mock_rs.next.side_effect = [True, False]
+            mock_rs.get_row_data.return_value = ["2026-01-05", "0"]
+            mock_bs.query_history_k_data_plus.return_value = mock_rs
+            yield mock_bs
+
+        monkeypatch.setattr(bp, "baostock_session", mock_baostock_session)
+
+        provider = VendorPriceDataProvider(Path("/tmp/nonexistent_db.sqlite"))
+        provider._meta_cache["000001.SZ"] = {"name": "平安银行", "list_date": "1991-04-03"}
+        provider._st_cache.clear()
+
+        res = provider.is_st("000001.SZ", "2026-01-05")
+        assert len(st_calls) >= 1
+        assert res is False
+
+    def test_v03_paths_propagate_network_access_denied_without_swallowing(self, monkeypatch):
+        """v03 query_stock_basic and is_st must NOT swallow NetworkAccessDeniedError or OfflineTestGuardrailError."""
+        from contextlib import contextmanager
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import NetworkAccessDeniedError
+        from tradingagents.eval.v03_return_measure import VendorPriceDataProvider
+        import tradingagents.dataflows.providers.cn_baostock_provider as bp
+
+        @contextmanager
+        def denied_session():
+            raise NetworkAccessDeniedError("Refusal by offline security policy")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(bp, "baostock_session", denied_session)
+
+        provider = VendorPriceDataProvider(Path("/tmp/nonexistent_db.sqlite"))
+        provider._meta_cache.clear()
+        provider._st_cache.clear()
+        provider._ensure_global_metadata = lambda: {}
+
+        # 1. _get_stock_metadata must re-raise NetworkAccessDeniedError, not return None
+        with pytest.raises(NetworkAccessDeniedError):
+            provider._get_stock_metadata("000001.SZ")
+
+        # 2. is_st must re-raise NetworkAccessDeniedError, not return None
+        provider._meta_cache["000001.SZ"] = {"name": "平安银行", "list_date": "1991-04-03"}
+        with pytest.raises(NetworkAccessDeniedError):
+            provider.is_st("000001.SZ", "2026-01-05")
+
+        # 3. Also verify OfflineTestGuardrailError is re-raised
+        @contextmanager
+        def guardrail_session():
+            raise OfflineTestGuardrailError("Audit hook blocked baostock socket")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(bp, "baostock_session", guardrail_session)
+        provider._meta_cache.clear()
+        with pytest.raises(OfflineTestGuardrailError):
+            provider._get_stock_metadata("000001.SZ")
+        provider._meta_cache["000001.SZ"] = {"name": "平安银行", "list_date": "1991-04-03"}
+        with pytest.raises(OfflineTestGuardrailError):
+            provider.is_st("000001.SZ", "2026-01-05")
 
 
 class TestNetworkAccessDeniedPropagation:
@@ -590,6 +670,22 @@ class TestNetworkAccessDeniedPropagation:
         assert provider_calls["vendor_a"] == 2
         # Then fell back to vendor_b
         assert provider_calls["vendor_b"] == 1
+
+    def test_baostock_login_failure_raises_notimplemented_for_zero_retry_fallback(self, monkeypatch):
+        """Login failure must raise NotImplementedError to trigger immediate vendor fallback without retry."""
+        import baostock as bs
+        from tradingagents.dataflows.providers.cn_baostock_provider import baostock_session
+
+        mock_lg = MagicMock()
+        mock_lg.error_code = "1"
+        mock_lg.error_msg = "invalid user or password"
+        monkeypatch.setattr(bs, "login", lambda: mock_lg)
+
+        with pytest.raises(NotImplementedError) as exc_info:
+            with baostock_session():
+                pass
+
+        assert "baostock login failed: invalid user or password" in str(exc_info.value)
 
     def test_e2e_guardrail_rejection_fast_timing_and_cleanup(self, monkeypatch):
         """End-to-end under real test guardrail: connect rejected, 0 send, completes in <0.1s, socket is None."""
