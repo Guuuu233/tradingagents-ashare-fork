@@ -250,7 +250,10 @@ class _OrdinaryGraph:
 
 
 @pytest.mark.parametrize("stream_events", [False, True])
-def test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback(stream_events):
+def test_ordinary_and_streaming_paths_merge_gaps_and_partial_run_is_no_trade(stream_events):
+    # D-009：必需分析师 news 报告为失败桩 → 运行完整性判为 PARTIAL，
+    # 执行动作必须是 NO_TRADE（方向性字段清空），不得沿用旧 BUY/HOLD 断言。
+    # data_gaps 仍须合并 collector 失败台账与报告文本中的缺口。
     job_id = f"dav27-ordinary-{uuid4().hex}"
     store = InMemoryJobStore()
     collector = MagicMock()
@@ -303,8 +306,14 @@ def test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback(stream_
         "【数据获取失败】新闻摘要源超时",
     ]
     assert job["status"] == "completed"
-    assert job["decision"] == "BUY"
+    assert job["decision"] == "NO_TRADE"
+    assert job["result"]["trade_action"] == "NO_TRADE"
+    assert job["result"]["analysis_status"] == "PARTIAL"
+    assert job["result"]["decision"] == "NO_TRADE"
     assert job["result"]["confidence"] is None
+    assert job["result"]["probability"] is None
+    assert job["result"]["target_price"] is None
+    assert job["result"]["stop_loss_price"] is None
     assert job["result"]["data_gaps"] == expected_gaps
     assert saved_reports[0]["data_gaps"] == expected_gaps
     assert saved_reports[0]["result_data"]["data_gaps"] == expected_gaps

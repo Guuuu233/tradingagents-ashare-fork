@@ -291,7 +291,15 @@ class _FakeGraphStream:
             "company_of_interest": "600519.SH",
             "trade_date": "2026-08-20",
             "horizon": horizon,
+            # D-009 运行完整性默认要求 7 个分析师报告全部非空；
+            # 此处构造健康 VALID 运行，避免缺报告被误判为 PARTIAL/INVALID。
+            "market_report": f"{horizon} market",
+            "sentiment_report": f"{horizon} sentiment",
             "news_report": f"{horizon} news",
+            "fundamentals_report": f"{horizon} fundamentals",
+            "macro_report": f"{horizon} macro",
+            "smart_money_report": f"{horizon} smart_money",
+            "volume_price_report": f"{horizon} volume_price",
             "final_trade_decision": f"{horizon} decision 买入",
             "investment_plan": f"{horizon} 投资计划",
             "trader_investment_plan": f"{horizon} 交易计划",
@@ -342,6 +350,11 @@ class _FakeGraphStream:
                 "horizon": horizon,
                 "news_report": f"{horizon} news",
                 "market_report": f"{horizon} market",
+                "sentiment_report": f"{horizon} sentiment",
+                "fundamentals_report": f"{horizon} fundamentals",
+                "macro_report": f"{horizon} macro",
+                "smart_money_report": f"{horizon} smart_money",
+                "volume_price_report": f"{horizon} volume_price",
                 "market_data_context": init_state.get("market_data_context"),
                 "analyst_traces": [{"horizon": horizon, "analyst": "news"}],
             }
