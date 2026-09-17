@@ -349,3 +349,139 @@ class TestV03SessionIntegration:
 
         # Must have invoked baostock_session
         assert len(session_calls) >= 1
+
+
+class TestNetworkAccessDeniedPropagation:
+    """Targeted tests for NetworkAccessDeniedError non-retry fast propagation (DAV-1009 B2)."""
+
+    def test_exception_inheritance_hierarchy(self):
+        """OfflineTestGuardrailError must inherit from production NetworkAccessDeniedError and RuntimeError."""
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import NetworkAccessDeniedError
+
+        assert issubclass(NetworkAccessDeniedError, RuntimeError)
+        assert issubclass(OfflineTestGuardrailError, NetworkAccessDeniedError)
+        assert issubclass(OfflineTestGuardrailError, RuntimeError)
+
+    def test_route_to_vendor_denied_error_immediate_propagation_no_retry_no_fallback(self, monkeypatch):
+        """NetworkAccessDeniedError must immediately propagate with 1 attempt and 0 retries or vendor fallback."""
+        from tradingagents.dataflows.interface import NetworkAccessDeniedError, route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        import tradingagents.dataflows.interface as iface
+
+        attempt_counts = {"count": 0}
+
+        class MockDeniedProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "cn_baostock"
+
+            def get_stock_data(self, *args, **kwargs):
+                attempt_counts["count"] += 1
+                raise NetworkAccessDeniedError("Access to exchange blocked by security policy")
+
+        reg = DataProviderRegistry()
+        reg.register(MockDeniedProvider())
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "cn_baostock")
+
+        with pytest.raises(NetworkAccessDeniedError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert "blocked by security policy" in str(exc_info.value)
+        # Rigid assertion: exactly 1 attempt, no retry, no fallback
+        assert attempt_counts["count"] == 1
+
+    def test_route_to_vendor_offline_guardrail_immediate_propagation(self, monkeypatch):
+        """OfflineTestGuardrailError must be caught by NetworkAccessDeniedError branch and fail fast."""
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        import tradingagents.dataflows.interface as iface
+
+        attempts = []
+
+        class MockGuardrailProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "cn_baostock"
+
+            def get_stock_data(self, *args, **kwargs):
+                attempts.append("attempt")
+                raise OfflineTestGuardrailError("Audit hook blocked outbound socket connect")
+
+        reg = DataProviderRegistry()
+        reg.register(MockGuardrailProvider())
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "cn_baostock")
+
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert "Audit hook blocked" in str(exc_info.value)
+        assert len(attempts) == 1
+
+    def test_normal_timeout_preserves_retry_and_fallback(self, monkeypatch):
+        """Standard TimeoutError must preserve its retry budget and fallback semantics."""
+        from tradingagents.dataflows.interface import route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        from tradingagents.dataflows.providers import ProviderResourcePolicy
+        import tradingagents.dataflows.interface as iface
+
+        provider_calls = {"vendor_a": 0, "vendor_b": 0}
+
+        class TimeoutProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "vendor_a"
+
+            def get_stock_data(self, *args, **kwargs):
+                provider_calls["vendor_a"] += 1
+                raise TimeoutError("Slow upstream network response on vendor_a")
+
+        class FallbackSuccessProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "vendor_b"
+
+            def get_stock_data(self, *args, **kwargs):
+                provider_calls["vendor_b"] += 1
+                return "SUCCESS_DATA"
+
+        reg = DataProviderRegistry()
+        policy = ProviderResourcePolicy(timeout_seconds=1.0, max_retries=1, max_concurrency=1)
+        reg.register(TimeoutProvider(), resource_policy=policy)
+        reg.register(FallbackSuccessProvider(), resource_policy=policy)
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "vendor_a,vendor_b")
+
+        result = route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert result == "SUCCESS_DATA"
+        # vendor_a max_retries is 1, so vendor_a should have 2 attempts (initial + 1 retry)
+        assert provider_calls["vendor_a"] == 2
+        # Then fell back to vendor_b
+        assert provider_calls["vendor_b"] == 1
+
+    def test_e2e_guardrail_rejection_fast_timing_and_cleanup(self, monkeypatch):
+        """End-to-end under real test guardrail: connect rejected, 0 send, completes in <0.1s, socket is None."""
+        import time
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import route_to_vendor
+        import tradingagents.dataflows.interface as iface
+
+        monkeypatch.setattr(iface, "get_config", lambda: {"core_stock_apis": "cn_baostock"})
+
+        t0 = time.perf_counter()
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+        elapsed = time.perf_counter() - t0
+
+        # Timing must be milliseconds, far below 45.0s
+        assert elapsed < 0.2, f"Guardrail rejection took too long: {elapsed:.3f}s"
+        assert "OfflineTestGuardrail" in str(exc_info.value)
+        # Global default_socket must be None
+        assert getattr(bs_context, "default_socket", None) is None

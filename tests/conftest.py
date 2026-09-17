@@ -35,7 +35,10 @@ FROZEN_TRADE_DATETIME = datetime(2026, 8, 17, 16, 0, 0, tzinfo=CN_TZ)
 # Offline Network Guardrail (Audit Hook Architecture - DAV-1007 / PEP 578)
 # ============================================================================
 
-class OfflineTestGuardrailError(RuntimeError):
+from tradingagents.dataflows.interface import NetworkAccessDeniedError
+
+
+class OfflineTestGuardrailError(NetworkAccessDeniedError):
     """Raised when an outbound network connection is attempted in an offline test suite."""
     pass
 
