@@ -39,6 +39,8 @@ from tradingagents.eval.v03_return_measure import (
     OFFLINE_REPLAY_GAP,
     CostModel,
     OfflineReplayHarness,
+    OfflineSnapshotPriceDataProvider,
+    PriceSnapshotValidationError,
     SnapshotManifest,
     VendorPriceDataProvider,
     V03ReturnMeasureEngine,
@@ -182,6 +184,8 @@ def run_measurement_and_ablations(
     run_ablations: bool = True,
     running_service_sha: Optional[str] = None,
     running_service_provenance: Optional[str] = None,
+    offline: bool = False,
+    price_snapshot: Optional[str] = None,
 ) -> None:
     """Execute measurement engine and ablation harness on replica database."""
     user_stats = V03ReturnMeasureEngine.get_user_report_counts(
@@ -202,11 +206,32 @@ def run_measurement_and_ablations(
     print(f"      Historical Sample Generating SHA: {HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA}")
     print(f"      Running Service SHA: {running_service_sha} (provenance: {running_service_provenance})")
 
+    if offline:
+        # DAV-1050: --offline must not reach any external vendor. The offline
+        # provider reads only an explicitly provided local snapshot (or none ->
+        # typed-missing), and never calls route_to_vendor / akshare / baostock.
+        price_provider: Any = OfflineSnapshotPriceDataProvider(
+            snapshot_path=price_snapshot,
+            forward_oos_end_date=forward_oos_end_date,
+        )
+        if price_snapshot:
+            print(
+                f"      Offline price snapshot: {price_provider.snapshot_path} "
+                f"(sha256={price_provider.snapshot_sha256})"
+            )
+        else:
+            print(
+                "      Offline mode WITHOUT local price snapshot: all vendor-priced "
+                "samples resolve to typed-missing (provider/network gap), no waiting."
+            )
+    else:
+        price_provider = VendorPriceDataProvider(forward_oos_end_date=forward_oos_end_date)
+
     engine = V03ReturnMeasureEngine(
         cost_model=CostModel(),
         hold_days=hold_days,
         benchmark_symbol=DEFAULT_BENCHMARK_SYMBOL,
-        price_provider=VendorPriceDataProvider(forward_oos_end_date=forward_oos_end_date),
+        price_provider=price_provider,
         target_user_id=target_user_id,
         status_filter=status_filter,
         target_user_stats=user_stats,
@@ -377,7 +402,20 @@ def main() -> None:
     parser.add_argument(
         "--offline",
         action="store_true",
-        help="Force offline execution mode without healthz probe",
+        help=(
+            "Force fully offline execution: no healthz probe and no external "
+            "price vendors (route_to_vendor/akshare/baostock/socket). Without "
+            "--price-snapshot, priced lookups resolve to typed-missing."
+        ),
+    )
+    parser.add_argument(
+        "--price-snapshot",
+        type=str,
+        default=None,
+        help=(
+            "Local JSON/CSV daily-bar snapshot for --offline mode (requires "
+            "--offline). Validated fail-closed; sha256 recorded in manifest."
+        ),
     )
     parser.add_argument(
         "--skip-backup", action="store_true", help="Skip backup if replica already exists"
@@ -386,6 +424,9 @@ def main() -> None:
         "--no-ablations", action="store_true", help="Skip running ablation controls"
     )
     args = parser.parse_args()
+
+    if args.price_snapshot and not args.offline:
+        parser.error("--price-snapshot requires --offline (online path must stay untouched)")
 
     # Running service SHA provenance resolution (DAV-865 & DAV-866)
     running_sha = args.running_service_sha
@@ -435,6 +476,8 @@ def main() -> None:
         run_ablations=not args.no_ablations,
         running_service_sha=running_sha,
         running_service_provenance=prov_source,
+        offline=args.offline,
+        price_snapshot=args.price_snapshot,
     )
 
 

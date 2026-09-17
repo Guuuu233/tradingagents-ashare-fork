@@ -44,11 +44,14 @@ Strict Frozen Specification (work/v03-freeze-sheet-20260909.md / DAV-802):
 from __future__ import annotations
 
 import argparse
+import bisect
 from collections import Counter, defaultdict
+import csv
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 import hashlib
+import io
 import json
 import logging
 import math
@@ -631,6 +634,10 @@ class SnapshotManifest:
     regression_symbols: List[str] = field(
         default_factory=lambda: sorted(list(REGRESSION_SYMBOLS))
     )
+    # DAV-1050 offline price-source stamping (empty strings in online mode)
+    price_provider: str = ""
+    price_snapshot_path: str = ""
+    price_snapshot_sha256: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -1275,6 +1282,310 @@ class VendorPriceDataProvider:
             return None
 
 
+class PriceSnapshotValidationError(ValueError):
+    """Raised when a local offline price snapshot fails fail-closed validation."""
+
+    __slots__ = ()
+
+
+class OfflineSnapshotPriceDataProvider:
+    """Deterministic offline price provider for V-03 --offline measurement (DAV-1050).
+
+    Hard guarantees:
+    - NEVER calls route_to_vendor / akshare / baostock / any network or socket.
+    - Prices come only from an explicitly provided local JSON/CSV snapshot file.
+    - The snapshot file is hashed (sha256 recorded) and validated fail-closed:
+      missing required fields, conflicting duplicate (symbol, date) rows, or rows
+      dated beyond ``forward_oos_end_date`` all raise PriceSnapshotValidationError.
+    - With no snapshot, every lookup returns the typed-missing path (None /
+      EXCLUDED_UNKNOWN upstream) instantly; no waiting, no fabricated prices.
+    - get_t_plus_n_date is computed from the snapshot's own trade-date list
+      (or the union of bar dates), never from the live trade calendar.
+
+    Snapshot JSON schema::
+
+        {
+          "trade_dates": ["2026-09-09", ...],          # optional; derived from bars if absent
+          "bars": [
+            {"symbol": "600519.SH", "date": "2026-09-18",
+             "open": ..., "high": ..., "low": ..., "close": ..., "volume": ...,
+             "amount": ..., "is_suspended": ..., "limit_up": ..., "limit_down": ...}
+          ],
+          "metadata": {                                 # optional; absent -> typed gap (fail-closed)
+            "600519.SH": {"list_date": "2001-08-27", "name": "...",
+                          "st": false, "st_dates": ["2021-06-01"]}
+          }
+        }
+
+    CSV form: one header row with at least symbol,date,open,high,low,close;
+    optional columns volume,amount,is_suspended,limit_up,limit_down.
+    """
+
+    REQUIRED_BAR_FIELDS: Tuple[str, ...] = (
+        "symbol",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+    )
+
+    def __init__(
+        self,
+        snapshot_path: Optional[str] = None,
+        forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE,
+    ) -> None:
+        self.forward_oos_end_date = forward_oos_end_date
+        self.offline: bool = True  # marker: measurement must not reach external vendors
+        self.snapshot_path: Optional[str] = None
+        self.snapshot_sha256: Optional[str] = None
+        self._bars: Dict[Tuple[str, str], DailyBar] = {}
+        self._trade_dates: List[str] = []
+        self._metadata: Dict[str, Dict[str, Any]] = {}
+        if snapshot_path:
+            self._load_snapshot(snapshot_path)
+
+    # ------------------------------------------------------------------
+    # Snapshot loading & fail-closed validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _norm_symbol(symbol: Any) -> str:
+        res = canonicalize_symbol(symbol)
+        canon = res.canonical_symbol
+        if canon:
+            return canon.upper()
+        return str(symbol or "").strip().upper()
+
+    def _load_snapshot(self, snapshot_path: str) -> None:
+        p = Path(snapshot_path).resolve()
+        if not p.exists():
+            raise PriceSnapshotValidationError(f"price snapshot not found: {p}")
+        raw = p.read_bytes()
+        self.snapshot_path = str(p)
+        self.snapshot_sha256 = hashlib.sha256(raw).hexdigest()
+        text = raw.decode("utf-8")
+        if p.suffix.lower() == ".csv":
+            payload = self._parse_csv(text, p)
+        else:
+            try:
+                payload = json.loads(text)
+            except Exception as exc:
+                raise PriceSnapshotValidationError(
+                    f"price snapshot {p} is not valid JSON: {exc}"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise PriceSnapshotValidationError(
+                    f"price snapshot {p} must be a JSON object"
+                )
+        self._ingest_payload(payload, p)
+
+    def _parse_csv(self, text: str, p: Path) -> Dict[str, Any]:
+        reader = csv.DictReader(io.StringIO(text))
+        if reader.fieldnames is None:
+            raise PriceSnapshotValidationError(f"price snapshot {p}: empty CSV")
+        cols = {str(c).strip().lower() for c in reader.fieldnames}
+        missing_cols = [c for c in self.REQUIRED_BAR_FIELDS if c not in cols]
+        if missing_cols:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: CSV missing required columns: {missing_cols}"
+            )
+        bars: List[Dict[str, Any]] = []
+        for row in reader:
+            bars.append(
+                {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+            )
+        return {"bars": bars}
+
+    def _ingest_payload(self, payload: Dict[str, Any], p: Path) -> None:
+        raw_dates = payload.get("trade_dates") or []
+        if not isinstance(raw_dates, list):
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: 'trade_dates' must be a list"
+            )
+        dates: Set[str] = set()
+        for d in raw_dates:
+            ds = str(d).strip()[:10]
+            self._check_date_bound(ds, p)
+            dates.add(ds)
+
+        bars = payload.get("bars") or []
+        if not isinstance(bars, list):
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: 'bars' must be a list"
+            )
+        for i, row in enumerate(bars):
+            if not isinstance(row, dict):
+                raise PriceSnapshotValidationError(
+                    f"price snapshot {p}: bar #{i} is not an object"
+                )
+            self._ingest_bar(row, i, p, dates)
+
+        meta = payload.get("metadata") or {}
+        if not isinstance(meta, dict):
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: 'metadata' must be an object"
+            )
+        for sym, m in meta.items():
+            if isinstance(m, dict):
+                self._metadata[self._norm_symbol(sym)] = dict(m)
+
+        self._trade_dates = sorted(dates)
+
+    def _check_date_bound(self, ds: str, p: Path) -> None:
+        if not ds or len(ds) != 10:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: invalid trade date {ds!r}"
+            )
+        if self.forward_oos_end_date is not None and ds > self.forward_oos_end_date:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: date {ds} exceeds forward_oos_end_date "
+                f"{self.forward_oos_end_date} (future rows are rejected fail-closed)"
+            )
+
+    def _ingest_bar(
+        self, row: Dict[str, Any], idx: int, p: Path, dates: Set[str]
+    ) -> None:
+        lower = {str(k).strip().lower(): v for k, v in row.items()}
+        missing = [f for f in self.REQUIRED_BAR_FIELDS if lower.get(f) in (None, "")]
+        if missing:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: bar #{idx} missing required fields: {missing}"
+            )
+        sym = self._norm_symbol(lower["symbol"])
+        ds = str(lower["date"]).strip()[:10]
+        self._check_date_bound(ds, p)
+        try:
+            open_v = float(lower["open"])
+            high_v = float(lower["high"])
+            low_v = float(lower["low"])
+            close_v = float(lower["close"])
+        except Exception as exc:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: bar #{idx} ({sym} {ds}) has non-numeric OHLC: {exc}"
+            ) from exc
+        try:
+            vol_v = float(lower.get("volume") or 0.0)
+            amt_v = float(lower.get("amount") or 0.0)
+        except Exception as exc:
+            raise PriceSnapshotValidationError(
+                f"price snapshot {p}: bar #{idx} ({sym} {ds}) has non-numeric volume/amount: {exc}"
+            ) from exc
+        susp = lower.get("is_suspended")
+        if susp is None or susp == "":
+            is_susp = vol_v == 0.0 or (open_v == 0.0 and close_v == 0.0)
+        else:
+            is_susp = bool(susp) if isinstance(susp, bool) else str(susp).strip().lower() in ("1", "true", "yes")
+
+        def _opt_float(key: str) -> Optional[float]:
+            v = lower.get(key)
+            if v in (None, ""):
+                return None
+            try:
+                return float(v)
+            except Exception as exc:
+                raise PriceSnapshotValidationError(
+                    f"price snapshot {p}: bar #{idx} ({sym} {ds}) invalid {key}: {exc}"
+                ) from exc
+
+        bar = DailyBar(
+            date=ds,
+            open=open_v,
+            high=high_v,
+            low=low_v,
+            close=close_v,
+            volume=vol_v,
+            amount=amt_v,
+            is_suspended=is_susp,
+            limit_up=_opt_float("limit_up"),
+            limit_down=_opt_float("limit_down"),
+        )
+        key = (sym, ds)
+        if key in self._bars:
+            prev = self._bars[key]
+            if prev != bar:
+                raise PriceSnapshotValidationError(
+                    f"price snapshot {p}: conflicting duplicate bars for {sym} {ds} "
+                    "(fail-closed; cannot choose deterministically)"
+                )
+            return  # identical duplicate: dedupe
+        self._bars[key] = bar
+        dates.add(ds)
+
+    # ------------------------------------------------------------------
+    # PriceDataProvider protocol (offline-only)
+    # ------------------------------------------------------------------
+
+    def describe_price_gap(self, symbol: str, date: str) -> str:
+        """Explain why a bar lookup returned None; used for typed-missing audit."""
+        clean_date = str(date).strip()[:10]
+        if self.forward_oos_end_date is not None and clean_date > self.forward_oos_end_date:
+            return "date_beyond_forward_oos_end"
+        if not self.snapshot_path:
+            return "offline_no_price_snapshot"
+        sym = self._norm_symbol(symbol)
+        if (sym, clean_date) not in self._bars:
+            if not any(s == sym for (s, _d) in self._bars):
+                return "snapshot_missing_symbol"
+            return "snapshot_missing_date"
+        return "unknown"
+
+    def get_t_plus_n_date(self, base_date: str, n: int) -> Optional[str]:
+        if not self._trade_dates or n <= 0:
+            return None
+        base = str(base_date).strip()[:10]
+        idx = bisect.bisect_left(self._trade_dates, base)
+        if idx >= len(self._trade_dates) or self._trade_dates[idx] != base:
+            idx = bisect.bisect_right(self._trade_dates, base) - 1
+        target = idx + n
+        if 0 <= target < len(self._trade_dates):
+            return self._trade_dates[target]
+        return None
+
+    def get_bar(self, symbol: str, date: str) -> Optional[DailyBar]:
+        clean_date = str(date).strip()[:10]
+        if self.forward_oos_end_date is not None and clean_date > self.forward_oos_end_date:
+            return None
+        return self._bars.get((self._norm_symbol(symbol), clean_date))
+
+    def is_st(self, symbol: str, date: str) -> Optional[bool]:
+        meta = self._metadata.get(self._norm_symbol(symbol))
+        if meta is None:
+            return None  # fail-closed: no offline metadata -> typed gap upstream
+        clean_date = str(date).strip()[:10]
+        st_dates = meta.get("st_dates")
+        if isinstance(st_dates, list) and st_dates:
+            return clean_date in {str(d)[:10] for d in st_dates}
+        if "st" in meta:
+            return bool(meta.get("st"))
+        return False
+
+    def is_listed_for_n_days(
+        self, symbol: str, date: str, min_days: int = 60
+    ) -> Optional[bool]:
+        meta = self._metadata.get(self._norm_symbol(symbol))
+        if meta is None:
+            return None  # fail-closed
+        list_date = str(meta.get("list_date") or "").strip()[:10]
+        if not list_date:
+            return None
+        try:
+            d_list = datetime.strptime(list_date, "%Y-%m-%d").date()
+            d_as_of = datetime.strptime(str(date)[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+        cal_days = (d_as_of - d_list).days
+        if cal_days < min_days:
+            return False
+        if cal_days >= min_days * 2:
+            return True
+        # Borderline window: count snapshot trade dates between list_date and date.
+        if not self._trade_dates:
+            return None
+        count = sum(1 for d in self._trade_dates if list_date <= d <= str(date)[:10])
+        return count >= min_days
+
+
 def calculate_roll_days(trade_date_str: str, entry_date_str: str) -> int:
     """Calculate non-trading/calendar roll days between signal date and entry date."""
     try:
@@ -1671,6 +1982,28 @@ class V03ReturnMeasureEngine:
     # Single Sample Measurement
     # -----------------------------------------------------------------------
 
+    @staticmethod
+    def _enrich_missing_reason(
+        base_reason: str,
+        symbol: Optional[str],
+        date: Optional[str],
+        gap_describer: Optional[Callable[[str, str], str]],
+    ) -> str:
+        """Append provider-side gap detail to a typed-missing reason when available.
+
+        Keeps the frozen reason prefix for metric counters while making the
+        provider/network gap traceable (e.g. offline_no_price_snapshot).
+        """
+        if not callable(gap_describer) or not symbol or not date:
+            return base_reason
+        try:
+            detail = gap_describer(symbol, date)
+        except Exception:
+            return base_reason
+        if not detail or detail == "unknown":
+            return base_reason
+        return f"{base_reason}[{detail}]"
+
     def measure_sample(self, report: Dict[str, Any]) -> SampleMeasureRecord:
         """Measure return and coverage metrics for a single report record.
 
@@ -1746,7 +2079,15 @@ class V03ReturnMeasureEngine:
             "trade_date": trade_date,
             "raw_symbol": str(raw_sym or ""),
             "has_result_data": bool(res_data_raw),
+            "price_provider": type(self.price_provider).__name__,
         }
+        if getattr(self.price_provider, "offline", False):
+            provenance["price_snapshot_path"] = getattr(
+                self.price_provider, "snapshot_path", None
+            )
+            provenance["price_snapshot_sha256"] = getattr(
+                self.price_provider, "snapshot_sha256", None
+            )
 
         rec = SampleMeasureRecord(
             report_id=report_id,
@@ -1803,6 +2144,17 @@ class V03ReturnMeasureEngine:
             rec.performance_category = "excluded_pool"
             rec.evaluation_eligible = False
             rec.exclusion_reason = pool_status.value
+            if (
+                pool_status == PoolFilterStatus.EXCLUDED_UNKNOWN
+                and getattr(self.price_provider, "offline", False)
+            ):
+                # Offline mode: ST/listing metadata cannot be fetched from vendors;
+                # an unverifiable pool check is a data gap (typed_missing), not a
+                # real pool exclusion. Sample stays in coverage, return stays NULL.
+                rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
+                rec.missing_reason = "offline_metadata_unavailable"
+                rec.performance_category = "typed_missing"
+                rec.exclusion_reason = "offline_metadata_unavailable"
             return rec
 
         assert canonical_sym is not None
@@ -1860,10 +2212,13 @@ class V03ReturnMeasureEngine:
                     return rec
 
         # 2. Resolve T+1 Entry Date and Exit Date
+        gap_describer = getattr(self.price_provider, "describe_price_gap", None)
         entry_date = self.price_provider.get_t_plus_n_date(trade_date, 1)
         if not entry_date:
             rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = "calendar_missing_t_plus_1"
+            rec.missing_reason = self._enrich_missing_reason(
+                "calendar_missing_t_plus_1", canonical_sym, trade_date, gap_describer
+            )
             rec.performance_category = "typed_missing"
             rec.evaluation_eligible = False
             rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
@@ -1874,7 +2229,12 @@ class V03ReturnMeasureEngine:
         exit_date = self.price_provider.get_t_plus_n_date(entry_date, self.hold_days)
         if not exit_date:
             rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = f"calendar_missing_t_plus_{self.hold_days}"
+            rec.missing_reason = self._enrich_missing_reason(
+                f"calendar_missing_t_plus_{self.hold_days}",
+                canonical_sym,
+                entry_date,
+                gap_describer,
+            )
             rec.performance_category = "typed_missing"
             rec.evaluation_eligible = False
             rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
@@ -1885,7 +2245,9 @@ class V03ReturnMeasureEngine:
         entry_bar = self.price_provider.get_bar(canonical_sym, entry_date)
         if entry_bar is None:
             rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = "entry_bar_missing"
+            rec.missing_reason = self._enrich_missing_reason(
+                "entry_bar_missing", canonical_sym, entry_date, gap_describer
+            )
             rec.performance_category = "typed_missing"
             rec.evaluation_eligible = False
             rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
@@ -1920,7 +2282,9 @@ class V03ReturnMeasureEngine:
         exit_bar = self.price_provider.get_bar(canonical_sym, exit_date)
         if exit_bar is None:
             rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = "exit_bar_missing"
+            rec.missing_reason = self._enrich_missing_reason(
+                "exit_bar_missing", canonical_sym, exit_date, gap_describer
+            )
             rec.performance_category = "typed_missing"
             rec.evaluation_eligible = False
             rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
@@ -2331,6 +2695,9 @@ class V03ReturnMeasureEngine:
                 else ""
             ),
             regression_symbols=sorted(list(REGRESSION_SYMBOLS)),
+            price_provider=type(self.price_provider).__name__,
+            price_snapshot_path=str(getattr(self.price_provider, "snapshot_path", None) or ""),
+            price_snapshot_sha256=str(getattr(self.price_provider, "snapshot_sha256", None) or ""),
         )
 
         # Build 25-field offline audit table (V-03a-3 Section 2)
