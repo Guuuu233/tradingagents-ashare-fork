@@ -321,3 +321,99 @@ class TestKlineApiIntegrity:
             resp = client.get("/v1/market/kline?symbol=000001.SH&start_date=2026-01-01&end_date=2026-01-10")
             assert resp.status_code == 404
             assert resp.json()["detail"] == "no kline data"
+
+    """Requirement 6: Response window re-filtering (DAV-952).
+
+    Vendor request params are not a result contract: rows outside the
+    requested [start_date, end_date] must not reach the response.
+    """
+
+    def test_kline_endpoint_stock_out_of_window_rows_dropped(self, client):
+        # Fake vendor returns rows before start and after end of the request.
+        raw_wide = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-06-30,9.0,9.5,8.9,9.2,500\n"
+            "2026-07-01,10.0,11.0,9.0,10.5,1000\n"
+            "2026-07-31,12.0,12.5,11.5,12.2,1500\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw_wide):
+            resp = client.get("/v1/market/kline?symbol=600519.SH&start_date=2026-07-01&end_date=2026-07-30")
+            assert resp.status_code == 200
+            dates = [c["date"] for c in resp.json()["candles"]]
+            assert dates == ["2026-07-01"]
+
+    def test_kline_endpoint_stock_window_boundaries_inclusive(self, client):
+        raw = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-07-01,10.0,11.0,9.0,10.5,1000\n"
+            "2026-07-30,11.0,11.5,10.5,11.2,1200\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw):
+            resp = client.get("/v1/market/kline?symbol=600519.SH&start_date=2026-07-01&end_date=2026-07-30")
+            assert resp.status_code == 200
+            dates = [c["date"] for c in resp.json()["candles"]]
+            assert dates == ["2026-07-01", "2026-07-30"]
+
+    def test_kline_endpoint_stock_all_rows_out_of_window_returns_404(self, client):
+        raw = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-06-30,9.0,9.5,8.9,9.2,500\n"
+            "2026-07-31,12.0,12.5,11.5,12.2,1500\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw):
+            resp = client.get("/v1/market/kline?symbol=600519.SH&start_date=2026-07-01&end_date=2026-07-30")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "no kline data"
+
+    def test_kline_endpoint_stock_bad_date_rows_dropped(self, client):
+        # Unparseable date strings must not pass through even if vendor emits them.
+        raw = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "not-a-date,9.0,9.5,8.9,9.2,500\n"
+            "2026-07-05,10.0,11.0,9.0,10.5,1000\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw):
+            resp = client.get("/v1/market/kline?symbol=600519.SH&start_date=2026-07-01&end_date=2026-07-30")
+            assert resp.status_code == 200
+            dates = [c["date"] for c in resp.json()["candles"]]
+            assert dates == ["2026-07-05"]
+
+    def test_kline_endpoint_stock_inverted_window_returns_404_not_raw_rows(self, client):
+        raw = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-07-05,10.0,11.0,9.0,10.5,1000\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw):
+            resp = client.get("/v1/market/kline?symbol=600519.SH&start_date=2026-07-30&end_date=2026-07-01")
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "no kline data"
+
+    def test_kline_endpoint_stock_invalid_date_params_not_served_raw_rows(self, client):
+        # Unparseable date params must not leak unfiltered vendor rows.
+        raw = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-07-05,10.0,11.0,9.0,10.5,1000\n"
+        )
+        with patch("api.main.route_to_vendor", return_value=raw):
+            for params in (
+                "start_date=not-a-date&end_date=2026-07-30",
+                "start_date=2026-07-01&end_date=not-a-date",
+            ):
+                resp = client.get(f"/v1/market/kline?symbol=600519.SH&{params}")
+                assert resp.status_code != 200 or resp.json().get("candles") == [], params
+
+    def test_kline_endpoint_index_window_filtering_direct(self, client):
+        # Index path already re-filters; lock the shared window contract in.
+        candles_out = [
+            {"date": "2026-06-30", "open": 9.0, "high": 9.5, "low": 8.9, "close": 9.2,
+             "volume": 500.0, "amount": None, "change": None, "change_percent": None, "turnover_rate": None},
+        ]
+        with patch("api.main._fetch_index_kline", return_value=candles_out) as mock_fetch:
+            resp = client.get("/v1/market/kline?symbol=000001.SH&start_date=2026-07-01&end_date=2026-07-30")
+            # Index helper is invoked with the requested window and is the sole
+            # filtering authority for that path; verify params propagated.
+            assert mock_fetch.call_count == 1
+            args = mock_fetch.call_args[0]
+            assert args[1:] == ("2026-07-01", "2026-07-30")
+            assert resp.status_code == 200
+            assert resp.json()["candles"] == candles_out

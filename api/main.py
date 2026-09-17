@@ -4671,7 +4671,7 @@ def get_kline(
         config = _build_runtime_config({})
         set_config(config)
         raw = route_to_vendor("get_stock_data", symbol, start, end)
-        candles = _parse_stock_csv(raw)
+        candles = _filter_candles_to_window(_parse_stock_csv(raw), start, end)
     if not candles:
         raise HTTPException(status_code=404, detail="no kline data")
     return KlineResponse(
@@ -4680,6 +4680,42 @@ def get_kline(
         end_date=end,
         candles=candles,
     )
+
+
+def _filter_candles_to_window(
+    candles: List[Dict[str, Any]],
+    start_date: str,
+    end_date: str,
+) -> List[Dict[str, Any]]:
+    """Re-clip parsed candles to the requested [start_date, end_date] window.
+
+    Vendor request params are not a result contract (DAV-952): rows outside
+    the requested window or with unparseable dates must not reach the
+    response. Missing/invalid params and an inverted window yield [] so the
+    endpoint keeps its existing 404 "no kline data" semantics instead of
+    leaking unfiltered rows.
+    """
+    try:
+        start_ts = pd.to_datetime(start_date)
+        end_ts = pd.to_datetime(end_date)
+    except Exception:
+        return []
+    if start_ts is None or end_ts is None or pd.isna(start_ts) or pd.isna(end_ts):
+        return []
+    if start_ts > end_ts:
+        return []
+
+    kept: List[Dict[str, Any]] = []
+    for candle in candles:
+        try:
+            d = pd.to_datetime(candle.get("date"))
+        except Exception:
+            continue
+        if d is None or pd.isna(d):
+            continue
+        if start_ts <= d <= end_ts:
+            kept.append(candle)
+    return kept
 
 
 def _normalize_ths_code(code: str) -> str:
