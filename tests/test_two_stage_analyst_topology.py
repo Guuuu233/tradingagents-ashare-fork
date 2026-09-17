@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.graph import START
+from langgraph.graph import END, START
 
 from tradingagents.agents.analysts.fundamentals_analyst import create_fundamentals_analyst
 from tradingagents.agents.analysts.news_analyst import create_news_analyst
@@ -111,6 +111,15 @@ def test_full_7_analysts_two_stage_topology():
         compiled = setup.setup_graph(all_analysts)
 
     edges = compiled["edges"]
+    conditional_edges = compiled["conditional_edges"]
+
+    # 0. Run Integrity Gate 必须存在：节点已注册，且条件路由至 Bull/END
+    assert "Run Integrity Gate" in compiled["nodes"]
+    gate_cond = [c for c in conditional_edges if c[0] == "Run Integrity Gate"]
+    assert gate_cond, "Run Integrity Gate 缺少条件出边"
+    gate_mapping = gate_cond[0][2]
+    assert gate_mapping.get("Bull Researcher") == "Bull Researcher"
+    assert gate_mapping.get("END") == END
 
     # 1. 阶段一节点直接由 START 出发
     assert (START, "Macro Analyst") in edges
