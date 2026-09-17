@@ -603,6 +603,157 @@ def test_backfill_pending_cases_persists_typed_refusal_for_empty_outcomes(
     assert third_stats["total_scanned"] == 1
 
 
+def _refusal_entries(claims):
+    return [
+        entry for entry in (claims or [])
+        if isinstance(entry, dict) and "__historical_case_refusal__" in entry
+    ]
+
+
+def test_backfill_transient_refusal_is_idempotent_without_semantic_change(
+    test_db_session,
+):
+    """相同 as_of 与相同拒绝结果下重复回填：仍被扫描、仍 still_missing，
+    但 updated_at 不变、拒绝元数据不重复增长、无无语义变化的 UPDATE。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    case = HistoricalCaseDB(
+        id="case-idempotent-refusal",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+    refusal = VendorRefuse("provider unavailable for historical T+1")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        first_stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+    assert first_stats["still_missing"] == 1
+
+    test_db_session.expire_all()
+    first = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    first_updated_at = first.updated_at
+    first_refusal_entries = _refusal_entries(first.claims)
+    assert len(first_refusal_entries) == 1
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        second_stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    # 暂态拒绝仍在队列中，第二次仍被扫描并返回 still_missing
+    assert second_stats["total_scanned"] == 1
+    assert second_stats["still_missing"] == 1
+
+    test_db_session.expire_all()
+    second = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    # 无语义变化：updated_at 不得更新，拒绝元数据不得重复
+    assert second.updated_at == first_updated_at
+    assert _refusal_entries(second.claims) == first_refusal_entries
+
+
+def test_backfill_transient_refusal_persists_and_updates_on_change(
+    test_db_session,
+):
+    """暂态拒绝的 reason/code 变化时必须持久化并刷新 updated_at。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    case = HistoricalCaseDB(
+        id="case-refusal-change",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+    first_refusal = VendorRefuse("provider unavailable for historical T+1")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, first_refusal),
+    ):
+        backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    test_db_session.expire_all()
+    first = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    first_updated_at = first.updated_at
+
+    # 拒绝原因发生变化：第二次必须保存并更新时间
+    second_refusal = VendorRefuse("provider timeout for historical T+1")
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, second_refusal),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-15")
+    assert stats["still_missing"] == 1
+
+    test_db_session.expire_all()
+    second = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    entries = _refusal_entries(second.claims)
+    assert len(entries) == 1
+    assert entries[0]["__historical_case_refusal__"]["reason"] == second_refusal.reason
+    assert second.updated_at > first_updated_at
+
+
+def test_backfill_transient_refusal_completes_after_market_close(
+    test_db_session,
+):
+    """评估日收盘后行情可用：从暂态拒绝转为成功回填，字段/元数据/updated_at 均正确。"""
+    from tradingagents.dataflows.vendor_result import VendorRefuse
+
+    case = HistoricalCaseDB(
+        id="case-refusal-recovers",
+        symbol="600519",
+        trade_date="2024-05-10",
+        eval_date="2024-05-13",
+        decision="BUY",
+        direction="看多",
+        actual_outcome=DATA_MISSING_PLACEHOLDER,
+    )
+    test_db_session.add(case)
+    test_db_session.commit()
+    refusal = VendorRefuse("eval_date_not_closed: market still open")
+
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", None, refusal),
+    ):
+        backfill_pending_cases(test_db_session, as_of="2024-05-15")
+
+    test_db_session.expire_all()
+    first = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    first_updated_at = first.updated_at
+    assert len(_refusal_entries(first.claims)) == 1
+
+    # 收盘后行情可用：回填成功
+    with patch(
+        "tradingagents.knowledge.historical_cases.calculate_t1_return",
+        return_value=("2024-05-13", 1.5, "+1.50%"),
+    ):
+        stats = backfill_pending_cases(test_db_session, as_of="2024-05-16")
+    assert stats["backfilled"] == 1
+    assert stats["still_missing"] == 0
+
+    test_db_session.expire_all()
+    done = test_db_session.query(HistoricalCaseDB).filter_by(id=case.id).one()
+    assert done.actual_change_pct == 1.5
+    assert done.actual_outcome == "+1.50%"
+    assert done.is_error is False
+    assert _refusal_entries(done.claims) == []
+    assert done.updated_at > first_updated_at
+
+
 @pytest.mark.parametrize(
     "legacy_reason,expected_code",
     [
