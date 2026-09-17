@@ -1,8 +1,13 @@
-import re
 import io
+import logging
+import os
+import re
+import socket
+import threading
 from contextlib import contextmanager
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
+from typing import Optional
 
 import pandas as pd
 from stockstats import wrap
@@ -13,6 +18,161 @@ from ..trade_calendar import (
     dedupe_daily_bars,
     drop_incomplete_today_bar,
 )
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "45.0"))
+_INSTALL_LOCK = threading.Lock()
+_HARDENING_INSTALLED = False
+_HARDENING_ERROR: Optional[Exception] = None
+
+
+def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT) -> None:
+    """Harden baostock client socketutil: enforce per-socket timeout, fail-fast connect, and break EOF liveloop.
+
+    Fail-closed invariant:
+    If hardening installation fails, subsequent attempts to access baostock are actively
+    blocked before bs.login() can be invoked.
+    """
+    global _HARDENING_INSTALLED, _HARDENING_ERROR
+
+    if _HARDENING_ERROR is not None:
+        raise RuntimeError(
+            f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
+        ) from _HARDENING_ERROR
+
+    if _HARDENING_INSTALLED:
+        return
+
+    with _INSTALL_LOCK:
+        if _HARDENING_ERROR is not None:
+            raise RuntimeError(
+                f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
+            ) from _HARDENING_ERROR
+        if _HARDENING_INSTALLED:
+            return
+
+        try:
+            import zlib
+            import baostock.util.socketutil as bssock
+
+            if not hasattr(bssock, "SocketUtil") or not hasattr(bssock, "send_msg"):
+                raise AttributeError("baostock.util.socketutil is missing SocketUtil or send_msg")
+
+            cons = bssock.cons
+            context = bssock.context
+
+            def safe_connect(self):
+                my_socket = None
+                try:
+                    my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    my_socket.settimeout(timeout)
+                    my_socket.connect((cons.BAOSTOCK_SERVER_IP, cons.BAOSTOCK_SERVER_PORT))
+                    setattr(context, "default_socket", my_socket)
+                except Exception as exc:
+                    if my_socket is not None:
+                        try:
+                            my_socket.close()
+                        except OSError as close_err:
+                            logger.debug("Error closing baostock socket after connect failure: %s", close_err)
+                    setattr(context, "default_socket", None)
+                    logger.debug("Baostock socket connect failed, cleaned up context.default_socket: %s", exc)
+                    raise
+
+            def safe_send_msg(msg: str):
+                default_socket = getattr(context, "default_socket", None)
+                if default_socket is None:
+                    raise ConnectionError("baostock default_socket is None or not connected")
+                try:
+                    default_socket.settimeout(timeout)
+                    msg_bytes = (msg + "\n").encode("utf-8")
+                    default_socket.sendall(msg_bytes)
+                    receive = b""
+                    while True:
+                        recv = default_socket.recv(8192)
+                        if not recv:
+                            try:
+                                default_socket.close()
+                            except OSError as close_err:
+                                logger.debug("Error closing baostock socket on EOF: %s", close_err)
+                            setattr(context, "default_socket", None)
+                            raise ConnectionResetError("baostock socket connection closed by peer (EOF)")
+                        receive += recv
+                        if receive.endswith(b"<![CDATA[]]>\n"):
+                            break
+
+                    head_bytes = receive[0:cons.MESSAGE_HEADER_LENGTH]
+                    head_str = head_bytes.decode("utf-8")
+                    head_arr = head_str.split(cons.MESSAGE_SPLIT)
+                    if head_arr[1] in cons.COMPRESSED_MESSAGE_TYPE_TUPLE:
+                        head_inner_length = int(head_arr[2])
+                        body_bytes = receive[
+                            cons.MESSAGE_HEADER_LENGTH : cons.MESSAGE_HEADER_LENGTH + head_inner_length
+                        ]
+                        body_str = zlib.decompress(body_bytes).decode("utf-8")
+                        return head_str + body_str
+                    else:
+                        return receive.decode("utf-8")
+                except Exception as exc:
+                    try:
+                        default_socket.close()
+                    except OSError as close_err:
+                        logger.debug("Error closing baostock socket on send/recv error: %s", close_err)
+                    setattr(context, "default_socket", None)
+                    logger.debug("Baostock send_msg error: %s", exc)
+                    raise
+
+            bssock.SocketUtil.connect = safe_connect
+            bssock.send_msg = safe_send_msg
+            _HARDENING_INSTALLED = True
+        except Exception as exc:
+            _HARDENING_ERROR = exc
+            logger.error("Failed to install baostock socket hardening: %s", exc, exc_info=True)
+            raise RuntimeError(
+                f"baostock hardening installation failed (fail-closed): {exc}"
+            ) from exc
+
+
+def _cleanup_context_socket() -> None:
+    try:
+        import baostock.common.context as bs_ctx
+        sock = getattr(bs_ctx, "default_socket", None)
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError as close_err:
+                logger.debug("Error closing leftover baostock socket: %s", close_err)
+            setattr(bs_ctx, "default_socket", None)
+    except Exception as ctx_err:
+        logger.debug("Error accessing baostock context for cleanup: %s", ctx_err)
+
+
+@contextmanager
+def baostock_session(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
+    """Unified production entry point and session context for baostock operations."""
+    ensure_baostock_socket_hardening(timeout=timeout)
+    try:
+        import baostock as bs  # type: ignore
+    except ImportError as exc:
+        raise NotImplementedError(
+            "cn_baostock requires 'baostock'. Install it with: pip install baostock"
+        ) from exc
+
+    with redirect_stdout(io.StringIO()):
+        lg = bs.login()
+    if getattr(lg, "error_code", "1") != "0":
+        _cleanup_context_socket()
+        err_msg = getattr(lg, "error_msg", "unknown login error")
+        raise ConnectionError(f"baostock login failed: {err_msg}")
+    try:
+        yield bs
+    finally:
+        with redirect_stdout(io.StringIO()):
+            try:
+                bs.logout()
+            except Exception as logout_err:
+                logger.debug("Error during baostock logout: %s", logout_err)
+        _cleanup_context_socket()
 
 
 class CnBaoStockProvider(BaseMarketDataProvider):
@@ -39,6 +199,7 @@ class CnBaoStockProvider(BaseMarketDataProvider):
         return "cn_baostock"
 
     def _bs(self):
+        ensure_baostock_socket_hardening()
         try:
             import baostock as bs  # type: ignore
         except ImportError as exc:
@@ -60,17 +221,9 @@ class CnBaoStockProvider(BaseMarketDataProvider):
         return f"sz.{code}"
 
     @contextmanager
-    def _session(self):
-        bs = self._bs()
-        with redirect_stdout(io.StringIO()):
-            lg = bs.login()
-        if getattr(lg, "error_code", "1") != "0":
-            raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
-        try:
+    def _session(self, timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
+        with baostock_session(timeout=timeout) as bs:
             yield bs
-        finally:
-            with redirect_stdout(io.StringIO()):
-                bs.logout()
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start_boundary = pd.to_datetime(start_date, errors="coerce")
