@@ -99,7 +99,7 @@ def test_full_7_analysts_two_stage_topology():
     """验证 7 分析师拓扑：
     - 阶段一（Macro/Market/Social）由 START 并行出发
     - 阶段一完成汇合（Barrier），广播至阶段二（Fundamentals/News/Smart Money/Volume Price）
-    - 阶段二完成汇合，进入 Bull Researcher
+    - 阶段二完成汇合，经 Run Integrity Gate 条件路由至 Bull Researcher 或 END
     """
     setup = _make_graph_setup()
     factories = _make_mock_factories()
@@ -111,6 +111,14 @@ def test_full_7_analysts_two_stage_topology():
         compiled = setup.setup_graph(all_analysts)
 
     edges = compiled["edges"]
+    conditional_edges = compiled["conditional_edges"]
+
+    # 0. Run Integrity Gate 必须存在：节点已注册，且条件路由至 Bull/END
+    assert "Run Integrity Gate" in compiled["nodes"]
+    gate_cond = [c for c in conditional_edges if c[0] == "Run Integrity Gate"]
+    assert gate_cond, "Run Integrity Gate 缺少条件出边"
+    gate_mapping = gate_cond[0][2]
+    assert gate_mapping.get("Bull Researcher") == "Bull Researcher"
 
     # 1. 阶段一节点直接由 START 出发
     assert (START, "Macro Analyst") in edges
@@ -130,16 +138,17 @@ def test_full_7_analysts_two_stage_topology():
     assert (phase1_dones, "Smart Money Analyst") in edges
     assert (phase1_dones, "Volume Price Analyst") in edges
 
-    # 3. 阶段二 Done 汇合进入 Bull Researcher
+    # 3. 阶段二 Done 汇合进入 Run Integrity Gate（再经条件边路由到 Bull）
     phase2_dones = (
         "Fundamentals Analyst Done",
         "News Analyst Done",
         "Smart Money Analyst Done",
         "Volume Price Analyst Done",
     )
-    assert (phase2_dones, "Bull Researcher") in edges
+    assert (phase2_dones, "Run Integrity Gate") in edges
 
-    # 阶段一 Done 不得直接进入 Bull Researcher
+    # 分析师 Done 不得直接进入 Bull Researcher（必须过 Gate）
+    assert (phase2_dones, "Bull Researcher") not in edges
     assert (phase1_dones, "Bull Researcher") not in edges
 
 
@@ -148,7 +157,7 @@ def test_full_7_analysts_two_stage_topology():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_phase1_only_topology():
-    """当仅选择阶段一分析师时，阶段一直接汇合进入 Bull Researcher。"""
+    """当仅选择阶段一分析师时，阶段一汇合后经 Run Integrity Gate 进入 Bull Researcher。"""
     setup = _make_graph_setup()
     factories = _make_mock_factories()
 
@@ -159,11 +168,12 @@ def test_phase1_only_topology():
     edges = compiled["edges"]
     assert (START, "Macro Analyst") in edges
     assert (START, "Market Analyst") in edges
-    assert (("Macro Analyst Done", "Market Analyst Done"), "Bull Researcher") in edges
+    assert (("Macro Analyst Done", "Market Analyst Done"), "Run Integrity Gate") in edges
+    assert (("Macro Analyst Done", "Market Analyst Done"), "Bull Researcher") not in edges
 
 
 def test_phase2_only_topology():
-    """当仅选择阶段二分析师时，阶段二由 START 并行出发，汇合进入 Bull Researcher。"""
+    """当仅选择阶段二分析师时，阶段二由 START 并行出发，汇合经 Run Integrity Gate 进入 Bull Researcher。"""
     setup = _make_graph_setup()
     factories = _make_mock_factories()
 
@@ -174,7 +184,8 @@ def test_phase2_only_topology():
     edges = compiled["edges"]
     assert (START, "Fundamentals Analyst") in edges
     assert (START, "News Analyst") in edges
-    assert (("Fundamentals Analyst Done", "News Analyst Done"), "Bull Researcher") in edges
+    assert (("Fundamentals Analyst Done", "News Analyst Done"), "Run Integrity Gate") in edges
+    assert (("Fundamentals Analyst Done", "News Analyst Done"), "Bull Researcher") not in edges
 
 
 def test_mixed_subset_topology():
@@ -190,7 +201,8 @@ def test_mixed_subset_topology():
     assert (START, "Market Analyst") in edges
     assert (("Market Analyst Done",), "Fundamentals Analyst") in edges
     assert (("Market Analyst Done",), "Smart Money Analyst") in edges
-    assert (("Fundamentals Analyst Done", "Smart Money Analyst Done"), "Bull Researcher") in edges
+    assert (("Fundamentals Analyst Done", "Smart Money Analyst Done"), "Run Integrity Gate") in edges
+    assert (("Fundamentals Analyst Done", "Smart Money Analyst Done"), "Bull Researcher") not in edges
 
 
 # ─────────────────────────────────────────────────────────────────────────────

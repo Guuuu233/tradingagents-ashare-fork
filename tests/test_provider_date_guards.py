@@ -33,6 +33,9 @@ TIMELESS_GET_METHODS = {
     # Low-level sina live stream page fetch; historical refuse is enforced on
     # get_global_news / router, not on the raw pager.
     "get_sina_global_news",
+    # Static content read keyed by disclosure record (announcementId/attachment
+    # URL), not by analysis date; the record's own cutoff governs staleness.
+    "get_cninfo_announcement_content",
 }
 
 
