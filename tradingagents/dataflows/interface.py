@@ -25,6 +25,16 @@ from .vendor_result import (
 
 _logger = logging.getLogger(__name__)
 
+
+class NetworkAccessDeniedError(RuntimeError):
+    """Raised when network access is denied by policy, offline guardrail, or operational refusal.
+
+    Contract:
+    - Lightweight, production-side definition of explicit network denial.
+    - Immediately propagates upward without retry and without vendor fallback.
+    """
+    __slots__ = ()
+
 # Tools organized by category
 TOOLS_CATEGORIES = {
     "core_stock_apis": {
@@ -481,6 +491,16 @@ def route_to_vendor(method: str, *args, **kwargs):
                     vendor, policy, impl_func, args, kwargs
                 )
                 result = future.result(timeout=policy.timeout_seconds)
+            except NetworkAccessDeniedError as exc:
+                last_exc = exc
+                if future is not None:
+                    future.cancel()
+                _trace(
+                    f"method={method} {args_summary} vendor={vendor} "
+                    f"status=network-access-denied reason={type(exc).__name__}: {exc}"
+                )
+                # Immediate upward propagation: strictly no retry, no fallback to next vendor
+                raise
             except (AlphaVantageRateLimitError, NotImplementedError) as exc:
                 last_exc = exc
                 # Try next provider for transient/routing issues or placeholder providers.

@@ -1,4 +1,5 @@
-"""Comprehensive tests for offline network guardrail and socket isolation (DAV-995 / DAV-979).
+"""Comprehensive tests for offline network guardrail and socket isolation
+(DAV-979 / DAV-995 socket-patch layer + DAV-1007 PEP 578 audit-hook layer).
 
 Validates:
 1. Outbound socket connection attempts to external IPs and domains are intercepted and fail-fast with OfflineTestGuardrailError.
@@ -7,11 +8,16 @@ Validates:
 4. Local loopback communication (127.0.0.1, localhost), AF_UNIX sockets, and FastAPI TestClient are completely unaffected.
 5. Tests marked with @pytest.mark.network are exempted and allowed normal outbound network behavior.
 6. Context managers for selective enabling/disabling function properly.
+7. Audit-hook layer: observation/deny log pairing, positive-control sentinels,
+   curl_cffi C-level guard, DNS-level interception, socket-mock coexistence,
+   and explicit network switch fail-closed semantics.
 """
 from __future__ import annotations
 
 import os
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -24,12 +30,22 @@ from tests.conftest import (
     OfflineTestGuardrailError,
     _ORIG_SOCKET_CONNECT,
     _is_local_or_loopback,
+    check_socket_health,
     disable_offline_network_guard,
     enable_offline_network_guard,
+    get_deny_log_path,
+    get_observation_log_path,
+    is_network_enabled,
     is_offline_network_guard_active,
     offline_guard_disabled,
     offline_guard_enabled,
+    run_guardrail_sentinel,
 )
+
+# Reserved TEST-NET addresses (RFC 5737) - never use 198.18.x or 127.0.0.1:9
+TEST_NET_1_IP = "192.0.2.1"
+TEST_NET_2_IP = "198.51.100.1"
+TEST_NET_3_IP = "203.0.113.1"
 
 
 class TestAddressAllowlistUnit:
@@ -42,6 +58,11 @@ class TestAddressAllowlistUnit:
         assert _is_local_or_loopback(("sub.localhost", 80)) is True
         assert _is_local_or_loopback(("testserver", 80)) is True
         assert _is_local_or_loopback(("0.0.0.0", 80)) is True
+        # Bare hostnames / None (audit-hook arg shapes)
+        assert _is_local_or_loopback("localhost") is True
+        assert _is_local_or_loopback("127.0.0.1") is True
+        assert _is_local_or_loopback("testserver") is True
+        assert _is_local_or_loopback(None) is True
 
     def test_loopback_ipv6(self):
         assert _is_local_or_loopback(("::1", 80)) is True
@@ -56,10 +77,18 @@ class TestAddressAllowlistUnit:
             assert _is_local_or_loopback(("/tmp/test.sock",), family=socket.AF_UNIX) is True
 
     def test_external_addresses_disallowed(self):
+        # TEST-NET reserved ranges (RFC 5737)
+        assert _is_local_or_loopback((TEST_NET_1_IP, 80)) is False
+        assert _is_local_or_loopback((TEST_NET_2_IP, 443)) is False
+        assert _is_local_or_loopback((TEST_NET_3_IP, 8080)) is False
+        assert _is_local_or_loopback(TEST_NET_1_IP) is False
+
         assert _is_local_or_loopback(("8.8.8.8", 53)) is False
         assert _is_local_or_loopback(("1.1.1.1", 80)) is False
         assert _is_local_or_loopback(("baostock.com", 80)) is False
         assert _is_local_or_loopback(("example.com", 80)) is False
+        assert _is_local_or_loopback("baostock.com") is False
+        assert _is_local_or_loopback("api.openai.com") is False
         assert _is_local_or_loopback(("192.168.1.1", 80)) is False
         assert _is_local_or_loopback(("10.0.0.1", 80)) is False
         assert _is_local_or_loopback(("172.16.0.1", 80)) is False
@@ -498,7 +527,7 @@ class TestBaostockHardeningVerification:
         repo_root = Path(__file__).resolve().parent.parent
         scan_dirs = [repo_root / d for d in ["tradingagents", "api", "scheduler", "scripts"]]
         target_file = (repo_root / "tradingagents/dataflows/providers/cn_baostock_provider.py").resolve()
-        allowed_scopes = {"ensure_baostock_socket_hardening", "_cleanup_baostock_context", "get_hardened_baostock"}
+        allowed_scopes = {"ensure_baostock_socket_hardening", "_cleanup_baostock_context", "_cleanup_context_socket", "baostock_session", "get_hardened_baostock"}
 
         violations = []
 
@@ -576,3 +605,324 @@ class TestBaostockHardeningVerification:
             "Found unauthorized baostock imports outside get_hardened_baostock accessor:\n"
             + "\n".join(violations)
         )
+
+
+# ============================================================================
+# DAV-1007 audit-hook layer coverage (merged from the A+B candidate suite).
+# The socket-patch layer remains the primary enforcement (4355ca3); the audit
+# hooks add irreversible observation/deny logging and DNS-level interception.
+# ============================================================================
+
+
+class TestAuditHookInterception:
+    """Verification of PEP 578 audit-hook interception and fail-fast semantics."""
+
+    def test_tcp_connect_test_net_ip_blocked_fail_fast(self):
+        """TCP socket.connect to TEST-NET IP must raise OfflineTestGuardrailError in milliseconds."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            t0 = time.perf_counter()
+            with pytest.raises(OfflineTestGuardrailError) as exc_info:
+                s.connect((TEST_NET_1_IP, 80))
+            elapsed = time.perf_counter() - t0
+
+            assert elapsed < 0.05, f"Fail-fast exceeded 50ms: took {elapsed*1000:.2f}ms"
+            err_msg = str(exc_info.value)
+            assert TEST_NET_1_IP in err_msg
+            assert "OfflineTestGuardrail" in err_msg
+            assert issubclass(OfflineTestGuardrailError, RuntimeError)
+        finally:
+            s.close()
+
+    def test_tcp_connect_ex_test_net_ip_blocked(self):
+        """TCP socket.connect_ex to TEST-NET destination must trigger interception."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with pytest.raises(OfflineTestGuardrailError) as exc_info:
+                s.connect_ex((TEST_NET_2_IP, 443))
+            assert TEST_NET_2_IP in str(exc_info.value)
+        finally:
+            s.close()
+
+    def test_dns_getaddrinfo_external_domain_blocked_fail_fast(self):
+        """socket.getaddrinfo for external domain must fail-fast without network DNS query."""
+        t0 = time.perf_counter()
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            socket.getaddrinfo("example.com", 80)
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.05, f"Fail-fast exceeded 50ms: took {elapsed*1000:.2f}ms"
+        assert "example.com" in str(exc_info.value)
+
+    def test_dns_gethostbyname_external_domain_blocked(self):
+        """socket.gethostbyname for external domain must be intercepted."""
+        t0 = time.perf_counter()
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            socket.gethostbyname("baostock.com")
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.05
+        assert "baostock.com" in str(exc_info.value)
+
+    def test_udp_sendto_test_net_ip_blocked(self):
+        """UDP socket.sendto to TEST-NET destination must be intercepted."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            with pytest.raises(OfflineTestGuardrailError) as exc_info:
+                s.sendto(b"ping", (TEST_NET_1_IP, 53))
+            assert TEST_NET_1_IP in str(exc_info.value)
+        finally:
+            s.close()
+
+    def test_curl_cffi_blocked_fail_fast(self):
+        """curl_cffi perform must be intercepted to prevent C-level libcurl bypass."""
+        from tests.conftest import get_curl_cffi_guard_status
+        status = get_curl_cffi_guard_status()
+        assert status.startswith("installed:") or status.startswith("not_installed:"), (
+            f"Unexpected curl_cffi guard status: {status}"
+        )
+        try:
+            import curl_cffi.curl
+            c = curl_cffi.curl.Curl()
+            c.setopt(curl_cffi.curl.CurlOpt.URL, b"https://example.com")
+            with pytest.raises(OfflineTestGuardrailError) as exc_info:
+                c.perform()
+            assert "curl_cffi" in str(exc_info.value)
+        except ImportError:
+            pytest.skip("curl_cffi not installed")
+
+
+class TestExistingSocketMockCompatibility:
+    """Targeted compatibility tests for existing test-level socket mocks.
+
+    1. tests/test_fund_flow_scale_consumption.py:48 autouse guard_no_network_calls (patch socket.socket.connect)
+    2. tests/test_horizon_return_labels.py:806 monkeypatch.setattr(socket, "socket", block_socket)
+
+    Must prove:
+    - No cascade crash across tests.
+    - Guardrail detects tampering and reports exact nodeid and phase without crashing with AttributeError.
+    """
+
+    def test_compatibility_with_patch_socket_connect(self):
+        """Verify compatibility with test_fund_flow_scale_consumption.py:48 pattern.
+
+        Using patch('socket.socket.connect', side_effect=RuntimeError(...)) must coexist with the guardrail.
+        """
+        from unittest.mock import patch
+
+        custom_error_msg = "Network access forbidden in offline tests"
+        with patch("socket.socket.connect", side_effect=RuntimeError(custom_error_msg)):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # The test-level mock intercepts first and raises its own RuntimeError
+            with pytest.raises(RuntimeError) as exc_info:
+                s.connect((TEST_NET_1_IP, 80))
+            assert custom_error_msg in str(exc_info.value)
+            s.close()
+
+        # After exiting the patch context, socket.socket is clean and healthy
+        healthy, report = check_socket_health(
+            nodeid="tests/test_offline_network_guardrail.py::test_compatibility_with_patch_socket_connect",
+            phase="call",
+        )
+        assert healthy is True
+        assert "socket healthy" in report
+
+    def test_compatibility_with_monkeypatch_socket_class(self, monkeypatch):
+        """Verify compatibility with test_horizon_return_labels.py:806 pattern.
+
+        monkeypatch.setattr(socket, 'socket', block_socket) replaces the socket.socket class
+        with a function. Guardrail must:
+        1. Not crash with AttributeError when checking or handling socket.
+        2. Detect tampering and report exact nodeid and phase.
+        3. Restore cleanly after monkeypatch teardown without cascading failures.
+        """
+        def block_socket(*args, **kwargs):
+            raise AssertionError("Unexpected network socket creation attempted!")
+
+        # Replace socket.socket with a function (reproducing line 806 exactly)
+        monkeypatch.setattr(socket, "socket", block_socket)
+
+        # 1. Calling socket.socket() raises the test's AssertionError, NOT a guardrail AttributeError
+        with pytest.raises(AssertionError) as exc_info:
+            socket.socket()
+        assert "Unexpected network socket creation attempted!" in str(exc_info.value)
+
+        # 2. Guardrail detects tampering safely and reports nodeid and phase
+        fake_nodeid = "tests/test_horizon_return_labels.py::TestResolveHorizonCalendarWindow::test_resolution_makes_no_network_calls"
+        fake_phase = "call"
+        healthy, report = check_socket_health(nodeid=fake_nodeid, phase=fake_phase)
+        assert healthy is False
+        assert fake_nodeid in report
+        assert fake_phase in report
+        assert "is not a class" in report
+        assert "block_socket" in report
+
+    def test_sequential_execution_no_cascade_error(self):
+        """Ensure that subsequent tests execute normally after socket mock tests."""
+        healthy, report = check_socket_health()
+        assert healthy is True
+
+        # Ensure normal local TCP operations work
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        assert s.getsockname()[1] > 0
+        s.close()
+
+
+class TestNetworkSwitchFailClosed:
+    """Verification of explicit network authorization switch and fail-closed semantics."""
+
+    def test_switch_missing_defaults_to_fail_closed(self, monkeypatch):
+        """When RT_NETWORK_ENABLED is missing or unset, guardrail must be active (fail-closed)."""
+        monkeypatch.delenv("RT_NETWORK_ENABLED", raising=False)
+        assert is_network_enabled() is False
+        assert is_offline_network_guard_active() is True
+
+        # External connection must be blocked
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with pytest.raises(OfflineTestGuardrailError):
+                s.connect((TEST_NET_1_IP, 80))
+        finally:
+            s.close()
+
+    def test_switch_empty_or_zero_defaults_to_fail_closed(self, monkeypatch):
+        """When RT_NETWORK_ENABLED is empty string or '0', guardrail must remain active."""
+        for val in ("", "0", "false", "no", "DISABLED"):
+            monkeypatch.setenv("RT_NETWORK_ENABLED", val)
+            assert is_network_enabled() is False
+            assert is_offline_network_guard_active() is True
+
+    def test_forgetting_switch_subprocess_fail_closed(self):
+        """Dedicated subprocess test covering 'forgetting to set switch' path.
+
+        Even when running pytest directly without RT_NETWORK_ENABLED, the process
+        defaults to offline mode and denies external outbound connections.
+        """
+        code = """
+import socket, sys
+from tests.conftest import OfflineTestGuardrailError
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.connect(("192.0.2.1", 80))
+    sys.exit(10)  # Should have been blocked!
+except OfflineTestGuardrailError:
+    sys.exit(0)   # Correctly blocked fail-closed
+finally:
+    s.close()
+"""
+        # Run in clean subprocess without RT_NETWORK_ENABLED
+        clean_env = os.environ.copy()
+        clean_env.pop("RT_NETWORK_ENABLED", None)
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=clean_env,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"Subprocess did not fail-closed: returncode={proc.returncode}"
+
+
+class TestObservationAndDenyLogsPairing:
+    """Verification of dual-hook logging, 1:1 pairing, and positive control sentinels."""
+
+    def test_sentinel_executed_and_pid_matches_pytest_main(self):
+        """Both observation log and deny log must contain positive control sentinels with current PID."""
+        obs_path = get_observation_log_path()
+        deny_path = get_deny_log_path()
+
+        assert os.path.exists(obs_path), f"Observation log does not exist: {obs_path}"
+        assert os.path.exists(deny_path), f"Deny log does not exist: {deny_path}"
+
+        current_pid = str(os.getpid())
+
+        # Read observation log
+        with open(obs_path, "r", encoding="utf-8") as f:
+            obs_lines = f.readlines()
+        with open(deny_path, "r", encoding="utf-8") as f:
+            deny_lines = f.readlines()
+
+        # Check positive control in observation log
+        obs_sentinels = [line for line in obs_lines if "SENTINEL_" in line]
+        assert len(obs_sentinels) >= 1, "Observation log missing SENTINEL records"
+        assert any(f"PID:{current_pid}" in line for line in obs_sentinels), (
+            f"Observation sentinel PID does not match current PID {current_pid}"
+        )
+
+        # Check positive control in deny log
+        deny_sentinels = [line for line in deny_lines if "SENTINEL_" in line]
+        assert len(deny_sentinels) >= 1, "Deny log missing SENTINEL records"
+        assert any(f"PID:{current_pid}" in line for line in deny_sentinels), (
+            f"Deny sentinel PID does not match current PID {current_pid}"
+        )
+
+    def test_non_local_events_one_to_one_paired(self):
+        """Every non-local event in Observation Log must have a matching entry in Deny Log."""
+        obs_path = get_observation_log_path()
+        deny_path = get_deny_log_path()
+
+        with open(obs_path, "r", encoding="utf-8") as f:
+            obs_lines = f.readlines()
+        with open(deny_path, "r", encoding="utf-8") as f:
+            deny_lines = f.readlines()
+
+        # Extract non-local events from observation log
+        obs_non_local = [
+            line.strip() for line in obs_lines
+            if "LOCAL:False" in line
+        ]
+        deny_entries = [
+            line.strip() for line in deny_lines
+            if "ACTION:DENY" in line
+        ]
+
+        assert len(obs_non_local) > 0, "No non-local attempts recorded during tests"
+        assert len(obs_non_local) == len(deny_entries), (
+            f"Mismatch between observation non-local ({len(obs_non_local)}) "
+            f"and deny entries ({len(deny_entries)})"
+        )
+
+        # Verify each non-local observation has matching event and target in deny log
+        for i, (obs, deny) in enumerate(zip(obs_non_local, deny_entries)):
+            obs_target = obs.split("TARGET:")[-1].strip()
+            deny_target = deny.split("TARGET:")[-1].strip()
+            assert obs_target == deny_target, f"Item {i} target mismatch: {obs_target} vs {deny_target}"
+
+
+class TestGuardrailArchitectureInvariants:
+    """Verification of foundational architectural requirements."""
+
+    def test_pep578_hooks_irreversible(self):
+        """PEP 578 specifies that Python audit hooks cannot be removed or replaced."""
+        assert not hasattr(sys, "removeaudithook"), "PEP 578 invariant violated: removeaudithook exists"
+
+    def test_dual_layer_guardrail_composed(self):
+        """The merged guardrail keeps BOTH layers: composable socket patch + irreversible audit hooks.
+
+        Replaces the A+B invariant 'depth counter completely removed': the current
+        mainline (4355ca3) deliberately retains the depth-counted composable
+        socket-patch layer; the audit-hook layer is additive on top of it.
+        """
+        import tests.conftest as ct
+        # Socket-patch composable layer (4355ca3)
+        assert hasattr(ct, "enable_offline_network_guard")
+        assert hasattr(ct, "disable_offline_network_guard")
+        assert hasattr(ct, "offline_guard_disabled")
+        assert hasattr(ct, "_verify_guardrail_integrity")
+        # Audit-hook layer (DAV-1007)
+        assert hasattr(ct, "_observation_hook")
+        assert hasattr(ct, "_interception_hook")
+        assert hasattr(ct, "run_guardrail_sentinel")
+        assert hasattr(ct, "get_observation_log_path")
+        assert hasattr(ct, "get_deny_log_path")
+
+    def test_only_test_net_ips_used(self):
+        """External test addresses must strictly use TEST-NET blocks (RFC 5737)."""
+        assert TEST_NET_1_IP.startswith("192.0.2.")
+        assert TEST_NET_2_IP.startswith("198.51.100.")
+        assert TEST_NET_3_IP.startswith("203.0.113.")
+        assert not TEST_NET_1_IP.startswith("198.18.")
+        assert not TEST_NET_2_IP.startswith("198.18.")
+        assert not TEST_NET_3_IP.startswith("198.18.")
+        assert TEST_NET_1_IP != "127.0.0.1"

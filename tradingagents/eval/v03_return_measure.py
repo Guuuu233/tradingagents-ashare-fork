@@ -50,6 +50,7 @@ from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -62,6 +63,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+logger = logging.getLogger(__name__)
+
+from tradingagents.dataflows.interface import NetworkAccessDeniedError
 from tradingagents.agents.utils.symbol_canonical import (
     CanonicalStatus,
     CanonicalSymbolResult,
@@ -1145,26 +1149,23 @@ class VendorPriceDataProvider:
 
         # Fallback to baostock query_stock_basic
         try:
-            from tradingagents.dataflows.providers.cn_baostock_provider import get_hardened_baostock
-            bs = get_hardened_baostock()
+            from tradingagents.dataflows.providers.cn_baostock_provider import baostock_session
             bs_market = "sh" if norm_sym.endswith(".SH") or code.startswith(("5", "6", "9")) else "sz"
             bs_code = f"{bs_market}.{code}"
-            lg = bs.login()
-            if lg.error_code == "0":
-                try:
-                    rs = bs.query_stock_basic(code=bs_code)
-                    if rs.error_code == "0" and rs.next():
-                        row = dict(zip(rs.fields, rs.get_row_data()))
-                        ipo = str(row.get("ipoDate", "")).strip()[:10]
-                        cname = str(row.get("code_name", "")).strip()
-                        if ipo:
-                            res = {"name": cname, "list_date": ipo}
-                            self._meta_cache[norm_sym] = res
-                            return res
-                finally:
-                    bs.logout()
-        except Exception:
-            pass
+            with baostock_session() as bs:
+                rs = bs.query_stock_basic(code=bs_code)
+                if rs and getattr(rs, "error_code", None) == "0" and rs.next():
+                    row = dict(zip(rs.fields, rs.get_row_data()))
+                    ipo = str(row.get("ipoDate", "")).strip()[:10]
+                    cname = str(row.get("code_name", "")).strip()
+                    if ipo:
+                        res = {"name": cname, "list_date": ipo}
+                        self._meta_cache[norm_sym] = res
+                        return res
+        except NetworkAccessDeniedError:
+            raise
+        except Exception as exc:
+            logger.debug("v03_return_measure baostock query_stock_basic fallback failed for %s: %s", norm_sym, exc)
 
         self._meta_cache[norm_sym] = None
         return None
@@ -1200,16 +1201,32 @@ class VendorPriceDataProvider:
 
         pit_st: Optional[bool] = None
         try:
-            from tradingagents.dataflows.providers.cn_baostock_provider import get_hardened_baostock
-            bs = get_hardened_baostock()
-            lg = bs.login()
-            if lg.error_code == "0":
-                try:
-                    # 1. First try exact date query
+            from tradingagents.dataflows.providers.cn_baostock_provider import baostock_session
+            with baostock_session() as bs:
+                # 1. First try exact date query
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,isST",
+                    start_date=clean_date,
+                    end_date=clean_date,
+                    frequency="d",
+                    adjustflag="3",
+                )
+                if rs and rs.error_code == "0":
+                    while rs.next():
+                        row = rs.get_row_data()
+                        if row and len(row) >= 2:
+                            pit_st = (row[1] == "1")
+                            break
+                # 2. If exact date returned no bar (e.g. suspension, weekend, or holiday),
+                # look back up to 30 calendar days for the latest known trading day
+                if pit_st is None:
+                    d = datetime.strptime(clean_date, "%Y-%m-%d").date()
+                    start_d = (d - timedelta(days=30)).strftime("%Y-%m-%d")
                     rs = bs.query_history_k_data_plus(
                         bs_code,
                         "date,isST",
-                        start_date=clean_date,
+                        start_date=start_d,
                         end_date=clean_date,
                         frequency="d",
                         adjustflag="3",
@@ -1219,31 +1236,10 @@ class VendorPriceDataProvider:
                             row = rs.get_row_data()
                             if row and len(row) >= 2:
                                 pit_st = (row[1] == "1")
-                                break
-                    # 2. If exact date returned no bar (e.g. suspension, weekend, or holiday),
-                    # look back up to 30 calendar days for the latest known trading day
-                    if pit_st is None:
-                        d = datetime.strptime(clean_date, "%Y-%m-%d").date()
-                        start_d = (d - timedelta(days=30)).strftime("%Y-%m-%d")
-                        rs = bs.query_history_k_data_plus(
-                            bs_code,
-                            "date,isST",
-                            start_date=start_d,
-                            end_date=clean_date,
-                            frequency="d",
-                            adjustflag="3",
-                        )
-                        if rs and rs.error_code == "0":
-                            while rs.next():
-                                row = rs.get_row_data()
-                                if row and len(row) >= 2:
-                                    pit_st = (row[1] == "1")
-                finally:
-                    try:
-                        bs.logout()
-                    except Exception:
-                        pass
-        except Exception:
+        except NetworkAccessDeniedError:
+            raise
+        except Exception as exc:
+            logger.debug("v03_return_measure baostock is_st check failed for %s on %s: %s", bs_code, clean_date, exc)
             pit_st = None
 
         self._st_cache[cache_key] = pit_st

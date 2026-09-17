@@ -2,6 +2,8 @@ import io
 import logging
 import os
 import re
+import socket
+import threading
 from contextlib import contextmanager
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
@@ -19,128 +21,156 @@ from ..trade_calendar import (
 
 logger = logging.getLogger(__name__)
 
-_BAOSTOCK_HARDENED: bool = False
-DEFAULT_BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "5.0"))
-_BAOSTOCK_TIMEOUT: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
+DEFAULT_BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "45.0"))
+_INSTALL_LOCK = threading.Lock()
+_HARDENING_INSTALLED = False
+_HARDENING_ERROR: Optional[Exception] = None
 
 
 def is_baostock_hardened() -> bool:
     """Return whether baostock socket hardening has been successfully applied."""
-    return _BAOSTOCK_HARDENED
+    return _HARDENING_INSTALLED
 
 
 def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT) -> bool:
-    """Harden baostock client socketutil: enforce socket timeout and break EOF liveloop."""
-    global _BAOSTOCK_HARDENED, _BAOSTOCK_TIMEOUT
-    _BAOSTOCK_TIMEOUT = timeout
-    if _BAOSTOCK_HARDENED:
+    """Harden baostock client socketutil: enforce per-socket timeout, fail-fast connect, and break EOF liveloop.
+
+    Fail-closed invariant:
+    If hardening installation fails, the error is recorded in _HARDENING_ERROR and
+    subsequent attempts to access baostock are actively blocked before bs.login()
+    can be invoked. A pre-existing recorded failure raises RuntimeError (fail-closed);
+    a fresh install failure logs a warning and returns False so callers can refuse.
+    """
+    global _HARDENING_INSTALLED, _HARDENING_ERROR
+
+    if _HARDENING_ERROR is not None:
+        raise RuntimeError(
+            f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
+        ) from _HARDENING_ERROR
+
+    if _HARDENING_INSTALLED:
         return True
-    try:
-        import zlib
-        import baostock.util.socketutil as bssock
 
-        cons = bssock.cons
-        context = bssock.context
+    with _INSTALL_LOCK:
+        if _HARDENING_ERROR is not None:
+            raise RuntimeError(
+                f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
+            ) from _HARDENING_ERROR
+        if _HARDENING_INSTALLED:
+            return True
 
-        def safe_connect(self):
-            mySockect = None
-            try:
-                mySockect = bssock.socket.socket(bssock.socket.AF_INET, bssock.socket.SOCK_STREAM)
-                mySockect.settimeout(_BAOSTOCK_TIMEOUT)
-                mySockect.connect((cons.BAOSTOCK_SERVER_IP, cons.BAOSTOCK_SERVER_PORT))
-                setattr(context, "default_socket", mySockect)
-            except Exception:
-                if mySockect is not None:
-                    try:
-                        mySockect.close()
-                    except OSError:
-                        pass
-                setattr(context, "default_socket", None)
-                raise
+        try:
+            import zlib
+            import baostock.util.socketutil as bssock
 
-        def safe_send_msg(msg):
-            default_socket = getattr(context, "default_socket", None)
-            if default_socket is None:
-                return None
-            try:
-                default_socket.settimeout(_BAOSTOCK_TIMEOUT)
-                msg_bytes = (msg + "\n").encode("utf-8")
-                default_socket.sendall(msg_bytes)
-                receive = b""
-                while True:
-                    recv = default_socket.recv(8192)
-                    if not recv:
-                        try:
-                            default_socket.close()
-                        except OSError:
-                            pass
-                        setattr(context, "default_socket", None)
-                        raise ConnectionResetError("baostock socket connection closed by peer (EOF)")
-                    receive += recv
-                    if receive[-13:] == b"<![CDATA[]]>\n":
-                        break
-                head_bytes = receive[0:cons.MESSAGE_HEADER_LENGTH]
-                head_str = bytes.decode(head_bytes)
-                head_arr = head_str.split(cons.MESSAGE_SPLIT)
-                if head_arr[1] in cons.COMPRESSED_MESSAGE_TYPE_TUPLE:
-                    head_inner_length = int(head_arr[2])
-                    body_str = bytes.decode(
-                        zlib.decompress(
-                            receive[
-                                cons.MESSAGE_HEADER_LENGTH : cons.MESSAGE_HEADER_LENGTH
-                                + head_inner_length
-                            ]
-                        )
-                    )
-                    return head_str + body_str
-                else:
-                    return bytes.decode(receive)
-            except Exception:
+            if not hasattr(bssock, "SocketUtil") or not hasattr(bssock, "send_msg"):
+                raise AttributeError("baostock.util.socketutil is missing SocketUtil or send_msg")
+
+            cons = bssock.cons
+            context = bssock.context
+
+            def safe_connect(self):
+                my_socket = None
                 try:
-                    if default_socket:
+                    my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    my_socket.settimeout(timeout)
+                    my_socket.connect((cons.BAOSTOCK_SERVER_IP, cons.BAOSTOCK_SERVER_PORT))
+                    setattr(context, "default_socket", my_socket)
+                except Exception as exc:
+                    if my_socket is not None:
+                        try:
+                            my_socket.close()
+                        except OSError as close_err:
+                            logger.debug("Error closing baostock socket after connect failure: %s", close_err)
+                    setattr(context, "default_socket", None)
+                    logger.debug("Baostock socket connect failed, cleaned up context.default_socket: %s", exc)
+                    raise
+
+            def safe_send_msg(msg: str):
+                default_socket = getattr(context, "default_socket", None)
+                if default_socket is None:
+                    raise ConnectionError("baostock default_socket is None or not connected")
+                try:
+                    default_socket.settimeout(timeout)
+                    msg_bytes = (msg + "\n").encode("utf-8")
+                    default_socket.sendall(msg_bytes)
+                    receive = b""
+                    while True:
+                        recv = default_socket.recv(8192)
+                        if not recv:
+                            try:
+                                default_socket.close()
+                            except OSError as close_err:
+                                logger.debug("Error closing baostock socket on EOF: %s", close_err)
+                            setattr(context, "default_socket", None)
+                            raise ConnectionResetError("baostock socket connection closed by peer (EOF)")
+                        receive += recv
+                        if receive.endswith(b"<![CDATA[]]>\n"):
+                            break
+
+                    head_bytes = receive[0:cons.MESSAGE_HEADER_LENGTH]
+                    head_str = head_bytes.decode("utf-8")
+                    head_arr = head_str.split(cons.MESSAGE_SPLIT)
+                    if head_arr[1] in cons.COMPRESSED_MESSAGE_TYPE_TUPLE:
+                        head_inner_length = int(head_arr[2])
+                        body_bytes = receive[
+                            cons.MESSAGE_HEADER_LENGTH : cons.MESSAGE_HEADER_LENGTH + head_inner_length
+                        ]
+                        body_str = zlib.decompress(body_bytes).decode("utf-8")
+                        return head_str + body_str
+                    else:
+                        return receive.decode("utf-8")
+                except Exception as exc:
+                    try:
                         default_socket.close()
-                except OSError:
-                    pass
-                setattr(context, "default_socket", None)
-                raise
+                    except OSError as close_err:
+                        logger.debug("Error closing baostock socket on send/recv error: %s", close_err)
+                    setattr(context, "default_socket", None)
+                    logger.debug("Baostock send_msg error: %s", exc)
+                    raise
 
-        bssock.SocketUtil.connect = safe_connect
-        bssock.send_msg = safe_send_msg
-        _BAOSTOCK_HARDENED = True
-        return True
-    except (ImportError, AttributeError) as e:
-        logger.warning("Failed to apply baostock socket hardening: %s", e)
-        return False
+            bssock.SocketUtil.connect = safe_connect
+            bssock.send_msg = safe_send_msg
+            _HARDENING_INSTALLED = True
+            return True
+        except Exception as exc:
+            _HARDENING_ERROR = exc
+            logger.warning("Failed to apply baostock socket hardening: %s", exc)
+            return False
 
 
-def _cleanup_baostock_context() -> None:
-    """Clean up baostock's module-level context socket and singleton instance.
+def _cleanup_context_socket() -> None:
+    """Close and clear baostock's module-level context socket and SocketUtil singleton.
 
     baostock stores its active connection on `baostock.common.context.default_socket`
     and caches a singleton on `SocketUtil.instance`. If logout is missed or if the peer
     closes the socket, subsequent calls can hang in socket select() or spin in busy-loops.
     """
     try:
-        import baostock.common.context as conx
-        sock = getattr(conx, "default_socket", None)
+        import baostock.common.context as bs_ctx
+        sock = getattr(bs_ctx, "default_socket", None)
         if sock is not None:
             try:
                 sock.close()
-            except OSError as exc:
-                logger.warning("baostock context socket close failed: %s", exc)
-            conx.default_socket = None
-    except (ImportError, AttributeError) as exc:
-        logger.warning("baostock context access failed during cleanup: %s", exc)
+            except OSError as close_err:
+                logger.debug("Error closing leftover baostock socket: %s", close_err)
+            setattr(bs_ctx, "default_socket", None)
+    except Exception as ctx_err:
+        logger.debug("Error accessing baostock context for cleanup: %s", ctx_err)
 
     try:
         import baostock.util.socketutil as sockutil
         sockutil.SocketUtil.instance = None
-    except (ImportError, AttributeError) as exc:
-        logger.warning("baostock SocketUtil reset failed during cleanup: %s", exc)
+    except Exception as sockutil_err:
+        logger.debug("Error resetting baostock SocketUtil singleton: %s", sockutil_err)
+
+
+# Backwards-compatible alias kept for tests/callers using the DAV-995 name.
+_cleanup_baostock_context = _cleanup_context_socket
 
 
 def get_hardened_baostock(timeout: Optional[float] = None):
-    """唯一受管 baostock 客户端访问入口。
+    """唯一受管 baostock 客户端访问入口（返回已硬化的 baostock 模块）。
 
     保证在返回 baostock 模块前已完成 socket EOF/超时硬化。
     若 baostock 未安装或硬化失败，直接抛出 NotImplementedError (Fail-Closed)。
@@ -154,9 +184,37 @@ def get_hardened_baostock(timeout: Optional[float] = None):
     effective_timeout = timeout if timeout is not None else DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
     if not ensure_baostock_socket_hardening(timeout=effective_timeout):
         raise NotImplementedError(
-            "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁"
+            "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
         )
     return bs
+
+
+@contextmanager
+def baostock_session(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
+    """Unified production entry point and session context for baostock operations."""
+    ensure_baostock_socket_hardening(timeout=timeout)
+    try:
+        import baostock as bs  # type: ignore
+    except ImportError as exc:
+        raise NotImplementedError(
+            "cn_baostock requires 'baostock'. Install it with: pip install baostock"
+        ) from exc
+
+    with redirect_stdout(io.StringIO()):
+        lg = bs.login()
+    if getattr(lg, "error_code", "1") != "0":
+        _cleanup_context_socket()
+        err_msg = getattr(lg, "error_msg", "unknown login error")
+        raise NotImplementedError(f"baostock login failed: {err_msg}")
+    try:
+        yield bs
+    finally:
+        with redirect_stdout(io.StringIO()):
+            try:
+                bs.logout()
+            except Exception as logout_err:
+                logger.debug("Error during baostock logout: %s", logout_err)
+        _cleanup_context_socket()
 
 
 class CnBaoStockProvider(BaseMarketDataProvider):
@@ -202,23 +260,23 @@ class CnBaoStockProvider(BaseMarketDataProvider):
         bs = self._bs()
         if not ensure_baostock_socket_hardening(timeout=timeout):
             raise NotImplementedError(
-                "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁"
+                "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
             )
         with redirect_stdout(io.StringIO()):
             lg = bs.login()
         if getattr(lg, "error_code", "1") != "0":
-            raise NotImplementedError(f"baostock login failed: {lg.error_msg}")
+            _cleanup_context_socket()
+            raise NotImplementedError(f"baostock login failed: {getattr(lg, 'error_msg', 'unknown login error')}")
         try:
             yield bs
         finally:
             try:
                 with redirect_stdout(io.StringIO()):
                     bs.logout()
-            except (OSError, RuntimeError, AttributeError) as exc:
+            except Exception as exc:
                 logger.warning("baostock logout failed: %s", exc)
             finally:
-                _cleanup_baostock_context()
-
+                _cleanup_context_socket()
 
     def _fetch_hist_df(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         start_boundary = pd.to_datetime(start_date, errors="coerce")
