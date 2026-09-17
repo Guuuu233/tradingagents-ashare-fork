@@ -30,16 +30,18 @@ def get_YFin_data_online(
     end_date: Annotated[str, "End date in yyyy-mm-dd format"],
 ):
 
-    datetime.strptime(start_date, "%Y-%m-%d")
-    datetime.strptime(end_date, "%Y-%m-%d")
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    if start_dt > end_dt:
+        raise ValueError(
+            f"start_date ({start_date}) must not be after end_date ({end_date})"
+        )
 
     # Create ticker object
     ticker = yf.Ticker(symbol.upper())
 
     # Fetch historical data for the specified date range
-    end_date_inclusive = (
-        datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-    ).strftime("%Y-%m-%d")
+    end_date_inclusive = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
     data = ticker.history(start=start_date, end=end_date_inclusive)
 
     # Check if data is empty
@@ -51,6 +53,15 @@ def get_YFin_data_online(
     # Remove timezone info from index for cleaner output
     if data.index.tz is not None:
         data.index = data.index.tz_localize(None)
+
+    # Re-validate the vendor-returned window: keep only rows whose date is
+    # inside the inclusive [start_date, end_date] request window.
+    row_dates = data.index.normalize()
+    data = data[(row_dates >= start_dt) & (row_dates <= end_dt)]
+    if data.empty:
+        return (
+            f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
+        )
 
     # Round numerical values to 2 decimal places for cleaner display
     numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
