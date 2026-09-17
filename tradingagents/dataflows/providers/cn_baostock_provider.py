@@ -25,11 +25,17 @@ DEFAULT_BAOSTOCK_SOCKET_TIMEOUT = float(os.getenv("BAOSTOCK_SOCKET_TIMEOUT", "45
 _INSTALL_LOCK = threading.Lock()
 _HARDENING_INSTALLED = False
 _HARDENING_ERROR: Optional[Exception] = None
+# Latest requested per-socket timeout; read by the hardened closures so a later
+# ensure_baostock_socket_hardening(timeout=...) updates the effective timeout
+# even when the monkeypatch was already installed.
+_ACTIVE_TIMEOUT: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
+# Compat alias kept for DAV-995-era tests/callers; mirrors _HARDENING_INSTALLED.
+_BAOSTOCK_HARDENED = False
 
 
 def is_baostock_hardened() -> bool:
     """Return whether baostock socket hardening has been successfully applied."""
-    return _HARDENING_INSTALLED
+    return _BAOSTOCK_HARDENED
 
 
 def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT) -> bool:
@@ -41,14 +47,16 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
     can be invoked. A pre-existing recorded failure raises RuntimeError (fail-closed);
     a fresh install failure logs a warning and returns False so callers can refuse.
     """
-    global _HARDENING_INSTALLED, _HARDENING_ERROR
+    global _HARDENING_INSTALLED, _HARDENING_ERROR, _BAOSTOCK_HARDENED, _ACTIVE_TIMEOUT
+
+    _ACTIVE_TIMEOUT = timeout
 
     if _HARDENING_ERROR is not None:
         raise RuntimeError(
             f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
         ) from _HARDENING_ERROR
 
-    if _HARDENING_INSTALLED:
+    if _HARDENING_INSTALLED and _BAOSTOCK_HARDENED:
         return True
 
     with _INSTALL_LOCK:
@@ -56,7 +64,7 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
             raise RuntimeError(
                 f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
             ) from _HARDENING_ERROR
-        if _HARDENING_INSTALLED:
+        if _HARDENING_INSTALLED and _BAOSTOCK_HARDENED:
             return True
 
         try:
@@ -73,7 +81,7 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
                 my_socket = None
                 try:
                     my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    my_socket.settimeout(timeout)
+                    my_socket.settimeout(_ACTIVE_TIMEOUT)
                     my_socket.connect((cons.BAOSTOCK_SERVER_IP, cons.BAOSTOCK_SERVER_PORT))
                     setattr(context, "default_socket", my_socket)
                 except Exception as exc:
@@ -91,7 +99,7 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
                 if default_socket is None:
                     raise ConnectionError("baostock default_socket is None or not connected")
                 try:
-                    default_socket.settimeout(timeout)
+                    default_socket.settimeout(_ACTIVE_TIMEOUT)
                     msg_bytes = (msg + "\n").encode("utf-8")
                     default_socket.sendall(msg_bytes)
                     receive = b""
@@ -132,9 +140,13 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
             bssock.SocketUtil.connect = safe_connect
             bssock.send_msg = safe_send_msg
             _HARDENING_INSTALLED = True
+            _BAOSTOCK_HARDENED = True
             return True
         except Exception as exc:
-            _HARDENING_ERROR = exc
+            # Do not latch _HARDENING_ERROR here: a fresh install failure returns
+            # False so callers refuse (fail-closed at the call site), while a
+            # latched error would poison every subsequent unrelated call.
+            # _HARDENING_ERROR is only honored when set externally/previously.
             logger.warning("Failed to apply baostock socket hardening: %s", exc)
             return False
 
@@ -182,6 +194,11 @@ def get_hardened_baostock(timeout: Optional[float] = None):
             "baostock is required. Install it with: pip install baostock"
         ) from exc
     effective_timeout = timeout if timeout is not None else DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
+    prior_error = _HARDENING_ERROR
+    if prior_error is not None:
+        raise NotImplementedError(
+            "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
+        ) from prior_error
     if not ensure_baostock_socket_hardening(timeout=effective_timeout):
         raise NotImplementedError(
             "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
@@ -258,6 +275,11 @@ class CnBaoStockProvider(BaseMarketDataProvider):
     @contextmanager
     def _session(self, timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT):
         bs = self._bs()
+        prior_error = _HARDENING_ERROR
+        if prior_error is not None:
+            raise NotImplementedError(
+                "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
+            ) from prior_error
         if not ensure_baostock_socket_hardening(timeout=timeout):
             raise NotImplementedError(
                 "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
