@@ -480,7 +480,7 @@ class TestV03SessionIntegration:
         res = provider._get_stock_metadata("000001.SZ")
 
         # Must have invoked baostock_session and parsed result
-        assert len(session_calls) >= 1
+        assert len(session_calls) == 1
         assert res == {"name": "平安银行", "list_date": "1991-04-03"}
 
     def test_v03_is_st_uses_baostock_session(self, monkeypatch):
@@ -509,7 +509,7 @@ class TestV03SessionIntegration:
         provider._st_cache.clear()
 
         res = provider.is_st("000001.SZ", "2026-01-05")
-        assert len(st_calls) >= 1
+        assert len(st_calls) == 1
         assert res is False
 
     def test_v03_paths_propagate_network_access_denied_without_swallowing(self, monkeypatch):
