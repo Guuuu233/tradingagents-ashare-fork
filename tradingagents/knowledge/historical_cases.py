@@ -975,14 +975,32 @@ def backfill_pending_cases(
                     is_error,
                 )
             else:
-                case.actual_outcome = DATA_MISSING_PLACEHOLDER
-                case.actual_change_pct = None
-                case.is_error = None
-                modified = True
+                # 幂等化：逐项比较持久化字段，仅在实际语义变化时才写库并刷新 updated_at，
+                # 避免暂态拒绝的重复扫描制造无意义 dirty state 和时间戳噪音。
+                fields_changed = False
+                if case.actual_outcome != DATA_MISSING_PLACEHOLDER:
+                    case.actual_outcome = DATA_MISSING_PLACEHOLDER
+                    fields_changed = True
+                if case.actual_change_pct is not None:
+                    case.actual_change_pct = None
+                    fields_changed = True
+                if case.is_error is not None:
+                    case.is_error = None
+                    fields_changed = True
                 if refusal:
-                    case.claims = _claims_with_refusal_metadata(case.claims, refusal)
-                    case.updated_at = datetime.now(timezone.utc)
+                    persisted_refusal = _case_refusal(case)
+                    refusal_changed = (
+                        persisted_refusal is None
+                        or persisted_refusal.code != refusal.code
+                        or persisted_refusal.reason != refusal.reason
+                        or persisted_refusal.terminal != refusal.terminal
+                    )
+                    if refusal_changed:
+                        case.claims = _claims_with_refusal_metadata(case.claims, refusal)
+                        fields_changed = True
                     refusal_by_case_id[case.id] = refusal
+                if fields_changed:
+                    case.updated_at = datetime.now(timezone.utc)
                     modified = True
                 stats["still_missing"] += 1
                 logger.warning(
