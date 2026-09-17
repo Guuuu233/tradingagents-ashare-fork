@@ -1406,7 +1406,9 @@ class OfflineSnapshotPriceDataProvider:
             )
         dates: Set[str] = set()
         for d in raw_dates:
-            ds = str(d).strip()[:10]
+            # Strict validation runs on the untruncated string; only after it
+            # passes is the canonical YYYY-MM-DD value stored (no [:10] bypass).
+            ds = str(d).strip()
             self._check_date_bound(ds, p)
             dates.add(ds)
 
@@ -1482,7 +1484,8 @@ class OfflineSnapshotPriceDataProvider:
                 f"price snapshot {p}: bar #{idx} missing required fields: {missing}"
             )
         sym = self._norm_symbol(lower["symbol"])
-        ds = str(lower["date"]).strip()[:10]
+        # Strict validation on the untruncated string (no [:10] bypass).
+        ds = str(lower["date"]).strip()
         self._check_date_bound(ds, p)
         try:
             open_v = float(lower["open"])

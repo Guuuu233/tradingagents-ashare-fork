@@ -610,3 +610,41 @@ def test_dav1052_legal_dates_still_measure_t1_t5(tmp_path):
     assert rec.entry_date == "2026-09-11"
     assert rec.exit_date == "2026-09-18"
     assert rec.net_return is not None
+
+
+# ---------------------------------------------------------------------------
+# DAV-1054 rework: strict date validation must run BEFORE [:10] truncation
+# ---------------------------------------------------------------------------
+
+SUFFIXED_DATES = [
+    "2026-09-10T00:00:00",
+    "2026-09-10 00:00:00",
+    "2026-09-10T00:00:00+08:00",
+    "2026-09-10T00:00:00Z",
+]
+
+
+@pytest.mark.parametrize("suffixed", SUFFIXED_DATES)
+def test_dav1054_trade_dates_reject_time_suffix(tmp_path, suffixed):
+    """trade_dates 中带时间后缀的字符串必须在截断前被拒绝."""
+    snap = _write_snapshot(
+        tmp_path,
+        {"trade_dates": [suffixed], "bars": [_bar("2026-09-10")]},
+    )
+    with pytest.raises(PriceSnapshotValidationError):
+        OfflineSnapshotPriceDataProvider(
+            snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        )
+
+
+@pytest.mark.parametrize("suffixed", SUFFIXED_DATES)
+def test_dav1054_bar_dates_reject_time_suffix(tmp_path, suffixed):
+    """bars[].date 中带时间后缀的字符串必须在截断前被拒绝."""
+    snap = _write_snapshot(
+        tmp_path,
+        {"trade_dates": SNAP_TRADE_DATES, "bars": [_bar(suffixed)]},
+    )
+    with pytest.raises(PriceSnapshotValidationError):
+        OfflineSnapshotPriceDataProvider(
+            snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        )
