@@ -14,7 +14,6 @@ Covers:
 """
 
 from decimal import Decimal
-import socket
 from unittest.mock import patch
 
 import pytest
@@ -28,10 +27,14 @@ from tradingagents.dataflows.fund_flow_evidence import (
 
 
 @pytest.fixture(autouse=True)
-def guard_no_network_calls():
-    """Ensure no real network calls can be made in this test suite."""
-    with patch("socket.socket.connect", side_effect=RuntimeError("Network access forbidden in pure calculation tests")), \
-         patch("requests.post", side_effect=RuntimeError("requests.post forbidden in pure calculation tests")), \
+def guard_no_network_calls(forbid_external_network):
+    """Ensure no real network calls can be made in this test suite.
+
+    Socket-level denial is enforced by the unified offline guardrail via the
+    ``forbid_external_network`` conftest fixture; only requests-level seams
+    are patched here.
+    """
+    with patch("requests.post", side_effect=RuntimeError("requests.post forbidden in pure calculation tests")), \
          patch("requests.get", side_effect=RuntimeError("requests.get forbidden in pure calculation tests")):
         yield
 

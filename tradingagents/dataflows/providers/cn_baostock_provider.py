@@ -33,9 +33,24 @@ _ACTIVE_TIMEOUT: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
 _BAOSTOCK_HARDENED = False
 
 
+class BaostockHardeningError(NotImplementedError):
+    """Fail-closed refusal when baostock socket hardening fails or a prior
+    failure is latched in _HARDENING_ERROR.
+
+    NotImplementedError subclasses RuntimeError, so this single type satisfies
+    both `except RuntimeError` (ensure_/baostock_session callers) and
+    `except NotImplementedError` (provider fail-closed contract) consumers.
+    """
+
+
 def is_baostock_hardened() -> bool:
-    """Return whether baostock socket hardening has been successfully applied."""
-    return _BAOSTOCK_HARDENED
+    """Return whether baostock socket hardening has been successfully applied.
+
+    Reads the same predicate as ensure_baostock_socket_hardening's fast path so
+    flipping either flag alone reports not-hardened (fail-closed) instead of
+    letting the two flags desync.
+    """
+    return _HARDENING_INSTALLED and _BAOSTOCK_HARDENED
 
 
 def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TIMEOUT) -> bool:
@@ -52,7 +67,7 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
     _ACTIVE_TIMEOUT = timeout
 
     if _HARDENING_ERROR is not None:
-        raise RuntimeError(
+        raise BaostockHardeningError(
             f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
         ) from _HARDENING_ERROR
 
@@ -61,7 +76,7 @@ def ensure_baostock_socket_hardening(timeout: float = DEFAULT_BAOSTOCK_SOCKET_TI
 
     with _INSTALL_LOCK:
         if _HARDENING_ERROR is not None:
-            raise RuntimeError(
+            raise BaostockHardeningError(
                 f"baostock hardening installation failed previously (fail-closed): {_HARDENING_ERROR}"
             ) from _HARDENING_ERROR
         if _HARDENING_INSTALLED and _BAOSTOCK_HARDENED:
@@ -196,11 +211,11 @@ def get_hardened_baostock(timeout: Optional[float] = None):
     effective_timeout = timeout if timeout is not None else DEFAULT_BAOSTOCK_SOCKET_TIMEOUT
     prior_error = _HARDENING_ERROR
     if prior_error is not None:
-        raise NotImplementedError(
+        raise BaostockHardeningError(
             "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
         ) from prior_error
     if not ensure_baostock_socket_hardening(timeout=effective_timeout):
-        raise NotImplementedError(
+        raise BaostockHardeningError(
             "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
         )
     return bs
@@ -277,11 +292,11 @@ class CnBaoStockProvider(BaseMarketDataProvider):
         bs = self._bs()
         prior_error = _HARDENING_ERROR
         if prior_error is not None:
-            raise NotImplementedError(
+            raise BaostockHardeningError(
                 "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
             ) from prior_error
         if not ensure_baostock_socket_hardening(timeout=timeout):
-            raise NotImplementedError(
+            raise BaostockHardeningError(
                 "baostock 硬化失败，拒绝使用未硬化客户端以避免 EOF 活锁 (fail-closed)"
             )
         with redirect_stdout(io.StringIO()):
