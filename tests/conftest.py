@@ -710,7 +710,7 @@ def offline_historical_case_seam(request):
 
 
 @pytest.fixture
-def forbid_external_network(): 
+def forbid_external_network():
     """Reusable per-test entry point to the unified offline guardrail.
 
     Tests that previously layered ad-hoc ``patch("socket.socket.connect")``
