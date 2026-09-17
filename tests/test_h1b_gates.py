@@ -817,10 +817,31 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
         assert gate_res["matrix"]["dimension_side"]["details"]["bull_verified_claims"] > 0
         assert gate_res["matrix"]["dimension_side"]["details"]["bear_verified_claims"] > 0
 
-    def test_verify_h1b_gates_script_runs_and_verifies_v2_only(self, tmp_path):
+    def test_verify_h1b_gates_script_runs_and_verifies_v2_only(self, tmp_path, monkeypatch):
         """scripts/verify_h1b_gates.py run_verify produces correct v2-only output JSON and structure."""
         from scripts.verify_h1b_gates import load_reports_from_db, run_verify
         import glob
+
+        # Isolate the ambient-DB load path deterministically: load_reports_from_db()
+        # (no db_path) consults api.database.engine, which is bound at import time to
+        # DATABASE_URL. Under a shared RT-FULL temp DB, earlier tests may have written
+        # completed reports, which would short-circuit step 4 and suppress the golden
+        # fallback. Pin engine + SessionLocal to a fresh empty SQLite file so the
+        # ambient query deterministically finds no `reports` table.
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        import api.database as _api_db
+
+        empty_engine = create_engine(
+            f"sqlite:///{tmp_path / 'empty_ambient.db'}",
+            connect_args={"check_same_thread": False},
+        )
+        monkeypatch.setattr(_api_db, "engine", empty_engine)
+        monkeypatch.setattr(
+            _api_db,
+            "SessionLocal",
+            sessionmaker(autocommit=False, autoflush=False, bind=empty_engine),
+        )
 
         # 1. Test load_reports_from_db fallback to golden samples:
         # Under D-009 §5, legacy golden samples without analysis_status are excluded as legacy_null

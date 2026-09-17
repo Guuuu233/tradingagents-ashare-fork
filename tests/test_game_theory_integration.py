@@ -724,8 +724,14 @@ def test_rt10_real_graph_builder_routing_reachability_and_execution():
     builder.add_edge("Research Manager", "Trader")
     builder.add_edge("Trader", END)
 
+    # 确定性数据池：必须先于接线创建并注入，否则节点回落到真实 fetch_* 函数，
+    # 在离线门禁下全部失败并触发原子降级（signals=None），与本测试契约矛盾。
+    sample_raw = _make_sample_raw_data()
+    mock_collector = MagicMock()
+    mock_collector.get.return_value = sample_raw
+
     # 真实接线：splice Game Theory 介于 Research Manager 与 Trader 之间
-    wire_game_theory_node(builder)
+    wire_game_theory_node(builder, data_collector=mock_collector)
     compiled = builder.compile()
 
     # 1. 结构与拓扑断言
@@ -735,10 +741,6 @@ def test_rt10_real_graph_builder_routing_reachability_and_execution():
     assert ("Research Manager", "Trader") not in builder.edges
 
     # 2. 真实图执行断言
-    sample_raw = _make_sample_raw_data()
-    mock_collector = MagicMock()
-    mock_collector.get.return_value = sample_raw
-
     # 包装执行状态
     state_in = {
         "company_of_interest": "600519.SH",

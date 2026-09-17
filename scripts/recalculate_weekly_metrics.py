@@ -121,6 +121,21 @@ def load_reports(
     use_mock: bool = False,
 ) -> List[Dict[str, Any]]:
     """Load reports from input-file, input-dir, database, golden files, or mock datasets."""
+    # use_mock is an explicit operator override: it must deterministically return
+    # the synthetic 60-sample dataset regardless of ambient DB / fallback inputs,
+    # otherwise a populated production/temp DB silently shadows the mock contract.
+    if use_mock:
+        logger.info("--use-mock 已指定：跳过 DB/文件加载，直接使用合成 60 局 Mock 基准评测集。")
+        synthetic = generate_60_sample_weekly_dataset()
+        w_id = synthetic.get("week_identifier", "week_202634")
+        res = []
+        for s in synthetic.get("samples") or []:
+            if isinstance(s, dict):
+                item = dict(s)
+                item["_source_week_identifier"] = w_id
+                res.append(item)
+        return res
+
     reports: List[Dict[str, Any]] = []
 
     # 1. Explicit input file

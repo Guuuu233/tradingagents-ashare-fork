@@ -25,6 +25,11 @@ DATE_PARAM_NAMES = {
     "trade_date",
     "begin_date",
     "as_of",
+    # PIT cutoff bound enforced on single-record qualifiers such as
+    # cn_akshare.get_cninfo_announcement_content (announced_at > cutoff ->
+    # content_status=unavailable, fail-closed). This is a real date parameter,
+    # not a whitelist exemption.
+    "cutoff",
 }
 
 # Methods that are intentionally date-blind (raw paging / pure transport).
@@ -88,6 +93,44 @@ def test_whitelist_entries_actually_exist_and_lack_date():
                 )
     missing = TIMELESS_GET_METHODS - found
     assert not missing, f"whitelist methods not found on any provider: {missing}"
+
+
+def test_cninfo_announcement_content_cutoff_is_fail_closed():
+    """cn_akshare.get_cninfo_announcement_content carries a real PIT date param
+    (`cutoff`) and must fail closed: announced_at > cutoff -> content_status
+    'unavailable', never a fabricated hash or silent pass-through."""
+    from tradingagents.dataflows.cninfo_disclosure import (
+        CONTENT_STATUS_UNAVAILABLE,
+        CninfoDisclosureRecord,
+    )
+
+    p = CnAkshareProvider()
+    fn = p.get_cninfo_announcement_content
+
+    # Structural: the method exposes a date param recognized by the guard.
+    assert _has_date_param(fn)
+    sig = inspect.signature(fn)
+    assert "cutoff" in sig.parameters
+
+    record = CninfoDisclosureRecord(
+        symbol="600519",
+        title="2026 年半年度报告",
+        announced_at="2026-08-12 10:00:00",
+        url="https://example.com/ann",
+        source_type="cninfo_announcement",
+        cutoff_eligible=True,
+        announcement_id="1212123456",
+        canonical_event_id="cninfo:1212123456",
+        adjunct_url="https://static.cninfo.com.cn/fake.pdf",
+    )
+    qualified = fn(
+        record,
+        content_bytes=b"%PDF-1.4 fake-bytes",
+        cutoff="2026-08-01",
+    )
+    assert qualified.content_status == CONTENT_STATUS_UNAVAILABLE
+    assert qualified.cutoff_eligible is False
+    assert qualified.content_sha256 is None
 
 
 # --- missing curr_date must fail (no data) ---------------------------------
