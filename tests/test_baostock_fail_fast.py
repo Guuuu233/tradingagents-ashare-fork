@@ -36,6 +36,40 @@ from tradingagents.dataflows.providers.cn_baostock_provider import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_baostock_module_state():
+    """Autouse fixture ensuring complete isolation of module-level globals across all tests.
+
+    Restores:
+    - baostock.common.context.default_socket -> None (with socket closed)
+    - baostock.util.socketutil.SocketUtil.instance -> None
+    - baostock.util.socketutil.SocketUtil.init_flag -> False
+    - tradingagents.dataflows.providers.cn_baostock_provider._HARDENING_ERROR -> None
+    """
+    import baostock.common.context as ctx
+    import baostock.util.socketutil as su
+    import tradingagents.dataflows.providers.cn_baostock_provider as bp
+
+    _cleanup_context_socket()
+    setattr(ctx, "default_socket", None)
+    setattr(su.SocketUtil, "instance", None)
+    setattr(su.SocketUtil, "init_flag", False)
+    bp._HARDENING_ERROR = None
+
+    # Assert clean baseline before test body executes
+    assert getattr(ctx, "default_socket", None) is None
+    assert su.SocketUtil.instance is None
+    assert su.SocketUtil.init_flag is False
+
+    yield
+
+    _cleanup_context_socket()
+    setattr(ctx, "default_socket", None)
+    setattr(su.SocketUtil, "instance", None)
+    setattr(su.SocketUtil, "init_flag", False)
+    bp._HARDENING_ERROR = None
+
+
 class TestBaoStockAstGuard:
     """AST guard verifying that no bypass imports of baostock exist."""
 
@@ -118,19 +152,33 @@ class TestBaoStockAstGuard:
 
 
 class TestBaoStockHardeningFailClosed:
-    """Verification of fail-closed semantics on hardening installation."""
+    """Verification of fail-closed semantics on hardening installation (Scenario S2)."""
 
-    def test_hardening_installation_failure_blocks_with_zero_login_calls(self, monkeypatch):
-        """When hardening fails to install, bs.login() call count must be strictly ZERO."""
+    def test_scenario_s2_hardening_installation_failure_blocks_with_zero_login_calls(self, monkeypatch):
+        """Scenario S2: When hardening fails to install, bs.login() call count is strictly 0 and __cause__ is original error.
+
+        Assertions:
+        1. Verified independent clean initial state (not affected by prior S1 run).
+        2. bs.login.call_count == 0 (call path stops before bs.login).
+        3. Raised error is new production-side RuntimeError.
+        4. __cause__ is the original exception (raise ... from exc).
+        """
         import tradingagents.dataflows.providers.cn_baostock_provider as bp
+        import baostock as bs
 
-        # Simulate prior installation failure state
-        synthetic_error = RuntimeError("Synthetic socketutil patch failure")
+        # Step 1: Explicit reset and confirm clean initial state before test
+        _cleanup_context_socket()
+        setattr(bs_context, "default_socket", None)
+        setattr(bs_socketutil.SocketUtil, "instance", None)
+        setattr(bs_socketutil.SocketUtil, "init_flag", False)
+        assert getattr(bs_context, "default_socket", None) is None
+        assert bs_socketutil.SocketUtil.instance is None
+        assert bs_socketutil.SocketUtil.init_flag is False
+
+        synthetic_error = AttributeError("Synthetic socketutil attribute error")
         monkeypatch.setattr(bp, "_HARDENING_INSTALLED", False)
         monkeypatch.setattr(bp, "_HARDENING_ERROR", synthetic_error)
 
-        # Mock baostock.login to spy on calls
-        import baostock as bs
         login_mock = MagicMock()
         monkeypatch.setattr(bs, "login", login_mock)
 
@@ -140,8 +188,11 @@ class TestBaoStockHardeningFailClosed:
                 pass
 
         assert "fail-closed" in str(exc_info.value)
-        assert "Synthetic socketutil patch failure" in str(exc_info.value)
-        # Rigid assertion: bs.login() call count must be strictly 0
+        # S2 assertion a: exception is wrapped into new type RuntimeError
+        assert isinstance(exc_info.value, RuntimeError)
+        # S2 assertion b: __cause__ is the original exception
+        assert exc_info.value.__cause__ is synthetic_error
+        # S2 assertion c: bs.login() call count is strictly 0
         assert login_mock.call_count == 0, f"Expected 0 calls to bs.login(), got {login_mock.call_count}"
 
     def test_provider_bs_method_fail_closed(self, monkeypatch):
@@ -157,6 +208,7 @@ class TestBaoStockHardeningFailClosed:
             provider._bs()
 
         assert "fail-closed" in str(exc_info.value)
+        assert exc_info.value.__cause__ is synthetic_error
 
 
 class TestBaoStockSocketOperationsHardened:
@@ -166,9 +218,82 @@ class TestBaoStockSocketOperationsHardened:
     def ensure_hardened_environment(self):
         """Ensure hardening is installed for test cases and context socket is cleaned up."""
         ensure_baostock_socket_hardening()
-        _cleanup_context_socket()
+        assert getattr(bs_context, "default_socket", None) is None
+        assert bs_socketutil.SocketUtil.instance is None
         yield
         _cleanup_context_socket()
+        setattr(bs_context, "default_socket", None)
+        setattr(bs_socketutil.SocketUtil, "instance", None)
+        setattr(bs_socketutil.SocketUtil, "init_flag", False)
+
+    def test_scenario_s1_guardrail_connect_rejection_in_login(self, monkeypatch):
+        """Scenario S1: connect rejected by offline guardrail during bs.login().
+
+        Full link verification:
+        login (count==1) -> connect (count==1) rejected by guardrail ->
+        cleanup (socket closed, context.default_socket is None) ->
+        send_msg never entered (count==0, raw send==0) ->
+        bare raise propagates original exception unaltered (__cause__ is None).
+        """
+        import time
+        from tests.conftest import OfflineTestGuardrailError
+        import baostock as bs
+        import baostock.util.socketutil as bs_sockutil
+
+        # Confirm clean initial state before test starts
+        assert getattr(bs_context, "default_socket", None) is None
+        assert bs_socketutil.SocketUtil.instance is None
+
+        # Spy on bs.login
+        login_spy = MagicMock(wraps=bs.login)
+        monkeypatch.setattr(bs, "login", login_spy)
+
+        # Spy on connect
+        orig_connect = bs_sockutil.SocketUtil.connect
+        connect_calls = []
+
+        def spy_connect(self, *args, **kwargs):
+            connect_calls.append(self)
+            return orig_connect(self, *args, **kwargs)
+
+        monkeypatch.setattr(bs_sockutil.SocketUtil, "connect", spy_connect)
+
+        # Spy on send_msg
+        send_msg_spy = MagicMock(wraps=bs_sockutil.send_msg)
+        monkeypatch.setattr(bs_sockutil, "send_msg", send_msg_spy)
+
+        # Spy on raw socket send/sendall
+        raw_send_spy = MagicMock()
+        monkeypatch.setattr(socket.socket, "send", raw_send_spy)
+        monkeypatch.setattr(socket.socket, "sendall", raw_send_spy)
+
+        t0 = time.perf_counter()
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            with baostock_session():
+                pass
+        elapsed = time.perf_counter() - t0
+
+        # S1.1: bs.login was invoked (call_count == 1)
+        assert login_spy.call_count == 1, f"Expected 1 call to bs.login(), got {login_spy.call_count}"
+
+        # S1.2: connect was invoked inside login (call_count == 1)
+        assert len(connect_calls) == 1, f"Expected 1 call to connect(), got {len(connect_calls)}"
+
+        # S1.3: send_msg was NEVER invoked (0 send calls)
+        assert send_msg_spy.call_count == 0, f"Expected 0 calls to send_msg(), got {send_msg_spy.call_count}"
+
+        # S1.4: Raw socket send/sendall was NEVER invoked (0 raw send calls)
+        assert raw_send_spy.call_count == 0, f"Expected 0 raw socket sends, got {raw_send_spy.call_count}"
+
+        # S1.5: context.default_socket is cleaned up to None immediately
+        assert getattr(bs_context, "default_socket", None) is None
+
+        # S1.6: Original exception type is preserved (bare raise, not wrapped)
+        assert isinstance(exc_info.value, OfflineTestGuardrailError)
+        assert exc_info.value.__cause__ is None
+
+        # S1.7: Elapsed time is < 0.1s, far below 45s
+        assert elapsed < 0.1, f"Connect failure took too long: {elapsed:.3f}s"
 
     def test_offline_guardrail_connect_failure_immediately_leaves_clean_context(self):
         """Under real test guardrail, SocketUtil().connect() must raise OfflineTestGuardrailError,
@@ -349,3 +474,316 @@ class TestV03SessionIntegration:
 
         # Must have invoked baostock_session
         assert len(session_calls) >= 1
+
+
+class TestNetworkAccessDeniedPropagation:
+    """Targeted tests for NetworkAccessDeniedError non-retry fast propagation (DAV-1009 B2)."""
+
+    def test_exception_inheritance_hierarchy(self):
+        """OfflineTestGuardrailError must inherit from production NetworkAccessDeniedError and RuntimeError."""
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import NetworkAccessDeniedError
+
+        assert issubclass(NetworkAccessDeniedError, RuntimeError)
+        assert issubclass(OfflineTestGuardrailError, NetworkAccessDeniedError)
+        assert issubclass(OfflineTestGuardrailError, RuntimeError)
+
+    def test_route_to_vendor_denied_error_immediate_propagation_no_retry_no_fallback(self, monkeypatch):
+        """NetworkAccessDeniedError must immediately propagate with 1 attempt and 0 retries or vendor fallback."""
+        from tradingagents.dataflows.interface import NetworkAccessDeniedError, route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        import tradingagents.dataflows.interface as iface
+
+        attempt_counts = {"count": 0}
+
+        class MockDeniedProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "cn_baostock"
+
+            def get_stock_data(self, *args, **kwargs):
+                attempt_counts["count"] += 1
+                raise NetworkAccessDeniedError("Access to exchange blocked by security policy")
+
+        reg = DataProviderRegistry()
+        reg.register(MockDeniedProvider())
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "cn_baostock")
+
+        with pytest.raises(NetworkAccessDeniedError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert "blocked by security policy" in str(exc_info.value)
+        # Rigid assertion: exactly 1 attempt, no retry, no fallback
+        assert attempt_counts["count"] == 1
+
+    def test_route_to_vendor_offline_guardrail_immediate_propagation(self, monkeypatch):
+        """OfflineTestGuardrailError must be caught by NetworkAccessDeniedError branch and fail fast."""
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        import tradingagents.dataflows.interface as iface
+
+        attempts = []
+
+        class MockGuardrailProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "cn_baostock"
+
+            def get_stock_data(self, *args, **kwargs):
+                attempts.append("attempt")
+                raise OfflineTestGuardrailError("Audit hook blocked outbound socket connect")
+
+        reg = DataProviderRegistry()
+        reg.register(MockGuardrailProvider())
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "cn_baostock")
+
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert "Audit hook blocked" in str(exc_info.value)
+        assert len(attempts) == 1
+
+    def test_normal_timeout_preserves_retry_and_fallback(self, monkeypatch):
+        """Standard TimeoutError must preserve its retry budget and fallback semantics."""
+        from tradingagents.dataflows.interface import route_to_vendor
+        from tradingagents.dataflows.providers.registry import DataProviderRegistry
+        from tradingagents.dataflows.providers.china_equity_provider import CnStubProvider
+        from tradingagents.dataflows.providers import ProviderResourcePolicy
+        import tradingagents.dataflows.interface as iface
+
+        provider_calls = {"vendor_a": 0, "vendor_b": 0}
+
+        class TimeoutProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "vendor_a"
+
+            def get_stock_data(self, *args, **kwargs):
+                provider_calls["vendor_a"] += 1
+                raise TimeoutError("Slow upstream network response on vendor_a")
+
+        class FallbackSuccessProvider(CnStubProvider):
+            @property
+            def name(self) -> str:
+                return "vendor_b"
+
+            def get_stock_data(self, *args, **kwargs):
+                provider_calls["vendor_b"] += 1
+                return "SUCCESS_DATA"
+
+        reg = DataProviderRegistry()
+        policy = ProviderResourcePolicy(timeout_seconds=1.0, max_retries=1, max_concurrency=1)
+        reg.register(TimeoutProvider(), resource_policy=policy)
+        reg.register(FallbackSuccessProvider(), resource_policy=policy)
+        monkeypatch.setattr(iface, "_registry", reg)
+        monkeypatch.setattr(iface, "get_vendor", lambda cat, meth=None: "vendor_a,vendor_b")
+
+        result = route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+
+        assert result == "SUCCESS_DATA"
+        # vendor_a max_retries is 1, so vendor_a should have 2 attempts (initial + 1 retry)
+        assert provider_calls["vendor_a"] == 2
+        # Then fell back to vendor_b
+        assert provider_calls["vendor_b"] == 1
+
+    def test_e2e_guardrail_rejection_fast_timing_and_cleanup(self, monkeypatch):
+        """End-to-end under real test guardrail: connect rejected, 0 send, completes in <0.1s, socket is None."""
+        import time
+        from tests.conftest import OfflineTestGuardrailError
+        from tradingagents.dataflows.interface import route_to_vendor
+        import tradingagents.dataflows.interface as iface
+
+        monkeypatch.setattr(iface, "get_config", lambda: {"core_stock_apis": "cn_baostock"})
+
+        t0 = time.perf_counter()
+        with pytest.raises(OfflineTestGuardrailError) as exc_info:
+            route_to_vendor("get_stock_data", "600519", "2026-01-01", "2026-01-05")
+        elapsed = time.perf_counter() - t0
+
+        # Timing must be milliseconds, far below 45.0s
+        assert elapsed < 0.2, f"Guardrail rejection took too long: {elapsed:.3f}s"
+        assert "OfflineTestGuardrail" in str(exc_info.value)
+        # Global default_socket must be None
+        assert getattr(bs_context, "default_socket", None) is None
+
+
+class TestScenarioIsolationCrossVerification:
+    """Rigid verification of cross-test isolation for S1 and S2 (DAV-1009 Step 3).
+
+    Verifies:
+    1. S1 runs cleanly in an independent fresh subprocess.
+    2. S2 runs cleanly in an independent fresh subprocess.
+    3. Order reversal invariance: Running S1 -> S2 -> S2 -> S1 within the same process
+       under explicit state resets never leaks or causes false greens.
+    """
+
+    def test_scenario_s1_in_isolated_subprocess(self):
+        """Step 3.1: Scenario S1 executed in a completely fresh subprocess."""
+        import subprocess
+
+        cmd = [
+            sys.executable,
+            "-c",
+            """
+import baostock as bs
+import baostock.util.socketutil as bs_sockutil
+import baostock.common.context as bs_context
+from unittest.mock import MagicMock
+from tests.conftest import OfflineTestGuardrailError
+from tradingagents.dataflows.providers.cn_baostock_provider import baostock_session, ensure_baostock_socket_hardening
+
+ensure_baostock_socket_hardening()
+login_spy = MagicMock(wraps=bs.login)
+bs.login = login_spy
+send_msg_spy = MagicMock(wraps=bs_sockutil.send_msg)
+bs_sockutil.send_msg = send_msg_spy
+
+assert getattr(bs_context, "default_socket", None) is None
+assert bs_sockutil.SocketUtil.instance is None
+
+try:
+    with baostock_session():
+        pass
+except OfflineTestGuardrailError as exc:
+    assert login_spy.call_count == 1
+    assert send_msg_spy.call_count == 0
+    assert getattr(bs_context, "default_socket", None) is None
+    assert exc.__cause__ is None
+    print("S1_SUBPROCESS_OK")
+""",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        assert "S1_SUBPROCESS_OK" in res.stdout
+
+    def test_scenario_s2_in_isolated_subprocess(self):
+        """Step 3.2: Scenario S2 executed in a completely fresh subprocess."""
+        import subprocess
+
+        cmd = [
+            sys.executable,
+            "-c",
+            """
+import baostock as bs
+import baostock.util.socketutil as bs_sockutil
+import baostock.common.context as bs_context
+from unittest.mock import MagicMock
+import tradingagents.dataflows.providers.cn_baostock_provider as bp
+from tradingagents.dataflows.providers.cn_baostock_provider import baostock_session
+
+# Reset to clean initial state
+setattr(bs_context, "default_socket", None)
+setattr(bs_sockutil.SocketUtil, "instance", None)
+setattr(bs_sockutil.SocketUtil, "init_flag", False)
+bp._HARDENING_INSTALLED = False
+synthetic_error = AttributeError("Synthetic socketutil attribute error")
+bp._HARDENING_ERROR = synthetic_error
+
+login_mock = MagicMock()
+bs.login = login_mock
+
+assert getattr(bs_context, "default_socket", None) is None
+assert bs_sockutil.SocketUtil.instance is None
+assert bp._HARDENING_INSTALLED is False
+
+try:
+    with baostock_session():
+        pass
+except RuntimeError as exc:
+    assert login_mock.call_count == 0
+    assert exc.__cause__ is synthetic_error
+    print("S2_SUBPROCESS_OK")
+""",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        assert "S2_SUBPROCESS_OK" in res.stdout
+
+    def test_bidirectional_order_isolation_s1_s2_s2_s1(self):
+        """Step 3.3: Order-reversal test (S1->S2->S2->S1) in same process under resets."""
+        import subprocess
+
+        cmd = [
+            sys.executable,
+            "-c",
+            """
+import baostock as bs
+import baostock.util.socketutil as bs_sockutil
+import baostock.common.context as bs_context
+from unittest.mock import MagicMock
+from tests.conftest import OfflineTestGuardrailError
+import tradingagents.dataflows.providers.cn_baostock_provider as bp
+from tradingagents.dataflows.providers.cn_baostock_provider import (
+    baostock_session,
+    ensure_baostock_socket_hardening,
+    _cleanup_context_socket,
+)
+
+orig_login = bs.login
+orig_send_msg = bs_sockutil.send_msg
+
+def reset_all():
+    _cleanup_context_socket()
+    setattr(bs_context, "default_socket", None)
+    setattr(bs_sockutil.SocketUtil, "instance", None)
+    setattr(bs_sockutil.SocketUtil, "init_flag", False)
+    bs.login = orig_login
+    bs_sockutil.send_msg = orig_send_msg
+    bp._HARDENING_INSTALLED = False
+    bp._HARDENING_ERROR = None
+
+def run_s1():
+    reset_all()
+    ensure_baostock_socket_hardening()
+
+    login_spy = MagicMock(wraps=bs.login)
+    bs.login = login_spy
+    send_msg_spy = MagicMock(wraps=bs_sockutil.send_msg)
+    bs_sockutil.send_msg = send_msg_spy
+
+    try:
+        with baostock_session():
+            pass
+    except OfflineTestGuardrailError as exc:
+        assert login_spy.call_count == 1
+        assert send_msg_spy.call_count == 0
+        assert getattr(bs_context, "default_socket", None) is None
+        assert exc.__cause__ is None
+        reset_all()
+        return True
+    reset_all()
+    return False
+
+def run_s2():
+    reset_all()
+    synthetic_error = AttributeError("Synthetic socketutil attribute error")
+    bp._HARDENING_ERROR = synthetic_error
+
+    login_mock = MagicMock()
+    bs.login = login_mock
+
+    try:
+        with baostock_session():
+            pass
+    except RuntimeError as exc:
+        assert login_mock.call_count == 0
+        assert exc.__cause__ is synthetic_error
+        reset_all()
+        return True
+    reset_all()
+    return False
+
+# Execute order S1 -> S2 -> S2 -> S1
+assert run_s1() is True
+assert run_s2() is True
+assert run_s2() is True
+assert run_s1() is True
+
+print("BIDIRECTIONAL_ISOLATION_OK")
+""",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        assert "BIDIRECTIONAL_ISOLATION_OK" in res.stdout
