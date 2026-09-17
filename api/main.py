@@ -331,15 +331,20 @@ async def lifespan(app: FastAPI):
     # unless the operator explicitly opted into the insecure default for local
     # development (TA_ALLOW_DEFAULT_SECRET=1). Must run before init_db() so no
     # data is ever written using the well-known default key.
-    auth_service.ensure_secure_secret_configured()
-    prior_socket_timeout = socket.getdefaulttimeout()
+    # Snapshot mutable global state up-front so both startup-failure and
+    # normal shutdown paths restore exactly what was in place on entry.
+    # (DAV-1021: previously an exception before `yield` skipped cleanup and
+    # leaked the socket default timeout and the executor references.)
+    _prev_socket_timeout = socket.getdefaulttimeout()
+    _loop = asyncio.get_running_loop()
+    _prev_loop_executor = getattr(_loop, "_default_executor", None)
     global _default_executor, _executor
+    _prev_module_executor = _default_executor
     if getattr(_executor, "_shutdown", False):
         _executor = ThreadPoolExecutor(max_workers=int(os.getenv("TA_MAX_WORKERS", "2")))
     new_default_executor: Optional[ThreadPoolExecutor] = None
-    loop: Optional[asyncio.AbstractEventLoop] = None
-    prior_loop_default_executor: Optional[ThreadPoolExecutor] = None
     try:
+        auth_service.ensure_secure_secret_configured()
         # 全局 socket 默认超时：akshare 等库内部的 requests 调用不传 timeout，
         # 网络丢包时 TLS 握手/读会永久阻塞，僵尸线程逐渐占满线程池（见 healthz 探针）。
         # uvicorn/asyncio 的服务端 socket 显式 setblocking(False)，不受此影响；
@@ -366,14 +371,12 @@ async def lifespan(app: FastAPI):
         # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
         # DB writes, LLM extraction, and akshare data collection.
         try:
-            loop = asyncio.get_running_loop()
-            prior_loop_default_executor = getattr(loop, "_default_executor", None)
             executor_workers = int(os.getenv("ASYNCIO_DEFAULT_EXECUTOR_WORKERS", "64"))
             new_default_executor = ThreadPoolExecutor(
                 max_workers=executor_workers,
                 thread_name_prefix="ta-asyncio",
             )
-            loop.set_default_executor(new_default_executor)
+            _loop.set_default_executor(new_default_executor)
             _default_executor = new_default_executor
             _log(f"Default asyncio executor set to {executor_workers} workers.")
         except Exception as exc:
@@ -445,10 +448,17 @@ async def lifespan(app: FastAPI):
 
         yield
 
+        # Normal shutdown path: stop the module-level executor now that the
+        # app is draining; a later lifespan re-creates it via the entry check.
+        try:
+            _executor.shutdown(wait=True)
+        except Exception as exc:
+            _log(f"Could not shutdown module executor: {exc}")
+
     finally:
         _log("Shutting down: Cleaning up resources...")
         try:
-            socket.setdefaulttimeout(prior_socket_timeout)
+            socket.setdefaulttimeout(_prev_socket_timeout)
         except Exception as exc:
             _log(f"Could not restore socket default timeout: {exc}")
         if new_default_executor is not None:
@@ -458,18 +468,15 @@ async def lifespan(app: FastAPI):
             # available to later lifespans and callers.
             try:
                 new_default_executor.shutdown(wait=True)
-            finally:
-                if loop is not None:
-                    try:
-                        if getattr(loop, "_default_executor", None) is new_default_executor:
-                            if prior_loop_default_executor is not None:
-                                loop.set_default_executor(prior_loop_default_executor)
-                            else:
-                                loop._default_executor = None
-                    except Exception as exc:
-                        _log(f"Could not reset loop default executor: {exc}")
-                if _default_executor is new_default_executor:
-                    _default_executor = None
+            except Exception as exc:
+                _log(f"Could not shutdown lifespan executor: {exc}")
+        # Restore the exact pre-entry executor references on every path —
+        # including startup failures before `yield` (DAV-1021).
+        try:
+            _loop._default_executor = _prev_loop_executor
+        except Exception as exc:
+            _log(f"Could not reset loop default executor: {exc}")
+        _default_executor = _prev_module_executor
         _log("Executor shutdown complete.")
 
 
