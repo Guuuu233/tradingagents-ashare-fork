@@ -331,117 +331,133 @@ async def lifespan(app: FastAPI):
     # unless the operator explicitly opted into the insecure default for local
     # development (TA_ALLOW_DEFAULT_SECRET=1). Must run before init_db() so no
     # data is ever written using the well-known default key.
-    auth_service.ensure_secure_secret_configured()
-    # 全局 socket 默认超时：akshare 等库内部的 requests 调用不传 timeout，
-    # 网络丢包时 TLS 握手/读会永久阻塞，僵尸线程逐渐占满线程池（见 healthz 探针）。
-    # uvicorn/asyncio 的服务端 socket 显式 setblocking(False)，不受此影响；
-    # httpx/openai SDK 自带超时配置，也不受影响。
-    socket.setdefaulttimeout(float(os.getenv("TA_SOCKET_DEFAULT_TIMEOUT", "60")))
-    _log(f"Global socket default timeout set to {socket.getdefaulttimeout()}s.")
-    # Raise the AnyIO thread limiter ceiling so frequent sync endpoints
-    # (tracking-board polling, /v1/jobs/{id} polling, akshare-backed
-    # market endpoints) cannot starve each other when the event loop is
-    # also running long-lived `_run_job` tasks.
-    try:
-        from anyio import to_thread as _anyio_to_thread
-
-        limiter = _anyio_to_thread.current_default_thread_limiter()
-        desired = int(os.getenv("ANYIO_THREAD_LIMIT", "120"))
-        if limiter.total_tokens < desired:
-            limiter.total_tokens = desired
-            _log(f"AnyIO thread limiter raised to {desired}.")
-    except Exception as exc:
-        _log(f"Could not raise AnyIO thread limiter: {exc}")
-
-    # Default asyncio executor is used by `asyncio.to_thread`. The CPython
-    # default is `min(32, cpu_count + 4)`, which is too small when many
-    # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
-    # DB writes, LLM extraction, and akshare data collection.
+    # Snapshot mutable global state up-front so both startup-failure and
+    # normal shutdown paths restore exactly what was in place on entry.
+    # (DAV-1021: previously an exception before `yield` skipped cleanup and
+    # leaked the socket default timeout and the executor references.)
+    _prev_socket_timeout = socket.getdefaulttimeout()
+    _loop = asyncio.get_running_loop()
+    _prev_loop_executor = getattr(_loop, "_default_executor", None)
     global _default_executor
+    _prev_module_executor = _default_executor
     new_default_executor: Optional[ThreadPoolExecutor] = None
     try:
-        loop = asyncio.get_running_loop()
-        executor_workers = int(os.getenv("ASYNCIO_DEFAULT_EXECUTOR_WORKERS", "64"))
-        new_default_executor = ThreadPoolExecutor(
-            max_workers=executor_workers,
-            thread_name_prefix="ta-asyncio",
-        )
-        loop.set_default_executor(new_default_executor)
-        _default_executor = new_default_executor
-        _log(f"Default asyncio executor set to {executor_workers} workers.")
-    except Exception as exc:
-        _log(f"Could not configure default asyncio executor: {exc}")
+        auth_service.ensure_secure_secret_configured()
+        # 全局 socket 默认超时：akshare 等库内部的 requests 调用不传 timeout，
+        # 网络丢包时 TLS 握手/读会永久阻塞，僵尸线程逐渐占满线程池（见 healthz 探针）。
+        # uvicorn/asyncio 的服务端 socket 显式 setblocking(False)，不受此影响；
+        # httpx/openai SDK 自带超时配置，也不受影响。
+        socket.setdefaulttimeout(float(os.getenv("TA_SOCKET_DEFAULT_TIMEOUT", "60")))
+        _log(f"Global socket default timeout set to {socket.getdefaulttimeout()}s.")
+        # Raise the AnyIO thread limiter ceiling so frequent sync endpoints
+        # (tracking-board polling, /v1/jobs/{id} polling, akshare-backed
+        # market endpoints) cannot starve each other when the event loop is
+        # also running long-lived `_run_job` tasks.
+        try:
+            from anyio import to_thread as _anyio_to_thread
 
-    identity = await asyncio.to_thread(_get_runtime_identity)
-    _log(_runtime_identity_log_line(identity))
-    init_db()
-    _log("Database initialized.")
-    store = get_job_store()
-    store.clear()
-    _background_tasks.clear()
+            limiter = _anyio_to_thread.current_default_thread_limiter()
+            desired = int(os.getenv("ANYIO_THREAD_LIMIT", "120"))
+            if limiter.total_tokens < desired:
+                limiter.total_tokens = desired
+                _log(f"AnyIO thread limiter raised to {desired}.")
+        except Exception as exc:
+            _log(f"Could not raise AnyIO thread limiter: {exc}")
 
-    # Security: reaching this point without a custom key means the operator
-    # explicitly opted into the insecure built-in default (TA_ALLOW_DEFAULT_SECRET=1)
-    # for local development. Warn loudly so it cannot be confused with a secure boot.
-    if not auth_service.is_custom_secret_configured():
-        _log("=" * 70)
-        _log("WARNING: TA_APP_SECRET_KEY is not set and TA_ALLOW_DEFAULT_SECRET=1.")
-        _log("Using hardcoded default key. ALL encryption and JWT signing")
-        _log("is INSECURE. Set TA_APP_SECRET_KEY for any non-local deployment.")
-        _log("=" * 70)
-
-    _report_version_stats()
-    # Pre-load trade calendar (uses mini_racer/V8 which is not thread-safe)
-    from tradingagents.dataflows.trade_calendar import _load_cn_trade_dates
-    _load_cn_trade_dates()
-    _log("Trade calendar pre-loaded.")
-    # Pre-load stock + ETF name map
-    await asyncio.to_thread(_load_cn_stock_map)
-    _log("Stock map pre-loaded on startup.")
-
-    # Recover orphan pending/running reports left by interrupted processes.
-    # Without this, DB "running" zombies accumulate and any UI/scheduler that
-    # keys off active status keeps fighting real work for LLM capacity.
-    try:
-        from api.services import report_service as _report_service
-
-        with get_db_ctx() as _db:
-            # No in-memory jobs are live yet at startup (store was just cleared).
-            stats = _report_service.recover_stale_active_reports(
-                _db,
-                active_job_ids=[],
-                error_message="进程中断，启动恢复流程标记",
+        # Default asyncio executor is used by `asyncio.to_thread`. The CPython
+        # default is `min(32, cpu_count + 4)`, which is too small when many
+        # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
+        # DB writes, LLM extraction, and akshare data collection.
+        new_default_executor: Optional[ThreadPoolExecutor] = None
+        try:
+            loop = asyncio.get_running_loop()
+            executor_workers = int(os.getenv("ASYNCIO_DEFAULT_EXECUTOR_WORKERS", "64"))
+            new_default_executor = ThreadPoolExecutor(
+                max_workers=executor_workers,
+                thread_name_prefix="ta-asyncio",
             )
-        _log(
-            f"Recovered stale active reports: failed={stats.get('failed', 0)} "
-            f"(error marked as process-interrupt recovery)."
-        )
-    except Exception as exc:
-        _log(f"Stale report recovery failed (non-fatal): {exc}")
+            loop.set_default_executor(new_default_executor)
+            _default_executor = new_default_executor
+            _log(f"Default asyncio executor set to {executor_workers} workers.")
+        except Exception as exc:
+            _log(f"Could not configure default asyncio executor: {exc}")
 
-    # Backfill pending historical cases whose T+1 eval_date has arrived (DAV-287)
-    try:
-        from tradingagents.knowledge.historical_cases import backfill_pending_cases
+        identity = await asyncio.to_thread(_get_runtime_identity)
+        _log(_runtime_identity_log_line(identity))
+        init_db()
+        _log("Database initialized.")
+        store = get_job_store()
+        store.clear()
+        _background_tasks.clear()
 
-        def _startup_backfill_sync():
+        # Security: reaching this point without a custom key means the operator
+        # explicitly opted into the insecure built-in default (TA_ALLOW_DEFAULT_SECRET=1)
+        # for local development. Warn loudly so it cannot be confused with a secure boot.
+        if not auth_service.is_custom_secret_configured():
+            _log("=" * 70)
+            _log("WARNING: TA_APP_SECRET_KEY is not set and TA_ALLOW_DEFAULT_SECRET=1.")
+            _log("Using hardcoded default key. ALL encryption and JWT signing")
+            _log("is INSECURE. Set TA_APP_SECRET_KEY for any non-local deployment.")
+            _log("=" * 70)
+
+        _report_version_stats()
+        # Pre-load trade calendar (uses mini_racer/V8 which is not thread-safe)
+        from tradingagents.dataflows.trade_calendar import _load_cn_trade_dates
+        _load_cn_trade_dates()
+        _log("Trade calendar pre-loaded.")
+        # Pre-load stock + ETF name map
+        await asyncio.to_thread(_load_cn_stock_map)
+        _log("Stock map pre-loaded on startup.")
+
+        # Recover orphan pending/running reports left by interrupted processes.
+        # Without this, DB "running" zombies accumulate and any UI/scheduler that
+        # keys off active status keeps fighting real work for LLM capacity.
+        try:
+            from api.services import report_service as _report_service
+
             with get_db_ctx() as _db:
-                return backfill_pending_cases(_db)
+                # No in-memory jobs are live yet at startup (store was just cleared).
+                stats = _report_service.recover_stale_active_reports(
+                    _db,
+                    active_job_ids=[],
+                    error_message="进程中断，启动恢复流程标记",
+                )
+            _log(
+                f"Recovered stale active reports: failed={stats.get('failed', 0)} "
+                f"(error marked as process-interrupt recovery)."
+            )
+        except Exception as exc:
+            _log(f"Stale report recovery failed (non-fatal): {exc}")
 
-        bf_stats = await asyncio.to_thread(_startup_backfill_sync)
-        _log(
-            f"Historical cases startup backfill completed: scanned={bf_stats.get('total_scanned', 0)}, "
-            f"backfilled={bf_stats.get('backfilled', 0)}, still_missing={bf_stats.get('still_missing', 0)}, "
-            f"skipped_future={bf_stats.get('skipped_future', 0)}."
-        )
-    except Exception as exc:
-        _log(f"Historical cases startup backfill failed (non-fatal): {exc}")
+        # Backfill pending historical cases whose T+1 eval_date has arrived (DAV-287)
+        try:
+            from tradingagents.knowledge.historical_cases import backfill_pending_cases
 
-    yield
-    _log("Shutting down: Cleaning up resources...")
-    _executor.shutdown(wait=True)
-    if new_default_executor is not None:
-        new_default_executor.shutdown(wait=False)
-    _log("Executor shutdown complete.")
+            def _startup_backfill_sync():
+                with get_db_ctx() as _db:
+                    return backfill_pending_cases(_db)
+
+            bf_stats = await asyncio.to_thread(_startup_backfill_sync)
+            _log(
+                f"Historical cases startup backfill completed: scanned={bf_stats.get('total_scanned', 0)}, "
+                f"backfilled={bf_stats.get('backfilled', 0)}, still_missing={bf_stats.get('still_missing', 0)}, "
+                f"skipped_future={bf_stats.get('skipped_future', 0)}."
+            )
+        except Exception as exc:
+            _log(f"Historical cases startup backfill failed (non-fatal): {exc}")
+
+        yield
+        _log("Shutting down: Cleaning up resources...")
+        _executor.shutdown(wait=True)
+        if new_default_executor is not None:
+            new_default_executor.shutdown(wait=False)
+        _log("Executor shutdown complete.")
+    finally:
+        socket.setdefaulttimeout(_prev_socket_timeout)
+        if new_default_executor is not None:
+            new_default_executor.shutdown(wait=False)
+        _loop._default_executor = _prev_loop_executor
+        _default_executor = _prev_module_executor
 
 
 _is_prod = os.getenv("ENV", "").lower() == "prod"
