@@ -651,8 +651,66 @@ def offline_network_guard(request):
             _reset_baostock_context()
 
 
+def _offline_cn_stock_name_stub(symbol):
+    """Deterministic offline stand-in for ``get_cn_stock_name``.
+
+    Mirrors the production fallback (return the numeric code / symbol itself)
+    without attempting the eastmoney/sina name lookups.
+    """
+    import re as _re
+
+    m = _re.search(r"(\d{6})", str(symbol or ""))
+    return m.group(1) if m else str(symbol or "")
+
+
+@pytest.fixture(autouse=True)
+def offline_historical_case_seam(request):
+    """DAV-1040: deterministic local stubs for the historical-case chain.
+
+    Offline runs must never enter provider routing via the report-completion
+    historical-case path (record/backfill -> calculate_t1_return ->
+    _load_cn_trade_dates (akshare/fuyao) / route_to_vendor), nor spend time on
+    bare TCP / HTTP name lookups. While the offline guard enforces, stub:
+
+    - ``historical_cases._load_cn_trade_dates`` -> deterministic empty
+      calendar, never fetching akshare/fuyao. Offline the real loader
+      degrades to empty anyway (both fetchers are guardrail-denied), so
+      production semantics are unchanged; tests needing a calendar or the
+      downstream vendor chain must seed an explicit local stub (see
+      test_offline_network_guardrail baostock fail-closed test).
+    - ``context_utils.get_cn_stock_name`` -> local stub returning the code.
+      Covers call sites resolved through the module (e.g.
+      ``infer_instrument_context`` used by report_service). Analyst modules
+      that imported the symbol directly are patched per-test where needed.
+
+    Tests that explicitly patch these names keep their own stubs (patch
+    nesting composes). Network-marked tests (guard exempt) are untouched.
+    """
+    if request.node.get_closest_marker("network") is not None or is_network_enabled():
+        yield
+        return
+    if not is_offline_network_guard_active():
+        yield
+        return
+    try:
+        from unittest.mock import patch as _patch
+
+        with _patch(
+            "tradingagents.knowledge.historical_cases._load_cn_trade_dates",
+            return_value=([], set()),
+        ), _patch(
+            "tradingagents.agents.utils.context_utils.get_cn_stock_name",
+            side_effect=_offline_cn_stock_name_stub,
+        ):
+            yield
+    except (ImportError, AttributeError):
+        # Historical-case stack or context utils not importable/installed in
+        # this environment; nothing to stub.
+        yield
+
+
 @pytest.fixture
-def forbid_external_network():
+def forbid_external_network(): 
     """Reusable per-test entry point to the unified offline guardrail.
 
     Tests that previously layered ad-hoc ``patch("socket.socket.connect")``

@@ -1047,7 +1047,12 @@ def test_macro_analyst_injects_historical_cases(test_db_session):
         "company_of_interest": "600519",
     }
 
-    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx:
+    # DAV-1040: 离线确定性桩——get_cn_stock_name 直连外网(eastmoney/sina)，
+    # resolve_macro_event_context 会构建全量 RAG 索引（数十秒 CPU），
+    # 二者均不属于本用例断言的历史案例注入链路，显式桩掉避免外部等待。
+    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx, \
+         patch("tradingagents.agents.analysts.macro_analyst.get_cn_stock_name", return_value="600519"), \
+         patch("tradingagents.agents.analysts.macro_analyst.resolve_macro_event_context", return_value=([], "")):
         mock_ctx.return_value.__enter__.return_value = test_db_session
         result = asyncio.run(macro_node(state))
 
@@ -1085,7 +1090,9 @@ def test_macro_analyst_injects_historical_cases(test_db_session):
         "company_of_interest": "000001",  # 无历史案例
     }
 
-    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx:
+    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx, \
+         patch("tradingagents.agents.analysts.macro_analyst.get_cn_stock_name", return_value="000001"), \
+         patch("tradingagents.agents.analysts.macro_analyst.resolve_macro_event_context", return_value=([], "")):
         mock_ctx.return_value.__enter__.return_value = test_db_session
         result_miss = asyncio.run(macro_node_miss(state_miss))
 
@@ -1138,7 +1145,9 @@ def test_fundamentals_analyst_injects_historical_cases(test_db_session):
         "company_of_interest": "688981",
     }
 
-    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx:
+    # DAV-1040: 离线确定性桩，避免 get_cn_stock_name 外联 eastmoney/sina。
+    with patch("tradingagents.knowledge.historical_cases.get_db_ctx") as mock_ctx, \
+         patch("tradingagents.agents.analysts.fundamentals_analyst.get_cn_stock_name", return_value="688981"):
         mock_ctx.return_value.__enter__.return_value = test_db_session
         result = asyncio.run(fund_node(state))
 

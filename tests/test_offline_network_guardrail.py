@@ -466,6 +466,15 @@ class TestBaostockHardeningVerification:
         # (b) End-to-end propagation: route_to_vendor routes get_stock_data to real cn_baostock
         monkeypatch.setattr(iface, "_resolve_vendor_chain", lambda method, configured: ["cn_baostock"])
 
+        # DAV-1040: deterministic local calendar seed — the vendor-routing assertion
+        # requires a known calendar containing 2024-05-10 (Fri) and its strict
+        # next trading day 2024-05-13 (Mon); it must never depend on the
+        # akshare/fuyao network fetch.
+        import tradingagents.knowledge.historical_cases as _hc
+        from datetime import date as _date
+        _fake_dates = [_date(2024, 5, 10), _date(2024, 5, 13)]
+        monkeypatch.setattr(_hc, "_load_cn_trade_dates", lambda: (_fake_dates, set(_fake_dates)))
+
         eval_date, return_pct, refusal = calculate_t1_return("600519", "2024-05-10", "2024-05-13")
 
         assert return_pct is None
