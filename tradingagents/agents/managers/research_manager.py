@@ -420,6 +420,49 @@ def format_expectation_revisions_for_prompt(
     return "\n".join(lines)
 
 
+# DAV-1068 缺陷B：E-04 priced-in 守卫按 occurrence 判定，否定/不确定/明确驳回的引述不算肯定断言。
+# 否定词表覆盖非紧邻否定（同一子句内）；双重否定（偶数个否定词）仍视为断言。
+_PRICED_IN_CLAUSE_BREAKS = "。！？；，、：,.;:!?—–\n"
+_PRICED_IN_NEG_ZH = re.compile(
+    r"尚未|并未|未被|并没有|未有|无法|不能|难以|无从|没有|并非|不会|不应|未(?!来)|不(?!断|但|得)"
+)
+_PRICED_IN_NEG_EN = re.compile(
+    r"\b(?:not|no|never|cannot|can't|cant|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|"
+    r"hasn't|hasnt|haven't|havent|hadn't|hadnt|won't|wont|wouldn't|wouldnt|shouldn't|shouldnt|"
+    r"didn't|didnt|doesn't|doesnt|don't|dont|unable|unclear|uncertain|unconfirmed|yet\s+to\s+be)\b",
+    re.IGNORECASE,
+)
+_PRICED_IN_REJECT_ZH = re.compile(r"驳回|不成立|不予采纳|不能成立|予以否定|并不采纳|未被采纳|被否定")
+
+
+def _priced_in_clause(text: str, start: int, end: int) -> tuple[str, str]:
+    """Return (clause_before_match, clause_after_match) bounded by nearest punctuation breaks."""
+    left = start
+    while left > 0 and text[left - 1] not in _PRICED_IN_CLAUSE_BREAKS:
+        left -= 1
+    right = end
+    n = len(text)
+    while right < n and text[right] not in _PRICED_IN_CLAUSE_BREAKS:
+        right += 1
+    return text[left:start], text[end:right]
+
+
+def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
+    """Per-occurrence check: a priced-in mention is an assertion unless its own clause negates/rejects it."""
+    before, after = _priced_in_clause(text, start, end)
+    # 引用对方观点但同句内（跨越逗号子句）明确驳回/判不成立 -> 非本人断言
+    strong_right = end
+    n = len(text)
+    while strong_right < n and text[strong_right] not in "。！？!?;；\n":
+        strong_right += 1
+    after_sentence = text[end:strong_right]
+    if _PRICED_IN_REJECT_ZH.search(after_sentence) or _PRICED_IN_REJECT_ZH.search(before):
+        return False
+    # 同一句内一处否定不豁免另一处肯定：按出现位置所在子句计数否定词，奇数为否定、偶数为双重否定
+    neg_count = len(_PRICED_IN_NEG_ZH.findall(before)) + len(_PRICED_IN_NEG_EN.findall(before))
+    return neg_count % 2 == 0
+
+
 def validate_manager_expectation_revision_consumption(
     manager_verdict: Mapping[str, Any],
     raw_response: str,
@@ -475,24 +518,32 @@ def validate_manager_expectation_revision_consumption(
             "股价已完全反映", "股价已充分反应", "市场已完全反映",
             "完全定价", "充分定价", "已被市场消化", "已被充分消化", "已被完全消化",
         )
+        pi_occurrences: list[tuple[int, int]] = []
         for pat in pi_patterns_zh:
-            if pat in full_text:
+            idx = full_text.find(pat)
+            while idx >= 0:
+                pi_occurrences.append((idx, idx + len(pat)))
+                idx = full_text.find(pat, idx + 1)
+        for m in re.finditer(r"已定价|已在股价中反映|已反映在股价中", full_text):
+            pi_occurrences.append((m.start(), m.end()))
+        for m in re.finditer(
+            r"(?:already\s+|fully\s+|largely\s+|mostly\s+|market\s+has\s+)?priced\s*[- ]?in\b",
+            full_text,
+            re.IGNORECASE,
+        ):
+            pi_occurrences.append((m.start(), m.end()))
+        for m in re.finditer(r"\b(?:fully|largely)\s+discounted\b", full_text, re.IGNORECASE):
+            pi_occurrences.append((m.start(), m.end()))
+        for m in re.finditer(
+            r"\b(?:fully|largely)\s+reflected\s+in\s+(?:the\s+)?(?:stock\s+)?price\b",
+            full_text,
+            re.IGNORECASE,
+        ):
+            pi_occurrences.append((m.start(), m.end()))
+        for start, end in pi_occurrences:
+            if _is_priced_in_assertion(full_text, start, end):
                 has_pi_asserted = True
                 break
-        if not has_pi_asserted:
-            if re.search(r"(?<!未)(?<!尚未)(?<!不能确定)(?<!无法确认)(?:已定价|已在股价中反映|已反映在股价中)", full_text):
-                has_pi_asserted = True
-        if not has_pi_asserted:
-            if re.search(
-                r"(?<!not\s)(?<!un)(?:already\s+|fully\s+|largely\s+|mostly\s+|market\s+has\s+)?priced\s*[- ]?in\b",
-                full_text,
-                re.IGNORECASE,
-            ):
-                has_pi_asserted = True
-            elif re.search(r"\b(?:fully|largely)\s+discounted\b", full_text, re.IGNORECASE):
-                has_pi_asserted = True
-            elif re.search(r"\b(?:fully|largely)\s+reflected\s+in\s+(?:the\s+)?(?:stock\s+)?price\b", full_text, re.IGNORECASE):
-                has_pi_asserted = True
         if has_pi_asserted:
             violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用")
 

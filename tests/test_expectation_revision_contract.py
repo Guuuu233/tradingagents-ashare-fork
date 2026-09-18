@@ -2014,3 +2014,60 @@ def test_dav883_publication_future_date_regression_and_cutoff_preservation():
     assert not is_val
     assert any("later than cutoff" in v for v in viols)
     assert any("content_qualification cannot be 'qualified'" in v for v in viols)
+
+# ==============================================================================
+# DAV-1068 缺陷B：E-04 priced-in 守卫不得把明确否定/不确定句误报为肯定断言
+# ==============================================================================
+
+def _dav1068_gap_revs():
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_GAP)
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_GAP)
+    return [fund_er, news_er]
+
+
+def test_dav1068_priced_in_negation_zh_en_not_flagged():
+    """B1: 中英文明确否定/不确定句不得被判为已定价断言。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "利好尚未充分定价。",
+        "目前无法确认利好已定价。",
+        "利好并未完全定价，仍待验证。",
+        "不能确定该利好已被市场消化。",
+        "The benefit is not fully priced in.",
+        "The positive is not yet priced in.",
+        "We cannot confirm the news is already priced in.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1068_gap_revs()
+        )
+        assert not any("已定价" in v for v in viols), f"误报: {text!r} -> {viols}"
+
+
+def test_dav1068_priced_in_affirmation_still_flagged():
+    """B2: 肯定断言、双重否定、同段并列肯定仍拒绝。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "利好已充分定价。",
+        "当前市场已充分定价该项合同利好。",
+        "利好已定价，不宜追高。",
+        "并非未充分定价，反而已完全定价。",
+        "利好尚未充分定价，但估值已完全定价。",
+        "The market has already priced in the recent contract developments",
+        "The positive news is fully discounted in the current stock price",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1068_gap_revs()
+        )
+        assert not is_valid, f"应拦截: {text!r}"
+        assert any("已定价" in v for v in viols), f"应报已定价违规: {text!r} -> {viols}"
+
+
+def test_dav1068_priced_in_rejected_quote_not_flagged():
+    """B3: 引用对方观点并明确驳回/不成立，不算自己断言；其他守卫不退化。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "多方称利好已充分定价，我方予以驳回，该说法不成立。",
+        _dav1068_gap_revs(),
+    )
+    assert not any("已定价" in v for v in viols), f"误报: {viols}"
