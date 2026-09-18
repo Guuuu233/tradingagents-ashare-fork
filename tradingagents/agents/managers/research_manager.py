@@ -424,7 +424,7 @@ def format_expectation_revisions_for_prompt(
 # 否定词表覆盖非紧邻否定（同一子句内）；双重否定（偶数个否定词）仍视为断言。
 _PRICED_IN_CLAUSE_BREAKS = "。！？；，、：,.;:!?—–\n"
 _PRICED_IN_NEG_ZH = re.compile(
-    r"尚未|并未|未被|并没有|未有|无法|不能|难以|无从|没有|并非|不会|不应|未(?!来)|不(?!断|但|得)"
+    r"尚未|并未|未被|并没有|未有|无法|不能|难以|无从|没有|并非|不会|不应|未(?!来)|(?<!得)不(?!断|但|得)"
 )
 _PRICED_IN_NEG_EN = re.compile(
     r"\b(?:not|no|never|cannot|can't|cant|isn't|isnt|aren't|arent|wasn't|wasnt|weren't|werent|"
