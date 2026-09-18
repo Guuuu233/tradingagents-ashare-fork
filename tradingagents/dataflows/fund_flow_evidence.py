@@ -52,10 +52,16 @@ _FIELD_SEMANTICS = {
 _COMPONENT_SEMANTICS = {
     "super_large_net": "特大单净额（主力组成项，负值表示净流出）",
     "large_net": "大单净额（主力组成项，负值表示净流出）",
+    # ``lg_net`` carries an official 大单净流入额 field (e.g. Tushare
+    # moneyflow_dc/moneyflow_ths ``buy_lg_amount``). It lacks the 超大单
+    # component, so it is NOT 主力净额 and must never be aliased into
+    # ``r0_net``; large-order vs large-order comparisons stay on this field.
+    "lg_net": "大单净额（大单口径，不含超大单分量）",
 }
 _FIELD_CATEGORIES = {
     **{field: "main_force" for field in _MAIN_FORCE_FIELDS},
     "netamount": "total",
+    "lg_net": "large_order",
 }
 _AMOUNT_RE = re.compile(
     r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*"
@@ -352,6 +358,23 @@ def build_source_evidence(
             record[f"{component}_raw_unit"] = parsed_unit
             record.setdefault("components", {})[component] = _decimal_text(parsed)
             record.setdefault("component_semantics", {})[component] = _COMPONENT_SEMANTICS[component]
+        # Structured providers may pass canonical component keys directly
+        # (e.g. ``lg_net`` for Tushare ``buy_lg_amount``). They remain
+        # components: comparable only to the same field, never direction.
+        for component in _COMPONENT_SEMANTICS:
+            if component in record or row.get(component) is None:
+                continue
+            parsed, parsed_unit = _amount_to_yi(
+                row.get(component),
+                row.get(f"{component}_unit") or row.get("unit") or raw_unit,
+            )
+            if parsed is None:
+                continue
+            record[component] = _decimal_text(parsed)
+            record[f"{component}_raw"] = str(row.get(component))
+            record[f"{component}_raw_unit"] = parsed_unit
+            record.setdefault("components", {})[component] = _decimal_text(parsed)
+            record.setdefault("component_semantics", {})[component] = _COMPONENT_SEMANTICS[component]
         components = record.get("components", {})
         if "r0_net" not in record and {"super_large_net", "large_net"}.issubset(components):
             derived = (
@@ -387,7 +410,9 @@ def build_source_evidence(
                     record[f"{canonical}_raw_unit"] = parsed_unit
                     record.setdefault("components", {})[canonical] = _decimal_text(parsed)
                     record.setdefault("component_semantics", {})[canonical] = _COMPONENT_SEMANTICS[canonical]
-        if not field_semantics:
+        # A component-only row (e.g. THS lg_net 大单口径) is still evidence;
+        # it just cannot authorize a main-force direction on its own.
+        if not field_semantics and not record.get("components"):
             continue
         record["field_semantics"] = field_semantics
         record["field_categories"] = field_categories
@@ -976,6 +1001,9 @@ def _evaluate_observation_group(
             "status": "data_conflict",
             "data_conflict": True,
             "reason_code": "insufficient_sources",
+            # Same-semantic field has no comparable peer: fail closed and
+            # never fall back to a cross-semantics comparison.
+            "semantic_incomparable": True,
             "reason": "新算法组有效且可比来源不足，无法形成共识",
             "raw_values": raw_values,
             "source_count": len(unique_values),
@@ -1141,9 +1169,18 @@ def _field_semantics_are_valid(record: Mapping[str, Any], field: str) -> bool:
             and "主力" not in text
         )
     if field == "r0_net":
-        return ("主力" in text or "大单" in text) and "净" in text and (
-            "流入" in text or "流出" in text or "净额" in text
-        )
+        # r0_net is strictly 主力净额 (= 超大单 + 大单). A pure 大单口径
+        # declaration lacks the 超大单 component and must fail closed
+        # instead of being放行 as a main-force field.
+        if not (
+            "主力" in text
+            and "净" in text
+            and ("流入" in text or "流出" in text or "净额" in text)
+        ):
+            return False
+        if "大单" in text and "超大单" not in text and "特大单" not in text:
+            return False
+        return True
     if field == "r0_in":
         return "主力" in text and "流入" in text and "净" not in text
     if field == "r0_out":
@@ -1400,6 +1437,12 @@ def score_large_order_reference_credibility(
         val = r.get("r0_net")
         if val is None and r.get("field") == "r0_net":
             val = r.get("value")
+        if val is None:
+            # 大单口径 (lg_net) corroborates direction only; it is never
+            # averaged into the 主力 r0_net value itself.
+            val = r.get("lg_net")
+            if val is None and r.get("field") == "lg_net":
+                val = r.get("value")
         if val is not None and decimal_value(val) is not None:
             r0_items.append(r)
 
@@ -1407,7 +1450,12 @@ def score_large_order_reference_credibility(
     unique_sources: list[dict[str, Any]] = []
     for item in r0_items:
         src = str(item.get("source") or item.get("source_family") or "unknown")
-        val = decimal_value(item.get("r0_net") if item.get("r0_net") is not None else item.get("value"))
+        raw_val = item.get("r0_net")
+        if raw_val is None:
+            raw_val = item.get("lg_net")
+        if raw_val is None:
+            raw_val = item.get("value")
+        val = decimal_value(raw_val)
         direction = item.get("direction")
         if direction not in {"inflow", "outflow", "neutral"}:
             if val is not None:
@@ -1728,8 +1776,17 @@ def select_fund_flow_source(
             direction_summary = f"{label}接近平衡"
 
     r0_candidates = [item for item in valid_groups if item.get("field") == "r0_net"]
+    # Large-order (lg_net) records corroborate direction credibility but
+    # never enter the r0_net value comparison or the selection groups.
+    lg_corroboration = [
+        item
+        for item in (records or [])
+        if isinstance(item, Mapping)
+        and (item.get("lg_net") is not None or item.get("field") == "lg_net")
+        and item.get("status") == "available"
+    ]
     cred_info = score_large_order_reference_credibility(
-        r0_candidates,
+        [*r0_candidates, *lg_corroboration],
         price_change=price_change,
     )
 
@@ -1853,6 +1910,10 @@ def _aggregate_daily_field_results(
             "status": "data_conflict",
             "data_conflict": True,
             "reason_code": "daily_consensus_conflict",
+            "semantic_incomparable": any(
+                result.get("semantic_incomparable")
+                for result in daily_results.values()
+            ),
             "reason": "至少一个交易日的新算法组无法形成可解释共识",
             "dates": dates,
             "blocked_dates": blocked_dates,

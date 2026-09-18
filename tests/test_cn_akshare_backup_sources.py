@@ -187,6 +187,7 @@ def test_tushare_dc_ths_success_keeps_transport_and_field_semantics(monkeypatch)
     assert dc_record["upstream_field"] == "net_amount"
     assert dc_record["upstream_field_semantics"] == "今日主力净流入额（万元）"
     assert dc_record["r0_net"] == "1.2"
+    assert dc_record["lg_net"] == "0.03"
     assert dc_record["vendor_raw_fields"]["buy_sm_amount"] == "100"
     assert dc_record["vendor_normalized_fields"]["buy_sm_amount"] == "0.01"
     assert ths_record["source_family"] == "ths"
@@ -195,9 +196,11 @@ def test_tushare_dc_ths_success_keeps_transport_and_field_semantics(monkeypatch)
     assert ths_record["net_d5_amount_raw"] == "56000"
     assert ths_record["net_d5_amount_period_kind"] == "five_day_cumulative"
     assert ths_lg_record["source_family"] == "ths"
-    assert ths_lg_record["r0_net"] == "0.03"
+    assert ths_lg_record["lg_net"] == "0.03"
+    assert "r0_net" not in ths_lg_record
     assert ths_lg_record["upstream_field"] == "buy_lg_amount"
-    assert "大单净额" in ths_lg_record["upstream_field_semantics"]
+    assert "大单" in ths_lg_record["upstream_field_semantics"]
+    assert "主力" not in ths_lg_record["upstream_field_semantics"]
     assert meta["transport_provider"] == "tushare"
     assert meta["selection"]["selected_source"] == "tushare_eastmoney_moneyflow_dc"
     assert meta["selection"]["selected_field"] == "r0_net"

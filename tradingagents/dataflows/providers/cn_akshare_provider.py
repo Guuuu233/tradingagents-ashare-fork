@@ -392,7 +392,10 @@ _TUSHARE_THS_SOURCE = "tushare_ths_moneyflow_ths"
 _TUSHARE_DC_FIELD_SEMANTICS = "今日主力净流入额（万元）"
 _TUSHARE_THS_FIELD_SEMANTICS = "资金净流入（万元）"
 _TUSHARE_THS_D5_SEMANTICS = "5日主力净额（万元）"
-_TUSHARE_THS_LG_FIELD_SEMANTICS = "大单净额 / 平台主力口径参考（万元）"
+# moneyflow_ths.buy_lg_amount 官方语义为「今日大单净流入额」，缺超大单
+# 分量，不是主力净额；文本中刻意不含「主力」字样，防止闸门把它当 r0_net
+# 放行（r0_net 仅接受主力口径）。
+_TUSHARE_THS_LG_FIELD_SEMANTICS = "今日大单净流入额（大单口径，不含超大单分量；万元）"
 _TUSHARE_REQUEST_FIELDS = {
     # Keep each request aligned with the endpoint's documented schema; an
     # unsupported field can make an otherwise valid token request fail.
@@ -2543,6 +2546,8 @@ class CnAkshareProvider(BaseMarketDataProvider):
         upstream_field: str = "net_amount",
     ) -> None:
         is_dc = api_name == _TUSHARE_DC_API
+        # THS buy_lg_amount 与 DC buy_lg_amount 都是大单口径（lg_net），
+        # 可同义互比；只有 DC net_amount 是主力净额（r0_net）。
         is_ths_lg = (not is_dc) and (upstream_field == "buy_lg_amount")
         normalized_fields = {
             field: self._tushare_yi_text(value)
@@ -2573,7 +2578,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             }
         )
         if is_ths_lg:
-            record.setdefault("field_semantics", {})["r0_net"] = _TUSHARE_THS_LG_FIELD_SEMANTICS
+            record.setdefault("field_semantics", {})["lg_net"] = _TUSHARE_THS_LG_FIELD_SEMANTICS
         if not is_dc and row.get("net_d5_amount") is not None and not is_ths_lg:
             net_d5_yi = self._tushare_yi_text(row.get("net_d5_amount"))
             if net_d5_yi is not None:
@@ -2603,9 +2608,13 @@ class CnAkshareProvider(BaseMarketDataProvider):
             source = _TUSHARE_DC_SOURCE
             source_row = {
                 # The API row has YYYYMMDD; evidence alignment uses ISO dates.
+                # moneyflow_dc.net_amount 官方语义=今日主力净流入额 -> r0_net；
+                # buy_lg_amount=今日大单净流入额 -> lg_net（大单对大单可比层）。
                 "trade_date": requested_date,
                 "r0_net": row.get("net_amount"),
                 "r0_net_unit": "万元",
+                "lg_net": row.get("buy_lg_amount"),
+                "lg_net_unit": "万元",
                 "period_kind": "historical_daily",
                 "time_window": "1d",
                 "raw_unit": "万元",
@@ -2651,13 +2660,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
             self._tushare_attach_record(record, api_name, row, raw_fields, upstream_field="net_amount")
         records.extend(total_records)
 
-        # 2. Large order net (r0_net from buy_lg_amount) as peer evidence to Eastmoney
+        # 2. Large order net: moneyflow_ths.buy_lg_amount is 今日大单净流入额
+        # (no 超大单 component), so it maps to the independent ``lg_net``
+        # field and never to ``r0_net`` (主力净额口径).
         buy_lg_val = row.get("buy_lg_amount")
         if buy_lg_val is not None and self._tushare_yi_text(buy_lg_val) is not None:
             source_row_lg = {
                 "trade_date": requested_date,
-                "r0_net": buy_lg_val,
-                "r0_net_unit": "万元",
+                "lg_net": buy_lg_val,
+                "lg_net_unit": "万元",
                 "period_kind": "historical_daily",
                 "time_window": "1d",
                 "raw_unit": "万元",
@@ -2783,15 +2794,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
         is_ths_lg = (not is_dc) and (
             record.get("upstream_field") == "buy_lg_amount"
             or record.get("upstream_field_semantics") == _TUSHARE_THS_LG_FIELD_SEMANTICS
-            or (record.get("field") == "r0_net" and "r0_net" in record)
+            or record.get("lg_net") is not None
         )
         source_label = "东方财富 moneyflow_dc" if is_dc else "同花顺 moneyflow_ths"
         if is_dc:
             field = "r0_net"
             label = "今日主力净流入额（统计口径参考，非身份结论）"
         elif is_ths_lg:
-            field = "r0_net"
-            label = "大单净额（平台主力口径参考，非身份结论）"
+            field = "lg_net"
+            label = "今日大单净流入额（大单口径，缺超大单分量，非主力口径）"
         else:
             field = "netamount"
             label = "资金净流入（总资金旁证，非主力口径）"
@@ -2824,11 +2835,13 @@ class CnAkshareProvider(BaseMarketDataProvider):
         selection = self._tushare_consensus(dc_records, ths_records)
         has_r0 = any(r.get("r0_net") is not None for r in records)
         if has_r0:
+            # field=None keeps every same-semantics layer in field_results:
+            # r0_net (主力对主力), lg_net (大单对大单), netamount (总资金)。
             consensus_audit = build_consensus_evidence(
                 records,
                 symbol=records[0].get("symbol") if records else None,
                 requested_as_of=records[0].get("requested_as_of") if records else None,
-                field="r0_net",
+                field=None,
             )
         else:
             consensus_audit = (

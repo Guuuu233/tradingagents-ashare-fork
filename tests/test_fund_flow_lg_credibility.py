@@ -1,4 +1,4 @@
-"""Tests for Tonghuashun large order (buy_lg_amount) r0_net evidence and credibility scoring."""
+"""Tests for Tonghuashun large order (buy_lg_amount -> lg_net) evidence and credibility scoring."""
 from decimal import Decimal
 import asyncio
 from types import SimpleNamespace
@@ -81,14 +81,14 @@ def _record(source: str, value: str, field: str = "r0_net", date: str = "2026-08
         "unit": "亿元",
         "direction": direction,
         "field_semantics": {
-            field: "大单净额 / 平台主力口径参考（万元）" if field == "r0_net" and "ths" in source else ("主力净额（负值表示净流出）" if field == "r0_net" else "总净额（负值表示净流出）")
+            field: "今日大单净流入额（大单口径，不含超大单分量；万元）" if field == "lg_net" else ("主力净额（负值表示净流出）" if field == "r0_net" else "总净额（负值表示净流出）")
         },
-        "upstream_field_semantics": "大单净额 / 平台主力口径参考（万元）" if field == "r0_net" and "ths" in source else ("今日主力净流入额（万元）" if field == "r0_net" else "资金净流入（万元）"),
+        "upstream_field_semantics": "今日大单净流入额（大单口径，不含超大单分量；万元）" if field == "lg_net" else ("今日主力净流入额（万元）" if field == "r0_net" else "资金净流入（万元）"),
     }
 
 
-def test_ths_buy_lg_amount_produces_r0_net_evidence_alongside_dc(monkeypatch):
-    """1. THS buy_lg -> r0_net 证据入库，与 DC r0_net 平级出现在 evidence。"""
+def test_ths_buy_lg_amount_produces_lg_net_evidence_alongside_dc(monkeypatch):
+    """1. THS buy_lg -> lg_net 证据入库（方案B：不再混装 r0_net），与 DC 平级。"""
     monkeypatch.setenv("TUSHARE_TOKEN", "configured")
     provider = CnAkshareProvider()
     with patch(
@@ -102,18 +102,20 @@ def test_ths_buy_lg_amount_produces_r0_net_evidence_alongside_dc(monkeypatch):
 
     assert errors == []
     assert out is not None
-    # 应有 3 条证据：DC r0_net, THS netamount, THS r0_net (来自 buy_lg_amount)
+    # 应有 3 条证据：DC r0_net+lg_net, THS netamount, THS lg_net (来自 buy_lg_amount)
     assert len(out.fund_flow_evidence) == 3
     dc_r0 = next(r for r in out.fund_flow_evidence if r.get("source") == "tushare_eastmoney_moneyflow_dc" and "r0_net" in r)
     ths_net = next(r for r in out.fund_flow_evidence if r.get("source") == "tushare_ths_moneyflow_ths" and "netamount" in r)
-    ths_r0 = next(r for r in out.fund_flow_evidence if r.get("source") == "tushare_ths_moneyflow_ths" and "r0_net" in r)
+    ths_lg = next(r for r in out.fund_flow_evidence if r.get("source") == "tushare_ths_moneyflow_ths" and "lg_net" in r)
 
     assert dc_r0["r0_net"] == "1.2"
+    assert dc_r0["lg_net"] == "0.03"
     assert ths_net["netamount"] == "1.2"
-    assert ths_r0["r0_net"] == "0.03"
-    assert ths_r0["upstream_field"] == "buy_lg_amount"
-    assert "大单净额" in ths_r0["upstream_field_semantics"]
-    assert "参考" in ths_r0["upstream_field_semantics"]
+    assert ths_lg["lg_net"] == "0.03"
+    assert "r0_net" not in ths_lg
+    assert ths_lg["upstream_field"] == "buy_lg_amount"
+    assert "大单" in ths_lg["upstream_field_semantics"]
+    assert "主力" not in ths_lg["upstream_field_semantics"]
 
 
 def test_dc_r0_net_and_ths_netamount_coexist_allows_direction_no_incomparable_block():
@@ -136,7 +138,7 @@ def test_dc_r0_net_and_ths_netamount_coexist_allows_direction_no_incomparable_bl
 
 
 def test_large_order_credibility_concordant_higher_than_single_source():
-    """3a. DC r0_net 与 THS buy_lg 同向 -> 可信度高于单源。"""
+    """3a. DC r0_net 与 THS buy_lg(lg_net) 同向 -> 可信度高于单源。"""
     single_record = [_record("tushare_eastmoney_moneyflow_dc", "2.0", field="r0_net")]
     single_score = score_large_order_reference_credibility(single_record)
     assert single_score["single_source"] is True
@@ -144,7 +146,7 @@ def test_large_order_credibility_concordant_higher_than_single_source():
 
     dual_concordant = [
         _record("tushare_eastmoney_moneyflow_dc", "2.0", field="r0_net"),
-        _record("tushare_ths_moneyflow_ths", "0.5", field="r0_net"),
+        _record("tushare_ths_moneyflow_ths", "0.5", field="lg_net"),
     ]
     concordant_score = score_large_order_reference_credibility(dual_concordant)
     assert concordant_score["single_source"] is False
@@ -160,7 +162,7 @@ def test_large_order_credibility_divergent_lower_with_divergence_details():
 
     dual_divergent = [
         _record("tushare_eastmoney_moneyflow_dc", "2.0", field="r0_net"),
-        _record("tushare_ths_moneyflow_ths", "-0.5", field="r0_net"),
+        _record("tushare_ths_moneyflow_ths", "-0.5", field="lg_net"),
     ]
     divergent_score = score_large_order_reference_credibility(dual_divergent)
     assert divergent_score["single_source"] is False
@@ -186,7 +188,7 @@ class _DualSourceCollector:
         records = [
             _record("tushare_eastmoney_moneyflow_dc", "2.0", field="r0_net", date=curr_date),
             _record("tushare_ths_moneyflow_ths", "1.5", field="netamount", date=curr_date),
-            _record("tushare_ths_moneyflow_ths", self.ths_lg_val, field="r0_net", date=curr_date),
+            _record("tushare_ths_moneyflow_ths", self.ths_lg_val, field="lg_net", date=curr_date),
         ]
         return {
             "fund_flow_individual": "东方财富与同花顺资金流数据",
