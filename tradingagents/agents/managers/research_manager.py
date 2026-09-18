@@ -433,18 +433,217 @@ _PRICED_IN_NEG_EN = re.compile(
     re.IGNORECASE,
 )
 _PRICED_IN_REJECT_ZH = re.compile(r"驳回|不成立|不予采纳|不能成立|予以否定|并不采纳|未被采纳|被否定")
+# DAV-1071 缺陷1：条件/假设句引导的命中不算断言（若/如果/一旦…引导的条件从句是情景推演而非事实断言）
+_E04_COND_ZH = re.compile(r"若(?!干)|如果|倘若|假若|倘使|一旦|假设|除非|万一")
+_E04_COND_EN = re.compile(
+    r"\b(?:if|unless|in\s+case|assuming|provided\s+that|providing\s+that|should\s+there\s+be)\b",
+    re.IGNORECASE,
+)
+# DAV-1071 缺陷1：beat/miss 关键词后紧跟名词时构成名词性偏正短语（如“超预期幅度/信息”），是列举未知项而非断言
+_BEAT_MISS_NOUN_SUFFIX = re.compile(
+    r"^\s*(?:幅度|空间|概率|可能性|程度|水平|信息|情形|情况|风险|因素|变量|情景)"
+)
+# DAV-1071 缺陷2：附带可回溯披露依据（明确披露日或已过交易日数）且用于降权的 priced-in 引用放行
+_E04_DISCLOSURE_WORD = re.compile(r"披露|公告|公布|发布|公开|财报|中报|年报|季报|业绩快报|业绩预告|龙虎榜")
+_E04_DATE_PAT = re.compile(
+    r"\d{4}\s*[-年/.]\s*\d{1,2}\s*[-月/.]\s*\d{1,2}\s*日?|\d{1,2}\s*月\s*\d{1,2}\s*日"
+)
+_E04_TRADING_DAYS_PAT = re.compile(r"超(?:过|出)?\s*\d+\s*个?交易日|\d+\s*个?交易日")
+# DAV-1074 🟡-1：移除「谨慎|观望」高频弱词，收窄降权豁免口径
+_E04_DOWNWEIGHT = re.compile(
+    r"降权|降格|弱化|解释力|不作为|不得作为|不能作为|不应作为|不计入|不纳入|剔除|排除|"
+    r"降低.{0,4}权重|减仓|止损|不(?:宜|可|建议|应)?\s*追高|不加仓|不追涨"
+)
+# claim_id 引用语域：id 与命中之间出现自主判断/转折标记时视为独立断言而非引用
+_E04_OWN_VOICE = re.compile(
+    r"我方|我认为|我觉得|笔者|本人|独立判断|独立认为|即判|即认为|据此判|但|然而|不过|相反"
+)
+# 反向把已定价当作方向支撑（做多/加仓/追高…且非否定语境）仍拦
+_E04_DIRECTIONAL = re.compile(r"做多|做空|加仓|买入|建仓|追高|追涨|抄底|看多|看空|满仓|荐股")
+_E04_NEG_PREFIX = re.compile(r"(?:不|勿|莫|未|严禁|禁止|避免|不宜|不可|不应|杜绝|防止)\s*$")
+_PRICED_IN_SENTENCE_BREAKS = "。！？!?;；\n"
+# 引用豁免要求匹配短语之外至少带这么多上下文（去空白/标点后），防止裸断言撞 claim 子串被误放行
+_QUOTE_MIN_CONTEXT_CHARS = 4
+# DAV-1073 复审：生产上 manager 以「claim ID + 改写」引用，逐字子串零覆盖。
+# 放宽为：命中所在整句与某 claim 归一文本最长公共子串 ≥阈值，且该 claim 本身含同类关键词；
+# 或句内出现含同类关键词的 claim_id。阈值 10 字保证句子主体源自 claim 而非巧合重叠。
+_QUOTE_LCS_MIN = 10
+_PI_QUOTE_KW = re.compile(
+    r"已定价|完全定价|充分定价|已被市场消化|已被.{0,2}消化|已在股价中反映|已反映在股价中|"
+    r"priced[\s-]*in|discounted|reflected",
+    re.IGNORECASE,
+)
+_BM_QUOTE_KW = re.compile(
+    r"超预期|超出预期|超越预期|好于预期|优于预期|高于预期|不及预期|低于预期|未达预期|"
+    r"差于预期|弱于预期|逊于预期|落后于预期|beat|miss|expectation|consensus",
+    re.IGNORECASE,
+)
+# 「已定价状态为 unknown」等显式标注引用形态（引用栏位标注而非断言事实）。
+# DAV-1074 🔴-1：仅当标注 match 覆盖命中或与命中同子句时生效，同句独立断言不连带豁免。
+_PI_ANNOTATION = re.compile(
+    r"已定价\s*(?:状态|栏位|标注|标记|评级|结论)?\s*(?:为|是|：|:|=|标为|标成|记为)\s*"
+    r"(?:unknown|未知|不确定|待验证|待确认)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_quote_text(s: str) -> str:
+    return re.sub(r"[\s　]+", "", s or "")
+
+
+def _lcs_len(a: str, b: str, cap: int = 600) -> int:
+    """Longest common substring length (capped inputs to bound cost)."""
+    a, b = a[:cap], b[:cap]
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for ch in a:
+        cur = [0]
+        for j, cb in enumerate(b, 1):
+            v = prev[j - 1] + 1 if ch == cb else 0
+            cur.append(v)
+            if v > best:
+                best = v
+        prev = cur
+        if best >= min(len(a), len(b)):
+            break
+    return best
+
+
+def _claim_quote_index(claims: Sequence[Mapping[str, Any]] | None) -> list[dict]:
+    """归一化 claim 语料：每条带 norm 文本与 claim_id（供 ID 引用路径判定）。"""
+    items: list[dict] = []
+    for c in claims or []:
+        if not isinstance(c, Mapping):
+            continue
+        cid = str(c.get("claim_id") or "").strip()
+        norms: list[str] = []
+        for key in ("claim", "claim_text", "text"):
+            v = c.get(key)
+            if v:
+                norms.append(_normalize_quote_text(str(v)))
+        ev = c.get("evidence")
+        if isinstance(ev, list):
+            norms.extend(_normalize_quote_text(str(x)) for x in ev)
+        elif ev:
+            norms.append(_normalize_quote_text(str(ev)))
+        for n_ in norms:
+            if n_:
+                items.append({"norm": n_, "claim_id": cid})
+    return items
+
+
+def _is_claim_quotation(
+    text: str,
+    start: int,
+    end: int,
+    claim_index: Sequence[dict],
+    kw_in_claim: re.Pattern,
+) -> bool:
+    """DAV-1071/DAV-1073: a priced-in / beat-miss mention inside analyst claim text is a quotation,
+    not the manager's own assertion. Quote forms (any suffices):
+      1. enclosing clause/sentence is a verbatim substring of a claim text (with ≥4 chars context);
+      2. enclosing sentence shares an LCS ≥ _QUOTE_LCS_MIN with a claim that itself contains the
+         same kind of keyword (production「claim ID + 改写」paraphrase form);
+      3. enclosing sentence names a claim_id whose claim contains the same kind of keyword.
+    The claim must itself carry the keyword — quotation exemption never invents priced-in/beat-miss
+    content the analyst didn't write."""
+    if not claim_index:
+        return False
+    n = len(text)
+    matched = _normalize_quote_text(text[start:end])
+    # clause-level span (weak breaks) — covers quotes embedded mid-sentence
+    cl, cr = start, end
+    while cl > 0 and not _is_clause_break(text, cl - 1):
+        cl -= 1
+    while cr < n and not _is_clause_break(text, cr):
+        cr += 1
+    # sentence-level span (strong breaks) — covers verbatim copy / paraphrase of a whole sentence
+    sl, sr = start, end
+    while sl > 0 and text[sl - 1] not in _PRICED_IN_SENTENCE_BREAKS:
+        sl -= 1
+    while sr < n and text[sr] not in _PRICED_IN_SENTENCE_BREAKS:
+        sr += 1
+    clause_span = text[cl:cr]
+    sentence_span = text[sl:sr]
+    sentence_norm = _normalize_quote_text(sentence_span)
+    for span, span_off in ((clause_span, cl), (sentence_span, sl)):
+        norm = _normalize_quote_text(span)
+        # 🟢：按命中偏移删除匹配段，而非首个出现位置
+        hit_off_norm = len(_normalize_quote_text(text[span_off:start]))
+        ctx = norm[:hit_off_norm] + norm[hit_off_norm + len(matched):]
+        ctx_alnum = re.sub(r"[，。！？；、：,.;:!?—–（）()「」『』【】\[\]《》<>\"'“”‘’]+", "", ctx)
+        if len(ctx_alnum) < _QUOTE_MIN_CONTEXT_CHARS:
+            continue
+        if any(norm and norm in item["norm"] for item in claim_index):
+            return True
+    # paraphrase path: sentence largely derives from a claim carrying the same keyword.
+    # 但句子含非否定语境的方向词（可积极做多/建议追高…）时属反向支撑自断言，不予豁免。
+    # DAV-1074 🔴-2：claim_id 路径锚定——id 与命中同子句，或 id 在句内先于命中且两者之间
+    # 无自主判断/转折标记（「提及INV-3后，我方独立判断利好已定价」不再放行）。
+    for item in claim_index:
+        if not kw_in_claim.search(item["norm"]):
+            continue
+        cid = item["claim_id"]
+        id_hit = False
+        if cid:
+            # DAV-1080 🔴：同子句分支与句级分支同一口径——id 须先于命中，且 id 与命中之间
+            # 不得有自主判断/转折标记；豁免判定不依赖标点有无（「采纳CLM-PI但我方独立判断…」拦截）。
+            pos_in_clause = clause_span.find(cid)
+            if pos_in_clause >= 0:
+                id_end = cl + pos_in_clause + len(cid)
+                if id_end <= start and not _E04_OWN_VOICE.search(text[id_end:start]):
+                    id_hit = True
+            if not id_hit:
+                id_pos = sentence_span.find(cid)
+                if 0 <= id_pos < start - sl and not _E04_OWN_VOICE.search(
+                    sentence_span[id_pos + len(cid): start - sl]
+                ):
+                    id_hit = True
+        # DAV-1076 🔴-4：LCS 分支与 ID 分支同一语域检查——句内含自主判断/转折标记即非引用
+        lcs_hit = _lcs_len(sentence_norm, item["norm"]) >= _QUOTE_LCS_MIN
+        fuzzy_hit = id_hit or (lcs_hit and not _E04_OWN_VOICE.search(sentence_span))
+        if fuzzy_hit and not _has_directional_support(sentence_span):
+            return True
+    return False
+
+
+def _has_directional_support(sentence: str) -> bool:
+    """句内存在未被否定词修饰的方向性操作建议（做多/追高/加仓…）。"""
+    for m in _E04_DIRECTIONAL.finditer(sentence):
+        if not _E04_NEG_PREFIX.search(sentence[: m.start()]):
+            return True
+    return False
+
+
+def _is_clause_break(text: str, i: int) -> bool:
+    """Punctuation break, but '.', ',' inside a number (e.g. 88.80 / 1,000) is not a break."""
+    ch = text[i]
+    if ch not in _PRICED_IN_CLAUSE_BREAKS:
+        return False
+    if ch in ".,，" and i > 0 and i + 1 < len(text) and text[i - 1].isdigit() and text[i + 1].isdigit():
+        return False
+    return True
 
 
 def _priced_in_clause(text: str, start: int, end: int) -> tuple[str, str]:
     """Return (clause_before_match, clause_after_match) bounded by nearest punctuation breaks."""
     left = start
-    while left > 0 and text[left - 1] not in _PRICED_IN_CLAUSE_BREAKS:
+    while left > 0 and not _is_clause_break(text, left - 1):
         left -= 1
     right = end
     n = len(text)
-    while right < n and text[right] not in _PRICED_IN_CLAUSE_BREAKS:
+    while right < n and not _is_clause_break(text, right):
         right += 1
     return text[left:start], text[end:right]
+
+
+def _in_conditional_clause(clause_before: str) -> bool:
+    """DAV-1071/DAV-1073: hit is non-assertive only when the conditional marker sits in the SAME
+    clause as the hit. Sentence-level search was reverted (DAV-1073 🔴-1):「若A则B，C已定价」中 C
+    所在子句无条件词，是主句断言而非条件推演，必须拦。"""
+    return bool(_E04_COND_ZH.search(clause_before) or _E04_COND_EN.search(clause_before))
 
 
 def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
@@ -453,14 +652,61 @@ def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
     # 引用对方观点但同句内（跨越逗号子句）明确驳回/判不成立 -> 非本人断言
     strong_right = end
     n = len(text)
-    while strong_right < n and text[strong_right] not in "。！？!?;；\n":
+    while strong_right < n and text[strong_right] not in _PRICED_IN_SENTENCE_BREAKS:
         strong_right += 1
     after_sentence = text[end:strong_right]
     if _PRICED_IN_REJECT_ZH.search(after_sentence) or _PRICED_IN_REJECT_ZH.search(before):
         return False
+    # DAV-1071 缺陷1：条件/假设从句内命中属情景推演，非断言（同时供给 beat/miss 分支）
+    # DAV-1073 🔴-1：仅限同子句条件词，句级搜索已撤销
+    if _in_conditional_clause(before):
+        return False
     # 同一句内一处否定不豁免另一处肯定：按出现位置所在子句计数否定词，奇数为否定、偶数为双重否定
     neg_count = len(_PRICED_IN_NEG_ZH.findall(before)) + len(_PRICED_IN_NEG_EN.findall(before))
     return neg_count % 2 == 0
+
+
+def _is_beat_miss_assertion(text: str, start: int, end: int) -> bool:
+    """DAV-1071 缺陷1：beat/miss 与 priced-in 同一套 per-occurrence 判别，另加名词性偏正短语豁免
+    （“超预期幅度/信息/风险”等是列举未知项而非断言）。"""
+    n = len(text)
+    right = end
+    while right < n and not _is_clause_break(text, right):
+        right += 1
+    if _BEAT_MISS_NOUN_SUFFIX.match(text[end:right]):
+        return False
+    return _is_priced_in_assertion(text, start, end)
+
+
+def _has_traceable_pricing_basis(sentence: str) -> bool:
+    """DAV-1071 缺陷2 / DAV-1074 🟡-1：句子含可回溯披露依据 = 披露类词与（明确日期 或 已过交易日数）共现。
+    单独一个日期（如“9月18日美联储降息”）不构成披露依据。"""
+    return bool(
+        _E04_DISCLOSURE_WORD.search(sentence)
+        and (_E04_DATE_PAT.search(sentence) or _E04_TRADING_DAYS_PAT.search(sentence))
+    )
+
+
+def _is_downweighting_pricing(sentence: str) -> bool:
+    """ priced-in 引用用于对该 claim 降权/解释力弱化，而非反向支撑方向。
+    方向词仅在非否定语境下出现（如“可追高/应加仓”）时视为反向支撑，不予豁免。"""
+    if not _E04_DOWNWEIGHT.search(sentence):
+        return False
+    for m in _E04_DIRECTIONAL.finditer(sentence):
+        if not _E04_NEG_PREFIX.search(sentence[: m.start()]):
+            return False
+    return True
+
+
+def _sentence_span(text: str, start: int, end: int) -> str:
+    left = start
+    while left > 0 and text[left - 1] not in _PRICED_IN_SENTENCE_BREAKS:
+        left -= 1
+    right = end
+    n = len(text)
+    while right < n and text[right] not in _PRICED_IN_SENTENCE_BREAKS:
+        right += 1
+    return text[left:right]
 
 
 def validate_manager_expectation_revision_consumption(
@@ -510,6 +756,10 @@ def validate_manager_expectation_revision_consumption(
         texts_to_check.append(str(manager_verdict.get("investment_plan")))
     full_text = "\n".join(t for t in texts_to_check if t)
 
+    # DAV-1071：经理引用分析师 claim 文本（含其自标 unknown 的已定价标注）不等于自行断言；
+    # 提前构建 claim 文本语料（空白归一），供 priced-in 与 beat/miss 两个分支共用。
+    claim_index = _claim_quote_index(claims)
+
     # 1. Check if priced_in claimed as supported fact without traceable evidence (Chinese & English)
     if fund_pi != PRICED_IN_SUPPORTED and news_pi != PRICED_IN_SUPPORTED:
         has_pi_asserted = False
@@ -541,9 +791,33 @@ def validate_manager_expectation_revision_consumption(
         ):
             pi_occurrences.append((m.start(), m.end()))
         for start, end in pi_occurrences:
-            if _is_priced_in_assertion(full_text, start, end):
-                has_pi_asserted = True
-                break
+            # DAV-1071 缺陷0 + DAV-1073：命中处于分析师 claim 文本/改写/ID引用内属引用，非自行断言；
+            # 「已定价状态为 unknown」显式标注引用同样放行
+            if _is_claim_quotation(full_text, start, end, claim_index, _PI_QUOTE_KW):
+                continue
+            # DAV-1074 🔴-1 / DAV-1076 🔴-3：标注豁免仅当标注 match 覆盖本命中区间。
+            # 「同子句」路径已撤销——「已定价状态为unknown但/即市场实际已定价」类无标点转折
+            # 绕过中，第二个命中不在标注 match 内，属独立断言必须拦。
+            _pi_sl = start
+            while _pi_sl > 0 and full_text[_pi_sl - 1] not in _PRICED_IN_SENTENCE_BREAKS:
+                _pi_sl -= 1
+            _pi_sr = end
+            while _pi_sr < len(full_text) and full_text[_pi_sr] not in _PRICED_IN_SENTENCE_BREAKS:
+                _pi_sr += 1
+            _pi_sent = full_text[_pi_sl:_pi_sr]
+            if any(
+                m.start() <= start - _pi_sl < m.end()
+                for m in _PI_ANNOTATION.finditer(_pi_sent)
+            ):
+                continue
+            if not _is_priced_in_assertion(full_text, start, end):
+                continue
+            # DAV-1071 缺陷2：附带可回溯披露依据且用于降权的 priced-in 引用放行
+            sentence = _sentence_span(full_text, start, end)
+            if _has_traceable_pricing_basis(sentence) and _is_downweighting_pricing(sentence):
+                continue
+            has_pi_asserted = True
+            break
         if has_pi_asserted:
             violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用")
 
@@ -554,31 +828,58 @@ def validate_manager_expectation_revision_consumption(
             "超预期", "超出预期", "超越预期", "好于预期", "优于预期", "高于预期",
             "不及预期", "低于预期", "未达预期", "差于预期", "弱于预期", "逊于预期", "落后于预期",
         )
+        # DAV-1071 缺陷1：beat/miss 改 per-occurrence 判别（否定/驳回/条件句/名词短语/引用豁免），
+        # 与 priced-in 同一套语义判定；同位重叠关键词去重（保留最长）。
+        bm_occurrences: list[tuple[int, int, str]] = []
         for kw in beat_miss_kws_zh:
-            if kw in full_text:
-                has_beat_miss = True
-                violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”")
-                break
+            idx = full_text.find(kw)
+            while idx >= 0:
+                bm_occurrences.append((idx, idx + len(kw), kw))
+                idx = full_text.find(kw, idx + 1)
+        bm_occurrences.sort(key=lambda o: (o[0], -(o[1] - o[0])))
+        bm_dedup: list[tuple[int, int, str]] = []
+        for occ in bm_occurrences:
+            if bm_dedup and occ[0] < bm_dedup[-1][1]:
+                continue
+            bm_dedup.append(occ)
+        for start, end, kw in bm_dedup:
+            if _is_claim_quotation(full_text, start, end, claim_index, _BM_QUOTE_KW):
+                continue
+            if not _is_beat_miss_assertion(full_text, start, end):
+                continue
+            has_beat_miss = True
+            violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”")
+            break
         if not has_beat_miss:
-            m_en_beat = re.search(
+            en_beat_iter = list(re.finditer(
                 r"\b(?:beat|beats|beating|exceed|exceeded|exceeds|exceeding|surpass|surpassed|surpasses|surpassing|above|better than|higher than|ahead of)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected)\b|\b(?:earnings|profit|revenue)\s+beat\b",
                 full_text,
                 re.IGNORECASE,
-            )
-            if m_en_beat:
+            ))
+            for m_en_beat in en_beat_iter:
+                if _is_claim_quotation(full_text, m_en_beat.start(), m_en_beat.end(), claim_index, _BM_QUOTE_KW):
+                    continue
+                if not _is_beat_miss_assertion(full_text, m_en_beat.start(), m_en_beat.end()):
+                    continue
                 violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩超预期（命中 {m_en_beat.group(0)!r}）")
                 has_beat_miss = True
-            else:
-                m_en_miss = re.search(
+                break
+            if not has_beat_miss:
+                en_miss_iter = list(re.finditer(
                     r"\b(?:fell short|falls short|fall short)(?:\s+of\b(?:\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected))?)?\b|"
                     r"\b(?:missed?|misses|missing|below|worse than|lower than|lagged|behind)\s+(?:(?:all\s+)?(?:market|analyst|street|wall\s+street|consensus|earnings)\s+)?(?:expectations?|consensus|estimates?|forecasts?|expected)\b|"
                     r"\b(?:earnings|profit|revenue)\s+miss\b",
                     full_text,
                     re.IGNORECASE,
-                )
-                if m_en_miss:
+                ))
+                for m_en_miss in en_miss_iter:
+                    if _is_claim_quotation(full_text, m_en_miss.start(), m_en_miss.end(), claim_index, _BM_QUOTE_KW):
+                        continue
+                    if not _is_beat_miss_assertion(full_text, m_en_miss.start(), m_en_miss.end()):
+                        continue
                     violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩不及预期（命中 {m_en_miss.group(0)!r}）")
                     has_beat_miss = True
+                    break
 
     # 3. Check if financial numbers hallucinated when analyst reported gap / missing structured actual
     fund_act_val = (fund_er.get("actual") or {}).get("value")

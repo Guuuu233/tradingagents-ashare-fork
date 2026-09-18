@@ -2071,3 +2071,339 @@ def test_dav1068_priced_in_rejected_quote_not_flagged():
         _dav1068_gap_revs(),
     )
     assert not any("已定价" in v for v in viols), f"误报: {viols}"
+
+# ==============================================================================
+# DAV-1071：E-04 引用型误报修复 + beat/miss per-occurrence + 条件句判别 + 披露依据降权豁免
+# ==============================================================================
+
+def _dav1071_gap_revs():
+    return _dav1068_gap_revs()
+
+
+_DAV1071_CLAIM_PI_UNKNOWN = (
+    "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化"
+)
+
+
+def test_dav1071_priced_in_claim_quotation_not_flagged():
+    """A/C/E: claim 标 priced_in=unknown 时，manager 引用该 claim 文本不算自行断言；自行新增仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{"claim_id": "CLM-PI", "claim": _DAV1071_CLAIM_PI_UNKNOWN, "evidence": []}]
+
+    # A: 原样引用 claim 文本 -> 放行
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "采纳多方观点：" + _DAV1071_CLAIM_PI_UNKNOWN, _dav1071_gap_revs(), claims=claims
+    )
+    assert not any("已定价" in v for v in viols), f"引用被误报: {viols}"
+
+    # B: 同段引用之外另有自行断言 -> 拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        _DAV1071_CLAIM_PI_UNKNOWN + "。此外我认为估值提升空间已充分定价，可积极做多。",
+        _dav1071_gap_revs(), claims=claims,
+    )
+    assert any("已定价" in v for v in viols), f"自行断言漏拦: {viols}"
+
+    # D: 无任何 claim 支撑，manager 自己说已定价 -> 拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "该利好已被市场充分消化，且现金流改善已定价。", _dav1071_gap_revs(), claims=[]
+    )
+    assert any("已定价" in v for v in viols), f"无支撑断言漏拦: {viols}"
+
+
+def test_dav1071_beat_miss_conditional_and_listing_not_flagged():
+    """beat/miss 条件/假设句、否定句、名词性列举（生产 8 条真实命中形态）全部放行。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "若节日消费实际承接超预期，可能迅速阻断空头破位进程",
+        "若白酒双节动销大幅不及预期，叠加批价走弱将演化为加速破位",
+        "但若半年报业绩大幅不及预期且放量破位，短线估值溢价将被挤压",
+        "若日收盘跌破88.80元或08-29中报单季扣非净利同比大幅不及预期，无条件止损离场",
+        "若中报超预期，上方SMA200（94.62元）将转为支撑",
+        "正文无未计提超预期信息",
+        "盲点：中报历史静态超预期幅度、渠道库存未披露",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert not any("预期" in v for v in viols), f"误报: {text!r} -> {viols}"
+
+
+def test_dav1071_beat_miss_own_assertion_still_flagged():
+    """beat/miss 自行断言（非条件、非引用）仍拦，守卫不退化。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "公司二季度业绩大幅超预期，建议适度建仓",
+        "本次中报实际披露净利不及预期，需下修判断",
+        "The results beat expectations significantly",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert not is_valid, f"应拦截: {text!r}"
+        assert any("预期" in v for v in viols), f"应报业绩预期违规: {text!r} -> {viols}"
+
+
+def test_dav1071_beat_miss_claim_quotation_not_flagged():
+    """manager 引用分析师 claim 中的超预期表述不算自行断言。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claim = "多方认为二季度动销超预期，但证据仅为渠道调研口径"
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "记录多方观点：" + claim + "，不予采纳。",
+        _dav1071_gap_revs(),
+        claims=[{"claim_id": "CLM-BM", "claim": claim}],
+    )
+    assert not any("预期" in v for v in viols), f"引用被误报: {viols}"
+
+
+def test_dav1071_priced_in_traceable_basis_downweight_not_flagged():
+    """附带可回溯披露日期/公开时长依据且用于降权的 priced-in 引用放行（生产真实句）。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "该信息8月29日披露，超过14个交易日的信息属于已定价，短线择时解释力偏弱",
+        "该财务事实已于8月31日披露超10个交易日，属于已定价信息，对短线交易解释力弱",
+        "依据信息定价纪律，中报已披露超10个交易日，属于已定价基线，短线解释力降权",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert not any("已定价" in v for v in viols), f"误报: {text!r} -> {viols}"
+
+
+def test_dav1071_priced_in_basis_without_downweight_or_reverse_still_flagged():
+    """有日期依据但用于支撑方向、或有降权词但无日期依据，仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "该利好已于8月29日披露，市场已充分定价，建议追高买入",
+        "该利好已定价，短线解释力偏弱，不宜追高",
+        "信息已充分定价，该判断不作为独立择时依据",  # 无日期/时长依据
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert any("已定价" in v for v in viols), f"漏拦: {text!r} -> {viols}"
+
+# ==============================================================================
+# DAV-1073 复审返修：条件豁免限同子句 + 生产「claim ID+改写」引用覆盖
+# ==============================================================================
+
+def test_dav1073_conditional_scope_limited_to_same_clause():
+    """🔴-1：条件词只豁免同子句命中；「若A则B，C已定价」中 C 是主句断言，必须拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "若消息属实则观望，该利好已充分定价，短线无上行空间",
+        _dav1071_gap_revs(),
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"句级豁免漏拦: {viols}"
+    # 同子句条件仍放行（含小数点价格不应断句）
+    for text in (
+        "若节日消费实际承接超预期，可能迅速阻断空头破位进程",
+        "若日收盘跌破88.80元或08-29中报单季扣非净利同比大幅不及预期，无条件止损离场",
+        "若该信息已被市场消化则利好出尽",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert not any("已定价" in v or "预期" in v for v in viols), f"误报: {text!r} -> {viols}"
+
+
+def test_dav1073_claim_paraphrase_and_id_quotation_not_flagged():
+    """🟡-1：生产形态「claim ID + 改写」引用放行——LCS≥10 或句内 claim_id + claim 含同类关键词。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claim_txt = (
+        "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化"
+    )
+    claims = [{"claim_id": "CLM-PI", "claim": claim_txt, "evidence": []}]
+    for text in (
+        "多方指出：中报披露已超10个交易日，现金流属历史陈迹，市场层面已定价",
+        "采纳CLM-PI的判断：该信息已定价，解释力降权",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert not any("已定价" in v for v in viols), f"生产引用形态误报: {text!r} -> {viols}"
+
+
+def test_dav1073_quotation_with_directional_support_still_flagged():
+    """引用形态叠加非否定方向词（可积极做多）属反向支撑自断言，仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{
+        "claim_id": "CLM-PI",
+        "claim": "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化",
+    }]
+    for text in (
+        "采纳CLM-PI的判断：该信息已定价，可积极做多",
+        "中报披露已超10个交易日，我认为利好已被市场消化，可积极做多",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert any("已定价" in v for v in viols), f"反向支撑漏拦: {text!r} -> {viols}"
+
+
+def test_dav1073_priced_in_unknown_annotation_not_flagged():
+    """「已定价状态为 unknown」显式标注引用放行。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "分析师已定价状态为unknown，经理按未知处理，不作定价事实依据",
+        _dav1071_gap_revs(),
+    )
+    assert not any("已定价" in v for v in viols), f"标注引用误报: {viols}"
+
+# ==============================================================================
+# DAV-1074 复审返修：句级豁免锚定到命中/子句粒度
+# ==============================================================================
+
+def test_dav1074_annotation_does_not_exempt_same_sentence_own_assertion():
+    """🔴-1：同句标注引用不连带豁免独立断言。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "已定价状态为unknown，但我方独立判断该利好已定价",
+        _dav1071_gap_revs(),
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"同句独立断言漏拦: {viols}"
+    # 纯标注引用仍放行
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "分析师已定价状态为unknown，经理按未知处理，不作定价事实依据",
+        _dav1071_gap_revs(),
+    )
+    assert not any("已定价" in v for v in viols), f"标注引用误报: {viols}"
+
+
+def test_dav1074_claim_id_does_not_exempt_own_assertion_after_pivot():
+    """🔴-2：claim_id 后接自主判断标记时，命中属独立断言仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{"claim_id": "INV-3", "claim": "该利好或已定价，需核实", "evidence": []}]
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "提及INV-3后，我方独立判断利好已定价",
+        _dav1071_gap_revs(),
+        claims=claims,
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"ID 引用语域漏拦: {viols}"
+    # 同子句/引用语域内的 ID 引用仍放行
+    claim2 = "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化"
+    for text in (
+        "采纳CLM-PI的判断：该信息已定价，解释力降权",
+        "按CLM-PI标注该信息已定价处理",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(),
+            claims=[{"claim_id": "CLM-PI", "claim": claim2}],
+        )
+        assert not any("已定价" in v for v in viols), f"ID 引用误报: {text!r} -> {viols}"
+
+
+def test_dav1074_traceable_basis_requires_disclosure_word():
+    """🟡-1：仅日期无披露类词不构成可回溯依据；弱降权词收窄。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "9月18日美联储降息落地，利好已定价，市场需谨慎",
+        _dav1071_gap_revs(),
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"弱依据漏拦: {viols}"
+
+# ==============================================================================
+# DAV-1076 复审返修：无标点转折绕过家族 + LCS 语域检查
+# ==============================================================================
+
+def test_dav1076_annotation_nopunct_pivot_own_assertion_flagged():
+    """🔴-3：标注 match 不再按「同子句」豁免；无标点转折（但/即/而）后的独立断言仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    for text in (
+        "已定价状态为unknown但市场实际已定价",
+        "已定价状态为unknown即判断利好已定价",
+        "已定价状态为unknown而我方认为利好已定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs()
+        )
+        assert not is_valid, f"无标点转折漏拦: {text!r}"
+        assert any("已定价" in v for v in viols), f"应报已定价违规: {text!r} -> {viols}"
+
+
+def test_dav1076_lcs_paraphrase_with_own_voice_flagged():
+    """🔴-4：LCS 改写路径施加同一语域检查；含自主判断/转折标记的句子不再豁免。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{
+        "claim_id": "CLM-PI",
+        "claim": "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化",
+    }]
+    for text in (
+        "多方称该利好已被市场消化，但我方独立判断利好已定价",
+        "多方称中报披露已超10个交易日，但该利好实际已定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert not is_valid, f"LCS+转折漏拦: {text!r}"
+        assert any("已定价" in v for v in viols), f"应报已定价违规: {text!r} -> {viols}"
+    # 干净 paraphrase 仍放行
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "多方指出：中报披露已超10个交易日，现金流属历史陈迹，市场层面已定价",
+        _dav1071_gap_revs(), claims=claims,
+    )
+    assert not any("已定价" in v for v in viols), f"paraphrase 误报: {viols}"
+
+def test_dav1077_lcs_path_same_sentence_own_assertion_flagged():
+    """DAV-1077：LCS 改写路径句级豁免收口复核——审查实测句固化。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{
+        "claim_id": "CLM-PI",
+        "claim": "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化",
+    }]
+    for text in (
+        "多方称该利好已被市场消化反映需核实，我方独立判断其已定价",
+        "多方称该利好已被市场消化反映需核实。我方独立判断其已定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert not is_valid, f"LCS 句级豁免漏拦: {text!r}"
+        assert any("已定价" in v for v in viols), f"应报已定价违规: {text!r} -> {viols}"
+    # beat/miss 对称路径
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "多方称中报披露已超10个交易日现金流属陈迹，我方独立判断其已超预期",
+        _dav1071_gap_revs(), claims=claims,
+    )
+    assert not is_valid
+    assert any("预期" in v for v in viols), f"beat/miss 对称漏拦: {viols}"
+
+def test_dav1080_claim_id_same_clause_own_voice_flagged():
+    """DAV-1080 🔴：claim_id 同子句分支补齐语域检查——无标点转折连接的独立断言仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    claims = [{
+        "claim_id": "CLM-PI",
+        "claim": "中报披露已超10个交易日，700亿现金流属于全市场皆知的历史财务陈迹（已定价），不构成新增催化",
+    }]
+    for text in (
+        "采纳CLM-PI但我方独立判断该利好已定价",
+        "按CLM-PI然而市场实际已定价",
+        "采纳CLM-PI，但我方独立判断该利好已定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert not is_valid, f"同子句 ID+转折漏拦: {text!r}"
+        assert any("已定价" in v for v in viols), f"应报已定价违规: {text!r} -> {viols}"
+    # 干净 ID 引用仍放行（豁免不依赖标点有无的反向面）
+    for text in (
+        "采纳CLM-PI的判断：该信息已定价",
+        "按CLM-PI标注该信息已定价处理",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, _dav1071_gap_revs(), claims=claims
+        )
+        assert not any("已定价" in v for v in viols), f"ID 引用误报: {text!r} -> {viols}"
