@@ -11,6 +11,7 @@ Specifications:
 """
 
 import os
+from pathlib import Path
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -31,6 +32,7 @@ from scripts.run_social_ingestion import (
     validate_source_db_tables,
     build_mediacrawler_argv,
     ensure_mediacrawler_sqlite_target,
+    harden_sqlite_file_permissions,
     validate_mediacrawler_argv,
     sanitize_cmd_for_logging,
 )
@@ -540,3 +542,112 @@ def test_run_social_ingestion_subprocess_failure_raises(tmp_path):
                 crawler_entrypoint=str(entrypoint),
                 execute_crawler=True,
             )
+
+
+# ============================================================================
+# 6. DAV-1061 Hardening Tests
+# ============================================================================
+
+def test_ensure_mediacrawler_sqlite_target_requires_entrypoint_file(tmp_path):
+    """LOW-2: a missing entrypoint file fails with a direct, obvious error."""
+    crawler_root = tmp_path / "MediaCrawler"
+    (crawler_root / "database").mkdir(parents=True)
+    missing_entrypoint = crawler_root / "main.py"  # never created
+    source_db = tmp_path / "runtime" / "mediacrawler.db"
+
+    with pytest.raises(ValueError, match="entrypoint not found"):
+        ensure_mediacrawler_sqlite_target(str(source_db), str(missing_entrypoint))
+
+
+def test_refusing_to_choose_winner_mentions_backup_recovery(tmp_path):
+    """LOW-1: the dual-DB error explains the pre-link backup recovery path."""
+    crawler_root = tmp_path / "MediaCrawler"
+    database_dir = crawler_root / "database"
+    database_dir.mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text("# test entrypoint\n")
+    (database_dir / "sqlite_tables.db").write_bytes(b"crawler")
+    source_db = tmp_path / "runtime" / "mediacrawler.db"
+    source_db.parent.mkdir()
+    source_db.write_bytes(b"requested")
+
+    with pytest.raises(ValueError, match=r"pre-link"):
+        ensure_mediacrawler_sqlite_target(str(source_db), str(entrypoint))
+
+
+def test_harden_sqlite_file_permissions_covers_fixed_path_sidecars(tmp_path):
+    """MED-1: -wal/-shm/-journal sidecars at the crawler's fixed DB path are private.
+
+    SQLite names sidecars after the *opened* path — the fixed
+    ``database/sqlite_tables.db`` symlink — not after the resolved source DB,
+    so sidecars can land next to the symlink even when the source path was
+    hardened.
+    """
+    source_db = tmp_path / "runtime" / "mediacrawler.db"
+    source_db.parent.mkdir()
+    source_db.write_bytes(b"db")
+    crawler_db = tmp_path / "MediaCrawler" / "database" / "sqlite_tables.db"
+    crawler_db.parent.mkdir(parents=True)
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = Path(f"{crawler_db}{suffix}")
+        sidecar.write_bytes(b"sidecar")
+        os.chmod(sidecar, 0o644)
+
+    harden_sqlite_file_permissions(str(source_db), str(crawler_db))
+
+    for suffix in ("-wal", "-shm", "-journal"):
+        mode = Path(f"{crawler_db}{suffix}").stat().st_mode & 0o777
+        assert oct(mode) == "0o600", f"{suffix} sidecar left world-readable"
+    assert oct(source_db.stat().st_mode & 0o777) == "0o600"
+
+
+def test_run_social_ingestion_hardens_fixed_path_sidecars(tmp_path):
+    """MED-1 end-to-end: crawl-time sidecars left at the fixed path are 0600."""
+    crawler_root = tmp_path / "MediaCrawler"
+    database_dir = crawler_root / "database"
+    database_dir.mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text(
+        '''
+import sqlite3
+from pathlib import Path
+
+db_path = Path(__file__).parent / "database" / "sqlite_tables.db"
+conn = sqlite3.connect(db_path)
+conn.executescript(
+    """
+    CREATE TABLE xhs_note (
+        note_id TEXT, time INTEGER, add_ts INTEGER, last_modify_ts INTEGER
+    );
+    CREATE TABLE xhs_note_comment (
+        comment_id TEXT, note_id TEXT, create_time INTEGER,
+        add_ts INTEGER, last_modify_ts INTEGER
+    );
+    """
+)
+conn.commit()
+conn.close()
+# Simulate WAL-mode sidecars named after the opened (symlink) path.
+for suffix in ("-wal", "-shm"):
+    Path(f"{db_path}{suffix}").write_bytes(b"sidecar")
+'''
+    )
+    source_db = tmp_path / "runtime" / "declared-source.db"
+
+    result = run_social_ingestion(
+        platform="xhs",
+        query="贵州茅台",
+        source_db=str(source_db),
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
+        lock_file=str(tmp_path / "child.lock"),
+        crawler_entrypoint=str(entrypoint),
+        execute_crawler=True,
+        python_bin=sys.executable,
+    )
+
+    assert result["status"] == "success"
+    fixed_db = database_dir / "sqlite_tables.db"
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(f"{fixed_db}{suffix}")
+        assert sidecar.exists()
+        assert oct(sidecar.stat().st_mode & 0o777) == "0o600"

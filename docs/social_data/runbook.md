@@ -113,6 +113,15 @@ keeping the original file as a recoverable sibling backup when needed. The
 source DB path is therefore the actual working database; `--save_data_path`
 only controls MediaCrawler's media output directory.
 
+The binding symlink at `<crawler-root>/database/sqlite_tables.db` is left in
+place after the run so subsequent runs reuse the same working DB. Before
+switching to a different `--source-db`, delete that symlink manually
+(`rm <crawler-root>/database/sqlite_tables.db`); otherwise the runner refuses
+to redirect it. Earlier real files displaced by the link are preserved
+alongside as `sqlite_tables.db.pre-link-<ns>.bak`. The runner also tightens
+the working DB and any `-wal` / `-shm` / `-journal` sidecars — including ones
+created at the fixed crawler path — to `0600` after each crawl.
+
 Arbitrary argv lists (e.g. `echo`, shell wrappers) are strictly rejected by `validate_mediacrawler_argv`.
 
 
