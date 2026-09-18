@@ -318,13 +318,10 @@ def evaluate_confirmation_state(
         core_claim_ids = []
 
     # DAV-1068 缺陷A：合法去重排除（double_count_guard 折叠）代表已裁决但不计额外贡献。
-    # 只认与已知 claim 绑定的 excluded id；伪造/无来源 id 不起作用，字符串/None 元素天然无 claim_id。
+    # 被折叠 claim 的特征恰是已被移出裁决列表（adopted/partial/rejected），因此合法性
+    # 只要求能绑定到真实存在的 claim（claims/summary/verification 任一），不以裁决列表
+    # 成员资格为条件；伪造/无来源 id 不起作用，字符串/None 元素天然无 claim_id。
     excluded_ids = [str(x).strip() for x in (excluded_claim_ids or []) if str(x).strip()]
-    _known_bound_cids = set(core_claim_ids) | set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids)
-    legit_excluded_ids: set[str] = {
-        cid for cid in excluded_ids
-        if cid in _known_bound_cids
-    }
 
     summary_map: dict[str, Mapping[str, Any]] = {}
     if claim_evidence_summary:
@@ -345,10 +342,10 @@ def evaluate_confirmation_state(
         for c in (claims or [])
         if isinstance(c, Mapping) and str(c.get("claim_id", "") or "").strip()
     }
-    # 排除项必须能核对到真实存在的 claim（claims/summary/verification/裁决列表任一）
-    legit_excluded_ids = {
-        cid for cid in legit_excluded_ids
-        if cid in known_claims or cid in summary_map or cid in ver_by_cid or cid in _known_bound_cids
+    # 排除项必须能核对到真实存在的 claim（claims/summary/verification 任一）
+    legit_excluded_ids: set[str] = {
+        cid for cid in excluded_ids
+        if cid in known_claims or cid in summary_map or cid in ver_by_cid
     }
     # 被合法折叠的 claim 已裁决为零贡献，不再计入 core 验证要求；fatal 检查仍在原 core 全集上执行
     core_eval_ids = [cid for cid in core_claim_ids if cid not in legit_excluded_ids]

@@ -1189,6 +1189,61 @@ def test_dav1068_excluded_ids_param_marks_claim_decided():
     assert not any(c.startswith("unadjudicated_material_claims_adopt") for c in r_codes)
 
 
+def test_dav1068_folded_claim_outside_adjudication_lists_not_unadjudicated():
+    """A1 补充（DAV-1069 返修）：被折叠 claim 不在 focus/adopted/partial/rejected 任一裁决列表，
+    仅存在于 claims+verification+审计排除集——合法去重排除不得被当漏裁决。"""
+    claims = [
+        {"claim_id": "INV-1", "event_id": "ev1", "claim_text": "预告大增"},
+        {"claim_id": "INV-5", "event_id": "ev1", "claim_text": "同一事件重复表述"},
+    ]
+    ver = [
+        {"claim_id": "INV-1", "status": "verified"},
+        {"claim_id": "INV-5", "status": "verified"},
+    ]
+    metrics = {
+        "independent_cluster_count": 2,
+        "double_count_guard_applied": True,
+        "double_count_guard_audit": {
+            "status": "accounted_for",
+            "excluded_claim_ids": ["INV-5"],
+        },
+    }
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["INV-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+    status = status_from_manager_verdict(
+        mv,
+        investment_debate_state={"claim_cluster_metrics": metrics},
+        focus_claim_ids=["INV-1"],
+        claims_verification=ver,
+        claims=claims,
+    )
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.confirmation_state == CONFIRM_CONFIRMED
+    assert not any(
+        c.startswith("unadjudicated_material_claims_adopt") for c in status.reason_codes
+    )
+
+    # 对照：同一 claim 无审计排除来源时仍是真漏裁决
+    mv2 = dict(mv)
+    status2 = status_from_manager_verdict(
+        mv2,
+        focus_claim_ids=["INV-1"],
+        claims_verification=ver,
+        claims=claims,
+    )
+    assert status2.analysis_status == ANALYSIS_ABSTAIN
+    assert any(
+        c.startswith("unadjudicated_material_claims_adopt") for c in status2.reason_codes
+    )
+
+
 def test_dav1068_true_unadjudicated_and_forged_exclusion_still_block():
     """A2: 真漏裁决仍 UNRESOLVED/ABSTAIN；伪造/无来源 excluded ID 不绕过。"""
     summary = _dcg_summary("INV-1", "INV-2")
