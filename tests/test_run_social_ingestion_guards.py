@@ -12,6 +12,7 @@ Specifications:
 
 import os
 import sqlite3
+import sys
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -29,6 +30,7 @@ from scripts.run_social_ingestion import (
     validate_save_option,
     validate_source_db_tables,
     build_mediacrawler_argv,
+    ensure_mediacrawler_sqlite_target,
     validate_mediacrawler_argv,
     sanitize_cmd_for_logging,
 )
@@ -187,6 +189,100 @@ def test_validate_source_db_tables_guard(tmp_path):
     validate_source_db_tables(valid_db, "xhs", enable_comments=True)
 
 
+def test_mediacrawler_sqlite_target_is_bound_to_requested_source(tmp_path):
+    """The pinned crawler's fixed DB path must resolve to the declared source DB."""
+    crawler_root = tmp_path / "MediaCrawler"
+    database_dir = crawler_root / "database"
+    database_dir.mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text("# test entrypoint\n")
+    fixed_db = database_dir / "sqlite_tables.db"
+    fixed_db.write_bytes(b"seed-db")
+    source_db = tmp_path / "runtime" / "mediacrawler.db"
+
+    returned_root = ensure_mediacrawler_sqlite_target(str(source_db), str(entrypoint))
+
+    assert returned_root == str(crawler_root)
+    assert fixed_db.is_symlink()
+    assert fixed_db.resolve() == source_db.resolve()
+    assert source_db.read_bytes() == b"seed-db"
+    assert list(database_dir.glob("sqlite_tables.db.pre-link-*.bak"))
+    assert oct(source_db.stat().st_mode & 0o777) == "0o600"
+
+
+def test_mediacrawler_sqlite_target_rejects_two_existing_databases(tmp_path):
+    """The wrapper must not silently choose between unrelated DB files."""
+    crawler_root = tmp_path / "MediaCrawler"
+    database_dir = crawler_root / "database"
+    database_dir.mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text("# test entrypoint\n")
+    (database_dir / "sqlite_tables.db").write_bytes(b"crawler")
+    source_db = tmp_path / "runtime" / "mediacrawler.db"
+    source_db.parent.mkdir()
+    source_db.write_bytes(b"requested")
+
+    with pytest.raises(ValueError, match="refusing to choose a winner"):
+        ensure_mediacrawler_sqlite_target(str(source_db), str(entrypoint))
+
+
+def test_run_social_ingestion_child_writes_declared_source_db(tmp_path):
+    """Prove the real subprocess path writes through the explicit DB binding."""
+    crawler_root = tmp_path / "MediaCrawler"
+    database_dir = crawler_root / "database"
+    database_dir.mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text(
+        '''
+import sqlite3
+from pathlib import Path
+
+db_path = Path(__file__).parent / "database" / "sqlite_tables.db"
+conn = sqlite3.connect(db_path)
+conn.executescript(
+    """
+    CREATE TABLE xhs_note (
+        note_id TEXT, time INTEGER, add_ts INTEGER, last_modify_ts INTEGER
+    );
+    CREATE TABLE xhs_note_comment (
+        comment_id TEXT, note_id TEXT, create_time INTEGER,
+        add_ts INTEGER, last_modify_ts INTEGER
+    );
+    """
+)
+conn.commit()
+conn.close()
+'''
+    )
+    source_db = tmp_path / "runtime" / "declared-source.db"
+
+    result = run_social_ingestion(
+        platform="xhs",
+        query="贵州茅台",
+        source_db=str(source_db),
+        crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
+        lock_file=str(tmp_path / "child.lock"),
+        crawler_entrypoint=str(entrypoint),
+        execute_crawler=True,
+        python_bin=sys.executable,
+    )
+
+    assert result["status"] == "success"
+    assert result["crawler_execution"]["exit_code"] == 0
+    assert source_db.is_file()
+    assert (database_dir / "sqlite_tables.db").is_symlink()
+    assert (database_dir / "sqlite_tables.db").resolve() == source_db.resolve()
+    conn = sqlite3.connect(source_db)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+    assert {"xhs_note", "xhs_note_comment"}.issubset(tables)
+
+
 # ============================================================================
 # 5. Ingestion Runner and CLI Main Tests
 # ============================================================================
@@ -295,7 +391,7 @@ def test_build_mediacrawler_argv_shape():
     assert "--get_comment" in cmd and cmd[cmd.index("--get_comment") + 1] == "true"
     assert "--get_sub_comment" in cmd and cmd[cmd.index("--get_sub_comment") + 1] == "false"
     assert "--headless" in cmd and cmd[cmd.index("--headless") + 1] == "true"
-    assert "--save_data_path" in cmd and cmd[cmd.index("--save_data_path") + 1] == os.path.abspath("/path/to/mediacrawler_source.db")
+    assert "--save_data_path" in cmd and cmd[cmd.index("--save_data_path") + 1] == os.path.abspath("/path/to")
     assert "--cookies" in cmd and cmd[cmd.index("--cookies") + 1] == os.path.abspath("/tmp/test_cookies.txt")
     assert "--crawler_max_notes_count" in cmd and cmd[cmd.index("--crawler_max_notes_count") + 1] == "25"
     assert "--max_comments_count_singlenotes" in cmd and cmd[cmd.index("--max_comments_count_singlenotes") + 1] == "15"
@@ -368,6 +464,11 @@ def test_run_social_ingestion_mock_subprocess_and_four_dimensions(tmp_path):
     mock_proc.stdout = "[MediaCrawler] Crawling completed. Inserted 5 notes into SQLite."
     mock_proc.stderr = ""
 
+    crawler_root = tmp_path / "MediaCrawler"
+    (crawler_root / "database").mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text("# test entrypoint\n")
+
     with patch("subprocess.run", return_value=mock_proc) as mock_run:
         result = run_social_ingestion(
             platform="xhs",
@@ -380,7 +481,7 @@ def test_run_social_ingestion_mock_subprocess_and_four_dimensions(tmp_path):
             lock_file=lock_file,
             auto_import=True,
             execute_crawler=True,
-            crawler_entrypoint="/mock/mediacrawler/main.py",
+            crawler_entrypoint=str(entrypoint),
         )
 
         assert mock_run.called
@@ -423,6 +524,11 @@ def test_run_social_ingestion_subprocess_failure_raises(tmp_path):
     mock_proc.stdout = ""
     mock_proc.stderr = "MediaCrawler failed: cookie expired"
 
+    crawler_root = tmp_path / "MediaCrawler"
+    (crawler_root / "database").mkdir(parents=True)
+    entrypoint = crawler_root / "main.py"
+    entrypoint.write_text("# test entrypoint\n")
+
     with patch("subprocess.run", return_value=mock_proc):
         with pytest.raises(RuntimeError, match="MediaCrawler subprocess failed with exit code 1"):
             run_social_ingestion(
@@ -431,6 +537,6 @@ def test_run_social_ingestion_subprocess_failure_raises(tmp_path):
                 source_db=source_db,
                 crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092",
                 lock_file=lock_file,
+                crawler_entrypoint=str(entrypoint),
                 execute_crawler=True,
             )
-

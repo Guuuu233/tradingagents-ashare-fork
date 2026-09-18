@@ -12,7 +12,8 @@ Specifications:
 - Post-run SQLite target table verification.
 - Controlled command construction against real MediaCrawler CLI interface (cmd_arg/arg.py):
   --platform, --lt, --type search, --keywords, --save_data_option sqlite,
-  --get_comment true/false, --get_sub_comment false, --headless true, --save_data_path.
+  --get_comment true/false, --get_sub_comment false, --headless true,
+  --save_data_path (media directory; SQLite is bound explicitly).
 - Proves 4 independent dimensions:
   1. Crawler execution outcome
   2. Archive ingestion count
@@ -27,6 +28,8 @@ from datetime import datetime, timezone
 import fcntl
 import json
 import os
+from pathlib import Path
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -61,6 +64,75 @@ PLATFORM_TARGET_TABLES: Dict[str, List[str]] = {
     "xhs": ["xhs_note", "xhs_note_comment"],
     "dy": ["douyin_aweme", "douyin_aweme_comment"],
 }
+
+
+def ensure_mediacrawler_sqlite_target(source_db: str, crawler_entrypoint: str) -> str:
+    """Bind MediaCrawler's fixed SQLite path to the requested working DB.
+
+    The pinned MediaCrawler release stores SQLite at
+    ``<crawler-root>/database/sqlite_tables.db`` and does not use its
+    ``--save_data_path`` argument for the database file. Leaving that path
+    untouched silently writes outside the caller's declared ``source_db``.
+
+    The binding is filesystem-only: the pinned source remains unchanged, the
+    previous regular DB is kept as a recoverable sibling backup, and a
+    conflicting existing symlink or second DB is rejected.
+    """
+    source = Path(os.path.abspath(source_db))
+    entrypoint = Path(os.path.abspath(crawler_entrypoint))
+    crawler_db_dir = entrypoint.parent / "database"
+    fixed_db = crawler_db_dir / "sqlite_tables.db"
+
+    if not crawler_db_dir.is_dir():
+        raise ValueError(
+            f"MediaCrawler database directory not found: {crawler_db_dir}. "
+            "Use the pinned repository root as --crawler-entrypoint."
+        )
+
+    source.parent.mkdir(parents=True, exist_ok=True)
+
+    if os.path.lexists(fixed_db):
+        if fixed_db.is_symlink():
+            current_target = Path(os.path.realpath(fixed_db))
+            if current_target != source:
+                raise ValueError(
+                    f"MediaCrawler SQLite path already points to {current_target}; "
+                    f"refusing to redirect it to {source}."
+                )
+        elif fixed_db.is_file():
+            if source.exists():
+                try:
+                    same_file = os.path.samefile(fixed_db, source)
+                except OSError:
+                    same_file = False
+                if not same_file:
+                    raise ValueError(
+                        f"Both MediaCrawler SQLite path {fixed_db} and requested "
+                        f"source DB {source} exist; refusing to choose a winner."
+                    )
+            else:
+                shutil.copy2(fixed_db, source)
+                os.chmod(source, 0o600)
+                backup = crawler_db_dir / f"sqlite_tables.db.pre-link-{time.time_ns()}.bak"
+                os.replace(fixed_db, backup)
+                os.chmod(backup, 0o600)
+        else:
+            raise ValueError(f"MediaCrawler SQLite path is not a regular file or symlink: {fixed_db}")
+
+    if not os.path.lexists(fixed_db):
+        fixed_db.symlink_to(source)
+
+    if source.exists():
+        os.chmod(source, 0o600)
+    return str(crawler_db_dir.parent)
+
+
+def harden_sqlite_file_permissions(db_path: str) -> None:
+    """Keep the SQLite DB and any WAL sidecars private after a crawl."""
+    for suffix in ("", "-wal", "-shm"):
+        path = f"{db_path}{suffix}"
+        if os.path.exists(path):
+            os.chmod(path, 0o600)
 
 
 # ============================================================================
@@ -260,7 +332,10 @@ def build_mediacrawler_argv(
         "--get_comment", "true" if enable_comments else "false",
         "--get_sub_comment", "true" if enable_sub_comments else "false",
         "--headless", "true" if headless else "false",
-        "--save_data_path", os.path.abspath(source_db),
+        # MediaCrawler uses this option for media output directories, not its
+        # SQLite file. The SQLite path is bound by
+        # ensure_mediacrawler_sqlite_target before launch.
+        "--save_data_path", os.path.dirname(os.path.abspath(source_db)),
     ]
 
     if cookie_path:
@@ -445,10 +520,17 @@ def run_social_ingestion(
         should_execute = execute_crawler or crawler_cmd is not None or crawler_entrypoint is not None
 
         if should_execute:
+            crawler_cwd: Optional[str] = None
             if crawler_cmd:
                 validate_mediacrawler_argv(crawler_cmd)
                 cmd_to_run = crawler_cmd
             else:
+                if not crawler_entrypoint:
+                    raise ValueError(
+                        "--execute-crawler requires --crawler-entrypoint so the pinned "
+                        "MediaCrawler SQLite path can be bound safely."
+                    )
+                crawler_cwd = ensure_mediacrawler_sqlite_target(source_db, crawler_entrypoint)
                 cmd_to_run = build_mediacrawler_argv(
                     platform=platform,
                     query=query,
@@ -470,7 +552,14 @@ def run_social_ingestion(
             for proxy_var in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
                 clean_env.pop(proxy_var, None)
 
-            proc = subprocess.run(cmd_to_run, capture_output=True, text=True, env=clean_env)
+            proc = subprocess.run(
+                cmd_to_run,
+                capture_output=True,
+                text=True,
+                env=clean_env,
+                cwd=crawler_cwd,
+            )
+            harden_sqlite_file_permissions(source_db)
             crawler_res = {
                 "executed": True,
                 "status": "success" if proc.returncode == 0 else "failed",
@@ -686,4 +775,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

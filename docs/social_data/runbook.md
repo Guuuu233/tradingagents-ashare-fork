@@ -102,9 +102,16 @@ When `--execute-crawler` or `--crawler-entrypoint` is provided, `run_social_inge
   --get_comment <true|false> \
   --get_sub_comment false \
   --headless true \
-  --save_data_path <source-db> \
+  --save_data_path <source-db-parent-directory> \
   [--cookies <cookie-path>]
 ```
+
+MediaCrawler's pinned SQLite implementation ignores `--save_data_path` for the
+database filename and uses `<crawler-root>/database/sqlite_tables.db`. Before
+launch, the runner binds that fixed path to the declared `--source-db` path,
+keeping the original file as a recoverable sibling backup when needed. The
+source DB path is therefore the actual working database; `--save_data_path`
+only controls MediaCrawler's media output directory.
 
 Arbitrary argv lists (e.g. `echo`, shell wrappers) are strictly rejected by `validate_mediacrawler_argv`.
 
