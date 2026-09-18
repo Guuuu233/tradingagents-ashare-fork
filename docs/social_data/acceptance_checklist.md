@@ -2,8 +2,13 @@
 
 > **Target:** Track B-3 真实采集 / shadow / canary 验收方案与检查清单（执行不启用）  
 > **Reference:** `docs/social_data/implementation_plan.md` §3, §4, §5, §10, §11, §12; D-008, D-009, D-010; DAV-648, DAV-649, DAV-650, DAV-651  
-> **Baseline Commit:** `origin/codex/dav-4-p2a-trunk` @ `4fdcf8efa841c2a881d82429febd48578d544c94`  
+> **Baseline Commit:** `origin/codex/dav-4-p2a-trunk` @ `08f40178729da384b6ba0341489c1877328649d4`
 > **Strict Operational Boundary:** **本卡只出方案与检查清单，不启动爬虫、不切 active、不部署、不改账号。**
+
+> **2026-09-18 状态勘误：** 用户另行授权后，Gate 0 已在独立社交沙箱完成双平台
+> 小样本实测；证据见 `work/social-gate0-evidence-20260918.md`。这不改变本清单的
+> 生产边界：生产宿主机、生产 social archive、`shadow`、`active` 和生产报告抽检仍未
+> 执行。下表中标注“生产未做/待授权”的项目应继续视为未完成，不能用沙箱证据替代。
 
 ---
 
@@ -43,10 +48,10 @@
 
 | 门禁 | 验收细项 | 门槛标准 | 代码已交付状态（Code Delivered） | 真实未做状态 / 阻断点（Real-world Pending） | 验证依据 / 自动化套件 |
 |---|---|---|---|---|---|
-| **Gate 0** | MediaCrawler 钉 SHA | 锁定 `d6f7c5bb906b6dac40ddf343ef9e26438a3de092` | **已完成**：`run_social_ingestion.py`、`import_mediacrawler_social.py` 强制校验该 SHA；`runbook.md` 固化 CLI 参数映射 | **未做**：生产宿主机未拉取真实 MediaCrawler 仓库及安装 Python 3.11/uv 环境 | `tests/test_run_social_ingestion_guards.py`<br>`tests/test_import_mediacrawler_social_cli.py` |
-| **Gate 0** | SQLite 强制校验与隔离 | 强制 `save_data_option=sqlite`；控制接口强制 `127.0.0.1` | **已完成**：参数校验器拒绝非 sqlite（如 jsonl）、拒绝非 loopback 地址，校验表与列白名单 | **未做**：生产真实运行生成真实物理 SQLite 工作库 | `tests/test_run_social_ingestion_guards.py` |
-| **Gate 0** | 双平台真实导入首轮验证 | xhs/dy 各至少一轮；archive 行增加；旧快照不被 UPDATE | **已完成**：`MediaCrawlerImporter` 实现 4 表导入、空正文处理、非法时间拒收、哈希去重与 append-only；合成测试全过 | **未做（待授权）**：真实账号/Cookie 驱动真实爬虫抓取小红书与抖音，物理导入生产 `social_archive.db` 并核对行数 | `tests/test_mediacrawler_importer.py`<br>`tests/test_social_e2e_acceptance.py` |
-| **Gate 0** | 凭据与敏感数据治理 | Cookie/Token 绝不落库、不入日志、不入代码 | **已完成**：`author_id_hash` 单向脱敏，过滤 `xsec_token`、nicknames 等；代码与日志不打印敏感信息 | **未做（待授权）**：测试账号 Cookie 注入外部受控安全目录（`~/.mediacrawler/cookies/`） | `tests/test_social_e2e_acceptance.py` |
+| **Gate 0** | MediaCrawler 钉 SHA | 锁定 `d6f7c5bb906b6dac40ddf343ef9e26438a3de092` | **已完成**：代码强制校验 SHA；独立沙箱已按该 SHA、Python 3.11.15 和 uv 环境完成真实运行 | **仍未做**：生产宿主机未启用该采集环境；生产环境继续保持 disabled | `work/social-gate0-evidence-20260918.md`<br>`tests/test_run_social_ingestion_guards.py` |
+| **Gate 0** | SQLite 强制校验与隔离 | 强制 `save_data_option=sqlite`；控制接口强制 `127.0.0.1` | **已完成**：参数校验器拒绝非 sqlite（如 jsonl）、拒绝非 loopback 地址，校验表与列白名单；沙箱真实工作库已验证 | **仍未做**：生产环境未生成工作库，避免越过生产边界 | `work/social-gate0-evidence-20260918.md`<br>`tests/test_run_social_ingestion_guards.py` |
+| **Gate 0** | 双平台真实导入首轮验证 | xhs/dy 各至少一轮；archive 行增加；旧快照不被 UPDATE | **沙箱已完成**：两平台真实采集并导入独立 append-only archive，行数与拒绝数已核对 | **仍未做（有意保留）**：没有把结果物理导入生产 `social_archive.db`；生产导入需另行放行 | `work/social-gate0-evidence-20260918.md`<br>`tests/test_mediacrawler_importer.py` |
+| **Gate 0** | 凭据与敏感数据治理 | Cookie/Token 绝不落库、不入日志、不入代码 | **沙箱已验证**：用户在专用 Chrome profile 登录，未导出或保存 Cookie；日志和评论未包含 Cookie 内容 | **仍未做**：没有建立生产 Cookie 文件注入路径；无人值守采集仍需单独安全方案 | `work/social-gate0-evidence-20260918.md`<br>`tests/test_social_e2e_acceptance.py` |
 | **Gate 1** | 时间字段五层分立 | `published_at` / `source_updated_at` / `first_seen_at` / `snapshot_at` / `ingest_at` | **已完成**：契约、表结构与资格函数全部实现；`ingest_at` 永不参与资格判定 | **已完成（离线代码）**：离线测试全量闭环；待真实数据入库后执行数据审计 | `tests/test_social_contracts.py`<br>`tests/test_social_as_of_guard.py` |
 | **Gate 1** | XHS `last_update_time` 验证 | 未验证前忽略 `source_updated_at` 资格 | **已完成**：产出结论文档；代码默认未 trusted 时忽略该字段，防止正文未改互动变化时误判资格 | **未做**：生产大样本长期追踪真实内容变动与更新时间戳的相关性 | `docs/social_data/xhs_last_update_time_verification.md`<br>`tests/test_social_as_of_guard.py` |
 | **Gate 2** | Shadow 模式链路追溯 | `TA_SOCIAL_MODE=shadow`；生成 bundle 并持久化 | **已完成**：`collector.py`、`analyst_adapter.py` 支持 shadow；`social_data_context` 贯穿 State/API/Report | **未做（待授权）**：生产环境配置 `TA_SOCIAL_MODE=shadow` 并重启应用服务 | `tests/test_social_rollout_modes.py`<br>`tests/test_report_social_context.py` |
