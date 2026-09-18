@@ -1098,3 +1098,160 @@ def test_dav854_rt6_non_executable_clears_metrics():
     assert result["target_price"] is None
     assert result["stop_loss_price"] is None
 
+
+
+# ==============================================================================
+# DAV-1068 缺陷A：double_count_guard 折叠的 claim 不得被误判为漏裁决
+# ==============================================================================
+
+def _dcg_summary(*cids):
+    return {
+        cid: {
+            "counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        }
+        for cid in cids
+    }
+
+
+def test_dav1068_dedup_excluded_claim_not_unadjudicated():
+    """A1: 同事件双 claim 折叠后，被排除项有合法去重裁决，不得报 unadjudicated，不得整单 ABSTAIN。"""
+    from tradingagents.agents.managers.research_manager import apply_manager_double_count_guard
+    from tradingagents.agents.analysts.news_analyst import (
+        DOUBLE_COUNT_ACCOUNTED_FOR,
+        DOUBLE_COUNT_UNKNOWN,
+        EVENT_TYPE_EVENT,
+        EVENT_TYPE_FUNDAMENTAL,
+        STATUS_AVAILABLE,
+        STATUS_PARTIAL,
+        make_default_expectation_revision,
+    )
+
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+    fund_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_ACCOUNTED_FOR,
+        "prevent_double_voting": True,
+    }
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_PARTIAL)
+    news_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_UNKNOWN,
+        "prevent_double_voting": True,
+    }
+    exp_revs = {"fundamentals": fund_er, "news": news_er}
+
+    claims = [
+        {"claim_id": "INV-1", "event_id": "ev1", "claim_text": "公司业绩预告大幅增长", "evidence": ["预告"]},
+        {"claim_id": "INV-2", "event_id": "ev1", "claim_text": "新闻报道业绩预告大幅增长", "evidence": ["预告"]},
+    ]
+    verdict = {"adopted_claim_ids": ["INV-1", "INV-2"], "excluded_evidence": ["历史字符串证据"]}
+    metrics, verdict, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics={"independent_cluster_count": 2, "bull_cluster_count": 2, "bear_cluster_count": 0},
+        expectation_revisions=exp_revs,
+        claims=claims,
+        manager_verdict=verdict,
+    )
+    assert verdict["adopted_claim_ids"] == ["INV-1"]
+    assert "历史字符串证据" in verdict["excluded_evidence"]
+
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": verdict["adopted_claim_ids"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+        "excluded_evidence": verdict["excluded_evidence"],
+    }
+    status = status_from_manager_verdict(
+        mv,
+        investment_debate_state={"claim_cluster_metrics": metrics},
+        focus_claim_ids=["INV-1", "INV-2"],
+        claim_evidence_summary=_dcg_summary("INV-1", "INV-2"),
+        claims=claims,
+    )
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.confirmation_state == CONFIRM_CONFIRMED
+    assert status.trade_action == ACTION_BUY
+
+
+def test_dav1068_excluded_ids_param_marks_claim_decided():
+    """A1 单元层：evaluate_confirmation_state 的 excluded_claim_ids 计入已裁决集合。"""
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["INV-1", "INV-2"],
+        claim_evidence_summary=_dcg_summary("INV-1", "INV-2"),
+        adopted_claim_ids=["INV-1"],
+        rejected_claim_ids=[],
+        excluded_claim_ids=["INV-2"],
+    )
+    assert c_state == CONFIRM_CONFIRMED
+    assert not any(c.startswith("unadjudicated_material_claims_adopt") for c in r_codes)
+
+
+def test_dav1068_true_unadjudicated_and_forged_exclusion_still_block():
+    """A2: 真漏裁决仍 UNRESOLVED/ABSTAIN；伪造/无来源 excluded ID 不绕过。"""
+    summary = _dcg_summary("INV-1", "INV-2")
+    claims = [{"claim_id": "INV-1"}, {"claim_id": "INV-2"}]
+
+    # INV-2 漏裁决（无任何 excluded 记录）仍拦
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["INV-1"],
+        claim_evidence_summary=summary,
+        claims=claims,
+        adopted_claim_ids=["INV-1"],
+        rejected_claim_ids=[],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert "unadjudicated_material_claims_adopt:INV-2" in r_codes
+
+    # excluded_claim_ids 只含与已知 claim 无关的伪造 ID：INV-2 仍被拦
+    c_state2, r_codes2 = evaluate_confirmation_state(
+        focus_claim_ids=["INV-1"],
+        claim_evidence_summary=summary,
+        claims=claims,
+        adopted_claim_ids=["INV-1"],
+        rejected_claim_ids=[],
+        excluded_claim_ids=["FAKE-999"],
+    )
+    assert c_state2 == CONFIRM_UNRESOLVED
+    assert "unadjudicated_material_claims_adopt:INV-2" in r_codes2
+
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["INV-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+        "excluded_evidence": [{"claim_id": "INV-2", "reason": "伪造排除"}],
+    }
+    # 即便 manager 自报 excluded_evidence 里有 INV-2，没有审计来源也不算已裁决
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["INV-1"],
+        claim_evidence_summary=summary,
+        claims=claims,
+    )
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.trade_action == ACTION_NO_TRADE
+
+
+def test_dav1068_excluded_fatal_claim_still_blocks():
+    """A3: 被折叠 claim 若在 focus 且为 fatal(contradicted)，拦截不放宽。"""
+    summary = _dcg_summary("INV-1")
+    summary["INV-2"] = {
+        "counts": {"total": 1, "verified": 0, "unsupported": 0, "contradicted": 1, "source_unavailable": 0},
+        "coverage": 0.0,
+        "decision": "reject",
+    }
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["INV-1", "INV-2"],
+        claim_evidence_summary=summary,
+        adopted_claim_ids=["INV-1"],
+        rejected_claim_ids=[],
+        excluded_claim_ids=["INV-2"],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert any("fatal" in c for c in r_codes)

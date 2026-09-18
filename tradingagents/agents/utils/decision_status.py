@@ -285,6 +285,7 @@ def evaluate_confirmation_state(
     adopted_claim_ids: Sequence[Any] | None = None,
     partially_adopted_claims: Sequence[Any] | None = None,
     rejected_claim_ids: Sequence[Any] | None = None,
+    excluded_claim_ids: Sequence[Any] | None = None,
 ) -> tuple[str, list[str]]:
     """Determine confirmation_state (CONFIRMED / PARTIAL / UNRESOLVED) and diagnostic codes.
 
@@ -316,6 +317,15 @@ def evaluate_confirmation_state(
     else:
         core_claim_ids = []
 
+    # DAV-1068 缺陷A：合法去重排除（double_count_guard 折叠）代表已裁决但不计额外贡献。
+    # 只认与已知 claim 绑定的 excluded id；伪造/无来源 id 不起作用，字符串/None 元素天然无 claim_id。
+    excluded_ids = [str(x).strip() for x in (excluded_claim_ids or []) if str(x).strip()]
+    _known_bound_cids = set(core_claim_ids) | set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids)
+    legit_excluded_ids: set[str] = {
+        cid for cid in excluded_ids
+        if cid in _known_bound_cids
+    }
+
     summary_map: dict[str, Mapping[str, Any]] = {}
     if claim_evidence_summary:
         summary_map = {str(k).strip(): v for k, v in claim_evidence_summary.items() if str(k).strip()}
@@ -335,6 +345,13 @@ def evaluate_confirmation_state(
         for c in (claims or [])
         if isinstance(c, Mapping) and str(c.get("claim_id", "") or "").strip()
     }
+    # 排除项必须能核对到真实存在的 claim（claims/summary/verification/裁决列表任一）
+    legit_excluded_ids = {
+        cid for cid in legit_excluded_ids
+        if cid in known_claims or cid in summary_map or cid in ver_by_cid or cid in _known_bound_cids
+    }
+    # 被合法折叠的 claim 已裁决为零贡献，不再计入 core 验证要求；fatal 检查仍在原 core 全集上执行
+    core_eval_ids = [cid for cid in core_claim_ids if cid not in legit_excluded_ids]
 
     def _is_claim_obs_hypo(cid: str) -> bool:
         sm = summary_map.get(cid)
@@ -427,7 +444,7 @@ def evaluate_confirmation_state(
     unadjudicated_adopt_cids: list[str] = []
     unadjudicated_partial_cids: list[str] = []
     if adjudication_provided:
-        decided_cids = set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids)
+        decided_cids = set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids) | legit_excluded_ids
         known_debate_cids = list(dict.fromkeys(
             [str(c.get("claim_id", "") or "").strip() for c in (claims or []) if str(c.get("claim_id", "") or "").strip()]
             + list(summary_map.keys())
@@ -487,7 +504,7 @@ def evaluate_confirmation_state(
         return CONFIRM_UNRESOLVED, fatal_codes
 
     # If neither core claims nor adopted claims exist
-    if not core_claim_ids and not adopted_ids:
+    if not core_eval_ids and not adopted_ids:
         unadjudicated_fatal_cids: set[str] = set()
         for cid, sm in summary_map.items():
             if _is_claim_fatal(cid):
@@ -516,11 +533,11 @@ def evaluate_confirmation_state(
         return CONFIRM_CONFIRMED, audit_rejected_codes
 
     # Core claims verification
-    if core_claim_ids:
-        core_verified = [cid for cid in core_claim_ids if _is_claim_verified(cid)]
-        core_unverified = [cid for cid in core_claim_ids if not _is_claim_verified(cid) and not _is_claim_fatal(cid)]
+    if core_eval_ids:
+        core_verified = [cid for cid in core_eval_ids if _is_claim_verified(cid)]
+        core_unverified = [cid for cid in core_eval_ids if not _is_claim_verified(cid) and not _is_claim_fatal(cid)]
         if len(core_verified) == 0:
-            return CONFIRM_UNRESOLVED, [f"unverified_core_claims:{','.join(core_claim_ids)}"]
+            return CONFIRM_UNRESOLVED, [f"unverified_core_claims:{','.join(core_eval_ids)}"]
         core_unverified_factual = [cid for cid in core_unverified if not _is_claim_obs_hypo(cid)]
         core_unverified_obs = [cid for cid in core_unverified if _is_claim_obs_hypo(cid)]
         core_has_partial = len(core_unverified_factual) > 0
@@ -696,6 +713,19 @@ def status_from_manager_verdict(
         else (mv_in_deb.get("rejected_claim_ids") or deb_state.get("rejected_claim_ids"))
     )
 
+    # DAV-1068 缺陷A：去重排除只认 double_count_guard_audit.excluded_claim_ids 审计来源，
+    # 不信 manager 自报的 excluded_evidence 字符串；具体 claim 真实性由 evaluate_confirmation_state 核对。
+    dcg_excluded_ids: list = []
+    for _metrics_src in (
+        deb_state.get("claim_cluster_metrics"),
+        mv.get("claim_cluster_metrics"),
+        mv_in_deb.get("claim_cluster_metrics"),
+    ):
+        if isinstance(_metrics_src, Mapping):
+            _audit = _metrics_src.get("double_count_guard_audit")
+            if isinstance(_audit, Mapping):
+                dcg_excluded_ids.extend(_audit.get("excluded_claim_ids") or [])
+
     confirmation_state, confirm_codes = evaluate_confirmation_state(
         focus_claim_ids=f_ids,
         unresolved_claim_ids=u_ids,
@@ -705,6 +735,7 @@ def status_from_manager_verdict(
         adopted_claim_ids=adopted_ids,
         partially_adopted_claims=partially_adopted_ids,
         rejected_claim_ids=rejected_ids,
+        excluded_claim_ids=dcg_excluded_ids,
     )
 
     # Consistency hard gate: rejected + adopt, unadjudicated material claim with adopt, or PIT failure in adopted/partially adopted
