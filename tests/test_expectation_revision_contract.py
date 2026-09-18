@@ -1409,6 +1409,95 @@ def test_negative_double_count_guard_deduplicates_by_real_identity_and_is_idempo
     assert len(v_dup2["excluded_evidence"]) == 1
 
 
+def _make_dcg_exp_revs():
+    """Expectation revisions with double_count_guard active on both legs."""
+    fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
+    fund_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_ACCOUNTED_FOR,
+        "prevent_double_voting": True,
+        "description": "已在基线中计入",
+    }
+    news_er = make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_PARTIAL)
+    news_er["double_count_guard"] = {
+        "status": DOUBLE_COUNT_UNKNOWN,
+        "prevent_double_voting": True,
+        "description": "阻止再次加票",
+    }
+    return {"fundamentals": fund_er, "news": news_er}
+
+
+def test_double_count_guard_tolerates_non_mapping_excluded_evidence_on_first_pass():
+    """DAV-1056: first-pass exclusion must not crash on string/None legacy excluded_evidence entries."""
+    exp_revs = _make_dcg_exp_revs()
+    claims_same = [
+        {"claim_id": "c1", "event_id": "ev_guidance", "claim_text": "公司业绩预告大幅增长", "evidence": ["预告"]},
+        {"claim_id": "c2", "event_id": "ev_guidance", "claim_text": "业绩预告大幅增长", "evidence": ["预告"]},
+    ]
+    initial_verdict = {
+        "adopted_claim_ids": ["c1", "c2"],
+        "excluded_evidence": ["历史字符串证据", None, {"claim_id": "c9", "reason": "其他原因"}],
+    }
+    m_out, v_out, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics={"independent_cluster_count": 2, "bull_cluster_count": 2, "bear_cluster_count": 0},
+        expectation_revisions=exp_revs,
+        claims=claims_same,
+        manager_verdict=initial_verdict,
+    )
+    assert v_out["adopted_claim_ids"] == ["c1"]
+    excluded = v_out["excluded_evidence"]
+    # 字符串与 None 被保留，mapping 按 claim_id 去重后追加 c2
+    assert "历史字符串证据" in excluded
+    assert None in excluded
+    assert any(isinstance(e, dict) and e.get("claim_id") == "c9" for e in excluded)
+    assert sum(1 for e in excluded if isinstance(e, dict) and e.get("claim_id") == "c2") == 1
+
+
+def test_double_count_guard_reentry_tolerates_non_mapping_excluded_evidence():
+    """DAV-1056: idempotent reentry must not crash when excluded_evidence contains strings/None/odd mappings."""
+    exp_revs = _make_dcg_exp_revs()
+    metrics = {
+        "independent_cluster_count": 1,
+        "bull_cluster_count": 1,
+        "double_count_guard_applied": True,
+        "double_count_guard_audit": {
+            "status": "blocked",
+            "excluded_claim_ids": ["c2", "c3"],
+        },
+    }
+    verdict = {
+        "adopted_claim_ids": ["c1", "c2", "c3"],
+        "excluded_evidence": [
+            "历史字符串证据",
+            None,
+            {"claim_id": "c2", "reason": "double_count_guard: 已排除"},
+            {"reason": "无 claim_id 的历史记录"},
+        ],
+    }
+    m_out, v_out, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics=metrics,
+        expectation_revisions=exp_revs,
+        claims=[],
+        manager_verdict=verdict,
+    )
+    # c2/c3 从 adopted 剔除；字符串与 None 保留；c2 不重复追加，c3 新增一条
+    assert v_out["adopted_claim_ids"] == ["c1"]
+    excluded = v_out["excluded_evidence"]
+    assert "历史字符串证据" in excluded
+    assert None in excluded
+    assert sum(1 for e in excluded if isinstance(e, dict) and e.get("claim_id") == "c2") == 1
+    assert sum(1 for e in excluded if isinstance(e, dict) and e.get("claim_id") == "c3") == 1
+
+    # 二次重入结果稳定（幂等）
+    m_out2, v_out2, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics=m_out,
+        expectation_revisions=exp_revs,
+        claims=[],
+        manager_verdict=v_out,
+    )
+    assert v_out2["adopted_claim_ids"] == ["c1"]
+    assert v_out2["excluded_evidence"] == excluded
+
+
 def test_negative_publication_missing_provenance_stays_gap_without_faking_publish_time():
     """DAV-874 Item 5: Publication lacking provenance stays gap; cannot use actual as_of as publish_time."""
     outputs = {
