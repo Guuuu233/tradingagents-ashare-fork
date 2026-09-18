@@ -686,7 +686,8 @@ def apply_manager_double_count_guard(
                 adopted = list(manager_verdict.get("adopted_claim_ids") or [])
                 manager_verdict["adopted_claim_ids"] = [cid for cid in adopted if cid not in excluded_ids]
                 for cid in excluded_ids:
-                    if not any(e.get("claim_id") == cid for e in excluded):
+                    # excluded_evidence 历史元素可能是字符串/空值等非 mapping 形态，跳过其 claim_id 比较但保留元素
+                    if not any(isinstance(e, Mapping) and e.get("claim_id") == cid for e in excluded):
                         excluded.append({
                             "claim_id": cid,
                             "reason": "double_count_guard: 同一事件已被既有预测/事件栏位计入，阻止重复加票",
@@ -799,7 +800,8 @@ def apply_manager_double_count_guard(
         excluded = list(manager_verdict.get("excluded_evidence") or [])
         for dup in duplicate_claims:
             cid = dup.get("claim_id")
-            if cid and not any(e.get("claim_id") == cid for e in excluded):
+            # excluded_evidence 历史元素可能是字符串/空值等非 mapping 形态，跳过其 claim_id 比较但保留元素
+            if cid and not any(isinstance(e, Mapping) and e.get("claim_id") == cid for e in excluded):
                 excluded.append({
                     "claim_id": cid,
                     "reason": "double_count_guard: 同一事件已被既有预测/事件栏位计入，阻止重复加票",
