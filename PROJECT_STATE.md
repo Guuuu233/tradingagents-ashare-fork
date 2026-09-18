@@ -1,6 +1,8 @@
 # Project State
 
-最后核验：2026-09-18。远端 trunk 经 `ls-remote origin codex/dav-4-p2a-trunk` 回读=**`4b540b0c9b08d77a12ce7d08cfdf0095288cd350`**，线上服务当前 PID **68658（PPID=1）** 正运行于 8000，`/healthz` 精确回读同一 SHA。生产库 `data/tradingagents.db` 当前 reports 1419（795 completed / 624 failed）；部署前备份为 `work/tradingagents.db.bak-20260918-130737-deploy-4b540b0`，quick_check=ok。
+最后核验：2026-09-19。远端 trunk `codex/dav-4-p2a-trunk` 回读 = **`a290f187f18635dfc2c4890cea2645bed9f09f1a`**（含 09-18 ABSTAIN 修复线 7 个提交：DAV-1068 去重裁决态 `bbca10a`/`c76972e`/`1210c70`/`254d2ab`、DAV-1071 E-04 引述/条件豁免 `6993fbf`、DAV-1061 SQLite sidecar 加固 `0db3bb9` 及 merge `a290f18`）。**`a290f18` 已于 2026-09-19 受控部署并在线**：serve worktree `/private/tmp/ta-serve-a290f18`，PID 1018（PPID=1）运行于 8000，`/healthz` 精确回读同一 SHA，`executor_queued=0`；部署证据 `work/deploy-a290f18-postcheck-20260919.md`，部署前备份 `work/tradingagents.db.bak-20260919-021456-deploy-a290f18`。生产库 `data/tradingagents.db` 当前 reports **1736**（978 completed / 758 failed，含受控验证新报告 `c21456dd`），quick_check=ok。社交 active 未开启：`/v1/social-data/status` 回读 `mode=shadow`、xhs/dy operational，归档 357 快照。
+
+**H1b 正式门槛口径（D-009 §5 cohort，2026-09-19 重算）：977 completed → 315 v2 → 17 D-009 eligible。** cohort 拆分：`legacy_unversioned` 7 条（冻死，生产现只产 v1 cohort），`decision_model.v1:evidence_contract.v1:price_basis.unspecified` 10 条；两者按 D-009 隔离不得合并。**仍 FAIL / KEEP_FALSE**——v1 cohort 10/60，样本量不足。198 条存量 ABSTAIN 缺陷签名：A（DAV-1068 `unadjudicated_material_claims_adopt`）52、E-04 priced-in 69、E-04 超预期 15，合计 132/198（66.7%），零重叠。**a290f18 部署后受控单样本验证（报告 `c21456dd`，详见 `work/abstain-fix-verification-a290f18-20260919.md`）：两个旧闸（unadjudicated_material_claims_adopt、E-04 priced-in/超预期）均未再触发；该报告仍 ABSTAIN 系真实资金流/方向证据闸拦截，不计入 H1b 样本。** 单次样本只证明修复路径生效，存量 132 条缺陷签名的真实下降须后续批次验证。
 
 ✅ **DAV-998 阻断级缺陷已修复并合入**（经 `4355ca3`→`e295b58` 链）：T+1 refusal 可重试态与永久终态已解耦（`TERMINAL_REFUSAL_CODES` 白名单）；部署动作已于 2026-09-18 独立放行并完成。
 
