@@ -83,6 +83,12 @@ def ensure_mediacrawler_sqlite_target(source_db: str, crawler_entrypoint: str) -
     crawler_db_dir = entrypoint.parent / "database"
     fixed_db = crawler_db_dir / "sqlite_tables.db"
 
+    if not entrypoint.is_file():
+        raise ValueError(
+            f"MediaCrawler entrypoint not found: {entrypoint}. "
+            "Pass the pinned repository's main.py via --crawler-entrypoint."
+        )
+
     if not crawler_db_dir.is_dir():
         raise ValueError(
             f"MediaCrawler database directory not found: {crawler_db_dir}. "
@@ -108,7 +114,12 @@ def ensure_mediacrawler_sqlite_target(source_db: str, crawler_entrypoint: str) -
                 if not same_file:
                     raise ValueError(
                         f"Both MediaCrawler SQLite path {fixed_db} and requested "
-                        f"source DB {source} exist; refusing to choose a winner."
+                        f"source DB {source} exist; refusing to choose a winner. "
+                        "Recovery: keep the intended working DB at "
+                        f"{fixed_db} and move the other aside (or delete {fixed_db} "
+                        "so the runner can re-link it). Earlier runs leave backups "
+                        "named sqlite_tables.db.pre-link-<ns>.bak in the same "
+                        "directory that can be restored if needed."
                     )
             else:
                 shutil.copy2(fixed_db, source)
@@ -127,12 +138,28 @@ def ensure_mediacrawler_sqlite_target(source_db: str, crawler_entrypoint: str) -
     return str(crawler_db_dir.parent)
 
 
-def harden_sqlite_file_permissions(db_path: str) -> None:
-    """Keep the SQLite DB and any WAL sidecars private after a crawl."""
-    for suffix in ("", "-wal", "-shm"):
-        path = f"{db_path}{suffix}"
-        if os.path.exists(path):
-            os.chmod(path, 0o600)
+def harden_sqlite_file_permissions(
+    db_path: str,
+    crawler_db_path: Optional[str] = None,
+) -> None:
+    """Keep the SQLite DB and any journal/WAL sidecars private after a crawl.
+
+    The pinned MediaCrawler does not enable WAL (no ``journal_mode`` pragma;
+    SQLite's default rollback journal is used), but WAL mode persists in the
+    DB header: a ``source_db`` previously opened in WAL elsewhere emits
+    ``-wal``/``-shm`` sidecars named after the *opened* path — the
+    ``<crawler-root>/database/sqlite_tables.db`` symlink — not after
+    ``db_path``. Rollback ``-journal`` files follow the same rule. Both
+    locations and all sidecar suffixes are therefore tightened.
+    """
+    bases = [db_path]
+    if crawler_db_path and crawler_db_path != db_path:
+        bases.append(crawler_db_path)
+    for base in bases:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            path = f"{base}{suffix}"
+            if os.path.exists(path):
+                os.chmod(path, 0o600)
 
 
 # ============================================================================
@@ -559,7 +586,10 @@ def run_social_ingestion(
                 env=clean_env,
                 cwd=crawler_cwd,
             )
-            harden_sqlite_file_permissions(source_db)
+            fixed_crawler_db: Optional[str] = None
+            if crawler_cwd:
+                fixed_crawler_db = str(Path(crawler_cwd) / "database" / "sqlite_tables.db")
+            harden_sqlite_file_permissions(source_db, fixed_crawler_db)
             crawler_res = {
                 "executed": True,
                 "status": "success" if proc.returncode == 0 else "failed",
