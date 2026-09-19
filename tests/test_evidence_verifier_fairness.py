@@ -466,3 +466,67 @@ def test_e03c_preserves_raw_evidence_source_and_state_change_reasons():
     assert "冲突数据" in s["excluded_evidence"]
     assert "虚假指标" in s["excluded_evidence"]
     assert "存在 1 条与报告事实冲突/前视偏差证据" in s["reason"]
+
+
+# ── DAV-1088: Semantic-Type De-folding + Binding/Match Whitelist ─────────────
+# All fixtures below are verbatim production samples from 600036.SH report
+# 9e2dd38b79a04819ae619f0078cefbf5 (2026-09-18).
+
+_PROD_FUNDAMENTALS_REPORT = (
+    "- 招商银行当前股价 40.59 元，对应 2026H1 每股净资产 45.40 元，**市净率（PB）仅约 0.89 倍**，处于显著“破净”状态。\n"
+    "- **净资产规模**：截至 2026-06-30，归属于母公司的股东权益合计为 13,533.01 亿元，"
+    "较 2025 年底（12,808.99 亿元）扩张 5.65%；每股净资产达到 **45.40 元**（2025 年底为 43.43 元）。\n"
+    "- 2026H1 归母净利润为 764.45 亿元，同比 2025H1（749.30 亿元）增长 **+2.02%**；\n"
+    "- **经营活动现金流（OCF）**：\n"
+    "  - 2026H1 经营活动产生的现金流量净额达到 **3,046.11 亿元**，相较于 2025H1（1,344.61 亿元）同比暴增 **+126.54%**；"
+)
+
+_PROD_MACRO_REPORT = (
+    "- 中线基本面扎实：2026年中报实现营业总收入1781.81亿元（同比+4.83%），"
+    "净利润764.45亿元（同比+2.02%），行业龙头地位稳固，万亿市值重新收复；"
+)
+
+
+# ── Commit 1 (缺陷 A): 语义类型去折叠 ──
+
+def test_dav1088_a1_proportion_vs_growth_rate_not_contradicted(evaluator):
+    """A1 生产 INV-10 原句: 「折损利息约15.3亿元占净利1%」是占比，「净利润同比+2.02%」是同比增速，不可比。"""
+    seven_reports = {"macro_report": _PROD_MACRO_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="新闻报告显示个贷新规仅折损利息约15.3亿元占净利1%且已充分定价并加速非标出清",
+        seven_reports=seven_reports,
+        claim_id="INV-10",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1088_a2_partial_impact_vs_total_not_contradicted(evaluator):
+    """A2 生产 INV-12 原句: 「年化利息收入折损15.3亿元」是分项影响额，「营业总收入1781.81亿元」是总量，不可比。"""
+    seven_reports = {"macro_report": _PROD_MACRO_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="新闻报告显示个贷新规导致年化利息收入折损15.3亿元且居民去杠杆压制总需求",
+        seven_reports=seven_reports,
+        claim_id="INV-12",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1088_a3_true_conflict_same_metric_unit_stype_period(evaluator):
+    """A3: 同指标、同单位、同语义类型、同期间下的数值矛盾仍须判 contradicted。"""
+    seven_reports = {"macro_report": _PROD_MACRO_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年中报营业总收入1500.50亿元",
+        seven_reports=seven_reports,
+        claim_id="A3",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1088_a_unit_fold_removed(evaluator):
+    """规范化不再把「净利 + %」折叠为净利率、把「净利率 + 元」反向折叠为净利润。"""
+    from tradingagents.agents.utils.evidence_verifier import _canonicalize_metric
+
+    assert _canonicalize_metric("净利", "%") != "净利率"
+    assert _canonicalize_metric("净利率", "元") != "净利润"
+
+

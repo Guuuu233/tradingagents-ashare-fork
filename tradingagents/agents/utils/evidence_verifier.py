@@ -264,7 +264,7 @@ _METRIC_KEYWORDS = [
     # Sentiment & General
     "风险偏好", "进攻", "防守", "避险", "虹吸", "抽水", "情绪", "舆情", "预期差", "公告", "中报", "年报", "季报",
     # Entities frequently referenced
-    "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来"
+    "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来",
 ]
 
 
@@ -278,6 +278,11 @@ def _extract_metric_keywords(text: str) -> list[str]:
     return found
 
 
+# DAV-1088 准入标准（本卡审定）：进入 _STRICT_METRICS 的规范化指标名必须同时满足
+#   a) 名称唯一、量纲稳定 —— 同名 + 同单位 + 同语义类型 + 同期间下的数值发散即构成真实冲突；
+#   b) 该指标在证据核验中需要承担「绑定即负责」语义 —— 绑定到严格指标的数字只允许与
+#      同名严格指标的数字匹配/判冲突，不得作为通配符与未绑定或其他指标的数字互相放行。
+# 该集合同时决定缺陷 A 的触发面（谁能被判冲突）与缺陷 B' 的触发面（谁不得当通配符）。
 _STRICT_METRICS = {
     "营收", "毛利率", "毛利", "净利率", "净利润", "成本", "应收账款", "存货", "现金流",
     "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
@@ -330,38 +335,122 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
 
 
 def _canonicalize_metric(raw_metric: str | None, unit: str) -> str | None:
+    """Map a raw metric name to its canonical form.
+
+    DAV-1088: 规范化不再只依据「词 + 单位」做有损折叠。
+    「净利 + %」不得归为净利率（它可能是占比或同比增速），「净利率 + 元」也不得
+    反向归为净利润 —— 量的语义由 _classify_semantic_type 独立判定。
+    """
     if not raw_metric:
         return None
-    m = _METRIC_CANONICAL_MAP.get(raw_metric, raw_metric)
+    return _METRIC_CANONICAL_MAP.get(raw_metric, raw_metric)
+
+
+# ── DAV-1088: 语义类型（封闭枚举）──
+# 「未知」为显式枚举值，表示“已抽取数字但语义类型无法归类”；它与 metric=None
+# （未绑定）含义不同，不得用 None 兼作两种含义。语义类型无法确定时一律归「未知」，
+# 走不可比路径，不得猜测归属。
+STYPE_ABS_AMOUNT = "绝对额"          # 绑定到非总量科目的金额/每股量（如每股净资产、eps）
+STYPE_PARTIAL_IMPACT = "分项影响额"  # 对总量的分项冲击金额（折损/影响/贡献等修饰词判定）
+STYPE_TOTAL = "总量"                # 营收/净利润/现金流等总量科目金额
+STYPE_PROPORTION = "占比"           # 「占 X 的 Y%」
+STYPE_GROWTH = "同比增速"           # 同比/环比/涨跌/增减类速率
+STYPE_RATIO = "比率"                # 率、倍数、概率类无方向比值
+STYPE_UNKNOWN = "未知"
+
+# 「分项影响额 vs 总量」不可由指标名与单位推断（15.3亿元 与 1781.81亿元 单位相同、
+# 指标名同为「营收」仍不可比），必须靠句法角色/修饰词另行判定。
+_PARTIAL_IMPACT_RE = re.compile(
+    r"折损|影响|贡献|拖累|侵蚀|损失|承压|减少|压缩|计提|减值|折让|冲击|侵蚀"
+)
+_GROWTH_CONTEXT_RE = re.compile(
+    r"同比|环比|增长|增速|增幅|下降|下滑|降低|回落|回升|提升|提高|暴增|大增|"
+    r"微增|微降|下跌|上涨|涨跌|收窄|走阔|扩张|收缩|跌(?!破)|涨(?!停)"
+)
+_PROPORTION_CONTEXT_RE = re.compile(r"占[^，。；、]{0,8}$")
+
+# % 单位下语义为「比率」的规范化指标
+_RATE_CANON_METRICS = {
+    "毛利率", "净利率", "roe", "roa", "股息率", "资产负债率", "换手率", "概率",
+}
+# raw/倍/点 单位下语义为「比率」的规范化指标
+_RATIO_CANON_METRICS = _RATE_CANON_METRICS | {"pe", "pb", "ps", "eps", "量比"}
+# 元/股 单位下语义为「总量」的规范化指标
+_TOTAL_CANON_METRICS = {
+    "营收", "净利润", "成本", "毛利", "现金流", "应收账款", "存货",
+    "成交量", "成交额", "主力", "超大单", "大单", "散户小单", "两融",
+}
+
+
+def _classify_semantic_type(
+    text: str,
+    n_start: int,
+    n_end: int,
+    unit: str,
+    canon_metric: str | None,
+) -> str:
+    """Classify a bound number's semantic type (closed enum; falls back to 未知).
+
+    依据单位 + 数字紧邻上下文修饰词 + 规范化指标名三维判定；依据不足时返回 STYPE_UNKNOWN。
+    """
+    # 仅取数字前最近一个子句作语境，防止跨子句/跨括号的「同比增长」污染后续指标判定
+    window = re.split(r"[，。；、,;（）()【】]", text[max(0, n_start - 20):n_start])[-1]
     if unit == "%":
-        if m == "毛利":
-            return "毛利率"
-        if m in ("净利", "净利润"):
-            return "净利率"
-    elif unit in ("元", "股"):
-        if m == "毛利率":
-            return "毛利"
-        if m == "净利率":
-            return "净利润"
-    return m
+        if _PROPORTION_CONTEXT_RE.search(window):
+            return STYPE_PROPORTION
+        # 「暴跌至10%」「达到28.5%」等至/到/为/达/录得结尾的窗口是**水平值**声明，
+        # 语义为比率而非变动速率；但「同比增至」「同比增长」仍是增速，优先判增长语境。
+        level_suffix = re.search(r"[至到为达得]\s*$", window)
+        has_growth_ctx = _GROWTH_CONTEXT_RE.search(window)
+        if has_growth_ctx and not (level_suffix and not re.search(r"同比|环比|增", window)):
+            return STYPE_GROWTH
+        # 后缀语境：「3.55%的微弱增速」「17.10%的增速」
+        if re.search(r"增速|增长|增幅|跌幅|涨幅", text[n_end:n_end + 8]):
+            return STYPE_GROWTH
+        if canon_metric in _RATE_CANON_METRICS or (
+            canon_metric is None and window and window.endswith("率")
+        ) or (canon_metric and "率" in canon_metric) or canon_metric == "毛利":
+            # % 绑定到「毛利」只能是毛利率语义；绑定到率类指标同理
+            return STYPE_RATIO
+        return STYPE_UNKNOWN
+    if unit in ("元", "股"):
+        if _PARTIAL_IMPACT_RE.search(window):
+            return STYPE_PARTIAL_IMPACT
+        if canon_metric in _TOTAL_CANON_METRICS:
+            return STYPE_TOTAL
+        if canon_metric is not None:
+            return STYPE_ABS_AMOUNT
+        return STYPE_UNKNOWN
+    # raw / 倍 / 点 / 次 / 手 等无标准量纲单位
+    if _GROWTH_CONTEXT_RE.search(window) or re.search(
+        r"增速|增长|增幅|跌幅|涨幅", text[n_end:n_end + 8]
+    ):
+        # 「下降 1.38 个百分点」等变动量，语义同同比增速
+        return STYPE_GROWTH
+    if canon_metric in _RATIO_CANON_METRICS:
+        return STYPE_RATIO
+    if canon_metric is not None:
+        return STYPE_ABS_AMOUNT
+    return STYPE_UNKNOWN
 
 
 _SORTED_METRIC_MAP_KEYS = sorted(_METRIC_CANONICAL_MAP.keys(), key=len, reverse=True)
 
 
 class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric")
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype")
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None):
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN):
         self.val = val
         self.unit = unit
         self.raw = raw
-        self.metric = metric
+        self.metric = metric          # None = 显式「未绑定」标记
         self.period = period
         self.raw_metric = raw_metric
+        self.stype = stype
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r})"
 
 
 def extract_bound_numbers(text: str, default_period: str | None = None) -> list[BoundNumber]:
@@ -406,7 +495,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         min_prec_dist = 9999
         for m_start, m_end, m_raw in filtered_spans:
             if m_end <= n_start and (n_start - m_end) < 40:
-                intervening = text[m_end:n_start]
+                intervening = cleaned[m_end:n_start]
                 if "；" in intervening or ";" in intervening or "。" in intervening:
                     continue
                 dist = n_start - m_end
@@ -425,7 +514,12 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
 
         raw_metric = closest_prec or closest_succ
         metric = _canonicalize_metric(raw_metric, unit)
-        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric))
+        stype = _classify_semantic_type(cleaned, n_start, n_end, unit, metric)
+        if unit == "%" and metric == "毛利":
+            # % 绑定到「毛利」只可能是毛利率语义（占比/增速下毛利的 % 无意义），
+            # 而「净利 + %」不得折叠——它可能是净利增速或占比，保持净利润。
+            metric = "毛利率"
+        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype))
     return res
 
 
@@ -471,6 +565,9 @@ def _is_bound_num_contradicted(
     if not ev_strict or not l_strict or ev_strict != l_strict:
         return False
     if ev_bn.unit != l_bn.unit or ev_bn.unit not in {"%", "元", "股"}:
+        return False
+    # 语义类型不一致（占比 vs 同比增速、分项影响额 vs 总量）一律不可比，不得判冲突
+    if ev_bn.stype != l_bn.stype:
         return False
     if ev_bn.unit == "%":
         if ev_bn.period != l_bn.period:
