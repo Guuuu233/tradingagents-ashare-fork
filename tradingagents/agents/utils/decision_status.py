@@ -93,6 +93,8 @@ class DecisionStatus:
     reason_codes: list[str] = field(default_factory=list)
     confidence: Optional[int] = None
     probability: Optional[float] = None
+    failed_checks: list[str] = field(default_factory=list)
+    human_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -103,6 +105,8 @@ def invalid_run_status(
     failure_class: str = ANALYSIS_DATA_ERROR,
     reason_codes: Optional[list[str]] = None,
     risk_status: str = RISK_UNKNOWN,
+    failed_checks: Optional[list[str]] = None,
+    human_reasons: Optional[list[str]] = None,
 ) -> DecisionStatus:
     """Build the canonical INVALID_RUN → NO_TRADE payload.
 
@@ -111,6 +115,8 @@ def invalid_run_status(
     Neutral/HOLD market view.
     """
     fc = failure_class or ANALYSIS_DATA_ERROR
+    fc_list = list(failed_checks or [])
+    hr_list = list(human_reasons or fc_list)
     return DecisionStatus(
         analysis_status=ANALYSIS_INVALID_RUN,
         direction=DIRECTION_NA,
@@ -121,6 +127,8 @@ def invalid_run_status(
         reason_codes=list(reason_codes or []),
         confidence=None,
         probability=None,
+        failed_checks=fc_list,
+        human_reasons=hr_list,
     )
 
 
@@ -129,11 +137,15 @@ def abstain_status(
     reason_codes: Optional[list[str]] = None,
     trade_action: str = ACTION_NO_TRADE,
     risk_status: str = RISK_BLOCKED,
+    failed_checks: Optional[list[str]] = None,
+    human_reasons: Optional[list[str]] = None,
 ) -> DecisionStatus:
     """Data partially usable but direction must not be asserted as Neutral."""
     action = trade_action if trade_action in TRADE_ACTIONS else ACTION_NO_TRADE
     if action not in NON_DIRECTIONAL_TRADE_ACTIONS:
         action = ACTION_NO_TRADE
+    fc_list = list(failed_checks or [])
+    hr_list = list(human_reasons or fc_list)
     return DecisionStatus(
         analysis_status=ANALYSIS_ABSTAIN,
         direction=DIRECTION_NA,
@@ -144,6 +156,8 @@ def abstain_status(
         reason_codes=list(reason_codes or ["direction_not_decidable"]),
         confidence=None,
         probability=None,
+        failed_checks=fc_list,
+        human_reasons=hr_list,
     )
 
 
@@ -156,9 +170,13 @@ def valid_status(
     confidence: Optional[int] = None,
     probability: Optional[float] = None,
     reason_codes: Optional[list[str]] = None,
+    failed_checks: Optional[list[str]] = None,
+    human_reasons: Optional[list[str]] = None,
 ) -> DecisionStatus:
     dir_norm = direction if direction in DIRECTIONS else DIRECTION_NEUTRAL
     act_norm = trade_action if trade_action in TRADE_ACTIONS else ACTION_HOLD
+    fc_list = list(failed_checks or [])
+    hr_list = list(human_reasons or fc_list)
     return DecisionStatus(
         analysis_status=ANALYSIS_VALID,
         direction=dir_norm,
@@ -171,6 +189,8 @@ def valid_status(
         reason_codes=list(reason_codes or []),
         confidence=confidence,
         probability=probability,
+        failed_checks=fc_list,
+        human_reasons=hr_list,
     )
 
 
@@ -181,6 +201,8 @@ def partial_status(
     trade_action: str = ACTION_NO_TRADE,
     risk_status: str = RISK_ELEVATED,
     direction: str = DIRECTION_NA,
+    failed_checks: Optional[list[str]] = None,
+    human_reasons: Optional[list[str]] = None,
 ) -> DecisionStatus:
     """Some required analysts failed; direction must not be treated as eligible Neutral."""
     codes = list(reason_codes or [])
@@ -190,6 +212,8 @@ def partial_status(
     # PARTIAL runs are not calibration-eligible; prefer non-directional actions.
     if action not in NON_DIRECTIONAL_TRADE_ACTIONS and action != ACTION_HOLD:
         action = ACTION_NO_TRADE
+    fc_list = list(failed_checks or [])
+    hr_list = list(human_reasons or fc_list)
     return DecisionStatus(
         analysis_status=ANALYSIS_PARTIAL,
         direction=direction if direction in DIRECTIONS else DIRECTION_NA,
@@ -200,6 +224,8 @@ def partial_status(
         reason_codes=codes,
         confidence=None,
         probability=None,
+        failed_checks=fc_list,
+        human_reasons=hr_list,
     )
 
 
@@ -684,12 +710,15 @@ def status_from_manager_verdict(
             return from_nested
 
     # Consistency hard gate: never emit VALID/BUY when the plan is blocked.
+    # DAV-1093: reason_codes 只保留机读码，中文叙述句归位到 failed_checks 与 human_reasons 结构化字段
     if mv.get("consistency_check_passed") is False:
         failed = [str(x) for x in (mv.get("failed_checks") or []) if x]
         return abstain_status(
-            reason_codes=["manager_consistency_hard_gate", *failed],
+            reason_codes=["manager_consistency_hard_gate"],
             trade_action=ACTION_NO_TRADE,
             risk_status=RISK_BLOCKED,
+            failed_checks=failed,
+            human_reasons=failed,
         )
 
     deb_state = investment_debate_state if isinstance(investment_debate_state, Mapping) else {}
@@ -1268,6 +1297,10 @@ def apply_decision_status_to_result(
         result["failure_class"] = payload.get("failure_class")
     if payload.get("reason_codes") is not None:
         result["reason_codes"] = list(payload.get("reason_codes") or [])
+    if payload.get("failed_checks") is not None:
+        result["failed_checks"] = list(payload.get("failed_checks") or [])
+    if payload.get("human_reasons") is not None:
+        result["human_reasons"] = list(payload.get("human_reasons") or [])
 
     # Compat: lifecycle decision stores trade_action (includes NO_TRADE/WAIT).
     result["decision"] = trade_action
@@ -1332,6 +1365,9 @@ def decision_status_from_mapping(
             except (ValueError, TypeError):
                 prob_val = None
 
+    fc_list = list(raw.get("failed_checks") or [])
+    hr_list = list(raw.get("human_reasons") or fc_list)
+
     return DecisionStatus(
         analysis_status=analysis_status,
         direction=str(raw.get("direction") or DIRECTION_NA).upper()
@@ -1346,6 +1382,8 @@ def decision_status_from_mapping(
         reason_codes=list(raw.get("reason_codes") or []),
         confidence=conf_val,
         probability=prob_val,
+        failed_checks=fc_list,
+        human_reasons=hr_list,
     )
 
 

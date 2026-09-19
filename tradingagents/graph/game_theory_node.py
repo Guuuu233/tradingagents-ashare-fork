@@ -555,24 +555,31 @@ def compute_game_theory_signals(
 
     if main_dir == 1 and sh_dir >= 0:
         dominant_strategy = "顺势进攻：主力资金净流入且筹码集中度良好，多头占优，建议跟随主力做多"
+        dominant_strategy_code = "game_theory:trend_long_attack"
         overall_dir = "偏多"
     elif main_dir == 1 and sh_dir == -1:
         dominant_strategy = "分歧拉升：主力资金净买入但散户筹码分散，短线急拉后警惕获利盘兑现，建议顺势波段交易"
+        dominant_strategy_code = "game_theory:divergence_rally"
         overall_dir = "偏多"
     elif main_dir == -1 and sh_dir <= 0:
         dominant_strategy = "严格防守：主力资金净流出且筹码分散，严禁盲目抄底接盘，建议观望或逢反弹减磅"
+        dominant_strategy_code = "game_theory:strict_defense"
         overall_dir = "偏空"
     elif main_dir == -1 and sh_dir == 1:
         dominant_strategy = "防御观察：主力微幅兑现但底仓筹码集中度未破，观察关键技术均线与支撑有效性"
+        dominant_strategy_code = "game_theory:defensive_observation"
         overall_dir = "中性"
     elif main_dir == 1:
         dominant_strategy = "顺势跟随：主力资金呈增持做多意愿，适度参与多头博弈"
+        dominant_strategy_code = "game_theory:trend_following"
         overall_dir = "偏多"
     elif main_dir == -1:
         dominant_strategy = "谨慎避险：主力资金流出减仓，建议以防守观望为主"
+        dominant_strategy_code = "game_theory:cautious_hedging"
         overall_dir = "偏空"
     else:
         dominant_strategy = "中性博弈：多空对手盘分歧明显，未见明确主导方，建议保持仓位克制与观望"
+        dominant_strategy_code = "game_theory:neutral_game"
         overall_dir = "中性"
 
     # 5. Deterministic Fragile Equilibrium derivation
@@ -618,6 +625,7 @@ def compute_game_theory_signals(
         "player_states": player_states,
         "likely_actions": likely_actions,
         "dominant_strategy": dominant_strategy,
+        "dominant_strategy_code": dominant_strategy_code,
         "fragile_equilibrium": fragile_equilibrium,
         "counter_consensus_signal": counter_consensus_signal,
         "confidence": confidence_score,
@@ -796,6 +804,7 @@ def create_game_theory_node(
 
             # 5. Build TraceItem for analyst_traces (RT-4 audit trail)
             source_status = signals.get("data_status") or "available"
+            gt_code = signals.get("dominant_strategy_code") or "game_theory:dominant_strategy"
             trace_item: TraceItem = {
                 "agent": AGENT_NAME,
                 "horizon": horizon,
@@ -807,7 +816,7 @@ def create_game_theory_node(
                 "source_mode": "deterministic_game_theory",
                 "bundle_id": "game_theory_v1",
                 "direction_allowed": (source_status != "unavailable"),
-                "reason_codes": [signals.get("dominant_strategy", "")[:30]],
+                "reason_codes": [gt_code],
                 "evidence_refs": [k for k, v in raw_data.items() if not _is_service_failure(v)],
                 "financial_period_compliance": {},
             }

@@ -182,6 +182,86 @@ def test_consistency_hard_gate_maps_to_abstain_not_valid_buy():
     assert status.direction == DIRECTION_NA
 
 
+def test_dav1093_reason_codes_machine_readable_and_failed_checks_preserved():
+    """DAV-1093: reason_codes 保持机读，不得被自然语言自由文本污染；叙述句转移至 failed_checks/human_reasons。"""
+    from tradingagents.agents.utils.decision_status import (
+        status_from_manager_verdict,
+        apply_decision_status_to_result,
+        decision_status_from_mapping,
+    )
+    from tradingagents.graph.game_theory_node import create_game_theory_node
+
+    # 1. 产出点 B: consistency_check_passed=False 时
+    # reason_codes 仅保留机读码，不 splat 中文/叙述性 failed_checks；详细信息保留在 failed_checks 字段
+    narrative_checks = [
+        "多头胜裁决必须设定明确有效的止损位 (stop_loss)",
+        "E-04 守卫拦截：研究总监判定理由中包含未经辩论验证的利好已定价肯定断言",
+    ]
+    status = status_from_manager_verdict(
+        {
+            "direction": "看多",
+            "winner": "bull",
+            "position_pct": 60,
+            "consistency_check_passed": False,
+            "failed_checks": narrative_checks,
+        }
+    )
+    assert status.analysis_status == "ABSTAIN"
+    assert status.trade_action == "NO_TRADE"
+    assert status.reason_codes == ["manager_consistency_hard_gate"]
+    assert status.failed_checks == narrative_checks
+    assert status.human_reasons == narrative_checks
+
+    # 验证 to_dict 与 apply_decision_status_to_result 保留字段结构
+    s_dict = status.to_dict()
+    assert s_dict["reason_codes"] == ["manager_consistency_hard_gate"]
+    assert s_dict["failed_checks"] == narrative_checks
+    assert s_dict["human_reasons"] == narrative_checks
+
+    res: dict = {}
+    apply_decision_status_to_result(res, status)
+    assert res["reason_codes"] == ["manager_consistency_hard_gate"]
+    assert res["failed_checks"] == narrative_checks
+    assert res["human_reasons"] == narrative_checks
+
+    # 验证 decision_status_from_mapping 往返一致性
+    restored = decision_status_from_mapping(s_dict)
+    assert restored is not None
+    assert restored.reason_codes == ["manager_consistency_hard_gate"]
+    assert restored.failed_checks == narrative_checks
+    assert restored.human_reasons == narrative_checks
+
+    # 2. 产出点 A: game_theory_node TraceItem.reason_codes 必须是固定枚举码，中文整句移入 key_finding
+    node_fn = create_game_theory_node()
+    mock_raw_bull = {
+        "fund_flow_individual": "主力净流入 15000 万元",
+        "scale_metrics": {"net_amount": 15000.0, "status": "available"},
+        "margin_trading": "融资买入额 5000 万元 融资偿还额 1000 万元",
+        "shareholder_count": "较上期变动: -3.5%",
+        "northbound_flow": "增加 100 万股",
+        "fund_flow_board": "板块净流入 10 亿元",
+    }
+    state_in = {
+        "company_of_interest": "600519.SH",
+        "trade_date": "2026-09-19",
+        "horizon": "short",
+        "market_data_context": mock_raw_bull,
+        "analyst_traces": [],
+    }
+    out = node_fn.invoke(state_in)
+    traces = out.get("analyst_traces", [])
+    assert len(traces) == 1
+    t = traces[0]
+    # reason_codes 必须全为机读码，不得含中文或中文标点
+    for rc in t.get("reason_codes", []):
+        assert isinstance(rc, str)
+        assert rc.startswith("game_theory:")
+        assert not any(c in rc for c in "：，顺势进攻分歧拉升严格防守防御观察顺势跟随谨慎避险中性博弈")
+    # key_finding 承接详细策略说明
+    assert "顺势进攻" in t.get("key_finding", "")
+
+
+
 def test_risk_reject_overwrites_upstream_valid_buy():
     from tradingagents.agents.utils.decision_status import (
         is_non_executable_status,
