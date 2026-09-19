@@ -12,6 +12,7 @@ from .cn_akshare_provider import CnAkshareProvider
 from .cn_baostock_provider import CnBaoStockProvider
 from .cn_fuyao_provider import CnFuyaoProvider
 from .cn_investoday_provider import CnInvestodayProvider
+from .tushare_provider import TushareProvider
 
 
 DEFAULT_PROVIDER_RESOURCE_POLICIES: Dict[str, ProviderResourcePolicy] = {
@@ -48,6 +49,11 @@ DEFAULT_PROVIDER_RESOURCE_POLICIES: Dict[str, ProviderResourcePolicy] = {
     "cn_stub": ProviderResourcePolicy(
         timeout_seconds=5.0,
         max_retries=0,
+        max_concurrency=4,
+    ),
+    "tushare": ProviderResourcePolicy(
+        timeout_seconds=30.0,
+        max_retries=1,
         max_concurrency=4,
     ),
 }
@@ -97,4 +103,5 @@ def build_default_registry() -> DataProviderRegistry:
     registry.register(YFinanceProvider())
     registry.register(AlphaVantageProvider())
     registry.register(CnStubProvider())
+    registry.register(TushareProvider())
     return registry
