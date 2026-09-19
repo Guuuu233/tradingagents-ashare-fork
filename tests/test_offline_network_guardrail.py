@@ -892,11 +892,30 @@ class TestObservationAndDenyLogsPairing:
             f"and deny entries ({len(deny_entries)})"
         )
 
-        # Verify each non-local observation has matching event and target in deny log
-        for i, (obs, deny) in enumerate(zip(obs_non_local, deny_entries)):
-            obs_target = obs.split("TARGET:")[-1].strip()
-            deny_target = deny.split("TARGET:")[-1].strip()
-            assert obs_target == deny_target, f"Item {i} target mismatch: {obs_target} vs {deny_target}"
+        # Verify each non-local observation has matching event and target in deny log.
+        # NOTE: obs/deny 由两条审计钩子按事件顺序写，provider 线程池并发下两条日志
+        # 可能交错（obsA, obsB, denyB, denyA），按索引对齐会产生误报；契约是 1:1
+        # 配对而非写入顺序，因此按 (EVENT, TARGET) 多重集比对。
+        from collections import Counter
+
+        obs_pairs = Counter(
+            (
+                line.split("EVENT:")[-1].split("|")[0].strip(),
+                line.split("TARGET:")[-1].strip(),
+            )
+            for line in obs_non_local
+        )
+        deny_pairs = Counter(
+            (
+                line.split("EVENT:")[-1].split("|")[0].strip(),
+                line.split("TARGET:")[-1].strip(),
+            )
+            for line in deny_entries
+        )
+        assert obs_pairs == deny_pairs, (
+            f"Observation/Deny pairing mismatch: "
+            f"obs-only={obs_pairs - deny_pairs} deny-only={deny_pairs - obs_pairs}"
+        )
 
 
 class TestGuardrailArchitectureInvariants:

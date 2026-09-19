@@ -134,6 +134,7 @@ def _query_tushare_api(
     as_of: Optional[str] = None,
     fields: Optional[str] = None,
     params: Optional[Dict[str, Any]] = None,
+    timeout: Any = None,
 ) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[str]]:
     """向 Tushare 发起行情/宏观数据请求并进行响应校验与错误分类。
 
@@ -143,6 +144,7 @@ def _query_tushare_api(
         as_of: 截止基准日期 (YYYY-MM-DD 或 YYYYMMDD)
         fields: 请求字段列表
         params: 额外自定义参数字典
+        timeout: requests 超时（秒或 (connect, read) 元组）；None 时用全局 _TUSHARE_TIMEOUT
 
     Returns:
         (DataFrame, error_category, error_note): 成功时 DataFrame 非空，失败时返回错误分类与说明
@@ -181,7 +183,11 @@ def _query_tushare_api(
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=_TUSHARE_TIMEOUT)
+        resp = requests.post(
+            url,
+            json=payload,
+            timeout=_TUSHARE_TIMEOUT if timeout is None else timeout,
+        )
     except requests.Timeout as e:
         return None, "timeout", f"Tushare 请求超时: {e}"
     except requests.RequestException as e:

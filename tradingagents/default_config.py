@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
     "data_vendors": {
         "core_stock_apis": "cn_akshare,cn_baostock,cn_investoday,yfinance,cn_fuyao",
         "technical_indicators": "cn_akshare,cn_baostock,cn_investoday,yfinance",
-        "fundamental_data": "cn_fuyao,cn_akshare,cn_baostock,cn_investoday,yfinance",
+        "fundamental_data": "tushare,cn_fuyao,cn_akshare,cn_baostock,cn_investoday,yfinance",
         "news_data": "cn_akshare,cn_baostock,cn_investoday,yfinance",
         "realtime_data": "cn_akshare,cn_investoday,cn_fuyao",
         "cn_market_data": "cn_akshare,cn_fuyao",

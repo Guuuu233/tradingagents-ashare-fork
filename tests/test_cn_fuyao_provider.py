@@ -1066,8 +1066,10 @@ def test_build_default_registry_includes_cn_fuyao():
 def test_default_config_routes_fundamentals_to_fuyao_primary():
     from tradingagents.dataflows.interface import get_vendor
 
+    # DAV-1099：tushare 升为 fundamental_data 主源，cn_fuyao/cn_akshare 为后备
     chain = get_vendor("fundamental_data")
-    assert chain.split(",")[0] == "cn_fuyao"
+    assert chain.split(",")[0] == "tushare"
+    assert "cn_fuyao" in chain
     assert "cn_akshare" in chain
 
 
