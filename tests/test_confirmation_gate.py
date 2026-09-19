@@ -1310,3 +1310,196 @@ def test_dav1068_excluded_fatal_claim_still_blocks():
     )
     assert c_state == CONFIRM_UNRESOLVED
     assert any("fatal" in c for c in r_codes)
+
+
+# ── DAV-1091: is_fatal 独立严重度位契约测试 ─────────────────────────
+
+
+def test_dav1091_is_fatal_four_quadrant_matrix():
+    """DAV-1091: status × is_fatal 四格组合全覆盖断言。
+
+    | status             | is_fatal | 期望                                                    |
+    |--------------------|----------|---------------------------------------------------------|
+    | contradicted       | False    | 证据仍判拒绝/不采纳，但不得升级为整条 claim fatal       |
+    | contradicted       | True     | fatal                                                   |
+    | source_unavailable | False    | 按显式 is_fatal 判定（不升级）                          |
+    | source_unavailable | True     | fatal；生产者对真正的不可用源幻觉继续输出 True           |
+    """
+    mv_base = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "consistency_check_passed": True,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+
+    # 格 1: contradicted + is_fatal=False
+    # 期望：证据仍判拒绝/不采纳，但不得升级为整条 claim fatal
+    c_state_1, r_codes_1 = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "contradicted", "is_fatal": False}],
+        adopted_claim_ids=["CLM-1"],
+    )
+    assert c_state_1 == CONFIRM_UNRESOLVED
+    assert not any("fatal" in c for c in r_codes_1), f"格 1 误判为 fatal: {r_codes_1}"
+    assert "unverified_core_claims:CLM-1" in r_codes_1
+
+    status_1 = status_from_manager_verdict(
+        mv_base,
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "contradicted", "is_fatal": False}],
+    )
+    assert status_1.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_1.trade_action == ACTION_WAIT
+    assert not any("fatal" in c for c in status_1.reason_codes), f"格 1 status reason_codes 误含 fatal: {status_1.reason_codes}"
+
+    # 格 2: contradicted + is_fatal=True
+    # 期望：fatal
+    c_state_2, r_codes_2 = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "contradicted", "is_fatal": True}],
+        adopted_claim_ids=["CLM-1"],
+    )
+    assert c_state_2 == CONFIRM_UNRESOLVED
+    assert "fatal_core_claims:CLM-1" in r_codes_2 or "fatal_adopted_claims:CLM-1" in r_codes_2
+
+    status_2 = status_from_manager_verdict(
+        mv_base,
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "contradicted", "is_fatal": True}],
+    )
+    assert status_2.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_2.trade_action == ACTION_WAIT
+    assert any("fatal" in c for c in status_2.reason_codes)
+
+    # 格 3: source_unavailable + is_fatal=False
+    # 期望：按显式 is_fatal 判定（不升级为 fatal）
+    c_state_3, r_codes_3 = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": False}],
+        adopted_claim_ids=["CLM-1"],
+    )
+    assert c_state_3 == CONFIRM_UNRESOLVED
+    assert not any("fatal" in c for c in r_codes_3), f"格 3 误判为 fatal: {r_codes_3}"
+    assert "unverified_core_claims:CLM-1" in r_codes_3
+
+    status_3 = status_from_manager_verdict(
+        mv_base,
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": False}],
+    )
+    assert status_3.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_3.trade_action == ACTION_WAIT
+    assert not any("fatal" in c for c in status_3.reason_codes), f"格 3 status reason_codes 误含 fatal: {status_3.reason_codes}"
+
+    # 格 4: source_unavailable + is_fatal=True
+    # 期望：fatal；生产者对真正的不可用源幻觉继续输出 True
+    c_state_4, r_codes_4 = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": True}],
+        adopted_claim_ids=["CLM-1"],
+    )
+    assert c_state_4 == CONFIRM_UNRESOLVED
+    assert "fatal_core_claims:CLM-1" in r_codes_4 or "fatal_adopted_claims:CLM-1" in r_codes_4
+
+    status_4 = status_from_manager_verdict(
+        mv_base,
+        focus_claim_ids=["CLM-1"],
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": True}],
+    )
+    assert status_4.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_4.trade_action == ACTION_WAIT
+    assert any("fatal" in c for c in status_4.reason_codes)
+
+
+def test_dav1091_unadjudicated_claims_is_fatal_four_quadrant_matrix():
+    """DAV-1091: 无 core 与 adopted claim 时，unadjudicated fatal 检查的四格语义断言。"""
+    # 格 1: contradicted + False -> 不得升级为 fatal_contradicted_claims
+    c_state_1, r_codes_1 = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        claims_verification=[{"claim_id": "CLM-UNADJ", "status": "contradicted", "is_fatal": False}],
+        adopted_claim_ids=[],
+    )
+    assert not any("fatal_contradicted_claims" in c for c in r_codes_1)
+
+    # 格 2: contradicted + True -> fatal_contradicted_claims
+    c_state_2, r_codes_2 = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        claims_verification=[{"claim_id": "CLM-UNADJ", "status": "contradicted", "is_fatal": True}],
+        adopted_claim_ids=[],
+    )
+    assert c_state_2 == CONFIRM_UNRESOLVED
+    assert any("fatal_contradicted_claims" in c and "CLM-UNADJ" in c for c in r_codes_2)
+
+    # 格 3: source_unavailable + False -> 不得升级为 fatal_contradicted_claims
+    c_state_3, r_codes_3 = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        claims_verification=[{"claim_id": "CLM-UNADJ", "status": "source_unavailable", "is_fatal": False}],
+        adopted_claim_ids=[],
+    )
+    assert not any("fatal_contradicted_claims" in c for c in r_codes_3)
+
+    # 格 4: source_unavailable + True -> fatal_contradicted_claims
+    c_state_4, r_codes_4 = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        claims_verification=[{"claim_id": "CLM-UNADJ", "status": "source_unavailable", "is_fatal": True}],
+        adopted_claim_ids=[],
+    )
+    assert c_state_4 == CONFIRM_UNRESOLVED
+    assert any("fatal_contradicted_claims" in c and "CLM-UNADJ" in c for c in r_codes_4)
+
+
+def test_dav1091_manager_verdict_gate_is_fatal_contract():
+    """DAV-1091: extract_and_validate_manager_verdict 严重幻觉硬闸消费点的 is_fatal 契约。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_and_validate_manager_verdict
+
+    payload = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 50,
+        "entry": 10.0,
+        "target": 12.0,
+        "stop_loss": 9.5,
+        "adopted_claim_ids": ["CLM-1"],
+        "partially_adopted_claims": [],
+        "rejected_claim_ids": [],
+    }
+    raw = f"<!-- MANAGER_VERDICT: {json.dumps(payload)} -->\nProse analysis..."
+
+    # source_unavailable + is_fatal=False -> 不得触发「不可用数据源的严重幻觉」硬闸
+    res_false = extract_and_validate_manager_verdict(
+        raw,
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": False}],
+    )
+    unavail_fails_false = [c for c in res_false.get("failed_checks", []) if "严重幻觉" in c]
+    assert unavail_fails_false == [], f"source_unavailable + False 误触严重幻觉闸: {unavail_fails_false}"
+
+    # source_unavailable + is_fatal=True -> 必须触发严重幻觉硬闸
+    res_true = extract_and_validate_manager_verdict(
+        raw,
+        claims_verification=[{"claim_id": "CLM-1", "status": "source_unavailable", "is_fatal": True}],
+    )
+    unavail_fails_true = [c for c in res_true.get("failed_checks", []) if "严重幻觉" in c]
+    assert len(unavail_fails_true) == 1, f"source_unavailable + True 未触发严重幻觉闸: {unavail_fails_true}"
+    assert "CLM-1" in unavail_fails_true[0]
+
+
+def test_dav1091_pit_failed_unconditional_hard_gate_preserved():
+    """DAV-1091 约束：pit_failed 仍是独立、无条件的硬闸，本卡不得触碰。"""
+    c_state, r_codes = evaluate_confirmation_state(
+        focus_claim_ids=["CLM-PIT"],
+        claim_evidence_summary={
+            "CLM-PIT": {
+                "pit_failed": True,
+                "counts": {"total": 1, "verified": 1, "contradicted": 0, "source_unavailable": 0},
+                "decision": "reject",
+            }
+        },
+        adopted_claim_ids=["CLM-PIT"],
+    )
+    assert c_state == CONFIRM_UNRESOLVED
+    assert any("pit_failed" in c or "fatal" in c for c in r_codes)
+    assert "fatal_adopted_claims:CLM-PIT" in r_codes
+    assert "pit_failed_adopted_claims:CLM-PIT" in r_codes

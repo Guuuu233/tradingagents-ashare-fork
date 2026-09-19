@@ -1164,7 +1164,8 @@ class EvidenceFactualTruthEvaluator:
             contradicted_items = [v for v in ver_items if v.get("status") == STATUS_CONTRADICTED]
             unavail_items = [
                 v for v in ver_items
-                if v.get("status") == STATUS_SOURCE_UNAVAILABLE or v.get("is_fatal")
+                if (v.get("status") == STATUS_SOURCE_UNAVAILABLE and v.get("is_fatal") is not False)
+                or v.get("is_fatal") is True
             ]
             unsupported_items = [v for v in ver_items if v.get("status") == STATUS_UNSUPPORTED]
 
@@ -1469,8 +1470,13 @@ def aggregate_claim_evidence(
         contradicted_items = [v for v in claim_ver_items if v.get("status") == STATUS_CONTRADICTED]
         source_unavail_items = [
             v for v in claim_ver_items
-            if v.get("status") == STATUS_SOURCE_UNAVAILABLE or v.get("is_fatal")
+            if (v.get("status") == STATUS_SOURCE_UNAVAILABLE and v.get("is_fatal") is not False)
+            or (v.get("is_fatal") is True and v.get("status") != STATUS_CONTRADICTED)
         ]
+        claim_has_fatal = any(
+            v.get("is_fatal") is True or (v.get("is_fatal") is None and v.get("status") == STATUS_SOURCE_UNAVAILABLE)
+            for v in claim_ver_items
+        )
 
         total_count = len(claim_ver_items)
         if total_count == 0:
@@ -1570,6 +1576,7 @@ def aggregate_claim_evidence(
             "applicability": norm_applicability,
             "invalidation_conditions": norm_conditions,
             "pit_failed": pit_failed,
+            "is_fatal": claim_has_fatal,
         }
 
     return summary_map
@@ -2165,7 +2172,7 @@ def extract_and_validate_manager_verdict(
         fatal_cids = {
             str(item.get("claim_id"))
             for item in claims_verification
-            if item.get("is_fatal") or item.get("status") == STATUS_SOURCE_UNAVAILABLE
+            if item.get("is_fatal") is True or (item.get("is_fatal") is None and item.get("status") == STATUS_SOURCE_UNAVAILABLE)
         }
         for cid in adopted_claim_ids:
             if str(cid) in fatal_cids:

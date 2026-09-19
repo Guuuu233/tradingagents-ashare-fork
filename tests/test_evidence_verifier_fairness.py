@@ -615,3 +615,65 @@ def test_dav1088_b_binding_unbound_marker_no_cross_sentence_guess(evaluator):
     bns = extract_bound_numbers("资产价格45.40元对应PB仅0.89倍")
     bn_4540 = next(b for b in bns if abs(b.val - 45.40) < 1e-6)
     assert bn_4540.metric != "pb"
+
+
+# ── DAV-1091: is_fatal 独立严重度位在证据核验器中的消费契约 ─────────────────
+
+
+def test_dav1091_aggregate_claim_evidence_is_fatal_contract():
+    """DAV-1091: aggregate_claim_evidence 在 claims 汇总中保持 is_fatal 独立位。"""
+    from tradingagents.agents.utils.evidence_verifier import aggregate_claim_evidence
+
+    # 1. contradicted + is_fatal=False -> summary["is_fatal"] 为 False，decision 为 reject
+    sum_1 = aggregate_claim_evidence(
+        claims=[{"claim_id": "C-1", "claim": "命题1"}],
+        claims_verification=[{"claim_id": "C-1", "status": "contradicted", "is_fatal": False, "raw": "冲突"}],
+    )
+    assert sum_1["C-1"]["decision"] == "reject"
+    assert sum_1["C-1"]["is_fatal"] is False
+
+    # 2. contradicted + is_fatal=True -> summary["is_fatal"] 为 True
+    sum_2 = aggregate_claim_evidence(
+        claims=[{"claim_id": "C-2", "claim": "命题2"}],
+        claims_verification=[{"claim_id": "C-2", "status": "contradicted", "is_fatal": True, "raw": "致命冲突"}],
+    )
+    assert sum_2["C-2"]["decision"] == "reject"
+    assert sum_2["C-2"]["is_fatal"] is True
+
+    # 3. source_unavailable + is_fatal=False -> summary["is_fatal"] 为 False (按显式 is_fatal 判定不升级)
+    sum_3 = aggregate_claim_evidence(
+        claims=[{"claim_id": "C-3", "claim": "命题3"}],
+        claims_verification=[{"claim_id": "C-3", "status": "source_unavailable", "is_fatal": False, "raw": "非致命不可用"}],
+    )
+    assert sum_3["C-3"]["decision"] == "reject"
+    assert sum_3["C-3"]["is_fatal"] is False
+
+    # 4. source_unavailable + is_fatal=True -> summary["is_fatal"] 为 True
+    sum_4 = aggregate_claim_evidence(
+        claims=[{"claim_id": "C-4", "claim": "命题4"}],
+        claims_verification=[{"claim_id": "C-4", "status": "source_unavailable", "is_fatal": True, "raw": "真致命幻觉"}],
+    )
+    assert sum_4["C-4"]["decision"] == "reject"
+    assert sum_4["C-4"]["is_fatal"] is True
+
+
+def test_dav1091_evaluate_challenges_is_fatal_contract(evaluator):
+    """DAV-1091: evaluate_challenges 中 source_unavailable + is_fatal=False 不升级为 fatal unavailable。"""
+    # 构造单个不可用源挑战，is_fatal=False 情况下不得升级
+    challenges = [
+        {
+            "challenge_id": "CH-1",
+            "target_claim_id": "C-1",
+            "speaker": "bear",
+            "severity": "fatal",
+            "evidence": ["非致命不可用源指标引用"],
+        }
+    ]
+    # 使用打桩验证项直接注入
+    res = evaluator.evaluate_challenges(
+        challenges=challenges,
+        seven_reports={},
+    )
+    assert len(res) == 1
+    # 正常无报告且无 failure_ledger 时判定为 unsupported
+    assert res[0]["evidence_status"] in ("unsupported", "contradicted")

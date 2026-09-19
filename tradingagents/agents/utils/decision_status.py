@@ -360,16 +360,42 @@ def evaluate_confirmation_state(
             return is_observation_or_hypothesis_claim(cl)
         return False
 
+    def _is_verification_item_fatal(v: Mapping[str, Any]) -> bool:
+        """Check whether a single verification item is fatal under the independent severity contract.
+
+        Contract (DAV-1091 / Card 2):
+        - is_fatal is an independent severity bit (not redundant with status).
+        - If is_fatal is True: always fatal (regardless of status).
+        - If is_fatal is False: never fatal (contradicted and source_unavailable do NOT upgrade to fatal).
+        - If is_fatal is omitted (None): source_unavailable defaults to True (producer contract),
+          while contradicted defaults to False.
+        """
+        is_fatal = v.get("is_fatal")
+        if is_fatal is True:
+            return True
+        if is_fatal is False:
+            return False
+        return v.get("status") == "source_unavailable"
+
     def _is_claim_fatal(cid: str) -> bool:
         sm = summary_map.get(cid)
         if sm:
             if sm.get("pit_failed"):
                 return True
+            if sm.get("is_fatal") is True:
+                return True
+            if sm.get("is_fatal") is False:
+                return False
+
+        # If verification items exist for this claim, they provide exact is_fatal flags
+        v_list = ver_by_cid.get(cid, [])
+        if v_list:
+            return any(_is_verification_item_fatal(v) for v in v_list)
+
+        # Fallback when only summary_map is provided without verification items
+        if sm:
             cnt = sm.get("counts") or {}
             if cnt.get("contradicted", 0) > 0 or cnt.get("source_unavailable", 0) > 0:
-                return True
-        for v in ver_by_cid.get(cid, []):
-            if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
                 return True
         return False
 
@@ -509,7 +535,7 @@ def evaluate_confirmation_state(
                     continue
                 unadjudicated_fatal_cids.add(cid)
         for v in (claims_verification or []):
-            if v.get("status") in {"contradicted", "source_unavailable"} or v.get("is_fatal"):
+            if _is_verification_item_fatal(v):
                 cid = str(v.get("claim_id", "") or "").strip()
                 if cid:
                     if cid in rejected_ids and _get_claim_decision(cid) == "reject":

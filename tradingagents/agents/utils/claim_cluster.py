@@ -184,6 +184,7 @@ def _build_verification_index(
             if not isinstance(item, Mapping):
                 continue
             st = str(item.get("status") or "").strip().lower()
+            # DAV-1091 (Card 2): is_fatal is an independent severity bit. Only non-fatal verified items qualify.
             is_fatal = bool(item.get("is_fatal", False))
             if st in {"verified", "pass", "ok"} and not is_fatal and st not in {
                 "contradicted",
