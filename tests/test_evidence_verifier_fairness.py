@@ -530,3 +530,88 @@ def test_dav1088_a_unit_fold_removed(evaluator):
     assert _canonicalize_metric("净利率", "元") != "净利润"
 
 
+# ── Commit 2 (缺陷 B'): 绑定与匹配白名单化 ──
+
+def test_dav1088_b1_production_inv10_verified(evaluator):
+    """B1 生产 INV-10 原句: 两个事实均在 fundamentals_report 中真实存在，应 verified。"""
+    seven_reports = {"fundamentals_report": _PROD_FUNDAMENTALS_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="基本面报告显示2026H1每股净资产45.40元且现金流达3046亿元提供极强反脆弱缓冲",
+        seven_reports=seven_reports,
+        claim_id="INV-10",
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1088_b2_production_inv6_verified_and_not_bound_to_pb(evaluator):
+    """B2 生产 INV-6 原句: verified，且 45.40元 的绑定指标不得为 pb。"""
+    from tradingagents.agents.utils.evidence_verifier import (
+        extract_bound_numbers,
+        split_compound_evidence,
+    )
+
+    raw = "基本面报告显示2026H1每股净资产45.40元对应PB仅0.89倍且经营现金流达3046亿元"
+    bns = []
+    for clause in split_compound_evidence(raw):
+        bns.extend(extract_bound_numbers(clause))
+    bn_4540 = next(b for b in bns if abs(b.val - 45.40) < 1e-6)
+    assert bn_4540.metric is not None and bn_4540.metric != "pb"
+
+    seven_reports = {"fundamentals_report": _PROD_FUNDAMENTALS_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence=raw,
+        seven_reports=seven_reports,
+        claim_id="INV-6",
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1088_b3_pb_clause_optional_consistent_verdict(evaluator):
+    """B3: 同一句仅增删句尾「对应PB仅0.89倍」，两种句式结论一致，不得翻转。"""
+    seven_reports = {"fundamentals_report": _PROD_FUNDAMENTALS_REPORT}
+    res_with = evaluator.evaluate_single_evidence(
+        raw_evidence="基本面报告显示2026H1每股净资产45.40元对应PB仅0.89倍且经营现金流达3046亿元",
+        seven_reports=seven_reports,
+        claim_id="INV-6",
+    )
+    res_without = evaluator.evaluate_single_evidence(
+        raw_evidence="基本面报告显示2026H1每股净资产45.40元且经营现金流达3046亿元",
+        seven_reports=seven_reports,
+        claim_id="INV-6",
+    )
+    assert res_with["status"] == res_without["status"] == STATUS_VERIFIED
+
+
+def test_dav1088_b4_number_absent_still_unsupported(evaluator):
+    """B4: 证据数值确实不在任何报告中，仍判 unsupported，不得蒙混通过。"""
+    seven_reports = {"fundamentals_report": _PROD_FUNDAMENTALS_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="基本面报告显示2026H1每股净资产45.40元且股息率达9.99%",
+        seven_reports=seven_reports,
+        claim_id="B4",
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1088_b5_unbound_number_coincidence_not_verified(evaluator):
+    """B5: 未绑定指标 + 数值巧合相等（避开 3.1 快速路径），不得 verified。"""
+    # 证据中 2.02 为无单位评分(raw)，与报告中净利润同比 +2.02% 单位兼容但指标未绑定；
+    # 文本按「，」切分无任何 ≥4 字段落入报告，规避 3.1 两个放行分支。
+    seven_reports = {"macro_report": _PROD_MACRO_REPORT}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="量化策略评分录得2.02且置信区间稳定",
+        seven_reports=seven_reports,
+        claim_id="B5",
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1088_b_binding_unbound_marker_no_cross_sentence_guess(evaluator):
+    """绑定侧: 数字无法确定指标时产出显式未绑定标记，不得绑到句中碰巧出现的其他指标。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    # 「45.40元」与「PB」之间隔着关系动词「对应」，不得把 45.40 误绑给 pb；
+    # 句中无「每股净资产」词表命中时须显式未绑定(metric=None)。
+    bns = extract_bound_numbers("资产价格45.40元对应PB仅0.89倍")
+    bn_4540 = next(b for b in bns if abs(b.val - 45.40) < 1e-6)
+    assert bn_4540.metric != "pb"

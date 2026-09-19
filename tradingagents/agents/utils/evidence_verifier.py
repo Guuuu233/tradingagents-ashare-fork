@@ -265,6 +265,8 @@ _METRIC_KEYWORDS = [
     "风险偏好", "进攻", "防守", "避险", "虹吸", "抽水", "情绪", "舆情", "预期差", "公告", "中报", "年报", "季报",
     # Entities frequently referenced
     "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来",
+    # DAV-1088: per-share fundamentals needed for metric binding (缺陷 B' 词表缺项)
+    "每股净资产", "bps"
 ]
 
 
@@ -287,18 +289,24 @@ _STRICT_METRICS = {
     "营收", "毛利率", "毛利", "净利率", "净利润", "成本", "应收账款", "存货", "现金流",
     "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
     "主力", "超大单", "大单", "两融", "概率", "预期收益", "降息", "降准", "关税",
-    "lpr", "cpi", "ppi", "m2", "gdp"
+    "lpr", "cpi", "ppi", "m2", "gdp",
+    "每股净资产"
 }
 
 _METRIC_CANONICAL_MAP: dict[str, str] = {
     # 营收 / 收入
     "营业收入": "营收", "主营业务收入": "营收", "单季营收": "营收", "海外营收": "营收", "营收": "营收", "收入": "营收", "revenue": "营收",
+    # 利息收入为独立科目（非营收总量），不进入 _STRICT_METRICS：
+    # 「利息收入折损 15.3亿」与「营收 1781.81亿」不可比，防止误绑营收后判伪冲突
+    "利息收入": "利息收入",
     # 毛利率 / 毛利
     "综合毛利率": "毛利率", "销售毛利率": "毛利率", "毛利率": "毛利率", "毛利": "毛利",
     # 净利率
     "归母净利率": "净利率", "扣非净利率": "净利率", "净利率": "净利率", "净利润率": "净利率",
     # 净利润
     "归母净利润": "净利润", "归母净利": "净利润", "扣非净利润": "净利润", "扣非净利": "净利润", "净利润": "净利润", "净利": "净利润",
+    # 每股净资产
+    "每股净资产": "每股净资产", "每股净资产（bps）": "每股净资产", "bps": "每股净资产",
     # 成本
     "营业成本": "成本", "生产成本": "成本", "成本": "成本",
     # 应收账款
@@ -320,7 +328,7 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # 交易 / 资金
     "换手率": "换手率", "换手": "换手率",
     "量比": "量比",
-    "成交量": "成交量", "成交额": "成交额",
+    "成交量": "成交量", "成交额": "成交额", "成交": "成交量",
     "主力净流入": "主力", "主力净流出": "主力", "主力": "主力",
     "超大单净流入": "超大单", "超大单净流出": "超大单", "超大单": "超大单",
     "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
@@ -459,7 +467,9 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         return []
     period = normalize_period(text) or default_period
     cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), text)
-    text_lower = text.lower()
+    # 千分位逗号归一：3,046.11 -> 3046.11（仅在数字与三位数字组之间的逗号）
+    cleaned = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", cleaned)
+    text_lower = cleaned.lower()
     metric_spans = []
     for kw in _SORTED_METRIC_MAP_KEYS:
         start = 0
@@ -474,6 +484,16 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     for s in metric_spans:
         if not filtered_spans or s[0] >= filtered_spans[-1][1]:
             filtered_spans.append(s)
+
+    # 括号内指标词仅作限定语（如「营业支出/成本维度」），主体绑定优先非括号指标
+    paren_mask = [False] * (len(cleaned) + 1)
+    depth = 0
+    for i, ch in enumerate(cleaned):
+        if ch in "（(【[":
+            depth += 1
+        elif ch in "）)】]":
+            depth = max(0, depth - 1)
+        paren_mask[i] = depth > 0
 
     matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
     res = []
@@ -491,22 +511,57 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         raw = m.group(0).strip()
         n_start, n_end = m.span()
 
+        # 前向绑定：指标词只能绑定同一子句内其后最近的数字；若指标与目标数字之间
+        # 已隔着另一个数字且无子句边界（，、同比/环比），该指标已被占先，不得再绑
+        # （「量比1.4收于0.15」中 0.15 不得绑到量比）。含同比/环比的比较从句允许
+        # 更长距离（「现金流量净额达到 3,046.11 亿元，相较于 2025H1…同比暴增 +126.54%」）。
         closest_prec = None
         min_prec_dist = 9999
+        closest_prec_paren = None
+        min_prec_paren_dist = 9999
         for m_start, m_end, m_raw in filtered_spans:
-            if m_end <= n_start and (n_start - m_end) < 40:
-                intervening = cleaned[m_end:n_start]
-                if "；" in intervening or ";" in intervening or "。" in intervening:
+            if m_end <= n_start:
+                # 距离与占先判定均基于剔除括号内容后的文本：
+                # 「毛利率（营业总收入扣除营业支出/成本维度）为 50.95%…下降 1.38」中
+                # 括号内说明文字不拉开指标与数字的语义距离。
+                intervening_raw = cleaned[m_end:n_start]
+                intervening = "".join(
+                    ch for i, ch in enumerate(intervening_raw, start=m_end)
+                    if not paren_mask[i]
+                )
+                # 占先/语境信号（，、同比/环比）看原文；语义距离看剔除括号后的文本
+                ctx = intervening_raw
+                max_dist = 64 if re.search(r"同比|环比", ctx) else 40
+                if len(intervening) >= max_dist:
                     continue
-                dist = n_start - m_end
+                if "；" in ctx or ";" in ctx or "。" in ctx:
+                    continue
+                if _NUMBER_WITH_UNIT_RE.search(ctx) and not re.search(
+                    r"[，,、]|同比|环比", ctx
+                ):
+                    continue
+                dist = len(intervening)
+                if any(paren_mask[p] for p in range(m_start, m_end)):
+                    if dist < min_prec_paren_dist:
+                        min_prec_paren_dist = dist
+                        closest_prec_paren = m_raw
+                    continue
                 if dist < min_prec_dist:
                     min_prec_dist = dist
                     closest_prec = m_raw
+        if closest_prec is None:
+            closest_prec = closest_prec_paren
 
+        # 后继绑定仅允许数字与指标名紧邻（可隔「的」）。
+        # 「45.40元对应PB」中隔着关系动词「对应」的 PB 是碰巧出现的其他指标，
+        # 禁止就近猜测误绑；无法确定指标时保持 metric=None（显式未绑定标记）。
         closest_succ = None
         min_succ_dist = 9999
         for m_start, m_end, m_raw in filtered_spans:
             if m_start >= n_end and (m_start - n_end) < 15:
+                intervening = cleaned[n_end:m_start]
+                if intervening.strip() not in ("", "的"):
+                    continue
                 dist = m_start - n_end
                 if dist < min_succ_dist:
                     min_succ_dist = dist
@@ -542,13 +597,32 @@ def _is_bound_num_match(
     rel_tol: float = 0.02,
     abs_tol: float = 0.05,
 ) -> bool:
-    """Check if evidence bound number matches line bound number without metric cross-binding."""
+    """Whitelist match: 指标、单位（数值容差内）、语义类型、期间四者均兼容才放行。
+
+    DAV-1088: 不再维持「只要不明确矛盾就通过」。绑定到严格指标的数字只能与
+    同名严格指标匹配；任一侧严格、另一侧非严格/未绑定即拒绝。两侧均非严格时
+    要求规范化指标同名或双方均未绑定；语义类型必须一致，否则不可比。
+    """
     if not _is_num_match(ev_bn.val, ev_bn.unit, l_bn.val, l_bn.unit, rel_tol, abs_tol):
         return False
     ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
     l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
-    if ev_strict and l_strict and ev_strict != l_strict:
+    if ev_strict or l_strict:
+        if not ev_strict or not l_strict or ev_strict != l_strict:
+            return False
+    elif ev_bn.metric != l_bn.metric:
         return False
+    if ev_bn.stype != l_bn.stype:
+        return False
+    # 期间兼容：双方均抽出期间时，要求相同或共享同一年度前缀
+    # （2026H1 与 2026 / 2026-07-06 属同一年度粒度，视为兼容；跨年不兼容）。
+    if ev_bn.period and l_bn.period and ev_bn.period != l_bn.period:
+        if not (
+            ev_bn.period[:4] == l_bn.period[:4]
+            and re.match(r"^\d{4}", ev_bn.period)
+            and re.match(r"^\d{4}", l_bn.period)
+        ):
+            return False
     return True
 
 
