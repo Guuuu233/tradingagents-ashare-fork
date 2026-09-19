@@ -8,11 +8,48 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# 全球核心指数合理值域契约（用于防御 100 倍等极端畸变或字段错位）
+# 基于历史峰谷与安全裕度设定的合理区间 [min_val, max_val]
+GLOBAL_INDICES_REASONABLE_RANGES: Dict[str, Tuple[float, float]] = {
+    "标普500": (1000.0, 15000.0),
+    "SPX": (1000.0, 15000.0),
+    ".INX": (1000.0, 15000.0),
+    "^GSPC": (1000.0, 15000.0),
+    "纳斯达克": (3000.0, 50000.0),
+    "纳斯达克综合": (3000.0, 50000.0),
+    "纳斯达克100": (3000.0, 50000.0),
+    "IXIC": (3000.0, 50000.0),
+    ".IXIC": (3000.0, 50000.0),
+    "^IXIC": (3000.0, 50000.0),
+    "NDX": (3000.0, 50000.0),
+    "道琼斯": (10000.0, 100000.0),
+    "DJI": (10000.0, 100000.0),
+    ".DJI": (10000.0, 100000.0),
+    "^DJI": (10000.0, 100000.0),
+    "恒生指数": (8000.0, 60000.0),
+    "HSI": (8000.0, 60000.0),
+    "恒生科技指数": (1000.0, 20000.0),
+    "HKTECH": (1000.0, 20000.0),
+    "HSTECH": (1000.0, 20000.0),
+    "日经225": (10000.0, 120000.0),
+    "N225": (10000.0, 120000.0),
+    "韩国KOSPI": (1000.0, 8000.0),
+    "KS11": (1000.0, 8000.0),
+    "德国DAX": (5000.0, 40000.0),
+    "GDAXI": (5000.0, 40000.0),
+    "法国CAC40": (2000.0, 20000.0),
+    "FCHI": (2000.0, 20000.0),
+    "英国富时100": (3000.0, 20000.0),
+    "FTSE": (3000.0, 20000.0),
+}
+
 
 def calculate_series_metrics(
     df: Optional[pd.DataFrame],
     as_of: str,
     price_col: str = "close",
+    instrument: Optional[str] = None,
+    max_stale_business_days: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Normalize a time series frame and calculate key returns, MAs, and trend status.
 
@@ -75,6 +112,37 @@ def calculate_series_metrics(
     last_row = df_work.iloc[-1]
     actual_as_of = last_row["date"].strftime("%Y-%m-%d")
     latest_close = float(last_row["close"])
+
+    # 1. 标的值域一致性校验（契约 4：异常拒绝而非放行，落入数据缺失，禁止盲目 /100）
+    if instrument:
+        inst_key = str(instrument).strip()
+        r_range = GLOBAL_INDICES_REASONABLE_RANGES.get(inst_key)
+        if r_range is None and inst_key.upper() in GLOBAL_INDICES_REASONABLE_RANGES:
+            r_range = GLOBAL_INDICES_REASONABLE_RANGES[inst_key.upper()]
+        if r_range:
+            min_val, max_val = r_range
+            if latest_close < min_val or latest_close > max_val:
+                logger.warning(
+                    "Instrument %s close value %.2f violates reasonable range [%.2f, %.2f], rejecting",
+                    instrument, latest_close, min_val, max_val
+                )
+                return None
+
+    # 2. 新鲜度闸校验（契约 2：actual_as_of 与请求 as_of 相差超出阈值则返回 None）
+    if max_stale_business_days is not None and max_stale_business_days > 0:
+        act_dt = last_row["date"].date()
+        req_dt = end_dt.date()
+        if act_dt > req_dt:
+            # 严格防前视：actual_as_of 不得晚于请求日
+            return None
+        # 计算工作日差
+        b_days = int(np.busday_count(act_dt.strftime("%Y-%m-%d"), req_dt.strftime("%Y-%m-%d")))
+        if b_days > max_stale_business_days:
+            logger.warning(
+                "Series actual_as_of %s is %d business days behind requested %s (threshold=%d), rejecting",
+                actual_as_of, b_days, as_of, max_stale_business_days
+            )
+            return None
 
     prev_close = float(df_work["close"].iloc[-2]) if n >= 2 else latest_close
     change_1d_pct = ((latest_close - prev_close) / prev_close * 100) if prev_close != 0 else 0.0
@@ -192,21 +260,38 @@ def build_global_indices_markdown(
     valid_dates = [m["as_of"] for m in valid_items.values() if isinstance(m, dict) and "as_of" in m]
     actual_as_of = max(valid_dates) if valid_dates else requested_as_of
 
+    total_count = len(items)
+    success_count = len(valid_items)
+    is_partial = success_count < total_count
+
+    missing_names = [k for k, v in items.items() if k not in valid_items]
+
+    status_str = f"partial (部分成功 {success_count}/{total_count})" if is_partial else "verified (完整有效)"
+
     lines = [
         f"## 全球核心市场指数行情（数据基准日：{actual_as_of}，来源：{source}）\n",
         f"【数据日期】{actual_as_of}",
-        "| 市场/指数 | 代码 | 最新收盘 | 单日涨跌幅 | 5日涨跌幅 | 20日涨跌幅 | 趋势状态 |",
-        "|---|---|---|---|---|---|---|",
+        f"【数据状态】{status_str}",
     ]
+    if missing_names:
+        lines.append(f"【缺失项】{', '.join(missing_names)}")
+
+    lines.extend([
+        "| 市场/指数 | 代码 | 数据基准日 | 数据来源 | 最新收盘 | 单日涨跌幅 | 5日涨跌幅 | 20日涨跌幅 | 趋势状态 |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ])
 
     for name, data in items.items():
         if not isinstance(data, dict) or data.get("latest_close") is None:
             code = data.get("code", "-") if isinstance(data, dict) else "-"
-            lines.append(f"| {name} | {code} | 【数据缺失】 | - | - | - | - |")
+            lines.append(f"| {name} | {code} | - | - | 【数据缺失】 | - | - | - | - |")
             continue
 
         display_name = name
         code = data.get("code", "-")
+        item_as_of = data.get("as_of", actual_as_of)
+        item_source = data.get("source", source)
+
         if display_name == "纳斯达克":
             if "100" in str(code) or "NDX" in str(code):
                 display_name = "纳斯达克100"
@@ -218,7 +303,7 @@ def build_global_indices_markdown(
         d5 = f"{data['change_5d_pct']:+.2f}%" if data.get("change_5d_pct") is not None else "【数据缺失】"
         d20 = f"{data['change_20d_pct']:+.2f}%" if data.get("change_20d_pct") is not None else "【数据缺失】"
         trend = data.get("trend_desc", "平稳")
-        lines.append(f"| {display_name} | {code} | {close_val} | {d1} | {d5} | {d20} | {trend} |")
+        lines.append(f"| {display_name} | {code} | {item_as_of} | {item_source} | {close_val} | {d1} | {d5} | {d20} | {trend} |")
 
     lines.append("\n### 跨市场宏观联动观察")
     # US markets check

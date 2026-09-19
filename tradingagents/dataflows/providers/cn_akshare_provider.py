@@ -7022,7 +7022,11 @@ class CnAkshareProvider(BaseMarketDataProvider):
         if curr_date is None:
             return "【数据获取失败】全球核心指数 — 原因：缺少分析基准日期 (来源: cn_akshare)"
         from datetime import datetime, timedelta
-        from ..macro_market_utils import calculate_series_metrics, build_global_indices_markdown
+        from ..macro_market_utils import (
+            calculate_series_metrics,
+            build_global_indices_markdown,
+            GLOBAL_INDICES_REASONABLE_RANGES,
+        )
 
         try:
             end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
@@ -7079,9 +7083,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
                         df = None
 
                 if df is not None and not df.empty:
-                    metrics = calculate_series_metrics(df, curr_date)
+                    metrics = calculate_series_metrics(
+                        df,
+                        curr_date,
+                        instrument=code,
+                        max_stale_business_days=3,
+                    )
                     if metrics:
                         metrics["code"] = code
+                        metrics["source"] = "cn_akshare_hist"
                         results[name] = metrics
 
         def _fetch_from_snapshots():
@@ -7090,6 +7100,20 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 sina_snapshots = self._fetch_global_indices_sina_hq(curr_date)
                 for k, v in sina_snapshots.items():
                     if k not in results and v.get("as_of", "") <= curr_date:
+                        # 🟡-1: 快照路径接入标的值域防线校验
+                        p_val = v.get("latest_close")
+                        c_code = v.get("code")
+                        r_range = GLOBAL_INDICES_REASONABLE_RANGES.get(k) or (
+                            GLOBAL_INDICES_REASONABLE_RANGES.get(str(c_code).strip()) if c_code else None
+                        )
+                        if r_range and p_val is not None:
+                            min_val, max_val = r_range
+                            if p_val < min_val or p_val > max_val:
+                                _provider_logger.warning(
+                                    "Sina snapshot %s close %.2f violates range [%.2f, %.2f], rejecting",
+                                    k, p_val, min_val, max_val
+                                )
+                                continue
                         results[k] = v
             except Exception as exc:
                 _provider_logger.debug("Sina HQ global indices failed: %s", exc)
@@ -7101,6 +7125,20 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     if k not in results and v.get("as_of", "") <= curr_date:
                         if k == "纳斯达克100" and "纳斯达克综合" in results:
                             continue
+                        # 🟡-1: 快照路径接入标的值域防线校验
+                        p_val = v.get("latest_close")
+                        c_code = v.get("code")
+                        r_range = GLOBAL_INDICES_REASONABLE_RANGES.get(k) or (
+                            GLOBAL_INDICES_REASONABLE_RANGES.get(str(c_code).strip()) if c_code else None
+                        )
+                        if r_range and p_val is not None:
+                            min_val, max_val = r_range
+                            if p_val < min_val or p_val > max_val:
+                                _provider_logger.warning(
+                                    "Eastmoney snapshot %s close %.2f violates range [%.2f, %.2f], rejecting",
+                                    k, p_val, min_val, max_val
+                                )
+                                continue
                         results[k] = v
             except Exception as exc:
                 _provider_logger.debug("EM ulist global indices failed: %s", exc)
@@ -7116,6 +7154,14 @@ class CnAkshareProvider(BaseMarketDataProvider):
 
         if not results:
             return "【数据获取失败】全球核心指数 — 原因：所有全球指数接口调用失败或无有效数据 (来源: cn_akshare)"
+
+        # 补齐未成功的标准目标标的为 None，确保 markdown 渲染能反映【数据缺失】与 partial 状态
+        for name, code, _ in global_targets:
+            if name not in results:
+                # 若纳斯达克100存在则代表纳斯达克，不重复补
+                if name == "纳斯达克综合" and "纳斯达克100" in results:
+                    continue
+                results[name] = {"code": code, "latest_close": None}
 
         result_md = build_global_indices_markdown(results, curr_date, source="cn_akshare")
         self._set_macro_cache(cache_key, result_md)
