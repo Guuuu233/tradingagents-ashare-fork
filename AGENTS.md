@@ -200,3 +200,67 @@ sqlite3 "file:data/tradingagents.db?immutable=1" \
   `select count(*) from reports;`
 - 任务层返回成功 ≠ 报告已落库。验收必须贴出前后对照的实测值。
 - 失败的分析可能完全不落库（失败在写库之前），此时计数不变属正常。
+
+---
+
+## 11. .gitignore：什么可以忽略，什么绝对不行
+
+本仓库工作区常年有一千多个未跟踪文件，`git status` 基本不可读。2026-09-20 起 `.gitignore` 末尾有一段「本地工作区噪音」规则，**改它之前先读这一节**。
+
+### 11.1 准入标准
+
+只有三类东西可以进 `.gitignore`：
+
+| 可以忽略 | 例子 |
+|---|---|
+| 机器生成物 | `work/analysis_runs/` 下的 run JSON、probe log |
+| 工具本地状态 | `.claude/`、`.cursor/`、`.squad/`、`.hermes/`、`.workbuddy-ai/` |
+| 大体积二进制副本 | `*.db.bak-*`、`*.db.migrated-*`（本地约 12 GiB） |
+
+**以下绝对不能加进 .gitignore：**
+
+- 人写的交接文档、审计报告、施工计划（`work/*.md`）
+- agent 指令文本（`work/agent-instructions-backup/`）
+- `.patch` 快照 —— 那是未提交改动的救命底稿。`*.patch` 这种全局规则会把将来有价值的补丁一起吞掉
+- **任何 git worktree 目录**，见 §11.2
+
+曾经踩过的坑：第一版规则里写了 `work/audit_final/`、`work/phase_e_ab_*/`、`work/agent-instructions-backup/` 和全局 `*.patch`，等于把 22 份审计/指令文档加 6 个补丁静默藏起来，和上面这条自相矛盾。
+
+### 11.2 worktree 目录不得忽略
+
+仓库内有多个**已登记的 git worktree**，它们看起来像临时残留，其实不是：
+
+```
+"/tmp/p2-t5-review-50ec109"   ← 目录名真的就是一个引号，是当年 quoting bug 留下的
+.dav1050
+.review-dav977-263c1a5
+work/dav-42-pr13-rework
+```
+
+规则：
+
+1. **动手前先跑 `git worktree list`。** 看起来像垃圾的目录，先验证登记状态再说。全仓库现有 65 个 worktree，大半在 `/private/tmp/`。
+2. **不得用 `.dav[0-9]*/`、`.review-*/` 这类规则忽略它们。** 藏掉一个活的 worktree，比 `git status` 多两行噪音危险得多。
+3. **清理只能用 `git worktree remove`**，禁止 `rm -rf`。直接删目录会留下悬挂登记，之后 `git worktree` 系列命令行为异常。标 `prunable` 的用 `git worktree prune`。
+
+另外：worktree 有自己的 HEAD 和分支。**不要把主仓的文件复制进去**「同步」——那只会制造未提交改动，可能被别人的 commit 顺手带走。规范更新靠 merge/rebase 流转，不靠 cp。
+
+### 11.3 其他约束
+
+- `.gitignore` 只作用于**未跟踪**文件。已跟踪文件加规则不会让它消失，要用 `git rm --cached`。
+- 无斜杠的模式在**任意层级**生效。`*.db.bak-*` 已经覆盖 `work/` 和 `data/` 下的副本，不需要再写 `work/*.db.bak-*`。
+- 确需提交被忽略的文件：`git add -f <path>`。
+- 改完必须实测影响面，不要凭规则文本推断：
+
+```sh
+git show HEAD:.gitignore > /tmp/gi_old.txt
+git ls-files --others --exclude-from=/tmp/gi_old.txt | wc -l   # 改前
+git ls-files --others --exclude-from=.gitignore     | wc -l   # 改后
+# 逐条看新藏了什么，确认里面没有文档、补丁、worktree
+comm -23 <(git ls-files --others --exclude-from=/tmp/gi_old.txt | sort) \
+         <(git ls-files --others --exclude-from=.gitignore | sort)
+```
+
+### 11.4 数据库备份不等于可删
+
+`work/` 下 61 个、`data/` 下 14 个备份合计约 12 GiB。忽略它们只是让 `git status` 干净，**不代表可以删**。删除前必须逐个确认：`quick_check` 是否完好、对应哪个部署 SHA、是不是某次发布的唯一回滚点。确认后也走可恢复方式，不要 `rm -rf`。

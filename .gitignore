@@ -255,3 +255,30 @@ frontend/node_modules/
 uv.lock.cp313
 .worktrees/
 data/
+
+# ── 本地工作区噪音（2026-09-20 加，详见 AGENTS.md §11）──────────────────
+# 准入标准：只忽略「机器生成物 / 工具本地状态 / 大体积二进制」。
+# 不忽略：人写的交接文档、审计报告、agent 指令文本、.patch 快照，
+#         以及任何 git worktree 目录（worktree 必须在 status 里可见）。
+# 已跟踪文件不受影响；要提交被忽略的文件用 `git add -f <path>`。
+
+# agent 工具的本地状态目录（不属于本项目源码）
+.claude/
+.cursor/
+.squad/
+.hermes/
+.workbuddy-ai/
+
+# 数据库备份与迁移副本（本地约 12 GiB，是部署门证据，留本地不入库）
+# 无斜杠模式在任意层级生效，work/ 与 data/ 下的副本一并覆盖
+*.db.bak-*
+*.db.migrated-*
+*.db-shm
+*.db-wal
+
+# 机器生成的分析运行产物（要留证据请 git add -f）
+work/analysis_runs/
+
+# 配置文件的本地备份副本
+uv.lock.bak-*
+.env.bak-*
