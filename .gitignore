@@ -1,7 +1,13 @@
-# Docs (local design/plan documents)
+# Docs
+# 历史规则 docs/* 会静默吞掉 docs/ 下一切内容，2026-09-20 前已造成 7 份无副本的
+# 交接/审计文档长期未入库。现改为：Markdown 文档默认可见，其余类型仍默认忽略。
 docs/*
+!docs/*/
+!docs/**/*.md
 !docs/social_data/
 !docs/social_data/**
+# 会话导出体积大且可再生，按 docs/agent-history/README.md 要求保持本地归档
+docs/agent-history/
 
 # LangGraph Checkpoints
 graph_checkpoints.db

@@ -256,8 +256,9 @@ work/dav-42-pr13-rework
 
 - `.gitignore` 只作用于**未跟踪**文件。已跟踪文件加规则不会让它消失，要用 `git rm --cached`。
 - 无斜杠的模式在**任意层级**生效。`*.db.bak-*` 已经覆盖 `work/` 和 `data/` 下的副本，不需要再写 `work/*.db.bak-*`。
-- **`docs/` 整个目录被 `.gitignore:2` 的既有规则 `docs/*` 忽略**（只放行 `docs/social_data/`）。在 `docs/` 下新建文档会静默不入库，`git status` 也看不见。
-  已跟踪的 `docs/KNOWN_ISSUES.md`、`docs/db-backup-retention.md` 等都是 `git add -f` 加进去的；文件一旦被跟踪，之后正常 commit 即可。
+- **`docs/` 的忽略规则是「Markdown 默认可见、其余类型默认忽略」**（`.gitignore:1-11`）。
+  历史上 `docs/*` 会吞掉 `docs/` 下一切内容，曾让 7 份无副本的交接/审计文档长期未入库；2026-09-20 已改为放行 `docs/**/*.md`。
+  例外：`docs/agent-history/` 仍整体忽略（约 4.6 MiB 会话导出，按其 README 保持本地归档）。在 `docs/` 放非 md 文件仍需 `git add -f`。
 - 确需提交被忽略的文件：`git add -f <path>`。
 - 改完必须实测影响面，不要凭规则文本推断：
 
