@@ -450,6 +450,49 @@ _E04_CONSEQ_ZH = re.compile(
     r"^\s*将(?:会|要|令|致|使|对|为|在|于|把)?"
 )
 _E04_CONSEQ_EN = re.compile(r"\b(?:then|therefore|thus|hence|consequently)\b", re.IGNORECASE)
+# DAV-1110 rerun：情景标签开启条件域（情景推演段内的命中属情景假设，非事实断言）
+# 中文：悲观情景/乐观情景/基准情景/极端情景/情景测试/压力测试（容忍 markdown 加粗与冒号/括号间隔）
+_E04_SCENARIO_ZH = re.compile(
+    # 限定词必选（悲观/乐观...情景）或子句首复合标签（^情景推演/测试/假设/分析、^压力测试）
+    # 🟢-1：复合标签收窄为子句首标签形态，避免「此情景分析已被证伪」等中间词泄漏
+    r"(?:悲观|乐观|基准|极端|中性|牛市|熊市)\s*情景(?:\s*[（(][^）)]*[）)])?\s*[:：下中里]?|"
+    r"^\s*[*_#\s-]*情景\s*(?:推演|测试|假设|分析)\s*[:：下中里]?|"
+    r"^\s*[*_#\s-]*压力\s*测试\s*[:：下中里]?"
+)
+# 英文：base|bull|bear|worst|best|downside|upside case/scenarios / scenario analysis/test/simulation / stress case/test
+# 🟡-A：裸 scenario(s) 必须带限定词或子句首复合标签，避免 "the above scenario was falsified" 等泄漏
+_E04_SCENARIO_EN = re.compile(
+    r"\b(?:base|bull|bear|worst|best|downside|upside)[\s-]+(?:case|scenarios?)\b\s*[:：]?|"
+    r"^\s*[*_#\s-]*(?:scenario\s+(?:analysis|test|simulation)|stress[\s-]+(?:case|test))\b\s*[:：]?",
+    re.IGNORECASE,
+)
+# 情景域内回转标记：情景段结束、回到现实断言（如「悲观情景：…，但多头已确认将超预期」后半必须拦）
+# 注：回转标记仅锚定子句首（^\s*）；句中转折不切断情景域属可接受边界（防止情景内容自身转折被误切）
+_E04_SCENARIO_BREAK_ZH = re.compile(
+    r"^\s*(?:但(?:是)?|然而|不过|相反|反之|实际上|事实上|现实(?:中|情况)|"
+    r"回到现实|当前(?:市场|盘面)|目前(?:市场|盘面)|已确认|业已|已经|现实情况)"
+)
+_E04_SCENARIO_BREAK_EN = re.compile(
+    r"^\s*(?:but|however|yet|in\s+reality|in\s+fact|actually|as\s+it\s+stands|confirmed)\b",
+    re.IGNORECASE,
+)
+# DAV-1110 🟡-1：情景证伪/否定语境（多头已证伪/排除/否定该情景…），不开启或立即终止情景域
+# 🟡-NEW-1：否定词严格限定为对情景/假设的处置动词形态，避免普通形容词（negative/偏否定）误判
+_E04_SCENARIO_REJECT_ZH = re.compile(
+    r"证伪|已被证伪|已证伪|被证伪|"
+    r"予以否定|被否定|否定了|"
+    r"(?<!偏)否定(?:\s*此|\s*该|\s*上述|\s*前述|\s*各类|\s*相关)?\s*(?:(?:悲观|乐观|基准|极端|中性|牛市|熊市)\s*)?(?:情景|假设|推演|预测|观点|结论)|"
+    r"不予采纳|不能成立|不成立|驳回|未被采纳|并不采纳|推翻|抛弃|"
+    r"排除(?:\s*此|\s*该|\s*上述|\s*前述|\s*各类|\s*相关)?\s*(?:(?:悲观|乐观|基准|极端|中性|牛市|熊市)\s*)?情景|"
+    r"(?:情景|假设).{0,6}(?:排除|证伪|(?<!偏)否定|不成立|推翻)|"
+    r"排除.*(?:情景|假设)"
+)
+_E04_SCENARIO_REJECT_EN = re.compile(
+    r"\b(?:ruled\s+out|falsif\w*|reject\w*|dismiss\w*|disprov\w*|eliminat\w*|invalidat\w*|negat(?:e|es|ed|ing))\b|"
+    r"\bexclud\w*\s+(?:the\s+|this\s+|that\s+|such\s+)?(?:(?:base|bull|bear|worst|best|downside|upside)[\s-]+(?:case|scenarios?)|stress[\s-]+(?:case|test)|scenarios?)\b|"
+    r"\b(?:case|scenarios?|assumptions?)\s+(?:was|were|is|are|has\s+been|have\s+been)?\s*(?:excluded|ruled\s+out|falsified|rejected|dismissed)\b",
+    re.IGNORECASE,
+)
 # DAV-1071 缺陷1：beat/miss 关键词后紧跟名词时构成名词性偏正短语（如“超预期幅度/信息”），是列举未知项而非断言
 _BEAT_MISS_NOUN_SUFFIX = re.compile(
     r"^\s*(?:幅度|空间|概率|可能性|程度|水平|信息|情形|情况|风险|因素|变量|情景)"
@@ -692,7 +735,48 @@ def _in_conditional_clause(text: str, hit_start: int, hit_end: int) -> bool:
             return False
         return True
 
-    # 2. 跨子句并列条件合取链（DAV-1110）
+    # 2. 情景标签条件域（DAV-1110 rerun）
+    # 同句内前序子句若含情景标签（悲观情景/基准情景/scenario/bear case/压力测试…），
+    # 则其后各子句均属情景假设域——直到回转标记（但/然而/不过/but…）、后果标记、证伪/否定标记或句界为止。
+    # 先查当前子句自身是否已是回转子句（情景结束后的真实断言不得豁免）。
+    if _E04_SCENARIO_BREAK_ZH.search(current_clause) or _E04_SCENARIO_BREAK_EN.search(current_clause):
+        pass  # 明确回转：直接落到合取链判定，不进入情景域
+    elif _E04_SCENARIO_REJECT_ZH.search(current_clause) or _E04_SCENARIO_REJECT_EN.search(current_clause):
+        pass  # 🟡-1：当前子句自身处于证伪/否定语境，不开启情景条件域
+    else:
+        # 🟡-2：当前子句自身即以情景标签引导（标签在命中之前，如「悲观情景下中报将超预期」无标点形态）
+        m_scen_zh = list(_E04_SCENARIO_ZH.finditer(current_clause))
+        m_scen_en = list(_E04_SCENARIO_EN.finditer(current_clause))
+        if m_scen_zh or m_scen_en:
+            # 🟢-2：取 m.end() 使切片起点严格在标签自身之后
+            last_scen_end = max([m.end() for m in m_scen_zh] + [m.end() for m in m_scen_en])
+            after_scen = current_clause[last_scen_end:]
+            # 标签与命中之间出现后果标记（如「悲观情景下则业绩超预期」）→ 后果断言，不豁免
+            if not (_E04_CONSEQ_ZH.search(after_scen) or _E04_CONSEQ_EN.search(after_scen)):
+                return True
+
+        # 🟡-B：跨子句后果标记检测：若当前子句自身由后果标记引导（如「悲观情景：…，则中报业绩超预期」），
+        # 属后果断言，不予情景域豁免（与第 3 段合取链 760 行对称检测）
+        if not (_E04_CONSEQ_ZH.search(current_clause) or _E04_CONSEQ_EN.search(current_clause)):
+            for prev_clause in reversed(clauses[:-1]):
+                if not prev_clause:
+                    continue
+                # 前序子句出现回转标记、后果标记或证伪/否定标记 → 情景域已终止/未开启
+                if (
+                    _E04_SCENARIO_BREAK_ZH.search(prev_clause)
+                    or _E04_SCENARIO_BREAK_EN.search(prev_clause)
+                    or _E04_CONSEQ_ZH.search(prev_clause)
+                    or _E04_CONSEQ_EN.search(prev_clause)
+                    or _E04_SCENARIO_REJECT_ZH.search(prev_clause)
+                    or _E04_SCENARIO_REJECT_EN.search(prev_clause)
+                ):
+                    break
+                if _E04_SCENARIO_ZH.search(prev_clause) or _E04_SCENARIO_EN.search(prev_clause):
+                    return True
+                # 未命中标签也未终止：继续向前倒查，允许情景内容跨多子句
+            # 情景标签搜索无果 → 继续合取链判定
+
+    # 3. 跨子句并列条件合取链（DAV-1110）
     # 当前子句无条件词，必须以合取连词引导（且/并/及/and...）
     if not (_E04_COND_CONJ_ZH.search(current_clause) or _E04_COND_CONJ_EN.search(current_clause)):
         return False

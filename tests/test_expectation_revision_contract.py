@@ -2496,3 +2496,239 @@ def test_dav1110_consequence_and_unconditional_assertions_still_flagged():
         )
         assert not is_valid, f"直接断言漏拦: {text!r}"
         assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+# ==============================================================================
+# DAV-1110 rerun：情景标签条件域（悲观情景/基准情景/scenario 段内命中豁免）
+# ==============================================================================
+
+def test_dav1110_scenario_label_scope_exemption():
+    """DAV-1110 rerun regression：300308 真实「悲观情景：…不及预期」精准豁免。"""
+    verdict = {"direction": "中性", "winner": "tie", "reason": "大单承接难敌均线压制"}
+    gap_exp = _dav1071_gap_revs()
+
+    # 1. 真实 fixture：300308.SZ @ 2026-08-11 judge_decision 极端情景测试段（精简保留原句）
+    real_text = (
+        "**悲观情景**：海外同业财报不及预期叠加高油价推升滞胀，"
+        "但公司 2026Q1 扣非净利 57.18 亿元与在手订单提供估值底线。"
+    )
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, real_text, gap_exp
+    )
+    assert is_valid, f"300308 悲观情景段被误拦: {viols}"
+    assert not any("预期" in v for v in viols)
+
+    # 2. 中文各情景标签同规则覆盖
+    for text in (
+        "乐观情景：若放量突破 940 元，业绩将超预期兑现",
+        "基准情景：三季度业绩不及预期，估值中枢下移",
+        "极端情景下，需求下滑 20% 且中报大幅不及预期",
+        "情景测试：若成本上涨 30%，盈利可能不及预期",
+        "压力测试：假设订单腰斩，业绩将不及预期",
+        # 排除非情景分析因素（如汇率）不误切情景域
+        "基准情景：若排除汇率波动影响，三季度业绩不及预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"情景标签域误拦: {text!r} -> {viols}"
+
+    # 3. 英文情景标签同规则覆盖（含 🟢-1 复数与连字符形态）
+    for text in (
+        "Bear case: overseas peers' earnings miss expectations, triggering derating.",
+        "In the base case, interim earnings beat expectations and margins hold.",
+        "Stress test: if orders halve, earnings would miss expectations.",
+        "Scenario analysis: bull case assumes revenue beats expectations.",
+        "In bear scenarios, overseas earnings miss expectations.",
+        "Worst-case: demand drops 30% and earnings miss expectations.",
+        "Stress-case: revenue would miss expectations under tariffs.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"英文情景标签域误拦: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow2_scenario_under_single_clause_exemption():
+    """DAV-1110 🟡-2 返修回归：情景标签与命中同处无标点子句时（「情景下」形态）精准豁免。"""
+    verdict = {"direction": "偏多", "winner": "bull", "reason": "情景推演"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "悲观情景下中报将超预期",
+        "悲观情景下，中报将超预期",
+        "极端情景下中报业绩不及预期",
+        "乐观情景中三季度净利超预期",
+        "基准情景里中报将超预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"🟡-2 单子句无标点情景误拦: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow1_bare_scenario_assertion_still_flagged():
+    """DAV-1110 🟡-1 返修回归：裸「情景」（证伪/回顾语境）不得开启条件域，真实断言严格拦截。"""
+    verdict = {"direction": "NEUTRAL", "reason": "跟踪"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "上述情景已被证伪，中报业绩将超预期",
+        "情景已被市场证伪，二季度业绩超预期",
+        "回顾上述情景，公司中报业绩超预期",
+        "此情景已被排除，三季度业绩超预期",
+        # 🟢-1：情景分析/推演在证伪语境下亦不开启条件域
+        "此情景分析已被证伪，中报业绩将超预期",
+        "该情景推演已被证伪，二季度业绩超预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"🟡-1 裸情景豁免溢出漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow_a_bare_en_scenario_assertion_still_flagged():
+    """DAV-1110 🟡-A 返修回归：EN 裸 scenario(s)（证伪语境）不得开启条件域，真实断言严格拦截。"""
+    verdict = {"direction": "NEUTRAL", "reason": "tracking"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "The above scenario was falsified, and earnings beat expectations.",
+        "This scenario was ruled out, and interim profit beats expectations.",
+        "The above scenario analysis was falsified, and earnings beat expectations.",
+        "Reviewing the scenario, management expects revenue to beat expectations.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"🟡-A 英文裸 scenario 漏拦: {text!r}"
+        assert any("beat" in v or "预期" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow_b_scenario_consequence_clause_still_flagged():
+    """DAV-1110 🟡-B 返修回归：情景域内后果引导子句（跨子句/同子句）属后果断言，严格拦截。"""
+    verdict = {"direction": "NEUTRAL", "reason": "情景后果推演"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        # 跨子句后果引导（则/那么/then...）
+        "悲观情景：需求下滑 20%，则中报业绩将超预期",
+        "悲观情景：需求走弱，那么二季度利润超预期",
+        "Bear case: demand drops 20%, then earnings beat expectations.",
+        "In the base case, if tariffs rise, therefore earnings beat expectations.",
+        # 同子句后果引导
+        "悲观情景下则中报业绩超预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"🟡-B 情景后果子句漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow_new1_negative_adjective_in_scenario_zh_exempt():
+    """DAV-1110 🟡-NEW-1 返修回归：普通形容词（偏否定）不应误判为证伪语境，情景推演正常豁免。"""
+    verdict = {"direction": "中性", "winner": "tie", "reason": "情景分析"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "悲观情景：情绪偏否定，业绩不及预期",
+        "悲观情景：需求下滑，情绪偏否定，业绩不及预期",
+        "极端情景：市场态度偏否定，中报业绩不及预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"🟡-NEW-1 中文形容词误拦: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow_new1_negative_adjective_in_scenario_en_exempt():
+    """DAV-1110 🟡-NEW-1 返修回归：普通英文形容词（negative/negatively）不应误判为否定动词，情景推演正常豁免。"""
+    verdict = {"direction": "NEUTRAL", "reason": "bear case analysis"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "Bear case: sentiment stays negative, earnings miss expectations",
+        "Bear case: demand weakens, outlook is negative, earnings miss expectations",
+        "In the base case, if returns turn negative, interim earnings miss expectations",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"🟡-NEW-1 英文 negative 形容词误拦: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow1_falsified_negated_scenario_zh_still_flagged():
+    """DAV-1110 🟡-1 返修回归：限定词情景标签在证伪/排除/否定语境下不得开启条件域，真实断言严格拦截。"""
+    verdict = {"direction": "偏多", "reason": "证伪后看多"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "多头已证伪悲观情景，中报业绩将超预期",
+        "排除极端情景后，公司中报业绩超预期",
+        "我们否定熊市情景假设，三季度业绩超预期",
+        "悲观情景已被证伪，二季度利润超预期",
+        "此情景假设不成立，下半年营收超预期",
+        "驳回悲观情景预测，公司中报业绩超预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"🟡-1 中文证伪语境情景漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1110_yellow1_falsified_negated_scenario_en_still_flagged():
+    """DAV-1110 🟡-1 返修回归：EN 限定词 scenario 在 ruled out/falsified 等否定语境下严格拦截真实断言。"""
+    verdict = {"direction": "NEUTRAL", "reason": "falsified"}
+    gap_exp = _dav1071_gap_revs()
+
+    for text in (
+        "we ruled out the bear case, earnings beat expectations",
+        "The bear case was falsified, interim profit beats expectations.",
+        "Having dismissed the worst-case scenario, management expects earnings to beat expectations.",
+        "Rejecting the stress test assumptions, earnings beat expectations.",
+        "The bull case is invalidated, earnings miss expectations.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"🟡-1 英文证伪语境 scenario 漏拦: {text!r}"
+        assert any("beat" in v or "miss" in v or "预期" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1110_scenario_scope_termination_and_assertions_still_flagged():
+    """DAV-1110 rerun 边界：情景段结束后的真实断言、跨句断言、裸断言必须继续拦截。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1071_gap_revs()
+
+    # 1. 作用域终止反例：情景段结束后回转现实断言必须拦
+    for text in (
+        "悲观情景：需求下滑 20%，但多头已确认中报将超预期",
+        "悲观情景下需求走弱，然而公司二季度业绩已确认超预期",
+        "Bear case: demand drops 20%, but management confirmed earnings beat expectations.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"情景段后真实断言漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+    # 2. 情景标签不跨句：新句子中的断言仍拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "悲观情景：需求下滑 20%。中报业绩将超预期",
+        gap_exp,
+    )
+    assert not is_valid, "跨句情景豁免溢出漏拦"
+    assert any("预期" in v for v in viols), f"未报违规: {viols}"
+
+    # 3. 601138 式裸「已定价」断言仍拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "该利好已充分定价，短线无上行空间",
+        gap_exp,
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"裸已定价漏拦: {viols}"
