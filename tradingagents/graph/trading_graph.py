@@ -797,7 +797,15 @@ class TradingAgentsGraph:
             "report_manifest": final_state.get("report_manifest") or (raw_inv_state.get("report_manifest") if isinstance(raw_inv_state, dict) else None),
             "risk_debate_state": final_state.get("risk_debate_state"),
             "risk_feedback_state": final_state.get("risk_feedback_state"),
-            "fund_flow_consensus_guard": final_state.get("fund_flow_consensus_guard", {"blocked": True, "direction_allowed": False, "status": "not_checked"}),
+            "fund_flow_consensus_guard": (
+                final_state.get("fund_flow_consensus_guard")
+                if final_state.get("fund_flow_consensus_guard") and final_state.get("fund_flow_consensus_guard", {}).get("status") != "not_checked"
+                else (
+                    (market_data_context.get("fund_flow_consensus_guard") if isinstance(market_data_context, dict) else None)
+                    or final_state.get("fund_flow_consensus_guard")
+                    or {"blocked": True, "direction_allowed": False, "status": "not_checked"}
+                )
+            ),
             "analyst_traces": final_state.get("analyst_traces", []),
             "market_report": final_state.get("market_report", ""),
             "sentiment_report": final_state.get("sentiment_report", ""),
@@ -960,7 +968,14 @@ class TradingAgentsGraph:
             "market_context": final_state.get("market_context", {}),
             "market_data_context": final_state.get("market_data_context", {}),
             "social_data_context": _summarize_social_context(final_state.get("social_data_context")),
-            "fund_flow_consensus_guard": final_state.get("fund_flow_consensus_guard", {}),
+            "fund_flow_consensus_guard": (
+                final_state.get("fund_flow_consensus_guard")
+                if final_state.get("fund_flow_consensus_guard") and final_state.get("fund_flow_consensus_guard", {}).get("status") != "not_checked"
+                else (
+                    (final_state.get("market_data_context", {}).get("fund_flow_consensus_guard") if isinstance(final_state.get("market_data_context"), dict) else None)
+                    or final_state.get("fund_flow_consensus_guard", {})
+                )
+            ),
             "user_context": final_state.get("user_context", {}),
             "workflow_context": final_state.get("workflow_context", {}),
             "market_report": final_state.get("market_report", ""),

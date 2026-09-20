@@ -2203,10 +2203,14 @@ def consensus_prompt_instruction(consensus: Mapping[str, Any] | None) -> str:
 
 _FIELD_VALUE_PATTERNS = {
     "r0_net": (
-        re.compile(r"主力(?:资金)?(?:净)?(?:流入额?|流出额?|流入|流出|额|资金净额)[^\n。；;，,]{0,20}?(?:为|达|为约|约|：|:)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*亿"),
+        re.compile(
+            r"主力(?:资金)?(?:[^\n。；;，,0-9]{0,6}?)?(?:净)?(?:流入额?|流出额?|流入|流出|额|资金净额)[^\n。；;，,]{0,20}?(?:为|达|为约|约|：|:)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*亿"
+        ),
     ),
     "netamount": (
-        re.compile(r"(?<!主力)(?:总资金|全市场总资金|全市场资金|全市场|总)?(?:净)?(?:流入额?|流出额?|流入|流出|净额)[^\n。；;，,]{0,20}?(?:为|达|为约|约|：|:)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*亿"),
+        re.compile(
+            r"(?<!主力)(?:总资金|全市场总资金|全市场资金|全市场|总)?(?:[^\n。；;，,0-9]{0,6}?)?(?:净)?(?:流入额?|流出额?|流入|流出|净额)[^\n。；;，,]{0,20}?(?:为|达|为约|约|：|:)?\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*亿"
+        ),
     ),
 }
 
@@ -2262,7 +2266,11 @@ def extract_model_daily_values(text: str | None) -> dict[str, str]:
                 clause_end = min((pos for m in ("。", "；", ";", "，", ",", "\n") if (pos := text.find(m, match.end())) != -1), default=len(text))
                 clause = text[clause_start:clause_end]
 
-                if any(kw in sentence for kw in _CUMULATIVE_KEYWORDS):
+                has_cum_in_sentence = any(kw in sentence for kw in _CUMULATIVE_KEYWORDS)
+                has_cum_in_clause = any(kw in clause for kw in _CUMULATIVE_KEYWORDS)
+                has_daily_in_clause = any(kw in clause for kw in ("今日", "当日", "单日", "本日", "日内"))
+                # DAV-1104: If clause explicitly describes daily, don't discard it just because another clause in the sentence mentions multi-day trend
+                if has_cum_in_clause or (has_cum_in_sentence and not has_daily_in_clause):
                     continue
                 if field == "netamount" and "主力" in clause:
                     continue
@@ -2319,6 +2327,13 @@ def validate_model_summary(
             if structured_value is None:
                 unverifiable.append(model_field)
             continue
+        # DAV-1104: When window_days == 1 and structured_cum only has 1 record,
+        # structured evidence does not provide multi-day cumulative data.
+        # A model narrative mentioning a multi-day trend cannot be compared
+        # against a single-day record as if 1-day were the 5-day sum.
+        if window_days == 1 and (structured_cum.get("record_count") or 0) <= 1:
+            unverifiable.append(model_field)
+            continue
         if abs(structured_value - model_value) > tolerance:
             mismatches.append(
                 {
@@ -2355,25 +2370,57 @@ def validate_model_summary(
     combined_model = {**model_daily, **model_totals}
     primary_structured = structured_daily if window_days == 1 else structured_cum
 
+    # DAV-1104: Distinguish directional contradiction or exact assertion mismatch
+    # (-> hard mismatch/blocked) from pure rhetorical/approximate deviation (-> validation_warning).
+    hard_mismatches: list[dict[str, str]] = []
+    rhetorical_warnings: list[dict[str, str]] = []
+    directional_contradiction = False
+    for m in mismatches:
+        s_val = decimal_value(m.get("structured"))
+        m_val = decimal_value(m.get("model"))
+        if s_val is not None and m_val is not None:
+            if (s_val > Decimal("0.02") and m_val < Decimal("-0.02")) or (
+                s_val < Decimal("-0.02") and m_val > Decimal("0.02")
+            ):
+                directional_contradiction = True
+        raw_model_str = m.get("model") or ""
+        is_approx = False
+        if model_text:
+            search_str = raw_model_str.lstrip("+-")
+            pos = model_text.find(search_str) if search_str else -1
+            if pos != -1:
+                ctx_start = max(0, pos - 15)
+                ctx_end = min(len(model_text), pos + len(search_str) + 15)
+                ctx = model_text[ctx_start:ctx_end]
+                is_approx = any(w in ctx for w in ("约", "大致", "大约", "左右", "预估", "预计", "接近", "达", "超"))
+        if s_val is not None and m_val is not None and s_val * m_val > 0 and is_approx:
+            rel_diff = abs(s_val - m_val) / max(abs(s_val), Decimal("0.01"))
+            if rel_diff <= Decimal("0.25") or abs(s_val - m_val) <= Decimal("0.10"):
+                rhetorical_warnings.append(m)
+                continue
+        hard_mismatches.append(m)
+
     if primary_structured.get("status") == "data_conflict":
         status = "blocked"
-    elif mismatches:
+    elif directional_contradiction or hard_mismatches:
         status = "mismatch"
+    elif rhetorical_warnings:
+        status = "validation_warning"
     elif selected_field:
         canonical_selected = _canonical_field(selected_field) or str(selected_field)
         if canonical_selected in (model_daily.keys() | model_totals.keys()):
             if canonical_selected in unverifiable or primary_structured.get("status") == "partial":
-                status = "blocked"
+                status = "validation_warning"
             else:
                 status = "matched"
         elif matched_fields:
-            status = "blocked" if primary_structured.get("status") == "partial" else "matched"
+            status = "validation_warning" if primary_structured.get("status") == "partial" else "matched"
         else:
             status = "not_checked"
     elif matched_fields:
-        status = "blocked" if primary_structured.get("status") == "partial" else "matched"
+        status = "validation_warning" if primary_structured.get("status") == "partial" else "matched"
     elif combined_model and (primary_structured.get("status") == "partial" or unverifiable):
-        status = "blocked"
+        status = "validation_warning"
     elif combined_model:
         status = "matched"
     else:
@@ -2382,10 +2429,14 @@ def validate_model_summary(
     return {
         "status": status,
         "hard_guard": {
-            "blocked": status not in {"matched", "not_checked"},
+            "blocked": status in {"blocked", "mismatch"},
             "reason": "模型数值（单日或累计）与结构化 evidence 不一致或结构化窗口不可用"
             if status in {"blocked", "mismatch"}
-            else "no explicit model total",
+            else (
+                "模型数值表述与结构化基准存在局部偏差，降级为警示"
+                if status == "validation_warning"
+                else "no explicit model total"
+            ),
         },
         "structured": primary_structured,
         "selected_field": selected_field,

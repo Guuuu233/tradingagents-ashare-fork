@@ -81,6 +81,7 @@ from tradingagents.dataflows.fund_flow_evidence import (
     build_gap_meta,
     build_provider_text,
     calculate_fund_flow_scale_metrics,
+    select_fund_flow_source,
     summarize_evidence,
 )
 from tradingagents.dataflows.news_event_evidence import (
@@ -2495,6 +2496,71 @@ def _fetch_dividend_evidence(symbol: str, as_of: str) -> DividendEvidenceText:
     )
 
 
+def _build_fund_flow_consensus_guard(selection: Optional[dict]) -> dict:
+    """Build fund_flow_consensus_guard from a source selection dictionary.
+
+    DAV-1104: When smart_money_analyst is omitted from selected_analysts,
+    the valid data-layer selection must be bridged to fund_flow_consensus_guard
+    so downstream managers and traders do not hang in fail-closed not_checked.
+    """
+    selection_allowed = bool(
+        isinstance(selection, dict)
+        and selection.get("status") in {"selected", "consensus"}
+        and selection.get("direction_allowed")
+        and selection.get("selected_source")
+        and selection.get("selected_field")
+        and selection.get("selected_value") is not None
+        and isinstance(selection.get("hard_guard"), dict)
+        and not selection.get("hard_guard", {}).get("blocked")
+    )
+    if selection_allowed:
+        guard = {
+            "blocked": False,
+            "direction_allowed": True,
+            "status": selection.get("status", "selected"),
+            "selection": selection,
+            "validation": {"status": "not_checked", "hard_guard": {"blocked": False}},
+            "reason": selection.get("reason", "new_algorithm_source_priority"),
+        }
+        for key in (
+            "selected_source",
+            "selected_source_family",
+            "selected_algorithm_group",
+            "selected_field",
+            "selected_value",
+            "selected_unit",
+            "selected_direction",
+            "selected_as_of",
+            "selected_period_kind",
+            "selected_time_window",
+            "selected_window_days",
+            "fallback_rank",
+            "legacy_reference",
+            "legacy_web_algorithm",
+            "selection_reason",
+            "credibility",
+            "credibility_score",
+            "credibility_level",
+            "credibility_reason",
+            "single_source",
+            "divergence",
+            "reference_only",
+            "large_order_credibility",
+        ):
+            if key in selection:
+                guard[key] = selection[key]
+        return guard
+
+    return {
+        "blocked": True,
+        "direction_allowed": False,
+        "status": selection.get("status", "not_checked") if isinstance(selection, dict) else "not_checked",
+        "selection": selection or {},
+        "validation": {"status": "not_checked", "hard_guard": {"blocked": True}},
+        "reason": (selection or {}).get("reason", "fund-flow source selection unavailable") if isinstance(selection, dict) else "fund-flow source selection unavailable",
+    }
+
+
 def _fetch_all(
     ticker: str,
     trade_date: str,
@@ -2747,6 +2813,21 @@ def _fetch_all(
             fund_flow_context["status"] = fund_flow_evidence_meta["status"]
         else:
             fund_flow_context["status"] = "partial"
+
+        selection = (
+            fund_flow_evidence_meta.get("selection")
+            if isinstance(fund_flow_evidence_meta, dict)
+            else None
+        )
+        if not isinstance(selection, dict) or "selected_source" not in selection:
+            selection = select_fund_flow_source(
+                fund_flow_evidence,
+                symbol=ticker,
+                requested_as_of=trade_date,
+            )
+        fund_flow_context["selection"] = selection
+        consensus_guard = _build_fund_flow_consensus_guard(selection)
+        fund_flow_context["fund_flow_consensus_guard"] = consensus_guard
     else:
         generic_gap = build_gap_meta(
             symbol=ticker,
@@ -2763,6 +2844,8 @@ def _fetch_all(
         for key, value in generic_gap.items():
             fund_flow_context.setdefault(key, value)
         fund_flow_context.setdefault("records", [])
+        consensus_guard = _build_fund_flow_consensus_guard(fund_flow_context.get("selection"))
+        fund_flow_context["fund_flow_consensus_guard"] = consensus_guard
         fund_flow_context.setdefault(
             "summary", summarize_evidence([], window_days=5)
         )
@@ -3057,6 +3140,7 @@ def _fetch_all(
     results["market_data_context"] = {
         "analysis_baseline_date": trade_date,
         "fund_flow_evidence": fund_flow_context,
+        "fund_flow_consensus_guard": consensus_guard,
         "scale_metrics": scale_metrics,
         "dividend_evidence": results.get("dividend_evidence"),
         "event_coverage": event_cov,
@@ -3071,6 +3155,7 @@ def _fetch_all(
         "data_failure_ledger": data_failure_ledger,
         "price_basis": norm_price_basis,
     }
+    results["fund_flow_consensus_guard"] = consensus_guard
     results["price_basis"] = norm_price_basis
 
     # ── 核心加速：本地计算所有技术指标 ──────────────────

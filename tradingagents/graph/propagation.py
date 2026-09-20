@@ -168,6 +168,16 @@ class Propagator:
             "attempts": [],
         }
         investment_debate_state_dict.update(protocol_meta)
+        initial_fund_flow_guard = default_fund_flow_consensus_guard()
+        if isinstance(market_data_context, dict):
+            guard_candidate = market_data_context.get("fund_flow_consensus_guard")
+            if not guard_candidate:
+                ffe = market_data_context.get("fund_flow_evidence")
+                if isinstance(ffe, dict):
+                    guard_candidate = ffe.get("fund_flow_consensus_guard")
+            if isinstance(guard_candidate, dict):
+                initial_fund_flow_guard = copy.deepcopy(guard_candidate)
+
         state: Dict[str, Any] = {
             "messages": [("human", user_prompt_context)],
             "company_of_interest": company_name,
@@ -176,7 +186,7 @@ class Propagator:
             "market_context": market_context,
             "market_data_context": market_data_context or default_market_data_context(),
             "social_data_context": social_data_context or create_default_social_data_context(requested_as_of=str(trade_date)),
-            "fund_flow_consensus_guard": default_fund_flow_consensus_guard(),
+            "fund_flow_consensus_guard": initial_fund_flow_guard,
             "user_context": normalized_user_context,
             "workflow_context": {
                 "context_version": "v1",
