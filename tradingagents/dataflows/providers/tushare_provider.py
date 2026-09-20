@@ -26,8 +26,8 @@ _FINANCIAL_RETRYABLE_ERRORS = frozenset(
 _FINANCIAL_API_FIELDS: Dict[str, str] = {
     "income": (
         "ts_code,ann_date,f_ann_date,end_date,report_type,update_flag,"
-        "basic_eps,total_revenue,revenue,operate_profit,total_profit,"
-        "n_income,n_income_attr_p"
+        "basic_eps,total_revenue,revenue,total_cogs,oper_cost,operate_profit,"
+        "total_profit,n_income,n_income_attr_p"
     ),
     "balancesheet": (
         "ts_code,ann_date,f_ann_date,end_date,report_type,update_flag,"
@@ -45,8 +45,9 @@ _FINANCIAL_API_FIELDS: Dict[str, str] = {
 # 渲染给 LLM 的列（存在才显示，缺失自动跳过）
 _FINANCIAL_DISPLAY_COLUMNS: Dict[str, list[str]] = {
     "income": [
-        "end_date", "ann_date", "total_revenue", "revenue", "operate_profit",
-        "total_profit", "n_income", "n_income_attr_p", "basic_eps",
+        "end_date", "ann_date", "total_revenue", "revenue", "total_cogs",
+        "oper_cost", "operate_profit", "total_profit", "n_income",
+        "n_income_attr_p", "basic_eps",
     ],
     "balancesheet": [
         "end_date", "ann_date", "total_assets", "total_liab",
@@ -63,6 +64,22 @@ _FINANCIAL_TITLES = {
     "income": "Income Statement",
     "balancesheet": "Balance Sheet",
     "cashflow": "Cashflow",
+}
+
+# 渲染给 LLM 的中文 canonical 表头（与 akshare/fuyao 输出口径一致）。
+# 营业总成本(total_cogs) ⊃ 营业成本(oper_cost)，必须分列展示、禁止混用（DAV-1134）。
+_FINANCIAL_HEADER_RENAMES: Dict[str, Dict[str, str]] = {
+    "income": {
+        "total_revenue": "营业总收入",
+        "revenue": "营业收入",
+        "total_cogs": "营业总成本",
+        "oper_cost": "营业成本",
+        "operate_profit": "营业利润",
+        "total_profit": "利润总额",
+        "n_income": "净利润",
+        "n_income_attr_p": "归属于母公司所有者的净利润",
+        "basic_eps": "基本每股收益",
+    },
 }
 
 # 报告期重复判定时忽略的公告元数据列（更正公告日/更新标记变化不构成「值冲突」）
@@ -238,7 +255,9 @@ def _financial_report(
         c for c in _FINANCIAL_DISPLAY_COLUMNS[api_name] if c in clean.columns
     ]
     table = clean[clean["_end"].isin(selected_ends)][display_cols].copy()
-    table = table.rename(columns={"end_date": "报告期", "ann_date": "公告日", "f_ann_date": "公告日"})
+    renames = {"end_date": "报告期", "ann_date": "公告日", "f_ann_date": "公告日"}
+    renames.update(_FINANCIAL_HEADER_RENAMES.get(api_name, {}))
+    table = table.rename(columns=renames)
     for col in table.columns:
         if col in ("end_date", "报告期"):
             table[col] = clean[clean["_end"].isin(selected_ends)]["_end"].values

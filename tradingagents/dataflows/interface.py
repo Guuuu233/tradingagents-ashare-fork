@@ -15,6 +15,7 @@ from .trade_calendar import (
     is_historical_analysis_date,
     unavailable_analysis_date_reason,
 )
+from .utils import income_statement_text_caliber_notes
 from .vendor_result import (
     VendorEmpty,
     VendorFail,
@@ -354,6 +355,27 @@ def _historical_news_failure(method: str) -> str:
     )
 
 
+# Methods whose rendered payload must pass the shared income-statement cost
+# caliber guard before reaching the analyst prompt (DAV-1134). The guard lives
+# in the routing/assembly layer so every provider — akshare/fuyao/Tushare and
+# future ones — is covered without per-provider wiring.
+_STATEMENT_GUARD_METHODS = frozenset(TOOLS_CATEGORIES["fundamental_data"]["tools"])
+
+
+def _apply_shared_statement_guard(method: str, text):
+    """Append shared caliber guard notes to a fundamental statement payload."""
+    if method not in _STATEMENT_GUARD_METHODS or not isinstance(text, str):
+        return text
+    try:
+        notes = income_statement_text_caliber_notes(text)
+    except Exception:
+        _logger.exception("income statement caliber guard failed for %s", method)
+        return text
+    if notes:
+        return text.rstrip("\n") + "\n\n" + notes
+    return text
+
+
 def _historical_fundamental_failure(method: str, as_of: str | None) -> str:
     """Keep historical fundamental/insider failures explicit without accepting date-blind sources."""
     date_str = f"（{as_of}）" if as_of else ""
@@ -610,7 +632,7 @@ def route_to_vendor(method: str, *args, **kwargs):
                         )
                         break
                     _trace(f"method={method} {args_summary} vendor={vendor} status=hit")
-                    return prompt
+                    return _apply_shared_statement_guard(method, prompt)
                 if (
                     historical_provider_allowlist is not None
                     and not isinstance(result, str)
@@ -631,7 +653,7 @@ def route_to_vendor(method: str, *args, **kwargs):
                     )
                     break
                 _trace(f"method={method} {args_summary} vendor={vendor} status=hit")
-                return result
+                return _apply_shared_statement_guard(method, result)
 
     if historical_provider_allowlist is not None:
         _trace(

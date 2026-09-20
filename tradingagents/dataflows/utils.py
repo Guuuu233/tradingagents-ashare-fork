@@ -447,12 +447,32 @@ def _replace_nullish_with_marker(df: "pd.DataFrame", marker: str = MISSING_VALUE
 INCOME_TOTAL_COST_COLUMN_CANDIDATES: tuple[str, ...] = (
     "营业总成本",
     "operating_expenses",
+    "total_cogs",
+    "total_oper_cost",
 )
 INCOME_COST_COLUMN_CANDIDATES: tuple[str, ...] = (
     "营业成本",
     "主营业务成本",
     "operating_costs",
+    "oper_cost",
 )
+
+
+def _column_has_numeric_value(df: "pd.DataFrame", col) -> bool:
+    """True when the column carries at least one non-null numeric-ish cell.
+
+    A column that exists but is entirely empty/NaN must not count as the field
+    being present (e.g. Tushare returns oper_cost with all-null values).
+    """
+    for value in df[col].tolist():
+        if _is_nullish(value):
+            continue
+        if safe_float(value) is not None:
+            return True
+        # Cells rendered with units (e.g. "494.94亿") still count as data.
+        if any(ch.isdigit() for ch in str(value)):
+            return True
+    return False
 
 
 def income_statement_cost_field_notes(df: "pd.DataFrame") -> str:
@@ -469,14 +489,16 @@ def income_statement_cost_field_notes(df: "pd.DataFrame") -> str:
         return ""
     total_col = _resolve_column(df.columns, INCOME_TOTAL_COST_COLUMN_CANDIDATES)
     cost_col = _resolve_column(df.columns, INCOME_COST_COLUMN_CANDIDATES)
+    has_total = total_col is not None and _column_has_numeric_value(df, total_col)
+    has_cost = cost_col is not None and _column_has_numeric_value(df, cost_col)
     notes: list[str] = []
-    if total_col is not None and cost_col is None:
+    if has_total and not has_cost:
         notes.append(
             "【口径提示】本表含营业总成本但缺营业成本字段：营业总成本≠营业成本"
             "（总成本含税金及附加与期间费用），禁止将营业总成本当作营业成本，"
             "也禁止用于毛利率或原材料成本敏感性推算；营业成本按数据缺失处理。"
         )
-    if total_col is not None and cost_col is not None:
+    if has_total and has_cost:
         inverted = 0
         for _, row in df.iterrows():
             total_v = safe_float(row.get(total_col))
@@ -488,6 +510,59 @@ def income_statement_cost_field_notes(df: "pd.DataFrame") -> str:
                 f"【口径告警】{inverted} 行出现营业总成本<营业成本，字段口径疑似错标，"
                 "引用成本数据前须人工核对。"
             )
+    return "\n".join(notes)
+
+
+def _iter_markdown_tables(text: str):
+    """Yield (headers, rows) for each GitHub-style pipe table in ``text``.
+
+    rows are lists of cell strings aligned to headers (short rows padded,
+    long rows truncated).
+    """
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        header_line = lines[i].strip()
+        if header_line.startswith("|") and i + 1 < len(lines):
+            sep = lines[i + 1].strip()
+            if sep.startswith("|") and set(sep) <= set("|:- ") and "-" in sep:
+                headers = [c.strip() for c in header_line.split("|")[1:-1]]
+                rows: list[list[str]] = []
+                j = i + 2
+                while j < len(lines) and lines[j].strip().startswith("|"):
+                    cols = [c.strip() for c in lines[j].strip().split("|")[1:-1]]
+                    if len(cols) < len(headers):
+                        cols += [""] * (len(headers) - len(cols))
+                    rows.append(cols[: len(headers)])
+                    j += 1
+                if headers and rows:
+                    yield headers, rows
+                i = j
+                continue
+        i += 1
+
+
+def income_statement_text_caliber_notes(text: str) -> str:
+    """Shared pre-LLM caliber guard on a rendered income-statement payload.
+
+    Applies the same contract as ``income_statement_cost_field_notes`` to every
+    markdown table embedded in a provider's rendered output, so every provider
+    routed through the shared layer is covered without per-provider wiring
+    (DAV-1134). Note lines already present in the payload are not duplicated.
+    Returns '' when nothing to note.
+    """
+    if not text or "|" not in text:
+        return ""
+    notes: list[str] = []
+    for headers, rows in _iter_markdown_tables(text):
+        try:
+            df = pd.DataFrame(rows, columns=headers)
+        except Exception:
+            continue
+        block = income_statement_cost_field_notes(df)
+        for line in block.splitlines():
+            if line and line not in notes and line not in text:
+                notes.append(line)
     return "\n".join(notes)
 
 
