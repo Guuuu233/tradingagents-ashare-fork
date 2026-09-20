@@ -1202,6 +1202,49 @@ def financial_cutoff_header(
 
 
 
+def latest_public_period(
+    effective_map: dict[str, EffectiveAnnounceDate],
+    curr_date: str,
+) -> Optional[str]:
+    """Newest report period (YYYYMMDD) already public by ``curr_date``.
+
+    Spans every statement contributing to ``effective_map``, so it reflects the
+    freshest period disclosed across all financial statements (DAV-1108 B).
+    """
+    cutoff = parse_yyyymmdd(curr_date)
+    if cutoff is None:
+        return None
+    periods = [
+        p for p, eff in effective_map.items() if eff.effective_date <= cutoff
+    ]
+    return max(periods) if periods else None
+
+
+def stale_period_cutoff_note(
+    latest: Optional[EffectiveAnnounceDate],
+    global_latest_period: Optional[str],
+    curr_date: str,
+) -> str:
+    """Explicit stale-snapshot note when a newer report period is already public.
+
+    DAV-1108 stage B: once a newer period is disclosed, an older snapshot in the
+    same prompt must not be silently reused as 'latest'. The note marks the gap
+    explicitly and forbids implicit fallback to the stale period.
+    """
+    if latest is None or not global_latest_period:
+        return ""
+    if global_latest_period <= latest.report_period:
+        return ""
+    new_label = format_report_period_label(global_latest_period)
+    return (
+        f"【期间提示】本表最新可见报告期为 {latest.report_period_label}，"
+        f"截至 {curr_date} 已有更新报告期 {new_label} 公开披露；"
+        "本表旧期行仅作历史参照，凡表述“最新/当前”财务状态必须使用 "
+        f"{new_label} 数据；本表未含该期的字段按数据缺失处理，"
+        "禁止隐式回退旧期快照。"
+    )
+
+
 def periods_used_dropped_yoy(
     effective_map: dict[str, EffectiveAnnounceDate],
     report_periods: Iterable,

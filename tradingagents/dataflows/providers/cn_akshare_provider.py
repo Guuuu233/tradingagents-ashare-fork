@@ -60,9 +60,11 @@ from ..financial_announce import (
     financial_cutoff_header,
     format_q2_derivation_block,
     format_report_period_label,
+    latest_public_period,
     parse_yyyymmdd,
     periods_used_dropped_yoy,
     resolve_earnings_forecast_report_period,
+    stale_period_cutoff_note,
 )
 from ..cninfo_disclosure import (
     CONTENT_STATUS_HASHED,
@@ -1276,6 +1278,13 @@ class CnAkshareProvider(BaseMarketDataProvider):
                                 latest, curr_date, yoy_disclaimer=yoy_note
                             )
                         )
+                        stale_note = stale_period_cutoff_note(
+                            latest,
+                            latest_public_period(eff_map, curr_date),
+                            curr_date,
+                        )
+                        if stale_note:
+                            parts.append(stale_note)
                         if latest is None or filtered is None or filtered.empty:
                             parts.append(
                                 f"【数据获取失败】财务摘要在 {curr_date} 及之前无已公开报告期列。"
@@ -1580,6 +1589,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             yoy_disclaimer=yoy_note,
                             statement_kind=stmt_kind,
                         )
+                        stale_note = stale_period_cutoff_note(
+                            latest, latest_public_period(eff_map, curr_date), curr_date
+                        )
                         table = self._shrink_table(
                             work,
                             max_rows=12,
@@ -1592,7 +1604,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             if stmt_kind == "income"
                             else ""
                         )
-                        note_block = f"\n{cost_note}" if cost_note else ""
+                        note_block = (
+                            f"\n{stale_note}" if stale_note else ""
+                        ) + (f"\n{cost_note}" if cost_note else "")
                         if stmt_kind in ("income", "cashflow"):
                             q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
                             q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)
@@ -1657,6 +1671,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             yoy_disclaimer=yoy_note,
                             statement_kind=stmt_kind,
                         )
+                        stale_note = stale_period_cutoff_note(
+                            latest, latest_public_period(eff_map, curr_date), curr_date
+                        )
                         table = self._shrink_table(
                             work,
                             max_rows=12,
@@ -1669,7 +1686,9 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             if stmt_kind == "income"
                             else ""
                         )
-                        note_block = f"\n{cost_note}" if cost_note else ""
+                        note_block = (
+                            f"\n{stale_note}" if stale_note else ""
+                        ) + (f"\n{cost_note}" if cost_note else "")
                         if stmt_kind in ("income", "cashflow"):
                             q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
                             q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)

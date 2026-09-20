@@ -12,7 +12,10 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from tradingagents.dataflows.financial_announce import classify_financial_period_kind
+from tradingagents.dataflows.financial_announce import (
+    classify_financial_period_kind,
+    format_report_period_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,7 @@ KIND_SINGLE_QUARTER_WITHOUT_DERIVATION = "single_quarter_without_derivation"
 # Deterministic input-consistency kinds (DAV-1108 stage A)
 KIND_COST_FIELD_INCONSISTENT = "cost_field_inconsistent"
 KIND_GROSS_MARGIN_INCONSISTENT = "gross_margin_inconsistent"
+KIND_PERIOD_SNAPSHOT_MISMATCH = "period_snapshot_mismatch"
 
 # Gross-margin consistency: |reported - (1 - cost/revenue)| tolerance (fraction).
 # 2pp accommodates vendor rounding of reported gross margin.
@@ -553,6 +557,44 @@ def _check_income_field_consistency(
     return violations
 
 
+def _check_period_snapshot_consistency(
+    statements: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Flag statements whose latest visible period is older than the freshest.
+
+    DAV-1108 stage B: once a newer report period is disclosed in one statement,
+    another statement stuck on an older period is a stale snapshot that must be
+    flagged rather than silently mixed into the same report.
+    """
+    latest_by_stmt: dict[str, str] = {}
+    for stmt_name, rows in statements.items():
+        periods = [
+            str(r.get("period_end"))
+            for r in rows or []
+            if re.fullmatch(r"\d{8}", str(r.get("period_end") or ""))
+        ]
+        if periods:
+            latest_by_stmt[stmt_name] = max(periods)
+    if len(set(latest_by_stmt.values())) <= 1:
+        return []
+    newest = max(latest_by_stmt.values())
+    violations: list[dict[str, Any]] = []
+    for stmt_name, period in sorted(latest_by_stmt.items()):
+        if period >= newest:
+            continue
+        violations.append({
+            "kind": KIND_PERIOD_SNAPSHOT_MISMATCH,
+            "quoted_text": "",
+            "statement": stmt_name,
+            "field": "报告期",
+            "reported_label": format_report_period_label(period),
+            "input_period_kind": "stale_snapshot",
+            "input_value": float(period),
+            "expected_label": format_report_period_label(newest),
+        })
+    return violations
+
+
 # ── Core verification algorithm ──────────────────────────────────────────────
 
 
@@ -593,6 +635,10 @@ def check_financial_period_compliance(
     violations: list[dict[str, Any]] = _check_income_field_consistency(
         stmts.get("income_statement", [])
     )
+    # Cross-statement period consistency (DAV-1108 stage B): a statement stuck
+    # on an older period while a newer period is disclosed elsewhere is a stale
+    # snapshot, not a mixable 'latest' view.
+    violations.extend(_check_period_snapshot_consistency(stmts))
 
     if not report_text or not report_text.strip():
         status = (
