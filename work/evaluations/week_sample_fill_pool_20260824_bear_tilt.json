@@ -1,0 +1,48 @@
+{
+  "trade_date": "2026-08-24",
+  "target_new": 10,
+  "queue": [
+    {
+      "symbol": "603288.SH",
+      "industry": "食品饮料"
+    },
+    {
+      "symbol": "300015.SZ",
+      "industry": "医药生物"
+    },
+    {
+      "symbol": "600585.SH",
+      "industry": "建筑材料"
+    },
+    {
+      "symbol": "601012.SH",
+      "industry": "电力设备"
+    },
+    {
+      "symbol": "000002.SZ",
+      "industry": "房地产"
+    },
+    {
+      "symbol": "002460.SZ",
+      "industry": "有色金属"
+    },
+    {
+      "symbol": "603259.SH",
+      "industry": "医药生物"
+    },
+    {
+      "symbol": "002304.SZ",
+      "industry": "食品饮料"
+    },
+    {
+      "symbol": "600438.SH",
+      "industry": "电力设备"
+    },
+    {
+      "symbol": "300122.SZ",
+      "industry": "医药生物"
+    }
+  ],
+  "strategy": "bear_tilt_only",
+  "rationale": "Batch1 defensive names all bull; use structural bear_tilt on date with prior bear winners"
+}

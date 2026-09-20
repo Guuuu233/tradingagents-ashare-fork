@@ -1,0 +1,66 @@
+{
+  "target_new": 12,
+  "queue": [
+    {
+      "symbol": "600438.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "300122.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "601318.SH",
+      "industry": "非银金融",
+      "trade_date": "2026-08-22"
+    },
+    {
+      "symbol": "603288.SH",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-22"
+    },
+    {
+      "symbol": "601012.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "002466.SZ",
+      "industry": "有色金属",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "601633.SH",
+      "industry": "汽车",
+      "trade_date": "2026-08-20"
+    },
+    {
+      "symbol": "600031.SH",
+      "industry": "机械设备",
+      "trade_date": "2026-08-20"
+    },
+    {
+      "symbol": "603501.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-19"
+    },
+    {
+      "symbol": "600011.SH",
+      "industry": "公用事业",
+      "trade_date": "2026-08-19"
+    },
+    {
+      "symbol": "600900.SH",
+      "industry": "公用事业",
+      "trade_date": "2026-08-18"
+    },
+    {
+      "symbol": "601668.SH",
+      "industry": "建筑装饰",
+      "trade_date": "2026-08-18"
+    }
+  ],
+  "strategy": "retry_plus_multi_date_spread"
+}

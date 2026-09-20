@@ -1,0 +1,1 @@
+开工。基线 `origin/codex/dav-4-p2a-trunk` = `fbdc598ef527ea01fba7f6072f600bd557762715`。隔离 worktree。只给 `get_stock_data` 增加显式 `price_basis=raw` 通道，缺省必须仍是 qfq/`vendor_qfq`。不要改 collector、不要接 dividend、不要改回测缺省。完成后评论 40 位 SHA。不要 @独立代码审核员。

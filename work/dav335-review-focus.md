@@ -1,0 +1,1 @@
+复审范围纠偏：DAV-335 是纯前端候选，不需要运行后端 pytest。请停止无关后端测试，只完成：1) 静态审查精确 SHA；2) 在开发者精确 checkout `eae4a959c98d/workdir/1/frontend` 核 HEAD=`0634112...` 后复跑 Vitest 53 项与 `npm run build`；3) 检查旧报告 fallback、fatal/invalid 样式、默认折叠、稳定 key、无 reasoning_content/secret 渲染、无后端改动。发布 PASS/阻塞结论即可。

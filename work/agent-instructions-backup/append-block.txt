@@ -1,0 +1,10 @@
+
+
+【运行环境铁律｜TradingAgents-AShare 审查证据有效性前提】
+1. 该项目的审查证据必须在项目锁定解释器上取得，绝对路径：`/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python`，且必须 `env -u PYTHONPATH`（宿主 PYTHONPATH 会污染 venv，造成 numpy/pydantic「二进制不兼容」假象）。报告中必须贴出该解释器 `-V` 的实际输出，须为 `Python 3.10.20`。
+2. 禁止用系统 `python3`、`python3.14` 或任务运行时自带 `.venv` 作为门禁证据。实测差异：系统 3.14 的依赖是另一套（pandas 3.0.5 对项目 2.3.0，跨大版本；numpy 2.5.1 对 2.2.6；akshare 1.18.75 对 1.18.30）。pandas 2→3 已确认两处语义级变化：字符串列 dtype `object → str`（空值语义 NaN/NA、dtype 判断、groupby/merge 受影响）、copy-on-write `False → True`（链式赋值就地修改语义改变）。生产服务运行在 `.venv310`，异构环境既可能假绿（那边过、生产挂）也可能假红（误打回），且系统 site-packages 不受 `uv.lock` 锁定、结论不可复现。
+3. 说明：3.14 并非跑不通（依赖齐全、py_mini_racer 可正常 eval、多数测试两边一致）。因此在环境受限时，仍可用其他解释器完成代码逻辑分析，但结论必须显式标注解释器与依赖差异，写为「旁证／未取得发布门禁证据」，不得写成 PASS。
+4. 全量回归（RT-FULL，改产品代码时不可省）必须：`-q -p no:randomly`；`DATABASE_URL` 指向隔离临时库，禁止写 `data/tradingagents.db`；并追加 `--deselect "tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields"`——该用例是主干既有死锁（约 38% 处 %CPU=0 挂死、不会自行结束，见 DAV-979），非候选引入，不得计为新增失败，也不得据此打回候选；报告须显式写明该 deselect 及原因。结论只判断相对目标主线基线有无**新增**失败。
+5. 需要跑会出网的测试时，先 `unset http_proxy https_proxy all_proxy`，或设 `http_proxy=http://127.0.0.1:9` 让外连快速失败；否则请求会走本机 Clash `7897` 代理挂死，表现为测试无限期停住。
+6. 审查期间禁止：修改代码、合入、部署、重启服务、写生产库、调用真实模型或真实供应商、读取 Cookie、改 `credit_weighting_enabled`，以及改动用户个人配置（`role_bindings` / `providers` / API Key）。
+7. 任一红队场景未执行、无法复现或结果未记录，结论不得为 PASS，只能是「有条件通过」「打回」或「审核无效」。

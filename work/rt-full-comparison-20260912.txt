@@ -1,0 +1,38 @@
+# RT-FULL 同口径比对证据（2026-09-12）
+
+## 4a5206f（合入前）
+19 failed, 3991 passed, 1 skipped, 3 deselected, 176 warnings in 795.83s (0:13:15)
+
+## 70b5b47（合入后）
+19 failed, 4094 passed, 1 skipped, 3 deselected, 176 warnings in 1146.78s (0:19:06)
+
+## 失败集合比对
+基线失败数: 19
+当前失败数: 19
+
+### 只在当前版本失败（新增回归）
+（无 —— 零新增回归）
+
+### 只在基线失败（被修复）
+（无）
+
+## 失败清单（当前 70b5b47）
+tests/test_dav27_report_semantics.py::test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback[False]
+tests/test_dav27_report_semantics.py::test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback[True]
+tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_dual_horizon_persists_debate_states_to_result_data
+tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_intent_hoist_persists_debate_states_to_result_data
+tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_job_execution_hold_decision_persists_note_and_metrics_consistency
+tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_job_execution_with_legitimate_empty_probability_persists_note_and_4_of_4_metrics
+tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_single_horizon_persists_debate_states_to_result_data
+tests/test_h1b_gates.py::TestH1bV2OnlySampleFilteringAndIndustry::test_verify_h1b_gates_script_runs_and_verifies_v2_only
+tests/test_provider_date_guards.py::test_all_time_sensitive_get_methods_have_date_param
+tests/test_recalculate_weekly_metrics.py::TestCliIntegrationAndSubprocess::test_cli_subprocess_format_json
+tests/test_signal_processing.py::test_negated_build_position_is_not_buy
+tests/test_signal_processing.py::test_negated_buy_phrase_is_not_buy
+tests/test_signal_processing.py::test_plain_hold_is_hold
+tests/test_social_data_api.py::test_status_proves_four_dimensions_independent
+tests/test_two_stage_analyst_topology.py::test_full_7_analysts_two_stage_topology
+tests/test_two_stage_analyst_topology.py::test_mixed_subset_topology
+tests/test_two_stage_analyst_topology.py::test_phase1_only_topology
+tests/test_two_stage_analyst_topology.py::test_phase2_only_topology
+tests/test_v03_return_measure.py::test_rt_s4_david_account_clean_population_counts

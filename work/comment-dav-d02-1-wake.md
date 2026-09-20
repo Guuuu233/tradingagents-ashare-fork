@@ -1,0 +1,1 @@
+开工。基线 `origin/codex/dav-4-p2a-trunk` = `12455e9b26d433c35a17b20097b0cc3c61a92edb`。隔离 worktree。本卡只做 price_basis 短标签 ↔ cohort `price_basis_version` 映射与测试。不要接 collector，不要改回测缺省 `vendor_qfq`，不要实现 PIT。完成后评论 40 位 SHA。不要 @独立代码审核员。

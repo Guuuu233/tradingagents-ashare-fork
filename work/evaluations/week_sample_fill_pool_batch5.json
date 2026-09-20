@@ -1,0 +1,126 @@
+{
+  "target_new": 12,
+  "strategy": "bear_tilt_new_trade_dates_may_aug_2026",
+  "queue": [
+    {
+      "symbol": "601012.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-05-08"
+    },
+    {
+      "symbol": "002460.SZ",
+      "industry": "有色金属",
+      "trade_date": "2026-05-12"
+    },
+    {
+      "symbol": "300015.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-05-15"
+    },
+    {
+      "symbol": "000002.SZ",
+      "industry": "房地产",
+      "trade_date": "2026-05-20"
+    },
+    {
+      "symbol": "603259.SH",
+      "industry": "医药生物",
+      "trade_date": "2026-05-26"
+    },
+    {
+      "symbol": "600438.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-05-29"
+    },
+    {
+      "symbol": "002304.SZ",
+      "industry": "食品饮料",
+      "trade_date": "2026-06-03"
+    },
+    {
+      "symbol": "603288.SH",
+      "industry": "食品饮料",
+      "trade_date": "2026-06-05"
+    },
+    {
+      "symbol": "300122.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-06-11"
+    },
+    {
+      "symbol": "600585.SH",
+      "industry": "建筑材料",
+      "trade_date": "2026-06-12"
+    },
+    {
+      "symbol": "002241.SZ",
+      "industry": "电子",
+      "trade_date": "2026-06-18"
+    },
+    {
+      "symbol": "000858.SZ",
+      "industry": "食品饮料",
+      "trade_date": "2026-06-24"
+    },
+    {
+      "symbol": "601318.SH",
+      "industry": "非银金融",
+      "trade_date": "2026-07-02"
+    },
+    {
+      "symbol": "600036.SH",
+      "industry": "银行",
+      "trade_date": "2026-07-08"
+    },
+    {
+      "symbol": "000725.SZ",
+      "industry": "电子",
+      "trade_date": "2026-07-10"
+    },
+    {
+      "symbol": "002415.SZ",
+      "industry": "电子",
+      "trade_date": "2026-07-16"
+    },
+    {
+      "symbol": "300750.SZ",
+      "industry": "电力设备",
+      "trade_date": "2026-07-20"
+    },
+    {
+      "symbol": "601088.SH",
+      "industry": "煤炭",
+      "trade_date": "2026-07-24"
+    },
+    {
+      "symbol": "600519.SH",
+      "industry": "食品饮料",
+      "trade_date": "2026-07-28"
+    },
+    {
+      "symbol": "000063.SZ",
+      "industry": "通信",
+      "trade_date": "2026-08-03"
+    },
+    {
+      "symbol": "002475.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-05"
+    },
+    {
+      "symbol": "688981.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-07"
+    },
+    {
+      "symbol": "601138.SH",
+      "industry": "计算机",
+      "trade_date": "2026-08-11"
+    },
+    {
+      "symbol": "300308.SZ",
+      "industry": "通信",
+      "trade_date": "2026-08-13"
+    }
+  ]
+}

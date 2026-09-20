@@ -1,0 +1,66 @@
+{
+  "target_new": 12,
+  "strategy": "tmt_historical_may_jul_2026",
+  "queue": [
+    {
+      "symbol": "601138.SH",
+      "industry": "计算机",
+      "trade_date": "2026-07-30"
+    },
+    {
+      "symbol": "688981.SH",
+      "industry": "电子",
+      "trade_date": "2026-07-22"
+    },
+    {
+      "symbol": "002475.SZ",
+      "industry": "电子",
+      "trade_date": "2026-07-14"
+    },
+    {
+      "symbol": "002371.SZ",
+      "industry": "电子",
+      "trade_date": "2026-07-06"
+    },
+    {
+      "symbol": "000063.SZ",
+      "industry": "通信",
+      "trade_date": "2026-06-26"
+    },
+    {
+      "symbol": "300308.SZ",
+      "industry": "通信",
+      "trade_date": "2026-06-17"
+    },
+    {
+      "symbol": "603501.SH",
+      "industry": "电子",
+      "trade_date": "2026-06-09"
+    },
+    {
+      "symbol": "688256.SH",
+      "industry": "电子",
+      "trade_date": "2026-06-01"
+    },
+    {
+      "symbol": "688012.SH",
+      "industry": "电子",
+      "trade_date": "2026-05-22"
+    },
+    {
+      "symbol": "688036.SH",
+      "industry": "电子",
+      "trade_date": "2026-05-14"
+    },
+    {
+      "symbol": "300433.SZ",
+      "industry": "电子",
+      "trade_date": "2026-05-06"
+    },
+    {
+      "symbol": "002241.SZ",
+      "industry": "电子",
+      "trade_date": "2026-05-28"
+    }
+  ]
+}

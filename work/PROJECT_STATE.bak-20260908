@@ -1,0 +1,71 @@
+# Project State
+
+最后核验：2026-09-07 ~23:56（UTC+8）。本文件是快照；开工前必须重查 Git / Multica。
+
+## 主干 / 服务
+
+- 主干分支：`codex/dav-4-p2a-trunk`
+- origin 主干 tip：`98ba99f474723d0f98a323721918cc0fb5cb8d57`（D-03-1 资金规模纯归一 + mapping 净额 0 返修；DAV-717/718/719/720）
+- origin：`https://github.com/Guuuu233/tradingagents-ashare-fork.git`
+- 宿主 checkout 脏；勿 reset/clean
+- 本地 API：cwd `/tmp/ta-run-98ba99f`，PID 以 `lsof :8000` 为准，库仍是宿主 `data/tradingagents.db`
+- `/healthz`：live `commit_sha=98ba99f474723d0f98a323721918cc0fb5cb8d57`
+- 本机 `frontend/dist` 复用 H-03c 隔离构建（本包未改前端），未用宿主脏 `api.ts` WIP
+- uvicorn 必须带相同 `no_proxy`/`NO_PROXY`（含字面量 `100.65.130.33`、`100.71.132.80`）；httpx 不认 CIDR `100.64.0.0/10`
+- **不准予生产部署。** 加权关闭。禁止补 H1b 样本。禁止改 `role_bindings`/`providers`。C-09-3 纯计算已在主干；collector 接线与分析师消费仍分刀。
+
+## 本轮已合入
+
+- `e8130b6` C-09-2 `daily_basic`
+- `e20c6ac` C-05 `forecast`
+- `d82b0da` C-05 `repurchase`
+- `b9e7238` C-05 `disclosure_date`（DAV-644/645）
+- `b9de29e` C-05 旁证软对齐挂到巨潮 `NewsEvidence`（DAV-646/647）
+- `418a310` Track B-1
+- `4fdcf8e` Track B-2
+- `45f5286` Track B-3
+- `de0e4e0` C-05 切片 6：collector 传入共享 `cn_akshare` provider（DAV-657/658）
+- `da9a69d` C-05 切片 7：collector 接入巨潮公告 envelope（DAV-659/660）
+- `9a2878c` C-05 切片 8：collector 接入巨潮 IR envelope（DAV-661/662）
+- `705b4a6` C-05 切片 9：collector 调用 `qualify_cninfo_content`（DAV-663/664）
+- `c838818` C-05 切片 10：coverage 诚实报告 `content_status`（DAV-665/666）
+- `872d94e` H-01 期限唯一解析（DAV-669/670）
+- `664a76b` H-02a 跑次元数据进入 AgentState（DAV-671/672）
+- `afd8950` H-02b 跑次元数据回显落库（DAV-673/674）
+- `0019d6c` H-02c 派生结果键隔离（DAV-675/676）
+- `75b00a4` H-03a 分析入口接线（DAV-677/678）
+- `c62ff8e` H-03b 交互选档（DAV-679/680）
+- `8325943` H-03c 组合定时选档（DAV-681/682）
+- `f03466c` H-04a 研究档与专业观察窗分别可见（DAV-683/684）
+- `645cbb5` H-04b-1 市场分析师运行档/观察窗/trace（DAV-685/686）
+- `904dc0e` H-04b-2 新闻分析师运行档/观察窗/trace（DAV-687/688）
+- `1e28ee1` H-04b-3 社交舆情分析师运行档/观察窗/trace（DAV-689/690）
+- `3899fe8` H-04b-4 基本面分析师运行档/观察窗/trace（DAV-691/692）
+- `d4f8bef` H-04b-5 宏观分析师运行档/观察窗/trace（DAV-693/694）
+- `a822a86` H-04b-6 资金分析师运行档/观察窗/trace（DAV-695/696）
+- `5eed1a2` H-04b-7 量价分析师运行档/观察窗/trace（DAV-697/698）
+- `5fbd70e` H-04d 投研经理消费研究档（DAV-699/700）
+- `309bdbc` H-05a 双档顶层 not_applicable 聚合不得被单档覆盖（DAV-701/702）
+- `12455e9` D-01 / C-04-2 Tushare raw `daily` + `dividend` 读取契约（DAV-703/704）
+- `fbdc598` D-02-1 价格口径短标签 ↔ cohort `price_basis_version` 映射（DAV-705/706）
+- `f9be5c6` D-02-2 provider 显式 raw 日线通道（缺省仍 vendor_qfq；含循环导入返修 DAV-709/710）
+- `166b705` D-02-3 collector 显式 raw 日线接线（缺省仍 vendor 链；DAV-711/712）
+- `d4103af` D-02-4 回测进出场价与分析 `price_basis` 同口径（缺省仍 vendor_qfq；DAV-713/714）
+- `30e17a4` D-02-5 collector 分红旁证（空表≠无分红，不落地 PIT；DAV-715/716）
+- `7f17815` D-03-1 规模纯归一（不得单独当 tip；已被 `98ba99f` 覆盖）
+- `98ba99f` D-03-1 返修：mapping 净额 0 不得当缺失；`DecimalRatio.__hash__`；非法分母日期失败闭合（DAV-719/720）
+
+## 进行中
+
+- D-03-2 collector 接线：实现 [DAV-721](mention://issue/01a07c95-c0b5-7f18-bbcd-7bad5e14243b) 资深开发2 `in_progress`。独立审核 [DAV-722](mention://issue/01a07c96-dea6-72e5-a195-60a1fb43ad45) Path A，无 40 位 SHA 前保持 `todo`、不指派。不改 `smart_money_analyst.py`。
+- H-04c / H-05b / H-05c 已跳过空提交。
+- D-03-3 分析师消费不同批。未授权：PDF、社交 AUTH、部署。
+- C-05 采集与覆盖度诚实路径已在主干。未授权：PDF 正文抽取、社交 AUTH。
+- C-04 切片 1 权威评估仍是 DAV-628。DAV-667/668 已 `cancelled`，不准予合入。
+- Track B 真实采集 / shadow / canary 仍待授权，DAV-648 保留为启用总卡（`todo`）。
+
+## 排队
+
+- D-03-3：分析师消费 `scale_metrics`（本批禁止）
+- Track B 真实启用：登录/Cookie、真采集、切 shadow/active
+- 准予部署 / 开加权 / 启用社交 active / 扩大采集

@@ -1,0 +1,106 @@
+{
+  "target_new": 20,
+  "strategy": "prior_bear_winner_symbols_tplus5_due_aug",
+  "queue": [
+    {
+      "symbol": "000858.SZ",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-27"
+    },
+    {
+      "symbol": "000063.SZ",
+      "industry": "通信",
+      "trade_date": "2026-08-27"
+    },
+    {
+      "symbol": "300015.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-08-27"
+    },
+    {
+      "symbol": "601012.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-08-27"
+    },
+    {
+      "symbol": "600438.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-08-26"
+    },
+    {
+      "symbol": "300122.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-08-26"
+    },
+    {
+      "symbol": "603288.SH",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-26"
+    },
+    {
+      "symbol": "601138.SH",
+      "industry": "计算机",
+      "trade_date": "2026-08-26"
+    },
+    {
+      "symbol": "688981.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-25"
+    },
+    {
+      "symbol": "002371.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-25"
+    },
+    {
+      "symbol": "603501.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-25"
+    },
+    {
+      "symbol": "600011.SH",
+      "industry": "公用事业",
+      "trade_date": "2026-08-25"
+    },
+    {
+      "symbol": "688012.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "002460.SZ",
+      "industry": "有色金属",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "000002.SZ",
+      "industry": "房地产",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "603259.SH",
+      "industry": "医药生物",
+      "trade_date": "2026-08-21"
+    },
+    {
+      "symbol": "002304.SZ",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-20"
+    },
+    {
+      "symbol": "600585.SH",
+      "industry": "建筑材料",
+      "trade_date": "2026-08-20"
+    },
+    {
+      "symbol": "000858.SZ",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-19"
+    },
+    {
+      "symbol": "000063.SZ",
+      "industry": "通信",
+      "trade_date": "2026-08-19"
+    }
+  ]
+}

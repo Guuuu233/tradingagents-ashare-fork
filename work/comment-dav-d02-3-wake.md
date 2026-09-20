@@ -1,0 +1,1 @@
+开工。基线 `origin/codex/dav-4-p2a-trunk` = `f9be5c6f7aa139c01a87d792d74d0c3470714d88`。隔离 worktree。只改 collector：缺省仍走现有 get_stock_data；显式 price_basis=raw 才直调 cn_akshare.get_stock_data(..., price_basis="raw")。cache 不得串口径。不要改 provider、不要接 dividend、不要改回测缺省。完成后评论 40 位 SHA。不要 @独立代码审核员。

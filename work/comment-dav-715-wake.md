@@ -1,0 +1,1 @@
+D-02-5。基线 `d4103af21c6ba19483716a74594b90af361f90a2`。隔离 worktree，一个 commit。collector 经 registry 调已有 `_fetch_tushare_dividend(as_of=trade_date)`；空表不得写成无分红；不得用分红改日线或宣称 PIT。完成后评论 40 位 SHA、第一父、diff --stat、pytest。不要 @独立代码审核员。

@@ -1,0 +1,106 @@
+{
+  "target_new": 20,
+  "strategy": "fill_free_slots_on_proven_bear_dates",
+  "queue": [
+    {
+      "symbol": "601138.SH",
+      "industry": "计算机",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "688981.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "002371.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "603501.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "600011.SH",
+      "industry": "公用事业",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "688012.SH",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "300308.SZ",
+      "industry": "通信",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "002475.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "000725.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "002415.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "300750.SZ",
+      "industry": "电力设备",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "601088.SH",
+      "industry": "煤炭",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "600036.SH",
+      "industry": "银行",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "601318.SH",
+      "industry": "非银金融",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "000001.SZ",
+      "industry": "银行",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "000333.SZ",
+      "industry": "家用电器",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "600519.SH",
+      "industry": "食品饮料",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "002241.SZ",
+      "industry": "电子",
+      "trade_date": "2026-08-24"
+    },
+    {
+      "symbol": "300015.SZ",
+      "industry": "医药生物",
+      "trade_date": "2026-08-19"
+    },
+    {
+      "symbol": "601012.SH",
+      "industry": "电力设备",
+      "trade_date": "2026-08-19"
+    }
+  ]
+}

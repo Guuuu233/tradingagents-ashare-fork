@@ -1,0 +1,1 @@
+D-03-1。基线 `30e17a46688b3c8f392ad265d96e858ebfa52886`。隔离 worktree，一个 commit。只在 `fund_flow_evidence.py` 做纯归一计算；不改 collector、不新增 fetcher。`circ_mv` 官方万元；`amount` 不得默认单位。完成后评论 40 位 SHA、第一父、diff --stat、pytest。不要 @独立代码审核员。

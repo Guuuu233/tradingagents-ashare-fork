@@ -1,0 +1,1 @@
+用户明确要求补齐样本：用真实 POST /v1/analyze + 单次 `v2_debate_enabled=true` 跑到 completed v2≥10。不改持久 3/1，不开 H1b。队列从 000001/000333/000725/002415/600036/600519/601318 起，串行（executor_threads=1）。进度见 `work/v2-sample-fill.log`。

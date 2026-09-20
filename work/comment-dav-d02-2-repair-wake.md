@@ -1,0 +1,1 @@
+开工。被打回 SHA `6ee6272b00f1ce6015f4524cada07ba400eeeed0`。从该分支继续。删掉 `cn_akshare_provider.py` 对 `api.services` 的导入，改用本文件短标签字符串。不要下沉映射模块、不要改 collector。pytest 必须包含 `tests/test_h1b_gates.py`。完成后评论 40 位 SHA。不要 @独立代码审核员。

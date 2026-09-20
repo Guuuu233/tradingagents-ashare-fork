@@ -1,0 +1,10 @@
+E-03b-1 baseline evidence
+Date: 2026-09-12 Australia/Perth
+Checkout: /private/tmp/ta-review-dav844
+HEAD: 59713d3744bc4563e34a59173c4f12a16901bc9d
+
+Command:
+env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q tests/test_debate_opening_protocol.py tests/test_debate_challenge_protocol.py tests/test_debate_e2e_protocol_repair.py tests/test_debate_information_gain.py
+
+Result: 65 passed in 0.58s; 0 failed; 0 skipped.
+Scope note: tests/test_claim_review_contract.py did not exist at baseline. This is the pre-candidate comparison point for DAV-846.

@@ -1,0 +1,853 @@
+diff --git a/tradingagents/agents/researchers/bear_researcher.py b/tradingagents/agents/researchers/bear_researcher.py
+index 1a8bef8..c61ac32 100644
+--- a/tradingagents/agents/researchers/bear_researcher.py
++++ b/tradingagents/agents/researchers/bear_researcher.py
+@@ -2,7 +2,7 @@ import logging
+ from tradingagents.dataflows.config import get_config
+ from tradingagents.prompts import get_prompt
+ from tradingagents.graph.intent_parser import build_horizon_context
+-from tradingagents.agents.utils.agent_states import current_tracker_var
++from tradingagents.agents.utils.agent_states import current_tracker_var, is_v2_debate_enabled
+ from tradingagents.agents.utils.debate_utils import (
+     DebateProtocolError,
+     build_debate_report_manifest,
+@@ -20,8 +20,12 @@ _logger = logging.getLogger(__name__)
+ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
+     async def bear_node(state) -> dict:
+         investment_debate_state = state["investment_debate_state"]
+-        history = investment_debate_state.get("history", "")
+-        current_response = investment_debate_state.get("current_response", "")
++        current_count = safe_int(investment_debate_state.get("count", 0), 0)
++        message_index = current_count + 1
++        v2_enabled = is_v2_debate_enabled(state)
++        current_stage = str(investment_debate_state.get("protocol_stage") or "opening").strip().lower()
++        is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
++
+         macro_report = state.get("macro_report", "")
+         market_research_report = state.get("market_report", "")
+         sentiment_report = state.get("sentiment_report", "")
+@@ -33,12 +37,6 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+         report_manifest = build_debate_report_manifest(state)
+         _logger.info("[bear_researcher] report input manifest: %s", report_manifest)
+ 
+-        claims = investment_debate_state.get("claims", [])
+-        focus_claim_ids = investment_debate_state.get("focus_claim_ids", [])
+-        unresolved_claim_ids = investment_debate_state.get("unresolved_claim_ids", [])
+-        round_summary = investment_debate_state.get("round_summary", "")
+-        round_goal = investment_debate_state.get("round_goal", "")
+-
+         horizon = state.get("horizon", "medium")
+         user_intent = state.get("user_intent") or {}
+         focus_areas = user_intent.get("focus_areas", [])
+@@ -54,11 +52,29 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+             f"{smart_money_report}\n\n"
+             f"{volume_price_report}"
+         )
+-        past_memories = memory.get_memories(curr_situation, n_matches=2)
+ 
+-        past_memory_str = ""
+-        for i, rec in enumerate(past_memories, 1):
+-            past_memory_str += rec["recommendation"] + "\n\n"
++        if is_opening_stage:
++            history = ""
++            current_response = ""
++            claims = []
++            focus_claim_ids = []
++            unresolved_claim_ids = []
++            round_summary = ""
++            round_goal = "建立空头核心立论并覆盖至少3个不同战场"
++            past_memories = memory.get_memories(curr_situation, n_matches=0)
++            past_memory_str = ""
++        else:
++            history = investment_debate_state.get("history", "")
++            current_response = investment_debate_state.get("current_response", "")
++            claims = investment_debate_state.get("claims", [])
++            focus_claim_ids = investment_debate_state.get("focus_claim_ids", [])
++            unresolved_claim_ids = investment_debate_state.get("unresolved_claim_ids", [])
++            round_summary = investment_debate_state.get("round_summary", "")
++            round_goal = investment_debate_state.get("round_goal", "")
++            past_memories = memory.get_memories(curr_situation, n_matches=2)
++            past_memory_str = ""
++            for i, rec in enumerate(past_memories, 1):
++                past_memory_str += rec["recommendation"] + "\n\n"
+ 
+         injection_slots = build_injection_slots(custom_prompt, placement, role_key="bear_researcher")
+         prompt = horizon_ctx + get_prompt("bear_prompt", config=get_config()).format(
+@@ -82,9 +98,7 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+ 
+         # ── 实现 Token 级流式输出与单轮重试机制 ──────────────────
+         tracker = current_tracker_var.get()
+-        current_count = safe_int(investment_debate_state.get("count", 0), 0)
+-        message_index = current_count + 1
+-        debate_round = (message_index - 1) // 2 + 1
++        debate_round = 1 if is_opening_stage else ((message_index - 1) // 2 + 1)
+         model_name = getattr(llm, "model_name", None) or getattr(llm, "model", None)
+ 
+         attempts_trace = []
+@@ -95,37 +109,51 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+             if attempt_num == 1:
+                 attempt_prompt = prompt
+             else:
+-                opponent_open_claims = [
+-                    c["claim_id"] for c in claims
+-                    if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
+-                    and c.get("status") != "resolved"
+-                ]
+-                opponent_all_claims = [
+-                    c["claim_id"] for c in claims
+-                    if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
+-                ]
+-                same_side_prev_claims = [
+-                    c["claim"] for c in claims
+-                    if (c.get("speaker_key") == "Bear" or c.get("stance") == "bearish")
+-                ]
+-                prev_claims_hint = (
+-                    f"已提出的历史空头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
+-                    if same_side_prev_claims
+-                    else ""
+-                )
+-                retry_instruction = (
+-                    f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
+-                    f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
+-                    f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
+-                    f"- 当前第 {message_index} 次发言要求：\n"
+-                    f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
+-                    f"     {prev_claims_hint}\n"
+-                    f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
+-                    f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
+-                    f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
+-                    f"  5. 严禁擅自 resolve 对手的 Claim。\n"
+-                    f"请立即修正并重新输出完整发言及合规机器块！"
+-                )
++                if is_opening_stage:
++                    retry_instruction = (
++                        f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
++                        f"你上一次输出的 DEBATE_STATE 机器块未通过 Opening 阶段协议校验，错误原因：{last_error_detail}。\n"
++                        f"请在保持专业立论正文的同时，重新严格按 Opening 契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
++                        f"- 当前 Opening 立论发言要求：\n"
++                        f"  1. responded_claim_ids 必须为空数组 []。\n"
++                        f"  2. new_claims 必须包含 2 到 3 条 Claim，且必须覆盖至少 3 个不同战场 (capital_flow / sentiment_theme / price_volume / macro_policy / fundamentals)。\n"
++                        f"  3. 每一项 new_claims 必须包含 battlefield 字段（属于五大战场之一），且 target_claim_ids 必须为空数组 []。\n"
++                        f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
++                        f"  5. resolved_claim_ids 必须为空数组 []。\n"
++                        f"请立即修正并重新输出完整发言及合规机器块！"
++                    )
++                else:
++                    opponent_open_claims = [
++                        c["claim_id"] for c in claims
++                        if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
++                        and c.get("status") != "resolved"
++                    ]
++                    opponent_all_claims = [
++                        c["claim_id"] for c in claims
++                        if (c.get("speaker_key") == "Bull" or (c.get("stance") and c.get("stance") != "bearish"))
++                    ]
++                    same_side_prev_claims = [
++                        c["claim"] for c in claims
++                        if (c.get("speaker_key") == "Bear" or c.get("stance") == "bearish")
++                    ]
++                    prev_claims_hint = (
++                        f"已提出的历史空头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
++                        if same_side_prev_claims
++                        else ""
++                    )
++                    retry_instruction = (
++                        f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
++                        f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
++                        f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
++                        f"- 当前第 {message_index} 次发言要求：\n"
++                        f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
++                        f"     {prev_claims_hint}\n"
++                        f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
++                        f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
++                        f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
++                        f"  5. 严禁擅自 resolve 对手的 Claim。\n"
++                        f"请立即修正并重新输出完整发言及合规机器块！"
++                    )
+                 attempt_prompt = prompt + retry_instruction
+ 
+             full_content = ""
+diff --git a/tradingagents/agents/researchers/bull_researcher.py b/tradingagents/agents/researchers/bull_researcher.py
+index f95061d..5e30e4a 100644
+--- a/tradingagents/agents/researchers/bull_researcher.py
++++ b/tradingagents/agents/researchers/bull_researcher.py
+@@ -2,7 +2,7 @@ import logging
+ from tradingagents.dataflows.config import get_config
+ from tradingagents.prompts import get_prompt
+ from tradingagents.graph.intent_parser import build_horizon_context
+-from tradingagents.agents.utils.agent_states import current_tracker_var
++from tradingagents.agents.utils.agent_states import current_tracker_var, is_v2_debate_enabled
+ from tradingagents.agents.utils.debate_utils import (
+     DebateProtocolError,
+     build_debate_report_manifest,
+@@ -20,8 +20,12 @@ _logger = logging.getLogger(__name__)
+ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
+     async def bull_node(state) -> dict:
+         investment_debate_state = state["investment_debate_state"]
+-        history = investment_debate_state.get("history", "")
+-        current_response = investment_debate_state.get("current_response", "")
++        current_count = safe_int(investment_debate_state.get("count", 0), 0)
++        message_index = current_count + 1
++        v2_enabled = is_v2_debate_enabled(state)
++        current_stage = str(investment_debate_state.get("protocol_stage") or "opening").strip().lower()
++        is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
++
+         macro_report = state.get("macro_report", "")
+         market_research_report = state.get("market_report", "")
+         sentiment_report = state.get("sentiment_report", "")
+@@ -33,12 +37,6 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+         report_manifest = build_debate_report_manifest(state)
+         _logger.info("[bull_researcher] report input manifest: %s", report_manifest)
+ 
+-        claims = investment_debate_state.get("claims", [])
+-        focus_claim_ids = investment_debate_state.get("focus_claim_ids", [])
+-        unresolved_claim_ids = investment_debate_state.get("unresolved_claim_ids", [])
+-        round_summary = investment_debate_state.get("round_summary", "")
+-        round_goal = investment_debate_state.get("round_goal", "")
+-
+         horizon = state.get("horizon", "medium")
+         user_intent = state.get("user_intent") or {}
+         focus_areas = user_intent.get("focus_areas", [])
+@@ -54,11 +52,29 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+             f"{smart_money_report}\n\n"
+             f"{volume_price_report}"
+         )
+-        past_memories = memory.get_memories(curr_situation, n_matches=2)
+ 
+-        past_memory_str = ""
+-        for i, rec in enumerate(past_memories, 1):
+-            past_memory_str += rec["recommendation"] + "\n\n"
++        if is_opening_stage:
++            history = ""
++            current_response = ""
++            claims = []
++            focus_claim_ids = []
++            unresolved_claim_ids = []
++            round_summary = ""
++            round_goal = "建立多头核心立论并覆盖至少3个不同战场"
++            past_memories = memory.get_memories(curr_situation, n_matches=0)
++            past_memory_str = ""
++        else:
++            history = investment_debate_state.get("history", "")
++            current_response = investment_debate_state.get("current_response", "")
++            claims = investment_debate_state.get("claims", [])
++            focus_claim_ids = investment_debate_state.get("focus_claim_ids", [])
++            unresolved_claim_ids = investment_debate_state.get("unresolved_claim_ids", [])
++            round_summary = investment_debate_state.get("round_summary", "")
++            round_goal = investment_debate_state.get("round_goal", "")
++            past_memories = memory.get_memories(curr_situation, n_matches=2)
++            past_memory_str = ""
++            for i, rec in enumerate(past_memories, 1):
++                past_memory_str += rec["recommendation"] + "\n\n"
+ 
+         injection_slots = build_injection_slots(custom_prompt, placement, role_key="bull_researcher")
+         prompt = horizon_ctx + get_prompt("bull_prompt", config=get_config()).format(
+@@ -82,9 +98,7 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+ 
+         # ── 实现 Token 级流式输出与单轮重试机制 ──────────────────
+         tracker = current_tracker_var.get()
+-        current_count = safe_int(investment_debate_state.get("count", 0), 0)
+-        message_index = current_count + 1
+-        debate_round = (message_index - 1) // 2 + 1
++        debate_round = 1 if is_opening_stage else ((message_index - 1) // 2 + 1)
+         model_name = getattr(llm, "model_name", None) or getattr(llm, "model", None)
+ 
+         attempts_trace = []
+@@ -95,37 +109,51 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
+             if attempt_num == 1:
+                 attempt_prompt = prompt
+             else:
+-                opponent_open_claims = [
+-                    c["claim_id"] for c in claims
+-                    if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+-                    and c.get("status") != "resolved"
+-                ]
+-                opponent_all_claims = [
+-                    c["claim_id"] for c in claims
+-                    if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
+-                ]
+-                same_side_prev_claims = [
+-                    c["claim"] for c in claims
+-                    if (c.get("speaker_key") == "Bull" or c.get("stance") == "bullish")
+-                ]
+-                prev_claims_hint = (
+-                    f"已提出的历史多头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
+-                    if same_side_prev_claims
+-                    else ""
+-                )
+-                retry_instruction = (
+-                    f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
+-                    f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
+-                    f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
+-                    f"- 当前第 {message_index} 次发言要求：\n"
+-                    f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
+-                    f"     {prev_claims_hint}\n"
+-                    f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
+-                    f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
+-                    f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
+-                    f"  5. 严禁擅自 resolve 对手的 Claim。\n"
+-                    f"请立即修正并重新输出完整发言及合规机器块！"
+-                )
++                if is_opening_stage:
++                    retry_instruction = (
++                        f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
++                        f"你上一次输出的 DEBATE_STATE 机器块未通过 Opening 阶段协议校验，错误原因：{last_error_detail}。\n"
++                        f"请在保持专业立论正文的同时，重新严格按 Opening 契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
++                        f"- 当前 Opening 立论发言要求：\n"
++                        f"  1. responded_claim_ids 必须为空数组 []。\n"
++                        f"  2. new_claims 必须包含 2 到 3 条 Claim，且必须覆盖至少 3 个不同战场 (capital_flow / sentiment_theme / price_volume / macro_policy / fundamentals)。\n"
++                        f"  3. 每一项 new_claims 必须包含 battlefield 字段（属于五大战场之一），且 target_claim_ids 必须为空数组 []。\n"
++                        f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
++                        f"  5. resolved_claim_ids 必须为空数组 []。\n"
++                        f"请立即修正并重新输出完整发言及合规机器块！"
++                    )
++                else:
++                    opponent_open_claims = [
++                        c["claim_id"] for c in claims
++                        if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
++                        and c.get("status") != "resolved"
++                    ]
++                    opponent_all_claims = [
++                        c["claim_id"] for c in claims
++                        if (c.get("speaker_key") == "Bear" or (c.get("stance") and c.get("stance") != "bullish"))
++                    ]
++                    same_side_prev_claims = [
++                        c["claim"] for c in claims
++                        if (c.get("speaker_key") == "Bull" or c.get("stance") == "bullish")
++                    ]
++                    prev_claims_hint = (
++                        f"已提出的历史多头观点（严禁重复或同义改写，相似度须 < 0.82）: {same_side_prev_claims}。"
++                        if same_side_prev_claims
++                        else ""
++                    )
++                    retry_instruction = (
++                        f"\n\n【协议重试警告 (Attempt {attempt_num})】：\n"
++                        f"你上一次输出的 DEBATE_STATE 机器块未通过协议校验，错误原因：{last_error_detail}。\n"
++                        f"请在保持专业论证正文的同时，重新严格按契约格式在输出末尾输出 <!-- DEBATE_STATE: ... --> 机器块。\n"
++                        f"- 当前第 {message_index} 次发言要求：\n"
++                        f"  1. 信息增量硬闸：本轮必须提出至少一条具有实质信息增量的新 Claim，必须包含历史未出现过的具体数值/新证据实体/新因果链，严禁复读或轻微改写前几轮观点。\n"
++                        f"     {prev_claims_hint}\n"
++                        f"  2. responded_claim_ids 必须包含至少一条对手未解决 Claim ID。当前可选合法未解决对手 Claim: {opponent_open_claims or opponent_all_claims}。\n"
++                        f"  3. new_claims 中的每一项必须包含 target_claim_ids 字段，且 target_claim_ids 必须指定至少一条对手 Claim ID (如 target_claim_ids: {opponent_all_claims[:1] if opponent_all_claims else ['INV-1']})。\n"
++                        f"  4. confidence 必须是 0.00-1.00 之间的有限数值，严禁百分比。\n"
++                        f"  5. 严禁擅自 resolve 对手的 Claim。\n"
++                        f"请立即修正并重新输出完整发言及合规机器块！"
++                    )
+                 attempt_prompt = prompt + retry_instruction
+ 
+             full_content = ""
+diff --git a/tradingagents/agents/utils/agent_states.py b/tradingagents/agents/utils/agent_states.py
+index e544523..4f4870c 100644
+--- a/tradingagents/agents/utils/agent_states.py
++++ b/tradingagents/agents/utils/agent_states.py
+@@ -2,7 +2,7 @@ import contextvars
+ import json
+ import operator
+ import re
+-from typing import Annotated, Any, List, Tuple
++from typing import Annotated, Any, List, Mapping, Tuple
+ 
+ from typing_extensions import Optional, TypedDict
+ from langgraph.graph import MessagesState
+@@ -225,6 +225,38 @@ def normalize_protocol_metadata(state_or_result: Any) -> dict[str, Any]:
+     return get_protocol_metadata(state_or_result)
+ 
+ 
++def is_v2_debate_enabled(state_or_config: Any) -> bool:
++    """Return True if v2_debate_enabled is explicitly enabled in state, config, or feature_flags."""
++    if not isinstance(state_or_config, (dict, Mapping)):
++        return False
++
++    # 1. Direct check in nested investment_debate_state if present
++    inv_state = state_or_config.get("investment_debate_state")
++    if isinstance(inv_state, (dict, Mapping)):
++        flags = inv_state.get("feature_flags")
++        if isinstance(flags, (dict, Mapping)) and flags.get("v2_debate_enabled") is not None:
++            return bool(flags["v2_debate_enabled"])
++        if inv_state.get("v2_debate_enabled") is not None:
++            return bool(inv_state.get("v2_debate_enabled"))
++        if inv_state.get("protocol_version") == PROTOCOL_VERSION_V2_STRUCTURED:
++            return True
++
++    # 2. Check in top-level feature_flags dict
++    flags = state_or_config.get("feature_flags")
++    if isinstance(flags, (dict, Mapping)) and flags.get("v2_debate_enabled") is not None:
++        return bool(flags["v2_debate_enabled"])
++
++    # 3. Direct key at top level
++    if state_or_config.get("v2_debate_enabled") is not None:
++        return bool(state_or_config.get("v2_debate_enabled"))
++
++    # 4. Direct protocol_version at top level
++    if state_or_config.get("protocol_version") == PROTOCOL_VERSION_V2_STRUCTURED:
++        return True
++
++    return False
++
++
+ class InvestDebateState(TypedDict):
+     bull_history: Annotated[str, "Bullish conversation history"]
+     bear_history: Annotated[str, "Bearish conversation history"]
+diff --git a/tradingagents/agents/utils/debate_utils.py b/tradingagents/agents/utils/debate_utils.py
+index 8dac286..9910e24 100644
+--- a/tradingagents/agents/utils/debate_utils.py
++++ b/tradingagents/agents/utils/debate_utils.py
+@@ -9,6 +9,8 @@ import re
+ from numbers import Real
+ from typing import Any, Iterable, Mapping, Sequence
+ 
++from tradingagents.agents.utils.agent_states import is_v2_debate_enabled
++
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -32,6 +34,15 @@ class DebateProtocolError(RuntimeError):
+         self.attempts = attempts or []
+ 
+ 
++VALID_BATTLEFIELDS: frozenset[str] = frozenset({
++    "capital_flow",
++    "sentiment_theme",
++    "price_volume",
++    "macro_policy",
++    "fundamentals",
++})
++
++
+ _MACHINE_LIST_FIELDS = (
+     "responded_claim_ids",
+     "new_claims",
+@@ -41,7 +52,7 @@ _MACHINE_LIST_FIELDS = (
+ )
+ _MACHINE_TEXT_FIELDS = ("round_summary", "round_goal")
+ _MACHINE_FIELDS = frozenset((*_MACHINE_LIST_FIELDS, *_MACHINE_TEXT_FIELDS))
+-_MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids"))
++_MACHINE_CLAIM_FIELDS = frozenset(("claim", "evidence", "confidence", "target_claim_ids", "battlefield"))
+ 
+ 
+ def normalize_text(text: str) -> str:
+@@ -404,18 +415,20 @@ def _sanitize_machine_payload(payload: Mapping[str, Any], tag: str) -> dict[str,
+         confidence = _claim_confidence(raw_claim.get("confidence"), tag, claim_index)
+         if confidence is None:
+             continue
+-        claims.append(
+-            {
+-                "claim": claim_text.strip(),
+-                "evidence": _normalize_machine_string_list(
+-                    raw_claim.get("evidence"), tag, "evidence", claim_index
+-                ),
+-                "confidence": confidence,
+-                "target_claim_ids": _normalize_machine_string_list(
+-                    raw_claim.get("target_claim_ids"), tag, "target_claim_ids", claim_index
+-                ),
+-            }
+-        )
++        claim_dict: dict[str, Any] = {
++            "claim": claim_text.strip(),
++            "evidence": _normalize_machine_string_list(
++                raw_claim.get("evidence"), tag, "evidence", claim_index
++            ),
++            "confidence": confidence,
++            "target_claim_ids": _normalize_machine_string_list(
++                raw_claim.get("target_claim_ids"), tag, "target_claim_ids", claim_index
++            ),
++        }
++        raw_battlefield = raw_claim.get("battlefield")
++        if raw_battlefield is not None:
++            claim_dict["battlefield"] = str(raw_battlefield).strip()
++        claims.append(claim_dict)
+     normalized["new_claims"] = claims
+     return normalized
+ 
+@@ -786,6 +799,10 @@ def validate_debate_response(
+     }
+ 
+     if domain == "investment":
++        v2_enabled = is_v2_debate_enabled(state)
++        current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
++        is_opening_stage = v2_enabled and (current_stage == "opening" or message_index <= 2)
++
+         # Check A: Camp permission for resolved_claim_ids (cannot resolve opponent's claims)
+         raw_resolved = _string_list(payload.get("resolved_claim_ids"))
+         unauthorized = []
+@@ -802,113 +819,169 @@ def validate_debate_response(
+             logger.warning("[debate_utils] protocol violation: %s", detail)
+             return False, "invalid_protocol", detail, payload
+ 
+-        # Check B: message_index >= 2 must respond to at least one un-resolved opponent claim
+-        if message_index >= 2:
++        if is_opening_stage:
++            # ── O2 Opening 阶段专属契约与五战场硬闸 ───────────────────────
++            # 1. responded_claim_ids 必须为空数组 []
+             raw_responded = _string_list(payload.get("responded_claim_ids"))
+-            valid_opponent_responded = [
+-                cid
+-                for cid in raw_responded
+-                if cid in claim_map
+-                and (
+-                    (claim_map[cid].get("speaker_key") and claim_map[cid].get("speaker_key") != speaker_key)
+-                    or (claim_map[cid].get("stance") and claim_map[cid].get("stance") != stance)
+-                )
+-                and claim_map[cid].get("status") != "resolved"
+-            ]
+-            if not valid_opponent_responded:
+-                opponent_open_ids = [
+-                    c["claim_id"]
+-                    for c in claims
+-                    if (
+-                        (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
+-                        or (c.get("stance") and c.get("stance") != stance)
+-                    )
+-                    and c.get("status") != "resolved"
+-                ]
++            if raw_responded:
+                 detail = (
+-                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 responded_claim_ids 中回应至少一条未解决的对手 claim ID "
+-                    f"(当前 responded: {raw_responded}, 合法对手未解决 claim: {opponent_open_ids})"
++                    f"Opening 阶段 ({speaker_key}) 必须为独立双盲立论，responded_claim_ids 必须为空数组 [] "
++                    f"(当前 responded_claim_ids: {raw_responded})"
+                 )
+                 logger.warning("[debate_utils] protocol violation: %s", detail)
+                 return False, "invalid_protocol", detail, payload
+ 
+-        # Check C: message_index >= 2 must have at least one new claim targeting an opponent claim
+-        if message_index >= 2:
++            # 2. new_claims 必须为 2-3 条
+             new_claims_list = payload.get("new_claims") or []
+-            has_opponent_target = False
+-            for nc in new_claims_list:
+-                t_ids = _string_list(nc.get("target_claim_ids"))
+-                for tid in t_ids:
+-                    if tid in claim_map:
+-                        c = claim_map[tid]
+-                        is_opponent = (
+-                            c.get("speaker_key") and c.get("speaker_key") != speaker_key
+-                        ) or (c.get("stance") and c.get("stance") != stance)
+-                        if is_opponent:
+-                            has_opponent_target = True
+-                            break
+-                if has_opponent_target:
+-                    break
+-            if not has_opponent_target:
+-                opponent_all_ids = [
+-                    c["claim_id"]
+-                    for c in claims
+-                    if (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
+-                    or (c.get("stance") and c.get("stance") != stance)
+-                ]
++            if not (2 <= len(new_claims_list) <= 3):
+                 detail = (
+-                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims[].target_claim_ids 中指定至少一条对手 claim ID 作为反驳目标 "
+-                    f"(合法对手 claim: {opponent_all_ids})"
++                    f"Opening 阶段 ({speaker_key}) new_claims 数量必须为 2 到 3 条 (当前数量: {len(new_claims_list)})"
+                 )
+                 logger.warning("[debate_utils] protocol violation: %s", detail)
+                 return False, "invalid_protocol", detail, payload
+ 
+-        # Check D: message_index >= 3 (or same-side claims exist) must provide genuine information gain (anti-repetition hard gate)
+-        same_side_claims = [
+-            c
+-            for c in claims
+-            if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
+-            or (c.get("stance") and c.get("stance") == stance)
+-        ]
+-        if same_side_claims:
+-            new_claims_list = payload.get("new_claims") or []
+-            if not new_claims_list:
++            # 3. 每一项 new_claim 的 target_claim_ids 必须为空数组 []
++            for nc_idx, nc in enumerate(new_claims_list, start=1):
++                t_ids = _string_list(nc.get("target_claim_ids"))
++                if t_ids:
++                    detail = (
++                        f"Opening 阶段 ({speaker_key}) 第 {nc_idx} 条 claim 的 target_claim_ids 必须为空数组 [] "
++                        f"(当前 target_claim_ids: {t_ids})"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
++
++            # 4. 每一项 new_claim 必须指定属于 VALID_BATTLEFIELDS 的合法战场
++            covered_battlefields = set()
++            for nc_idx, nc in enumerate(new_claims_list, start=1):
++                bf = nc.get("battlefield")
++                if not bf or not isinstance(bf, str) or bf.strip() not in VALID_BATTLEFIELDS:
++                    detail = (
++                        f"Opening 阶段 ({speaker_key}) 第 {nc_idx} 条 claim 必须指定合法的 battlefield "
++                        f"(有效战场: {sorted(VALID_BATTLEFIELDS)}, 当前: {repr(bf)})"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
++                covered_battlefields.add(bf.strip())
++
++            # 5. 必须覆盖至少 3 个不同战场
++            if len(covered_battlefields) < 3:
+                 detail = (
+-                    f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims 中提供至少一条具有信息增量的新观点"
++                    f"Opening 阶段 ({speaker_key}) new_claims 必须覆盖至少 3 个不同战场 "
++                    f"(当前仅覆盖 {len(covered_battlefields)} 个战场: {sorted(covered_battlefields)})"
+                 )
+                 logger.warning("[debate_utils] protocol violation: %s", detail)
+                 return False, "invalid_protocol", detail, payload
+ 
+-            prev_ev_list = [
+-                ev
+-                for pc in same_side_claims
+-                for ev in (pc.get("evidence") or [])
+-                if str(ev).strip()
++        else:
++            # ── Legacy 规则 (及 v1 非 opening 逻辑) ───────────────────────
++            # Check B: message_index >= 2 must respond to at least one un-resolved opponent claim
++            if message_index >= 2:
++                raw_responded = _string_list(payload.get("responded_claim_ids"))
++                valid_opponent_responded = [
++                    cid
++                    for cid in raw_responded
++                    if cid in claim_map
++                    and (
++                        (claim_map[cid].get("speaker_key") and claim_map[cid].get("speaker_key") != speaker_key)
++                        or (claim_map[cid].get("stance") and claim_map[cid].get("stance") != stance)
++                    )
++                    and claim_map[cid].get("status") != "resolved"
++                ]
++                if not valid_opponent_responded:
++                    opponent_open_ids = [
++                        c["claim_id"]
++                        for c in claims
++                        if (
++                            (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
++                            or (c.get("stance") and c.get("stance") != stance)
++                        )
++                        and c.get("status") != "resolved"
++                    ]
++                    detail = (
++                        f"第 {message_index} 次发言 ({speaker_key}) 必须在 responded_claim_ids 中回应至少一条未解决的对手 claim ID "
++                        f"(当前 responded: {raw_responded}, 合法对手未解决 claim: {opponent_open_ids})"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
++
++            # Check C: message_index >= 2 must have at least one new claim targeting an opponent claim
++            if message_index >= 2:
++                new_claims_list = payload.get("new_claims") or []
++                has_opponent_target = False
++                for nc in new_claims_list:
++                    t_ids = _string_list(nc.get("target_claim_ids"))
++                    for tid in t_ids:
++                        if tid in claim_map:
++                            c = claim_map[tid]
++                            is_opponent = (
++                                c.get("speaker_key") and c.get("speaker_key") != speaker_key
++                            ) or (c.get("stance") and c.get("stance") != stance)
++                            if is_opponent:
++                                has_opponent_target = True
++                                break
++                    if has_opponent_target:
++                        break
++                if not has_opponent_target:
++                    opponent_all_ids = [
++                        c["claim_id"]
++                        for c in claims
++                        if (c.get("speaker_key") and c.get("speaker_key") != speaker_key)
++                        or (c.get("stance") and c.get("stance") != stance)
++                    ]
++                    detail = (
++                        f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims[].target_claim_ids 中指定至少一条对手 claim ID 作为反驳目标 "
++                        f"(合法对手 claim: {opponent_all_ids})"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
++
++            # Check D: message_index >= 3 (or same-side claims exist) must provide genuine information gain (anti-repetition hard gate)
++            same_side_claims = [
++                c
++                for c in claims
++                if (c.get("speaker_key") and c.get("speaker_key") == speaker_key)
++                or (c.get("stance") and c.get("stance") == stance)
+             ]
++            if same_side_claims:
++                new_claims_list = payload.get("new_claims") or []
++                if not new_claims_list:
++                    detail = (
++                        f"第 {message_index} 次发言 ({speaker_key}) 必须在 new_claims 中提供至少一条具有信息增量的新观点"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
++
++                prev_ev_list = [
++                    ev
++                    for pc in same_side_claims
++                    for ev in (pc.get("evidence") or [])
++                    if str(ev).strip()
++                ]
+ 
+-            duplicate_claims = []
+-            valid_new_claims = []
+-            max_sims = []
+-
+-            for nc in new_claims_list:
+-                is_duplicate, sim, new_ev_count, _ = _evaluate_claim_duplication(
+-                    nc, same_side_claims, prev_ev_list
+-                )
+-                max_sims.append(sim)
+-
+-                if is_duplicate:
+-                    duplicate_claims.append(str(nc.get("claim", "")).strip())
+-                else:
+-                    valid_new_claims.append(nc)
++                duplicate_claims = []
++                valid_new_claims = []
++                max_sims = []
+ 
+-            if not valid_new_claims:
+-                max_sim = max(max_sims) if max_sims else 0.0
+-                detail = (
+-                    f"第 {message_index} 次发言 ({speaker_key}) 未提供有效信息增量：所有 new_claims 均与同侧历史观点重复或复用相同证据 "
+-                    f"(最高相似度 {max_sim:.2f} >= 0.82 或缺乏新证据，重复观点: {duplicate_claims})"
+-                )
+-                logger.warning("[debate_utils] protocol violation: %s", detail)
+-                return False, "invalid_protocol", detail, payload
++                for nc in new_claims_list:
++                    is_duplicate, sim, new_ev_count, _ = _evaluate_claim_duplication(
++                        nc, same_side_claims, prev_ev_list
++                    )
++                    max_sims.append(sim)
++
++                    if is_duplicate:
++                        duplicate_claims.append(str(nc.get("claim", "")).strip())
++                    else:
++                        valid_new_claims.append(nc)
++
++                if not valid_new_claims:
++                    max_sim = max(max_sims) if max_sims else 0.0
++                    detail = (
++                        f"第 {message_index} 次发言 ({speaker_key}) 未提供有效信息增量：所有 new_claims 均与同侧历史观点重复或复用相同证据 "
++                        f"(最高相似度 {max_sim:.2f} >= 0.82 或缺乏新证据，重复观点: {duplicate_claims})"
++                    )
++                    logger.warning("[debate_utils] protocol violation: %s", detail)
++                    return False, "invalid_protocol", detail, payload
+ 
+     return True, "valid", "", payload
+ 
+@@ -933,12 +1006,20 @@ def _record_unstructured_response(
+     new_state = dict(state)
+     current_count = safe_int(state.get("count", 0), 0)
+     message_index = current_count + 1
+-    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
++    v2_enabled = is_v2_debate_enabled(state)
++    current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
++    if v2_enabled and message_index <= 2:
++        current_stage = "opening"
++        debate_round = 1
++    else:
++        debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
+ 
+     if domain == "investment":
+         attempt_record: dict[str, Any] = {
+             "message_index": message_index,
+             "debate_round": debate_round,
++            "stage": current_stage,
++            "protocol_stage": current_stage,
+             "speaker": speaker_label,
+             "speaker_key": speaker_key,
+             "cleaned_prose": cleaned_response,
+@@ -1068,7 +1149,13 @@ def update_debate_state_with_payload(
+ 
+     current_count = safe_int(state.get("count", 0), 0)
+     message_index = current_count + 1
+-    debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
++    v2_enabled = is_v2_debate_enabled(state)
++    current_stage = str(state.get("protocol_stage") or "opening").strip().lower()
++    if v2_enabled and message_index <= 2:
++        current_stage = "opening"
++        debate_round = 1
++    else:
++        debate_round = (message_index - 1) // 2 + 1 if domain == "investment" else (message_index - 1) // 3 + 1
+ 
+     claims = [dict(item) for item in (state.get("claims", []) or []) if isinstance(item, Mapping)]
+     claim_map = {
+@@ -1160,7 +1247,12 @@ def update_debate_state_with_payload(
+                 "status": "open",
+                 "target_claim_ids": target_claim_ids,
+                 "round_index": message_index,
++                "debate_round": debate_round,
++                "message_index": message_index,
++                "stage": current_stage,
+             }
++            if claim_payload.get("battlefield"):
++                claim_entry["battlefield"] = claim_payload["battlefield"]
+             claims.append(claim_entry)
+             claim_map[claim_id] = claim_entry
+             open_claim_ids.add(claim_id)
+@@ -1195,6 +1287,8 @@ def update_debate_state_with_payload(
+     round_msg = {
+         "message_index": message_index,
+         "debate_round": debate_round,
++        "stage": current_stage,
++        "protocol_stage": current_stage,
+         "speaker": speaker_label,
+         "speaker_key": speaker_key,
+         "cleaned_prose": cleaned_response,
+diff --git a/tradingagents/graph/propagation.py b/tradingagents/graph/propagation.py
+index f7435f6..ee345bd 100644
+--- a/tradingagents/graph/propagation.py
++++ b/tradingagents/graph/propagation.py
+@@ -5,7 +5,10 @@ from typing import Dict, Any, List, Optional, Mapping
+ from tradingagents.agents.utils.agent_states import (
+     DEFAULT_PROTOCOL_METADATA,
+     InvestDebateState,
++    PROTOCOL_VERSION_V1_LEGACY,
++    PROTOCOL_VERSION_V2_STRUCTURED,
+     RiskDebateState,
++    is_v2_debate_enabled,
+ )
+ from tradingagents.agents.utils.context_utils import (
+     build_market_context,
+@@ -50,6 +53,7 @@ class Propagator:
+         user_intent: Optional[Dict[str, Any]] = None,
+         horizon: str = "short",
+         market_data_context: Optional[Dict[str, Any]] = None,
++        runtime_config: Optional[Mapping[str, Any]] = None,
+     ) -> Dict[str, Any]:
+         """Create the initial state for the agent graph."""
+         instrument_context = infer_instrument_context(company_name)
+@@ -61,6 +65,12 @@ class Propagator:
+             f"{summarize_market_context(market_context)}\n"
+             f"{user_context_summary}"
+         )
++        protocol_meta = copy.deepcopy(DEFAULT_PROTOCOL_METADATA)
++        if runtime_config and is_v2_debate_enabled(runtime_config):
++            protocol_meta["protocol_version"] = PROTOCOL_VERSION_V2_STRUCTURED
++            protocol_meta["protocol_stage"] = "opening"
++            protocol_meta["feature_flags"]["v2_debate_enabled"] = True
++
+         investment_debate_state_dict: Dict[str, Any] = {
+             "history": "",
+             "bull_history": "",
+@@ -80,7 +90,7 @@ class Propagator:
+             "claim_counter": 0,
+             "attempts": [],
+         }
+-        investment_debate_state_dict.update(copy.deepcopy(DEFAULT_PROTOCOL_METADATA))
++        investment_debate_state_dict.update(protocol_meta)
+         state: Dict[str, Any] = {
+             "messages": [("human", user_prompt_context)],
+             "company_of_interest": company_name,
+diff --git a/tradingagents/graph/trading_graph.py b/tradingagents/graph/trading_graph.py
+index 63c3bc3..3a61aa4 100644
+--- a/tradingagents/graph/trading_graph.py
++++ b/tradingagents/graph/trading_graph.py
+@@ -324,6 +324,7 @@ class TradingAgentsGraph:
+             selected_analysts=selected_analysts,
+             request_source=request_source,
+             market_data_context=market_data_context,
++            runtime_config=self.config,
+         )
+         args = self.propagator.get_graph_args()
+ 
+@@ -407,6 +408,7 @@ class TradingAgentsGraph:
+             user_intent=user_intent,
+             horizon="short",
+             market_data_context=market_data_context,
++            runtime_config=self.config,
+         )
+         final_state = await self.graph.ainvoke(state, **graph_args)
+ 

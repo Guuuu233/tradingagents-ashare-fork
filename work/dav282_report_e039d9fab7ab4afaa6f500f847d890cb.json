@@ -1,0 +1,11 @@
+{
+  "job_id": "e039d9fab7ab4afaa6f500f847d890cb",
+  "user_id": "429163f7-50b6-4982-8bdf-96ae99506843",
+  "symbol": "000725.SZ",
+  "status": "failed",
+  "created_at": "2026-08-21 20:13:23.190139",
+  "duration_seconds": 422.7013649940491,
+  "error_message": "模型服务端暂时故障。请稍后重试；若持续失败，建议在「设置」中更换模型。\n\n（原始错误：InternalServerError: Error code: 502）\n\nNoneType: None\n",
+  "result_data": {},
+  "report_text_sample": ""
+}

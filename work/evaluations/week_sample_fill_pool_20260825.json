@@ -1,0 +1,51 @@
+{
+  "trade_date": "2026-08-25",
+  "target_new": 10,
+  "queue": [
+    {
+      "symbol": "601398.SH",
+      "industry": "银行"
+    },
+    {
+      "symbol": "600941.SH",
+      "industry": "通信"
+    },
+    {
+      "symbol": "601857.SH",
+      "industry": "石油石化"
+    },
+    {
+      "symbol": "601318.SH",
+      "industry": "非银金融"
+    },
+    {
+      "symbol": "601088.SH",
+      "industry": "煤炭"
+    },
+    {
+      "symbol": "601985.SH",
+      "industry": "公用事业"
+    },
+    {
+      "symbol": "600048.SH",
+      "industry": "房地产"
+    },
+    {
+      "symbol": "601919.SH",
+      "industry": "交通运输"
+    },
+    {
+      "symbol": "600019.SH",
+      "industry": "钢铁"
+    },
+    {
+      "symbol": "600309.SH",
+      "industry": "基础化工"
+    }
+  ],
+  "rebalance": "bear_compensate",
+  "historical_bull_bear": [
+    20,
+    3
+  ]
+}

@@ -1,0 +1,1 @@
+[@资深开发2](mention://agent/5fd6e9a0-8540-40ea-a9d6-e358ab37a0fc) D-03-2。基线 `98ba99f474723d0f98a323721918cc0fb5cb8d57`。collector 接 `calculate_fund_flow_scale_metrics`；circ_mv 万元；amount 不得默认单位；净额 0 合法。不改分析师。完成后评论 40 位 SHA、第一父、diff --stat、pytest。不要 @独立代码审核员。

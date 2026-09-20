@@ -1,0 +1,35 @@
+tests/test_calibration_service.py: 11 warnings
+tests/test_calibration_small_sample_guard.py: 1 warning
+tests/test_dashboard_tracking.py: 2 warnings
+tests/test_normal_analysis_trade_date_normalization.py: 9 warnings
+tests/test_portfolio_import.py: 1 warning
+tests/test_social_data_api.py: 2 warnings
+tests/test_swimlane_de_audit.py: 1 warning
+tests/test_v2_debate_override_allowlist.py: 1 warning
+  /Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/jwt/api_jwt.py:365: InsecureKeyLengthWarning: The HMAC key is 31 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
+tests/test_dav28_data_boundaries.py::test_fetch_all_unavailable_when_all_rows_invalid
+  /private/tmp/ta-union/tradingagents/graph/data_collector.py:144: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_dav27_report_semantics.py::test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback[False]
+FAILED tests/test_dav27_report_semantics.py::test_ordinary_and_streaming_paths_merge_gaps_and_keep_graph_fallback[True]
+FAILED tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_dual_horizon_persists_debate_states_to_result_data
+FAILED tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_intent_hoist_persists_debate_states_to_result_data
+FAILED tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_single_horizon_persists_debate_states_to_result_data
+FAILED tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_job_execution_with_legitimate_empty_probability_persists_note_and_4_of_4_metrics
+FAILED tests/test_debate_state_persistence.py::TestJobExecutionDebatePersistence::test_job_execution_hold_decision_persists_note_and_metrics_consistency
+FAILED tests/test_h1b_gates.py::TestH1bV2OnlySampleFilteringAndIndustry::test_verify_h1b_gates_script_runs_and_verifies_v2_only
+FAILED tests/test_provider_date_guards.py::test_all_time_sensitive_get_methods_have_date_param
+FAILED tests/test_recalculate_weekly_metrics.py::TestCliIntegrationAndSubprocess::test_cli_subprocess_format_json
+FAILED tests/test_signal_processing.py::test_negated_buy_phrase_is_not_buy - ...
+FAILED tests/test_signal_processing.py::test_negated_build_position_is_not_buy
+FAILED tests/test_signal_processing.py::test_plain_hold_is_hold - AssertionEr...
+FAILED tests/test_two_stage_analyst_topology.py::test_full_7_analysts_two_stage_topology
+FAILED tests/test_two_stage_analyst_topology.py::test_phase1_only_topology - ...
+FAILED tests/test_two_stage_analyst_topology.py::test_phase2_only_topology - ...
+FAILED tests/test_two_stage_analyst_topology.py::test_mixed_subset_topology
+17 failed, 3843 passed, 1 skipped, 3 deselected, 175 warnings in 542.84s (0:09:02)
