@@ -1893,6 +1893,55 @@ def is_conflicting_fund_flow_dispute(
     return has_in and has_out
 
 
+# ── Claim ID Grammar & Token Matching (DAV-1106) ───────────────────────────
+#
+# 合法 claim_id 语法：由英文字母、数字、下划线及连字符组成（[A-Za-z0-9_-]+），
+# 形如 INV-1, INV-10, RISK-2, CLM-OBS 等。
+#
+# 边界契约：
+#   - 前向边界 (?<![A-Za-z0-9_-])：防止被较长标识符或复合 ID 前缀误捕获（如 comp_INV-1 中前置下划线）。
+#   - 后向边界 (?![A-Za-z0-9_-])：防止被扩展数字或复合 ID 后缀误捕获（如 INV-1 误命中 INV-10/11/12，或 comp_INV-1_xxx 中后置下划线）。
+#
+# comp_INV-1_xxx 复合 ID 的引用语义（契约明确，严禁靠猜）：
+#   comp_{cid}_{hash} 属于证据图规约（claim clustering / reduction）生成的 FoldedComponent
+#   组件级标识符，用于独立性审计（global_contribution_cap 约束）。
+#   其内部携带的前缀 {cid} 仅代表该拓扑分量中按字典序排序的首个遍历节点，并不构成对 claim {cid}
+#   本身的采纳、驳回或'证据充分'性质评。
+#   裁决自洽检查（consistency gate）核验的是经理对单一原子 claim 的证据核验裁定，因此复合组件 ID
+#   严禁被识别为原子 claim 的正文引用。Token 边界前后约束严格将 comp_INV-1_xxx 排除在
+#   INV-1 的匹配范围之外。
+
+
+def build_claim_id_token_pattern(cid: str) -> str:
+    """构建带严格 token 边界的 claim_id 正则子模式 (DAV-1106).
+
+    前后均带边界约束：
+      前向 (?<![A-Za-z0-9_-])：防止命中复合前缀（如 comp_INV-1）
+      后向 (?![A-Za-z0-9_-])：防止命中数字前缀（如 INV-1 命中 INV-10/11）及复合后缀（如 INV-1_xxx）
+    """
+    clean_cid = str(cid or "").strip()
+    if not clean_cid:
+        return ""
+    return rf"(?<![A-Za-z0-9_-]){re.escape(clean_cid)}(?![A-Za-z0-9_-])"
+
+
+def build_claim_evidence_sufficient_pattern(cid: str) -> re.Pattern:
+    """构建检测正文将 claim 标注为'证据充分'的正则模式 (DAV-1106).
+
+    匹配格式：
+      1. <claim_id>[^\\n。；]*?证据充分
+      2. 证据充分[^\\n。；]*?<claim_id>
+    两分支中 claim_id 均具备完整 token 边界。
+    """
+    token_pat = build_claim_id_token_pattern(cid)
+    if not token_pat:
+        return re.compile(r"(?!)")
+    return re.compile(
+        rf"{token_pat}[^\n。；]*?证据充分|证据充分[^\n。；]*?{token_pat}",
+        re.IGNORECASE,
+    )
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -2156,10 +2205,7 @@ def extract_and_validate_manager_verdict(
             cov = s.get("coverage", 0.0)
             dec = s.get("decision")
             if dec != DECISION_ADOPT or cov < 1.0:
-                pattern = re.compile(
-                    rf"{re.escape(cid)}[^\n。；]*?证据充分|证据充分[^\n。；]*?{re.escape(cid)}",
-                    re.IGNORECASE,
-                )
+                pattern = build_claim_evidence_sufficient_pattern(cid)
                 for line in prose.splitlines():
                     if pattern.search(line):
                         if not re.search(r"非[^\n]*?证据充分|不[^\n]*?证据充分|未[^\n]*?证据充分|不能[^\n]*?证据充分", line):

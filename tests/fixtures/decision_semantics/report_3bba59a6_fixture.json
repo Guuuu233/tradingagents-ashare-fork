@@ -1,0 +1,1064 @@
+{
+  "report_id": "3bba59a64fdf4facbac1ef3548904e07",
+  "symbol": "688981.SH",
+  "trade_date": "2026-08-20",
+  "raw_response": "### 一、 各分析师 Verdict 全景概览与证据贡献状态\n\n依据短线（1-2周，技术面主导）视角，七位分析师独立审查结果如下：\n1. **宏观板块分析师**：偏空。美债利率 4.69% 压制科技成长估值，费芯指数月跌 -4.50%。证据贡献状态：属于全局唯一折叠组件 `comp_INV-1_1b1fb8aa1297`，独立性状态为 UNKNOWN，按规则上限约束贡献。\n2. **市场（技术面）分析师**：偏空。跌破 10日 EMA（129.74）与布林中轨（129.25），MACD 零轴下方死叉。证据贡献状态：折叠于组件 `comp_INV-1_1b1fb8aa1297`，独立性 UNKNOWN。\n3. **舆情（情绪）分析师**：中性。社交数据状态为 `not_applicable`，短线情绪回归技术与资金面。证据贡献状态：无独立方向贡献，独立性 UNKNOWN。\n4. **新闻分析师**：偏空。同行盛合晶微中报现金流承压暴跌 9.23%，两融与南向资金抢跑流出。证据贡献状态：折叠于组件 `comp_INV-1_1b1fb8aa1297`，独立性 UNKNOWN。\n5. **基本面分析师**：偏空。2026Q1 营业成本占比 91.05%，净利率降至 9.05%，巨额折旧压制短线利润表。证据贡献状态：折叠于组件 `comp_INV-1_1b1fb8aa1297`，独立性 UNKNOWN。\n6. **主力资金分析师**：偏空。主力大单净流出 -2.63 亿元，碎单逆向接盘，微观筹码离散化。证据贡献状态：折叠于组件 `comp_INV-1_1b1fb8aa1297`，独立性 UNKNOWN。\n7. **量价分析师**：偏空。08-19 放量中阴破位后，08-20 缩量至 4013 万股且收于日内低位 0.16，呈现典型的无需求阴跌（No Demand Fall）。证据贡献状态：折叠于组件 `comp_INV-1_1b1fb8aa1297`，独立性 UNKNOWN。\n\n---\n\n### 二、 多空辩论深度裁决与证据评定\n\n#### 1. 证据链完整性审查与传导路径验证\n- **核验与采纳判定**：\n  - **INV-3（空头）**：覆盖率 100.0%，标注为【证据充分】，予以采纳（adopted）。核验证实：收盘 125.50 元跌破 10日 EMA 与 VWMA（127.46 元），大单同向流出 2.63 亿元，微观呈现大单撤离、中小单接盘的离散化。\n  - **INV-2 / INV-6 / INV-10（多头基本面）**：覆盖率 100.0%，标注为【证据充分】，予以采纳。核验证实产能利用率 93.7%、货币资金 556.10 亿元。但**传导路径验证**显示：晶圆代工提价至毛利修复存在 1-2 个季度的财务结算时滞，在短线 1-2 周观察窗内，该利好无法对冲折旧峰值与资金抢跑避险压力。\n  - **INV-4 / INV-7 / INV-9**：覆盖率 66.7%，标注为【部分支持】。仅采纳净利率跌至 9.05%、单日融资偿还 2.3 亿元等已核验子结论；未核验的赔率测算与无依据成本假设予以剔除（excluded）。\n  - **INV-1 / INV-5 / INV-11**：覆盖率 33.3%-50.0%，标注为【不支持】，坚决驳回。\n  - **INV-8（空头）**：因原油推升成本的敏感性测算存在矛盾假设，标注为【矛盾/不可用】，坚决驳回。\n\n#### 2. 焦点分歧裁决\n- **核心焦点**：8 月 20 日缩量 40%（4013 万股）是“卖压衰竭”还是“买盘枯竭”？\n  - **裁决**：**空头胜**。虽然多头主张地量代表空方筹码耗尽，但量价硬数据显示：价格收于日内极低位（0.16），且全天运行在 VWMA（127.46 元）下方。根据威科夫供求理论，缺乏买盘高峰（放量长下影）托底的地量下行，实质是场外主动买盘承接真空（No Demand），而非反转信号。\n- **裁定结论**：**空头胜**。\n\n#### 3. 双方共同盲点\n多空双方均过度聚焦 8 月 27 日中报博弈，却忽视了 8 月 19-20 日科创50权重龙头（寒武纪破千元、海光信息破位）形成的指数级被动平仓流动性挤压，短线面临系统性被动去杠杆风险。\n\n---\n\n### 三、 分歧地图与极端情景测试\n\n#### 1. 分歧地图 (Dispute Map)\n- **数据点**：8 月 20 日成交量缩至 4013 万股收跌 -2.0%。\n  - **多头解读**：抛压衰竭，依托 200日线（122.90 元）构筑高胜率买点。\n  - **空头解读**：场外资金拒绝接盘（No Demand），筹码离散化加速下行。\n  - **证据裁决**：收盘位置 0.16 且失守 VWMA，确认买盘真空，空方逻辑成立。胜出方：**空头**。\n\n#### 2. 极端情景测试与风险收益比\n- **极端下行推演**：若中报前避险加剧、击穿 200日 SMA（122.90 元），短线将加速下探布林下轨与前低 **115.00 - 116.00 元**（潜在下行空间 **-7.57% 至 -8.37%**）。\n- **反弹空间测算**：上方 127.50（VWMA）与 129.50-130.00（10日 EMA 复合阻力）压制明显，反抽空间仅 **+1.59% 至 +3.58%**。\n- **风险收益比**：倒挂至 **2.3 : 1**，短线做多赔率极差。\n\n---\n\n### 四、 投资方案与交易指令\n\n- **投资决策**：**偏空（防守观望 / 减仓）**\n- **建议仓位**：**0% - 10%**（严格控制在 10% 上限以内，多头头寸逢反抽离场）。\n- **入场/减仓区间**：盘中反抽 **127.50 - 129.50 元** 区域果断逢高减仓。\n- **止损位（空头防守 / 多头止损）**：多头硬性止损位设为 **122.90 元**（跌破 200日均线无条件离场，下行缓冲仅 -2.07%）；空头逻辑失效离场点设为放量站稳 **130.50 元**（涨幅约 +3.98%）。\n- **逻辑失效条件**：单日成交量放大至 7000 万股以上且大单连续净流入超 2.5 亿元收复 10日 EMA。\n\n<!-- MANAGER_VERDICT: {\"winner\": \"bear\", \"direction\": \"偏空\", \"reason\": \"无需求缩量阴跌破位VWMA，筹码离散且短期赔率倒挂\", \"position_pct\": 10, \"entry\": \"127.50-129.50逢反抽减仓\", \"target\": \"116.00\", \"stop_loss\": \"122.90\", \"upside\": 3.58, \"downside\": 7.57, \"odds\": 0.47, \"adopted_claim_ids\": [\"INV-2\", \"INV-3\", \"INV-6\", \"INV-10\"], \"partially_adopted_claims\": [\"INV-4\", \"INV-7\", \"INV-9\"], \"rejected_claim_ids\": [\"INV-1\", \"INV-5\", \"INV-8\", \"INV-11\"], \"excluded_evidence\": [\"当前PB高达6.70倍且PE近200倍成本上涨5%即压降毛利率4.55个百分点\", \"现价距反弹阻力仅+1.6%至+3.2%而破位年线至115元下行空间达-8.4%\", \"大单净流出仅占流通市值-0.105%未现恐慌踩踏\", \"原油大涨推升成本敏感性测算成本涨5%税前利润降45.5%\"], \"dispute_map\": [{\"data_point\": \"8月20日缩量40%收于125.50元\", \"bull_interpretation\": \"地量印证卖压衰竭构筑支撑\", \"bear_interpretation\": \"收于低位0.16且破位VWMA属无需求阴跌\", \"evidence_decision\": \"量价指标未现放量长下影，买盘真空确立\", \"winner\": \"bear\"}]} -->\n<!-- VERDICT: {\"direction\": \"偏空\", \"reason\": \"缩量阴跌失守均线与VWMA，筹码离散承接乏力\"} -->",
+  "claims": [
+    {
+      "claim_id": "INV-1",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "200日线叠加地量卖压衰竭，短线具高赔率反弹条件",
+      "evidence": [
+        "收盘125.50元距200日SMA仅2.07%",
+        "8月20日成交量骤降至4013万股量比0.7",
+        "主力大单流出仅占流通盘0.105%"
+      ],
+      "confidence": 0.73,
+      "status": "unresolved",
+      "target_claim_ids": [],
+      "round_index": 1,
+      "debate_round": 1,
+      "message_index": 1,
+      "stage": "opening",
+      "cluster_id": "cluster_price_shock_efa89372db41",
+      "evidence_ids": [
+        "ev_0eeb584f54_1",
+        "ev_a3f69ce0cd_2",
+        "ev_8fd69c922c_3"
+      ],
+      "verified_evidence": [
+        "8月20日成交量骤降至4013万股量比0.7"
+      ],
+      "verified_evidence_ids": [
+        "ev_a3f69ce0cd_1"
+      ],
+      "cluster_type": "price_shock",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-2",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "产能利用率93.7%与提价共振构筑中报预期差",
+      "evidence": [
+        "中芯国际产能利用率93.7%且三星意法密集提价",
+        "2026Q1经营现金流大幅转正至51.32亿元",
+        "货币资金储备高达556.10亿元"
+      ],
+      "confidence": 0.71,
+      "status": "unresolved",
+      "target_claim_ids": [],
+      "round_index": 1,
+      "debate_round": 1,
+      "message_index": 1,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_4edf284918_1",
+        "ev_2b1548887f_2",
+        "ev_2c6a03a0eb_3"
+      ],
+      "verified_evidence": [
+        "中芯国际产能利用率93.7%且三星意法密集提价",
+        "2026Q1经营现金流大幅转正至51.32亿元",
+        "货币资金储备高达556.10亿元"
+      ],
+      "verified_evidence_ids": [
+        "ev_4edf284918_1",
+        "ev_2b1548887f_2",
+        "ev_2c6a03a0eb_3"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-3",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "无需求缩量阴跌失守均线，200日线面临破位加速风险",
+      "evidence": [
+        "量价报告显示8月20日成交骤降至4013万股收于日内低位0.16属无需求阴跌",
+        "多源大单同向净流出超2.6亿元且中小单散户被动接盘",
+        "技术报告现价125.50元跌破10日EMA129.74及VWMA127.46"
+      ],
+      "confidence": 0.73,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-1"
+      ],
+      "round_index": 2,
+      "debate_round": 1,
+      "message_index": 2,
+      "stage": "opening",
+      "cluster_id": "cluster_price_shock_efa89372db41",
+      "evidence_ids": [
+        "ev_389750306a_1",
+        "ev_093f3c9581_2",
+        "ev_17a18eb8dc_3"
+      ],
+      "verified_evidence": [
+        "量价报告显示8月20日成交骤降至4013万股收于日内低位0.16属无需求阴跌",
+        "多源大单同向净流出超2.6亿元且中小单散户被动接盘",
+        "技术报告现价125.50元跌破10日EMA129.74及VWMA127.46"
+      ],
+      "verified_evidence_ids": [
+        "ev_389750306a_1",
+        "ev_093f3c9581_2",
+        "ev_17a18eb8dc_3"
+      ],
+      "cluster_type": "price_shock",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-4",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "增收不增利叠加高额折旧吞噬利润，6.7倍PB面临中报杀估值",
+      "evidence": [
+        "基本面报告2026Q1净利率从14.24%腰斩至9.05%且自由现金流-66.21亿元",
+        "单日融资净偿还2.3亿元且港股南向净流出3.5亿港元资金提前避险抢跑",
+        "当前PB高达6.70倍且PE近200倍成本上涨5%即压降毛利率4.55个百分点"
+      ],
+      "confidence": 0.72,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-2"
+      ],
+      "round_index": 2,
+      "debate_round": 1,
+      "message_index": 2,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_148481fd9b_1",
+        "ev_0dde5e8df9_2",
+        "ev_494e45126a_3"
+      ],
+      "verified_evidence": [
+        "基本面报告2026Q1净利率从14.24%腰斩至9.05%且自由现金流-66.21亿元",
+        "单日融资净偿还2.3亿元且港股南向净流出3.5亿港元资金提前避险抢跑"
+      ],
+      "verified_evidence_ids": [
+        "ev_148481fd9b_1",
+        "ev_0dde5e8df9_2"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-5",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "地量阴跌印证卖压衰竭，200日线上方具1比3.4高胜率赔率",
+      "evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭",
+        "现价125.50距200日SMA仅2.07%且大单流出仅占流通盘0.105%"
+      ],
+      "confidence": 0.74,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-3"
+      ],
+      "round_index": 3,
+      "debate_round": 2,
+      "message_index": 3,
+      "stage": "opening",
+      "cluster_id": "cluster_price_shock_efa89372db41",
+      "evidence_ids": [
+        "ev_cdc4dd20e7_1",
+        "ev_ff45dff7f1_2"
+      ],
+      "verified_evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭"
+      ],
+      "verified_evidence_ids": [
+        "ev_cdc4dd20e7_1"
+      ],
+      "cluster_type": "price_shock",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-6",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "93.7%高稼动率摊薄折旧，556亿现金与提价共振确立财报反转",
+      "evidence": [
+        "基本面报告2026Q1经营现金流+51.32亿且货币资金高达556.10亿元",
+        "宏观与新闻报告产能利用率达93.7%且全行业代工提价10-25%"
+      ],
+      "confidence": 0.72,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-4"
+      ],
+      "round_index": 3,
+      "debate_round": 2,
+      "message_index": 3,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_a8aac2726a_1",
+        "ev_7ab011dc6e_2"
+      ],
+      "verified_evidence": [
+        "基本面报告2026Q1经营现金流+51.32亿且货币资金高达556.10亿元",
+        "宏观与新闻报告产能利用率达93.7%且全行业代工提价10-25%"
+      ],
+      "verified_evidence_ids": [
+        "ev_a8aac2726a_1",
+        "ev_7ab011dc6e_2"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-7",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "地量阴跌破位VWMA非卖压衰竭，年线支撑脆弱且赔率严重倒挂",
+      "evidence": [
+        "量价报告收盘125.50元处于低位0.16且量比0.7属无需求阴跌",
+        "多源大单净流出超2.6亿元且中小单散户接盘筹码离散化",
+        "现价距反弹阻力仅+1.6%至+3.2%而破位年线至115元下行空间达-8.4%"
+      ],
+      "confidence": 0.74,
+      "status": "addressed",
+      "target_claim_ids": [
+        "INV-5"
+      ],
+      "round_index": 4,
+      "debate_round": 2,
+      "message_index": 4,
+      "stage": "opening",
+      "cluster_id": "cluster_price_shock_efa89372db41",
+      "evidence_ids": [
+        "ev_46fc6c58af_1",
+        "ev_4607212ba8_2",
+        "ev_78817086f7_3"
+      ],
+      "verified_evidence": [
+        "量价报告收盘125.50元处于低位0.16且量比0.7属无需求阴跌",
+        "多源大单净流出超2.6亿元且中小单散户接盘筹码离散化"
+      ],
+      "verified_evidence_ids": [
+        "ev_46fc6c58af_1",
+        "ev_4607212ba8_2"
+      ],
+      "cluster_type": "price_shock",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-8",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "巨额折旧与大宗通胀吞噬利润，6.7倍PB高估值面临业绩杀跌",
+      "evidence": [
+        "基本面报告2026Q1净利率跌至9.05%且自由现金流-66.21亿元",
+        "原油大涨推升成本敏感性测算成本涨5%税前利润降45.5%",
+        "财报前单日融资净偿还2.3亿且港股南向净流出3.5亿港元资金加速抢跑"
+      ],
+      "confidence": 0.73,
+      "status": "addressed",
+      "target_claim_ids": [
+        "INV-6"
+      ],
+      "round_index": 4,
+      "debate_round": 2,
+      "message_index": 4,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_fc2c834d9e_1",
+        "ev_f09379894a_2",
+        "ev_226a749860_3"
+      ],
+      "verified_evidence": [
+        "基本面报告2026Q1净利率跌至9.05%且自由现金流-66.21亿元",
+        "财报前单日融资净偿还2.3亿且港股南向净流出3.5亿港元资金加速抢跑"
+      ],
+      "verified_evidence_ids": [
+        "ev_fc2c834d9e_1",
+        "ev_226a749860_2"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-9",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "地量阴跌现卖压衰竭，年线上方具1比3.4高赔率",
+      "evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭候选",
+        "现价125.50元距200日线122.90元仅2.07%试错成本低",
+        "大单净流出仅占流通市值-0.105%未现恐慌踩踏"
+      ],
+      "confidence": 0.73,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-7"
+      ],
+      "round_index": 5,
+      "debate_round": 3,
+      "message_index": 5,
+      "stage": "opening",
+      "cluster_id": "cluster_price_shock_efa89372db41",
+      "evidence_ids": [
+        "ev_09e9073711_1",
+        "ev_35cd00fd0f_2",
+        "ev_33b6c9278a_3"
+      ],
+      "verified_evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭候选",
+        "现价125.50元距200日线122.90元仅2.07%试错成本低"
+      ],
+      "verified_evidence_ids": [
+        "ev_09e9073711_1",
+        "ev_35cd00fd0f_2"
+      ],
+      "cluster_type": "price_shock",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-10",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "93.7%稼动率与代工提价共振，充沛现金夯实业绩底座",
+      "evidence": [
+        "宏观及新闻报告显示产能利用率93.7%且全行业密集提价10-25%",
+        "基本面报告2026Q1经营现金流大幅回正至+51.32亿元",
+        "货币资金储备达556.10亿元提供极强反脆弱安全垫"
+      ],
+      "confidence": 0.71,
+      "status": "unresolved",
+      "target_claim_ids": [
+        "INV-8"
+      ],
+      "round_index": 5,
+      "debate_round": 3,
+      "message_index": 5,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_dc91aaa545_1",
+        "ev_33e04b05e0_2",
+        "ev_a9050da0ac_3"
+      ],
+      "verified_evidence": [
+        "宏观及新闻报告显示产能利用率93.7%且全行业密集提价10-25%",
+        "基本面报告2026Q1经营现金流大幅回正至+51.32亿元",
+        "货币资金储备达556.10亿元提供极强反脆弱安全垫"
+      ],
+      "verified_evidence_ids": [
+        "ev_dc91aaa545_1",
+        "ev_33e04b05e0_2",
+        "ev_a9050da0ac_3"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    },
+    {
+      "claim_id": "INV-11",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "存货271亿创历史新高叠加筹资依赖，增收不增利击穿6.7倍PB泡沫",
+      "evidence": [
+        "基本面报告显示2026Q1存货达271.42亿元创历史新高较2024年末增27.62%",
+        "2026Q1自由现金流为-66.21亿元且现金储备增加全赖外部筹资+160.44亿元",
+        "综合成本上涨5%即压降毛利4.55个百分点且税前利润下滑45.5%"
+      ],
+      "confidence": 0.73,
+      "status": "open",
+      "target_claim_ids": [
+        "INV-9",
+        "INV-10"
+      ],
+      "round_index": 6,
+      "debate_round": 3,
+      "message_index": 6,
+      "stage": "opening",
+      "cluster_id": "cluster_fundamentals_309efc82490d",
+      "evidence_ids": [
+        "ev_cf2cce4fe7_1",
+        "ev_3a4df579f2_2",
+        "ev_48d13c5c05_3"
+      ],
+      "verified_evidence": [
+        "基本面报告显示2026Q1存货达271.42亿元创历史新高较2024年末增27.62%"
+      ],
+      "verified_evidence_ids": [
+        "ev_cf2cce4fe7_1"
+      ],
+      "cluster_type": "fundamentals",
+      "cluster_status": "clustered"
+    }
+  ],
+  "claims_verification": [
+    {
+      "raw": "收盘125.50元距200日SMA仅2.07%",
+      "claim_id": "INV-1",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "8月20日成交量骤降至4013万股量比0.7",
+      "claim_id": "INV-1",
+      "matched_role": "volume_price_report",
+      "matched_source": "volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 volume_price_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "主力大单流出仅占流通盘0.105%",
+      "claim_id": "INV-1",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "中芯国际产能利用率93.7%且三星意法密集提价",
+      "claim_id": "INV-2",
+      "matched_role": "macro_report",
+      "matched_source": "macro",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 macro_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "2026Q1经营现金流大幅转正至51.32亿元",
+      "claim_id": "INV-2",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "货币资金储备高达556.10亿元",
+      "claim_id": "INV-2",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "量价报告显示8月20日成交骤降至4013万股收于日内低位0.16属无需求阴跌",
+      "claim_id": "INV-3",
+      "matched_role": "volume_price_report",
+      "matched_source": "volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 volume_price_report 中通过多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "多源大单同向净流出超2.6亿元且中小单散户被动接盘",
+      "claim_id": "INV-3",
+      "matched_role": "smart_money_report",
+      "matched_source": "smart_money",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 smart_money_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "技术报告现价125.50元跌破10日EMA129.74及VWMA127.46",
+      "claim_id": "INV-3",
+      "matched_role": "smart_money_report",
+      "matched_source": "smart_money",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 smart_money_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "基本面报告2026Q1净利率从14.24%腰斩至9.05%且自由现金流-66.21亿元",
+      "claim_id": "INV-4",
+      "matched_role": "macro_report,fundamentals_report",
+      "matched_source": "macro,fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 macro_report,fundamentals_report 中跨报告多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "单日融资净偿还2.3亿元且港股南向净流出3.5亿港元资金提前避险抢跑",
+      "claim_id": "INV-4",
+      "matched_role": "news_report",
+      "matched_source": "news",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 news_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "当前PB高达6.70倍且PE近200倍成本上涨5%即压降毛利率4.55个百分点",
+      "claim_id": "INV-4",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭",
+      "claim_id": "INV-5",
+      "matched_role": "volume_price_report",
+      "matched_source": "volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 volume_price_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "现价125.50距200日SMA仅2.07%且大单流出仅占流通盘0.105%",
+      "claim_id": "INV-5",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "基本面报告2026Q1经营现金流+51.32亿且货币资金高达556.10亿元",
+      "claim_id": "INV-6",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中通过多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "宏观与新闻报告产能利用率达93.7%且全行业代工提价10-25%",
+      "claim_id": "INV-6",
+      "matched_role": "macro_report",
+      "matched_source": "macro",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 macro_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "量价报告收盘125.50元处于低位0.16且量比0.7属无需求阴跌",
+      "claim_id": "INV-7",
+      "matched_role": "volume_price_report",
+      "matched_source": "volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 volume_price_report 中通过多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "多源大单净流出超2.6亿元且中小单散户接盘筹码离散化",
+      "claim_id": "INV-7",
+      "matched_role": "smart_money_report",
+      "matched_source": "smart_money",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 smart_money_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "现价距反弹阻力仅+1.6%至+3.2%而破位年线至115元下行空间达-8.4%",
+      "claim_id": "INV-7",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "基本面报告2026Q1净利率跌至9.05%且自由现金流-66.21亿元",
+      "claim_id": "INV-8",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中通过多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "原油大涨推升成本敏感性测算成本涨5%税前利润降45.5%",
+      "claim_id": "INV-8",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "contradicted",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中指标 '成本' 数据冲突: 证据声称 5%，报告记录为 11.42%"
+    },
+    {
+      "raw": "财报前单日融资净偿还2.3亿且港股南向净流出3.5亿港元资金加速抢跑",
+      "claim_id": "INV-8",
+      "matched_role": "news_report",
+      "matched_source": "news",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 news_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭候选",
+      "claim_id": "INV-9",
+      "matched_role": "volume_price_report",
+      "matched_source": "volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 volume_price_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "现价125.50元距200日线122.90元仅2.07%试错成本低",
+      "claim_id": "INV-9",
+      "matched_role": "market_report,news_report,fundamentals_report,smart_money_report,volume_price_report",
+      "matched_source": "market,news,fundamentals,smart_money,volume_price",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 market_report,news_report,fundamentals_report,smart_money_report,volume_price_report 中跨报告多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "大单净流出仅占流通市值-0.105%未现恐慌踩踏",
+      "claim_id": "INV-9",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "宏观及新闻报告显示产能利用率93.7%且全行业密集提价10-25%",
+      "claim_id": "INV-10",
+      "matched_role": "macro_report",
+      "matched_source": "macro",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 macro_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "基本面报告2026Q1经营现金流大幅回正至+51.32亿元",
+      "claim_id": "INV-10",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "货币资金储备达556.10亿元提供极强反脆弱安全垫",
+      "claim_id": "INV-10",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中验证数值与关键词匹配"
+    },
+    {
+      "raw": "基本面报告显示2026Q1存货达271.42亿元创历史新高较2024年末增27.62%",
+      "claim_id": "INV-11",
+      "matched_role": "fundamentals_report",
+      "matched_source": "fundamentals",
+      "status": "verified",
+      "is_fatal": false,
+      "details": "在 fundamentals_report 中通过多行聚合验证数值与关键词匹配 (multi_line_match)"
+    },
+    {
+      "raw": "2026Q1自由现金流为-66.21亿元且现金储备增加全赖外部筹资+160.44亿元",
+      "claim_id": "INV-11",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    },
+    {
+      "raw": "综合成本上涨5%即压降毛利4.55个百分点且税前利润下滑45.5%",
+      "claim_id": "INV-11",
+      "matched_role": null,
+      "matched_source": null,
+      "status": "unsupported",
+      "is_fatal": false,
+      "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+    }
+  ],
+  "claim_evidence_summary": {
+    "INV-1": {
+      "claim_id": "INV-1",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "200日线叠加地量卖压衰竭，短线具高赔率反弹条件",
+      "counts": {
+        "total": 3,
+        "verified": 1,
+        "unsupported": 2,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.3333333333333333,
+      "decision": "reject",
+      "reason": "证据覆盖率不足 (verified 1/3, coverage=33.3% < 67%)，予以驳回/降权",
+      "verified_evidence": [
+        "8月20日成交量骤降至4013万股量比0.7"
+      ],
+      "unsupported_evidence": [
+        "收盘125.50元距200日SMA仅2.07%",
+        "主力大单流出仅占流通盘0.105%"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "收盘125.50元距200日SMA仅2.07%",
+        "主力大单流出仅占流通盘0.105%"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-2": {
+      "claim_id": "INV-2",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "产能利用率93.7%与提价共振构筑中报预期差",
+      "counts": {
+        "total": 3,
+        "verified": 3,
+        "unsupported": 0,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 1.0,
+      "decision": "adopt",
+      "reason": "全部证据核验通过 (verified 3/3, coverage=100.0%)",
+      "verified_evidence": [
+        "中芯国际产能利用率93.7%且三星意法密集提价",
+        "2026Q1经营现金流大幅转正至51.32亿元",
+        "货币资金储备高达556.10亿元"
+      ],
+      "unsupported_evidence": [],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-3": {
+      "claim_id": "INV-3",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "无需求缩量阴跌失守均线，200日线面临破位加速风险",
+      "counts": {
+        "total": 3,
+        "verified": 3,
+        "unsupported": 0,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 1.0,
+      "decision": "adopt",
+      "reason": "全部证据核验通过 (verified 3/3, coverage=100.0%)",
+      "verified_evidence": [
+        "量价报告显示8月20日成交骤降至4013万股收于日内低位0.16属无需求阴跌",
+        "多源大单同向净流出超2.6亿元且中小单散户被动接盘",
+        "技术报告现价125.50元跌破10日EMA129.74及VWMA127.46"
+      ],
+      "unsupported_evidence": [],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-4": {
+      "claim_id": "INV-4",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "增收不增利叠加高额折旧吞噬利润，6.7倍PB面临中报杀估值",
+      "counts": {
+        "total": 3,
+        "verified": 2,
+        "unsupported": 1,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.6666666666666666,
+      "decision": "partial",
+      "reason": "混合证据部分通过核验 (verified 2/3, coverage=66.7%)，仅可采纳 verified 子结论并剔除未验证项",
+      "verified_evidence": [
+        "基本面报告2026Q1净利率从14.24%腰斩至9.05%且自由现金流-66.21亿元",
+        "单日融资净偿还2.3亿元且港股南向净流出3.5亿港元资金提前避险抢跑"
+      ],
+      "unsupported_evidence": [
+        "当前PB高达6.70倍且PE近200倍成本上涨5%即压降毛利率4.55个百分点"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "当前PB高达6.70倍且PE近200倍成本上涨5%即压降毛利率4.55个百分点"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-5": {
+      "claim_id": "INV-5",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "地量阴跌印证卖压衰竭，200日线上方具1比3.4高胜率赔率",
+      "counts": {
+        "total": 2,
+        "verified": 1,
+        "unsupported": 1,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.5,
+      "decision": "reject",
+      "reason": "证据覆盖率不足 (verified 1/2, coverage=50.0% < 67%)，予以驳回/降权",
+      "verified_evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭"
+      ],
+      "unsupported_evidence": [
+        "现价125.50距200日SMA仅2.07%且大单流出仅占流通盘0.105%"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "现价125.50距200日SMA仅2.07%且大单流出仅占流通盘0.105%"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-6": {
+      "claim_id": "INV-6",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "93.7%高稼动率摊薄折旧，556亿现金与提价共振确立财报反转",
+      "counts": {
+        "total": 2,
+        "verified": 2,
+        "unsupported": 0,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 1.0,
+      "decision": "adopt",
+      "reason": "全部证据核验通过 (verified 2/2, coverage=100.0%)",
+      "verified_evidence": [
+        "基本面报告2026Q1经营现金流+51.32亿且货币资金高达556.10亿元",
+        "宏观与新闻报告产能利用率达93.7%且全行业代工提价10-25%"
+      ],
+      "unsupported_evidence": [],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-7": {
+      "claim_id": "INV-7",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "地量阴跌破位VWMA非卖压衰竭，年线支撑脆弱且赔率严重倒挂",
+      "counts": {
+        "total": 3,
+        "verified": 2,
+        "unsupported": 1,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.6666666666666666,
+      "decision": "partial",
+      "reason": "混合证据部分通过核验 (verified 2/3, coverage=66.7%)，仅可采纳 verified 子结论并剔除未验证项",
+      "verified_evidence": [
+        "量价报告收盘125.50元处于低位0.16且量比0.7属无需求阴跌",
+        "多源大单净流出超2.6亿元且中小单散户接盘筹码离散化"
+      ],
+      "unsupported_evidence": [
+        "现价距反弹阻力仅+1.6%至+3.2%而破位年线至115元下行空间达-8.4%"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "现价距反弹阻力仅+1.6%至+3.2%而破位年线至115元下行空间达-8.4%"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-8": {
+      "claim_id": "INV-8",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "巨额折旧与大宗通胀吞噬利润，6.7倍PB高估值面临业绩杀跌",
+      "counts": {
+        "total": 3,
+        "verified": 2,
+        "unsupported": 0,
+        "contradicted": 1,
+        "source_unavailable": 0
+      },
+      "coverage": 0.6666666666666666,
+      "decision": "reject",
+      "reason": "存在 1 条与报告事实冲突/前视偏差证据 (contradicted)",
+      "verified_evidence": [
+        "基本面报告2026Q1净利率跌至9.05%且自由现金流-66.21亿元",
+        "财报前单日融资净偿还2.3亿且港股南向净流出3.5亿港元资金加速抢跑"
+      ],
+      "unsupported_evidence": [],
+      "contradicted_evidence": [
+        "原油大涨推升成本敏感性测算成本涨5%税前利润降45.5%"
+      ],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "原油大涨推升成本敏感性测算成本涨5%税前利润降45.5%"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-9": {
+      "claim_id": "INV-9",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "地量阴跌现卖压衰竭，年线上方具1比3.4高赔率",
+      "counts": {
+        "total": 3,
+        "verified": 2,
+        "unsupported": 1,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.6666666666666666,
+      "decision": "partial",
+      "reason": "混合证据部分通过核验 (verified 2/3, coverage=66.7%)，仅可采纳 verified 子结论并剔除未验证项",
+      "verified_evidence": [
+        "量价报告8月20日成交骤降至4013万股量比0.7属卖压衰竭候选",
+        "现价125.50元距200日线122.90元仅2.07%试错成本低"
+      ],
+      "unsupported_evidence": [
+        "大单净流出仅占流通市值-0.105%未现恐慌踩踏"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "大单净流出仅占流通市值-0.105%未现恐慌踩踏"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-10": {
+      "claim_id": "INV-10",
+      "speaker": "Bull Analyst",
+      "speaker_key": "Bull",
+      "stance": "bullish",
+      "claim": "93.7%稼动率与代工提价共振，充沛现金夯实业绩底座",
+      "counts": {
+        "total": 3,
+        "verified": 3,
+        "unsupported": 0,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 1.0,
+      "decision": "adopt",
+      "reason": "全部证据核验通过 (verified 3/3, coverage=100.0%)",
+      "verified_evidence": [
+        "宏观及新闻报告显示产能利用率93.7%且全行业密集提价10-25%",
+        "基本面报告2026Q1经营现金流大幅回正至+51.32亿元",
+        "货币资金储备达556.10亿元提供极强反脆弱安全垫"
+      ],
+      "unsupported_evidence": [],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    },
+    "INV-11": {
+      "claim_id": "INV-11",
+      "speaker": "Bear Analyst",
+      "speaker_key": "Bear",
+      "stance": "bearish",
+      "claim": "存货271亿创历史新高叠加筹资依赖，增收不增利击穿6.7倍PB泡沫",
+      "counts": {
+        "total": 3,
+        "verified": 1,
+        "unsupported": 2,
+        "contradicted": 0,
+        "source_unavailable": 0
+      },
+      "coverage": 0.3333333333333333,
+      "decision": "reject",
+      "reason": "证据覆盖率不足 (verified 1/3, coverage=33.3% < 67%)，予以驳回/降权",
+      "verified_evidence": [
+        "基本面报告显示2026Q1存货达271.42亿元创历史新高较2024年末增27.62%"
+      ],
+      "unsupported_evidence": [
+        "2026Q1自由现金流为-66.21亿元且现金储备增加全赖外部筹资+160.44亿元",
+        "综合成本上涨5%即压降毛利4.55个百分点且税前利润下滑45.5%"
+      ],
+      "contradicted_evidence": [],
+      "source_unavailable_evidence": [],
+      "excluded_evidence": [
+        "2026Q1自由现金流为-66.21亿元且现金储备增加全赖外部筹资+160.44亿元",
+        "综合成本上涨5%即压降毛利4.55个百分点且税前利润下滑45.5%"
+      ],
+      "is_observation_or_hypothesis": false,
+      "applicability": null,
+      "invalidation_conditions": [],
+      "pit_failed": false,
+      "is_fatal": false
+    }
+  },
+  "market_data_context": {
+    "symbol": null,
+    "trade_date": null,
+    "analysis_baseline_date": "2026-08-20",
+    "data_as_of": null,
+    "data_source_provenance": null,
+    "daily": {
+      "as_of": "2026-08-20",
+      "completeness": "completed"
+    }
+  }
+}
