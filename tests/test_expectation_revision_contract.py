@@ -2407,3 +2407,92 @@ def test_dav1080_claim_id_same_clause_own_voice_flagged():
             verdict, text, _dav1071_gap_revs(), claims=claims
         )
         assert not any("已定价" in v for v in viols), f"ID 引用误报: {text!r} -> {viols}"
+
+
+# ==============================================================================
+# DAV-1110：E-04 条件作用域修复（并列合取从句「若A，且B…」豁免与后果从句拦截）
+# ==============================================================================
+
+def test_dav1110_conjunction_conditional_scope_exemption():
+    """DAV-1110 regression fixture：以 a2a7f1e0 真实文本验证并列合取条件从句豁免。"""
+    verdict = {"direction": "偏空", "winner": "bear", "reason": "大单持续净流出且均线承压反转未确认"}
+    gap_exp = _dav1071_gap_revs()
+
+    # 1. 真实 fixture：a2a7f1e0 极端情景测试段
+    real_text = (
+        "若美债利率持续突破 4.8%，且 8 月 27 日中报披露折旧超预期侵蚀扣非净利，"
+        "杠杆盘（当前仍有114.2亿两融）与短线散户可能引发多杀多。"
+    )
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, real_text, gap_exp
+    )
+    assert is_valid, f"a2a7f1e0 真实条件从句被误拦: {viols}"
+    assert not any("预期" in v for v in viols)
+
+    # 2. 中文多重并列合取：若A，且B，并且C超预期
+    multi_conj_text = "如果外围市场大跌，且大宗商品反弹，并且三季报业绩超预期，则维持仓位观察"
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, multi_conj_text, gap_exp
+    )
+    assert is_valid, f"多重合取条件句误拦: {viols}"
+
+    # 3. 英文条件并列合取：If A, and B beats expectations...
+    en_conj_text = (
+        "If 10Y treasury yields break 4.8%, and the interim report shows depreciation "
+        "beats expectations significantly, margin liquidation may occur."
+    )
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, en_conj_text, gap_exp
+    )
+    assert is_valid, f"英文并列合取条件句误拦: {viols}"
+
+    # 4. 高频词边界：合取从句中「就业/将/便」复合词不得截断条件域（DAV-1110 返修 🟡-1）
+    for text in (
+        "若美联储降息，且就业数据超预期走强，则风险资产或阶段性受益",
+        "若利率上行，且中报业绩将超预期，杠杆资金或回流",
+        "若美债利率突破4.8%，且就业市场数据不及预期，衰退交易或升温",
+        "若海外流动性收紧，且就诊人数数据超预期，医药板块或承压",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"高频复合词截断条件域误拦: {text!r} -> {viols}"
+
+
+def test_dav1110_consequence_and_unconditional_assertions_still_flagged():
+    """DAV-1110 边界：后果域及无条件直接断言必须继续拦截，红线绝不退化。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1071_gap_revs()
+
+    # 1. DAV-1073 红线：「若A则B，C已定价」中 C 属主句断言，必须拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "若消息属实则观望，该利好已充分定价，短线无上行空间",
+        gap_exp,
+    )
+    assert not is_valid
+    assert any("已定价" in v for v in viols), f"主句已定价断言漏拦: {viols}"
+
+    # 2. 「若A则B超预期」：后果断言必须拦
+    for text in (
+        "若利率上行则中报业绩超预期，建议加仓",
+        "如果大盘企稳那么中报业绩超预期将催化反弹",
+        "If bond yields rise then interim earnings beat expectations, go long.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"后果句超预期漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报超预期违规: {text!r} -> {viols}"
+
+    # 3. 无条件词的直接断言：必须拦
+    for text in (
+        "8 月 27 日中报披露折旧超预期侵蚀扣非净利",
+        "公司二季度业绩大幅超预期，建议建仓",
+        "Interim earnings beat expectations, risk premium drops.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"直接断言漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"

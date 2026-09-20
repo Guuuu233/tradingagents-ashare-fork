@@ -439,6 +439,17 @@ _E04_COND_EN = re.compile(
     r"\b(?:if|unless|in\s+case|assuming|provided\s+that|providing\s+that|should\s+there\s+be)\b",
     re.IGNORECASE,
 )
+# DAV-1110：条件句中合取并列连词（且/并/及/与/and）延续条件域，直到后果标记或硬边界
+_E04_COND_CONJ_ZH = re.compile(r"^\s*(?:且|并且|并|以及|及|与|同|还|同时|包括)")
+_E04_COND_CONJ_EN = re.compile(r"^\s*(?:and|as\s+well\s+as|along\s+with)\b", re.IGNORECASE)
+# 条件后承接的后果断言/主句引导词（若出现则切出条件域，进入后果断言域）
+_E04_CONSEQ_ZH = re.compile(
+    r"则|那么|乃至|即可|定会|必将|必然|因而|是以|"
+    r"就(?!业|近|是|要|绪|范|地|便|医|诊|读|学|职|任|寝|餐|座|坐|位|算|势|手|教|擒|隅)|"
+    r"便(?!宜|利|秘|签|当|条|携|衣|帽|饭|桥|民|警)|"
+    r"^\s*将(?:会|要|令|致|使|对|为|在|于|把)?"
+)
+_E04_CONSEQ_EN = re.compile(r"\b(?:then|therefore|thus|hence|consequently)\b", re.IGNORECASE)
 # DAV-1071 缺陷1：beat/miss 关键词后紧跟名词时构成名词性偏正短语（如“超预期幅度/信息”），是列举未知项而非断言
 _BEAT_MISS_NOUN_SUFFIX = re.compile(
     r"^\s*(?:幅度|空间|概率|可能性|程度|水平|信息|情形|情况|风险|因素|变量|情景)"
@@ -639,11 +650,72 @@ def _priced_in_clause(text: str, start: int, end: int) -> tuple[str, str]:
     return text[left:start], text[end:right]
 
 
-def _in_conditional_clause(clause_before: str) -> bool:
-    """DAV-1071/DAV-1073: hit is non-assertive only when the conditional marker sits in the SAME
-    clause as the hit. Sentence-level search was reverted (DAV-1073 🔴-1):「若A则B，C已定价」中 C
-    所在子句无条件词，是主句断言而非条件推演，必须拦。"""
-    return bool(_E04_COND_ZH.search(clause_before) or _E04_COND_EN.search(clause_before))
+def _in_conditional_clause(text: str, hit_start: int, hit_end: int) -> bool:
+    """DAV-1071/DAV-1073/DAV-1110: hit is non-assertive when sitting in a conditional premise domain.
+
+    - A conditional domain is opened by a conditional marker (若/如果/if...).
+    - It covers the conditional clause and extends across conjunction-headed clauses (且/并/及/and...).
+    - It is terminated by a consequence marker (则/那么/就/便/then...) or sentence boundaries.
+    - If a consequence marker intervenes between the conditional marker and the hit,
+      the hit belongs to the consequence/main clause assertion (e.g. 「若A则B，C已定价」、「若A则B超预期」)
+      -> NOT exempt (must flag).
+    """
+    # 找到整句的起点
+    sl = hit_start
+    while sl > 0 and text[sl - 1] not in _PRICED_IN_SENTENCE_BREAKS:
+        sl -= 1
+    sentence_up_to_hit = text[sl:hit_start]
+
+    # 切量子句（按 _is_clause_break）
+    clause_spans: list[tuple[int, int]] = []
+    c_start = 0
+    for idx in range(len(sentence_up_to_hit)):
+        if _is_clause_break(sentence_up_to_hit, idx):
+            clause_spans.append((c_start, idx))
+            c_start = idx + 1
+    clause_spans.append((c_start, len(sentence_up_to_hit)))
+
+    clauses = [sentence_up_to_hit[s:e].strip() for s, e in clause_spans]
+    current_clause = clauses[-1]
+
+    # 1. 紧邻前缀子句（同一子句内）
+    # 如果同子句内有条件词：
+    m_cond_zh = list(_E04_COND_ZH.finditer(current_clause))
+    m_cond_en = list(_E04_COND_EN.finditer(current_clause))
+    if m_cond_zh or m_cond_en:
+        last_cond_pos = max(
+            [m.start() for m in m_cond_zh] + [m.start() for m in m_cond_en]
+        )
+        # 检查条件词与 hit 之间是否出现了后果标记（如「若A则B超预期」）
+        after_cond = current_clause[last_cond_pos:]
+        if _E04_CONSEQ_ZH.search(after_cond) or _E04_CONSEQ_EN.search(after_cond):
+            return False
+        return True
+
+    # 2. 跨子句并列条件合取链（DAV-1110）
+    # 当前子句无条件词，必须以合取连词引导（且/并/及/and...）
+    if not (_E04_COND_CONJ_ZH.search(current_clause) or _E04_COND_CONJ_EN.search(current_clause)):
+        return False
+    # 当前合取子句内如果已经出现了后果标记（如「且...则...超预期」），也不属于条件域
+    if _E04_CONSEQ_ZH.search(current_clause) or _E04_CONSEQ_EN.search(current_clause):
+        return False
+
+    # 向前倒查：前面每一级子句必须也是合取子句，直到找到条件起始子句；
+    # 期间若遇到后果标记（则/那么/就/then...）或非合取独立分句，则链条断开。
+    for prev_clause in reversed(clauses[:-1]):
+        if not prev_clause:
+            continue
+        # 如果前序子句含后果标记，说明已经由条件转入推论/主句
+        if _E04_CONSEQ_ZH.search(prev_clause) or _E04_CONSEQ_EN.search(prev_clause):
+            return False
+        # 如果前序子句包含条件标记，确认合取链成立
+        if _E04_COND_ZH.search(prev_clause) or _E04_COND_EN.search(prev_clause):
+            return True
+        # 否则该前序子句本身也必须是合取子句以继续向前传递条件域
+        if not (_E04_COND_CONJ_ZH.search(prev_clause) or _E04_COND_CONJ_EN.search(prev_clause)):
+            return False
+
+    return False
 
 
 def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
@@ -657,9 +729,8 @@ def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
     after_sentence = text[end:strong_right]
     if _PRICED_IN_REJECT_ZH.search(after_sentence) or _PRICED_IN_REJECT_ZH.search(before):
         return False
-    # DAV-1071 缺陷1：条件/假设从句内命中属情景推演，非断言（同时供给 beat/miss 分支）
-    # DAV-1073 🔴-1：仅限同子句条件词，句级搜索已撤销
-    if _in_conditional_clause(before):
+    # DAV-1071 缺陷1 / DAV-1110：条件/假设从句内命中（含「若A，且B」并列条件从句）属情景推演，非断言
+    if _in_conditional_clause(text, start, end):
         return False
     # 同一句内一处否定不豁免另一处肯定：按出现位置所在子句计数否定词，奇数为否定、偶数为双重否定
     neg_count = len(_PRICED_IN_NEG_ZH.findall(before)) + len(_PRICED_IN_NEG_EN.findall(before))
