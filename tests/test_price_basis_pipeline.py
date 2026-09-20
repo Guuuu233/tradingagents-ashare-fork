@@ -19,11 +19,13 @@ from api.services.price_basis_labels import (
     PRICE_BASIS_PIT_ADJUSTED,
     PRICE_BASIS_PIT_RAW,
     PRICE_BASIS_RAW,
+    PRICE_BASIS_T1_OPEN_V1,
     PRICE_BASIS_UNSPECIFIED,
     PRICE_BASIS_VENDOR_QFQ,
     PRICE_BASIS_VERSION_PIT_ADJUSTED,
     PRICE_BASIS_VERSION_PIT_RAW,
     PRICE_BASIS_VERSION_RAW,
+    PRICE_BASIS_VERSION_T1_OPEN_V1,
     PRICE_BASIS_VERSION_UNSPECIFIED,
     PRICE_BASIS_VERSION_VENDOR_QFQ,
     SHORT_TO_VERSION_MAP,
@@ -42,12 +44,14 @@ import tradingagents.agents.utils.shadow_credit as shadow_credit
 
 
 # The 5 canonical rows defined in work/2026-09-05-c04-pit-raw-dividend-eval.md §4.2
+# plus the DAV-1107 H1b evaluation-basis label (not a market-data adjustment channel)
 CANONICAL_PAIRS = [
     ("vendor_qfq", "price_basis.vendor_qfq"),
     ("unspecified", "price_basis.unspecified"),
     ("raw", "price_basis.raw"),
     ("pit_raw", "price_basis.pit_raw"),
     ("pit_adjusted", "price_basis.pit_adjusted"),
+    ("t1_open_v1", "price_basis.t1_open_v1"),
 ]
 
 
@@ -82,23 +86,24 @@ class TestPriceBasisBidirectionalMapping:
         """Verify constant sets contain exactly the 5 canonical items."""
         assert set(ALL_PRICE_BASIS_SHORT_LABELS) == {p[0] for p in CANONICAL_PAIRS}
         assert set(ALL_PRICE_BASIS_VERSIONS) == {p[1] for p in CANONICAL_PAIRS}
-        assert len(ALL_PRICE_BASIS_SHORT_LABELS) == 5
-        assert len(ALL_PRICE_BASIS_VERSIONS) == 5
+        assert len(ALL_PRICE_BASIS_SHORT_LABELS) == 6
+        assert len(ALL_PRICE_BASIS_VERSIONS) == 6
 
 
 class TestPriceBasisDistinctness:
     """Contract 3: pit_raw != pit_adjusted != raw != vendor_qfq != unspecified."""
 
     def test_all_short_labels_mutually_distinct(self):
-        """All 5 short labels must be distinct strings (no aliasing)."""
+        """All 6 short labels must be distinct strings (no aliasing)."""
         labels = [
             PRICE_BASIS_VENDOR_QFQ,
             PRICE_BASIS_UNSPECIFIED,
             PRICE_BASIS_RAW,
             PRICE_BASIS_PIT_RAW,
             PRICE_BASIS_PIT_ADJUSTED,
+            PRICE_BASIS_T1_OPEN_V1,
         ]
-        assert len(set(labels)) == 5
+        assert len(set(labels)) == 6
         # Explicit pairwise checks for critical boundaries
         assert PRICE_BASIS_PIT_RAW != PRICE_BASIS_PIT_ADJUSTED
         assert PRICE_BASIS_PIT_RAW != PRICE_BASIS_RAW
@@ -107,15 +112,16 @@ class TestPriceBasisDistinctness:
         assert PRICE_BASIS_RAW != PRICE_BASIS_UNSPECIFIED
 
     def test_all_versions_mutually_distinct(self):
-        """All 5 cohort versions must be distinct strings (no aliasing)."""
+        """All 6 cohort versions must be distinct strings (no aliasing)."""
         versions = [
             PRICE_BASIS_VERSION_VENDOR_QFQ,
             PRICE_BASIS_VERSION_UNSPECIFIED,
             PRICE_BASIS_VERSION_RAW,
             PRICE_BASIS_VERSION_PIT_RAW,
             PRICE_BASIS_VERSION_PIT_ADJUSTED,
+            PRICE_BASIS_VERSION_T1_OPEN_V1,
         ]
-        assert len(set(versions)) == 5
+        assert len(set(versions)) == 6
         assert PRICE_BASIS_VERSION_PIT_RAW != PRICE_BASIS_VERSION_PIT_ADJUSTED
         assert PRICE_BASIS_VERSION_PIT_RAW != PRICE_BASIS_VERSION_RAW
         assert PRICE_BASIS_VERSION_RAW != PRICE_BASIS_VERSION_VENDOR_QFQ

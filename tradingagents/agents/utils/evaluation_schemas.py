@@ -1324,7 +1324,14 @@ def build_evaluation_metric_matrix(
     # ── 4. Quadrant 4: T+5 Return & Shadow Weighted Calibration ───────────────
     raw_target = data.get("target_price") or manager_verdict.get("target")
     raw_stop = data.get("stop_loss_price") or manager_verdict.get("stop_loss")
-    raw_entry = manager_verdict.get("entry") or data.get("entry_price")
+    # H1b 入场价契约 (DAV-1107)：优先取已按契约盖章的 T+1 Open，
+    # 其次才回退遗留信号口径（manager_verdict.entry / report entry_price）。
+    # 显式 is-not-None 取值，避免数值 0 在 or 链中被意外短路。
+    raw_entry = data.get("t_plus_1_open")
+    if raw_entry is None and data.get("entry_price_source") == "t1_open":
+        raw_entry = data.get("entry_price")
+    if raw_entry is None:
+        raw_entry = manager_verdict.get("entry") or data.get("entry_price")
     decision_dir = str(
         manager_verdict.get("direction")
         or data.get("direction")

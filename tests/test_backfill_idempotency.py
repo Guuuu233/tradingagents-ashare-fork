@@ -166,8 +166,13 @@ class TestRedTeamScenarios:
         assert res["_backfill_status"] == "hit"
         assert res["t_plus_5_direction_hit"] is True
 
-    def test_rt1_valid_price_with_missing_entry_calculates_hit_when_trade_date_in_prices(self):
-        """RT-1: Sample has valid t_plus_5_price, entry is None, but price_series provides trade_date -> computes hit."""
+    def test_rt1_t_day_price_in_series_not_used_as_entry(self):
+        """RT-1 (DAV-1107 契约修订): T 日价格禁止作为 H1b 评价入场基准。
+
+        样本有有效 t_plus_5_price 但无任何可解析的契约入场价（无 T+1 Open、
+        无遗留 entry 字段）时，不再用 price_series 中的 T 日价格充当 entry，
+        hit 保持 None，样本归入 price_basis.unspecified cohort。
+        """
         report = _build_test_report(
             symbol="600001.SH",
             trade_date="2026-08-03",
@@ -181,8 +186,35 @@ class TestRedTeamScenarios:
 
         assert res["t_plus_5_price"] == 12.0
         assert res["t_plus_5_status"] == T_PLUS_5_STATUS_DUE_AND_EVALUATED
+        assert res["t_plus_5_direction_hit"] is None
+        assert res["price_basis_version"] == "price_basis.unspecified"
+
+    def test_rt1b_t1_open_series_used_as_contract_entry(self):
+        """RT-1b: open_price_series 提供 T+1 Open 时按契约基准计算 hit 并盖章 t1_open_v1。"""
+        report = _build_test_report(
+            symbol="600001.SH",
+            trade_date="2026-08-03",
+            winner="bull",
+            entry_price=None,
+            existing_t5_price=12.0,
+        )
+        prices = {"2026-08-10": 12.0}
+        opens = {"2026-08-04": 10.0}
+
+        res = backfill_tplus5_shadow_for_report(
+            report,
+            as_of="2026-08-15",
+            price_series=prices,
+            open_price_series=opens,
+        )
+
+        assert res["t_plus_5_price"] == 12.0
+        assert res["t_plus_5_status"] == T_PLUS_5_STATUS_DUE_AND_EVALUATED
         assert res["t_plus_5_direction_hit"] is True
         assert res["_backfill_status"] == "hit"
+        assert res["entry_price"] == 10.0
+        assert res["entry_date"] == "2026-08-04"
+        assert res["price_basis_version"] == "price_basis.t1_open_v1"
 
     def test_rt1c_partial_price_series_without_t5_preserves_existing_price(self):
         """RT-1c: Valid existing price + partial price_series (no T+5 date) -> retains price, not degraded."""

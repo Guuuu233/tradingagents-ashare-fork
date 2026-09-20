@@ -49,6 +49,13 @@ DECISION_MODEL_V1: str = "decision_model.v1"
 EVIDENCE_CONTRACT_V0: str = "evidence_contract.v0"
 PRICE_BASIS_UNSPECIFIED: str = "price_basis.unspecified"
 
+# ── H1b 入场价契约 (DAV-1107) ──────────────────────────────────────────────
+# 评价入口统一为 T+1 Open 真实成交价；manager_verdict.entry / report entry /
+# T 日 close 禁止作为 H1b 评价基准，仅作遗留记账口径并归入 unspecified cohort。
+PRICE_BASIS_T1_OPEN_V1: str = "price_basis.t1_open_v1"
+ENTRY_PRICE_SOURCE_T1_OPEN: str = "t1_open"
+ENTRY_PRICE_SOURCE_LEGACY: str = "legacy_signal_entry"
+
 # ── T+5 Status Constants (AGENTS.md §5 / DAV-779) ──────────────────────────────
 T_PLUS_5_STATUS_DUE_AND_EVALUATED: str = "due_and_evaluated"
 T_PLUS_5_STATUS_PENDING_DUE: str = "pending_due"
@@ -357,13 +364,22 @@ def calculate_shadow_credit_metrics(
 
     if t_plus_5_price is not None and isinstance(t_plus_5_price, (int, float)):
         entry_val = None
-        raw_entry = (
-            manager_verdict.get("entry")
-            or result_data_or_state.get("entry_price")
-            or result_data_or_state.get("target_price")
-            or inv_state.get("entry_price")
-            or inv_state.get("target_price")
-        )
+        # H1b 入场价契约 (DAV-1107)：优先取已按契约盖章的 T+1 Open，
+        # 其次才回退遗留信号口径（manager_verdict.entry / report 字段）。
+        # 显式 is-not-None 取值，避免数值 0 在 or 链中被意外短路。
+        raw_entry = result_data_or_state.get("t_plus_1_open")
+        if raw_entry is None:
+            raw_entry = inv_state.get("t_plus_1_open")
+        if raw_entry is None and result_data_or_state.get("entry_price_source") == ENTRY_PRICE_SOURCE_T1_OPEN:
+            raw_entry = result_data_or_state.get("entry_price")
+        if raw_entry is None:
+            raw_entry = (
+                manager_verdict.get("entry")
+                or result_data_or_state.get("entry_price")
+                or result_data_or_state.get("target_price")
+                or inv_state.get("entry_price")
+                or inv_state.get("target_price")
+            )
         if raw_entry:
             try:
                 entry_val = float(str(raw_entry).split("-")[0].replace("元", "").strip())
@@ -1104,6 +1120,23 @@ def evaluate_h1b_system_gates(
             }),
         }
 
+    # H1b 入场价契约 (DAV-1107)：unspecified 口径样本仅作记账，不得计入正式
+    # cohort 门槛判定；对显式告警并落标记，防外部调用方误用。
+    canonical_key_str = str(cohort_meta.get("canonical_key") or "")
+    if PRICE_BASIS_UNSPECIFIED in canonical_key_str or (
+        not canonical_key_str and any(
+            (extract_sample_cohort(s).get("price_basis_version") or PRICE_BASIS_UNSPECIFIED)
+            == PRICE_BASIS_UNSPECIFIED
+            for s in samples
+        )
+    ):
+        cohort_meta["price_basis_unspecified_warning"] = True
+        logger.warning(
+            "H1b gate evaluation on price_basis.unspecified cohort: "
+            "样本未按 T+1 Open 契约 (price_basis.t1_open_v1) 评价，结果仅作记账，"
+            "不得作为 H1b 总闸判定依据"
+        )
+
     sample_count = len(samples)
 
     # ── Dimension 1: N (Sample Count & Diversity) ─────────────────────────────
@@ -1816,12 +1849,16 @@ def apply_credit_weighting_to_debate(
 
 # ── T+5 Shadow Backfill Module (Track A5 / DAV-779) ──────────────────────────
 
-def fetch_close_prices_safe(
+def fetch_daily_bars_safe(
     symbol: str,
     start_date: str,
     end_date: str,
-) -> dict[str, float]:
-    """Fetch close prices from market data vendor safely, returning date_str -> close_price mapping."""
+) -> dict[str, dict[str, float]]:
+    """Fetch daily OHLC bars from market data vendor safely.
+
+    Returns ``{date_str: {"open": float, "close": float}}`` — fields absent from
+    the vendor payload are simply omitted per row.
+    """
     if not symbol or not start_date or not end_date:
         return {}
     try:
@@ -1836,25 +1873,46 @@ def fetch_close_prices_safe(
         if not clean_lines:
             return {}
         reader = csv.DictReader(io.StringIO("\n".join(clean_lines)))
-        prices: dict[str, float] = {}
+        bars: dict[str, dict[str, float]] = {}
         for row in reader:
             cols_lower = {k.lower().strip(): v for k, v in row.items() if k}
             d_val = cols_lower.get("date") or cols_lower.get("trade_date")
-            c_val = cols_lower.get("close") or cols_lower.get("close_price")
-            if d_val and c_val:
-                try:
-                    d_clean = str(d_val)[:10]
-                    if len(d_clean) == 8 and d_clean.isdigit():
-                        d_clean = f"{d_clean[:4]}-{d_clean[4:6]}-{d_clean[6:]}"
-                    c_float = float(c_val)
-                    if c_float > 0:
-                        prices[d_clean] = c_float
-                except (ValueError, TypeError):
-                    pass
-        return prices
+            if not d_val:
+                continue
+            d_clean = str(d_val)[:10]
+            if len(d_clean) == 8 and d_clean.isdigit():
+                d_clean = f"{d_clean[:4]}-{d_clean[4:6]}-{d_clean[6:]}"
+            bar: dict[str, float] = {}
+            for field, keys in (
+                ("open", ("open", "open_price", "开盘价")),
+                ("close", ("close", "close_price", "收盘价")),
+            ):
+                for key in keys:
+                    v = cols_lower.get(key)
+                    if v:
+                        try:
+                            f = float(v)
+                            if f > 0:
+                                bar[field] = f
+                        except (ValueError, TypeError):
+                            pass
+                        break
+            if bar:
+                bars[d_clean] = bar
+        return bars
     except Exception as exc:
-        logger.debug("fetch_close_prices_safe failed for %s (%s -> %s): %s", symbol, start_date, end_date, exc)
+        logger.debug("fetch_daily_bars_safe failed for %s (%s -> %s): %s", symbol, start_date, end_date, exc)
         return {}
+
+
+def fetch_close_prices_safe(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> dict[str, float]:
+    """Fetch close prices from market data vendor safely, returning date_str -> close_price mapping."""
+    bars = fetch_daily_bars_safe(symbol, start_date, end_date)
+    return {d: b["close"] for d, b in bars.items() if b.get("close") is not None}
 
 
 def detect_tplus5_suspension(
@@ -1932,6 +1990,8 @@ def backfill_tplus5_shadow_for_report(
     as_of: Optional[Union[str, date, datetime]] = None,
     price_series: Optional[Mapping[str, float]] = None,
     get_price_fn: Optional[Any] = None,
+    open_price_series: Optional[Mapping[str, float]] = None,
+    get_open_price_fn: Optional[Any] = None,
     trading_calendar: Optional[Sequence[Union[str, date]]] = None,
     is_suspended: Optional[bool] = None,
 ) -> dict[str, Any]:
@@ -1952,6 +2012,11 @@ def backfill_tplus5_shadow_for_report(
        - 'bear': price_change < 0
        - 'tie': abs(price_change / entry_val) <= 0.03
     5. Pure & idempotent: preserves all existing fields in result_data.
+    6. H1b 入场价契约 (DAV-1107): entry 基准统一为 T+1 Open 真实成交价
+       (open_price_series / get_open_price_fn / vendor daily bars / 已盖章
+       t_plus_1_open 字段)。T+1 Open 不可得时回退遗留信号口径仅作记账，
+       样本 price_basis_version 标记为 price_basis.unspecified，与
+       price_basis.t1_open_v1 cohort 隔离，不计入正式 H1b 门槛判定。
     """
     if not isinstance(report_or_result_data, Mapping):
         return {}
@@ -2016,6 +2081,68 @@ def backfill_tplus5_shadow_for_report(
             res["shadow_credit_metrics"] = sm
         res["_backfill_status"] = "missing_date"
         return res
+
+    # ── H1b 入场价契约 (DAV-1107) ─────────────────────────────────────────
+    # T+1 交易日与 T+1 Open 解析：评价基准只认真实成交价；解析不到时回退
+    # 遗留信号口径（manager_verdict.entry / report entry / target_price）
+    # 仅作记账，样本 price_basis_version 归为 unspecified cohort。
+    t1_date: Optional[str] = None
+    try:
+        fwd1 = trading_days_forward(trade_date_str, 1, calendar_dates=trading_calendar)
+        if fwd1:
+            t1_date = str(fwd1[0])[:10]
+    except Exception as exc:
+        logger.debug("trading_days_forward T+1 failed for %s: %s", trade_date_str, exc)
+
+    def _to_positive_float(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            f = float(str(v).split("-")[0].replace("元", "").strip())
+            return f if f > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    t1_open_val: Optional[float] = None
+    if t1_date:
+        if isinstance(open_price_series, Mapping):
+            t1_open_val = _to_positive_float(open_price_series.get(t1_date))
+        if t1_open_val is None and callable(get_open_price_fn):
+            try:
+                t1_open_val = _to_positive_float(get_open_price_fn(symbol, t1_date))
+            except Exception as exc:
+                logger.debug("get_open_price_fn failed for %s@%s: %s", symbol, t1_date, exc)
+        if t1_open_val is None:
+            # 幂等重跑：复用此前已按契约盖章的 T+1 Open
+            for _cand in (
+                target.get("t_plus_1_open"),
+                res.get("t_plus_1_open"),
+                target.get("entry_price")
+                if target.get("entry_price_source") == ENTRY_PRICE_SOURCE_T1_OPEN
+                else None,
+                res.get("entry_price")
+                if res.get("entry_price_source") == ENTRY_PRICE_SOURCE_T1_OPEN
+                else None,
+            ):
+                t1_open_val = _to_positive_float(_cand)
+                if t1_open_val is not None:
+                    break
+
+    def _stamp_entry_basis() -> None:
+        """将入场价口径与 cohort 标签写入 target 与 res 两层。"""
+        src = ENTRY_PRICE_SOURCE_T1_OPEN if t1_open_val is not None else ENTRY_PRICE_SOURCE_LEGACY
+        pbv = PRICE_BASIS_T1_OPEN_V1 if t1_open_val is not None else PRICE_BASIS_UNSPECIFIED
+        for _c in (target, res):
+            # legacy 口径下 entry 并非 T+1 成交价，entry_date 置空避免
+            # 「T+1 日期 + T 日信号价」的语义错配
+            _c["entry_date"] = t1_date if t1_open_val is not None else None
+            _c["entry_price_source"] = src
+            _c["price_basis_version"] = pbv
+            if t1_open_val is not None:
+                _c["t_plus_1_open"] = round(float(t1_open_val), 4)
+                _c["entry_price"] = round(float(t1_open_val), 4)
+
+    _stamp_entry_basis()
 
     # 3. As-of Boundary Check
     if as_of is None:
@@ -2093,24 +2220,11 @@ def backfill_tplus5_shadow_for_report(
     if not isinstance(manager_verdict, Mapping):
         manager_verdict = {}
 
-    entry_val: Optional[float] = None
-    raw_entry = (
-        manager_verdict.get("entry")
-        or target.get("entry_price")
-        or target.get("target_price")
-        or inv_state.get("entry_price")
-        or inv_state.get("target_price")
-        or res.get("entry_price")
-        or res.get("target_price")
-    )
-    if raw_entry:
-        try:
-            entry_val = float(str(raw_entry).split("-")[0].replace("元", "").strip())
-        except (ValueError, TypeError):
-            entry_val = None
+    entry_val: Optional[float] = float(t1_open_val) if t1_open_val is not None else None
 
     t5_price_val: Optional[float] = None
     quote_series: Optional[Mapping[str, float]] = None
+    vendor_bars: Optional[Mapping[str, Mapping[str, float]]] = None
 
     if not suspended:
         # Check custom price_series or get_price_fn or pre-set t_plus_5_price
@@ -2121,11 +2235,6 @@ def backfill_tplus5_shadow_for_report(
                     t5_price_val = float(price_series[t5_date])
                 except (ValueError, TypeError):
                     t5_price_val = None
-            if entry_val is None and trade_date_str in price_series:
-                try:
-                    entry_val = float(price_series[trade_date_str])
-                except (ValueError, TypeError):
-                    entry_val = None
         elif get_price_fn and callable(get_price_fn):
             try:
                 fn_res = get_price_fn(symbol, trade_date_str, t5_date)
@@ -2156,13 +2265,36 @@ def backfill_tplus5_shadow_for_report(
             except Exception:
                 end_query_date = t5_date
 
-            fetched = fetch_close_prices_safe(symbol, trade_date_str, end_query_date)
+            vendor_bars = fetch_daily_bars_safe(symbol, trade_date_str, end_query_date)
+            fetched = {d: b["close"] for d, b in vendor_bars.items() if b.get("close") is not None}
             quote_series = fetched
             if fetched:
                 if t5_date in fetched:
                     t5_price_val = fetched[t5_date]
-                if entry_val is None and trade_date_str in fetched:
-                    entry_val = fetched[trade_date_str]
+
+        # H1b 契约 (DAV-1107)：T+1 Open 的 vendor 解析与 T+5 价格 elif 链解耦。
+        # 存量已回填样本在上方被 t_plus_5_price 短路时，此处仍独立补抓 T+1 bar，
+        # 否则核心目标人群 t1_open_v1 覆盖率为 0，契约静默失效。
+        if t1_open_val is None and t1_date:
+            if vendor_bars is None:
+                vendor_bars = fetch_daily_bars_safe(symbol, trade_date_str, t1_date)
+            t1_open_val = _to_positive_float((vendor_bars.get(t1_date) or {}).get("open"))
+            if t1_open_val is not None:
+                entry_val = float(t1_open_val)
+                _stamp_entry_basis()
+
+        # H1b 契约：T+1 Open 不可得时回退遗留信号口径，仅记账、归入 unspecified cohort
+        if entry_val is None:
+            raw_entry = (
+                manager_verdict.get("entry")
+                or target.get("entry_price")
+                or target.get("target_price")
+                or inv_state.get("entry_price")
+                or inv_state.get("target_price")
+                or res.get("entry_price")
+                or res.get("target_price")
+            )
+            entry_val = _to_positive_float(raw_entry)
 
         # Universal fallback: if price source (price_series / get_price_fn / vendor) did not yield
         # a valid T+5 price, fall back to report's existing valid t_plus_5_price
@@ -2358,6 +2490,8 @@ def backfill_tplus5_shadow_for_reports(
     as_of: Optional[Union[str, date, datetime]] = None,
     price_series_map: Optional[Mapping[str, Mapping[str, float]]] = None,
     get_price_fn: Optional[Any] = None,
+    open_price_series_map: Optional[Mapping[str, Mapping[str, float]]] = None,
+    get_open_price_fn: Optional[Any] = None,
     trading_calendar: Optional[Sequence[Union[str, date]]] = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Batch backfill T+5 shadow credit metrics for a list of reports.
@@ -2367,6 +2501,7 @@ def backfill_tplus5_shadow_for_reports(
     """
     updated_reports: list[dict[str, Any]] = []
     prices_map = dict(price_series_map or {})
+    opens_map = dict(open_price_series_map or {})
 
     stats: dict[str, Any] = {
         "total_scanned": len(reports),
@@ -2398,11 +2533,19 @@ def backfill_tplus5_shadow_for_reports(
         elif sym_clean.split(".")[0] in prices_map:
             series = prices_map[sym_clean.split(".")[0]]
 
+        open_series: Optional[Mapping[str, float]] = None
+        if sym_clean in opens_map:
+            open_series = opens_map[sym_clean]
+        elif sym_clean.split(".")[0] in opens_map:
+            open_series = opens_map[sym_clean.split(".")[0]]
+
         updated = backfill_tplus5_shadow_for_report(
             r,
             as_of=as_of,
             price_series=series,
             get_price_fn=get_price_fn,
+            open_price_series=open_series,
+            get_open_price_fn=get_open_price_fn,
             trading_calendar=trading_calendar,
         )
         updated_reports.append(updated)

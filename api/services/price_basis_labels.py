@@ -19,6 +19,10 @@ PRICE_BASIS_UNSPECIFIED: str = "unspecified"
 PRICE_BASIS_RAW: str = "raw"
 PRICE_BASIS_PIT_RAW: str = "pit_raw"
 PRICE_BASIS_PIT_ADJUSTED: str = "pit_adjusted"
+# DAV-1107: H1b 评价口径标签（T+1 Open 统一入场基准）。
+# 注意：这是评价口径标签而非行情复权通道，禁止作为 get_stock_data 的
+# price_basis 入参使用（与 unspecified 一样属失败闭合通道）。
+PRICE_BASIS_T1_OPEN_V1: str = "t1_open_v1"
 
 ALL_PRICE_BASIS_SHORT_LABELS: Tuple[str, ...] = (
     PRICE_BASIS_VENDOR_QFQ,
@@ -26,6 +30,7 @@ ALL_PRICE_BASIS_SHORT_LABELS: Tuple[str, ...] = (
     PRICE_BASIS_RAW,
     PRICE_BASIS_PIT_RAW,
     PRICE_BASIS_PIT_ADJUSTED,
+    PRICE_BASIS_T1_OPEN_V1,
 )
 
 
@@ -37,6 +42,7 @@ PRICE_BASIS_VERSION_UNSPECIFIED: str = "price_basis.unspecified"
 PRICE_BASIS_VERSION_RAW: str = "price_basis.raw"
 PRICE_BASIS_VERSION_PIT_RAW: str = "price_basis.pit_raw"
 PRICE_BASIS_VERSION_PIT_ADJUSTED: str = "price_basis.pit_adjusted"
+PRICE_BASIS_VERSION_T1_OPEN_V1: str = "price_basis.t1_open_v1"
 
 ALL_PRICE_BASIS_VERSIONS: Tuple[str, ...] = (
     PRICE_BASIS_VERSION_VENDOR_QFQ,
@@ -44,6 +50,7 @@ ALL_PRICE_BASIS_VERSIONS: Tuple[str, ...] = (
     PRICE_BASIS_VERSION_RAW,
     PRICE_BASIS_VERSION_PIT_RAW,
     PRICE_BASIS_VERSION_PIT_ADJUSTED,
+    PRICE_BASIS_VERSION_T1_OPEN_V1,
 )
 
 
@@ -65,12 +72,13 @@ class InvalidPriceBasisMappingError(PriceBasisError):
 # ==============================================================================
 # Canonical Bidirectional Mapping Tables
 # ==============================================================================
-# 5 distinct mappings:
+# 6 distinct mappings:
 # vendor_qfq    <-> price_basis.vendor_qfq
 # unspecified   <-> price_basis.unspecified
 # raw           <-> price_basis.raw
 # pit_raw       <-> price_basis.pit_raw
 # pit_adjusted  <-> price_basis.pit_adjusted
+# t1_open_v1    <-> price_basis.t1_open_v1   (评价口径标签, 非行情复权通道)
 
 SHORT_TO_VERSION_MAP: Dict[str, str] = {
     PRICE_BASIS_VENDOR_QFQ: PRICE_BASIS_VERSION_VENDOR_QFQ,
@@ -78,6 +86,7 @@ SHORT_TO_VERSION_MAP: Dict[str, str] = {
     PRICE_BASIS_RAW: PRICE_BASIS_VERSION_RAW,
     PRICE_BASIS_PIT_RAW: PRICE_BASIS_VERSION_PIT_RAW,
     PRICE_BASIS_PIT_ADJUSTED: PRICE_BASIS_VERSION_PIT_ADJUSTED,
+    PRICE_BASIS_T1_OPEN_V1: PRICE_BASIS_VERSION_T1_OPEN_V1,
 }
 
 VERSION_TO_SHORT_MAP: Dict[str, str] = {
@@ -86,6 +95,7 @@ VERSION_TO_SHORT_MAP: Dict[str, str] = {
     PRICE_BASIS_VERSION_RAW: PRICE_BASIS_RAW,
     PRICE_BASIS_VERSION_PIT_RAW: PRICE_BASIS_PIT_RAW,
     PRICE_BASIS_VERSION_PIT_ADJUSTED: PRICE_BASIS_PIT_ADJUSTED,
+    PRICE_BASIS_VERSION_T1_OPEN_V1: PRICE_BASIS_T1_OPEN_V1,
 }
 
 
