@@ -184,9 +184,16 @@ iloc[:,:18] 取错列、head(4) 取错行、curr_date 未规整交易日、
 因此跑分析前必须实测回读一次：
 
 ```sh
-sqlite3 "file:data/tradingagents.db?immutable=1" \
+sqlite3 "file:data/tradingagents.db?mode=ro" \
   "select backend_url from user_llm_configs where user_id='429163f7-50b6-4982-8bdf-96ae99506843';"
 ```
+
+> **读活库必须用 `mode=ro`，不能用 `immutable=1`。**
+> `immutable=1` 会绕过 WAL。2026-09-20 实测：活库有 2.26 MiB WAL 时，
+> `immutable=1` 读到 1742/980，`mode=ro` 读到真实的 1746/982，少算 4 份报告。
+> 「无 WAL 时 mode=ro 打不开、须用 immutable=1」只在没有 WAL 的那一刻成立。
+> 先看一眼 `ls data/tradingagents.db-wal`：有 WAL 就只能 `mode=ro`。
+> `immutable=1` 只用来读**静态备份文件**。
 
 确认拿到的是预期端点再跑。**不要从日志或他人转述里抄 URL**——曾出现转录笔误把 `100.67.61.23` 写成 `100.67:61.23`，而库里原值是对的。
 
@@ -197,7 +204,7 @@ sqlite3 "file:data/tradingagents.db?immutable=1" \
 ### 10.4 记账
 
 - 跑分析前后必须实测报告总数，**不得推算**：
-  `select count(*) from reports;`
+  `sqlite3 "file:data/tradingagents.db?mode=ro" "select count(*) from reports;"`
 - 任务层返回成功 ≠ 报告已落库。验收必须贴出前后对照的实测值。
 - 失败的分析可能完全不落库（失败在写库之前），此时计数不变属正常。
 
