@@ -288,3 +288,13 @@ work/analysis_runs/
 # 配置文件的本地备份副本
 uv.lock.bak-*
 .env.bak-*
+
+# work/ 纯噪音（原始采样 dump / 事件流 / 探针脚本 / 采样脚本 / stdout）
+# 证据级文档（审计/交接/卡体/台账/验收/报告）已入库，勿加宽规则误伤
+work/*raw.json
+work/abstain-diagnostic-*.json
+work/*.events.jsonl
+work/*.stdout
+work/*_probe.py
+work/dav1009_probe_pkg/
+work/run_tushare_sampling.py
