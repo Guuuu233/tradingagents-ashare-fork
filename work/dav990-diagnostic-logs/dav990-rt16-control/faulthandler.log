@@ -1,0 +1,70 @@
+Current thread 0x00000001f5993f80 (most recent call first):
+  Garbage-collecting
+  File "<frozen importlib._bootstrap>", line 110 in acquire
+  File "<frozen importlib._bootstrap>", line 171 in __enter__
+  File "<frozen importlib._bootstrap>", line 1024 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 992 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/conftest.py", line 48 in pytest_sessionstart
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 316 in wrap_session
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py", line 9 in <module>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 86 in _run_code
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 196 in _run_module_as_main
+Current thread 0x00000001f5993f80 (most recent call first):
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 336 in tokenize_cn_en
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 398 in _add_field_tokens
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 430 in _build_index
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 388 in __init__
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 696 in get_global_rag_index
+  File "/private/tmp/dav990-target/tradingagents/knowledge/rag.py", line 710 in retrieve_industry_knowledge
+  File "/private/tmp/dav990-target/tradingagents/agents/utils/knowledge_context.py", line 852 in resolve_industry_profile
+  File "/private/tmp/dav990-target/tradingagents/agents/utils/knowledge_context.py", line 873 in resolve_industry_context
+  File "/private/tmp/dav990-target/tradingagents/agents/analysts/fundamentals_analyst.py", line 691 in fundamentals_analyst_node
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/asyncio/events.py", line 80 in _run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/asyncio/base_events.py", line 1909 in _run_once
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/asyncio/base_events.py", line 603 in run_forever
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/asyncio/base_events.py", line 636 in run_until_complete
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/asyncio/runners.py", line 44 in run
+  File "/private/tmp/dav990-target/tests/test_financial_period_compliance.py", line 542 in test_rt16_non_blocking_does_not_alter_analysis_status
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 166 in pytest_pyfunc_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 1720 in runtest
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 179 in pytest_runtest_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 245 in <lambda>
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 353 in from_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 244 in call_and_report
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 137 in runtestprotocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 396 in pytest_runtestloop
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 372 in _main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 318 in wrap_session
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py", line 9 in <module>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 86 in _run_code
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 196 in _run_module_as_main

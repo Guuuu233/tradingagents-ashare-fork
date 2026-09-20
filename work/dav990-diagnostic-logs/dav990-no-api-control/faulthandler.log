@@ -1,0 +1,295 @@
+Current thread 0x00000001f5993f80 (most recent call first):
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 1176 in create_module
+  File "<frozen importlib._bootstrap>", line 571 in module_from_spec
+  File "<frozen importlib._bootstrap>", line 674 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1078 in _handle_fromlist
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/ops/array_ops.py", line 18 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/ops/__init__.py", line 8 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1078 in _handle_fromlist
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/arrays/arrow/array.py", line 53 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/arrays/arrow/__init__.py", line 5 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/arrays/__init__.py", line 1 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/core/api.py", line 28 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pandas/__init__.py", line 49 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/dataflows/alpha_vantage_common.py", line 4 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/dataflows/interface.py", line 6 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/agents/utils/core_stock_tools.py", line 3 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/agents/utils/agent_utils.py", line 4 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/agents/__init__.py", line 1 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 992 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 992 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/api/services/portfolio_import_service.py", line 19 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1078 in _handle_fromlist
+  File "/private/tmp/dav990-target/api/services/__init__.py", line 3 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  ...
+Thread 0x0000007001007000 (most recent call first):
+  File "<frozen importlib._bootstrap_external>", line 147 in _path_stat
+  File "<frozen importlib._bootstrap_external>", line 1092 in path_stats
+  File "<frozen importlib._bootstrap_external>", line 1012 in get_code
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 705 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/akshare/__init__.py", line 5277 in <module>
+  File "<frozen importlib._bootstrap>", line 241 in _call_with_frames_removed
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_akshare_provider.py", line 776 in _ak
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_akshare_provider.py", line 993 in _fetch_hist_df
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_akshare_provider.py", line 1109 in get_stock_data
+  File "/private/tmp/dav990-target/tradingagents/dataflows/interface.py", line 366 in <lambda>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 58 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 83 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017f737000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017e72b000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017d71f000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017c713000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017b707000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x0000000170683000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Current thread 0x00000001f5993f80 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 324 in wait
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/_base.py", line 453 in result
+  File "/private/tmp/dav990-target/tradingagents/dataflows/interface.py", line 440 in route_to_vendor
+  File "/private/tmp/dav990-target/tradingagents/knowledge/historical_cases.py", line 173 in calculate_t1_return
+  File "/private/tmp/dav990-target/tradingagents/knowledge/historical_cases.py", line 364 in record_historical_case
+  File "/private/tmp/dav990-target/api/services/report_service.py", line 1785 in create_report
+  File "/private/tmp/dav990-target/tests/test_fund_flow_scale_consumption.py", line 205 in test_single_horizon_report_persists_and_reads_all_scale_fields
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 166 in pytest_pyfunc_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 1720 in runtest
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 179 in pytest_runtest_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 245 in <lambda>
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 353 in from_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 244 in call_and_report
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 137 in runtestprotocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 396 in pytest_runtestloop
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 372 in _main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 318 in wrap_session
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py", line 9 in <module>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 86 in _run_code
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 196 in _run_module_as_main
+Thread 0x0000007001007000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017f737000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017e72b000 (most recent call first):
+  File "<frozen importlib._bootstrap_external>", line 883 in exec_module
+  File "<frozen importlib._bootstrap>", line 688 in _load_unlocked
+  File "<frozen importlib._bootstrap>", line 1006 in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 1027 in _find_and_load
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_baostock_provider.py", line 43 in _bs
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_baostock_provider.py", line 64 in _session
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/contextlib.py", line 135 in __enter__
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_baostock_provider.py", line 87 in _fetch_hist_df
+  File "/private/tmp/dav990-target/tradingagents/dataflows/providers/cn_baostock_provider.py", line 126 in get_stock_data
+  File "/private/tmp/dav990-target/tradingagents/dataflows/interface.py", line 366 in <lambda>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 58 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 83 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017d71f000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017c713000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x000000017b707000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Thread 0x0000000170683000 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/thread.py", line 81 in _worker
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 953 in run
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 1016 in _bootstrap_inner
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 973 in _bootstrap
+
+Current thread 0x00000001f5993f80 (most recent call first):
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/threading.py", line 324 in wait
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/concurrent/futures/_base.py", line 453 in result
+  File "/private/tmp/dav990-target/tradingagents/dataflows/interface.py", line 440 in route_to_vendor
+  File "/private/tmp/dav990-target/tradingagents/knowledge/historical_cases.py", line 173 in calculate_t1_return
+  File "/private/tmp/dav990-target/tradingagents/knowledge/historical_cases.py", line 364 in record_historical_case
+  File "/private/tmp/dav990-target/api/services/report_service.py", line 1785 in create_report
+  File "/private/tmp/dav990-target/tests/test_fund_flow_scale_consumption.py", line 205 in test_single_horizon_report_persists_and_reads_all_scale_fields
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 166 in pytest_pyfunc_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/python.py", line 1720 in runtest
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 179 in pytest_runtest_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 245 in <lambda>
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 353 in from_call
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 244 in call_and_report
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 137 in runtestprotocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/runner.py", line 118 in pytest_runtest_protocol
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 396 in pytest_runtestloop
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 372 in _main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 318 in wrap_session
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/main.py", line 365 in pytest_cmdline_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_callers.py", line 121 in _multicall
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_manager.py", line 120 in _hookexec
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pluggy/_hooks.py", line 512 in __call__
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 199 in main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223 in console_main
+  File "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py", line 9 in <module>
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 86 in _run_code
+  File "/Users/davidliu/.local/share/uv/python/cpython-3.10-macos-aarch64-none/lib/python3.10/runpy.py", line 196 in _run_module_as_main

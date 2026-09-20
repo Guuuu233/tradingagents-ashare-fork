@@ -1,0 +1,21 @@
+
+===== at-cpu elapsed=0.29 =====
+2624  2622  2624 Rs    60.3 00:00  54960 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+thread_rows=1
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  2624   ??   60.3 R    20T   0:00.04   0:00.25 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+
+---nodes---
+1789497278.350228	configure	pid=2624 argv=/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+
+
+===== 20s elapsed=20.28 =====
+2624  2622  2624 Rs    99.8 00:20 241008 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+thread_rows=1
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  2624   ??   99.8 R    20T   0:00.30   0:19.07 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+
+---nodes---
+1789497278.350228	configure	pid=2624 argv=/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py -q -p no:randomly -p dav990_probe tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+1789497280.877319	START	tests/test_financial_period_compliance.py::test_rt16_non_blocking_does_not_alter_analysis_status
+

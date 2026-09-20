@@ -1,0 +1,10 @@
+
+===== first elapsed=0.41 =====
+3458  3456  3458 Rs    67.2 00:01  72992 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields
+thread_rows=1
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  3458   ??   67.2 R    46T   0:00.05   0:00.36 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields
+
+---nodes---
+1789497437.917329	configure	pid=3458 argv=/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py -q -p no:randomly -p dav990_probe tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields
+

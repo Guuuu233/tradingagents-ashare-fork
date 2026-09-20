@@ -1,0 +1,130 @@
+
+===== at-cpu elapsed=0.62 =====
+4158  4156  4158 Rs    85.5 00:00 105232 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+thread_rows=1
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  4158   ??   85.5 R    20T   0:00.10   0:00.52 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+
+---nodes---
+1789497559.413163	configure	pid=4158 argv=/Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/pytest/__main__.py -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+
+
+===== at-consumption elapsed=44.77 =====
+4158  4156  4158 Rs    71.1 00:44 292992 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+thread_rows=8
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  4158   ??   65.9 S    20T   0:00.45   0:42.94 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+          4158         1.0 S    20T   0:00.00   0:00.10 
+          4158         1.0 S    20T   0:00.00   0:00.02 
+          4158         0.7 S    20T   0:00.00   0:00.01 
+          4158         0.6 S    20T   0:00.00   0:00.01 
+          4158         0.7 S    20T   0:00.00   0:00.01 
+          4158         0.8 S    20T   0:00.00   0:00.01 
+          4158         0.4 R    20T   0:00.02   0:00.04 
+
+---nodes---
+Mv::test_normal_circ_mv_ratio_calculated_and_hung
+1789497602.806496	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_without_unit_omits_turnover_ratio_and_records_gap
+1789497602.840707	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_without_unit_omits_turnover_ratio_and_records_gap
+1789497602.840943	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_with_explicit_unit_calculates_both_ratios
+1789497602.874031	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_with_explicit_unit_calculates_both_ratios
+1789497602.874258	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_token_missing_explicit_gap_not_zero_ratio
+1789497602.982120	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_token_missing_explicit_gap_not_zero_ratio
+1789497602.982363	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_permission_denied_explicit_gap
+1789497603.016595	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_permission_denied_explicit_gap
+1789497603.016831	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_provider_unavailable_in_registry
+1789497603.061264	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_provider_unavailable_in_registry
+1789497603.061490	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_exception_gracefully_handled
+1789497603.096322	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_exception_gracefully_handled
+1789497603.096567	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_zero_int_computes_zero_ratio
+1789497603.130153	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_zero_int_computes_zero_ratio
+1789497603.130386	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_decimal_zero_computes_zero_ratio
+1789497603.241545	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_decimal_zero_computes_zero_ratio
+1789497603.241807	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_missing_records_gap
+1789497603.276024	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_missing_records_gap
+1789497603.276261	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_trade_date_rejected_by_pure_function
+1789497603.309838	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_trade_date_rejected_by_pure_function
+1789497603.310065	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_security_rejected_by_pure_function
+1789497603.344068	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_security_rejected_by_pure_function
+1789497603.344281	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_zero_circ_mv_rejected
+1789497603.457290	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_zero_circ_mv_rejected
+1789497603.457506	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_negative_circ_mv_rejected
+1789497603.491550	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_negative_circ_mv_rejected
+1789497603.491785	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_neutrality_no_strength_ranking_in_output
+1789497603.525702	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_neutrality_no_strength_ranking_in_output
+1789497603.525939	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_data_collector_class_collect_integration
+1789497603.568937	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_data_collector_class_collect_integration
+1789497603.569174	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_normal_collector_output_json_serializable_and_sqlite_bindable
+1789497603.682017	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_normal_collector_output_json_serializable_and_sqlite_bindable
+1789497603.682251	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_zero_net_amount_json_serializable_and_sqlite_bindable
+1789497603.717615	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_zero_net_amount_json_serializable_and_sqlite_bindable
+1789497603.717851	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_denominator_json_serializable_and_sqlite_bindable
+1789497603.751490	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_denominator_json_serializable_and_sqlite_bindable
+1789497603.751704	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_amount_unit_json_serializable_and_sqlite_bindable
+1789497603.785311	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_amount_unit_json_serializable_and_sqlite_bindable
+1789497603.785529	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_default_market_data_context_json_serializable
+1789497603.786376	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_default_market_data_context_json_serializable
+1789497603.786524	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_unknown_type_raises_type_error_no_default_str_masking
+1789497603.787369	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_unknown_type_raises_type_error_no_default_str_masking
+1789497603.787540	START	tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields
+
+
+===== 45s elapsed=50.45 =====
+4158  4156  4158 Rs    37.5 00:50 4038336 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+thread_rows=8
+USER       PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND
+davidliu  4158   ??    0.6 S    20T   0:00.45   0:42.94 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pytest -q -p no:randomly -p dav990_probe tests/test_evidence_relations.py tests/test_evidence_summary.py tests/test_evidence_verifier_fairness.py tests/test_expectation_revision_contract.py tests/test_financial_announce_cutoff.py tests/test_financial_as_of.py tests/test_financial_period_compliance.py tests/test_financial_period_kind.py tests/test_frozen_trade_date_isolation.py tests/test_fund_flow_dispute_tie.py tests/test_fund_flow_evidence.py tests/test_fund_flow_lg_credibility.py tests/test_fund_flow_scale_collector.py tests/test_fund_flow_scale_consumption.py tests/test_fund_flow_scale_metrics.py tests/test_fundamentals_analyst.py tests/test_game_theory_integration.py::test_rt7_single_and_dual_horizon_isolation
+          4158         0.0 S    20T   0:00.00   0:00.10 
+          4158         0.0 S    20T   0:00.00   0:00.02 
+          4158         0.0 S    20T   0:00.00   0:00.01 
+          4158         0.0 S    20T   0:00.00   0:00.01 
+          4158        34.8 R    20T   0:01.70   0:00.56 
+          4158         0.0 S    20T   0:00.00   0:00.01 
+          4158         0.0 S    20T   0:00.02   0:00.04 
+
+---nodes---
+Mv::test_normal_circ_mv_ratio_calculated_and_hung
+1789497602.806496	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_without_unit_omits_turnover_ratio_and_records_gap
+1789497602.840707	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_without_unit_omits_turnover_ratio_and_records_gap
+1789497602.840943	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_with_explicit_unit_calculates_both_ratios
+1789497602.874031	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorAmountUnitContract::test_amount_with_explicit_unit_calculates_both_ratios
+1789497602.874258	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_token_missing_explicit_gap_not_zero_ratio
+1789497602.982120	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_token_missing_explicit_gap_not_zero_ratio
+1789497602.982363	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_permission_denied_explicit_gap
+1789497603.016595	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_permission_denied_explicit_gap
+1789497603.016831	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_provider_unavailable_in_registry
+1789497603.061264	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_provider_unavailable_in_registry
+1789497603.061490	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_exception_gracefully_handled
+1789497603.096322	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDailyBasicFailures::test_daily_basic_exception_gracefully_handled
+1789497603.096567	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_zero_int_computes_zero_ratio
+1789497603.130153	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_zero_int_computes_zero_ratio
+1789497603.130386	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_decimal_zero_computes_zero_ratio
+1789497603.241545	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_decimal_zero_computes_zero_ratio
+1789497603.241807	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_missing_records_gap
+1789497603.276024	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorZeroNetAmount::test_net_amount_missing_records_gap
+1789497603.276261	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_trade_date_rejected_by_pure_function
+1789497603.309838	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_trade_date_rejected_by_pure_function
+1789497603.310065	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_security_rejected_by_pure_function
+1789497603.344068	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorCrossDateAndSecurity::test_cross_security_rejected_by_pure_function
+1789497603.344281	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_zero_circ_mv_rejected
+1789497603.457290	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_zero_circ_mv_rejected
+1789497603.457506	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_negative_circ_mv_rejected
+1789497603.491550	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorDenominatorSanity::test_negative_circ_mv_rejected
+1789497603.491785	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_neutrality_no_strength_ranking_in_output
+1789497603.525702	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_neutrality_no_strength_ranking_in_output
+1789497603.525939	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_data_collector_class_collect_integration
+1789497603.568937	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorNeutralityAndIntegration::test_data_collector_class_collect_integration
+1789497603.569174	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_normal_collector_output_json_serializable_and_sqlite_bindable
+1789497603.682017	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_normal_collector_output_json_serializable_and_sqlite_bindable
+1789497603.682251	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_zero_net_amount_json_serializable_and_sqlite_bindable
+1789497603.717615	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_zero_net_amount_json_serializable_and_sqlite_bindable
+1789497603.717851	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_denominator_json_serializable_and_sqlite_bindable
+1789497603.751490	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_denominator_json_serializable_and_sqlite_bindable
+1789497603.751704	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_amount_unit_json_serializable_and_sqlite_bindable
+1789497603.785311	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_missing_amount_unit_json_serializable_and_sqlite_bindable
+1789497603.785529	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_default_market_data_context_json_serializable
+1789497603.786376	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_default_market_data_context_json_serializable
+1789497603.786524	START	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_unknown_type_raises_type_error_no_default_str_masking
+1789497603.787369	FINISH	tests/test_fund_flow_scale_collector.py::TestFundFlowScaleCollectorJsonSerialization::test_unknown_type_raises_type_error_no_default_str_masking
+1789497603.787540	START	tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields
+
