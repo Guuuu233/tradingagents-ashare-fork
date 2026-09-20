@@ -29,6 +29,7 @@ from ..trade_calendar import (
 from ..utils import (
     chronological,
     format_hist_csv,
+    income_statement_cost_field_notes,
     safe_float,
     shrink_table,
     slice_hist_df,
@@ -1586,11 +1587,17 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             table_kind=kind_map.get(report_name, "generic"),
                             require_core_fields=(report_name == "资产负债表"),
                         )
+                        cost_note = (
+                            income_statement_cost_field_notes(filtered)
+                            if stmt_kind == "income"
+                            else ""
+                        )
+                        note_block = f"\n{cost_note}" if cost_note else ""
                         if stmt_kind in ("income", "cashflow"):
                             q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
                             q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)
-                            return f"{header}\n\n{table}\n\n{q2_block}"
-                        return f"{header}\n\n{table}"
+                            return f"{header}{note_block}\n\n{table}\n\n{q2_block}"
+                        return f"{header}{note_block}\n\n{table}"
                     except Exception as exc:
                         errors.append(f"stock_financial_report_sina: {type(exc).__name__}({exc})")
             else:
@@ -1657,11 +1664,17 @@ class CnAkshareProvider(BaseMarketDataProvider):
                             table_kind=kind_map.get(report_name, "generic"),
                             require_core_fields=(report_name == "资产负债表"),
                         )
+                        cost_note = (
+                            income_statement_cost_field_notes(filtered)
+                            if stmt_kind == "income"
+                            else ""
+                        )
+                        note_block = f"\n{cost_note}" if cost_note else ""
                         if stmt_kind in ("income", "cashflow"):
                             q2_res = derive_q2_from_h1_q1(stmt_kind, filtered, effective_map=eff_map)
                             q2_block = format_q2_derivation_block(q2_res, effective_map=eff_map)
-                            return f"{header}\n\n{table}\n\n{q2_block}"
-                        return f"{header}\n\n{table}"
+                            return f"{header}{note_block}\n\n{table}\n\n{q2_block}"
+                        return f"{header}{note_block}\n\n{table}"
                     except Exception as exc:
                         errors.append(f"backup_financial_report: {type(exc).__name__}({exc})")
                 else:

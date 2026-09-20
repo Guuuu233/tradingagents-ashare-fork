@@ -1,0 +1,60 @@
+{
+  "description": "DAV-1108 stage A regression fixture: 营业成本 vs 营业总成本 independent fields. Units: yuan. gross_margin in percent.",
+  "cases": [
+    {
+      "ticker": "600276.SH",
+      "name": "恒瑞医药",
+      "period": "20260331",
+      "source": "real_report_issue_verified (DAV-1108 issue body: 营收81.4057亿/营业成本10.9095亿/营业总成本56.4293亿)",
+      "营业收入": 8140570000,
+      "营业成本": 1090950000,
+      "营业总成本": 5642930000,
+      "毛利率": 86.60,
+      "expect": "clean"
+    },
+    {
+      "ticker": "000725.SZ",
+      "name": "京东方A",
+      "period": "20260331",
+      "source": "real_report_dav282 (work/dav282_report_6e8b20a60ba24cdc881a218feb32c9a8.json fundamentals: 营收510.01亿/营业成本430.47亿/毛利率15.59%)",
+      "营业收入": 51001000000,
+      "营业成本": 43047000000,
+      "营业总成本": null,
+      "毛利率": 15.59,
+      "expect": "clean"
+    },
+    {
+      "ticker": "601899.SH",
+      "name": "紫金矿业",
+      "period": "20260331",
+      "source": "synthetic_consistent_pending_real_report",
+      "营业收入": 80000000000,
+      "营业成本": 68000000000,
+      "营业总成本": 74000000000,
+      "毛利率": 15.0,
+      "expect": "clean"
+    },
+    {
+      "ticker": "002475.SZ",
+      "name": "立讯精密",
+      "period": "20260331",
+      "source": "synthetic_consistent_pending_real_report",
+      "营业收入": 60000000000,
+      "营业成本": 54000000000,
+      "营业总成本": 57000000000,
+      "毛利率": 10.0,
+      "expect": "clean"
+    },
+    {
+      "ticker": "300015.SZ",
+      "name": "爱尔眼科",
+      "period": "20260331",
+      "source": "synthetic_consistent_pending_real_report",
+      "营业收入": 6000000000,
+      "营业成本": 3000000000,
+      "营业总成本": 4200000000,
+      "毛利率": 50.0,
+      "expect": "clean"
+    }
+  ]
+}

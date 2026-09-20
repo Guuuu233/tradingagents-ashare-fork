@@ -27,6 +27,13 @@ COMPLIANCE_STATUS_NOT_CHECKED = "not_checked"
 KIND_CUMULATIVE_LABELED_AS_SINGLE_QUARTER = "cumulative_labeled_as_single_quarter"
 KIND_CUMULATIVE_DOUBLE_COUNTED = "cumulative_double_counted"
 KIND_SINGLE_QUARTER_WITHOUT_DERIVATION = "single_quarter_without_derivation"
+# Deterministic input-consistency kinds (DAV-1108 stage A)
+KIND_COST_FIELD_INCONSISTENT = "cost_field_inconsistent"
+KIND_GROSS_MARGIN_INCONSISTENT = "gross_margin_inconsistent"
+
+# Gross-margin consistency: |reported - (1 - cost/revenue)| tolerance (fraction).
+# 2pp accommodates vendor rounding of reported gross margin.
+GROSS_MARGIN_TOLERANCE: float = 0.02
 
 # ── Numerical parsing & tolerance constants ───────────────────────────────────
 
@@ -112,11 +119,23 @@ CANONICAL_FIELD_ALIASES: dict[str, dict[str, list[str]]] = {
             "operating_income",
             "operating_revenue",
         ],
-        "营业成本": [
+        # 营业总成本 ⊃ 营业成本（含税金及期间费用），两者是包含关系而非别名，
+        # 必须保持独立 canonical 字段且更长名称排前，避免 substring 误匹配（DAV-1108）。
+        "营业总成本": [
             "营业总成本",
-            "营业成本",
-            "operating_costs",
             "operating_expenses",
+        ],
+        "营业成本": [
+            "营业成本",
+            "主营业务成本",
+            "operating_costs",
+        ],
+        "毛利率": [
+            "毛利率",
+            "销售毛利率",
+            "gross_margin",
+            "gross_margin_ratio",
+            "gross_profit_margin",
         ],
         "销售费用": ["销售费用", "sales_fee", "selling_expenses"],
         "管理费用": ["管理费用", "manage_fee", "management_expenses"],
@@ -216,6 +235,7 @@ def parse_financial_statement_inputs(
     parsed: dict[str, Any] = {
         "statements": {},
         "q2_derivation": {},
+        "field_gaps": [],
     }
 
     found_any_valid_table = False
@@ -343,10 +363,36 @@ def parse_financial_statement_inputs(
             parsed["statements"][stmt_key] = normalized_rows
             found_any_valid_table = True
 
+    parsed["field_gaps"] = _detect_field_gaps(parsed["statements"])
+
     if not found_any_valid_table:
         return False, "未能从输入中解析出任何有效财务报表行", {}
 
     return True, None, parsed
+
+
+def _detect_field_gaps(statements: dict[str, Any]) -> list[dict[str, Any]]:
+    """Detect explicit field-level gaps in parsed statements (DAV-1108).
+
+    Marks missing fields as explicit ``gap`` entries so downstream consumers
+    (report assembly, trace) treat them as data-missing instead of letting the
+    model back-fill or alias another field's value.
+    """
+    gaps: list[dict[str, Any]] = []
+    income_rows = statements.get("income_statement") or []
+    if income_rows:
+        canonical_keys: set[str] = set()
+        for r in income_rows:
+            canonical_keys.update((r.get("_numeric_fields") or {}).keys())
+        if "营业总成本" in canonical_keys and "营业成本" not in canonical_keys:
+            gaps.append({
+                "statement": "income_statement",
+                "gap": "missing_field",
+                "missing_field": "营业成本",
+                "present_field": "营业总成本",
+                "note": "营业成本字段缺失，营业总成本≠营业成本，禁止反推或冒充",
+            })
+    return gaps
 
 
 # ── Text analysis & reported amount extraction ───────────────────────────────
@@ -455,6 +501,58 @@ def _extract_clause_period_label(clause: str) -> Tuple[Optional[str], Optional[s
     return None, None
 
 
+def _check_income_field_consistency(
+    income_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Deterministic cross-field checks on parsed income rows (DAV-1108 stage A).
+
+    - 营业总成本 ≥ 营业成本 must hold per row when both fields exist;
+      a violation indicates a swapped/mislabeled field caliber.
+    - When 营业收入, 营业成本 and 毛利率 coexist, enforce
+      毛利率 ≈ 1 - 营业成本/营业收入 within ``GROSS_MARGIN_TOLERANCE``.
+      营业总成本 is a separate canonical field and is never used here —
+      it must not feed gross-margin or raw-material sensitivity derivation.
+    """
+    violations: list[dict[str, Any]] = []
+    for r in income_rows or []:
+        nf = r.get("_numeric_fields") or {}
+        period_label = r.get("reported_period_label") or "unknown"
+        total_cost = nf.get("营业总成本")
+        cost = nf.get("营业成本")
+        revenue = nf.get("营业收入")
+        gross_margin = nf.get("毛利率")
+
+        if total_cost is not None and cost is not None and not _is_approx_equal(total_cost, cost):
+            if total_cost < cost:
+                violations.append({
+                    "kind": KIND_COST_FIELD_INCONSISTENT,
+                    "quoted_text": "",
+                    "statement": "income_statement",
+                    "field": "营业总成本",
+                    "reported_label": period_label,
+                    "input_period_kind": r.get("period_kind", "unknown"),
+                    "input_value": float(total_cost),
+                    "expected_label": "营业总成本 >= 营业成本",
+                })
+
+        if revenue is not None and cost is not None and gross_margin is not None:
+            gm_frac = gross_margin / 100.0 if gross_margin > 1.5 else float(gross_margin)
+            if revenue > 0:
+                expected = 1.0 - (float(cost) / float(revenue))
+                if abs(gm_frac - expected) > GROSS_MARGIN_TOLERANCE:
+                    violations.append({
+                        "kind": KIND_GROSS_MARGIN_INCONSISTENT,
+                        "quoted_text": "",
+                        "statement": "income_statement",
+                        "field": "毛利率",
+                        "reported_label": period_label,
+                        "input_period_kind": r.get("period_kind", "unknown"),
+                        "input_value": float(gm_frac),
+                        "expected_label": f"1-营业成本/营业收入≈{expected:.4f}",
+                    })
+    return violations
+
+
 # ── Core verification algorithm ──────────────────────────────────────────────
 
 
@@ -481,20 +579,33 @@ def check_financial_period_compliance(
             "status": COMPLIANCE_STATUS_NOT_CHECKED,
             "not_checked_reason": fail_reason or "财报输入数据不可用或未提供足够元数据",
             "violations": [],
+            "field_gaps": [],
         }
 
-    if not report_text or not report_text.strip():
-        return {
-            "status": COMPLIANCE_STATUS_CHECKED_CLEAN,
-            "not_checked_reason": None,
-            "violations": [],
-        }
-
-    violations: list[dict[str, Any]] = []
+    field_gaps = parsed_data.get("field_gaps", [])
 
     # Map statements for quick lookup
     stmts = parsed_data["statements"]
     q2_derivations = parsed_data["q2_derivation"]
+
+    # Deterministic input field-consistency checks (DAV-1108 stage A):
+    # independent of report text, catch swapped/mislabeled cost calibers.
+    violations: list[dict[str, Any]] = _check_income_field_consistency(
+        stmts.get("income_statement", [])
+    )
+
+    if not report_text or not report_text.strip():
+        status = (
+            COMPLIANCE_STATUS_VIOLATIONS_FOUND
+            if violations
+            else COMPLIANCE_STATUS_CHECKED_CLEAN
+        )
+        return {
+            "status": status,
+            "not_checked_reason": None,
+            "violations": violations,
+            "field_gaps": field_gaps,
+        }
 
     # Build input value index for flow statements (cashflow, income_statement)
     # entry: (statement, field, period_kind, reported_label, value)
@@ -707,10 +818,12 @@ def check_financial_period_compliance(
             "status": COMPLIANCE_STATUS_VIOLATIONS_FOUND,
             "not_checked_reason": None,
             "violations": unique_violations,
+            "field_gaps": field_gaps,
         }
 
     return {
         "status": COMPLIANCE_STATUS_CHECKED_CLEAN,
         "not_checked_reason": None,
         "violations": [],
+        "field_gaps": field_gaps,
     }

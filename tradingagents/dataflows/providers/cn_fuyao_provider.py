@@ -50,7 +50,13 @@ from ..trade_calendar import (
     now_cn,
     snapshot_historical_refusal,
 )
-from ..utils import format_hist_csv, safe_float, shrink_table, slice_hist_df
+from ..utils import (
+    format_hist_csv,
+    income_statement_cost_field_notes,
+    safe_float,
+    shrink_table,
+    slice_hist_df,
+)
 from ..vendor_result import VendorEmpty, VendorFail, VendorRefuse
 
 logger = logging.getLogger(__name__)
@@ -949,6 +955,10 @@ class CnFuyaoProvider(BaseMarketDataProvider):
         table = self._shrink_table(
             visible_df, max_rows=12, max_cols=18, table_kind="generic"
         )
+        if kind == "income":
+            cost_note = income_statement_cost_field_notes(df)
+            if cost_note:
+                table = f"{table}\n\n{cost_note}"
         notes = self._financial_semantic_notes(df, kind, curr_date)
         derivation = self._q2_derivation_block(df, kind, curr_date)
         if derivation:

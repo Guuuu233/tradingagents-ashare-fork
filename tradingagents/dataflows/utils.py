@@ -441,6 +441,56 @@ def _replace_nullish_with_marker(df: "pd.DataFrame", marker: str = MISSING_VALUE
     return out
 
 
+# Income-statement cost caliber guard (DAV-1108 stage A).
+# 营业总成本 (total operating cost incl. taxes & period expenses) is NOT an
+# alias of 营业成本 (COGS). Resolve each name independently.
+INCOME_TOTAL_COST_COLUMN_CANDIDATES: tuple[str, ...] = (
+    "营业总成本",
+    "operating_expenses",
+)
+INCOME_COST_COLUMN_CANDIDATES: tuple[str, ...] = (
+    "营业成本",
+    "主营业务成本",
+    "operating_costs",
+)
+
+
+def income_statement_cost_field_notes(df: "pd.DataFrame") -> str:
+    """Prompt-visible caliber guard for injected income statements.
+
+    - When only 营业总成本 is present and 营业成本 is missing, emit an explicit
+      gap note so the model cannot silently treat total cost as COGS or
+      back-derive gross margin from it.
+    - When both exist, flag rows where 营业总成本 < 营业成本 as a suspected
+      field mislabel.
+    Returns '' when nothing to note.
+    """
+    if df is None or getattr(df, "empty", True):
+        return ""
+    total_col = _resolve_column(df.columns, INCOME_TOTAL_COST_COLUMN_CANDIDATES)
+    cost_col = _resolve_column(df.columns, INCOME_COST_COLUMN_CANDIDATES)
+    notes: list[str] = []
+    if total_col is not None and cost_col is None:
+        notes.append(
+            "【口径提示】本表含营业总成本但缺营业成本字段：营业总成本≠营业成本"
+            "（总成本含税金及附加与期间费用），禁止将营业总成本当作营业成本，"
+            "也禁止用于毛利率或原材料成本敏感性推算；营业成本按数据缺失处理。"
+        )
+    if total_col is not None and cost_col is not None:
+        inverted = 0
+        for _, row in df.iterrows():
+            total_v = safe_float(row.get(total_col))
+            cost_v = safe_float(row.get(cost_col))
+            if total_v is not None and cost_v is not None and total_v < cost_v:
+                inverted += 1
+        if inverted:
+            notes.append(
+                f"【口径告警】{inverted} 行出现营业总成本<营业成本，字段口径疑似错标，"
+                "引用成本数据前须人工核对。"
+            )
+    return "\n".join(notes)
+
+
 def _table_to_markdown(df: "pd.DataFrame") -> str:
     if df is None or getattr(df, "empty", True):
         return ""
