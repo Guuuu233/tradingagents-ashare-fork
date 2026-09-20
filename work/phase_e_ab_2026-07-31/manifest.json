@@ -1,0 +1,42 @@
+{
+  "started_at": "2026-07-30T20:36:15.563266+00:00",
+  "target_user_id": "429163f7-50b6-4982-8bdf-96ae99506843",
+  "target_email": "davidliu022305@gmail.com",
+  "symbol": "600519.SH",
+  "runs": [
+    {
+      "label": "current_off",
+      "trade_date": "2026-07-29",
+      "switch_enabled": false,
+      "job_id": "2873c7591d0947c898c1d264ff8f6135",
+      "status": "completed"
+    },
+    {
+      "label": "current_on",
+      "trade_date": "2026-07-29",
+      "switch_enabled": true,
+      "job_id": "d7deca255c734554bfadae4539ade111",
+      "status": "completed"
+    },
+    {
+      "label": "historical_off",
+      "trade_date": "2026-04-30",
+      "switch_enabled": false,
+      "job_id": "573e92970a7b445ca2cc8e8c6dd496b7",
+      "status": "completed"
+    },
+    {
+      "label": "historical_on",
+      "trade_date": "2026-04-30",
+      "switch_enabled": true,
+      "job_id": "a8cafe3d314841e3923654d94ba98c0d",
+      "status": "completed"
+    }
+  ],
+  "finished_at": "2026-07-30T20:56:59.648007+00:00",
+  "cleanup": {
+    "ok": true,
+    "method": "API",
+    "switch": false
+  }
+}
