@@ -210,6 +210,11 @@ sqlite3 "file:data/tradingagents.db?mode=ro" \
   `sqlite3 "file:data/tradingagents.db?mode=ro" "select count(*) from reports;"`
 - 任务层返回成功 ≠ 报告已落库。验收必须贴出前后对照的实测值。
 - 失败的分析可能完全不落库（失败在写库之前），此时计数不变属正常。
+- **失败有两层记账位置，统计必须分开**：`status='failed'` 的行（执行层硬失败，无
+  `analysis_status`）与 `status='completed' AND analysis_status='INVALID_RUN'` 的行
+  （链路走完但决策层判运行无效）。只数 `completed` 会把 INVALID_RUN 当成功样本，
+  只数 `failed` 会漏掉判废样本。2026-09-20 实测分布：failed 764 / completed 982
+  （其中 INVALID_RUN 4）。
 
 ---
 
