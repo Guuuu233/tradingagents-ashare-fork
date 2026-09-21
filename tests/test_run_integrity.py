@@ -473,3 +473,113 @@ def test_e03c_nested_decision_status_roundtrip_consistency():
     assert recovered_rd is not None
     assert recovered_rd.trade_action == ACTION_BUY
     assert recovered_rd.confidence == 80
+
+
+# ── DAV-1143: financial_period_compliance violations_found must fail-close ──
+
+
+def _violation_trace(kind: str = "cost_field_inconsistent") -> dict:
+    return {
+        "agent": "fundamentals_analyst",
+        "verdict": "看多",
+        "key_finding": "基本面分析结论：看多",
+        "financial_period_compliance": {
+            "status": "violations_found",
+            "not_checked_reason": None,
+            "violations": [
+                {
+                    "kind": kind,
+                    "statement": "income_statement",
+                    "field": "营业成本",
+                }
+            ],
+        },
+    }
+
+
+def test_compliance_violation_trace_fails_analyst_report():
+    """A long, otherwise-passing report with violations_found is treated as failed."""
+    from tradingagents.agents.utils.run_integrity import (
+        assess_reports,
+        trace_compliance_violation_reason,
+    )
+
+    trace = _violation_trace()
+    reason = trace_compliance_violation_reason(trace)
+    assert reason == "financial_period_compliance:violations_found:cost_field_inconsistent"
+
+    reports = _seven(failed=0)
+    assessments = assess_reports(reports, analyst_traces=[trace])
+    fund = next(a for a in assessments if a.analyst_key == "fundamentals")
+    assert fund.failed is True
+    assert fund.source == "trace"
+    assert "violations_found" in (fund.reason or "")
+
+
+def test_compliance_violation_long_report_cannot_stay_valid():
+    """The concrete DAV-1143 scenario: a long report that self-explains the
+    anomaly still fails integrity → run degrades to PARTIAL, never VALID."""
+    long_report = "基本面报告：" + ("营业收入与成本分析，经穿透核实系费用冲回所致。" * 30)
+    reports = _seven(failed=0)
+    reports["fundamentals_report"] = long_report
+
+    integrity = evaluate_run_integrity(
+        reports, analyst_traces=[_violation_trace()]
+    )
+    assert integrity.all_required_failed is False
+    assert integrity.failed_required == ["fundamentals"]
+    assert integrity.analysis_status == "PARTIAL"
+    assert any("violations_found" in c for c in integrity.reason_codes)
+
+
+def test_compliance_violation_end_to_end_partial_not_valid():
+    """evaluate_state_integrity + status_from_manager_verdict: prior PARTIAL
+    blocks the manager from emitting a VALID terminal status."""
+    from tradingagents.agents.utils.decision_status import (
+        ANALYSIS_PARTIAL,
+        status_from_manager_verdict,
+    )
+
+    reports = _seven(failed=0)
+    state = dict(reports)
+    state["analyst_traces"] = [_violation_trace()]
+
+    integrity = evaluate_state_integrity(state)
+    assert integrity.analysis_status == ANALYSIS_PARTIAL
+
+    # Simulate gate stamping analysis_status into state, then manager VALID verdict.
+    manager_verdict = {
+        "direction": "看多",
+        "trade_action": "BUY",
+        "reason": "各项数据良好",
+        "confidence": 80,
+        "probability": 0.7,
+        "consistency_check_passed": True,
+    }
+    status = status_from_manager_verdict(
+        manager_verdict, prior_analysis_status=integrity.analysis_status
+    )
+    assert status.analysis_status == ANALYSIS_PARTIAL
+    assert status.trade_action == "NO_TRADE"
+
+
+def test_compliance_clean_and_not_checked_do_not_fail():
+    """checked_clean / not_checked / missing compliance must not affect integrity."""
+    from tradingagents.agents.utils.run_integrity import (
+        assess_reports,
+        trace_compliance_violation_reason,
+    )
+
+    base = {"agent": "fundamentals_analyst", "verdict": "看多"}
+    for comp in (
+        {"status": "checked_clean", "violations": []},
+        {"status": "not_checked", "not_checked_reason": "x", "violations": []},
+        {},
+        None,
+    ):
+        trace = dict(base)
+        if comp is not None:
+            trace["financial_period_compliance"] = comp
+        assert trace_compliance_violation_reason(trace) is None
+        assessments = assess_reports(_seven(failed=0), analyst_traces=[trace])
+        assert all(not a.failed for a in assessments)

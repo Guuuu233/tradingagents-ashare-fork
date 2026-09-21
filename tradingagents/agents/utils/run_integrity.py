@@ -168,6 +168,34 @@ def is_failed_analyst_trace(trace: Mapping[str, Any] | None) -> tuple[bool, Opti
     return False, None
 
 
+def trace_compliance_violation_reason(trace: Mapping[str, Any] | None) -> Optional[str]:
+    """Structured fail-close hint: financial_period_compliance violations_found.
+
+    A trace whose compliance check found violations means the report's
+    financial figures are internally contradictory (e.g. cost_field_inconsistent).
+    The anomaly must propagate to executable state: the analyst report is
+    treated as failed so the run can only reach PARTIAL/INVALID, never VALID —
+    an LLM narrative explanation of the anomaly is not reconciliation.
+    """
+    if not isinstance(trace, Mapping):
+        return None
+    compliance = trace.get("financial_period_compliance")
+    if not isinstance(compliance, Mapping):
+        return None
+    violations = compliance.get("violations") or []
+    if compliance.get("status") != "violations_found" and not violations:
+        return None
+    kinds = sorted(
+        {
+            str(v.get("kind"))
+            for v in violations
+            if isinstance(v, Mapping) and v.get("kind")
+        }
+    )
+    suffix = ":" + ",".join(kinds) if kinds else ""
+    return f"financial_period_compliance:violations_found{suffix}"
+
+
 def normalize_required_analysts(
     selected: Optional[Sequence[str]] = None,
 ) -> list[str]:
@@ -216,6 +244,13 @@ def assess_reports(
         content = reports.get(field_name, "")
         failed, reason = is_failed_analyst_report(content)
         source = "report"
+        if not failed:
+            # Structured compliance violations fail-close regardless of report
+            # length: a long report that self-explains contradictory figures is
+            # still a failed report (DAV-1143).
+            comp_reason = trace_compliance_violation_reason(traces.get(key))
+            if comp_reason:
+                failed, reason, source = True, comp_reason, "trace"
         if not failed:
             # Structured trace as secondary signal only when report body is empty/short.
             # Prefer report body; never let a long valid report fail via mid-text gaps.
