@@ -79,7 +79,7 @@ REPORT_TO_PROVENANCE_SOURCES: dict[str, tuple[str, ...]] = {
 }
 
 # Chinese and English quantity/unit patterns
-_UNIT_STR = r"(?:万股|亿股|股|亿元|万元|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手)"
+_UNIT_STR = r"(?:万股|亿股|股|亿元|万元|万户|万人|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手|户|人)"
 
 _RANGE_BOTH_UNIT_PATTERN = re.compile(
     r"(?<![\d.])(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")(?![\d.])"
@@ -189,6 +189,15 @@ def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, st
         return num, "%"
     elif unit == "bp":
         return num / 100.0, "%"
+    elif unit == "万户":
+        # 股东户数等计数单位：归一为「户」，不得折叠为元（DAV-1144）
+        return num * 10_000.0, "户"
+    elif unit == "户":
+        return num, "户"
+    elif unit == "万人":
+        return num * 10_000.0, "人"
+    elif unit == "人":
+        return num, "人"
     else:
         return num, "raw"
 
@@ -290,7 +299,9 @@ _STRICT_METRICS = {
     "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
     "主力", "超大单", "大单", "两融", "概率", "预期收益", "降息", "降准", "关税",
     "lpr", "cpi", "ppi", "m2", "gdp",
-    "每股净资产"
+    "每股净资产",
+    # DAV-1144: 股价与股东户数为独立严格指标（同名+同单位+同语义才可比较）
+    "股价", "最高价", "最低价", "股东户数",
 }
 
 _METRIC_CANONICAL_MAP: dict[str, str] = {
@@ -334,6 +345,14 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
     "散户小单净买入": "散户小单", "散户小单": "散户小单",
     "融资净偿还": "两融", "融资净买入": "两融", "融券净卖出": "两融", "两融": "两融", "融资": "两融", "融券": "两融",
+    # DAV-1144: 股价/股东户数 独立指标（此前词表缺失，错绑回退到最近指标）
+    "股价": "股价", "收盘价": "股价", "开盘": "开盘价", "开盘价": "开盘价",
+    "最高价": "最高价", "最低价": "最低价",
+    "股东户数": "股东户数", "股东人数": "股东户数",
+    # 布林轨位类：「股价跌破布林下轨49.59」中 49.59 归属下轨而非股价；
+    # 报告侧「BOLL 下轨为 49.59」须绑同一规范化名才可匹配
+    "布林下轨": "布林", "布林上轨": "布林", "布林中轨": "布林",
+    "布林带": "布林", "布林": "布林", "boll": "布林",
     # 宏观 / 情景
     "情景概率": "概率", "概率": "概率", "情景": "概率",
     "预期收益": "预期收益",
@@ -497,6 +516,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
 
     matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
     res = []
+    last_res_match_end = -1  # res 中最后一个 BoundNumber 对应的 match.end()
     for i, m in enumerate(matches):
         val_str = m.group(1)
         unit_str = m.group(2) or ""
@@ -536,8 +556,13 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                     continue
                 if "；" in ctx or ";" in ctx or "。" in ctx:
                     continue
-                if _NUMBER_WITH_UNIT_RE.search(ctx) and not re.search(
-                    r"[，,、]|同比|环比", ctx
+                # DAV-1144: 括号内数字不得跨括号继承远处的无关指标——括号是紧邻
+                # 前一数字的限定语（「报20700日元（月环比-15.58%）」中 -15.58% 属
+                # 于大金股价的环比，不得回退绑到句首的惠而浦「股价」）；其归属由
+                # 下方的「金额+括号同比」显式配对规则处理，配对不上则保持未绑定。
+                if _NUMBER_WITH_UNIT_RE.search(ctx) and (
+                    paren_mask[n_start]
+                    or not re.search(r"[，,、]|同比|环比", ctx)
                 ):
                     continue
                 dist = len(intervening)
@@ -567,14 +592,33 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                     min_succ_dist = dist
                     closest_succ = m_raw
 
+        # DAV-1144: 「金额+括号同比」配对——括号内 % 紧邻前一金额数字时，显式
+        # 继承该金额绑定的主体指标（「归母净利2.46亿元(-14.73%)」中 -14.73%
+        # 绑净利润而非营收）。词表缺失时不得抓错指标，此规则优先于就近回退。
+        if (
+            unit == "%" and res and last_res_match_end != -1
+            and n_start > 0 and paren_mask[n_start]
+        ):
+            gap = cleaned[last_res_match_end:n_start]
+            if re.fullmatch(r"\s*[（(【\[]\s*", gap) and res[-1].raw_metric:
+                closest_prec = res[-1].raw_metric
+                closest_succ = None
+
         raw_metric = closest_prec or closest_succ
         metric = _canonicalize_metric(raw_metric, unit)
         stype = _classify_semantic_type(cleaned, n_start, n_end, unit, metric)
+        if (
+            unit == "%" and stype == STYPE_UNKNOWN and raw_metric
+            and n_start > 0 and paren_mask[n_start]
+        ):
+            # 括号内 % 直接挂在金额数字之后是同比/环比限定语，语义为同比增速
+            stype = STYPE_GROWTH
         if unit == "%" and metric == "毛利":
             # % 绑定到「毛利」只可能是毛利率语义（占比/增速下毛利的 % 无意义），
             # 而「净利 + %」不得折叠——它可能是净利增速或占比，保持净利润。
             metric = "毛利率"
         res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype))
+        last_res_match_end = n_end
     return res
 
 

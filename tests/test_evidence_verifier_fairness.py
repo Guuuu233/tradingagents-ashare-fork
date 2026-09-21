@@ -617,6 +617,55 @@ def test_dav1088_b_binding_unbound_marker_no_cross_sentence_guess(evaluator):
     assert bn_4540.metric != "pb"
 
 
+# ── DAV-1144: Metric Binding 基础层 ───────────────────────────────────────
+
+
+def test_dav1144_canonical_metric_completion_price_and_holder_count():
+    """DAV-1144: 股价/股东户数 入 canonical 词表；户数单位=户，不归一为元。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("股价在22.76元")[0]
+    assert bn.metric == "股价"
+
+    bn = extract_bound_numbers("净利润2.46亿元")[0]
+    assert bn.metric == "净利润"
+
+    bn = extract_bound_numbers("股东户数增至18.81万户")[0]
+    assert bn.metric == "股东户数"
+    assert bn.unit == "户"
+    assert abs(bn.val - 188100.0) < 1e-6
+
+    bn = extract_bound_numbers("融资净偿还76.69万")[0]
+    assert bn.metric == "两融"
+
+
+def test_dav1144_no_cross_comma_metric_inheritance():
+    """DAV-1144: 跨逗号无关数字不得继承前一指标（股东户数不得绑两融）。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("融资净偿还76.69万，股东户数18.81万户")
+    bn_margin = next(b for b in bns if abs(b.val - 766900.0) < 1e-3)
+    bn_holders = next(b for b in bns if b.unit == "户")
+    assert bn_margin.metric == "两融"
+    assert bn_holders.metric == "股东户数"
+
+
+def test_dav1144_paren_yoy_binds_nearest_amount_metric():
+    """DAV-1144: 金额+括号同比配对绑最近主体指标：-14.73% 绑净利不得绑营收。"""
+    from tradingagents.agents.utils.evidence_verifier import (
+        STYPE_GROWTH,
+        extract_bound_numbers,
+    )
+
+    bns = extract_bound_numbers("营收70.02亿(-17.02%)，归母净利2.46亿(-14.73%)")
+    bn_rev_yoy = next(b for b in bns if abs(b.val + 17.02) < 1e-6)
+    bn_np_yoy = next(b for b in bns if abs(b.val + 14.73) < 1e-6)
+    assert bn_rev_yoy.metric == "营收"
+    assert bn_np_yoy.metric == "净利润"
+    assert bn_rev_yoy.stype == STYPE_GROWTH
+    assert bn_np_yoy.stype == STYPE_GROWTH
+
+
 # ── DAV-1091: is_fatal 独立严重度位在证据核验器中的消费契约 ─────────────────
 
 
