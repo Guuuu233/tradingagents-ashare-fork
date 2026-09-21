@@ -255,7 +255,8 @@ _METRIC_KEYWORDS = [
     "估值", "分红", "股息", "股息率", "回购", "增持", "减持", "重组", "定增", "质押", "现金", "货币资金", "安全垫", "安全边际",
     # DAV-1163: canonical 词表补全对应的关键词——关键词门（canonical 交集）
     # 只看 _METRIC_KEYWORDS，新 canonical 无关键词落点时命中行会被门拦下
-    "流通市值", "市值", "离散度", "利息收入", "融资成本", "持仓占比", "均价",
+    "流通市值", "市值", "离散度", "利息收入", "利息支出", "财务费用", "融资成本", "持仓占比", "均价",
+    "贴息", "裂口", "缺口", "拨备",
     "股价", "收盘", "现价", "价格", "日均线", "日线", "铜价", "美债", "shibor",
     "流动比率", "速动比率",
     "底线", "压力测试", "敏感性", "弹性",
@@ -387,6 +388,14 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "年期收益率": "美债", "国债收益率": "美债", "美债": "美债",
     "shibor": "shibor",
     "综合融资成本": "融资成本", "融资成本": "融资成本",
+    # DAV-1159: 财务费用/贴息类、裂口/拨备类 canonical 落点——此前无词表项，
+    # 「压降负债率69.4%的利息支出」中 69.4% 错绑资产负债率、「裂口68.5亿」
+    # 回退错绑净利润、「拨备30-40亿」回退错绑每股净资产。
+    "利息支出": "利息支出", "利息费用": "利息支出", "财务费用": "财务费用",
+    "贴息": "贴息",
+    "资金裂口": "裂口", "裂口": "裂口", "资金缺口": "裂口",
+    "计提拨备": "拨备", "拨备": "拨备",
+    "价格区间": "股价",
     "资本开支": "capex", "capex": "capex",
     "流通市值": "流通市值",
     "离散度": "离散度",
@@ -1212,6 +1221,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # 「45.40元对应PB」中隔着关系动词「对应」的 PB 是碰巧出现的其他指标，
         # 禁止就近猜测误绑；无法确定指标时保持 metric=None（显式未绑定标记）。
         closest_succ = None
+        succ_gap = None
         min_succ_dist = 9999
         for m_start, m_end, m_raw in filtered_spans:
             if m_start >= n_end and (m_start - n_end) < 15:
@@ -1224,6 +1234,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 if dist < min_succ_dist:
                     min_succ_dist = dist
                     closest_succ = m_raw
+                    succ_gap = intervening
 
         # DAV-1144: 「金额+括号同比」配对——括号内 % 紧邻前一金额数字时，显式
         # 继承该金额绑定的主体指标（「归母净利2.46亿元(-14.73%)」中 -14.73%
@@ -1241,6 +1252,15 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # 均线族后继绑定优先于前向泛指标（「现价高于10日均线91.14」中 10 属
         # 均线而非现价）。
         if closest_succ and _canonicalize_metric(closest_succ, unit) == "均线":
+            closest_prec = None
+
+        # DAV-1159: 「X%的<科目>」所有格结构——% 数字量化的是紧随其后的科目
+        # 名词（「压降负债率69.4%的利息支出」中 69.4% 是利息支出的降幅，不得
+        # 绑前面的负债率与 60% 阈值互判伪冲突）；「的+指标」后继优先于前向。
+        if (
+            unit == "%" and closest_succ and succ_gap is not None
+            and succ_gap.strip() == "的"
+        ):
             closest_prec = None
 
         # DAV-1163: 「变动量+至/到+水平值」结构中的水平值继承变动量的指标——

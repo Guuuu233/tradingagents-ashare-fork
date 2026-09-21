@@ -666,6 +666,40 @@ def test_dav1144_paren_yoy_binds_nearest_amount_metric():
     assert bn_np_yoy.stype == STYPE_GROWTH
 
 
+# ── DAV-1159: Metric Binding 残漏收尾（贴息/负债率/裂口/拨备）─────────────
+
+
+def test_dav1159_percent_possessive_binds_following_subject():
+    """DAV-1159: 「X%的<科目>」所有格——% 量化紧随其后的科目名词，不得绑前向指标。
+
+    「压降负债率69.4%的利息支出」中 69.4% 是利息支出的降幅，绑到资产负债率
+    后会与 60% 阈值互判伪冲突。
+    """
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("贴息扩围与低利率环境显著压降负债率69.4%的利息支出")[0]
+    assert bn.metric == "利息支出"
+
+    bn = extract_bound_numbers("资产负债率60%")[0]
+    assert bn.metric == "资产负债率"
+
+
+def test_dav1159_gap_and_provision_canonical_landing():
+    """DAV-1159: 裂口/拨备 入 canonical 词表——不再回退错绑净利润/每股净资产。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("净利润5.2亿元且资金裂口68.5亿元")
+    bn_gap = next(b for b in bns if abs(b.val - 6850000000.0) < 1e-3)
+    assert bn_gap.metric == "裂口"
+
+    bns = extract_bound_numbers("每股净资产8.5元拨备30-40亿元")
+    bn_prov = next(b for b in bns if abs(b.val - 4000000000.0) < 1e-3)
+    assert bn_prov.metric == "拨备"
+
+    bn = extract_bound_numbers("计提30亿的拨备")[0]
+    assert bn.metric == "拨备"
+
+
 # ── DAV-1145: Entity / Comparison Scope ────────────────────────────────────
 
 
