@@ -780,6 +780,148 @@ def test_dav1145_ambiguous_entity_conservative_no_contradiction(evaluator):
     assert res.get("entity_scope_gaps")
 
 
+# ── DAV-1146: Semantic Role / Scenario / Period 进 binding key ─────────────
+
+
+def test_dav1146_role_and_basis_extraction():
+    """DAV-1146: 语义角色/期间基准入 BoundNumber.role/basis；无修饰默认 actual/None。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("实际换手率为1.11%")[0]
+    assert bn.role == "actual" and bn.basis is None
+
+    bn = extract_bound_numbers("单日换手率达20%即登龙虎榜披露阈值")[0]
+    assert bn.role == "threshold"
+
+    bn = extract_bound_numbers("压力测试情景下净利润或降至335亿")[0]
+    assert bn.role == "scenario"
+
+    bn = extract_bound_numbers("增量营收贡献17亿元")[0]
+    assert bn.role == "incremental"
+
+    bn = extract_bound_numbers("单季ROE为3.595%")[0]
+    assert bn.role == "actual" and bn.basis == "single_quarter"
+
+    bn = extract_bound_numbers("年化ROE为14.38%")[0]
+    assert bn.basis == "annualized"
+
+
+def test_dav1146_actual_vs_threshold_not_contradicted(evaluator):
+    """1.11%实际换手 vs 20%龙虎榜披露阈值：actual vs threshold 不判冲突 + 记 gap。"""
+    seven_reports = {
+        "market_report": "- **异动规则**：单日换手率达20%即登龙虎榜披露阈值。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="实际换手率为1.11%",
+        seven_reports=seven_reports,
+        claim_id="ROLE-1",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1146_scenario_vs_actual_not_contradicted(evaluator):
+    """压力测试净利335亿 vs 实际净利445亿：scenario vs actual 不判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：2026年实际净利润为445亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="压力测试情景下2026年净利润或降至335亿",
+        seven_reports=seven_reports,
+        claim_id="ROLE-2",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1146_incremental_vs_total_not_contradicted(evaluator):
+    """增量营收17亿 vs 总营收4565亿：incremental vs actual(total) 不判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- **营收**：全年总营收4565亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="新业务增量营收贡献17亿元",
+        seven_reports=seven_reports,
+        claim_id="ROLE-3",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1146_single_quarter_vs_annualized_not_contradicted(evaluator):
+    """单季ROE 3.595% vs 年化ROE 14.38%：期间基准不同不判冲突 + 记 gap。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：年化ROE为14.38%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="单季ROE为3.595%",
+        seven_reports=seven_reports,
+        claim_id="ROLE-4",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1146_same_role_same_basis_true_conflict_still_contradicted(evaluator):
+    """同角色同语义同期间真矛盾仍拦（防过宽）：actual/无基准标注 双侧一致。"""
+    seven_reports = {
+        "fundamentals_report": "- **财务表现**：2026年Q2净利润为25.57亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2净利润为15.00亿元",
+        seven_reports=seven_reports,
+        claim_id="ROLE-5",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+    assert "净利润" in res.get("details", "")
+
+
+def test_dav1146_same_scenario_true_conflict_still_contradicted(evaluator):
+    """同 scenario 角色下真矛盾仍拦：压力测试净利335亿 vs 压力测试净利445亿。"""
+    seven_reports = {
+        "fundamentals_report": "- **压力测试**：极端情景下净利润或降至445亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="压力测试情景下净利润或降至335亿",
+        seven_reports=seven_reports,
+        claim_id="ROLE-6",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1146_disclosed_actual_value_not_threshold(evaluator):
+    """返修回归：「中报披露净利445亿」中「披露」修饰实际披露值，不得误判为 threshold；
+    与报告净利15亿的真矛盾仍判 contradicted（防假阴性）。"""
+    seven_reports = {
+        "fundamentals_report": "- **财务表现**：2026年净利润为15.00亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="中报披露归母净利润为445亿元",
+        seven_reports=seven_reports,
+        claim_id="ROLE-7",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+    assert "净利润" in res.get("details", "")
+
+
+def test_dav1146_anaphoric_prev_clause_not_polluting():
+    """返修回归：「阈值如上，实际换手1.11%」前子句为回指性陈述，不得并入语境
+    污染实际值——提取 role 必须为 actual。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("阈值如上，实际换手1.11%")[0]
+    assert bn.role == "actual"
+
+
+def test_dav1146_mixed_marker_priority_threshold_over_scenario():
+    """角色优先级固化 threshold > scenario：「极端压力测试…净利底线」同时含
+    情景词与界线词，归 threshold。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("极端压力测试显示极悲观年化净利底线60亿元")[0]
+    assert bn.role == "threshold"
+    assert bn.basis == "annualized"
+
+
 # ── DAV-1091: is_fatal 独立严重度位在证据核验器中的消费契约 ─────────────────
 
 

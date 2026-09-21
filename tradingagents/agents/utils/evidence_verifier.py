@@ -512,6 +512,9 @@ _ENTITY_BARE_BAD_SUBSTR = frozenset({
     "均值", "平均", "合计", "总计", "占比", "比重", "口径", "情景", "假设",
     "测算", "推演", "预计", "预测", "底线", "上限", "下限", "区间", "中枢",
     "极端", "悲观", "乐观", "中性", "压力测试", "支撑", "阻力",
+    # DAV-1146: 「中报披露」「年报披露」中的「披露」是动作修饰语——token 含之
+    # 即截断取头部（中报披露→中报，落入 stopwords 丢弃），不得整段立为主体。
+    "披露",
 })
 _ENTITY_STOPWORDS = frozenset({
     "公司", "本公司", "上市", "子公司", "集团", "报告期内", "报告期", "期内",
@@ -530,6 +533,9 @@ _ENTITY_STOPWORDS = frozenset({
     "下降", "回升", "回落", "收窄", "走阔", "扩张", "收缩", "改善", "恶化",
     "承压", "修复", "拐点", "趋势", "格局", "逻辑", "驱动", "支撑", "压力",
     "风险", "机会", "对应", "反映", "体现", "表明", "说明", "验证", "证实",
+    # DAV-1146: 「实际换手1.11%」「单日换手率达20%」中「实际」「单日」是修饰语
+    # 而非主体名——不拦截会被裸 token 规则误抓为 co:实际/co:单日。
+    "实际", "单日", "当期", "当季", "当月", "当年",
 })
 _ENTITY_BENCH_NORM = {"行业平均": "行业均值", "同业平均": "同业均值"}
 _ENTITY_COMPANY_SUFFIXES = (
@@ -631,6 +637,95 @@ def _bind_entity_for_number(
     return None
 
 
+# ── DAV-1146: 语义角色 / 情景 / 期间基准进 binding key ──
+# BoundNumber.role 取值：
+#   ROLE_ACTUAL       实际值/默认（无修饰标记）
+#   ROLE_THRESHOLD    披露阈值/门槛/红线/警戒/上下限等规则界线（「20%龙虎榜披露阈值」）
+#   ROLE_SCENARIO     压力测试/情景/假设/测算/预计等假设值（「压力测试净利335–350亿」）
+#   ROLE_INCREMENTAL  增量/新增/净增等边际量（「增量营收17亿」vs「总营收4565亿」）
+# BoundNumber.basis 取值（期间基准，独立于报告期 period 字段）：
+#   BASIS_SINGLE_QUARTER  单季        BASIS_ANNUALIZED  年化/折年
+#   BASIS_CUMULATIVE      累计/年初至今    None 未标注
+ROLE_ACTUAL = "actual"
+ROLE_THRESHOLD = "threshold"
+ROLE_SCENARIO = "scenario"
+ROLE_INCREMENTAL = "incremental"
+BASIS_SINGLE_QUARTER = "single_quarter"
+BASIS_ANNUALIZED = "annualized"
+BASIS_CUMULATIVE = "cumulative"
+
+_ROLE_THRESHOLD_RE = re.compile(
+    # 「披露」「退市」等高频歧义词不得裸用：「中报披露净利445亿」是实际披露值
+    # 而非界线；「披露」仅在与界线词同现（披露阈值/披露标准…）时算 threshold。
+    r"阈值|门槛|红线|警戒|预警|上限|下限|触发|临界|底线|龙虎榜|"
+    r"平仓线|止损线|达标|不低于|不超过|不少于|至多|至少|"
+    r"披露.{0,4}(?:阈值|门槛|红线|标准|要求)|退市(?:线|风险警示|标准)"
+)
+_ROLE_SCENARIO_RE = re.compile(
+    r"压力测试|情景|情形|假设|测算|推演|预测|预计|预估|敏感性|模拟|"
+    r"乐观|悲观|中性|极端"
+)
+_ROLE_INCREMENTAL_RE = re.compile(r"增量|新增|净增|多增|增加额|边际")
+_BASIS_SINGLE_Q_RE = re.compile(r"单季|单季度")
+_BASIS_ANNUALIZED_RE = re.compile(r"年化|折年")
+_BASIS_CUMULATIVE_RE = re.compile(r"累计|年初至今|年初以来|年内累计")
+_ROLE_PREV_CLAUSE_MAX = 16  # 「在压力测试情景下，净利或降至335亿」类短引导子句
+# 前子句并入仅认「引导介词起头」的假设/界线设定子句（在|于|按|若|当|依|据|假设），
+# 排除「阈值如上」「前述下限」这类回指性陈述子句对实际值的污染。
+_ROLE_PREV_CLAUSE_LEAD_RE = re.compile(r"^\s*(?:在|于|按|若|当|依|据|假设|如果)")
+
+
+def _classify_role_and_basis(
+    text: str,
+    n_start: int,
+    n_end: int,
+) -> tuple[str, str | None]:
+    """判定绑定数字的语义角色与期间基准；无修饰标记默认 (actual, None)。
+
+    语境取「同子句前缀 + 数字后紧邻同子句修饰」（阈值/情景/基准常后置，如
+    「20%的龙虎榜披露阈值」「335亿（压力测试）」）；前一子句仅当为「引导介词
+    起头的短假设/界线设定子句」时并入（覆盖「在压力测试情景下，净利或降至
+    335亿」），排除「阈值如上，实际换手1.11%」这类回指性陈述子句的污染。
+    角色优先级固定为 threshold > scenario > incremental（规则界线 > 假设值 >
+    边际量），如「极端压力测试…净利底线60-65亿」归 threshold。
+    """
+    segs = re.split(r"[，。；、,;（）()【】：:！？!?]", text[max(0, n_start - 40):n_start])
+    ctx = segs[-1] if segs else ""
+    if len(segs) >= 2 and segs[-2] and len(segs[-2]) <= _ROLE_PREV_CLAUSE_MAX and (
+        _ROLE_PREV_CLAUSE_LEAD_RE.match(segs[-2])
+        and (_ROLE_SCENARIO_RE.search(segs[-2]) or _ROLE_THRESHOLD_RE.search(segs[-2]))
+    ):
+        ctx = segs[-2] + ctx
+    post = re.split(r"[，。；、,;：:！？!?]", text[n_end:n_end + 12])[0]
+    ctx_full = ctx + "|" + post
+    if _ROLE_THRESHOLD_RE.search(ctx_full):
+        role = ROLE_THRESHOLD
+    elif _ROLE_SCENARIO_RE.search(ctx_full):
+        role = ROLE_SCENARIO
+    elif _ROLE_INCREMENTAL_RE.search(ctx_full):
+        role = ROLE_INCREMENTAL
+    else:
+        role = ROLE_ACTUAL
+    if _BASIS_SINGLE_Q_RE.search(ctx_full):
+        basis = BASIS_SINGLE_QUARTER
+    elif _BASIS_ANNUALIZED_RE.search(ctx_full):
+        basis = BASIS_ANNUALIZED
+    elif _BASIS_CUMULATIVE_RE.search(ctx_full):
+        basis = BASIS_CUMULATIVE
+    else:
+        basis = None
+    return role, basis
+
+
+def _semantics_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
+    """冲突判定的语义角色/期间基准可比性：角色必须相同（actual 不得与 threshold/
+    scenario/incremental 互判）；期间基准必须一致（单季 vs 年化 vs 累计互不可比，
+    单侧未标注按最保守不判）——与 _entities_comparable 同一保守原则。"""
+    if ev_bn.role != l_bn.role:
+        return False
+    return ev_bn.basis == l_bn.basis
+
+
 def _entities_comparable(ev_entity: str | None, l_entity: str | None) -> bool:
     """冲突判定的主体可比性：双侧均未指明主体（默认同一报告目标）或规范名一致才可比。
 
@@ -646,9 +741,9 @@ def _entities_comparable(ev_entity: str | None, l_entity: str | None) -> bool:
 
 
 class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity")
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis")
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None):
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -657,9 +752,11 @@ class BoundNumber:
         self.raw_metric = raw_metric
         self.stype = stype
         self.entity = entity          # None = 未指明主体；ENTITY_AMBIGUOUS = 多主体歧义
+        self.role = role              # DAV-1146: actual/threshold/scenario/incremental
+        self.basis = basis            # DAV-1146: 单季/年化/累计期间基准，None = 未标注
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r})"
 
 
 def extract_bound_numbers(text: str, default_period: str | None = None) -> list[BoundNumber]:
@@ -801,7 +898,8 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             # 而「净利 + %」不得折叠——它可能是净利增速或占比，保持净利润。
             metric = "毛利率"
         entity = _bind_entity_for_number(cleaned, n_start, entity_spans)
-        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype, entity))
+        role, basis = _classify_role_and_basis(cleaned, n_start, n_end)
+        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype, entity, role, basis))
         last_res_match_end = n_end
     return res
 
@@ -890,8 +988,12 @@ def _is_bound_num_contradicted(
     Requires matching metric name, unit, and period (for percentages) before judging conflict.
     DAV-1145: 另要求主体可比——同指标不同主体（跨公司/个股 vs 指数行业基准/
     主体歧义/单侧未指明主体）不得互判 contradicted。
+    DAV-1146: 另要求语义角色/期间基准可比——actual vs threshold/scenario/
+    incremental、单季 vs 年化/累计 不得互判 contradicted。
     """
     if not _entities_comparable(ev_bn.entity, l_bn.entity):
+        return False
+    if not _semantics_comparable(ev_bn, l_bn):
         return False
     return _bound_num_value_conflicts(ev_bn, l_bn)
 
@@ -1256,6 +1358,8 @@ class EvidenceFactualTruthEvaluator:
         contradicted_candidate = None
         # DAV-1145: 数值层面构成冲突、仅因主体不同/歧义/单侧未指明而被跳过的比较 → 记 gap
         entity_scope_gaps: list[str] = []
+        # DAV-1146: 数值层面构成冲突、仅因语义角色/期间基准不同而被跳过的比较 → 记 gap
+        semantic_role_gaps: list[str] = []
         if all_ev_bns:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -1283,13 +1387,22 @@ class EvidenceFactualTruthEvaluator:
                                 )
                                 break
                             if _bound_num_value_conflicts(ev_bn, l_bn):
-                                gap_note = (
-                                    f"跨主体比较已跳过(entity_scope): 证据 {ev_bn.raw}"
-                                    f"(主体={ev_bn.entity}) vs {role_key} 记录 {l_bn.raw}"
-                                    f"(主体={l_bn.entity})"
-                                )
-                                if gap_note not in entity_scope_gaps:
-                                    entity_scope_gaps.append(gap_note)
+                                if _entities_comparable(ev_bn.entity, l_bn.entity):
+                                    gap_note = (
+                                        f"跨语义角色/期间基准比较已跳过(semantic_role): 证据 {ev_bn.raw}"
+                                        f"(role={ev_bn.role},basis={ev_bn.basis}) vs {role_key} 记录 {l_bn.raw}"
+                                        f"(role={l_bn.role},basis={l_bn.basis})"
+                                    )
+                                    if gap_note not in semantic_role_gaps:
+                                        semantic_role_gaps.append(gap_note)
+                                else:
+                                    gap_note = (
+                                        f"跨主体比较已跳过(entity_scope): 证据 {ev_bn.raw}"
+                                        f"(主体={ev_bn.entity}) vs {role_key} 记录 {l_bn.raw}"
+                                        f"(主体={l_bn.entity})"
+                                    )
+                                    if gap_note not in entity_scope_gaps:
+                                        entity_scope_gaps.append(gap_note)
                         if contradicted_candidate:
                             break
                     if contradicted_candidate:
@@ -1309,6 +1422,8 @@ class EvidenceFactualTruthEvaluator:
             }
             if entity_scope_gaps:
                 res["entity_scope_gaps"] = entity_scope_gaps
+            if semantic_role_gaps:
+                res["semantic_role_gaps"] = semantic_role_gaps
             return res
 
         # 4. Check market_data_context if provided
@@ -1350,6 +1465,8 @@ class EvidenceFactualTruthEvaluator:
         }
         if entity_scope_gaps:
             res["entity_scope_gaps"] = entity_scope_gaps
+        if semantic_role_gaps:
+            res["semantic_role_gaps"] = semantic_role_gaps
         return res
 
     def evaluate_claims(
