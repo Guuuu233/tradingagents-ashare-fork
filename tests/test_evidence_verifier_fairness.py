@@ -1679,3 +1679,160 @@ def test_dav1158_financial_metric_provider_ignored(evaluator):
         claim_id="PROV-7",
     )
     assert res["status"] == STATUS_CONTRADICTED
+
+
+# ── DAV-1168: Semantic Role 残余收敛——delta/aggregate/scenario 分桶后互判 ──
+
+
+def test_dav1168_delta_vs_level_lpr_quarterly_drop(evaluator):
+    """#1: LPR季降22%（变动率）vs 报告 LPR 3.00%（水平值）不互判冲突。"""
+    seven_reports = {
+        "macro_report": "央行引导LPR_1Y降至3.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="LPR季降22%使生息资产收益持续塌陷",
+        seven_reports=seven_reports,
+        claim_id="SR-1",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_delta_vs_level_lpr_mom_drop(evaluator):
+    """#16: LPR月环比大降10.45%（变动率）vs 报告 3.00%（水平值）不互判冲突。"""
+    seven_reports = {
+        "macro_report": "LPR_1Y为3.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="LPR_1Y降至3.00%月环比大降10.45%",
+        seven_reports=seven_reports,
+        claim_id="SR-16",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_delta_amount_vs_level_cashflow(evaluator):
+    """#10: 同比骤降183亿（变动额）vs 现金流-25.35亿（水平值）不互判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "2026Q1经营活动现金流量净额为-25.35亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1经营现金流-25.35亿同比骤降183亿",
+        seven_reports=seven_reports,
+        claim_id="SR-10",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_delta_amount_after_level_suffix(evaluator):
+    """#28: 「环比激增9.83%达36.57亿」中 36.57亿 是变动额（量纲异于9.83%），
+    不得与存货408.69亿水平值互判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "2026Q1存货为408.69亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="基本面报告显示2026Q1存货达408.69亿元环比激增9.83%达36.57亿元挤压现金流",
+        seven_reports=seven_reports,
+        claim_id="SR-28",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_aggregate_vs_component_fund_flow(evaluator):
+    """#2/#3: 大单与中单合计净流出2.91亿（合计值）vs 中单-1.7948亿（分项）不互判。"""
+    seven_reports = {
+        "smart_money_report": "| **大单与中单博弈** | 大单 -1.1134 亿 / 中单 -1.7948 亿 | 离场 |",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="08-21大单与中单合计净流出2.91亿元主力净流入仅380万",
+        seven_reports=seven_reports,
+        claim_id="SR-2",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_concatenated_aggregate_vs_component(evaluator):
+    """#5: 「大单超大单流出15.06亿」（连写合计）vs 大单-12.96亿（分项）不互判。"""
+    seven_reports = {
+        "smart_money_report": "大单净额（LG）：-12.96 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="主力资金报告：2026-07-06主力净流出15.06亿元(大单超大单流出15.06亿)",
+        seven_reports=seven_reports,
+        claim_id="SR-5",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_zhongxiaodan_aggregate_vs_component(evaluator):
+    """#11: 「中小单流出1.25亿」（中+小连写合计）vs 小单-0.7239亿（分项）不互判。"""
+    seven_reports = {
+        "smart_money_report": "小单净流出 -0.7239 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="中小单流出1.25亿元确认主力在71元关口吸纳散户割肉筹码",
+        seven_reports=seven_reports,
+        claim_id="SR-11",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_actual_vs_scenario_projection(evaluator):
+    """#6: 每股净资产实际21元 vs 报告压力测算「跌向8.00元」情景值不互判。"""
+    seven_reports = {
+        "fundamentals_report": "- **压力测算底线**：每股净资产跌向 8.00元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="每股净资产已由21元降至9.26元",
+        seven_reports=seven_reports,
+        claim_id="SR-6",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_header_scoped_scenario(evaluator):
+    """#23: 「汇率敏感性：…升值1%」小节标题式情景声明作用于行内数值，
+    营收实际增速14.03%不得与其互判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- **汇率敏感性**：公司海外营收占比较高，人民币每单向升值 1%，毛利率受拖累。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="营收增14.03%",
+        seven_reports=seven_reports,
+        claim_id="SR-23",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_scenario_target_vs_actual(evaluator):
+    """#27: 悲观推演「杀跌至23.50元」情景目标 vs 报告 VWMA 28.42 实际值不互判。"""
+    seven_reports = {
+        "news_report": "大盘VWMA加权均线位于28.42元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="大盘均线空头排列且板块加速补跌击穿25.40将诱发踩踏杀跌至23.50元(-12.1%)",
+        seven_reports=seven_reports,
+        claim_id="SR-27",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1168_true_conflict_still_contradicted(evaluator):
+    """正例对照：同角色同指标真矛盾仍拦——actual vs actual 不放宽。"""
+    seven_reports = {
+        "smart_money_report": "超大单净流出 -1.6056 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="超大单净流出2.2亿元",
+        seven_reports=seven_reports,
+        claim_id="SR-POS",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1168_level_after_drop_still_actual(evaluator):
+    """守卫回归：「大降10.45%至3.00%」中 3.00% 是变动后水平值（同量纲），仍归 actual。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("LPR月环比大降10.45%至3.00%")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["10.45%"].role == "delta"
+    assert by_raw["3.00%"].role == "actual"

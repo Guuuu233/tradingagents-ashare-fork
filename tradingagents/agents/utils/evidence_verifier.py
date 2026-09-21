@@ -733,6 +733,9 @@ ROLE_INCREMENTAL = "incremental"
 ROLE_AGGREGATE = "aggregate"
 ROLE_COMPONENT = "component"
 ROLE_DELTA = "delta"
+# DAV-1168: 变动前基准水平——「每股净资产已由21元降至9.26元」中 21元 是
+# 变动前起点值而非当前水平/变动量，不得与变动后水平值互判冲突
+ROLE_BASELINE = "baseline"
 BASIS_SINGLE_QUARTER = "single_quarter"
 BASIS_ANNUALIZED = "annualized"
 BASIS_CUMULATIVE = "cumulative"
@@ -748,7 +751,10 @@ _ROLE_THRESHOLD_RE = re.compile(
 )
 _ROLE_SCENARIO_RE = re.compile(
     r"压力测试|情景|情形|假设|测算|推演|预测|预计|预估|敏感性|模拟|"
-    r"乐观|悲观|中性|极端"
+    r"乐观|悲观|中性|极端|"
+    # DAV-1168: 前瞻性投影词——「跌向8.00元」「目标价23.50」「将诱发踩踏杀跌至」
+    # 中的数值是情景/目标推演值而非已录得实际值，不得与 actual 互判冲突
+    r"跌向|看至|上看|下看|目标价|诱发|踩踏"
 )
 _ROLE_INCREMENTAL_RE = re.compile(r"增量|新增|净增|多增|增加额|边际")
 # DAV-1157: 合计/汇总值——显式汇总词（合计/总计/共计/加总/总和/合并口径），
@@ -756,8 +762,16 @@ _ROLE_INCREMENTAL_RE = re.compile(r"增量|新增|净增|多增|增加额|边际
 _ROLE_AGGREGATE_RE = re.compile(
     r"合计|总计|共计|加总|总和|合并口径|合并计算|"
     r"(?:超大单|大单|中单|小单|全单|主力|散户)\s*[加和与及+]\s*"
-    r"(?:超大单|大单|中单|小单|全单|主力|散户|大量|中量|小量|资金)"
+    r"(?:超大单|大单|中单|小单|全单|主力|散户|大量|中量|小量|资金)|"
+    # DAV-1168: 资金流分单连写合计——「大单超大单流出15.06亿」「中小单流出
+    # 1.25亿」是无连接符的多分量加总，与「大单与中单合计」同义，不得与
+    # 任一分项记录互判
+    r"(?:(?:超?大|中|小)单){2,}|(?:(?:大|中|小)){2,}单"
 )
+# 连写/并列合计词命中后，其后若已出现分量列举（分量词或另一数字），该
+# 合计词已被占先——「大单与中单博弈 | 大单 -1.1134 亿 / 中单 -1.7948 亿」
+# 中两个数值均为分项而非合计值
+_ROLE_AGG_COMPONENT_TAIL_RE = re.compile(r"超大单|大单|中单|小单")
 # 「其中/分项/分量」引导的分量记录（「合计5亿，其中超大单3亿」中的 3亿）。
 _ROLE_COMPONENT_RE = re.compile(r"其中|分项|分量|单项")
 # 变动量/幅度值：降幅/涨幅/变动/回落/提升/增减等变化量（非水平值）。
@@ -766,7 +780,11 @@ _ROLE_COMPONENT_RE = re.compile(r"其中|分项|分量|单项")
 _ROLE_DELTA_RE = re.compile(
     r"降幅|跌幅|涨幅|增幅|变动|上调|下调|加息|降息|回落|回升|"
     r"收窄|走阔|下降|下跌|降低|下滑|增减|减少|大跌|暴跌|大涨|暴涨|"
-    r"提升|提高|增长|增加|个百分点"
+    r"提升|提高|增长|增加|个百分点|"
+    # DAV-1168: 变动词补全——「季降22%」「月环比大降10.45%」「同比骤降183亿」
+    # 「环比激增9.83%」均为变动量而非水平值；裸「增/降」不收（增持/增至/降至
+    # 等是水平语境，由 _ROLE_LEVEL_SUFFIX_RE 与所有格规则另行处理）
+    r"骤降|大降|季降|月降|年降|周降|日降|再降|续降|激增|骤增|暴增|飙涨|飙升"
 )
 # 紧邻前子句以「至/到/为/达/录得/收于」收尾时，该数字是变动后的水平值，
 # 不是变动量本身（「大跌10.45%至3.00%」中的 3.00%）。
@@ -786,6 +804,7 @@ def _classify_role_and_basis(
     text: str,
     n_start: int,
     n_end: int,
+    unit: str = "",
 ) -> tuple[str, str | None]:
     """判定绑定数字的语义角色与期间基准；无修饰标记默认 (actual, None)。
 
@@ -814,14 +833,81 @@ def _classify_role_and_basis(
         role = ROLE_SCENARIO
     elif _ROLE_INCREMENTAL_RE.search(ctx_full):
         role = ROLE_INCREMENTAL
-    elif _ROLE_AGGREGATE_RE.search(ctx_full):
-        role = ROLE_AGGREGATE
+    elif _ROLE_AGGREGATE_RE.search(ctx):
+        # DAV-1168: 合计词占先守卫——最后一个合计词命中点之后若已出现分量
+        # 列举（分量词或另一数字），当前数字是分项而非合计值本身；合计词
+        # 只认数字前缀语境（ctx）——后置「与中小单净流入X亿」枚举的是另
+        # 一分项，不得把本数字误标合计
+        agg_matches = list(_ROLE_AGGREGATE_RE.finditer(ctx))
+        if agg_matches:
+            last_agg = agg_matches[-1]
+            tail = ctx[last_agg.end():]
+            # 枚举式合计词（「大单与中单」「超大单加大单」「大单超大单」）
+            # 命中后若尾部再出现分量词，则当前数字是该分量的列举值而非
+            # 合计值本身（「大单与中单博弈|大单 -1.1134 亿」）；显式汇总词
+            # 「合计超大单…」中分量词是合计对象的限定语，不在此列
+            enum_marker = bool(
+                re.search(
+                    r"[加和与及+]|(?:(?:超?大|中|小)单){2,}|(?:(?:大|中|小)){2,}单",
+                    last_agg.group(0),
+                )
+            )
+            role = (
+                ROLE_ACTUAL
+                if _NUMBER_WITH_UNIT_RE.search(tail)
+                or (enum_marker and _ROLE_AGG_COMPONENT_TAIL_RE.search(tail))
+                else ROLE_AGGREGATE
+            )
+        else:
+            role = ROLE_AGGREGATE
     elif _ROLE_COMPONENT_RE.search(ctx_full):
         role = ROLE_COMPONENT
-    elif _ROLE_DELTA_RE.search(ctx_full) and not _ROLE_LEVEL_SUFFIX_RE.search(ctx):
+    elif _ROLE_DELTA_RE.search(ctx_full):
         role = ROLE_DELTA
+        if _ROLE_LEVEL_SUFFIX_RE.search(ctx):
+            # 「至/到/为/达」收尾默认水平值；仅「变动N%达X<非%量纲>」结构中
+            # X 是变动额本身而非变动后水平（「环比激增9.83%达36.57亿」中
+            # 36.57亿为增量）。「至/到/为」仍一律归水平值——「回落30%至50元」
+            # 的 50元 是变动后价位。
+            level_m = _ROLE_LEVEL_SUFFIX_RE.search(ctx)
+            pre = ctx[:level_m.start()]
+            pre_nums = list(_NUMBER_WITH_UNIT_RE.finditer(pre))
+            is_delta_amount = bool(
+                ctx[level_m.start():].startswith("达")
+                and pre_nums
+                and (pre_nums[-1].group(2) or "") == "%"
+                and unit != "%"
+                and _ROLE_DELTA_RE.search(pre)
+            )
+            if not is_delta_amount:
+                role = ROLE_ACTUAL
+    elif re.search(r"由\s*$", ctx) and re.match(
+        r"\s*(?:降|跌|升|涨|增|减|回落|下调|上调|走低|走高)", post
+    ):
+        # 「由X降至Y」中 X 为变动前基准水平——仅当 X 后紧跟变动动词且自身
+        # 无显式期间标注时成立（「由37.91%（2024）降至25.48%」中 37.91% 带
+        # 显式期间，仍归 actual 可与同期间记录判真冲突）
+        role = ROLE_BASELINE
     else:
         role = ROLE_ACTUAL
+    # DAV-1168: 小节标题式情景/界线声明（「**压力测算底线**：」「**汇率
+    # 敏感性**：」）作用于同一行内其后所有数字——仅兜底 actual，不覆盖
+    # 局部已判定的更强角色（delta/component 等）。
+    if role == ROLE_ACTUAL:
+        line_start = text.rfind("\n", 0, n_start) + 1
+        head_scope = text[line_start:n_start]
+        if re.search(
+            r"(?:压力测试|情景|情形|假设|测算|推演|预测|预计|预估|敏感性|模拟|"
+            r"乐观|悲观|中性|极端)[^，。；、,;：:！？!?\n]{0,12}[：:]",
+            head_scope,
+        ):
+            role = ROLE_SCENARIO
+        elif re.search(
+            r"(?:阈值|门槛|红线|警戒|预警|上限|下限|临界|底线|平仓线|止损线)"
+            r"[^，。；、,;：:！？!?\n]{0,12}[：:]",
+            head_scope,
+        ):
+            role = ROLE_THRESHOLD
     if _BASIS_SINGLE_Q_RE.search(ctx_full):
         basis = BASIS_SINGLE_QUARTER
     elif _BASIS_ANNUALIZED_RE.search(ctx_full):
@@ -1294,7 +1380,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             # 而「净利 + %」不得折叠——它可能是净利增速或占比，保持净利润。
             metric = "毛利率"
         entity = _bind_entity_for_number(cleaned, n_start, entity_spans)
-        role, basis = _classify_role_and_basis(cleaned, n_start, n_end)
+        role, basis = _classify_role_and_basis(cleaned, n_start, n_end, unit)
         # DAV-1157: 数字级期间覆盖（后置括号/子句引导），无局部标注回退整句期间
         num_period = _bind_period_for_number(period_view, n_start, n_end, period)
         # DAV-1163: 区间/约数修饰提取——「约/近/超/不足」前缀与「左右/以上/余」
