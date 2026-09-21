@@ -253,6 +253,7 @@ _METRIC_KEYWORDS = [
     "现金流", "自由现金流", "fcf", "资本开支", "capex", "研发", "费用", "费用率", "应收账款", "存货",
     "周转率", "商誉", "减值", "利用率", "产能", "cr3", "价格战", "库存", "去库", "补库", "订单",
     "估值", "分红", "股息", "股息率", "回购", "增持", "减持", "重组", "定增", "质押", "现金", "货币资金", "安全垫", "安全边际",
+    "流动比率", "速动比率",
     "底线", "压力测试", "敏感性", "弹性",
     # Capital & Flow metrics
     "主力", "净流入", "净流出", "流出", "流入", "超大单", "大单", "中单", "小单", "全单", "龙虎榜",
@@ -345,6 +346,12 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
     "散户小单净买入": "散户小单", "散户小单": "散户小单",
     "融资净偿还": "两融", "融资净买入": "两融", "融券净卖出": "两融", "两融": "两融", "融资": "两融", "融券": "两融",
+    # DAV-1147: 现金口径归一——证据侧「现金337.51亿」与报告侧「货币资金337.51亿」
+    # 必须折叠到同一规范化名，否则跨报告聚合的关键词门（canonical 交集）与
+    # 指标绑定两侧均对不上，真实存在的事实被误判 unsupported。
+    "现金": "现金", "货币资金": "现金", "现金及等价物": "现金", "现金储备": "现金",
+    # DAV-1147: 流动性比率独立指标（流动比率 1.76 此前无词表项，跨报告拼合失败）
+    "流动比率": "流动比率", "速动比率": "速动比率",
     # DAV-1144: 股价/股东户数 独立指标（此前词表缺失，错绑回退到最近指标）
     "股价": "股价", "收盘价": "股价", "开盘": "开盘价", "开盘价": "开盘价",
     "最高价": "最高价", "最低价": "最低价",
@@ -726,6 +733,38 @@ def _semantics_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
     return ev_bn.basis == l_bn.basis
 
 
+def _entities_consistent_for_join(ev_entity: str | None, l_entity: str | None) -> bool:
+    """DAV-1147: 跨报告聚合拼合的主体一致性门。
+
+    与冲突判定的 _entities_comparable 不同：聚合拼合是「验证事实存在性」，
+    单侧未指明主体时默认同报告目标股、允许拼；仅当双侧均指明且主体不同
+    （或任一侧歧义）时禁止强拼——不同主体的同值不得互相佐证。"""
+    if ev_entity is None or l_entity is None:
+        return True
+    if ev_entity == ENTITY_AMBIGUOUS or l_entity == ENTITY_AMBIGUOUS:
+        return False
+    return ev_entity == l_entity
+
+
+def _periods_join_compatible(p1: str | None, p2: str | None) -> bool:
+    """DAV-1147: 跨报告聚合拼合的期间一致性门（与 _is_bound_num_match 同一规则）。
+
+    双侧均指明期间时要求相同或共享同一年度前缀；单侧未指明不阻塞拼合
+    （验证方向的保守宽松，与数值匹配一致）。"""
+    if not p1 or not p2:
+        return True
+    if p1 == p2:
+        return True
+    return bool(
+        p1[:4] == p2[:4]
+        and re.match(r"^\d{4}", p1)
+        and re.match(r"^\d{4}", p2)
+    )
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
 def _entities_comparable(ev_entity: str | None, l_entity: str | None) -> bool:
     """冲突判定的主体可比性：双侧均未指明主体（默认同一报告目标）或规范名一致才可比。
 
@@ -802,7 +841,9 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         unit_str = m.group(2) or ""
         if not unit_str and i + 1 < len(matches):
             between = cleaned[m.end():matches[i+1].start()]
-            if re.fullmatch(r"\s*[-~至到]\s*", between) and matches[i+1].group(2):
+            # DAV-1147: 补全角 dash（–—）——「回购10–12亿元」中 10 须继承单位亿元，
+            # 否则前半截归一为 raw 量纲，跨报告数值拼合拼不上。
+            if re.fullmatch(r"\s*[-~–—至到]\s*", between) and matches[i+1].group(2):
                 unit_str = matches[i+1].group(2)
         norm = normalize_numeric_value(val_str, unit_str)
         if norm is None:
@@ -840,9 +881,12 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 # 前一数字的限定语（「报20700日元（月环比-15.58%）」中 -15.58% 属
                 # 于大金股价的环比，不得回退绑到句首的惠而浦「股价」）；其归属由
                 # 下方的「金额+括号同比」显式配对规则处理，配对不上则保持未绑定。
+                # DAV-1147: 跨子句逗号同样不得继承——「流动比率1.76，拟10亿元回购」
+                # 中逗号后数字属新子句，仅当语境含同比/环比比较从句信号（占先豁免）
+                # 时才允许跨数字长距绑定，否则前句指标已被 1.76 占先。
                 if _NUMBER_WITH_UNIT_RE.search(ctx) and (
                     paren_mask[n_start]
-                    or not re.search(r"[，,、]|同比|环比", ctx)
+                    or not re.search(r"同比|环比", ctx)
                 ):
                     continue
                 dist = len(intervening)
@@ -942,14 +986,8 @@ def _is_bound_num_match(
         return False
     # 期间兼容：双方均抽出期间时，要求相同或共享同一年度前缀
     # （2026H1 与 2026 / 2026-07-06 属同一年度粒度，视为兼容；跨年不兼容）。
-    if ev_bn.period and l_bn.period and ev_bn.period != l_bn.period:
-        if not (
-            ev_bn.period[:4] == l_bn.period[:4]
-            and re.match(r"^\d{4}", ev_bn.period)
-            and re.match(r"^\d{4}", l_bn.period)
-        ):
-            return False
-    return True
+    # DAV-1147：同一规则兼任跨报告拼合的期间门——不同期间的同值不得强拼。
+    return _periods_join_compatible(ev_bn.period, l_bn.period)
 
 
 def _bound_num_value_conflicts(
@@ -1219,6 +1257,47 @@ class EvidenceFactualTruthEvaluator:
 
         parent_period = normalize_period(raw_text)
         atomic_clauses = split_compound_evidence(raw_text)
+
+        # 3.1b DAV-1147: 原子子句跨报告逐字聚合——复合证据的多个事实分处不同
+        # 报告时，每个 ≥4 字的原子子句只要在任一可用报告中逐字命中（容忍报告
+        # 换行/空白差异），整条证据即可聚合成立。聚合的是事实存在性，不拼数字
+        # 推因果；期间与主体一致性由子句文本自身承载（逐字命中即同期同主体），
+        # 数值拼合的期间/主体门在 3.3 跨报告路径另行强制。
+        substantive_clauses = [c for c in atomic_clauses if len(c) >= 4]
+        if len(substantive_clauses) >= 2:
+            clause_hit_roles: dict[str, set[str]] = {}
+            all_clauses_hit = True
+            for clause in substantive_clauses:
+                clause_norm = _WHITESPACE_RE.sub("", clause)
+                for role_key in SEVEN_REPORT_KEYS:
+                    if self._is_report_unavailable(role_key, unavailable_sources):
+                        continue
+                    report_body = str(seven_reports.get(role_key, "") or "")
+                    if not report_body.strip():
+                        continue
+                    if clause in report_body or (
+                        clause_norm
+                        and clause_norm in _WHITESPACE_RE.sub("", report_body)
+                    ):
+                        clause_hit_roles.setdefault(clause, set()).add(role_key)
+                if clause not in clause_hit_roles:
+                    all_clauses_hit = False
+                    break
+            if all_clauses_hit:
+                matched_roles = sorted(
+                    {r for roles in clause_hit_roles.values() for r in roles},
+                    key=SEVEN_REPORT_KEYS.index,
+                )
+                return {
+                    "raw": raw_text,
+                    "claim_id": claim_id,
+                    "matched_role": ",".join(matched_roles) if len(matched_roles) > 1 else matched_roles[0],
+                    "matched_source": ",".join(r.replace("_report", "") for r in matched_roles),
+                    "status": STATUS_VERIFIED,
+                    "is_fatal": False,
+                    "details": f"原子子句跨报告逐字聚合验证 (verbatim_atomic_aggregation): {','.join(matched_roles)}",
+                }
+
         all_ev_bns: list[BoundNumber] = []
         for clause in atomic_clauses:
             clause_period = normalize_period(clause) or parent_period
@@ -1289,6 +1368,9 @@ class EvidenceFactualTruthEvaluator:
         if all_ev_bns:
             num_hits_by_report: dict[str, set[int]] = {}
             all_hit_num_indices: set[int] = set()
+            # DAV-1147: 主体一致的命中（供跨报告拼合，防止跨主体同值强拼）
+            cross_hits_by_report: dict[str, set[int]] = {}
+            all_cross_hit_num_indices: set[int] = set()
 
             for num_idx, ev_bn in enumerate(all_ev_bns):
                 for role_key in SEVEN_REPORT_KEYS:
@@ -1314,6 +1396,9 @@ class EvidenceFactualTruthEvaluator:
                             if _is_bound_num_match(ev_bn, l_bn, self.rel_tol, self.abs_tol):
                                 num_hits_by_report.setdefault(role_key, set()).add(num_idx)
                                 all_hit_num_indices.add(num_idx)
+                                if _entities_consistent_for_join(ev_bn.entity, l_bn.entity):
+                                    cross_hits_by_report.setdefault(role_key, set()).add(num_idx)
+                                    all_cross_hit_num_indices.add(num_idx)
                                 matched_in_report = True
                                 break
                         if matched_in_report:
@@ -1337,10 +1422,12 @@ class EvidenceFactualTruthEvaluator:
                     }
 
             # Check cross-report multi-line aggregation
-            if len(all_hit_num_indices) == total_nums:
+            # DAV-1147: 跨报告拼合加主体一致性门——不同主体/主体歧义的同值不得
+            # 强拼（期间兼容性已在 _is_bound_num_match 内强制）。
+            if len(all_cross_hit_num_indices) == total_nums:
                 matched_roles = [
                     r for r in SEVEN_REPORT_KEYS
-                    if r in num_hits_by_report and num_hits_by_report[r]
+                    if r in cross_hits_by_report and cross_hits_by_report[r]
                     and not self._is_report_unavailable(r, unavailable_sources)
                 ]
                 if matched_roles:

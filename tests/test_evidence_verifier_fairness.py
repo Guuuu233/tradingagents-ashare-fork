@@ -982,3 +982,146 @@ def test_dav1091_evaluate_challenges_is_fatal_contract(evaluator):
     assert len(res) == 1
     # 正常无报告且无 failure_ledger 时判定为 unsupported
     assert res[0]["evidence_status"] in ("unsupported", "contradicted")
+
+
+# ── DAV-1147: Cross-report Evidence Aggregation（跨报告事实拼合恢复 coverage）──
+
+
+def test_dav1147_verbatim_atomic_clauses_across_reports(evaluator):
+    """牧原型假 unsupported：复合证据的原子事实逐字分处不同报告 → 聚合 verified。
+
+    「头均减亏40%」在 fundamentals、「主力净流出2.89亿元」在 smart_money——
+    原文逐字存在，不得判 unsupported。（用「；」分隔避开 3.1 逗号切片预命中，
+    确保走 verbatim_atomic_aggregation 路径。）
+    """
+    seven_reports = {
+        "fundamentals_report": "成本改善显著，头均减亏40%。\n",
+        "smart_money_report": "当日主力净流出2.89亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="头均减亏40%；主力净流出2.89亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+    assert "verbatim_atomic_aggregation" in res["details"]
+    assert "fundamentals" in res["matched_source"]
+    assert "smart_money" in res["matched_source"]
+
+
+def test_dav1147_verbatim_aggregation_requires_all_clauses(evaluator):
+    """逐字聚合是合取：任一 ≥4 字子句未命中即不放行（不得借部分命中强拼）。"""
+    seven_reports = {
+        "fundamentals_report": "成本改善显著，头均减亏40%。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="头均减亏40%；主力净流出9.99亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1147_verbatim_aggregation_tolerates_report_line_wrap(evaluator):
+    """报告文本换行/空白差异不得破坏逐字命中。"""
+    seven_reports = {
+        "fundamentals_report": "头均减亏\n40%。\n",
+        "smart_money_report": "主力净流出 2.89亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="头均减亏40%；主力净流出2.89亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1147_numeric_facts_joined_across_reports(evaluator):
+    """中兴 INV-10 型：现金/流动比率在 fundamentals、回购区间在 news → 跨报告数值拼合 verified。
+
+    依赖：货币资金↔现金 canonical 归一、流动比率词表补全、10–12亿 全角 dash 单位继承。
+    """
+    seven_reports = {
+        "fundamentals_report": (
+            "资产负债与流动性：\n"
+            "报告期末货币资金余额337.51亿元，流动性充裕。\n"
+            "流动比率为1.76，短期偿债能力稳健。\n"
+        ),
+        "news_report": (
+            "公司公告：拟以10亿元至12亿元回购公司股份。\n"
+        ),
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="货币资金337.51亿元，流动比率1.76，拟10–12亿元回购",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+    assert "fundamentals" in res["matched_source"]
+    assert "news" in res["matched_source"]
+
+
+def test_dav1147_cross_report_join_rejects_different_period(evaluator):
+    """不同期间的同值不得跨报告强拼：2026H1 净利润不得拿 2025H1 的同值佐证。"""
+    seven_reports = {
+        "fundamentals_report": "2025H1公司实现净利润15亿元。\n",
+        "news_report": "公司拟以10亿元回购股份。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026H1净利润15亿元，拟10亿元回购",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1147_cross_report_join_rejects_different_entity(evaluator):
+    """不同主体的同值不得跨报告强拼：奥克斯的毛利率不得佐证美的的同名指标。"""
+    seven_reports = {
+        "fundamentals_report": "奥克斯毛利率为18.8%，低于同业。\n",
+        "news_report": "公司拟以10亿元回购股份。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="美的毛利率18.8%，拟10亿元回购",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1147_en_dash_range_unit_inheritance():
+    """全角 en-dash「10–12亿元」前半截须继承单位亿元（归一为元量纲）。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("拟10–12亿元回购")
+    vals_units = {(b.val, b.unit) for b in bns}
+    assert (10 * 100_000_000.0, "元") in vals_units
+    assert (12 * 100_000_000.0, "元") in vals_units
+
+
+def test_dav1147_claim_level_coverage_restored(evaluator):
+    """端到端 claim 覆盖：分处 fundamentals/news 的三条事实全部 verified → coverage 100%。
+
+    中兴 INV-10 型 claim：修复前货币资金/流动比率/回购子句各自拼不上 → 50% coverage；
+    修复后逐字+数值两条聚合路径均放行。
+    """
+    from tradingagents.agents.utils.evidence_verifier import aggregate_claim_evidence
+
+    seven_reports = {
+        "fundamentals_report": (
+            "报告期末货币资金余额337.51亿元。\n"
+            "流动比率为1.76。\n"
+        ),
+        "news_report": "公司公告拟以10亿元至12亿元回购股份。\n",
+    }
+    claims = [
+        {
+            "claim_id": "INV-10",
+            "speaker_key": "Bull",
+            "claim": "现金充裕且回购托底",
+            "evidence": [
+                "货币资金337.51亿元",
+                "流动比率1.76",
+                "拟10–12亿元回购",
+            ],
+        }
+    ]
+    vers = evaluator.evaluate_claims(claims=claims, seven_reports=seven_reports)
+    assert all(v["status"] == STATUS_VERIFIED for v in vers)
+    summary = aggregate_claim_evidence(claims=claims, claims_verification=vers)
+    assert summary["INV-10"]["coverage"] == 1.0
+    assert summary["INV-10"]["decision"] in ("adopt", "partial")
