@@ -1457,3 +1457,72 @@ def test_dav1163_yoy_anchor_shifts_period_back_one_year():
     by_raw = {b.raw: b for b in bns}
     assert by_raw["+311.37亿元"].period == "2025H1"
     assert by_raw["-21.54亿元"].period == "2026H1"
+
+
+def test_dav1164_negative_range_signed_span_and_coverage():
+    """负区间带符号归一：「-5%至-3%」range_span=(-5,-3)，被 -4% 覆盖、+4% 不覆盖。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("波动区间-5%至-3%")
+    spans = {b.range_span for b in bns if b.range_span}
+    assert spans == {(-5.0, -3.0)}
+
+
+def test_dav1164_negative_range_covered_by_inside_point(evaluator):
+    seven_reports = {"news_report": "波动区间为-4%。\n"}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="波动区间-5%至-3%",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1164_negative_range_not_covered_by_opposite_sign(evaluator):
+    """+4% 不在真实区间 (-5,-3) 内，不得被判覆盖（防假阳性放宽 verified）。"""
+    seven_reports = {"news_report": "波动区间为+4%。\n"}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="波动区间-5%至-3%",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1164_cross_zero_range_signed_span(evaluator):
+    """跨零区间「-3%~2%」range_span=(-3,2)，被 -1% 覆盖、+4% 不覆盖；
+    端点 2% 的 bound 不得被 `~` 误标为 approx。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("变动-3%~2%")
+    spans = {b.range_span for b in bns if b.range_span}
+    assert spans == {(-3.0, 2.0)}
+    tail = [b for b in bns if b.raw == "2%"][0]
+    assert tail.bound is None
+    seven_reports = {"news_report": "变动为-1%。\n"}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="变动-3%~2%",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+    seven_reports = {"news_report": "变动为+4%。\n"}
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="变动-3%~2%",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1164_clause_trace_fields_complete(evaluator):
+    """溯源三件套齐备：拆分与未拆分原子项均带 parent_evidence/atomic_index/clause。"""
+    seven_reports = {
+        "fundamentals_report": "2026Q1归母净利润同比下滑 -46.58%。\n",
+        "news_report": "公司公告拟回购超100亿元。\n",
+    }
+    items = evaluator._verify_evidence_or_decompose(
+        "2026Q1归母净利润同比下滑46.58%，且公司拟回购超100亿元，同期营收999.99亿",
+        seven_reports, None, None, "INV-1", None,
+    )
+    assert any(i["status"] == STATUS_VERIFIED for i in items)
+    for i in items:
+        assert "clause" in i
+        assert "atomic_index" in i
+    assert any("parent_evidence" in i for i in items)

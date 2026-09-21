@@ -889,7 +889,9 @@ BOUND_APPROX = "approx"  # 约/近/左右/上下/前后/附近 → 约数（放�
 # 差值量而非上界，故不列入（误列会把差值当上界放水）。
 _BOUND_MIN_PREFIX_RE = re.compile(r"(?:超过|超|逾|不低于|不少于|至少|≥|>)\s*$")
 _BOUND_MAX_PREFIX_RE = re.compile(r"(?:不足|不到|未及|不超过|至多|≤|<)\s*$")
-_BOUND_APPROX_PREFIX_RE = re.compile(r"(?:约为|大约|约|近|接近|大概|差不多|近似|~)\s*$")
+# DAV-1163 返修（DAV-1164 🟡-1）：`~` 移出约数前缀——「变动-3%~2%」中
+# `~` 是区间连接符而非约数标记，端点不得被误标 approx。
+_BOUND_APPROX_PREFIX_RE = re.compile(r"(?:约为|大约|约|近|接近|大概|差不多|近似)\s*$")
 _BOUND_APPROX_SUFFIX_RE = re.compile(r"^\s*(?:左右|上下|前后|附近)")
 _BOUND_MIN_SUFFIX_RE = re.compile(
     r"^\s*(?:以上|及以上)|^\s*(?:余|多)(?=\s*(?:亿|万|%|％|元|股|点|倍|个|家|次|手|户|人|吨|桶|天|日|月|年|$|[^一-龥]))"
@@ -1183,8 +1185,11 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             is_range = True
             res[j + 1].val = abs(res[j + 1].val)
         if is_range:
-            lo = min(abs(res[j].val), abs(res[j + 1].val))
-            hi = max(abs(res[j].val), abs(res[j + 1].val))
+            # DAV-1163 返修（DAV-1164 🟡-1）：区间端点保留符号——「-5%至-3%」
+            # 归一为 (-5,-3) 而非 (3,5)；取 abs 仅限上方负号吞并分支（无显式
+            # 连接符的「91%-92%」形态，该分支已在吞并时完成 abs）。
+            lo = min(res[j].val, res[j + 1].val)
+            hi = max(res[j].val, res[j + 1].val)
             res[j].range_span = (lo, hi)
             res[j + 1].range_span = (lo, hi)
             # 区间端点共享指标/语义绑定——「市值底线67-77元」中 77 因前一数字
@@ -1962,11 +1967,16 @@ class EvidenceFactualTruthEvaluator:
                 for idx, sub in enumerate(sub_results):
                     for it in self._facts_or_self(sub, substantive[idx], ev_str):
                         it["atomic_index"] = idx
+                        # DAV-1164 🟢-2：溯源三件套齐备——非拆分项也补 clause
+                        it.setdefault("clause", substantive[idx])
                         items.append(it)
                 return items
             return [res]
         # 单子句多数字：整句未获验但部分数字事实已命中 → 逐事实独立计分
-        return self._facts_or_self(res, ev_str, ev_str)
+        items = self._facts_or_self(res, ev_str, ev_str)
+        for it in items:
+            it.setdefault("clause", ev_str)
+        return items
 
     @staticmethod
     def _facts_or_self(
