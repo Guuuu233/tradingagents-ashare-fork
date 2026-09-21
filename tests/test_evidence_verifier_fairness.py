@@ -922,6 +922,149 @@ def test_dav1146_mixed_marker_priority_threshold_over_scenario():
     assert bn.basis == "annualized"
 
 
+# ── DAV-1157: 残余修复——合计vs分项/降幅vs水平/期间角色不互判冲突 ──────────
+
+
+def test_dav1157_role_and_basis_extraction():
+    """DAV-1157: aggregate/component/delta 角色与 yoy/mom 基准提取。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("超大单加大单净流入0.9122亿元")[0]
+    assert bn.role == "aggregate"
+
+    bn = extract_bound_numbers("合计超大单净流入0.9122亿元")[0]
+    assert bn.role == "aggregate"
+
+    bns = extract_bound_numbers("合计净流入5亿元，其中超大单3亿元")
+    assert bns[0].role == "aggregate" and bns[1].role == "component"
+
+    bns = extract_bound_numbers("LPR环比大跌10.45%至3.00%")
+    assert bns[0].role == "delta" and bns[0].basis == "mom"
+    # 「至3.00%」是变动后的水平值，归 actual 而非 delta
+    assert bns[1].role == "actual"
+
+    bn = extract_bound_numbers("净利润同比增长10%")[0]
+    assert bn.role == "delta" and bn.basis == "yoy"
+
+    # 水平值后的「（同比+X%）」括号注释不得把水平值标成 yoy（DAV-1088 A3 防退）
+    bn = extract_bound_numbers("2026年中报实现营业总收入1781.81亿元（同比+4.83%）")[0]
+    assert bn.role == "actual" and bn.basis is None
+
+
+def test_dav1157_per_number_period_binding():
+    """同一行两期共存：后置括号期间逐数字补绑，不再被整句期间压平。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("毛利率由37.91%（2024）降至25.48%（2026H1）")
+    assert bns[0].period == "2024" and bns[1].period == "2026H1"
+
+    bns = extract_bound_numbers("2024年营收100亿元")
+    assert bns[0].period == "2024"
+
+    # 返修回归：前置千分位逗号数字不得使期间绑定坐标系错位（cleaned 去逗号
+    # 不保位）——37.91% 必须仍绑 2024 而非被整句 2026H1 压平
+    bns = extract_bound_numbers("营收1,234.56亿元，毛利率由37.91%（2024）降至25.48%（2026H1）")
+    pct_bns = [b for b in bns if b.unit == "%"]
+    assert pct_bns[0].period == "2024" and pct_bns[1].period == "2026H1"
+
+
+def test_dav1157_thousands_comma_period_conflict_still_contradicted(evaluator):
+    """返修回归：千分位前置 + 两期共存，37.91%（2024）vs 报告 2024 毛利率
+    40.00% 的同期间真矛盾仍判 contradicted（防静默放行）。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：2024年毛利率为40.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="营收1,234.56亿元，毛利率由37.91%（2024）降至25.48%（2026H1）",
+        seven_reports=seven_reports,
+        claim_id="AGG-6",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1157_consolidated_statement_not_aggregate():
+    """返修回归：「合并报表净利润50亿」是实际值表述，裸「合并」不得误标
+    aggregate——role 必须为 actual。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("合并报表净利润50亿元")[0]
+    assert bn.role == "actual"
+
+
+def test_dav1157_aggregate_vs_component_not_contradicted(evaluator):
+    """合计超大单净流入0.9122亿 vs 分项超大单净流入0.5亿：aggregate vs
+    actual(component) 不判冲突 + 记 semantic_role_gaps。"""
+    seven_reports = {
+        "market_report": "- **资金流**：超大单净流入0.5亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="合计超大单净流入0.9122亿元",
+        seven_reports=seven_reports,
+        claim_id="AGG-1",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1157_delta_vs_level_not_contradicted(evaluator):
+    """净利润下调10.45%（delta）vs 净利润为12.00%（actual/未标基准）：
+    降幅与水平值不互判冲突 + 记 gap。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：净利润为12.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="净利润下调10.45%",
+        seven_reports=seven_reports,
+        claim_id="AGG-2",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1157_yoy_vs_mom_not_contradicted(evaluator):
+    """净利润同比增长30% vs 净利润环比增长12%：同为 delta 但同比/环比基准
+    不同，不互判冲突 + 记 gap。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：净利润环比增长12.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="净利润同比增长30.00%",
+        seven_reports=seven_reports,
+        claim_id="AGG-3",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("semantic_role_gaps")
+
+
+def test_dav1157_same_period_same_role_true_conflict_still_contradicted(evaluator):
+    """防过宽：2026H1 毛利率 25.48% vs 2026H1 毛利率 30.00%，
+    同期间同语义同主体不同值仍判 contradicted。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：2026H1毛利率为30.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026H1毛利率为25.48%",
+        seven_reports=seven_reports,
+        claim_id="AGG-4",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1157_cross_period_same_metric_not_contradicted(evaluator):
+    """同行两期共存不再被压平互判：2024 毛利率 37.91% vs 2024 毛利率 40.00%
+    仍判冲突（真矛盾）；而 2026H1 值不得与 2024 记录互判。"""
+    seven_reports = {
+        "fundamentals_report": "- **盈利**：2024年毛利率为40.00%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="毛利率由37.91%（2024）降至25.48%（2026H1）",
+        seven_reports=seven_reports,
+        claim_id="AGG-5",
+    )
+    # 37.91%（2024）vs 40.00%（2024）为同期间真矛盾，仍拦
+    assert res["status"] == STATUS_CONTRADICTED
+
+
 # ── DAV-1091: is_fatal 独立严重度位在证据核验器中的消费契约 ─────────────────
 
 

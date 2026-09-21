@@ -650,16 +650,28 @@ def _bind_entity_for_number(
 #   ROLE_THRESHOLD    披露阈值/门槛/红线/警戒/上下限等规则界线（「20%龙虎榜披露阈值」）
 #   ROLE_SCENARIO     压力测试/情景/假设/测算/预计等假设值（「压力测试净利335–350亿」）
 #   ROLE_INCREMENTAL  增量/新增/净增等边际量（「增量营收17亿」vs「总营收4565亿」）
+# DAV-1157 残余修复追加：
+#   ROLE_AGGREGATE    合计/总计/多分量加总的汇总值（「超大单加大单净流入0.9122亿」
+#                     「合计净流入5亿」），不得与任一分项记录互判
+#   ROLE_COMPONENT    「其中/分项」引导的分量值（「合计5亿，其中超大单3亿」中的 3亿）
+#   ROLE_DELTA        变动量/幅度值（降幅/涨幅/变动/回落/提升等），非水平值——
+#                     「LPR环比大跌10.45%至3.00%」中 10.45% 为 delta、3.00% 为水平
 # BoundNumber.basis 取值（期间基准，独立于报告期 period 字段）：
 #   BASIS_SINGLE_QUARTER  单季        BASIS_ANNUALIZED  年化/折年
-#   BASIS_CUMULATIVE      累计/年初至今    None 未标注
+#   BASIS_CUMULATIVE      累计/年初至今    BASIS_YOY 同比    BASIS_MOM 环比
+#   None 未标注（同比 vs 环比互不可比，单侧未标注按最保守不判）
 ROLE_ACTUAL = "actual"
 ROLE_THRESHOLD = "threshold"
 ROLE_SCENARIO = "scenario"
 ROLE_INCREMENTAL = "incremental"
+ROLE_AGGREGATE = "aggregate"
+ROLE_COMPONENT = "component"
+ROLE_DELTA = "delta"
 BASIS_SINGLE_QUARTER = "single_quarter"
 BASIS_ANNUALIZED = "annualized"
 BASIS_CUMULATIVE = "cumulative"
+BASIS_YOY = "yoy"
+BASIS_MOM = "mom"
 
 _ROLE_THRESHOLD_RE = re.compile(
     # 「披露」「退市」等高频歧义词不得裸用：「中报披露净利445亿」是实际披露值
@@ -673,9 +685,31 @@ _ROLE_SCENARIO_RE = re.compile(
     r"乐观|悲观|中性|极端"
 )
 _ROLE_INCREMENTAL_RE = re.compile(r"增量|新增|净增|多增|增加额|边际")
+# DAV-1157: 合计/汇总值——显式汇总词（合计/总计/共计/加总/总和/合并口径），
+# 或资金流多分量加总短语（「超大单加大单」「主力和超大单」「超大单加大量」）。
+_ROLE_AGGREGATE_RE = re.compile(
+    r"合计|总计|共计|加总|总和|合并口径|合并计算|"
+    r"(?:超大单|大单|中单|小单|全单|主力|散户)\s*[加和与及+]\s*"
+    r"(?:超大单|大单|中单|小单|全单|主力|散户|大量|中量|小量|资金)"
+)
+# 「其中/分项/分量」引导的分量记录（「合计5亿，其中超大单3亿」中的 3亿）。
+_ROLE_COMPONENT_RE = re.compile(r"其中|分项|分量|单项")
+# 变动量/幅度值：降幅/涨幅/变动/回落/提升/增减等变化量（非水平值）。
+# 「增加|增长」列入但受 _ROLE_LEVEL_SUFFIX_RE 守卫——「增长至4565亿」的 4565亿
+# 是水平值而非变动量。
+_ROLE_DELTA_RE = re.compile(
+    r"降幅|跌幅|涨幅|增幅|变动|上调|下调|加息|降息|回落|回升|"
+    r"收窄|走阔|下降|下跌|降低|下滑|增减|减少|大跌|暴跌|大涨|暴涨|"
+    r"提升|提高|增长|增加|个百分点"
+)
+# 紧邻前子句以「至/到/为/达/录得/收于」收尾时，该数字是变动后的水平值，
+# 不是变动量本身（「大跌10.45%至3.00%」中的 3.00%）。
+_ROLE_LEVEL_SUFFIX_RE = re.compile(r"(?:至|到|为|达|得|维持|录得|收于|报收)\s*$")
 _BASIS_SINGLE_Q_RE = re.compile(r"单季|单季度")
 _BASIS_ANNUALIZED_RE = re.compile(r"年化|折年")
 _BASIS_CUMULATIVE_RE = re.compile(r"累计|年初至今|年初以来|年内累计")
+_BASIS_YOY_RE = re.compile(r"同比|较上年|较去年同期|较上年同期|同期相比")
+_BASIS_MOM_RE = re.compile(r"环比|较上月|较前期")
 _ROLE_PREV_CLAUSE_MAX = 16  # 「在压力测试情景下，净利或降至335亿」类短引导子句
 # 前子句并入仅认「引导介词起头」的假设/界线设定子句（在|于|按|若|当|依|据|假设），
 # 排除「阈值如上」「前述下限」这类回指性陈述子句对实际值的污染。
@@ -693,8 +727,11 @@ def _classify_role_and_basis(
     「20%的龙虎榜披露阈值」「335亿（压力测试）」）；前一子句仅当为「引导介词
     起头的短假设/界线设定子句」时并入（覆盖「在压力测试情景下，净利或降至
     335亿」），排除「阈值如上，实际换手1.11%」这类回指性陈述子句的污染。
-    角色优先级固定为 threshold > scenario > incremental（规则界线 > 假设值 >
-    边际量），如「极端压力测试…净利底线60-65亿」归 threshold。
+    角色优先级固定为 threshold > scenario > incremental > aggregate >
+    component > delta > actual（规则界线 > 假设值 > 边际量 > 汇总值 > 分量 >
+    变动量 > 实际值），如「极端压力测试…净利底线60-65亿」归 threshold。
+    delta 判定受 _ROLE_LEVEL_SUFFIX_RE 守卫：前子句以「至/到/为/达/录得」
+    收尾的数字是变动后的水平值，归 actual（「大跌10.45%至3.00%」中 3.00%）。
     """
     segs = re.split(r"[，。；、,;（）()【】：:！？!?]", text[max(0, n_start - 40):n_start])
     ctx = segs[-1] if segs else ""
@@ -711,6 +748,12 @@ def _classify_role_and_basis(
         role = ROLE_SCENARIO
     elif _ROLE_INCREMENTAL_RE.search(ctx_full):
         role = ROLE_INCREMENTAL
+    elif _ROLE_AGGREGATE_RE.search(ctx_full):
+        role = ROLE_AGGREGATE
+    elif _ROLE_COMPONENT_RE.search(ctx_full):
+        role = ROLE_COMPONENT
+    elif _ROLE_DELTA_RE.search(ctx_full) and not _ROLE_LEVEL_SUFFIX_RE.search(ctx):
+        role = ROLE_DELTA
     else:
         role = ROLE_ACTUAL
     if _BASIS_SINGLE_Q_RE.search(ctx_full):
@@ -719,6 +762,12 @@ def _classify_role_and_basis(
         basis = BASIS_ANNUALIZED
     elif _BASIS_CUMULATIVE_RE.search(ctx_full):
         basis = BASIS_CUMULATIVE
+    elif role == ROLE_DELTA and _BASIS_YOY_RE.search(ctx_full):
+        # 同比/环比是比较方向，仅落在变动量上——水平值后的「（同比+4.83%）」
+        # 括号注释不得把水平值标成 yoy，否则同指标真矛盾被错放（DAV-1088 A3）。
+        basis = BASIS_YOY
+    elif role == ROLE_DELTA and _BASIS_MOM_RE.search(ctx_full):
+        basis = BASIS_MOM
     else:
         basis = None
     return role, basis
@@ -798,14 +847,64 @@ class BoundNumber:
         return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r})"
 
 
+# DAV-1157: 数字级期间绑定——整句归一期间（normalize_period(text)）会把同一行
+# 共存的两期数字压成同一期间（「毛利率由37.91%（2024）降至25.48%（2026H1）」
+# 两值均得 2026H1），真不同期被误判冲突；以下规则按数字就近补绑局部期间。
+_PAREN_POST_NUM_RE = re.compile(r"\s*[（(【\[]\s*([^）)】\]]{1,16})")
+_CLAUSE_BREAK_FOR_PERIOD = re.compile(r"[，。；、,;：:！？!?（）()【】]")
+
+
+def _bind_period_for_number(
+    text: str,
+    n_start: int,
+    n_end: int,
+    fallback: str | None,
+) -> str | None:
+    """按数字就近补绑局部期间；无局部标注时回退整句期间 fallback。
+
+    规则（优先级递减）：
+    1. 后置括号期间——「37.91%（2024）」「25.48%（2026H1）」括号内能归一出
+       期间时优先采用（解决同一行两期共存）。
+    2. 子句引导期间——「2024年营收100亿」「较2024年的37.91%」期间位于本子句
+       首个非期间数字之前时绑定本子句数字；尾随前一数字的期间（「37.91%（2024）
+       降至25.48%」中的 2024）归前数字所有，不向后绑。
+    """
+    m = _PAREN_POST_NUM_RE.match(text[n_end:n_end + 20])
+    if m:
+        inner = m.group(1).strip()
+        p = normalize_period(inner)
+        if p:
+            return p
+        # 裸年份括号「（2024）」——normalize_period 要求「年」后缀，此处宽收
+        if re.fullmatch(r"\d{4}", inner):
+            return inner
+    clause = _CLAUSE_BREAK_FOR_PERIOD.split(text[max(0, n_start - 40):n_start])[-1]
+    if clause:
+        first_period = _DATE_MASK_PATTERN.search(clause)
+        if first_period:
+            masked = _DATE_MASK_PATTERN.sub(
+                lambda mm: " " * len(mm.group(0)), clause
+            )
+            first_num = _NUMBER_WITH_UNIT_RE.search(masked)
+            if not first_num or first_num.start() >= first_period.start():
+                p = normalize_period(clause)
+                if p:
+                    return p
+    return fallback
+
+
 def extract_bound_numbers(text: str, default_period: str | None = None) -> list[BoundNumber]:
     """Extract numbers from text and bind each number to its closest specific metric and period."""
     if not text:
         return []
     period = normalize_period(text) or default_period
-    cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), text)
-    # 千分位逗号归一：3,046.11 -> 3046.11（仅在数字与三位数字组之间的逗号）
-    cleaned = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", cleaned)
+    # DAV-1157 返修：千分位逗号归一（3,046.11 -> 3046.11）必须早于日期掩码——
+    # 逗号删除不保位，先掩码后删逗号会使 cleaned 坐标相对 text 左偏，
+    # _bind_period_for_number 用 cleaned 坐标切 text 时错过后置括号期间。
+    # period_view = 未掩码日期 + 已去逗号，与 cleaned 严格同坐标系，专供
+    # 数字级期间绑定读取局部期间标注（「（2024）」「2026H1」）。
+    period_view = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+    cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), period_view)
     text_lower = cleaned.lower()
     metric_spans = []
     for kw in _SORTED_METRIC_MAP_KEYS:
@@ -943,7 +1042,9 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             metric = "毛利率"
         entity = _bind_entity_for_number(cleaned, n_start, entity_spans)
         role, basis = _classify_role_and_basis(cleaned, n_start, n_end)
-        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype, entity, role, basis))
+        # DAV-1157: 数字级期间覆盖（后置括号/子句引导），无局部标注回退整句期间
+        num_period = _bind_period_for_number(period_view, n_start, n_end, period)
+        res.append(BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis))
         last_res_match_end = n_end
     return res
 
