@@ -1268,3 +1268,192 @@ def test_dav1147_claim_level_coverage_restored(evaluator):
     summary = aggregate_claim_evidence(claims=claims, claims_verification=vers)
     assert summary["INV-10"]["coverage"] == 1.0
     assert summary["INV-10"]["decision"] in ("adopt", "partial")
+
+
+# ── DAV-1163: 复合句覆盖坍缩修复（区间/约数/方向界/canonical补全/逐事实计分）──
+
+
+def test_dav1163_min_bound_superior_value_covered(evaluator):
+    """「超X」为下界声明：报告值 ≥ X 即覆盖（「在手现金超330亿」被337.51亿覆盖）。"""
+    seven_reports = {
+        "fundamentals_report": "报告期末在手现金337.51亿元，流动性充裕。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="在手现金超330亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_min_bound_lower_value_not_covered(evaluator):
+    """「超X」下界不成立时不得放行：报告值 310 < 330 仍须 unsupported。"""
+    seven_reports = {
+        "fundamentals_report": "报告期末在手现金310.00亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="在手现金超330亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_UNSUPPORTED
+
+
+def test_dav1163_bound_not_value_conflict(evaluator):
+    """方向界不是点值：「超100亿」与「130亿」是覆盖而非冲突，不得判 contradicted。"""
+    seven_reports = {
+        "news_report": "公司公告拟回购130亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="公司拟回购超100亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_evidence_range_covered_by_point_inside(evaluator):
+    """证据区间「67-77元」被区间内报告值覆盖（市值底线族）。"""
+    seven_reports = {
+        "fundamentals_report": "极端压力测试下公司市值底线为77元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="极端压力测试对应市值底线67-77元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_point_not_covered_by_report_range(evaluator):
+    """报告侧区间不得反向覆盖证据点值（区间内取值是衍生值，golden CASE-001 红线）。"""
+    seven_reports = {
+        "news_report": "美的集团完成69.73亿元回购，回购均价79.79元/股。\n",
+        "macro_report": "标的股价可能出现5%-8%的阶段性回调。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="69.73亿回购均价79.79元低于现价5.6%已充分定价",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] != STATUS_VERIFIED
+
+
+def test_dav1163_approx_tolerance_widened(evaluator):
+    """「约X」约数容差放宽：「约100亿」被「105亿」覆盖。"""
+    seven_reports = {
+        "news_report": "公司公告拟回购105亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="公司拟回购约100亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_rounding_equivalence_same_value(evaluator):
+    """舍入/精度差同值不判失配：「3.70亿」与「+3.7045亿」是同一数值。"""
+    seven_reports = {
+        "smart_money_report": "小单分组单日逆势净买入 +3.7045 亿元。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="小单净流入3.70亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_canonical_small_order_binding(evaluator):
+    """「小单/中单」canonical 补全：证据「小单净流入」绑小单而非回退主力。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("主力资金小单逆势净流入3.70亿元")
+    assert bns and bns[0].metric == "小单"
+
+
+def test_dav1163_ma_family_canonical(evaluator):
+    """均线族（EMA/SMA/日均线）归一：「10EMA(91.14)」与「10日均线91.14」同族匹配。"""
+    seven_reports = {
+        "market_report": "现价高于10日均线91.14元与50日均线89.28元，多头排列。\n",
+        "volume_price_report": "收盘价92.32元，短中期均线多头排列。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="收盘价92.32稳居10EMA(91.14)与50SMA(89.28)之上",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1163_composite_partial_fact_scoring(evaluator):
+    """逐事实独立计分：复合句单点失配不拖垮整条，已命中事实计 verified。"""
+    from tradingagents.agents.utils.evidence_verifier import aggregate_claim_evidence
+
+    seven_reports = {
+        "fundamentals_report": "2026Q1归母净利润同比下滑 -46.58%。\n",
+        "news_report": "公司公告拟回购超100亿元。\n",
+    }
+    claims = [
+        {
+            "claim_id": "INV-1",
+            "speaker_key": "Bull",
+            "claim": "利润下滑但回购托底",
+            "evidence": [
+                "2026Q1归母净利润同比下滑46.58%，且公司拟回购超100亿元，同期营收999.99亿",
+            ],
+        }
+    ]
+    vers = evaluator.evaluate_claims(claims=claims, seven_reports=seven_reports)
+    stats = [v["status"] for v in vers]
+    assert STATUS_VERIFIED in stats, "已命中事实须计 verified"
+    assert STATUS_UNSUPPORTED in stats, "虚构的999.99亿仍须 unsupported"
+    summary = aggregate_claim_evidence(claims=claims, claims_verification=vers)
+    # 2/3 事实获验 → coverage 66.7% → partial 而非 reject
+    assert summary["INV-1"]["coverage"] > 0.6
+    assert summary["INV-1"]["decision"] == "partial"
+
+
+def test_dav1163_leadin_attribution_not_atomic_clause(evaluator):
+    """出处引导语（根据X报告/报告显示）不作 unsupported 原子子句阻断逐事实计分。"""
+    seven_reports = {
+        "market_report": "股价在52.60-52.80元区间多次探底企稳，RSI达41已钝化。\n",
+    }
+    items = evaluator._verify_evidence_or_decompose(
+        "根据市场分析师报告，股价在52.60-52.80元区间多次探底企稳且RSI达41已钝化",
+        seven_reports, None, None, "C1", None,
+    )
+    assert any(i["status"] == STATUS_VERIFIED for i in items)
+
+
+def test_dav1163_true_missing_fact_still_unsupported(evaluator):
+    """红线：实际缺失仍须 unsupported——不放宽 verified 标准换分。"""
+    seven_reports = {
+        "fundamentals_report": "2026Q1归母净利润同比下滑 -46.58%。\n",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1存货减值损失99.99亿元",
+        seven_reports=seven_reports,
+    )
+    assert res["status"] == STATUS_UNSUPPORTED
+
+
+def test_dav1163_price_metric_demoted_for_paren_quantile(evaluator):
+    """「收盘处于日内绝对低位（0.03）」中 0.03 是分位值，不得绑严格股价。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("K线收盘处于日内绝对低位（0.03）")
+    bn = [b for b in bns if b.raw == "0.03"][0]
+    assert bn.metric is None
+
+
+def test_dav1163_price_metric_demoted_for_percent(evaluator):
+    """「低于现价5.6%」中 5.6% 是差值比率，不得绑严格股价引发伪冲突。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("回购均价79.79元低于现价5.6%已充分定价")
+    bn = [b for b in bns if b.raw == "5.6%"][0]
+    assert bn.metric is None
+
+
+def test_dav1163_yoy_anchor_shifts_period_back_one_year():
+    """「去年同期+311.37亿」锚定前一年度期间；其后的当期数字不前移。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bns = extract_bound_numbers("2026H1经营现金流由去年同期+311.37亿元骤降至-21.54亿元")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["+311.37亿元"].period == "2025H1"
+    assert by_raw["-21.54亿元"].period == "2026H1"

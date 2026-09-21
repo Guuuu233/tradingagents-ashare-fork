@@ -253,6 +253,10 @@ _METRIC_KEYWORDS = [
     "现金流", "自由现金流", "fcf", "资本开支", "capex", "研发", "费用", "费用率", "应收账款", "存货",
     "周转率", "商誉", "减值", "利用率", "产能", "cr3", "价格战", "库存", "去库", "补库", "订单",
     "估值", "分红", "股息", "股息率", "回购", "增持", "减持", "重组", "定增", "质押", "现金", "货币资金", "安全垫", "安全边际",
+    # DAV-1163: canonical 词表补全对应的关键词——关键词门（canonical 交集）
+    # 只看 _METRIC_KEYWORDS，新 canonical 无关键词落点时命中行会被门拦下
+    "流通市值", "市值", "离散度", "利息收入", "融资成本", "持仓占比", "均价",
+    "股价", "收盘", "现价", "价格", "日均线", "日线", "铜价", "美债", "shibor",
     "流动比率", "速动比率",
     "底线", "压力测试", "敏感性", "弹性",
     # Capital & Flow metrics
@@ -299,6 +303,8 @@ _STRICT_METRICS = {
     "营收", "毛利率", "毛利", "净利率", "净利润", "成本", "应收账款", "存货", "现金流",
     "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
     "主力", "超大单", "大单", "两融", "概率", "预期收益", "降息", "降准", "关税",
+    # DAV-1163: 小单/中单/均线族/RSI/ATR 入严格集——绑定即负责，不得当通配符
+    "小单", "中单", "均线", "rsi", "atr",
     "lpr", "cpi", "ppi", "m2", "gdp",
     "每股净资产",
     # DAV-1144: 股价与股东户数为独立严格指标（同名+同单位+同语义才可比较）
@@ -338,13 +344,25 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "市销率": "ps", "ps": "ps",
     "分红率": "股息率", "股息率": "股息率", "分红": "股息率", "股息": "股息率",
     # 交易 / 资金
-    "换手率": "换手率", "换手": "换手率",
+    # DAV-1163: 换手率细类归一（实际换手/单日换手率/自由流通换手率 等同指标）
+    "换手率": "换手率", "换手": "换手率", "实际换手": "换手率", "单日换手率": "换手率",
+    "自由流通换手率": "换手率", "流通换手率": "换手率",
+    # DAV-1163: 均线族（EMA/SMA/VWMA/日均线）归一——「10EMA(91.14)」与
+    # 「10日均线91.14」是同族均线的不同记法；RSI/ATR 为独立规范化指标。
+    "ema": "均线", "sma": "均线", "vwma": "均线", "日均线": "均线", "均线": "均线",
+    "日线": "均线", "ma": "均线",
+    "rsi": "rsi", "atr": "atr",
     "量比": "量比",
     "成交量": "成交量", "成交额": "成交额", "成交": "成交量",
     "主力净流入": "主力", "主力净流出": "主力", "主力": "主力",
     "超大单净流入": "超大单", "超大单净流出": "超大单", "超大单": "超大单",
     "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
-    "散户小单净买入": "散户小单", "散户小单": "散户小单",
+    # DAV-1163: 小单/中单补全——词表此前仅有「散户小单」，「小单净流入3.70亿」
+    # 无 canonical 落点，数字错绑回退到「主力」后被严格指标门误判失配。
+    # 散户小单与小单同义（小单即散户分组），归一到同一 canonical。
+    "散户小单净买入": "小单", "散户小单": "小单",
+    "小单净流入": "小单", "小单净流出": "小单", "小单净买入": "小单", "小单": "小单",
+    "中单净流入": "中单", "中单净流出": "中单", "中单净买入": "中单", "中单": "中单",
     "融资净偿还": "两融", "融资净买入": "两融", "融券净卖出": "两融", "两融": "两融", "融资": "两融", "融券": "两融",
     # DAV-1147: 现金口径归一——证据侧「现金337.51亿」与报告侧「货币资金337.51亿」
     # 必须折叠到同一规范化名，否则跨报告聚合的关键词门（canonical 交集）与
@@ -353,8 +371,27 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # DAV-1147: 流动性比率独立指标（流动比率 1.76 此前无词表项，跨报告拼合失败）
     "流动比率": "流动比率", "速动比率": "速动比率",
     # DAV-1144: 股价/股东户数 独立指标（此前词表缺失，错绑回退到最近指标）
-    "股价": "股价", "收盘价": "股价", "开盘": "开盘价", "开盘价": "开盘价",
+    # DAV-1163: 「收盘/现价/报收/价格」同义记法归一到股价——报告侧
+    # 「收盘 92.32」此前无 canonical 落点，与证据侧「收盘价92.32」互判失配。
+    "股价": "股价", "收盘价": "股价", "收盘": "股价", "现价": "股价",
+    "报收": "股价", "价格": "股价", "开盘": "开盘价", "开盘价": "开盘价",
     "最高价": "最高价", "最低价": "最低价",
+    # DAV-1163: canonical 指标补全（复合句家族失配点）
+    "市值": "市值",
+    "在手现金": "现金",
+    "lme铜价": "铜价", "lme铜": "铜价", "伦铜": "铜价", "铜价": "铜价", "lme": "铜价",
+    "10年期美债": "美债", "美债利率": "美债", "美债收益率": "美债",
+    # 「美债10年期收益率报4.740%」中期限数字 10 隔断了「美债」与数值的前向
+    # 绑定——「年期收益率/国债收益率」词组落在数字之后，使收益率数值可前向
+    # 绑到美债。
+    "年期收益率": "美债", "国债收益率": "美债", "美债": "美债",
+    "shibor": "shibor",
+    "综合融资成本": "融资成本", "融资成本": "融资成本",
+    "资本开支": "capex", "capex": "capex",
+    "流通市值": "流通市值",
+    "离散度": "离散度",
+    "回购": "回购",
+    "持仓占比": "持仓占比",
     "股东户数": "股东户数", "股东人数": "股东户数",
     # 布林轨位类：「股价跌破布林下轨49.59」中 49.59 归属下轨而非股价；
     # 报告侧「BOLL 下轨为 49.59」须绑同一规范化名才可匹配
@@ -395,13 +432,21 @@ STYPE_UNKNOWN = "未知"
 # 「分项影响额 vs 总量」不可由指标名与单位推断（15.3亿元 与 1781.81亿元 单位相同、
 # 指标名同为「营收」仍不可比），必须靠句法角色/修饰词另行判定。
 _PARTIAL_IMPACT_RE = re.compile(
-    r"折损|影响|贡献|拖累|侵蚀|损失|承压|减少|压缩|计提|减值|折让|冲击|侵蚀"
+    # DAV-1163: 「压减/压降」同为分项冲击修饰（「压减利息收入约20-30亿」），
+    # 缺词会把分项影响额压成绝对额/未知，与同事实记录互判失配
+    r"折损|影响|贡献|拖累|侵蚀|损失|承压|减少|压缩|计提|减值|折让|冲击|侵蚀|压减|压降"
 )
 _GROWTH_CONTEXT_RE = re.compile(
     r"同比|环比|增长|增速|增幅|下降|下滑|降低|回落|回升|提升|提高|暴增|大增|"
-    r"微增|微降|下跌|上涨|涨跌|收窄|走阔|扩张|收缩|跌(?!破)|涨(?!停)"
+    r"微增|微降|下跌|上涨|涨跌|收窄|走阔|扩张|收缩|跌(?!破)|涨(?!停)|"
+    # DAV-1163: 骤降/骤升/跳水/飙升/腰斩/翻倍 等同为变动速率语境——
+    # 「经营现金流骤降67.48%」语义即同比增速，缺词会被压成「未知」互判失配
+    r"骤降|骤升|跳水|飙升|飙涨|腰斩|翻倍|大跌|大涨|暴跌|暴涨"
 )
-_PROPORTION_CONTEXT_RE = re.compile(r"占[^，。；、]{0,8}$")
+# DAV-1163: 「占」字比例语境放宽到同子句 16 字窗口——「主力净额占流通
+# 市值比（net_to_circ_mv）约为 -0.0069%」中「占」与数字之间隔着括号注
+# 释，8 字窗口会把占比语义压成「未知」互判失配。
+_PROPORTION_CONTEXT_RE = re.compile(r"占[^，。；、]{0,16}$")
 
 # % 单位下语义为「比率」的规范化指标
 _RATE_CANON_METRICS = {
@@ -412,7 +457,7 @@ _RATIO_CANON_METRICS = _RATE_CANON_METRICS | {"pe", "pb", "ps", "eps", "量比"}
 # 元/股 单位下语义为「总量」的规范化指标
 _TOTAL_CANON_METRICS = {
     "营收", "净利润", "成本", "毛利", "现金流", "应收账款", "存货",
-    "成交量", "成交额", "主力", "超大单", "大单", "散户小单", "两融",
+    "成交量", "成交额", "主力", "超大单", "大单", "散户小单", "小单", "中单", "两融",
 }
 
 
@@ -522,6 +567,12 @@ _ENTITY_BARE_BAD_SUBSTR = frozenset({
     # DAV-1146: 「中报披露」「年报披露」中的「披露」是动作修饰语——token 含之
     # 即截断取头部（中报披露→中报，落入 stopwords 丢弃），不得整段立为主体。
     "披露",
+    # DAV-1163: 裸 token 误抓的修饰/连接片段——「公司上半年」「较过去长期」
+    # 「并在」「日内」等被误立为主体后阻断跨报告主体一致性拼合。
+    "日内", "并在", "上半年", "下半年", "过去", "长期", "短期", "月初", "月末",
+    "当前", "目前", "单日", "单边", "连续", "累计",
+    "全天", "量能", "冲高", "上方", "下方", "经历", "短中期", "中长期",
+    "最低", "最高", "处于", "位于",
 })
 _ENTITY_STOPWORDS = frozenset({
     "公司", "本公司", "上市", "子公司", "集团", "报告期内", "报告期", "期内",
@@ -605,7 +656,7 @@ def _extract_entity_spans(
             or token in _ENTITY_BARE_BAD_SUBSTR
             or token[0] in _ENTITY_BARE_BAD_FIRST_CHAR
             or token[-1] in _ENTITY_BARE_BAD_LAST_CHAR
-            or any(k in token for k in _SORTED_METRIC_MAP_KEYS)
+            or any(k in token.lower() for k in _SORTED_METRIC_MAP_KEYS)
         ):
             continue
         t_start, t_end = cs + lead, cs + lead + len(token)
@@ -828,10 +879,33 @@ def _entities_comparable(ev_entity: str | None, l_entity: str | None) -> bool:
     return ev_entity == l_entity
 
 
-class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis")
+# DAV-1163: 区间/约数修饰（约X/近X/超X/X余/X左右）不是点值声明，按方向界或
+# 放宽容差处理；「A-B」区间对的两个端点合并为一个区间事实，区间内有值即覆盖。
+BOUND_MIN = "min"        # 超/超过/逾/不低于/至少/X以上/X余/X多 → 下界（实际值 ≥ X）
+BOUND_MAX = "max"        # 不足/不到/低于/至多/X以下/X以内 → 上界（实际值 ≤ X）
+BOUND_APPROX = "approx"  # 约/近/左右/上下/前后/附近 → 约数（放宽容差）
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None):
+# 注意：「高于/低于/大于/小于」不是方向界——「低于现价5.6%」中 5.6% 是
+# 差值量而非上界，故不列入（误列会把差值当上界放水）。
+_BOUND_MIN_PREFIX_RE = re.compile(r"(?:超过|超|逾|不低于|不少于|至少|≥|>)\s*$")
+_BOUND_MAX_PREFIX_RE = re.compile(r"(?:不足|不到|未及|不超过|至多|≤|<)\s*$")
+_BOUND_APPROX_PREFIX_RE = re.compile(r"(?:约为|大约|约|近|接近|大概|差不多|近似|~)\s*$")
+_BOUND_APPROX_SUFFIX_RE = re.compile(r"^\s*(?:左右|上下|前后|附近)")
+_BOUND_MIN_SUFFIX_RE = re.compile(
+    r"^\s*(?:以上|及以上)|^\s*(?:余|多)(?=\s*(?:亿|万|%|％|元|股|点|倍|个|家|次|手|户|人|吨|桶|天|日|月|年|$|[^一-龥]))"
+)
+_BOUND_MAX_SUFFIX_RE = re.compile(r"^\s*(?:以下|以内|及以下)")
+# 区间连接符（「67-77元」「91%~92%」「20-30亿」）；负号被数字正则吞作符号位时
+# 由「紧邻 + 下一数字以 - 起头」形态识别。
+_RANGE_CONNECTOR_RE = re.compile(r"\s*[-~–—至到]\s*")
+# 「约X」类约数的相对容差（约数本身声明的是近似量级，容差宽于点值 2%）
+_APPROX_REL_TOL = 0.10
+
+
+class BoundNumber:
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span")
+
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -842,9 +916,11 @@ class BoundNumber:
         self.entity = entity          # None = 未指明主体；ENTITY_AMBIGUOUS = 多主体歧义
         self.role = role              # DAV-1146: actual/threshold/scenario/incremental
         self.basis = basis            # DAV-1146: 单季/年化/累计期间基准，None = 未标注
+        self.bound = bound            # DAV-1163: min/max/approx 方向界或约数修饰，None = 点值
+        self.range_span = range_span  # DAV-1163: 「A-B」区间对合并的 (lo,hi)，None = 非区间
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r})"
 
 
 # DAV-1157: 数字级期间绑定——整句归一期间（normalize_period(text)）会把同一行
@@ -880,6 +956,17 @@ def _bind_period_for_number(
             return inner
     clause = _CLAUSE_BREAK_FOR_PERIOD.split(text[max(0, n_start - 40):n_start])[-1]
     if clause:
+        # DAV-1163: 「去年同期/上年同期」把本子句数字的期间前移一年——
+        # 「由去年同期+311.37亿元骤降至-21.54亿元」中 311.37 属 2025H1 而非
+        # 整句归一期间 2026H1，不前移会被期间门误判不可比。
+        yoy_anchor = re.search(r"去年同期|上年同期|上一年同期", clause)
+        if yoy_anchor and not _NUMBER_WITH_UNIT_RE.search(clause[yoy_anchor.end():]):
+            # 「去年同期」仅锚定紧随其后的第一个数字——其后若已出现其他数字，
+            # 锚定已被占先（「去年同期+311.37亿骤降至-21.54亿」中 -21.54 仍属
+            # 当期），不得前移。
+            generic = normalize_period(clause) or fallback
+            if generic and re.match(r"\d{4}", generic):
+                return str(int(generic[:4]) - 1) + generic[4:]
         first_period = _DATE_MASK_PATTERN.search(clause)
         if first_period:
             masked = _DATE_MASK_PATTERN.sub(
@@ -934,6 +1021,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
     entity_spans = _extract_entity_spans(cleaned, filtered_spans, matches)
     res = []
+    res_spans: list[tuple[int, int]] = []  # 与 res 平行的 (n_start, n_end)
     last_res_match_end = -1  # res 中最后一个 BoundNumber 对应的 match.end()
     for i, m in enumerate(matches):
         val_str = m.group(1)
@@ -1008,7 +1096,9 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         for m_start, m_end, m_raw in filtered_spans:
             if m_start >= n_end and (m_start - n_end) < 15:
                 intervening = cleaned[n_end:m_start]
-                if intervening.strip() not in ("", "的"):
+                # DAV-1163: 「日/月」期间后缀允许后继绑定——「10日均线」「50日
+                # SMA」「20日VWMA」中的期限数字属于均线本身。
+                if intervening.strip() not in ("", "的", "日", "月", "个月"):
                     continue
                 dist = m_start - n_end
                 if dist < min_succ_dist:
@@ -1027,8 +1117,31 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 closest_prec = res[-1].raw_metric
                 closest_succ = None
 
+        # DAV-1163: 「N日均线/N日EMA/N日SMA/N日VWMA」中的期限数字归属均线——
+        # 均线族后继绑定优先于前向泛指标（「现价高于10日均线91.14」中 10 属
+        # 均线而非现价）。
+        if closest_succ and _canonicalize_metric(closest_succ, unit) == "均线":
+            closest_prec = None
+
+        # DAV-1163: 「变动量+至/到+水平值」结构中的水平值继承变动量的指标——
+        # 「毛利率骤降5.99pct至28.28%」中 28.28% 同属毛利率，占先规则会把它
+        # 留在未绑定态（或错绑远处指标），与同事实记录互判失配。
+        if closest_prec is None and res and last_res_match_end != -1:
+            gap = cleaned[last_res_match_end:n_start]
+            if re.search(r"(?:至|到)\s*$", gap) and res[-1].raw_metric:
+                closest_prec = res[-1].raw_metric
+                closest_succ = None
+
         raw_metric = closest_prec or closest_succ
         metric = _canonicalize_metric(raw_metric, unit)
+        # DAV-1163: 价格类指标只绑元/股量纲——「收盘处于日内绝对低位（0.03）」
+        # 中 0.03 是收盘位置分位而非股价，「低于现价5.6%」中 5.6% 是差值比率；
+        # 误绑严格股价会与未绑定证据互判失配/伪冲突。
+        if metric in {"股价", "开盘价", "最高价", "最低价"} and (
+            unit == "%" or (unit not in {"元", "股"} and paren_mask[n_start])
+        ):
+            metric = None
+            raw_metric = None
         stype = _classify_semantic_type(cleaned, n_start, n_end, unit, metric)
         if (
             unit == "%" and stype == STYPE_UNKNOWN and raw_metric
@@ -1044,13 +1157,62 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         role, basis = _classify_role_and_basis(cleaned, n_start, n_end)
         # DAV-1157: 数字级期间覆盖（后置括号/子句引导），无局部标注回退整句期间
         num_period = _bind_period_for_number(period_view, n_start, n_end, period)
-        res.append(BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis))
+        # DAV-1163: 区间/约数修饰提取——「约/近/超/不足」前缀与「左右/以上/余」
+        # 后缀把点值声明变为方向界或约数，匹配语义在 _value_covered 中处理。
+        bound = None
+        prefix_ctx = cleaned[max(0, n_start - 8):n_start]
+        suffix_ctx = cleaned[n_end:n_end + 8]
+        if _BOUND_MIN_PREFIX_RE.search(prefix_ctx) or _BOUND_MIN_SUFFIX_RE.match(suffix_ctx):
+            bound = BOUND_MIN
+        elif _BOUND_MAX_PREFIX_RE.search(prefix_ctx) or _BOUND_MAX_SUFFIX_RE.match(suffix_ctx):
+            bound = BOUND_MAX
+        elif _BOUND_APPROX_PREFIX_RE.search(prefix_ctx) or _BOUND_APPROX_SUFFIX_RE.match(suffix_ctx):
+            bound = BOUND_APPROX
+        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound)
+        res.append(bn)
+        res_spans.append((n_start, n_end))
         last_res_match_end = n_end
+    # DAV-1163: 「A-B」区间对合并——相邻两数字仅以连接符（- ~ – — 至 到）相隔，
+    # 或负号被数字正则吞作符号位（「91%-92%」中 -92 的 - 实为连接符）时，两个
+    # 端点合并为一个区间事实：任一端点不被单独要求命中，区间内落值即覆盖。
+    for j in range(len(res) - 1):
+        gap = cleaned[res_spans[j][1]:res_spans[j + 1][0]]
+        is_range = bool(_RANGE_CONNECTOR_RE.fullmatch(gap))
+        if not is_range and gap == "" and res[j + 1].raw.startswith("-"):
+            # 「A-B」中 B 的负号是连接符而非符号位：取绝对值并标记区间
+            is_range = True
+            res[j + 1].val = abs(res[j + 1].val)
+        if is_range:
+            lo = min(abs(res[j].val), abs(res[j + 1].val))
+            hi = max(abs(res[j].val), abs(res[j + 1].val))
+            res[j].range_span = (lo, hi)
+            res[j + 1].range_span = (lo, hi)
+            # 区间端点共享指标/语义绑定——「市值底线67-77元」中 77 因前一数字
+            # 占先而失绑，区间两端同属「市值」；未绑定端点继承对端绑定。
+            if res[j + 1].metric is None and res[j].metric is not None:
+                res[j + 1].metric = res[j].metric
+                res[j + 1].raw_metric = res[j].raw_metric
+            if res[j].metric is None and res[j + 1].metric is not None:
+                res[j].metric = res[j + 1].metric
+                res[j].raw_metric = res[j + 1].raw_metric
+            if res[j + 1].stype == STYPE_UNKNOWN and res[j].stype != STYPE_UNKNOWN:
+                res[j + 1].stype = res[j].stype
+            if res[j].stype == STYPE_UNKNOWN and res[j + 1].stype != STYPE_UNKNOWN:
+                res[j].stype = res[j + 1].stype
     return res
 
 
 _COMPOUND_SPLIT_RE = re.compile(
-    r"[;；]|(?<!\d)[,，](?!\d)|(?<=[%\d元股点])\s*(?:且|并且|严重背离|背离|同时)\s*"
+    r"[;；]|(?<!\d)[,，](?!\d)|(?<=[%\d元股点次倍])\s*(?:且|并且|但|但是|同时|严重背离|背离)\s*"
+)
+
+# DAV-1163: 出处引导语（「根据市场分析师报告，」「宏观报告显示」「基本面
+# 报告：」）不是事实子句——拆分前剥除，否则引导语会被计为一个 unsupported
+# 原子子句，阻断逐事实计分路径。
+_EVIDENCE_LEADIN_RE = re.compile(
+    r"^\s*(?:根据[^，。；、,;:：\d]{0,30}[，。；、,;:：]|"
+    r"[^，。；、,;:：\d]{0,15}?(?:报告|分析|研报)[：:]|"
+    r"[^，。；、,;]{0,15}?(?:报告|分析|研报)(?:显示|表明|指出|称|认为|提到)?[，。；、,;]?)"
 )
 
 
@@ -1060,6 +1222,77 @@ def split_compound_evidence(text: str) -> list[str]:
         return []
     parts = [p.strip() for p in _COMPOUND_SPLIT_RE.split(text) if p.strip()]
     return parts if parts else [text.strip()]
+
+
+def _decimal_places(raw: str) -> int:
+    m = re.search(r"\.(\d+)", raw or "")
+    return len(m.group(1)) if m else 0
+
+
+def _is_rounding_equivalent(ev_bn: BoundNumber, l_bn: BoundNumber) -> bool:
+    """DAV-1163: 舍入/精度等价——同一数值按较粗精度舍入后相等即视为同值
+    （「3.70亿」vs「+3.7045亿」：3.7045 舍入到 2 位即 3.70，不得判失配）。"""
+    d = min(_decimal_places(ev_bn.raw), _decimal_places(l_bn.raw))
+    return round(ev_bn.val, d) == round(l_bn.val, d) or round(
+        abs(ev_bn.val), d
+    ) == round(abs(l_bn.val), d)
+
+
+def _value_covered(
+    ev_bn: BoundNumber,
+    l_bn: BoundNumber,
+    rel_tol: float = 0.02,
+    abs_tol: float = 0.05,
+) -> bool:
+    """DAV-1163: 数值覆盖语义——区间/约数/方向界表达按声明语义覆盖而非点值相等。
+
+    - ev 「超X/X余/X以上」（下界）：报告值 ≥ X（容差内）即覆盖；
+    - ev 「不足X/X以下/X以内」（上界）：报告值 ≤ X 即覆盖；
+    - 报告侧带方向界时对称处理；
+    - 任一侧「约X/近X/X左右」：容差放宽至 _APPROX_REL_TOL；
+    - 「A-B」区间对：两侧区间在容差内重叠即覆盖（区间内落值也算覆盖）；
+    - 点值：原容差 + 舍入等价（精度差同值不判失配）。
+    """
+    unit_compatible = (
+        (ev_bn.unit == l_bn.unit)
+        or (ev_bn.unit == "raw" and l_bn.unit == "%")
+        or (ev_bn.unit == "%" and l_bn.unit == "raw")
+        # DAV-1163: 证据常省略「元」单位（「10EMA(91.14)」「现价86.20」），
+        # 指标已绑定时允许 raw↔元 量纲互认；双侧均未绑定仍要求严格量纲，
+        # 防止裸数字跨语义通配。
+        or (
+            (ev_bn.metric is not None or l_bn.metric is not None)
+            and {ev_bn.unit, l_bn.unit} == {"raw", "元"}
+        )
+    )
+    if not unit_compatible:
+        return False
+    e_lo, e_hi = ev_bn.range_span or (ev_bn.val, ev_bn.val)
+    l_lo, l_hi = l_bn.range_span or (l_bn.val, l_bn.val)
+    if ev_bn.bound == BOUND_MIN:
+        return l_hi >= ev_bn.val * (1 - rel_tol) - abs_tol
+    if ev_bn.bound == BOUND_MAX:
+        return l_lo <= ev_bn.val * (1 + rel_tol) + abs_tol
+    if l_bn.bound == BOUND_MIN:
+        return e_hi >= l_bn.val * (1 - rel_tol) - abs_tol
+    if l_bn.bound == BOUND_MAX:
+        return e_lo <= l_bn.val * (1 + rel_tol) + abs_tol
+    rt = rel_tol
+    if ev_bn.bound == BOUND_APPROX or l_bn.bound == BOUND_APPROX:
+        rt = max(rel_tol, _APPROX_REL_TOL)
+    if ev_bn.range_span is None and l_bn.range_span is None:
+        if _is_num_match(ev_bn.val, ev_bn.unit, l_bn.val, l_bn.unit, rt, abs_tol):
+            return True
+        return _is_rounding_equivalent(ev_bn, l_bn)
+    if ev_bn.range_span is None:
+        # 证据是点值、报告侧是区间：点值未在报告中字面出现（区间内取值是
+        # 衍生值而非记录值），不得按区间包含放行——「低于现价5.6%」不得被
+        # 报告「5%-8%回调」区间覆盖（golden CASE-001 红线）。
+        return False
+    # 证据区间 [e_lo,e_hi] 与报告值/区间在容差内重叠即覆盖：报告点值落在
+    # 证据区间内（「底线67-77元」被「77元」覆盖）或两侧区间相交均算命中。
+    margin = abs_tol
+    return e_lo <= l_hi * (1 + rt) + margin and l_lo <= e_hi * (1 + rt) + margin
 
 
 def _is_bound_num_match(
@@ -1074,7 +1307,7 @@ def _is_bound_num_match(
     同名严格指标匹配；任一侧严格、另一侧非严格/未绑定即拒绝。两侧均非严格时
     要求规范化指标同名或双方均未绑定；语义类型必须一致，否则不可比。
     """
-    if not _is_num_match(ev_bn.val, ev_bn.unit, l_bn.val, l_bn.unit, rel_tol, abs_tol):
+    if not _value_covered(ev_bn, l_bn, rel_tol, abs_tol):
         return False
     ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
     l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
@@ -1098,7 +1331,16 @@ def _bound_num_value_conflicts(
     """数值层面是否构成冲突（同名严格指标 + 同单位 + 同语义类型 + 同期间 + 数值发散）。
 
     不含主体维度——供冲突判定与 entity_scope_gap 记录共用。
+    DAV-1163: 方向界/约数/区间表达不是点值声明，不参与点值冲突判定
+    （「超100亿」与「130亿」是覆盖关系而非冲突）。
     """
+    if (
+        ev_bn.bound is not None
+        or l_bn.bound is not None
+        or ev_bn.range_span is not None
+        or l_bn.range_span is not None
+    ):
+        return False
     ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
     l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
     if not ev_strict or not l_strict or ev_strict != l_strict:
@@ -1651,11 +1893,128 @@ class EvidenceFactualTruthEvaluator:
             "is_fatal": False,
             "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑",
         }
+        # DAV-1163: 数字级事实覆盖清单——复合句中已命中的数字事实与未命中
+        # 事实分列，供 _verify_evidence_or_decompose 做逐事实独立计分（单点
+        # 失配不拖垮整条，部分覆盖经原子计分落 partial）。
+        if all_ev_bns:
+            res["fact_coverage"] = {
+                "total": len(all_ev_bns),
+                "verified_facts": [
+                    all_ev_bns[i].raw for i in sorted(all_hit_num_indices)
+                ],
+                "unverified_facts": [
+                    all_ev_bns[i].raw
+                    for i in range(len(all_ev_bns))
+                    if i not in all_hit_num_indices
+                ],
+            }
         if entity_scope_gaps:
             res["entity_scope_gaps"] = entity_scope_gaps
         if semantic_role_gaps:
             res["semantic_role_gaps"] = semantic_role_gaps
         return res
+
+    def _verify_evidence_or_decompose(
+        self,
+        ev_str: str,
+        seven_reports: Mapping[str, str],
+        market_data_context: Mapping[str, Any] | None,
+        analysis_baseline_date: str | None,
+        claim_id: str | None,
+        social_data_context: Mapping[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """DAV-1163: 复合句逐事实独立计分——整条证据核验失败（unsupported）且可拆
+        出 ≥2 个实义原子子句时，逐子句独立重评：任一子句获验即按原子粒度计入
+        verified，单点失配不再拖垮整条（部分覆盖经原子计分自然落 partial）。
+
+        verified/contradicted/source_unavailable/致命结果语义不变，不拆分；全部
+        子句均未获验时回退整条单点结论，不膨胀 coverage 分母。拆分后各子项带
+        parent_evidence/atomic_index 溯源字段。
+        """
+        res = self.evaluate_single_evidence(
+            raw_evidence=ev_str,
+            seven_reports=seven_reports,
+            market_data_context=market_data_context,
+            analysis_baseline_date=analysis_baseline_date,
+            claim_id=claim_id,
+            social_data_context=social_data_context,
+        )
+        if res.get("status") != STATUS_UNSUPPORTED:
+            return [res]
+        ev_core = _EVIDENCE_LEADIN_RE.sub("", ev_str, count=1)
+        substantive = [
+            c for c in split_compound_evidence(ev_core) if len(c.strip()) >= 4
+        ]
+        if len(substantive) >= 2:
+            sub_results = [
+                self.evaluate_single_evidence(
+                    raw_evidence=clause,
+                    seven_reports=seven_reports,
+                    market_data_context=market_data_context,
+                    analysis_baseline_date=analysis_baseline_date,
+                    claim_id=claim_id,
+                    social_data_context=social_data_context,
+                )
+                for clause in substantive
+            ]
+            if any(s.get("status") == STATUS_VERIFIED for s in sub_results):
+                items: list[dict[str, Any]] = []
+                for idx, sub in enumerate(sub_results):
+                    for it in self._facts_or_self(sub, substantive[idx], ev_str):
+                        it["atomic_index"] = idx
+                        items.append(it)
+                return items
+            return [res]
+        # 单子句多数字：整句未获验但部分数字事实已命中 → 逐事实独立计分
+        return self._facts_or_self(res, ev_str, ev_str)
+
+    @staticmethod
+    def _facts_or_self(
+        res: dict[str, Any], clause: str, parent: str
+    ) -> list[dict[str, Any]]:
+        """把「多数字、部分命中」的子句拆成逐事实计分项。
+
+        fact_coverage 中 verified_facts 是已在报告中字面命中的数字事实
+        （绑定指标/语义/期间门均通过），独立计为 verified；未命中事实仍计
+        unsupported——不放宽 verified 标准，只是不让单点失配拖垮整句。
+        全部命中（应已 verified）或全部未命中时保持原子句单点结论。
+        """
+        fc = res.get("fact_coverage") or {}
+        verified_facts = fc.get("verified_facts") or []
+        unverified_facts = fc.get("unverified_facts") or []
+        if not verified_facts or not unverified_facts:
+            res["parent_evidence"] = parent
+            return [res]
+        items = []
+        for fact in verified_facts:
+            items.append(
+                {
+                    "raw": fact,
+                    "claim_id": res.get("claim_id"),
+                    "matched_role": res.get("matched_role"),
+                    "matched_source": res.get("matched_source"),
+                    "status": STATUS_VERIFIED,
+                    "is_fatal": False,
+                    "details": f"复合句原子事实已在报告中命中 (atomic_fact): {fact}",
+                    "parent_evidence": parent,
+                    "clause": clause,
+                }
+            )
+        for fact in unverified_facts:
+            items.append(
+                {
+                    "raw": fact,
+                    "claim_id": res.get("claim_id"),
+                    "matched_role": None,
+                    "matched_source": None,
+                    "status": STATUS_UNSUPPORTED,
+                    "is_fatal": False,
+                    "details": f"复合句原子事实未在报告中找到支撑 (atomic_fact): {fact}",
+                    "parent_evidence": parent,
+                    "clause": clause,
+                }
+            )
+        return items
 
     def evaluate_claims(
         self,
@@ -1677,15 +2036,16 @@ class EvidenceFactualTruthEvaluator:
                 ev_str = str(ev).strip()
                 if not ev_str:
                     continue
-                ver_res = self.evaluate_single_evidence(
-                    raw_evidence=ev_str,
-                    seven_reports=seven_reports,
-                    market_data_context=market_data_context,
-                    analysis_baseline_date=analysis_baseline_date,
-                    claim_id=cid,
-                    social_data_context=social_data_context,
+                results.extend(
+                    self._verify_evidence_or_decompose(
+                        ev_str,
+                        seven_reports,
+                        market_data_context,
+                        analysis_baseline_date,
+                        cid,
+                        social_data_context,
+                    )
                 )
-                results.append(ver_res)
 
         return results
 
@@ -1714,15 +2074,16 @@ class EvidenceFactualTruthEvaluator:
                 ev_str = str(ev).strip()
                 if not ev_str:
                     continue
-                ver_res = self.evaluate_single_evidence(
-                    raw_evidence=ev_str,
-                    seven_reports=seven_reports,
-                    market_data_context=market_data_context,
-                    analysis_baseline_date=analysis_baseline_date,
-                    claim_id=chid,
-                    social_data_context=social_data_context,
+                ver_items.extend(
+                    self._verify_evidence_or_decompose(
+                        ev_str,
+                        seven_reports,
+                        market_data_context,
+                        analysis_baseline_date,
+                        chid,
+                        social_data_context,
+                    )
                 )
-                ver_items.append(ver_res)
 
             verified_items = [v for v in ver_items if v.get("status") == STATUS_VERIFIED]
             contradicted_items = [v for v in ver_items if v.get("status") == STATUS_CONTRADICTED]
