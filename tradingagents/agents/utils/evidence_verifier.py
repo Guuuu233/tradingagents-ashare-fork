@@ -464,10 +464,191 @@ def _classify_semantic_type(
 _SORTED_METRIC_MAP_KEYS = sorted(_METRIC_CANONICAL_MAP.keys(), key=len, reverse=True)
 
 
-class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype")
+# ── DAV-1145: 实体 / 比较范围（同指标跨主体不得互判冲突）──
+# BoundNumber.entity 取值：
+#   None        未指明主体（默认当前报告目标股，双侧均 None 视为同主体）
+#   'co:<名>'   公司/主体名（「美的」「格力电器」「奥克斯」等）
+#   'sym:<6位>' 证券代码
+#   'bench:<名>' 指数/行业均值/同业等基准主体（与个股主体不可比）
+#   ENTITY_AMBIGUOUS  同子句出现多个不同主体，归属歧义 → 最保守不判冲突
+ENTITY_AMBIGUOUS = "ambig"
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN):
+# 6 位证券代码（A 股 0/3/6/9 开头）：后跟量纲单位时排除（300000元 是金额非代码）
+_ENTITY_TICKER_RE = re.compile(
+    r"(?<![\d.])([0369]\d{5})(?:\.(?:sh|sz|bj))?(?![\d.])"
+    r"(?!\s*(?:万股|亿股|股|亿元|万元|万户|万人|万|亿|%|％|元|港元|美元|倍|点|次|手|户|人))",
+    re.IGNORECASE,
+)
+# 指数 / 行业均值 / 同业基准类主体
+_ENTITY_BENCH_RE = re.compile(
+    r"沪深\s*300|中证\s*\d{2,4}|国证\s*\d{2,4}|上证\s*50|上证指数|深证成指|"
+    r"创业板指|科创\s*50|北证\s*50|恒生指数|恒生科技|纳斯达克|标普\s*500|道琼斯|"
+    r"行业均值|行业平均|同业均值|同业平均|可比公司|板块均值|行业基准|大盘"
+)
+# 带组织后缀的公司名（美的集团/格力电器股份/惠而浦（中国）有限公司）
+_ENTITY_COMPANY_RE = re.compile(
+    r"[一-龥A-Za-z][一-龥A-Za-z0-9（）()]{0,11}?"
+    r"(?:股份有限公司|有限责任公司|有限公司|公司|集团|股份|控股)"
+)
+# 裸主体名：仅识别「子句首 2-6 字 token 且紧贴指标词/数字（可隔连接词）」的
+# 高精度形态（「美的毛利率26.39%」「奥克斯18.8%」「奥克斯为18.8%」）。
+# 句中修饰语/谓语片段一律不作主体，宁可漏抽也不误抓（漏抽走最保守路径）。
+# 子句首到首个锚点（指标词/数字）之间的 gap 整体必须是「2-6 字 token（+可选连接词）」
+_ENTITY_BARE_TOKEN_RE = re.compile(r"([一-龥A-Za-z]{2,6}?)(?:的|为|是|达|录得|约|仅|报)?")
+_ENTITY_BARE_BAD_FIRST_CHAR = frozenset(
+    "在按若当其该本各每由从对与和及或虽已可能需应因将现此这那以如"
+)
+_ENTITY_BARE_BAD_LAST_CHAR = frozenset(
+    "至到为达报收约仅超略共总各其于和与或升降增跌涨破站入出满欠得"
+)
+# 修饰语子串：token 含以下任一片段即非主体名（「同比增长」「单月」「累计」等）
+_ENTITY_BARE_BAD_SUBSTR = frozenset({
+    "同比", "环比", "增长", "下降", "上涨", "下跌", "回升", "回落", "提升",
+    "提高", "减少", "收窄", "走阔", "扩张", "收缩", "涨跌", "微增", "微降",
+    "暴增", "大增", "暴跌", "维持", "突破", "跌破", "达到", "录得", "预计",
+    "实现", "显示", "表明", "对应", "折合", "处于", "位于", "高于", "低于",
+    "超过", "约为", "截至", "年初", "期末", "期内", "日均", "单月", "单季",
+    "累计", "年化", "月度", "季度", "年度", "增速", "增幅", "跌幅", "涨幅",
+    "均值", "平均", "合计", "总计", "占比", "比重", "口径", "情景", "假设",
+    "测算", "推演", "预计", "预测", "底线", "上限", "下限", "区间", "中枢",
+    "极端", "悲观", "乐观", "中性", "压力测试", "支撑", "阻力",
+})
+_ENTITY_STOPWORDS = frozenset({
+    "公司", "本公司", "上市", "子公司", "集团", "报告期内", "报告期", "期内",
+    "该股", "标的", "个股", "我们", "预计", "实现", "录得", "达到", "约为",
+    "超过", "同比", "环比", "截至", "目前", "当前", "其中", "整体", "主营",
+    "业务", "综合", "加权", "平均", "累计", "单季", "年化", "行业", "板块",
+    "指数", "大盘", "市场", "同期", "上年", "去年", "今年", "明年", "年报",
+    "中报", "季报", "年度", "上半年", "下半年", "一季度", "二季度", "三季度",
+    "四季度", "年初", "年末", "季度", "月份", "数据", "显示", "根据", "公告",
+    "财报", "业绩", "经营", "财务", "最新", "收盘", "开盘", "盘中", "早盘",
+    "尾盘", "全天", "今日", "昨日", "明日", "估计", "维持", "判断", "认为",
+    "指出", "表示", "来看", "而言", "方面", "口径", "维度", "情景", "假设",
+    "乐观", "悲观", "中性", "基准", "目标", "空间", "弹性", "水平", "位置",
+    "区间", "中枢", "附近", "以上", "以下", "以内", "左右", "前后", "之前",
+    "之后", "当时", "此前", "此后", "增速", "增幅", "跌幅", "涨幅", "提升",
+    "下降", "回升", "回落", "收窄", "走阔", "扩张", "收缩", "改善", "恶化",
+    "承压", "修复", "拐点", "趋势", "格局", "逻辑", "驱动", "支撑", "压力",
+    "风险", "机会", "对应", "反映", "体现", "表明", "说明", "验证", "证实",
+})
+_ENTITY_BENCH_NORM = {"行业平均": "行业均值", "同业平均": "同业均值"}
+_ENTITY_COMPANY_SUFFIXES = (
+    "股份有限公司", "有限责任公司", "有限公司", "公司", "集团", "股份", "控股",
+)
+_ENTITY_CLAUSE_BREAKS = "，。；、！？!?,;：:（）()【】\n"
+_ENTITY_INHERIT_WINDOW = 64
+
+
+def _extract_entity_spans(
+    cleaned: str,
+    filtered_spans: list[tuple[int, int, str]],
+    matches: list[re.Match],
+) -> list[tuple[int, int, str]]:
+    """抽取实体锚点 span 列表 (start, end, canonical)，canonical 带 co:/sym:/bench: 前缀。"""
+    spans: list[tuple[int, int, str]] = []
+    for m in _ENTITY_TICKER_RE.finditer(cleaned):
+        spans.append((m.start(1), m.end(1), f"sym:{m.group(1)}"))
+    for m in _ENTITY_BENCH_RE.finditer(cleaned):
+        name = re.sub(r"\s+", "", m.group(0))
+        spans.append((m.start(), m.end(), f"bench:{_ENTITY_BENCH_NORM.get(name, name)}"))
+    for m in _ENTITY_COMPANY_RE.finditer(cleaned):
+        name = m.group(0)
+        for suf in _ENTITY_COMPANY_SUFFIXES:
+            if name.endswith(suf):
+                name = name[: -len(suf)]
+                break
+        name = name.strip("（）()").lstrip("与和及或跟")
+        if len(name) >= 2 and name not in _ENTITY_STOPWORDS:
+            spans.append((m.start(), m.end(), f"co:{name}"))
+    # 裸主体名：子句首 run（2-6 字）紧贴指标词/数字（可隔连接词）才认作主体。
+    # run 长度 >6 说明是「修饰语+指标」长串（如「极端压力测试显示极悲观年化净利
+    # 底线」），直接放弃——漏抽按最保守处理，不误抓句中谓语片段。
+    anchors = sorted({s[0] for s in filtered_spans} | {m.start() for m in matches})
+    clause_begins = [0]
+    for i, ch in enumerate(cleaned):
+        if ch in _ENTITY_CLAUSE_BREAKS:
+            clause_begins.append(i + 1)
+    for cs in clause_begins:
+        nxt = next((a for a in anchors if a > cs), None)
+        if nxt is None:
+            continue
+        # 子句首→首个锚点之间的 gap 整体必须是「2-6 字 token（+可选连接词）」；
+        # 「极端压力测试显示极悲观年化净利底线 60」这类长修饰串直接放弃。
+        bm = _ENTITY_BARE_TOKEN_RE.fullmatch(cleaned[cs:nxt].strip())
+        if not bm:
+            continue
+        token = bm.group(1)
+        lead = len(token) - len(token.lstrip("与和及或跟"))
+        token = token[lead:]
+        # 修饰子串出现时截断取头部（「大金单月跌」→「大金」）；截后不足 2 字则弃
+        for s in _ENTITY_BARE_BAD_SUBSTR:
+            cut = token.find(s)
+            if cut >= 0:
+                token = token[:cut]
+                break
+        if (
+            len(token) < 2
+            or token in _ENTITY_STOPWORDS
+            or token in _ENTITY_BARE_BAD_SUBSTR
+            or token[0] in _ENTITY_BARE_BAD_FIRST_CHAR
+            or token[-1] in _ENTITY_BARE_BAD_LAST_CHAR
+            or any(k in token for k in _SORTED_METRIC_MAP_KEYS)
+        ):
+            continue
+        t_start, t_end = cs + lead, cs + lead + len(token)
+        # 与已识别的代码/基准/后缀公司 span 重叠时丢弃裸 token（如「沪深300指数」
+        # 中的「沪深」不得再立为独立主体）
+        if any(s < t_end and t_start < e for s, e, _ in spans):
+            continue
+        spans.append((t_start, t_end, f"co:{token}"))
+    spans.sort(key=lambda s: (s[0], s[1]))
+    return spans
+
+
+def _bind_entity_for_number(
+    text: str,
+    n_start: int,
+    entity_spans: list[tuple[int, int, str]],
+) -> str | None:
+    """给数字绑定主体：优先同子句内实体；缺省时向前继承最近主体（主体跨逗号延续）；
+    同子句出现多个不同主体 → ENTITY_AMBIGUOUS（归属歧义，最保守处理）。"""
+    window_start = max(0, n_start - _ENTITY_INHERIT_WINDOW)
+    clause_start = window_start
+    for i in range(n_start - 1, window_start - 1, -1):
+        if text[i] in _ENTITY_CLAUSE_BREAKS:
+            clause_start = i + 1
+            break
+    in_clause = [
+        c for s, e, c in entity_spans if s >= clause_start and e <= n_start
+    ]
+    if len(set(in_clause)) > 1:
+        return ENTITY_AMBIGUOUS
+    if in_clause:
+        return in_clause[-1]
+    prev = [c for s, e, c in entity_spans if e <= clause_start and e > window_start]
+    if prev:
+        return prev[-1]
+    return None
+
+
+def _entities_comparable(ev_entity: str | None, l_entity: str | None) -> bool:
+    """冲突判定的主体可比性：双侧均未指明主体（默认同一报告目标）或规范名一致才可比。
+
+    单侧缺主体 / 任一侧歧义 / 主体类型或名称不同（公司 vs 指数 / 行业均值）一律
+    按最保守——不可比、不判冲突（由调用方记 entity_scope_gap）。"""
+    if ev_entity == ENTITY_AMBIGUOUS or l_entity == ENTITY_AMBIGUOUS:
+        return False
+    if ev_entity is None and l_entity is None:
+        return True
+    if ev_entity is None or l_entity is None:
+        return False
+    return ev_entity == l_entity
+
+
+class BoundNumber:
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity")
+
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -475,9 +656,10 @@ class BoundNumber:
         self.period = period
         self.raw_metric = raw_metric
         self.stype = stype
+        self.entity = entity          # None = 未指明主体；ENTITY_AMBIGUOUS = 多主体歧义
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r})"
 
 
 def extract_bound_numbers(text: str, default_period: str | None = None) -> list[BoundNumber]:
@@ -515,6 +697,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         paren_mask[i] = depth > 0
 
     matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
+    entity_spans = _extract_entity_spans(cleaned, filtered_spans, matches)
     res = []
     last_res_match_end = -1  # res 中最后一个 BoundNumber 对应的 match.end()
     for i, m in enumerate(matches):
@@ -617,7 +800,8 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             # % 绑定到「毛利」只可能是毛利率语义（占比/增速下毛利的 % 无意义），
             # 而「净利 + %」不得折叠——它可能是净利增速或占比，保持净利润。
             metric = "毛利率"
-        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype))
+        entity = _bind_entity_for_number(cleaned, n_start, entity_spans)
+        res.append(BoundNumber(val, unit, raw, metric, period, raw_metric, stype, entity))
         last_res_match_end = n_end
     return res
 
@@ -670,13 +854,13 @@ def _is_bound_num_match(
     return True
 
 
-def _is_bound_num_contradicted(
+def _bound_num_value_conflicts(
     ev_bn: BoundNumber,
     l_bn: BoundNumber,
 ) -> bool:
-    """Check if evidence bound number contradicts line bound number.
+    """数值层面是否构成冲突（同名严格指标 + 同单位 + 同语义类型 + 同期间 + 数值发散）。
 
-    Requires matching metric name, unit, and period (for percentages) before judging conflict.
+    不含主体维度——供冲突判定与 entity_scope_gap 记录共用。
     """
     ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
     l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
@@ -695,6 +879,21 @@ def _is_bound_num_contradicted(
             return False
     diff_pct = abs(abs(ev_bn.val) - abs(l_bn.val)) / (abs(l_bn.val) + 1e-9)
     return diff_pct > 0.05
+
+
+def _is_bound_num_contradicted(
+    ev_bn: BoundNumber,
+    l_bn: BoundNumber,
+) -> bool:
+    """Check if evidence bound number contradicts line bound number.
+
+    Requires matching metric name, unit, and period (for percentages) before judging conflict.
+    DAV-1145: 另要求主体可比——同指标不同主体（跨公司/个股 vs 指数行业基准/
+    主体歧义/单侧未指明主体）不得互判 contradicted。
+    """
+    if not _entities_comparable(ev_bn.entity, l_bn.entity):
+        return False
+    return _bound_num_value_conflicts(ev_bn, l_bn)
 
 
 class EvidenceFactualTruthEvaluator:
@@ -1055,6 +1254,8 @@ class EvidenceFactualTruthEvaluator:
 
         # 3.4 Contradiction check across reports when evidence is not verified
         contradicted_candidate = None
+        # DAV-1145: 数值层面构成冲突、仅因主体不同/歧义/单侧未指明而被跳过的比较 → 记 gap
+        entity_scope_gaps: list[str] = []
         if all_ev_bns:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -1081,6 +1282,14 @@ class EvidenceFactualTruthEvaluator:
                                     f"在 {role_key} 中指标 '{ev_bn.metric}' 数据冲突: 证据声称 {ev_bn.raw}，报告记录为 {l_bn.raw}",
                                 )
                                 break
+                            if _bound_num_value_conflicts(ev_bn, l_bn):
+                                gap_note = (
+                                    f"跨主体比较已跳过(entity_scope): 证据 {ev_bn.raw}"
+                                    f"(主体={ev_bn.entity}) vs {role_key} 记录 {l_bn.raw}"
+                                    f"(主体={l_bn.entity})"
+                                )
+                                if gap_note not in entity_scope_gaps:
+                                    entity_scope_gaps.append(gap_note)
                         if contradicted_candidate:
                             break
                     if contradicted_candidate:
@@ -1089,7 +1298,7 @@ class EvidenceFactualTruthEvaluator:
                     break
 
         if contradicted_candidate:
-            return {
+            res = {
                 "raw": raw_text,
                 "claim_id": claim_id,
                 "matched_role": contradicted_candidate[0],
@@ -1098,6 +1307,9 @@ class EvidenceFactualTruthEvaluator:
                 "is_fatal": False,
                 "details": contradicted_candidate[1],
             }
+            if entity_scope_gaps:
+                res["entity_scope_gaps"] = entity_scope_gaps
+            return res
 
         # 4. Check market_data_context if provided
         if isinstance(market_data_context, Mapping):
@@ -1127,7 +1339,7 @@ class EvidenceFactualTruthEvaluator:
                     }
 
         # 5. Unsupported
-        return {
+        res = {
             "raw": raw_text,
             "claim_id": claim_id,
             "matched_role": None,
@@ -1136,6 +1348,9 @@ class EvidenceFactualTruthEvaluator:
             "is_fatal": False,
             "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑",
         }
+        if entity_scope_gaps:
+            res["entity_scope_gaps"] = entity_scope_gaps
+        return res
 
     def evaluate_claims(
         self,

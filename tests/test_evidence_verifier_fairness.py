@@ -666,6 +666,120 @@ def test_dav1144_paren_yoy_binds_nearest_amount_metric():
     assert bn_np_yoy.stype == STYPE_GROWTH
 
 
+# ── DAV-1145: Entity / Comparison Scope ────────────────────────────────────
+
+
+def test_dav1145_entity_binding_extraction():
+    """DAV-1145: 主体抽取——公司名/代码/行业基准入 BoundNumber.entity；无主体保持 None。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("美的毛利率为26.39%")[0]
+    assert bn.entity == "co:美的"
+
+    bn = extract_bound_numbers("奥克斯毛利率18.8%")[0]
+    assert bn.entity == "co:奥克斯"
+
+    bn = extract_bound_numbers("大金单月跌15.58%")[0]
+    assert bn.entity == "co:大金"
+
+    bn = extract_bound_numbers("恒瑞医药2026年Q2毛利率高达86.33%")[0]
+    assert bn.entity == "co:恒瑞医药"
+
+    bn = extract_bound_numbers("行业均值毛利率为18.8%")[0]
+    assert bn.entity == "bench:行业均值"
+
+    # 无主体提及 → None（默认报告目标股）
+    bn = extract_bound_numbers("2026年Q2综合毛利率为25.57%")[0]
+    assert bn.entity is None
+
+    # 同子句双主体 → 归属歧义标记
+    bn = extract_bound_numbers("美的集团与奥克斯集团毛利率为26.39%")[0]
+    assert bn.entity == "ambig"
+
+
+def test_dav1145_cross_entity_same_metric_not_contradicted(evaluator):
+    """美的毛利率26.39% vs 奥克斯18.8%：同指标跨主体不得互判冲突，须记 entity gap。"""
+    seven_reports = {
+        "fundamentals_report": "- **同业对比**：奥克斯同期毛利率为18.8%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="美的毛利率为26.39%",
+        seven_reports=seven_reports,
+        claim_id="ENT-1",
+    )
+    assert res["status"] == STATUS_UNSUPPORTED
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("entity_scope_gaps")
+
+
+def test_dav1145_named_vs_unspecified_entity_not_contradicted(evaluator):
+    """单侧指明主体、另一侧未指明（默认目标股）→ 主体不可比，按最保守不判冲突 + 记 gap。"""
+    seven_reports = {
+        "fundamentals_report": "- **财务表现**：2026年Q2综合毛利率为25.57%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="奥克斯2026年Q2毛利率为15.00%",
+        seven_reports=seven_reports,
+        claim_id="ENT-2",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("entity_scope_gaps")
+
+
+def test_dav1145_same_entity_true_conflict_still_contradicted(evaluator):
+    """同一公司同指标同期间真实矛盾仍判冲突（防过宽）。"""
+    seven_reports = {
+        "fundamentals_report": "- **财务表现**：美的2026年Q2毛利率为25.57%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="美的2026年Q2毛利率为15.00%",
+        seven_reports=seven_reports,
+        claim_id="ENT-3",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+    assert "毛利率" in res.get("details", "")
+
+
+def test_dav1145_both_unspecified_true_conflict_still_contradicted(evaluator):
+    """双侧均未指明主体（默认同一报告目标股）→ 可比，真矛盾仍拦。"""
+    seven_reports = {
+        "fundamentals_report": "2026年Q2综合毛利率为25.57%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026年Q2综合毛利率为15.00%",
+        seven_reports=seven_reports,
+        claim_id="ENT-4",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1145_benchmark_vs_stock_value_not_contradicted(evaluator):
+    """行业均值基准 vs 个股值：主体类型不同不可比，不判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- **行业对比**：行业均值毛利率为18.8%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="美的毛利率为26.39%",
+        seven_reports=seven_reports,
+        claim_id="ENT-5",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1145_ambiguous_entity_conservative_no_contradiction(evaluator):
+    """同子句多主体归属歧义 → 主体抽取失败按最保守：不判冲突 + 记 gap，不误杀。"""
+    seven_reports = {
+        "fundamentals_report": "- **财务表现**：美的集团毛利率为18.80%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="美的集团与奥克斯集团毛利率为26.39%",
+        seven_reports=seven_reports,
+        claim_id="ENT-6",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("entity_scope_gaps")
+
+
 # ── DAV-1091: is_fatal 独立严重度位在证据核验器中的消费契约 ─────────────────
 
 
