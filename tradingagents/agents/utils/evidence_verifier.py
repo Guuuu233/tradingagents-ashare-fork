@@ -549,6 +549,8 @@ _ENTITY_COMPANY_RE = re.compile(
 _ENTITY_BARE_TOKEN_RE = re.compile(r"([一-龥A-Za-z]{2,6}?)(?:的|为|是|达|录得|约|仅|报)?")
 _ENTITY_BARE_BAD_FIRST_CHAR = frozenset(
     "在按若当其该本各每由从对与和及或虽已可能需应因将现此这那以如"
+    # DAV-1158: 「据」是引语介词（据东方财富财报…），永非主体名首字
+    "据"
 )
 _ENTITY_BARE_BAD_LAST_CHAR = frozenset(
     "至到为达报收约仅超略共总各其于和与或升降增跌涨破站入出满欠得"
@@ -591,6 +593,10 @@ _ENTITY_STOPWORDS = frozenset({
     "下降", "回升", "回落", "收窄", "走阔", "扩张", "收缩", "改善", "恶化",
     "承压", "修复", "拐点", "趋势", "格局", "逻辑", "驱动", "支撑", "压力",
     "风险", "机会", "对应", "反映", "体现", "表明", "说明", "验证", "证实",
+    # DAV-1158: 数据源名（东财/同花顺…）是 provider/source 口径标注而非陈述
+    # 主体——裸 token 不得立为 co: 实体，归属由 BoundNumber.provider 承载。
+    "东财", "东方财富", "同花顺", "通达信", "大智慧", "万得", "新浪",
+    "问财", "上交所", "深交所", "北交所", "港交所", "交易所",
     # DAV-1146: 「实际换手1.11%」「单日换手率达20%」中「实际」「单日」是修饰语
     # 而非主体名——不拦截会被裸 token 规则误抓为 co:实际/co:单日。
     "实际", "单日", "当期", "当季", "当月", "当年",
@@ -824,6 +830,114 @@ def _classify_role_and_basis(
     return role, basis
 
 
+# ── DAV-1158: provider/source 口径命名空间（资金流/行情类指标）──
+# 数据源/字段代码口径进 binding key：不同数据源（东财 vs 同花顺）或不同字段口径
+# （东财 r0_net vs 同花顺 netamount）的数值语义不同，不得互作 contradiction
+# ground truth；同 provider 同口径的真矛盾仍拦。price_basis（复权/收盘口径）
+# 归 DAV-1142，本卡只管 provider/source 口径层。
+# provider 取值为排序后的 token 元组：
+#   src:<source>   数据源（eastmoney/ths/wind/tdx/dzh/sina/tushare/exchange）
+#   fld:<field>    字段代码口径（r0_net/netamount/zljlr/main_inflow 等）
+# 命名空间仅挂在资金流/行情类规范化指标上——「据东财财报净利润45亿」这类财务
+# 科目数值与数据源无关，不得因 provider 单侧标注而放松真矛盾判定。
+_PROVIDER_SCOPED_METRICS = {
+    # 资金流分单/两融（严格指标）
+    "主力", "超大单", "大单", "两融",
+    # 未归一化的资金流/行情 raw canonical（词表直通，参与匹配但不判冲突）
+    "中单", "小单", "全单", "散户小单", "净流入", "净流出", "流入", "流出",
+    "北向", "北向资金", "机构", "外资", "游资", "散户", "龙虎榜",
+    "大宗交易", "筹码", "吸筹", "出货", "增仓", "减仓", "席位",
+    # 行情/量价（含严格指标 换手率/量比/股价/最高价/最低价）
+    "成交量", "成交额", "换手率", "换手", "量比",
+    "股价", "收盘价", "开盘价", "开盘", "最高价", "最低价", "布林",
+}
+
+# 数据源 token 正则：英文 token 必须以非 [A-Za-z0-9_] 字符为界（Python \b 把
+# CJK 算 \w，「显示r0_net」中 \b 失效；「ths/wind/sina」裸用会误中 months/
+# window 等英文单词）。
+_PROVIDER_SOURCE_RES: tuple[tuple[str, "re.Pattern"], ...] = (
+    ("src:eastmoney", re.compile(r"东方财富|东财|(?<![A-Za-z0-9_])(?:eastmoney|choice)(?![A-Za-z0-9_])", re.I)),
+    ("src:ths", re.compile(r"同花顺|问财|(?<![A-Za-z0-9_])(?:10jqka|iwencai|ths)(?![A-Za-z0-9_])", re.I)),
+    ("src:wind", re.compile(r"万得|(?<![A-Za-z0-9_])wind(?![A-Za-z0-9_])", re.I)),
+    ("src:tdx", re.compile(r"通达信")),
+    ("src:dzh", re.compile(r"大智慧")),
+    ("src:sina", re.compile(r"新浪|(?<![A-Za-z0-9_])sina(?![A-Za-z0-9_])", re.I)),
+    ("src:tushare", re.compile(r"(?<![A-Za-z0-9_])tushare(?![A-Za-z0-9_])", re.I)),
+    ("src:exchange", re.compile(r"上交所|深交所|北交所|港交所|交易所")),
+)
+# 字段代码口径（资金流字段名即口径标签：东财 r0_net vs 同花顺 netamount）
+_PROVIDER_FIELD_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(r0_net|r0_in|r0_out|netamount|zljlr|zjlr|"
+    r"main_inflow|main_net_inflow|moneyflow|smc_in|smc_out)(?![A-Za-z0-9_])",
+    re.I,
+)
+_PROVIDER_WINDOW = 48  # 「同花顺数据：r0_net 中单净流入1465.71万」类引导前缀窗口
+_PROVIDER_POST_WINDOW = 16
+
+
+def _nearest_tokens(
+    scope: str,
+    res: tuple[tuple[str, "re.Pattern"], ...],
+) -> set[str]:
+    """取 scope 内最靠后（离数字最近）的一簇数据源 token；同终点并列时并入。"""
+    best_end = -1
+    tokens: set[str] = set()
+    for name, rx in res:
+        for m in rx.finditer(scope):
+            if m.end() > best_end:
+                best_end = m.end()
+                tokens = {name}
+            elif m.end() == best_end:
+                tokens.add(name)
+    return tokens
+
+
+def _bind_provider_for_number(
+    text: str,
+    n_start: int,
+    n_end: int,
+    metric: str | None,
+) -> tuple[str, ...] | None:
+    """给资金流/行情类数字绑定数据源/口径命名空间；无标注或指标不在作用域返回 None。
+
+    语境 = 数字前 _PROVIDER_WINDOW 窗口内「最近的一簇」provider 标注（覆盖
+    「东财口径：」「同花顺数据：r0_net」这类冒号引导前缀——冒号是子句断点，
+    口径词作用于其后的整段数值陈述）+ 数字后同子句紧邻标注（「1465.71万
+    （东财口径）」）。取最近一簇而非全窗并集，避免「同花顺…东财…」长窗内
+    两个源并列污染归属。
+    """
+    if metric not in _PROVIDER_SCOPED_METRICS:
+        return None
+    window = text[max(0, n_start - _PROVIDER_WINDOW):n_start]
+    post = re.split(r"[，。；、,;：:！？!?]", text[n_end:n_end + _PROVIDER_POST_WINDOW])[0]
+    tokens = _nearest_tokens(window, _PROVIDER_SOURCE_RES)
+    tokens |= _nearest_tokens(post, _PROVIDER_SOURCE_RES)
+    # 字段代码口径同规则：窗内取最近一簇 + 数字后同子句标注
+    fld_tokens: set[str] = set()
+    best_fld_end = -1
+    for m in _PROVIDER_FIELD_RE.finditer(window):
+        tok = f"fld:{m.group(1).lower()}"
+        if m.end() > best_fld_end:
+            best_fld_end = m.end()
+            fld_tokens = {tok}
+        elif m.end() == best_fld_end:
+            fld_tokens.add(tok)
+    tokens |= fld_tokens
+    tokens |= {f"fld:{m.group(1).lower()}" for m in _PROVIDER_FIELD_RE.finditer(post)}
+    return tuple(sorted(tokens)) or None
+
+
+def _providers_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
+    """DAV-1158: provider/source 口径可比性——不同数据源或不同字段口径的数值
+    不得互作 contradiction ground truth；同 provider 同口径真矛盾仍拦。
+    单侧未标注按最保守不判（与 _entities_comparable 同一原则）。"""
+    if ev_bn.provider is None and l_bn.provider is None:
+        return True
+    if ev_bn.provider is None or l_bn.provider is None:
+        return False
+    return ev_bn.provider == l_bn.provider
+
+
 def _semantics_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
     """冲突判定的语义角色/期间基准可比性：角色必须相同（actual 不得与 threshold/
     scenario/incremental 互判）；期间基准必须一致（单季 vs 年化 vs 累计互不可比，
@@ -905,9 +1019,9 @@ _APPROX_REL_TOL = 0.10
 
 
 class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span")
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span", "provider")
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None):
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None, provider: tuple[str, ...] | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -920,9 +1034,10 @@ class BoundNumber:
         self.basis = basis            # DAV-1146: 单季/年化/累计期间基准，None = 未标注
         self.bound = bound            # DAV-1163: min/max/approx 方向界或约数修饰，None = 点值
         self.range_span = range_span  # DAV-1163: 「A-B」区间对合并的 (lo,hi)，None = 非区间
+        self.provider = provider      # DAV-1158: 数据源/口径命名空间（src:*/fld:* 元组），None = 未标注
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r}, provider={self.provider!r})"
 
 
 # DAV-1157: 数字级期间绑定——整句归一期间（normalize_period(text)）会把同一行
@@ -994,6 +1109,9 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     # 数字级期间绑定读取局部期间标注（「（2024）」「2026H1」）。
     period_view = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
     cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), period_view)
+    # DAV-1158: 字段代码口径（r0_net/netamount 等）保位掩码——其内部数字
+    # （r0_net 的 0）不得被当作独立数值抽取；口径信息由 provider 绑定另行读取
+    cleaned = _PROVIDER_FIELD_RE.sub(lambda m: " " * len(m.group(0)), cleaned)
     text_lower = cleaned.lower()
     metric_spans = []
     for kw in _SORTED_METRIC_MAP_KEYS:
@@ -1170,7 +1288,11 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             bound = BOUND_MAX
         elif _BOUND_APPROX_PREFIX_RE.search(prefix_ctx) or _BOUND_APPROX_SUFFIX_RE.match(suffix_ctx):
             bound = BOUND_APPROX
-        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound)
+        # DAV-1158: 资金流/行情类数字的数据源/口径命名空间；读 period_view——
+        # cleaned 已把字段代码（r0_net 等）保位掩码，口径标注须从未掩码坐标等价的
+        # period_view 读取（与 _bind_period_for_number 同一坐标系约定）。
+        provider = _bind_provider_for_number(period_view, n_start, n_end, metric)
+        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound, None, provider)
         res.append(bn)
         res_spans.append((n_start, n_end))
         last_res_match_end = n_end
@@ -1380,6 +1502,9 @@ def _is_bound_num_contradicted(
     if not _entities_comparable(ev_bn.entity, l_bn.entity):
         return False
     if not _semantics_comparable(ev_bn, l_bn):
+        return False
+    # DAV-1158: 不同数据源/口径（东财 vs 同花顺、r0_net vs netamount）不得互判
+    if not _providers_comparable(ev_bn, l_bn):
         return False
     return _bound_num_value_conflicts(ev_bn, l_bn)
 
@@ -1795,6 +1920,8 @@ class EvidenceFactualTruthEvaluator:
         entity_scope_gaps: list[str] = []
         # DAV-1146: 数值层面构成冲突、仅因语义角色/期间基准不同而被跳过的比较 → 记 gap
         semantic_role_gaps: list[str] = []
+        # DAV-1158: 数值层面构成冲突、仅因数据源/口径不同或单侧未标注而被跳过的比较 → 记 gap
+        provider_scope_gaps: list[str] = []
         if all_ev_bns:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -1822,7 +1949,15 @@ class EvidenceFactualTruthEvaluator:
                                 )
                                 break
                             if _bound_num_value_conflicts(ev_bn, l_bn):
-                                if _entities_comparable(ev_bn.entity, l_bn.entity):
+                                if not _entities_comparable(ev_bn.entity, l_bn.entity):
+                                    gap_note = (
+                                        f"跨主体比较已跳过(entity_scope): 证据 {ev_bn.raw}"
+                                        f"(主体={ev_bn.entity}) vs {role_key} 记录 {l_bn.raw}"
+                                        f"(主体={l_bn.entity})"
+                                    )
+                                    if gap_note not in entity_scope_gaps:
+                                        entity_scope_gaps.append(gap_note)
+                                elif not _semantics_comparable(ev_bn, l_bn):
                                     gap_note = (
                                         f"跨语义角色/期间基准比较已跳过(semantic_role): 证据 {ev_bn.raw}"
                                         f"(role={ev_bn.role},basis={ev_bn.basis}) vs {role_key} 记录 {l_bn.raw}"
@@ -1831,13 +1966,15 @@ class EvidenceFactualTruthEvaluator:
                                     if gap_note not in semantic_role_gaps:
                                         semantic_role_gaps.append(gap_note)
                                 else:
+                                    # _is_bound_num_contradicted 已否而主体/语义均可比，
+                                    # 仅剩 provider/source 口径差异为跳过原因
                                     gap_note = (
-                                        f"跨主体比较已跳过(entity_scope): 证据 {ev_bn.raw}"
-                                        f"(主体={ev_bn.entity}) vs {role_key} 记录 {l_bn.raw}"
-                                        f"(主体={l_bn.entity})"
+                                        f"跨数据源/口径比较已跳过(provider_scope): 证据 {ev_bn.raw}"
+                                        f"(provider={ev_bn.provider}) vs {role_key} 记录 {l_bn.raw}"
+                                        f"(provider={l_bn.provider})"
                                     )
-                                    if gap_note not in entity_scope_gaps:
-                                        entity_scope_gaps.append(gap_note)
+                                    if gap_note not in provider_scope_gaps:
+                                        provider_scope_gaps.append(gap_note)
                         if contradicted_candidate:
                             break
                     if contradicted_candidate:
@@ -1859,6 +1996,8 @@ class EvidenceFactualTruthEvaluator:
                 res["entity_scope_gaps"] = entity_scope_gaps
             if semantic_role_gaps:
                 res["semantic_role_gaps"] = semantic_role_gaps
+            if provider_scope_gaps:
+                res["provider_scope_gaps"] = provider_scope_gaps
             return res
 
         # 4. Check market_data_context if provided
@@ -1917,6 +2056,8 @@ class EvidenceFactualTruthEvaluator:
             res["entity_scope_gaps"] = entity_scope_gaps
         if semantic_role_gaps:
             res["semantic_role_gaps"] = semantic_role_gaps
+        if provider_scope_gaps:
+            res["provider_scope_gaps"] = provider_scope_gaps
         return res
 
     def _verify_evidence_or_decompose(

@@ -1526,3 +1526,122 @@ def test_dav1164_clause_trace_fields_complete(evaluator):
         assert "clause" in i
         assert "atomic_index" in i
     assert any("parent_evidence" in i for i in items)
+# ── DAV-1158: provider/source 口径命名空间 ─────────────────────────────────
+
+
+def test_dav1158_provider_extraction():
+    """DAV-1158: 数据源/字段代码口径入 BoundNumber.provider；非作用域指标/无标注为 None。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+
+    bn = extract_bound_numbers("东财 r0_net 主力净流出8.1亿")[0]
+    assert bn.provider == ("fld:r0_net", "src:eastmoney")
+    bn = extract_bound_numbers("同花顺 netamount 显示主力净流出5.2亿")[0]
+    assert bn.provider == ("fld:netamount", "src:ths")
+    bn = extract_bound_numbers("换手率3.2%（同花顺口径）")[0]
+    assert bn.provider == ("src:ths",)
+    # 财务科目不在 provider 作用域——「据东财财报」不给 provider
+    bn = extract_bound_numbers("据东方财富财报净利润为45亿元")[0]
+    assert bn.provider is None
+    # 无标注 → None
+    bn = extract_bound_numbers("主力净流出8.1亿")[0]
+    assert bn.provider is None
+    # 数据源名不得再被裸 token 立为 co: 主体（归 provider 层承载）
+    bn = extract_bound_numbers("东财口径主力净流出5.2亿")[0]
+    assert bn.entity is None
+    bn = extract_bound_numbers("据东方财富财报净利润为45亿元")[0]
+    assert bn.entity is None
+
+
+def test_dav1158_cross_provider_same_metric_not_contradicted(evaluator):
+    """东财口径 vs 同花顺口径同指标数值发散：不同数据源不得互作冲突真值。"""
+    seven_reports = {
+        "smart_money_report": "同花顺口径主力净流出8.1亿。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="东财口径主力净流出5.2亿",
+        seven_reports=seven_reports,
+        claim_id="PROV-1",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("provider_scope_gaps")
+
+
+def test_dav1158_cross_field_code_not_contradicted(evaluator):
+    """东财 r0_net vs 同花顺 netamount：同语义不同字段口径互判 → 跳过 + 记 gap。"""
+    seven_reports = {
+        "smart_money_report": "东财 r0_net 主力净流出8.1亿。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="同花顺 netamount 显示主力净流出5.2亿",
+        seven_reports=seven_reports,
+        claim_id="PROV-2",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("provider_scope_gaps")
+
+
+def test_dav1158_single_side_provider_not_contradicted(evaluator):
+    """单侧标注 provider、另一侧未标注 → 口径未知按最保守不判 + 记 gap。"""
+    seven_reports = {
+        "smart_money_report": "主力净流出8.1亿。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="东财口径主力净流出5.2亿",
+        seven_reports=seven_reports,
+        claim_id="PROV-3",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("provider_scope_gaps")
+
+
+def test_dav1158_same_provider_same_field_true_conflict_still_contradicted(evaluator):
+    """同 provider 同字段口径的真矛盾仍拦（防过宽）。"""
+    seven_reports = {
+        "smart_money_report": "东财 r0_net 主力净流出8.1亿。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="东财 r0_net 主力净流出5.2亿",
+        seven_reports=seven_reports,
+        claim_id="PROV-4",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1158_both_untagged_true_conflict_still_contradicted(evaluator):
+    """双侧均无 provider 标注（默认同口径）→ 可比，真矛盾仍拦。"""
+    seven_reports = {
+        "smart_money_report": "主力净流出8.1亿。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="主力净流出5.2亿",
+        seven_reports=seven_reports,
+        claim_id="PROV-5",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1158_provider_tagged_quote_metric_not_contradicted(evaluator):
+    """行情类（换手率）跨源不互判——东财口径换手7.84% vs 同花顺3.2% 跳过。"""
+    seven_reports = {
+        "market_report": "同花顺数据显示换手率为3.2%。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="东财口径换手率为7.84%",
+        seven_reports=seven_reports,
+        claim_id="PROV-6",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    assert res.get("provider_scope_gaps")
+
+
+def test_dav1158_financial_metric_provider_ignored(evaluator):
+    """财务科目不在 provider 作用域——「据东财财报净利润45亿」与报告 60亿 仍判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "净利润为60亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="据东方财富财报净利润为45亿元",
+        seven_reports=seven_reports,
+        claim_id="PROV-7",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
