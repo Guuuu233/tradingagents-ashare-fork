@@ -104,6 +104,17 @@ _DATE_MASK_PATTERN = re.compile(
     r"(?<![\d.])\d{4}年?[hHqQ][1-4](?![\d.])|"
     r"(?<![\d.])[hHqQ][1-4](?![\d.])|"
     r"(?<![\d.])\d{4}年?[hH][1-2](?![\d.])|"
+    # DAV-1177: 分隔符期间形态——「2026-Q1」「2026_H1」原掩码要求紧邻年字，
+    # 漏掩后「2026」被当独立数字抽成伪原子，抬高复合证据覆盖分母。
+    r"(?<![\d.])\d{4}[-_][qQ][1-4](?![\d.])|"
+    r"(?<![\d.])\d{4}[-_][hH][1-2](?![\d.])|"
+    # DAV-1177: 非补零月-日形态「6-25日」「9-4日」——原掩码仅覆盖补零
+    # 「08-19」，漏掩后 6/25 被抽成两个伪原子并错绑邻近指标。强制带「日」
+    # 后缀，防止误吞「6-25元」式价格区间。
+    r"(?<![\d.])(?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12]\d|3[01])日(?![\d.])|"
+    # DAV-1177: 「2025全年」「2025 年全年」年度期间形态——原掩码仅覆盖
+    # 「2025年/2025年度」，漏掩后「2025」被抽成伪原子阻断全数命中。
+    r"(?<![\d.])\d{4}\s*年?\s*全\s*年(?![\d.])|"
     r"(?<![\d.])\d{4}年度?(?![\d.])"
 )
 
@@ -259,6 +270,7 @@ _METRIC_KEYWORDS = [
     # DAV-1163: canonical 词表补全对应的关键词——关键词门（canonical 交集）
     # 只看 _METRIC_KEYWORDS，新 canonical 无关键词落点时命中行会被门拦下
     "流通市值", "市值", "离散度", "利息收入", "利息支出", "财务费用", "融资成本", "持仓占比", "均价",
+    "中小单",
     "贴息", "裂口", "缺口", "拨备", "投资现金流", "筹资现金流", "总负债",
     "股价", "收盘", "现价", "价格", "日均线", "日线", "铜价", "美债", "shibor",
     "流动比率", "速动比率",
@@ -284,6 +296,15 @@ _METRIC_KEYWORDS = [
     # Entities frequently referenced
     "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来",
     # DAV-1088: per-share fundamentals needed for metric binding (缺陷 B' 词表缺项)
+    # DAV-1177: 事件/定性锚点名词——纯定性证据（展期兑付/任职获批/回购
+    # 事件）经定性匹配路径验证时需要非指标类关键词落点。
+    "展期", "兑付", "逾期", "违约", "任职", "履职", "核准", "换届", "辞职",
+    "中标", "解禁", "诉讼", "停牌", "复牌", "摘帽", "处罚", "问询", "立案",
+    "退市", "更名", "收购", "并购", "配股", "发债", "除权", "除息", "担保",
+    "冻结", "划转", "转让", "增资", "注资", "分拆", "投产", "量产", "交付",
+    "签约", "牌照", "提价", "降价", "调价", "合作", "协议", "合同", "补贴",
+    "豁免", "宽限", "定价", "发酵", "充足率", "总资产", "关口", "接任",
+    "燃油车", "电动车", "新能源车",
     "每股净资产", "bps"
 ]
 
@@ -317,6 +338,9 @@ _STRICT_METRICS = {
     "每股净资产",
     # DAV-1144: 股价与股东户数为独立严格指标（同名+同单位+同语义才可比较）
     "股价", "最高价", "最低价", "股东户数",
+    # DAV-1177: 「占流通市值比（net_to_circ_mv）」命名派生指标入严格集——
+    # 同名同口径才可互证，不得与其他占比/主力净额混判。
+    "流通市值占比",
 }
 
 _METRIC_CANONICAL_MAP: dict[str, str] = {
@@ -330,7 +354,10 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # 净利率
     "归母净利率": "净利率", "扣非净利率": "净利率", "净利率": "净利率", "净利润率": "净利率",
     # 净利润
-    "归母净利润": "净利润", "归母净利": "净利润", "扣非净利润": "净利润", "扣非净利": "净利润", "净利润": "净利润", "净利": "净利润",
+    "归母净利润": "净利润", "归母净利": "净利润", "净利润": "净利润", "净利": "净利润",
+    # DAV-1177: 扣非口径独立于归母净利——「扣非净利增74%」与「归母净利+70%」
+    # 是不同科目，并入净利润会互判伪冲突（fa50d0d8）；扣非行与扣非值同键互配。
+    "扣非净利润": "扣非净利润", "扣非净利": "扣非净利润",
     # 每股净资产
     "每股净资产": "每股净资产", "每股净资产（bps）": "每股净资产", "bps": "每股净资产",
     # 成本
@@ -368,20 +395,33 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "自由流通换手率": "换手率", "流通换手率": "换手率",
     # DAV-1163: 均线族（EMA/SMA/VWMA/日均线）归一——「10EMA(91.14)」与
     # 「10日均线91.14」是同族均线的不同记法；RSI/ATR 为独立规范化指标。
-    "ema": "均线", "sma": "均线", "vwma": "均线", "日均线": "均线", "均线": "均线",
+    "ema": "均线", "sma": "均线", "日均线": "均线", "均线": "均线",
+    "vwma": "均价",
     "日线": "均线", "ma": "均线",
     "rsi": "rsi", "atr": "atr",
     "量比": "量比",
     "成交量": "成交量", "成交额": "成交额", "成交": "成交量",
+    # DAV-1177: 量能同义记法归一到成交量——「放量1.25亿股」「地量6717万股」
+    # 中放量/地量是成交量的状态修饰词，不绑定会使证据侧 metric=None 与
+    # 报告侧「成交量放大至1.25亿股」互判失配（假阴性）。
+    "放量": "成交量", "缩量": "成交量", "地量": "成交量", "天量": "成交量",
+    "量能": "成交量",
     "主力净流入": "主力", "主力净流出": "主力", "主力": "主力",
     "超大单净流入": "超大单", "超大单净流出": "超大单", "超大单": "超大单",
-    "大单净流入": "大单", "大单净流出": "大单", "大单": "大单",
+    # DAV-1177: 「同花顺大单口径」与「主力净额」是同一统计口径别名（平台主力
+    # 口径=大单分组），报告「主力/大单净额」表头混用是既有写法；gran/src
+    # 粒度仍由 provider 层保留区分（gran:大单 vs gran:主力）。
+    "大单净流入": "主力", "大单净流出": "主力", "大单净额": "主力", "大单": "主力",
     # DAV-1163: 小单/中单补全——词表此前仅有「散户小单」，「小单净流入3.70亿」
     # 无 canonical 落点，数字错绑回退到「主力」后被严格指标门误判失配。
     # 散户小单与小单同义（小单即散户分组），归一到同一 canonical。
     "散户小单净买入": "小单", "散户小单": "小单",
     "小单净流入": "小单", "小单净流出": "小单", "小单净买入": "小单", "小单": "小单",
     "中单净流入": "中单", "中单净流出": "中单", "中单净买入": "中单", "中单": "中单",
+    # DAV-1177: 「中小单」聚合分组独立落点——「中小单流出1.25亿」不得拆绑
+    # 小单/中单（分别配对规则另有职责），亦不得回退成未绑定通配。
+    "中小单净流入": "中小单", "中小单净流出": "中小单", "中小单净买入": "中小单",
+    "中小单": "中小单",
     "融资净偿还": "两融", "融资净买入": "两融", "融券净卖出": "两融", "两融": "两融", "融资": "两融", "融券": "两融",
     # DAV-1147: 现金口径归一——证据侧「现金337.51亿」与报告侧「货币资金337.51亿」
     # 必须折叠到同一规范化名，否则跨报告聚合的关键词门（canonical 交集）与
@@ -399,6 +439,10 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "市值": "市值",
     "在手现金": "现金",
     "lme铜价": "铜价", "lme铜": "铜价", "伦铜": "铜价", "铜价": "铜价", "lme": "铜价",
+    # DAV-1177: 原油同义记法归一——「布油」「布伦特原油」「WTI」与「原油/
+    # 油价」同指标命名空间，证据侧惯用简称时不得错绑或脱绑。
+    "布油": "油价", "布伦特原油": "油价", "布伦特": "油价", "wti": "油价",
+    "原油": "油价", "油价": "油价",
     "10年期美债": "美债", "美债利率": "美债", "美债收益率": "美债",
     # 「美债10年期收益率报4.740%」中期限数字 10 隔断了「美债」与数值的前向
     # 绑定——「年期收益率/国债收益率」词组落在数字之后，使收益率数值可前向
@@ -423,9 +467,40 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "总负债": "总负债", "负债总额": "总负债", "负债合计": "总负债",
     "价格区间": "股价",
     "均价": "均价",
+    # DAV-1177: gate3 复合证据真值集驱动的 canonical 补全（机制层原子化配套）——
+    # 「最高/最低」裸记法归一（「最高 39.15 元」与「最高价39.15元」同指标）。
+    "最高": "最高价", "最低": "最低价",
+    # 「上轨/下轨/中轨」裸记法归一布林轨位（「布林上轨12.03」与「上轨12.03」）。
+    "上轨": "布林", "下轨": "布林", "中轨": "布林",
+    # 资金流分组联合记法——「小单与中单合计」即中小单分组，
+    # 「超大单与大单合计」即主力口径（东财主力=超大单+大单）。
+    "小单与中单": "中小单", "中单与小单": "中小单",
+    "小单和中单": "中小单", "中单和小单": "中小单",
+    "超大单与大单": "主力", "大单与超大单": "主力",
+    "超大单和大单": "主力", "大单和超大单": "主力",
+    # 财务科目补全
+    "投资净现金流": "投资现金流", "投资活动现金": "投资现金流",
+    "扣非归母净利润": "扣非净利润", "扣非净亏损": "扣非净利润", "净亏损": "净利润",
+    "资产总额": "总资产", "总资产": "总资产", "资产": "总资产",
+    "资本充足率": "资本充足率", "充足率": "资本充足率",
+    # 「合理估值上限/价值区间」承载的是目标价水平值，非严格指标。
+    "估值上限": "估值", "估值顶": "估值", "合理估值": "估值",
+    "合理价值": "估值", "价值区间": "估值", "估值": "估值", "目标价": "估值",
+    # 「占流通市值比（net_to_circ_mv）」是命名派生指标——分母与分子合并为
+    # 独立规范化名，避免「占」字前向绑主体（主力）与报告侧绑分母互判失配。
+    "占流通市值比": "流通市值占比", "流通市值占比": "流通市值占比",
+    "净额占流通市值比": "流通市值占比",
+    # DAV-1177: 任职/履职/获批 事件同义词归一（定性匹配 canonical 交集）。
+    "履职": "任职", "获批": "任职", "核准": "任职", "任职": "任职",
+    "上任": "任职", "接任": "任职",
+    # 「回购均价/回购耗资」归一回购（「回购均价约39.7元」与「完成回购」同指标）。
+    "回购均价": "回购", "回购耗资": "回购",
     # DAV-1170: VWMA/筹码「加权成本（线）」是技术分析均价基准而非会计
     # 营业成本——「VWMA加权成本线90.38元」不得与「营业成本318.92亿」
     # 或「碳酸锂15.20万元/吨」互判伪冲突；归一到非严格均价族。
+    # DAV-1177: VWMA 加权成本线归一均线族——报告侧「VWMA 为 90.38 元」绑
+    # vwma→均线，证据侧「VWMA加权成本线90.38元」须同落点；裸「加权成本」
+    # 仍归均价（非 VWMA 语境，保持 DAV-1170 防营业成本误绑语义）。
     "加权成本": "均价", "加权成本线": "均价", "成本均价": "均价",
     # DAV-1170: 「净利-归母差额9.65亿」中 9.65亿 是两科目的会计差额而
     # 非净利润本身——「差额」须有自己的 canonical 落点，不得回退错绑
@@ -485,7 +560,11 @@ _GROWTH_CONTEXT_RE = re.compile(
     r"微增|微降|下跌|上涨|涨跌|收窄|走阔|扩张|收缩|跌(?!破)|涨(?!停)|"
     # DAV-1163: 骤降/骤升/跳水/飙升/腰斩/翻倍 等同为变动速率语境——
     # 「经营现金流骤降67.48%」语义即同比增速，缺词会被压成「未知」互判失配
-    r"骤降|骤升|跳水|飙升|飙涨|腰斩|翻倍|大跌|大涨|暴跌|暴涨"
+    r"骤降|骤升|跳水|飙升|飙涨|腰斩|翻倍|大跌|大涨|暴跌|暴涨|"
+    # DAV-1177: 复合证据原子级失配残余——「大降/大减/激增/萎缩/跃升/急跌」
+    # 同为变动速率语境（「利息支出大降15.55%」），缺词会被压成「未知」与
+    # 报告侧「同比增速」互判失配。
+    r"大降|大减|激增|萎缩|跃升|巨增|微升|急跌|急升|深跌|激增"
 )
 # DAV-1163: 「占」字比例语境放宽到同子句 16 字窗口——「主力净额占流通
 # 市值比（net_to_circ_mv）约为 -0.0069%」中「占」与数字之间隔着括号注
@@ -502,7 +581,38 @@ _RATIO_CANON_METRICS = _RATE_CANON_METRICS | {"pe", "pb", "ps", "eps", "量比"}
 _TOTAL_CANON_METRICS = {
     "营收", "净利润", "成本", "毛利", "现金流", "应收账款", "存货",
     "成交量", "成交额", "主力", "超大单", "大单", "散户小单", "小单", "中单", "两融",
+    # DAV-1177: 中小单（中单+小单）同为资金流总量分组——「中小单净流出超9亿」
+    # 与报告「合计净流入 9.02 亿」同语义类型。
+    "中小单",
 }
+
+
+# DAV-1177: canonical 语义为 %/倍的率类指标不得绑大额元值（「拟派现66.72亿」
+# 撞上「派现」错绑股息率）。元值阈值 1e5 以下（每股分红/股价等）不受影响。
+_MONEY_FORBIDDEN_METRICS = {
+    "股息率", "分红率", "派息率", "毛利率", "净利率", "营业利润率",
+    "roe", "roa", "资产负债率", "负债率", "换手率", "现金比率",
+    "流通市值占比", "净息差", "nim", "周转率", "存货周转率",
+    "应收账款周转率", "概率", "置信度", "胜率", "pe", "pb", "ps",
+    "peg", "占比", "资本金率", "充足率", "收益率", "lpr",
+}
+
+# DAV-1177: % 向前继承指标时的阻断集——线型/点位类指标的邻接 % 是偏离度或
+# 另一指标的变化率（「量增 29%」不得继承「均线」）。
+_PCT_INHERIT_BLOCK_METRICS = {
+    "均线", "布林", "布林上轨", "布林下轨", "布林中轨", "年线", "半年线",
+    "月线", "周线", "日线", "收盘点位", "最高点位", "最低点位", "开盘点位",
+    "指数", "点位", "关口",
+}
+
+# DAV-1177: 幅度词负号推断——「月降幅达10.45%」抽取为 +10.45 与报告
+# 「月环比 -10.45%」符号互判；降幅/跌幅类幅度词紧邻前值赋负号。仅限 %
+# 量纲（元值「降至 X 亿」的水平值不适用），且词干必含「幅」或为跌幅/降幅
+# 复合词，「下调至3.00%」的水平值不误翻。
+_DECLINE_MAGNITUDE_RE = re.compile(
+    r"(?:降幅|跌幅|下行幅度|下调幅度|回落幅度|收窄幅度|收缩幅度|下降幅度|"
+    r"下滑幅度|跌幅度)(?:达|至|为|约|超|近|或|到)?\s*$"
+)
 
 
 # DAV-1170: 「X%<定语>债券/存款/理财类收益率名词」后继锚点——% 数字量化
@@ -532,16 +642,52 @@ def _classify_semantic_type(
     # 仅取数字前最近一个子句作语境，防止跨子句/跨括号的「同比增长」污染后续指标判定
     window = re.split(r"[，。；、,;（）()【】]", text[max(0, n_start - 20):n_start])[-1]
     if unit == "%":
+        # DAV-1177: 偏离/溢价类差值语境——「股价偏离VWMA达3.77%」「正向偏离
+        # +3.77%」是相对基准的差值比率而非增速；双侧同规则归为占比语义，
+        # 避免带号侧判增速、无号侧判未知互判失配。
+        if re.search(r"偏离|溢价|折价|升水|贴水|价差|利差|息差|剪刀差", window):
+            return STYPE_PROPORTION
         if _PROPORTION_CONTEXT_RE.search(window):
             return STYPE_PROPORTION
+        # DAV-1177: 「63% 比例」「15% 分位」后继比例/分位词同样是占比/位次
+        # 语义而非增速——双侧同规则，避免与「占比达63%」式表述互判失配。
+        if re.match(r"^\s*(?:比例|占比|比重|分位|百分位)", text[n_end:]):
+            return STYPE_PROPORTION
+        # DAV-1177: 「占X比（口径注释）约为Y%」——括号注释把「占」挤出紧邻
+        # 窗口时，剥除括号内容后在放宽窗口内复判占比语境（双侧同规则）。
+        _w2 = re.sub(r"（[^（）]*）|\([^()]*\)|【[^【】]*】", "",
+                     text[max(0, n_start - 36):n_start])
+        _w2 = re.split(r"[，。；、,;]", _w2)[-1]
+        if _PROPORTION_CONTEXT_RE.search(_w2) or canon_metric == "流通市值":
+            return STYPE_PROPORTION
+        # DAV-1177: 带显式正负号的 % 是变动量而非水平比率——「报4588.70点
+        # （-2.90%）」「同比下滑-14.02%」中括号/表格内带号 % 均为涨跌幅，
+        # 双侧同规则归入同比增速语义，避免与证据侧「跌2.90%」互判失配。
+        raw_tok = text[n_start:n_end]
+        if raw_tok.lstrip().startswith(("+", "-", "−")) or (
+            n_start > 0 and text[n_start - 1] in "+-—−"
+        ):
+            return STYPE_GROWTH
         # 「暴跌至10%」「达到28.5%」等至/到/为/达/录得结尾的窗口是**水平值**声明，
         # 语义为比率而非变动速率；但「同比增至」「同比增长」仍是增速，优先判增长语境。
-        level_suffix = re.search(r"[至到为达得]\s*$", window)
+        # DAV-1177: 后缀判定前剥除 markdown 强调符——「飙升10个基点至 **4.33%**
+        # 」中 window 以「至 **」结尾，旧 [至到为达得]\s*$ 因 ** 脱判，把水平值
+        # 错分为同比增速与证据侧「升至4.33%」互判失配。
+        level_suffix = re.search(r"[至到为达得][\s\*_~]*$", window)
         has_growth_ctx = _GROWTH_CONTEXT_RE.search(window)
         if has_growth_ctx and not (level_suffix and not re.search(r"同比|环比|增", window)):
             return STYPE_GROWTH
-        # 后缀语境：「3.55%的微弱增速」「17.10%的增速」
-        if re.search(r"增速|增长|增幅|跌幅|涨幅", text[n_end:n_end + 8]):
+        # 后缀语境：「3.55%的微弱增速」「17.10%的增速」；DAV-1177: 后缀词判定
+        # 截断于首个标点——「15%分位，业绩零增长」中跨逗号的「增长」不得污染。
+        _succ_seg = re.split(r"[，。；、,;（）()【】]", text[n_end:n_end + 8])[0]
+        if re.search(r"增速|增长|增幅|跌幅|涨幅", _succ_seg):
+            return STYPE_GROWTH
+        # DAV-1177: 裸变动动词收尾的窗口——「净利增83.8%」「东财增44.8%」中
+        # 增/降/涨/跌直接修饰 %，语义为同比变动量（原词表仅收复合词漏判未知）。
+        if re.search(
+            r"(?:大增|大降|增|降|涨|跌|回升|回落|反弹|修复|扩大|收窄|走弱|走强)\s*$",
+            window,
+        ):
             return STYPE_GROWTH
         if canon_metric in _RATE_CANON_METRICS or (
             canon_metric is None and window and window.endswith("率")
@@ -550,7 +696,15 @@ def _classify_semantic_type(
             return STYPE_RATIO
         return STYPE_UNKNOWN
     if unit in ("元", "股"):
-        if _PARTIAL_IMPACT_RE.search(window):
+        # DAV-1177: 「承压于10日EMA」「冲击41.78元」「压缩至4.12亿」——承压/
+        # 冲击/压缩后接于/至/到或直接收尾时，数字是方向性目标位而非分项冲击
+        # 金额，不得判分项影响额与报告侧同值记录互判失配。
+        _pi = _PARTIAL_IMPACT_RE.search(window)
+        if _pi and not re.search(
+            r"(?:承压|冲击|压缩)\s*(?:于|至|到)[^，。；、]{0,12}$"
+            r"|(?:承压|冲击|压缩)\s*$",
+            window,
+        ):
             return STYPE_PARTIAL_IMPACT
         if canon_metric in _TOTAL_CANON_METRICS:
             return STYPE_TOTAL
@@ -558,8 +712,9 @@ def _classify_semantic_type(
             return STYPE_ABS_AMOUNT
         return STYPE_UNKNOWN
     # raw / 倍 / 点 / 次 / 手 等无标准量纲单位
+    _succ_seg = re.split(r"[，。；、,;（）()【】]", text[n_end:n_end + 8])[0]
     if _GROWTH_CONTEXT_RE.search(window) or re.search(
-        r"增速|增长|增幅|跌幅|涨幅", text[n_end:n_end + 8]
+        r"增速|增长|增幅|跌幅|涨幅", _succ_seg
     ):
         # 「下降 1.38 个百分点」等变动量，语义同同比增速
         return STYPE_GROWTH
@@ -592,7 +747,10 @@ _ENTITY_TICKER_RE = re.compile(
 _ENTITY_BENCH_RE = re.compile(
     r"沪深\s*300|中证\s*\d{2,4}|国证\s*\d{2,4}|上证\s*50|上证指数|深证成指|"
     r"创业板指|科创\s*50|北证\s*50|恒生指数|恒生科技|纳斯达克|标普\s*500|道琼斯|"
-    r"行业均值|行业平均|同业均值|同业平均|可比公司|板块均值|行业基准|大盘"
+    r"行业均值|行业平均|同业均值|同业平均|可比公司|板块均值|行业基准|大盘|"
+    # DAV-1177: 「上证5日跌2.53%」裸「上证+数字」形同为指数主体（上证50/上证
+    # 指数之外的简写），不识别会把数字绑到邻近视作指标的均线族。
+    r"上证(?=\s*\d)"
 )
 # 带组织后缀的公司名（美的集团/格力电器股份/惠而浦（中国）有限公司）
 _ENTITY_COMPANY_RE = re.compile(
@@ -672,6 +830,23 @@ _ENTITY_BARE_BAD_SUBSTR = frozenset({
     "当前", "目前", "单日", "单边", "连续", "累计",
     "全天", "量能", "冲高", "上方", "下方", "经历", "短中期", "中长期",
     "最低", "最高", "处于", "位于",
+    # DAV-1177: 量价/资金修饰语截断——「放量1.25亿股」「缩量十字星」中的
+    # 放量/缩量是成交量状态词而非主体，误立 co:放量 会被实体一致性门拦下。
+    "放量", "缩量", "量价", "地量", "天量", "反弹", "探底", "刺穿", "触及",
+    "净买入", "净卖出", "净流入", "净流出",
+    # DAV-1177: 裸 token 误抓的修饰/位置/情绪片段——「冲击」「静态」「下影线」
+    # 「宽基」「订单」「平台」「耗资」「相对」「呈现」「对等」「实施」「关口」
+    # 「水位」「密集」「波段」「套牢」「割肉」「承接」「盘面」「特征」「良性」
+    # 「被动」「候选」「验证」「印证」「触发」「信号」「现价」「成本」「筹码」
+    # 「散户」「情绪」「资金」「债务」「权益」「规模」「前日」「强力」等被误立
+    # 为 co:/sec: 主体会阻断跨报告主体一致性拼合（全部为修饰语而非主体名）。
+    "冲击", "静态", "耗资", "相对", "影线", "下影", "上影", "平台", "订单",
+    "宽基", "年末", "下轨", "上轨", "中轨", "呈现", "对等", "实施", "缺口",
+    "关口", "水位", "密集", "波段", "套牢", "割肉", "承接", "盘面", "特征",
+    "良性", "被动", "候选", "验证", "印证", "触发", "信号", "现价", "成本",
+    "筹码", "散户", "情绪", "资金", "债务", "权益", "规模", "前日", "昨日",
+    "今日", "本周", "上周", "下周", "强力", "路径", "角度", "层面",
+    "指标", "核心", "关键", "节点", "时点", "落点", "触点", "活动", "较大",
 })
 _ENTITY_STOPWORDS = frozenset({
     "公司", "本公司", "上市", "子公司", "集团", "报告期内", "报告期", "期内",
@@ -697,6 +872,9 @@ _ENTITY_STOPWORDS = frozenset({
     # DAV-1146: 「实际换手1.11%」「单日换手率达20%」中「实际」「单日」是修饰语
     # 而非主体名——不拦截会被裸 token 规则误抓为 co:实际/co:单日。
     "实际", "单日", "当期", "当季", "当月", "当年",
+    # DAV-1177: 「货币资金」「报告期末」被裸 token 规则截出「货币」「报告」
+    # 噪声主体，阻断跨报告数值拼合（entity_scope 双侧歧义）。
+    "货币", "报告", "报表", "期末", "余额",
 })
 _ENTITY_BENCH_NORM = {"行业平均": "行业均值", "同业平均": "同业均值"}
 _ENTITY_COMPANY_SUFFIXES = (
@@ -771,6 +949,9 @@ def _extract_entity_spans(
                 break
         if (
             len(token) < 2
+            # DAV-1177: 裸主体必须含中文字符——「Sto」(Stopping) 类英文残片
+            # 不得立为主体名（ticker/sym 由独立正则承载）。
+            or not re.search(r"[一-龥]", token)
             or token in _ENTITY_STOPWORDS
             or token in _ENTITY_BARE_BAD_SUBSTR
             or token[0] in _ENTITY_BARE_BAD_FIRST_CHAR
@@ -1042,6 +1223,9 @@ def _classify_role_and_basis(
 _PROVIDER_SCOPED_METRICS = {
     # 资金流分单/两融（严格指标）
     "主力", "超大单", "大单", "两融",
+    # DAV-1177: 流通市值占比是资金流分单的比率口径（「超大单净流入占流通市值
+    # 0.0044%」）——provider/gran 命名空间同样生效。
+    "流通市值占比",
     # 未归一化的资金流/行情 raw canonical（词表直通，参与匹配但不判冲突）
     "中单", "小单", "全单", "散户小单", "净流入", "净流出", "流入", "流出",
     "北向", "北向资金", "机构", "外资", "游资", "散户", "龙虎榜",
@@ -1283,6 +1467,16 @@ def _periods_join_compatible(p1: str | None, p2: str | None) -> bool:
         return True
     if p1 == p2:
         return True
+    # DAV-1177: 无年 MM-DD 与带年 YYYY-MM-DD 同日月后缀视为同日——证据常省
+    # 年份（「8月19日」→08-19），报告侧为全日期（2026-08-19），缺省年不等价
+    # 跨期，同日月即可比（与下同的年份前缀共享规则同一保守粒度）。
+    for _short, _long in ((p1, p2), (p2, p1)):
+        if (
+            re.fullmatch(r"\d{2}-\d{2}", _short)
+            and re.match(r"^\d{4}-", _long)
+            and _long.endswith(_short)
+        ):
+            return True
     return bool(
         p1[:4] == p2[:4]
         and re.match(r"^\d{4}", p1)
@@ -1360,6 +1554,27 @@ class BoundNumber:
 # 两值均得 2026H1），真不同期被误判冲突；以下规则按数字就近补绑局部期间。
 _PAREN_POST_NUM_RE = re.compile(r"\s*[（(【\[]\s*([^）)】\]]{1,16})")
 _CLAUSE_BREAK_FOR_PERIOD = re.compile(r"[，。；、,;：:！？!?（）()【】]")
+
+# DAV-1177: 资金流方向词——证据「净流出/流出/净卖出」类方向的金额数字需
+# 赋负号以与报告侧带号记录（「-1.5420亿」）同约定比较；仅资金流类指标生效。
+_FLOW_DIRECTION_METRICS = frozenset({
+    "主力", "超大单", "大单", "中单", "小单", "中小单", "全单", "散户小单",
+    "两融", "融资", "融券", "资金", "北向", "北向资金", "龙虎榜",
+})
+_FLOW_DIRECTION_RE = re.compile(
+    r"(净流入|净流出|净买入|净卖出|净偿还|净回笼|流入|流出|买入|卖出|"
+    r"抛售|出逃|撤离|回吐|抽血|吸血)"
+)
+_FLOW_OUT_WORDS = frozenset({
+    "净流出", "流出", "净卖出", "卖出", "净回笼",
+    "抛售", "出逃", "撤离", "回吐", "抽血", "吸血",
+})
+
+# DAV-1177: 时长/期限 token——抽数阶段跳过的「N日/NY/N年(期)」在指标占先
+# 判定中同样不计为占先数字。
+_DURATION_TOKEN_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:[Yy]|日|年(?=期|限|债|收益率|内|来|前|以|间|中|度))"
+)
 # DAV-1169: 空格断开的年度/全年期间不在 _DATE_MASK_PATTERN 掩码内，子句
 # 引导期间检测需补检，否则「如 2025 全年经营现金流…241.86 亿」漏绑 2025。
 _CLAUSE_YEAR_HINT_RE = re.compile(r"\d{4}\s*(?:全\s*年|年(?:度)?)")
@@ -1438,6 +1653,22 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     # DAV-1158: 字段代码口径（r0_net/netamount 等）保位掩码——其内部数字
     # （r0_net 的 0）不得被当作独立数值抽取；口径信息由 provider 绑定另行读取
     cleaned = _PROVIDER_FIELD_RE.sub(lambda m: " " * len(m.group(0)), cleaned)
+    # DAV-1177: 点分十进制「12.03」在价格语境（上轨/阻力/关口/元）中是价位
+    # 而非日期——MM.DD 掩码分支会把它抹成伪日期。按上下文还原：前随价格/
+    # 轨位/动词词尾或后随元/关口/区域类后缀时解除掩码；连字符 08-19 仍按日期。
+    for _dm in re.finditer(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?![\d.])", period_view):
+        if not (1 <= int(_dm.group(1)) <= 12 and 1 <= int(_dm.group(2)) <= 31):
+            continue
+        _s, _e = _dm.span()
+        _pre = period_view[max(0, _s - 8):_s]
+        _post = period_view[_e:_e + 6]
+        if re.search(
+            r"(?:上轨|下轨|中轨|布林|均线|价|元|阻力|支撑|关口|触及|探|为|报|线|峰|谷|位|带|区|高|低)\s*$",
+            _pre,
+        ) or re.match(
+            r"^\s*(?:元|关口|附近|区域|一带|一线|位|线|阻力|支撑)", _post
+        ):
+            cleaned = cleaned[:_s] + _dm.group(0) + cleaned[_e:]
     text_lower = cleaned.lower()
     metric_spans = []
     for kw in _SORTED_METRIC_MAP_KEYS:
@@ -1466,9 +1697,59 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
 
     matches = list(_NUMBER_WITH_UNIT_RE.finditer(cleaned))
     entity_spans = _extract_entity_spans(cleaned, filtered_spans, matches)
+
+    # DAV-1177: Markdown 表格行语义——「| 扣非归母净利润 | 109.62 亿元 |
+    # 127.50 亿元 | -14.02% | 行业平均约 -3.0% |」中首列是行标签科目，其后
+    # 各数据单元格数字同属该科目；单元格自带指标词或主体标注（行业平均）
+    # 时不覆盖，仅补缺绑。
+    _row_label_raw: str | None = None
+    _row_label_pipe = -1
+    _pipe_positions = [i for i, ch in enumerate(cleaned) if ch == "|"]
+    if len(_pipe_positions) >= 2:
+        for _pi, _p in enumerate(_pipe_positions[:-1]):
+            _cell = cleaned[_p + 1:_pipe_positions[_pi + 1]]
+            _cand = [
+                k for k in _SORTED_METRIC_MAP_KEYS
+                if k.lower() in _cell.lower()
+            ]
+            if _cand:
+                _row_label_raw = max(_cand, key=len)
+                _row_label_pipe = _pi
+                break
+
+    # DAV-1177: 「A与B分别…X与Y」序位配对表——「分别」前按出现顺序的指标
+    # 与「分别」后按出现顺序的数字一一对应（「大单与中单分别净流出1.54亿
+    # 与1.47亿」中 1.54→大单、1.47→中单，就近前向绑会令 1.54 错绑中单）。
+    # 表项: (分别词位置, [该位置之前同段子句内有序 raw_metric 列表])
+    pair_slots: list[tuple[int, list[str]]] = []
+    for _pm in re.finditer(r"分别", cleaned):
+        seg_start = 0
+        for _b in "，。；、,;：:（）()【】\n":
+            _p = cleaned.rfind(_b, 0, _pm.start())
+            if _p > seg_start:
+                seg_start = _p
+        ordered = []
+        for s in filtered_spans:
+            if seg_start <= s[0] and s[1] <= _pm.start():
+                _raw = s[2]
+                # DAV-1177: 联合分组词拆分为分量——「小单和中单分别录得X与Y」
+                # 中 X→小单、Y→中单（联合词本身是 canonical 落点但分别配对
+                # 需要分量序位）；按联合词内分量出现顺序展开。
+                _parts = [
+                    mm.group(1)
+                    for mm in re.finditer(
+                        r"(超大单|中单|小单|大单|主力)", _raw
+                    )
+                ]
+                if len(_parts) >= 2:
+                    ordered.extend(_parts)
+                else:
+                    ordered.append(_raw)
+        if len(ordered) >= 2:
+            pair_slots.append((_pm.start(), ordered))
     res = []
     res_spans: list[tuple[int, int]] = []  # 与 res 平行的 (n_start, n_end)
-    last_res_match_end = -1  # res 中最后一个 BoundNumber 对应的 match.end()
+    last_res_match_end = -1  # 与 res 中最后一个 BoundNumber 对应的 match.end()
     for i, m in enumerate(matches):
         val_str = m.group(1)
         unit_str = m.group(2) or ""
@@ -1484,6 +1765,50 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         val, unit = norm
         raw = m.group(0).strip()
         n_start, n_end = m.span()
+        # DAV-1177: 「N日」时长/指标期限后缀不是可核验数值原子——「近5日顶部
+        # 背离」「10日EMA5.86元」「5日跌2.53%」中的 N 是时间跨度或均线期限参数；
+        # 保留成原子会抬高覆盖分母并与报告侧同事实记录互判失配，一律跳过。
+        if cleaned[n_end:n_end + 1] == "日":
+            continue
+        # DAV-1177: 「NEMA/NSMA/NMA」均线窗口参数不是数值原子——
+        # 「10EMA(91.14)」「50SMA(89.28)」中的 N 是窗口期数，与「N日」同处理。
+        if re.match(r"(?i)(?:e?ma|sma|wma|ema)\b", cleaned[n_end:]):
+            continue
+        # DAV-1177: 括号内裸四位年份是期间标注不是数值原子——「37.91%（2024）」
+        # 中 2024 已由期间补绑覆盖，抽成原子抬高覆盖分母并破坏逐期对齐。
+        if paren_mask[n_start] and re.fullmatch(r"(?:19|20)\d{2}", val_str.strip()):
+            continue
+        # DAV-1177: 指数/代码主体名内嵌数字（沪深300/科创50/600036.SH）是名称
+        # 成分而非数值事实——落在 bench:/sym: 主体 span 内的数字一律跳过。
+        if any(
+            _es <= n_start and n_end <= _ee
+            and (_lab.startswith("bench:") or _lab.startswith("sym:"))
+            for _es, _ee, _lab in entity_spans
+        ):
+            continue
+        # DAV-1177: 「N周」存续期后缀——「已发酵近4周」「为期3周消化整固」中的
+        # N 是时长而非事实值；前随近/约/满/达/历/续/持或后随内/期/余/多时跳过。
+        if cleaned[n_end:n_end + 1] == "周" and (
+            cleaned[n_start - 1:n_start] in {"近", "约", "满", "达", "历", "续", "持"}
+            or cleaned[n_end + 1:n_end + 2] in {"内", "期", "余", "多"}
+        ):
+            continue
+        # DAV-1177: 「N派M元/每N股派M元」分红记法中的 N 是每十股基数而非
+        # 数值原子——「10派20元」「每10股派现金20元」中 10 跳过，M 另行绑分红。
+        if re.match(r"^股?派", cleaned[n_end:]):
+            continue
+        # DAV-1177: 「N年/NY」期限/存续期后缀同理——「美债10Y收益率」「10年期
+        # 收益率」中的 10 是债券期限而非数值事实；「N年」仅当 N<1000（非四位
+        # 年份，四位年份已被日期掩码覆盖）且后接期/限/债/收益率类词时跳过。
+        if cleaned[n_end:n_end + 1] and cleaned[n_end:n_end + 1] in "Yy":
+            continue
+        if (
+            cleaned[n_end:n_end + 1] == "年"
+            and len(val_str.lstrip("+-")) < 4
+            and re.match(r"^年(?:期|限|债|收益率|内|来|前|以|间|中|度)",
+                         cleaned[n_end:])
+        ):
+            continue
 
         # 前向绑定：指标词只能绑定同一子句内其后最近的数字；若指标与目标数字之间
         # 已隔着另一个数字且无子句边界（，、同比/环比），该指标已被占先，不得再绑
@@ -1518,7 +1843,11 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 # DAV-1147: 跨子句逗号同样不得继承——「流动比率1.76，拟10亿元回购」
                 # 中逗号后数字属新子句，仅当语境含同比/环比比较从句信号（占先豁免）
                 # 时才允许跨数字长距绑定，否则前句指标已被 1.76 占先。
-                if _NUMBER_WITH_UNIT_RE.search(ctx) and (
+                # DAV-1177: 时长/期限词（10Y/10年期/近5日）已被抽数阶段跳过，
+                # 不得再充当占先数字阻断前向指标绑定——「美债10Y收益率达4.73%」
+                # 中 4.73% 须可绑「美债」。先剥除时长 token 再判占先。
+                _ctx_occ = _DURATION_TOKEN_RE.sub("", ctx)
+                if _NUMBER_WITH_UNIT_RE.search(_ctx_occ) and (
                     paren_mask[n_start]
                     or not re.search(r"同比|环比", ctx)
                 ):
@@ -1536,6 +1865,25 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         if closest_prec is None:
             closest_prec = closest_prec_paren
 
+        # DAV-1177: 「占<分母>X%」派生占比指标——「主力净流入0.83亿仅占
+        # 流通市值0.0378%」「净额占流通市值比约为-0.024%」中 % 量化的对象是
+        # 「净额占流通市值比」这一命名派生指标（net_to_circ_mv），而非「占」
+        # 前主体；两侧统一绑 canonical「流通市值占比」，先于 A占B 规则判定。
+        _mv_ratio_pct = False
+        if unit == "%":
+            _w_mv = re.sub(
+                r"（[^（）]*）|\([^()]*\)|【[^【】]*】", "",
+                cleaned[max(0, n_start - 18):n_start],
+            )
+            if re.search(
+                r"占(?:流通市值|流通盘|流通股本|总市值|总股本|成交额|总盘子)"
+                r"[^，。；、]{0,8}$",
+                _w_mv,
+            ):
+                _mv_ratio_pct = True
+                closest_prec = "占流通市值比"
+                closest_succ = None
+
         # DAV-1170: 「A占B X%」所有格前置——紧邻「占」字之后的指标 B 是
         # 占比基准（分母），% 数字量化的是「占」字之前的指标 A
         # （「成本占营收92.85%」中 92.85% 是成本占营收的比重，绑 A=成本；
@@ -1543,7 +1891,8 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # 仅当同子句内「占」字之前 16 字内存在另一指标词时才改绑，否则
         # 保持原绑定（「占营收比重45%」无前置科目时仍归营收）。
         if (
-            unit == "%" and closest_prec is not None
+            not _mv_ratio_pct
+            and unit == "%" and closest_prec is not None
             and closest_prec_pos is not None
         ):
             k = closest_prec_pos - 1
@@ -1559,24 +1908,38 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                             closest_prec = _s_raw
                         break
 
-        # 后继绑定仅允许数字与指标名紧邻（可隔「的」）。
+        # 后继绑定仅允许数字与指标名紧邻（可隔「的」/期限后缀/紧邻动词）。
         # 「45.40元对应PB」中隔着关系动词「对应」的 PB 是碰巧出现的其他指标，
         # 禁止就近猜测误绑；无法确定指标时保持 metric=None（显式未绑定标记）。
+        # DAV-1177: 动词 gap 扩展——「6717万股完成地量供给」中「地量」隔动词
+        # 「完成」后继；仅当无可用前向绑定时生效，不抢占已占先指标。
         closest_succ = None
         succ_gap = None
         min_succ_dist = 9999
+        _SUCC_GAP_VERBS = (
+            "完成", "录得", "达到", "进行", "实施", "耗资", "呈现", "出现", "已完成",
+        )
         for m_start, m_end, m_raw in filtered_spans:
             if m_start >= n_end and (m_start - n_end) < 15:
                 intervening = cleaned[n_end:m_start]
+                _ig = intervening.strip()
                 # DAV-1163: 「日/月」期间后缀允许后继绑定——「10日均线」「50日
                 # SMA」「20日VWMA」中的期限数字属于均线本身。
-                if intervening.strip() not in ("", "的", "日", "月", "个月"):
+                if _ig not in ("", "的", "日", "月", "个月") and not (
+                    _ig in _SUCC_GAP_VERBS and closest_prec is None
+                ):
                     continue
                 dist = m_start - n_end
                 if dist < min_succ_dist:
                     min_succ_dist = dist
                     closest_succ = m_raw
                     succ_gap = intervening
+        # DAV-1177: 「N点」指数/点位值不向后绑均线——「上证指数报3990.30点
+        # 均线多头排列」中 3990.30 是指数水平值，紧邻的「均线」属下一定性
+        # 分句，绑定会与报告侧「收报3990.30点」m=None 互判失配。
+        if unit_str == "点":
+            closest_succ = None
+            succ_gap = None
 
         # DAV-1144: 「金额+括号同比」配对——括号内 % 紧邻前一金额数字时，显式
         # 继承该金额绑定的主体指标（「归母净利2.46亿元(-14.73%)」中 -14.73%
@@ -1614,6 +1977,62 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 closest_prec = res[-1].raw_metric
                 closest_succ = None
 
+        # DAV-1177: 「每10股派20元/派现金20元」分红记法——「派」紧邻的元值是
+        # 每股分红额，绑「分红」（canonical 股息率），两侧同规则。
+        if unit == "元" and re.search(
+            r"派(?:现金|息|现|送)?[^，。；、]{0,6}$",
+            cleaned[max(0, n_start - 12):n_start],
+        ):
+            closest_prec = "分红"
+            closest_succ = None
+
+        # DAV-1177: 「0.10分位」「71元关口」——分位/关口是位置修饰而非指标值，
+        # 不得绑邻近指标（收盘/主力）与报告侧同值未绑定记录互判失配。
+        if re.match(r"^(?:分位|百分位|关口|大关)", cleaned[n_end:n_end + 4]):
+            closest_prec = None
+            closest_succ = None
+
+        # DAV-1177: 括号内「合计」数取同括号分组聚合指标——「（中单 -0.5263 亿、
+        # 小单 -0.7239 亿，合计流出 -1.2502 亿）」中合计数属中小单分组而非最近
+        # 分量小单；超大单+大单合计划归主力口径。
+        if re.search(r"合计[^，。；、]{0,6}$", cleaned[max(0, n_start - 16):n_start]):
+            _cstart = max(
+                cleaned.rfind("（", 0, n_start), cleaned.rfind("(", 0, n_start)
+            )
+            _cbreak = max(
+                cleaned.rfind("。", 0, n_start), cleaned.rfind("；", 0, n_start),
+                cleaned.rfind(";", 0, n_start),
+            )
+            _gseg = (
+                cleaned[_cstart + 1:n_start]
+                if _cstart > _cbreak
+                else cleaned[max(0, n_start - 40):n_start]
+            )
+            _gkeys = {k for k in ("中单", "小单", "超大单", "大单") if k in _gseg}
+            # 「大单」是「超大单」的子串——先剔除超大单出现再判独立大单，
+            # 防「合计超大单净流入」误命中超大单+大单组合。
+            _gseg_nocxl = _gseg.replace("超大单", "")
+            _gkeys.discard("大单")
+            if "大单" in _gseg_nocxl:
+                _gkeys.add("大单")
+            if {"中单", "小单"} <= _gkeys:
+                closest_prec, closest_succ = "中小单", None
+            elif {"超大单", "大单"} <= _gkeys:
+                closest_prec, closest_succ = "主力", None
+
+        # DAV-1177: 括号内非 % 数字缺绑时继承括号前紧邻数字的指标——「（1万股）」
+        # 是前随回购金额的补充量纲，「（扣非净亏损 -24.85 亿元）」共享前数字
+        # 科目；仅当括号内无自身指标词时生效（不覆盖括号内显式科目）。
+        if (
+            unit in ("元", "股") and closest_prec is None and closest_succ is None
+            and res and last_res_match_end != -1 and paren_mask[n_start]
+        ):
+            gap = cleaned[last_res_match_end:n_start]
+            if re.fullmatch(
+                r"\s*[（(【\[][^，。；、,;（）()【】]{0,14}", gap
+            ) and res[-1].raw_metric:
+                closest_prec = res[-1].raw_metric
+
         # DAV-1170: 「X%<定语>收益率承载名词」后继锚点优先于前向泛指标——
         # 「股息率仍大幅超越1.63%个人养老金国债」中 1.63% 归属国债收益率，
         # 不得绑隔着比较动词的「股息率」。仅在后继绑定未命中且定语 gap 无
@@ -1624,8 +2043,59 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 closest_prec = None
                 closest_succ = _ym.group(2)
 
+        # DAV-1177: 「A与B分别…X与Y」序位配对优先于就近绑定——「分别」
+        # 前按出现顺序排列的指标与其后按出现顺序排列的数字一一对应
+        # （「大单与中单分别净流出1.54亿与1.47亿」中 1.54→大单、1.47→中单，
+        # 就近前向绑会令 1.54 错绑中单）。仅在同一无标点断开片段内生效。
+        for _ppos, _plist in pair_slots:
+            if _ppos >= n_start:
+                continue
+            if re.search(r"[，。；;：:（）()【】]", cleaned[_ppos:n_start]):
+                continue
+            ord_idx = sum(
+                1 for _om in matches if _ppos < _om.start() < n_start
+            )
+            if ord_idx < len(_plist):
+                closest_prec = _plist[ord_idx]
+                closest_succ = None
+            break
+
+        # DAV-1177: 表格行标签科目补缺绑——数字位于行标签之后的单元格且该
+        # 单元格无自身指标/主体标注时，继承行首科目。
+        if (
+            _row_label_raw is not None and closest_prec is None
+            and closest_succ is None
+        ):
+            _cell_idx = sum(1 for _p in _pipe_positions if _p < n_start)
+            if _cell_idx > _row_label_pipe:
+                _c0 = _pipe_positions[_cell_idx - 1] + 1
+                _c1 = (
+                    _pipe_positions[_cell_idx]
+                    if _cell_idx < len(_pipe_positions) else len(cleaned)
+                )
+                _cell_txt = cleaned[_c0:_c1]
+                if not any(
+                    k.lower() in _cell_txt.lower()
+                    for k in _SORTED_METRIC_MAP_KEYS
+                ) and not re.search(
+                    r"行业平均|行业均值|同业|可比|基准", _cell_txt
+                ):
+                    closest_prec = _row_label_raw
+
         raw_metric = closest_prec or closest_succ
         metric = _canonicalize_metric(raw_metric, unit)
+        # DAV-1177: bench 主体近旁的 % 变动是指数涨跌幅而非均线/股价值——
+        # 「上证5日跌2.53%」中前向「均线」属另一定性分句，绑它会与报告侧
+        # 「上证 5 日 -2.53%」m=None 互判失配；实体为指数基准时剥除价格类绑定。
+        if (
+            unit == "%" and metric in {"均线", "股价", "均价", "开盘价", "收盘价", "最高价", "最低价"}
+            and any(
+                _lab.startswith("bench:") and 0 < n_start - _ee <= 16
+                for _es, _ee, _lab in entity_spans
+            )
+        ):
+            metric = None
+            raw_metric = None
         # DAV-1163: 价格类指标只绑元/股量纲——「收盘处于日内绝对低位（0.03）」
         # 中 0.03 是收盘位置分位而非股价，「低于现价5.6%」中 5.6% 是差值比率；
         # 误绑严格股价会与未绑定证据互判失配/伪冲突。
@@ -1634,12 +2104,75 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         ):
             metric = None
             raw_metric = None
+        # DAV-1177: 率类指标（canonical 语义为 %/倍）不得绑大额元值——
+        # 「拟派现 66.72 亿」「单季派生净利润 -99.30 亿」中元值撞上「派现」
+        # 「派息」词面会错绑股息率并与报告股息率数字互判伪冲突；每股分红
+        # 额（<1e5 元）仍允许绑「股息率」。
+        if (
+            unit == "元" and abs(val) >= 1e5
+            and metric in _MONEY_FORBIDDEN_METRICS
+        ):
+            metric = None
+            raw_metric = None
+        # DAV-1177: 无自身指标词的 % 向前继承同子句最近数字的指标——
+        # 「成交 64,861,142 股，较前两日均值大幅萎缩 43.4%」中 43.4% 量化的
+        # 是紧邻的成交量而非未绑定通配；gap 内含其他指标词/占比语境时不继承。
+        if (
+            unit == "%" and metric is None and res and last_res_match_end != -1
+            and res[-1].metric is not None
+            # 括号内 % 的归属由「金额+括号同比」显式配对/括号主体回退处理，
+            # 不走跨数字继承——「（收盘40.87元，跌-0.07%）」中 -0.07% 是收盘
+            # 价变动而非量能指标值。
+            and not paren_mask[n_start]
+            # 「N%分位/关口」等位置修饰语已由上方规则剥除指标绑定——不得
+            # 再向前继承（「19.8倍处于历史后15%分位」中 15% 是估值位次而非
+            # PE 数值）。
+            and not re.match(r"^\s*(?:分位|百分位|关口|大关|一线|一带)", cleaned[n_end:])
+            # 线型/点位类指标（均线/布林/点位）的 % 邻接值是偏离度或另一
+            # 指标的变化率，向前继承会把它绑成「均线增速」与报告均线值
+            # 伪冲突（「量增 29%」继承「均线」撞上报告均线 -3.22%）。
+            and res[-1].metric not in _PCT_INHERIT_BLOCK_METRICS
+            # 继承 gap 内含完整主体标注时，% 属该主体的变化而非前数字指标
+            # （「毛利0.3-0.5pct且大金单月暴跌15.58%」中 15.58% 是大金股价
+            # 跌幅而非毛利率变动）。
+            and not any(
+                _es >= last_res_match_end and _ee <= n_start
+                for _es, _ee, _lab in entity_spans
+            )
+        ):
+            _ig = cleaned[last_res_match_end:n_start]
+            if (
+                "；" not in _ig and "。" not in _ig and "占" not in _ig
+                and len(re.sub(r"[（）()【】]", "", _ig)) <= 40
+                and not any(
+                    kw.lower() in _ig.lower() for kw in _SORTED_METRIC_MAP_KEYS
+                )
+                # gap 含涨跌动词时 % 是另一主体的涨跌幅而非前数字指标
+                # （「毛利0.3-0.5pct且大金单月暴跌15.58%」）。
+                and not re.search(r"暴跌|暴涨|大跌|大涨|飙升|下挫|冲高", _ig)
+            ):
+                metric = res[-1].metric
+                raw_metric = res[-1].raw_metric
+        # DAV-1177: 「N%比例/占比/分位」后继比例词——「拉出长达 63% 比例
+        # 的下影线」「历史 15% 分位」中 % 是形态位次/比率，向前绑量能/估值
+        # 指标会与报告侧同值未绑定记录互判失配，剥除绑定。
+        if unit == "%" and re.match(
+            r"^\s*(?:比例|占比|比重|分位|百分位)", cleaned[n_end:]
+        ):
+            metric = None
+            raw_metric = None
         stype = _classify_semantic_type(cleaned, n_start, n_end, unit, metric)
         if (
             unit == "%" and stype == STYPE_UNKNOWN and raw_metric
             and n_start > 0 and paren_mask[n_start]
+            and res and last_res_match_end != -1
+            and re.fullmatch(
+                r"\s*[（(【\[]\s*", cleaned[last_res_match_end:n_start]
+            )
         ):
-            # 括号内 % 直接挂在金额数字之后是同比/环比限定语，语义为同比增速
+            # 括号内 % 直接挂在金额数字之后是同比/环比限定语，语义为同比增速；
+            # DAV-1177: 仅限紧邻前一数字的括号注释——括号内自有科目/多项并列
+            # 的 %（「相对离散度约46.6%」）不属同比限定语，保持未知。
             stype = STYPE_GROWTH
         if unit == "%" and metric == "毛利":
             # % 绑定到「毛利」只可能是毛利率语义（占比/增速下毛利的 % 无意义），
@@ -1649,6 +2182,13 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         role, basis = _classify_role_and_basis(cleaned, n_start, n_end, unit)
         # DAV-1157: 数字级期间覆盖（后置括号/子句引导），无局部标注回退整句期间
         num_period = _bind_period_for_number(period_view, n_start, n_end, period)
+        # DAV-1177: 括号内数字无局部期间标注时继承括号前紧邻数字的期间——
+        # 「2025 年全年归母净利润为 -17.70 亿元（扣非净亏损 -24.85 亿元）」中
+        # -24.85 共享 2025 期间，不得回退整句期间（如行尾出现的 Q1）。
+        if num_period == period and res and paren_mask[n_start] and res[-1].period:
+            _pg = period_view[res_spans[-1][1]:n_start]
+            if len(_pg) <= 18 and re.match(r"^\s*[*_~]*[（(【\[]", _pg):
+                num_period = res[-1].period
         # DAV-1163: 区间/约数修饰提取——「约/近/超/不足」前缀与「左右/以上/余」
         # 后缀把点值声明变为方向界或约数，匹配语义在 _value_covered 中处理。
         bound = None
@@ -1660,6 +2200,53 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             bound = BOUND_MAX
         elif _BOUND_APPROX_PREFIX_RE.search(prefix_ctx) or _BOUND_APPROX_SUFFIX_RE.match(suffix_ctx):
             bound = BOUND_APPROX
+        # DAV-1177: 「相较/较 <基期>的<基值>…同比X%」中的 % 归属于本期主体
+        # （描述本期值相对基期的变动），不得绑基期——「相较2025年Q1的
+        # 360.74亿元同比大幅下降15.55%」中 15.55% 属本期利息支出同比，误绑
+        # 2025Q1 会被期间门拦成与本期记录不可比。仅当基期与数字之间隔着
+        # 其他数值（基值）时改绑 fallback；若 % 本身是基值（「较2025Q1的
+        # 15.55%扩大至20%」中的 15.55%）则保持基期绑定。
+        if unit == "%" and num_period:
+            _pseg = _CLAUSE_BREAK_FOR_PERIOD.split(
+                period_view[max(0, n_start - 48):n_start]
+            )[-1]
+            _pm = _DATE_MASK_PATTERN.search(_pseg) or _CLAUSE_YEAR_HINT_RE.search(_pseg)
+            if (
+                _pm
+                and re.match(r"\s*(?:相较|相比|对比|相对于|较)\s*", _pseg)
+                and normalize_period(_pseg) == num_period
+                and _NUMBER_WITH_UNIT_RE.search(_pseg[_pm.end():])
+            ):
+                num_period = period
+        # DAV-1177: 资金流方向动词给净额数字赋负号——「净流出1.54亿」原抽取
+        # 为 +1.54，与报告「-1.5420亿」值门发散；流出类方向词把同事实压成符号
+        # 失配。仅对资金流类指标 + 元/股量纲生效；赋值后清除方向界（bound 的
+        # 比较语义按符号反转会破坏容差判定，「净流出超5.5亿」-5.55 已在容差内）。
+        if val > 0 and unit in ("元", "股") and metric in _FLOW_DIRECTION_METRICS:
+            _dseg = _CLAUSE_BREAK_FOR_PERIOD.split(
+                cleaned[max(0, n_start - 24):n_start]
+            )[-1]
+            _dir_hits = list(_FLOW_DIRECTION_RE.finditer(_dseg))
+            if _dir_hits and _dir_hits[-1].group(1) in _FLOW_OUT_WORDS:
+                val = -val
+                bound = None
+        # DAV-1177: 「（净）亏损X亿」语义负值——「扣非净亏损24.85亿元」「亏损
+        # 21.28亿元」中亏损额须赋负号与报告「-24.85亿」同约定；扭亏/减亏修饰
+        # 不改变金额本身的亏损语义。仅元/股量纲生效。
+        if val > 0 and unit in ("元", "股"):
+            _lseg = _CLAUSE_BREAK_FOR_PERIOD.split(
+                cleaned[max(0, n_start - 20):n_start]
+            )[-1]
+            if re.search(r"亏损[^，。；、]{0,4}$", _lseg):
+                val = -val
+                bound = None
+        # DAV-1177: 「降幅达X%」类幅度词负号——与报告负号写法同约定。
+        if val > 0 and unit == "%":
+            _fseg = _CLAUSE_BREAK_FOR_PERIOD.split(
+                cleaned[max(0, n_start - 20):n_start]
+            )[-1]
+            if _DECLINE_MAGNITUDE_RE.search(_fseg):
+                val = -val
         # DAV-1158: 资金流/行情类数字的数据源/口径命名空间；读 period_view——
         # cleaned 已把字段代码（r0_net 等）保位掩码，口径标注须从未掩码坐标等价的
         # period_view 读取（与 _bind_period_for_number 同一坐标系约定）。
@@ -1677,9 +2264,25 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     for j in range(len(res) - 1):
         gap = cleaned[res_spans[j][1]:res_spans[j + 1][0]]
         is_range = bool(_RANGE_CONNECTOR_RE.fullmatch(gap))
+        absorbed_sign = False
         if not is_range and gap == "" and res[j + 1].raw.startswith("-"):
-            # 「A-B」中 B 的负号是连接符而非符号位：取绝对值并标记区间
+            # 「A-B」中 B 的负号是连接符而非符号位：标记区间并在合并时取绝对值
             is_range = True
+            absorbed_sign = True
+        # DAV-1177: 区间合并仅对同量纲同指标（或一侧未绑）的端点成立——
+        # 「降15.55%至304.66亿元」是「变动率→水平值」两个独立原子而非区间，
+        # 跨单位合并会把 15.55% 的 range_span 拉成 (15.55, 304.66e9) 使覆盖
+        # 判定失真；「1,258.49亿 - Capex 54.24亿」是减法式分项而非区间。
+        if is_range and (
+            res[j].unit != res[j + 1].unit
+            or (
+                res[j].metric is not None
+                and res[j + 1].metric is not None
+                and res[j].metric != res[j + 1].metric
+            )
+        ):
+            is_range = False
+        if is_range and absorbed_sign:
             res[j + 1].val = abs(res[j + 1].val)
         if is_range:
             # DAV-1163 返修（DAV-1164 🟡-1）：区间端点保留符号——「-5%至-3%」
@@ -1701,6 +2304,55 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 res[j + 1].stype = res[j].stype
             if res[j].stype == STYPE_UNKNOWN and res[j + 1].stype != STYPE_UNKNOWN:
                 res[j].stype = res[j + 1].stype
+    # DAV-1177: 「A与B分别X与Y」资金流分组的合计原子——中单+小单→中小单、
+    # 超大单+大单→主力（东财主力=超大单+大单口径）。证据「中小单合计净流入
+    # 超9亿」的合计语义即各分量之和；仅同子句相邻同量纲对才合成。
+    _extra: list[BoundNumber] = []
+    for j in range(len(res) - 1):
+        _pair = {res[j].metric, res[j + 1].metric}
+        if _pair == {"中单", "小单"}:
+            _combo = "中小单"
+        elif _pair == {"超大单", "大单"}:
+            _combo = "主力"
+        else:
+            continue
+        _gap = cleaned[res_spans[j][1]:res_spans[j + 1][0]]
+        if len(_gap) > 24 or re.search(r"[。；;]", _gap) or res[j].unit != res[j + 1].unit:
+            continue
+        # DAV-1177: 跨口径分量不得加总——「东财超大单-2595万/同花顺大单-3961万」
+        # 分属不同数据源，相加无「主力」语义；要求两分量 src 集合完全一致
+        # （均无出处标注时按同口径处理）。
+        _src_a = {p for p in (res[j].provider or ()) if p.startswith("src:")}
+        _src_b = {p for p in (res[j + 1].provider or ()) if p.startswith("src:")}
+        if _src_a != _src_b:
+            continue
+        _extra.append(
+            BoundNumber(
+                res[j].val + res[j + 1].val, res[j].unit,
+                res[j].raw + "+" + res[j + 1].raw, _combo,
+                res[j].period if res[j].period == res[j + 1].period else None,
+                _combo,
+                res[j].stype if res[j].stype == res[j + 1].stype else STYPE_UNKNOWN,
+                res[j].entity if res[j].entity == res[j + 1].entity else None,
+                ROLE_AGGREGATE,
+                res[j].basis if res[j].basis == res[j + 1].basis else None,
+                None, None,
+                res[j].provider if res[j].provider == res[j + 1].provider else None,
+                res[j].timepoint if res[j].timepoint == res[j + 1].timepoint else None,
+            )
+        )
+    res.extend(_extra)
+    # DAV-1177: % 偏离度原子剥除线型/价格类指标绑定——「股价偏离 VWMA 达
+    # 3.77%」的 3.77% 是乖离值（stype=占比），报告行写「正向偏离 +3.77%」
+    # 时两侧各自就近绑到 VWMA/现价等不同指标会互判失配；偏离度跨指标可比，
+    # 一律剥为未绑定按值对齐。
+    for _b in res:
+        if (
+            _b.unit == "%" and _b.stype == STYPE_PROPORTION
+            and _b.metric in _PCT_INHERIT_BLOCK_METRICS | {"股价", "开盘价", "收盘价", "最高价", "最低价", "均价"}
+        ):
+            _b.metric = None
+            _b.raw_metric = None
     return res
 
 
@@ -1787,10 +2439,17 @@ def _value_covered(
             return True
         return _is_rounding_equivalent(ev_bn, l_bn)
     if ev_bn.range_span is None:
-        # 证据是点值、报告侧是区间：点值未在报告中字面出现（区间内取值是
-        # 衍生值而非记录值），不得按区间包含放行——「低于现价5.6%」不得被
-        # 报告「5%-8%回调」区间覆盖（golden CASE-001 红线）。
-        return False
+        # 证据是点值、报告侧是区间：区间内部取值是衍生值不得覆盖——区间
+        # 端点本身是字面记录值可覆盖，但要求证据侧有同名指标锚定（同科目
+        # 同量纲），防止无指标数字碰上无关区间端点（「350亿利润底座」撞上
+        # 「一致预期320-350亿区间」式数字巧合）。
+        if not (ev_bn.metric is not None and ev_bn.metric == l_bn.metric):
+            return False
+        return any(
+            _is_num_match(ev_bn.val, ev_bn.unit, ep, l_bn.unit, rt, abs_tol)
+            or _is_rounding_equivalent(ev_bn, l_bn)
+            for ep in (l_lo, l_hi)
+        )
     # 证据区间 [e_lo,e_hi] 与报告值/区间在容差内重叠即覆盖：报告点值落在
     # 证据区间内（「底线67-77元」被「77元」覆盖）或两侧区间相交均算命中。
     margin = abs_tol
@@ -1819,6 +2478,16 @@ def _is_bound_num_match(
     elif ev_bn.metric != l_bn.metric:
         return False
     if ev_bn.stype != l_bn.stype:
+        return False
+    # DAV-1177: 情景/假设前提的证据原子不得由实绩行佐证——「极端压力下仍有
+    # 350亿利润底座」的数值撞上实绩「至少110亿」不构成记录事实支撑（总工
+    # 裁定：情景参数是实质性 atom，supported_in_available=False）。反向不
+    # 阻塞：报告侧标为情景/测算/变动的行仍是字面记录值，可佐证；阈值
+    # （估值上限/底线）行同样是声明值。
+    if ev_bn.role == ROLE_SCENARIO and l_bn.role in (
+        ROLE_ACTUAL,
+        ROLE_BASELINE,
+    ):
         return False
     # 期间兼容：双方均抽出期间时，要求相同或共享同一年度前缀
     # （2026H1 与 2026 / 2026-07-06 属同一年度粒度，视为兼容；跨年不兼容）。
@@ -2193,6 +2862,43 @@ class EvidenceFactualTruthEvaluator:
                             "details": f"在 {role_key} 中找到定性指标匹配: {', '.join(common_kw)}",
                         }
                     continue
+                # DAV-1177: 纯定性证据（无任何数值原子）——展期/兑付/任职等事件
+                # 类事实的报告行常带无关数字（时间戳/他项金额），line_bns 非空
+                # 不再是排除条件；但交集需含至少一个非通用资金/价量词（防
+                # 「小单持续净流出」类泛化词组弱重合放行），且含持续性声明
+                # （持续/连续/多日）的定性子句单行关键词不足为证，fail-close。
+                _GENERIC_FLOW_KWS = {
+                    "净流入", "净流出", "流入", "流出", "主力", "大单", "小单",
+                    "中单", "超大单", "中小单", "两融", "散户", "成交量", "成交额",
+                    "股价", "收盘", "开盘", "最高", "最低", "市值", "流通市值",
+                    "换手率", "换手", "量比",
+                }
+                # 定性锚点词集：事件/行为/主体名词——只有命中此类非指标锚点的
+                # 定性子句才允许在带数字行上放行（指标/资金流泛词不构成定性证据）。
+                _QUAL_ANCHOR_KWS = {
+                    "展期", "兑付", "逾期", "违约", "任职", "履职", "核准", "换届",
+                    "辞职", "中标", "解禁", "诉讼", "停牌", "复牌", "摘帽", "处罚",
+                    "问询", "立案", "退市", "更名", "收购", "并购", "配股", "发债",
+                    "除权", "除息", "担保", "冻结", "划转", "转让", "增资", "注资",
+                    "分拆", "投产", "量产", "交付", "签约", "牌照", "提价", "降价",
+                    "调价", "合作", "协议", "合同", "补贴", "豁免", "宽限", "定价",
+                    "发酵", "接任", "燃油车", "电动车", "新能源车",
+                }
+                if (
+                    not all_ev_bns and len(common_kw) >= 2
+                    and common_kw & _QUAL_ANCHOR_KWS
+                    and not re.search(r"持续|连续|多日|连日|逐日|每日", raw_text)
+                    and any(kw in line_text for kw in ev_keywords)
+                ):
+                    return {
+                        "raw": raw_text,
+                        "claim_id": claim_id,
+                        "matched_role": role_key,
+                        "matched_source": role_key.replace("_report", ""),
+                        "status": STATUS_VERIFIED,
+                        "is_fatal": False,
+                        "details": f"在 {role_key} 中找到定性事实匹配: {', '.join(sorted(common_kw))}",
+                    }
 
                 # If numbers exist, check single-line full value match with metric binding
                 if all_ev_bns:
@@ -2246,7 +2952,15 @@ class EvidenceFactualTruthEvaluator:
                         line_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in line_keywords}
                         common_kw = ev_canon.intersection(line_canon)
                         # Each hit line must share >= 1 canonical keyword with the evidence sentence
-                        if ev_keywords and not common_kw:
+                        # DAV-1177: bench 主体锚点可当关键词等价物——「沪深300收
+                        # 涨0.85%」与「沪深300（+0.85%）领涨」主体一致即认可候选，
+                        # 不要求指标关键词重合（指数涨跌幅行常无指标词）。
+                        _bench_anchor = (
+                            ev_bn.entity is not None
+                            and ev_bn.entity.startswith("bench:")
+                            and ev_bn.entity[6:] in line_text
+                        )
+                        if ev_keywords and not common_kw and not _bench_anchor:
                             continue
                         line_bns = extract_bound_numbers(line_text)
                         for l_bn in line_bns:
