@@ -1751,6 +1751,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 analysis_baseline_date=analysis_baseline_date or None,
                 expected_symbol=expected_symbol or None,
                 market_data_context=effective_market_data_context,
+                seven_reports=seven_reports,
             )
             from tradingagents.agents.utils.decision_status import abstain_status
 
@@ -1823,6 +1824,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             analysis_baseline_date=analysis_baseline_date or None,
             expected_symbol=expected_symbol or None,
             market_data_context=effective_market_data_context,
+            seven_reports=seven_reports,
         )
 
         claims = cluster_claims(
@@ -2117,6 +2119,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             analysis_baseline_date=analysis_baseline_date or None,
             expected_symbol=expected_symbol or None,
             market_data_context=effective_market_data_context,
+            seven_reports=seven_reports,
         )
         manager_verdict["claim_evidence_summary"] = claim_evidence_summary
         manager_verdict["horizon"] = research_horizon
