@@ -85,7 +85,7 @@ class TestCohortMetadataPersistence:
         assert "generated_by_commit_sha" in rep.result_data
 
         assert rep.result_data["decision_model_version"] == "decision_model.v1"
-        assert rep.result_data["evidence_contract_version"] == "evidence_contract.v1"
+        assert rep.result_data["evidence_contract_version"] == "evidence_contract.v2"
         assert rep.result_data["price_basis_version"] == "price_basis.unspecified"
 
         sha = rep.result_data["generated_by_commit_sha"]
@@ -97,7 +97,7 @@ class TestCohortMetadataPersistence:
         from_db = sqlite_db_session.query(ReportDB).filter(ReportDB.id == report_id).first()
         assert from_db is not None
         assert from_db.result_data["decision_model_version"] == "decision_model.v1"
-        assert from_db.result_data["evidence_contract_version"] == "evidence_contract.v1"
+        assert from_db.result_data["evidence_contract_version"] == "evidence_contract.v2"
         assert from_db.result_data["price_basis_version"] == "price_basis.unspecified"
         assert from_db.result_data["generated_by_commit_sha"] == sha
 
@@ -126,7 +126,7 @@ class TestCohortMetadataPersistence:
         assert updated.status == "completed"
         assert isinstance(updated.result_data, dict)
         assert updated.result_data["decision_model_version"] == "decision_model.v1"
-        assert updated.result_data["evidence_contract_version"] == "evidence_contract.v1"
+        assert updated.result_data["evidence_contract_version"] == "evidence_contract.v2"
         assert updated.result_data["price_basis_version"] == "price_basis.unspecified"
         assert updated.result_data["generated_by_commit_sha"] is not None
         assert len(updated.result_data["generated_by_commit_sha"]) == 40
@@ -183,7 +183,7 @@ class TestCohortMetadataPersistence:
                 # Must be explicitly None (never today's date, timestamp, or random uuid)
                 assert rep.result_data["generated_by_commit_sha"] is None
                 assert rep.result_data["decision_model_version"] == "decision_model.v1"
-                assert rep.result_data["evidence_contract_version"] == "evidence_contract.v1"
+                assert rep.result_data["evidence_contract_version"] == "evidence_contract.v2"
                 assert rep.result_data["price_basis_version"] == "price_basis.unspecified"
 
     def test_legacy_samples_not_backfilled_to_v1(self, sqlite_db_session):
@@ -352,7 +352,7 @@ class TestCohortMetadataPersistence:
         )
         # Root dictionary
         assert rep.result_data["decision_model_version"] == "decision_model.v1"
-        assert rep.result_data["evidence_contract_version"] == "evidence_contract.v1"
+        assert rep.result_data["evidence_contract_version"] == "evidence_contract.v2"
         assert rep.result_data["price_basis_version"] == "price_basis.unspecified"
         assert len(rep.result_data["generated_by_commit_sha"]) == 40
 
@@ -379,11 +379,11 @@ class TestCohortMetadataPersistence:
 
         extracted = extract_sample_cohort(rep.to_dict())
         assert extracted["decision_model_version"] == "decision_model.v1"
-        assert extracted["evidence_contract_version"] == "evidence_contract.v1"
+        assert extracted["evidence_contract_version"] == "evidence_contract.v2"
         assert extracted["price_basis_version"] == "price_basis.unspecified"
         assert len(extracted["generated_by_commit_sha"]) == 40
 
-        target_cohort = "decision_model.v1:evidence_contract.v1:price_basis.unspecified"
+        target_cohort = "decision_model.v1:evidence_contract.v2:price_basis.unspecified"
         filtered, meta = filter_reports_by_cohort([rep.to_dict()], cohort=target_cohort)
         assert len(filtered) == 1
         assert meta["canonical_key"] == target_cohort

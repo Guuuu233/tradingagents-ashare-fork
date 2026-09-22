@@ -57,6 +57,10 @@ STALE_REPORT_ERROR_MESSAGE = "分析任务已中断，请重新发起分析"
 # DAV-604 / DAV-705: H1b cohort metadata constants
 DECISION_MODEL_V1: str = "decision_model.v1"
 EVIDENCE_CONTRACT_V1: str = "evidence_contract.v1"
+# DAV-1193 (1141-B2): semantic proposition gate 接入正式 claim decision——
+# 测量/采纳契约变化（semantic_decision 决定 adopt/partial/reject、
+# non_factual_only 无采纳资格、grounded causal 同句口径收紧），提升版本。
+EVIDENCE_CONTRACT_V2: str = "evidence_contract.v2"
 PRICE_BASIS_UNSPECIFIED: str = "price_basis.unspecified"
 PRICE_BASIS_VERSION_VENDOR_QFQ: str = "price_basis.vendor_qfq"
 PRICE_BASIS_VERSION_UNSPECIFIED: str = "price_basis.unspecified"
@@ -792,7 +796,7 @@ def ensure_report_cohort_persisted(
 
     Fields written:
     - decision_model_version: 'decision_model.v1'
-    - evidence_contract_version: 'evidence_contract.v1'
+    - evidence_contract_version: 'evidence_contract.v2'
     - price_basis_version: 'price_basis.unspecified'
     - generated_by_commit_sha: 40-character hex commit SHA (or None if resolution fails)
 
@@ -821,7 +825,7 @@ def ensure_report_cohort_persisted(
         result_data["decision_model_version"] = DECISION_MODEL_V1
 
     if "evidence_contract_version" not in result_data:
-        result_data["evidence_contract_version"] = EVIDENCE_CONTRACT_V1
+        result_data["evidence_contract_version"] = EVIDENCE_CONTRACT_V2
 
     if "price_basis_version" not in result_data:
         result_data["price_basis_version"] = PRICE_BASIS_UNSPECIFIED

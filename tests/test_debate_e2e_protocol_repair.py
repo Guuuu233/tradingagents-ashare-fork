@@ -91,9 +91,9 @@ def _build_valid_six_round_state():
         {"message_index": 6, "debate_round": 3, "speaker": "Bear Analyst", "speaker_key": "Bear", "parse_status": "valid", "accepted": True, "responded_claim_ids": ["INV-5"], "target_claim_ids": ["INV-5"], "new_claim_ids": ["INV-6"]},
     ]
     claims = [
-        {"claim_id": "INV-1", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "营收高增", "evidence": ["营收同比增长30%"], "confidence": 0.85},
+        {"claim_id": "INV-1", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "营收同比增长30%", "evidence": ["营收同比增长30%"], "confidence": 0.85},
         {"claim_id": "INV-2", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "估值透支", "evidence": ["PE处于高位"], "confidence": 0.80},
-        {"claim_id": "INV-3", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "订单放量", "evidence": ["在手订单增长50%"], "confidence": 0.90},
+        {"claim_id": "INV-3", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "在手订单增长50%", "evidence": ["在手订单增长50%"], "confidence": 0.90},
         {"claim_id": "INV-4", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "原料涨价", "evidence": ["上游成本上升"], "confidence": 0.75},
         {"claim_id": "INV-5", "speaker": "Bull Analyst", "speaker_key": "Bull", "stance": "bullish", "claim": "长协锁价", "evidence": ["主力净流入5.2亿元"], "confidence": 0.88},
         {"claim_id": "INV-6", "speaker": "Bear Analyst", "speaker_key": "Bear", "stance": "bearish", "claim": "竞争加剧", "evidence": ["价格战苗头"], "confidence": 0.78},

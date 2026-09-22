@@ -272,6 +272,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
      * **混合证据且覆盖率达标（Coverage>=67%）**：必须标注“部分支持”，只允许记录于 partially_adopted_claims，正文与裁决仅采纳 verified 子结论，未验证项必须记录进 excluded_evidence 并在正文中予以剔除，严禁将整条 claim 标为“证据充分”；
      * **证据覆盖率不足（Coverage<67%）或全部未获验证**：必须标注“不支持”，予以驳回/降权，记录于 rejected_claim_ids，严禁采纳；
      * **存在矛盾冲突证据或引用不可用数据源**：必须标注“矛盾/不可用”，坚决予以驳回，记录于 rejected_claim_ids。
+   - **语义命题门禁（semantic_decision，与证据覆盖率并行的硬约束）**：系统已将每条 claim 拆分为实质语义命题并给出正式判定：semantic_decision=adopt（实质命题全覆盖且无 E-04 未证 hard guard）方可进入 adopted_claim_ids；semantic_decision=partial_threshold 只允许记录于 partially_adopted_claims 且仅消费 supported 子命题、未证子命题必须进 excluded_evidence；semantic_decision=reject 必须记录于 rejected_claim_ids（即使其含 supported 子命题也不得偷升为部分采纳）；semantic_decision=non_factual_only 为纯修辞/规范句、无证据采纳资格，只能进 rejected/excluded 审计路径。legacy 证据覆盖率全绿但 semantic_decision 非 adopt 的 claim 严禁全额采纳。
    - 严厉穿透双方最脆弱的核心假设与宏观叙事假设，识别并驳回缺乏可验证数据支撑、逻辑链条断裂或存在盲目外推的脆弱 claim。
    - 裁决依据是论点的证据质量、逻辑严密性与抗压测能力，而非论辩修辞或某一方人数多寡。
 2. **第二步：传导路径验证**：

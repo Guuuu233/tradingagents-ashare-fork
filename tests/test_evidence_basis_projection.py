@@ -48,8 +48,10 @@ def _claim(cid: str, speaker_key: str | None = "Bear", stance: str | None = "bea
     c = {
         "claim_id": cid,
         "speaker": f"{speaker_key} Analyst" if speaker_key else "Analyst",
-        "claim": f"{cid} 论点",
-        "evidence": [f"{cid} 证据1"],
+        # DAV-1193：adopted claim 须为 semantic 可证命题，否则触发
+        # semantic_decision 硬闸，与本组测试目标无关
+        "claim": "主力净流出1.2亿",
+        "evidence": ["主力净流出1.2亿元"],
         "confidence": 0.8,
     }
     if speaker_key is not None:
@@ -61,7 +63,7 @@ def _claim(cid: str, speaker_key: str | None = "Bear", stance: str | None = "bea
 
 def _verification(cid: str, n_verified: int = 1) -> list[dict]:
     return [
-        {"claim_id": cid, "status": STATUS_VERIFIED, "raw": f"{cid} 证据{i}"}
+        {"claim_id": cid, "status": STATUS_VERIFIED, "raw": f"主力净流出1.2亿元·凭证{i}"}
         for i in range(1, n_verified + 1)
     ]
 
@@ -91,7 +93,7 @@ def test_adopted_projection_deterministic_and_traceable():
     assert items == [{
         "claim_id": "INV-1",
         "source": "adopted",
-        "verified_subfacts": ["INV-1 证据1", "INV-1 证据2"],
+        "verified_subfacts": ["主力净流出1.2亿元·凭证1", "主力净流出1.2亿元·凭证2"],
         "verified_count": 2,
     }]
     # 同输入重算结果逐字节一致（确定性投影）

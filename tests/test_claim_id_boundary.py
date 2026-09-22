@@ -111,8 +111,13 @@ class TestClaimIdBoundaryRegression688981:
 
         # False check on INV-1 must be gone
         assert not any("INV-1" in err and "证据充分" in err for err in verdict["failed_checks"])
-        assert verdict["consistency_check_passed"] is True
-        assert len(verdict["failed_checks"]) == 0
+        # DAV-1193 B2：该历史裁决在当时 legacy 口径下通过，但 B2 semantic gate
+        # 正式接入后，manager 对含未证实质命题的 claim 的全额/部分采纳属违规
+        # ——fixture 中 INV-2/INV-3 semantic=reject 被 adopted、INV-4/7/9 被
+        # partial，自洽硬闸按新契约 fail-close，这是预期行为而非回归。
+        assert verdict["consistency_check_passed"] is False
+        assert verdict["failed_checks"]
+        assert all("semantic_decision" in err for err in verdict["failed_checks"])
         assert verdict["winner"] == "bear"
         assert verdict["direction"] == "偏空"
 

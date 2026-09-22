@@ -451,9 +451,31 @@ def evaluate_confirmation_state(
             return "reject"
         sm = summary_map.get(cid)
         if sm:
+            # DAV-1193 B2：正式 semantic decision 优先于 legacy evidence
+            # coverage 推断。effective = legacy decision 与 semantic_decision
+            # 取更严者（reject > partial > adopt）；non_factual_only 无事实
+            # 可采纳，按 reject 参与裁决一致性判定（不代表“事实为假”，仅是
+            # 无证据采纳资格）。
+            _SEV = {"reject": 0, "partial": 1, "adopt": 2}
+
+            def _map_sem(sd: Any) -> str | None:
+                if sd == "adopt":
+                    return "adopt"
+                if sd == "partial_threshold":
+                    return "partial"
+                if sd in ("reject", "non_factual_only"):
+                    return "reject"
+                return None
+
             dec = sm.get("decision")
-            if dec in {"adopt", "partial", "reject"}:
-                return str(dec)
+            legacy_mapped = dec if dec in {"adopt", "partial", "reject"} else None
+            sem_mapped = _map_sem(sm.get("semantic_decision"))
+            if legacy_mapped is not None or sem_mapped is not None:
+                if legacy_mapped is None:
+                    return sem_mapped
+                if sem_mapped is None:
+                    return legacy_mapped
+                return min((legacy_mapped, sem_mapped), key=lambda d: _SEV[d])
             cnt = sm.get("counts") or {}
             total = cnt.get("total", 0)
             verified = cnt.get("verified", 0)

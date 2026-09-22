@@ -2112,6 +2112,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             challenges=challenges,
             challenges_verification=challenges_verification,
             market_data_context=effective_market_data_context,
+            seven_reports=seven_reports,
         )
         claim_evidence_summary = truth_evaluator.aggregate_claim_evidence(
             claims=claims,

@@ -55,12 +55,13 @@ def _make_e2e_debate_state():
     ]
     claims = [
         # INV-1: 100% verified (2 verified, 0 unverified)
+        # DAV-1193：claim 文本改为数值可证命题，保证 semantic_decision=adopt
         {
             "claim_id": "INV-1",
             "speaker": "Bull Analyst",
             "speaker_key": "Bull",
             "stance": "bullish",
-            "claim": "在手订单充足与营收高增",
+            "claim": "营收同比增长30%且在手订单增长50%",
             "evidence": ["营收同比增长30%", "在手订单增长50%"],
             "confidence": 0.85,
         },
@@ -74,13 +75,13 @@ def _make_e2e_debate_state():
             "evidence": ["global_indices重挫3%"],
             "confidence": 0.70,
         },
-        # INV-3: 100% verified
+        # INV-3: 100% verified（claim 文本含可证数值+事件谓词 → semantic adopt）
         {
             "claim_id": "INV-3",
             "speaker": "Bull Analyst",
             "speaker_key": "Bull",
             "stance": "bullish",
-            "claim": "均线多头排列且央行降息",
+            "claim": "央行降息25bp且均线多头排列",
             "evidence": ["央行降息25bp", "均线多头排列"],
             "confidence": 0.88,
         },
@@ -95,12 +96,14 @@ def _make_e2e_debate_state():
             "confidence": 0.75,
         },
         # INV-5: mixed evidence (2 verified, 1 unsupported -> coverage = 2/3 = 66.7% >= 67%)
+        # DAV-1193：claim 文本数值+事件谓词均在 verified 语料可命中 → semantic adopt，
+        # 仅 legacy 混合证据留在 partial
         {
             "claim_id": "INV-5",
             "speaker": "Bull Analyst",
             "speaker_key": "Bull",
             "stance": "bullish",
-            "claim": "主力持续增持与市场情绪高涨",
+            "claim": "主力净流入5.2亿元与情绪看多占比65%",
             "evidence": ["主力净流入5.2亿元", "情绪报告看多占比65%", "某机构私下调研看好翻倍"],
             "confidence": 0.90,
         },
@@ -637,13 +640,16 @@ class TestManagerVerdictConsistencyHardGateCoverage:
         """Adopting observation/hypothesis claim fails consistency check; partial adoption passes."""
         obs_claim = {
             "claim_id": "CLM-OBS",
-            "claim": "【假设】若主力拉升则突破前高",
+            # DAV-1193：scenario 命题需报告语料命中才可 supported；本例经
+            # seven_reports 传入命中语料，保证 partial 路径语义合法
+            "claim": "【假设】若主力净流入则反弹延续",
             "claim_type": "hypothesis",
-            "evidence": ["突破阻力位"],
+            "evidence": ["主力净流入"],
         }
         verifications = [
-            {"claim_id": "CLM-OBS", "raw": "突破阻力位", "status": STATUS_VERIFIED}
+            {"claim_id": "CLM-OBS", "raw": "主力净流入", "status": STATUS_VERIFIED}
         ]
+        obs_reports = {"smart_money_report": "主力净流入5亿元，市场反弹延续。"}
         # 1. Putting in adopted_claim_ids -> FAILS
         raw_output_adopt = """【投研经理裁决报告】
 看多。
@@ -652,6 +658,7 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             raw_response=raw_output_adopt,
             claims_verification=verifications,
             claims=[obs_claim],
+            seven_reports=obs_reports,
         )
         assert verdict_bad["consistency_check_passed"] is False
         assert any("观察/假设类" in err for err in verdict_bad["failed_checks"])
@@ -664,6 +671,7 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             raw_response=raw_output_partial,
             claims_verification=verifications,
             claims=[obs_claim],
+            seven_reports=obs_reports,
         )
         assert verdict_ok["consistency_check_passed"] is True
 
@@ -846,7 +854,7 @@ class TestResearchManagerIntegrationWithEvidenceGate:
         # Make INV-5 an observation claim with 100% verified evidence (no unverified hearsay)
         claims[4]["claim_type"] = "observation"
         claims[4]["is_observation"] = True
-        claims[4]["claim"] = "【观察】主力持续增持与市场情绪高涨"
+        claims[4]["claim"] = "【观察】主力净流入5.2亿元与情绪看多占比65%"
         claims[4]["evidence"] = ["主力净流入5.2亿元", "情绪报告看多占比65%"]
 
         # Manager puts factual core INV-1 & INV-3 in adopted_claim_ids, and observation INV-5 in partially_adopted_claims

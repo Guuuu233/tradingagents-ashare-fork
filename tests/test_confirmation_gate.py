@@ -1192,13 +1192,15 @@ def test_dav1068_excluded_ids_param_marks_claim_decided():
 def test_dav1068_folded_claim_outside_adjudication_lists_not_unadjudicated():
     """A1 补充（DAV-1069 返修）：被折叠 claim 不在 focus/adopted/partial/rejected 任一裁决列表，
     仅存在于 claims+verification+审计排除集——合法去重排除不得被当漏裁决。"""
+    # DAV-1193：claim 文本须为可证数值命题，保证 semantic_decision=adopt，
+    # 与本测试的折叠/漏裁决语义无关
     claims = [
-        {"claim_id": "INV-1", "event_id": "ev1", "claim_text": "预告大增"},
-        {"claim_id": "INV-5", "event_id": "ev1", "claim_text": "同一事件重复表述"},
+        {"claim_id": "INV-1", "event_id": "ev1", "claim": "主力净流出1.2亿", "claim_text": "预告大增"},
+        {"claim_id": "INV-5", "event_id": "ev1", "claim": "主力净流出1.2亿", "claim_text": "同一事件重复表述"},
     ]
     ver = [
-        {"claim_id": "INV-1", "status": "verified"},
-        {"claim_id": "INV-5", "status": "verified"},
+        {"claim_id": "INV-1", "status": "verified", "raw": "主力净流出1.2亿元"},
+        {"claim_id": "INV-5", "status": "verified", "raw": "主力净流出1.2亿元"},
     ]
     metrics = {
         "independent_cluster_count": 2,

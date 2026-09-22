@@ -43,6 +43,8 @@ def main():
         json_extract(result_data,'$.manager_verdict.claim_evidence_summary'),
         json_extract(result_data,'$.manager_verdict.adopted_claim_ids'),
         json_extract(result_data,'$.market_data_context.source_provenance'),
+        json_extract(result_data,'$.decision_model_version'),
+        json_extract(result_data,'$.evidence_contract_version'),
         market_report, sentiment_report, news_report, fundamentals_report,
         macro_report, smart_money_report, volume_price_report, game_theory_report
       FROM reports WHERE status='completed'
@@ -73,7 +75,7 @@ def main():
                 or str(v.get("status", "")).lower() in ("refused", "failed", "unavailable")
             )
         }
-        fields = dict(zip(REPORT_FIELDS, r[9:]))
+        fields = dict(zip(REPORT_FIELDS, r[11:]))
         fields = {k: v for k, v in fields.items() if v}
         cmap = {c.get("claim_id"): c for c in claims}
         for cid in adopted:
@@ -93,6 +95,8 @@ def main():
             out.append({
                 "report_id": rid, "symbol": sym, "claim_id": cid, "claim": text,
                 "stance": cs.get("stance"), "sha": sha,
+                "decision_model": r[9] or "unversioned",
+                "evidence_contract": r[10] or "unversioned",
                 "frozen_batch": rid in frozen_rids,
                 "semantic_coverage": audit["semantic_coverage"],
                 "preview": audit["semantic_decision_preview"],
@@ -108,7 +112,8 @@ def main():
         "frozen": [r for r in out if r["frozen_batch"]],
     }
     for name, rs in coh.items():
-        gaps = [r for r in rs if r["semantic_coverage"] < 1.0]
+        # DAV-1193：semantic_coverage 可能为 None（non_factual_only），视为缺口
+        gaps = [r for r in rs if (r["semantic_coverage"] or 0.0) < 1.0]
         bs = Counter(r["stance"] for r in gaps)
         tot = Counter(r["stance"] for r in rs)
         print(f"{name}: gap {len(gaps)}/{len(rs)} ({len(gaps)/max(1,len(rs))*100:.1f}%) "
@@ -118,10 +123,35 @@ def main():
               f"({bs['bearish']/max(1,tot['bearish'])*100:.1f}%)")
         pv = Counter(r["preview"] for r in rs)
         print(f"  preview: {dict(pv)}")
+        # DAV-1193 B2 迁移矩阵：全部存量均为 legacy adopted，新 semantic
+        # decision 分布即 adopt→X 迁移；按 cohort 与 stance/commit 分层
+        mig = Counter(f"adopt->{r['preview']}" for r in rs)
+        print(f"  migration adopt->*: {dict(mig)}")
+        mig_stance = defaultdict(Counter)
+        mig_sha = defaultdict(Counter)
+        for r in rs:
+            mig_stance[r["stance"]][r["preview"]] += 1
+            mig_sha[(r["sha"] or "unknown")[:8]][r["preview"]] += 1
+        for st, c in sorted(mig_stance.items()):
+            print(f"    stance={st}: {dict(c)}")
+        for sha, c in sorted(mig_sha.items()):
+            print(f"    commit={sha}: {dict(c)}")
+        mig_model = defaultdict(Counter)
+        mig_contract = defaultdict(Counter)
+        for r in rs:
+            mig_model[r["decision_model"]][r["preview"]] += 1
+            mig_contract[r["evidence_contract"]][r["preview"]] += 1
+        for m, c in sorted(mig_model.items()):
+            print(f"    model={m}: {dict(c)}")
+        for ec, c in sorted(mig_contract.items()):
+            print(f"    contract={ec}: {dict(c)}")
         # 80% 阈值对比：coverage>=0.8 → adopt（检查与 100% 是否同判定）
         def gate80(r):
-            return "adopt" if r["semantic_coverage"] >= 0.8 else (
-                "partial" if r["semantic_coverage"] >= 0.67 else "reject")
+            cov = r["semantic_coverage"]
+            if cov is None:
+                return "non_factual_only"
+            return "adopt" if cov >= 0.8 else (
+                "partial" if cov >= 0.67 else "reject")
         g80 = Counter(gate80(r) for r in rs)
         print(f"  thr=80% gate: {dict(g80)}")
         # E-04 sensitive
@@ -137,7 +167,9 @@ def main():
     # INV-2 锚点
     for r in out:
         if r["report_id"].startswith("aa773648") or "已定价超6天" in r["claim"]:
-            print(f"ANCHOR {r['report_id'][:8]} {r['claim_id']} sem={r['semantic_coverage']:.0%} "
+            cov = r["semantic_coverage"]
+            cov_txt = f"{cov:.0%}" if isinstance(cov, (int, float)) else "n/a"
+            print(f"ANCHOR {r['report_id'][:8]} {r['claim_id']} sem={cov_txt} "
                   f"preview={r['preview']} claim={r['claim'][:50]}")
 
 

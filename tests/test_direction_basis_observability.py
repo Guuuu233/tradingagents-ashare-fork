@@ -42,8 +42,10 @@ def _claim(cid: str, speaker_key: str | None = "Bear", stance: str | None = "bea
     c = {
         "claim_id": cid,
         "speaker": f"{speaker_key} Analyst" if speaker_key else "Analyst",
-        "claim": f"{cid} 论点",
-        "evidence": [f"{cid} 证据1"],
+        # DAV-1193：claim 文本须为可证实质命题（数值在 verified 语料可命中），
+        # 否则 adopted 会触发 semantic_decision 硬闸，与本组测试目标无关
+        "claim": "主力净流出1.2亿",
+        "evidence": ["主力净流出1.2亿元"],
         "confidence": 0.8,
     }
     if speaker_key is not None:
@@ -54,7 +56,7 @@ def _claim(cid: str, speaker_key: str | None = "Bear", stance: str | None = "bea
 
 
 def _verification(cid: str) -> list[dict]:
-    return [{"claim_id": cid, "status": STATUS_VERIFIED, "raw": f"{cid} 证据1"}]
+    return [{"claim_id": cid, "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元"}]
 
 
 def _run(raw, claims, verifications):

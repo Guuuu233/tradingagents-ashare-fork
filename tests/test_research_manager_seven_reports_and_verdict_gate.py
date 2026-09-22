@@ -49,7 +49,7 @@ def _make_seven_reports_state(overrides=None):
             "speaker": "Bull Analyst",
             "speaker_key": "Bull",
             "stance": "bullish",
-            "claim": "在手订单与营收高增",
+            "claim": "营收同比增长30%且在手订单增长50%",
             "evidence": ["营收同比增长30%", "在手订单增长50%"],
             "confidence": 0.85,
         },

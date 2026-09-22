@@ -524,7 +524,8 @@ class TestB33DisputeMapAndChallengeConsistency:
             "} -->"
         )
         claims = [
-            {"claim_id": "INV-1", "speaker_key": "Bull", "evidence": ["东财主力净流入1.29亿元"]}
+            # DAV-1193：claim 文本须为可证数值命题，否则 adopted 触发 semantic 硬闸
+            {"claim_id": "INV-1", "speaker_key": "Bull", "claim": "主力净流入1.29亿元", "evidence": ["东财主力净流入1.29亿元"]}
         ]
         claims_verification = [
             {"claim_id": "INV-1", "status": "verified", "raw": "东财主力净流入1.29亿元"}

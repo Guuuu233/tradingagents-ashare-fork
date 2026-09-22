@@ -3539,16 +3539,19 @@ SEM_SUPPORT_KIND_REPORT = "report_text"
 SEM_SUPPORT_KIND_GROUNDED = "grounded_interpretation"
 SEM_SUPPORT_KIND_NONE = "none"
 
-# Semantic preview verdicts (预览层命名，不占用既有 DECISION_* 语义)
+# Semantic decision verdicts (DAV-1193 B2：preview 即正式判定，命名不占用
+# 既有 DECISION_* 语义；preview_* 字段保留作 B1 审计追溯别名)
 SEM_PREVIEW_ADOPT = "adopt"
 SEM_PREVIEW_PARTIAL = "partial_threshold"
 SEM_PREVIEW_REJECT = "reject"
+SEM_DECISION_NON_FACTUAL = "non_factual_only"
 
-# Preview origin markers
+# Decision origin markers
 SEM_ORIGIN_ADOPT_FULL = "adopt_full_coverage"
 SEM_ORIGIN_PARTIAL_THRESHOLD = "partial_threshold"
 SEM_ORIGIN_REJECT_WITH_SUPPORTED = "reject_with_supported_subset"
 SEM_ORIGIN_REJECT_NO_SUPPORTED = "reject_no_supported_subset"
+SEM_ORIGIN_NON_FACTUAL = "non_factual_only"
 
 SEM_PREVIEW_PARTIAL_THRESHOLD = 0.67
 
@@ -3559,6 +3562,15 @@ _SEM_EVENT = re.compile(r'缩量|放量|超卖|超买|空头排列|多头排列|
 _SEM_NUM = re.compile(r'\d')
 _SEM_DERIVED = re.compile(r'盈亏比|比值|空间.{0,4}(达|为)|幅度|占比|分位|分位数|百分位|胜率|赔率|周转|杠杆|安全边际|折价率|溢价率')
 _SEM_NORM = re.compile(r'建议|应该|值得关注|值得警惕|需警惕|值得|静待|拭目以待|关注后[续市]|具备(配置|投资)价值|不容忽视')
+# DAV-1193 🟡-2：NORM 命中 ≠ non_factual。子句若含事实性风险/事件/状态/
+# 对象谓词（如“商誉减值风险”“监管处罚风险”“订单下滑风险”），必须降档
+# 为可审计 proposition kind，不得用 non_factual 排除分母。
+_SEM_RISK_OBJECT = re.compile(
+    r'(商誉|减值|监管|处罚|立案|违规|订单|业绩|利润|债务|违约|退市|戴帽|流动性|诉讼|质押|解禁|库存|亏损|坏账|诉讼|供应链|断供|关税|制裁|产能过剩|价格战|食安|疫情|汇率|利率|商誉减值|资产减值|信用|商誉|订单下滑|需求下滑|销量|份额|毛利|回款|应收)'
+    r'.{0,6}风险'
+    r'|风险.{0,6}(释放|暴露|积聚|扩散|发酵|落地|兑现|抬升|攀升|加剧)'
+    r'|(商誉|资产|信用|存货).{0,4}减值'
+)
 
 _SEM_CLAUSE_SPLIT = re.compile(r'[，；。；;、]|\s+且\s+|\s+而\s+|叠加|以及|同时|与此同时|另一方面')
 _SEM_PREMISE_SPLIT = re.compile(r'与|和|及')
@@ -3570,7 +3582,10 @@ _SEM_E04 = re.compile(r'已定价|已计价|定价超|priced.?in|超预期|低�
 _SEM_CAUSAL_KW = re.compile(r'已定价|已计价|双底|估值底|底线|托底|构筑|倒挂|折价|溢价|出清|确认|印证|反映|导致|高胜率|反脆弱|封死|锁定|压顶|压制|错杀|黄金坑|安全边际|铁底|强支撑|破位|拐点|衰竭|吸筹|洗盘|派发|承接|真空')
 # 前提锚点名词表（敏感性复算同款）
 _SEM_NOUN = re.compile(r'扣非|净利|净利润|营收|毛利|毛利率|股息|分红|派息|现金流|存货|负债|商誉|应收|应付|超大单|大单|中单|小单|主力|散户|机构|RSI|MACD|布林|均线|EMA|VWMA|ATR|缩量|放量|地量|成交量|量比|回购|增持|减持|质押|PE|PB|市盈率|市净率|ROE|利息|息差|油价|煤价|锂价|铜价|猪价|电价|运价|汇率|利率|美债|ETF|北向|融资|筹码|套牢|解禁|缺口|年线|前高|前低|跌停|涨停|连板|食安|立案|处罚|公告|疫情|补贴|招标|订单|产能|库存|动销|份额|出海|关税')
-_SEM_GROUNDED_WINDOW = 80  # 同义关系共现窗口 ±80 字符（敏感性复算同款）
+_SEM_GROUNDED_WINDOW = 80  # 历史：同段 ±80 字符共现窗口（DAV-1193 起废弃，
+                           # grounded 只认同一句内「关系谓词+前提锚点」共现）
+# 报告文本分句边界： grounded 关系陈述必须同句命中，跨句/同段拼接不得采纳
+_SEM_SENTENCE_SPLIT = re.compile(r'[。！？!?；;\n]+')
 
 _SEM_KW_VOCAB = re.compile(r'已定价|已计价|双底|估值底|托底|超卖|缩量|空头排列|多头排列|破位|衰竭|净流入|净流出|净买入|倒挂|折价|溢价|出清|背离|承压|压制|滞涨|恶[化性]|减持|增持|回购|立案|处罚|跌停|涨停|横盘|探底|筑底|企稳|反弹|回落|下滑|减速|滞后|发酵|蔓延')
 
@@ -3612,8 +3627,14 @@ def _sem_classify_clause(clause: str) -> list[dict[str, str]]:
     props: list[dict[str, str]] = []
     has_causal = bool(_SEM_CAUSAL.search(clause))
     has_num = bool(_SEM_NUM.search(clause))
-    if _SEM_NORM.search(clause) and not has_num and not has_causal and not _SEM_EVENT.search(clause):
-        return [{'text': clause, 'type': SEM_KIND_NON_FACTUAL}]
+    if _SEM_NORM.search(clause) and not has_num and not has_causal:
+        # DAV-1193 🟡-2：NORM 命中不等于 non_factual——含事实性风险/事件/
+        # 状态谓词的警示句降档为可审计 scenario_hypothesis，保留在分母内；
+        # 含事实对象名词（订单/营收/回购等）同样不得用 non_factual 排除分母。
+        if _SEM_RISK_OBJECT.search(clause):
+            return [{'text': clause, 'type': SEM_KIND_SCENARIO}]
+        if not _SEM_EVENT.search(clause) and not _SEM_NOUN.search(clause):
+            return [{'text': clause, 'type': SEM_KIND_NON_FACTUAL}]
     if _SEM_SCEN.search(clause):
         props.append({'text': clause, 'type': SEM_KIND_SCENARIO})
         # 情景子句中的可证伪前提仍拆出
@@ -3642,17 +3663,24 @@ def _sem_classify_clause(clause: str) -> list[dict[str, str]]:
         return [{'text': clause, 'type': SEM_KIND_DERIVED}]
     if _SEM_EVENT.search(clause):
         return [{'text': clause, 'type': SEM_KIND_FACTUAL_EVENT}]
-    # 无数字无事件谓词：修辞/判断性收尾
-    if len(clause) <= 14:
+    # 无数字无事件谓词：修辞/判断性收尾；含事实对象名词的短句仍立为
+    # 可审计事实命题（DAV-1193 🟡-2：不得以 non_factual 排除分母）
+    if len(clause) <= 14 and not _SEM_NOUN.search(clause):
         return [{'text': clause, 'type': SEM_KIND_NON_FACTUAL}]
     return [{'text': clause, 'type': SEM_KIND_FACTUAL_EVENT}]
 
 
 def decompose_claim_propositions(claim_text: str) -> list[dict[str, str]]:
-    """把 claim 拆成实质语义命题（去重保序，Phase A split_props 同款）。"""
+    """把 claim 拆成实质语义命题（去重保序，Phase A split_props 同款）。
+
+    每条命题附带 ``clause`` 记录其来源子句：DAV-1193 🟡-1 要求
+    interpretation_causal 的前提链与前提锚点只能取自本子句，不得并入
+    其它子句/其它 claim proposition 的名词。
+    """
     out: list[dict[str, str]] = []
     for c in _sem_split_clauses(str(claim_text or '')):
-        out.extend(_sem_classify_clause(c))
+        for p in _sem_classify_clause(c):
+            out.append({**p, 'clause': c})
     seen: set[tuple[str, str]] = set()
     res: list[dict[str, str]] = []
     for p in out:
@@ -3661,6 +3689,17 @@ def decompose_claim_propositions(claim_text: str) -> list[dict[str, str]]:
             seen.add(k)
             res.append(p)
     return res
+
+
+def _sem_causal_pred_hits(prop_text: str, corpus: str) -> set[str]:
+    """interpretation_causal 严格命中只检查解释结论/关系谓词命中集。
+
+    DAV-1193 🟡-1(4)：词集只用 _SEM_CAUSAL_KW（关系/结论谓词），剔除
+    “回购、扣非、营收、股息”等前提/实体/指标名词——前提名词出现在
+    verified corpus 不得把整个解释命题判 supported。
+    """
+    kws = set(_SEM_CAUSAL_KW.findall(prop_text))
+    return {k for k in kws if k in corpus}
 
 
 def _sem_keyword_hits(prop_text: str, corpus: str) -> set[str]:
@@ -3694,6 +3733,14 @@ def _sem_report_field_for(pred, report_fields: Mapping[str, str]) -> str | None:
     return None
 
 
+def _sem_num_in_corpus(num: str, corpus: str) -> bool:
+    """裸数值子串匹配加数字词边界（DAV-1193 五：避免 20 误命中 120）。"""
+    n = num.rstrip('%')
+    if not n:
+        return False
+    return re.search(r'(?<!\d)' + re.escape(n) + r'(?!\d)', corpus) is not None
+
+
 def _sem_adjudicate_proposition(
     prop: Mapping[str, str],
     verified_corpus: str,
@@ -3714,8 +3761,8 @@ def _sem_adjudicate_proposition(
     sig_nums = {n for n in nums if len(n.rstrip('%')) >= 2 or n.endswith('%')}
     if ty in (SEM_KIND_FACTUAL_NUMERIC, SEM_KIND_DERIVED):
         if sig_nums:
-            hit_v = all(n.rstrip('%') in verified_corpus for n in sig_nums)
-            hit_r = all(n.rstrip('%') in report_corpus for n in sig_nums)
+            hit_v = all(_sem_num_in_corpus(n, verified_corpus) for n in sig_nums)
+            hit_r = all(_sem_num_in_corpus(n, report_corpus) for n in sig_nums)
             if hit_v:
                 return {'support_status': SEM_SUPPORT_SUPPORTED,
                         'support_kind': SEM_SUPPORT_KIND_VERIFIED,
@@ -3726,7 +3773,7 @@ def _sem_adjudicate_proposition(
                         'support_kind': SEM_SUPPORT_KIND_REPORT,
                         'evidence_refs': sorted(sig_nums),
                         'report_source': _sem_report_field_for(
-                            lambda f: all(n.rstrip('%') in f for n in sig_nums), report_fields),
+                            lambda f: all(_sem_num_in_corpus(n, f) for n in sig_nums), report_fields),
                         'reason': '数值在可用报告文本中命中(未经verifier)'}
             if dom_blocked:
                 return {'support_status': SEM_SUPPORT_PROVENANCE_BLOCKED,
@@ -3788,11 +3835,15 @@ def _sem_adjudicate_proposition(
                 'evidence_refs': [], 'report_source': None,
                 'reason': '情景假设未见对应测算文本'}
     if ty == SEM_KIND_CAUSAL:
-        # 解释性命题严格口径：仅认 verified_evidence 中显式出现的同一解释结论词
-        if _sem_keyword_hit(t, verified_corpus):
+        # 解释性命题严格口径：仅认 verified_evidence 中显式出现的同一解释
+        # 结论/关系谓词；前提/实体/指标名词（回购、扣非、营收、股息等）
+        # 命中不得把解释命题判 supported（DAV-1193 🟡-1(4)）。
+        hits = _sem_causal_pred_hits(t, verified_corpus)
+        kws = set(_SEM_CAUSAL_KW.findall(t))
+        if kws and len(hits) >= max(1, len(kws) // 2):
             return {'support_status': SEM_SUPPORT_SUPPORTED,
                     'support_kind': SEM_SUPPORT_KIND_VERIFIED,
-                    'evidence_refs': sorted(_sem_keyword_hits(t, verified_corpus)),
+                    'evidence_refs': sorted(hits),
                     'report_source': None,
                     'reason': '解释结论词在 verified_evidence 显式出现'}
         return {'support_status': SEM_SUPPORT_UNSUPPORTED,
@@ -3805,8 +3856,19 @@ def _sem_adjudicate_proposition(
             'reason': '未覆盖类型'}
 
 
+def _sem_premise_anchors_for_text(text: str) -> set[str]:
+    """单条 causal proposition 自身的前提锚点：名词 + 有效数值。
+
+    DAV-1193 🟡-1(2)：锚点只从该 proposition 自身的前提部分/被解释对象
+    提取，禁止把其它 claim proposition 的任意名词并入前提池。
+    """
+    anchors: set[str] = set(_SEM_NOUN.findall(text))
+    anchors.update(re.findall(r'\d+(?:\.\d+)?%?', text))
+    return {x for x in anchors if len(x) >= 2}
+
+
 def _sem_premise_anchors(props: Sequence[Mapping[str, Any]]) -> set[str]:
-    """claim 中非解释性命题的内容锚点：名词 + 有效数值（敏感性复算同款）。"""
+    """[legacy] claim 级全前提锚点池（保留供审计回溯；grounded 判定不再使用）。"""
     anchors: set[str] = set()
     for p in props:
         if p['type'] in (SEM_KIND_CAUSAL, SEM_KIND_NON_FACTUAL):
@@ -3816,16 +3878,27 @@ def _sem_premise_anchors(props: Sequence[Mapping[str, Any]]) -> set[str]:
     return {x for x in anchors if len(x) >= 2}
 
 
+def _sem_anchor_in_text(anchor: str, text: str) -> bool:
+    """前提锚点命中：数值锚点走数字词边界，名词锚点走子串。"""
+    if re.fullmatch(r'\d+(?:\.\d+)?%?', anchor):
+        return _sem_num_in_corpus(anchor, text)
+    return anchor in text
+
+
 def _sem_grounded_interpretation(
     prop: Mapping[str, Any],
     props: Sequence[Mapping[str, Any]],
     report_fields: Mapping[str, str],
     blocked_sources: set[str],
 ) -> tuple[bool, str, str | None, str | None]:
-    """总工裁定口径 1：显式同义关系 + verified 事实前提链 → grounded_interpretation。
+    """总工裁定口径 1（DAV-1193 🟡-1 收紧）：显式同句同义关系 + 该命题自身
+    前提链全 verified → grounded_interpretation。
 
-    a) 可用报告中明确陈述同一关系：解释谓词与前提锚点在 ±80 字符窗口共现；
-    b) 该关系依赖的事实前提（同 claim 全部非解释性实质命题）均 supported；
+    a) 可用报告【同一句】中明确陈述同一关系：该句同时出现解释关系
+       谓词（_SEM_CAUSAL_KW）与该 proposition 自身对应的前提锚点；
+       仅同段共现、邻近共现或跨句拼接一律不得 grounded；
+    b) 前提链：与该 causal proposition 同一子句拆出的非解释性实质命题
+       全部 supported（available + verified 口径，含 report_text 命中）；
     c) 不依赖 provenance_blocked / unavailable 材料；
     E-04 敏感谓词一律不走本放宽。
 
@@ -3834,10 +3907,19 @@ def _sem_grounded_interpretation(
     t = prop['text']
     if _SEM_E04.search(t):
         return False, 'E04-sensitive，不走放宽', None, None
-    prem = [p for p in props if p['type'] not in (SEM_KIND_CAUSAL, SEM_KIND_NON_FACTUAL)]
+    # b) 前提链限定同一子句（prop['clause']），不得跨子句/跨命题借用
+    own_clause = prop.get('clause') or t
+    prem = [
+        p for p in props
+        if p['type'] not in (SEM_KIND_CAUSAL, SEM_KIND_NON_FACTUAL)
+        and (p.get('clause') or p['text']) == own_clause
+    ]
     if any(p['support_status'] != SEM_SUPPORT_SUPPORTED for p in prem):
         return False, '前提链未全部 supported', None, None
-    anchors = _sem_premise_anchors(props)
+    # a) 前提锚点只取该 proposition 自身文本（🟡-1(2)）
+    anchors = _sem_premise_anchors_for_text(t)
+    if not anchors:
+        return False, '该命题自身无可定位前提锚点', None, None
     kws = set(_SEM_CAUSAL_KW.findall(t))
     if not kws:
         return False, '无可定位解释谓词', None, None
@@ -3848,16 +3930,19 @@ def _sem_grounded_interpretation(
     for kw in ('新闻', '舆情', '利空', '利好', '食安', '事件', '报道', '热搜', '公告'):
         if kw in t and any(s in blocked_sources for s in ('global_news', 'hot_stocks', 'news')):
             return False, '主题域数据源受限(provenance fail-close)', None, None
-    # a) 同义关系：报告文本中解释谓词与前提锚点同窗口共现
+    # a) 同句同义关系：报告某一分句同时出现关系谓词与该命题前提锚点
     for fname, ftext in (report_fields or {}).items():
         if not ftext:
             continue
-        for kw in kws:
-            for m in re.finditer(re.escape(kw), ftext):
-                win = ftext[max(0, m.start() - _SEM_GROUNDED_WINDOW):m.end() + _SEM_GROUNDED_WINDOW]
-                if any(a in win for a in anchors):
-                    return True, f'关系词[{kw}]与前提锚点在{fname}±{_SEM_GROUNDED_WINDOW}字符共现', fname, kw
-    return False, '报告无同窗口同义关系陈述', None, None
+        for sent in _SEM_SENTENCE_SPLIT.split(ftext):
+            if not sent:
+                continue
+            for kw in kws:
+                if kw not in sent:
+                    continue
+                if any(_sem_anchor_in_text(a, sent) for a in anchors):
+                    return True, f'关系词[{kw}]与该命题前提锚点在{fname}同句共现', fname, kw
+    return False, '报告无同句同义关系陈述', None, None
 
 
 def _sem_blocked_provenance_sources(market_data_context: Mapping[str, Any] | None) -> set[str]:
@@ -3936,7 +4021,11 @@ def audit_claim_semantic_coverage(
     supported = [a for a in verifiable if a['support_status'] == SEM_SUPPORT_SUPPORTED]
     n_verifiable = len(verifiable)
     n_supported = len(supported)
-    semantic_coverage = (n_supported / n_verifiable) if n_verifiable else 1.0
+    # DAV-1193 🟡-2：verifiable==0 不得伪装成 full coverage——coverage=null，
+    # decision=non_factual_only（可机读），绝无 adopt 资格。
+    semantic_coverage: float | None = (
+        (n_supported / n_verifiable) if n_verifiable else None
+    )
 
     hard_guards = [
         {
@@ -3949,17 +4038,22 @@ def audit_claim_semantic_coverage(
         if a['e04_sensitive'] and a['support_status'] != SEM_SUPPORT_SUPPORTED
     ]
 
-    if semantic_coverage >= 1.0:
+    if n_verifiable == 0:
+        preview = SEM_DECISION_NON_FACTUAL
+        origin = SEM_ORIGIN_NON_FACTUAL
+    elif semantic_coverage >= 1.0:
         preview = SEM_PREVIEW_ADOPT
         origin = SEM_ORIGIN_ADOPT_FULL
-    elif semantic_coverage >= SEM_PREVIEW_PARTIAL_THRESHOLD:
+    elif semantic_coverage >= SEM_PREVIEW_PARTIAL_THRESHOLD or math.isclose(
+        semantic_coverage, 2 / 3, abs_tol=1e-3
+    ):
         preview = SEM_PREVIEW_PARTIAL
         origin = SEM_ORIGIN_PARTIAL_THRESHOLD
     else:
         preview = SEM_PREVIEW_REJECT
         origin = (SEM_ORIGIN_REJECT_WITH_SUPPORTED if n_supported > 0
                   else SEM_ORIGIN_REJECT_NO_SUPPORTED)
-    # E-04 未证命题为具名 hard guard：preview 禁止 adopt
+    # E-04 未证命题为具名 hard guard：decision 禁止 adopt
     if hard_guards and preview == SEM_PREVIEW_ADOPT:
         preview = SEM_PREVIEW_PARTIAL
         origin = SEM_ORIGIN_PARTIAL_THRESHOLD
@@ -3977,6 +4071,11 @@ def audit_claim_semantic_coverage(
             'e04_unsupported': len(hard_guards),
         },
         'proposition_audit': proposition_audit,
+        # DAV-1193 B2 正式 semantic decision（下游 decision_status /
+        # consistency gate 必须消费此字段，不得退回 legacy coverage 推断）
+        'semantic_decision': preview,
+        'semantic_partial_origin': origin,
+        # B1 审计追溯别名（值与正式字段一致）
         'semantic_decision_preview': preview,
         'semantic_partial_origin_preview': origin,
         'semantic_hard_guards': hard_guards,
@@ -4251,9 +4350,10 @@ def aggregate_claim_evidence(
             "is_fatal": claim_has_fatal,
         }
         # DAV-1192: semantic proposition audit（预览层，不改上方 decision）
+        # DAV-1193：claim 文本字段兼容 event 折叠 claim 的 claim_text
         summary_map[cid].update(
             audit_claim_semantic_coverage(
-                str(claim_obj.get("claim", "") or ""),
+                str(claim_obj.get("claim") or claim_obj.get("claim_text") or ""),
                 verified_evidence=verified_ev,
                 report_fields=sem_report_fields,
                 blocked_sources=sem_blocked_sources,
@@ -4321,6 +4421,19 @@ def format_claims_with_verification_for_prompt(
         lines.append(f"{prefix}{cid} [{status}] {speaker}{stance_str}: {summary_text}")
         lines.append(f"  * 核验评级: 【{badge}】 覆盖率={cov:.1%} ({verified}/{total} verified) | 规则判定: {decision}")
         lines.append(f"  * 判定说明: {reason}")
+        # DAV-1193 B2：把正式 semantic decision 透传给 manager，消费正式
+        # 判定而非让其自行从 legacy coverage 推断
+        sem_dec = sum_info.get("semantic_decision")
+        if sem_dec:
+            sem_cov = sum_info.get("semantic_coverage")
+            sem_cnt = sum_info.get("semantic_counts") or {}
+            sem_cov_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
+            guards = sum_info.get("semantic_hard_guards") or []
+            guard_txt = f" | E-04未证hard guard={len(guards)}" if guards else ""
+            lines.append(
+                f"  * 语义命题判定: semantic_decision={sem_dec} | semantic_coverage={sem_cov_txt} "
+                f"(supported {sem_cnt.get('supported', 0)}/{sem_cnt.get('verifiable', 0)} 可证命题){guard_txt}"
+            )
         if sum_info.get("applicability"):
             app = sum_info["applicability"]
             lines.append(f"  * 适用档规格: 标的={app.get('symbol')}, 观察窗={app.get('horizon')}, 计量基准={app.get('metric_basis')}, PIT截止日={app.get('pit_date')}")
@@ -4879,6 +4992,7 @@ def extract_and_validate_manager_verdict(
     challenges: Sequence[Mapping[str, Any]] | None = None,
     challenges_verification: Sequence[Mapping[str, Any]] | None = None,
     market_data_context: Mapping[str, Any] | None = None,
+    seven_reports: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Extract structured manager verdict and perform strict consistency check.
 
@@ -5014,6 +5128,7 @@ def extract_and_validate_manager_verdict(
             analysis_baseline_date=b_date,
             expected_symbol=exp_sym,
             market_data_context=market_data_context,
+            seven_reports=seven_reports,
         )
     elif payload and isinstance(payload.get("claim_evidence_summary"), dict):
         claim_evidence_summary = payload["claim_evidence_summary"]
@@ -5022,6 +5137,14 @@ def extract_and_validate_manager_verdict(
     for cid, s in claim_evidence_summary.items():
         if cid in partially_adopted_claims or cid in rejected_claim_ids or s.get("decision") in {DECISION_PARTIAL, DECISION_REJECT}:
             deterministic_excluded.extend(s.get("excluded_evidence", []))
+        # DAV-1193：partial 只消费 supported propositions，unsupported /
+        # provenance_blocked 实质命题必须显式进入 excluded_evidence
+        if cid in partially_adopted_claims:
+            for p in (s.get("proposition_audit") or []):
+                if p.get("support_status") in {SEM_SUPPORT_UNSUPPORTED, SEM_SUPPORT_PROVENANCE_BLOCKED}:
+                    ptxt = str(p.get("text") or "").strip()
+                    if ptxt:
+                        deterministic_excluded.append(f"未证实质命题[{p.get('proposition_id', cid)}]: {ptxt}")
     combined_excluded = list(dict.fromkeys(excluded_evidence + deterministic_excluded))
 
     # ── Consistency Hard Gate Validation ──────────────────────────────────
@@ -5108,6 +5231,7 @@ def extract_and_validate_manager_verdict(
                 cov = s.get("coverage", 0.0)
                 dec = s.get("decision")
                 is_obs = s.get("is_observation_or_hypothesis", False)
+                sem_dec = s.get("semantic_decision")
                 if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
                     failed_checks.append(f"裁决采纳了存在事实冲突/前视偏差的矛盾 claim: {cid}")
                 elif cnt.get("source_unavailable", 0) > 0:
@@ -5122,6 +5246,24 @@ def extract_and_validate_manager_verdict(
                     failed_checks.append(
                         f"裁决全额采纳了含未核实混合证据的 claim: {cid} (coverage={cov:.1%})，混合证据仅允许记录于 partially_adopted_claims 并剔除未验证项"
                     )
+                # DAV-1193 B2 semantic hard gate：legacy 证据全绿但藏未证实质
+                # 命题/E-04 hard guard/纯修辞 claim 一律不得全额 adopt
+                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                    failed_checks.append(
+                        f"裁决采纳了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
+                    )
+                elif sem_dec == SEM_PREVIEW_REJECT:
+                    sem_cov = s.get("semantic_coverage")
+                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
+                    failed_checks.append(
+                        f"裁决全额采纳了 semantic_decision=reject 的 claim: {cid} (semantic_coverage={sem_txt})，实质命题覆盖不足不得 adopt"
+                    )
+                elif sem_dec == SEM_PREVIEW_PARTIAL or (s.get("semantic_hard_guards") and sem_dec):
+                    sem_cov = s.get("semantic_coverage")
+                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
+                    failed_checks.append(
+                        f"裁决全额采纳了 semantic_decision=partial_threshold 的 claim: {cid} (semantic_coverage={sem_txt})，仅允许记录于 partially_adopted_claims"
+                    )
 
         for cid in partially_adopted_claims:
             if cid in claim_evidence_summary:
@@ -5129,6 +5271,7 @@ def extract_and_validate_manager_verdict(
                 cnt = s.get("counts", {})
                 cov = s.get("coverage", 0.0)
                 is_obs = s.get("is_observation_or_hypothesis", False)
+                sem_dec = s.get("semantic_decision")
                 if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
                     failed_checks.append(f"部分采纳列表中包含了存在事实冲突/前视偏差的矛盾 claim: {cid}")
                 elif cnt.get("source_unavailable", 0) > 0:
@@ -5137,6 +5280,15 @@ def extract_and_validate_manager_verdict(
                     failed_checks.append(f"部分采纳列表中包含了全部证据未获验证 (unsupported) 的 claim: {cid}")
                 elif not is_obs and (cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3)):
                     failed_checks.append(f"部分采纳列表中包含了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
+                # DAV-1193 B2：semantic reject / non_factual_only 绝不偷升 partial
+                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                    failed_checks.append(
+                        f"部分采纳列表中包含了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
+                    )
+                elif sem_dec == SEM_PREVIEW_REJECT:
+                    failed_checks.append(
+                        f"部分采纳列表中包含了 semantic_decision=reject 的 claim: {cid}，reject_with_supported_subset 不得偷升为部分采纳"
+                    )
 
         # Check prose consistency against claim verification
         for cid, s in claim_evidence_summary.items():
