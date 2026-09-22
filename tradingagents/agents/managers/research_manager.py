@@ -29,6 +29,7 @@ from tradingagents.agents.utils.evidence_verifier import (
     format_challenge_verification_summary,
     format_challenges_for_prompt,
     format_claims_with_verification_for_prompt,
+    refresh_direction_basis,
 )
 from tradingagents.agents.utils.claim_cluster import (
     RELATION_GRAPH_STATUS_AVAILABLE,
@@ -1417,6 +1418,9 @@ def _blocked_manager_payload(
         "evidence_relation_reason": claim_cluster_metrics.get("relation_graph_reason", ""),
         "expectation_revision": dict(expectation_revision or {}),
     }
+    # DAV-1111 B1: fallback tie 裁决同样落 direction_basis/warnings 字段，
+    # 保证消费端 schema 一致（tie → not_applicable，零告警）。
+    refresh_direction_basis(manager_verdict, claims=investment_debate_state.get("claims"))
     payload = {
         "fund_flow_consensus_guard": fund_flow_guard,
         "investment_plan": blocked_plan,
@@ -2096,6 +2100,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         )
 
         manager_verdict = extract_and_validate_manager_verdict(
+
             raw_response=full_content,
             claims_verification=claims_verification,
             claims=claims,
@@ -2123,6 +2128,11 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             claims=claims,
             manager_verdict=manager_verdict,
         )
+
+        # DAV-1111 B1: guard 可能将同向 adopted claim 剥离进 excluded_evidence，
+        # 必须在最终裁剪后账本上重算 direction_basis / warnings，保证落库记录
+        # 与最终 adopted/partial 账本一致（warning-only，幂等）。
+        refresh_direction_basis(manager_verdict, claims=claims)
 
         er_valid, er_violations = validate_manager_expectation_revision_consumption(
             manager_verdict=manager_verdict,

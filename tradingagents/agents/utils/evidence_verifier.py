@@ -4128,6 +4128,139 @@ def build_claim_evidence_sufficient_pattern(cid: str) -> re.Pattern:
     )
 
 
+def compute_direction_basis(
+    winner: Any,
+    adopted_claim_ids: Sequence[str] | None,
+    partially_adopted_claims: Sequence[str] | None,
+    claim_evidence_summary: Mapping[str, Any] | None = None,
+    claims: Sequence[Mapping[str, Any]] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """DAV-1111 B1: 纯确定性判定 winner 方向与 adopted/partial claim 账本同向性。
+
+    warning-only 观测，绝不产生 failed_checks、不影响 consistency_check_passed /
+    winner / action / claim adoption 语义。
+
+    Returns:
+        (direction_basis, warnings)
+        direction_basis = {
+            "status": "ledgered" | "partial_only" | "unledgered" | "unknown" | "not_applicable",
+            "same_direction_claims": [{"claim_id": str, "source": "adopted" | "partial"}],
+            "undetermined_claim_ids": [str],
+        }
+    """
+    warnings: list[str] = []
+    same_direction_claims: list[dict[str, str]] = []
+    undetermined_claim_ids: list[str] = []
+    status = "not_applicable"
+
+    w = str(winner or "").strip().lower()
+    if w in {"bull", "bear"}:
+        summary = claim_evidence_summary or {}
+        claims_by_cid: dict[str, Mapping[str, Any]] = {}
+        if claims is not None:
+            for c in claims:
+                if isinstance(c, Mapping):
+                    cid_key = str(c.get("claim_id", "")).strip()
+                    if cid_key:
+                        claims_by_cid[cid_key] = c
+
+        def _claim_side(cid: str) -> str | None:
+            """确定性判定账本 claim 的立场侧别：'bull' | 'bear' | None。"""
+            sources: list[Mapping[str, Any]] = []
+            s = summary.get(cid)
+            if isinstance(s, Mapping):
+                sources.append(s)
+            c = claims_by_cid.get(cid)
+            if isinstance(c, Mapping) and c is not s:
+                sources.append(c)
+            # speaker_key 优先；缺失时降级用 stance；仍不可判返回 None。
+            # summary 命中但 speaker_key/stance 均空时回退 claims_by_cid。
+            for src in sources:
+                speaker_key = str(src.get("speaker_key") or src.get("speaker") or "").strip().lower()
+                if "bull" in speaker_key or "多" in speaker_key:
+                    return "bull"
+                if "bear" in speaker_key or "空" in speaker_key:
+                    return "bear"
+            for src in sources:
+                stance = str(src.get("stance") or "").strip().lower()
+                if stance in {"bullish", "bull", "看多", "偏多", "多头", "多方"}:
+                    return "bull"
+                if stance in {"bearish", "bear", "看空", "偏空", "空头", "空方"}:
+                    return "bear"
+            return None
+
+        for cid in adopted_claim_ids or []:
+            side = _claim_side(cid)
+            if side == w:
+                same_direction_claims.append({"claim_id": cid, "source": "adopted"})
+            elif side is None:
+                undetermined_claim_ids.append(cid)
+        for cid in partially_adopted_claims or []:
+            side = _claim_side(cid)
+            if side == w:
+                same_direction_claims.append({"claim_id": cid, "source": "partial"})
+            elif side is None:
+                undetermined_claim_ids.append(cid)
+
+        if any(item["source"] == "adopted" for item in same_direction_claims):
+            status = "ledgered"
+        elif same_direction_claims:
+            status = "partial_only"
+        elif undetermined_claim_ids:
+            status = "unknown"
+        else:
+            status = "unledgered"
+
+        if status == "unledgered":
+            warnings.append(
+                f"direction_basis_unledgered: {w} 胜裁决的 adopted/partial claim 账本中无同向 claim，"
+                "方向依据不可机读复原 (warning-only，不影响 consistency_check_passed)"
+            )
+        elif status == "partial_only":
+            warnings.append(
+                f"direction_basis_partial_only: {w} 胜裁决的同向依据仅来自部分采纳 claim，"
+                "无全额采纳的同向 claim (warning-only，不影响 consistency_check_passed)"
+            )
+        elif status == "unknown":
+            warnings.append(
+                f"direction_basis_unknown: adopted/partial claim {undetermined_claim_ids} 的 speaker/stance "
+                "无法可靠判定，方向依据账本状态未知 (warning-only，不影响 consistency_check_passed)"
+            )
+
+    direction_basis: dict[str, Any] = {
+        "status": status,
+        "same_direction_claims": same_direction_claims,
+        "undetermined_claim_ids": undetermined_claim_ids,
+    }
+    return direction_basis, warnings
+
+
+def refresh_direction_basis(
+    manager_verdict: dict[str, Any],
+    claims: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """在（可能被 double_count_guard 裁剪后的）最终账本上重算 direction_basis。
+
+    原地刷新 manager_verdict["direction_basis"]，并将 warnings 中所有
+    ``direction_basis_`` 前缀条目按最新状态重写，保证落库记录与最终
+    adopted/partial 账本一致。幂等：账本未变时结果与初次计算相同。
+    """
+    direction_basis, db_warnings = compute_direction_basis(
+        winner=manager_verdict.get("winner"),
+        adopted_claim_ids=manager_verdict.get("adopted_claim_ids") or [],
+        partially_adopted_claims=manager_verdict.get("partially_adopted_claims") or [],
+        claim_evidence_summary=manager_verdict.get("claim_evidence_summary") or {},
+        claims=claims,
+    )
+    manager_verdict["direction_basis"] = direction_basis
+    kept = [
+        w for w in (manager_verdict.get("warnings") or [])
+        if not str(w).startswith("direction_basis_")
+    ]
+    manager_verdict["warnings"] = kept + db_warnings
+    return manager_verdict
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -4158,6 +4291,8 @@ def extract_and_validate_manager_verdict(
         - dispute_map
         - consistency_check_passed
         - failed_checks
+        - warnings (warning-only 旁路告警，不进 failed_checks)
+        - direction_basis (DAV-1111 B1 同向 claim 账本可观测性结构化字段)
     """
     from tradingagents.agents.utils.debate_utils import extract_tagged_json, strip_tagged_json
 
@@ -4453,6 +4588,20 @@ def extract_and_validate_manager_verdict(
                         f"存在事实冲突的 fatal challenge ({chid}) 必须被驳回，不得采纳"
                     )
 
+    # ── Check 9: Direction basis ledger observability (warning-only) ─────
+    # DAV-1111 B1: 纯确定性观测 winner 方向与 adopted/partial claim 账本
+    # 是否存在同向支撑。只读 speaker_key/stance，不产生 failed_checks，
+    # 不影响 consistency_check_passed / winner / action / claim adoption。
+    # 注意：下游 apply_manager_double_count_guard 可能剥离 adopted claim，
+    # 裁剪后须由 refresh_direction_basis 在最终账本上重算刷新。
+    direction_basis, warnings = compute_direction_basis(
+        winner=winner,
+        adopted_claim_ids=adopted_claim_ids,
+        partially_adopted_claims=partially_adopted_claims,
+        claim_evidence_summary=claim_evidence_summary,
+        claims=claims,
+    )
+
     consistency_passed = (len(failed_checks) == 0)
 
     return {
@@ -4474,6 +4623,8 @@ def extract_and_validate_manager_verdict(
         "dispute_map": dispute_map,
         "consistency_check_passed": consistency_passed,
         "failed_checks": failed_checks,
+        "warnings": warnings,
+        "direction_basis": direction_basis,
         "ohlcv_gate_applied": ohlcv_gate_applied,
         "fund_flow_dispute_gate_applied": fund_flow_dispute_gate_applied,
     }
