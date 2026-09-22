@@ -1568,16 +1568,20 @@ def test_dav1158_provider_extraction():
     from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
 
     bn = extract_bound_numbers("东财 r0_net 主力净流出8.1亿")[0]
-    assert bn.provider == ("fld:r0_net", "src:eastmoney")
+    # DAV-1171: 粒度层 gran:<分单> 并入 provider 命名空间
+    assert bn.provider == ("fld:r0_net", "gran:主力", "src:eastmoney")
     bn = extract_bound_numbers("同花顺 netamount 显示主力净流出5.2亿")[0]
-    assert bn.provider == ("fld:netamount", "src:ths")
+    assert bn.provider == ("fld:netamount", "gran:主力", "src:ths")
     bn = extract_bound_numbers("换手率3.2%（同花顺口径）")[0]
     assert bn.provider == ("src:ths",)
     # 财务科目不在 provider 作用域——「据东财财报」不给 provider
     bn = extract_bound_numbers("据东方财富财报净利润为45亿元")[0]
     assert bn.provider is None
-    # 无标注 → None
+    # 分单粒度词本身是口径标注——「主力净流出」得 gran:主力
     bn = extract_bound_numbers("主力净流出8.1亿")[0]
+    assert bn.provider == ("gran:主力",)
+    # 完全无口径标注 → None
+    bn = extract_bound_numbers("资金净流出8.1亿")[0]
     assert bn.provider is None
     # 数据源名不得再被裸 token 立为 co: 主体（归 provider 层承载）
     bn = extract_bound_numbers("东财口径主力净流出5.2亿")[0]
@@ -2206,5 +2210,98 @@ def test_dav1170_same_net_profit_true_conflict(evaluator):
         raw_evidence="2026Q1净利润28.41亿元",
         seven_reports={"fundamentals_report": "2026Q1 净利润为 18.76 亿元。"},
         claim_id="DAV1170-POS4",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+# ── DAV-1171: Provider/Entity Namespace 残余收敛 ──
+# 机制：①口径命名空间补 gran:<分单层级>——「全单/大单/中单/小单 vs 主力/
+# 超大单」粒度互不可比（同花顺 netamount 全单口径不得与东财 r0_net 主力
+# 口径互判冲突）；②跨实体隔离补 sec:<板块名>——行业板块 vs 行业板块互
+# 绑互判（半导体板块 226.6 亿 vs 汽车板块 4.73 亿）。
+
+
+def test_dav1171_sector_entity_binding():
+    """板块级主体绑定：X板块/流向X/​X流出 三形态归一 sec:<名>。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("主力流向半导体226.6亿元致汽车流出4.73亿")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["226.6亿元"].entity == "sec:半导体"
+    # 「致汽车流出」使 4.73 亿同子句多主体 → 歧义最保守
+    assert by_raw["4.73亿"].entity == "ambig"
+    bns2 = extract_bound_numbers("主力流向半导体，汽车板块净流出4.73亿")
+    assert bns2[0].entity == "sec:汽车"
+
+
+def test_dav1171_cross_sector_flow_not_contradicted(evaluator):
+    """RED #15（002594.SZ）：半导体板块 226.6 亿不得绑汽车板块 4.73 亿互判。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="主力流向半导体226.6亿元致汽车流出4.73亿",
+        seven_reports={
+            "macro_report": "行业板块主力资金净流入前10名被泛科技主导：排名第1为半导体（净额+226.60亿元）。\n"
+            "汽车板块未能跻身今日净流入前十，于9月18日出现4.73亿元的主力资金净流出撤离。\n"
+            "| 板块资金与轮动 | 主力流向半导体，汽车板块净流出4.73亿 | 市场热点切换至TMT |"
+        },
+        claim_id="DAV1171-15",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1171_granularity_provider_binding():
+    """口径粒度绑定：全单/超大单各归各粒度；后置粒度词不污染前数字。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("主力资金全单净流出-1587.9万且超大单流入仅占流通市值0.0044%")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["-1587.9万"].provider == ("gran:全单",)
+    assert by_raw["0.0044%"].provider == ("gran:超大单",)
+    # #12 守卫形态：前数字只取紧邻粒度超大单，不受后置中小单污染
+    bns2 = extract_bound_numbers("超大单流出2.2亿与中小单净流入2.2亿形成被动接盘")
+    assert bns2[0].provider == ("gran:超大单",)
+
+
+def test_dav1171_cross_granularity_not_contradicted(evaluator):
+    """RED #19（000895.SZ）：同花顺全单 -1587.9 万不得绑东财主力 r0_net
+    +371.29 万互判——全单 vs 主力是不同统计粒度。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="主力资金全单净流出-1587.9万且超大单流入仅占流通市值0.0044%",
+        seven_reports={
+            "smart_money_report": "东方财富口径（moneyflow_dc / r0_net）：主力统计口径录得净流入 +0.037129 亿元（约 +371.29 万元）。\n"
+            "总资金旁证（同花顺 netamount）：全单净额录得 -0.15879 亿元（-1587.9 万元）。"
+        },
+        claim_id="DAV1171-19",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+# ── 真冲突反例守卫：同板块/同粒度数值发散仍判 contradicted ──
+
+
+def test_dav1171_same_sector_true_conflict_still_contradicted(evaluator):
+    """正例守卫：同板块主体（汽车板块 vs 汽车板块）同指标数值发散仍判冲突。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="汽车板块主力资金单日净流出14.73亿元",
+        seven_reports={"macro_report": "汽车板块主力资金单日净流入 4.73 亿元。"},
+        claim_id="DAV1171-POS1",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1171_same_granularity_true_conflict_still_contradicted(evaluator):
+    """正例守卫（#12 同型）：同粒度超大单数值发散仍判冲突——粒度命名空间
+    不降低同口径冲突判定灵敏度。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="超大单流出2.2亿与中小单净流入2.2亿形成被动接盘",
+        seven_reports={"smart_money_report": "超大单净额（buy_elg_amount）：-1.6056 亿元。"},
+        claim_id="DAV1171-POS2",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1171_same_main_force_true_conflict(evaluator):
+    """正例守卫：同 provider 同粒度（主力 vs 主力）数值发散仍判冲突。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="东财主力资金净流出-2.20亿元",
+        seven_reports={"smart_money_report": "东方财富口径：主力资金净流入 +1.20 亿元。"},
+        claim_id="DAV1171-POS3",
     )
     assert res["status"] == STATUS_CONTRADICTED

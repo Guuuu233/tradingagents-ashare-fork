@@ -599,6 +599,46 @@ _ENTITY_COMPANY_RE = re.compile(
     r"[一-龥A-Za-z][一-龥A-Za-z0-9（）()]{0,11}?"
     r"(?:股份有限公司|有限责任公司|有限公司|公司|集团|股份|控股)"
 )
+# ── DAV-1171: 板块/行业级主体命名空间（sec:<名>，「板块」后缀归一剥离）──
+# 跨实体隔离不能只到公司名一层：行业板块 vs 行业板块互绑互判是已知残余
+# （「主力流向半导体226.6亿元致汽车流出4.73亿」中半导体板块 226.6 亿不得与
+# 汽车板块 4.73 亿互判冲突）。三种高精度形态：
+#   A. 「X板块」显式后缀（汽车板块/半导体板块/通信设备板块）
+#   B. 流向动词紧邻板块名（主力流向半导体226.6亿/资金涌入通信设备）
+#   C. 板块名紧邻流向动词（汽车流出4.73亿/半导体净流出）
+# 板块名一律过主体停用词/指标词/修饰字过滤，宁可漏抽不误抓。
+_ENTITY_SECTOR_SUFFIX_RE = re.compile(r"([一-龥]{2,8})板块")
+_ENTITY_SECTOR_VERB_PRE_RE = re.compile(
+    r"(?:流向|净流入|净流出|流入|流出|涌入|集聚在|聚集在|扎堆|"
+    r"加仓|减仓|净买入|净卖出|虹吸|抽血)"
+    r"([一-龥]{2,6})(?=[\d（(，。；、,;：:！？!?]|$)"
+)
+_ENTITY_SECTOR_VERB_POST_RE = re.compile(
+    r"([一-龥]{2,6})(?=净流出|净流入|流出|流入|被虹吸|遭抽血)"
+)
+# 板块名禁用子串：含这些片段的候选是口径/指标/泛称而非板块主体
+# （「汽车板块资金流出」中的「板块资金」、「大单流出」中的「大单」等）。
+_ENTITY_SECTOR_BAD_SUBSTR = frozenset({
+    "资金", "主力", "板块", "市场", "大盘", "行业", "指数", "散户",
+    "北向", "外资", "机构", "游资", "龙虎", "个股", "股票", "两市",
+    "全线", "整体", "合计", "总计", "其中", "口径", "净额", "总额",
+})
+
+
+def _sector_name_or_none(name: str) -> str | None:
+    """板块候选名过滤：停用词/指标词/修饰字命中即弃，返回规范化 sec: 名。"""
+    if (
+        len(name) < 2
+        or name in _ENTITY_STOPWORDS
+        or name in _ENTITY_SECTOR_BAD_SUBSTR
+        or any(k in name for k in _ENTITY_SECTOR_BAD_SUBSTR)
+        or name[0] in _ENTITY_BARE_BAD_FIRST_CHAR
+        or name[-1] in _ENTITY_BARE_BAD_LAST_CHAR
+        or any(k in name for k in _ENTITY_BARE_BAD_SUBSTR)
+        or any(k in name.lower() for k in _SORTED_METRIC_MAP_KEYS)
+    ):
+        return None
+    return f"sec:{name}"
 # 裸主体名：仅识别「子句首 2-6 字 token 且紧贴指标词/数字（可隔连接词）」的
 # 高精度形态（「美的毛利率26.39%」「奥克斯18.8%」「奥克斯为18.8%」）。
 # 句中修饰语/谓语片段一律不作主体，宁可漏抽也不误抓（漏抽走最保守路径）。
@@ -687,6 +727,22 @@ def _extract_entity_spans(
         name = name.strip("（）()").lstrip("与和及或跟")
         if len(name) >= 2 and name not in _ENTITY_STOPWORDS:
             spans.append((m.start(), m.end(), f"co:{name}"))
+    # DAV-1171: 板块级主体（sec:<名>）——先于裸 token 规则抽取，使「X板块」
+    # 不再落入 co: 命名空间，保证跨行/跨报告同一板块主体规范名一致。
+    for m in _ENTITY_SECTOR_SUFFIX_RE.finditer(cleaned):
+        canon = _sector_name_or_none(m.group(1))
+        if canon is not None:
+            spans.append((m.start(1), m.end(1), canon))
+    for rx in (_ENTITY_SECTOR_VERB_PRE_RE, _ENTITY_SECTOR_VERB_POST_RE):
+        for m in rx.finditer(cleaned):
+            canon = _sector_name_or_none(m.group(1))
+            if canon is None:
+                continue
+            # 与已识别的板块/公司/代码/基准 span 重叠时丢弃（如「流向汽车板块」
+            # 中动词形与后缀形同名同义，保留先识别的 span 即可）
+            if any(s < m.end(1) and m.start(1) < e for s, e, _ in spans):
+                continue
+            spans.append((m.start(1), m.end(1), canon))
     # 裸主体名：子句首 run（2-6 字）紧贴指标词/数字（可隔连接词）才认作主体。
     # run 长度 >6 说明是「修饰语+指标」长串（如「极端压力测试显示极悲观年化净利
     # 底线」），直接放弃——漏抽按最保守处理，不误抓句中谓语片段。
@@ -1014,6 +1070,14 @@ _PROVIDER_FIELD_RE = re.compile(
     r"main_inflow|main_net_inflow|moneyflow|smc_in|smc_out)(?![A-Za-z0-9_])",
     re.I,
 )
+# DAV-1171: 口径粒度命名空间（gran:<分单层级>）——provider 名一级仍不够：
+# 「全单/大单/中单/小单」与「主力/超大单」是不同统计粒度（同花顺 netamount
+# 全单口径 vs 东财 r0_net 主力口径数值语义不同），同 provider 不同粒度也
+# 不得互判冲突。取词按最长优先（超大单/中小单先于大单/小单/中单），与
+# 数据源/字段码同一「最近一簇」绑定规则；只挂在资金流/行情类作用域指标上。
+_PROVIDER_GRAN_RE = re.compile(
+    r"超大单|中小单|大小单|全单|中单|小单|大单|主力|散户|机构|北向"
+)
 _PROVIDER_WINDOW = 48  # 「同花顺数据：r0_net 中单净流入1465.71万」类引导前缀窗口
 _PROVIDER_POST_WINDOW = 16
 
@@ -1067,6 +1131,19 @@ def _bind_provider_for_number(
             fld_tokens.add(tok)
     tokens |= fld_tokens
     tokens |= {f"fld:{m.group(1).lower()}" for m in _PROVIDER_FIELD_RE.finditer(post)}
+    # DAV-1171: 口径粒度只取数字前窗内最近一簇——后置同子句的粒度词属于
+    # 下一个数字的口径（「-1587.9万且超大单流入仅…」中超大单归 0.0044%），
+    # 并入会污染本数字命名空间并误放真冲突（#12 超大单守卫）。
+    gran_tokens: set[str] = set()
+    best_gran_end = -1
+    for m in _PROVIDER_GRAN_RE.finditer(window):
+        tok = f"gran:{m.group(0)}"
+        if m.end() > best_gran_end:
+            best_gran_end = m.end()
+            gran_tokens = {tok}
+        elif m.end() == best_gran_end:
+            gran_tokens.add(tok)
+    tokens |= gran_tokens
     return tuple(sorted(tokens)) or None
 
 
