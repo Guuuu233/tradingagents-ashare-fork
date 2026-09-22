@@ -43,6 +43,7 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .report_quality_gate import apply_report_quality_gate
+from tradingagents.agents.utils.price_ref_registry import audit_price_ref_registry
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
@@ -653,6 +654,8 @@ class TradingAgentsGraph:
         # Store current state for reflection
         self.curr_state = final_state
         apply_report_quality_gate(final_state)
+        # DAV-1198: bypass-only price_ref registry audit (no decision/target/stop effect)
+        audit_price_ref_registry(final_state)
 
         # Log state
         self._log_state(trade_date, final_state)
@@ -741,6 +744,8 @@ class TradingAgentsGraph:
     def _build_horizon_result(self, horizon: str, final_state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract a compact result dict from a completed graph state."""
         apply_report_quality_gate(final_state)
+        # DAV-1198: bypass-only price_ref registry audit (no decision/target/stop effect)
+        audit_price_ref_registry(final_state)
         market_context = final_state.get("market_context", {})
         trade_date = final_state.get("trade_date", "")
         market_data_context = final_state.get("market_data_context", {})
@@ -824,6 +829,10 @@ class TradingAgentsGraph:
             "trade_action": final_state.get("trade_action"),
             "risk_status": final_state.get("risk_status"),
             "horizon_run_metadata": copy.deepcopy(final_state.get("horizon_run_metadata")) if isinstance(final_state.get("horizon_run_metadata"), dict) else final_state.get("horizon_run_metadata"),
+            # DAV-1198 bypass-only price_ref audit fields (preview semantics; no decision effect)
+            "price_refs": final_state.get("price_refs"),
+            "price_basis_gaps": final_state.get("price_basis_gaps"),
+            "price_basis_validation": final_state.get("price_basis_validation"),
         }
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state
