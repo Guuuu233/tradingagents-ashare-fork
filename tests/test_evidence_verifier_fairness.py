@@ -1836,3 +1836,208 @@ def test_dav1168_level_after_drop_still_actual(evaluator):
     by_raw = {b.raw: b for b in bns}
     assert by_raw["10.45%"].role == "delta"
     assert by_raw["3.00%"].role == "actual"
+
+
+# ── DAV-1169: Period Identity 残余收敛——跨期间/跨时点/价格基准时点 ──
+
+
+def test_dav1169_cross_period_q1_vs_fullyear(evaluator):
+    """#24-26: 「2026Q1 经营现金流 -90.84亿」不得与「2025 全年 241.86亿」
+    互判冲突（跨期间：Q1 单季 vs 全年累计，报告原文 -90.84 逐字在）。"""
+    seven_reports = {
+        "fundamentals_report": (
+            "- 2026Q1 经营活动现金净额为 -90.84 亿元（2025Q1 为 -50.34 亿元至 -50.69 亿元）。"
+            "经营现金流呈现典型的高度季节性：上半年通常为大额垫资备料与施工期，"
+            "回款集中在四季度统一结算（如 2025 全年经营现金流净流入高达 241.86 亿元，"
+            "2024 年达 271.28 亿元）。"
+        ),
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1经营现金流大幅净流出90.84亿元",
+        seven_reports=seven_reports,
+        claim_id="PI-24",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_operating_vs_investing_cashflow(evaluator):
+    """#24-26 二阶守卫：同期间（2026Q1）但不同现金流子科目——经营现金流
+    不得与投资活动现金流净额互判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- 2026Q1 投资活动现金流净额为 +80.39 亿元，有效对冲了季节性经营垫付。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1经营现金流大幅净流出90.84亿元",
+        seven_reports=seven_reports,
+        claim_id="PI-24B",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_stock_balance_vs_daily_flow(evaluator):
+    """#21-22: 「两融余额/杠杆出清至 24.88亿」（存量时点值）不得与
+    「单日融资净偿还 1526.45万」（单日流量）互判冲突。"""
+    seven_reports = {
+        "macro_report": (
+            "- **融资杠杆资金持续流出（已发生）**：7月30日融资净偿还 1526.45 万元，"
+            "7月29日融资净偿还 1688.69 万元，近一周融资资金呈持续净偿还态势。"
+        ),
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="AH精明指数为单一因子指数且两融杠杆已出清至24.88亿",
+        seven_reports=seven_reports,
+        claim_id="PI-21",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+    res2 = evaluator.evaluate_single_evidence(
+        raw_evidence="宏观与新闻报告证实调出仅为单一因子指数，两融余额降至24.88亿浮筹出清",
+        seven_reports=seven_reports,
+        claim_id="PI-22",
+    )
+    assert res2["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_hist_high_vs_current_price(evaluator):
+    """#8: 「股价自 42.48 元累跌 21%」（历史高点时点值）不得与
+    现价 33.42 元互判冲突。"""
+    seven_reports = {
+        "market_report": "截至 2026-08-25 收盘价为 33.42 元，中期下行趋势压制显著。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="中报利空公布已超3日股价自42.48元累跌21%充分定价",
+        seven_reports=seven_reports,
+        claim_id="PI-8",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_cost_basis_vs_current_price(evaluator):
+    """#9: 「大股东增持均价 82.71 元」（历史成本均价）不得与
+    现价 71.52 元互判冲突。"""
+    seven_reports = {
+        "market_report": "当前股价（71.52 元）处于中期下降通道的下轨支撑震荡区域。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="新闻报告:大股东增持均价82.71元现价跌破13.5%利好充分定价已失效",
+        seven_reports=seven_reports,
+        claim_id="PI-9",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_same_timepoint_true_conflict_still_contradicted(evaluator):
+    """正例守卫 #12：超大单流出 2.2 亿原文无支撑 vs 报告 -1.6056 亿——
+    资金流分单不在时点作用域，同时点同指标真矛盾仍判 contradicted。"""
+    seven_reports = {
+        "smart_money_report": "超大单净流出 -1.6056 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="超大单流出2.2亿与中小单净流入2.2亿形成被动接盘",
+        seven_reports=seven_reports,
+        claim_id="PI-POS12",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1169_same_balance_true_conflict_still_contradicted(evaluator):
+    """正例守卫：同存量基准（两融余额 vs 两融余额）数值发散仍判冲突。"""
+    seven_reports = {
+        "macro_report": "截至 7 月末两融余额 18.20 亿元，杠杆水平平稳。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="两融余额已升至24.88亿",
+        seven_reports=seven_reports,
+        claim_id="PI-POS1",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1169_same_period_cashflow_true_conflict(evaluator):
+    """正例守卫：同期间同子科目（2026Q1 经营现金流）数值发散仍判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- 2026Q1 经营现金流为 +45.20 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1经营现金流大幅净流出90.84亿元",
+        seven_reports=seven_reports,
+        claim_id="PI-POS2",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1169_timepoint_binding():
+    """机制单测：时点/价格基准绑定值正确。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    by_raw = {b.raw: b for b in extract_bound_numbers("两融余额降至24.88亿")}
+    assert by_raw["24.88亿"].timepoint == "tp:stock"
+    by_raw = {b.raw: b for b in extract_bound_numbers("7月30日融资净偿还 1526.45 万元")}
+    assert by_raw["1526.45 万元"].timepoint == "tp:flow"
+    by_raw = {b.raw: b for b in extract_bound_numbers("股价自42.48元累跌21%")}
+    assert by_raw["42.48元"].timepoint == "tp:hist"
+    by_raw = {b.raw: b for b in extract_bound_numbers("大股东增持均价82.71元")}
+    assert by_raw["82.71元"].timepoint == "tp:cost"
+    # 未标注现价不打标签（保持可与报告未标注记录判真冲突）
+    by_raw = {b.raw: b for b in extract_bound_numbers("现价33.42元")}
+    assert by_raw["33.42元"].timepoint is None
+
+
+def test_dav1169_spaced_year_period():
+    """机制单测：「2025 全年」「2024 年」空格年度形态归一为年度期间。"""
+    from tradingagents.agents.utils.evidence_verifier import (
+        extract_bound_numbers,
+        normalize_period,
+    )
+    assert normalize_period("如 2025 全年经营现金流净流入高达 ") == "2025"
+    assert normalize_period("2024 年达 ") == "2024"
+    bns = extract_bound_numbers("如 2025 全年经营现金流净流入高达 241.86 亿元")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["241.86 亿元"].period == "2025"
+
+
+def test_dav1169_fcf_vs_operating_cashflow(evaluator):
+    """DAV-1173 🔴-1 返修回归：「2026Q2 经营现金流 602.17亿」与「单季 FCF
+    351.44亿」是同期间不同子科目，不得互判冲突（冻结语料 cda1abff 第 16 条）。"""
+    seven_reports = {
+        "fundamentals_report": "- 经营活动现金流单季度达 602.17 亿元，同比大幅改善。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q2经营现金流602.17亿且单季FCF达351.44亿",
+        seven_reports=seven_reports,
+        claim_id="PI-FCF",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1169_same_fcf_true_conflict(evaluator):
+    """FCF 拆分守卫：同子科目（自由现金流 vs 自由现金流）数值发散仍判冲突。"""
+    seven_reports = {
+        "fundamentals_report": "- 2026Q2 单季自由现金流为 345.44 亿元。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q2单季自由现金流高达119.04亿元抗风险",
+        seven_reports=seven_reports,
+        claim_id="PI-POS-FCF",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1169_match_direction_unlabeled_timepoint(evaluator):
+    """DAV-1173 🟡-2 返修：佐证方向单侧标注不阻塞——证据标 tp:cost 的
+    「增持均价 82.71元」可被报告未标注同值记录佐证。"""
+    seven_reports = {
+        "news_report": "大股东增持均价 82.71 元已完成披露。",
+    }
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="大股东增持均价82.71元",
+        seven_reports=seven_reports,
+        claim_id="PI-JOIN",
+    )
+    assert res["status"] == STATUS_VERIFIED
+
+
+def test_dav1169_junxian_not_cost_basis():
+    """均价负例：「N日均价线」是均线类表述而非成本基准，不打 tp:cost 标签。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("10日均价线33.42元上穿")
+    tagged = [b for b in bns if b.timepoint is not None]
+    assert tagged == []

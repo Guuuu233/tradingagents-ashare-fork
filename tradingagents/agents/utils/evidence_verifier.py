@@ -112,7 +112,10 @@ _PERIOD_SINGLE_QUARTER_RE = re.compile(r"(?<!\w)[qQ]([1-4])(?!\w)")
 _PERIOD_HALF_RE = re.compile(r"(\d{4})年?[-_]?[hH]([1-2])")
 _PERIOD_DATE_RE = re.compile(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?")
 _PERIOD_MD_RE = re.compile(r"(\d{1,2})月(\d{1,2})日?")
-_PERIOD_YEAR_RE = re.compile(r"(\d{4})年(?:度)?")
+# DAV-1169: 空格断开的年度/全年形态（「2024 年」「2025 全年」「2025全年」）
+# 同样归一为年度期间——旧式 \d{4}年 要求紧邻「年」，漏绑后数字被整句
+# 期间错绑（「2025 全年经营现金流241.86亿」被绑到句首 2026Q1 判跨期冲突）。
+_PERIOD_YEAR_RE = re.compile(r"(\d{4})\s*(?:全\s*年|年(?:度)?)")
 
 
 def normalize_period(text: str) -> str | None:
@@ -256,7 +259,7 @@ _METRIC_KEYWORDS = [
     # DAV-1163: canonical 词表补全对应的关键词——关键词门（canonical 交集）
     # 只看 _METRIC_KEYWORDS，新 canonical 无关键词落点时命中行会被门拦下
     "流通市值", "市值", "离散度", "利息收入", "利息支出", "财务费用", "融资成本", "持仓占比", "均价",
-    "贴息", "裂口", "缺口", "拨备",
+    "贴息", "裂口", "缺口", "拨备", "投资现金流", "筹资现金流", "总负债",
     "股价", "收盘", "现价", "价格", "日均线", "日线", "铜价", "美债", "shibor",
     "流动比率", "速动比率",
     "底线", "压力测试", "敏感性", "弹性",
@@ -304,6 +307,10 @@ _STRICT_METRICS = {
     "营收", "毛利率", "毛利", "净利率", "净利润", "成本", "应收账款", "存货", "现金流",
     "资产负债率", "roe", "roa", "eps", "pe", "pb", "ps", "股息率", "换手率", "量比",
     "主力", "超大单", "大单", "两融", "概率", "预期收益", "降息", "降准", "关税",
+    # DAV-1169: 投资/筹资活动现金流子科目入严格集（绑定即负责，与经营现金流不互判）
+    "投资现金流", "筹资现金流",
+    # DAV-1169 返修：自由现金流/FCF 独立子科目入严格集（与经营现金流不互判）
+    "自由现金流",
     # DAV-1163: 小单/中单/均线族/RSI/ATR 入严格集——绑定即负责，不得当通配符
     "小单", "中单", "均线", "rsi", "atr",
     "lpr", "cpi", "ppi", "m2", "gdp",
@@ -333,7 +340,18 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # 存货
     "存货": "存货", "库存": "存货",
     # 现金流
-    "经营活动产生的现金流量净额": "现金流", "经营性现金流": "现金流", "经营现金流": "现金流", "自由现金流": "现金流", "现金流": "现金流", "fcf": "现金流",
+    "经营活动产生的现金流量净额": "现金流", "经营性现金流": "现金流", "经营现金流": "现金流", "现金流": "现金流",
+    "经营活动现金流": "现金流", "经营活动现金流量净额": "现金流",
+    # DAV-1169 返修（DAV-1173 🔴-1）：自由现金流/FCF 为独立子科目——「单季
+    # FCF 351.44亿」不得与同期间「经营活动现金流 602.17亿」互判冲突（同属
+    # canonical 现金流造成的跨子科目假冲突，与投资/筹资漏拆同类）。
+    "自由现金流": "自由现金流", "派生自由现金流": "自由现金流", "fcf": "自由现金流",
+    # DAV-1169: 投资/筹资活动现金流为独立子科目——「2026Q1 经营现金流 -90.84亿」
+    # 不得与同期间「投资活动现金流 +80.39亿」互判冲突（同名「现金流」跨科目误绑）。
+    "投资活动产生的现金流量净额": "投资现金流", "投资活动现金流净额": "投资现金流",
+    "投资活动现金流": "投资现金流", "投资现金流": "投资现金流",
+    "筹资活动产生的现金流量净额": "筹资现金流", "筹资活动现金流净额": "筹资现金流",
+    "筹资活动现金流": "筹资现金流", "筹资现金流": "筹资现金流",
     # 资产负债率
     "资产负债率": "资产负债率", "负债率": "资产负债率",
     # 估值 / 收益率
@@ -395,7 +413,12 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "贴息": "贴息",
     "资金裂口": "裂口", "裂口": "裂口", "资金缺口": "裂口",
     "计提拨备": "拨备", "拨备": "拨备",
+    # DAV-1169: 总负债独立科目落点——「Q1投资现金流净流出1023亿致总负债
+    # 2273亿」中 2273亿 是负债总量而非投资现金流，缺词会前向继承投资现金流
+    # 造成同指标伪冲突；非严格指标，不作冲突判定基准。
+    "总负债": "总负债", "负债总额": "总负债", "负债合计": "总负债",
     "价格区间": "股价",
+    "均价": "均价",
     "资本开支": "capex", "capex": "capex",
     "流通市值": "流通市值",
     "离散度": "离散度",
@@ -1033,6 +1056,100 @@ def _providers_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
     return ev_bn.provider == l_bn.provider
 
 
+# ── DAV-1169: timepoint/价格基准时点命名空间 ──
+# 同一 (entity, metric, basis) 但 period/timepoint 不同的数值不得互判冲突：
+# 存量时点值 vs 单日流量（两融余额 vs 单日融资净偿还）、历史高点/成本均价
+# vs 现价（自 42.48 高点累跌、增持均价 82.71 vs 现价 71.52）。与 provider 层
+# 同原则：时点标签挂在作用域指标上，双侧均标注且不同、或单侧未标注按最保
+# 守不判（「现价/收盘价」本身不打标签——证据显式现价声明保持未标注，仍可
+# 与报告未标注记录判真冲突）。
+TIMEPOINT_STOCK = "tp:stock"  # 存量时点值（余额/存量/出清至 X/仓位）
+TIMEPOINT_FLOW = "tp:flow"    # 单日/当期流量（净偿还/净流入/单日）
+TIMEPOINT_HIST = "tp:hist"    # 历史时点价格锚点（自 X 高点/冲高至 X）
+TIMEPOINT_COST = "tp:cost"    # 成本/均价基准（增持均价/成本价/买入均价）
+
+# 余额 vs 流量共用同名指标的族（「两融」同名既指余额存量也指单日净偿还）；
+# 超大单/大单等资金流分单不在此列——流出/流入是该族的常规陈述，不得因
+# 时点标签单侧化放松真矛盾（DAV-1148 #12 超大单正例守卫）。
+_TIMEPOINT_BALANCE_METRICS = {"两融", "融资", "融券", "保证金"}
+_TIMEPOINT_PRICE_METRICS = {"股价", "收盘价", "开盘价", "最高价", "最低价", "现价", "价格", "均价"}
+
+_TP_STOCK_RE = re.compile(r"余额|存量|结存|出清|仓位|保有量")
+_TP_FLOW_RE = re.compile(
+    r"净偿还|净流入|净流出|净买入|净卖出|净申购|净赎回|单日|当日|日净"
+)
+_TP_COST_PRE_RE = re.compile(
+    r"(?:增持|回购|买入|建仓|加仓|减持|持仓|定增|行权|转股)?"
+    r"\s*(?:均价|成本价|平均价|成本线)\s*$"
+)
+_TP_HIST_PRE_RE = re.compile(
+    r"(?:自|从|曾至|曾达|冲高至|反弹至|上探|下探至|见高点?|最高点?|峰值|"
+    r"历史高点?|前期高点?|前高)\s*$"
+)
+_TP_HIST_POST_RE = re.compile(
+    r"^\s*(?:元)?\s*(?:高点|峰值|累跌|累计跌|回落|见顶|起跌|后回落|后快速回落)"
+)
+
+
+def _bind_timepoint_for_number(
+    text: str,
+    n_start: int,
+    n_end: int,
+    metric: str | None,
+) -> str | None:
+    """给余额/流量共用指标与价格类数字绑定时点/价格基准；无标注或非作用域返回 None。
+
+    语境取「同子句前缀 + 数字后紧邻同子句修饰」（与 _classify_role_and_basis
+    同窗口约定）。balance 族：前缀含「余额/存量/出清」归 tp:stock，含「净偿还/
+    净流入/单日/当日」归 tp:flow；price 族：前缀以「均价/成本价/成本线」收尾
+    归 tp:cost，以「自/从/冲高至/高点」收尾或后随「高点/累跌/回落」归 tp:hist。
+    """
+    if metric not in _TIMEPOINT_BALANCE_METRICS and metric not in _TIMEPOINT_PRICE_METRICS:
+        return None
+    segs = re.split(r"[，。；、,;（）()【】：:！？!?]", text[max(0, n_start - 40):n_start])
+    ctx = segs[-1] if segs else ""
+    post = re.split(r"[，。；、,;：:！？!?]", text[n_end:n_end + 16])[0]
+    if metric in _TIMEPOINT_BALANCE_METRICS:
+        if _TP_STOCK_RE.search(ctx):
+            return TIMEPOINT_STOCK
+        if _TP_FLOW_RE.search(ctx) or _TP_FLOW_RE.search(post):
+            return TIMEPOINT_FLOW
+        return None
+    # price 族：成本/均价基准优先于历史时点锚点
+    if _TP_COST_PRE_RE.search(ctx):
+        return TIMEPOINT_COST
+    if _TP_HIST_PRE_RE.search(ctx) or _TP_HIST_POST_RE.match(post):
+        return TIMEPOINT_HIST
+    return None
+
+
+def _timepoints_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
+    """DAV-1169: 时点/价格基准可比性——存量时点 vs 单日流量、历史高点/成本
+    均价 vs 现价不得互作 contradiction ground truth；同时点同基准真矛盾仍拦。
+    单侧未标注按最保守不判（与 _entities_comparable/_providers_comparable 同原则）。"""
+    if ev_bn.timepoint is None and l_bn.timepoint is None:
+        return True
+    if ev_bn.timepoint is None or l_bn.timepoint is None:
+        return False
+    return ev_bn.timepoint == l_bn.timepoint
+
+
+def _timepoints_join_compatible(t1: str | None, t2: str | None) -> bool:
+    """DAV-1169 返修（DAV-1173 🟡-2）：佐证/拼合方向的时点兼容门。
+
+    与冲突判定的保守口径不同——match 方向要求数值相等才成立，「证据标注
+    时点、报告未标注」的真同源数值不应被单侧标注门拦下（此前 verified
+    侧失血 11 条）；仅双侧均标注且不同时才不拼（存量值不得拿流量记录佐证）。"""
+    if not t1 or not t2:
+        return True
+    return t1 == t2
+    if ev_bn.timepoint is None and l_bn.timepoint is None:
+        return True
+    if ev_bn.timepoint is None or l_bn.timepoint is None:
+        return False
+    return ev_bn.timepoint == l_bn.timepoint
+
+
 def _semantics_comparable(ev_bn: "BoundNumber", l_bn: "BoundNumber") -> bool:
     """冲突判定的语义角色/期间基准可比性：角色必须相同（actual 不得与 threshold/
     scenario/incremental 互判）；期间基准必须一致（单季 vs 年化 vs 累计互不可比，
@@ -1114,9 +1231,9 @@ _APPROX_REL_TOL = 0.10
 
 
 class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span", "provider")
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span", "provider", "timepoint")
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None, provider: tuple[str, ...] | None = None):
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None, provider: tuple[str, ...] | None = None, timepoint: str | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -1130,9 +1247,10 @@ class BoundNumber:
         self.bound = bound            # DAV-1163: min/max/approx 方向界或约数修饰，None = 点值
         self.range_span = range_span  # DAV-1163: 「A-B」区间对合并的 (lo,hi)，None = 非区间
         self.provider = provider      # DAV-1158: 数据源/口径命名空间（src:*/fld:* 元组），None = 未标注
+        self.timepoint = timepoint    # DAV-1169: 时点/价格基准（tp:stock/flow/hist/cost），None = 未标注
 
     def __repr__(self) -> str:
-        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r}, provider={self.provider!r})"
+        return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r}, provider={self.provider!r}, timepoint={self.timepoint!r})"
 
 
 # DAV-1157: 数字级期间绑定——整句归一期间（normalize_period(text)）会把同一行
@@ -1140,6 +1258,9 @@ class BoundNumber:
 # 两值均得 2026H1），真不同期被误判冲突；以下规则按数字就近补绑局部期间。
 _PAREN_POST_NUM_RE = re.compile(r"\s*[（(【\[]\s*([^）)】\]]{1,16})")
 _CLAUSE_BREAK_FOR_PERIOD = re.compile(r"[，。；、,;：:！？!?（）()【】]")
+# DAV-1169: 空格断开的年度/全年期间不在 _DATE_MASK_PATTERN 掩码内，子句
+# 引导期间检测需补检，否则「如 2025 全年经营现金流…241.86 亿」漏绑 2025。
+_CLAUSE_YEAR_HINT_RE = re.compile(r"\d{4}\s*(?:全\s*年|年(?:度)?)")
 
 
 def _bind_period_for_number(
@@ -1179,10 +1300,18 @@ def _bind_period_for_number(
             generic = normalize_period(clause) or fallback
             if generic and re.match(r"\d{4}", generic):
                 return str(int(generic[:4]) - 1) + generic[4:]
-        first_period = _DATE_MASK_PATTERN.search(clause)
+        first_period = (
+            _DATE_MASK_PATTERN.search(clause)
+            or _CLAUSE_YEAR_HINT_RE.search(clause)
+        )
         if first_period:
             masked = _DATE_MASK_PATTERN.sub(
                 lambda mm: " " * len(mm.group(0)), clause
+            )
+            # DAV-1169 返修（DAV-1173 🟢-2）：year-hint 命中段一并保位掩码——
+            # 「2025 全年」内部数字不得被当作子句首个数值参与位置判断
+            masked = _CLAUSE_YEAR_HINT_RE.sub(
+                lambda mm: " " * len(mm.group(0)), masked
             )
             first_num = _NUMBER_WITH_UNIT_RE.search(masked)
             if not first_num or first_num.start() >= first_period.start():
@@ -1398,7 +1527,10 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # cleaned 已把字段代码（r0_net 等）保位掩码，口径标注须从未掩码坐标等价的
         # period_view 读取（与 _bind_period_for_number 同一坐标系约定）。
         provider = _bind_provider_for_number(period_view, n_start, n_end, metric)
-        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound, None, provider)
+        # DAV-1169: 余额/流量共用指标与价格类数字的时点/价格基准命名空间；
+        # 同 provider 读取约定（period_view 坐标系）。
+        timepoint = _bind_timepoint_for_number(period_view, n_start, n_end, metric)
+        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound, None, provider, timepoint)
         res.append(bn)
         res_spans.append((n_start, n_end))
         last_res_match_end = n_end
@@ -1554,7 +1686,12 @@ def _is_bound_num_match(
     # 期间兼容：双方均抽出期间时，要求相同或共享同一年度前缀
     # （2026H1 与 2026 / 2026-07-06 属同一年度粒度，视为兼容；跨年不兼容）。
     # DAV-1147：同一规则兼任跨报告拼合的期间门——不同期间的同值不得强拼。
-    return _periods_join_compatible(ev_bn.period, l_bn.period)
+    if not _periods_join_compatible(ev_bn.period, l_bn.period):
+        return False
+    # DAV-1169: 时点/价格基准兼容——双侧均标注且不同时（存量 vs 流量、历史/
+    # 成本 vs 现价）的同值不得互相佐证；单侧未标注不阻塞拼合（数值相等前提
+    # 下的保守宽松，与 _periods_join_compatible 同一原则）。
+    return _timepoints_join_compatible(ev_bn.timepoint, l_bn.timepoint)
 
 
 def _bound_num_value_conflicts(
@@ -1611,6 +1748,10 @@ def _is_bound_num_contradicted(
         return False
     # DAV-1158: 不同数据源/口径（东财 vs 同花顺、r0_net vs netamount）不得互判
     if not _providers_comparable(ev_bn, l_bn):
+        return False
+    # DAV-1169: 不同时点/价格基准（存量时点 vs 单日流量、历史高点/成本均价 vs
+    # 现价）不得互判
+    if not _timepoints_comparable(ev_bn, l_bn):
         return False
     return _bound_num_value_conflicts(ev_bn, l_bn)
 
@@ -2028,6 +2169,8 @@ class EvidenceFactualTruthEvaluator:
         semantic_role_gaps: list[str] = []
         # DAV-1158: 数值层面构成冲突、仅因数据源/口径不同或单侧未标注而被跳过的比较 → 记 gap
         provider_scope_gaps: list[str] = []
+        # DAV-1169: 数值层面构成冲突、仅因时点/价格基准不同或单侧未标注而被跳过的比较 → 记 gap
+        timepoint_scope_gaps: list[str] = []
         if all_ev_bns:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -2071,9 +2214,7 @@ class EvidenceFactualTruthEvaluator:
                                     )
                                     if gap_note not in semantic_role_gaps:
                                         semantic_role_gaps.append(gap_note)
-                                else:
-                                    # _is_bound_num_contradicted 已否而主体/语义均可比，
-                                    # 仅剩 provider/source 口径差异为跳过原因
+                                elif not _providers_comparable(ev_bn, l_bn):
                                     gap_note = (
                                         f"跨数据源/口径比较已跳过(provider_scope): 证据 {ev_bn.raw}"
                                         f"(provider={ev_bn.provider}) vs {role_key} 记录 {l_bn.raw}"
@@ -2081,6 +2222,16 @@ class EvidenceFactualTruthEvaluator:
                                     )
                                     if gap_note not in provider_scope_gaps:
                                         provider_scope_gaps.append(gap_note)
+                                else:
+                                    # 主体/语义/provider 均可比而 _is_bound_num_contradicted
+                                    # 已否，仅剩时点/价格基准差异为跳过原因
+                                    gap_note = (
+                                        f"跨时点/价格基准比较已跳过(timepoint_scope): 证据 {ev_bn.raw}"
+                                        f"(timepoint={ev_bn.timepoint}) vs {role_key} 记录 {l_bn.raw}"
+                                        f"(timepoint={l_bn.timepoint})"
+                                    )
+                                    if gap_note not in timepoint_scope_gaps:
+                                        timepoint_scope_gaps.append(gap_note)
                         if contradicted_candidate:
                             break
                     if contradicted_candidate:
@@ -2104,6 +2255,8 @@ class EvidenceFactualTruthEvaluator:
                 res["semantic_role_gaps"] = semantic_role_gaps
             if provider_scope_gaps:
                 res["provider_scope_gaps"] = provider_scope_gaps
+            if timepoint_scope_gaps:
+                res["timepoint_scope_gaps"] = timepoint_scope_gaps
             return res
 
         # 4. Check market_data_context if provided
