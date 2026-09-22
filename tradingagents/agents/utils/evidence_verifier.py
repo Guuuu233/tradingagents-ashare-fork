@@ -404,6 +404,10 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # 绑定——「年期收益率/国债收益率」词组落在数字之后，使收益率数值可前向
     # 绑到美债。
     "年期收益率": "美债", "国债收益率": "美债", "美债": "美债",
+    # DAV-1170: 裸「国债」（「1.63%个人养老金国债」）归入同一债券收益
+    # 率命名空间——此前无落点，数字前向错绑「股息率」与报告股息率 5%
+    # 互判伪冲突；非严格指标，仅作绑定归属。
+    "国债": "美债", "储蓄国债": "美债",
     "shibor": "shibor",
     "综合融资成本": "融资成本", "融资成本": "融资成本",
     # DAV-1159: 财务费用/贴息类、裂口/拨备类 canonical 落点——此前无词表项，
@@ -419,6 +423,14 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     "总负债": "总负债", "负债总额": "总负债", "负债合计": "总负债",
     "价格区间": "股价",
     "均价": "均价",
+    # DAV-1170: VWMA/筹码「加权成本（线）」是技术分析均价基准而非会计
+    # 营业成本——「VWMA加权成本线90.38元」不得与「营业成本318.92亿」
+    # 或「碳酸锂15.20万元/吨」互判伪冲突；归一到非严格均价族。
+    "加权成本": "均价", "加权成本线": "均价", "成本均价": "均价",
+    # DAV-1170: 「净利-归母差额9.65亿」中 9.65亿 是两科目的会计差额而
+    # 非净利润本身——「差额」须有自己的 canonical 落点，不得回退错绑
+    # 净利/归母净利后与报告归母净利互判伪冲突；非严格指标。
+    "差额": "差额",
     "资本开支": "capex", "capex": "capex",
     "流通市值": "流通市值",
     "离散度": "离散度",
@@ -491,6 +503,19 @@ _TOTAL_CANON_METRICS = {
     "营收", "净利润", "成本", "毛利", "现金流", "应收账款", "存货",
     "成交量", "成交额", "主力", "超大单", "大单", "散户小单", "小单", "中单", "两融",
 }
+
+
+# DAV-1170: 「X%<定语>债券/存款/理财类收益率名词」后继锚点——% 数字量化
+# 的是紧随的收益率承载名词（「1.63%个人养老金国债」中 1.63% 是国债收益
+# 率，不得前向绑「股息率」与报告股息率 5% 互判伪冲突）。定语 gap 内不得
+# 含关系动词/比较词（防止「45.40元对应PB」式就近误绑）。
+_YIELD_NOUN_POST_RE = re.compile(
+    r"([一-龥]{0,6}?)(国债收益率|储蓄国债|国债|美债|企业债|公司债|债券|"
+    r"定期存款|存款|银行理财|理财产品)"
+)
+_YIELD_GAP_BAD_RE = re.compile(
+    r"对应|达到|是|为|录得|约|仅|超|逾|报|较|胜|高|低|跑赢|优于|及|与|和|或"
+)
 
 
 def _classify_semantic_type(
@@ -1388,6 +1413,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # （「量比1.4收于0.15」中 0.15 不得绑到量比）。含同比/环比的比较从句允许
         # 更长距离（「现金流量净额达到 3,046.11 亿元，相较于 2025H1…同比暴增 +126.54%」）。
         closest_prec = None
+        closest_prec_pos = None
         min_prec_dist = 9999
         closest_prec_paren = None
         min_prec_paren_dist = 9999
@@ -1429,8 +1455,32 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
                 if dist < min_prec_dist:
                     min_prec_dist = dist
                     closest_prec = m_raw
+                    closest_prec_pos = m_start
         if closest_prec is None:
             closest_prec = closest_prec_paren
+
+        # DAV-1170: 「A占B X%」所有格前置——紧邻「占」字之后的指标 B 是
+        # 占比基准（分母），% 数字量化的是「占」字之前的指标 A
+        # （「成本占营收92.85%」中 92.85% 是成本占营收的比重，绑 A=成本；
+        # 误绑 B=营收会与「AI服务器营收占比提升至45%」互判伪冲突）。
+        # 仅当同子句内「占」字之前 16 字内存在另一指标词时才改绑，否则
+        # 保持原绑定（「占营收比重45%」无前置科目时仍归营收）。
+        if (
+            unit == "%" and closest_prec is not None
+            and closest_prec_pos is not None
+        ):
+            k = closest_prec_pos - 1
+            while k >= 0 and cleaned[k] == " ":
+                k -= 1
+            if k >= 0 and cleaned[k] == "占":
+                for _s_start, _s_end, _s_raw in reversed(filtered_spans):
+                    if _s_end <= k:
+                        _seg = cleaned[_s_end:k]
+                        if len(_seg) <= 16 and not re.search(
+                            r"[，。；、,;：:（）()【】]", _seg
+                        ):
+                            closest_prec = _s_raw
+                        break
 
         # 后继绑定仅允许数字与指标名紧邻（可隔「的」）。
         # 「45.40元对应PB」中隔着关系动词「对应」的 PB 是碰巧出现的其他指标，
@@ -1486,6 +1536,16 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             if re.search(r"(?:至|到)\s*$", gap) and res[-1].raw_metric:
                 closest_prec = res[-1].raw_metric
                 closest_succ = None
+
+        # DAV-1170: 「X%<定语>收益率承载名词」后继锚点优先于前向泛指标——
+        # 「股息率仍大幅超越1.63%个人养老金国债」中 1.63% 归属国债收益率，
+        # 不得绑隔着比较动词的「股息率」。仅在后继绑定未命中且定语 gap 无
+        # 关系动词时生效。
+        if unit == "%" and closest_succ is None:
+            _ym = _YIELD_NOUN_POST_RE.match(cleaned[n_end:n_end + 14])
+            if _ym and not _YIELD_GAP_BAD_RE.search(_ym.group(1)):
+                closest_prec = None
+                closest_succ = _ym.group(2)
 
         raw_metric = closest_prec or closest_succ
         metric = _canonicalize_metric(raw_metric, unit)

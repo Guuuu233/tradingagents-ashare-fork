@@ -2041,3 +2041,170 @@ def test_dav1169_junxian_not_cost_basis():
     bns = extract_bound_numbers("10日均价线33.42元上穿")
     tagged = [b for b in bns if b.timepoint is not None]
     assert tagged == []
+
+
+# ── DAV-1170: Adjacent Metric Binding 残余收敛（相邻指标错绑根治）──
+# 机制：文本相邻/共现的不同指标不得因距离近而共享 canonical 落点——
+# 绑定优先级由指标词本身决定（A占B 的 A、加权成本=均价、收益率承载名词、
+# 会计差额独立落点），不得被邻近数字带偏。
+
+
+def test_dav1170_a_zhan_b_percent_binds_numerator(evaluator):
+    """RED #4（601138.SH）：「成本占营收92.85%」的 92.85% 量化的是成本
+    （占字前科目 A），不得绑占字后的营收 B 与「AI服务器营收占比45%」互判。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("基本面报告显示成本占营收92.85%成本涨1%利润降15.8%")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["92.85%"].metric == "成本"
+    assert by_raw["92.85%"].stype == "占比"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="成本占营收92.85%成本涨1%利润降15.8%",
+        seven_reports={"news_report": "AI服务器营收占比提升至45%，结构持续优化。"},
+        claim_id="DAV1170-4",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_zhan_without_prior_metric_keeps_denominator(evaluator):
+    """占字前无前置科目时保持原绑定——「占营收比重45%」仍归营收，规则不越界。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("（占营收比重 45%）")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["45%"].metric == "营收"
+
+
+def test_dav1170_vwma_cost_basis_not_operating_cost(evaluator):
+    """RED #7（000002.SZ）：「VWMA加权成本3.19元」是筹码均价基准（canonical
+    均价，非严格指标），不得与「营业成本318.92亿」互判冲突。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("主力报告显示VWMA加权成本在3.19元且大单仅微幅净流入0.16亿")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["3.19元"].metric == "均价"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="主力报告显示VWMA加权成本在3.19元且大单仅微幅净流入0.16亿",
+        seven_reports={"fundamentals_report": "2026Q1 营业成本高达 318.92 亿元。"},
+        claim_id="DAV1170-7",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_vwma_cost_line_not_commodity_cost(evaluator):
+    """RED #13（002594.SZ）：「VWMA加权成本线90.38元」不得与商品原料价
+    「碳酸锂15.20万元/吨」互判冲突；加权成本线同时打 tp:cost 基准标签。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("收盘价91.49元位于VWMA加权成本线90.38元上方1.23%")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["90.38元"].metric == "均价"
+    assert by_raw["90.38元"].timepoint == "tp:cost"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="收盘价91.49元位于VWMA加权成本线90.38元上方1.23%，筹码沉淀结构良性",
+        seven_reports={"macro_report": "上游原材料成本：碳酸锂15.20万元/吨(MoM +5.95%)。"},
+        claim_id="DAV1170-13",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_fcf_vs_operating_cashflow(evaluator):
+    """RED #14（002594.SZ）：自由现金流 119.04 亿与经营现金流 345.44 亿
+    是不同子科目，不得互判冲突（DAV-1169 已拆 canonical，本卡回归守卫）。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="单季自由现金流119.04亿元显示造血能力",
+        seven_reports={"fundamentals_report": "2025年经营活动现金流量净额 345.44 亿元。"},
+        claim_id="DAV1170-14",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_ocf_vs_capex(evaluator):
+    """RED #17/#18（600028.SH）：2025 经营现金流 1624.96 亿与资本开支
+    1464.72 亿是不同科目，不得互判冲突。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2025年经营现金流1624.96亿元覆盖资本开支1464.72亿元",
+        seven_reports={"fundamentals_report": "2025 年资本开支 1464.72 亿元。"},
+        claim_id="DAV1170-17",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_pension_bond_yield_not_dividend_yield(evaluator):
+    """RED #20（601288.SH）：「1.63%个人养老金国债」是国债收益率（归美债
+    命名空间），不得前向绑「股息率」与报告股息率 5% 互判冲突。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("2.73%极限股息率仍大幅超越1.63%个人养老金国债与1.40%Shibor")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["1.63%"].metric == "美债"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2.73%极限股息率仍大幅超越1.63%个人养老金国债与1.40%Shibor",
+        seven_reports={"macro_report": "银行板块平均股息率约 5%，市净率 PB 仅 0.6x。"},
+        claim_id="DAV1170-20",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+def test_dav1170_yield_noun_verb_gap_rejected():
+    """收益率名词后继锚点负例：gap 含关系动词时不允许跨 gap 改绑——
+    「5.6%为存款基准利率」式结构若 gap 含「为」仍保持原绑定语义。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("45.40元对应PB为12倍")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["45.40元"].metric is None
+
+
+def test_dav1170_profit_gap_not_net_profit(evaluator):
+    """RED #29（002466.SZ）：「归母净利差额9.65亿」是两科目的会计差额
+    （canonical 差额，非严格指标），不得与报告归母净利 18.76 亿互判冲突。"""
+    from tradingagents.agents.utils.evidence_verifier import extract_bound_numbers
+    bns = extract_bound_numbers("净利润28.41亿与归母净利差额9.65亿主要为泰利森高盈利并表")
+    by_raw = {b.raw: b for b in bns}
+    assert by_raw["9.65亿"].metric == "差额"
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="净利润28.41亿与归母净利差额9.65亿主要为泰利森高盈利并表",
+        seven_reports={"fundamentals_report": "2026Q1 净利润 28.41 亿元，实现归母净利润 18.76 亿元。"},
+        claim_id="DAV1170-29",
+    )
+    assert res["status"] != STATUS_CONTRADICTED
+
+
+# ── 真冲突反例守卫：同指标同语义数值发散仍判 contradicted ──
+
+
+def test_dav1170_same_cost_true_conflict_still_contradicted(evaluator):
+    """正例守卫：同科目（营业成本 vs 营业成本）数值发散仍判冲突——
+    加权成本归并未降低「成本」严格指标的冲突判定灵敏度。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1营业成本高达518.92亿元",
+        seven_reports={"fundamentals_report": "2026Q1 营业成本为 318.92 亿元。"},
+        claim_id="DAV1170-POS1",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1170_same_dividend_yield_true_conflict(evaluator):
+    """正例守卫：同指标（股息率 vs 股息率）数值发散仍判冲突。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="板块股息率仅2.73%缺乏吸引力",
+        seven_reports={"macro_report": "股息率为 5%，具备吸引力。"},
+        claim_id="DAV1170-POS2",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1170_same_revenue_share_true_conflict(evaluator):
+    """正例守卫：同指标同语义（营收占比 vs 营收占比）数值发散仍判冲突。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="AI服务器营收占比已提升至65%",
+        seven_reports={"news_report": "AI服务器营收占比提升至45%。"},
+        claim_id="DAV1170-POS3",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
+
+
+def test_dav1170_same_net_profit_true_conflict(evaluator):
+    """正例守卫：同指标（净利润 vs 净利润）数值发散仍判冲突——差额独立
+    落点不影响净利润本身的冲突判定。"""
+    res = evaluator.evaluate_single_evidence(
+        raw_evidence="2026Q1净利润28.41亿元",
+        seven_reports={"fundamentals_report": "2026Q1 净利润为 18.76 亿元。"},
+        claim_id="DAV1170-POS4",
+    )
+    assert res["status"] == STATUS_CONTRADICTED
