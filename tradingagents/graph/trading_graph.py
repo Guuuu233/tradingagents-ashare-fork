@@ -44,6 +44,11 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .report_quality_gate import apply_report_quality_gate
 from tradingagents.agents.utils.price_ref_registry import audit_price_ref_registry
+from tradingagents.agents.utils.price_basis_gate import (
+    GATE_BLOCKED_GAP,
+    PRICE_REF_CONTRACT_VERSION,
+    enforce_price_basis_gate,
+)
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
@@ -654,14 +659,20 @@ class TradingAgentsGraph:
         # Store current state for reflection
         self.curr_state = final_state
         apply_report_quality_gate(final_state)
-        # DAV-1198: bypass-only price_ref registry audit (no decision/target/stop effect)
+        # DAV-1198: bypass-only price_ref registry audit
         audit_price_ref_registry(final_state)
+        # DAV-1199: price-basis hard gate — violations fail-close (non-executable)
+        gate = enforce_price_basis_gate(final_state)
 
         # Log state
         self._log_state(trade_date, final_state)
 
         # Return decision and processed signal
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        signal = self.process_signal(final_state["final_trade_decision"])
+        if gate.get("status") == "blocked" and signal in ("BUY", "SELL"):
+            # fail-close: a gate-blocked run must not emit a directional signal
+            signal = "NO_TRADE"
+        return final_state, signal
 
     async def propagate_async(
         self,
@@ -744,8 +755,10 @@ class TradingAgentsGraph:
     def _build_horizon_result(self, horizon: str, final_state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract a compact result dict from a completed graph state."""
         apply_report_quality_gate(final_state)
-        # DAV-1198: bypass-only price_ref registry audit (no decision/target/stop effect)
+        # DAV-1198: bypass-only price_ref registry audit
         audit_price_ref_registry(final_state)
+        # DAV-1199: price-basis hard gate — violations fail-close (non-executable)
+        enforce_price_basis_gate(final_state)
         market_context = final_state.get("market_context", {})
         trade_date = final_state.get("trade_date", "")
         market_data_context = final_state.get("market_data_context", {})
@@ -779,6 +792,15 @@ class TradingAgentsGraph:
         )
         if gt_unavail and "game_theory_unavailable" not in data_gaps:
             data_gaps.append("game_theory_unavailable")
+
+        # DAV-1199: gate-blocked runs are fail-closed into data_gaps.
+        gate_payload = final_state.get("price_basis_gate")
+        if (
+            isinstance(gate_payload, dict)
+            and gate_payload.get("status") == "blocked"
+            and GATE_BLOCKED_GAP not in data_gaps
+        ):
+            data_gaps.append(GATE_BLOCKED_GAP)
 
         raw_inv_state = final_state.get("investment_debate_state")
         inv_state = dict(raw_inv_state) if isinstance(raw_inv_state, dict) else None
@@ -833,6 +855,10 @@ class TradingAgentsGraph:
             "price_refs": final_state.get("price_refs"),
             "price_basis_gaps": final_state.get("price_basis_gaps"),
             "price_basis_validation": final_state.get("price_basis_validation"),
+            # DAV-1199 hard gate + contract versioning (no DB schema migration)
+            "price_basis_gate": final_state.get("price_basis_gate"),
+            "price_ref_contract_version": PRICE_REF_CONTRACT_VERSION,
+            "price_basis_version": final_state.get("price_basis_version"),
         }
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state

@@ -463,18 +463,42 @@ def audit_price_ref_registry(state: MutableMapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(state, MutableMapping):
         return {"price_refs": [], "price_basis_gaps": [], "validation": {"status": "ok", "preview_only": True, "findings": []}}
 
-    cutoff = state.get("trade_date")
-    reports = {name: state.get(name) for name in REPORT_FIELDS}
-    # Also scan nested horizon results when present (short_term/medium_term/result_data).
-    for sub_key in ("short_term", "medium_term", "result_data"):
-        sub = state.get(sub_key)
-        if isinstance(sub, Mapping):
-            for name in REPORT_FIELDS:
-                if name not in reports or reports[name] in (None, ""):
-                    if isinstance(sub.get(name), str):
-                        reports[name] = sub[name]
+    try:
+        cutoff = state.get("trade_date")
+        reports = {name: state.get(name) for name in REPORT_FIELDS}
+        # Also scan nested horizon results when present (short_term/medium_term/result_data).
+        for sub_key in ("short_term", "medium_term", "result_data"):
+            sub = state.get(sub_key)
+            if isinstance(sub, Mapping):
+                for name in REPORT_FIELDS:
+                    if name not in reports or reports[name] in (None, ""):
+                        if isinstance(sub.get(name), str):
+                            reports[name] = sub[name]
 
-    result = build_price_ref_registry(reports, cutoff=cutoff)
+        result = build_price_ref_registry(reports, cutoff=cutoff)
+    except Exception:
+        # DAV-1199 🟡-1 (upgraded to mandatory): the audit is bypass-only — a
+        # malformed state must never crash the pipeline. Fail-closed: the error
+        # is recorded as a price_basis_gap and flagged on the validation payload
+        # so downstream (price_basis_gate) treats every price as un-audited and
+        # non-consumable, rather than silently letting them through.
+        result = {
+            "price_refs": [],
+            "price_basis_gaps": [
+                {
+                    "kind": "audit_error",
+                    "ref_id": None,
+                    "source": None,
+                    "detail": "price_ref 审计内部异常，全部价格视为未审计、不可消费",
+                }
+            ],
+            "validation": {
+                "status": "audit_error",
+                "preview_only": True,
+                "audit_error": True,
+                "findings": [],
+            },
+        }
     state["price_refs"] = result["price_refs"]
     state["price_basis_gaps"] = result["price_basis_gaps"]
     state["price_basis_validation"] = result["validation"]
