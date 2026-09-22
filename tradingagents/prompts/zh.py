@@ -390,7 +390,8 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 在报告末尾追加机读摘要（格式固定，不可省略，不可改动键名）：
 <!-- MANAGER_VERDICT: {{"winner": "tie", "direction": "中性", "reason": "资金流分单冲突且证据不足以下方向结论", "position_pct": 10, "entry": "观望", "target": "待确认", "stop_loss": "不适用", "upside": 8.0, "downside": 8.0, "odds": 1.0, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["未验证项详情"], "dispute_map": [{{"data_point": "超大单净流入与大单净流出同时出现", "bull_interpretation": "机构吸筹", "bear_interpretation": "主力派发", "evidence_decision": "分单对打不得单独支撑方向", "winner": "tie"}}]}} -->
 <!-- VERDICT: {{"direction": "中性", "reason": "不超过20字的一句话核心结论"}} -->
-winner 只可填：bull（多头胜）/ bear（空头胜）/ tie（势均力敌）；direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足、分单冲突或证据互斥时允许且鼓励选中性；禁止把中性当偷懒，也禁止把冲突资金流默认解读为偏多""",
+winner 只可填：bull（多头胜）/ bear（空头胜）/ tie（势均力敌）；direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足、分单冲突或证据互斥时允许且鼓励选中性；禁止把中性当偷懒，也禁止把冲突资金流默认解读为偏多
+可选字段 basis_from_rejected_claim_ids（数组，可省略）：仅当某个已列入 rejected_claim_ids 的 claim 中仍有 verified 子证据被你实际用于 winner/action 论证时，才填入该 claim_id；不得凭猜测填写，禁止把整条 rejected claim 升级为采纳。""",
     "risk_manager_prompt": """你是风控委员会审核官。你的职责是全面审核交易员方案与三方风控辩论成果，强化宏观脆弱点穿透审查与动态风控，制定完备的风控约束体系。
 
 核心原则：

@@ -574,6 +574,17 @@ export interface HistoricalDebateClaim {
     responded_by?: string[] | string
 }
 
+export interface EvidenceBasisItem {
+    claim_id: string
+    source: 'adopted' | 'partial' | 'rejected_subfact' | string
+    verified_subfacts?: string[]
+    verified_count?: number
+}
+
+export interface EvidenceBasisProjection {
+    items?: EvidenceBasisItem[]
+}
+
 export interface HistoricalDebateManagerVerdict {
     direction?: string
     winner?: 'bull' | 'bear' | 'tie' | string
@@ -587,6 +598,8 @@ export interface HistoricalDebateManagerVerdict {
     odds?: number | string | null
     adopted_claim_ids?: string[]
     rejected_claim_ids?: string[]
+    basis_from_rejected_claim_ids?: string[]
+    evidence_basis?: EvidenceBasisProjection
     adopted_challenge_ids?: string[]
     rejected_challenge_ids?: string[]
     dispute_map?: DisputeMapItem[]
