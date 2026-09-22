@@ -4261,6 +4261,121 @@ def refresh_direction_basis(
     return manager_verdict
 
 
+def compute_evidence_basis(
+    adopted_claim_ids: Sequence[str] | None,
+    partially_adopted_claims: Sequence[str] | None,
+    rejected_claim_ids: Sequence[str] | None,
+    basis_from_rejected_claim_ids: Sequence[str] | None = None,
+    claim_evidence_summary: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """DAV-1111 B2: 把裁决实际依据的 verified 子事实投影为机读 evidence_basis。
+
+    纯指针/投影层，不改 claim adoption 决策：
+    - adopted/partial：从既有 claim_evidence_summary 确定性投影
+      verified_evidence 子事实，不依赖 LLM 重复输出；
+    - rejected_subfact：仅消费 manager verdict 可选字段
+      ``basis_from_rejected_claim_ids``（经理指认“虽 rejected 但其 verified
+      子事实实际被用于 winner/action 论证”的 claim）。防虚标：被指认 cid
+      必须属于 rejected_claim_ids 且 summary 中 verified>0，否则只记
+      warning，不 fail-close；字段缺省时不得凭规则猜测。
+
+    warning-only 观测，绝不产生 failed_checks、不影响
+    consistency_check_passed / winner / action / claim adoption 语义。
+
+    Returns:
+        (evidence_basis, warnings)
+        evidence_basis = {
+            "items": [{
+                "claim_id": str,
+                "source": "adopted" | "partial" | "rejected_subfact",
+                "verified_subfacts": [str],
+                "verified_count": int,
+            }],
+        }
+    """
+    warnings: list[str] = []
+    summary = claim_evidence_summary or {}
+    rejected_set = {str(cid).strip() for cid in (rejected_claim_ids or []) if str(cid).strip()}
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _project(cid: str, source: str) -> None:
+        if cid in seen:
+            return
+        seen.add(cid)
+        s = summary.get(cid)
+        verified_subfacts: list[str] = []
+        if isinstance(s, Mapping):
+            verified_subfacts = [
+                str(e).strip() for e in (s.get("verified_evidence") or []) if str(e).strip()
+            ]
+        items.append({
+            "claim_id": cid,
+            "source": source,
+            "verified_subfacts": verified_subfacts,
+            "verified_count": len(verified_subfacts),
+        })
+
+    for cid in adopted_claim_ids or []:
+        cid_str = str(cid).strip()
+        if cid_str:
+            _project(cid_str, "adopted")
+    for cid in partially_adopted_claims or []:
+        cid_str = str(cid).strip()
+        if cid_str:
+            _project(cid_str, "partial")
+
+    for cid in basis_from_rejected_claim_ids or []:
+        cid_str = str(cid).strip()
+        if not cid_str:
+            continue
+        if cid_str not in rejected_set:
+            warnings.append(
+                f"evidence_basis_invalid_rejected_cid: basis_from_rejected_claim_ids 指认的 "
+                f"{cid_str} 不属于 rejected_claim_ids，已忽略 (warning-only，不影响 consistency_check_passed)"
+            )
+            continue
+        s = summary.get(cid_str)
+        verified_cnt = 0
+        if isinstance(s, Mapping):
+            verified_cnt = int((s.get("counts") or {}).get("verified", 0) or 0)
+        if verified_cnt <= 0:
+            warnings.append(
+                f"evidence_basis_rejected_no_verified: basis_from_rejected_claim_ids 指认的 "
+                f"{cid_str} 在 claim_evidence_summary 中 verified=0，无可投影的 verified 子事实，已忽略 "
+                "(warning-only，不影响 consistency_check_passed)"
+            )
+            continue
+        _project(cid_str, "rejected_subfact")
+
+    evidence_basis: dict[str, Any] = {"items": items}
+    return evidence_basis, warnings
+
+
+def refresh_evidence_basis(manager_verdict: dict[str, Any]) -> dict[str, Any]:
+    """在（可能被 double_count_guard 裁剪后的）最终账本上重算 evidence_basis。
+
+    原地刷新 manager_verdict["evidence_basis"]，并将 warnings 中所有
+    ``evidence_basis_`` 前缀条目按最新状态重写，保证落库记录与最终
+    adopted/partial/rejected 账本一致。幂等：账本未变时结果与初次计算相同。
+    """
+    evidence_basis, eb_warnings = compute_evidence_basis(
+        adopted_claim_ids=manager_verdict.get("adopted_claim_ids") or [],
+        partially_adopted_claims=manager_verdict.get("partially_adopted_claims") or [],
+        rejected_claim_ids=manager_verdict.get("rejected_claim_ids") or [],
+        basis_from_rejected_claim_ids=manager_verdict.get("basis_from_rejected_claim_ids") or [],
+        claim_evidence_summary=manager_verdict.get("claim_evidence_summary") or {},
+    )
+    manager_verdict["evidence_basis"] = evidence_basis
+    kept = [
+        w for w in (manager_verdict.get("warnings") or [])
+        if not str(w).startswith("evidence_basis_")
+    ]
+    manager_verdict["warnings"] = kept + eb_warnings
+    return manager_verdict
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -4293,6 +4408,8 @@ def extract_and_validate_manager_verdict(
         - failed_checks
         - warnings (warning-only 旁路告警，不进 failed_checks)
         - direction_basis (DAV-1111 B1 同向 claim 账本可观测性结构化字段)
+        - basis_from_rejected_claim_ids (DAV-1111 B2 经理可选指认的 rejected 子事实依据)
+        - evidence_basis (DAV-1111 B2 winner/action 到 verified 子事实的机读投影)
     """
     from tradingagents.agents.utils.debate_utils import extract_tagged_json, strip_tagged_json
 
@@ -4339,6 +4456,10 @@ def extract_and_validate_manager_verdict(
     partially_adopted_claims = _to_str_list(payload.get("partially_adopted_claims")) if payload else []
     rejected_claim_ids = _to_str_list(payload.get("rejected_claim_ids")) if payload else []
     excluded_evidence = _to_str_list(payload.get("excluded_evidence")) if payload else []
+    # DAV-1111 B2: 可选字段，旧模型缺省即空列表，绝不凭规则猜测。
+    basis_from_rejected_claim_ids = (
+        _to_str_list(payload.get("basis_from_rejected_claim_ids")) if payload else []
+    )
 
     # ── Extract Dispute Map ───────────────────────────────────────────────
     raw_dispute_map = payload.get("dispute_map") or []
@@ -4602,6 +4723,23 @@ def extract_and_validate_manager_verdict(
         claims=claims,
     )
 
+    # ── Check 10: Evidence basis projection (warning-only) ─────────────
+    # DAV-1111 B2: 将裁决实际依据的 verified 子事实投影为机读
+    # evidence_basis。adopted/partial 从 claim_evidence_summary 确定性
+    # 投影；rejected_subfact 仅消费经理可选指认
+    # basis_from_rejected_claim_ids，非法指认只落 warning。
+    # 只读投影层：不改 adopted/partial/rejected，不回写 direction_basis，
+    # 不产生 failed_checks。下游 apply_manager_double_count_guard 裁剪后
+    # 须由 refresh_evidence_basis 在最终账本上重算刷新。
+    evidence_basis, eb_warnings = compute_evidence_basis(
+        adopted_claim_ids=adopted_claim_ids,
+        partially_adopted_claims=partially_adopted_claims,
+        rejected_claim_ids=rejected_claim_ids,
+        basis_from_rejected_claim_ids=basis_from_rejected_claim_ids,
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    warnings.extend(eb_warnings)
+
     consistency_passed = (len(failed_checks) == 0)
 
     return {
@@ -4625,6 +4763,8 @@ def extract_and_validate_manager_verdict(
         "failed_checks": failed_checks,
         "warnings": warnings,
         "direction_basis": direction_basis,
+        "basis_from_rejected_claim_ids": basis_from_rejected_claim_ids,
+        "evidence_basis": evidence_basis,
         "ohlcv_gate_applied": ohlcv_gate_applied,
         "fund_flow_dispute_gate_applied": fund_flow_dispute_gate_applied,
     }
