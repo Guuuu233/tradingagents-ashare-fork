@@ -794,8 +794,13 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
         assert len(filtered_raw) == 0
         assert excluded["legacy_null"] == 3
 
-        # Calibrated golden samples with VALID analysis_status and directional trade_action qualify
-        for s in raw_samples:
+        # Calibrated golden samples with VALID analysis_status and directional trade_action qualify.
+        # DAV-1200 (1142-B3): the original golden report_ids are in the price-basis
+        # isolation manifest (DAV-1196 confirmed layer) and would be deterministically
+        # excluded as price_basis_contaminated; re-id the calibrated fixtures so this
+        # test exercises D-009/industry/gate semantics, not the isolation stage.
+        for i, s in enumerate(raw_samples):
+            s["id"] = f"golden-audit-{i}"
             s["analysis_status"] = "VALID"
             s["trade_action"] = "BUY" if s.get("manager_verdict", {}).get("winner") == "bull" else "SELL"
 
@@ -858,9 +863,12 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
         )
         golden_files = sorted(glob.glob(os.path.join(golden_dir, "*_result_data.json")))
         qualifying_samples = []
-        for fpath in golden_files:
+        for i, fpath in enumerate(golden_files):
             with open(fpath, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                # DAV-1200: original golden ids are manifest-confirmed contaminated;
+                # re-id so run_verify exercises the v2-only path, not isolation.
+                data["id"] = f"golden-audit-{i}"
                 data["analysis_status"] = "VALID"
                 data["trade_action"] = "BUY" if data.get("manager_verdict", {}).get("winner") == "bull" else "SELL"
                 qualifying_samples.append(data)

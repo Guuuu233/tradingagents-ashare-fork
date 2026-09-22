@@ -38,6 +38,12 @@ from tradingagents.agents.utils.debate_metrics import (
     _extract_cited_debate_numbers,
     extract_numerical_tokens,
 )
+from tradingagents.agents.utils.price_basis_isolation import (
+    REASON_CONTRACT_INCOMPLETE,
+    REASON_CONTAMINATED,
+    REASON_PENDING_REVIEW,
+    classify_price_basis_exclusion,
+)
 
 SCHEMA_VERSION: str = "h1a_json_v1"
 H1B_SCHEMA_VERSION: str = "h1b_json_v1"
@@ -770,6 +776,16 @@ def filter_v2_completed_reports(
     `excluded_counts` ONLY counts reports that entered the v2 pool (Stage 2) and were excluded
     under D-009 §5 (Stage 3). Non-v2 reports filtered at Stage 2 are tracked in ledger['non_v2_excluded']
     and NEVER conflated into D-009 `excluded_counts`.
+
+    Stage 4 (DAV-1200 / 1142-B3): legacy price-basis isolation via the versioned
+    manifest (`price_basis_isolation.v1`). D-009-eligible reports are excluded
+    deterministically by report_id under independent reasons
+    ``price_basis_contaminated`` / ``price_basis_pending_review`` /
+    ``price_basis_contract_incomplete`` — tracked ONLY in the pipeline ledger,
+    NEVER in D-009 `excluded_counts`. Quantity conservation:
+    ``eligible_count == clean_count + price_basis_isolated``.
+    A broken/unreadable manifest fails closed (raises ValueError): unadjudicated
+    prices must not silently enter clean-cohort denominators.
     """
     qualifying: list[dict[str, Any]] = []
     excluded_counts: dict[str, int] = {
@@ -786,6 +802,12 @@ def filter_v2_completed_reports(
         "eligible_count": 0,
         "non_v2_excluded": 0,
         "d009_excluded": 0,
+        # Stage 4: legacy price-basis isolation (independent of D-009 §5)
+        "price_basis_contaminated": 0,
+        "price_basis_pending_review": 0,
+        "price_basis_contract_incomplete": 0,
+        "price_basis_isolated": 0,
+        "clean_count": 0,
     }
 
     for r in reports:
@@ -798,16 +820,30 @@ def filter_v2_completed_reports(
 
         # Stage 2 -> Stage 3: Classify under D-009 §5
         cat = classify_v2_report_d009_exclusion(r)
-        if cat is None:
-            normalized = normalize_report_for_evaluation(r)
-            qualifying.append(normalized)
-            ledger["eligible_count"] += 1
-        else:
+        if cat is not None:
             ledger["d009_excluded"] += 1
             if cat in excluded_counts:
                 excluded_counts[cat] += 1
             else:
                 excluded_counts[cat] = excluded_counts.get(cat, 0) + 1
+            continue
+
+        ledger["eligible_count"] += 1
+
+        # Stage 3 -> Stage 4: deterministic price-basis isolation (DAV-1200).
+        # Isolation reasons are ledger-only and never enter D-009 excluded_counts.
+        pb_reason = classify_price_basis_exclusion(r)
+        if pb_reason is not None:
+            ledger["price_basis_isolated"] += 1
+            if pb_reason in (REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE):
+                ledger[pb_reason] += 1
+            else:  # pragma: no cover - defensive, classifier contract is fixed
+                ledger[REASON_CONTRACT_INCOMPLETE] += 1
+            continue
+
+        normalized = normalize_report_for_evaluation(r)
+        qualifying.append(normalized)
+        ledger["clean_count"] += 1
 
     if return_ledger:
         return qualifying, excluded_counts, ledger
