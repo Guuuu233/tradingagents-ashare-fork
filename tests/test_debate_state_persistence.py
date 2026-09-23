@@ -442,8 +442,8 @@ class _FakeTradingGraphForJob:
     def process_signal(self, decision):
         return "BUY"
 
-    def _build_horizon_result(self, horizon, state):
-        return TradingAgentsGraph._build_horizon_result(self, horizon, state)
+    def _build_horizon_result(self, horizon, state, market_source=None):
+        return TradingAgentsGraph._build_horizon_result(self, horizon, state, market_source)
 
 
 class TestJobExecutionDebatePersistence:

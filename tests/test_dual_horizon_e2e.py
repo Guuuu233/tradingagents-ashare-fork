@@ -84,7 +84,7 @@ class _FakeTradingGraph:
     def process_signal(self, _decision):
         return "HOLD"
 
-    def _build_horizon_result(self, horizon, state):
+    def _build_horizon_result(self, horizon, state, market_source=None):
         if horizon in _FakeTradingGraph.build_fail_horizons:
             raise RuntimeError(f"{horizon} build error")
         return dict(state)

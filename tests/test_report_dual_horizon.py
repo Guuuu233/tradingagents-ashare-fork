@@ -134,7 +134,7 @@ class _FakeTradingGraph:
     def process_signal(self, decision):
         return "BUY" if "short" in decision else "SELL"
 
-    def _build_horizon_result(self, _horizon, state):
+    def _build_horizon_result(self, _horizon, state, market_source=None):
         res = dict(state)
         if "horizon_run_metadata" in state:
             res["horizon_run_metadata"] = dict(state["horizon_run_metadata"])

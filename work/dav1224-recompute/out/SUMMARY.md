@@ -1,0 +1,68 @@
+# DAV-1224 候选 trunk 冻结语料重算
+
+- snapshot SHA256 vs manifest：10/10 匹配；state 数 50
+- pass 6/50：['s01__r4', 's03__r3', 's05__r2', 's05__r4', 's10__r3', 's10__r4']
+- 预期（W4）：['s01__r4', 's03__r3', 's05__r2', 's05__r4', 's10__r3', 's10__r4']
+- pass 集合一致：True；差异：无
+- violation kinds：{'decision_driving_unspecified_basis': 220, 'decision_driving_missing_as_of': 216, 'executable_level_wrong_basis': 19, 'unbacked_executable_level': 6, 'cross_basis_coordinate_mix': 25}
+- 坏锚全部 blocked：True
+
+## 坏锚明细
+- b188060f_fixture: blocked {'decision_driving_missing_as_of': 1, 'cross_basis_coordinate_mix': 1, 'executable_level_wrong_basis': 1}
+- s06:s06__r1: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2}
+- s06:s06__r2: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2, 'cross_basis_coordinate_mix': 8}
+- s06:s06__r3: blocked {'decision_driving_unspecified_basis': 10, 'decision_driving_missing_as_of': 10, 'cross_basis_coordinate_mix': 7}
+- s06:s06__r4: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4, 'cross_basis_coordinate_mix': 10}
+- s06:s06__r5: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2}
+
+## 逐 run
+- s01__r1: blocked {'decision_driving_unspecified_basis': 6, 'decision_driving_missing_as_of': 6} bridge=0
+- s01__r2: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2, 'executable_level_wrong_basis': 1, 'unbacked_executable_level': 1} bridge=0
+- s01__r3: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s01__r4: pass {} bridge=0
+- s01__r5: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=0
+- s02__r1: blocked {'decision_driving_unspecified_basis': 11, 'decision_driving_missing_as_of': 11} bridge=0
+- s02__r2: blocked {'decision_driving_unspecified_basis': 1, 'decision_driving_missing_as_of': 1} bridge=0
+- s02__r3: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s02__r4: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s02__r5: blocked {'decision_driving_unspecified_basis': 23, 'decision_driving_missing_as_of': 23, 'executable_level_wrong_basis': 4} bridge=0
+- s03__r1: blocked {'decision_driving_unspecified_basis': 6, 'decision_driving_missing_as_of': 6, 'executable_level_wrong_basis': 1, 'unbacked_executable_level': 1} bridge=4
+- s03__r2: blocked {'decision_driving_unspecified_basis': 3, 'decision_driving_missing_as_of': 3} bridge=0
+- s03__r3: pass {} bridge=0
+- s03__r4: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=1
+- s03__r5: blocked {'decision_driving_unspecified_basis': 7, 'decision_driving_missing_as_of': 7} bridge=0
+- s04__r1: blocked {'decision_driving_unspecified_basis': 2} bridge=3
+- s04__r2: blocked {'decision_driving_unspecified_basis': 3, 'decision_driving_missing_as_of': 3} bridge=0
+- s04__r3: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s04__r4: blocked {'decision_driving_unspecified_basis': 1, 'decision_driving_missing_as_of': 1} bridge=1
+- s04__r5: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=0
+- s05__r1: blocked {'decision_driving_unspecified_basis': 7, 'decision_driving_missing_as_of': 7} bridge=4
+- s05__r2: pass {} bridge=9
+- s05__r3: blocked {'decision_driving_unspecified_basis': 1, 'decision_driving_missing_as_of': 1} bridge=2
+- s05__r4: pass {} bridge=0
+- s05__r5: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s06__r1: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s06__r2: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2, 'cross_basis_coordinate_mix': 8} bridge=0
+- s06__r3: blocked {'decision_driving_unspecified_basis': 10, 'decision_driving_missing_as_of': 10, 'cross_basis_coordinate_mix': 7} bridge=22
+- s06__r4: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4, 'cross_basis_coordinate_mix': 10} bridge=0
+- s06__r5: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=7
+- s07__r1: blocked {'decision_driving_unspecified_basis': 1, 'decision_driving_missing_as_of': 1} bridge=0
+- s07__r2: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=9
+- s07__r3: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s07__r4: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=4
+- s07__r5: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s08__r1: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=1
+- s08__r2: blocked {'decision_driving_unspecified_basis': 7, 'decision_driving_missing_as_of': 7, 'executable_level_wrong_basis': 3} bridge=4
+- s08__r3: blocked {'decision_driving_unspecified_basis': 1, 'decision_driving_missing_as_of': 1} bridge=0
+- s08__r4: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=0
+- s08__r5: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=0
+- s09__r1: blocked {'decision_driving_unspecified_basis': 2, 'decision_driving_missing_as_of': 2} bridge=0
+- s09__r2: blocked {'decision_driving_unspecified_basis': 5, 'decision_driving_missing_as_of': 5} bridge=0
+- s09__r3: blocked {'decision_driving_unspecified_basis': 12, 'decision_driving_missing_as_of': 11, 'executable_level_wrong_basis': 1} bridge=0
+- s09__r4: blocked {'decision_driving_unspecified_basis': 7, 'decision_driving_missing_as_of': 7, 'unbacked_executable_level': 2, 'executable_level_wrong_basis': 2} bridge=2
+- s09__r5: blocked {'decision_driving_unspecified_basis': 7, 'decision_driving_missing_as_of': 7, 'unbacked_executable_level': 1} bridge=0
+- s10__r1: blocked {'decision_driving_unspecified_basis': 23, 'decision_driving_missing_as_of': 23, 'executable_level_wrong_basis': 4, 'unbacked_executable_level': 1} bridge=6
+- s10__r2: blocked {'decision_driving_unspecified_basis': 18, 'decision_driving_missing_as_of': 17, 'executable_level_wrong_basis': 3} bridge=0
+- s10__r3: pass {} bridge=0
+- s10__r4: pass {} bridge=0
+- s10__r5: blocked {'decision_driving_unspecified_basis': 4, 'decision_driving_missing_as_of': 4} bridge=0

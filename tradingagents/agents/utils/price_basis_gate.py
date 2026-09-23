@@ -50,6 +50,7 @@ from tradingagents.agents.utils.price_ref_registry import (
     COORDINATE_KEYWORDS,
     PRICE_BASIS_DERIVED_ESTIMATE,
     _LEVEL_PATTERN,
+    attach_price_ref_source,
     audit_price_ref_registry,
     extract_executable_levels,
 )
@@ -439,7 +440,10 @@ def enforce_price_basis_gate(state: MutableMapping[str, Any]) -> Dict[str, Any]:
         return fallback
 
 
-def finalize_price_ref_state(state: MutableMapping[str, Any]) -> Dict[str, Any]:
+def finalize_price_ref_state(
+    state: MutableMapping[str, Any],
+    market_source: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """Single post-graph price_ref finalization for every entry point
     (propagate / dual-horizon horizon result / streaming astream / raw invoke).
 
@@ -448,6 +452,14 @@ def finalize_price_ref_state(state: MutableMapping[str, Any]) -> Dict[str, Any]:
     lives inside ``enforce_price_basis_gate``; callers that derive a signal
     from the raw decision text must still apply the blocked->NO_TRADE
     downgrade to that signal (as ``propagate()`` does).
-"""
+
+    ``market_source`` (DAV-1224 C5): the run's already-collected pool
+    (``stock_data`` / ``indicators`` / ``price_basis``). When supplied it is
+    attached to state so the audit's strict source-backed bridge can resolve
+    field-level provenance. It is never fetched here and never persisted by
+    this function.
+    """
+    if market_source is not None:
+        attach_price_ref_source(state, market_source)
     audit_price_ref_registry(state)
     return enforce_price_basis_gate(state)

@@ -3459,6 +3459,7 @@ async def _run_job_inner(
                         horizon_result = graph._build_horizon_result(
                             horizon,
                             horizon_state,
+                            collected_pool,
                         )
                         structured = None
                         try:
@@ -3750,8 +3751,8 @@ async def _run_job_inner(
                 _log(f"[Timer] TOTAL Job execution (dual_horizon) took {time.time() - job_start_t:.2f}s")
                 return
 
-            short_r = graph._build_horizon_result("short", horizon_states.get("short") or {})
-            medium_r = graph._build_horizon_result("medium", horizon_states.get("medium") or {})
+            short_r = graph._build_horizon_result("short", horizon_states.get("short") or {}, collected_pool)
+            medium_r = graph._build_horizon_result("medium", horizon_states.get("medium") or {}, collected_pool)
             primary_r = short_r if horizon_states.get("short") else medium_r
             graph_decision = graph.process_signal(primary_r.get("final_trade_decision", ""))
             model_snapshot = {
@@ -4082,7 +4083,9 @@ async def _run_job_inner(
             # DAV-1211: the streaming single-horizon path bypasses
             # propagate(), so run the shared price_ref finalization here —
             # bypass audit + hard gate — before payload build/persistence.
-            finalize_price_ref_state(final_state)
+            # market_source: the already-collected pool enables the audit's
+            # strict source-backed bridge (DAV-1224 C5).
+            finalize_price_ref_state(final_state, collected_pool)
         else:
             single_horizon = request.horizons[0] if request.horizons else "short"
             if single_horizon == "short":
@@ -4140,7 +4143,7 @@ async def _run_job_inner(
                 # DAV-1207/1211: parity with propagate() — the raw-invoke
                 # medium path runs the same shared price_ref finalization,
                 # otherwise the persisted payload carries no real gate output.
-                finalize_price_ref_state(final_state)
+                finalize_price_ref_state(final_state, collected_pool)
 
         if not final_state:
             raise RuntimeError("graph returned empty final state")

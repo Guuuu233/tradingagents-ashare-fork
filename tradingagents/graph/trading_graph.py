@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 import json
 import logging
-from typing import Dict, Any, List, Optional, Union, TypedDict
+from typing import Dict, Any, List, Mapping, Optional, Union, TypedDict
 
 
 from langgraph.prebuilt import ToolNode
@@ -660,7 +660,7 @@ class TradingAgentsGraph:
         apply_report_quality_gate(final_state)
         # DAV-1198/1199/1211: shared price_ref finalization — bypass audit +
         # hard gate (violations fail-close, non-executable)
-        gate = finalize_price_ref_state(final_state)
+        gate = finalize_price_ref_state(final_state, collected)
 
         # Log state
         self._log_state(trade_date, final_state)
@@ -735,7 +735,7 @@ class TradingAgentsGraph:
         # Evict cached data to free memory
         self.data_collector.evict(ticker, trade_date)
 
-        result = self._build_horizon_result("short", final_state)
+        result = self._build_horizon_result("short", final_state, collected)
 
         self._log_state_dual(trade_date, result, {}, user_intent)
 
@@ -750,12 +750,22 @@ class TradingAgentsGraph:
             "social_data_context": social_data_context,
         }
 
-    def _build_horizon_result(self, horizon: str, final_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract a compact result dict from a completed graph state."""
+    def _build_horizon_result(
+        self,
+        horizon: str,
+        final_state: Dict[str, Any],
+        market_source: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Extract a compact result dict from a completed graph state.
+
+        ``market_source`` (DAV-1224 C5): the run's already-collected pool —
+        lets the price_ref audit resolve field-level provenance for its strict
+        source-backed bridge. Optional; absence only disables bridging.
+        """
         apply_report_quality_gate(final_state)
         # DAV-1198/1199/1211: shared price_ref finalization — bypass audit +
         # hard gate (violations fail-close, non-executable)
-        finalize_price_ref_state(final_state)
+        finalize_price_ref_state(final_state, market_source)
         market_context = final_state.get("market_context", {})
         trade_date = final_state.get("trade_date", "")
         market_data_context = final_state.get("market_data_context", {})

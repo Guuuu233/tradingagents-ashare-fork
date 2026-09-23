@@ -40,7 +40,7 @@ class _FakeTradingGraph:
     def process_signal(self, _decision):
         return "HOLD"
 
-    def _build_horizon_result(self, _horizon, state):
+    def _build_horizon_result(self, _horizon, state, market_source=None):
         return dict(state)
 
 

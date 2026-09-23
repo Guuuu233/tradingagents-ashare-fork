@@ -156,9 +156,9 @@ def _run_streaming_job(chunks, extra_patches=()):
 
     finalize_calls: list[dict] = []
 
-    def spy_finalize(state):
+    def spy_finalize(state, market_source=None):
         finalize_calls.append(state)
-        return finalize_price_ref_state(state)
+        return finalize_price_ref_state(state, market_source)
 
     patches = [
         patch.object(main, "_job_store_instance", store),
