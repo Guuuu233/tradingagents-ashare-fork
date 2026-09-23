@@ -630,6 +630,15 @@ def _fund_flow_failure_category(error: object) -> str:
             "request:",
             "connectionerror",
             "remotedisconnected",
+            "transport_",
+            "proxyerror",
+            "proxy",
+            "sslerror",
+            "ssl",
+            "tls",
+            "dns",
+            "getaddrinfo",
+            "peer_closed",
         )
     ):
         return "transport"
@@ -2300,11 +2309,78 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 json=payload,
                 timeout=_TUSHARE_FUND_FLOW_TIMEOUT,
             )
+        except _requests.ConnectTimeout:
+            # ConnectTimeout is both a Timeout and a ConnectionError; keep a
+            # dedicated subtype so proxy vs origin-connect issues stay visible.
+            return (
+                None,
+                self._tushare_error(api_name, "transport_connect_timeout"),
+                "transport_connect_timeout",
+                True,
+            )
+        except _requests.ReadTimeout:
+            return (
+                None,
+                self._tushare_error(api_name, "transport_read_timeout"),
+                "transport_read_timeout",
+                True,
+            )
         except _requests.Timeout:
             return (
                 None,
                 self._tushare_error(api_name, "transport_timeout"),
                 "transport_timeout",
+                True,
+            )
+        except _requests.exceptions.ProxyError:
+            return (
+                None,
+                self._tushare_error(api_name, "transport_proxy"),
+                "transport_proxy",
+                True,
+            )
+        except _requests.exceptions.SSLError:
+            # TLS handshake failure / peer-close EOF during handshake.
+            return (
+                None,
+                self._tushare_error(api_name, "transport_tls"),
+                "transport_tls",
+                True,
+            )
+        except _requests.ConnectionError as exc:
+            text = str(exc).lower()
+            if any(
+                token in text
+                for token in (
+                    "nameresolution",
+                    "name resolution",
+                    "getaddrinfo",
+                    "gaierror",
+                    "name or service not known",
+                    "temporary failure in name",
+                )
+            ):
+                category = "transport_dns"
+            elif any(
+                token in text
+                for token in (
+                    "remote end closed",
+                    "remotedisconnected",
+                    "connection aborted",
+                    "closed connection",
+                    "reset by peer",
+                )
+            ):
+                category = "transport_peer_closed"
+            else:
+                category = "transport_error"
+            _provider_logger.warning(
+                "tushare %s connection failed: %s", api_name, type(exc).__name__
+            )
+            return (
+                None,
+                self._tushare_error(api_name, category),
+                category,
                 True,
             )
         except _requests.RequestException as exc:
@@ -2394,13 +2470,19 @@ class CnAkshareProvider(BaseMarketDataProvider):
         ts_code: str,
         trade_date: str = "",
         params: dict | None = None,
-    ) -> tuple[dict | None, str | None, str | None]:
-        """POST one Tushare request without leaking the token."""
+    ) -> tuple[dict | None, str | None, str | None, int]:
+        """POST one Tushare request without leaking the token.
+
+        Returns ``(payload, error, category, attempts)`` so callers can persist
+        whether a failure exhausted the retryer (``attempts`` equals
+        ``_TUSHARE_FUND_FLOW_MAX_ATTEMPTS`` on a still-retryable final error).
+        """
         if _TUSHARE_FUND_FLOW_MAX_ATTEMPTS <= 0:
             return (
                 None,
                 self._tushare_error(api_name, "provider_error", "retry_unconfigured"),
                 "provider_error",
+                0,
             )
         result: tuple[dict | None, str | None, str | None, bool]
         for attempt in range(_TUSHARE_FUND_FLOW_MAX_ATTEMPTS):
@@ -2409,9 +2491,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
             )
             payload, error, category, retryable = result
             if not retryable or attempt + 1 >= _TUSHARE_FUND_FLOW_MAX_ATTEMPTS:
-                return payload, error, category
+                return payload, error, category, attempt + 1
             time.sleep(_TUSHARE_FUND_FLOW_RETRY_DELAY * (attempt + 1))
-        return result[:3]
+        payload, error, category, _retryable = result
+        return payload, error, category, _TUSHARE_FUND_FLOW_MAX_ATTEMPTS
 
     def _tushare_validate_envelope(
         self, payload: dict, api_name: str
@@ -2729,7 +2812,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
         symbol: str,
         requested_date: str,
         retrieved_at: str,
-    ) -> tuple[list[dict], str | None, str | None]:
+    ) -> tuple[list[dict], str | None, str | None, int]:
         try:
             ts_code = self._tushare_ts_code(symbol)
         except ValueError:
@@ -2737,39 +2820,55 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 [],
                 self._tushare_error(api_name, "validation", "symbol"),
                 "validation",
+                0,
             )
         trade_date = requested_date.replace("-", "")
-        payload, error, category = self._tushare_post(
+        payload, error, category, attempts = self._tushare_post(
             api_name, token, ts_code, trade_date
         )
         if error:
-            return [], error, category
+            return [], error, category, attempts
         row, error, category = self._tushare_extract_row(
             payload or {}, api_name, requested_date
         )
         if error:
-            return [], error, category
+            return [], error, category, attempts
         returned_ts_code = str((row or {}).get("ts_code") or "").strip().upper()
         if returned_ts_code and returned_ts_code != ts_code.upper():
             error = self._tushare_error(api_name, "symbol_mismatch")
-            return [], error, "symbol_mismatch"
+            return [], error, "symbol_mismatch", attempts
         records = self._tushare_records_for_row(
             api_name, row or {}, symbol, requested_date, retrieved_at
         )
         if not records:
             error = self._tushare_error(api_name, "invalid_amount")
-            return [], error, "invalid_amount"
-        return records, None, None
+            return [], error, "invalid_amount", attempts
+        return records, None, None, attempts
 
     @staticmethod
     def _tushare_failure_entry(
-        api_name: str, error: str, category: str | None
+        api_name: str,
+        error: str,
+        category: str | None,
+        attempts: int | None = None,
     ) -> dict[str, str]:
-        return {
+        entry = {
             "api": api_name,
             "category": category or "provider",
             "error": error,
         }
+        if attempts is not None:
+            entry["attempts"] = str(int(attempts))
+            # retry_exhausted marks a failure that consumed every configured
+            # attempt and still failed; single-attempt failures are marked
+            # explicitly so reports can tell "never retried" apart.
+            entry["retry_exhausted"] = (
+                "true"
+                if _TUSHARE_FUND_FLOW_MAX_ATTEMPTS > 1
+                and attempts >= _TUSHARE_FUND_FLOW_MAX_ATTEMPTS
+                else "false"
+            )
+        return entry
 
     @staticmethod
     def _tushare_incomparable_consensus(
@@ -2943,15 +3042,17 @@ class CnAkshareProvider(BaseMarketDataProvider):
 
     @staticmethod
     def _tushare_collect_failures(
-        failures_by_api: tuple[tuple[str, str | None, str | None], ...]
+        failures_by_api: tuple[tuple[str, str | None, str | None, int | None], ...]
     ) -> tuple[list[dict[str, str]], list[str]]:
         failures: list[dict[str, str]] = []
         errors: list[str] = []
-        for api_name, error, category in failures_by_api:
+        for api_name, error, category, attempts in failures_by_api:
             if error:
                 errors.append(error)
                 failures.append(
-                    CnAkshareProvider._tushare_failure_entry(api_name, error, category)
+                    CnAkshareProvider._tushare_failure_entry(
+                        api_name, error, category, attempts
+                    )
                 )
         return failures, errors
 
@@ -2985,16 +3086,20 @@ class CnAkshareProvider(BaseMarketDataProvider):
         if not token:
             return self._tushare_token_gap(api_names)
         retrieved_at = self._sina_retrieved_at()
-        dc_records, dc_error, dc_category = self._fetch_tushare_api_records(
-            _TUSHARE_DC_API, token, symbol, requested_date, retrieved_at
+        dc_records, dc_error, dc_category, dc_attempts = (
+            self._fetch_tushare_api_records(
+                _TUSHARE_DC_API, token, symbol, requested_date, retrieved_at
+            )
         )
-        ths_records, ths_error, ths_category = self._fetch_tushare_api_records(
-            _TUSHARE_THS_API, token, symbol, requested_date, retrieved_at
+        ths_records, ths_error, ths_category, ths_attempts = (
+            self._fetch_tushare_api_records(
+                _TUSHARE_THS_API, token, symbol, requested_date, retrieved_at
+            )
         )
         failures, errors = self._tushare_collect_failures(
             (
-                (_TUSHARE_DC_API, dc_error, dc_category),
-                (_TUSHARE_THS_API, ths_error, ths_category),
+                (_TUSHARE_DC_API, dc_error, dc_category, dc_attempts),
+                (_TUSHARE_THS_API, ths_error, ths_category, ths_attempts),
             )
         )
         if not dc_records and not ths_records:
@@ -3074,7 +3179,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
 
         # 4. Request gateway via existing _tushare_post
         formatted_trade_date = norm_trade_date.replace("-", "")
-        payload, error, category = self._tushare_post(
+        payload, error, category, _attempts = self._tushare_post(
             _TUSHARE_DAILY_BASIC_API, token, ts_code, formatted_trade_date
         )
         if error:
@@ -3325,7 +3430,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
         # Strictly unadjusted raw daily bars without adjustment parameters
         if norm_trade_date:
             formatted_trade_date = norm_trade_date.replace("-", "")
-            payload, error, category = self._tushare_post(
+            payload, error, category, _attempts = self._tushare_post(
                 _TUSHARE_DAILY_API, token, ts_code, formatted_trade_date
             )
         else:
@@ -3334,7 +3439,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 "start_date": norm_start_date.replace("-", ""),
                 "end_date": norm_end_date.replace("-", ""),
             }
-            payload, error, category = self._tushare_post(
+            payload, error, category, _attempts = self._tushare_post(
                 _TUSHARE_DAILY_API, token, ts_code, params=params
             )
 
@@ -3568,7 +3673,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
         params["ts_code"] = ts_code
 
         # 4. Request gateway via existing _tushare_post
-        payload, error, category = self._tushare_post(
+        payload, error, category, _attempts = self._tushare_post(
             _TUSHARE_DIVIDEND_API, token, ts_code, params=params
         )
         if error:
@@ -3831,7 +3936,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             if norm_end:
                 params["end_date"] = norm_end.replace("-", "")
 
-        payload, error, category = self._tushare_post(
+        payload, error, category, _attempts = self._tushare_post(
             _TUSHARE_FORECAST_API, token, ts_code, params=params
         )
         if error:
@@ -4096,7 +4201,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 )
             params["end_date"] = norm_end.replace("-", "")
 
-        payload, error, category = self._tushare_post(
+        payload, error, category, _attempts = self._tushare_post(
             _TUSHARE_REPURCHASE_API, token, ts_code, params=params
         )
         if error:
@@ -4397,7 +4502,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 )
             params["ann_date"] = norm_ann.replace("-", "")
 
-        payload, error, category = self._tushare_post(
+        payload, error, category, _attempts = self._tushare_post(
             _TUSHARE_DISCLOSURE_DATE_API, token, ts_code, params=params
         )
         if error:
