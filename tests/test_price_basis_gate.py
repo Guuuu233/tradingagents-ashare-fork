@@ -125,7 +125,7 @@ def test_labeled_dual_display_is_allowed_not_violation():
 def test_unspecified_decision_driving_price_fails_closed():
     state = _state(
         market_report="现价 81.19 元。",
-        final_trade_decision="某渠道消息称公允价 70.00 元，建议观望。",
+        final_trade_decision="某渠道消息称市价 70.00 元，建议观望。",
     )
     gate = enforce_price_basis_gate(state)
     assert gate["status"] == "blocked"

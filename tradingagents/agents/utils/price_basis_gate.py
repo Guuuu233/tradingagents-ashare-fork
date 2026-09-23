@@ -48,6 +48,7 @@ from tradingagents.agents.utils.decision_status import (
 )
 from tradingagents.agents.utils.price_ref_registry import (
     COORDINATE_KEYWORDS,
+    PRICE_BASIS_DERIVED_ESTIMATE,
     audit_price_ref_registry,
 )
 
@@ -92,7 +93,11 @@ def _is_decision_driving(ref: Mapping[str, Any]) -> bool:
     """A ref is decision-driving when it lives in a decision report or sits in
     a coordinate context (support/resistance/anchor/target/stop language).
     Refs inside an explicitly non-comparable labeled sentence are display-only
-    dual display, not decision-driving."""
+    dual display, not decision-driving. A ``derived_estimate`` ref is a model
+    valuation estimate, not a coordinate price — it carries no decision-driving
+    accountability (DAV-1224 C3)."""
+    if ref.get("basis") == PRICE_BASIS_DERIVED_ESTIMATE:
+        return False
     context = ref.get("context") or ""
     if _has_non_comparable_label(context):
         return False

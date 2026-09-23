@@ -77,6 +77,12 @@ CANONICAL_PRICE_BASES = frozenset(
     )
 )
 
+# [C3] derived_estimate is a semantic role, not a coordinate basis: a ref
+# carrying it is a model-derived valuation estimate — it may participate in
+# reasoning but is not a market quote, carries no decision-driving basis/as_of
+# accountability, and may not back an executable level.
+PRICE_BASIS_DERIVED_ESTIMATE = "derived_estimate"
+
 # Reports scanned by the audit. market/volume_price are built on the vendor
 # qfq data channel, so their unmarked prices inherit vendor_qfq. All other
 # reports are model-authored: their prices must trace back to the registry
@@ -444,6 +450,55 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
 
 
 # ---------------------------------------------------------------------------
+# [C3] derived_estimate — token 级估值算术绑定
+# ---------------------------------------------------------------------------
+
+# 强词：估值算术语义。「假设/情景/悲观/乐观/防御/底线」等弱词不得单独触发。
+_STRONG_DERIVED = re.compile(
+    r"PE|PB|市盈率|市净率|折合|折算|换算|测算|估算|估值|倍|净利|利润|"
+    r"市值|每股股价|公允|隐含|理论价|内在价值|DCF|贴现|安全边际|ROE"
+)
+# 「对应」必须落在 股价/每股/市值/估值 上才算强词（「对应了获利盘在 70 元关口」
+# 之类的「对应」是弱词）
+_DUIYING_DERIVED = re.compile(r"对应[^。]{0,8}(?:股价|每股|市值|估值|元)")
+_SUBCLAUSE_SPLIT = re.compile(r"[，。；;：:、|（）()\[\]【】\n\r]+")
+
+
+def _pre_token_window(sentence: str, start: int) -> str:
+    left = sentence[:start]
+    seg_start = 0
+    for m in _SUBCLAUSE_SPLIT.finditer(left):
+        seg_start = m.end()
+    return sentence[seg_start:start][-25:]
+
+
+def is_derived_value(sentence: str, value: float, tol: float = _VALUE_MATCH_TOLERANCE) -> bool:
+    """[C3] token 级 derived 判定：数字前 25 字内（同一子句）出现估值算术词。"""
+    for s, e, _p in _match_spans(sentence or "", value, tol):
+        window = _pre_token_window(sentence, s)
+        if _STRONG_DERIVED.search(window) or _DUIYING_DERIVED.search(window):
+            return True
+    return False
+
+
+_QUOTE_WORDS = re.compile(r"现价|收盘|报收|股价|运行于|位于|关口|平台|报价|价位")
+
+
+def looks_like_actual_quote(context: str, value: float,
+                            pool: Optional["MarketDataPool"],
+                            tol: float = _VALUE_MATCH_TOLERANCE) -> bool:
+    """[C3] 真报价保护：token 窗口含报价语义词且值匹配本运行具名字段 →
+    这是市场报价（coordinate），不得因同句估值算术词被判 derived。"""
+    if pool is None:
+        return False
+    for s, e, _p in _match_spans(context or "", value, tol):
+        w = context[max(0, s - 15):e + 10]
+        if _QUOTE_WORDS.search(w) and pool.fields_matching(value, tol):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -651,6 +706,24 @@ def build_price_ref_registry(
                     ref = next(r for r in refs if r["ref_id"] == rid)
                     ref["derived_from"] = [other for other in ids if other != rid]
 
+    # [C3] derived_estimate 语义角色：derived 估值锚不再是坐标 basis，
+    # 可参与推理但不冒充 vendor_qfq coordinate/executable。
+    for ref in refs:
+        prov = ref.get("provenance") or ""
+        # derived 判定绑定到数字本身：同一子句、数字前 25 字内出现估值算术词
+        # 才算；「假设/情景/悲观/乐观/防御/底线」弱词不单独触发。
+        # 真报价保护：报价语义词 + pool 具名字段同值 → 真坐标，不降格。
+        ctx_v = ref.get("context") or ""
+        # 真报价保护需要 [C5] pool；无池时该守卫不生效（与验证层一致）。
+        is_derived = is_derived_value(ctx_v, ref.get("value"))
+        # 只把「无 concrete basis」的派生值改写为 derived_estimate；
+        # 已声明 qfq/raw/pit_raw 的 ref（如『前复权目标价』）保持原 basis，
+        # conversion 记录也保留——合法转换仍是合法 executable。
+        if is_derived and ref.get("disclosure_type") is None \
+                and ref["basis"] == PRICE_BASIS_UNSPECIFIED:
+            ref["basis"] = PRICE_BASIS_DERIVED_ESTIMATE
+            ref["provenance"] = "role:derived_estimate|" + prov
+
     # Pass 2 — registry back-reference inheritance for unspecified model prices.
     qfq_values = [
         r["value"]
@@ -677,7 +750,8 @@ def build_price_ref_registry(
                 ref["source"],
                 f"价格 {ref['value']} 无法归因 basis（模型新价不可自证）",
             )
-        if ref["as_of"] is None:
+        # [C3] derived_estimate 不是市场报价，不要求 as_of。
+        if ref["as_of"] is None and ref["basis"] != PRICE_BASIS_DERIVED_ESTIMATE:
             _add_gap(
                 "missing_as_of",
                 ref["ref_id"],
@@ -686,6 +760,7 @@ def build_price_ref_registry(
             )
 
     # Pass 4 — basis mismatch detection.
+    # [C3] derived_estimate 不属 concrete basis，天然不参与 R1/R2 混用判定。
     concrete_bases = {PRICE_BASIS_VENDOR_QFQ, PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW}
 
     by_report: Dict[str, List[Dict[str, Any]]] = {}
