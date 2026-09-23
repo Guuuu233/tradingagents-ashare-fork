@@ -43,11 +43,10 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .report_quality_gate import apply_report_quality_gate
-from tradingagents.agents.utils.price_ref_registry import audit_price_ref_registry
 from tradingagents.agents.utils.price_basis_gate import (
     GATE_BLOCKED_GAP,
     PRICE_REF_CONTRACT_VERSION,
-    enforce_price_basis_gate,
+    finalize_price_ref_state,
 )
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
@@ -659,10 +658,9 @@ class TradingAgentsGraph:
         # Store current state for reflection
         self.curr_state = final_state
         apply_report_quality_gate(final_state)
-        # DAV-1198: bypass-only price_ref registry audit
-        audit_price_ref_registry(final_state)
-        # DAV-1199: price-basis hard gate — violations fail-close (non-executable)
-        gate = enforce_price_basis_gate(final_state)
+        # DAV-1198/1199/1211: shared price_ref finalization — bypass audit +
+        # hard gate (violations fail-close, non-executable)
+        gate = finalize_price_ref_state(final_state)
 
         # Log state
         self._log_state(trade_date, final_state)
@@ -755,10 +753,9 @@ class TradingAgentsGraph:
     def _build_horizon_result(self, horizon: str, final_state: Dict[str, Any]) -> Dict[str, Any]:
         """Extract a compact result dict from a completed graph state."""
         apply_report_quality_gate(final_state)
-        # DAV-1198: bypass-only price_ref registry audit
-        audit_price_ref_registry(final_state)
-        # DAV-1199: price-basis hard gate — violations fail-close (non-executable)
-        enforce_price_basis_gate(final_state)
+        # DAV-1198/1199/1211: shared price_ref finalization — bypass audit +
+        # hard gate (violations fail-close, non-executable)
+        finalize_price_ref_state(final_state)
         market_context = final_state.get("market_context", {})
         trade_date = final_state.get("trade_date", "")
         market_data_context = final_state.get("market_data_context", {})

@@ -91,8 +91,7 @@ from tradingagents.graph.intent_parser import parse_intent as _parse_intent
 from tradingagents.agents.utils.context_utils import USER_CONTEXT_KEYS, normalize_user_context
 from tradingagents.agents.utils.agent_states import current_tracker_var, get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
-from tradingagents.agents.utils.price_ref_registry import audit_price_ref_registry
-from tradingagents.agents.utils.price_basis_gate import enforce_price_basis_gate
+from tradingagents.agents.utils.price_basis_gate import finalize_price_ref_state
 from tradingagents.graph.horizon_profile import (
     HORIZON_PROFILE_V1,
     HORIZON_SHORT,
@@ -4079,6 +4078,11 @@ async def _run_job_inner(
                 raise
             finally:
                 current_tracker_var.reset(_tracker_token)
+
+            # DAV-1211: the streaming single-horizon path bypasses
+            # propagate(), so run the shared price_ref finalization here —
+            # bypass audit + hard gate — before payload build/persistence.
+            finalize_price_ref_state(final_state)
         else:
             single_horizon = request.horizons[0] if request.horizons else "short"
             if single_horizon == "short":
@@ -4133,16 +4137,22 @@ async def _run_job_inner(
                     init_state,
                     **args,
                 )
-                # DAV-1207: parity with propagate() — the raw-invoke medium path
-                # must run the same price_ref audit + hard gate, otherwise the
-                # persisted payload carries no real gate output.
-                audit_price_ref_registry(final_state)
-                enforce_price_basis_gate(final_state)
+                # DAV-1207/1211: parity with propagate() — the raw-invoke
+                # medium path runs the same shared price_ref finalization,
+                # otherwise the persisted payload carries no real gate output.
+                finalize_price_ref_state(final_state)
 
         if not final_state:
             raise RuntimeError("graph returned empty final state")
 
         graph_decision = graph.process_signal(final_state["final_trade_decision"])
+        if (
+            (final_state.get("price_basis_gate") or {}).get("status") == "blocked"
+            and graph_decision in ("BUY", "SELL")
+        ):
+            # Same fail-close as propagate(): a gate-blocked run must not emit
+            # a directional signal even if the decision text still parses one.
+            graph_decision = "NO_TRADE"
         result = _build_result_payload(final_state)
         result["decision"] = graph_decision or "UNKNOWN"
 

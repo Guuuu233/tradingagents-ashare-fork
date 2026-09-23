@@ -440,3 +440,17 @@ def enforce_price_basis_gate(state: MutableMapping[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
         return fallback
+
+
+def finalize_price_ref_state(state: MutableMapping[str, Any]) -> Dict[str, Any]:
+    """Single post-graph price_ref finalization for every entry point
+    (propagate / dual-horizon horizon result / streaming astream / raw invoke).
+
+    Runs the DAV-1198 bypass audit then the DAV-1199 hard gate and returns the
+    gate payload. Fail-close mutation of ``trade_action``/``decision_status``
+    lives inside ``enforce_price_basis_gate``; callers that derive a signal
+    from the raw decision text must still apply the blocked->NO_TRADE
+    downgrade to that signal (as ``propagate()`` does).
+    """
+    audit_price_ref_registry(state)
+    return enforce_price_basis_gate(state)
