@@ -1,49 +1,87 @@
 # Project State
 
-## 当前状态头部（2026-09-24 00:45 总控更新；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-24 06:30 总控更新；开工前必须重新回读，D-005）
 
-| 项 | production view | trunk candidate view |
-|---|---|---|
-| 代码 SHA | `3d9c41495b748121032e038cf2ae85afeb64248d`（`/healthz` 精确回读） | `9d03c899e689687cc8c96e2544f8452455d393f9`（`git ls-remote origin codex/dav-4-p2a-trunk`）。若主干 HEAD 是其治理文档后代，代码树逐字节一致 |
-| 待发布提交 | — | `35c33de`（DAV-1135，E-04 否定存在豁免）、`1d74ce8`（DAV-1139，Stage 3.5 HOLD 语义隔离）、`9d03c89`（DAV-1138，资金流失败分类） |
-| H1b 漏斗（D-035） | completed 1052 → v2 390 → D-009 合格 43 → 价格口径隔离 28 → **clean 15**（legacy 6 + v1 9） | 1052 → 390 → 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
+| 项 | 值 |
+|---|---|
+| 生产代码 SHA | `a181e4afc763019f24fa258fa7557a84c305bedb`（`/healthz` 与 `/api/health` 精确回读；09-24 03:16 起，DAV-1233） |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`a181e4a` 之后若只有治理文档提交，代码树与生产逐字节一致 |
+| 待发布提交 | 无 |
+| H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
-两个漏斗的统计口径：
-- 数据来自生产库 `.backup()` 副本，快照时间 2026-09-23 21:54；
-- D-009 排除共 347 条：ABSTAIN 234、旧格式无状态 69、WAIT 40、INVALID_RUN 4；
-- 价格口径隔离共 28 条：确认污染 14、待裁决 13、契约不全 1。
+漏斗的统计口径：
+- **数据来源**：生产库 `.backup()` 副本，快照时间 2026-09-23 21:54。
+- **部署后新增的报告**：新增 completed 只有 smoke 报告 4390ddfd。它带 `price_ref_contract_version=price_ref.v1` 与 `price_basis_version=price_basis.unspecified`，按 `classify_price_basis_exclusion` 判定为 contract_incomplete，不进入 clean。这一结论来自读代码，下次刷新台账时用已提交的脚本复测。
+- **clean 从 15 变成 12 的原因**：生产视图原来是 15，本次发布后 DAV-1139 HOLD 语义隔离生效，排除 4 条（其中 1 条与价格口径隔离重叠）。这不是数据丢失。
+- **计算代码未变**：漏斗计算所用的 `shadow_credit.py`、`price_basis_isolation.py`、`verify_h1b_gates.py`，自 `9d03c89` 以来没有改动。
 
-- **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60；两种视图下 v1 cohort 分别只有 9 和 6 条。`credit_weighting_enabled=False`。
-- **服务运行态**：
-  - PID 41313，2026-09-23 13:28 启动，监听 `127.0.0.1:8000`；
-  - 运行目录是主仓库 `/Users/davidliu/Documents/TradingAgents-AShare`（detached HEAD），不是独立发布 worktree，待下次发布门迁回（D-038）；
-  - 未设置 `TA_SOCIAL_MODE`，`/v1/social-data/status` 回读 `disabled`（09-19 为 shadow）。原因已查明：宿主 `.env` 缺少社交配置，而 09-20 后的发布都从主仓库目录启动。总控决定暂时保持 `disabled`，下次发布门显式设置并回读（D-038）。
-- **生产库**：reports 共 1816 份，其中 completed 1052、failed 764（2026-09-23 22:21 `mode=ro` 实测）。
-- **当前唯一关键路径**（D-034、D-039）：DAV-1225 已签收（证据 `53df9ad` 已并入主干）→ **DAV-1224**（按 v2 范围 `work/issue-dav1224-spec-v2-20260924.md` 施工，待总工派工）→ 50 份冻结 state 零 LLM 重算 → 统一发布门 → B2+B3 解冻裁决。
-- **冻结语料 what-if 上限**（DAV-1225）：五个杠杆全部落地后 6/50 通过；剩余主体为模型自拟、无来源的真实价位。
-- **样本产出率**（DAV-1227）：每 100 份 completed 约产出 3.07 个 clean（production 视图）或 2.45 个（trunk 视图）。单一 cohort 要攒到 60 个，约需 2,000–2,450 份真实分析，而契约期新报告目前产出为 0。
+- **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
+- **服务运行态**（D-038、D-041）：
+  - PID 7082，2026-09-24 03:16:09 启动，监听 `127.0.0.1:8000`。
+  - 运行目录是独立发布 worktree `/Users/davidliu/Documents/TradingAgents-AShare-releases/a181e4a`，detached 且已 locked。
+  - 启动环境：
+    - 用 `env -i` 只保留 13 项白名单变量，不含任何 agent 变量；
+    - DATABASE_URL 为绝对路径；
+    - 显式设置 `TA_SOCIAL_MODE=disabled`，`/v1/social-data/status` 回读为 `disabled`；
+    - no_proxy 与上一进程逐字一致。
+  - `.env` 是指向主 checkout 的软链。`frontend/dist` 从主 checkout 原样复制，是 08-28 的构建（`index-BUNRF3hH.js`）。
+  - 日志：`/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/uvicorn-a181e4a.log`。
+  - `/healthz` 的 version 显示为 `dev`：发布目录里没有包元数据，只影响显示。下次发布在启动环境里加 `APP_VERSION`。
+  - 回退源是主 checkout，停在 `3d9c414`，工作区干净。今后不得再从主 checkout 启动生产。
+- **生产库**：
+  - reports 共 1817 份：completed 1053、failed 764（2026-09-24 06:0x，`mode=ro` 实测）。
+  - 部署前备份为 `data/tradingagents.db.bak-20260924-deploy-a181e4a`：899,166,208 B，quick_check 与 integrity_check 均为 ok，含 1816 份报告。
+- **当前唯一关键路径**（D-041）：
+  1. **DAV-1235**：price-ref 精度收紧，零 LLM，目前在 backlog，待总工派工。
+  2. **生成侧价格来源标注**：由总控撰写规格，并按 D-037 单独放行。
+  3. **B2+B3 解冻裁决**。
+- **上线后首份真实报告**（smoke 4390ddfd，600519.SH@2026-09-23，VALID / BEAR / NO_TRADE）：
+  - 共 205 条 price ref：vendor_qfq 177、unspecified 25、derived_estimate 3。
+  - gate 结果为 blocked，共 42 条违规，出自 20 条 ref：16 条是模型自拟的交易价位；另外 4 条是抽取误报，其中差额 3 条、非本股价格 1 条。
+  - derived_estimate 的 3 条里有 2 条误判，交 DAV-1235 收紧。
+  - 字段桥接 1 条：pr-191 → `derived.limit_down@2026-09-23`，正确。
+- **冻结语料 what-if**：a181e4a 在冻结语料上 6/50 通过，与 W4 一致。
+- **样本产出率**（DAV-1227）：每 100 份 completed 约产出 2.45 个 clean，这是现在唯一的口径。契约期的新报告目前产出仍为 0。
 - **冻结项**：
   - B2+B3 的 24 条真实重放；
   - 信用加权；
   - 社交 active；
   - 批量真实分析；
   - 概率输出与生成链改造（D-037）。
-- **并行准备线**（D-037）已全部签收：
-  - DAV-1226：probability 缺失的主因是生成侧契约从未要求输出；
-  - DAV-1227：见上方产出率；
-  - DAV-1228：阶段 H/E 的数据缺口均有闭合路径（Tushare `index_member` / `report_rc`、baostock 退市股）。
+- **并行准备线**（D-037）：
+  - DAV-1226、1227、1228 已签收。
+  - DAV-1228 分支 `agent/agent/665f3af82f25` 尚待 squash 合入。按 D-040，probe-raw 只保留元信息，合入后删除原分支。
   - F1 阶段 H 的实施，在关键路径完成后再排期。
 - **测量地基约束**：
   - `price_ref.v1` 下 51/51 blocked：50 份 DAV-1222 冻结重放，加 1 份 contract-era 生产 smoke `7a557f07`；
   - 固定输入方差（DAV-1222，10 个样本 × 5 次）：交易动作 5 次全一致的仅 2/10，H1b 资格发生翻转的 4/10；
   - 前向窗口 ABSTAIN 87.1%，8 条 VALID 全部为 WAIT（DAV-1044，09-19）；
   - completed 报告带 probability 的比例：2026-07 为 0/403，2026-08 为 7/328，2026-09 为 12/321。
+- **已知运行态技术债**：
+  - **前端 dist 过期**：自 08-28 起未重建，此后 10 个前端提交从未上线（截至 `49f1e87`），其中包括 DAV-765 校准面板、DAV-914/887 方向本地化。另立前端发布项处理。
+  - **一条读活库的测试**：`test_rt_s4_david_account_clean_population_counts` 以 `mode=ro` 读活库，并与 09-08 的硬编码计数比对，因此在任何 SHA 上都会失败（575≠317）。它不是回归信号，应改为固定快照，或移出 RT-FULL。
 - **角色**（D-033）：
   - 总控（Claude 桌面会话）：最终裁决与签字；
   - 总工：执行统筹；
   - ChatGPT：独立复核；
   - 看板动作以「【总控】」「【总工】」前缀区分。
-- **路线索引**：见仓库根目录的 `ROADMAP.md`。此前只存在于本机的计划与研究文档，已于 09-23 复制入库，放在 `docs/plans/` 和 `docs/research/`。
+- **路线索引**：见仓库根目录的 `ROADMAP.md`。
+
+## 2026-09-23 → 2026-09-24 变更摘要
+
+- **主干**：`9d03c89` → `a181e4a`。
+  - 治理：`daba99d`（D-033～D-038）、`5e43e29`（计划与研究文档入库、D-038）、`ae89d2b`（D-039/D-040、DAV-1224 v2 规格）。
+  - 证据：`53df9ad`（DAV-1225 纠错返修）。
+  - 代码：DAV-1224 C1–C5，即 `80c1f5e`、`6196774`、`98c4d3c`、`46e84c2`、`6043fbc`；另有 `a181e4a`，只删除 4 处 EOF 空行。
+- **上线**：`3d9c414` → `a181e4a`（DAV-1233，09-24 03:16）。
+  - 同时带上 DAV-1135、DAV-1139、DAV-1138。
+  - 生产迁入独立发布 worktree，社交开关改为显式设置。
+  - 第一段 RT-FULL：基线 5401 passed / 1 failed，候选 5488 passed / 1 failed，新增失败 0。
+  - 另做受控 smoke 1 条（4390ddfd）。
+- **看板**：
+  - DAV-1224、1231、1232、1233 已 done；
+  - 新立 DAV-1235，放在 backlog。总工同时立的占位卡 DAV-1234 与之重复，已取消；
+  - 旧分支 `agent/2/dav-1225-b0-corr` 已删除。
 
 ## 2026-09-19 → 2026-09-23 变更摘要
 
