@@ -17,7 +17,7 @@
 - **服务运行态**：
   - PID 41313，2026-09-23 13:28 启动，监听 `127.0.0.1:8000`；
   - 运行目录是主仓库 `/Users/davidliu/Documents/TradingAgents-AShare`（detached HEAD），不是独立发布 worktree，待下次发布门迁回（D-038）；
-  - 未设置 `TA_SOCIAL_MODE`，`/v1/social-data/status` 回读 `disabled`；09-19 台账记录为 shadow，变更原因待查（D-038）。
+  - 未设置 `TA_SOCIAL_MODE`，`/v1/social-data/status` 回读 `disabled`（09-19 为 shadow）。原因已查明：宿主 `.env` 缺少社交配置，而 09-20 后的发布都从主仓库目录启动。总控决定暂时保持 `disabled`，下次发布门显式设置并回读（D-038）。
 - **生产库**：reports 共 1816 份，其中 completed 1052、failed 764（2026-09-23 22:21 `mode=ro` 实测）。
 - **当前唯一关键路径**（D-034）：DAV-1136 → **DAV-1225**（零 token 纠错与 W0–W4；backlog，待总工指派实现者）→ DAV-1224（blocked）→ 50 份冻结 state 零 LLM 重算 → B2+B3 解冻裁决 → 统一发布门。
 - **冻结项**：
@@ -37,7 +37,7 @@
   - 总工：执行统筹；
   - ChatGPT：独立复核；
   - 看板动作以「【总控】」「【总工】」前缀区分。
-- **路线索引**：见仓库根目录的 `ROADMAP.md`。
+- **路线索引**：见仓库根目录的 `ROADMAP.md`。此前只存在于本机的计划与研究文档，已于 09-23 复制入库，放在 `docs/plans/` 和 `docs/research/`。
 
 ## 2026-09-19 → 2026-09-23 变更摘要
 

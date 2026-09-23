@@ -1,0 +1,51 @@
+{
+  "seed": 20260922,
+  "power_z": 2.801585218112968,
+  "power_table": [
+    {
+      "sd": 0.1,
+      "delta": 0.005,
+      "n_independent": 3140,
+      "n_discovered_example": 6354
+    },
+    {
+      "sd": 0.1,
+      "delta": 0.01,
+      "n_independent": 785,
+      "n_discovered_example": 1589
+    },
+    {
+      "sd": 0.1,
+      "delta": 0.02,
+      "n_independent": 197,
+      "n_discovered_example": 399
+    },
+    {
+      "sd": 0.15,
+      "delta": 0.01,
+      "n_independent": 1766,
+      "n_discovered_example": 3574
+    }
+  ],
+  "simulation": {
+    "replications": 10000,
+    "clusters": 40,
+    "cluster_size": 20,
+    "intracluster_correlation": 0.1,
+    "true_delta": 0,
+    "pA": 0.45,
+    "pB": 0.55,
+    "nominal_alpha": 0.05,
+    "naive_rejection": 0.2572,
+    "cluster_rejection": 0.0535,
+    "mcse_naive": 0.004370905626983955,
+    "mcse_cluster": 0.0022502833154960733
+  },
+  "checks": {
+    "brier_identity_maxerror": 2.220446049250313e-16,
+    "ensemble_identity_maxerror": 2.220446049250313e-16,
+    "shrinkage_example": 0.58,
+    "mixture_weight": 0.5259841802114615,
+    "mixture_grid_check": "passed"
+  }
+}

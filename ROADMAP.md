@@ -26,7 +26,7 @@
 - **下一阶段（研究线）**
   - 方向是「可验证的投研学习」。
   - 首个实验是冻结经验包，检验它能否改进 T+10 行业相对概率。
-  - 协议 v1.0.1 的方法已定稿，尚未排期（见第 5 节）。
+  - 协议 v1.0.1 的方法已定稿，尚未排期（见第 5 节）。协议本体在 `docs/research/f1-frozen-experience/`。
 
 ## 2. 当前关键路径（D-034）
 
@@ -61,7 +61,7 @@
   - 批量真实分析。
 - **红线**，须 David 单独授权：
   - 生产库业务写入；
-  - 社交 active、真实采集与 Cookie，其中包括是否恢复 shadow（D-038）；
+  - 社交 active、真实采集与 Cookie（社交当前保持 disabled，见 D-038）；
   - 凭据轮换；
   - 历史重写；
   - 开启信用加权。
@@ -90,21 +90,21 @@
 | H1b 激活门槛（08-26） | `work/p3-h1b-activation-gates-draft.md` | 现行 | 即 D-006 的门槛值 |
 | 决策语义审计稿（08-27） | `work/2026-08-27-audit-decision-semantics-plan.md` | 现行（原则） | D-009 权威 |
 | 统一方案 Track A/B（08-27） | `work/2026-08-27-unified-final-plan.md` | 已取代 | 冲突处以 D-009 审计稿为准 |
-| 增补整合施工计划 v1.1（09-06） | 仓库外：`~/Documents/Codex/2026-08-27/referenced-chatgpt-conversation-this-is-an-3/.hermes/plans/` | 已完成（主体） | 09-14 审计确认主体已交付 |
+| 增补整合施工计划 v1.1（09-06） | `docs/plans/2026-09-06-integrated-construction-plan/`（v1 同目录，已被 v1.1 取代） | 已完成（主体） | 09-14 审计确认主体已交付 |
 | 派工序列表（09-12） | `work/2026-09-12-dispatch-sequence.md` | 已取代 | 被 09-14 收口、09-16 裁定取代 |
 | 计划审计收口（09-14） | `work/2026-09-14-plan-audit-closeout.md` | 历史 | — |
 | 终版审计与唯一收口（09-16） | `work/2026-09-16-final-audit-and-integration-plan.md` | 已完成 | 取代 `work/2026-09-16-handoff.md`；DAV-1003 已于 09-17 完成 |
-| 方案对账与剩余清单（09-17） | 仓库外：`~/Documents/Codex/2026-09-17/remaining-work-audit/plan-inventory.md` | 已取代 | 五阶段中前三阶段已完成，其余由本文件接续；文中「D-018 回归老流程」实为 D-032 |
+| 方案对账与剩余清单（09-17） | `docs/plans/2026-09-17-remaining-work-audit/plan-inventory.md` | 已取代 | 五阶段中前三阶段已完成，其余由本文件接续；文中「D-018 回归老流程」实为 D-032 |
 | 工作流升级方案（09-17） | `work/2026-09-17-multica-workflow-upgrade-landing-plan.md` | 已取代 | 已由 D-032 撤销 |
 | H1b 攒样计划（09-18/19） | `work/h1b-sample-plan-20260918.md`、`work/h1b-v1-cohort-sample-plan-20260919.md` | 历史 | 其中 cohort 数字已过期，以 D-035 双视图为准 |
 | 证据核验器审计方案（09-19） | `work/2026-09-19-evidence-verifier-audit-plan.md` | 已完成 | — |
 | B2/B3 分层批次冻结名单（09-21） | `work/h1b-regime-pool-20260921.md`、`work/h1b-regime-pool-b3-20260921.md` | 现行 | 这 24 条的重放目前冻结 |
-| 下一阶段提升建议（09-18） | 仓库外：`~/Downloads/TradingAgents-下一阶段提升建议-20260918.md` | 历史 | 属研究建议，未批准；内容已被 09-23 协议吸收 |
-| Fable/GPT 方案评议、组织经验实验协议草案（09-21） | 仓库外：`~/Downloads/` 下对应文件 | 已取代 | 被 09-23 协议取代 |
-| 测量与可行性试点协议 v1.0.1 及三份附件（09-23） | 仓库外：`~/Documents/Codex/2026-09-22/ni/outputs/` | 现行（方法） | 方法已定稿，尚未排期；阶段 H 的准备见 DAV-1228 |
+| 下一阶段提升建议（09-18） | `docs/research/2026-09-18-next-stage/` | 历史 | 属研究建议，未批准；内容已被 09-23 协议吸收 |
+| Fable/GPT 方案评议、组织经验实验协议草案（09-21） | `docs/research/2026-09-21-learning-review/` | 已取代 | 被 09-23 协议取代 |
+| 测量与可行性试点协议 v1.0.1 及三份附件（09-23） | `docs/research/f1-frozen-experience/outputs/`（验算脚本在同级 `claude_review/`、`math-bundle/`、`checks/`） | 现行（方法） | 方法已定稿，尚未排期；阶段 H 的准备见 DAV-1228 |
 | DAV-1136 路线裁决与 09-23 更正 | 看板评论 | 现行 | 已写入 D-034 |
 
-仓库外文件目前只在本机存在。仓库是公开仓库，这些文件是否复制进仓库，由 David 决定。
+以上原本只在本机的计划与研究文档，已于 2026-09-23 经 David 同意复制入库（`docs/plans/`、`docs/research/`，各目录 README 记录了来源与未复制内容）。本仓库为公开仓库。
 
 ## 6. 术语表
 

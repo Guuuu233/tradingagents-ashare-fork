@@ -1,0 +1,50 @@
+{
+ "1_calibrated_U_random_worlds": {
+  "trials": 31592,
+  "min_n_over_Kbound": 1.0012634752486798,
+  "min_n_over_distribution_free_bound": 1.001355874602646
+ },
+ "2_named_worlds_SD10pp_U0.5": {
+  "two_point_q=0.4/0.6": {
+   "SD_q": 0.09999999999999998,
+   "best_n_found": 188.38064877167878,
+   "oracle_n": 753.4924544975148,
+   "bound": 188.37311362437814,
+   "old_c0_bound": 188.37311362437814
+  },
+  "extreme_4pct_q=0or1_rest_0.5": {
+   "SD_q": 0.1,
+   "best_n_found": 188.37311362437796,
+   "oracle_n": 188.37311362437808,
+   "bound": 188.37311362437805,
+   "old_c0_bound": 0.0
+  },
+  "extreme_q=0.02/0.98_mixed": {
+   "SD_q": 0.1,
+   "best_n_found": 188.37372899502267,
+   "oracle_n": 234.52452646235074,
+   "bound": 188.37311362437805,
+   "old_c0_bound": 15.383804279324206
+  }
+ },
+ "3_nonconstant_comparator": {
+  "trials": 25970,
+  "min_n_over_Kbound": 1.0019999013356307
+ },
+ "4_distribution_free_table": {
+  "U=0.5": {
+   "SD(q)=0.1": 189,
+   "SD(q)=0.07": 393,
+   "SD(q)=0.05": 778,
+   "SD(q)=0.03": 2173,
+   "SD(q)=0.02": 4898
+  },
+  "U=0.52": {
+   "SD(q)=0.1": 173,
+   "SD(q)=0.07": 362,
+   "SD(q)=0.05": 716,
+   "SD(q)=0.03": 2002,
+   "SD(q)=0.02": 4514
+  }
+ }
+}

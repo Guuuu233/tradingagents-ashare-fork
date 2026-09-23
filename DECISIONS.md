@@ -91,7 +91,14 @@
 
 - 生产服务应从明确的发布 worktree、以精确 SHA 启动。当前的 `3d9c414` 直接运行在主仓库目录（detached HEAD），下一次发布门时迁回独立发布 worktree。
 - 每次发布前后，`PROJECT_STATE.md` 头部必须记录：服务 SHA、运行目录、PID，以及关键运行开关（含 `TA_SOCIAL_MODE`）。
-- 社交模式现状：`/v1/social-data/status` 回读为 `disabled`，当前进程没有设置 `TA_SOCIAL_MODE`，而 09-19 台账记录为 shadow。变更的时间和原因待查。是否恢复 shadow 涉及已登录会话采集，由 David 决定。
+- **社交模式现状**：`/v1/social-data/status` 回读为 `disabled`，当前进程未设置 `TA_SOCIAL_MODE`；09-19 台账记录的是 shadow。
+- **静默变化的原因（已查明）**：宿主 `.env` 本来就没有 `TA_SOCIAL_*` 三项，09-18 已在 `work/social-shadow-deploy-gate-20260918.md` 记录这一风险。09-20 之后的发布直接从主仓库目录启动，没有经过带社交校验的发布脚本，服务因此回落到默认值 `disabled`。
+- **总控决定（2026-09-23）**：暂时保持 `disabled`，不为此单独重启生产。David 原话：「社交数据这个你看着办」。理由有三：
+  - 社交归档库只有 09-18 的一次测试采集（关键词「贵州茅台」，xhs 203 条、dy 154 条，快照 357 个），之后没有持续采集，恢复 shadow 几乎没有增量；
+  - shadow 模式下社交数据本来就不参与方向判断（`direction_allowed=false`）；
+  - 现行关键路径和各项测量都不依赖社交数据。
+- **下次发布门的要求**：必须显式设置并回读 `TA_SOCIAL_MODE`（届时为 `disabled`），并写入 `PROJECT_STATE` 头部。
+- **将来若要恢复 shadow 或开展持续采集**：先要有明确的研究用途和采集方案（标的范围、频率、登录态的使用方式），由总控提出；真实采集与 Cookie 仍属红线，须 David 单独授权。
 
 ### D-013 附注（2026-09-23）
 

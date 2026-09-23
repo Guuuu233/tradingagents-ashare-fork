@@ -1,0 +1,64 @@
+{
+  "original_test_exact_null_false_positive": 0.2539150763799708,
+  "normal_DEFF_approximation": 0.24976083662950455,
+  "independent_simulation": {
+    "seed": 20260923,
+    "R": 200000,
+    "naive": 0.2551,
+    "cluster": 0.0505
+  },
+  "small_shift_counterexample": {
+    "pA": 0.5,
+    "pB": 0.51,
+    "true_probability": 0.6,
+    "delta_B_minus_A": -0.001900000000000001,
+    "sd_loss_difference": 0.00979795897113272,
+    "independent_n_approx": 209,
+    "max_possible_improvement_no_labels": 0.00990000000000002
+  },
+  "three_bin_counterexample": {
+    "probabilities": [
+      0.2,
+      0.5,
+      0.8
+    ],
+    "brier_U": 0.25,
+    "brier_S": 0.19000000000000003,
+    "improvement": 0.05999999999999997
+  },
+  "DEFF_table": [
+    {
+      "m": 25,
+      "values": [
+        880,
+        974,
+        1162,
+        1351
+      ]
+    },
+    {
+      "m": 200,
+      "values": [
+        1567,
+        2348,
+        3910,
+        5472
+      ]
+    },
+    {
+      "m": 800,
+      "values": [
+        3922,
+        7058,
+        13330,
+        19602
+      ]
+    }
+  ],
+  "rounding": {
+    "continuous_neff": 784.8879734349086,
+    "continuous_total": 1588.2438991859328,
+    "sequential_ceiling": 1589,
+    "final_ceiling": 1589
+  }
+}
