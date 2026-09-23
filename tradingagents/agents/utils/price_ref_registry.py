@@ -177,6 +177,81 @@ _SENTENCE_SPLIT_PATTERN = re.compile(r"[。；;！!？?\n\r]+")
 _VALUE_MATCH_TOLERANCE = 5e-3
 
 # ---------------------------------------------------------------------------
+# [C4] Shared executable-level vocabulary (registry extraction + gate checks)
+# ---------------------------------------------------------------------------
+
+# Anchor words shared by the registry extractor and the gate level checker.
+_EXECUTABLE_ANCHOR_WORDS = (
+    "目标价",
+    "目标位",
+    "第一目标",
+    "第二目标",
+    "下行目标",
+    "上行目标",
+    "止盈",
+    "止损",
+    "入场",
+    "进场",
+    "买入",
+    "卖出",
+    "建仓",
+    "开仓",
+    "出场",
+    "加仓",
+    "减仓",
+)
+
+# Gate-level pattern: a value anchored to an executable word is an executable
+# number (kept identical to the historical gate contract — no 区间 anchors).
+_LEVEL_PATTERN = re.compile(
+    r"(?:目标价|目标位|第一目标|第二目标|下行目标|上行目标|止盈位?|止损位?|"
+    r"入场价?|进场价?|买入价|卖出价|建仓价|开仓价|出场价|加仓价|减仓价)"
+    r"[^0-9]{0,12}?(\d+(?:\.\d+)?)"
+)
+
+# Registry-extraction pattern: same anchors plus explicit 区间 phrasing so both
+# ends of 「X–Y 元」 ranges register a ref before accountability.
+_LEVEL_PATTERN_EXTENDED = re.compile(
+    r"(?:目标价|目标位|第一目标|第二目标|下行目标|上行目标|止盈位?|止损位?|"
+    r"入场价?|进场价?|买入价|卖出价|建仓价|开仓价|出场价|加仓价|减仓价|"
+    r"入场区间|进场区间|建仓区间|加仓区间|减仓区间|买入区间|卖出区间)"
+    r"[^0-9]{0,12}?(\d+(?:\.\d+)?)"
+)
+
+
+def _is_false_level(text: str, nstart: int, nend: int, value: float) -> bool:
+    """Executable-level hit that is not a price: Markdown list ordinal 「N. 」,
+    percentage, share/amount count, or a date/year fragment."""
+    tail = text[nend:nend + 8]
+    if re.match(r"^\.\s", tail):                      # Markdown「2. 」序号
+        return True
+    if re.match(r"^\s*[%％]", tail):                  # 百分比
+        return True
+    if re.match(r"^\s*(?:亿|万)?\s*(?:股|手|户|份)", tail):
+        return True
+    if re.search(r"20\d{2}\s*[-/年.]", text[max(0, nstart - 6):nend + 6]):
+        return True
+    return False
+
+
+def extract_executable_levels(text: str) -> List[Tuple[float, int, int]]:
+    """Shared executable-level extractor. Returns (value, num_start, num_end)
+    with false hits (list ordinals / percents / counts / dates) removed."""
+    values: List[Tuple[float, int, int]] = []
+    if not isinstance(text, str):
+        return values
+    for m in _LEVEL_PATTERN.finditer(text):
+        try:
+            v = float(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if _is_false_level(text, m.start(1), m.end(1), v):
+            continue
+        values.append((v, m.start(1), m.end(1)))
+    return values
+
+
+# ---------------------------------------------------------------------------
 # [C1] Extraction guards — non-price / foreign mention filters
 # ---------------------------------------------------------------------------
 
@@ -548,6 +623,23 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
         _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
     for m in _PRICE_KEYWORD_PATTERN.finditer(sentence):
         _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
+
+    # [C4] shared executable parser：gate 价位词并入 registry 抽取。
+    for m in _LEVEL_PATTERN_EXTENDED.finditer(sentence):
+        try:
+            value = float(m.group(1))
+        except (TypeError, ValueError):
+            continue
+        if value <= 0:
+            continue
+        nstart, nend = m.start(1), m.end(1)
+        if _is_false_mention(sentence, nstart, nend, value):
+            continue
+        if _is_false_level(sentence, nstart, nend, value):
+            continue
+        if any(abs(v - value) <= _VALUE_MATCH_TOLERANCE for v, _p in found):
+            continue
+        found.append((value, nstart))
 
     found.sort(key=lambda item: item[1])
     return found

@@ -49,7 +49,9 @@ from tradingagents.agents.utils.decision_status import (
 from tradingagents.agents.utils.price_ref_registry import (
     COORDINATE_KEYWORDS,
     PRICE_BASIS_DERIVED_ESTIMATE,
+    _LEVEL_PATTERN,
     audit_price_ref_registry,
+    extract_executable_levels,
 )
 
 PRICE_REF_CONTRACT_VERSION = "price_ref.v1"
@@ -76,13 +78,8 @@ NON_COMPARABLE_MARKERS = (
     "双列",
 )
 
-# Executable-level keywords in decision texts. A value anchored to one of these
-# is an executable number and must resolve to a legal qfq/converted ref.
-_LEVEL_PATTERN = re.compile(
-    r"(?:目标价|目标位|第一目标|第二目标|下行目标|上行目标|止盈位?|止损位?|"
-    r"入场价?|进场价?|买入价|卖出价|建仓价|开仓价|出场价|加仓价|减仓价)"
-    r"[^0-9]{0,12}?(\d+(?:\.\d+)?)"
-)
+# Executable-level anchors/pattern are shared with the registry extractor
+# (imported above — single vocabulary, DAV-1224 C4).
 
 _DIRECTIONAL_ACTIONS = frozenset({ACTION_BUY, ACTION_SELL})
 
@@ -135,15 +132,10 @@ def _legal_execution_ref(ref: Mapping[str, Any], invalid_ref_ids: Set[str]) -> b
 
 
 def _extract_executable_levels(text: str) -> List[float]:
-    values: List[float] = []
-    if not isinstance(text, str):
-        return values
-    for m in _LEVEL_PATTERN.finditer(text):
-        try:
-            values.append(float(m.group(1)))
-        except (TypeError, ValueError):
-            continue
-    return values
+    """Executable values in a decision text. Uses the shared extractor
+    (registry-owned) which already filters false hits — list ordinals,
+    percentages, share counts, date fragments (DAV-1224 C4)."""
+    return [v for v, _s, _e in extract_executable_levels(text)]
 
 
 def evaluate_price_basis_gate(state: Mapping[str, Any]) -> Dict[str, Any]:
@@ -456,6 +448,6 @@ def finalize_price_ref_state(state: MutableMapping[str, Any]) -> Dict[str, Any]:
     lives inside ``enforce_price_basis_gate``; callers that derive a signal
     from the raw decision text must still apply the blocked->NO_TRADE
     downgrade to that signal (as ``propagate()`` does).
-    """
+"""
     audit_price_ref_registry(state)
     return enforce_price_basis_gate(state)
