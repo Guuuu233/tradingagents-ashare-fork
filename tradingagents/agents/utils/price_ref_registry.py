@@ -282,6 +282,168 @@ def _is_false_mention(sentence: str, start: int, end: int, value: float) -> Opti
 
 
 # ---------------------------------------------------------------------------
+# [C2] Typed-disclosure verdict rules — 判定对象是「该值是否该类披露价」
+# ---------------------------------------------------------------------------
+
+def _occurrences(ctx: str, kw: str) -> List[int]:
+    return [m.start() for m in re.finditer(re.escape(kw), ctx)]
+
+
+def _kw_window(ctx: str, i: int, n: int = 10) -> str:
+    return ctx[max(0, i - n):i + n]
+
+
+_GOODS_CTX = re.compile(
+    r"商品|物资|原料|材料|成本|金属|能源|化石|资产|涨价|通胀|"
+    r"LME|COMEX|原油|布伦特|黄金|贵金属|铜|铝|镍|上游|采购|BOM|进口"
+)
+_REAL_BLOCK = re.compile(r"大宗交易|大宗平价|平价大宗|大宗\s*成交")
+
+
+def _num_windows(ctx: str, value: float, half: int = 15) -> List[str]:
+    """返回每个与 value 同值数字 token 的 ±half 字窗口。"""
+    wins = []
+    for m in re.finditer(r"\d+(?:\.\d+)?", ctx or ""):
+        try:
+            if abs(float(m.group(0)) - value) <= _VALUE_MATCH_TOLERANCE:
+                wins.append(ctx[max(0, m.start() - half):m.end() + half])
+        except ValueError:
+            pass
+    return wins
+
+
+def classify_typed_disclosure(ref: Mapping[str, Any],
+                              stock_name: Optional[str] = None) -> Dict[str, Any]:
+    """typed_disclosure ref → verdict true / false / ambiguous。
+
+    判定对象收紧为「该 ref 的值是否该类披露价」：
+    - 交易建议里的减持/增持仓位、资金流描述的减持 → false；
+    - 大宗商品/材料/成本语境的『大宗』→ false；
+    - 票据/中票/股本『发行』、他标的发行价 → false（他标的单列 subtype）；
+    - 回购语境中的坐标价（安全垫/站稳/关口）→ false；
+    - ambiguous 只留真不可判者。
+    """
+    ctx = ref.get("context") or ""
+    dtype = ref.get("disclosure_type") or ""
+    value = ref.get("value")
+    wins = _num_windows(ctx, value) if isinstance(value, (int, float)) else []
+    verdict = "ambiguous"
+    reason = ""
+    subtype = ""
+
+    if dtype == "block_trade":
+        goods = bool(_GOODS_CTX.search(ctx)) and not _REAL_BLOCK.search(ctx)
+        # 值紧邻『大宗交易/平价/成交/折价/席位/接盘』→ 真披露价
+        real = any(re.search(r"大宗（交易|平价|成交|折价|溢价|席位|接盘|买入）"
+                             r"|（交易|平价|折价|溢价|席位|接盘）[^。]{0,10}大宗", w)
+                   for w in wins)
+        if real:
+            verdict, reason = "true", "数值紧邻大宗交易/平价/成交语义"
+        elif goods or any(_GOODS_CTX.search(w) for w in wins):
+            verdict, reason = "false", "大宗为商品/材料/成本语境，非披露价"
+        elif _REAL_BLOCK.search(ctx):
+            # 句中有真大宗语义但该值不紧邻 → 该值不是披露价
+            verdict, reason = "false", "句内有大宗交易但该值非披露价"
+        else:
+            verdict, reason = "ambiguous", "大宗语境无法定夺"
+
+    elif dtype == "issuance":
+        occ_fa = _occurrences(ctx, "发行")
+        real_fa = [i for i in occ_fa if not (i > 0 and ctx[i - 1] == "突")]
+        other = _occurrences(ctx, "定增") + _occurrences(ctx, "增发")
+        # 他标的：『发行价/申购』前的主语公司名 ≠ 本标的
+        if re.search(r"发行价|申购", ctx) and stock_name:
+            subj = None
+            m = re.search(r"([一-龥]{2,7})\s*(?:科创板|创业板|主板)?\s*"
+                          r"(?:开启|开始)?\s*申购|([一-龥]{2,7})[^。]{0,10}发行价", ctx)
+            if m:
+                subj = m.group(1) or m.group(2)
+            if subj and subj != stock_name and stock_name not in subj:
+                verdict, subtype = "false", "other_symbol"
+                reason = f"发行价主语为『{subj}』，非本标的 {stock_name}"
+        if verdict != "false":
+            if re.search(r"票据|中票|中期票据|债券|总股本|股本|成本|已完成|已发行", ctx):
+                verdict, reason = "false", "发行属票据/股本/成本语境，非股票发行披露价"
+            elif other:
+                verdict, reason = "true", "定增/增发为确定披露词"
+            elif real_fa:
+                w = _kw_window(ctx, real_fa[0])
+                if re.search(r"IPO|新股|转债|配售|上市|募资|公开发行|定向", w):
+                    verdict, reason = "true", f"发行处于募资/IPO 语境：{w}"
+                elif re.search(r"发行价", ctx):
+                    verdict, reason = "ambiguous", "发行价但无法确认标的主语"
+                else:
+                    verdict, reason = "ambiguous", f"发行语境不含明确募资语义：{w}"
+            elif occ_fa:
+                verdict, reason = "false", "『发行』均为『突发行业』类跨词假命中"
+            else:
+                verdict, reason = "ambiguous", "未定位关键词"
+
+    elif dtype == "repurchase":
+        bad = any((w and re.search(r"逆回购|央行|国债", w)) or
+                  (i > 0 and ctx[i - 1] == "逆")
+                  for i in _occurrences(ctx, "回购") for w in [_kw_window(ctx, i)])
+        # 真披露价：回购价/回购金额/回购均价/以 X 元回购股份 等；
+        # 「回购为股价提供 X 元安全垫」中的 X 是坐标价，非披露价。
+        price_like = any(re.search(r"回购（价|金额|均价|上限|下限|价格|股份|注销|方案|"
+                                   r"拟|计划|公告）|（以|按|不超过）[^。]{0,6}元[^。]{0,4}回购", w)
+                         for w in wins)
+        coord = any(re.search(r"支撑|站稳|安全垫|关口|一线", w) for w in wins)
+        if bad:
+            verdict, reason = "false", "逆回购/央行/国债回购语境"
+        elif price_like:
+            verdict, reason = "true", "回购价/回购方案语义贴近该值"
+        elif coord or wins:
+            verdict, reason = "false", "该值为坐标语境价位，非回购披露价"
+        else:
+            verdict, reason = "false", "值不可定位/JSON 截断，非回购披露价"
+
+    elif dtype in ("shareholder_increase", "shareholder_decrease"):
+        kw = "增持" if dtype == "shareholder_increase" else "减持"
+        occ = _occurrences(ctx, kw)
+        # 值紧邻『增持/减持 + 成交/价/披露』→ 披露价；否则一律非披露价
+        disc_price = any(
+            re.search(rf"{kw}[^。]{{0,8}}(?:价|成交|均价|披露|公告|股|万股)|"
+                      rf"(?:股东|公告|披露)[^。]{{0,10}}{kw}", w)
+            for w in wins
+        )
+        pos_or_flow = any(
+            re.search(rf"{kw}\s*(?:仓|头寸|比例|幅度|至|到|\d|%|获利|避险|离场|"
+                      rf"抛盘|兑现)|逢高|挂单|清仓|减仓|仓位|头寸|持仓|外资|"
+                      rf"融资盘|中单|超大单|融券|杠杆|ETF|做空", w)
+            for w in wins
+        ) or any(
+            re.search(r"逢高|挂单|清仓|减仓|离场|避险|获利|兑现|外资|融资盘|"
+                      r"中单|超大单|融券|ETF|做空|仓位|头寸|持仓|建议", _kw_window(ctx, i, 14))
+            for i in occ
+        )
+        if disc_price and not pos_or_flow:
+            verdict, reason = "true", "股东增减持披露价语义"
+        elif pos_or_flow or not disc_price:
+            verdict, reason = "false", "头寸建议/资金流描述/非披露价的增减持语境"
+        else:
+            verdict, reason = "ambiguous", "增减持语境无法定夺"
+
+    elif dtype == "dragon_tiger_list":
+        if any(re.search(r"龙虎榜[^。]{0,8}(?:成交|买|卖|净买|净卖|价)", w) for w in wins):
+            verdict, reason = "true", "龙虎榜成交价语义"
+        elif _JSON_BLOB.search(ctx):
+            verdict, reason = "false", "JSON 片段数字，非龙虎榜价"
+        else:
+            verdict, reason = "false", "龙虎榜语境但该值非榜价"
+
+    elif dtype == "private_placement":
+        verdict, reason = "true", "定增/增发字面命中"
+
+    return {
+        "ref_id": ref.get("ref_id"), "value": ref.get("value"),
+        "source": ref.get("source"), "context": ctx,
+        "disclosure_type": dtype, "verdict": verdict, "subtype": subtype,
+        "reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -337,13 +499,18 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
 
 
 def _detect_disclosure_type(sentence: str) -> Optional[str]:
-    """Return the disclosure type for the longest matching keyword, else None."""
+    """[C2] 最长匹配后过 verdict 规则：verdict=false → 不是该类披露价。"""
     best: Optional[Tuple[int, str]] = None  # (keyword length, type)
     for kw, dtype in TYPED_DISCLOSURE_KEYWORDS.items():
         if kw in sentence:
             if best is None or len(kw) > best[0]:
                 best = (len(kw), dtype)
-    return best[1] if best else None
+    if best is None:
+        return None
+    verdict = classify_typed_disclosure({"context": sentence, "disclosure_type": best[1]})
+    if verdict["verdict"] == "false":
+        return None
+    return best[1]
 
 
 def _has_coordinate_keyword(sentence: str) -> bool:
@@ -458,14 +625,21 @@ def build_price_ref_registry(
 
                 if derived:
                     ref["provenance"] = "derived:" + ref["provenance"]
-                    factor_match = _FACTOR_PATTERN.search(sentence)
-                    ref["conversion"] = {
-                        "factor": float(factor_match.group(1)) if factor_match else None,
-                        "factor_as_of": sentence_as_of,
-                    }
-                    target = _conversion_target_basis(sentence)
-                    if target is not None and disclosure_type is None:
-                        ref["basis"] = target
+                    # [C2] conversion 语义修正：仅当句内同时有复权语义才登记
+                    # conversion；「折合/折算」单独出现只是估值/量幅算术。
+                    is_real_conv = bool(
+                        _REAL_CONVERSION_CTX.search(sentence)
+                        and _CONVERSION_VERB_PATTERN.search(sentence)
+                    )
+                    if is_real_conv:
+                        factor_match = _FACTOR_PATTERN.search(sentence)
+                        ref["conversion"] = {
+                            "factor": float(factor_match.group(1)) if factor_match else None,
+                            "factor_as_of": sentence_as_of,
+                        }
+                        target = _conversion_target_basis(sentence)
+                        if target is not None and disclosure_type is None:
+                            ref["basis"] = target
 
                 refs.append(ref)
                 sentence_ref_ids.append((ref["ref_id"], value, ref["basis"]))
@@ -613,7 +787,7 @@ def audit_price_ref_registry(state: MutableMapping[str, Any]) -> Dict[str, Any]:
     """Run the bypass audit over a final graph state and attach side-channel fields.
 
     Writes ``price_refs`` / ``price_basis_gaps`` / ``price_basis_validation``
-    (plus ``price_ref_pool_bridge`` when the [C5] source pool is available)
+   
     into ``state`` and returns the audit payload. Never raises on malformed
     input and never mutates decision/target/stop fields.
 

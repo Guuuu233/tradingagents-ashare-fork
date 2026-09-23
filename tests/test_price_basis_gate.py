@@ -101,10 +101,12 @@ def test_f2_raw_value_reused_in_technical_context_is_blocked():
 
 
 def test_labeled_dual_display_is_allowed_not_violation():
+    # DAV-1224 C2：「定增」是确定披露词（pit_raw）；「大宗交易」句级不再
+    # 自动贴 raw。用定增构造 raw/pit_raw 双列展示。
     state = _state(
         market_report="现价 81.19 元。",
         news_report=(
-            "披露口径：大宗交易 78.61 元（raw）与前复权现价 81.19 元"
+            "披露口径：定增 78.61 元（pit_raw）与前复权现价 81.19 元"
             "双列展示，两者不可直接比较。"
         ),
         investment_plan="前复权目标价 90.00 元，前复权止损位 78.00 元。",
