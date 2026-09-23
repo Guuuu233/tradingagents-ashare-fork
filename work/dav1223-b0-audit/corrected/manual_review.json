@@ -1,0 +1,887 @@
+{
+ "s01__r1|pr-175": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "0.49元为长上影线价差，非价位"
+ },
+ "s01__r1|pr-189": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "0.40元为长上影线价差，非价位"
+ },
+ "s02__r1|pr-156": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "日内0.85为相对位置/分位，非价格"
+ },
+ "s02__r1|pr-188": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "5.8%~6.4%回撤截断值"
+ },
+ "s02__r3|pr-110": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "上证指数点位3940.04，非个股价格"
+ },
+ "s03__r1|pr-180": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "来源无法从截断context定位（疑为%截断）"
+ },
+ "s03__r1|pr-201": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "MANAGER_VERDICT JSON片段"
+ },
+ "s03__r2|pr-135": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "2026E前瞻年份碎片"
+ },
+ "s03__r5|pr-152": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "2026Q1年份碎片"
+ },
+ "s04__r3|pr-152": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "1.6T产能单位，非价格"
+ },
+ "s04__r5|pr-103": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "截断context无法确认0.5语义（疑比率）"
+ },
+ "s05__r1|pr-062": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "2025加权ROE年份碎片"
+ },
+ "s06__r1|pr-163": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "0.37元为折价价差，非价位"
+ },
+ "s06__r2|pr-143": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "1~3个月时间窗碎片"
+ },
+ "s06__r4|pr-156": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "破净PB推演支撑价13.5-17.0"
+ },
+ "s06__r4|pr-157": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "同上，17.0为派生估值区间端点"
+ },
+ "s06__r4|pr-159": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "同句PB推演派生值14.5"
+ },
+ "s06__r4|pr-167": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "创业板指点位3626.30"
+ },
+ "s06__r5|pr-156": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "10 EMA的周期数10，非价格"
+ },
+ "s07__r3|pr-107": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "0.80x~0.85x PB倍数"
+ },
+ "s07__r3|pr-113": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "中线（1-3月）时间窗"
+ },
+ "s07__r4|pr-082": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "100元/千瓦·年容量电价，非股价"
+ },
+ "s08__r1|pr-139": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "截断context无法定位3.0来源（疑排产%）"
+ },
+ "s09__r3|pr-168": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "收盘位置0.17为bar指标"
+ },
+ "s09__r5|pr-118": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "1.1-1.2倍PB倍数"
+ },
+ "s10__r1|pr-114": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "量比0.9，非价格"
+ },
+ "s10__r2|pr-096": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "创业板指点位3545.58"
+ },
+ "s07__r1|pr-152": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s04__r5|pr-124": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "90亿净利底线推演市值/股价口径derived，可辨"
+ },
+ "s05__r3|pr-111": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r5|pr-155": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-146": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r3|pr-101": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r5|pr-160": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r3|pr-140": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r2|pr-135": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r2|pr-131": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-181": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r4|pr-155": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "960亿元市值量级，非股价"
+ },
+ "s01__r2|pr-181": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r1|pr-055": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r1|pr-140": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r2|pr-146": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "1.2-1.3倍PB倍数"
+ },
+ "s08__r3|pr-163": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r3|pr-139": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r3|pr-153": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r2|pr-148": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r1|pr-150": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "4.46为每股净资产，非股价"
+ },
+ "s07__r1|pr-151": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "4.5语义截断不可辨（净资产或底线价）"
+ },
+ "s01__r4|pr-133": {
+  "verdict": "wrong",
+  "category": "non_price_false_extraction",
+  "reason": "1.8~2.0倍PB倍数，非股价"
+ },
+ "s08__r1|pr-130": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r3|pr-155": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r2|pr-136": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r1|pr-141": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r2|pr-116": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r2|pr-134": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r4|pr-104": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "极端悲观市值区间折算每股48元，derived可辨"
+ },
+ "s01__r1|pr-090": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r2|pr-143": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-212": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "115.0无法定位（疑指数/境外点位）"
+ },
+ "s10__r1|pr-152": {
+  "verdict": "wrong",
+  "category": "real_coordinate_source_unbacked",
+  "reason": "8.28为本标的止损价，句内美债语境不使该值成外币"
+ },
+ "s03__r4|pr-159": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r2|pr-066": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "6.62无法定位（煤价或日期碎片）"
+ },
+ "s02__r5|pr-202": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r1|pr-144": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s04__r2|pr-147": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r2|pr-140": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r4|pr-109": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r2|pr-106": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r5|pr-104": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-202": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "55.2疑为成本%/截断值，境外语境但值源不明"
+ },
+ "s09__r1|pr-146": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-181": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "同上"
+ },
+ "s01__r3|pr-147": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r4|pr-160": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r2|pr-182": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "1.2疑为倍数截断值"
+ },
+ "s03__r4|pr-134": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-091": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r2|pr-139": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-122": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-123": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r4|pr-096": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r1|pr-108": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r4|pr-165": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-110": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r2|pr-144": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-111": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r4|pr-134": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r5|pr-142": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r4|pr-128": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r5|pr-146": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r4|pr-110": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r5|pr-204": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r4|pr-156": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r5|pr-188": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r3|pr-116": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r5|pr-170": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r4|pr-140": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r2|pr-144": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r2|pr-115": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r4|pr-189": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r1|pr-181": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r1|pr-151": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r1|pr-157": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r5|pr-180": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-197": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r1|pr-213": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r3|pr-205": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r1|pr-156": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r2|pr-154": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r4|pr-120": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r1|pr-149": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r1|pr-131": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r3|pr-107": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r3|pr-151": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r3|pr-183": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r5|pr-132": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r3|pr-086": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "context截断未见指标名，依赖规则命中无法人工确认"
+ },
+ "s06__r5|pr-144": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r4|pr-189": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r1|pr-156": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r1|pr-071": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r4|pr-174": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r2|pr-111": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r4|pr-194": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r2|pr-109": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s04__r1|pr-136": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-220": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r1|pr-219": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r1|pr-072": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-101": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-139": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-221": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r2|pr-096": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r2|pr-215": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-160": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "context截断未见VWMA字样，无法人工确认"
+ },
+ "s05__r2|pr-145": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r1|pr-220": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r2|pr-129": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r1|pr-045": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r2|pr-150": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r4|pr-163": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-197": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s07__r2|pr-093": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r1|pr-058": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s05__r3|pr-079": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s06__r3|pr-142": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r5|pr-114": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r1|pr-173": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r5|pr-216": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s08__r5|pr-142": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "12倍PE折算股价极限支撑位78元，派生值"
+ },
+ "s02__r5|pr-169": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r2|pr-133": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r3|pr-167": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r5|pr-128": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r5|pr-154": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r2|pr-139": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r5|pr-210": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r4|pr-194": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s01__r5|pr-168": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "PB推演极端估值底线30.16"
+ },
+ "s01__r3|pr-161": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "30.0疑为PB底线派生，context截断不足以定论"
+ },
+ "s09__r1|pr-132": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "1.1-1.2倍PB极限估值对应4.04元"
+ },
+ "s06__r5|pr-094": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "59.38疑为200日均线同值或派生，无法定论"
+ },
+ "s02__r5|pr-162": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r2|pr-189": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r1|pr-174": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s02__r5|pr-095": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "悲观底线估值对应24元"
+ },
+ "s10__r5|pr-106": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r1|pr-117": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "11.98疑为百分比/指标值，无法定论"
+ },
+ "s07__r5|pr-133": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "每股净资产×破净系数推演6.2"
+ },
+ "s10__r2|pr-228": {
+  "verdict": "unsure",
+  "category": null,
+  "reason": "8.25元后接（qfq）声明词，declared窗口在数字后未覆盖"
+ },
+ "s02__r4|pr-104": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "2.0-2.2倍PB测算硬性安全底价14.84"
+ },
+ "s09__r3|pr-180": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s03__r5|pr-144": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s10__r2|pr-182": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ },
+ "s09__r3|pr-124": {
+  "verdict": "wrong",
+  "category": "derived_valuation_estimate",
+  "reason": "极端压力情景支撑3.12~3.48"
+ },
+ "s10__r5|pr-121": {
+  "verdict": "correct",
+  "category": null,
+  "reason": "人工复核：分类正确"
+ }
+}

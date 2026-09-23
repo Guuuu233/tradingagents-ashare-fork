@@ -1,0 +1,556 @@
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-092", "pr-088", "pr-089"], "detail": "qfq 价格 36.0(pr-092) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-093", "pr-088", "pr-089"], "detail": "qfq 价格 35.91(pr-093) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-094", "pr-088", "pr-089"], "detail": "qfq 价格 37.36(pr-094) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-098", "pr-088", "pr-089"], "detail": "qfq 价格 36.3(pr-098) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-099", "pr-088", "pr-089"], "detail": "qfq 价格 36.5(pr-099) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-100", "pr-088", "pr-089"], "detail": "qfq 价格 36.36(pr-100) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-101", "pr-088", "pr-089"], "detail": "qfq 价格 37.36(pr-101) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-102", "pr-088", "pr-089"], "detail": "qfq 价格 36.8(pr-102) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-103", "pr-088", "pr-089"], "detail": "qfq 价格 37.2(pr-103) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-104", "pr-088", "pr-089"], "detail": "qfq 价格 34.5(pr-104) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-105", "pr-088", "pr-089"], "detail": "qfq 价格 34.4(pr-105) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-106", "pr-088", "pr-089"], "detail": "qfq 价格 33.9(pr-106) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-107", "pr-088", "pr-089"], "detail": "qfq 价格 33.0(pr-107) 与 raw/pit_raw 价格 ['pr-088', 'pr-089'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-120", "pr-114"], "detail": "qfq 价格 43.29(pr-120) 与 raw/pit_raw 价格 ['pr-114'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s01__r1", "sample": "s01", "ref_ids": ["pr-089"], "detail": "raw 价格 3.0(pr-089) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-136", "pr-131"], "detail": "qfq 价格 35.91(pr-136) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-139", "pr-131"], "detail": "qfq 价格 35.91(pr-139) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-140", "pr-131"], "detail": "qfq 价格 36.36(pr-140) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-141", "pr-131"], "detail": "qfq 价格 34.8(pr-141) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-145", "pr-147"], "detail": "qfq 价格 35.91(pr-145) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-146", "pr-147"], "detail": "qfq 价格 36.36(pr-146) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-149", "pr-147"], "detail": "qfq 价格 35.91(pr-149) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-151", "pr-147"], "detail": "qfq 价格 6.0(pr-151) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-152", "pr-147"], "detail": "qfq 价格 36.0(pr-152) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-153", "pr-147"], "detail": "qfq 价格 36.36(pr-153) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-154", "pr-147"], "detail": "qfq 价格 37.36(pr-154) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-159", "pr-147"], "detail": "qfq 价格 34.86(pr-159) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-160", "pr-147"], "detail": "qfq 价格 34.5(pr-160) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-161", "pr-147"], "detail": "qfq 价格 34.86(pr-161) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-162", "pr-147"], "detail": "qfq 价格 36.0(pr-162) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-163", "pr-147"], "detail": "qfq 价格 36.36(pr-163) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-164", "pr-147"], "detail": "qfq 价格 36.89(pr-164) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-165", "pr-147"], "detail": "qfq 价格 37.36(pr-165) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-168", "pr-147"], "detail": "qfq 价格 34.86(pr-168) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-169", "pr-147"], "detail": "qfq 价格 34.4(pr-169) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-170", "pr-147"], "detail": "qfq 价格 36.0(pr-170) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-171", "pr-147"], "detail": "qfq 价格 34.86(pr-171) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-172", "pr-147"], "detail": "qfq 价格 35.91(pr-172) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-173", "pr-147"], "detail": "qfq 价格 34.86(pr-173) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-174", "pr-147"], "detail": "qfq 价格 36.0(pr-174) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s01__r4", "sample": "s01", "ref_ids": ["pr-147"], "detail": "pit_raw 价格 36.0(pr-147) 直接进入坐标语境，禁止跨坐标混用", "source": "smart_money_report"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-213", "pr-224"], "detail": "qfq 价格 37.36(pr-213) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-214", "pr-224"], "detail": "qfq 价格 35.91(pr-214) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-215", "pr-224"], "detail": "qfq 价格 39.4(pr-215) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-219", "pr-224"], "detail": "qfq 价格 36.89(pr-219) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-221", "pr-224"], "detail": "qfq 价格 34.3(pr-221) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-222", "pr-224"], "detail": "qfq 价格 34.54(pr-222) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-223", "pr-224"], "detail": "qfq 价格 2.4(pr-223) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-229", "pr-224"], "detail": "qfq 价格 34.3(pr-229) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s01__r5", "sample": "s01", "ref_ids": ["pr-232", "pr-224"], "detail": "qfq 价格 34.3(pr-232) 与 raw/pit_raw 价格 ['pr-224'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-004", "pr-031"], "detail": "qfq 价格 35.33(pr-004) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-005", "pr-031"], "detail": "qfq 价格 36.0(pr-005) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-006", "pr-031"], "detail": "qfq 价格 35.36(pr-006) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-007", "pr-031"], "detail": "qfq 价格 33.6(pr-007) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-008", "pr-031"], "detail": "qfq 价格 33.7(pr-008) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-009", "pr-031"], "detail": "qfq 价格 32.7(pr-009) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-010", "pr-031"], "detail": "qfq 价格 32.3(pr-010) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-011", "pr-031"], "detail": "qfq 价格 34.72(pr-011) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-012", "pr-031"], "detail": "qfq 价格 32.71(pr-012) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-013", "pr-031"], "detail": "qfq 价格 29.08(pr-013) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-014", "pr-031"], "detail": "qfq 价格 31.85(pr-014) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-018", "pr-031"], "detail": "qfq 价格 32.15(pr-018) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-023", "pr-031"], "detail": "qfq 价格 35.33(pr-023) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-032", "pr-031"], "detail": "qfq 价格 35.3(pr-032) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-033", "pr-031"], "detail": "qfq 价格 33.6(pr-033) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-034", "pr-031"], "detail": "qfq 价格 33.0(pr-034) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-035", "pr-031"], "detail": "qfq 价格 35.36(pr-035) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-037", "pr-031"], "detail": "qfq 价格 32.1(pr-037) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-038", "pr-031"], "detail": "qfq 价格 35.3(pr-038) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-039", "pr-031"], "detail": "qfq 价格 36.5(pr-039) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-041", "pr-031"], "detail": "qfq 价格 32.71(pr-041) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-044", "pr-031"], "detail": "qfq 价格 1.38(pr-044) 与 raw/pit_raw 价格 ['pr-031'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-134", "pr-113"], "detail": "qfq 价格 33.6(pr-134) 与 raw/pit_raw 价格 ['pr-113'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-145", "pr-138"], "detail": "qfq 价格 35.33(pr-145) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-146", "pr-138"], "detail": "qfq 价格 35.5(pr-146) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-147", "pr-138"], "detail": "qfq 价格 33.6(pr-147) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-148", "pr-138"], "detail": "qfq 价格 33.7(pr-148) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-149", "pr-138"], "detail": "qfq 价格 32.15(pr-149) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-150", "pr-138"], "detail": "qfq 价格 32.71(pr-150) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-152", "pr-138"], "detail": "qfq 价格 33.6(pr-152) 与 raw/pit_raw 价格 ['pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-187", "pr-208"], "detail": "qfq 价格 35.33(pr-187) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-189", "pr-208"], "detail": "qfq 价格 34.72(pr-189) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-194", "pr-208"], "detail": "qfq 价格 33.6(pr-194) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-195", "pr-208"], "detail": "qfq 价格 32.7(pr-195) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-196", "pr-208"], "detail": "qfq 价格 35.33(pr-196) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-197", "pr-208"], "detail": "qfq 价格 35.5(pr-197) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-200", "pr-208"], "detail": "qfq 价格 32.5(pr-200) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-201", "pr-208"], "detail": "qfq 价格 10.0(pr-201) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-202", "pr-208"], "detail": "qfq 价格 32.7(pr-202) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-206", "pr-208"], "detail": "qfq 价格 32.5(pr-206) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-210", "pr-208"], "detail": "qfq 价格 32.5(pr-210) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r1", "sample": "s02", "ref_ids": ["pr-211", "pr-208"], "detail": "qfq 价格 31.85(pr-211) 与 raw/pit_raw 价格 ['pr-208'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-005", "pr-038", "pr-039"], "detail": "qfq 价格 33.7(pr-005) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-006", "pr-038", "pr-039"], "detail": "qfq 价格 35.0(pr-006) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-007", "pr-038", "pr-039"], "detail": "qfq 价格 35.36(pr-007) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-008", "pr-038", "pr-039"], "detail": "qfq 价格 35.33(pr-008) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-009", "pr-038", "pr-039"], "detail": "qfq 价格 35.36(pr-009) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-010", "pr-038", "pr-039"], "detail": "qfq 价格 36.5(pr-010) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-011", "pr-038", "pr-039"], "detail": "qfq 价格 33.64(pr-011) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-012", "pr-038", "pr-039"], "detail": "qfq 价格 33.7(pr-012) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-013", "pr-038", "pr-039"], "detail": "qfq 价格 32.65(pr-013) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-014", "pr-038", "pr-039"], "detail": "qfq 价格 32.71(pr-014) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-015", "pr-038", "pr-039"], "detail": "qfq 价格 31.85(pr-015) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-016", "pr-038", "pr-039"], "detail": "qfq 价格 32.15(pr-016) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-017", "pr-038", "pr-039"], "detail": "qfq 价格 34.72(pr-017) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-018", "pr-038", "pr-039"], "detail": "qfq 价格 29.08(pr-018) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-019", "pr-038", "pr-039"], "detail": "qfq 价格 31.85(pr-019) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-020", "pr-038", "pr-039"], "detail": "qfq 价格 32.71(pr-020) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-025", "pr-038", "pr-039"], "detail": "qfq 价格 32.15(pr-025) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-026", "pr-038", "pr-039"], "detail": "qfq 价格 33.0(pr-026) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-031", "pr-038", "pr-039"], "detail": "qfq 价格 24.12(pr-031) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-035", "pr-038", "pr-039"], "detail": "qfq 价格 35.3(pr-035) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-036", "pr-038", "pr-039"], "detail": "qfq 价格 35.36(pr-036) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-037", "pr-038", "pr-039"], "detail": "qfq 价格 33.5(pr-037) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-043", "pr-038", "pr-039"], "detail": "qfq 价格 32.6(pr-043) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-044", "pr-038", "pr-039"], "detail": "qfq 价格 35.3(pr-044) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-045", "pr-038", "pr-039"], "detail": "qfq 价格 36.5(pr-045) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-047", "pr-038", "pr-039"], "detail": "qfq 价格 32.71(pr-047) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-050", "pr-038", "pr-039"], "detail": "qfq 价格 32.15(pr-050) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-051", "pr-038", "pr-039"], "detail": "qfq 价格 34.72(pr-051) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-052", "pr-038", "pr-039"], "detail": "qfq 价格 1.38(pr-052) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r2", "sample": "s02", "ref_ids": ["pr-053", "pr-038", "pr-039"], "detail": "qfq 价格 1.0(pr-053) 与 raw/pit_raw 价格 ['pr-038', 'pr-039'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-051", "pr-054"], "detail": "qfq 价格 35.0(pr-051) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-056", "pr-054"], "detail": "qfq 价格 35.36(pr-056) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-057", "pr-054"], "detail": "qfq 价格 33.73(pr-057) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-058", "pr-054"], "detail": "qfq 价格 33.6(pr-058) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-061", "pr-054"], "detail": "qfq 价格 35.36(pr-061) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-062", "pr-054"], "detail": "qfq 价格 33.6(pr-062) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-063", "pr-054"], "detail": "qfq 价格 32.7(pr-063) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-068", "pr-054"], "detail": "qfq 价格 35.0(pr-068) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-069", "pr-054"], "detail": "qfq 价格 35.36(pr-069) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-070", "pr-054"], "detail": "qfq 价格 36.0(pr-070) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-071", "pr-054"], "detail": "qfq 价格 36.5(pr-071) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-072", "pr-054"], "detail": "qfq 价格 33.6(pr-072) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-073", "pr-054"], "detail": "qfq 价格 33.73(pr-073) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-074", "pr-054"], "detail": "qfq 价格 32.7(pr-074) 与 raw/pit_raw 价格 ['pr-054'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-103", "pr-099"], "detail": "qfq 价格 34.72(pr-103) 与 raw/pit_raw 价格 ['pr-099'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-104", "pr-099"], "detail": "qfq 价格 35.36(pr-104) 与 raw/pit_raw 价格 ['pr-099'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-105", "pr-099"], "detail": "qfq 价格 33.0(pr-105) 与 raw/pit_raw 价格 ['pr-099'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s02__r3", "sample": "s02", "ref_ids": ["pr-109", "pr-099"], "detail": "qfq 价格 35.3(pr-109) 与 raw/pit_raw 价格 ['pr-099'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s02__r5", "sample": "s02", "ref_ids": ["pr-167", "pr-166"], "detail": "qfq 价格 33.7(pr-167) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r5", "sample": "s02", "ref_ids": ["pr-171", "pr-166"], "detail": "qfq 价格 34.72(pr-171) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r5", "sample": "s02", "ref_ids": ["pr-174", "pr-166"], "detail": "qfq 价格 33.8(pr-174) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r5", "sample": "s02", "ref_ids": ["pr-176", "pr-166"], "detail": "qfq 价格 35.36(pr-176) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s02__r5", "sample": "s02", "ref_ids": ["pr-166"], "detail": "raw 价格 35.36(pr-166) 直接进入坐标语境，禁止跨坐标混用", "source": "trader_investment_plan"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-119", "pr-135"], "detail": "qfq 价格 71.0(pr-119) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-120", "pr-135"], "detail": "qfq 价格 70.06(pr-120) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-121", "pr-135"], "detail": "qfq 价格 70.97(pr-121) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-126", "pr-135"], "detail": "qfq 价格 70.5(pr-126) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-127", "pr-135"], "detail": "qfq 价格 70.0(pr-127) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-131", "pr-135"], "detail": "qfq 价格 66.85(pr-131) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-132", "pr-135"], "detail": "qfq 价格 63.65(pr-132) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r1", "sample": "s03", "ref_ids": ["pr-133", "pr-135"], "detail": "qfq 价格 70.0(pr-133) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-162", "pr-157"], "detail": "qfq 价格 60.0(pr-162) 与 raw/pit_raw 价格 ['pr-157'] 处于同一坐标语境（现价/支撑/锚等）", "source": "macro_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-166", "pr-170", "pr-171"], "detail": "qfq 价格 61.64(pr-166) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-167", "pr-170", "pr-171"], "detail": "qfq 价格 69.18(pr-167) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-175", "pr-170", "pr-171"], "detail": "qfq 价格 70.0(pr-175) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-176", "pr-170", "pr-171"], "detail": "qfq 价格 66.8(pr-176) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-177", "pr-170", "pr-171"], "detail": "qfq 价格 67.5(pr-177) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-178", "pr-170", "pr-171"], "detail": "qfq 价格 71.0(pr-178) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-179", "pr-170", "pr-171"], "detail": "qfq 价格 73.5(pr-179) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-180", "pr-170", "pr-171"], "detail": "qfq 价格 74.0(pr-180) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-181", "pr-170", "pr-171"], "detail": "qfq 价格 66.85(pr-181) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-182", "pr-170", "pr-171"], "detail": "qfq 价格 63.65(pr-182) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-184", "pr-170", "pr-171"], "detail": "qfq 价格 69.18(pr-184) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-185", "pr-170", "pr-171"], "detail": "qfq 价格 70.0(pr-185) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-186", "pr-170", "pr-171"], "detail": "qfq 价格 71.0(pr-186) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-187", "pr-170", "pr-171"], "detail": "qfq 价格 70.06(pr-187) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-188", "pr-170", "pr-171"], "detail": "qfq 价格 70.97(pr-188) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-189", "pr-170", "pr-171"], "detail": "qfq 价格 66.8(pr-189) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-190", "pr-170", "pr-171"], "detail": "qfq 价格 67.5(pr-190) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-191", "pr-170", "pr-171"], "detail": "qfq 价格 66.85(pr-191) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-192", "pr-170", "pr-171"], "detail": "qfq 价格 63.65(pr-192) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-193", "pr-170", "pr-171"], "detail": "qfq 价格 61.64(pr-193) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-195", "pr-170", "pr-171"], "detail": "qfq 价格 63.65(pr-195) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-197", "pr-170", "pr-171"], "detail": "qfq 价格 66.85(pr-197) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-198", "pr-170", "pr-171"], "detail": "qfq 价格 65.0(pr-198) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-200", "pr-170", "pr-171"], "detail": "qfq 价格 69.18(pr-200) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r4", "sample": "s03", "ref_ids": ["pr-201", "pr-170", "pr-171"], "detail": "qfq 价格 61.64(pr-201) 与 raw/pit_raw 价格 ['pr-170', 'pr-171'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-126", "pr-141"], "detail": "qfq 价格 70.97(pr-126) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-127", "pr-141"], "detail": "qfq 价格 69.18(pr-127) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-131", "pr-141"], "detail": "qfq 价格 1.0(pr-131) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-139", "pr-141"], "detail": "qfq 价格 71.0(pr-139) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-143", "pr-141"], "detail": "qfq 价格 63.65(pr-143) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-145", "pr-141"], "detail": "qfq 价格 66.85(pr-145) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-146", "pr-141"], "detail": "qfq 价格 71.0(pr-146) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-148", "pr-141"], "detail": "qfq 价格 69.0(pr-148) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-161", "pr-150"], "detail": "qfq 价格 69.18(pr-161) 与 raw/pit_raw 价格 ['pr-150'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-163", "pr-150"], "detail": "qfq 价格 69.18(pr-163) 与 raw/pit_raw 价格 ['pr-150'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-190", "pr-205"], "detail": "qfq 价格 69.18(pr-190) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-191", "pr-205"], "detail": "qfq 价格 70.06(pr-191) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-192", "pr-205"], "detail": "qfq 价格 71.0(pr-192) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-193", "pr-205"], "detail": "qfq 价格 70.06(pr-193) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-194", "pr-205"], "detail": "qfq 价格 70.97(pr-194) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-195", "pr-205"], "detail": "qfq 价格 66.85(pr-195) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-196", "pr-205"], "detail": "qfq 价格 67.5(pr-196) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-197", "pr-205"], "detail": "qfq 价格 66.85(pr-197) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-198", "pr-205"], "detail": "qfq 价格 67.65(pr-198) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-199", "pr-205"], "detail": "qfq 价格 64.0(pr-199) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-201", "pr-205"], "detail": "qfq 价格 71.0(pr-201) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-202", "pr-205"], "detail": "qfq 价格 66.85(pr-202) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-203", "pr-205"], "detail": "qfq 价格 1.0(pr-203) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-204", "pr-205"], "detail": "qfq 价格 63.65(pr-204) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-206", "pr-205"], "detail": "qfq 价格 61.64(pr-206) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-207", "pr-205"], "detail": "qfq 价格 69.18(pr-207) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-208", "pr-205"], "detail": "qfq 价格 67.5(pr-208) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-209", "pr-205"], "detail": "qfq 价格 70.0(pr-209) 与 raw/pit_raw 价格 ['pr-205'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s03__r5", "sample": "s03", "ref_ids": ["pr-150"], "detail": "pit_raw 价格 69.18(pr-150) 直接进入坐标语境，禁止跨坐标混用", "source": "fundamentals_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-160", "pr-153"], "detail": "qfq 价格 886.96(pr-160) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-162", "pr-153"], "detail": "qfq 价格 939.06(pr-162) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-163", "pr-153"], "detail": "qfq 价格 933.06(pr-163) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-164", "pr-153"], "detail": "qfq 价格 940.0(pr-164) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-165", "pr-153"], "detail": "qfq 价格 850.0(pr-165) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-168", "pr-153"], "detail": "qfq 价格 935.0(pr-168) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-169", "pr-153"], "detail": "qfq 价格 850.0(pr-169) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-170", "pr-153"], "detail": "qfq 价格 835.0(pr-170) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-176", "pr-153"], "detail": "qfq 价格 935.0(pr-176) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-177", "pr-153"], "detail": "qfq 价格 939.06(pr-177) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-178", "pr-153"], "detail": "qfq 价格 886.96(pr-178) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r2", "sample": "s04", "ref_ids": ["pr-179", "pr-153"], "detail": "qfq 价格 940.0(pr-179) 与 raw/pit_raw 价格 ['pr-153'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-107", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 886.96(pr-107) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-108", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 933.06(pr-108) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-109", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 939.06(pr-109) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-117", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 886.96(pr-117) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-118", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 933.0(pr-118) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-129", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 835.0(pr-129) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-132", "pr-115", "pr-116", "pr-124"], "detail": "qfq 价格 835.0(pr-132) 与 raw/pit_raw 价格 ['pr-115', 'pr-116', 'pr-124'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r3", "sample": "s04", "ref_ids": ["pr-116"], "detail": "pit_raw 价格 886.96(pr-116) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-109", "pr-108"], "detail": "qfq 价格 933.0(pr-109) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-111", "pr-108"], "detail": "qfq 价格 930.0(pr-111) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-112", "pr-108"], "detail": "qfq 价格 835.0(pr-112) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-113", "pr-108"], "detail": "qfq 价格 793.0(pr-113) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-114", "pr-108"], "detail": "qfq 价格 802.0(pr-114) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-117", "pr-108"], "detail": "qfq 价格 933.0(pr-117) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-118", "pr-108"], "detail": "qfq 价格 835.0(pr-118) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-126", "pr-129"], "detail": "qfq 价格 886.96(pr-126) 与 raw/pit_raw 价格 ['pr-129'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-163", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 939.0(pr-163) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-166", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 915.0(pr-166) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-167", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 933.06(pr-167) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-168", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 939.06(pr-168) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-171", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 933.0(pr-171) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-172", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 793.0(pr-172) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-173", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 835.0(pr-173) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-174", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 835.0(pr-174) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-175", "pr-177", "pr-178", "pr-179"], "detail": "qfq 价格 5.0(pr-175) 与 raw/pit_raw 价格 ['pr-177', 'pr-178', 'pr-179'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-108"], "detail": "pit_raw 价格 940.0(pr-108) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-129"], "detail": "pit_raw 价格 2026.0(pr-129) 直接进入坐标语境，禁止跨坐标混用", "source": "fundamentals_report"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-177"], "detail": "raw 价格 933.0(pr-177) 直接进入坐标语境，禁止跨坐标混用", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-178"], "detail": "raw 价格 835.0(pr-178) 直接进入坐标语境，禁止跨坐标混用", "source": "investment_plan"}
+{"run": "s04__r5", "sample": "s04", "ref_ids": ["pr-179"], "detail": "raw 价格 835.0(pr-179) 直接进入坐标语境，禁止跨坐标混用", "source": "investment_plan"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-061", "pr-059"], "detail": "qfq 价格 48.8(pr-061) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-067", "pr-059"], "detail": "qfq 价格 50.0(pr-067) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-068", "pr-059"], "detail": "qfq 价格 50.04(pr-068) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-069", "pr-059"], "detail": "qfq 价格 48.8(pr-069) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-070", "pr-059"], "detail": "qfq 价格 49.0(pr-070) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-071", "pr-059"], "detail": "qfq 价格 51.45(pr-071) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-072", "pr-059"], "detail": "qfq 价格 51.5(pr-072) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-073", "pr-059"], "detail": "qfq 价格 52.8(pr-073) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-074", "pr-059"], "detail": "qfq 价格 53.37(pr-074) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-076", "pr-059"], "detail": "qfq 价格 50.0(pr-076) 与 raw/pit_raw 价格 ['pr-059'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-077", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 46.29(pr-077) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-078", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 53.37(pr-078) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-079", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 52.97(pr-079) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-083", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 50.04(pr-083) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-084", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 50.0(pr-084) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-085", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 50.0(pr-085) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-088", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 52.97(pr-088) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-093", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 50.0(pr-093) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-094", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 51.45(pr-094) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-095", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 50.2(pr-095) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-096", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 51.45(pr-096) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-097", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 49.8(pr-097) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-098", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 49.8(pr-098) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-099", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 49.7(pr-099) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-100", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 49.0(pr-100) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-105", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 49.7(pr-105) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s05__r2", "sample": "s05", "ref_ids": ["pr-106", "pr-101", "pr-102", "pr-103"], "detail": "qfq 价格 51.45(pr-106) 与 raw/pit_raw 价格 ['pr-101', 'pr-102', 'pr-103'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-106", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 59.38(pr-106) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-107", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 62.46(pr-107) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-113", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 56.58(pr-113) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-114", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 56.73(pr-114) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-115", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 59.38(pr-115) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-116", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 62.46(pr-116) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-117", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 58.0(pr-117) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-118", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 58.75(pr-118) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-119", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 55.0(pr-119) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-123", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 58.75(pr-123) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-124", "pr-104", "pr-105", "pr-125", "pr-126"], "detail": "qfq 价格 59.38(pr-124) 与 raw/pit_raw 价格 ['pr-104', 'pr-105', 'pr-125', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-136", "pr-129"], "detail": "qfq 价格 56.58(pr-136) 与 raw/pit_raw 价格 ['pr-129'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-137", "pr-129"], "detail": "qfq 价格 52.0(pr-137) 与 raw/pit_raw 价格 ['pr-129'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s06__r1", "sample": "s06", "ref_ids": ["pr-144", "pr-141"], "detail": "qfq 价格 53.0(pr-144) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）", "source": "macro_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-077", "pr-090", "pr-091"], "detail": "qfq 价格 58.75(pr-077) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-078", "pr-090", "pr-091"], "detail": "qfq 价格 58.75(pr-078) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-085", "pr-090", "pr-091"], "detail": "qfq 价格 62.46(pr-085) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-086", "pr-090", "pr-091"], "detail": "qfq 价格 59.38(pr-086) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-087", "pr-090", "pr-091"], "detail": "qfq 价格 57.93(pr-087) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-088", "pr-090", "pr-091"], "detail": "qfq 价格 58.75(pr-088) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-089", "pr-090", "pr-091"], "detail": "qfq 价格 58.75(pr-089) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-099", "pr-090", "pr-091"], "detail": "qfq 价格 57.93(pr-099) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-100", "pr-090", "pr-091"], "detail": "qfq 价格 58.75(pr-100) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-101", "pr-090", "pr-091"], "detail": "qfq 价格 59.38(pr-101) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-102", "pr-090", "pr-091"], "detail": "qfq 价格 60.0(pr-102) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-103", "pr-090", "pr-091"], "detail": "qfq 价格 54.52(pr-103) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-104", "pr-090", "pr-091"], "detail": "qfq 价格 55.0(pr-104) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-106", "pr-090", "pr-091"], "detail": "qfq 价格 57.5(pr-106) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-107", "pr-090", "pr-091"], "detail": "qfq 价格 55.0(pr-107) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-110", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 56.58(pr-110) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-111", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 59.38(pr-111) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-112", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 57.93(pr-112) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-113", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 8.0(pr-113) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-121", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 55.0(pr-121) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-122", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 57.93(pr-122) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-123", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 58.0(pr-123) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-124", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 55.0(pr-124) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-125", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 8.0(pr-125) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-126", "pr-108", "pr-109", "pr-127", "pr-128"], "detail": "qfq 价格 52.65(pr-126) 与 raw/pit_raw 价格 ['pr-108', 'pr-109', 'pr-127', 'pr-128'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-155", "pr-166"], "detail": "qfq 价格 55.0(pr-155) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-156", "pr-166"], "detail": "qfq 价格 52.81(pr-156) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-161", "pr-166"], "detail": "qfq 价格 56.95(pr-161) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-162", "pr-166"], "detail": "qfq 价格 57.93(pr-162) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-164", "pr-166"], "detail": "qfq 价格 55.0(pr-164) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-165", "pr-166"], "detail": "qfq 价格 55.3(pr-165) 与 raw/pit_raw 价格 ['pr-166'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-090"], "detail": "pit_raw 价格 56.5(pr-090) 直接进入坐标语境，禁止跨坐标混用", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-091"], "detail": "pit_raw 价格 58.0(pr-091) 直接进入坐标语境，禁止跨坐标混用", "source": "volume_price_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-127"], "detail": "raw 价格 58.0(pr-127) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r2", "sample": "s06", "ref_ids": ["pr-128"], "detail": "raw 价格 59.38(pr-128) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-062", "pr-088"], "detail": "qfq 价格 58.75(pr-062) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-063", "pr-088"], "detail": "qfq 价格 56.06(pr-063) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-064", "pr-088"], "detail": "qfq 价格 52.65(pr-064) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-065", "pr-088"], "detail": "qfq 价格 58.0(pr-065) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-066", "pr-088"], "detail": "qfq 价格 60.0(pr-066) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-067", "pr-088"], "detail": "qfq 价格 70.0(pr-067) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-070", "pr-088"], "detail": "qfq 价格 57.0(pr-070) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-071", "pr-088"], "detail": "qfq 价格 55.0(pr-071) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-073", "pr-088"], "detail": "qfq 价格 2.0(pr-073) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-076", "pr-088"], "detail": "qfq 价格 2.0(pr-076) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-079", "pr-088"], "detail": "qfq 价格 54.3(pr-079) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-080", "pr-088"], "detail": "qfq 价格 54.5(pr-080) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-081", "pr-088"], "detail": "qfq 价格 1.0(pr-081) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-082", "pr-088"], "detail": "qfq 价格 57.0(pr-082) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-083", "pr-088"], "detail": "qfq 价格 2.0(pr-083) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-084", "pr-088"], "detail": "qfq 价格 58.75(pr-084) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-085", "pr-088"], "detail": "qfq 价格 54.5(pr-085) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-086", "pr-088"], "detail": "qfq 价格 55.0(pr-086) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-087", "pr-088"], "detail": "qfq 价格 52.81(pr-087) 与 raw/pit_raw 价格 ['pr-088'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-095", "pr-090", "pr-091"], "detail": "qfq 价格 52.81(pr-095) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-096", "pr-090", "pr-091"], "detail": "qfq 价格 52.65(pr-096) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-100", "pr-090", "pr-091"], "detail": "qfq 价格 56.58(pr-100) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-102", "pr-090", "pr-091"], "detail": "qfq 价格 54.5(pr-102) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-103", "pr-090", "pr-091"], "detail": "qfq 价格 52.65(pr-103) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-104", "pr-090", "pr-091"], "detail": "qfq 价格 52.81(pr-104) 与 raw/pit_raw 价格 ['pr-090', 'pr-091'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-113", "pr-108"], "detail": "qfq 价格 56.58(pr-113) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-116", "pr-108"], "detail": "qfq 价格 2.0(pr-116) 与 raw/pit_raw 价格 ['pr-108'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-184", "pr-194", "pr-200"], "detail": "qfq 价格 56.58(pr-184) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-185", "pr-194", "pr-200"], "detail": "qfq 价格 56.73(pr-185) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-186", "pr-194", "pr-200"], "detail": "qfq 价格 56.95(pr-186) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-187", "pr-194", "pr-200"], "detail": "qfq 价格 57.93(pr-187) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-189", "pr-194", "pr-200"], "detail": "qfq 价格 2.0(pr-189) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-190", "pr-194", "pr-200"], "detail": "qfq 价格 56.58(pr-190) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-191", "pr-194", "pr-200"], "detail": "qfq 价格 57.93(pr-191) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-192", "pr-194", "pr-200"], "detail": "qfq 价格 58.0(pr-192) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-193", "pr-194", "pr-200"], "detail": "qfq 价格 54.5(pr-193) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-199", "pr-194", "pr-200"], "detail": "qfq 价格 54.5(pr-199) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-201", "pr-194", "pr-200"], "detail": "qfq 价格 58.75(pr-201) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-204", "pr-194", "pr-200"], "detail": "qfq 价格 58.0(pr-204) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-205", "pr-194", "pr-200"], "detail": "qfq 价格 54.5(pr-205) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-206", "pr-194", "pr-200"], "detail": "qfq 价格 56.58(pr-206) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-208", "pr-194", "pr-200"], "detail": "qfq 价格 58.0(pr-208) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-209", "pr-194", "pr-200"], "detail": "qfq 价格 57.93(pr-209) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-210", "pr-194", "pr-200"], "detail": "qfq 价格 54.5(pr-210) 与 raw/pit_raw 价格 ['pr-194', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s06__r3", "sample": "s06", "ref_ids": ["pr-200"], "detail": "pit_raw 价格 57.93(pr-200) 直接进入坐标语境，禁止跨坐标混用", "source": "final_trade_decision"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-005", "pr-047"], "detail": "qfq 价格 57.0(pr-005) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-006", "pr-047"], "detail": "qfq 价格 56.95(pr-006) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-007", "pr-047"], "detail": "qfq 价格 57.93(pr-007) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-008", "pr-047"], "detail": "qfq 价格 58.75(pr-008) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-009", "pr-047"], "detail": "qfq 价格 57.93(pr-009) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-010", "pr-047"], "detail": "qfq 价格 58.75(pr-010) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-011", "pr-047"], "detail": "qfq 价格 59.38(pr-011) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-012", "pr-047"], "detail": "qfq 价格 60.0(pr-012) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-013", "pr-047"], "detail": "qfq 价格 59.38(pr-013) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-014", "pr-047"], "detail": "qfq 价格 54.52(pr-014) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-015", "pr-047"], "detail": "qfq 价格 55.0(pr-015) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-016", "pr-047"], "detail": "qfq 价格 52.65(pr-016) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-017", "pr-047"], "detail": "qfq 价格 52.81(pr-017) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-018", "pr-047"], "detail": "qfq 价格 52.65(pr-018) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-019", "pr-047"], "detail": "qfq 价格 52.81(pr-019) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-020", "pr-047"], "detail": "qfq 价格 56.58(pr-020) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-021", "pr-047"], "detail": "qfq 价格 62.46(pr-021) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-022", "pr-047"], "detail": "qfq 价格 59.38(pr-022) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-023", "pr-047"], "detail": "qfq 价格 56.73(pr-023) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-026", "pr-047"], "detail": "qfq 价格 56.95(pr-026) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-027", "pr-047"], "detail": "qfq 价格 56.58(pr-027) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-032", "pr-047"], "detail": "qfq 价格 57.93(pr-032) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-033", "pr-047"], "detail": "qfq 价格 55.0(pr-033) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-034", "pr-047"], "detail": "qfq 价格 52.65(pr-034) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-035", "pr-047"], "detail": "qfq 价格 58.0(pr-035) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-036", "pr-047"], "detail": "qfq 价格 59.38(pr-036) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-039", "pr-047"], "detail": "qfq 价格 20.0(pr-039) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-040", "pr-047"], "detail": "qfq 价格 56.58(pr-040) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-041", "pr-047"], "detail": "qfq 价格 58.0(pr-041) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-042", "pr-047"], "detail": "qfq 价格 54.5(pr-042) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-043", "pr-047"], "detail": "qfq 价格 58.0(pr-043) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-044", "pr-047"], "detail": "qfq 价格 59.4(pr-044) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-045", "pr-047"], "detail": "qfq 价格 58.0(pr-045) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-046", "pr-047"], "detail": "qfq 价格 53.0(pr-046) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-048", "pr-047"], "detail": "qfq 价格 54.5(pr-048) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-049", "pr-047"], "detail": "qfq 价格 52.65(pr-049) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-053", "pr-047"], "detail": "qfq 价格 62.46(pr-053) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-055", "pr-047"], "detail": "qfq 价格 56.95(pr-055) 与 raw/pit_raw 价格 ['pr-047'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-139", "pr-120", "pr-121", "pr-122", "pr-127", "pr-128", "pr-129", "pr-135", "pr-136", "pr-137", "pr-138"], "detail": "qfq 价格 58.5(pr-139) 与 raw/pit_raw 价格 ['pr-120', 'pr-121', 'pr-122', 'pr-127', 'pr-128', 'pr-129', 'pr-135', 'pr-136', 'pr-137', 'pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-141", "pr-120", "pr-121", "pr-122", "pr-127", "pr-128", "pr-129", "pr-135", "pr-136", "pr-137", "pr-138"], "detail": "qfq 价格 59.38(pr-141) 与 raw/pit_raw 价格 ['pr-120', 'pr-121', 'pr-122', 'pr-127', 'pr-128', 'pr-129', 'pr-135', 'pr-136', 'pr-137', 'pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-142", "pr-120", "pr-121", "pr-122", "pr-127", "pr-128", "pr-129", "pr-135", "pr-136", "pr-137", "pr-138"], "detail": "qfq 价格 54.5(pr-142) 与 raw/pit_raw 价格 ['pr-120', 'pr-121', 'pr-122', 'pr-127', 'pr-128', 'pr-129', 'pr-135', 'pr-136', 'pr-137', 'pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-143", "pr-120", "pr-121", "pr-122", "pr-127", "pr-128", "pr-129", "pr-135", "pr-136", "pr-137", "pr-138"], "detail": "qfq 价格 52.65(pr-143) 与 raw/pit_raw 价格 ['pr-120', 'pr-121', 'pr-122', 'pr-127', 'pr-128', 'pr-129', 'pr-135', 'pr-136', 'pr-137', 'pr-138'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-047"], "detail": "pit_raw 价格 58.5(pr-047) 直接进入坐标语境，禁止跨坐标混用", "source": "market_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-127"], "detail": "raw 价格 58.5(pr-127) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-128"], "detail": "raw 价格 55.63(pr-128) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-129"], "detail": "raw 价格 54.5(pr-129) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-136"], "detail": "raw 价格 57.93(pr-136) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-137"], "detail": "raw 价格 55.63(pr-137) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-138"], "detail": "raw 价格 54.5(pr-138) 直接进入坐标语境，禁止跨坐标混用", "source": "news_report"}
+{"run": "s06__r4", "sample": "s06", "ref_ids": ["pr-169"], "detail": "raw 价格 55.63(pr-169) 直接进入坐标语境，禁止跨坐标混用", "source": "macro_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-090", "pr-089", "pr-107"], "detail": "qfq 价格 58.0(pr-090) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-095", "pr-089", "pr-107"], "detail": "qfq 价格 54.5(pr-095) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-096", "pr-089", "pr-107"], "detail": "qfq 价格 52.8(pr-096) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-100", "pr-089", "pr-107"], "detail": "qfq 价格 55.0(pr-100) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-101", "pr-089", "pr-107"], "detail": "qfq 价格 52.65(pr-101) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-102", "pr-089", "pr-107"], "detail": "qfq 价格 52.8(pr-102) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-103", "pr-089", "pr-107"], "detail": "qfq 价格 57.5(pr-103) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-104", "pr-089", "pr-107"], "detail": "qfq 价格 58.5(pr-104) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-105", "pr-089", "pr-107"], "detail": "qfq 价格 54.5(pr-105) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-106", "pr-089", "pr-107"], "detail": "qfq 价格 52.8(pr-106) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-111", "pr-089", "pr-107"], "detail": "qfq 价格 58.5(pr-111) 与 raw/pit_raw 价格 ['pr-089', 'pr-107'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-119"], "detail": "pit_raw 价格 1440.0(pr-119) 直接进入坐标语境，禁止跨坐标混用", "source": "fundamentals_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-120"], "detail": "pit_raw 价格 52.5(pr-120) 直接进入坐标语境，禁止跨坐标混用", "source": "fundamentals_report"}
+{"run": "s06__r5", "sample": "s06", "ref_ids": ["pr-121"], "detail": "pit_raw 价格 52.65(pr-121) 直接进入坐标语境，禁止跨坐标混用", "source": "fundamentals_report"}
+{"run": "s07__r1", "sample": "s07", "ref_ids": ["pr-155", "pr-138", "pr-141", "pr-147"], "detail": "qfq 价格 7.1(pr-155) 与 raw/pit_raw 价格 ['pr-138', 'pr-141', 'pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-066", "pr-092"], "detail": "qfq 价格 6.84(pr-066) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-067", "pr-092"], "detail": "qfq 价格 6.8(pr-067) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-068", "pr-092"], "detail": "qfq 价格 6.9(pr-068) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-069", "pr-092"], "detail": "qfq 价格 6.89(pr-069) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-072", "pr-092"], "detail": "qfq 价格 6.8(pr-072) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-076", "pr-092"], "detail": "qfq 价格 6.9(pr-076) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-080", "pr-092"], "detail": "qfq 价格 6.97(pr-080) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-081", "pr-092"], "detail": "qfq 价格 7.1(pr-081) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-082", "pr-092"], "detail": "qfq 价格 6.8(pr-082) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-083", "pr-092"], "detail": "qfq 价格 7.08(pr-083) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-085", "pr-092"], "detail": "qfq 价格 6.9(pr-085) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-086", "pr-092"], "detail": "qfq 价格 1.0(pr-086) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-087", "pr-092"], "detail": "qfq 价格 7.0(pr-087) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-089", "pr-092"], "detail": "qfq 价格 6.8(pr-089) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-090", "pr-092"], "detail": "qfq 价格 7.0(pr-090) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-091", "pr-092"], "detail": "qfq 价格 6.64(pr-091) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-099", "pr-092"], "detail": "qfq 价格 6.97(pr-099) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-100", "pr-092"], "detail": "qfq 价格 7.0(pr-100) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-101", "pr-092"], "detail": "qfq 价格 7.17(pr-101) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-102", "pr-092"], "detail": "qfq 价格 7.1(pr-102) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-103", "pr-092"], "detail": "qfq 价格 7.08(pr-103) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-104", "pr-092"], "detail": "qfq 价格 6.8(pr-104) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-105", "pr-092"], "detail": "qfq 价格 6.6(pr-105) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-106", "pr-092"], "detail": "qfq 价格 6.64(pr-106) 与 raw/pit_raw 价格 ['pr-092'] 处于同一坐标语境（现价/支撑/锚等）", "source": "volume_price_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-134", "pr-127"], "detail": "qfq 价格 2026.0(pr-134) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-135", "pr-127"], "detail": "qfq 价格 6.89(pr-135) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-138", "pr-127"], "detail": "qfq 价格 6.97(pr-138) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s07__r5", "sample": "s07", "ref_ids": ["pr-139", "pr-127"], "detail": "qfq 价格 7.17(pr-139) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s08__r1", "sample": "s08", "ref_ids": ["pr-134", "pr-129"], "detail": "qfq 价格 124.0(pr-134) 与 raw/pit_raw 价格 ['pr-129'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s08__r1", "sample": "s08", "ref_ids": ["pr-135", "pr-129"], "detail": "qfq 价格 124.0(pr-135) 与 raw/pit_raw 价格 ['pr-129'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-175", "pr-173"], "detail": "qfq 价格 120.0(pr-175) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-176", "pr-173"], "detail": "qfq 价格 124.53(pr-176) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-180", "pr-173"], "detail": "qfq 价格 122.77(pr-180) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-181", "pr-173"], "detail": "qfq 价格 124.53(pr-181) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-182", "pr-173"], "detail": "qfq 价格 111.74(pr-182) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-183", "pr-173"], "detail": "qfq 价格 117.19(pr-183) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-185", "pr-173"], "detail": "qfq 价格 121.3(pr-185) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-186", "pr-173"], "detail": "qfq 价格 122.8(pr-186) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-187", "pr-173"], "detail": "qfq 价格 122.77(pr-187) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-188", "pr-173"], "detail": "qfq 价格 124.53(pr-188) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-189", "pr-173"], "detail": "qfq 价格 114.5(pr-189) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-190", "pr-173"], "detail": "qfq 价格 115.0(pr-190) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-191", "pr-173"], "detail": "qfq 价格 114.76(pr-191) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-192", "pr-173"], "detail": "qfq 价格 111.45(pr-192) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-193", "pr-173"], "detail": "qfq 价格 111.75(pr-193) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-194", "pr-173"], "detail": "qfq 价格 111.45(pr-194) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-195", "pr-173"], "detail": "qfq 价格 111.74(pr-195) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-196", "pr-173"], "detail": "qfq 价格 122.8(pr-196) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-197", "pr-173"], "detail": "qfq 价格 114.76(pr-197) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-198", "pr-173"], "detail": "qfq 价格 115.0(pr-198) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-200", "pr-173"], "detail": "qfq 价格 117.19(pr-200) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-202", "pr-173"], "detail": "qfq 价格 117.19(pr-202) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-203", "pr-173"], "detail": "qfq 价格 121.0(pr-203) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-204", "pr-173"], "detail": "qfq 价格 111.74(pr-204) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r3", "sample": "s08", "ref_ids": ["pr-206", "pr-173"], "detail": "qfq 价格 111.45(pr-206) 与 raw/pit_raw 价格 ['pr-173'] 处于同一坐标语境（现价/支撑/锚等）", "source": "smart_money_report"}
+{"run": "s08__r4", "sample": "s08", "ref_ids": ["pr-106", "pr-100", "pr-101"], "detail": "qfq 价格 117.19(pr-106) 与 raw/pit_raw 价格 ['pr-100', 'pr-101'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-107", "pr-111"], "detail": "qfq 价格 99.05(pr-107) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-108", "pr-111"], "detail": "qfq 价格 121.33(pr-108) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-109", "pr-111"], "detail": "qfq 价格 124.53(pr-109) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-110", "pr-111"], "detail": "qfq 价格 122.77(pr-110) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-118", "pr-111"], "detail": "qfq 价格 120.0(pr-118) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-127", "pr-111"], "detail": "qfq 价格 122.8(pr-127) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-128", "pr-111"], "detail": "qfq 价格 124.53(pr-128) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s08__r5", "sample": "s08", "ref_ids": ["pr-132", "pr-111"], "detail": "qfq 价格 121.0(pr-132) 与 raw/pit_raw 价格 ['pr-111'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s09__r1", "sample": "s09", "ref_ids": ["pr-135", "pr-122", "pr-130"], "detail": "qfq 价格 6.5(pr-135) 与 raw/pit_raw 价格 ['pr-122', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-188", "pr-199", "pr-200"], "detail": "qfq 价格 6.01(pr-188) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-189", "pr-199", "pr-200"], "detail": "qfq 价格 6.2(pr-189) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-190", "pr-199", "pr-200"], "detail": "qfq 价格 6.45(pr-190) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-191", "pr-199", "pr-200"], "detail": "qfq 价格 5.7(pr-191) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-192", "pr-199", "pr-200"], "detail": "qfq 价格 5.85(pr-192) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-193", "pr-199", "pr-200"], "detail": "qfq 价格 5.3(pr-193) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-196", "pr-199", "pr-200"], "detail": "qfq 价格 5.85(pr-196) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r2", "sample": "s09", "ref_ids": ["pr-198", "pr-199", "pr-200"], "detail": "qfq 价格 6.55(pr-198) 与 raw/pit_raw 价格 ['pr-199', 'pr-200'] 处于同一坐标语境（现价/支撑/锚等）", "source": "investment_plan"}
+{"run": "s09__r3", "sample": "s09", "ref_ids": ["pr-125", "pr-115"], "detail": "qfq 价格 6.01(pr-125) 与 raw/pit_raw 价格 ['pr-115'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s09__r4", "sample": "s09", "ref_ids": ["pr-122", "pr-118"], "detail": "qfq 价格 6.01(pr-122) 与 raw/pit_raw 价格 ['pr-118'] 处于同一坐标语境（现价/支撑/锚等）", "source": "fundamentals_report"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-135", "pr-147"], "detail": "qfq 价格 8.33(pr-135) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-136", "pr-147"], "detail": "qfq 价格 8.35(pr-136) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-137", "pr-147"], "detail": "qfq 价格 8.55(pr-137) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-143", "pr-147"], "detail": "qfq 价格 8.3(pr-143) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-153", "pr-147"], "detail": "qfq 价格 8.3(pr-153) 与 raw/pit_raw 价格 ['pr-147'] 处于同一坐标语境（现价/支撑/锚等）", "source": "trader_investment_plan"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-157", "pr-164"], "detail": "qfq 价格 8.28(pr-157) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-158", "pr-164"], "detail": "qfq 价格 0.24(pr-158) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-159", "pr-164"], "detail": "qfq 价格 8.2(pr-159) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-171", "pr-164"], "detail": "qfq 价格 8.28(pr-171) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-172", "pr-164"], "detail": "qfq 价格 8.2(pr-172) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r1", "sample": "s10", "ref_ids": ["pr-177", "pr-164"], "detail": "qfq 价格 8.55(pr-177) 与 raw/pit_raw 价格 ['pr-164'] 处于同一坐标语境（现价/支撑/锚等）", "source": "final_trade_decision"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-114", "pr-123"], "detail": "qfq 价格 8.33(pr-114) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-115", "pr-123"], "detail": "qfq 价格 8.42(pr-115) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-116", "pr-123"], "detail": "qfq 价格 8.55(pr-116) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-117", "pr-123"], "detail": "qfq 价格 8.35(pr-117) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-120", "pr-123"], "detail": "qfq 价格 8.1(pr-120) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-121", "pr-123"], "detail": "qfq 价格 8.15(pr-121) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-124", "pr-123"], "detail": "qfq 价格 8.55(pr-124) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-125", "pr-123"], "detail": "qfq 价格 8.15(pr-125) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-128", "pr-123"], "detail": "qfq 价格 8.55(pr-128) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-129", "pr-123"], "detail": "qfq 价格 8.15(pr-129) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-131", "pr-123"], "detail": "qfq 价格 8.1(pr-131) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-132", "pr-123"], "detail": "qfq 价格 7.86(pr-132) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r3", "sample": "s10", "ref_ids": ["pr-133", "pr-123"], "detail": "qfq 价格 7.91(pr-133) 与 raw/pit_raw 价格 ['pr-123'] 处于同一坐标语境（现价/支撑/锚等）", "source": "news_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-005", "pr-035"], "detail": "qfq 价格 8.62(pr-005) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-006", "pr-035"], "detail": "qfq 价格 8.55(pr-006) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-007", "pr-035"], "detail": "qfq 价格 8.78(pr-007) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-008", "pr-035"], "detail": "qfq 价格 8.8(pr-008) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-009", "pr-035"], "detail": "qfq 价格 8.32(pr-009) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-010", "pr-035"], "detail": "qfq 价格 8.35(pr-010) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-011", "pr-035"], "detail": "qfq 价格 8.05(pr-011) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-012", "pr-035"], "detail": "qfq 价格 8.1(pr-012) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-021", "pr-035"], "detail": "qfq 价格 8.79(pr-021) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-024", "pr-035"], "detail": "qfq 价格 8.53(pr-024) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-026", "pr-035"], "detail": "qfq 价格 8.2(pr-026) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-027", "pr-035"], "detail": "qfq 价格 8.55(pr-027) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-028", "pr-035"], "detail": "qfq 价格 10.02(pr-028) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-032", "pr-035"], "detail": "qfq 价格 8.55(pr-032) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-036", "pr-035"], "detail": "qfq 价格 8.55(pr-036) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-037", "pr-035"], "detail": "qfq 价格 8.68(pr-037) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-038", "pr-035"], "detail": "qfq 价格 10.0(pr-038) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-039", "pr-035"], "detail": "qfq 价格 8.15(pr-039) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-040", "pr-035"], "detail": "qfq 价格 8.05(pr-040) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-041", "pr-035"], "detail": "qfq 价格 50.0(pr-041) 与 raw/pit_raw 价格 ['pr-035'] 处于同一坐标语境（现价/支撑/锚等）", "source": "market_report"}
+{"run": "s10__r4", "sample": "s10", "ref_ids": ["pr-035"], "detail": "pit_raw 价格 8.65(pr-035) 直接进入坐标语境，禁止跨坐标混用", "source": "market_report"}
