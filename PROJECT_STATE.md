@@ -1,6 +1,6 @@
 # Project State
 
-## 当前状态头部（2026-09-23 22:20 总控核验；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-24 00:45 总控更新；开工前必须重新回读，D-005）
 
 | 项 | production view | trunk candidate view |
 |---|---|---|
@@ -19,14 +19,20 @@
   - 运行目录是主仓库 `/Users/davidliu/Documents/TradingAgents-AShare`（detached HEAD），不是独立发布 worktree，待下次发布门迁回（D-038）；
   - 未设置 `TA_SOCIAL_MODE`，`/v1/social-data/status` 回读 `disabled`（09-19 为 shadow）。原因已查明：宿主 `.env` 缺少社交配置，而 09-20 后的发布都从主仓库目录启动。总控决定暂时保持 `disabled`，下次发布门显式设置并回读（D-038）。
 - **生产库**：reports 共 1816 份，其中 completed 1052、failed 764（2026-09-23 22:21 `mode=ro` 实测）。
-- **当前唯一关键路径**（D-034）：DAV-1136 → **DAV-1225**（零 token 纠错与 W0–W4；backlog，待总工指派实现者）→ DAV-1224（blocked）→ 50 份冻结 state 零 LLM 重算 → B2+B3 解冻裁决 → 统一发布门。
+- **当前唯一关键路径**（D-034、D-039）：DAV-1225 已签收（证据 `53df9ad` 已并入主干）→ **DAV-1224**（按 v2 范围 `work/issue-dav1224-spec-v2-20260924.md` 施工，待总工派工）→ 50 份冻结 state 零 LLM 重算 → 统一发布门 → B2+B3 解冻裁决。
+- **冻结语料 what-if 上限**（DAV-1225）：五个杠杆全部落地后 6/50 通过；剩余主体为模型自拟、无来源的真实价位。
+- **样本产出率**（DAV-1227）：每 100 份 completed 约产出 3.07 个 clean（production 视图）或 2.45 个（trunk 视图）。单一 cohort 要攒到 60 个，约需 2,000–2,450 份真实分析，而契约期新报告目前产出为 0。
 - **冻结项**：
   - B2+B3 的 24 条真实重放；
   - 信用加权；
   - 社交 active；
   - 批量真实分析；
   - 概率输出与生成链改造（D-037）。
-- **并行准备线**（D-037，零模型、零生产写入）：DAV-1226（probability 诊断）、DAV-1227（样本供给漏斗）、DAV-1228（F1 阶段 H 准备）。
+- **并行准备线**（D-037）已全部签收：
+  - DAV-1226：probability 缺失的主因是生成侧契约从未要求输出；
+  - DAV-1227：见上方产出率；
+  - DAV-1228：阶段 H/E 的数据缺口均有闭合路径（Tushare `index_member` / `report_rc`、baostock 退市股）。
+  - F1 阶段 H 的实施，在关键路径完成后再排期。
 - **测量地基约束**：
   - `price_ref.v1` 下 51/51 blocked：50 份 DAV-1222 冻结重放，加 1 份 contract-era 生产 smoke `7a557f07`；
   - 固定输入方差（DAV-1222，10 个样本 × 5 次）：交易动作 5 次全一致的仅 2/10，H1b 资格发生翻转的 4/10；
