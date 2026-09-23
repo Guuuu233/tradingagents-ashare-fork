@@ -1,5 +1,79 @@
 # Project State
 
+## 当前状态头部（2026-09-23 22:20 总控核验；开工前必须重新回读，D-005）
+
+| 项 | production view | trunk candidate view |
+|---|---|---|
+| 代码 SHA | `3d9c41495b748121032e038cf2ae85afeb64248d`（`/healthz` 精确回读） | `9d03c899e689687cc8c96e2544f8452455d393f9`（`git ls-remote origin codex/dav-4-p2a-trunk`）。若主干 HEAD 是其治理文档后代，代码树逐字节一致 |
+| 待发布提交 | — | `35c33de`（DAV-1135，E-04 否定存在豁免）、`1d74ce8`（DAV-1139，Stage 3.5 HOLD 语义隔离）、`9d03c89`（DAV-1138，资金流失败分类） |
+| H1b 漏斗（D-035） | completed 1052 → v2 390 → D-009 合格 43 → 价格口径隔离 28 → **clean 15**（legacy 6 + v1 9） | 1052 → 390 → 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
+
+两个漏斗的统计口径：
+- 数据来自生产库 `.backup()` 副本，快照时间 2026-09-23 21:54；
+- D-009 排除共 347 条：ABSTAIN 234、旧格式无状态 69、WAIT 40、INVALID_RUN 4；
+- 价格口径隔离共 28 条：确认污染 14、待裁决 13、契约不全 1。
+
+- **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60；两种视图下 v1 cohort 分别只有 9 和 6 条。`credit_weighting_enabled=False`。
+- **服务运行态**：
+  - PID 41313，2026-09-23 13:28 启动，监听 `127.0.0.1:8000`；
+  - 运行目录是主仓库 `/Users/davidliu/Documents/TradingAgents-AShare`（detached HEAD），不是独立发布 worktree，待下次发布门迁回（D-038）；
+  - 未设置 `TA_SOCIAL_MODE`，`/v1/social-data/status` 回读 `disabled`；09-19 台账记录为 shadow，变更原因待查（D-038）。
+- **生产库**：reports 共 1816 份，其中 completed 1052、failed 764（2026-09-23 22:21 `mode=ro` 实测）。
+- **当前唯一关键路径**（D-034）：DAV-1136 → **DAV-1225**（零 token 纠错与 W0–W4；backlog，待总工指派实现者）→ DAV-1224（blocked）→ 50 份冻结 state 零 LLM 重算 → B2+B3 解冻裁决 → 统一发布门。
+- **冻结项**：
+  - B2+B3 的 24 条真实重放；
+  - 信用加权；
+  - 社交 active；
+  - 批量真实分析；
+  - 概率输出与生成链改造（D-037）。
+- **并行准备线**（D-037，零模型、零生产写入）：DAV-1226（probability 诊断）、DAV-1227（样本供给漏斗）、DAV-1228（F1 阶段 H 准备）。
+- **测量地基约束**：
+  - `price_ref.v1` 下 51/51 blocked：50 份 DAV-1222 冻结重放，加 1 份 contract-era 生产 smoke `7a557f07`；
+  - 固定输入方差（DAV-1222，10 个样本 × 5 次）：交易动作 5 次全一致的仅 2/10，H1b 资格发生翻转的 4/10；
+  - 前向窗口 ABSTAIN 87.1%，8 条 VALID 全部为 WAIT（DAV-1044，09-19）；
+  - completed 报告带 probability 的比例：2026-07 为 0/403，2026-08 为 7/328，2026-09 为 12/321。
+- **角色**（D-033）：
+  - 总控（Claude 桌面会话）：最终裁决与签字；
+  - 总工：执行统筹；
+  - ChatGPT：独立复核；
+  - 看板动作以「【总控】」「【总工】」前缀区分。
+- **路线索引**：见仓库根目录的 `ROADMAP.md`。
+
+## 2026-09-19 → 2026-09-23 变更摘要
+
+- **主干**：`116c7d6` → `9d03c89`，共 67 个提交（66 个非合并提交）。主要包括：
+  - 证据核验器：DAV-1088、1091、1093、1140（A–E）、1141、1144～1148、1157～1177；
+  - `price_ref.v1` 契约：DAV-1142、1196～1200、1207、1211；
+  - 财务口径与违规传播：DAV-1108、1134、1143；
+  - Tushare 全球指数与财报三表接入：DAV-1098、1099；
+  - E-04 修补：DAV-1110、1135；
+  - 资金流：DAV-1086、1138；
+  - H1b 入场价契约与 HOLD 语义隔离：DAV-1107、1139。
+- **上线**：09-22 以来依次为 `b51a528`（DAV-1186）→ `96f14eb`（DAV-1206）→ `7f865c9`（DAV-1209/1210）→ `3d9c414`（DAV-1214/1215）。09-20～21 期间另有多次上线（如 `846357a`、`8a5b1bf`、`55cd0bb`、`91afea8`），见各卡评论，本次未逐一回读。
+- **新口径**：
+  - `price_ref.v1` 契约，以及 Stage 4 价格口径隔离（DAV-1199/1200）；
+  - Stage 3.5 HOLD 语义隔离（DAV-1218，目前仅在主干）；
+  - direction_basis / evidence_basis 账本（DAV-1187/1188）；
+  - semantic coverage gate（DAV-1193）。
+- **诊断**：
+  - B2/B3 分层历史重放，每批 12 条，见 `work/h1b-regime-pool*.md`；
+  - DAV-1222 固定输入方差实锤：S3=4、S4=4、S5=0；
+  - DAV-1223 B0：高层结论保留，定量部分作废（D-034）。
+- **角色**：09-23 起由主控（ChatGPT）签字；同日由 D-033 改为单一总控制。
+
+## 看板收口记录（2026-09-23 总控，详见 DAV-1229）
+
+- **改为 done**（代码均已在主干和线上，经 merge-base 核验）：DAV-1107（`96db9ce`）、DAV-1108（`846357a`、`7e87829`）、DAV-1134（`8a5b1bf`）、DAV-1178（父卡 DAV-1148 已 done）。
+- **取消**：DAV-1203，与 DAV-1204 重复。
+- **改为 backlog**：DAV-1112（并入 DAV-1227），DAV-1225（防止自动指派，待总工指派）。
+- **新立**：DAV-1226、1227、1228，均为 backlog。
+- 所有状态变更都用 `--no-start`，事后核查确认没有唤醒任何 agent run。
+- 6 张 HD2D-CIRNO 卡与本项目无关，未改动，不计入本项目统计。
+
+---
+
+## 2026-09-19 快照（历史，勿据此开工）
+
 最后核验：2026-09-19。远端 trunk `codex/dav-4-p2a-trunk` 回读 = **`a290f187f18635dfc2c4890cea2645bed9f09f1a`**（含 09-18 ABSTAIN 修复线 7 个提交：DAV-1068 去重裁决态 `bbca10a`/`c76972e`/`1210c70`/`254d2ab`、DAV-1071 E-04 引述/条件豁免 `6993fbf`、DAV-1061 SQLite sidecar 加固 `0db3bb9` 及 merge `a290f18`）。**`a290f18` 已于 2026-09-19 受控部署并在线**：serve worktree `/private/tmp/ta-serve-a290f18`，PID 1018（PPID=1）运行于 8000，`/healthz` 精确回读同一 SHA，`executor_queued=0`；部署证据 `work/deploy-a290f18-postcheck-20260919.md`，部署前备份 `work/tradingagents.db.bak-20260919-021456-deploy-a290f18`。生产库 `data/tradingagents.db` 当前 reports **1736**（978 completed / 758 failed，含受控验证新报告 `c21456dd`），quick_check=ok。社交 active 未开启：`/v1/social-data/status` 回读 `mode=shadow`、xhs/dy operational，归档 357 快照。
 
 **H1b 正式门槛口径（D-009 §5 cohort，2026-09-19 重算）：977 completed → 315 v2 → 17 D-009 eligible。** cohort 拆分：`legacy_unversioned` 7 条（冻死，生产现只产 v1 cohort），`decision_model.v1:evidence_contract.v1:price_basis.unspecified` 10 条；两者按 D-009 隔离不得合并。**仍 FAIL / KEEP_FALSE**——v1 cohort 10/60，样本量不足。198 条存量 ABSTAIN 缺陷签名：A（DAV-1068 `unadjudicated_material_claims_adopt`）52、E-04 priced-in 69、E-04 超预期 15，合计 132/198（66.7%），零重叠。**a290f18 部署后受控单样本验证（报告 `c21456dd`，详见 `work/abstain-fix-verification-a290f18-20260919.md`）：两个旧闸（unadjudicated_material_claims_adopt、E-04 priced-in/超预期）均未再触发；该报告仍 ABSTAIN 系真实资金流/方向证据闸拦截，不计入 H1b 样本。** 单次样本只证明修复路径生效，存量 132 条缺陷签名的真实下降须后续批次验证。
