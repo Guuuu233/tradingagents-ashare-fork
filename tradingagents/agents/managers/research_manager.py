@@ -435,6 +435,32 @@ _PRICED_IN_NEG_EN = re.compile(
     re.IGNORECASE,
 )
 _PRICED_IN_REJECT_ZH = re.compile(r"驳回|不成立|不予采纳|不能成立|予以否定|并不采纳|未被采纳|被否定")
+# DAV-1135：双重否定结构（整体语义为肯定断言，不得按单否定豁免）。
+# 命中双重否定 token 内的单否定词不计入奇偶，token 本身贡献偶数（净效果=断言）。
+_PRICED_IN_DBL_NEG_ZH = re.compile(
+    r"无不是|无不|并非没有|并非不|并非未|并非无|不是没有|没有不|不得不|不能不|未必不|不见得"
+)
+# DAV-1135：名词性存在否定（absence）豁免 —— 「缺乏/缺少/没有/无 + 超预期 + 名词宾语」
+# 是「不存在」的客观陈述而非断言业绩超预期。按存在性否定结构判定，绝不把「无/没有」
+# 并入全局否定词表（会误放「并非没有超预期」「无不是超预期」等双重否定）。
+# 裸「无」须排除高频复合词（无论/无疑/无非/无关/无限/无数…），否则「毫无疑问超预期」误放。
+_E04_ABSENCE_VERB_ZH = re.compile(
+    r"缺乏|缺少|缺失|匮乏|没有|毫无|了无|不存在|未见|未出现|未发现|"
+    r"无(?!论|疑|非|知|故|聊|关|谓|妨|碍|偿|敌|情|理|效|数|期|限|线|毒|害|罪|意|畏|私|"
+    r"形|声|缘|辜|伤|名|实|定|常|奇|双|方|价|比|懈|厌|穷|尽|量|庸|恙|自|政府|独有偶)"
+)
+# 命中后须紧跟名词性宾语，使「超预期」降级为定语（超预期催化/证据/事件/题材…）。
+_E04_ABSENCE_NOUN_SUFFIX = re.compile(
+    r"^\s*(?:的\s*)?(?:催化|催化剂|催化点|证据|事件|信息|题材|因素|信号|支撑|驱动|动力|"
+    r"基础|依据|条件|情形|情况|可能|空间|幅度|逻辑|故事|利好|利空|变量|新闻|公告|"
+    r"披露|预期差|增长点|亮点|素材|理由|消息面|风险)"
+)
+# absence 动词与命中之间出现否定词（双重否定回转）、转折或断言标记 → 不构成存在否定
+_E04_ABSENCE_BREAK_ZH = re.compile(
+    r"不|未|非|莫|勿|但|然而|不过|反而|却|则|确实|毫无疑问|势必|必然|必将|定会|确认|仍"
+)
+# absence 动词之前若已有否定词（并非没有/不无…），整体是双重否定断言而非存在否定
+_E04_ABSENCE_PREFIX_NEG_ZH = re.compile(r"不|无|非|莫|勿")
 # DAV-1071 缺陷1：条件/假设句引导的命中不算断言（若/如果/一旦…引导的条件从句是情景推演而非事实断言）
 _E04_COND_ZH = re.compile(r"若(?!干)|如果|倘若|假若|倘使|一旦|假设|除非|万一")
 _E04_COND_EN = re.compile(
@@ -819,8 +845,45 @@ def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
     if _in_conditional_clause(text, start, end):
         return False
     # 同一句内一处否定不豁免另一处肯定：按出现位置所在子句计数否定词，奇数为否定、偶数为双重否定
-    neg_count = len(_PRICED_IN_NEG_ZH.findall(before)) + len(_PRICED_IN_NEG_EN.findall(before))
+    # DAV-1135：双重否定 token（无不是/无不/并非没有…）整体计偶数，其内部单否定词不重复计数，
+    # 否则「无不是超预期」仅匹配「不」为奇数而误放行。
+    dbl_spans = [m.span() for m in _PRICED_IN_DBL_NEG_ZH.finditer(before)]
+
+    def _inside_dbl(pos: int) -> bool:
+        return any(s <= pos < e for s, e in dbl_spans)
+
+    neg_count = (
+        sum(1 for m in _PRICED_IN_NEG_ZH.finditer(before) if not _inside_dbl(m.start()))
+        + sum(1 for m in _PRICED_IN_NEG_EN.finditer(before) if not _inside_dbl(m.start()))
+        + 2 * len(dbl_spans)
+    )
     return neg_count % 2 == 0
+
+
+def _is_absence_negation_zh(text: str, start: int, end: int) -> bool:
+    """DAV-1135：名词性存在否定豁免。
+
+    「缺乏/缺少/没有/无 + 超预期 + 名词宾语（催化/证据/事件/题材…）」是「不存在」的客观陈述，
+    非断言业绩超预期。结构判定（不动全局否定词表）：
+      1. 命中后须紧跟名词性宾语（「超预期」降级为定语）；
+      2. 命中所在子句前部存在 absence 动词（缺乏/缺少/没有/无…）；
+      3. absence 动词与命中之间不得含否定/转折/断言标记（防「缺乏证据但确实超预期催化」）；
+      4. absence 动词之前不得另含否定词（防「并非没有超预期催化」双重否定逃逸）。
+    """
+    n = len(text)
+    right = end
+    while right < n and not _is_clause_break(text, right):
+        right += 1
+    if not _E04_ABSENCE_NOUN_SUFFIX.match(text[end:right]):
+        return False
+    before, _ = _priced_in_clause(text, start, end)
+    for m in _E04_ABSENCE_VERB_ZH.finditer(before):
+        if _E04_ABSENCE_PREFIX_NEG_ZH.search(before[: m.start()]):
+            continue
+        if _E04_ABSENCE_BREAK_ZH.search(before[m.end() :]):
+            continue
+        return True
+    return False
 
 
 def _is_beat_miss_assertion(text: str, start: int, end: int) -> bool:
@@ -831,6 +894,9 @@ def _is_beat_miss_assertion(text: str, start: int, end: int) -> bool:
     while right < n and not _is_clause_break(text, right):
         right += 1
     if _BEAT_MISS_NOUN_SUFFIX.match(text[end:right]):
+        return False
+    # DAV-1135：名词性存在否定（「缺乏/无 + 超预期催化」）豁免——absence ≠ assertion
+    if _is_absence_negation_zh(text, start, end):
         return False
     return _is_priced_in_assertion(text, start, end)
 

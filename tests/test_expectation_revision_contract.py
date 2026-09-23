@@ -2732,3 +2732,80 @@ def test_dav1110_scenario_scope_termination_and_assertions_still_flagged():
     )
     assert not is_valid
     assert any("已定价" in v for v in viols), f"裸已定价漏拦: {viols}"
+
+
+# ==============================================================================
+# DAV-1135：E-04 名词性存在否定（absence）豁免 —— 「缺乏/缺少/没有/无 + 超预期 + 名词」
+# 是不存在的客观陈述而非断言业绩超预期；按存在性否定结构实现，不做全局否定词放宽。
+# ==============================================================================
+
+def _dav1135_gap_revs():
+    return _dav1068_gap_revs()
+
+
+def test_dav1135_absence_negation_not_flagged():
+    """DAV-1135 A：名词性存在否定结构豁免（含 b5a65f03 真实文本）。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1135_gap_revs()
+
+    # 1. 真实 fixture：b5a65f03（000538 云南白药 @ 2026-08-13）命中文本必须豁免
+    real_text = "缺乏短线超预期事件催化，快消日化竞品价格战升温"
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, real_text, gap_exp
+    )
+    assert is_valid, f"b5a65f03 存在否定被误拦: {viols}"
+    assert not any("预期" in v for v in viols)
+
+    # 2. 同型存在否定变体：各 absence 动词 × 各名词宾语
+    for text in (
+        "缺少超预期证据，维持中性",
+        "没有超预期信息，观望为主",
+        "无超预期题材，交投清淡",
+        "缺乏短线超预期催化",
+        "不存在超预期事件",
+        "未见超预期信号",
+        "毫无超预期利好",
+        "缺乏实质性超预期催化因素",
+        "当前无超预期的预期差",
+        "缺少不及预期风险因素，基本面平稳",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"存在否定误拦: {text!r} -> {viols}"
+        assert not any("预期" in v for v in viols), f"误报超预期违规: {text!r} -> {viols}"
+
+
+def test_dav1135_affirmative_and_double_negation_still_flagged():
+    """DAV-1135 B：真实肯定断言与双重否定不得逃逸（反例必须仍拦）。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1135_gap_revs()
+
+    # 1. 真实肯定断言：必须拦
+    for text in (
+        "公司二季度业绩确实超预期",
+        "毫无疑问超预期，建议加仓",
+        "无论如何都会超预期",
+        "中报业绩超预期兑现",
+        "Interim earnings beat expectations.",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"肯定断言漏拦: {text!r}"
+        assert any("预期" in v or "beat" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+    # 2. 双重否定/伪存在否定：必须拦（禁止 regex 放宽逃逸）
+    for text in (
+        "并非没有超预期",
+        "并非没有超预期催化",
+        "无不是超预期",
+        "业绩无不超预期",
+        "缺乏证据但确实超预期催化",
+        "无超预期，业绩反而大幅超预期",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"双重否定/伪否定漏拦: {text!r}"
+        assert any("预期" in v for v in viols), f"未报违规: {text!r} -> {viols}"
