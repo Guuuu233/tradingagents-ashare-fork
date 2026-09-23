@@ -1,0 +1,3 @@
+snapshot.db
+*.db
+__pycache__/

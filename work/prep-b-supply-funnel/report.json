@@ -1,0 +1,3599 @@
+{
+  "meta": {
+    "db": "/Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-1227-6ef1ca12addc/workdir/tradingagents-ashare-fork/work/prep-b-supply-funnel/snapshot.db",
+    "db_sha256": "bda9e74cc7587ce98d614c6927da0b958abbfc0db17441bd5c792c86d3c9b18d",
+    "snapshot_time_utc": "2026-09-23T14:54:51+00:00",
+    "user_id": "429163f7-50b6-4982-8bdf-96ae99506843",
+    "code_sha_trunk": "9d03c899e689687cc8c96e2544f8452455d393f9",
+    "code_sha_production": "3d9c41495b748121032e038cf2ae85afeb64248d",
+    "views": "production=无Stage3.5; trunk=Stage3.5(DAV-1139)+Stage4"
+  },
+  "funnel": {
+    "production": {
+      "raw": 489,
+      "non_v2": 101,
+      "v2": 388,
+      "d009_legacy_null": 69,
+      "d009_abstain": 234,
+      "d009_invalid_run": 2,
+      "d009_wait": 40,
+      "d009_eligible": 43,
+      "clean": 15,
+      "price_basis_contaminated": 14,
+      "price_basis_pending_review": 13,
+      "price_basis_contract_incomplete": 1
+    },
+    "trunk": {
+      "raw": 489,
+      "non_v2": 101,
+      "v2": 388,
+      "d009_legacy_null": 69,
+      "d009_abstain": 234,
+      "d009_invalid_run": 2,
+      "d009_wait": 40,
+      "d009_eligible": 43,
+      "clean": 12,
+      "hold_conflict": 3,
+      "price_basis_contaminated": 14,
+      "price_basis_pending_review": 13,
+      "hold_defensive": 1,
+      "price_basis_contract_incomplete": 1
+    }
+  },
+  "by_week": {
+    "2026-W31": {
+      "raw": 23,
+      "non_v2": 23
+    },
+    "2026-W32": {
+      "raw": 29,
+      "non_v2": 29
+    },
+    "2026-W33": {
+      "raw": 13,
+      "non_v2": 13
+    },
+    "2026-W34": {
+      "raw": 50,
+      "non_v2": 36,
+      "v2": 14,
+      "d009_legacy_null": 14
+    },
+    "2026-W35": {
+      "raw": 55,
+      "v2": 55,
+      "d009_legacy_null": 55
+    },
+    "2026-W36": {
+      "raw": 58,
+      "v2": 58,
+      "d009_abstain": 35,
+      "d009_invalid_run": 1,
+      "d009_wait": 15,
+      "d009_eligible": 7,
+      "prod_clean": 7,
+      "trunk_clean": 6
+    },
+    "2026-W37": {
+      "raw": 4,
+      "v2": 4,
+      "d009_invalid_run": 1,
+      "d009_eligible": 2,
+      "prod_clean": 1,
+      "trunk_clean": 1,
+      "d009_abstain": 1
+    },
+    "2026-W38": {
+      "raw": 218,
+      "v2": 218,
+      "d009_abstain": 178,
+      "d009_wait": 21,
+      "d009_eligible": 19,
+      "prod_clean": 4,
+      "trunk_clean": 3
+    },
+    "2026-W39": {
+      "raw": 39,
+      "v2": 39,
+      "d009_abstain": 20,
+      "d009_eligible": 15,
+      "prod_clean": 3,
+      "trunk_clean": 2,
+      "d009_wait": 4
+    }
+  },
+  "by_entry": {
+    "api": {
+      "raw": 205,
+      "non_v2": 19,
+      "v2": 186,
+      "d009_legacy_null": 60,
+      "d009_abstain": 71,
+      "d009_invalid_run": 1,
+      "d009_wait": 22,
+      "d009_eligible": 32,
+      "prod_clean": 11,
+      "trunk_clean": 10
+    },
+    "unknown(no workflow_context)": {
+      "raw": 284,
+      "non_v2": 82,
+      "v2": 202,
+      "d009_legacy_null": 9,
+      "d009_abstain": 163,
+      "d009_eligible": 11,
+      "prod_clean": 4,
+      "d009_wait": 18,
+      "d009_invalid_run": 1,
+      "trunk_clean": 2
+    }
+  },
+  "reason_codes": {
+    "abstain": {
+      "reports": 234,
+      "category_totals": {
+        "guard:e04_priced_in_beat_miss": 200,
+        "guard:manager_consistency_hard_gate": 179,
+        "other": 149,
+        "guard:fund_flow": 103,
+        "evidence_verification": 65,
+        "legacy_narrative(verifier)": 16,
+        "guard:price_basis_gate": 1
+      },
+      "category_fix_notes": {
+        "guard:e04_priced_in_beat_miss": "09-19 后已修：DAV-1110 条件作用域、DAV-1135(35c33de) 名词性存在否定豁免（仅 trunk）；DAV-1093 起拦截细节从 reason_codes 归位 failed_checks",
+        "guard:fund_flow": "09-19 后已修：DAV-1138(9d03c89) moneyflow failure taxonomy（仅 trunk）",
+        "guard:price_basis_gate": "DAV-1199/1200/1207/1211 已在 3d9c414 上线（两视图同口径）"
+      },
+      "top_codes": [
+        [
+          "manager_consistency_hard_gate",
+          179
+        ],
+        [
+          "failed_checks:E-04 守卫拦截",
+          109
+        ],
+        [
+          "risk_verdict:blocked",
+          71
+        ],
+        [
+          "E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+          69
+        ],
+        [
+          "direction_evidence_blocked",
+          55
+        ],
+        [
+          "fund_flow_consensus_guard",
+          48
+        ],
+        [
+          "fund_flow_guard:data_conflict",
+          32
+        ],
+        [
+          "upstream_non_executable",
+          23
+        ],
+        [
+          "E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“超预期”",
+          15
+        ],
+        [
+          "fund_flow_guard:selected",
+          10
+        ],
+        [
+          "fund_flow_guard:blocked",
+          10
+        ],
+        [
+          "unadjudicated_material_claims_adopt:INV-4,INV-5",
+          9
+        ],
+        [
+          "unadjudicated_material_claims_adopt:INV-4,INV-5,INV-6",
+          7
+        ],
+        [
+          "unadjudicated_material_claims_adopt:INV-2,INV-4,INV-5",
+          5
+        ],
+        [
+          "unadjudicated_material_claims_adopt:INV-5,INV-6",
+          5
+        ],
+        [
+          "E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“不及预期”",
+          5
+        ],
+        [
+          "部分采纳列表中包含了证据覆盖率不足 (50.0% < 67%) 的 claim: INV-6",
+          4
+        ],
+        [
+          "unadjudicated_material_claims_adopt:INV-3,INV-4,INV-6",
+          4
+        ],
+        [
+          "正文明确判定空头胜，但机读块为多头胜(bull)，正文与机读裁决严重矛盾",
+          4
+        ],
+        [
+          "fund_flow_guard:not_checked",
+          3
+        ]
+      ]
+    },
+    "wait": {
+      "reports": 40,
+      "category_totals": {
+        "other": 86,
+        "evidence_verification": 57
+      },
+      "category_fix_notes": {},
+      "top_codes": [
+        [
+          "manager_terminal",
+          40
+        ],
+        [
+          "upstream_non_executable",
+          22
+        ],
+        [
+          "risk_verdict:blocked",
+          22
+        ],
+        [
+          "fatal_contradicted_claims:INV-6",
+          3
+        ],
+        [
+          "partial_core_claims:verified=INV-2;unverified=INV-1",
+          3
+        ],
+        [
+          "audited_rejected_claims:INV-4",
+          3
+        ],
+        [
+          "unverified_core_claims:INV-1",
+          3
+        ],
+        [
+          "partially_adopted_claims:INV-2",
+          3
+        ],
+        [
+          "unverified_core_claims:INV-10",
+          3
+        ],
+        [
+          "fatal_core_claims:INV-1",
+          2
+        ],
+        [
+          "fatal_contradicted_claims:INV-3",
+          2
+        ],
+        [
+          "fatal_core_claims:INV-2",
+          2
+        ],
+        [
+          "partial_core_claims:verified=INV-1;unverified=INV-4",
+          2
+        ],
+        [
+          "audited_rejected_claims:INV-3",
+          2
+        ],
+        [
+          "audited_rejected_claims:INV-3,INV-5",
+          2
+        ],
+        [
+          "partial_core_claims:verified=INV-3;unverified=INV-1",
+          2
+        ],
+        [
+          "vpa_stagnation_candidate_wait",
+          2
+        ],
+        [
+          "audited_rejected_claims:INV-11,INV-4,INV-6,INV-7,INV-8",
+          2
+        ],
+        [
+          "unverified_core_claims:INV-9",
+          2
+        ],
+        [
+          "fatal_contradicted_claims:INV-3,INV-6",
+          1
+        ]
+      ]
+    },
+    "no_trade": {
+      "reports": 0,
+      "category_totals": {},
+      "category_fix_notes": {},
+      "top_codes": []
+    },
+    "invalid_run": {
+      "reports": 2,
+      "category_totals": {
+        "data_gap": 16
+      },
+      "category_fix_notes": {},
+      "top_codes": [
+        [
+          "analyst_upstream_7_of_7_failed",
+          2
+        ],
+        [
+          "market:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "social:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "news:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "fundamentals:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "macro:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "smart_money:prefix:分析报告生成失败",
+          2
+        ],
+        [
+          "volume_price:prefix:分析报告生成失败",
+          2
+        ]
+      ]
+    },
+    "data_error": {
+      "reports": 0,
+      "category_totals": {},
+      "category_fix_notes": {},
+      "top_codes": []
+    }
+  },
+  "e04_replay": {
+    "e04_abstain_reports": 102,
+    "class_counts": {
+      "1_bare_assertion(裸断言)": 101,
+      "9_no_hit_reproduced(存储文本未复现命中)": 1
+    },
+    "hit_outcomes": {
+      "blocked:bare_assertion": 319,
+      "exempt:negated_or_rejected": 20,
+      "blocked:evidenced_pricing": 20,
+      "exempt:conditional": 18,
+      "exempt:quotation": 8,
+      "exempt:absence_negation": 3,
+      "exempt:downweight_with_basis": 3,
+      "exempt:noun_phrase": 2,
+      "exempt:unknown_annotation": 1
+    },
+    "details": [
+      {
+        "report_id": "5fd6de0b3a80403a9841f227efde8651",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "，资金流方向正确但烈度被证伪，基本面利好已充分定价且非短线驱动。\n\n**第四步·极端情景测",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "91x/中报双增 | 深度安全边际 | 已充分定价 | INV-3全Verified，CH",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "资金流方向正确但烈度被证伪，基本面利好已充分定价且非短线驱动。\n\n**第四步·极端情景测",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "短线内触及概率低。悲观预期尚未被短线价格充分定价，但也未出现恐慌性放量（近5日量比0.8",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "1x/中报双增 | 深度安全边际 | 已充分定价 | INV-3全Verified，CH",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ce0fc412fd8c49c3af35b9d0b3cb2d4b",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-08-19",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " Q2单季环比暴降23%拨备平滑 | 属已定价历史数据，短线主导力弱 | **平局/均",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "空 INV-6）**：采纳。机构减仓属于已定价事实，不能作为短线杀跌增量。\n  - *",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "834fb1d1b8a24d4ea26851e939b272fd",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "解读：极低估值提供厚实安全垫；空头解读：已充分定价且 Q2 净利环比下滑 23%。\n  -",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "读：极低估值提供厚实安全垫；空头解读：已充分定价且 Q2 净利环比下滑 23%。\n  -",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "好与海外估值映射作为短线催化剂予以驳回（已定价超 4 个交易日，且缺乏短线传导弹性）；",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "interpretation\": \"利好已定价且单季净利环比下滑23%\", \"evid",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "b5b1243d9c7942b4bc0ae152427e80a7",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "sion\": \"短线视角下长周期报表已被充分定价，构成时空错配\", \"winner\": ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "NOWN。中报披露已过去 8 个交易日属已定价事实；二季度机构减少超 30 家仅作定性",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "据存在事实冲突（E-04 报表缺口与历史已定价矛盾），驳回进 rejected_cla",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "%）。二季度机构持股减少证据存在矛盾（属已定价历史），驳回进 rejected_cla",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "）**：成立，空头引用历史中报机构数据属已定价旧闻，予以剔除。\n- **CH-3（多击",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "2d7f66ddf185495f9099ec488916116f",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "场普遍担忧成长题材调整对大盘的拖累，但未充分定价低估值（0.48倍PB）高股息蓝筹的避险",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "b9e0a30e071646828c81a81c8e7f9564",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-09-01",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "击空，INV-5）**：已验证。中报利空已充分定价，破净提供安全垫，成功抗辩。\n- **C",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "空，INV-5）**：已验证。中报利空已充分定价，破净提供安全垫，成功抗辩。\n- **C",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "6a2ead77744a4b229c2e67462b9e65cc",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 8 月中旬中报落地前后被市场充分反映（已定价）。\n   - **INV-5（12.0",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "9edf48e6761a44a8adbc5aedc9a9f297",
+        "symbol": "000001.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "UNKNOWN（中报平稳无即时暴雷，属于已定价信息，不计独立票）\n5. **基本面分析",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "b923eef98cec4d9fbd084ab59a150509",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-08-19",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "状态【UNKNOWN】。徐恩利出任董事长已充分定价，幸福人寿追偿 6.55 亿元诉讼增加短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "反弹与 PB 估值利好未获完整验证，属于已充分定价旧闻。\n- **空头 Claim 审查*",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "态【UNKNOWN】。徐恩利出任董事长已充分定价，幸福人寿追偿 6.55 亿元诉讼增加短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "弹与 PB 估值利好未获完整验证，属于已充分定价旧闻。\n- **空头 Claim 审查*",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a48d3726c26648699ec5b17a918f2696",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "报预亏与 0.33x PB** | 预亏已充分定价，低估值安全边际厚 | 存货跌价侵蚀净资",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "预亏与 0.33x PB** | 预亏已充分定价，低估值安全边际厚 | 存货跌价侵蚀净资",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "db874b9bdb294dd29bfff821231f79f9",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-08-25",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "）：核验 verified，成立。空头拿已定价的历史财报压制短线被成功阻击。\n- **",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "bc1be9ac6d314fd2954f7f1b2a24c14f",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "### 4. 极端情景测试\n若宏观流动性超预期收紧（美债攀升）或销售进一步恶化，万科凭",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "底部 3.00-3.03 元；若政策细则超预期快速落地，估值修复上限受制于 3.28-",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n放量滞涨受阻中轨且",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "f87000232a25445b8732785e8a958d4d",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "再融资新政出台未满24小时，增量政策尚未充分定价）。\n5. **基本面分析师**：Ver",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "n\": \"财报利空出尽且增量信贷松绑未被充分定价\", \"bear_interpretat",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "0f90689188e2467e8d9aad7e7fe76a5a",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-04",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "n\": \"放量阳线站稳均线集群且悲观预期已充分定价\", \"position_pct\": 2",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "续交易。\n放量阳线站稳均线集群且悲观预期已充分定价",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "应 0.38 倍 PB，已将极端悲观假设完全定价（Priced-in），具备反脆弱性。\n",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "\": \"放量阳线站稳均线集群且悲观预期已充分定价\", \"position_pct\": 2",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "交易。\n放量阳线站稳均线集群且悲观预期已充分定价",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "8 倍 PB，已将极端悲观假设完全定价（Priced-in），具备反脆弱性。\n\n5. **第五步：",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "25125218938c4b6d8365a53b0dcac1a2",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "NOWN。2026H1亏损149.5亿元已定价，经营现金流微幅转正，但现房销售压制周转",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "718299a801544821964cbec4d1f81695",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "-2 周交易窗内，财报信息已在 8 月底完全定价（Priced-in）。Q2 资本开支骤",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "易窗内，财报信息已在 8 月底完全定价（Priced-in）。Q2 资本开支骤降至 0.48 亿元",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "0518eb529ad547c69f80a064a5ce168c",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "资产的失血苟延。裁决：深铁兜底切断硬着陆已充分定价，毛利率7.94%难抵费用率，估值底难以",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "产的失血苟延。裁决：深铁兜底切断硬着陆已充分定价，毛利率7.94%难抵费用率，估值底难以",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "cc15fb86c0504a869e3c7252f3fcb5c9",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "期事实。但该信息已在中报公开超半月，属于已定价历史数据，短线边际拉动力有限。\n- **",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " | 现金流改善属实但筹资失血对冲，且为已定价信息 | **空头** |\n| **大单",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": ": \"现金流改善属实但筹资失血对冲，且为已定价信息\", \"winner\": \"bear",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "6ca559d631a5463a8c52b82c214ed868",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-16",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "险，境内权益端尚未对潜在的长尾涉诉保全做充分定价。\n\n---\n\n### 五、 投资方案与",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "7c2c76994b954102bb32820166bde05b",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 至 -17% 的下行暴露，悲观预期远未充分定价。\n\n#### 5. 风险收益比量化\n-",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "269c532b0d5441aab650730ac95615ed",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "心焦点**：中报大跌 45.57% 是否已定价？\n- **裁决结论**：**空头胜**",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "8ab00c1ae2f44937b556cad60d029c1e",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "04 契约：仅作定性事实记录，无旧基线，已定价状态 unknown）\n5. **基本面",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "95d76fcce1944f69b2fafd4c44902526",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-09-09",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "已发生事实，正文财务细分结构未抽取，无新超预期催化）。\n5. **基本面分析师**：偏",
+            "outcome": "exempt:absence_negation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n缩量呈现买盘真空且",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "4188b87d41b54ac181154bf65dd341cc",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "方案推进算力直连缺乏量化订单支撑，且新闻已充分定价。\n- **INV-3（多头：利空出尽与",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "案推进算力直连缺乏量化订单支撑，且新闻已充分定价。\n- **INV-3（多头：利空出尽与",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "0617ca59055c49cca76d61b3c69f3e7b",
+        "symbol": "000063.SZ",
+        "trade_date": "2026-09-16",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "8% 属实；但该利空已公开近一个月，属于已定价事实。\n- **INV-6（空头：机构减",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "85a24a597f2c4c50988f70c08a093d9d",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "1 毛利率与净现比数据源获取失败，且属于已定价旧数据，予以驳回（rejected），记",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "\n若海外耐用品需求加速下行或国内消费刺激不及预期，缺乏买盘支撑的盘面将面临破位。下方第一",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n地量倒锤头失守VW",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "38ca6dc46f94432ab8db92699884f499",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "试\n- **上行测试**：若 H1 财报超预期放量拉升，上方 88.27 元（布林上轨",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "成交量超过 3500 万股；中报业绩大幅超预期。\n\n<!-- MANAGER_VERD",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n地量顶背离显现且大",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "7adf3a0e86bb45a6a7ed54f4ca337e09",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "盘无法收回，或8月29日中报主业扣非下滑超预期，无条件止损离场；若成交量放大至3,50",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n回购托底与上方长上",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "35c471fdf5104023b792ebf8829b1f6f",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "8.51 亿元且 08-28 盘后公布未充分定价。纳入 `adopted_claim_i",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "*扣非暴跌 25.31% 的主营侵蚀尚未充分定价（Unpriced）**。由于大单流向冲",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "cc81ac0517e240df81f5201b3e68700c",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-09-04",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "。中报利好与回购金额已被全市场消化定价（Priced-in）。\n5. **基本面分析师**：Ver",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ead7ca31d82c4105a6f60117c34bb340",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "多 INV-2）**：采纳。80 亿回购已基本定价，不能作为短线向上进攻的无限增量。\n- ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "期在 84.40-85.00 元已获得较充分定价。\n\n#### 5. 第五步：风险收益比",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "计超 80.2 亿元回购已消化，中报利好已定价，缺乏短期突发增量。\n5. **基本面分",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "b1441585713b49c39c760d37d7d9aec3",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "（回购首笔落地与分红节点明确，缺少未定价超预期）\n5. **基本面**：偏多 | 证据",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线多头支撑面对冲",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "9e08ae6913af4d448155e262418e5f88",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-03",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "的第一批中报后终端高频排产数据，该数据若超预期是打破技术盘局的潜在外部变量。\n3. *",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线密集压制量缩无",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "711efa6435dd410a9083a0ed81641043",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-09",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "纳。前十大机构持股中报已公开超 8 日，已被市场消化。\n- **CH-4（空攻多 INV-1",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "4e2dc9a466564905b3d086d8bb3063c7",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "，verified）**：成立。中报持仓已定价，即时微观大单净买入具备时效优先权。\n-",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "20d4a22818334548bbf19d58adb4b223",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " **Q2 净利润下滑** | 财报明牌已定价，毛利逆势扩张 | 业绩二阶失速，低 P",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "*：核验通过，主力流出比例极低且中报减仓已定价，空头主张降权；\n- **CH-3（驳空",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "48f3965d4ef2440b8e1050d2e88d5559",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-16",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "核验，但单季FCF及估值乘数属于历史静态已定价数据，三季度边际改善未获验证。**判定：",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "692937b79617498db276d8c4cfd4b6d6",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "\n   - 若出现大盘风格极度分化或财报不及预期，标的 2026Q1 单季现金流达 12",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n地量后放量收复中轨",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "c7b93ff6e8b8430ba31c288913127238",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "2周）内属于超过80个交易日的陈旧数据，已完全定价；海外三星反弹难以瞬间平抑A股科技板块整",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "周）内属于超过80个交易日的陈旧数据，已完全定价；海外三星反弹难以瞬间平抑A股科技板块整",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "fed4f3385c5346bcb26b9934dddda7b4",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-01",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "转，FCF封死下跌空间 | 公告已超3日充分定价，利好出尽 | 依据定价纪律，中报已定价",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "分定价，利好出尽 | 依据定价纪律，中报已定价，无法提供短线增量买盘 | **空头**",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": ": \"缩量跌破VWMA中轨压制且中报利好已定价\", \"position_pct\": 0",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "易。\n缩量跌破VWMA中轨压制且中报利好已定价",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "40c3add4417e42bf8632645009bb4688",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-02",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "全垫驱动估值错杀修复 | 公开超 4 日已充分定价，短线沦为利好出尽 | 缺乏新催化，历史",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "，但该财报已公告超过 4 个交易日，属于充分定价的历史信息；多头所谓“极端地量即是买点”",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "垫驱动估值错杀修复 | 公开超 4 日已充分定价，短线沦为利好出尽 | 缺乏新催化，历史",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "rpretation\": \"已公告超4日充分定价，利好出尽流动性真空\", \"eviden",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "vidence_decision\": \"已定价历史数据无法对抗短线估值去杠杆\", \"w",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "cbf6dfa9aff64298a3bfcbbb9aea6f45",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-03",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "d）**：**支持空头**。确认中报利好已定价完毕，无法提供短线向上催化。\n\n---\n",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "f97b67995e4e40cb8a12a677cc4d955d",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "百亿级利润底座，封死跌幅 | 公开12天已充分定价，短线难抗周期压制 | 中报利好钝化，短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "亿级利润底座，封死跌幅 | 公开12天已充分定价，短线难抗周期压制 | 中报利好钝化，短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "公开 12 天，根据信息定价纪律已充分 Priced-in，且短线观察窗下基本面属于次要权重；\n-",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "d25b5f5d560b4a629af708a88d9ed353",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "KNOWN（中报业绩利好已公布超 9 日充分定价，处于常规信息真空期）。\n5. **基本",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "e752b36d27f6423e907abce7434e5dc9",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "死下跌空间；\n  - 空头解读：历史利好已充分定价，美债折现压制估值，ASP 敏感度极高；",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "-6（空头：美债高折现压制估值与中报利好完全定价）**：标注【证据充分】。10 年期美债",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "下跌空间；\n  - 空头解读：历史利好已充分定价，美债折现压制估值，ASP 敏感度极高；",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "7a8cd124a36d47329c41ee65281b6868",
+        "symbol": "000725.SZ",
+        "trade_date": "2026-09-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "跌27.47%显示通用显示承压，中报高增已充分定价\"], \"dispute_map\": [",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "27.47%显示通用显示承压，中报高增已充分定价\"], \"dispute_map\": [",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "ge=50.0%<67%。三星电子跌幅与已定价断言未获核验，坚决驳回并剔除。\n\n###",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a9ce9c058a964d5a91ad53bf943b331a",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-08-20",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "盘扰动，且大股东增持已被其后跳空下挫走势充分定价（Priced-in），被空头 majo",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "大股东增持已被其后跳空下挫走势充分定价（Priced-in），被空头 major challeng",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ee4ccfe7900c41569fc173066f79023e",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "力**：多头视为刚性估值底；空头视为信息完全定价且增持规模不足以扭转抛压。裁决采纳空头边",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a47afd0ebba24b46a982a6a2de125763",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-08-25",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "应）*：多头视为底部安全垫；空头指出利好已充分定价且股价深幅击穿增持价。裁决：空头胜。公告",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "_decision\": \"公告已超14日已充分定价，缺乏短线催化弹性\", \"winner\"",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "）*：多头视为底部安全垫；空头指出利好已充分定价且股价深幅击穿增持价。裁决：空头胜。公告",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "decision\": \"公告已超14日已充分定价，缺乏短线催化弹性\", \"winner\"",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "1c10a5bb7bfb4108acc5623f97a2ea17",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "08-06增持1.99亿已过去20天，属已定价钝化信息）。\n5. **基本面**：中性",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "1c17159b1e5043ce8f33eb6cf4babb1a",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "2.71元与现价倒挂-13.54%，市场已完全定价且钝化。证据贡献状态：UNKNOWN。\n",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": ".71元与现价倒挂-13.54%，市场已完全定价且钝化。证据贡献状态：UNKNOWN。\n",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "事实属实，但增持已过去16个交易日，属于已定价信息。\n- **空头 Claim 审查*",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "71aa6913e3254aaf8533376cd7e724d5",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-09-01",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "利好钝化且Q2断崖。裁决：财报已过披露期已充分定价，短线催化衰竭，**空头胜**。\n\n**",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "证据 verified，成功证明历史财报已充分定价。\n\n---\n\n### 四、 预期差与宏",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "好钝化且Q2断崖。裁决：财报已过披露期已充分定价，短线催化衰竭，**空头胜**。\n\n**",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "据 verified，成功证明历史财报已充分定价。\n\n---\n\n### 四、 预期差与宏",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "UNKNOWN】（集团增持与中报披露属于已定价事实，缺乏超预期催化正文支持）。\n5. ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "（集团增持与中报披露属于已定价事实，缺乏超预期催化正文支持）。\n5. **基本面**：",
+            "outcome": "exempt:absence_negation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线空头压制牢固且",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "78d3de948b7d4b10960f6ec2c2492439",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-18",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "销的即时高频数据反馈，若节日消费实际承接超预期，可能迅速阻断空头破位进程。\n\n---\n",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线空头压制且主力",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "2da1c69d444f4014a90865c819038436",
+        "symbol": "000002.SZ",
+        "trade_date": "2026-09-18",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "头回补（Short Squeeze）带来超预期脉冲。\n2. **双方共同盲点**：多空",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "与投放的真实落地节奏。若9月下旬信贷投放不及预期，可能对短线反弹斜率造成压制。\n\n---",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n地量后8倍巨量涨停",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "cf0bcfa470af4307967340d9a77ea077",
+        "symbol": "000333.SZ",
+        "trade_date": "2026-09-18",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "月29日披露，超过14个交易日的信息属于已定价，短线择时解释力偏弱。\n\n2. **第二",
+            "outcome": "exempt:downweight_with_basis"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "0ae8af987be9454eb6165165c4ea8706",
+        "symbol": "000651.SZ",
+        "trade_date": "2026-09-18",
+        "class": "9_no_hit_reproduced(存储文本未复现命中)",
+        "hits": []
+      },
+      {
+        "report_id": "ae056d36077b407297b48d9c11972c42",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-09-03",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "端情景测试**\n   若白酒双节动销大幅不及预期，叠加中小盘题材对蓝筹持续抽血，当前无量",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n均线空头压制且放量",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ea824331dd7441e9b410879291423c98",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "构筑绝对筹码底；\n  - 空头解读：已被充分定价，且现价 70.48 元已实质破位；\n ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "interpretation\": \"利好已定价且现价70.48元已实质击穿下限\", \"",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "e3f71e6e30ae4e19afb7678a31575576",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-09-16",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "证据贡献状态为 UNKNOWN（中报高增已充分定价，Q2单季现金流转负构成短期估值抑制）。",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "与回购）**：中报已披露超12个交易日（已充分定价），现价击穿回购底为客观事实，大股东未完",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "据贡献状态为 UNKNOWN（中报高增已充分定价，Q2单季现金流转负构成短期估值抑制）。",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "回购）**：中报已披露超12个交易日（已充分定价），现价击穿回购底为客观事实，大股东未完",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "af3421c880884a10b676e592543f97a2",
+        "symbol": "000858.SZ",
+        "trade_date": "2026-09-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "与增持事实确立但已部分计提，正文无未计提超预期信息）。\n5. **基本面分析师**：中",
+            "outcome": "exempt:noun_phrase"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "vidence\": [\"CH-5未验证之超预期论述\"], \"dispute_map\":",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线空头压制大单持",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "03cae0716939410196bcc4ee0860c58c",
+        "symbol": "002594.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "50 元具备极强韧性；但若半年报业绩大幅不及预期且放量破位，短线估值溢价将被挤压。\n\n#",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n地量缩量磨底买卖两",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "c833da0370b2448faabdae69fd5869db",
+        "symbol": "002594.SZ",
+        "trade_date": "2026-08-25",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "但在 1-2 周交易窗口内，Q1 业绩早已被市场消化整整 4 个月（已定价）；新车预售虽难以",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "Q1 业绩早已被市场消化整整 4 个月（已定价）；新车预售虽难以即刻体现于报表，但对短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "）前夕的机构减仓避险冲动**。尽管一季度已定价，但披露前 2-3 个交易日资金通常收紧",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "或 08-29 中报单季扣非净利同比大幅不及预期，无条件止损离场。\n\n<!-- MANA",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n地量筑底完成且大单",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "4a71b3fea1ee40f68fddb83ac83fe8d3",
+        "symbol": "002594.SZ",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "考验，甚至向 77.31 元寻底；若中报超预期，上方 SMA200（94.62 元）将",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n缩量冲高受阻长上影",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "7a7f1e53b2994b9d886ccbb925b6f006",
+        "symbol": "002594.SZ",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "实已于8月31日披露超10个交易日，属于已定价信息，对短线交易解释力弱。\n- **IN",
+            "outcome": "exempt:downweight_with_basis"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "97f8f063e2f946009fda82c27a9f4181",
+        "symbol": "002594.SZ",
+        "trade_date": "2026-09-17",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "事实冲突，且中报已披露 13 日，属已知已定价信息。\n- **INV-4（空头：均线空",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "d7cfb88a4af74fb3ab4fea5ad3a194c9",
+        "symbol": "600036.SH",
+        "trade_date": "2026-08-19",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "与8月29日中报** | 0.87倍PB已充分定价，负债端低成本平抑 | 资产重定价剧烈收",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "8月29日中报** | 0.87倍PB已充分定价，负债端低成本平抑 | 资产重定价剧烈收",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ecd67fb7c82b42fdbfffaffd8107254f",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-02",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " **LPR降息与中报业绩** | 破净已完全定价，业绩具韧性 | 利好出尽，息差二次绞杀",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "**LPR降息与中报业绩** | 破净已完全定价，业绩具韧性 | 利好出尽，息差二次绞杀",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "### 4. 极端情景测试\n若宏观流动性超预期紧缩且大盘加速下挫，招行0.90倍PB破",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n放量突破后缩量蓄势",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "d77b56e2195843e9b73a27a7a25f9097",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-03",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "违约风险，增厚利润打破悲观预期 | 利好已充分定价，资产端重定价压制净息差 | 短线视角下",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "约风险，增厚利润打破悲观预期 | 利好已充分定价，资产端重定价压制净息差 | 短线视角下",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "37e5b9c7adba48c3a750865d36eb500d",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-09",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "），且中报利好已在 9 月 4 日冲高中充分定价。\n- **INV-4（空头：阻力位缩量",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "eb9e8ba1a7c241b783cc07acf1d05334",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "，Verified）**：成立，确认业绩已基本定价。\n\n---\n\n### 四、预期差与宏观",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "6b7e3ba869cc40bfb6bd4b637f0b3a1c",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "纪律，中报已披露超 10 个交易日，属于已定价基线，短线解释力降权。\n- **INV-",
+            "outcome": "exempt:downweight_with_basis"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "_evidence\": [\"中报历史静态超预期幅度\", \"宏观降息长期传导时滞细节\"]",
+            "outcome": "exempt:noun_phrase"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n高位平顶反包且主力",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "800efbf2b38342a0b6268e3ef06fcb8c",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-16",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "NKNOWN（中报业绩与万亿市值重返均属已充分定价历史事实，近期无新增结构化催化）。\n5.",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "KNOWN（中报业绩与万亿市值重返均属已充分定价历史事实，近期无新增结构化催化）。\n5.",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a985dd836acb430f83affe99797467a7",
+        "symbol": "600036.SH",
+        "trade_date": "2026-09-17",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "3.00%** | 0.89 倍 PB 已充分定价 | 压制息差，估值重估缺乏催化 | 短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": ".00%** | 0.89 倍 PB 已充分定价 | 压制息差，估值重估缺乏催化 | 短",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "04afdb640183490fb7f77e514e7a62ac",
+        "symbol": "600519.SH",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "估值（INV-6） | 利空已公开7日（已定价），但下半年业绩中枢下移压制估值弹性 |",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "d53822c9874c4605b1e7366a0b79a75b",
+        "symbol": "600519.SH",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "报已发布超10日，且根据E-04纪律，其已定价状态为 unknown，缺乏增量短线催化",
+            "outcome": "exempt:unknown_annotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "54f2d01b6b2344a9a9c7f6c042a2d01b",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-02",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "   - **INV-2（多头：中报降速已定价与现金流底座）**：覆盖率 100%（2",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "ac7eeec8cc9f4d37a83060064c94572b",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-03",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "5，verified）**：多头指出中报已充分定价且现金流极强，裁定**盘问成立**，但仅",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "实成立。\n- **INV-2（多头：中报充分定价与700亿现金流底座）**：核验覆盖率 ",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "，verified）**：多头指出中报已充分定价且现金流极强，裁定**盘问成立**，但仅",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "3d3ca2b677684fa1b70727da025627a0",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "庆旺季终端动销数据显示礼品与宴席场景出现超预期断崖，传统经销商降价套现可能引发二级市场",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n大单流出均线反压且",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "7e8e657af8604ef3af5f196f49f8ee7a",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "WN（高毛利与经营现金流充沛，但中报降速已定价）。\n6. **主力资金分析师**：偏空",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 15 日公开信息（已滞后近一月），属于已定价事实；而空头指出的“放量击穿 1270 ",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "干传统渠道蓄水池，批价承压 | 利润利好已定价，批价下行对短线情绪产生压制 | **空",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "48bcf17d7a7642189ad4bd65e3370e8a",
+        "symbol": "600519.SH",
+        "trade_date": "2026-09-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "抽取，i茅台次新常态化销售已过 5 日，已充分定价。\n5. **基本面分析师**：Verd",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "取，i茅台次新常态化销售已过 5 日，已充分定价。\n5. **基本面分析师**：Verd",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "97955c713edc483a83d5afea24519be9",
+        "symbol": "000776.SZ",
+        "trade_date": "2026-08-19",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "-3所依托的“一季报业绩与静态低估值”早已充分定价（发布超3个交易日），对近窗下行缺乏即时",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "3所依托的“一季报业绩与静态低估值”早已充分定价（发布超3个交易日），对近窗下行缺乏即时",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " | 估值铁底锁定下行空间 | 静态利好已定价，短线遇流动性折价 | 短线技术面主导，",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "5f3086589fd64dc1a6fd4db5aaf8dcc5",
+        "symbol": "000776.SZ",
+        "trade_date": "2026-08-20",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "3个月），且行业中报预喜已流传数周，属于充分定价（Priced-in）事实，对短线1-2",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "且行业中报预喜已流传数周，属于充分定价（Priced-in）事实，对短线1-2周交易无法构成即时上",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "78d13ad964a04d4ea88f860c26bbcb48",
+        "symbol": "000776.SZ",
+        "trade_date": "2026-08-26",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": ": [\"INV-3中所述Q1财报历史数据已定价\", \"空头关于大单离散必然反向砸盘推演",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用; E-04 守卫拦",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "结构化提取，按 E-04 纪律不作为短线超预期依据，记录于 `rejected_cla",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n地量后放量长阳突破",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a5671c26ffff4c189305991866a38be3",
+        "symbol": "000776.SZ",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "pretation\": \"公开利好超3日已充分定价，面临Sell the News\", \"",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "t）。\n  - **INV-6**（中报充分定价面临 8 月 29 日利好出尽）：覆盖率",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "retation\": \"公开利好超3日已充分定价，面临Sell the News\", \"",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "short_term",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "86f5a9aef6244b71aa3d1a4c5b556cb8",
+        "symbol": "600030.SH",
+        "trade_date": "2026-09-02",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "价多次冲高 28.08 元受阻回落，属于已充分定价事实。央行适度宽松表态传导至实体交投及券",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "多次冲高 28.08 元受阻回落，属于已充分定价事实。央行适度宽松表态传导至实体交投及券",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a2a7f1e0b9b24a698b58d1676db81144",
+        "symbol": "688981.SH",
+        "trade_date": "2026-08-20",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": ".8%，且 8 月 27 日中报披露折旧超预期侵蚀扣非净利，杠杆盘（当前仍有114.2",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n大单持续净流出且均",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "166c6f6843674267bb369b0a400a2389",
+        "symbol": "601138.SH",
+        "trade_date": "2026-08-10",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "与英伟达新品催化已在前期 24% 涨幅中充分定价（Priced-in）。短线盘口出现散户",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "品催化已在前期 24% 涨幅中充分定价（Priced-in）。短线盘口出现散户跟风买入与超大单分组",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "c161a4b88f2e44ca975fed5df294d35b",
+        "symbol": "300308.SZ",
+        "trade_date": "2026-08-11",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "测试\n- **悲观情景**：海外同业财报不及预期叠加高油价推升滞胀，但公司 2026Q1",
+            "outcome": "exempt:conditional"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“不及预期”，已阻断后续交易。\n大单吸筹与均线空头",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "a9cad6a72ee246fbb4ac60508a6f72b8",
+        "symbol": "000538.SZ",
+        "trade_date": "2026-08-13",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 多头主张的“上游原料降价增厚毛利”属于已定价历史信息（Priced-in状态未知且无",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "0faec4c752ca42bfb1f558063130d667",
+        "symbol": "600011.SH",
+        "trade_date": "2026-08-17",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "发生超 6 个交易日，在短线维度已被市场充分定价，缺乏即期脉冲动能。\n   - 空头主张",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "会议属法定沟通窗口，定性事实尚未体现增量超预期 | **势均力敌** |\n\n---\n\n",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "条件**：若 8 月 19 日业绩会释放超预期分红预案，或单日成交量放大至 1.2 亿",
+            "outcome": "exempt:conditional"
+          }
+        ]
+      },
+      {
+        "report_id": "6ba8472bb9654f2baaa7f7eec0322208",
+        "symbol": "600893.SH",
+        "trade_date": "2026-08-06",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "*预期差与产业链共振**：市场对微薄业绩已充分定价，但对下半年军品审价补差预期仍有分歧。主",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "预期差与产业链共振**：市场对微薄业绩已充分定价，但对下半年军品审价补差预期仍有分歧。主",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "b5a65f0359fa4828bc40d148342ca2f8",
+        "symbol": "000538.SZ",
+        "trade_date": "2026-08-13",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "证据贡献状态：UNKNOWN）。缺乏短线超预期事件催化，快消日化竞品价格战升温。\n5.",
+            "outcome": "exempt:absence_negation"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "线，经理不得在正文或裁决理由中断言业绩“超预期”，已阻断后续交易。\n均线压制未消且量价",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "bfc55b0039224c76a289c45f36bf21f8",
+        "symbol": "600011.SH",
+        "trade_date": "2026-08-17",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "产业链共振研判\n\n市场对迎峰度夏负荷顶峰已充分定价，存货下降虽平抑短期成本，但无法抵消 1",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "业链共振研判\n\n市场对迎峰度夏负荷顶峰已充分定价，存货下降虽平抑短期成本，但无法抵消 1",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "93dbc2478af4490d97380d7b36f7b66f",
+        "symbol": "300015.SZ",
+        "trade_date": "2026-08-21",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "充沛造血能力构筑反脆弱底线 | 历史财务已充分定价（Priced-in），无法阻挡估值重估",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "挡估值重估 | 静态公开信息超3个交易日已充分定价，短线技术主导 | **空头胜** |\n",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "沛造血能力构筑反脆弱底线 | 历史财务已充分定价（Priced-in），无法阻挡估值重估",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "估值重估 | 静态公开信息超3个交易日已充分定价，短线技术主导 | **空头胜** |\n",
+            "outcome": "exempt:negated_or_rejected"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "构筑反脆弱底线 | 历史财务已充分定价（Priced-in），无法阻挡估值重估 | 静态公开信息超",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "e1e775d7a24948f59ba84c5ab4509127",
+        "symbol": "601688.SH",
+        "trade_date": "2026-07-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "研判\n\n公募二季度增持与发债利差利好已被充分定价。当前可观察预期差在于：零售资金与存量两",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "367970e448d440be9a0b3ad827a33f21",
+        "symbol": "002027.SZ",
+        "trade_date": "2026-08-28",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "【中性】。二季度机构持股减少事实已发生并充分定价，新闻无未计入超预期增量，证据贡献状态：",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "beat_miss",
+            "span": "股减少事实已发生并充分定价，新闻无未计入超预期增量，证据贡献状态：UNKNOWN（定性",
+            "outcome": "exempt:negated_or_rejected"
+          }
+        ]
+      },
+      {
+        "report_id": "8b8b3ca3d8df47b88be23e9b560d98d5",
+        "symbol": "600009.SH",
+        "trade_date": "2026-04-15",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "）视角下，多头的基本面与分红优势属于已被充分定价的钝化信息。技术面上，4月14日的下影线",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " | 航空性业务受管制无自主定价权，利好已定价 | 空头 |\n\n---\n\n### 预期",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "83437cb04af743dab4830e4c1a9b57a1",
+        "symbol": "600019.SH",
+        "trade_date": "2026-05-12",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "资余额连续净偿还逾 5700 万元，利好已充分定价。\n5. **基本面分析师**：Verd",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "余额连续净偿还逾 5700 万元，利好已充分定价。\n5. **基本面分析师**：Verd",
+            "outcome": "exempt:quotation"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "| 估值底线坚实，业绩拐点确立 | 利好充分定价，原料通胀挤压毛利 | 破净底线属实，但",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "9436188698d248de840c403bff5fa988",
+        "symbol": "601111.SH",
+        "trade_date": "2026-08-27",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "对短线影响**\n  多头主张有时滞且定增已定价；空头主张即期预期杀估值。裁决：1-2 ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "e75a175f6b6b4c528c2481651ea3f597",
+        "symbol": "000768.SZ",
+        "trade_date": "2026-05-08",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "增至 18.81 万户** | 数据滞后已完全定价，现货资金主导去杠杆完成 | 筹码持续散",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "至 18.81 万户** | 数据滞后已完全定价，现货资金主导去杠杆完成 | 筹码持续散",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "aa773648b9d94864b6e8f1b32a159a76",
+        "symbol": "000895.SZ",
+        "trade_date": "2026-06-04",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "安事件定价状态）**：多头认为过 6 天已定价且山姆澄清；空头强调渠道提货门槛上升及 ",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      },
+      {
+        "report_id": "bcc19a9ad7b24a329d17c3fdbc98b9d4",
+        "symbol": "002304.SZ",
+        "trade_date": "2026-06-24",
+        "class": "1_bare_assertion(裸断言)",
+        "hits": [
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "*：分红实施方案于6月22日即公告，属于已定价信息。距6月29日登记日仅剩3日，主力大",
+            "outcome": "blocked:evidenced_pricing"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": " 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+            "outcome": "blocked:bare_assertion"
+          },
+          {
+            "horizon": "single",
+            "kind": "priced_in",
+            "span": "截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用，已阻断后续交易。\n",
+            "outcome": "blocked:bare_assertion"
+          }
+        ]
+      }
+    ]
+  },
+  "estimates": {
+    "production": {
+      "clean_per_100_completed": 3.07,
+      "reports_needed_for_60_clean": 1956
+    },
+    "trunk": {
+      "clean_per_100_completed": 2.45,
+      "reports_needed_for_60_clean": 2445
+    },
+    "cohort_note": {
+      "production_clean_by_cohort": {
+        "legacy_unversioned": 6,
+        "decision_model.v1:evidence_contract.v1:price_basis.unspecified": 9
+      },
+      "trunk_clean_by_cohort": {
+        "legacy_unversioned": 6,
+        "decision_model.v1:evidence_contract.v1:price_basis.unspecified": 6
+      },
+      "v1_cohort_clean": {
+        "production": 9,
+        "trunk": 6
+      },
+      "h1b_threshold_single_cohort": 60
+    }
+  }
+}
