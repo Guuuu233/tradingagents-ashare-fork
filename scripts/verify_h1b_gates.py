@@ -316,6 +316,17 @@ def format_gates_matrix_text(evaluation: Dict[str, Any], cohort_info: Optional[D
             f"D-009合格={ledger.get('eligible_count', 0)} "
             f"(非v2排除={ledger.get('non_v2_excluded', 0)})"
         )
+        lines.append(
+            f"【Stage 3.5/4 隔离台账 (DAV-1139/1200)】: "
+            f"hold_defensive={ledger.get('hold_defensive', 0)}, "
+            f"hold_conflict={ledger.get('hold_conflict', 0)}, "
+            f"hold_unresolved={ledger.get('hold_unresolved', 0)} "
+            f"(hold_semantic_isolated={ledger.get('hold_semantic_isolated', 0)}, "
+            f"prediction_eligible={ledger.get('prediction_eligible_count', 0)}) | "
+            f"price_basis_isolated={ledger.get('price_basis_isolated', 0)} "
+            f"(overlap={ledger.get('hold_price_basis_overlap', 0)}) -> "
+            f"primary_clean={ledger.get('clean_count', 0)}"
+        )
     lines.append(f"【排除样本分类计数 (D-009 §5)】: 总排除={total_excluded}")
     lines.append(
         f"  legacy_null={ex_counts.get('legacy_null', 0)}, "

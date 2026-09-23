@@ -38,11 +38,15 @@ from tradingagents.agents.utils.debate_metrics import (
     _extract_cited_debate_numbers,
     extract_numerical_tokens,
 )
+from tradingagents.agents.utils.evidence_verifier import (
+    is_daily_ohlcv_unavailable,
+)
 from tradingagents.agents.utils.price_basis_isolation import (
     REASON_CONTRACT_INCOMPLETE,
     REASON_CONTAMINATED,
     REASON_PENDING_REVIEW,
     classify_price_basis_exclusion,
+    extract_report_id,
 )
 
 SCHEMA_VERSION: str = "h1a_json_v1"
@@ -716,6 +720,164 @@ def classify_v2_report_d009_exclusion(report: Mapping[str, Any]) -> Optional[str
     return "invalid_run"
 
 
+# ── Stage 3.5: HOLD Semantic Isolation (DAV-1139 Phase B / DAV-1218) ──────────
+#
+# D-009 §5 (Stage 3) 只表达 analysis_status + trade_action 合法性，语义保持
+# 不变。HOLD 语义隔离作为独立 Stage 3.5 作用于 D-009 eligible 样本：
+#   raw → v2 → D-009 eligible → HOLD semantic isolation → price-basis isolation → primary clean
+#
+# 三类 reason 仅落 pipeline ledger，绝不进入 D-009 excluded_counts：
+# - hold_defensive: 核心行情证据不足/不可用/违反既有 OHLCV freshness 契约，
+#   gate 明确禁止方向性裁决（结构化判据，非文本猜测）；
+# - hold_conflict: fund_flow_dispute_gate_applied=true 的 HOLD，冲突证据 guard
+#   强制中性；
+# - hold_unresolved: 新契约（contract-era）HOLD 样本缺失判断所需的结构化
+#   字段（verdict gate flags 与 market_data_context 均不可得）→ fail-close。
+REASON_HOLD_DEFENSIVE: str = "hold_defensive"
+REASON_HOLD_CONFLICT: str = "hold_conflict"
+REASON_HOLD_UNRESOLVED: str = "hold_unresolved"
+
+# 主分类 precedence：defensive > conflict > unresolved
+HOLD_SEMANTIC_REASONS: tuple[str, ...] = (
+    REASON_HOLD_DEFENSIVE,
+    REASON_HOLD_CONFLICT,
+    REASON_HOLD_UNRESOLVED,
+)
+
+
+def _extract_manager_verdict_map(report: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Extract manager_verdict mapping from canonical locations."""
+    if not isinstance(report, Mapping):
+        return {}
+    res_data = report.get("result_data") if isinstance(report.get("result_data"), Mapping) else {}
+    inv_state = report.get("investment_debate_state") if isinstance(report.get("investment_debate_state"), Mapping) else (
+        res_data.get("investment_debate_state") if isinstance(res_data.get("investment_debate_state"), Mapping) else {}
+    )
+    verdict = (
+        report.get("manager_verdict")
+        or res_data.get("manager_verdict")
+        or (inv_state.get("manager_verdict") if isinstance(inv_state, Mapping) else None)
+        or {}
+    )
+    return verdict if isinstance(verdict, Mapping) else {}
+
+
+def _extract_market_data_context_map(report: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    """Extract market_data_context mapping; None when the structure is absent."""
+    if not isinstance(report, Mapping):
+        return None
+    res_data = report.get("result_data") if isinstance(report.get("result_data"), Mapping) else {}
+    inv_state = report.get("investment_debate_state") if isinstance(report.get("investment_debate_state"), Mapping) else (
+        res_data.get("investment_debate_state") if isinstance(res_data.get("investment_debate_state"), Mapping) else {}
+    )
+    for src in (report, res_data, inv_state):
+        if isinstance(src, Mapping):
+            mdc = src.get("market_data_context")
+            if isinstance(mdc, Mapping):
+                return mdc
+    return None
+
+
+def _is_contract_era_sample(report: Mapping[str, Any]) -> bool:
+    """True when the report carries any contract-stack marker (decision_model /
+    evidence_contract / price_basis / price_ref contract versions).
+
+    Contract-era samples are expected to persist the structured fields Stage 3.5
+    needs; legacy samples without any marker are exempt from fail-close.
+    """
+    if not isinstance(report, Mapping):
+        return False
+    cohort = extract_sample_cohort(report)
+    if cohort.get("decision_model_version") or cohort.get("evidence_contract_version") or cohort.get("price_basis_version"):
+        return True
+    res_data = report.get("result_data") if isinstance(report.get("result_data"), Mapping) else {}
+    inv_state = report.get("investment_debate_state") if isinstance(report.get("investment_debate_state"), Mapping) else (
+        res_data.get("investment_debate_state") if isinstance(res_data.get("investment_debate_state"), Mapping) else {}
+    )
+    meta = report.get("metadata") if isinstance(report.get("metadata"), Mapping) else (
+        res_data.get("metadata") if isinstance(res_data.get("metadata"), Mapping) else {}
+    )
+    for src in (report, res_data, inv_state, meta):
+        val = src.get("price_ref_contract_version") if isinstance(src, Mapping) else None
+        if val is not None and str(val).strip():
+            return True
+    return False
+
+
+def collect_hold_semantic_reasons(report: Mapping[str, Any]) -> list[str]:
+    """Collect all Stage 3.5 HOLD-semantic isolation reasons for a report.
+
+    Only applies to ``trade_action == 'HOLD'`` samples; other actions return [].
+    Reasons are derived exclusively from structured fields (gate flags +
+    market_data_context provenance/freshness contract); manager free-text is
+    never used as a classifier for new samples.
+
+    Returns reasons in precedence order (defensive, conflict, unresolved); may
+    return multiple reasons for a single sample.
+    """
+    _, act_val = extract_report_analysis_status_and_action(report)
+    if act_val != "HOLD":
+        return []
+
+    verdict = _extract_manager_verdict_map(report)
+    mdc = _extract_market_data_context_map(report)
+
+    reasons: list[str] = []
+
+    # hold_defensive: gate flag OR existing OHLCV freshness/unavailability
+    # contract (is_daily_ohlcv_unavailable encodes the upstream provenance
+    # status vocabulary, daily completeness/as_of semantics — we deliberately
+    # do NOT re-implement raw as_of date arithmetic here).
+    if bool(verdict.get("ohlcv_gate_applied")):
+        reasons.append(REASON_HOLD_DEFENSIVE)
+    elif mdc is not None and is_daily_ohlcv_unavailable(mdc):
+        reasons.append(REASON_HOLD_DEFENSIVE)
+
+    # hold_conflict: fund-flow dispute guard forced neutrality
+    if bool(verdict.get("fund_flow_dispute_gate_applied")):
+        reasons.append(REASON_HOLD_CONFLICT)
+
+    # hold_unresolved: contract-era HOLD missing every structure needed to
+    # adjudicate data sufficiency → fail-close (never guess from text).
+    if not reasons:
+        has_gate_fields = (
+            "ohlcv_gate_applied" in verdict or "fund_flow_dispute_gate_applied" in verdict
+        )
+        if not has_gate_fields and mdc is None and _is_contract_era_sample(report):
+            reasons.append(REASON_HOLD_UNRESOLVED)
+
+    return reasons
+
+
+def classify_hold_semantic_exclusion(report: Mapping[str, Any]) -> Optional[str]:
+    """Return the primary Stage 3.5 HOLD-semantic exclusion reason, or None.
+
+    Primary reason follows precedence defensive > conflict > unresolved;
+    use ``collect_hold_semantic_reasons`` for the full auditable reason set.
+    """
+    reasons = collect_hold_semantic_reasons(report)
+    return reasons[0] if reasons else None
+
+
+def collect_h1b_exclusion_reasons(
+    report: Mapping[str, Any],
+    *,
+    manifest_path: Optional[Any] = None,
+) -> list[str]:
+    """Collect ALL isolation reasons for a D-009-eligible report (Stage 3.5 + Stage 4).
+
+    HOLD-semantic reasons and the price-basis reason are computed
+    independently — a sample may carry e.g. ``hold_conflict`` AND
+    ``price_basis_contaminated``; both are returned so the ledger stays
+    auditable (DAV-1139 Phase B multi-reason requirement).
+    """
+    reasons = collect_hold_semantic_reasons(report)
+    pb_reason = classify_price_basis_exclusion(report, path=manifest_path)
+    if pb_reason is not None:
+        reasons.append(pb_reason)
+    return reasons
+
+
 def is_qualifying_h1b_report(report: Mapping[str, Any]) -> bool:
     """Return True if report is a completed v2 structured debate report qualifying for H1b pool under D-009 §5:
     - is_qualifying_v2_report(report) is True (completed v2 debate report with winner)
@@ -761,31 +923,51 @@ def filter_v2_completed_reports(
     *,
     return_excluded_counts: bool = False,
     return_ledger: bool = False,
+    return_exclusion_reasons: bool = False,
 ) -> Union[
     list[dict[str, Any]],
     tuple[list[dict[str, Any]], dict[str, int]],
     tuple[list[dict[str, Any]], dict[str, int], dict[str, int]],
+    tuple[list[dict[str, Any]], dict[str, int], dict[str, int], dict[str, list[str]]],
 ]:
     """Filter and normalize reports, returning only qualifying completed v2 reports under D-009 §5.
 
-    Implements three-stage pipeline accounting (DAV-783 / RT-2):
+    Implements multi-stage pipeline accounting (DAV-783 / RT-2 / DAV-1139 Phase B):
     Stage 1: raw input reports
     Stage 2: qualifying v2 protocol reports (protocol_version=v2_structured, completed, valid winner)
     Stage 3: D-009 §5 eligible reports (analysis_status=VALID, trade_action in {BUY, SELL, HOLD})
+    Stage 3.5: HOLD semantic isolation (DAV-1139 Phase B) — independent of D-009 §5
+    Stage 4: price-basis isolation (DAV-1200) — computed independently on eligible samples
 
     `excluded_counts` ONLY counts reports that entered the v2 pool (Stage 2) and were excluded
     under D-009 §5 (Stage 3). Non-v2 reports filtered at Stage 2 are tracked in ledger['non_v2_excluded']
     and NEVER conflated into D-009 `excluded_counts`.
+
+    Stage 3.5 (DAV-1139 Phase B): HOLD reports forced neutral by evidence guards
+    are isolated from the primary H1b denominator under ledger-only reasons
+    ``hold_defensive`` / ``hold_conflict`` / ``hold_unresolved`` — never in D-009
+    `excluded_counts`. ``prediction_eligible_count = eligible_count -
+    hold_semantic_isolated``. Analytical HOLDs remain in the primary denominator.
 
     Stage 4 (DAV-1200 / 1142-B3): legacy price-basis isolation via the versioned
     manifest (`price_basis_isolation.v1`). D-009-eligible reports are excluded
     deterministically by report_id under independent reasons
     ``price_basis_contaminated`` / ``price_basis_pending_review`` /
     ``price_basis_contract_incomplete`` — tracked ONLY in the pipeline ledger,
-    NEVER in D-009 `excluded_counts`. Quantity conservation:
-    ``eligible_count == clean_count + price_basis_isolated``.
+    NEVER in D-009 `excluded_counts`. Stage 4 runs on every D-009-eligible
+    sample even when Stage 3.5 already isolated it, so multi-reason samples
+    (e.g. hold_conflict + price_basis_contaminated) stay auditable via
+    ``hold_price_basis_overlap`` and ``exclusion_reasons``.
+
+    Quantity conservation:
+    ``eligible_count == clean_count + |union(hold_semantic, price_basis)|`` —
+    NOT a naive sum; overlapping samples are deducted once.
     A broken/unreadable manifest fails closed (raises ValueError): unadjudicated
     prices must not silently enter clean-cohort denominators.
+
+    When ``return_exclusion_reasons`` is True, a 4th element is returned:
+    ``dict[report_id, list[reason]]`` covering every isolation reason per
+    excluded eligible sample (Stage 3.5 + Stage 4).
     """
     qualifying: list[dict[str, Any]] = []
     excluded_counts: dict[str, int] = {
@@ -802,6 +984,13 @@ def filter_v2_completed_reports(
         "eligible_count": 0,
         "non_v2_excluded": 0,
         "d009_excluded": 0,
+        # Stage 3.5: HOLD semantic isolation (independent of D-009 §5, DAV-1139 Phase B)
+        "hold_defensive": 0,
+        "hold_conflict": 0,
+        "hold_unresolved": 0,
+        "hold_semantic_isolated": 0,
+        "prediction_eligible_count": 0,
+        "hold_price_basis_overlap": 0,
         # Stage 4: legacy price-basis isolation (independent of D-009 §5)
         "price_basis_contaminated": 0,
         "price_basis_pending_review": 0,
@@ -809,6 +998,7 @@ def filter_v2_completed_reports(
         "price_basis_isolated": 0,
         "clean_count": 0,
     }
+    exclusion_reasons: dict[str, list[str]] = {}
 
     for r in reports:
         # Stage 1 -> Stage 2: Must be a qualifying v2 protocol report first
@@ -830,21 +1020,49 @@ def filter_v2_completed_reports(
 
         ledger["eligible_count"] += 1
 
+        # Stage 3 -> Stage 3.5: HOLD semantic isolation (DAV-1139 Phase B).
+        hold_reasons = collect_hold_semantic_reasons(r)
+
         # Stage 3 -> Stage 4: deterministic price-basis isolation (DAV-1200).
-        # Isolation reasons are ledger-only and never enter D-009 excluded_counts.
+        # Computed for EVERY eligible sample even when Stage 3.5 already
+        # isolated it — dropping it here would erase multi-reason auditability
+        # (e.g. hold_conflict + price_basis_contaminated).
         pb_reason = classify_price_basis_exclusion(r)
+
+        sample_reasons: list[str] = list(hold_reasons)
+        if pb_reason is not None:
+            sample_reasons.append(pb_reason)
+
         if pb_reason is not None:
             ledger["price_basis_isolated"] += 1
             if pb_reason in (REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE):
                 ledger[pb_reason] += 1
             else:  # pragma: no cover - defensive, classifier contract is fixed
                 ledger[REASON_CONTRACT_INCOMPLETE] += 1
+
+        if hold_reasons:
+            ledger["hold_semantic_isolated"] += 1
+            for hr in hold_reasons:
+                if hr in ledger:
+                    ledger[hr] += 1
+                else:  # pragma: no cover - defensive, reason set is fixed
+                    ledger[hr] = ledger.get(hr, 0) + 1
+            if pb_reason is not None:
+                ledger["hold_price_basis_overlap"] += 1
+
+        if sample_reasons:
+            rid = extract_report_id(r) or f"<unknown:{id(r)}>"
+            exclusion_reasons[rid] = sample_reasons
             continue
 
         normalized = normalize_report_for_evaluation(r)
         qualifying.append(normalized)
         ledger["clean_count"] += 1
 
+    ledger["prediction_eligible_count"] = ledger["eligible_count"] - ledger["hold_semantic_isolated"]
+
+    if return_exclusion_reasons:
+        return qualifying, excluded_counts, ledger, exclusion_reasons
     if return_ledger:
         return qualifying, excluded_counts, ledger
     if return_excluded_counts:
