@@ -1,4 +1,4 @@
-"""PriceRef registry and per-reference basis/provenance audit layer (DAV-1142 / DAV-1198).
+"""PriceRef registry and per-reference basis/provenance audit layer (DAV-1142 / DAV-1198 / DAV-1224).
 
 Pure bypass audit — ZERO effect on decision, target/stop, H1b eligibility, or any
 production behavior. It extracts price references from report texts into a
@@ -22,11 +22,39 @@ Contract rules (DAV-1142):
 - derived/converted prices keep ``derived_from`` / ``conversion`` lineage;
   "derived" is provenance, never a basis. A raw→qfq conversion missing factor
   provenance, or with ``factor_as_of`` later than the run cutoff, previews invalid.
+
+DAV-1224 semantic-contract tightening (five levers, validated on the frozen
+DAV-1222 corpus by DAV-1225):
+
+- C1 extraction guards: non-price units/contexts (亿/万/%/倍/股/手/日/月/年,
+  date fragments, Markdown list numbers, JSON blobs), foreign-currency quotes,
+  and per-share financial indicators never produce price coordinates.
+- C2 typed disclosure is verdict-driven: a value is a disclosure price only when
+  it is the price of that disclosure kind (commodity 大宗 / position 增减持 /
+  note·share-capital 发行 / 逆回购 / coordinate price in a repurchase context
+  are rejected). ``invalid_conversion`` requires real basis-conversion
+  semantics (复权/前复权/不复权/因子); 「折合/折算」 as valuation arithmetic no
+  longer counts.
+- C3 ``derived_estimate`` semantic role: a value bound (same sub-clause, ≤25
+  chars before the number) to valuation-arithmetic vocabulary is not a
+  coordinate — it carries no decision-driving basis/as_of accountability, may
+  not back an executable level, and does not join cross-basis mixing checks.
+- C4 shared executable-level parser: registry and gate share one anchor
+  vocabulary (目标价/目标位/止盈/止损/入场/进场/买入/卖出/建仓/开仓/出场/加仓/
+  减仓) and one false-level filter (list ordinals, percentages, share counts,
+  dates).
+- C5 strict source-backed bridging: an ``unspecified`` ref may inherit
+  ``vendor_qfq`` from the run's own market data only when its context names a
+  concrete field (indicator name, explicit date + OHLC word, or limit-up/down)
+  and the value matches exactly. Bare value equality never bridges.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import re
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 from tradingagents.dataflows.providers.cn_akshare_provider import (
@@ -142,6 +170,120 @@ _SENTENCE_SPLIT_PATTERN = re.compile(r"[。；;！!？?\n\r]+")
 
 _VALUE_MATCH_TOLERANCE = 5e-3
 
+# ---------------------------------------------------------------------------
+# [C1] Extraction guards — non-price / foreign mention filters
+# ---------------------------------------------------------------------------
+
+_UNIT_TAIL = {
+    # e.g. 「50%」回溯截出的 5、LaTeX \%
+    "percent": re.compile(r"^\s*\d*\\?[%％]"),
+    # 「1.8-2.0倍」区间倍数
+    "multiple": re.compile(r"^\s*[-~—]?\s*\d*\s*倍"),
+    "shares": re.compile(r"^\s*(?:亿|万)?\s*(?:股|手|户|份)"),
+    # 时间/日期碎片：含范围写法「1-2周」「3 个月」「10 日 EMA」
+    "time": re.compile(
+        r"^\s*[-~—]?\s*\d*\s*(?:个)?\s*"
+        r"(?:分钟|小时|交易日|日|天|周|个月|月|年|季度|期|次|条|家|人|档|位)"
+    ),
+    "ratio": re.compile(r"^\s*[:：]"),
+}
+
+_PERSHARE_FIN = re.compile(
+    r"每股净资产|每股收益|每股派|每股股利|每股现金|每股盈余|"
+    r"净资产收益|每股未分配|每股公积金|每股经营"
+)
+_JSON_BLOB = re.compile(r"MANAGER_VERDICT|\"reason\"|\"confidence\"|\"winner\"|position_pct|JSON")
+_DATE_TOKEN = re.compile(r"20\d{2}\s*[-/年.]")
+
+_FOREIGN_CTX = re.compile(
+    r"美元|USD|usd|美股|美债|US10Y|纳指|道指|标普|纳斯达克|道琼斯|恒生|港股|港元|"
+    r"日元|韩元|欧元|英镑|离岸|LME|COMEX|WTI|布伦特|原油|黄金|伦敦|纽约|外汇|"
+    r"比特币|BTC|ETH|联邦基金|美联储|日经|德国DAX|法国CAC|富时|VIX|vix|"
+    r"台湾|日经225|韩国|印度|越南|新兴市场|\.KS\b|\.HK\b|\.N\b|\.O\b"
+)
+
+
+def _token_tail_flags(sentence: str, start: int, end: int) -> Optional[str]:
+    """数字 token 紧跟的单位/语境 → non-price 子类名；否则 None。"""
+    tail = sentence[end:end + 12]
+    head = sentence[max(0, start - 12):start]
+    if _UNIT_TAIL["percent"].match(tail):
+        return "percent"
+    if _UNIT_TAIL["multiple"].match(tail):
+        return "multiple"
+    if _UNIT_TAIL["shares"].match(tail):
+        return "shares_or_lots"
+    if _UNIT_TAIL["ratio"].match(tail):
+        return "ratio_token"
+    if _UNIT_TAIL["time"].match(tail):
+        # 「10日 EMA」式截断：数字本属于日期/周期
+        return "time_or_date_fragment"
+    if _DATE_TOKEN.search(sentence[max(0, start - 4):end + 4]):
+        return "date_fragment"
+    # 每股财务指标必须是 token 级：数字本身处在「每股净资产 X 元 / EPS X」
+    # 短语内；不能因句内别处出现「每股净资产」而误伤同句的派生股价。
+    if _PERSHARE_FIN.search(head) or re.search(
+            r"每股\s*$|EPS\s*(?:约|为)?\s*$|eps\s*(?:约|为)?\s*$", head):
+        return "per_share_financial"
+    if _PER_SHARE_PATTERN.search(sentence[max(0, start - 8):end + 8]):
+        return "per_share_financial"
+    # 金额/市值/数量：亿/万紧贴 token（含回溯截断，如「900亿元」截出 90
+    # → tail='0亿元'，及区间「300-390亿元」的 '300' → tail='-390亿'）；
+    # 真实股价不会被 亿/万 直接修饰。
+    if re.match(r"^\s*[-~—]?\s*\d*\s*(?:亿|万)", tail):
+        return "amount_or_marketcap"
+    return None
+
+
+def _match_spans(sentence: str, value: float, tol: float = _VALUE_MATCH_TOLERANCE) -> List[Tuple[int, int, str]]:
+    """返回 (num_start, num_end, pattern) — 命中该值的所有数字 token 位置。"""
+    spans: List[Tuple[int, int, str]] = []
+    for m in _PER_SHARE_PATTERN.finditer(sentence):
+        num = m.group(1) or m.group(2)
+        try:
+            if abs(float(num) - value) <= tol:
+                gs = m.start(1) if m.group(1) else m.start(2)
+                ge = m.end(1) if m.group(1) else m.end(2)
+                spans.append((gs, ge, "per_share"))
+        except (TypeError, ValueError):
+            pass
+    for m in _BARE_YUAN_PATTERN.finditer(sentence):
+        try:
+            if abs(float(m.group(1)) - value) <= tol:
+                spans.append((m.start(1), m.end(1), "bare_yuan"))
+        except (TypeError, ValueError):
+            pass
+    for m in _PRICE_KEYWORD_PATTERN.finditer(sentence):
+        try:
+            if abs(float(m.group(1)) - value) <= tol:
+                spans.append((m.start(1), m.end(1), "keyword"))
+        except (TypeError, ValueError):
+            pass
+    if not spans:  # fallback：裸数字定位（如日期截断值）
+        for m in re.finditer(r"\d+(?:\.\d+)?", sentence):
+            try:
+                if abs(float(m.group(0)) - value) <= tol:
+                    spans.append((m.start(), m.end(), "bare"))
+            except ValueError:
+                pass
+    return spans
+
+
+def _is_false_mention(sentence: str, start: int, end: int, value: float) -> Optional[str]:
+    """[C1] 返回伪命中子类名；不是伪命中返回 None。"""
+    flag = _token_tail_flags(sentence, start, end)
+    if flag:
+        return flag
+    if _JSON_BLOB.search(sentence) and "元" not in sentence:
+        return "json_or_prob_token"
+    if _FOREIGN_CTX.search(sentence):
+        return "foreign_or_commodity"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _split_sentences(text: str) -> List[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_PATTERN.split(text) if s and s.strip()]
@@ -157,11 +299,15 @@ def _extract_dates(text: str) -> List[str]:
 
 
 def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
-    """Extract (value, position) price mentions from a sentence, deduplicated."""
+    """Extract (value, position) price mentions from a sentence, deduplicated.
+
+    [C1]/[C4]：命中后按 token 语境过滤伪命中（单位/日期/JSON/外币/每股财务），
+    并把共享可执行价位词（含区间写法）并入抽取。position 为数字 token 起点。
+    """
     found: List[Tuple[float, int]] = []
     seen_spans: List[Tuple[int, int]] = []
 
-    def _add(value_str: str, start: int, end: int) -> None:
+    def _add(value_str: str, start: int, end: int, nstart: int, nend: int) -> None:
         for s0, e0 in seen_spans:
             if start < e0 and s0 < end:
                 return
@@ -171,16 +317,20 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
             return
         if value <= 0:
             return
+        if _is_false_mention(sentence, nstart, nend, value):  # [C1]
+            return
         seen_spans.append((start, end))
-        found.append((value, start))
+        found.append((value, nstart))
 
     for m in _PER_SHARE_PATTERN.finditer(sentence):
         num = m.group(1) or m.group(2)
-        _add(num, m.start(), m.end())
+        ns = m.start(1) if m.group(1) else m.start(2)
+        ne = m.end(1) if m.group(1) else m.end(2)
+        _add(num, m.start(), m.end(), ns, ne)
     for m in _BARE_YUAN_PATTERN.finditer(sentence):
-        _add(m.group(1), m.start(), m.end())
+        _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
     for m in _PRICE_KEYWORD_PATTERN.finditer(sentence):
-        _add(m.group(1), m.start(1), m.end(1))
+        _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
 
     found.sort(key=lambda item: item[1])
     return found
@@ -230,6 +380,12 @@ def _norm_date(value: Any) -> Optional[str]:
     return stripped or None
 
 
+# [C2] 复权转换要求：句内必须出现复权语义（前复权/不复权/qfq/因子），
+# 「折合/折算」单出现只是估值算术动词，不构成口径转换。
+_REAL_CONVERSION_CTX = re.compile(r"复权|qfq|前复权|不复权|因子", re.I)
+_CONVERSION_VERB_PATTERN = re.compile(r"换算|折算|折合|转换")
+
+
 def build_price_ref_registry(
     reports: Mapping[str, Any],
     *,
@@ -242,7 +398,6 @@ def build_price_ref_registry(
             are ignored).
         cutoff: run cutoff date (YYYY-MM-DD). Technical-report prices inherit it
             as as_of; conversion factor_as_of later than cutoff previews invalid.
-
     Returns:
         {"price_refs": [...], "price_basis_gaps": [...],
          "validation": {"status": ..., "findings": [...]}}
@@ -267,10 +422,10 @@ def build_price_ref_registry(
             continue
         is_technical = report_name in TECHNICAL_REPORT_FIELDS
         for sentence in _split_sentences(text):
-            mentions = _extract_price_values(sentence)
+            mentions = _extract_price_values(sentence)      # [C1]+[C4]
             if not mentions:
                 continue
-            disclosure_type = _detect_disclosure_type(sentence)
+            disclosure_type = _detect_disclosure_type(sentence)  # [C2]
             derived = _has_derived_keyword(sentence)
             sentence_dates = _extract_dates(sentence)
             sentence_as_of = sentence_dates[0] if sentence_dates else None
@@ -358,6 +513,7 @@ def build_price_ref_registry(
 
     # Pass 4 — basis mismatch detection.
     concrete_bases = {PRICE_BASIS_VENDOR_QFQ, PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW}
+
     by_report: Dict[str, List[Dict[str, Any]]] = {}
     for ref in refs:
         by_report.setdefault(ref["source"], []).append(ref)
@@ -456,9 +612,11 @@ def build_price_ref_registry(
 def audit_price_ref_registry(state: MutableMapping[str, Any]) -> Dict[str, Any]:
     """Run the bypass audit over a final graph state and attach side-channel fields.
 
-    Writes ``price_refs`` / ``price_basis_gaps`` / ``price_basis_validation`` into
-    ``state`` and returns the audit payload. Never raises on malformed input and
-    never mutates decision/target/stop fields.
+    Writes ``price_refs`` / ``price_basis_gaps`` / ``price_basis_validation``
+    (plus ``price_ref_pool_bridge`` when the [C5] source pool is available)
+    into ``state`` and returns the audit payload. Never raises on malformed
+    input and never mutates decision/target/stop fields.
+
     """
     if not isinstance(state, MutableMapping):
         return {"price_refs": [], "price_basis_gaps": [], "validation": {"status": "ok", "preview_only": True, "findings": []}}
