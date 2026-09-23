@@ -341,6 +341,11 @@ class TestH1bGateMultiIndustryVerification:
                     "trade_action": "BUY" if winner == "bull" else "SELL",
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                     "manager_verdict": {"winner": winner, "direction": "看多" if winner == "bull" else "看空"},
+                    # DAV-1207: create_report stamps evidence_contract.v2, making
+                    # these contract-era samples — clean eligibility requires the
+                    # full price_ref.v1 contract pair.
+                    "price_ref_contract_version": "price_ref.v1",
+                    "price_basis_version": "price_basis.vendor_qfq",
                 },
                 report_id=f"rep-{sym}-{uuid4().hex[:4]}",
                 status="completed",

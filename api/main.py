@@ -91,6 +91,8 @@ from tradingagents.graph.intent_parser import parse_intent as _parse_intent
 from tradingagents.agents.utils.context_utils import USER_CONTEXT_KEYS, normalize_user_context
 from tradingagents.agents.utils.agent_states import current_tracker_var, get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
+from tradingagents.agents.utils.price_ref_registry import audit_price_ref_registry
+from tradingagents.agents.utils.price_basis_gate import enforce_price_basis_gate
 from tradingagents.graph.horizon_profile import (
     HORIZON_PROFILE_V1,
     HORIZON_SHORT,
@@ -2166,7 +2168,22 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         "trade_action": final_state.get("trade_action"),
         "risk_status": final_state.get("risk_status"),
         "horizon_run_metadata": deepcopy(final_state.get("horizon_run_metadata")) if isinstance(final_state.get("horizon_run_metadata"), dict) else final_state.get("horizon_run_metadata"),
+        # DAV-1198 bypass-only price_ref audit fields (DAV-1207: ordinary path
+        # must persist the same key set as _build_horizon_result)
+        "price_refs": final_state.get("price_refs"),
+        "price_basis_gaps": final_state.get("price_basis_gaps"),
+        "price_basis_validation": final_state.get("price_basis_validation"),
+        # DAV-1199 hard gate + contract versioning
+        "price_basis_gate": final_state.get("price_basis_gate"),
+        "price_ref_contract_version": final_state.get("price_ref_contract_version"),
     }
+
+    # DAV-1207: persist the gate's real price_basis_version.  When the gate
+    # never stamped one, leave the key absent so report_service's
+    # `price_basis.unspecified` backfill stays the last-resort fallback instead
+    # of a persisted None masking the missing gate output.
+    if final_state.get("price_basis_version") is not None:
+        result["price_basis_version"] = final_state["price_basis_version"]
 
     return _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=final_state)
 
@@ -4116,6 +4133,11 @@ async def _run_job_inner(
                     init_state,
                     **args,
                 )
+                # DAV-1207: parity with propagate() — the raw-invoke medium path
+                # must run the same price_ref audit + hard gate, otherwise the
+                # persisted payload carries no real gate output.
+                audit_price_ref_registry(final_state)
+                enforce_price_basis_gate(final_state)
 
         if not final_state:
             raise RuntimeError("graph returned empty final state")

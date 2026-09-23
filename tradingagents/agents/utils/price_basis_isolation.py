@@ -23,10 +23,17 @@ adjudication reason，禁止批量猜测。
 - ``price_basis_contaminated``：report_id ∈ confirmed（86 全量层 ∪ 正式池 15 层；
   15 为 86 子集）。
 - ``price_basis_pending_review``：report_id ∈ pending_review_v1。
-- ``price_basis_contract_incomplete``：新 contract 样本（带
-  ``price_ref_contract_version`` 标记）缺 ``price_basis_version=price_basis.vendor_qfq``
-  或 ``price_ref_contract_version=price_ref.v1`` 任一项 → fail-close，
+- ``price_basis_contract_incomplete``：contract-era 样本缺
+  ``price_basis_version=price_basis.vendor_qfq`` 或
+  ``price_ref_contract_version=price_ref.v1`` 任一项 → fail-close，
   不得混入 clean denominator。
+
+contract-era 判据（DAV-1207）：``price_ref_contract_version`` 标记存在，
+或 ``evidence_contract_version == evidence_contract.v2`` 已落库。v2 与
+price_ref.v1 同属本次部署契约栈——有 v2 而没有 price_ref marker 本身就是
+写断链的证据（普通 /v1/analyze 曾丢全部 price-ref 字段），不得按 legacy
+fail-open。真 legacy（无 v2 标记、无 price_ref marker）仍走 manifest-only
+口径。
 """
 
 from __future__ import annotations
@@ -49,6 +56,11 @@ REASON_CONTRACT_INCOMPLETE: str = "price_basis_contract_incomplete"
 
 PRICE_BASIS_VERSION_REQUIRED: str = "price_basis.vendor_qfq"
 PRICE_REF_CONTRACT_REQUIRED: str = "price_ref.v1"
+
+# DAV-1207: contract-era marker. evidence_contract.v2 ships in the same
+# deployment contract stack as price_ref.v1; a persisted v2 sample missing the
+# price_ref marker is evidence of a broken write path, not a legacy sample.
+EVIDENCE_CONTRACT_ERA_MARKER: str = "evidence_contract.v2"
 
 _ANCHOR_REPORT_ID: str = "b188060fa75045bd9e52d1eacd265372"
 
@@ -213,10 +225,14 @@ def classify_price_basis_exclusion(
     REASON_CONTRACT_INCOMPLETE, or None when the report may enter the clean cohort.
 
     Order matters: manifest adjudication first (confirmed > pending), then the
-    new-contract fail-close check for samples stamped with
-    ``price_ref_contract_version`` (post-DAV-1199 contract). Legacy samples
-    without the contract marker are adjudicated by the manifest only — absence
-    from the manifest leaves them eligible (DAV-1197 口径之外不加隐性排除).
+    contract fail-close check for contract-era samples — those stamped with
+    ``price_ref_contract_version`` (post-DAV-1199 contract) or persisted under
+    ``evidence_contract_version == evidence_contract.v2`` (DAV-1207: v2 and
+    price_ref.v1 belong to the same deployed contract stack, so a v2 sample
+    lacking the price_ref marker evidences a broken write path and must NOT
+    fall back to the legacy fail-open branch). True legacy samples — neither
+    marker present — are adjudicated by the manifest only; absence from the
+    manifest leaves them eligible (DAV-1197 口径之外不加隐性排除).
     """
     idx = get_index(path)
     rid = extract_report_id(report)
@@ -226,11 +242,13 @@ def classify_price_basis_exclusion(
         if rid in idx.pending_ids:
             return REASON_PENDING_REVIEW
 
-    # New-contract fail-close: a sample carrying the price_ref contract marker
-    # must satisfy BOTH price_ref_contract_version == price_ref.v1 AND
+    # Contract-era fail-close: a sample carrying the price_ref contract marker
+    # or the evidence_contract.v2 era stamp must satisfy BOTH
+    # price_ref_contract_version == price_ref.v1 AND
     # price_basis_version == price_basis.vendor_qfq to enter the clean cohort.
     prcv = _find_field(report, "price_ref_contract_version")
-    if prcv is not None:
+    ecv = _find_field(report, "evidence_contract_version")
+    if prcv is not None or ecv == EVIDENCE_CONTRACT_ERA_MARKER:
         pbv = _find_field(report, "price_basis_version")
         if prcv != PRICE_REF_CONTRACT_REQUIRED or pbv != PRICE_BASIS_VERSION_REQUIRED:
             return REASON_CONTRACT_INCOMPLETE
