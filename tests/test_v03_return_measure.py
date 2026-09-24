@@ -951,42 +951,60 @@ def test_rt_s3_metadata_stamps_user_and_scope(mock_price_provider):
     assert "Account Stats" in md
 
 
-def test_rt_s4_david_account_clean_population_counts(mock_price_provider):
-    """RT-S4: 该账号 completed=231、评估候选≈217、DEV=FORWARD=0."""
-    prod_db_path = "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db"
-    if not Path(prod_db_path).exists():
-        pytest.skip("Production DB not found on local system")
+def test_rt_s4_david_account_clean_population_counts(tmp_path, mock_price_provider):
+    """RT-S4: clean population 计数逻辑（入库合成夹具，D-040 无生产库内容）。
 
-    # Query counts from database
+    DAV-1250: 原实现以 mode=ro 读本机生产库并对 09-08 硬编码计数做快照断言，
+    生产库逐日增长导致该用例在任何提交上固定失败且他机不可复现。改为读取
+    tests/fixtures/v03_rt_s4/clean_population_fixture.sql 全合成夹具，仍检验同一
+    逻辑面：账号/状态/cutoff 过滤计数、候选口径、DEV/HISTORICAL/FORWARD 分区、
+    六个黄金回归标的永久隔离。
+    """
+    fixture_sql = (
+        Path(__file__).parent
+        / "fixtures"
+        / "v03_rt_s4"
+        / "clean_population_fixture.sql"
+    )
+    db_path = tmp_path / "clean_population.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(fixture_sql.read_text(encoding="utf-8"))
+    conn.commit()
+    conn.close()
+
+    # Query counts from fixture database
     counts = V03ReturnMeasureEngine.get_user_report_counts(
-        prod_db_path,
+        str(db_path),
         target_user_id=DEFAULT_TARGET_USER_ID,
         cutoff_date=DEFAULT_HISTORICAL_CUTOFF_DATE,
     )
-    assert counts["total"] == 317
-    assert counts["completed"] == 231
-    assert counts["failed"] == 86
+    # f001~f010 在 cutoff 内：8 completed + 1 failed + 1 pending
+    # f011 (2026-09-09) 超 cutoff、f012 其他账号均被排除
+    assert counts["total"] == 10
+    assert counts["completed"] == 8
+    assert counts["failed"] == 1
 
-    # Load David completed reports
+    # Load completed reports within cutoff
     reports = V03ReturnMeasureEngine.load_reports_from_db(
-        prod_db_path,
+        str(db_path),
         target_user_id=DEFAULT_TARGET_USER_ID,
         status_filter=DEFAULT_STATUS_FILTER,
         cutoff_date=DEFAULT_HISTORICAL_CUTOFF_DATE,
     )
-    assert len(reports) == 231
+    assert len(reports) == 8
 
-    # Verify OOS date range
+    # Verify loaded date range matches fixture design
     trade_dates = [r["trade_date"] for r in reports]
-    assert min(trade_dates) >= "2026-04-30"
-    assert max(trade_dates) <= "2026-09-08"
+    assert min(trade_dates) == "2025-12-30"
+    assert max(trade_dates) == "2026-09-08"
 
     # Count directional candidates in raw reports (direction is not null/empty)
+    # f004 direction=NULL、f005 direction='' 不计入 → 6
     dir_candidates = sum(
         1 for r in reports
         if r.get("direction") is not None and str(r.get("direction")).strip() not in ("", "None")
     )
-    assert dir_candidates == 217
+    assert dir_candidates == 6
 
     # Run engine with mock provider to check OOS partitioning
     engine = V03ReturnMeasureEngine(
@@ -998,16 +1016,24 @@ def test_rt_s4_david_account_clean_population_counts(mock_price_provider):
     )
     res = engine.measure_dataset(reports)
 
-    assert res.all_metrics.total_reports == 231
-    # 评估候选 ≈ 217 (raw db has 217, with result_data fallback evaluates to 227)
-    assert abs(res.all_metrics.directional_candidate_count - 217) <= 15
-    assert res.dev_metrics.total_reports == 0
+    assert res.all_metrics.total_reports == 8
+    assert res.all_metrics.directional_candidate_count == 6
+    # f008 (2025-12-30) 落入 DEV 段
+    assert res.dev_metrics.total_reports == 1
+    # cutoff 已排除 2026-09-09，FORWARD_OOS 为空
     assert res.forward_oos_metrics.total_reports == 0
-    # 6 golden regression symbols permanently isolated (21 reports) from OOS metrics
-    assert res.regression_metrics.total_reports == 21
-    assert res.historical_oos_metrics.total_reports == 210
-    assert res.historical_oos_metrics.total_reports + res.regression_metrics.total_reports == 231
-    assert abs(res.historical_oos_metrics.directional_candidate_count - 206) <= 15
+    # f006/f007 命中黄金回归标的，永久隔离出 OOS 指标
+    assert res.regression_metrics.total_reports == 2
+    assert res.historical_oos_metrics.total_reports == 5
+    assert (
+        res.historical_oos_metrics.total_reports
+        + res.regression_metrics.total_reports
+        + res.dev_metrics.total_reports
+        + res.forward_oos_metrics.total_reports
+        == 8
+    )
+    # HISTORICAL_OOS 段候选：f001/f002/f003（f004 NULL、f005 '' 不计）
+    assert res.historical_oos_metrics.directional_candidate_count == 3
 
 
 # ===========================================================================
