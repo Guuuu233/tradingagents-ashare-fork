@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
 
-import {
+import ChatCopilotPanel, {
     formatAnalysisCompleteMessage,
     formatAnalysisRecoveryMessage,
     formatAnalysisNotificationBody,
 } from '@/components/ChatCopilotPanel'
+
+describe('ChatCopilotPanel horizon selector removal (D-042)', () => {
+    it('does not render the analysis horizon selector in the chat panel', () => {
+        const html = renderToStaticMarkup(
+            <ChatCopilotPanel onSymbolDetected={() => {}} />,
+        )
+        expect(html).not.toContain('analysis-horizon-selector')
+        expect(html).not.toContain('data-testid="horizon-')
+        expect(html).not.toContain('分析档位')
+    })
+})
 
 describe('ChatCopilotPanel direction localization (DAV-914)', () => {
     describe('formatAnalysisCompleteMessage', () => {

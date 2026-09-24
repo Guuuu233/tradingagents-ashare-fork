@@ -28,7 +28,7 @@ describe('isNotFoundError', () => {
     })
 })
 
-describe('api.chatCompletion horizons contract (H-03b)', () => {
+describe('api.chatCompletion request contract (D-042)', () => {
     let originalFetch: typeof globalThis.fetch
 
     beforeEach(() => {
@@ -40,7 +40,7 @@ describe('api.chatCompletion horizons contract (H-03b)', () => {
         vi.restoreAllMocks()
     })
 
-    it('sends explicit default ["short"] in request body when horizons is omitted', async () => {
+    it('sends messages/stream/selected_analysts without config_overrides or horizons', async () => {
         let capturedUrl = ''
         let capturedBody: Record<string, unknown> = {}
 
@@ -60,14 +60,14 @@ describe('api.chatCompletion horizons contract (H-03b)', () => {
         expect(capturedBody.messages).toEqual(messages)
         expect(capturedBody.stream).toBe(true)
         expect(capturedBody.selected_analysts).toEqual(['market'])
-        // 契约 2: 未改选择器/未传时发送 ["short"]（显式默认）
-        expect(capturedBody.horizons).toEqual(['short'])
-        // 契约 3: investment_horizon 不得写入 horizons
-        expect(capturedBody.horizons).not.toContain('短线')
-        expect(capturedBody.investment_horizon).toBeUndefined()
+        // D-042: 聊天入口回后端默认值，前端不得携带 v2_debate_enabled override
+        expect(capturedBody.config_overrides).toBeUndefined()
+        expect(JSON.stringify(capturedBody)).not.toContain('v2_debate_enabled')
+        // D-042: 聊天不再发送 horizons（后端 ChatCompletionRequest 无该字段）
+        expect('horizons' in capturedBody).toBe(false)
     })
 
-    it('sends explicit ["medium"] when medium horizon is selected', async () => {
+    it('omits selected_analysts key value when not provided but still sends no overrides', async () => {
         let capturedBody: Record<string, unknown> = {}
 
         globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
@@ -78,85 +78,17 @@ describe('api.chatCompletion horizons contract (H-03b)', () => {
             })
         })
 
-        await api.chatCompletion(
-            [{ role: 'user', content: '分析 600519.SH' }],
-            true,
-            ['macro'],
-            ['medium'],
-        )
+        await api.chatCompletion([{ role: 'user', content: 'test' }])
 
-        expect(capturedBody.horizons).toEqual(['medium'])
+        expect(capturedBody.stream).toBe(true)
+        expect(capturedBody.config_overrides).toBeUndefined()
+        expect('horizons' in capturedBody).toBe(false)
     })
 
-    it('sends explicit dual horizons ["short", "medium"] in preserved canonical order', async () => {
-        let capturedBody: Record<string, unknown> = {}
-
-        globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
-            capturedBody = JSON.parse((init?.body as string) || '{}')
-            return new Response(JSON.stringify({ ok: true }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            })
-        })
-
-        await api.chatCompletion(
-            [{ role: 'user', content: '分析 600519.SH 短线和中线' }],
-            true,
-            ['market', 'macro'],
-            ['short', 'medium'],
-        )
-
-        // 契约 1: 双档为显式 ['short', 'medium']（保序）
-        expect(capturedBody.horizons).toEqual(['short', 'medium'])
-    })
-
-    it('does NOT silently rewrite illegal empty array to ["short"]', async () => {
-        let capturedBody: Record<string, unknown> = {}
-
-        globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
-            capturedBody = JSON.parse((init?.body as string) || '{}')
-            return new Response(JSON.stringify({ ok: true }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            })
-        })
-
-        await api.chatCompletion(
-            [{ role: 'user', content: '分析 600519.SH' }],
-            true,
-            undefined,
-            [],
-        )
-
-        // 契约 4: 非法组合不要静默改档；必须原样发送由后端校验
-        expect(capturedBody.horizons).toEqual([])
-    })
-
-    it('does NOT silently rewrite illegal unknown values to ["short"]', async () => {
-        let capturedBody: Record<string, unknown> = {}
-
-        globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
-            capturedBody = JSON.parse((init?.body as string) || '{}')
-            return new Response(JSON.stringify({ ok: true }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            })
-        })
-
-        await api.chatCompletion(
-            [{ role: 'user', content: '分析 600519.SH' }],
-            true,
-            undefined,
-            ['bogus'],
-        )
-
-        expect(capturedBody.horizons).toEqual(['bogus'])
-    })
-
-    it('surfaces 422 validation errors with details without treating as success', async () => {
+    it('surfaces HTTP validation errors with details without treating as success', async () => {
         globalThis.fetch = vi.fn().mockImplementation(async () => {
             return new Response(
-                JSON.stringify({ detail: 'Invalid horizons: bogus' }),
+                JSON.stringify({ detail: 'Invalid request' }),
                 {
                     status: 422,
                     headers: { 'Content-Type': 'application/json' },
@@ -164,15 +96,9 @@ describe('api.chatCompletion horizons contract (H-03b)', () => {
             )
         })
 
-        // 契约 4: 422/400 错误必须抛出并携带详情，不把失败当成 short 成功
         await expect(
-            api.chatCompletion(
-                [{ role: 'user', content: 'test' }],
-                true,
-                undefined,
-                ['bogus'],
-            ),
-        ).rejects.toThrow('Invalid horizons: bogus')
+            api.chatCompletion([{ role: 'user', content: 'test' }]),
+        ).rejects.toThrow('Invalid request')
     })
 })
 
