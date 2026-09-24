@@ -1,6 +1,7 @@
 """DAV-1224 C3 derived_estimate 语义角色测试（GREEN 基线，对应 W2）。
 
-derived 判定绑定到数字本身（同子句、前 25 字内估值算术强词）；弱词不触发；
+derived 判定绑定到数字本身（DAV-1235 P1：同子句须同时含估值模型词与计算关联/乘数；
+P2 技术指标/行情坐标词一票否决）；弱词与叙事词不触发；
 真报价保护；derived_estimate 不承担 decision-driving 问责、不可执行、
 不参与跨口径混用判定、保留 lineage。
 """
@@ -39,7 +40,7 @@ def has_val(refs, v):
 class TestC3DerivedEstimateRole:
     def test_pe_derived_value_marked_derived_estimate(self):
         # PB/PE 推导的估值锚 → derived_estimate，不伪装 vendor_qfq
-        refs, g, _ = run({"fundamentals_report": "按 12 倍 PE 测算，对应股价 27.14 元。"})
+        refs, g, _ = run({"fundamentals_report": "按 12 倍 PE 测算对应股价 27.14 元。"})
         r = [r for r in refs if abs(r["value"] - 27.14) <= TOL]
         assert r and r[0]["basis"] == PRICE_BASIS_DERIVED_ESTIMATE
         assert r[0]["provenance"].startswith("role:derived_estimate|")
@@ -51,7 +52,7 @@ class TestC3DerivedEstimateRole:
         assert r and r[0]["basis"] != PRICE_BASIS_DERIVED_ESTIMATE
 
     def test_derived_estimate_not_decision_driving(self):
-        refs, g, _ = run({"fundamentals_report": "按 12 倍 PE 测算，对应股价 27.14 元。"})
+        refs, g, _ = run({"fundamentals_report": "按 12 倍 PE 测算对应股价 27.14 元。"})
         assert not any(
             v["kind"].startswith("decision_driving") and "27.14" in v["detail"]
             for v in g["violations"]
@@ -65,7 +66,7 @@ class TestC3DerivedEstimateRole:
         )
 
     def test_derived_estimate_exempt_from_as_of_gap(self):
-        refs, g, st = run({"fundamentals_report": "按 12 倍 PE 测算，对应股价 27.14 元。"})
+        refs, g, st = run({"fundamentals_report": "按 12 倍 PE 测算对应股价 27.14 元。"})
         assert not any(
             gap["kind"] == "missing_as_of" and "27.14" in gap["detail"]
             for gap in st["price_basis_gaps"]

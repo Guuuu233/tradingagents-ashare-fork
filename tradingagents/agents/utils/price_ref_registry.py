@@ -39,6 +39,33 @@ DAV-1222 corpus by DAV-1225):
   chars before the number) to valuation-arithmetic vocabulary is not a
   coordinate — it carries no decision-driving basis/as_of accountability, may
   not back an executable level, and does not join cross-basis mixing checks.
+
+DAV-1235 precision tightening (audit of production report 4390ddfd):
+
+- P1′ ``derived_estimate`` only fires on a valuation *formula* (D-042 revised):
+  (a) a valuation multiplier/model word (PE/PB/PS/PEG/EV-EBITDA/市盈率/市净率/
+  市销率/DCF/贴现/股息率, plus 「估值至/到/为/在 N 倍」 and 「N 倍估值/市盈率」)
+  within 60 chars before the number in the same sentence, and (b) a computation
+  link inside the number's own sub-clause and before the number (对应/折合/折算/
+  隐含/测算得/×/乘以), or 「N 倍/给予…倍」 in the number's sub-clause, or a
+  per-share base (EPS/每股收益/每股净资产) co-occurring with a multiplier.
+  Narrative words alone (估值修复/估值中枢/估值底/测算/估算/市值/公允/安全边际)
+  never trigger.
+- P2′ two-tier veto: hard veto — VWMA/VWAP/MA N/均线/布林/BOLL inside the
+  60-char window; bound veto — 现价/收盘/开盘/涨停/跌停/前高/前低 only when
+  directly modifying the number (same sub-clause, before it, no computation
+  word in between). 支撑/压力/阻力/平台/箱体/最高/最低/底线 are NOT vetoes.
+- P3 difference amounts (空间/回撤/滑点/价差/差价 and 上涨/下跌/涨/跌 N 元)
+  are not price coordinates and are not registered as refs at all (chosen
+  over a non-coordinate role: they are not prices, so the registry — whose
+  contract is price-coordinate accountability — simply does not list them;
+  this also removes them from every downstream decision-driving/executable
+  check without touching gate rules).
+- P4 non-stock commodity/product prices (批发价/出厂价/零售价/指导价/终端价/
+  散瓶/整箱/吨价 …) are not registered.
+- P5′ non-price measurements — 「N 板」连板 counts and values directly
+  followed by 倍 including decimal ranges (1.8~2.0倍 / 12-14 倍) — are not
+  registered.
 - C4 shared executable-level parser: registry and gate share one anchor
   vocabulary (目标价/目标位/止盈/止损/入场/进场/买入/卖出/建仓/开仓/出场/加仓/
   减仓) and one false-level filter (list ordinals, percentages, share counts,
@@ -258,9 +285,11 @@ def extract_executable_levels(text: str) -> List[Tuple[float, int, int]]:
 _UNIT_TAIL = {
     # e.g. 「50%」回溯截出的 5、LaTeX \%
     "percent": re.compile(r"^\s*\d*\\?[%％]"),
-    # 「1.8-2.0倍」区间倍数
-    "multiple": re.compile(r"^\s*[-~—]?\s*\d*\s*倍"),
+    # 「1.8-2.0倍」「1.8~2.0倍」「12-14 倍」区间倍数（P5′：允许小数区间）
+    "multiple": re.compile(r"^\s*[-~—]?\s*\d*(?:\.\d+)?\s*倍"),
     "shares": re.compile(r"^\s*(?:亿|万)?\s*(?:股|手|户|份)"),
+    # [P5] 「N 板」连板数（「最高4板」），非价格计量；(?!块) 防「板块」误伤
+    "board_count": re.compile(r"^\s*(?:连)?板(?!块)"),
     # 时间/日期碎片：含范围写法「1-2周」「3 个月」「10 日 EMA」
     "time": re.compile(
         r"^\s*[-~—]?\s*\d*\s*(?:个)?\s*"
@@ -268,6 +297,20 @@ _UNIT_TAIL = {
     ),
     "ratio": re.compile(r"^\s*[:：]"),
 }
+
+# [P3] 差额语境：数字是「空间/回撤/滑点/价差/差价/幅度」的量值，或「涨/跌 N 元」
+# 的变动量——不是价格坐标，不登记。粒子白名单刻意不含 至/到/破/穿：
+# 「跌至 45 元」「跌破 2000 元」仍是坐标价。
+_DIFF_HEAD = re.compile(
+    r"(?:空间|回撤|滑点|价差|差价|幅度)\s*(?:约|达|为|有|近|超|超过|不足)?\s*$"
+    r"|(?<![停板])(?:上涨|下跌|涨|跌)\s*(?:了|达|约|近|超|超过|不足|幅|逾)?\s*$"
+)
+_DIFF_TAIL = re.compile(r"^\s*元\s*(?:滑点|价差|差价)")
+
+# [P4] 非本股价格：商品/产品价格词出现在数值邻近语境 → 不登记为本股价格坐标。
+_NON_STOCK_PRICE_CTX = re.compile(
+    r"批发参考价|批发价|出厂价|零售价|指导价|终端价|散瓶|整箱|吨价|公斤价|克价"
+)
 
 _PERSHARE_FIN = re.compile(
     r"每股净资产|每股收益|每股派|每股股利|每股现金|每股盈余|"
@@ -294,6 +337,10 @@ def _token_tail_flags(sentence: str, start: int, end: int) -> Optional[str]:
         return "multiple"
     if _UNIT_TAIL["shares"].match(tail):
         return "shares_or_lots"
+    if _UNIT_TAIL["board_count"].match(tail):               # [P5]
+        return "board_count"
+    if _DIFF_HEAD.search(head) or _DIFF_TAIL.match(tail):  # [P3]
+        return "price_difference"
     if _UNIT_TAIL["ratio"].match(tail):
         return "ratio_token"
     if _UNIT_TAIL["time"].match(tail):
@@ -359,6 +406,9 @@ def _is_false_mention(sentence: str, start: int, end: int, value: float) -> Opti
         return "json_or_prob_token"
     if _FOREIGN_CTX.search(sentence):
         return "foreign_or_commodity"
+    # [P4] 数值 ±40/±12 字窗口内的商品/产品价格词 → 非本股价格坐标
+    if _NON_STOCK_PRICE_CTX.search(sentence[max(0, start - 40):end + 12]):
+        return "non_stock_price"
     return None
 
 
@@ -528,31 +578,80 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
 # [C3] derived_estimate — token 级估值算术绑定
 # ---------------------------------------------------------------------------
 
-# 强词：估值算术语义。「假设/情景/悲观/乐观/防御/底线」等弱词不得单独触发。
-_STRONG_DERIVED = re.compile(
-    r"PE|PB|市盈率|市净率|折合|折算|换算|测算|估算|估值|倍|净利|利润|"
-    r"市值|每股股价|公允|隐含|理论价|内在价值|DCF|贴现|安全边际|ROE"
-)
-# 「对应」必须落在 股价/每股/市值/估值 上才算强词（「对应了获利盘在 70 元关口」
-# 之类的「对应」是弱词）
-_DUIYING_DERIVED = re.compile(r"对应[^。]{0,8}(?:股价|每股|市值|估值|元)")
 _SUBCLAUSE_SPLIT = re.compile(r"[，。；;：:、|（）()\[\]【】\n\r]+")
 
+# [DAV-1235 P1′] (a) 估值乘数/估值模型词——只认公式词，叙事词不算：
+# 「估值修复/估值中枢/估值底/测算/估算/市值/公允/安全边际」均不在表中。
+# 窗口：数值之前 60 字内、同一句（调用方传入的 context 已是句子级切分）。
+_DERIVED_MODEL_WORDS = re.compile(
+    r"(?<![A-Za-z0-9])(?:PE|PB|PS|PEG|DCF)(?![A-Za-z0-9])"
+    r"|EV/EBITDA|市盈率|市净率|市销率|贴现|股息率"
+    # 两种乘数写法：「估值（至/到/为/在）N 倍」「N 倍估值 / N 倍市盈率」
+    r"|估值\s*(?:至|到|为|在)\s*\d+(?:\.\d+)?\s*倍"
+    r"|\d+(?:\.\d+)?\s*倍\s*(?:估值|市盈率)"
+)
+# (b) 计算关联词：必须在数值所在子句内、数值之前（D-042 二次修正，
+# 删除「紧邻前一子句」——技术颈线/现价会借用上一子句的「对应」误豁免）。
+_DERIVED_CALC_WORDS = re.compile(r"对应|折合|折算|隐含|测算得|×|乘以")
+# (b2) 数值所在子句内的乘数写法
+_DERIVED_CLAUSE_MULT = re.compile(r"\d+(?:\.\d+)?\s*倍|给予[^，。；]{0,10}倍")
+# (b3) 每股基数（与乘数同子句出现时等同 (b)）
+_DERIVED_PER_SHARE_BASE = re.compile(r"EPS|每股收益|每股净资产", re.I)
+_DERIVED_MULTIPLIER = re.compile(r"倍|×|乘以")
 
-def _pre_token_window(sentence: str, start: int) -> str:
-    left = sentence[:start]
-    seg_start = 0
-    for m in _SUBCLAUSE_SPLIT.finditer(left):
-        seg_start = m.end()
-    return sentence[seg_start:start][-25:]
+# [DAV-1235 P2′] 硬否决：技术指标词出现在数值前 60 字窗口内一律否决。
+_DERIVED_HARD_VETO = re.compile(r"VWMA|VWAP|MA\s*\d+|均线|布林|BOLL", re.I)
+# [P2′] 绑定否决：行情坐标词仅当直接修饰该数值时否决——出现在数值所在子句、
+# 数值之前，且与该数值之间没有计算关联词。
+_DERIVED_BOUND_VETO = re.compile(r"现价|收盘|开盘|涨停|跌停|前高|前低")
+
+
+def _subclause_bounds(sentence: str, start: int, end: int) -> Tuple[int, int]:
+    """返回包含 token [start,end) 的子句边界（_SUBCLAUSE_SPLIT 切分）。"""
+    left = 0
+    for m in _SUBCLAUSE_SPLIT.finditer(sentence[:start]):
+        left = m.end()
+    right = len(sentence)
+    m = _SUBCLAUSE_SPLIT.search(sentence, end)
+    if m:
+        right = m.start()
+    return left, right
 
 
 def is_derived_value(sentence: str, value: float, tol: float = _VALUE_MATCH_TOLERANCE) -> bool:
-    """[C3] token 级 derived 判定：数字前 25 字内（同一子句）出现估值算术词。"""
+    """[C3/P1′] token 级 derived 判定（D-042 修正规格）：
+    (a) 估值乘数/模型词出现在数值前 60 字内、同一句；
+    (b) 满足任一——计算关联词（对应/折合/折算/隐含/测算得/×/乘以）在数值
+        所在子句内且位于数值之前；「N 倍/给予…倍」在数值子句；每股基数与
+        乘数同子句；
+    [P2′] 技术指标词在 60 字窗口内硬否决；行情坐标词直接修饰该数值时绑定
+    否决。叙事词不单独触发。"""
     for s, e, _p in _match_spans(sentence or "", value, tol):
-        window = _pre_token_window(sentence, s)
-        if _STRONG_DERIVED.search(window) or _DUIYING_DERIVED.search(window):
-            return True
+        pre60 = sentence[max(0, s - 60):s]
+        if _DERIVED_HARD_VETO.search(pre60):
+            continue                                        # [P2′] 硬否决
+        cs, ce = _subclause_bounds(sentence, s, e)
+        clause = sentence[cs:ce]
+        # [P2′] 绑定否决：坐标词在数值前的本子句内，且与数值间无关联词
+        bound = False
+        for vm in _DERIVED_BOUND_VETO.finditer(clause):
+            if vm.end() <= s - cs:
+                between = clause[vm.end():s - cs]
+                if not _DERIVED_CALC_WORDS.search(between):
+                    bound = True
+                    break
+        if bound:
+            continue
+        if not _DERIVED_MODEL_WORDS.search(pre60):
+            continue                                        # 缺 (a)
+        has_calc = bool(_DERIVED_CALC_WORDS.search(clause[:s - cs]))
+        has_mult = bool(_DERIVED_CLAUSE_MULT.search(clause))
+        has_pershare = bool(
+            _DERIVED_PER_SHARE_BASE.search(clause)
+            and _DERIVED_MULTIPLIER.search(clause)
+        )
+        if has_calc or has_mult or has_pershare:
+            return True                                     # (a)+(b)
     return False
 
 
@@ -1106,8 +1205,8 @@ def build_price_ref_registry(
     # 可参与推理但不冒充 vendor_qfq coordinate/executable。
     for ref in refs:
         prov = ref.get("provenance") or ""
-        # derived 判定绑定到数字本身：同一子句、数字前 25 字内出现估值算术词
-        # 才算；「假设/情景/悲观/乐观/防御/底线」弱词不单独触发。
+        # derived 判定绑定到数字本身（DAV-1235 D-042：P1′ 模型词限数值前
+        # 60 字同一句 + 计算关联三条任一；P2′ 指标词硬否决、坐标词绑定否决）。
         # 真报价保护：报价语义词 + pool 具名字段同值 → 真坐标，不降格。
         ctx_v = ref.get("context") or ""
         is_derived = (

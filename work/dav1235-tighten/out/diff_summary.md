@@ -1,0 +1,660 @@
+# DAV-1235 候选 vs a181e4a 重算 diff
+
+## 总览
+- frozen 50：baseline pass 6/50（W4=6/50）→ candidate pass 5/50
+- 含生产报告合计：6/52 → 5/52
+- blocked→pass：[]
+- pass→blocked：['s10__r4']
+
+## 逐 run violation 变化
+
+### prod_4390ddfd
+- 移除 `decision_driving_missing_as_of` ('pr-142',) 决策驱动价格 1282.0(pr-142) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-155',) 决策驱动价格 1190.0(pr-155) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-156',) 决策驱动价格 14.31(pr-156) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-157',) 决策驱动价格 30.04(pr-157) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 1238.5(pr-161) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-170',) 决策驱动价格 1255.0(pr-170) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-171',) 决策驱动价格 1262.0(pr-171) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-172',) 决策驱动价格 1245.0(pr-172) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-173',) 决策驱动价格 1238.5(pr-173) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-178',) 决策驱动价格 1255.0(pr-178) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-179',) 决策驱动价格 1260.0(pr-179) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-182',) 决策驱动价格 1238.5(pr-182) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-183',) 决策驱动价格 1200.0(pr-183) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-189',) 决策驱动价格 2000.0(pr-189) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-193',) 决策驱动价格 1262.0(pr-193) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-194',) 决策驱动价格 1245.0(pr-194) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-198',) 决策驱动价格 1238.5(pr-198) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-200',) 决策驱动价格 5.0(pr-200) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-201',) 决策驱动价格 1262.0(pr-201) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-204',) 决策驱动价格 1238.5(pr-204) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-142',) 决策驱动价格 1282.0(pr-142) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-155',) 决策驱动价格 1190.0(pr-155) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-156',) 决策驱动价格 14.31(pr-156) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-157',) 决策驱动价格 30.04(pr-157) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 1238.5(pr-161) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-170',) 决策驱动价格 1255.0(pr-170) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-171',) 决策驱动价格 1262.0(pr-171) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-172',) 决策驱动价格 1245.0(pr-172) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-173',) 决策驱动价格 1238.5(pr-173) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-178',) 决策驱动价格 1255.0(pr-178) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-179',) 决策驱动价格 1260.0(pr-179) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-182',) 决策驱动价格 1238.5(pr-182) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-183',) 决策驱动价格 1200.0(pr-183) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-189',) 决策驱动价格 2000.0(pr-189) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-193',) 决策驱动价格 1262.0(pr-193) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-194',) 决策驱动价格 1245.0(pr-194) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-198',) 决策驱动价格 1238.5(pr-198) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-200',) 决策驱动价格 5.0(pr-200) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-201',) 决策驱动价格 1262.0(pr-201) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-204',) 决策驱动价格 1238.5(pr-204) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-161',) 可执行价位 1238.5（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-198', 'pr-204') 可执行价位 1238.5（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-141',) 决策驱动价格 1282.0(pr-141) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-154',) 决策驱动价格 1190.0(pr-154) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-158',) 决策驱动价格 1238.5(pr-158) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-167',) 决策驱动价格 1255.0(pr-167) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-168',) 决策驱动价格 1262.0(pr-168) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-169',) 决策驱动价格 1245.0(pr-169) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-170',) 决策驱动价格 1238.5(pr-170) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-175',) 决策驱动价格 1255.0(pr-175) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-176',) 决策驱动价格 1260.0(pr-176) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-179',) 决策驱动价格 1238.5(pr-179) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-180',) 决策驱动价格 1200.0(pr-180) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-189',) 决策驱动价格 1262.0(pr-189) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-190',) 决策驱动价格 1245.0(pr-190) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-194',) 决策驱动价格 1238.5(pr-194) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-196',) 决策驱动价格 1262.0(pr-196) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-199',) 决策驱动价格 1238.5(pr-199) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-141',) 决策驱动价格 1282.0(pr-141) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-154',) 决策驱动价格 1190.0(pr-154) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-158',) 决策驱动价格 1238.5(pr-158) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-167',) 决策驱动价格 1255.0(pr-167) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-168',) 决策驱动价格 1262.0(pr-168) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-169',) 决策驱动价格 1245.0(pr-169) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-170',) 决策驱动价格 1238.5(pr-170) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-175',) 决策驱动价格 1255.0(pr-175) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-176',) 决策驱动价格 1260.0(pr-176) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-179',) 决策驱动价格 1238.5(pr-179) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-180',) 决策驱动价格 1200.0(pr-180) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-189',) 决策驱动价格 1262.0(pr-189) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-190',) 决策驱动价格 1245.0(pr-190) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-194',) 决策驱动价格 1238.5(pr-194) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-196',) 决策驱动价格 1262.0(pr-196) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-199',) 决策驱动价格 1238.5(pr-199) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-158',) 可执行价位 1238.5（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-194', 'pr-199') 可执行价位 1238.5（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+### s01__r1
+- 移除 `decision_driving_missing_as_of` ('pr-111',) 决策驱动价格 40.0(pr-111) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-158',) 决策驱动价格 0.49(pr-158) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 39.58(pr-161) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-162',) 决策驱动价格 32.38(pr-162) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-172',) 决策驱动价格 0.4(pr-172) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-111',) 决策驱动价格 40.0(pr-111) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-158',) 决策驱动价格 0.49(pr-158) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 39.58(pr-161) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-162',) 决策驱动价格 32.38(pr-162) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-172',) 决策驱动价格 0.4(pr-172) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-110',) 决策驱动价格 40.0(pr-110) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-157',) 决策驱动价格 0.49(pr-157) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-160',) 决策驱动价格 39.58(pr-160) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 32.38(pr-161) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-171',) 决策驱动价格 0.4(pr-171) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-110',) 决策驱动价格 40.0(pr-110) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-157',) 决策驱动价格 0.49(pr-157) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-160',) 决策驱动价格 39.58(pr-160) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 32.38(pr-161) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-171',) 决策驱动价格 0.4(pr-171) basis 无法归因，禁止消费
+### s01__r2
+- 移除 `decision_driving_missing_as_of` ('pr-163',) 决策驱动价格 35.2(pr-163) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-163',) 决策驱动价格 35.2(pr-163) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-163',) 可执行价位 35.2（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 35.2(pr-161) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 35.2(pr-161) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-161',) 可执行价位 35.2（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+### s01__r5
+- 移除 `decision_driving_missing_as_of` ('pr-155',) 决策驱动价格 30.16(pr-155) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-155',) 决策驱动价格 30.16(pr-155) basis 无法归因，禁止消费
+### s02__r1
+- 移除 `decision_driving_missing_as_of` ('pr-173',) 决策驱动价格 5.0(pr-173) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-175',) 决策驱动价格 36.56(pr-175) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-176',) 决策驱动价格 29.92(pr-176) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-201',) 决策驱动价格 36.56(pr-201) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-202',) 决策驱动价格 29.92(pr-202) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-203',) 决策驱动价格 34.0(pr-203) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-204',) 决策驱动价格 34.3(pr-204) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-211',) 决策驱动价格 34.3(pr-211) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-217',) 决策驱动价格 34.3(pr-217) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-173',) 决策驱动价格 5.0(pr-173) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-175',) 决策驱动价格 36.56(pr-175) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-176',) 决策驱动价格 29.92(pr-176) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-201',) 决策驱动价格 36.56(pr-201) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-202',) 决策驱动价格 29.92(pr-202) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-203',) 决策驱动价格 34.0(pr-203) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-204',) 决策驱动价格 34.3(pr-204) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-211',) 决策驱动价格 34.3(pr-211) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-217',) 决策驱动价格 34.3(pr-217) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-120',) 决策驱动价格 28.5(pr-120) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-121',) 决策驱动价格 30.5(pr-121) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-174',) 决策驱动价格 36.56(pr-174) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-175',) 决策驱动价格 29.92(pr-175) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-200',) 决策驱动价格 36.56(pr-200) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-201',) 决策驱动价格 29.92(pr-201) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-202',) 决策驱动价格 34.0(pr-202) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-203',) 决策驱动价格 34.3(pr-203) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-210',) 决策驱动价格 34.3(pr-210) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-216',) 决策驱动价格 34.3(pr-216) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-120',) 决策驱动价格 28.5(pr-120) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-121',) 决策驱动价格 30.5(pr-121) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-174',) 决策驱动价格 36.56(pr-174) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-175',) 决策驱动价格 29.92(pr-175) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-200',) 决策驱动价格 36.56(pr-200) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-201',) 决策驱动价格 29.92(pr-201) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-202',) 决策驱动价格 34.0(pr-202) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-203',) 决策驱动价格 34.3(pr-203) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-210',) 决策驱动价格 34.3(pr-210) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-216',) 决策驱动价格 34.3(pr-216) basis 无法归因，禁止消费
+### s02__r2
+- 移除 `decision_driving_missing_as_of` ('pr-125',) 决策驱动价格 30.0(pr-125) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-125',) 决策驱动价格 30.0(pr-125) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-124',) 决策驱动价格 30.0(pr-124) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-126',) 决策驱动价格 22.0(pr-126) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-127',) 决策驱动价格 24.0(pr-127) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-124',) 决策驱动价格 30.0(pr-124) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-126',) 决策驱动价格 22.0(pr-126) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-127',) 决策驱动价格 24.0(pr-127) basis 无法归因，禁止消费
+### s02__r5
+- 移除 `decision_driving_missing_as_of` ('pr-089',) 决策驱动价格 24.0(pr-089) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-090',) 决策驱动价格 26.0(pr-090) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-093',) 决策驱动价格 33.5(pr-093) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-132',) 决策驱动价格 36.0(pr-132) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-142',) 决策驱动价格 36.0(pr-142) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-143',) 决策驱动价格 33.2(pr-143) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-145',) 决策驱动价格 33.2(pr-145) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-148',) 决策驱动价格 36.0(pr-148) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-149',) 决策驱动价格 33.2(pr-149) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-156',) 决策驱动价格 34.7(pr-156) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-158',) 决策驱动价格 37.05(pr-158) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-159',) 决策驱动价格 30.31(pr-159) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-163',) 决策驱动价格 36.0(pr-163) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-164',) 决策驱动价格 33.2(pr-164) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-166',) 决策驱动价格 33.2(pr-166) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-170',) 决策驱动价格 33.2(pr-170) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-174',) 决策驱动价格 30.31(pr-174) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-176',) 决策驱动价格 33.2(pr-176) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-178',) 决策驱动价格 36.0(pr-178) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-184',) 决策驱动价格 33.2(pr-184) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-188',) 决策驱动价格 33.2(pr-188) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-191',) 决策驱动价格 33.2(pr-191) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-089',) 决策驱动价格 24.0(pr-089) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-090',) 决策驱动价格 26.0(pr-090) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-093',) 决策驱动价格 33.5(pr-093) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-132',) 决策驱动价格 36.0(pr-132) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-142',) 决策驱动价格 36.0(pr-142) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-143',) 决策驱动价格 33.2(pr-143) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-145',) 决策驱动价格 33.2(pr-145) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-148',) 决策驱动价格 36.0(pr-148) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-149',) 决策驱动价格 33.2(pr-149) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-156',) 决策驱动价格 34.7(pr-156) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-158',) 决策驱动价格 37.05(pr-158) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-159',) 决策驱动价格 30.31(pr-159) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-163',) 决策驱动价格 36.0(pr-163) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-164',) 决策驱动价格 33.2(pr-164) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-166',) 决策驱动价格 33.2(pr-166) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-170',) 决策驱动价格 33.2(pr-170) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-174',) 决策驱动价格 30.31(pr-174) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-176',) 决策驱动价格 33.2(pr-176) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-178',) 决策驱动价格 36.0(pr-178) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-184',) 决策驱动价格 33.2(pr-184) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-188',) 决策驱动价格 33.2(pr-188) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-191',) 决策驱动价格 33.2(pr-191) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-143', 'pr-145', 'pr-149') 可执行价位 33.2（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-163',) 可执行价位 36.0（trader_investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-176', 'pr-184', 'pr-188', 'pr-191') 可执行价位 33.2（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-178',) 可执行价位 36.0（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-088',) 决策驱动价格 24.0(pr-088) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-089',) 决策驱动价格 26.0(pr-089) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-092',) 决策驱动价格 33.5(pr-092) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-131',) 决策驱动价格 36.0(pr-131) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-141',) 决策驱动价格 36.0(pr-141) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-142',) 决策驱动价格 33.2(pr-142) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-144',) 决策驱动价格 33.2(pr-144) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-147',) 决策驱动价格 36.0(pr-147) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-148',) 决策驱动价格 33.2(pr-148) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-155',) 决策驱动价格 34.7(pr-155) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-157',) 决策驱动价格 37.05(pr-157) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-158',) 决策驱动价格 30.31(pr-158) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-162',) 决策驱动价格 36.0(pr-162) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-163',) 决策驱动价格 33.2(pr-163) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-165',) 决策驱动价格 33.2(pr-165) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-169',) 决策驱动价格 33.2(pr-169) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-173',) 决策驱动价格 30.31(pr-173) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-175',) 决策驱动价格 33.2(pr-175) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-177',) 决策驱动价格 36.0(pr-177) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-183',) 决策驱动价格 33.2(pr-183) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-187',) 决策驱动价格 33.2(pr-187) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-190',) 决策驱动价格 33.2(pr-190) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-088',) 决策驱动价格 24.0(pr-088) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-089',) 决策驱动价格 26.0(pr-089) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-092',) 决策驱动价格 33.5(pr-092) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-131',) 决策驱动价格 36.0(pr-131) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-141',) 决策驱动价格 36.0(pr-141) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-142',) 决策驱动价格 33.2(pr-142) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-144',) 决策驱动价格 33.2(pr-144) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-147',) 决策驱动价格 36.0(pr-147) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-148',) 决策驱动价格 33.2(pr-148) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-155',) 决策驱动价格 34.7(pr-155) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-157',) 决策驱动价格 37.05(pr-157) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-158',) 决策驱动价格 30.31(pr-158) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-162',) 决策驱动价格 36.0(pr-162) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-163',) 决策驱动价格 33.2(pr-163) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-165',) 决策驱动价格 33.2(pr-165) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-169',) 决策驱动价格 33.2(pr-169) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-173',) 决策驱动价格 30.31(pr-173) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-175',) 决策驱动价格 33.2(pr-175) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-177',) 决策驱动价格 36.0(pr-177) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-183',) 决策驱动价格 33.2(pr-183) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-187',) 决策驱动价格 33.2(pr-187) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-190',) 决策驱动价格 33.2(pr-190) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-142', 'pr-144', 'pr-148') 可执行价位 33.2（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-162',) 可执行价位 36.0（trader_investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-175', 'pr-183', 'pr-187', 'pr-190') 可执行价位 33.2（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-177',) 可执行价位 36.0（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+### s03__r2
+- 移除 `decision_driving_missing_as_of` ('pr-132',) 决策驱动价格 68.0(pr-132) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-133',) 决策驱动价格 75.0(pr-133) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-132',) 决策驱动价格 68.0(pr-132) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-133',) 决策驱动价格 75.0(pr-133) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-131',) 决策驱动价格 68.0(pr-131) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-132',) 决策驱动价格 75.0(pr-132) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-131',) 决策驱动价格 68.0(pr-131) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-132',) 决策驱动价格 75.0(pr-132) basis 无法归因，禁止消费
+### s03__r4
+- 移除 `decision_driving_missing_as_of` ('pr-146',) 决策驱动价格 63.0(pr-146) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-148',) 决策驱动价格 68.0(pr-148) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-146',) 决策驱动价格 63.0(pr-146) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-148',) 决策驱动价格 68.0(pr-148) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-145',) 决策驱动价格 63.0(pr-145) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-147',) 决策驱动价格 68.0(pr-147) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-145',) 决策驱动价格 63.0(pr-145) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-147',) 决策驱动价格 68.0(pr-147) basis 无法归因，禁止消费
+### s03__r5
+- 移除 `decision_driving_missing_as_of` ('pr-162',) 决策驱动价格 65.0(pr-162) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-163',) 决策驱动价格 67.0(pr-163) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-162',) 决策驱动价格 65.0(pr-162) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-163',) 决策驱动价格 67.0(pr-163) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 65.0(pr-161) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-162',) 决策驱动价格 67.0(pr-162) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 65.0(pr-161) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-162',) 决策驱动价格 67.0(pr-162) basis 无法归因，禁止消费
+### s04__r2
+- 移除 `decision_driving_missing_as_of` ('pr-173',) 决策驱动价格 939.0(pr-173) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-173',) 决策驱动价格 939.0(pr-173) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-172',) 决策驱动价格 939.0(pr-172) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-172',) 决策驱动价格 939.0(pr-172) basis 无法归因，禁止消费
+### s04__r5
+- 新增 `decision_driving_missing_as_of` ('pr-115',) 决策驱动价格 160.0(pr-115) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-115',) 决策驱动价格 160.0(pr-115) basis 无法归因，禁止消费
+### s05__r1
+- 移除 `decision_driving_missing_as_of` ('pr-061',) 决策驱动价格 51.5(pr-061) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-067',) 决策驱动价格 49.2(pr-067) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-069',) 决策驱动价格 51.45(pr-069) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-071',) 决策驱动价格 49.9(pr-071) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-072',) 决策驱动价格 51.5(pr-072) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-073',) 决策驱动价格 2.06(pr-073) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-061',) 决策驱动价格 51.5(pr-061) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-067',) 决策驱动价格 49.2(pr-067) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-069',) 决策驱动价格 51.45(pr-069) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-071',) 决策驱动价格 49.9(pr-071) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-072',) 决策驱动价格 51.5(pr-072) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-073',) 决策驱动价格 2.06(pr-073) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-049',) 决策驱动价格 35.1(pr-049) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-050',) 决策驱动价格 37.08(pr-050) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-060',) 决策驱动价格 51.5(pr-060) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-066',) 决策驱动价格 49.2(pr-066) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-068',) 决策驱动价格 51.45(pr-068) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-070',) 决策驱动价格 49.9(pr-070) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-071',) 决策驱动价格 51.5(pr-071) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-072',) 决策驱动价格 2.06(pr-072) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-049',) 决策驱动价格 35.1(pr-049) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-050',) 决策驱动价格 37.08(pr-050) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-060',) 决策驱动价格 51.5(pr-060) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-066',) 决策驱动价格 49.2(pr-066) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-068',) 决策驱动价格 51.45(pr-068) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-070',) 决策驱动价格 49.9(pr-070) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-071',) 决策驱动价格 51.5(pr-071) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-072',) 决策驱动价格 2.06(pr-072) basis 无法归因，禁止消费
+### s05__r3
+- 新增 `decision_driving_missing_as_of` ('pr-102',) 决策驱动价格 32.4(pr-102) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-103',) 决策驱动价格 35.1(pr-103) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-102',) 决策驱动价格 32.4(pr-102) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-103',) 决策驱动价格 35.1(pr-103) basis 无法归因，禁止消费
+### s06__r4
+- 移除 `decision_driving_missing_as_of` ('pr-150',) 决策驱动价格 13.5(pr-150) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-151',) 决策驱动价格 17.0(pr-151) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-152',) 决策驱动价格 14.5(pr-152) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-154',) 决策驱动价格 3626.3(pr-154) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-150',) 决策驱动价格 13.5(pr-150) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-151',) 决策驱动价格 17.0(pr-151) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-152',) 决策驱动价格 14.5(pr-152) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-154',) 决策驱动价格 3626.3(pr-154) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-148',) 决策驱动价格 960.0(pr-148) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-149',) 决策驱动价格 13.5(pr-149) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-150',) 决策驱动价格 17.0(pr-150) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-151',) 决策驱动价格 14.5(pr-151) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-153',) 决策驱动价格 3626.3(pr-153) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-148',) 决策驱动价格 960.0(pr-148) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-149',) 决策驱动价格 13.5(pr-149) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-150',) 决策驱动价格 17.0(pr-150) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-151',) 决策驱动价格 14.5(pr-151) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-153',) 决策驱动价格 3626.3(pr-153) basis 无法归因，禁止消费
+### s07__r1
+- 移除 `decision_driving_missing_as_of` ('pr-127',) 决策驱动价格 4.46(pr-127) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-127',) 决策驱动价格 4.46(pr-127) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-126',) 决策驱动价格 4.46(pr-126) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-126',) 决策驱动价格 4.46(pr-126) basis 无法归因，禁止消费
+### s07__r3
+- 移除 `decision_driving_missing_as_of` ('pr-096',) 决策驱动价格 0.8(pr-096) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-101',) 决策驱动价格 3.0(pr-101) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-096',) 决策驱动价格 0.8(pr-096) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-101',) 决策驱动价格 3.0(pr-101) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-095',) 决策驱动价格 0.8(pr-095) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-100',) 决策驱动价格 3.0(pr-100) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-095',) 决策驱动价格 0.8(pr-095) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-100',) 决策驱动价格 3.0(pr-100) basis 无法归因，禁止消费
+### s07__r4
+- 新增 `decision_driving_unspecified_basis` ('pr-098',) 决策驱动价格 4.46(pr-098) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-099',) 决策驱动价格 4.9(pr-099) basis 无法归因，禁止消费
+### s07__r5
+- 移除 `decision_driving_missing_as_of` ('pr-119',) 决策驱动价格 6.2(pr-119) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-128',) 决策驱动价格 6.85(pr-128) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-119',) 决策驱动价格 6.2(pr-119) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-128',) 决策驱动价格 6.85(pr-128) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-118',) 决策驱动价格 6.2(pr-118) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-127',) 决策驱动价格 6.85(pr-127) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-118',) 决策驱动价格 6.2(pr-118) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-127',) 决策驱动价格 6.85(pr-127) basis 无法归因，禁止消费
+### s08__r1
+- 移除 `decision_driving_missing_as_of` ('pr-135',) 决策驱动价格 3.0(pr-135) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-135',) 决策驱动价格 3.0(pr-135) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-133',) 决策驱动价格 3.0(pr-133) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-133',) 决策驱动价格 3.0(pr-133) basis 无法归因，禁止消费
+### s08__r2
+- 移除 `decision_driving_missing_as_of` ('pr-181',) 决策驱动价格 111.5(pr-181) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-191',) 决策驱动价格 111.5(pr-191) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-194',) 决策驱动价格 119.0(pr-194) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-210',) 决策驱动价格 111.5(pr-210) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-218',) 决策驱动价格 50.0(pr-218) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-222',) 决策驱动价格 115.0(pr-222) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-223',) 决策驱动价格 115.0(pr-223) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-181',) 决策驱动价格 111.5(pr-181) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-191',) 决策驱动价格 111.5(pr-191) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-194',) 决策驱动价格 119.0(pr-194) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-210',) 决策驱动价格 111.5(pr-210) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-218',) 决策驱动价格 50.0(pr-218) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-222',) 决策驱动价格 115.0(pr-222) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-223',) 决策驱动价格 115.0(pr-223) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-181',) 可执行价位 111.5（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-210',) 可执行价位 111.5（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-222', 'pr-223') 可执行价位 115.0（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-169',) 决策驱动价格 45.0(pr-169) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-179',) 决策驱动价格 111.5(pr-179) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-189',) 决策驱动价格 111.5(pr-189) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-192',) 决策驱动价格 119.0(pr-192) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-208',) 决策驱动价格 111.5(pr-208) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-216',) 决策驱动价格 50.0(pr-216) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-220',) 决策驱动价格 115.0(pr-220) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-221',) 决策驱动价格 115.0(pr-221) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-169',) 决策驱动价格 45.0(pr-169) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-179',) 决策驱动价格 111.5(pr-179) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-189',) 决策驱动价格 111.5(pr-189) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-192',) 决策驱动价格 119.0(pr-192) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-208',) 决策驱动价格 111.5(pr-208) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-216',) 决策驱动价格 50.0(pr-216) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-220',) 决策驱动价格 115.0(pr-220) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-221',) 决策驱动价格 115.0(pr-221) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-179',) 可执行价位 111.5（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-208',) 可执行价位 111.5（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-220', 'pr-221') 可执行价位 115.0（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+### s08__r4
+- 移除 `decision_driving_missing_as_of` ('pr-129',) 决策驱动价格 124.5(pr-129) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-131',) 决策驱动价格 117.0(pr-131) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-134',) 决策驱动价格 107.0(pr-134) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-129',) 决策驱动价格 124.5(pr-129) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-131',) 决策驱动价格 117.0(pr-131) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-134',) 决策驱动价格 107.0(pr-134) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-128',) 决策驱动价格 124.5(pr-128) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-130',) 决策驱动价格 117.0(pr-130) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-133',) 决策驱动价格 107.0(pr-133) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-128',) 决策驱动价格 124.5(pr-128) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-130',) 决策驱动价格 117.0(pr-130) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-133',) 决策驱动价格 107.0(pr-133) basis 无法归因，禁止消费
+### s09__r1
+- 新增 `decision_driving_missing_as_of` ('pr-129',) 决策驱动价格 4.04(pr-129) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-130',) 决策驱动价格 4.4(pr-130) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-129',) 决策驱动价格 4.04(pr-129) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-130',) 决策驱动价格 4.4(pr-130) basis 无法归因，禁止消费
+### s09__r2
+- 移除 `decision_driving_missing_as_of` ('pr-131',) 决策驱动价格 4.4(pr-131) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-161',) 决策驱动价格 5.82(pr-161) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-193',) 决策驱动价格 6.05(pr-193) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-197',) 决策驱动价格 5.82(pr-197) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-131',) 决策驱动价格 4.4(pr-131) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-161',) 决策驱动价格 5.82(pr-161) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-193',) 决策驱动价格 6.05(pr-193) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-197',) 决策驱动价格 5.82(pr-197) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-130',) 决策驱动价格 4.4(pr-130) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-159',) 决策驱动价格 5.82(pr-159) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-191',) 决策驱动价格 6.05(pr-191) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-195',) 决策驱动价格 5.82(pr-195) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-130',) 决策驱动价格 4.4(pr-130) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-159',) 决策驱动价格 5.82(pr-159) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-191',) 决策驱动价格 6.05(pr-191) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-195',) 决策驱动价格 5.82(pr-195) basis 无法归因，禁止消费
+### s09__r3
+- 移除 `decision_driving_missing_as_of` ('pr-112',) 决策驱动价格 3.12(pr-112) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-113',) 决策驱动价格 3.48(pr-113) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-116',) 决策驱动价格 6.0(pr-116) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-117',) 决策驱动价格 3.48(pr-117) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-154',) 决策驱动价格 0.17(pr-154) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-157',) 决策驱动价格 6.15(pr-157) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-163',) 决策驱动价格 6.15(pr-163) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-165',) 决策驱动价格 5.55(pr-165) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-167',) 决策驱动价格 6.15(pr-167) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-169',) 决策驱动价格 0.17(pr-169) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-112',) 决策驱动价格 3.12(pr-112) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-113',) 决策驱动价格 3.48(pr-113) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-116',) 决策驱动价格 6.0(pr-116) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-117',) 决策驱动价格 3.48(pr-117) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-153',) 决策驱动价格 5.82(pr-153) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-154',) 决策驱动价格 0.17(pr-154) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-157',) 决策驱动价格 6.15(pr-157) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-163',) 决策驱动价格 6.15(pr-163) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-165',) 决策驱动价格 5.55(pr-165) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-167',) 决策驱动价格 6.15(pr-167) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-169',) 决策驱动价格 0.17(pr-169) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-165',) 可执行价位 5.55（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-111',) 决策驱动价格 3.12(pr-111) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-112',) 决策驱动价格 3.48(pr-112) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-115',) 决策驱动价格 6.0(pr-115) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-116',) 决策驱动价格 3.48(pr-116) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-153',) 决策驱动价格 0.17(pr-153) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-156',) 决策驱动价格 6.15(pr-156) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-162',) 决策驱动价格 6.15(pr-162) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-164',) 决策驱动价格 5.55(pr-164) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-166',) 决策驱动价格 6.15(pr-166) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-167',) 决策驱动价格 0.17(pr-167) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-111',) 决策驱动价格 3.12(pr-111) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-112',) 决策驱动价格 3.48(pr-112) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-115',) 决策驱动价格 6.0(pr-115) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-116',) 决策驱动价格 3.48(pr-116) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-152',) 决策驱动价格 5.82(pr-152) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-153',) 决策驱动价格 0.17(pr-153) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-156',) 决策驱动价格 6.15(pr-156) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-162',) 决策驱动价格 6.15(pr-162) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-164',) 决策驱动价格 5.55(pr-164) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-166',) 决策驱动价格 6.15(pr-166) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-167',) 决策驱动价格 0.17(pr-167) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-164',) 可执行价位 5.55（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+### s09__r4
+- 移除 `decision_driving_missing_as_of` ('pr-169',) 决策驱动价格 6.15(pr-169) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-175',) 决策驱动价格 6.15(pr-175) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-179',) 决策驱动价格 6.15(pr-179) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-184',) 决策驱动价格 5.9(pr-184) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-185',) 决策驱动价格 5.95(pr-185) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-196',) 决策驱动价格 6.15(pr-196) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-169',) 决策驱动价格 6.15(pr-169) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-175',) 决策驱动价格 6.15(pr-175) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-179',) 决策驱动价格 6.15(pr-179) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-184',) 决策驱动价格 5.9(pr-184) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-185',) 决策驱动价格 5.95(pr-185) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-196',) 决策驱动价格 6.15(pr-196) basis 无法归因，禁止消费
+- 移除 `executable_level_wrong_basis` ('pr-169',) 可执行价位 6.15（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 移除 `executable_level_wrong_basis` ('pr-196',) 可执行价位 6.15（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `decision_driving_missing_as_of` ('pr-116',) 决策驱动价格 3.67(pr-116) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-168',) 决策驱动价格 6.15(pr-168) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-174',) 决策驱动价格 6.15(pr-174) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-178',) 决策驱动价格 6.15(pr-178) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-183',) 决策驱动价格 5.9(pr-183) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-184',) 决策驱动价格 5.95(pr-184) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-195',) 决策驱动价格 6.15(pr-195) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-116',) 决策驱动价格 3.67(pr-116) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-168',) 决策驱动价格 6.15(pr-168) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-174',) 决策驱动价格 6.15(pr-174) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-178',) 决策驱动价格 6.15(pr-178) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-183',) 决策驱动价格 5.9(pr-183) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-184',) 决策驱动价格 5.95(pr-184) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-195',) 决策驱动价格 6.15(pr-195) basis 无法归因，禁止消费
+- 新增 `executable_level_wrong_basis` ('pr-168',) 可执行价位 6.15（investment_plan）basis=['unspecified']，非合法 qfq/converted 坐标
+- 新增 `executable_level_wrong_basis` ('pr-195',) 可执行价位 6.15（final_trade_decision）basis=['unspecified']，非合法 qfq/converted 坐标
+### s09__r5
+- 移除 `decision_driving_missing_as_of` ('pr-107',) 决策驱动价格 1.1(pr-107) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-108',) 决策驱动价格 4.04(pr-108) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-109',) 决策驱动价格 4.4(pr-109) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-114',) 决策驱动价格 7.35(pr-114) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-166',) 决策驱动价格 5.36(pr-166) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-173',) 决策驱动价格 6.1(pr-173) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-179',) 决策驱动价格 5.36(pr-179) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-107',) 决策驱动价格 1.1(pr-107) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-108',) 决策驱动价格 4.04(pr-108) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-109',) 决策驱动价格 4.4(pr-109) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-114',) 决策驱动价格 7.35(pr-114) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-166',) 决策驱动价格 5.36(pr-166) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-173',) 决策驱动价格 6.1(pr-173) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-179',) 决策驱动价格 5.36(pr-179) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-106',) 决策驱动价格 4.04(pr-106) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-107',) 决策驱动价格 4.4(pr-107) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-112',) 决策驱动价格 7.35(pr-112) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-164',) 决策驱动价格 5.36(pr-164) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-171',) 决策驱动价格 6.1(pr-171) 缺少 as_of
+- 新增 `decision_driving_missing_as_of` ('pr-177',) 决策驱动价格 5.36(pr-177) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-106',) 决策驱动价格 4.04(pr-106) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-107',) 决策驱动价格 4.4(pr-107) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-112',) 决策驱动价格 7.35(pr-112) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-164',) 决策驱动价格 5.36(pr-164) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-171',) 决策驱动价格 6.1(pr-171) basis 无法归因，禁止消费
+- 新增 `decision_driving_unspecified_basis` ('pr-177',) 决策驱动价格 5.36(pr-177) basis 无法归因，禁止消费
+### s10__r4
+- 新增 `decision_driving_unspecified_basis` ('pr-104',) 决策驱动价格 6.0(pr-104) basis 无法归因，禁止消费
+### s10__r5
+- 移除 `decision_driving_missing_as_of` ('pr-115',) 决策驱动价格 6.8(pr-115) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-116',) 决策驱动价格 7.2(pr-116) 缺少 as_of
+- 移除 `decision_driving_missing_as_of` ('pr-122',) 决策驱动价格 9.8(pr-122) 缺少 as_of
+- 移除 `decision_driving_unspecified_basis` ('pr-115',) 决策驱动价格 6.8(pr-115) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-116',) 决策驱动价格 7.2(pr-116) basis 无法归因，禁止消费
+- 移除 `decision_driving_unspecified_basis` ('pr-122',) 决策驱动价格 9.8(pr-122) basis 无法归因，禁止消费
+- 新增 `decision_driving_missing_as_of` ('pr-121',) 决策驱动价格 9.8(pr-121) 缺少 as_of
+- 新增 `decision_driving_unspecified_basis` ('pr-121',) 决策驱动价格 9.8(pr-121) basis 无法归因，禁止消费
+
+## 逐 ref 角色/basis 变化（74 条）
+
+- `prod_4390ddfd` basis value=1281.96 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | - **VWMA 关键基准位**：当前 VWMA 测算参考值为 **1281.96 元**（成交量加权价格参考带，非主力持仓成本）
+- `prod_4390ddfd` removed value=14.31 unspecified→None prov=model_text→None | - 赔率测算：上行空间约 14.31 元，下行回撤达 30.04 元，下行风险与上行收益比为 2.10:1，做多赔率显著劣势
+- `prod_4390ddfd` basis value=1400.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | | 市场风格回流低估值核心资产，估值修复驱动股价反抽至 1350-1400 元上方
+- `prod_4390ddfd` removed value=2000.0 unspecified→None prov=model_text→None | 若飞天茅台散瓶/整箱批发参考价在此期间跌破关键心理防线（如 2000 元关口），将直接打破渠道蓄水池的心理防线，诱发中小二批商与黄牛的恐慌性低价抛售
+- `prod_4390ddfd` removed value=30.04 unspecified→None prov=model_text→None | - 赔率测算：上行空间约 14.31 元，下行回撤达 30.04 元，下行风险与上行收益比为 2.10:1，做多赔率显著劣势
+- `prod_4390ddfd` removed value=4.0 unspecified→None prov=model_text→None | | **盘面涨停池生态** | 结构性投机活跃 | 题材分化期（最高4板） | 1-3 天短线脉冲 | 题材投机为主，对大盘蓝筹无直接溢价外溢 |
+- `prod_4390ddfd` removed value=5.0 unspecified→None prov=model_text→None | 大单抛盘若集中在 5 分钟内执行极易造成分时瞬间打穿 3-5 元滑点
+- `s01__r1` removed value=10.0 unspecified→None prov=model_text→None | - 全市场涨停共 83 只，连板梯队结构完整：首板 61 只，2 连板 9 只，3 连板 9 只，4 连板 2 只（欣天科技、风范股份），5 连板 1 只（豪尔赛），最高板为爱丽家居（10 连板）
+- `s01__r2` removed value=10.0 unspecified→None prov=model_text→None | - 全市场涨停共 83 只，连板梯队保持连续：首板 61 只，2 连板 9 只，3 连板 9 只，4 连板 2 只，5 连板 1 只，最高板为爱丽家居 10 连板（并购重组逻辑）
+- `s01__r2` removed value=10.0 unspecified→None prov=model_text→None | - 当日盘面涨停梯队达 83 只，市场主线显著定位于并购重组壳资源（最高 10 连板）以及 AI 硬件算力端
+- `s01__r3` removed value=10.0 unspecified→None prov=model_text→None | - 市场最高标为爱丽家居（10 连板，复牌+并购重组+存储测试），高位梯队涵盖豪尔赛（5 连板，液冷服务器）、欣天科技（4 连板，控制权变更）、风范股份（4 连板，特高压+中报预增）
+- `s01__r4` removed value=1.8 derived_estimate→None prov=role:derived_estimate|model_text→None | 历史PB最低点在1.8~2.0倍左右，对应极端悲观股价支撑位约为 **27.15 ~ 30.16 元**
+- `s01__r5` basis value=30.16 unspecified→derived_estimate prov=model_text→role:derived_estimate|model_text | - 压力测试推演显示，若原材料剧烈上涨叠加交付推迟，公司极端估值底线（1.8-2.0 倍 PB）对应 27.15-30.16 元
+- `s02__r1` basis value=1.95 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - 过去四个报告期（TTM：2025Q2~2026Q1）累计基本每股收益：$0.877 + 1.425 - 0.877 + 0.755$【注：基于单季度真实归母净利润推算 2025 全年 1.95 元，2026Q1 单季
+- `s02__r1` basis value=28.5 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **宏观敏感与压力测试**：金铜单价变动 1% 驱动利润弹性 2.85%，极端悲观假设下仍有 280 亿元以上净利支撑与 28.5~30.5 元扎实底线
+- `s02__r1` basis value=30.5 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **宏观敏感与压力测试**：金铜单价变动 1% 驱动利润弹性 2.85%，极端悲观假设下仍有 280 亿元以上净利支撑与 28.5~30.5 元扎实底线
+- `s02__r1` removed value=5.0 unspecified→None prov=model_text→None | 8 月 7 日缩量 31.8% 反包蕴含微观量价背离风险，现价距离布林线上轨（35.33 元）仅剩约 1.7% 空间，而向下回踩支撑位潜在回撤达 5.8%~6.4%，赔率严重倒挂（约 1:3）
+- `s02__r2` removed value=1.0 vendor_qfq→None prov=technical_report:vendor_qfq→None | | **atr** | 1.38 元 | 波动率处于较高水平 | 日内振幅较大，风控止损空间需留足 1.5 倍 ATR |
+- `s02__r2` basis value=22.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | | 极限估值给予 15x PE，估值支撑底线在 22.00 - 24.00 元（2026年6月探底低点 24.12 元强支撑）
+- `s02__r2` basis value=24.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | | 极限估值给予 15x PE，估值支撑底线在 22.00 - 24.00 元（2026年6月探底低点 24.12 元强支撑）
+- `s02__r2` removed value=4.0 unspecified→None prov=model_text→None | - 市场最高板维持在 4 连板（汇绿生态、云南锗业、宝鼎科技、百花医药、沃格光电），题材呈现先进封装/TGV、重大资产重组、医药及部分小金属轮动特征
+- `s02__r5` removed value=1.8 derived_estimate→None prov=role:derived_estimate|model_text→None | - **估值底线**：对应当前 2004 亿元净资产及重资产重置成本，悲观底线估值支撑位对应 PB 1.8-2.0 倍，股价强支撑位于 **24 - 26 元**（即2026年6月形成的大底支撑）
+- `s03__r1` basis value=75.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | 而在当前大牛市与AI核心资产溢价环境下，以2026年预测净利润（超420亿元）计算，中线公允价值区间维持在63.00-75.00元之间
+- `s03__r2` removed value=5.0 unspecified→None prov=model_text→None | - **空间高度与主线分布**：市场最高板为 5 连板（宝鼎科技、百花医药），3 连板为开开实业，2 连板主要集中在创新药及医药流通（誉衡药业、瑞康医药、哈三联、哈药股份等）与上游材料/半导体设备（先导基电、秦安股份等）
+- `s03__r3` basis value=70.0 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | - **高增长兑现门槛**：当前市值若要维持在65-70元平台，要求2026年全年净利润需达到450亿元以上（同比增速需维持在28%以上），2027年进一步站上550亿元
+- `s03__r4` removed value=5.0 unspecified→None prov=model_text→None | - **连板高度与主线聚焦**：最高板为 5 连板（宝鼎科技、百花医药），3 连板为开开实业
+- `s03__r5` removed value=5.0 unspecified→None prov=model_text→None | | **全市场连板生态** | 中短线活跃（103板/最高5板） | 首板发散、连板集中于医药/周期 | 1-3个交易日脉冲 | 游资偏好聚焦低位事件驱动，科技权重未显现题材脉冲合力 |
+- `s03__r5` basis value=72.0 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | 但从中线（1-3月）维度看，万亿市值巨象在快速反弹超 30% 后逼近前期 70~72 元套牢密集区，杠杆资金出现分歧偿还迹象，缺乏继续大幅提振估值的超预期增量驱动
+- `s04__r2` removed value=6.0 unspecified→None prov=model_text→None | - 最高标为百花医药（6连板，CRO+创新药+国资背景）及开开实业（4连板，医药商业+SPD）
+- `s04__r5` basis value=160.0 derived_estimate→unspecified prov=role:derived_estimate|derived:model_text→derived:model_text | - **估值支撑底线**：即使在极端悲观情景下，以年化 90 亿元净利润底线及周期底部估值 20x PE 测算，公司对应市值底线支撑位约为 1800 亿元，按最新股本（约 11.9 亿股）折合每股支撑价位约为 **150
+- `s05__r1` basis value=35.1 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值支撑底线**：即使遭遇极端情景，按照成熟消费中药的历史极端悲观估值中枢 18 倍 PE 计算，估值支撑底线在 35.10 - 37.08 元，当前价格（50.46元）相较于极端业绩底线具备稳固的流动性缓冲垫
+- `s05__r1` basis value=37.08 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值支撑底线**：即使遭遇极端情景，按照成熟消费中药的历史极端悲观估值中枢 18 倍 PE 计算，估值支撑底线在 35.10 - 37.08 元，当前价格（50.46元）相较于极端业绩底线具备稳固的流动性缓冲垫
+- `s05__r1` removed value=5.0 unspecified→None prov=model_text→None | - 高标与题材特征：最高板为秦安股份（5连板，小盘+人形机器人+真空镀膜）
+- `s05__r3` basis value=32.4 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值底线支撑**：按医药蓝筹极端防御底线估值 18 倍 PE 测算，公司极端情景下的强安全边际股价支撑位在 32.40 - 35.10 元
+- `s05__r3` basis value=35.1 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值底线支撑**：按医药蓝筹极端防御底线估值 18 倍 PE 测算，公司极端情景下的强安全边际股价支撑位在 32.40 - 35.10 元
+- `s06__r4` removed value=5.0 unspecified→None prov=model_text→None | - **量化结果**：**原材料成本每上涨 5.0%**，将导致公司综合毛利率直接下滑约 **3.44 个百分点**
+- `s06__r4` basis value=960.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **极端估值支撑位推演**：若按悲观情景归母净利 80 亿元，给予成熟周期制造 12-15 倍 PE 估值，极端悲观市值支撑位在 960 - 1,200 亿元
+- `s07__r1` removed value=10.0 unspecified→None prov=model_text→None | 若因国际综合能源价格溢价外溢导致到厂标煤单价上涨 10 元/吨（幅度约 1.2%），按度电标煤耗 290g 测算，度电燃料成本上升约 0.0029 元，年化成本增加约 **12.7 亿元**
+- `s07__r2` basis value=0.003 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | 综合融资成本的下降直接提升新能源项目的内部收益率（IRR），测算度电财务成本可下降约0.003~0.005元/千瓦时，巩固2026-2027年绿电转型的IRR红线（确定性高，时滞半年至1年）
+- `s07__r2` removed value=4.0 unspecified→None prov=model_text→None | - **高度板聚焦**：最高连板为 4 连板（金螳螂、澳洋健康、天洋新材），主要集中于算力基建/CPO、生肖投机、医疗与特种材料
+- `s07__r3` removed value=0.05 vendor_qfq→None prov=technical_report:vendor_qfq→None | 实体为小阳线（实体幅度 0.05 元，窄实体），收盘位于日内高位区（0.90 分位），下影线长 0.04 元（占比 0.40），上影线极短（0.01 元）
+- `s07__r4` basis value=4.46 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值支撑位推演**：在极端情景下，以 2026-03-31 每股净资产 4.46 元为基底，给予历史悲观估值中枢 **1.0x - 1.1x PB**，极端估值支撑位约为 **4.46 - 4.90 元**
+- `s07__r4` basis value=4.9 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **估值支撑位推演**：在极端情景下，以 2026-03-31 每股净资产 4.46 元为基底，给予历史悲观估值中枢 **1.0x - 1.1x PB**，极端估值支撑位约为 **4.46 - 4.90 元**
+- `s07__r4` basis value=7.1 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | 连续出现单日 1 亿元以上级别的大额订单净流入，并伴随成交量倍增收复 7.10 元筹码密集区，方能确认大单买盘扭转中期空头趋势
+- `s07__r5` removed value=20.0 unspecified→None prov=model_text→None | - 推演：若国际能源溢价传导至国内，现货标煤单价每上涨 20 元/吨，对应火电度电燃料成本上升约 0.6 - 0.7 分钱/千瓦时
+- `s08__r1` removed value=4.0 vendor_qfq→None prov=registry_backref:vendor_qfq→None | - **空间高度**：最高板为神奇制药（4连板，化学制药+OTC）
+- `s08__r1` removed value=4.0 vendor_qfq→None prov=registry_backref:vendor_qfq→None | 市场关注度侧显示，短线情绪主导权被中小盘题材炒作（最高板4板，78只涨停以首板和低位消费/农业/科技题材为主）占据，市场短线连板生态与大市值新能源板块暂无直接共振现象
+- `s08__r2` basis value=0.02 derived_estimate→unspecified prov=role:derived_estimate|derived:model_text→derived:model_text | - *成本穿透*：多晶硅上涨主要垫高主产业链硅片与组件成本（折合组件成本微升约 0.02—0.03 元/W），但逆变器核心 BOM 构成为 IGBT、电容、铜铝构件，多晶硅价格并不直接进入逆变器成本端
+- `s08__r2` removed value=1.0 vendor_qfq→None prov=technical_report:vendor_qfq→None | - **止损保护价位**：113.80元（跌破10日EMA且击穿近3日低点有效止损，单笔亏损控制在1.5倍ATR即约3%—4%以内）
+- `s08__r2` removed value=4.0 unspecified→None prov=model_text→None | - 最高板为神奇制药（4连板，化学制药+OTC）
+- `s08__r2` basis value=45.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | 在极端假设下（关税落地与价格战外溢），空头推演公司全年利润收缩至 55—65 亿元，对应估值底 43—45 元
+- `s08__r3` basis value=3.17 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - 对应当前每股收益 EPS 底线约为 **3.17 元 – 3.51 元**
+- `s08__r4` basis value=123.0 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | - **放量强突路径（概率 15%）**：除非大额买盘持续成倍放大且全市场放量突破 123.00 元（站稳 50 日 SMA 124.53 元），否则不具备单边上涨条件
+- `s08__r4` removed value=4.0 unspecified→None prov=model_text→None | | **盘面短线生态** | 涨停78家/最高4板，偏向医药/粮食 | 中性（非社交正文） | 轮动发酵阶段 | 1-3天短期脉冲 | 题材投机分散，大票缺乏短线情绪杠杆支持 |
+- `s09__r1` removed value=3.0 unspecified→None prov=model_text→None | 最高空间受限于 3 连板（京粮控股、金健米业、红四方）
+- `s09__r1` removed value=3.0 unspecified→None prov=model_text→None | - 2026-08-19 市场短线投机聚焦于低位农业及特定重组题材（最高连板受限于 3 连板），显示器及消费电子板块整体退潮，仅有深华发A等个别小市值标的受特定题材拉升，大容量中军龙头京东方Ａ完全缺乏板块资金协同进攻效应
+- `s09__r1` basis value=4.04 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **宏观敏感度与压力测试**：成本上涨5%即可吞噬单季绝大部分利润，周期底部极限估值支撑位在4.04-4.40元，风险等级：高，结论倾向：看空
+- `s09__r1` basis value=4.4 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | - **宏观敏感度与压力测试**：成本上涨5%即可吞噬单季绝大部分利润，周期底部极限估值支撑位在4.04-4.40元，风险等级：高，结论倾向：看空
+- `s09__r2` removed value=1.2 derived_estimate→None prov=role:derived_estimate|model_text→None | 2026Q1每股净资产为3.67元，在极端熊市恐慌情境下，PB极限支撑位下移至1.2-1.3倍PB，对应股价底部支撑区间为 **4.40 - 4.77 元**
+- `s09__r2` removed value=3.0 unspecified→None prov=model_text→None | - 市场最高连板高度压制在 3 板（京粮控股、金健米业、红四方，主要集中于粮食概念、油脂化工及国企改革）
+- `s09__r3` removed value=0.85 derived_estimate→None prov=role:derived_estimate|model_text→None | 在历史上行业极度悲观周期底部，京东方A估值最低曾触及 0.85~0.95 倍 PB
+- `s09__r4` removed value=3.0 unspecified→None prov=model_text→None | - 高标最高压制在 3 连板（京粮控股、金健米业、红四方），主要集中在粮食农业与周期化工方向
+- `s09__r4` basis value=3.67 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | 在极端悲观周期底部，面板行业常下探至 1.0~1.1 倍 PB，测算极限估值支撑位在 **3.67 ~ 4.04 元**（当前收盘价 6.01 元，极端回撤空间约 -32.8%）
+- `s09__r4` basis value=5.75 derived_estimate→vendor_qfq prov=role:derived_estimate|model_text→registry_backref:vendor_qfq | 若二季度模组盈利因成本上升不及预期，估值杀跌将突破 5.75 元支撑
+- `s09__r5` removed value=0.39 vendor_qfq→None prov=technical_report:vendor_qfq→None | - 08-18 投入 32.43 亿股的巨额“努力”，价格上涨 0.39 元（+6.41%）
+- `s09__r5` removed value=1.1 unspecified→None prov=model_text→None | | 估值回归 PB 底线支撑（历史极值约 1.1-1.2 倍 PB），股价极限回撤支撑位在 **4.04 - 4.40 元**
+- `s10__r3` removed value=3.0 unspecified→None prov=model_text→None | | **盘面关注度（医药主线）** | 医药概念连板活跃（最高3板） | 偏多（盘面局部） | 题材分化轮动 | 1-3个交易日 | 题材集中于小市值概念票，大市值医疗服务暂未形成协同联动 |
+- `s10__r3` removed value=3.0 unspecified→None prov=model_text→None | 最高板压制在 3 板（汉森制药、*ST威领）
+- `s10__r4` removed value=2.0 vendor_qfq→None prov=technical_report:vendor_qfq→None | - **8月10日投入产出异常**：投入了近两周最大成交量（1.49 亿股），但收盘仅上涨 2.8%，留下超过 0.20 元的长上影线，属于典型的“高投入、低产出”放量滞涨异常
+- `s10__r4` removed value=3.0 unspecified→None prov=model_text→None | 最高连板压制在 3 板（汉森制药、*ST威领）
+- `s10__r4` basis value=6.0 derived_estimate→unspecified prov=role:derived_estimate|model_text→model_text | * 对应 2026-08-21 现价 8.33 元（总股本 93.26 亿股，测算总市值约 776.8 亿元），极限极端情景下 PE 估值将被动推升至 57.3 倍，在此极端假设下，估值防守底线在 5.50 - 6.00
+- `s10__r5` removed value=3.0 unspecified→None prov=model_text→None | - **高度空间与结构**：市场最高板停留在 3 连板（汉森制药、*ST威领），市场整体风险偏好偏向低位试错与首板扩散，短线连板高度受到压制
+- `s10__r5` basis value=6.8 unspecified→derived_estimate prov=model_text→role:derived_estimate|model_text | - 对应当前市值（约 770-800 亿元估值区间），极端防守PE将提升至 38x-40x，股价底部极端支撑区间对应在 **6.80 - 7.20 元**
+- `s10__r5` basis value=7.2 unspecified→derived_estimate prov=model_text→role:derived_estimate|model_text | - 对应当前市值（约 770-800 亿元估值区间），极端防守PE将提升至 38x-40x，股价底部极端支撑区间对应在 **6.80 - 7.20 元**
+
+## 4390ddfd 验收点
+
+- derived_estimate refs：[('pr-113', 1274.0, '基准情景下（年化净利约 800 亿元，EPS 约 63.7 元），20倍 PE ')]
+- pr-156 上行空间 14.31：仍登记 0 条；关联违规 0 条
+- pr-157 下行回撤 30.04：仍登记 0 条；关联违规 0 条
+- pr-189 批发参考价 2000：仍登记 0 条；关联违规 0 条
+- pr-116 最高4板：仍登记 0 条；关联违规 0 条
+- pr-200 滑点 5：仍登记 0 条；关联违规 0 条
+- 桥接 refs：[('pr-187', 1126.12, 'pool_bridge:derived.limit_down@2026-09-23')]
+- 4390ddfd gate status：blocked（违规 34 条）
+- b188060f gate status：blocked
+- s06 r1–r5：{'s06__r1': 'blocked', 's06__r2': 'blocked', 's06__r3': 'blocked', 's06__r4': 'blocked', 's06__r5': 'blocked'}
+- out/baseline.json SHA256：`98fe8578a9ef76b858df9d54717e07353ea8ecb34ad2660f34ce6771e2dbd271`（不入库）
+- out/candidate.json SHA256：`ab02dbaf461cdee9eff01115e1bca073ae15f087294f40b502b043798627f532`（不入库）
