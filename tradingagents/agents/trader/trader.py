@@ -16,6 +16,7 @@ from tradingagents.agents.utils.evidence_summary import (
     build_seven_source_evidence_summary,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 
 def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
@@ -109,6 +110,14 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
             if tracker:
                 tracker._emit_token("Trader", "trader_investment_plan", content)
 
+        # DAV-1249 R1/R2: 交易员产出后逐角色 price_ref 检查 + 定向返修一次
+        # （风控打回重写时亦不再次返修——state 记录保证每角色最多一次）。
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="trader", report_field="trader_investment_plan",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+        )
+
         result = AIMessage(content=full_content, name=name)
         updated_feedback_state = dict(risk_feedback_state)
         if updated_feedback_state.get("revision_required"):
@@ -117,6 +126,7 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
         response_state = {
             "messages": [result],
             "trader_investment_plan": full_content,
+            "price_ref_revision": {"trader": _rev_rec} if _rev_rec else {},
             "sender": name,
         }
         if risk_feedback_state.get("latest_risk_verdict") == "revise":

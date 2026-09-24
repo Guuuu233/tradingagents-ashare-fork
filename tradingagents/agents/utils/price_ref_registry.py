@@ -1186,6 +1186,9 @@ def build_price_ref_registry(
                     "provenance": "model_text",
                     "as_of": sentence_as_of,
                     "context": sentence[:120],
+                    # DAV-1249: 返修/审计需要完整原句（context 截断 120 字
+                    # 可能丢失价格本身）；仅追溯用，不参与判定。
+                    "sentence": sentence,
                 }
                 if disclosure_type is not None:
                     ref["basis"] = DISCLOSURE_TYPE_BASIS[disclosure_type]

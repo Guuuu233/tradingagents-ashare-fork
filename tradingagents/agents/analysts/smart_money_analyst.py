@@ -22,6 +22,7 @@ from tradingagents.graph.intent_parser import (
 )
 from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, check_llm_output_degraded, check_stream_chunk_degraded
 from api.database import log_llm_call
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 logger = logging.getLogger(__name__)
 
@@ -730,6 +731,14 @@ def create_smart_money_analyst(llm, data_collector=None):
                 warning_header = "⚠️ 【资金流数值校准提示】模型正文部分表述与结构化基准存在细微出入，以结构化原值校验为准，不影响方向决策。\n\n"
                 if "【资金流数值校准提示】" not in full_content:
                     full_content = warning_header + full_content
+        # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="smart_money", report_field="smart_money_report",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+            deterministic_check=lambda t: not check_llm_output_degraded(
+                t, "Smart Money Analyst"),
+        )
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -783,6 +792,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                     consensus_guard[key] = selection[key]
         return {
             "smart_money_report": full_content,
+            "price_ref_revision": {"smart_money": _rev_rec} if _rev_rec else {},
             "fund_flow_consensus_guard": consensus_guard,
             "analyst_traces": [{
                 "agent": "smart_money_analyst",

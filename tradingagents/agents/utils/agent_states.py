@@ -420,6 +420,15 @@ class GameTheorySignals(TypedDict, total=False):
     data_status: Annotated[Optional[str], "available | partial | unavailable"]
 
 
+def _merge_price_ref_revision(left: Any, right: Any) -> dict:
+    """DAV-1249 reducer：并行分析师节点各自返回 {role_key: record}，
+    按键合并；同键以后写为准（同角色只写一次）。"""
+    merged = dict(left) if isinstance(left, dict) else {}
+    if isinstance(right, dict):
+        merged.update(right)
+    return merged
+
+
 class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     trade_date: Annotated[str, "What date we are trading at"]
@@ -477,6 +486,11 @@ class AgentState(MessagesState):
     short_term_result: Annotated[Optional[dict], "Final short-term analysis result"]
     medium_term_result: Annotated[Optional[dict], "Final medium-term analysis result"]
     metadata: Annotated[dict[str, Any], "Optional runtime metadata"]
+    # DAV-1224 C5 / DAV-1249: 本次运行的行情/指标源（stock_data/indicators），
+    # finalize 前挂入，供 C5 桥接与逐角色 price_ref 检查共用。
+    price_ref_source: Annotated[Optional[dict[str, Any]], "Run pool source for price_ref bridging (DAV-1224 C5)"]
+    # DAV-1249: 逐角色 price_ref 返修记录 {role_key: record}。
+    price_ref_revision: Annotated[dict[str, Any], _merge_price_ref_revision]
 
 
 import logging as _logging

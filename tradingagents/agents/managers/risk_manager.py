@@ -17,6 +17,7 @@ from tradingagents.agents.utils.evidence_summary import (
     build_seven_source_evidence_summary,
 )
 from tradingagents.agents.utils.prompt_injection import build_injection_slots, Placement, DEFAULT_PLACEMENT
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 
 def _with_status(payload: dict, status) -> dict:
@@ -139,6 +140,14 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
 
         judge_result = extract_risk_judge_result(full_content)
         cleaned_response = judge_result["cleaned_response"]
+        # DAV-1249 R1/R2: 风控裁决文本逐角色 price_ref 检查 + 定向返修一次。
+        # 只改写正文（机读块已剥离）；verdict/hard_constraints 等裁决字段
+        # 保持原抽取结果——返修不允许触碰结论。
+        cleaned_response, _rev_rec = await maybe_revise_role_report(
+            state, role_key="risk_manager", report_field="final_trade_decision",
+            text=cleaned_response, llm=llm,
+            orig_messages=prompt,
+        )
         verdict = judge_result["verdict"]
         hard_constraints = judge_result["hard_constraints"]
         soft_constraints = judge_result["soft_constraints"]
@@ -206,6 +215,7 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
                 "risk_debate_state": new_risk_debate_state,
                 "risk_feedback_state": new_risk_feedback_state,
                 "final_trade_decision": cleaned_response,
+                "price_ref_revision": {"risk_manager": _rev_rec} if _rev_rec else {},
             },
             status,
         )

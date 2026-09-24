@@ -48,6 +48,7 @@ from tradingagents.agents.utils.price_basis_gate import (
     PRICE_REF_CONTRACT_VERSION,
     finalize_price_ref_state,
 )
+from tradingagents.agents.utils.price_ref_registry import attach_price_ref_source
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
@@ -627,6 +628,12 @@ class TradingAgentsGraph:
             horizon_resolution=horizon_resolution,
             horizon=effective_horizon,
         )
+        # DAV-1249: 图运行期间即挂上本次运行 pool，供逐角色 price_ref
+        # 检查/返修与 finalize 的 C5 桥接共用同一数据源。
+        attach_price_ref_source(
+            init_agent_state, collected,
+            symbol=company_name, trade_date=trade_date,
+        )
         args = self.propagator.get_graph_args()
 
         state_horizon = init_agent_state.get("horizon") or effective_horizon
@@ -728,6 +735,7 @@ class TradingAgentsGraph:
             social_data_context=social_data_context,
             runtime_config=self.config,
         )
+        attach_price_ref_source(state, collected, symbol=ticker, trade_date=trade_date)
         final_state = await self.graph.ainvoke(state, **graph_args)
 
         self._ensure_game_theory_state(final_state, horizon="short")
@@ -866,6 +874,9 @@ class TradingAgentsGraph:
             "price_basis_gate": final_state.get("price_basis_gate"),
             "price_ref_contract_version": PRICE_REF_CONTRACT_VERSION,
             "price_basis_version": final_state.get("price_basis_version"),
+            # DAV-1249 逐角色 price_ref 检查/返修记录（仅追溯）
+            "price_ref_revision": final_state.get("price_ref_revision"),
+            "price_ref_revision_version": "price_ref_revision.v1",
         }
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state

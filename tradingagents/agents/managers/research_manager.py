@@ -32,6 +32,7 @@ from tradingagents.agents.utils.evidence_verifier import (
     refresh_direction_basis,
     refresh_evidence_basis,
 )
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 from tradingagents.agents.utils.claim_cluster import (
     RELATION_GRAPH_STATUS_AVAILABLE,
     RELATION_GRAPH_STATUS_INVALID,
@@ -2160,14 +2161,40 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 reasoning_text[:1500],
             )
 
-        # ── 事实核验与裁决自洽硬闸 ──────────────────
-        truth_evaluator = EvidenceFactualTruthEvaluator()
-        claims_verification = truth_evaluator.evaluate_claims(
-            claims=claims,
-            seven_reports=seven_reports,
-            market_data_context=effective_market_data_context,
-            analysis_baseline_date=analysis_baseline_date,
-            social_data_context=social_data_context,
+        def _rm_consistency_ok(candidate: str) -> bool:
+            """DAV-1249 V3：与下方一致性硬闸同口径（裁决提取 + 期望修订
+            消费校验），用于检查返修稿是否回归。零 LLM。"""
+            try:
+                mv = extract_and_validate_manager_verdict(
+                    raw_response=candidate,
+                    claims_verification=claims_verification,
+                    claims=claims,
+                    challenges=challenges,
+                    challenges_verification=challenges_verification,
+                    market_data_context=effective_market_data_context,
+                    seven_reports=seven_reports,
+                )
+            except Exception:
+                return False
+            if not mv.get("consistency_check_passed", True):
+                return False
+            ok, _viol = validate_manager_expectation_revision_consumption(
+                manager_verdict=mv,
+                raw_response=candidate,
+                expectation_revisions=expectation_revisions,
+                claims=claims,
+                seven_reports=seven_reports,
+            )
+            return bool(ok)
+
+        # DAV-1249 R1/R2: 研究总监产出后逐角色 price_ref 检查 + 定向返修一次。
+        # V2 带原始 prompt 上下文；V3 返修稿须过同一一致性硬门。
+        # 返修稿/原稿在事实核验与裁决提取之前定稿，下游全部读最终文本。
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="research_manager", report_field="investment_plan",
+            text=full_content, llm=llm,
+            orig_messages=prompt,
+            deterministic_check=_rm_consistency_ok,
         )
 
         manager_verdict = extract_and_validate_manager_verdict(
@@ -2352,6 +2379,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         payload = {
             "investment_debate_state": new_investment_debate_state,
             "investment_plan": final_plan,
+            "price_ref_revision": {"research_manager": _rev_rec} if _rev_rec else {},
             "manager_verdict": manager_verdict,
             "expectation_revision": expectation_revisions,
             "evidence_verification": claims_verification,

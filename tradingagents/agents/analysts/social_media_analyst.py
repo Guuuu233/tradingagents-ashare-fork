@@ -22,6 +22,7 @@ from tradingagents.dataflows.social.analyst_adapter import (
     resolve_social_mode,
 )
 from api.database import log_llm_call
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,14 @@ def create_social_media_analyst(llm, data_collector=None):
         if check_llm_output_degraded(full_content, "Social Analyst"):
             full_content = "舆情分析生成异常（输出退化），本项不可用"
 
+        # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="social", report_field="sentiment_report",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+            deterministic_check=lambda t: not check_llm_output_degraded(
+                t, "Social Analyst"),
+        )
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -217,6 +226,7 @@ def create_social_media_analyst(llm, data_collector=None):
 
         return {
             "sentiment_report": full_content,
+            "price_ref_revision": {"social": _rev_rec} if _rev_rec else {},
             "analyst_traces": [trace_item],
         }
 

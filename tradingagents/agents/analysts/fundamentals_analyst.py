@@ -34,6 +34,7 @@ from tradingagents.dataflows.industry_linkage import (
 )
 from tradingagents.graph.data_collector import _map_stock_to_industry
 from api.database import log_llm_call
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 from tradingagents.agents.analysts.news_analyst import (
     BASELINE_CONSENSUS_EXPECTATION,
     BASELINE_IMPLICIT_MODEL,
@@ -792,6 +793,14 @@ def create_fundamentals_analyst(llm, data_collector=None):
         logger.debug("[Fundamentals Analyst] DONE %s, report length=%s", ticker_display, len(full_content))
         if check_llm_output_degraded(full_content, "Fundamentals Analyst"):
             full_content = "基本面分析生成异常（输出退化），本项不可用"
+        # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="fundamentals", report_field="fundamentals_report",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+            deterministic_check=lambda t: not check_llm_output_degraded(
+                t, "Fundamentals Analyst"),
+        )
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -824,6 +833,7 @@ def create_fundamentals_analyst(llm, data_collector=None):
         )
         return {
             "fundamentals_report": full_content,
+            "price_ref_revision": {"fundamentals": _rev_rec} if _rev_rec else {},
             "analyst_traces": [{
                 "agent": "fundamentals_analyst",
                 "horizon": research_horizon,

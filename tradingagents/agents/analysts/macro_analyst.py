@@ -27,6 +27,7 @@ from tradingagents.dataflows.industry_linkage import (
 )
 from tradingagents.graph.data_collector import _map_stock_to_industry
 from api.database import log_llm_call
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,14 @@ def create_macro_analyst(llm, data_collector=None):
         logger.debug("[Macro Analyst] DONE %s, report length=%s", ticker_display, len(full_content))
         if check_llm_output_degraded(full_content, "Macro Analyst"):
             full_content = "宏观板块分析生成异常（输出退化），本项不可用"
+        # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="macro", report_field="macro_report",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+            deterministic_check=lambda t: not check_llm_output_degraded(
+                t, "Macro Analyst"),
+        )
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -292,6 +301,7 @@ def create_macro_analyst(llm, data_collector=None):
         verdict, confidence = extract_verdict(full_content)
         return {
             "macro_report": full_content,
+            "price_ref_revision": {"macro": _rev_rec} if _rev_rec else {},
             "analyst_traces": [{
                 "agent": "macro_analyst",
                 "horizon": research_horizon,

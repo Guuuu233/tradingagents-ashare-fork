@@ -28,6 +28,7 @@ from tradingagents.dataflows.news_event_evidence import (
     parse_news_markdown_to_evidences,
 )
 from api.database import log_llm_call
+from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 # ── E-04: Expectation Revision Contract Constants & Validation ──────────────────
 STATUS_AVAILABLE = "available"
@@ -1011,6 +1012,14 @@ def create_news_analyst(llm, data_collector=None):
 
         if check_llm_output_degraded(full_content, "News Analyst"):
             full_content = "新闻分析生成异常（输出退化），本项不可用"
+        # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
+        full_content, _rev_rec = await maybe_revise_role_report(
+            state, role_key="news", report_field="news_report",
+            text=full_content, llm=llm,
+            orig_messages=messages,
+            deterministic_check=lambda t: not check_llm_output_degraded(
+                t, "News Analyst"),
+        )
         _elapsed = _time.monotonic() - _t0
         _meta = getattr(_last_chunk, "response_metadata", {}) or {}
         _usage = _meta.get("token_usage") or _meta.get("usage") or {}
@@ -1034,6 +1043,7 @@ def create_news_analyst(llm, data_collector=None):
         )
         return {
             "news_report": full_content,
+            "price_ref_revision": {"news": _rev_rec} if _rev_rec else {},
             "event_coverage": event_coverage,
             "analyst_traces": [{
                 "agent": "news_analyst",
