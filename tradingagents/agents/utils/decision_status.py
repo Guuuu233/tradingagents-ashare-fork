@@ -376,6 +376,16 @@ def evaluate_confirmation_state(
     # 被合法折叠的 claim 已裁决为零贡献，不再计入 core 验证要求；fatal 检查仍在原 core 全集上执行
     core_eval_ids = [cid for cid in core_claim_ids if cid not in legit_excluded_ids]
 
+    # DAV-1264 F2：按 double_count_guard 裁剪后的最终账本评估。被合法折叠的
+    # claim 已由 guard 裁决为零贡献（decided），不得再以 adopted/partial/rejected
+    # 成员身份参与一致性判定——否则守卫从 adopted 裁剪后仍遗留在
+    # rejected/partial 等列表中的 id 会被当作「未决/拒绝」重新评估，等价于在
+    # 裁剪前的旧账本上判定（落库 unadjudicated/rejected_adopt 假阳性的来源）。
+    # 注意：仅做成员资格过滤，decided 集合仍包含 legit_excluded_ids（不算漏裁）。
+    eff_adopted_ids = [c for c in adopted_ids if c not in legit_excluded_ids]
+    eff_partial_ids = [c for c in partially_adopted_ids if c not in legit_excluded_ids]
+    eff_rejected_ids = [c for c in rejected_ids if c not in legit_excluded_ids]
+
     def _is_claim_obs_hypo(cid: str) -> bool:
         sm = summary_map.get(cid)
         if sm and sm.get("is_observation_or_hypothesis"):
@@ -503,7 +513,7 @@ def evaluate_confirmation_state(
 
     # Row 5: rejected + deterministic adopt -> verdict consistency failure
     rejected_adopt_cids = [
-        cid for cid in rejected_ids
+        cid for cid in eff_rejected_ids
         if _get_claim_decision(cid) == "adopt"
     ]
     if rejected_adopt_cids:
@@ -515,7 +525,7 @@ def evaluate_confirmation_state(
     unadjudicated_adopt_cids: list[str] = []
     unadjudicated_partial_cids: list[str] = []
     if adjudication_provided:
-        decided_cids = set(adopted_ids) | set(partially_adopted_ids) | set(rejected_ids) | legit_excluded_ids
+        decided_cids = set(eff_adopted_ids) | set(eff_partial_ids) | set(eff_rejected_ids) | legit_excluded_ids
         known_debate_cids = list(dict.fromkeys(
             [str(c.get("claim_id", "") or "").strip() for c in (claims or []) if str(c.get("claim_id", "") or "").strip()]
             + list(summary_map.keys())
@@ -537,7 +547,7 @@ def evaluate_confirmation_state(
 
     # Row 3: rejected, non-core with reject -> audit record, does not block
     rejected_reject_cids = [
-        cid for cid in rejected_ids
+        cid for cid in eff_rejected_ids
         if cid not in core_claim_ids and _get_claim_decision(cid) == "reject"
     ]
     audit_rejected_codes: list[str] = []
@@ -548,17 +558,17 @@ def evaluate_confirmation_state(
 
     # Row 4: rejected with partial
     rejected_partial_cids = [
-        cid for cid in rejected_ids
+        cid for cid in eff_rejected_ids
         if _get_claim_decision(cid) == "partial"
     ]
 
     # Row 1: Fatal check across core, adopted, and partially adopted claims
     core_fatal = [cid for cid in core_claim_ids if _is_claim_fatal(cid)]
-    adopted_fatal = [cid for cid in adopted_ids if _is_claim_fatal(cid)]
-    partially_adopted_fatal = [cid for cid in partially_adopted_ids if _is_claim_fatal(cid)]
+    adopted_fatal = [cid for cid in eff_adopted_ids if _is_claim_fatal(cid)]
+    partially_adopted_fatal = [cid for cid in eff_partial_ids if _is_claim_fatal(cid)]
 
-    adopted_pit = [cid for cid in adopted_ids if _is_claim_pit_failed(cid)]
-    partially_adopted_pit = [cid for cid in partially_adopted_ids if _is_claim_pit_failed(cid)]
+    adopted_pit = [cid for cid in eff_adopted_ids if _is_claim_pit_failed(cid)]
+    partially_adopted_pit = [cid for cid in eff_partial_ids if _is_claim_pit_failed(cid)]
 
     fatal_codes: list[str] = []
     if adopted_fatal:
@@ -575,18 +585,22 @@ def evaluate_confirmation_state(
         return CONFIRM_UNRESOLVED, fatal_codes
 
     # If neither core claims nor adopted claims exist
-    if not core_eval_ids and not adopted_ids:
+    if not core_eval_ids and not eff_adopted_ids:
         unadjudicated_fatal_cids: set[str] = set()
         for cid, sm in summary_map.items():
             if _is_claim_fatal(cid):
-                if cid in rejected_ids and _get_claim_decision(cid) == "reject":
+                if cid in legit_excluded_ids:
+                    continue
+                if cid in eff_rejected_ids and _get_claim_decision(cid) == "reject":
                     continue
                 unadjudicated_fatal_cids.add(cid)
         for v in (claims_verification or []):
             if _is_verification_item_fatal(v):
                 cid = str(v.get("claim_id", "") or "").strip()
                 if cid:
-                    if cid in rejected_ids and _get_claim_decision(cid) == "reject":
+                    if cid in legit_excluded_ids:
+                        continue
+                    if cid in eff_rejected_ids and _get_claim_decision(cid) == "reject":
                         continue
                     unadjudicated_fatal_cids.add(cid)
 
@@ -620,10 +634,10 @@ def evaluate_confirmation_state(
         core_has_partial = False
 
     # Adopted claims verification
-    adopted_unverified = [cid for cid in adopted_ids if _get_claim_decision(cid) == "reject"]
+    adopted_unverified = [cid for cid in eff_adopted_ids if _get_claim_decision(cid) == "reject"]
     if adopted_unverified:
         return CONFIRM_UNRESOLVED, [f"unverified_adopted_claims:{','.join(sorted(adopted_unverified))}"]
-    adopted_partial = [cid for cid in adopted_ids if _get_claim_decision(cid) == "partial"]
+    adopted_partial = [cid for cid in eff_adopted_ids if _get_claim_decision(cid) == "partial"]
 
     # Assemble partial reasons
     partial_codes: list[str] = []
@@ -649,8 +663,8 @@ def evaluate_confirmation_state(
             f"audited_observation_claims:{','.join(sorted(adopted_partial_obs))}"
         )
 
-    partially_adopted_factual = [cid for cid in partially_adopted_ids if not _is_claim_obs_hypo(cid)]
-    partially_adopted_obs = [cid for cid in partially_adopted_ids if _is_claim_obs_hypo(cid)]
+    partially_adopted_factual = [cid for cid in eff_partial_ids if not _is_claim_obs_hypo(cid)]
+    partially_adopted_obs = [cid for cid in eff_partial_ids if _is_claim_obs_hypo(cid)]
     if partially_adopted_factual:
         partial_codes.append(
             f"partially_adopted_claims:{','.join(sorted(partially_adopted_factual))}"
@@ -692,7 +706,7 @@ def evaluate_confirmation_state(
         return CONFIRM_PARTIAL, partial_codes + consolidated_obs_codes + audit_rejected_codes
 
     # Everything confirmed
-    verified_core = core_verified if core_claim_ids else [cid for cid in adopted_ids if _is_claim_verified(cid)]
+    verified_core = core_verified if core_claim_ids else [cid for cid in eff_adopted_ids if _is_claim_verified(cid)]
     if verified_core:
         return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(verified_core)}"] + consolidated_obs_codes + audit_rejected_codes
     elif all_obs_cids:
@@ -813,9 +827,15 @@ def status_from_manager_verdict(
     )
 
     # Consistency hard gate: rejected + adopt, unadjudicated material claim with adopt, or PIT failure in adopted/partially adopted
+    # DAV-1264 F2：被 guard 合法折叠的 claim 已裁决为零贡献，不再占用 adopted/
+    # partial 账本——PIT 检查同样按裁剪后账本执行（此处 ev_summary.get(cid) 命中
+    # 即满足 legit 绑定条件，与 evaluate_confirmation_state 同口径）。
+    _dcg_excluded_set = {str(x).strip() for x in dcg_excluded_ids if str(x).strip()}
     adopted_has_pit = False
     if ev_summary:
         for cid in list(adopted_ids or []) + list(partially_adopted_ids or []):
+            if str(cid).strip() in _dcg_excluded_set:
+                continue
             s = ev_summary.get(cid)
             if isinstance(s, Mapping) and (
                 s.get("pit_failed") is True

@@ -563,11 +563,63 @@ _BM_QUOTE_KW = re.compile(
 )
 # 「已定价状态为 unknown」等显式标注引用形态（引用栏位标注而非断言事实）。
 # DAV-1074 🔴-1：仅当标注 match 覆盖命中或与命中同子句时生效，同句独立断言不连带豁免。
+# DAV-1264 F3：连接词改为可选，并允许栏位标注形态「已定价状态 (priced_in): unknown」
+# 中间插入「（priced_in）/(priced_in)」括注。豁免仍只对 unknown 系取值生效；
+# 同句独立断言不连带豁免（DAV-1074 约束不变）。
 _PI_ANNOTATION = re.compile(
-    r"已定价\s*(?:状态|栏位|标注|标记|评级|结论)?\s*(?:为|是|：|:|=|标为|标成|记为)\s*"
-    r"(?:unknown|未知|不确定|待验证|待确认)",
+    r"已定价\s*(?:状态|栏位|标注|标记|评级|结论)?\s*"
+    r"(?:[（(]\s*priced[\s_-]*in\s*[)）]\s*)?"
+    r"(?:为|是|：|:|=|标为|标成|记为)?\s*"
+    r"(?:unknown(?![A-Za-z])|未知|不确定|待验证|待确认)",
     re.IGNORECASE,
 )
+
+# DAV-1264 F1：系统硬闸文案模板——生成（final_decision 告警尾缀 / 阻断占位
+# plan）与守卫剥离共用同一常量，保证剥掉的恰是系统追加的文案，不多不少。
+_SYS_GATE_ALARM_TEMPLATE = (
+    "\n\n[系统硬闸告警] 裁决自洽硬闸未通过：{reasons}，已阻断后续交易。"
+)
+_SYS_GATE_BLOCKED_PLAN_TEMPLATES = (
+    "研究总监裁决自洽硬闸未通过：{reasons}。已阻断进入 Trader 执行阶段。",
+    "研究总监裁决自洽硬闸未通过：{reasons}。"
+    "状态=ABSTAIN，动作=NO_TRADE；已阻断进入 Trader 执行阶段。",
+)
+
+# 剥离范围严格受限（DAV-1264 复审收紧）：
+# - 告警尾缀：仅当与生成模板完全一致且位于文末时才剥离最后一处；正文中间出现
+#   的同形标记不是系统追加内容，不剥——模型文本无法借此构造豁免通道。
+#   reasons 通配段用 tempered 写法禁止跨越第二个告警标记，确保只命中最后一处。
+_SYS_GATE_ALARM_TAIL_RE = re.compile(
+    re.escape("\n\n[系统硬闸告警] 裁决自洽硬闸未通过：")
+    + r"(?:(?!\[系统硬闸告警\]).)*?，已阻断后续交易。\s*\Z",
+    re.DOTALL,
+)
+
+
+def _gate_template_fullmatch_re(template: str) -> re.Pattern:
+    """把「{reasons} 为唯一变量」的生成模板转成整段匹配正则。"""
+    return re.compile(
+        r"\s*" + re.escape(template).replace(re.escape("{reasons}"), r".*?") + r"\s*",
+        re.DOTALL,
+    )
+
+
+# 阻断占位 plan：仅当整段文本 fullmatch 系统模板时才剥离，不做逐行删除。
+_SYS_GATE_BLOCKED_PLAN_RES = tuple(
+    _gate_template_fullmatch_re(t) for t in _SYS_GATE_BLOCKED_PLAN_TEMPLATES
+)
+
+
+def _strip_system_gate_text(text: str) -> str:
+    """剥离闸门追加的系统文案（文末告警尾缀 / 整段阻断占位 plan），返回经理原文。"""
+    if not text:
+        return text
+    m = _SYS_GATE_ALARM_TAIL_RE.search(text)
+    if m:
+        text = text[: m.start()]
+    if any(rx.fullmatch(text) for rx in _SYS_GATE_BLOCKED_PLAN_RES):
+        return ""
+    return text
 
 
 def _normalize_quote_text(s: str) -> str:
@@ -975,9 +1027,15 @@ def validate_manager_expectation_revision_consumption(
     news_pi = (news_er.get("priced_in") or {}).get("status", "unknown")
 
     # Combine all manager outputs: full raw response, verdict reason, and investment plan
-    texts_to_check = [str(raw_response or ""), str(manager_verdict.get("reason") or "")]
+    # DAV-1264 F1：扫描前剥离系统硬闸文案——raw_response 若为重扫的落库
+    # judge_decision，其尾部「[系统硬闸告警] …{failed_reasons}…」引文会二次命中；
+    # investment_plan 若为阻断占位文本同理。
+    texts_to_check = [
+        _strip_system_gate_text(str(raw_response or "")),
+        _strip_system_gate_text(str(manager_verdict.get("reason") or "")),
+    ]
     if manager_verdict.get("investment_plan"):
-        texts_to_check.append(str(manager_verdict.get("investment_plan")))
+        texts_to_check.append(_strip_system_gate_text(str(manager_verdict.get("investment_plan"))))
     full_text = "\n".join(t for t in texts_to_check if t)
 
     # DAV-1071：经理引用分析师 claim 文本（含其自标 unknown 的已定价标注）不等于自行断言；
@@ -1800,9 +1858,8 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if gate_errors:
             failed_reasons = "; ".join(f"辩论前置硬闸未通过: {err}" for err in gate_errors)
             _logger.warning("[research_manager] debate pre-gate check failed: %s", failed_reasons)
-            blocked_plan = (
-                f"研究总监裁决自洽硬闸未通过：{failed_reasons}。"
-                "状态=ABSTAIN，动作=NO_TRADE；已阻断进入 Trader 执行阶段。"
+            blocked_plan = _SYS_GATE_BLOCKED_PLAN_TEMPLATES[1].format(
+                reasons=failed_reasons
             )
             truth_evaluator = EvidenceFactualTruthEvaluator()
             claims_verification = truth_evaluator.evaluate_claims(
@@ -2251,9 +2308,13 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         if not manager_verdict["consistency_check_passed"]:
             failed_reasons = "; ".join(manager_verdict["failed_checks"])
             _logger.warning("[research_manager] consistency check failed: %s", failed_reasons)
-            blocked_plan = f"研究总监裁决自洽硬闸未通过：{failed_reasons}。已阻断进入 Trader 执行阶段。"
+            blocked_plan = _SYS_GATE_BLOCKED_PLAN_TEMPLATES[0].format(
+                reasons=failed_reasons
+            )
             final_plan = blocked_plan
-            final_decision = f"{full_content}\n\n[系统硬闸告警] 裁决自洽硬闸未通过：{failed_reasons}，已阻断后续交易。"
+            final_decision = full_content + _SYS_GATE_ALARM_TEMPLATE.format(
+                reasons=failed_reasons
+            )
         else:
             final_plan = full_content
             final_decision = full_content
