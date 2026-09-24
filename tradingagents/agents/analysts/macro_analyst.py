@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.utils.price_ref_prompt import price_ref_prompt_suffix
 from tradingagents.graph.intent_parser import (
     build_horizon_context,
     get_bound_research_horizon,
@@ -240,6 +241,7 @@ def create_macro_analyst(llm, data_collector=None):
             SystemMessage(content=(
                 system_message
                 + "\n\n请严格基于提供的数据输出报告，全程使用中文。"
+                + price_ref_prompt_suffix(state, config)
             )),
             HumanMessage(content="\n\n".join(human_content_lines)),
         ]

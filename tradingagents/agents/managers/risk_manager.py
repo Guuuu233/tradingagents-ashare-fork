@@ -1,5 +1,6 @@
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.utils.price_ref_prompt import price_ref_prompt_suffix
 from tradingagents.agents.utils.agent_states import current_tracker_var
 from tradingagents.agents.utils.context_utils import build_agent_context_view
 from tradingagents.agents.utils.debate_utils import (
@@ -124,6 +125,7 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
             round_summary=risk_debate_state.get("round_summary", "暂无风险轮次摘要。"),
             **injection_slots,
         )
+        prompt += price_ref_prompt_suffix(state, get_config())
 
         # ── 流式输出 ──
         tracker = current_tracker_var.get()

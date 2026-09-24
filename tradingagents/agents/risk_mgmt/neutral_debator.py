@@ -1,5 +1,6 @@
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.utils.price_ref_prompt import price_ref_prompt_suffix
 from tradingagents.agents.utils.agent_states import current_tracker_var
 from tradingagents.agents.utils.debate_utils import (
     format_claim_subset_for_prompt,
@@ -45,6 +46,7 @@ def create_neutral_debator(llm):
             round_summary=round_summary or "暂无风险轮次摘要，请先识别真正有信息增量的风险分歧。",
             round_goal=round_goal,
         )
+        prompt += price_ref_prompt_suffix(state, get_config())
 
         # ── 流式输出 ──
         tracker = current_tracker_var.get()

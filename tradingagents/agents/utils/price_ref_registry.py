@@ -74,6 +74,14 @@ DAV-1235 precision tightening (audit of production report 4390ddfd):
   ``vendor_qfq`` from the run's own market data only when its context names a
   concrete field (indicator name, explicit date + OHLC word, or limit-up/down)
   and the value matches exactly. Bare value equality never bridges.
+
+DAV-1246 A 部分补漏（生成侧 price_ref 提示词 v1 同卡）：
+
+- A1 影线长度不是价格坐标，不登记：「留下/留有/形成/引发/长达/达/超过
+  （了）N 元（的）（长）上影线/下影线」与「上影线/下影线（达/长约/长/
+  长度）N 元」两种写法中的数值。动词后不允许「的」——「留下的 35.36 元
+  上影线供应」「跌破 835.00 元下影线低点」是真实价位坐标，不误伤。
+- A2 C5 指标别名增加「牛熊线」，映射到 ``close_200_sma``。
 """
 
 from __future__ import annotations
@@ -312,6 +320,20 @@ _NON_STOCK_PRICE_CTX = re.compile(
     r"批发参考价|批发价|出厂价|零售价|指导价|终端价|散瓶|整箱|吨价|公斤价|克价"
 )
 
+# [DAV-1246 A1] 影线长度不是价格坐标，不登记。
+# 形态一：「留下/留有/形成/引发/长达/达/超过（了）N 元（的）（长）上影线/下影线」——
+# 动词必须直接接数字（「留下的 35.36 元上影线供应」中 35.36 是价位，不算长度，
+# 故动词后不允许「的」）。形态二：「上影线/下影线（达/长约/长/长度）N 元」。
+_SHADOW_LEN_HEAD = re.compile(
+    r"(?:留下|留有|形成|引发|长达|达|超过)\s*了?\s*$"
+)
+_SHADOW_LEN_TAIL = re.compile(
+    r"^\s*元\s*的?\s*长?\s*(?:上影线|下影线)"
+)
+_SHADOW_LEN_HEAD2 = re.compile(
+    r"(?:上影线|下影线)\s*(?:长约|长度约|长度|达|长)\s*$"
+)
+
 _PERSHARE_FIN = re.compile(
     r"每股净资产|每股收益|每股派|每股股利|每股现金|每股盈余|"
     r"净资产收益|每股未分配|每股公积金|每股经营"
@@ -360,6 +382,11 @@ def _token_tail_flags(sentence: str, start: int, end: int) -> Optional[str]:
     # 真实股价不会被 亿/万 直接修饰。
     if re.match(r"^\s*[-~—]?\s*\d*\s*(?:亿|万)", tail):
         return "amount_or_marketcap"
+    # [DAV-1246 A1] 影线长度：动词 + N 元（的）（长）影线，或 影线（达/长约）N 元。
+    if _SHADOW_LEN_TAIL.match(tail) and _SHADOW_LEN_HEAD.search(head):
+        return "shadow_length"
+    if _SHADOW_LEN_HEAD2.search(head):
+        return "shadow_length"
     return None
 
 
@@ -847,7 +874,7 @@ def build_market_data_pool(source: Mapping[str, Any], symbol: str,
 _INDICATOR_ALIASES: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"(?:10\s*日?\s*EMA|EMA\s*[-_]?\s*10|十\s*日\s*EMA)", re.I), "close_10_ema"),
     (re.compile(r"(?:50\s*日?\s*(?:SMA|均线|MA)|SMA\s*[-_]?\s*50|MA\s*50)", re.I), "close_50_sma"),
-    (re.compile(r"(?:200\s*日?\s*(?:SMA|均线|MA)|SMA\s*[-_]?\s*200|MA\s*200|年线)", re.I), "close_200_sma"),
+    (re.compile(r"(?:200\s*日?\s*(?:SMA|均线|MA)|SMA\s*[-_]?\s*200|MA\s*200|年线|牛熊线)", re.I), "close_200_sma"),
     (re.compile(r"VWMA|成交加权价|成交量加权", re.I), "vwma"),
     (re.compile(r"布林(?:带)?上轨|BOLL\s*上轨|boll_ub", re.I), "boll_ub"),
     (re.compile(r"布林(?:带)?下轨|BOLL\s*下轨|boll_lb", re.I), "boll_lb"),

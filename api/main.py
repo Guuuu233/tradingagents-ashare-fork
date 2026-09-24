@@ -91,6 +91,10 @@ from tradingagents.agents.utils.context_utils import USER_CONTEXT_KEYS, normaliz
 from tradingagents.agents.utils.agent_states import current_tracker_var, get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
 from tradingagents.agents.utils.price_basis_gate import finalize_price_ref_state
+from tradingagents.agents.utils.price_ref_prompt import (
+    PRICE_REF_PROMPT_VERSION,
+    attach_price_ref_prompt_block,
+)
 from tradingagents.graph.horizon_profile import (
     HORIZON_PROFILE_V1,
     HORIZON_SHORT,
@@ -2156,6 +2160,8 @@ def _build_result_payload(final_state: Dict[str, Any]) -> Dict[str, Any]:
         # DAV-1199 hard gate + contract versioning
         "price_basis_gate": final_state.get("price_basis_gate"),
         "price_ref_contract_version": final_state.get("price_ref_contract_version"),
+        # DAV-1246 B3：生成侧 price_ref 提示词版本戳（仅追溯）
+        "price_ref_prompt_version": PRICE_REF_PROMPT_VERSION,
     }
 
     # DAV-1207: persist the gate's real price_basis_version.  When the gate
@@ -3246,6 +3252,11 @@ async def _run_job_inner(
                     runtime_config=config,
                     horizon_resolution=horizon_resolution,
                 )
+                # DAV-1246 B1：可引用价位表注入（pool 缺失走降级文案）
+                attach_price_ref_prompt_block(
+                    init_state, collected_pool,
+                    symbol=ticker, trade_date=request.trade_date,
+                )
                 last_report: Dict[str, str] = {}
                 seen: Dict[str, bool] = {}   # 追踪哪些字段已出现过，避免重复事件
                 horizon_final = None
@@ -3909,6 +3920,11 @@ async def _run_job_inner(
                 runtime_config=config,
                 horizon_resolution=horizon_res,
             )
+            # DAV-1246 B1：可引用价位表注入（pool 缺失走降级文案）
+            attach_price_ref_prompt_block(
+                init_state, collected_pool,
+                symbol=request.symbol, trade_date=request.trade_date,
+            )
             args = graph.propagator.get_graph_args()
             
             # Pass job_id as thread_id for LangGraph checkpointer persistence
@@ -4111,6 +4127,11 @@ async def _run_job_inner(
                     social_data_context=social_data_context,
                     runtime_config=config,
                     horizon_resolution=horizon_resolution,
+                )
+                # DAV-1246 B1：可引用价位表注入（pool 缺失走降级文案）
+                attach_price_ref_prompt_block(
+                    init_state, collected_pool,
+                    symbol=request.symbol, trade_date=request.trade_date,
                 )
                 args = graph.propagator.get_graph_args()
                 if "config" not in args:

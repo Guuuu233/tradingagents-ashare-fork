@@ -2,6 +2,7 @@ from langchain_core.messages import AIMessage
 import functools
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.utils.price_ref_prompt import price_ref_prompt_suffix
 from tradingagents.agents.utils.agent_states import current_tracker_var
 from tradingagents.agents.utils.context_utils import build_agent_context_view
 from tradingagents.agents.utils.debate_utils import (
@@ -92,7 +93,7 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
         messages = [
             {
                 "role": "system",
-                "content": get_prompt("trader_system_prompt", config=config),
+                "content": get_prompt("trader_system_prompt", config=config) + price_ref_prompt_suffix(state, config),
             },
             {
                 "role": "user",

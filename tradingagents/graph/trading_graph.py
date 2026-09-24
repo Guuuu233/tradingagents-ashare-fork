@@ -48,6 +48,10 @@ from tradingagents.agents.utils.price_basis_gate import (
     PRICE_REF_CONTRACT_VERSION,
     finalize_price_ref_state,
 )
+from tradingagents.agents.utils.price_ref_prompt import (
+    PRICE_REF_PROMPT_VERSION,
+    attach_price_ref_prompt_block,
+)
 from .signal_processing import SignalProcessor
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
@@ -627,6 +631,11 @@ class TradingAgentsGraph:
             horizon_resolution=horizon_resolution,
             horizon=effective_horizon,
         )
+        # DAV-1246 B1：可引用价位表注入（本次运行 pool，缺失时降级文案）
+        attach_price_ref_prompt_block(
+            init_agent_state, collected,
+            symbol=company_name, trade_date=trade_date,
+        )
         args = self.propagator.get_graph_args()
 
         state_horizon = init_agent_state.get("horizon") or effective_horizon
@@ -727,6 +736,10 @@ class TradingAgentsGraph:
             market_data_context=market_data_context,
             social_data_context=social_data_context,
             runtime_config=self.config,
+        )
+        # DAV-1246 B1：可引用价位表注入（本次运行 pool，缺失时降级文案）
+        attach_price_ref_prompt_block(
+            state, collected, symbol=ticker, trade_date=trade_date,
         )
         final_state = await self.graph.ainvoke(state, **graph_args)
 
@@ -866,6 +879,8 @@ class TradingAgentsGraph:
             "price_basis_gate": final_state.get("price_basis_gate"),
             "price_ref_contract_version": PRICE_REF_CONTRACT_VERSION,
             "price_basis_version": final_state.get("price_basis_version"),
+            # DAV-1246 B3：生成侧 price_ref 提示词版本戳（仅追溯）
+            "price_ref_prompt_version": PRICE_REF_PROMPT_VERSION,
         }
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state

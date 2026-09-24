@@ -6,6 +6,7 @@ from typing import Any, Mapping, Sequence
 
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.utils.price_ref_prompt import price_ref_prompt_suffix
 from tradingagents.prompts.catalog import _resolve_language
 from tradingagents.agents.utils.agent_states import (
     current_tracker_var,
@@ -2084,7 +2085,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             prompt_language,
         )
         base_prompt = f"{base_prompt}\n\n{relation_guard}"
-        prompt = f"{horizon_ctx}\n\n{base_prompt}"
+        prompt = f"{horizon_ctx}\n\n{base_prompt}" + price_ref_prompt_suffix(state, config)
 
         _logger.info(
             "[research_manager] prompt size: total=%d chars | "
