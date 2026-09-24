@@ -47,7 +47,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 from sqlalchemy.orm import Session
 import pandas as pd
-import requests
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
 from api.job_store import get_job_store as _new_job_store
@@ -126,23 +125,6 @@ def _cors_allow_origins() -> list[str]:
 def _cors_allow_origin_regex() -> str | None:
     raw = os.getenv("CORS_ALLOW_ORIGIN_REGEX", "").strip()
     return raw or None
-
-
-def _report_version_stats() -> None:
-    """Report anonymous version stats to the official site."""
-    import threading, uuid
-
-    def _send():
-        try:
-            requests.post(
-                "https://app.510168.xyz/api/version-stats",
-                json={"v": APP_VERSION, "nonce": uuid.uuid4().hex},
-                timeout=30,
-            )
-        except Exception as exc:
-            logger.debug("version-stats report failed: %s", exc)
-
-    threading.Thread(target=_send, daemon=True).start()
 
 
 def _resolve_scheduled_trade_date(trade_date: str) -> str:
@@ -401,7 +383,6 @@ async def lifespan(app: FastAPI):
             _log("is INSECURE. Set TA_APP_SECRET_KEY for any non-local deployment.")
             _log("=" * 70)
 
-        _report_version_stats()
         # Pre-load trade calendar (uses mini_racer/V8 which is not thread-safe)
         from tradingagents.dataflows.trade_calendar import _load_cn_trade_dates
         _load_cn_trade_dates()

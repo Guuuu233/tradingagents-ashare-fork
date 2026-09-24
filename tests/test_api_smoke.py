@@ -523,7 +523,6 @@ class TestRuntimeIdentity:
             with (
                 patch("api.main.auth_service.ensure_secure_secret_configured"),
                 patch("api.main.auth_service.is_custom_secret_configured", return_value=True),
-                patch("api.main._report_version_stats"),
                 patch("api.main._load_cn_stock_map", return_value={}),
                 patch("tradingagents.dataflows.trade_calendar._load_cn_trade_dates"),
                 patch(
@@ -598,7 +597,6 @@ class TestRuntimeIdentity:
                 with (
                     patch("api.main.auth_service.ensure_secure_secret_configured"),
                     patch("api.main.auth_service.is_custom_secret_configured", return_value=True),
-                    patch("api.main._report_version_stats"),
                     patch("api.main._load_cn_stock_map", return_value={}),
                     patch("tradingagents.dataflows.trade_calendar._load_cn_trade_dates"),
                     patch(
@@ -646,7 +644,6 @@ class TestRuntimeIdentity:
 
         caplog.set_level("INFO", logger="api.main")
         with (
-            patch("api.main._report_version_stats"),
             patch("api.main._load_cn_stock_map", return_value={}),
             patch("tradingagents.dataflows.trade_calendar._load_cn_trade_dates"),
             _get_client() as client,

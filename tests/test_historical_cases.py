@@ -1694,7 +1694,6 @@ def test_api_lifespan_triggers_backfill():
          patch("tradingagents.knowledge.historical_cases.now_cn", return_value=fake_now), \
          patch("api.main.get_db_ctx") as mock_get_db_ctx, \
          patch("api.main.init_db"), \
-         patch("api.main._report_version_stats"), \
          patch("api.main._load_cn_stock_map"), \
          patch("tradingagents.dataflows.trade_calendar._load_cn_trade_dates"), \
          patch("api.services.report_service.recover_stale_active_reports", return_value={"failed": 0}), \
