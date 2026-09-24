@@ -1,13 +1,13 @@
 # Project State
 
-## 当前状态头部（2026-09-25 总控更新；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-25 01:30 总控更新；开工前必须重新回读，D-005）
 
 > 项目总图见 `docs/PROJECT_PANORAMA.md`（快照，给全体成员看的概览）。
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `b0ceff3029e3e5f786598d1bdb9bb37f62450f65`（`/healthz` 精确回读；09-24 13:25 起，DAV-1242）。上一版 `a181e4a`（09-24 03:16，DAV-1233） |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`b0ceff3` 之后若只有治理文档提交，代码树与生产逐字节一致 |
+| 生产代码 SHA | `f075124fd9818cba154e67eb0b04c3906a1ac545`（`/healthz` 精确回读；09-25 01:05 起，DAV-1258，**价格返修已开启**）。上一版 `b0ceff3`（09-24 13:25，DAV-1242） |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`f075124` 之后若只有治理文档提交，代码树与生产逐字节一致 |
 | 待发布提交 | 无 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
@@ -18,26 +18,26 @@
 - **计算代码未变**：漏斗计算所用的 `shadow_credit.py`、`price_basis_isolation.py`、`verify_h1b_gates.py`，自 `9d03c89` 以来没有改动。
 
 - **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
-- **服务运行态**（D-038、D-041、DAV-1242）：
-  - PID 85039，2026-09-24 13:25:42 启动，监听 `127.0.0.1:8000`。
-  - 运行目录：独立发布 worktree `/Users/davidliu/Documents/TradingAgents-AShare-releases/b0ceff3`，detached 且已 locked。
+- **服务运行态**（D-038、D-041、D-044、DAV-1258）：
+  - PID 89433，2026-09-25 01:05 启动，监听 `127.0.0.1:8000`。
+  - 运行目录：`/Users/davidliu/Documents/TradingAgents-AShare-releases/f075124`，detached 且已 locked。
   - 启动环境：
-    - `env -i` 白名单 14 项，不含任何 agent 变量；
-    - DATABASE_URL 为绝对路径；
+    - `env -i` 白名单 15 项；
     - `TA_SOCIAL_MODE=disabled`；
-    - `APP_VERSION=0.6.0`，`/healthz` 回读 version 为 0.6.0。
-  - `.env` 是指向主 checkout 的软链。
-  - `frontend/dist` 在发布目录内按 b0ceff3 现场构建，bundle 为 `index-l1qu65I1.js`，其中不含 `v2_debate_enabled`。
-  - 启动时不再向上游 app.510168.xyz 上报（DAV-1243）；日志与外连核验均为 0。
-  - 日志：`releases/logs/uvicorn-b0ceff3.log`。
-  - 回退源：`releases/a181e4a`（locked），启动命令存于 `releases/logs/prev-launch-a181e4a.txt`。主 checkout 停在 `3d9c414`，不再用于启动生产。
+    - `APP_VERSION=0.6.0`；
+    - **`TA_PRICE_REF_REVISION_ENABLED=1`**；
+    - 不含 DUMP_DIR 与任何 agent 变量。
+  - `.env` 软链到主 checkout。前端在发布目录内构建，bundle 为 `index-BwI-djog.js`。
+  - 日志：`releases/logs/uvicorn-f075124.log`。
+  - 回退源：`releases/b0ceff3`，启动命令存于 `releases/logs/prev-launch-b0ceff3.txt`。回退也就是关闭返修。
 - **生产库**：
-  - reports 共 1818 份：completed 1054、failed 764（2026-09-24 13:3x，`mode=ro` 实测）。
-  - 本次部署前备份为 `data/tradingagents.db.bak-20260924-deploy-b0ceff3`：900,939,776 B，quick_check 与 integrity_check 均为 ok。
-  - 上一份备份 `…-deploy-a181e4a` 保留。
-- **本次发布后的 smoke**（b37fd030，600519.SH@2026-09-23，ABSTAIN / NO_TRADE）：
-  - 共 136 条 price ref：vendor_qfq 125、unspecified 10、derived_estimate 1；derived 豁免的那一条是 PE 公式。
-  - gate blocked，共 16 条违规，来自 8 个 ref，都是模型自拟的价位；抽取误报为 0。
+  - reports 共 1819 份：completed 1055、failed 764（09-25 01:3x，mode=ro 实测）。
+  - 部署前备份为 `data/tradingagents.db.bak-20260925-deploy-f075124`，两项检查均为 ok；此前的备份均保留。
+- **本次发布后的 smoke**（89584ca1，600519.SH@2026-09-24）：
+  - ABSTAIN；gate 通过。
+  - 5 个角色触发返修：4 个采用，研究经理以 `revised_check_failed` 保留原稿；签名全部一致。
+  - 模型调用 22 次，此前的 smoke 为 15 次。
+- **上线后监控**（D-044）：总控审计前 20 份真实报告，审计脚本由 DAV-1259 制作。出现假 clean、改变结论的返修稿被采用、VALID 比例明显下降、返修导致失败，四者任一即关闭返修。
 - **当前唯一关键路径**（D-041）：
   1. ~~**DAV-1235**~~：price-ref 精度收紧（冻结语料 5/50，D-042 补充）已随 DAV-1242 于 09-24 13:25 上线，同批上线的还有前端 DAV-1238 与关闭上游上报的 DAV-1243。
   2. **生成侧价格来源标注**（D-043）：
