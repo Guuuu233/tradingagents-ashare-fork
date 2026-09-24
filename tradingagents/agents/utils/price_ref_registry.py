@@ -236,22 +236,52 @@ _EXECUTABLE_ANCHOR_WORDS = (
     "减仓",
 )
 
-# Gate-level pattern: a value anchored to an executable word is an executable
-# number (kept identical to the historical gate contract — no 区间 anchors).
-_LEVEL_PATTERN = re.compile(
+# Gate-level anchors: a value anchored to an executable word is an
+# executable number (kept identical to the historical gate contract —
+# no 区间 anchors). [DAV-1255] Anchor-only patterns: numbers are scanned
+# inside the post-anchor window so date/period/amount fragments can be
+# skipped in favour of the real price behind them (E1–E4).
+_LEVEL_ANCHOR_BODY = (
     r"(?:目标价|目标位|第一目标|第二目标|下行目标|上行目标|止盈位?|止损位?|"
     r"入场价?|进场价?|买入价|卖出价|建仓价|开仓价|出场价|加仓价|减仓价)"
-    r"[^0-9]{0,12}?(\d+(?:\.\d+)?)"
+)
+_LEVEL_PATTERN = re.compile(_LEVEL_ANCHOR_BODY)
+
+# Registry-extraction anchors: same anchors plus explicit 区间 phrasing so
+# both ends of 「X–Y 元」 ranges register a ref before accountability.
+_LEVEL_PATTERN_EXTENDED = re.compile(
+    _LEVEL_ANCHOR_BODY[:-1]
+    + r"|入场区间|进场区间|建仓区间|加仓区间|减仓区间|买入区间|卖出区间)"
 )
 
-# Registry-extraction pattern: same anchors plus explicit 区间 phrasing so both
-# ends of 「X–Y 元」 ranges register a ref before accountability.
-_LEVEL_PATTERN_EXTENDED = re.compile(
-    r"(?:目标价|目标位|第一目标|第二目标|下行目标|上行目标|止盈位?|止损位?|"
-    r"入场价?|进场价?|买入价|卖出价|建仓价|开仓价|出场价|加仓价|减仓价|"
-    r"入场区间|进场区间|建仓区间|加仓区间|减仓区间|买入区间|卖出区间)"
-    r"[^0-9]{0,12}?(\d+(?:\.\d+)?)"
-)
+# [DAV-1255 E4] post-anchor scan window: 40 chars, same clause only.
+_ANCHOR_LEVEL_WINDOW = 40
+_LEVEL_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+_LEVEL_CLAUSE_BREAK = re.compile(r"[。；;！!？？\n\r]")
+
+# [DAV-1255 E1] 「M月D日」 date fragments.
+_DATE_MD_TAIL = re.compile(r"^\s*月\s*\d{1,2}\s*日")      # number is the M
+_DATE_D_TAIL = re.compile(r"^\s*日")                    # number is the D
+_DATE_MD_HEAD = re.compile(r"\d{1,2}\s*月\s*$")
+# [DAV-1255 E1] ISO date span 「2026-08-06」：年份规则只盖住前两段，
+# 跳过-继续语义下「06」会漏成价位，因此整个 ISO 日期段按日期字段跳过。
+_ISO_DATE_SPAN = re.compile(r"20\d{2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}")
+# [DAV-1255 E2] 「N日」后接指标周期词（EMA/SMA/MA/均线/VWMA/布林/BOLL）
+# 或 OHLC 字段词（最高/最低/收盘/开盘）的数字跳过；实现上推广为所有紧跟
+# 「日」的数字一律跳过——价格不会以「日」为单位（见 _is_skip_level_number）。
+# [DAV-1255 E3] amount units （亿元/万元/亿/万 — 不接「股」也算金额）.
+_AMOUNT_TAIL = re.compile(r"^\s*(?:亿元|万元|亿|万)")
+# [DAV-1255 同族补漏] E4 窗口由 12→40 字符后新暴露的两类误读，与 E1–E3
+# 同属「非价位数字」：赔率/盈亏比 「N:1」「N:M」，及独立月份碎片「N月」。
+_RATIO_TAIL = re.compile(r"^\s*[:：]\s*\d")
+_RATIO_HEAD = re.compile(r"\d\s*[:：]\s*$")   # 「N:」后的 M（盈亏比 1:0.3）
+_BARE_MONTH_TAIL = re.compile(r"^\s*月")
+_BARE_DAY_TAIL = re.compile(r"^\s*日")          # 「N日」时长/日期碎片
+_ENUM_HEAD = re.compile(r"[（(]\s*$")          # 列表枚举（N）
+_ENUM_TAIL = re.compile(r"^\s*[)）]")
+_TIME_TAIL = re.compile(
+    r"^\s*(?:分钟|小时|交易日|个月|天|周|年|季度)"
+)                                                # 「N分钟/小时/天/周…」时长
 
 
 def _is_false_level(text: str, nstart: int, nend: int, value: float) -> bool:
@@ -269,21 +299,79 @@ def _is_false_level(text: str, nstart: int, nend: int, value: float) -> bool:
     return False
 
 
+def _is_skip_level_number(text: str, nstart: int, nend: int) -> bool:
+    """[DAV-1255 E1–E3] Number inside an anchor window that is a date field
+    (「M月D日」), an indicator period / OHLC field (「N日 SMA/最低…」), or an
+    amount (「N亿元/万元/亿/万」) — skip and keep scanning the window."""
+    tail = text[nend:]
+    for d in _ISO_DATE_SPAN.finditer(text):                  # E1: ISO 日期段
+        if d.start() <= nstart and nend <= d.end():
+            return True
+        if d.start() > nend:
+            break
+    if _DATE_MD_TAIL.match(tail):                            # E1: M of M月D日
+        return True
+    if _DATE_D_TAIL.match(tail):
+        if _DATE_MD_HEAD.search(text[:nstart]):              # E1: D of M月D日
+            return True
+        return True                                          # E2+：任何「N日」时长
+    if _ENUM_HEAD.search(text[:nstart]) and _ENUM_TAIL.match(tail):
+        return True                                          # 枚举序号（N）
+    if _AMOUNT_TAIL.match(tail):                             # E3
+        return True
+    if _RATIO_TAIL.match(tail):                              # 赔率/盈亏比 N:M
+        return True
+    if _RATIO_HEAD.search(text[:nstart]):                    # N:M 中的 M
+        return True
+    if _BARE_MONTH_TAIL.match(tail):                         # 月份碎片「N月」
+        return True
+    if _TIME_TAIL.match(tail):                               # 时长「N分钟/天/周…」
+        return True
+    return False
+
+
+def _iter_anchor_levels(
+    text: str, anchor_re: "re.Pattern[str]"
+) -> List[Tuple[float, int, int]]:
+    """[DAV-1255 E4] For each anchor, take the first real price within 40
+    chars in the same clause; date/period/amount/false fragments are skipped
+    and the scan continues. No real value → the anchor yields no level."""
+    found: List[Tuple[float, int, int]] = []
+    for a in anchor_re.finditer(text):
+        wstart = a.end()
+        wend = min(len(text), wstart + _ANCHOR_LEVEL_WINDOW)
+        cb = _LEVEL_CLAUSE_BREAK.search(text, wstart, wend)
+        if cb:
+            wend = cb.start()
+        # 窗口边界不得切断数字（「15 分钟」被切成「1」会产生伪价位）。
+        while (
+            wend < len(text)
+            and text[wend - 1] in "0123456789."
+            and text[wend] in "0123456789."
+        ):
+            wend += 1
+        for n in _LEVEL_NUMBER_PATTERN.finditer(text, wstart, wend):
+            try:
+                v = float(n.group(0))
+            except (TypeError, ValueError):
+                continue
+            if _is_false_level(text, n.start(), n.end(), v):
+                continue
+            if _is_skip_level_number(text, n.start(), n.end()):
+                continue
+            found.append((v, n.start(), n.end()))
+            break
+    return found
+
+
 def extract_executable_levels(text: str) -> List[Tuple[float, int, int]]:
     """Shared executable-level extractor. Returns (value, num_start, num_end)
-    with false hits (list ordinals / percents / counts / dates) removed."""
-    values: List[Tuple[float, int, int]] = []
+    with false hits (list ordinals / percents / counts / dates) removed and
+    [DAV-1255] date/period/amount fragments skipped in favour of the real
+    price inside the same anchor window."""
     if not isinstance(text, str):
-        return values
-    for m in _LEVEL_PATTERN.finditer(text):
-        try:
-            v = float(m.group(1))
-        except (TypeError, ValueError):
-            continue
-        if _is_false_level(text, m.start(1), m.end(1), v):
-            continue
-        values.append((v, m.start(1), m.end(1)))
-    return values
+        return []
+    return _iter_anchor_levels(text, _LEVEL_PATTERN)
 
 
 # ---------------------------------------------------------------------------
@@ -1049,14 +1137,12 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
         _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
 
     # [C4] shared executable parser：gate 价位词并入 registry 抽取。
-    for m in _LEVEL_PATTERN_EXTENDED.finditer(sentence):
-        try:
-            value = float(m.group(1))
-        except (TypeError, ValueError):
-            continue
+    # [DAV-1255] 同一锚点窗口扫描：日期/周期/金额碎片跳过后继续取真实价位。
+    for value, nstart, nend in _iter_anchor_levels(
+        sentence, _LEVEL_PATTERN_EXTENDED
+    ):
         if value <= 0:
             continue
-        nstart, nend = m.start(1), m.end(1)
         if _is_false_mention(sentence, nstart, nend, value):
             continue
         if _is_false_level(sentence, nstart, nend, value):
