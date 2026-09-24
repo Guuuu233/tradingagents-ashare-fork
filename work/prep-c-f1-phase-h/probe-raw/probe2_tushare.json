@@ -1,0 +1,42 @@
+{
+  "index_member": {
+    "ok": true,
+    "rows": 184,
+    "cols": [
+      "index_code",
+      "con_code",
+      "in_date",
+      "out_date",
+      "is_new"
+    ],
+    "sample_note": "样本行已按总控数据合规要求移除（付费研报数据不入库），仅保留字段名与行数"
+  },
+  "report_rc": {
+    "ok": true,
+    "rows": 112,
+    "cols": [
+      "ts_code",
+      "name",
+      "report_date",
+      "report_title",
+      "report_type",
+      "classify",
+      "org_name",
+      "author_name",
+      "quarter",
+      "op_rt",
+      "op_pr",
+      "tp",
+      "np",
+      "eps",
+      "pe",
+      "rd",
+      "roe",
+      "ev_ebitda",
+      "rating",
+      "max_price",
+      "min_price"
+    ],
+    "sample_note": "样本行已按总控数据合规要求移除（付费研报数据不入库），仅保留字段名与行数"
+  }
+}

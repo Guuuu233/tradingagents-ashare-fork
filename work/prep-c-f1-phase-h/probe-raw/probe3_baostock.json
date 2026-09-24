@@ -1,0 +1,28 @@
+{
+  "login": {
+    "code": "0"
+  },
+  "query": {
+    "err": "0",
+    "msg": "success",
+    "fields": [
+      "date",
+      "code",
+      "open",
+      "high",
+      "low",
+      "close",
+      "volume",
+      "tradestatus",
+      "isST"
+    ],
+    "rows": 53,
+    "tradestatus_vals": [
+      "0",
+      "1"
+    ],
+    "date_min": "2020-05-06",
+    "date_max": "2020-07-21",
+    "sample_note": "样本行已按总控数据合规要求移除（D-040），仅保留字段名与行数等元信息"
+  }
+}
