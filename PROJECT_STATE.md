@@ -1,13 +1,13 @@
 # Project State
 
-## 当前状态头部（2026-09-25 总控更新；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-26 总控更新；开工前必须重新回读，D-005）
 
 > 项目总图见 `docs/PROJECT_PANORAMA.md`（快照，给全体成员看的概览）。
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `c5a90d5944498e87d98ca541a2dc5e9cae24ff10`（`/healthz` 精确回读；09-25 20:21 起，DAV-1282：全球指数取数修复——Tushare 有界并发与部分结果、停用新浪无日期 int_*；**价格返修与 E-04 返修均开启**）。上一版 `a666be5`（DAV-1276） |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`c5a90d5` 之后若只有治理文档提交，代码树与生产逐字节一致 |
+| 生产代码 SHA | `dc0b14362d2450773a60440f750622ee07739018`（`/healthz` 精确回读；09-25 23:29 起，DAV-1287：聊天入口报告结论落库、列表与详情窄取数回退、价格口径降级说明；**价格返修与 E-04 返修均开启**）。上一版 `c5a90d5`（DAV-1282） |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`dc0b143` 之后若只有治理文档提交，代码树与生产逐字节一致 |
 | 待发布提交 | 无 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
@@ -19,19 +19,22 @@
 
 - **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
 - **服务运行态**（D-038、D-041、D-044、D-045、DAV-1276）：
-  - PID 84954，运行目录 `releases/c5a90d5`（locked）；回退源为 `releases/a666be5`（DAV-1282）。
+  - PID 68655，运行目录 `releases/dc0b143`（locked）；回退源为 `releases/c5a90d5`（DAV-1287）。
   - 启动环境：`env -i` 白名单 16 项，与 DAV-1270 相同，含两个返修开关，不含 DUMP_DIR。
   - bundle 为 `index-DXhIKhFl.js`，含博弈论报告显示。
-  - 回退启动命令存于 `logs/prev-launch-a666be5.txt`；`releases/3f34db5` 在签收后删除。
+  - 回退启动命令存于 `logs/prev-launch-c5a90d5.txt`；`releases/a666be5` 在签收后删除。
   - 按 David 09-25 的指示，已清理更早的发布目录 `f075124`、`b0ceff3`、`a181e4a`（git worktree 已解锁并移除，`.env` 为软链，目标文件未受影响）。今后只保留「当前」与「回退」两个发布目录，发布签收后删除更早的那个。
 - **生产库**：
-  - reports 共 1823 份：completed 1059、failed 764（09-25 20:3x）。
+  - reports 共 1828 份：completed 1064、failed 764（09-26 00:0x）。
   - 部署前备份为 `data/tradingagents.db.bak-20260925-deploy-a666be5`。
   - 历史报告的 `game_theory_report` 列**不回填**（总控裁定，David 授权「你看着办」）：API 读取时回退取值，显示已经完整；回填属于生产库业务写入，没有收益，只有风险。
 - **本次 smoke**（3c55216a，000725.SZ@2026-09-24）：
   - **VALID / HOLD / CONFIRMED，gate 通过，属于合格 clean**，这是 price_ref.v1 契约期内生产第一份合格 clean。
   - E-04 返修被采用：「已完全公开……无新增超预期」改为「已定价状态为 unknown」，总控逐条审计，没有逃逸。
-- **上线后监控**（D-044、D-045）：已审计 3 份（eedb6128、5152eecc、3c55216a），没有触发回退条件。
+- **上线后监控**（D-044、D-045）：
+  - 已审计 10 份，没有触发回退条件。
+  - 合格 clean 2 份：3c55216a（HOLD）、a58e144e（SELL，聊天入口）。
+  - 观察项：E-04 守卫不扫描 MANAGER_VERDICT 的 dispute_map（bdbf6c56 中仍有「已充分定价出尽」）。
 - **口径：** `v2_debate_enabled` 只检查构建产物 `dist/assets`。
 - **当前唯一关键路径**（D-041）：
   1. ~~**DAV-1235**~~：price-ref 精度收紧（冻结语料 5/50，D-042 补充）已随 DAV-1242 于 09-24 13:25 上线，同批上线的还有前端 DAV-1238 与关闭上游上报的 DAV-1243。
