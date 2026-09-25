@@ -90,6 +90,7 @@ const REPORT_CONTENT_KEYS = [
     'macro_report',
     'smart_money_report',
     'volume_price_report',
+    'game_theory_report',
     'investment_plan',
     'trader_investment_plan',
     'final_trade_decision',
@@ -147,6 +148,7 @@ export interface LegacyReportCandidate {
     macro_report?: string
     smart_money_report?: string
     volume_price_report?: string
+    game_theory_report?: string
     investment_plan?: string
     trader_investment_plan?: string
     final_trade_decision?: string
@@ -164,6 +166,87 @@ export function isLegacyEnglishReport(report: LegacyReportCandidate): boolean {
         .join('\n')
     if (!content.trim()) return false
     return detectLegacyEnglishContent(content)
+}
+
+/**
+ * DAV-1271 W1: explain the "方向偏空/偏多但执行动作为观望" combination.
+ *
+ * Pure display layer: when the pipeline flags the analysis as VALID but the
+ * trade action was downgraded to WAIT and the manager direction is still
+ * directional, surface a one-line reason instead of the raw status pair.
+ */
+export interface WaitDowngradeContext {
+    analysis_status?: string | null
+    trade_action?: string | null
+    direction?: string | null
+    confirmation_state?: string | null
+    reason_codes?: ReadonlyArray<string> | null
+}
+
+const UPSTREAM_BLOCKED_RE = /^\s*上游决策状态为/
+
+/** Sections whose generated text may be the upstream-blocked placeholder. */
+const UPSTREAM_PLACEHOLDER_SECTIONS = new Set([
+    'trader_investment_plan',
+    'final_trade_decision',
+])
+
+export function buildWaitDowngradeExplanation(
+    ctx: WaitDowngradeContext | null | undefined,
+    opts?: { short?: boolean },
+): string | null {
+    if (!ctx) return null
+    if (String(ctx.analysis_status || '').trim().toUpperCase() !== 'VALID') return null
+    if (String(ctx.trade_action || '').trim().toUpperCase() !== 'WAIT') return null
+    const localized = localizeDirection(ctx.direction)
+    const lean =
+        localized === '看多' || localized === '偏多' ? '看多'
+        : localized === '看空' || localized === '偏空' ? '看空'
+        : null
+    if (!lean) return null
+    // DAV-1271 rework: WAIT does not always mean the core claims were
+    // under-verified (the manager may pick WAIT directly, VPA candidates,
+    // pending signals…). Only confirmation states that provably carry a
+    // verification shortfall may claim it; anything else stays neutral.
+    const conf = String(ctx.confirmation_state || '').trim().toUpperCase()
+    if (opts?.short) {
+        if (conf === 'PARTIAL') {
+            return `研究团队倾向${lean}，但核心论据只部分确认，按规则保持观望。`
+        }
+        if (conf === 'UNRESOLVED') {
+            return `研究团队倾向${lean}，但核心论据尚未确认，按规则保持观望。`
+        }
+        return `研究团队倾向${lean}，但本次执行动作为观望（WAIT）。`
+    }
+    if (conf === 'PARTIAL') {
+        return `研究团队倾向${lean}，但核心论据只部分核实（部分确认），按规则不给出买卖指令，执行动作为观望。`
+    }
+    if (conf === 'UNRESOLVED') {
+        return `研究团队倾向${lean}，但核心论据尚未核实，按规则不给出买卖指令，执行动作为观望。`
+    }
+    // CONFIRMED / missing / unknown: no machine-mappable reason — state the
+    // downgrade fact only, never invent a cause (零幻觉).
+    return `研究团队倾向${lean}，但本次执行动作为观望（WAIT），未给出买卖指令。`
+}
+
+/**
+ * Replace the generated "上游决策状态为 VALID/WAIT：…" placeholder text of the
+ * trader / risk sections with a human-readable downgrade explanation, when the
+ * report's decision status matches the WAIT-downgrade shape. Returns the
+ * original content untouched in every other case (no status context, no
+ * downgrade, or non-placeholder text).
+ */
+export function substituteUpstreamBlockedPlaceholder(
+    section: string,
+    content: string | null | undefined,
+    ctx: WaitDowngradeContext | null | undefined,
+): string {
+    const text = content || ''
+    if (!UPSTREAM_PLACEHOLDER_SECTIONS.has(section) || !UPSTREAM_BLOCKED_RE.test(text)) {
+        return text
+    }
+    const explanation = buildWaitDowngradeExplanation(ctx, { short: true })
+    return explanation || text
 }
 
 /**

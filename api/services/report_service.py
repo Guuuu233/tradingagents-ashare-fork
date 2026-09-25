@@ -1193,6 +1193,30 @@ def _extract_verdict(text: Optional[str]) -> Optional[Dict[str, Any]]:
     return res
 
 
+def resolve_game_theory_report(result_data: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Read-only fallback chain for ``game_theory_report``.
+
+    Dual-horizon runs may keep the section only under
+    ``result_data.short_term`` / ``result_data.medium_term`` while the
+    top-level key (and therefore the DB column) stays empty. Resolve in order:
+    top level → ``short_term`` → ``medium_term``. Never writes back anywhere;
+    the caller decides whether to persist the resolved value (new reports) or
+    only expose it on reads (historical reports).
+    """
+    if not isinstance(result_data, dict):
+        return None
+    for source in (
+        result_data,
+        result_data.get("short_term"),
+        result_data.get("medium_term"),
+    ):
+        if isinstance(source, dict):
+            text = source.get("game_theory_report")
+            if isinstance(text, str) and text.strip():
+                return text
+    return None
+
+
 def resolve_report_fields(
     result_data: Optional[Dict[str, Any]] = None,
     confidence_override: Optional[int] = None,
@@ -1214,7 +1238,7 @@ def resolve_report_fields(
         macro_report = result_data.get("macro_report")
         smart_money_report = result_data.get("smart_money_report")
         volume_price_report = result_data.get("volume_price_report")
-        game_theory_report = result_data.get("game_theory_report")
+        game_theory_report = resolve_game_theory_report(result_data)
         investment_plan = result_data.get("investment_plan")
         trader_investment_plan = result_data.get("trader_investment_plan")
         final_trade_decision = result_data.get("final_trade_decision")

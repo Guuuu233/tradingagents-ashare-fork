@@ -5607,7 +5607,12 @@ def get_report_endpoint(
     if report.result_data and isinstance(report.result_data, dict):
         if "social_data_context" not in report.result_data or report.result_data["social_data_context"] is None:
             report.result_data["social_data_context"] = {}
-    return report
+    # DAV-1271 G1: expose game_theory_report on reads without backfilling the DB.
+    # Serialize via the response model first so the ORM row is never mutated.
+    payload = ReportDetailResponse.model_validate(report)
+    if not payload.game_theory_report:
+        payload.game_theory_report = report_service.resolve_game_theory_report(report.result_data)
+    return payload
 
 
 @app.delete("/v1/reports/{report_id}")

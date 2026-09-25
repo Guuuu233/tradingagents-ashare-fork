@@ -11,7 +11,7 @@ describe('REPORT_SECTIONS and REPORT_EXPORT_SECTIONS', () => {
         expect(REPORT_EXPORT_SECTIONS).toEqual(REPORT_SECTIONS)
     })
 
-    it('contains all 7 analyst section keys in analysis team', () => {
+    it('contains all 8 analyst section keys in analysis team', () => {
         const analystKeys = [
             'market_report',
             'sentiment_report',
@@ -20,6 +20,7 @@ describe('REPORT_SECTIONS and REPORT_EXPORT_SECTIONS', () => {
             'macro_report',
             'smart_money_report',
             'volume_price_report',
+            'game_theory_report',
         ]
 
         const currentKeys = REPORT_EXPORT_SECTIONS.map((s) => s.key)
@@ -47,7 +48,7 @@ describe('REPORT_SECTIONS and REPORT_EXPORT_SECTIONS', () => {
         }
     })
 
-    it('maintains the exact 10-section sequence: 7 analysts -> 3 team plans', () => {
+    it('maintains the exact 11-section sequence: 8 analysts -> 3 team plans', () => {
         const expectedOrder = [
             'market_report',
             'sentiment_report',
@@ -56,18 +57,19 @@ describe('REPORT_SECTIONS and REPORT_EXPORT_SECTIONS', () => {
             'macro_report',
             'smart_money_report',
             'volume_price_report',
+            'game_theory_report',
             'investment_plan',
             'trader_investment_plan',
             'final_trade_decision',
         ]
 
         expect(REPORT_EXPORT_SECTIONS.map((s) => s.key)).toEqual(expectedOrder)
-        expect(REPORT_EXPORT_SECTIONS).toHaveLength(10)
+        expect(REPORT_EXPORT_SECTIONS).toHaveLength(11)
     })
 })
 
 describe('buildReportMarkdown', () => {
-    it('builds full markdown including all 7 analyst sections and 3 team sections', () => {
+    it('builds full markdown including all 8 analyst sections and 3 team sections', () => {
         const mockReport = {
             market_report: '市场分析正文',
             sentiment_report: '舆情分析正文',
@@ -76,6 +78,7 @@ describe('buildReportMarkdown', () => {
             macro_report: '宏观板块分析正文',
             smart_money_report: '主力资金分析正文',
             volume_price_report: '量价分析正文',
+            game_theory_report: '博弈论分析正文',
             investment_plan: '研究团队决策正文',
             trader_investment_plan: '交易团队计划正文',
             final_trade_decision: '最终交易决策正文',
@@ -90,6 +93,7 @@ describe('buildReportMarkdown', () => {
         expect(md).toContain('## 宏观板块报告\n\n宏观板块分析正文')
         expect(md).toContain('## 主力资金报告\n\n主力资金分析正文')
         expect(md).toContain('## 量价分析报告\n\n量价分析正文')
+        expect(md).toContain('## 博弈论与对手盘分析\n\n博弈论分析正文')
         expect(md).toContain('## 研究团队决策\n\n研究团队决策正文')
         expect(md).toContain('## 交易团队计划\n\n交易团队计划正文')
         expect(md).toContain('## 最终交易决策\n\n最终交易决策正文')

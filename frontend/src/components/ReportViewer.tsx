@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAnalysisStore } from '@/stores/analysisStore'
 import type { ReportDetail } from '@/types'
-import { isLegacyEnglishReport, sanitizeReportMarkdown } from '@/utils/reportText'
+import { buildWaitDowngradeExplanation, isLegacyEnglishReport, sanitizeReportMarkdown, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
 import { buildReportMarkdown, downloadMarkdown, REPORT_SECTIONS } from '@/utils/markdownExport'
 import HistoricalDebateDrawer from './HistoricalDebateDrawer'
 
@@ -46,6 +46,24 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
     const [showDebateDrawer, setShowDebateDrawer] = useState(false)
     const isHistorical = !!reportData
 
+    // DAV-1271 W1: VALID + WAIT + directional → explain the downgrade
+    const waitCtx: WaitDowngradeContext = isHistorical
+        ? {
+            analysis_status: reportData?.analysis_status ?? reportData?.result_data?.analysis_status,
+            trade_action: reportData?.trade_action ?? reportData?.result_data?.trade_action,
+            direction: reportData?.direction ?? reportData?.result_data?.direction,
+            confirmation_state: reportData?.result_data?.confirmation_state ?? reportData?.result_data?.decision_status?.confirmation_state,
+            reason_codes: reportData?.result_data?.reason_codes ?? reportData?.result_data?.decision_status?.reason_codes,
+        }
+        : {
+            analysis_status: report?.analysis_status,
+            trade_action: report?.trade_action,
+            direction: report?.direction,
+            confirmation_state: report?.confirmation_state ?? report?.decision_status?.confirmation_state,
+            reason_codes: report?.reason_codes ?? report?.decision_status?.reason_codes,
+        }
+    const waitExplanation = buildWaitDowngradeExplanation(waitCtx)
+
     const handleOpenDebate = () => {
         if (onOpenDebateDrawer) {
             onOpenDebateDrawer()
@@ -56,10 +74,12 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
 
     const getSectionContent = (key: string): string => {
         if (isHistorical) {
-            return sanitizeReportMarkdown((reportData?.[key as keyof ReportDetail] as string | undefined) || '')
+            const raw = (reportData?.[key as keyof ReportDetail] as string | undefined) || ''
+            return sanitizeReportMarkdown(substituteUpstreamBlockedPlaceholder(key, raw, waitCtx))
         }
         const s = streamingSections[key]
-        return sanitizeReportMarkdown(s?.displayed || (report?.[key as keyof typeof report] as string | undefined) || '')
+        const raw = s?.displayed || (report?.[key as keyof typeof report] as string | undefined) || ''
+        return sanitizeReportMarkdown(substituteUpstreamBlockedPlaceholder(key, raw, waitCtx))
     }
 
     const getSectionState = (key: string) => {
@@ -142,6 +162,11 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
                         该报告由旧版引擎生成，正文可能包含英文内容。
                     </div>
                 )}
+                {waitExplanation && (
+                    <div className="rounded-2xl border border-blue-200/80 bg-blue-50/80 px-4 py-2.5 text-xs leading-5 text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
+                        {waitExplanation}
+                    </div>
+                )}
                 <div className="space-y-3">
                     {REPORT_SECTIONS.map((section) => {
                         const content = getSectionContent(section.key)
@@ -219,6 +244,12 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
                     </button>
                 )}
             </div>
+
+            {waitExplanation && (
+                <div className="mb-3 rounded-2xl border border-blue-200/80 bg-blue-50/80 px-4 py-2.5 text-xs leading-5 text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
+                    {waitExplanation}
+                </div>
+            )}
 
             {/* Body */}
             <div className="flex-1 overflow-y-auto min-h-0">

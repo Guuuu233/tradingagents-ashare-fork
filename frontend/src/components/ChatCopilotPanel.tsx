@@ -3,7 +3,7 @@ import {
     Bot, Loader2, Send, Sparkles, FileText, ChevronRight, Trash2,
     TrendingUp, MessageCircle, Newspaper, Calculator, BarChart2, DollarSign,
     ArrowBigUp, ArrowBigDown, Brain, Briefcase, Flame, Scale, Shield, CheckCircle2,
-    Activity,
+    Activity, Swords,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -18,7 +18,7 @@ import {
     JOB_NOT_FOUND_MESSAGE,
     RECOVERY_POLL_TIMEOUT_MESSAGE,
 } from '@/utils/jobLifecycle'
-import { localizeDirection } from '@/utils/reportText'
+import { localizeDirection, buildWaitDowngradeExplanation, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
 import type {
     AgentReportEvent,
     AgentSnapshotEvent,
@@ -40,16 +40,48 @@ interface StreamEvent {
     data: Record<string, unknown>
 }
 
-export function formatAnalysisCompleteMessage(direction?: string | null, decision?: string | null): string {
-    const localized = localizeDirection(direction) || '未知'
-    const action = String(decision || 'HOLD')
-    return `**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+function appendWaitDowngradeNote(base: string, waitCtx?: WaitDowngradeContext | null): string {
+    const explanation = buildWaitDowngradeExplanation(waitCtx)
+    if (!explanation) return base
+    return base.replace('\n\n> 免责声明', `\n\n> 说明：${explanation}\n\n> 免责声明`)
 }
 
-export function formatAnalysisRecoveryMessage(direction?: string | null, decision?: string | null): string {
+export function formatAnalysisCompleteMessage(direction?: string | null, decision?: string | null, waitCtx?: WaitDowngradeContext | null): string {
     const localized = localizeDirection(direction) || '未知'
     const action = String(decision || 'HOLD')
-    return `**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`
+    return appendWaitDowngradeNote(`**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx)
+}
+
+export function formatAnalysisRecoveryMessage(direction?: string | null, decision?: string | null, waitCtx?: WaitDowngradeContext | null): string {
+    const localized = localizeDirection(direction) || '未知'
+    const action = String(decision || 'HOLD')
+    return appendWaitDowngradeNote(`**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx)
+}
+
+/** Assemble the W1 wait-downgrade context from an analysis-result-shaped object. */
+function waitDowngradeContextOf(src: {
+    analysis_status?: string | null
+    trade_action?: string | null
+    decision?: string | null
+    direction?: string | null
+    confirmation_state?: string | null
+    reason_codes?: string[] | null
+    decision_status?: {
+        analysis_status?: string | null
+        trade_action?: string | null
+        direction?: string | null
+        confirmation_state?: string | null
+        reason_codes?: string[] | null
+    } | null
+} | null | undefined): WaitDowngradeContext {
+    if (!src) return {}
+    return {
+        analysis_status: src.analysis_status ?? src.decision_status?.analysis_status,
+        trade_action: src.trade_action ?? src.decision ?? src.decision_status?.trade_action,
+        direction: src.direction ?? src.decision_status?.direction,
+        confirmation_state: src.confirmation_state ?? src.decision_status?.confirmation_state,
+        reason_codes: src.reason_codes ?? src.decision_status?.reason_codes,
+    }
 }
 
 export function formatAnalysisNotificationBody(direction?: string | null, decision?: string | null): string {
@@ -71,6 +103,7 @@ const REPORT_SECTION_TITLES: Record<string, string> = {
     macro_report: '宏观分析报告',
     smart_money_report: '主力资金分析报告',
     volume_price_report: '量价分析报告',
+    game_theory_report: '博弈论与对手盘分析',
     investment_plan: '研究团队投资计划',
     trader_investment_plan: '交易员计划',
     final_trade_decision: '最终交易决策',
@@ -85,6 +118,7 @@ const SECTION_META: Record<string, { Icon: React.FC<{ className?: string }>; ico
     macro_report:           { Icon: BarChart2,     iconCls: 'text-violet-500',  bgCls: 'bg-violet-100 dark:bg-violet-500/20' },
     smart_money_report:     { Icon: DollarSign,    iconCls: 'text-amber-500',   bgCls: 'bg-amber-100 dark:bg-amber-500/20' },
     volume_price_report:    { Icon: Activity,      iconCls: 'text-rose-500',    bgCls: 'bg-rose-100 dark:bg-rose-500/20' },
+    game_theory_report:     { Icon: Swords,        iconCls: 'text-sky-500',     bgCls: 'bg-sky-100 dark:bg-sky-500/20' },
     investment_plan:        { Icon: Brain,         iconCls: 'text-indigo-500',  bgCls: 'bg-indigo-100 dark:bg-indigo-500/20' },
     trader_investment_plan: { Icon: Briefcase,     iconCls: 'text-orange-500',  bgCls: 'bg-orange-100 dark:bg-orange-500/20' },
     final_trade_decision:   { Icon: CheckCircle2,  iconCls: 'text-teal-500',    bgCls: 'bg-teal-100 dark:bg-teal-500/20' },
@@ -272,7 +306,14 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
             forceUpdate(n => n + 1)
             markAgentMessagesComplete()
             pushAssistant(
-                formatAnalysisRecoveryMessage(result.direction, dbReport.decision || result.decision)
+                formatAnalysisRecoveryMessage(
+                    result.direction,
+                    dbReport.decision || result.decision,
+                    waitDowngradeContextOf({
+                        ...dbReport,
+                        ...(dbReport.result_data || {}),
+                    }),
+                )
             )
             setCurrentHorizon(null)
             setIsAnalyzing(false)
@@ -348,7 +389,11 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                     forceUpdate(n => n + 1)
                     markAgentMessagesComplete()
                     pushAssistant(
-                        formatAnalysisRecoveryMessage(result.result.direction, result.decision)
+                        formatAnalysisRecoveryMessage(
+                            result.result.direction,
+                            result.decision,
+                            waitDowngradeContextOf(result.result),
+                        )
                     )
                     setCurrentHorizon(null)
                     setIsAnalyzing(false)
@@ -504,7 +549,11 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                 const rawDirection = typeof data.direction === 'string' ? data.direction : (data.direction != null ? String(data.direction) : null)
                 const rawDecision = typeof data.decision === 'string' ? data.decision : (data.decision != null ? String(data.decision) : null)
                 pushAssistant(
-                    formatAnalysisCompleteMessage(rawDirection, rawDecision)
+                    formatAnalysisCompleteMessage(
+                        rawDirection,
+                        rawDecision,
+                        waitDowngradeContextOf(data.result as AnalysisReport | undefined),
+                    )
                 )
                 if ('Notification' in window && Notification.permission === 'granted') {
                     new Notification('TradingAgents 分析完成', {
@@ -939,7 +988,11 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                             <ReportCard
                                 key={msg.id}
                                 section={msg.section}
-                                content={msg.content}
+                                content={substituteUpstreamBlockedPlaceholder(
+                                    msg.section,
+                                    msg.content,
+                                    waitDowngradeContextOf(useAnalysisStore.getState().report),
+                                )}
                                 streaming={!msg.complete}
                                 onOpen={() => onShowReport?.(msg.section)}
                             />

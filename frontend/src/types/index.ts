@@ -253,6 +253,15 @@ export interface AnalysisReport {
     analysis_status?: string | null
     trade_action?: string | null
     risk_status?: string | null
+    confirmation_state?: string | null
+    reason_codes?: string[] | null
+    decision_status?: {
+        analysis_status?: string | null
+        trade_action?: string | null
+        direction?: string | null
+        confirmation_state?: string | null
+        reason_codes?: string[] | null
+    } | null
     mode?: 'single_horizon' | 'dual_horizon' | string
     status?: string
     requested_horizons?: AnalysisHorizon[]
