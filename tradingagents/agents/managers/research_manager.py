@@ -23,6 +23,7 @@ from tradingagents.agents.utils.evidence_summary import (
     build_evidence_summary,
 )
 from tradingagents.agents.utils.evidence_verifier import (
+    STATUS_VERIFIED,
     EvidenceFactualTruthEvaluator,
     extract_and_validate_manager_verdict,
     format_battlefield_coverage,
@@ -33,6 +34,11 @@ from tradingagents.agents.utils.evidence_verifier import (
     refresh_evidence_basis,
 )
 from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
+from tradingagents.agents.utils.e04_revision import (
+    e04_only_failures,
+    e04_revision_enabled,
+    locate_hit_spans,
+)
 from tradingagents.agents.utils.claim_cluster import (
     RELATION_GRAPH_STATUS_AVAILABLE,
     RELATION_GRAPH_STATUS_INVALID,
@@ -991,8 +997,13 @@ def validate_manager_expectation_revision_consumption(
     expectation_revisions: Any,
     claims: Sequence[Mapping[str, Any]] | None = None,
     seven_reports: Mapping[str, Any] | None = None,
+    hit_collector: list | None = None,
 ) -> tuple[bool, list[str]]:
     """Validate that research manager only consumed structured expectation_revision fields without hallucination (E-04).
+
+    DAV-1267：``hit_collector`` 非 None 时，每条 violation 附带记录命中句
+    （``{"violation","sentence","span","match"}``，span 为 full_text 区间），
+    供 E-04 定向返修列出命中句清单。守卫词表与语义判定不变。
 
     Guards full raw_response, reason, and structured fields across Chinese and English:
     1. 'Priced in' cannot be asserted as fact without traceable evidence.
@@ -1037,6 +1048,16 @@ def validate_manager_expectation_revision_consumption(
     if manager_verdict.get("investment_plan"):
         texts_to_check.append(_strip_system_gate_text(str(manager_verdict.get("investment_plan"))))
     full_text = "\n".join(t for t in texts_to_check if t)
+
+    def _hit(vmsg: str, start: int | None = None,
+             end: int | None = None, match: str = "") -> None:
+        violations.append(vmsg)
+        if hit_collector is not None:
+            entry = {"violation": vmsg, "match": match, "sentence": ""}
+            if start is not None and end is not None:
+                entry["span"] = [start, end]
+                entry["sentence"] = _sentence_span(full_text, start, end).strip()
+            hit_collector.append(entry)
 
     # DAV-1071：经理引用分析师 claim 文本（含其自标 unknown 的已定价标注）不等于自行断言；
     # 提前构建 claim 文本语料（空白归一），供 priced-in 与 beat/miss 两个分支共用。
@@ -1099,9 +1120,11 @@ def validate_manager_expectation_revision_consumption(
             if _has_traceable_pricing_basis(sentence) and _is_downweighting_pricing(sentence):
                 continue
             has_pi_asserted = True
+            pi_start, pi_end = start, end
             break
         if has_pi_asserted:
-            violations.append("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用")
+            _hit("E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用",
+                 pi_start, pi_end, full_text[pi_start:pi_end])
 
     # 2. Check if beat/miss claimed without comparable baseline (Chinese & English & Synonyms)
     if fund_base_type == "none" or fund_base_val is None:
@@ -1130,7 +1153,8 @@ def validate_manager_expectation_revision_consumption(
             if not _is_beat_miss_assertion(full_text, start, end):
                 continue
             has_beat_miss = True
-            violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”")
+            _hit(f"E-04 守卫拦截：基本面无有效旧基线，经理不得在正文或裁决理由中断言业绩“{kw}”",
+                 start, end, kw)
             break
         if not has_beat_miss:
             en_beat_iter = list(re.finditer(
@@ -1143,7 +1167,8 @@ def validate_manager_expectation_revision_consumption(
                     continue
                 if not _is_beat_miss_assertion(full_text, m_en_beat.start(), m_en_beat.end()):
                     continue
-                violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩超预期（命中 {m_en_beat.group(0)!r}）")
+                _hit(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩超预期（命中 {m_en_beat.group(0)!r}）",
+                     m_en_beat.start(), m_en_beat.end(), m_en_beat.group(0))
                 has_beat_miss = True
                 break
             if not has_beat_miss:
@@ -1159,7 +1184,8 @@ def validate_manager_expectation_revision_consumption(
                         continue
                     if not _is_beat_miss_assertion(full_text, m_en_miss.start(), m_en_miss.end()):
                         continue
-                    violations.append(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩不及预期（命中 {m_en_miss.group(0)!r}）")
+                    _hit(f"E-04 守卫拦截：基本面无有效旧基线，经理不得断言业绩不及预期（命中 {m_en_miss.group(0)!r}）",
+                         m_en_miss.start(), m_en_miss.end(), m_en_miss.group(0))
                     has_beat_miss = True
                     break
 
@@ -1228,7 +1254,8 @@ def validate_manager_expectation_revision_consumption(
                     continue
 
             # Otherwise, unevidenced hallucination!
-            violations.append(f"E-04 守卫拦截：分析师未提供结构化实际财务数值且无既有证据支持，经理不得擅自断言财务指标数值（{matched_full}）")
+            _hit(f"E-04 守卫拦截：分析师未提供结构化实际财务数值且无既有证据支持，经理不得擅自断言财务指标数值（{matched_full}）",
+                 m.start(), m.end(), matched_full)
 
     # 4. Check if double_count_guard is violated by claiming double voting / extra support
     fund_dc = (fund_er.get("double_count_guard") or {})
@@ -1242,7 +1269,9 @@ def validate_manager_expectation_revision_consumption(
         for dc_pat in dc_pats_zh:
             if dc_pat in full_text:
                 has_dc_violation = True
-                violations.append(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中“{dc_pat}”）")
+                _dc_idx = full_text.find(dc_pat)
+                _hit(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中“{dc_pat}”）",
+                     _dc_idx, _dc_idx + len(dc_pat), dc_pat)
                 break
         if not has_dc_violation:
             m_en_dc = re.search(
@@ -1251,7 +1280,8 @@ def validate_manager_expectation_revision_consumption(
                 re.IGNORECASE,
             )
             if m_en_dc:
-                violations.append(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中 {m_en_dc.group(0)!r}）")
+                _hit(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中 {m_en_dc.group(0)!r}）",
+                     m_en_dc.start(), m_en_dc.end(), m_en_dc.group(0))
 
     return len(violations) == 0, violations
 
@@ -2244,14 +2274,75 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             )
             return bool(ok)
 
+        def _rm_failed_checks(candidate: str) -> tuple[list, list]:
+            """DAV-1267 R1：对原稿确定性跑同一套一致性检查，返回
+            ``(failed_checks 清单, E-04 命中记录)``。零 LLM。
+
+            调用点在 ``extract_and_validate_manager_verdict`` 之前，E-04
+            违规尚未计入 failed_checks——这里先算出来供触发判定。
+            """
+            try:
+                mv = extract_and_validate_manager_verdict(
+                    raw_response=candidate,
+                    claims_verification=claims_verification,
+                    claims=claims,
+                    challenges=challenges,
+                    challenges_verification=challenges_verification,
+                    market_data_context=effective_market_data_context,
+                    seven_reports=seven_reports,
+                )
+            except Exception:
+                return ["<verdict_extract_failed>"], []
+            failed: list = []
+            if not mv.get("consistency_check_passed", True):
+                failed.extend(mv.get("failed_checks") or [])
+            hits: list = []
+            ok, viol = validate_manager_expectation_revision_consumption(
+                manager_verdict=mv,
+                raw_response=candidate,
+                expectation_revisions=expectation_revisions,
+                claims=claims,
+                seven_reports=seven_reports,
+                hit_collector=hits,
+            )
+            if not ok:
+                failed.extend(viol)
+            return failed, hits
+
+        # DAV-1267 R1：失败项全部以「E-04 守卫拦截」开头才允许 E-04 返修；
+        # 混入任何非 E-04 失败项即不触发（返修救不回）。开关未置位时
+        # 零额外计算、零调用。
+        _e04_req = None
+        if e04_revision_enabled():
+            _failed_list, _e04_hits = _rm_failed_checks(full_content)
+            _e04_req = {
+                "triggered": e04_only_failures(_failed_list),
+                "hits": _e04_hits,
+                "hit_spans": locate_hit_spans(full_content, _e04_hits),
+                "verified_claim_ids": sorted({
+                    str(item.get("claim_id"))
+                    for item in (claims_verification or [])
+                    if isinstance(item, Mapping)
+                    and item.get("status") == STATUS_VERIFIED
+                    and item.get("claim_id")
+                }),
+            }
+            _logger.info(
+                "[research_manager] e04 revision gate: triggered=%s "
+                "failed_checks=%d e04_hits=%d",
+                _e04_req["triggered"], len(_failed_list), len(_e04_hits),
+            )
+
         # DAV-1249 R1/R2: 研究总监产出后逐角色 price_ref 检查 + 定向返修一次。
         # V2 带原始 prompt 上下文；V3 返修稿须过同一一致性硬门。
+        # DAV-1267：E-04 违规清单与价格问题合并进同一条返修消息，仍一次调用。
         # 返修稿/原稿在事实核验与裁决提取之前定稿，下游全部读最终文本。
         full_content, _rev_rec = await maybe_revise_role_report(
             state, role_key="research_manager", report_field="investment_plan",
             text=full_content, llm=llm,
             orig_messages=prompt,
             deterministic_check=_rm_consistency_ok,
+            e04=_e04_req,
         )
 
         manager_verdict = extract_and_validate_manager_verdict(

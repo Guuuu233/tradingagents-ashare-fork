@@ -49,6 +49,11 @@ from tradingagents.agents.utils.price_ref_registry import (
     _pool_from_state,
 )
 from tradingagents.graph.signal_processing import _extract_decision_keyword
+from tradingagents.agents.utils.e04_revision import (
+    E04_REVISION_VERSION,
+    build_e04_revision_message,
+    find_synonym_escapes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +429,7 @@ async def maybe_revise_role_report(
     llm: Any,
     orig_messages: Any = None,
     deterministic_check: Optional[Callable[[str], bool]] = None,
+    e04: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """R1+R2+R3：检查 -> （有问题时）返修一次 -> 保护 -> 记录。
 
@@ -436,6 +442,11 @@ async def maybe_revise_role_report(
     ``state[PRICE_REF_REVISION_STATE_KEY][role_key]``。
     每角色最多一次：state 中已有该角色的 attempted 记录时直接跳过返修
     （仍返回记录占位为 None，调用方不得覆盖既有记录）。
+
+    DAV-1267：``e04`` 非 None 时按 ``e04_revision.v1`` 记录研究经理 E-04
+    定向返修：``{"triggered","hits","hit_spans","verified_claim_ids"}``。
+    E-04 命中与价格问题清单合并进同一条返修消息，仍只调用一次模型；
+    返修稿须额外过同义词逃逸检查（``find_synonym_escapes``）。
     """
     if not revision_enabled():
         return text, {}
@@ -448,12 +459,53 @@ async def maybe_revise_role_report(
     problems = check_role_price_refs(state, report_field, text)
     rec = _base_record(role_key, report_field, problems)
     rec["original_len"] = len(text or "")
-    if not problems:
+
+    # DAV-1267：E-04 返修记录挂在同一角色记录下（总控允许的并列字段位）。
+    e04_hits: List[Dict[str, Any]] = []
+    e04_spans: List[Any] = []
+    if e04 is not None:
+        e04_rec: Dict[str, Any] = {
+            "version": E04_REVISION_VERSION,
+            "triggered": bool(e04.get("triggered")),
+            "hit_count": len(e04.get("hits") or []),
+            "hits": [
+                {"violation": h.get("violation"), "sentence": h.get("sentence")}
+                for h in (e04.get("hits") or []) if isinstance(h, Mapping)
+            ],
+            "verified_claim_ids": list(e04.get("verified_claim_ids") or []),
+            "revision_attempted": False,
+            "adopted": None,
+            "discard_reason": None,
+        }
+        rec["e04_revision"] = e04_rec
+        if e04.get("triggered"):
+            e04_hits = [dict(h) for h in (e04.get("hits") or [])
+                        if isinstance(h, Mapping)]
+            e04_spans = list(e04.get("hit_spans") or [])
+    else:
+        e04_rec = None
+
+    if not problems and not e04_hits:
         return text, rec
 
     rec["revision_attempted"] = True
+    if e04_rec is not None:
+        # DAV-1267 🟡-1：仅当本次返修确实包含 E-04 段（e04_hits 非空）时
+        # 才计 E-04 返修尝试并跑同义词检查；仅价格问题时 e04 侧保持
+        # triggered/attempted 均为 False，走原 DAV-1249 v2 路径。
+        e04_rec["revision_attempted"] = bool(e04_hits)
     table_text = _render_price_ref_table(state.get(PRICE_REF_SOURCE_KEY), state)
-    message = build_revision_message(problems, table_text)
+    if e04_hits:
+        # R2：价格问题与 E-04 违规合并进同一条返修消息，一次调用。
+        price_section = (
+            build_revision_message(problems, table_text) if problems else "")
+        message = build_e04_revision_message(
+            e04_hits,
+            (e04 or {}).get("verified_claim_ids") or [],
+            price_section=price_section,
+        )
+    else:
+        message = build_revision_message(problems, table_text)
     revised = await _invoke_revision_llm(llm, text, message,
                                          orig_messages=orig_messages)
 
@@ -484,6 +536,7 @@ async def maybe_revise_role_report(
     # V3 第三道保护：角色级确定性检查（如研究经理一致性硬门、输出退化
     # 检查）。返修稿必须通过同一检查才被采用；原稿通过而返修稿不通过
     # → consistency_regression；原稿也未过 → revised_check_failed。
+    # E-04 场景下该检查包含 E-04 守卫复检（R4：守卫与完整一致性全过）。
     if deterministic_check is not None:
         orig_ok = _safe_check(deterministic_check, text)
         rev_ok = _safe_check(deterministic_check, revised)
@@ -494,7 +547,23 @@ async def maybe_revise_role_report(
             rec["discard_reason"] = (
                 "consistency_regression" if orig_ok else "revised_check_failed"
             )
+            if e04_rec is not None and e04_rec["revision_attempted"]:
+                e04_rec["adopted"] = "original"
+                e04_rec["discard_reason"] = rec["discard_reason"]
             return text, rec
+
+    # R4 新增同义词断言检查（DAV-1267）：原命中句附近出现词表表述即丢稿。
+    # 仅 E-04 段参与本次返修（e04_rec.revision_attempted）时执行。
+    if e04_rec is not None and e04_rec["revision_attempted"]:
+        escapes = find_synonym_escapes(text, revised, e04_spans)
+        if escapes:
+            e04_rec["escapes"] = escapes
+            e04_rec["adopted"] = "original"
+            e04_rec["discard_reason"] = "synonym_escape"
+            rec["adopted"] = "original"
+            rec["discard_reason"] = "synonym_escape"
+            return text, rec
+        e04_rec["adopted"] = "revised"
 
     rec["adopted"] = "revised"
     # 返修后复检：记录残余问题与返修引入的新问题价格（供返修漏斗统计）。

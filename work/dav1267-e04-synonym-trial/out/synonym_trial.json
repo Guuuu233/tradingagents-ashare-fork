@@ -1,0 +1,59 @@
+{
+ "params": {
+  "db": "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db",
+  "account": "429163f7-50b6-4982-8bdf-96ae99506843",
+  "since": "2026-08-26",
+  "postfix_cutoff": "2026-09-25 01:05:19",
+  "states": "/Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-1249-c35f512940f2/workdir/dav1249/states",
+  "out": "work/dav1267-e04-synonym-trial/out"
+ },
+ "synonym_window": 160,
+ "corpus_docs": 424,
+ "e04_hit_docs": 122,
+ "doc_freq_by_group": {
+  "已被消化": {},
+  "已反映": {
+   "prod_pre_fix|all": 3
+  },
+  "已计入": {},
+  "已兑现": {
+   "prod_pre_fix|all": 2
+  },
+  "市场已知": {
+   "prod_pre_fix|all": 1
+  },
+  "充分反映": {
+   "prod_pre_fix|all": 3
+  }
+ },
+ "term_docs_within_e04_docs": {
+  "已被消化": 0,
+  "已反映": 2,
+  "已计入": 0,
+  "已兑现": 0,
+  "市场已知": 1,
+  "充分反映": 1
+ },
+ "near_hit_docs_within_e04_docs": {
+  "已被消化": 0,
+  "已反映": 1,
+  "已计入": 0,
+  "已兑现": 0,
+  "市场已知": 0,
+  "充分反映": 1
+ },
+ "near_hit_detail": [
+  {
+   "id": "6a2ead77744a4b229c2e67462b9e65cc",
+   "term": "充分反映",
+   "group": "prod_pre_fix",
+   "violation": "E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用"
+  },
+  {
+   "id": "d7cfb88a4af74fb3ab4fea5ad3a194c9",
+   "term": "已反映",
+   "group": "prod_pre_fix",
+   "violation": "E-04 守卫拦截：缺乏可回溯证据，经理不得将“已定价/priced in”当作已确证事实引用"
+  }
+ ]
+}
