@@ -1,13 +1,13 @@
 # Project State
 
-## 当前状态头部（2026-09-25 16:00 总控更新；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-25 总控更新；开工前必须重新回读，D-005）
 
 > 项目总图见 `docs/PROJECT_PANORAMA.md`（快照，给全体成员看的概览）。
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `3f34db5400017d800f82c66ddd8f938ccd87e743`（`/healthz` 精确回读；09-25 15:38 起，DAV-1270，**价格返修与 E-04 返修均已开启**）。上一版 `f075124`（09-25 01:05，DAV-1258） |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`3f34db5` 之后若只有治理文档提交，代码树与生产逐字节一致 |
+| 生产代码 SHA | `a666be53d1895346eb23b25bbb7738c1d08315f4`（`/healthz` 精确回读；09-25，DAV-1276：博弈论报告显示与「偏空但观望」说明；**价格返修与 E-04 返修均开启**）。上一版 `3f34db5`（DAV-1270） |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`a666be5` 之后若只有治理文档提交，代码树与生产逐字节一致 |
 | 待发布提交 | 无 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
@@ -18,26 +18,21 @@
 - **计算代码未变**：漏斗计算所用的 `shadow_credit.py`、`price_basis_isolation.py`、`verify_h1b_gates.py`，自 `9d03c89` 以来没有改动。
 
 - **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
-- **服务运行态**（D-038、D-041、D-044、D-045、DAV-1270）：
-  - PID 52017，2026-09-25 15:38 启动。
-  - 运行目录：`releases/3f34db5`，已 locked。
-  - 启动环境：`env -i` 白名单 16 项，含：
-    - `APP_VERSION=0.6.0`；
-    - `TA_SOCIAL_MODE=disabled`；
-    - **`TA_PRICE_REF_REVISION_ENABLED=1`**；
-    - **`TA_E04_REVISION_ENABLED=1`**；
-    - 不含 DUMP_DIR 与 agent 变量。
-  - bundle 为 `index-B2z6RfLQ.js`（在发布目录内构建）。
-  - 日志：`releases/logs/uvicorn-3f34db5.log`。
-  - 回退源：`releases/f075124`，启动命令存于 `logs/prev-launch-f075124.txt`；回退也就是关闭 E-04 返修。
-  - 更早的发布目录 `a181e4a`、`b0ceff3` 仍然保留。
+- **服务运行态**（D-038、D-041、D-044、D-045、DAV-1276）：
+  - PID 29756，运行目录 `releases/a666be5`（locked）。
+  - 启动环境：`env -i` 白名单 16 项，与 DAV-1270 相同，含两个返修开关，不含 DUMP_DIR。
+  - bundle 为 `index-DXhIKhFl.js`，含博弈论报告显示。
+  - 回退源：`releases/3f34db5`，启动命令存于 `logs/prev-launch-3f34db5.txt`。
+  - 更早的发布目录 `f075124`、`b0ceff3`、`a181e4a` 仍然保留，是否清理待 David 决定。
 - **生产库**：
-  - reports 共 1820 份：completed 1056、failed 764（09-25 16:00，mode=ro）。
-  - 部署前备份为 `data/tradingagents.db.bak-20260925-deploy-3f34db5`，integrity 检查为 ok；此前的备份均保留。
-- **本次发布后的 smoke**（5152eecc，600519.SH@2026-09-24）：
-  - ABSTAIN，硬门失败项只有一条非 E-04 项：「全额采纳覆盖率 66.7% 的 claim」，所以按设计不触发 E-04 返修。
-  - gate 通过；价格返修 2 份采用、研究经理 1 份保留原稿；所有签名一致。
-- **上线后监控**（D-044、D-045）：总控用 DAV-1259 脚本审计真实报告；采用了 E-04 返修的报告，逐条审计改写句。截至 09-25 16:00，除 smoke 外尚无真实报告。
+  - reports 共 1822 份：completed 1058、failed 764。
+  - 部署前备份为 `data/tradingagents.db.bak-20260925-deploy-a666be5`。
+  - 历史报告的 `game_theory_report` 列**没有回填**，读取时经 API 回退取值；是否回填由 David 另行授权。
+- **本次 smoke**（3c55216a，000725.SZ@2026-09-24）：
+  - **VALID / HOLD / CONFIRMED，gate 通过，属于合格 clean**，这是 price_ref.v1 契约期内生产第一份合格 clean。
+  - E-04 返修被采用：「已完全公开……无新增超预期」改为「已定价状态为 unknown」，总控逐条审计，没有逃逸。
+- **上线后监控**（D-044、D-045）：已审计 3 份（eedb6128、5152eecc、3c55216a），没有触发回退条件。
+- **口径：** `v2_debate_enabled` 只检查构建产物 `dist/assets`。
 - **当前唯一关键路径**（D-041）：
   1. ~~**DAV-1235**~~：price-ref 精度收紧（冻结语料 5/50，D-042 补充）已随 DAV-1242 于 09-24 13:25 上线，同批上线的还有前端 DAV-1238 与关闭上游上报的 DAV-1243。
   2. **生成侧价格来源标注**（D-043）：
