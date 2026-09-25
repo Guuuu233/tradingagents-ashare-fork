@@ -1,5 +1,6 @@
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any, Dict, Optional, Tuple, Union
 import pandas as pd
 
@@ -306,6 +307,34 @@ TUSHARE_GLOBAL_TARGETS: list[tuple[str, str, str]] = [
     ("英国富时100", "FTSE", "FTSE"),
 ]
 
+# ── 全球指数并发与总时限契约（DAV-1277）──
+# 旧实现串行调用 index_global（单发读超时 10s），个别超时即把总耗时推出
+# vendor 预算 (timeout_seconds=30s)，已拿到的指数被整体丢弃。现改为：
+# - 有界并发：worker 数 = registry 中 tushare policy 的 max_concurrency(4)，
+#   两处置必须保持一致；
+# - 单次请求超时沿用 _query_tushare_api 默认 10s，不放宽（网关 P95 ~8s，
+#   10s 已覆盖正常请求，放宽只会放大尾部等待）；
+# - provider 内部总时限 24s（方案 b）：最坏情况 10 个标的分 ⌈10/4⌉=3 波
+#   ×10s=30s 已顶到 vendor 预算，收在 24s 给 markdown 渲染与调度留 ~6s
+#   余量；到时返回已拿到的部分结果，不再向上抛超时。
+_GLOBAL_INDICES_MAX_WORKERS = 4
+_GLOBAL_INDICES_BUDGET_S = 24.0
+
+
+def _fetch_global_index_one(
+    ts_code: str, as_of: str
+) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[str]]:
+    """单个全球指数的 Tushare 取数包装：吞掉异常，返回 (df, err_cat, err_note)。"""
+    try:
+        return _query_tushare_api(
+            api_name="index_global",
+            ts_code=ts_code,
+            as_of=as_of,
+        )
+    except Exception as e:  # pragma: no cover - 防御性兜底
+        logger.warning("Tushare index_global %s raised: %s", ts_code, e)
+        return None, "exception", str(e)
+
 
 class TushareProvider(BaseMarketDataProvider):
     """正式接入的 Tushare 数据源 Provider。
@@ -387,38 +416,65 @@ class TushareProvider(BaseMarketDataProvider):
         except Exception:
             return VendorFail(f"非法日期格式 {curr_date} (tushare)")
 
-        results: Dict[str, Optional[Dict[str, Any]]] = {}
+        # 按 TARGET_SYMBOLS 顺序预填 None，保证 markdown 缺项渲染与顺序稳定
+        results: Dict[str, Optional[Dict[str, Any]]] = {
+            name: None for name, _, _ in self.TARGET_SYMBOLS
+        }
         error_reasons: list[str] = []
 
-        for name, ts_code, display_code in self.TARGET_SYMBOLS:
-            try:
-                df, err_cat, err_note = _query_tushare_api(
-                    api_name="index_global",
-                    ts_code=ts_code,
-                    as_of=curr_date,
+        # 有界并发取数 + provider 内部总时限：超时标的直接丢弃为【数据缺失】，
+        # 已拿到的部分结果照常返回（DAV-1277 方案 b，registry 预算维持 30s）。
+        deadline = time.monotonic() + _GLOBAL_INDICES_BUDGET_S
+        executor = ThreadPoolExecutor(
+            max_workers=_GLOBAL_INDICES_MAX_WORKERS,
+            thread_name_prefix="tushare-gidx",
+        )
+        future_map = {
+            executor.submit(_fetch_global_index_one, ts_code, curr_date): (
+                name,
+                ts_code,
+                display_code,
+            )
+            for name, ts_code, display_code in self.TARGET_SYMBOLS
+        }
+        try:
+            remaining = max(0.0, deadline - time.monotonic())
+            done, pending = wait(future_map, timeout=remaining)
+
+            for fut in pending:
+                fut.cancel()
+                name, ts_code, _ = future_map[fut]
+                logger.warning(
+                    "Tushare index_global %s (%s) exceeded provider budget %.1fs, "
+                    "dropped to keep partial results",
+                    name,
+                    ts_code,
+                    _GLOBAL_INDICES_BUDGET_S,
                 )
+                error_reasons.append(
+                    f"{ts_code}: provider budget {_GLOBAL_INDICES_BUDGET_S}s exceeded"
+                )
+
+            for fut in done:
+                name, ts_code, display_code = future_map[fut]
+                df, err_cat, err_note = fut.result()
                 if err_cat:
                     error_reasons.append(f"{ts_code}: {err_note or err_cat}")
-            except Exception as e:
-                logger.warning("Tushare query failed for %s (%s): %s", name, ts_code, e)
-                error_reasons.append(f"{ts_code}: {e}")
-                df = None
-
-            if df is not None and not df.empty:
-                metrics = calculate_series_metrics(
-                    df,
-                    curr_date,
-                    instrument=ts_code,
-                    max_stale_business_days=3,
-                )
-                if metrics:
-                    metrics["code"] = display_code
-                    metrics["source"] = "tushare"
-                    results[name] = metrics
-                else:
-                    results[name] = None
-            else:
-                results[name] = None
+                if df is not None and not df.empty:
+                    metrics = calculate_series_metrics(
+                        df,
+                        curr_date,
+                        instrument=ts_code,
+                        max_stale_business_days=3,
+                    )
+                    if metrics:
+                        metrics["code"] = display_code
+                        metrics["source"] = "tushare"
+                        results[name] = metrics
+        finally:
+            # 不等在途请求收尾（单发自带 10s 超时，由后台线程自行耗尽），
+            # 避免 shutdown(wait=True) 把总耗时重新推出 vendor 预算。
+            executor.shutdown(wait=False, cancel_futures=True)
 
         valid_count = sum(
             1 for v in results.values() if v is not None and v.get("latest_close") is not None

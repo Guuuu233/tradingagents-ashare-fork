@@ -303,7 +303,7 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         assert "纳斯达克综合" in md_ixic
 
     def test_sina_hq_int_symbols_live_format_mock(self):
-        """Mock 新浪 HQ 接口返回 int_dji, int_nasdaq, int_sp500 等文本格式解析。"""
+        """DAV-1277 返工：int_* 报文无日期字段整体停用，一律不进入结果；b_*/rt_hk 保留。"""
         provider = CnAkshareProvider()
         mock_response_text = (
             'var hq_str_int_dji="道琼斯,46247.29,299.97,0.65";\n'
@@ -331,21 +331,20 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         ):
             snapshots = provider._fetch_global_indices_sina_hq(curr_date="2026-08-21")
 
-        assert "标普500" in snapshots
-        assert snapshots["标普500"]["latest_close"] == 6643.70
-        assert snapshots["标普500"]["change_1d_pct"] == 0.59
-        assert snapshots["标普500"]["source"] == "sina_hq"
+        # int_* 全部停用：陈旧旧值（如标普 6643.70，一年前数据）不得入账
+        assert "标普500" not in snapshots
+        assert "纳斯达克综合" not in snapshots
+        assert "道琼斯" not in snapshots
+        assert "日经225" not in snapshots
 
-        assert "纳斯达克综合" in snapshots
-        assert snapshots["纳斯达克综合"]["latest_close"] == 22484.07
-        assert snapshots["纳斯达克综合"]["change_1d_pct"] == 0.44
-
-        assert "道琼斯" in snapshots
-        assert snapshots["道琼斯"]["latest_close"] == 46247.29
-        assert snapshots["道琼斯"]["change_1d_pct"] == 0.65
-
+        # b_*/rt_hk 带日期字段，保留
         assert "德国DAX" in snapshots
         assert snapshots["德国DAX"]["as_of"] == "2026-08-21"
+        assert "韩国KOSPI" in snapshots
+        assert "英国富时100" in snapshots
+        assert "法国CAC40" in snapshots
+        assert "恒生指数" in snapshots
+        assert "恒生科技指数" in snapshots
 
     def test_sina_priority_over_eastmoney_ulist(self):
         """验证新浪 int_* 优先于东财 ulist，东财 ulist 作为第二源补齐缺失项。"""
@@ -600,7 +599,8 @@ class TestGlobalIndicesFallback(unittest.TestCase):
         assert historical["英国富时100"]["as_of"] == "2026-08-21"
         assert "恒生科技指数" not in historical
         assert "日经225" not in historical
-        assert live["日经225"]["as_of"] == "2026-09-15"
+        # DAV-1277 返工：int_nikkei 无日期字段整体停用，live 模式同样不得入账
+        assert "日经225" not in live
 
     def test_sina_missing_change_pct_remains_unknown(self):
         """新浪合法快照的缺失涨跌幅保持 None，合法 0.0 仍保留。"""

@@ -6996,18 +6996,24 @@ class CnAkshareProvider(BaseMarketDataProvider):
         import re
         from zoneinfo import ZoneInfo
 
+        import numpy as np
+
+        # DAV-1277 返工（总控裁定）：int_* 报文没有日期字段，当日分析时 as_of
+        # 被合成为当天，返回的却是约一年前的旧值（实测标普 6643.70 vs Tushare
+        # 7706.03）。无法证明新鲜度 → int_*（sp500/nasdaq/dji/nikkei）整体停用，
+        # 不得合成日期；这些指数在 cn_akshare 路径无其他带日期来源时标【数据缺失】。
         symbols = [
-            ("标普500", ".INX", "int_sp500"),
-            ("纳斯达克综合", ".IXIC", "int_nasdaq"),
-            ("道琼斯", ".DJI", "int_dji"),
             ("恒生指数", "HSI", "rt_hkHSI"),
             ("恒生科技指数", "HSTECH", "rt_hkHSTECH"),
-            ("日经225", "N225", "int_nikkei"),
             ("韩国KOSPI", "KS11", "b_KOSPI"),
             ("德国DAX", "GDAXI", "b_DAX"),
             ("英国富时100", "FTSE", "b_FTSE"),
             ("法国CAC40", "FCHI", "b_CAC"),
         ]
+        _provider_logger.info(
+            "Sina int_* global index symbols disabled (undated payload, ~1yr stale "
+            "values observed); SPX/IXIC/DJI/N225 not served from sina_hq"
+        )
 
         code_list = [s[2] for s in symbols]
         url = "https://hq.sinajs.cn/list=" + ",".join(code_list)
@@ -7039,15 +7045,7 @@ class CnAkshareProvider(BaseMarketDataProvider):
             if not raw or len(raw) < 2 or not raw[1]:
                 continue
             try:
-                if sina_symbol.startswith("int_"):
-                    # fields: [name, latest, change_amt, change_pct]
-                    price = safe_float(raw[1])
-                    change_1d_pct = safe_float(raw[3])
-                    if not is_historical and sina_symbol in ("int_sp500", "int_nasdaq", "int_dji"):
-                        as_of = _get_latest_us_session_date()
-                    else:
-                        as_of = None
-                elif sina_symbol.startswith("gb_"):
+                if sina_symbol.startswith("gb_"):
                     # fields: [name, price, change_pct, datetime, change_amt, ...]
                     price = safe_float(raw[1])
                     change_1d_pct = safe_float(raw[2])
@@ -7104,6 +7102,15 @@ class CnAkshareProvider(BaseMarketDataProvider):
                 if price is None or price <= 0:
                     continue
                 if as_of is None:
+                    # DAV-1277 返工：b_* 无可靠行情日期时不得合成当日日期绕过
+                    # 陈旧拒收——任何模式下一律拒收，落【数据缺失】。
+                    if sina_symbol.startswith("b_"):
+                        _provider_logger.warning(
+                            "Rejecting undated Sina snapshot %s: b_* payload "
+                            "carries no quote date, cannot prove freshness",
+                            sina_symbol,
+                        )
+                        continue
                     if is_historical:
                         _provider_logger.debug(
                             "Ignoring undated Sina snapshot for %s in historical analysis",
@@ -7122,6 +7129,30 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     continue
                 if snapshot_date > analysis_date:
                     continue
+
+                # DAV-1277：b_* 海外行情自带日期早于分析日超过 3 个交易日一律
+                # 拒收（新浪海外快照陈旧，如 b_DAX 停在数周前）。rt_hk/gb_ 等其
+                # 他格式保持原有口径；int_* 已在 symbols 层整体停用（无日期字段）。
+                # b_* 取报文中最后一组「日期+时间」为行情时间戳（无时间的裸日期
+                # 为静态字段，不参与 as_of），fixture 见
+                # tests/test_dav1277_global_indices_resilience.py。
+                if sina_symbol.startswith(("int_", "b_")):
+                    stale_b_days = int(
+                        np.busday_count(
+                            snapshot_date.strftime("%Y-%m-%d"),
+                            analysis_date.strftime("%Y-%m-%d"),
+                        )
+                    )
+                    if stale_b_days > 3:
+                        _provider_logger.warning(
+                            "Rejecting stale Sina snapshot %s: quote date %s is "
+                            "%d business days behind analysis date %s (threshold=3)",
+                            sina_symbol,
+                            snapshot_date,
+                            stale_b_days,
+                            analysis_date,
+                        )
+                        continue
 
                 trend_desc = "涨跌幅数据缺失"
                 if change_1d_pct is not None:
