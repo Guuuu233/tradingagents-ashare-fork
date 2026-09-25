@@ -36,6 +36,7 @@ const decisionConfig: Record<DecisionAction, { label: string; color: string; ico
     watch: { label: '观望', color: 'bg-slate-100 dark:bg-slate-700/50 text-slate-700 dark:text-slate-400 border-slate-200 dark:border-slate-600', icon: Info },
     no_trade: { label: '不交易', color: 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-500/30', icon: Ban },
     invalid: { label: '无效运行', color: 'bg-rose-100 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-500/30', icon: AlertTriangle },
+    none: { label: '未记录', color: 'bg-slate-100 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-600', icon: Info },
 }
 
 function resolveDecision(

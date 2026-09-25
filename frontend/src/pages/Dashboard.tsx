@@ -30,6 +30,7 @@ const DASHBOARD_DECISION_DISPLAY: Record<DecisionAction, DashboardDecisionDispla
     watch: { label: '观望', colorClass: 'text-slate-500 dark:text-slate-400' },
     no_trade: { label: '不交易', colorClass: 'text-amber-600 dark:text-amber-400' },
     invalid: { label: '无效运行', colorClass: 'text-amber-600 dark:text-amber-400' },
+    none: { label: '未记录', colorClass: 'text-slate-500 dark:text-slate-400' },
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- kept here by the Dashboard-only change boundary

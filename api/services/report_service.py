@@ -1217,6 +1217,86 @@ def resolve_game_theory_report(result_data: Optional[Dict[str, Any]]) -> Optiona
     return None
 
 
+GATE_BLOCKED_REASON_CODE = "price_basis_gate_blocked"
+
+
+def _primary_horizon_slice(result_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the primary (short → medium) horizon slice of a dual-horizon
+    ``result_data``, or ``None`` when no slice carries a recorded status."""
+    for key in ("short_term", "medium_term"):
+        slice_ = result_data.get(key)
+        if isinstance(slice_, dict) and (
+            slice_.get("trade_action")
+            or slice_.get("analysis_status")
+            or slice_.get("decision_status")
+        ):
+            return slice_
+    return None
+
+
+def resolve_post_gate_decision_fields(
+    result_data: Optional[Dict[str, Any]],
+    *,
+    fallback_direction: Optional[str] = None,
+) -> Dict[str, Any]:
+    """DAV-1283: post-gate decision fields of the primary horizon slice.
+
+    Dual-horizon reports keep the price-basis-gate *final* values under
+    ``result_data.short_term`` (``trade_action`` / ``decision_status`` are
+    already gate-adjusted) while the top level may still carry the pre-gate
+    action. Shared by the persistence path (D1) and the API read fallback
+    (D2). Read-only — never mutates ``result_data``. Returns ``{}`` when no
+    post-gate status is recorded.
+    """
+    if not isinstance(result_data, dict):
+        return {}
+    primary = _primary_horizon_slice(result_data)
+    if not isinstance(primary, dict):
+        return {}
+    ds = primary.get("decision_status")
+    ds = ds if isinstance(ds, dict) else {}
+    trade_action = primary.get("trade_action") or ds.get("trade_action")
+    analysis_status = primary.get("analysis_status") or ds.get("analysis_status")
+    direction_raw = ds.get("direction") or primary.get("direction")
+    risk_status = primary.get("risk_status") or ds.get("risk_status")
+    reason_codes = list(ds.get("reason_codes") or primary.get("reason_codes") or [])
+    failed_checks = list(ds.get("failed_checks") or primary.get("failed_checks") or [])
+    gate = primary.get("price_basis_gate")
+    gate = gate if isinstance(gate, dict) else {}
+    codes = {str(c) for c in (*reason_codes, *failed_checks)}
+    gate_blocked = gate.get("status") == "blocked" or GATE_BLOCKED_REASON_CODE in codes
+
+    from tradingagents.agents.utils.decision_status import db_direction_from_canonical
+
+    analysis_upper = str(analysis_status or "").upper()
+    action_upper = str(trade_action or "").upper()
+    non_executable = analysis_upper in {
+        "INVALID_RUN",
+        "DATA_ERROR",
+        "ABSTAIN",
+        "PARTIAL",
+    } or action_upper in {"NO_TRADE", "WAIT"}
+    direction = db_direction_from_canonical(
+        {"analysis_status": analysis_status, "direction": direction_raw},
+        fallback=fallback_direction,
+    )
+    if non_executable and direction in {None, "", "中性", "NEUTRAL", "HOLD"}:
+        direction = "N/A"
+    decision = action_upper if action_upper in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"} else None
+    return {
+        "decision": decision,
+        "direction": direction,
+        "trade_action": action_upper or None,
+        "analysis_status": analysis_upper or None,
+        "risk_status": str(risk_status).upper() if risk_status else None,
+        "reason_codes": reason_codes,
+        "failed_checks": failed_checks,
+        "gate_blocked": gate_blocked,
+        "gate_violations": list(gate.get("violations") or []),
+        "non_executable": non_executable,
+    }
+
+
 def resolve_report_fields(
     result_data: Optional[Dict[str, Any]] = None,
     confidence_override: Optional[int] = None,
@@ -1678,13 +1758,27 @@ def create_report(
                 or "short_term" in canonical_result_data
                 or "medium_term" in canonical_result_data
             ):
-                db_report.direction = None
-                db_report.decision = None
-                db_report.confidence = None
-                db_report.probability = None
-                db_report.target_price = None
-                db_report.stop_loss_price = None
-                db_report.trade_action = None
+                # DAV-1283 D1: persist the primary horizon's post-gate
+                # decision fields (same contract as /v1/analyze). Gate
+                # downgrades to NO_TRADE keep numerics empty; reports with
+                # no recorded post-gate status stay unrecorded (NULL).
+                pg = resolve_post_gate_decision_fields(
+                    canonical_result_data,
+                    fallback_direction=resolved["direction"],
+                )
+                db_report.decision = pg.get("decision")
+                db_report.direction = pg.get("direction")
+                db_report.trade_action = pg.get("trade_action")
+                if pg.get("analysis_status"):
+                    db_report.analysis_status = pg["analysis_status"]
+                if pg.get("risk_status"):
+                    db_report.risk_status = pg["risk_status"]
+                if not pg or not pg.get("trade_action") or pg.get("non_executable"):
+                    db_report.confidence = None
+                    db_report.probability = None
+                    db_report.target_price = None
+                    db_report.stop_loss_price = None
+                    effective_probability = None
         db_report.result_data = canonical_result_data
         db_report.risk_items = canonical_risk_items
         db_report.key_metrics = canonical_key_metrics
@@ -1749,13 +1843,27 @@ def create_report(
                 or "short_term" in canonical_result_data
                 or "medium_term" in canonical_result_data
             ):
-                direction_value = None
-                decision_value = None
-                conf_value = None
-                prob_value = None
-                target_value = None
-                stop_value = None
-                trade_action = None
+                # DAV-1283 D1: persist the primary horizon's post-gate
+                # decision fields (same contract as /v1/analyze). No
+                # recorded post-gate status → unrecorded (NULL), never the
+                # pre-gate caller decision.
+                pg = resolve_post_gate_decision_fields(
+                    canonical_result_data,
+                    fallback_direction=direction_value,
+                )
+                decision_value = pg.get("decision")
+                direction_value = pg.get("direction")
+                trade_action = pg.get("trade_action")
+                if pg.get("analysis_status"):
+                    analysis_status = pg["analysis_status"]
+                if pg.get("risk_status"):
+                    risk_status = pg["risk_status"]
+                if not pg or not pg.get("trade_action") or pg.get("non_executable"):
+                    conf_value = None
+                    prob_value = None
+                    target_value = None
+                    stop_value = None
+                    effective_probability = None
         db_report = ReportDB(
             id=report_id or str(uuid4()),
             user_id=user_id,
@@ -1832,6 +1940,153 @@ def get_report(db: Session, report_id: str, user_id: Optional[str] = None) -> Op
     return report
 
 
+def apply_post_gate_read_fallback(
+    payload: Dict[str, Any],
+    result_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """DAV-1283 D2 (read-only): expose the primary horizon's post-gate
+    decision fields when the report's DB columns were never persisted.
+
+    Mutates and returns ``payload`` (a serialized ReportResponse-shaped
+    dict); never touches the ORM row or the DB.
+    """
+    if not isinstance(result_data, dict):
+        return payload
+    top_ds = result_data.get("decision_status")
+    top_ds = top_ds if isinstance(top_ds, dict) else {}
+    pg = resolve_post_gate_decision_fields(
+        result_data,
+        fallback_direction=payload.get("direction"),
+    )
+    reason_codes = pg.get("reason_codes") or list(
+        result_data.get("reason_codes") or top_ds.get("reason_codes") or []
+    )
+    if reason_codes and not payload.get("reason_codes"):
+        payload["reason_codes"] = reason_codes
+    if not pg:
+        return payload
+    if payload.get("trade_action") is None:
+        payload["trade_action"] = pg.get("trade_action")
+    if payload.get("decision") is None:
+        payload["decision"] = pg.get("decision")
+    if payload.get("direction") is None:
+        payload["direction"] = pg.get("direction")
+    if payload.get("analysis_status") is None:
+        payload["analysis_status"] = pg.get("analysis_status")
+    if payload.get("risk_status") is None:
+        payload["risk_status"] = pg.get("risk_status")
+    if not pg.get("trade_action"):
+        # No recorded post-gate action → nothing reliable to surface.
+        return payload
+    if pg.get("non_executable"):
+        # A post-gate NO_TRADE/WAIT must not surface pre-gate numerics.
+        payload["confidence"] = None
+        payload["probability"] = None
+        payload["target_price"] = None
+        payload["stop_loss_price"] = None
+    else:
+        # Executable post-gate action: surface the resolved top-level
+        # numerics when the column itself was never persisted.
+        for key, rd_key in (
+            ("confidence", "confidence"),
+            ("probability", "probability"),
+            ("target_price", "target_price"),
+            ("stop_loss_price", "stop_loss_price"),
+        ):
+            if payload.get(key) is None and result_data.get(rd_key) is not None:
+                payload[key] = result_data.get(rd_key)
+    return payload
+
+
+def report_needs_post_gate_fallback(row: Any) -> bool:
+    """DAV-1283 D2: a list row only needs the narrow post-gate read when its
+    decision columns were never persisted (historical chat-entry reports) or
+    when it is a NO_TRADE row whose reason_codes decide the display label."""
+    if getattr(row, "decision", None) is None or getattr(row, "trade_action", None) is None:
+        return True
+    return str(getattr(row, "trade_action", "") or "").upper() == "NO_TRADE"
+
+
+# Narrow json_extract paths — everything the post-gate fallback and the
+# reason_codes display need, without ever loading the full result_data.
+_POST_GATE_FRAGMENT_PATHS: Dict[str, str] = {
+    "st_trade_action": "$.short_term.trade_action",
+    "st_analysis_status": "$.short_term.analysis_status",
+    "st_risk_status": "$.short_term.risk_status",
+    "st_direction": "$.short_term.direction",
+    "st_decision_status": "$.short_term.decision_status",
+    "st_reason_codes": "$.short_term.reason_codes",
+    "st_gate_status": "$.short_term.price_basis_gate.status",
+    "top_ds_reason_codes": "$.decision_status.reason_codes",
+    "top_reason_codes": "$.reason_codes",
+    "confidence": "$.confidence",
+    "probability": "$.probability",
+    "target_price": "$.target_price",
+    "stop_loss_price": "$.stop_loss_price",
+}
+
+
+def load_post_gate_fragments(
+    db: Session,
+    report_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch only the post-gate fields for the given reports via SQLite
+    ``json_extract`` — one query, scalar fields + small JSON fragments; the
+    multi-MB ``result_data`` column is never loaded or parsed wholesale.
+    Returns ``{report_id: result_data_fragment}`` suitable for
+    :func:`apply_post_gate_read_fallback`."""
+    if not report_ids:
+        return {}
+    from sqlalchemy import func
+
+    exprs = {
+        name: func.json_extract(ReportDB.result_data, path)
+        for name, path in _POST_GATE_FRAGMENT_PATHS.items()
+    }
+    rows = (
+        db.query(ReportDB.id, *exprs.values())
+        .filter(ReportDB.id.in_(list(report_ids)))
+        .all()
+    )
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        vals = dict(zip(exprs.keys(), row[1:]))
+
+        def _js(v: Any) -> Any:
+            if isinstance(v, str) and v[:1] in ("{", "["):
+                try:
+                    return json.loads(v)
+                except (ValueError, TypeError):
+                    return v
+            return v
+
+        frag: Dict[str, Any] = {
+            "short_term": {
+                "trade_action": vals["st_trade_action"],
+                "analysis_status": vals["st_analysis_status"],
+                "risk_status": vals["st_risk_status"],
+                "direction": vals["st_direction"],
+                "decision_status": _js(vals["st_decision_status"]),
+                "reason_codes": _js(vals["st_reason_codes"]),
+                "price_basis_gate": (
+                    {"status": vals["st_gate_status"]} if vals["st_gate_status"] else None
+                ),
+            },
+            "confidence": vals["confidence"],
+            "probability": vals["probability"],
+            "target_price": vals["target_price"],
+            "stop_loss_price": vals["stop_loss_price"],
+        }
+        top_ds_rc = _js(vals["top_ds_reason_codes"])
+        if top_ds_rc:
+            frag["decision_status"] = {"reason_codes": top_ds_rc}
+        top_rc = _js(vals["top_reason_codes"])
+        if top_rc:
+            frag["reason_codes"] = top_rc
+        out[row[0]] = frag
+    return out
+
+
 def get_reports_by_user(
     db: Session,
     user_id: Optional[str] = None,
@@ -1839,6 +2094,10 @@ def get_reports_by_user(
     skip: int = 0,
     limit: int = 100,
 ) -> List[ReportDB]:
+    # DAV-1283 D2 (rework): the list query must stay on summary columns —
+    # result_data averages ~2MB/row in production and must never be loaded
+    # in bulk. Post-gate fallback fragments are fetched separately via
+    # json_extract only for rows that need them.
     query = db.query(ReportDB).options(load_only(*REPORT_SUMMARY_COLUMNS))
     if user_id:
         query = query.filter(ReportDB.user_id == user_id)

@@ -13,6 +13,7 @@ export type DecisionAction =
     | 'watch'
     | 'no_trade'
     | 'invalid'
+    | 'none'
 
 export function parseDecisionAction(decision?: string | null): DecisionAction | undefined {
     if (!decision) return undefined
@@ -227,6 +228,187 @@ export function buildWaitDowngradeExplanation(
     // CONFIRMED / missing / unknown: no machine-mappable reason — state the
     // downgrade fact only, never invent a cause (零幻觉).
     return `研究团队倾向${lean}，但本次执行动作为观望（WAIT），未给出买卖指令。`
+}
+
+/* ─── DAV-1283 D3: report-list decision label ──────────────────────────────
+ * Previously `parseDecision` lived inside Reports.tsx and silently rendered
+ * empty columns as "观望". Moved here so the label contract is testable.
+ */
+export interface ReportListDecisionMeta {
+    analysis_status?: string | null
+    trade_action?: string | null
+    direction?: string | null
+    reason_codes?: ReadonlyArray<string> | null
+}
+
+export type ReportListAction =
+    | 'add'
+    | 'reduce'
+    | 'hold'
+    | 'watch'
+    | 'no_trade'
+    | 'invalid'
+    | 'none'
+
+export function resolveReportListDecision(
+    decisionText?: string,
+    meta?: ReportListDecisionMeta,
+): { action: ReportListAction; label: string } {
+    const status = (meta?.analysis_status || '').toUpperCase()
+    const trade = (meta?.trade_action || decisionText || '').toUpperCase()
+    if (status === 'INVALID_RUN' || status === 'DATA_ERROR' || trade.includes('INVALID')) {
+        return { action: 'invalid', label: '无效运行' }
+    }
+    if (status === 'ABSTAIN') {
+        return { action: 'no_trade', label: '弃权/不交易' }
+    }
+    if (trade === 'NO_TRADE' || trade.includes('NO_TRADE')) {
+        // A gate-downgraded NO_TRADE is not a plain "不交易".
+        const gated = (meta?.reason_codes ?? []).some(c => c === PRICE_GATE_BLOCKED_CODE)
+        return { action: 'no_trade', label: gated ? '不交易（价格未通过）' : '不交易' }
+    }
+    if (trade === 'WAIT' || status === 'PARTIAL') {
+        return { action: 'watch', label: status === 'PARTIAL' ? '部分可用/观望' : '观望' }
+    }
+    // Empty columns mean "未记录", never a fake "观望".
+    if (!decisionText && !trade) return { action: 'none', label: '未记录' }
+    const action = parseDecisionAction(meta?.trade_action || decisionText)
+    if (action === 'invalid') return { action: 'invalid', label: '无效运行' }
+    if (action === 'no_trade') return { action: 'no_trade', label: '不交易' }
+    if (action === 'watch') return { action: 'watch', label: '观望' }
+    if (action === 'buy' || action === 'add') return { action: 'add', label: '增持' }
+    if (action === 'sell' || action === 'reduce') return { action: 'reduce', label: '减持' }
+    return { action: 'hold', label: '持有' }
+}
+
+/* ─── DAV-1283 D4: price-basis-gate downgrade note ─────────────────────────
+ * When the manager's action (BUY/SELL/HOLD) was downgraded to NO_TRADE by the
+ * price-basis gate, every surface must explain it instead of letting the
+ * pre-gate text ("卖出") stand alone.
+ */
+export const PRICE_GATE_BLOCKED_CODE = 'price_basis_gate_blocked'
+
+export interface PriceGateViolation {
+    kind?: string
+    source?: string | null
+    detail?: string | null
+    ref_ids?: Array<string | null>
+}
+
+export interface PriceGateDecisionStatus {
+    trade_action?: string | null
+    reason_codes?: ReadonlyArray<string> | null
+    failed_checks?: ReadonlyArray<string> | null
+}
+
+export interface PriceGateSlice {
+    trade_action?: string | null
+    reason_codes?: ReadonlyArray<string> | null
+    decision_status?: PriceGateDecisionStatus | null
+    price_basis_gate?: { status?: string; violations?: PriceGateViolation[] } | null
+}
+
+/** Structural source accepted by {@link resolvePriceGateDowngrade}: either an
+ * AnalysisReport-shaped object (its own fields are the result_data) or an API
+ * report row carrying `result_data`. */
+export interface PriceGateSource {
+    trade_action?: string | null
+    decision?: string | null
+    pre_gate_trade_action?: string | null
+    reason_codes?: ReadonlyArray<string> | null
+    decision_status?: PriceGateDecisionStatus | null
+    short_term?: PriceGateSlice | null
+    price_basis_gate?: { status?: string; violations?: PriceGateViolation[] } | null
+    result_data?: PriceGateSource | null
+}
+
+const GATE_PRE_ACTION_LABEL: Record<string, string> = {
+    BUY: '买入',
+    SELL: '卖出',
+    HOLD: '持有',
+}
+
+const PRICE_NUMBER_RE = /\d+(?:\.\d+)?/g
+const MAX_GATE_PRICE_SAMPLES = 3
+
+/**
+ * Detect a price-basis-gate downgrade: final (post-gate) action is NO_TRADE
+ * while the manager's pre-gate action was directional. Returns the pre-gate
+ * action plus up to 3 unverifiable price samples from the gate violations.
+ */
+export function resolvePriceGateDowngrade(
+    src: PriceGateSource | null | undefined,
+): { managerAction: 'BUY' | 'SELL' | 'HOLD'; prices: string[] } | null {
+    if (!src) return null
+    const rd: PriceGateSource = src.result_data ?? src
+    const slice: PriceGateSlice | null =
+        rd.short_term && typeof rd.short_term === 'object' ? rd.short_term : null
+    const postAction = String(
+        slice?.trade_action ??
+        slice?.decision_status?.trade_action ??
+        src.trade_action ??
+        rd.trade_action ??
+        '',
+    ).toUpperCase()
+    if (postAction !== 'NO_TRADE') return null
+    const codes: ReadonlyArray<string> = [
+        ...(slice?.decision_status?.reason_codes ?? []),
+        ...(slice?.decision_status?.failed_checks ?? []),
+        ...(slice?.reason_codes ?? []),
+        ...(src.reason_codes ?? []),
+        ...(rd.reason_codes ?? []),
+        ...(rd.decision_status?.reason_codes ?? []),
+        ...(rd.decision_status?.failed_checks ?? []),
+    ]
+    const gate = slice?.price_basis_gate ?? rd.price_basis_gate ?? null
+    const blocked =
+        gate?.status === 'blocked' || codes.some(c => c === PRICE_GATE_BLOCKED_CODE)
+    if (!blocked) return null
+    // Pre-gate manager action: explicit field (new reports) first, then the
+    // top-level trade_action/decision of legacy payloads which still hold the
+    // pre-gate value. Only directional actions count (the gate only ever
+    // downgrades BUY/SELL/HOLD).
+    const candidates = [
+        rd.pre_gate_trade_action,
+        src.pre_gate_trade_action,
+        rd.trade_action,
+        rd.decision,
+        src.decision,
+    ]
+    const managerAction = candidates
+        .map(c => String(c || '').toUpperCase())
+        .find(c => c === 'BUY' || c === 'SELL' || c === 'HOLD') as
+        | 'BUY'
+        | 'SELL'
+        | 'HOLD'
+        | undefined
+    if (!managerAction) return null
+    const prices: string[] = []
+    for (const violation of gate?.violations ?? []) {
+        // Strip ref-id tokens (pr-131 / (pr-131)) so ids never read as prices.
+        const detail = (typeof violation?.detail === 'string' ? violation.detail : '')
+            .replace(/\(\s*pr-[^)]*\)/gi, ' ')
+            .replace(/pr-\d+/gi, ' ')
+        for (const match of detail.matchAll(PRICE_NUMBER_RE)) {
+            if (!prices.includes(match[0])) prices.push(match[0])
+            if (prices.length >= MAX_GATE_PRICE_SAMPLES) break
+        }
+        if (prices.length >= MAX_GATE_PRICE_SAMPLES) break
+    }
+    return { managerAction, prices }
+}
+
+/** One-line downgrade note shared by the completion card, the detail banner
+ * and the trader/risk sections. */
+export function buildPriceGateDowngradeNote(
+    src: PriceGateSource | null | undefined,
+): string | null {
+    const downgrade = resolvePriceGateDowngrade(src)
+    if (!downgrade) return null
+    const pricePart = downgrade.prices.length
+        ? `（如：${downgrade.prices.join('、')} 元）`
+        : ''
+    return `研究团队建议${GATE_PRE_ACTION_LABEL[downgrade.managerAction]}，但报告中有价格无法核实来源${pricePart}，按规则不执行，最终动作为不交易。`
 }
 
 /**

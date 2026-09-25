@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAnalysisStore } from '@/stores/analysisStore'
 import type { ReportDetail } from '@/types'
-import { buildWaitDowngradeExplanation, isLegacyEnglishReport, sanitizeReportMarkdown, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
+import { buildPriceGateDowngradeNote, buildWaitDowngradeExplanation, isLegacyEnglishReport, sanitizeReportMarkdown, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
 import { buildReportMarkdown, downloadMarkdown, REPORT_SECTIONS } from '@/utils/markdownExport'
 import HistoricalDebateDrawer from './HistoricalDebateDrawer'
 
@@ -64,6 +64,16 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
         }
     const waitExplanation = buildWaitDowngradeExplanation(waitCtx)
 
+    // DAV-1283 D4: manager directional action downgraded to NO_TRADE by the
+    // price-basis gate → attach a short note to the trader / risk sections.
+    const gateNote = buildPriceGateDowngradeNote(isHistorical ? reportData : report)
+    const GATE_NOTE_SECTIONS = new Set(['trader_investment_plan', 'final_trade_decision'])
+    const withGateNote = (key: string, content: string): string => {
+        if (!gateNote || !GATE_NOTE_SECTIONS.has(key) || !content) return content
+        if (content.includes(gateNote)) return content
+        return `> 说明：${gateNote}\n\n${content}`
+    }
+
     const handleOpenDebate = () => {
         if (onOpenDebateDrawer) {
             onOpenDebateDrawer()
@@ -75,11 +85,11 @@ export default function ReportViewer({ reportData, activeSection, onOpenDebateDr
     const getSectionContent = (key: string): string => {
         if (isHistorical) {
             const raw = (reportData?.[key as keyof ReportDetail] as string | undefined) || ''
-            return sanitizeReportMarkdown(substituteUpstreamBlockedPlaceholder(key, raw, waitCtx))
+            return sanitizeReportMarkdown(withGateNote(key, substituteUpstreamBlockedPlaceholder(key, raw, waitCtx)))
         }
         const s = streamingSections[key]
         const raw = s?.displayed || (report?.[key as keyof typeof report] as string | undefined) || ''
-        return sanitizeReportMarkdown(substituteUpstreamBlockedPlaceholder(key, raw, waitCtx))
+        return sanitizeReportMarkdown(withGateNote(key, substituteUpstreamBlockedPlaceholder(key, raw, waitCtx)))
     }
 
     const getSectionState = (key: string) => {

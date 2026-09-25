@@ -255,6 +255,8 @@ export interface AnalysisReport {
     risk_status?: string | null
     confirmation_state?: string | null
     reason_codes?: string[] | null
+    pre_gate_trade_action?: string | null
+    price_basis_gate?: PriceBasisGate | null
     decision_status?: {
         analysis_status?: string | null
         trade_action?: string | null
@@ -364,6 +366,21 @@ export interface KeyMetric {
 
 export type AnalysisHorizon = 'short' | 'medium'
 
+export interface PriceBasisGateViolation {
+    kind?: string
+    source?: string | null
+    detail?: string | null
+    ref_ids?: Array<string | null>
+}
+
+export interface PriceBasisGate {
+    status?: string
+    violations?: PriceBasisGateViolation[]
+    allowed_dual_display?: unknown[]
+    decision_driving_ref_count?: number
+    price_basis_version?: string
+}
+
 export interface AnalysisHorizonResult {
     horizon?: string
     status?: string
@@ -371,6 +388,12 @@ export interface AnalysisHorizonResult {
     impact?: string
     decision?: string
     direction?: string
+    analysis_status?: string | null
+    trade_action?: string | null
+    risk_status?: string | null
+    reason_codes?: string[] | null
+    decision_status?: AnalysisReport['decision_status']
+    price_basis_gate?: PriceBasisGate | null
     confidence?: number | null
     probability?: number | null
     target_price?: number | null
@@ -425,6 +448,7 @@ export interface Report {
     analysis_status?: string | null
     trade_action?: string | null
     risk_status?: string | null
+    reason_codes?: string[] | null
     risk_items?: RiskItem[]
     key_metrics?: KeyMetric[]
     data_gaps?: string[]

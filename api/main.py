@@ -1345,6 +1345,9 @@ class ReportResponse(BaseModel):
     analysis_status: Optional[str] = None
     trade_action: Optional[str] = None
     risk_status: Optional[str] = None
+    # DAV-1283 D3: post-gate reason codes so the list/detail UI can
+    # distinguish a price-gate downgrade from a plain NO_TRADE.
+    reason_codes: Optional[List[str]] = None
     risk_items: Optional[List[Dict[str, Any]]] = None
     key_metrics: Optional[List[Dict[str, Any]]] = None
     data_gaps: List[str] = Field(default_factory=list)
@@ -3819,6 +3822,36 @@ async def _run_job_inner(
                 graph_decision=graph_decision,
                 resolved=resolved,
             )
+            # DAV-1283 D5: the top-level decision_status above is derived from
+            # the hoisted pre-gate verdict text, so it can disagree with the
+            # primary horizon's post-gate status (e.g. SELL vs NO_TRADE after
+            # price_basis_gate). Hoist the post-gate status to the top level
+            # and keep the pre-gate action under pre_gate_trade_action.
+            _primary_ds = primary_r.get("decision_status")
+            if isinstance(_primary_ds, dict) and _primary_ds.get("trade_action"):
+                from tradingagents.agents.utils.decision_status import (
+                    apply_decision_status_to_result,
+                )
+
+                _post_action = str(_primary_ds.get("trade_action") or "").upper()
+                _pre_gate_action = next(
+                    (
+                        str(c)
+                        for c in (
+                            result.get("trade_action"),
+                            result.get("decision"),
+                            graph_decision,
+                        )
+                        if c and str(c).upper() != _post_action
+                    ),
+                    None,
+                )
+                if _pre_gate_action:
+                    result["pre_gate_trade_action"] = _pre_gate_action
+                apply_decision_status_to_result(result, _primary_ds)
+                if primary_r.get("price_basis_gate") is not None:
+                    result["price_basis_gate"] = primary_r.get("price_basis_gate")
+                decision = str(result.get("trade_action") or decision)
             _mount_or_refresh_protocol_metadata_and_metrics(result)
             _attach_custom_prompt_snapshot(result, _prompt_snapshot)
 
@@ -5572,7 +5605,19 @@ def list_reports(
     for r in reports:
         r.name = code_to_name.get(r.symbol, r.symbol)
         _attach_job_runtime_state(r, str(getattr(r, "id", "")))
-    return {"total": total, "reports": reports}
+    # DAV-1283 D2 (rework): never bulk-load result_data. Only rows with
+    # unpersisted decision columns (or NO_TRADE rows needing reason_codes)
+    # get a narrow json_extract read of the post-gate fragment.
+    frag_map = report_service.load_post_gate_fragments(
+        db, [r.id for r in reports if report_service.report_needs_post_gate_fallback(r)]
+    )
+    items = [
+        report_service.apply_post_gate_read_fallback(
+            ReportResponse.model_validate(r).model_dump(), frag_map.get(r.id)
+        )
+        for r in reports
+    ]
+    return {"total": total, "reports": items}
 
 
 @app.post("/v1/reports/latest-by-symbols", response_model=LatestReportsBySymbolsResponse)
@@ -5586,7 +5631,16 @@ def list_latest_reports_by_symbols(
         user_id=current_user.id,
         symbols=body.symbols,
     )
-    return {"reports": reports}
+    frag_map = report_service.load_post_gate_fragments(
+        db, [r.id for r in reports if report_service.report_needs_post_gate_fallback(r)]
+    )
+    items = [
+        report_service.apply_post_gate_read_fallback(
+            ReportResponse.model_validate(r).model_dump(), frag_map.get(r.id)
+        )
+        for r in reports
+    ]
+    return {"reports": items}
 
 
 @app.get("/v1/reports/{report_id}", response_model=ReportDetailResponse)
@@ -5612,6 +5666,10 @@ def get_report_endpoint(
     payload = ReportDetailResponse.model_validate(report)
     if not payload.game_theory_report:
         payload.game_theory_report = report_service.resolve_game_theory_report(report.result_data)
+    # DAV-1283 D2: read-only fallback to post-gate primary-horizon fields.
+    payload = ReportDetailResponse.model_validate(
+        report_service.apply_post_gate_read_fallback(payload.model_dump(), report.result_data)
+    )
     return payload
 
 
@@ -7318,6 +7376,16 @@ def get_portfolio_overview(
     )
     for report in latest_reports:
         report.name = code_to_name.get(report.symbol, report.symbol)
+    latest_frag_map = report_service.load_post_gate_fragments(
+        db,
+        [r.id for r in latest_reports if report_service.report_needs_post_gate_fallback(r)],
+    )
+    latest_reports = [
+        report_service.apply_post_gate_read_fallback(
+            ReportResponse.model_validate(r).model_dump(), latest_frag_map.get(r.id)
+        )
+        for r in latest_reports
+    ]
 
     portfolio_import = portfolio_import_service.get_import_state(db, current_user.id)
 

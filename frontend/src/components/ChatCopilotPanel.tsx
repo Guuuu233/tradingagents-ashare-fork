@@ -18,7 +18,7 @@ import {
     JOB_NOT_FOUND_MESSAGE,
     RECOVERY_POLL_TIMEOUT_MESSAGE,
 } from '@/utils/jobLifecycle'
-import { localizeDirection, buildWaitDowngradeExplanation, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
+import { localizeDirection, buildPriceGateDowngradeNote, buildWaitDowngradeExplanation, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
 import type {
     AgentReportEvent,
     AgentSnapshotEvent,
@@ -40,22 +40,40 @@ interface StreamEvent {
     data: Record<string, unknown>
 }
 
-function appendWaitDowngradeNote(base: string, waitCtx?: WaitDowngradeContext | null): string {
-    const explanation = buildWaitDowngradeExplanation(waitCtx)
-    if (!explanation) return base
-    return base.replace('\n\n> 免责声明', `\n\n> 说明：${explanation}\n\n> 免责声明`)
+function appendWaitDowngradeNote(
+    base: string,
+    waitCtx?: WaitDowngradeContext | null,
+    gateSrc?: Parameters<typeof buildPriceGateDowngradeNote>[0],
+): string {
+    const notes = [
+        buildWaitDowngradeExplanation(waitCtx),
+        buildPriceGateDowngradeNote(gateSrc),
+    ].filter((n): n is string => !!n)
+    if (!notes.length) return base
+    const block = notes.map(n => `> 说明：${n}`).join('\n\n')
+    return base.replace('\n\n> 免责声明', `\n\n${block}\n\n> 免责声明`)
 }
 
-export function formatAnalysisCompleteMessage(direction?: string | null, decision?: string | null, waitCtx?: WaitDowngradeContext | null): string {
+export function formatAnalysisCompleteMessage(
+    direction?: string | null,
+    decision?: string | null,
+    waitCtx?: WaitDowngradeContext | null,
+    gateSrc?: Parameters<typeof buildPriceGateDowngradeNote>[0],
+): string {
     const localized = localizeDirection(direction) || '未知'
     const action = String(decision || 'HOLD')
-    return appendWaitDowngradeNote(`**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx)
+    return appendWaitDowngradeNote(`**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
 }
 
-export function formatAnalysisRecoveryMessage(direction?: string | null, decision?: string | null, waitCtx?: WaitDowngradeContext | null): string {
+export function formatAnalysisRecoveryMessage(
+    direction?: string | null,
+    decision?: string | null,
+    waitCtx?: WaitDowngradeContext | null,
+    gateSrc?: Parameters<typeof buildPriceGateDowngradeNote>[0],
+): string {
     const localized = localizeDirection(direction) || '未知'
     const action = String(decision || 'HOLD')
-    return appendWaitDowngradeNote(`**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx)
+    return appendWaitDowngradeNote(`**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
 }
 
 /** Assemble the W1 wait-downgrade context from an analysis-result-shaped object. */
@@ -313,6 +331,7 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                         ...dbReport,
                         ...(dbReport.result_data || {}),
                     }),
+                    dbReport,
                 )
             )
             setCurrentHorizon(null)
@@ -393,6 +412,7 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                             result.result.direction,
                             result.decision,
                             waitDowngradeContextOf(result.result),
+                            result.result,
                         )
                     )
                     setCurrentHorizon(null)
@@ -553,6 +573,7 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
                         rawDirection,
                         rawDecision,
                         waitDowngradeContextOf(data.result as AnalysisReport | undefined),
+                        data.result as AnalysisReport | undefined,
                     )
                 )
                 if ('Notification' in window && Notification.permission === 'granted') {

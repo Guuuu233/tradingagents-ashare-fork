@@ -13,7 +13,7 @@ import KeyMetrics from '@/components/KeyMetrics'
 import HistoricalDebateDrawer from '@/components/HistoricalDebateDrawer'
 import { useAuthStore } from '@/stores/authStore'
 import { advanceProgress, getReportRunProgress } from '@/utils/progressFeedback'
-import { isLegacyEnglishReport, parseDecisionAction } from '@/utils/reportText'
+import { buildPriceGateDowngradeNote, isLegacyEnglishReport, resolveReportListDecision } from '@/utils/reportText'
 import { buildReportMarkdown, downloadMarkdown, REPORT_EXPORT_SECTIONS } from '@/utils/markdownExport'
 
 type ProgressState = {
@@ -28,33 +28,8 @@ const IDLE_PROGRESS: ProgressState = {
     detail: null,
 }
 
-const parseDecision = (
-    decisionText?: string,
-    meta?: { analysis_status?: string | null; trade_action?: string | null; direction?: string | null },
-): { action: 'add' | 'reduce' | 'hold' | 'watch' | 'no_trade' | 'invalid'; label: string } => {
-    const status = (meta?.analysis_status || '').toUpperCase()
-    const trade = (meta?.trade_action || decisionText || '').toUpperCase()
-    if (status === 'INVALID_RUN' || status === 'DATA_ERROR' || trade.includes('INVALID')) {
-        return { action: 'invalid', label: '无效运行' }
-    }
-    if (status === 'ABSTAIN') {
-        return { action: 'no_trade', label: '弃权/不交易' }
-    }
-    if (trade === 'NO_TRADE' || trade.includes('NO_TRADE')) {
-        return { action: 'no_trade', label: '不交易' }
-    }
-    if (trade === 'WAIT' || status === 'PARTIAL') {
-        return { action: 'watch', label: status === 'PARTIAL' ? '部分可用/观望' : '观望' }
-    }
-    if (!decisionText && !trade) return { action: 'hold', label: '观望' }
-    const action = parseDecisionAction(meta?.trade_action || decisionText)
-    if (action === 'invalid') return { action: 'invalid', label: '无效运行' }
-    if (action === 'no_trade') return { action: 'no_trade', label: '不交易' }
-    if (action === 'watch') return { action: 'watch', label: '观望' }
-    if (action === 'buy' || action === 'add') return { action: 'add', label: '增持' }
-    if (action === 'sell' || action === 'reduce') return { action: 'reduce', label: '减持' }
-    return { action: 'hold', label: '持有' }
-}
+// DAV-1283 D3: canonical list-decision mapping lives in reportText.ts.
+const parseDecision = resolveReportListDecision
 
 const getDecisionColor = (
     decision?: string,
@@ -176,6 +151,7 @@ const renderStatusBadge = (report: Report) => {
                 analysis_status: report.analysis_status,
                 trade_action: report.trade_action,
                 direction: report.direction,
+                reason_codes: report.reason_codes,
             }
             const { label } = parseDecision(report.decision, decisionMeta)
             return (
@@ -434,7 +410,10 @@ export default function Reports() {
             analysis_status: selectedReport.analysis_status,
             trade_action: selectedReport.trade_action,
             direction: selectedReport.direction,
+            reason_codes: selectedReport.reason_codes,
         })
+        // DAV-1283 D4: price-basis-gate downgrade note for the detail header.
+        const priceGateNote = buildPriceGateDowngradeNote(selectedReport)
         const selectedReportProgressStatus = selectedReport.status === 'pending' || selectedReport.status === 'running'
             ? 'loading'
             : selectedReport.status === 'failed'
@@ -506,6 +485,16 @@ export default function Reports() {
                     <span>生成时间：{selectedReport.created_at ? new Date(selectedReport.created_at).toLocaleString('zh-CN') : '-'}</span>
                 </div>
 
+                {/* DAV-1283 D4: 价格口径降级说明 */}
+                {priceGateNote && (
+                    <div
+                        className="rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200"
+                        data-testid="price-gate-downgrade-note"
+                    >
+                        {priceGateNote}
+                    </div>
+                )}
+
                 {/* 历史决策时间线 */}
                 {symbolHistory.length > 1 && (
                     <div className="card">
@@ -519,6 +508,7 @@ export default function Reports() {
                                     analysis_status: r.analysis_status,
                                     trade_action: r.trade_action,
                                     direction: r.direction,
+                                    reason_codes: r.reason_codes,
                                 })
                                 const color =
                                     a === 'add' ? 'bg-red-500'
