@@ -226,6 +226,122 @@ def test_chat_creates_analyze_request_as_unprovided(stream):
     assert req.user_intent["horizons"] == ["short"]
 
 
+# ── 2b. Chat 显式 horizons（DAV-1288 选档控件）─────────────────────────────────
+
+async def _capture_chat_analyze_request(request, user, captured):
+    async def fake_run_job(job_id, analyze_request, *_args, **_kwargs):
+        captured.append(analyze_request)
+        main._set_job(job_id, status="completed", decision="DRY_RUN", result={})
+        main._emit_job_event(job_id, "job.completed", {"job_id": job_id, "result": {}})
+
+    extraction = ("600519.SH", "2026-07-31", ["short"], [], [], {})
+    with (
+        patch.object(main, "_build_runtime_config", return_value={}),
+        patch.object(main, "_compose_analysis_user_context", return_value={}),
+        patch.object(main, "_job_store_instance", InMemoryJobStore()),
+        patch.object(main, "_ai_extract_symbol_and_date", return_value=extraction),
+        patch.object(main, "_ai_extract_symbol_and_date_streaming", return_value=extraction),
+        patch.object(main, "_run_job", side_effect=fake_run_job),
+    ):
+        response = await main.chat_completions(request, current_user=user)
+        if request.stream:
+            _body = "".join([chunk async for chunk in response.body_iterator])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_explicit_medium_runs_medium_only(stream):
+    captured = []
+    user = MagicMock(id="user-1")
+    request = main.ChatCompletionRequest(
+        messages=[{"role": "user", "content": "分析 600519.SH"}],
+        stream=stream,
+        dry_run=True,
+        horizons=["medium"],
+    )
+    asyncio.run(_capture_chat_analyze_request(request, user, captured))
+    assert captured
+    req = captured[0]
+    assert req.horizons == ["medium"]
+    assert req.horizons_explicit is True
+    assert req.horizons_resolution_source == RESOLUTION_SOURCE_EXPLICIT
+    assert req.user_intent["horizons"] == ["medium"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_explicit_dual_runs_both_horizons(stream):
+    captured = []
+    user = MagicMock(id="user-1")
+    request = main.ChatCompletionRequest(
+        messages=[{"role": "user", "content": "分析 600519.SH"}],
+        stream=stream,
+        dry_run=True,
+        horizons=["short", "medium"],
+    )
+    asyncio.run(_capture_chat_analyze_request(request, user, captured))
+    assert captured
+    req = captured[0]
+    assert req.horizons == ["short", "medium"]
+    assert req.horizons_explicit is True
+    assert req.horizons_resolution_source == RESOLUTION_SOURCE_EXPLICIT
+    assert req.user_intent["horizons"] == ["short", "medium"]
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_explicit_horizons_ignores_llm_extracted_horizons(stream):
+    # 显式选档优先：即使 LLM 从 query 提取出别的期限，也以请求体 horizons 为准
+    captured = []
+    user = MagicMock(id="user-1")
+    request = main.ChatCompletionRequest(
+        messages=[{"role": "user", "content": "分析 600519.SH 中线"}],
+        stream=stream,
+        dry_run=True,
+        horizons=["short"],
+    )
+
+    async def fake_run_job(job_id, analyze_request, *_args, **_kwargs):
+        captured.append(analyze_request)
+        main._set_job(job_id, status="completed", decision="DRY_RUN", result={})
+        main._emit_job_event(job_id, "job.completed", {"job_id": job_id, "result": {}})
+
+    extraction = ("600519.SH", "2026-07-31", ["medium"], [], [], {})
+
+    async def run():
+        with (
+            patch.object(main, "_build_runtime_config", return_value={}),
+            patch.object(main, "_compose_analysis_user_context", return_value={}),
+            patch.object(main, "_job_store_instance", InMemoryJobStore()),
+            patch.object(main, "_ai_extract_symbol_and_date", return_value=extraction),
+            patch.object(main, "_ai_extract_symbol_and_date_streaming", return_value=extraction),
+            patch.object(main, "_run_job", side_effect=fake_run_job),
+        ):
+            response = await main.chat_completions(request, current_user=user)
+            if stream:
+                _body = "".join([chunk async for chunk in response.body_iterator])
+
+    asyncio.run(run())
+    assert captured
+    req = captured[0]
+    assert req.horizons == ["short"]
+    assert req.horizons_explicit is True
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_invalid_horizons_rejected(stream):
+    from fastapi import HTTPException
+
+    user = MagicMock(id="user-1")
+    for bad in (None, [], ["bogus"], ["short", "bogus"]):
+        request = main.ChatCompletionRequest(
+            messages=[{"role": "user", "content": "分析 600519.SH"}],
+            stream=stream,
+            dry_run=True,
+            horizons=bad,
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(main.chat_completions(request, current_user=user))
+        assert excinfo.value.status_code == 400
+
+
 # ── 3. 定时请求构造 _build_scheduled_analyze_request ──────────────────────────
 
 def test_build_scheduled_analyze_request_short(test_db):

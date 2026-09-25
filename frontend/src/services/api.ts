@@ -1,4 +1,4 @@
-import type { Announcement, AuthUser, AuthVerifyResponse, JobStatus, AnalysisReport, AnalysisRequest, AnalysisResponse, CalibrationResponse, KlineResponse, LatestAnnouncementResponse, PortfolioImportState, PortfolioOverviewResponse, PortfolioPositionInput, ReportDetail, ReportListResponse, RuntimeConfig, RuntimeConfigUpdate, RuntimeConfigUpdateResponse, RuntimeWarmupRequest, RuntimeWarmupResponse, WatchlistBatchResponse, ScheduledAnalysis, ScheduledBatchTriggerResponse, StockSearchResult, TrackingBoardResponse, UserToken, UserTokenCreateRequest, WecomWarmupRequest, WecomWarmupResponse, FeedbackItem, FeedbackListResponse, Provider, ModelProfile, ModelProfileCreatePayload, RoleBinding, RoleBindingItem, ResolvedRole, CustomPrompt, CustomPromptItem } from '@/types'
+import type { Announcement, AuthUser, AuthVerifyResponse, JobStatus, AnalysisHorizon, AnalysisReport, AnalysisRequest, AnalysisResponse, CalibrationResponse, KlineResponse, LatestAnnouncementResponse, PortfolioImportState, PortfolioOverviewResponse, PortfolioPositionInput, ReportDetail, ReportListResponse, RuntimeConfig, RuntimeConfigUpdate, RuntimeConfigUpdateResponse, RuntimeWarmupRequest, RuntimeWarmupResponse, WatchlistBatchResponse, ScheduledAnalysis, ScheduledBatchTriggerResponse, StockSearchResult, TrackingBoardResponse, UserToken, UserTokenCreateRequest, WecomWarmupRequest, WecomWarmupResponse, FeedbackItem, FeedbackListResponse, Provider, ModelProfile, ModelProfileCreatePayload, RoleBinding, RoleBindingItem, ResolvedRole, CustomPrompt, CustomPromptItem } from '@/types'
 
 export function getBaseUrl(): string {
     const envUrl = (import.meta.env.VITE_API_URL as string) || ''
@@ -99,6 +99,7 @@ class ApiService {
         messages: Array<{ role: string; content: string }>,
         stream = true,
         selectedAnalysts?: string[],
+        horizons?: AnalysisHorizon[] | string[],
     ) {
         const response = await fetch(`${getBaseUrl()}/v1/chat/completions`, {
             method: 'POST',
@@ -110,6 +111,9 @@ class ApiService {
                 messages,
                 stream,
                 selected_analysts: selectedAnalysts,
+                // DAV-1288: 聊天选档控件的显式期限，传入才写入请求体；
+                // 未传时后端按 DAV-669 默认 short。
+                ...(horizons !== undefined ? { horizons } : {}),
             }),
         })
 

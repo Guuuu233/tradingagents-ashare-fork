@@ -40,7 +40,7 @@ describe('api.chatCompletion request contract (D-042)', () => {
         vi.restoreAllMocks()
     })
 
-    it('sends messages/stream/selected_analysts without config_overrides or horizons', async () => {
+    it('sends messages/stream/selected_analysts without config_overrides; horizons omitted when not passed', async () => {
         let capturedUrl = ''
         let capturedBody: Record<string, unknown> = {}
 
@@ -63,8 +63,29 @@ describe('api.chatCompletion request contract (D-042)', () => {
         // D-042: 聊天入口回后端默认值，前端不得携带 v2_debate_enabled override
         expect(capturedBody.config_overrides).toBeUndefined()
         expect(JSON.stringify(capturedBody)).not.toContain('v2_debate_enabled')
-        // D-042: 聊天不再发送 horizons（后端 ChatCompletionRequest 无该字段）
+        // DAV-1288: 未传 horizons 参数时不写入请求体（后端默认 short，DAV-669）
         expect('horizons' in capturedBody).toBe(false)
+    })
+
+    it('sends explicit horizons in request body when provided (DAV-1288)', async () => {
+        let capturedBody: Record<string, unknown> = {}
+
+        globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+            capturedBody = JSON.parse((init?.body as string) || '{}')
+            return new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        })
+
+        // 选中线
+        await api.chatCompletion([{ role: 'user', content: 'test' }], true, ['market'], ['medium'])
+        expect(capturedBody.horizons).toEqual(['medium'])
+
+        // 选双档
+        await api.chatCompletion([{ role: 'user', content: 'test' }], true, ['market'], ['short', 'medium'])
+        expect(capturedBody.horizons).toEqual(['short', 'medium'])
+        expect(capturedBody.config_overrides).toBeUndefined()
     })
 
     it('omits selected_analysts key value when not provided but still sends no overrides', async () => {

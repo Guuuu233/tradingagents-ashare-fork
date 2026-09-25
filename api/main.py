@@ -1267,6 +1267,12 @@ class ChatCompletionRequest(UserContextInput):
     )
     config_overrides: Dict[str, Any] = Field(default_factory=dict)
     dry_run: bool = False
+    # DAV-1288: 聊天选档控件的显式期限。传入时按显式处理（explicit=True）；
+    # 未传时维持 DAV-669 口径：默认 short，不从 query 文本扩档。
+    horizons: Optional[List[str]] = Field(
+        default=None,
+        description="分析期限列表，可选 'short'/'medium'，可同选，如 ['short'] 或 ['short','medium']",
+    )
 
 
 class KlineResponse(BaseModel):
@@ -5290,6 +5296,19 @@ async def chat_completions(
     text = _extract_chat_text(request.messages)
     config = await asyncio.to_thread(_build_runtime_config, request.config_overrides, user_id=current_user.id)
 
+    # DAV-1288: 请求显式携带 horizons（聊天选档控件）时按显式选档处理；
+    # 未携带时维持 DAV-669：默认 short，不从 query 文本扩档。
+    # 统一在进入流式/非流式分支前解析，非法值直接返回 400。
+    if "horizons" in request.model_fields_set:
+        try:
+            horizons_res = resolve_analysis_horizons(request.horizons, query=text, explicit=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        horizons_res = resolve_analysis_horizons(_HORIZONS_UNSET, query=text, explicit=False)
+    horizons = horizons_res.resolved
+    horizons_explicit = horizons_res.resolution_source == RESOLUTION_SOURCE_EXPLICIT
+
     # ── 流式模式：立刻返回 SSE 流，在后台异步提取意图再启动任务 ──────────────────
     # 这样用户提交查询后立刻收到 job.ready，不用等待 thinking 模型的 StockExtract。
     if request.stream:
@@ -5315,10 +5334,8 @@ async def chat_completions(
             try:
                 symbol, trade_date, _extracted_horizons, focus_areas, specific_questions, inferred_user_context = \
                     await _ai_extract_symbol_and_date_streaming(text, config, job_id)
-                # Chat natural language extraction is NOT an explicit user selection;
-                # treat as unprovided (default short) with resolution_source=default.
-                horizons_res = resolve_analysis_horizons(_HORIZONS_UNSET, query=text, explicit=False)
-                horizons = horizons_res.resolved
+                # horizons/horizons_explicit 已在入口处解析（DAV-1288）：
+                # 请求显式 horizons 按显式处理；未传时 default short，不从 query 扩档。
                 date_explicit = bool(str(trade_date or "").strip())
                 try:
                     trade_date = _normalize_analysis_trade_date(
@@ -5364,7 +5381,7 @@ async def chat_completions(
                     dry_run=request.dry_run,
                     query=text,
                     horizons=horizons,
-                    horizons_explicit=False,
+                    horizons_explicit=horizons_explicit,
                     user_intent=pre_intent,
                     objective=merged_user_context.get("objective"),
                     risk_profile=merged_user_context.get("risk_profile"),
@@ -5427,10 +5444,8 @@ async def chat_completions(
     # ── 非流式模式：保持原有阻塞行为 ─────────────────────────────────────────────
     symbol, trade_date, _extracted_horizons, focus_areas, specific_questions, inferred_user_context = \
         await asyncio.to_thread(_ai_extract_symbol_and_date, text, config)
-    # Chat natural language extraction is NOT an explicit user selection;
-    # treat as unprovided (default short) with resolution_source=default.
-    horizons_res = resolve_analysis_horizons(_HORIZONS_UNSET, query=text, explicit=False)
-    horizons = horizons_res.resolved
+    # horizons/horizons_explicit 已在入口处解析（DAV-1288）：
+    # 请求显式 horizons 按显式处理；未传时 default short，不从 query 扩档。
     date_explicit = bool(str(trade_date or "").strip())
     try:
         trade_date = _normalize_analysis_trade_date(
@@ -5475,7 +5490,7 @@ async def chat_completions(
         dry_run=request.dry_run,
         query=text,
         horizons=horizons,
-        horizons_explicit=False,
+        horizons_explicit=horizons_explicit,
         user_intent=pre_intent,
         objective=merged_user_context.get("objective"),
         risk_profile=merged_user_context.get("risk_profile"),

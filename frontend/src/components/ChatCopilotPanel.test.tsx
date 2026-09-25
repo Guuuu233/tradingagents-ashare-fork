@@ -7,14 +7,18 @@ import ChatCopilotPanel, {
     formatAnalysisNotificationBody,
 } from '@/components/ChatCopilotPanel'
 
-describe('ChatCopilotPanel horizon selector removal (D-042)', () => {
-    it('does not render the analysis horizon selector in the chat panel', () => {
+describe('ChatCopilotPanel horizon selector (DAV-1288)', () => {
+    it('renders the analysis horizon selector in the chat panel with short as default', () => {
         const html = renderToStaticMarkup(
             <ChatCopilotPanel onSymbolDetected={() => {}} />,
         )
-        expect(html).not.toContain('analysis-horizon-selector')
-        expect(html).not.toContain('data-testid="horizon-')
-        expect(html).not.toContain('分析档位')
+        expect(html).toContain('analysis-horizon-selector')
+        expect(html).toContain('data-testid="horizon-short"')
+        expect(html).toContain('data-testid="horizon-medium"')
+        expect(html).toContain('data-testid="horizon-dual"')
+        expect(html).toContain('分析档位')
+        // 默认选中短线（active 按钮带 aria-pressed=true）
+        expect(html).toMatch(/data-testid="horizon-short"[^>]*aria-pressed="true"/)
     })
 })
 
