@@ -14,6 +14,7 @@ import HistoricalDebateDrawer from '@/components/HistoricalDebateDrawer'
 import { useAuthStore } from '@/stores/authStore'
 import { advanceProgress, getReportRunProgress } from '@/utils/progressFeedback'
 import { buildPriceGateDowngradeNote, isLegacyEnglishReport, resolveReportListDecision } from '@/utils/reportText'
+import { formatDualHorizonDecisionSummary, formatHorizonDecisionLabel, horizonLabel } from '@/utils/horizonDecisions'
 import { buildReportMarkdown, downloadMarkdown, REPORT_EXPORT_SECTIONS } from '@/utils/markdownExport'
 
 type ProgressState = {
@@ -146,12 +147,25 @@ const renderStatusBadge = (report: Report) => {
                     <span className="text-xs font-medium">任务失败</span>
                 </div>
             )
-        default:
+        default: {
             const decisionMeta = {
                 analysis_status: report.analysis_status,
                 trade_action: report.trade_action,
                 direction: report.direction,
                 reason_codes: report.reason_codes,
+            }
+            // DAV-1301: dual-horizon reports show both conclusions.
+            const horizons = report.horizon_decisions
+            if (horizons && horizons.length > 1) {
+                return (
+                    <div className="space-y-0.5">
+                        {horizons.map(hd => (
+                            <div key={hd.horizon} className={`text-xs font-medium ${getDecisionColor(report.decision, decisionMeta)}`}>
+                                {horizonLabel(hd.horizon)}：{formatHorizonDecisionLabel(hd)}
+                            </div>
+                        ))}
+                    </div>
+                )
             }
             const { label } = parseDecision(report.decision, decisionMeta)
             return (
@@ -159,6 +173,7 @@ const renderStatusBadge = (report: Report) => {
                     {label}
                 </span>
             )
+        }
     }
 }
 
@@ -524,7 +539,17 @@ export default function Reports() {
                                     >
                                         <div className={`w-3 h-3 rounded-full ${color}`} />
                                         <span className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.trade_date}</span>
-                                        {r.confidence != null && <span className="text-xs text-slate-400">{r.confidence}%</span>}
+                                        {r.horizon_decisions && r.horizon_decisions.length > 1 && (
+                                            <span
+                                                className="text-[10px] leading-3 text-slate-500 dark:text-slate-400 whitespace-nowrap"
+                                                title={formatDualHorizonDecisionSummary(r.horizon_decisions) ?? undefined}
+                                            >
+                                                {r.horizon_decisions.map(hd => `${horizonLabel(hd.horizon)}:${formatHorizonDecisionLabel(hd)}`).join('｜')}
+                                            </span>
+                                        )}
+                                        {r.confidence != null && !(r.horizon_decisions && r.horizon_decisions.length > 1) && (
+                                            <span className="text-xs text-slate-400">{r.confidence}%</span>
+                                        )}
                                     </button>
                                 )
                             })}
@@ -546,6 +571,7 @@ export default function Reports() {
                             targetPrice={selectedReport.target_price ?? undefined}
                             stopLoss={selectedReport.stop_loss_price ?? undefined}
                             reasoning={selectedReport.final_trade_decision?.slice(0, 300) ?? undefined}
+                            horizonDecisions={selectedReport.horizon_decisions}
                         />
                     ) : selectedReport.status === 'failed' ? (
                         <div className="card h-full flex flex-col items-center justify-center p-8 text-center min-h-[320px]">

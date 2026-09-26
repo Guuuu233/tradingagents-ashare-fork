@@ -430,6 +430,23 @@ export interface AnalysisHorizonResult {
     report_manifest?: HistoricalDebateReportManifest | Record<string, unknown> | null
 }
 
+/** DAV-1301: one horizon's post-gate decision as exposed by the report API. */
+export interface HorizonDecision {
+    horizon: string
+    status?: string | null
+    analysis_status?: string | null
+    direction?: string | null
+    trade_action?: string | null
+    /** 研究经理原结论（价格门/风控降级前的动作） */
+    manager_action?: string | null
+    reason_codes?: string[] | null
+    gate_blocked?: boolean
+    non_executable?: boolean
+    confidence?: number | null
+    target_price?: number | null
+    stop_loss_price?: number | null
+}
+
 // Report Types (from database)
 export interface Report {
     id: string
@@ -449,6 +466,7 @@ export interface Report {
     trade_action?: string | null
     risk_status?: string | null
     reason_codes?: string[] | null
+    horizon_decisions?: HorizonDecision[] | null
     risk_items?: RiskItem[]
     key_metrics?: KeyMetric[]
     data_gaps?: string[]

@@ -20,6 +20,7 @@ import {
 } from '@/utils/jobLifecycle'
 import AnalysisHorizonSelector from '@/components/AnalysisHorizonSelector'
 import { localizeDirection, buildPriceGateDowngradeNote, buildWaitDowngradeExplanation, substituteUpstreamBlockedPlaceholder, type WaitDowngradeContext } from '@/utils/reportText'
+import { formatDualHorizonDecisionSummary } from '@/utils/horizonDecisions'
 import type {
     AgentReportEvent,
     AgentSnapshotEvent,
@@ -56,15 +57,24 @@ function appendWaitDowngradeNote(
     return base.replace('\n\n> 免责声明', `\n\n${block}\n\n> 免责声明`)
 }
 
+/** DAV-1301: 双档报告在结论行后追加两档各自的结论。 */
+function dualHorizonLine(src: unknown): string {
+    const summary = formatDualHorizonDecisionSummary(
+        src as Parameters<typeof formatDualHorizonDecisionSummary>[0],
+    )
+    return summary ? `\n\n各档结论：**${summary}**` : ''
+}
+
 export function formatAnalysisCompleteMessage(
     direction?: string | null,
     decision?: string | null,
     waitCtx?: WaitDowngradeContext | null,
     gateSrc?: Parameters<typeof buildPriceGateDowngradeNote>[0],
+    horizonSrc?: unknown,
 ): string {
     const localized = localizeDirection(direction) || '未知'
     const action = String(decision || 'HOLD')
-    return appendWaitDowngradeNote(`**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
+    return appendWaitDowngradeNote(`**分析完成**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**${dualHorizonLine(horizonSrc ?? gateSrc)}\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
 }
 
 export function formatAnalysisRecoveryMessage(
@@ -72,10 +82,11 @@ export function formatAnalysisRecoveryMessage(
     decision?: string | null,
     waitCtx?: WaitDowngradeContext | null,
     gateSrc?: Parameters<typeof buildPriceGateDowngradeNote>[0],
+    horizonSrc?: unknown,
 ): string {
     const localized = localizeDirection(direction) || '未知'
     const action = String(decision || 'HOLD')
-    return appendWaitDowngradeNote(`**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
+    return appendWaitDowngradeNote(`**分析完成（已从中断连接恢复）**\n\n方向倾向：**${localized}**\n\n执行动作：**${action}**${dualHorizonLine(horizonSrc ?? gateSrc)}\n\n> 免责声明：以上内容由模型基于公开数据与规则生成，仅供研究参考，不构成任何投资建议或收益承诺。`, waitCtx, gateSrc)
 }
 
 /** Assemble the W1 wait-downgrade context from an analysis-result-shaped object. */

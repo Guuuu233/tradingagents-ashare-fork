@@ -1354,6 +1354,9 @@ class ReportResponse(BaseModel):
     # DAV-1283 D3: post-gate reason codes so the list/detail UI can
     # distinguish a price-gate downgrade from a plain NO_TRADE.
     reason_codes: Optional[List[str]] = None
+    # DAV-1301: per-horizon post-gate decisions for dual-horizon reports
+    # (short/medium). ``None`` for single-horizon reports.
+    horizon_decisions: Optional[List[Dict[str, Any]]] = None
     risk_items: Optional[List[Dict[str, Any]]] = None
     key_metrics: Optional[List[Dict[str, Any]]] = None
     data_gaps: List[str] = Field(default_factory=list)
@@ -5637,11 +5640,11 @@ def list_reports(
     for r in reports:
         r.name = code_to_name.get(r.symbol, r.symbol)
         _attach_job_runtime_state(r, str(getattr(r, "id", "")))
-    # DAV-1283 D2 (rework): never bulk-load result_data. Only rows with
-    # unpersisted decision columns (or NO_TRADE rows needing reason_codes)
-    # get a narrow json_extract read of the post-gate fragment.
+    # DAV-1283 D2 (rework): never bulk-load result_data. Post-gate fallback
+    # and DAV-1301 per-horizon decisions both come from one narrow
+    # json_extract fragment read — a single batched query for the page.
     frag_map = report_service.load_post_gate_fragments(
-        db, [r.id for r in reports if report_service.report_needs_post_gate_fallback(r)]
+        db, [r.id for r in reports]
     )
     items = [
         report_service.apply_post_gate_read_fallback(
@@ -5664,7 +5667,7 @@ def list_latest_reports_by_symbols(
         symbols=body.symbols,
     )
     frag_map = report_service.load_post_gate_fragments(
-        db, [r.id for r in reports if report_service.report_needs_post_gate_fallback(r)]
+        db, [r.id for r in reports]
     )
     items = [
         report_service.apply_post_gate_read_fallback(
@@ -7418,7 +7421,7 @@ def get_portfolio_overview(
         report.name = code_to_name.get(report.symbol, report.symbol)
     latest_frag_map = report_service.load_post_gate_fragments(
         db,
-        [r.id for r in latest_reports if report_service.report_needs_post_gate_fallback(r)],
+        [r.id for r in latest_reports],
     )
     latest_reports = [
         report_service.apply_post_gate_read_fallback(

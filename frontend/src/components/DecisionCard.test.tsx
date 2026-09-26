@@ -78,3 +78,86 @@ describe('DecisionCard production status rendering', () => {
         expect(html).toContain('70%')
     })
 })
+
+describe('DecisionCard dual-horizon rendering (DAV-1301)', () => {
+    const dual = [
+        {
+            horizon: 'short',
+            status: 'completed',
+            analysis_status: 'VALID',
+            direction: '看空',
+            trade_action: 'SELL',
+            manager_action: 'SELL',
+            confidence: 70,
+            target_price: 55.0,
+            stop_loss_price: 53.3,
+        },
+        {
+            horizon: 'medium',
+            status: 'completed',
+            analysis_status: 'VALID',
+            direction: '看多',
+            trade_action: 'NO_TRADE',
+            manager_action: 'BUY',
+            reason_codes: ['price_basis_gate_blocked'],
+            gate_blocked: true,
+            non_executable: true,
+        },
+    ]
+
+    it('renders one row per horizon with its own action and direction', () => {
+        const html = renderToStaticMarkup(
+            <DecisionCard
+                symbol="600276.SH"
+                name="恒瑞医药"
+                decision="sell"
+                direction="看空"
+                horizonDecisions={dual}
+            />,
+        )
+        expect(html).toContain('短线')
+        expect(html).toContain('卖出（看空）')
+        expect(html).toContain('中线')
+        expect(html).toContain('不交易（看多）')
+    })
+
+    it('marks the gate-downgraded horizon with its original manager action', () => {
+        const html = renderToStaticMarkup(
+            <DecisionCard symbol="600276.SH" horizonDecisions={dual} />,
+        )
+        expect(html).toContain('研究经理原结论买入')
+        expect(html).toContain('降级为不交易')
+    })
+
+    it('hangs numerics under the horizon row, never on the card top level', () => {
+        const html = renderToStaticMarkup(
+            <DecisionCard
+                symbol="600276.SH"
+                confidence={99}
+                targetPrice={999}
+                stopLoss={111}
+                horizonDecisions={dual}
+            />,
+        )
+        // Top-level numerics suppressed in dual mode; the short horizon keeps
+        // its own values inside its row.
+        expect(html).not.toContain('99%')
+        expect(html).not.toContain('999')
+        expect(html).toContain('置信度 70%')
+        expect(html).toContain('目标价 ¥55')
+        expect(html).toContain('止损价 ¥53.3')
+    })
+
+    it('renders 未完成 for a failed horizon', () => {
+        const html = renderToStaticMarkup(
+            <DecisionCard
+                symbol="600276.SH"
+                horizonDecisions={[dual[0], { horizon: 'medium', status: 'failed' }]}
+            />,
+        )
+        expect(html).toContain('短线')
+        expect(html).toContain('卖出（看空）')
+        expect(html).toContain('中线')
+        expect(html).toContain('未完成')
+    })
+})

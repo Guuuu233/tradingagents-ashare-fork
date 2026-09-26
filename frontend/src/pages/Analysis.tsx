@@ -10,6 +10,7 @@ import RiskRadar from '@/components/RiskRadar'
 import KeyMetrics from '@/components/KeyMetrics'
 import { useAnalysisStore } from '@/stores/analysisStore'
 import { parseDecisionAction } from '@/utils/reportText'
+import { normalizeHorizonDecisions } from '@/utils/horizonDecisions'
 
 function extractConfidence(text?: string): number | undefined {
     if (!text) return undefined
@@ -113,6 +114,7 @@ export default function Analysis() {
                             targetPrice={targetPrice}
                             stopLoss={stopLoss}
                             reasoning={finalDecision?.slice(0, 300)}
+                            horizonDecisions={normalizeHorizonDecisions(report)}
                         />
                         <RiskRadar items={riskItems} />
                         <KeyMetrics items={keyMetrics} />

@@ -1271,34 +1271,22 @@ def resolve_primary_horizon_report_fields(
     return {field: primary.get(field) for field in PRIMARY_HORIZON_REPORT_FIELDS}
 
 
-def resolve_post_gate_decision_fields(
-    result_data: Optional[Dict[str, Any]],
+def _resolve_slice_post_gate_fields(
+    slice_: Dict[str, Any],
     *,
     fallback_direction: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """DAV-1283: post-gate decision fields of the primary horizon slice.
-
-    Dual-horizon reports keep the price-basis-gate *final* values under
-    ``result_data.short_term`` (``trade_action`` / ``decision_status`` are
-    already gate-adjusted) while the top level may still carry the pre-gate
-    action. Shared by the persistence path (D1) and the API read fallback
-    (D2). Read-only — never mutates ``result_data``. Returns ``{}`` when no
-    post-gate status is recorded.
-    """
-    if not isinstance(result_data, dict):
-        return {}
-    primary = _primary_horizon_slice(result_data)
-    if not isinstance(primary, dict):
-        return {}
-    ds = primary.get("decision_status")
+    """Post-gate decision fields of one horizon slice (see
+    :func:`resolve_post_gate_decision_fields`)."""
+    ds = slice_.get("decision_status")
     ds = ds if isinstance(ds, dict) else {}
-    trade_action = primary.get("trade_action") or ds.get("trade_action")
-    analysis_status = primary.get("analysis_status") or ds.get("analysis_status")
-    direction_raw = ds.get("direction") or primary.get("direction")
-    risk_status = primary.get("risk_status") or ds.get("risk_status")
-    reason_codes = list(ds.get("reason_codes") or primary.get("reason_codes") or [])
-    failed_checks = list(ds.get("failed_checks") or primary.get("failed_checks") or [])
-    gate = primary.get("price_basis_gate")
+    trade_action = slice_.get("trade_action") or ds.get("trade_action")
+    analysis_status = slice_.get("analysis_status") or ds.get("analysis_status")
+    direction_raw = ds.get("direction") or slice_.get("direction")
+    risk_status = slice_.get("risk_status") or ds.get("risk_status")
+    reason_codes = list(ds.get("reason_codes") or slice_.get("reason_codes") or [])
+    failed_checks = list(ds.get("failed_checks") or slice_.get("failed_checks") or [])
+    gate = slice_.get("price_basis_gate")
     gate = gate if isinstance(gate, dict) else {}
     codes = {str(c) for c in (*reason_codes, *failed_checks)}
     gate_blocked = gate.get("status") == "blocked" or GATE_BLOCKED_REASON_CODE in codes
@@ -1332,6 +1320,103 @@ def resolve_post_gate_decision_fields(
         "gate_violations": list(gate.get("violations") or []),
         "non_executable": non_executable,
     }
+
+
+def resolve_post_gate_decision_fields(
+    result_data: Optional[Dict[str, Any]],
+    *,
+    fallback_direction: Optional[str] = None,
+) -> Dict[str, Any]:
+    """DAV-1283: post-gate decision fields of the primary horizon slice.
+
+    Dual-horizon reports keep the price-basis-gate *final* values under
+    ``result_data.short_term`` (``trade_action`` / ``decision_status`` are
+    already gate-adjusted) while the top level may still carry the pre-gate
+    action. Shared by the persistence path (D1) and the API read fallback
+    (D2). Read-only — never mutates ``result_data``. Returns ``{}`` when no
+    post-gate status is recorded.
+    """
+    if not isinstance(result_data, dict):
+        return {}
+    primary = _primary_horizon_slice(result_data)
+    if not isinstance(primary, dict):
+        return {}
+    return _resolve_slice_post_gate_fields(
+        primary, fallback_direction=fallback_direction
+    )
+
+
+def _resolve_manager_action(slice_: Dict[str, Any]) -> Optional[str]:
+    """DAV-1301 (rework): the research manager's recorded action for one
+    horizon slice. Resolution order:
+
+    (a) ``manager_verdict.trade_action`` — slice level first, then
+        ``investment_debate_state.manager_verdict``;
+    (b) ``pre_gate_trade_action``;
+    (c) ``None`` — never inferred from direction/winner/position_pct: the
+        manager's WAIT and adjudication-abstained NO_TRADE verdicts would be
+        misreported as directional actions (总控 36 份历史样本实测 45 处推算
+        与记录不一致，其中 6 条降级说明会写成假话)。
+    """
+    mv = slice_.get("manager_verdict")
+    if not isinstance(mv, dict):
+        inv_state = slice_.get("investment_debate_state")
+        mv = inv_state.get("manager_verdict") if isinstance(inv_state, dict) else None
+    if isinstance(mv, dict):
+        action = str(mv.get("trade_action") or "").upper()
+        if action:
+            return action
+    pre = str(slice_.get("pre_gate_trade_action") or "").upper()
+    if pre in {"BUY", "SELL", "HOLD", "WAIT", "NO_TRADE"}:
+        return pre
+    return None
+
+
+def resolve_horizon_decisions(
+    result_data: Optional[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """DAV-1301: per-horizon decision summary for dual-horizon reports.
+
+    Returns a list with one entry per horizon slice that carries any recorded
+    signal, or ``None`` for single-horizon reports (fewer than two slices).
+    Each entry exposes the post-gate ``analysis_status`` / ``direction`` /
+    ``trade_action``, the research manager's original (pre-gate) action, the
+    slice run ``status`` (completed/failed), the gate downgrade flags, and the
+    per-horizon numerics (nulled when the horizon is non-executable, matching
+    the top-level rule). Read-only — works on a full ``result_data`` or on the
+    narrow ``json_extract`` fragment built by :func:`load_post_gate_fragments`.
+    """
+    if not isinstance(result_data, dict):
+        return None
+    entries: List[Dict[str, Any]] = []
+    for horizon, key in (("short", "short_term"), ("medium", "medium_term")):
+        slice_ = result_data.get(key)
+        if not isinstance(slice_, dict):
+            continue
+        has_signal = any(
+            slice_.get(k)
+            for k in ("trade_action", "analysis_status", "decision_status", "status", "direction")
+        )
+        if not has_signal:
+            continue
+        pg = _resolve_slice_post_gate_fields(slice_)
+        non_executable = bool(pg.get("non_executable"))
+        entries.append({
+            "horizon": horizon,
+            "status": slice_.get("status"),
+            "analysis_status": pg.get("analysis_status"),
+            "direction": pg.get("direction"),
+            "trade_action": pg.get("trade_action"),
+            "manager_action": _resolve_manager_action(slice_),
+            "reason_codes": list(pg.get("reason_codes") or []),
+            "gate_blocked": bool(pg.get("gate_blocked")),
+            "non_executable": non_executable,
+            # Post-gate NO_TRADE/WAIT must not surface pre-gate numerics.
+            "confidence": None if non_executable else slice_.get("confidence"),
+            "target_price": None if non_executable else slice_.get("target_price"),
+            "stop_loss_price": None if non_executable else slice_.get("stop_loss_price"),
+        })
+    return entries if len(entries) > 1 else None
 
 
 def resolve_report_fields(
@@ -2032,6 +2117,9 @@ def apply_post_gate_read_fallback(
         ):
             if payload.get(key) is None and result_data.get(rd_key) is not None:
                 payload[key] = result_data.get(rd_key)
+    horizon_decisions = resolve_horizon_decisions(result_data)
+    if horizon_decisions:
+        payload["horizon_decisions"] = horizon_decisions
     return payload
 
 
@@ -2054,6 +2142,27 @@ _POST_GATE_FRAGMENT_PATHS: Dict[str, str] = {
     "st_decision_status": "$.short_term.decision_status",
     "st_reason_codes": "$.short_term.reason_codes",
     "st_gate_status": "$.short_term.price_basis_gate.status",
+    "st_status": "$.short_term.status",
+    "st_confidence": "$.short_term.confidence",
+    "st_target_price": "$.short_term.target_price",
+    "st_stop_loss_price": "$.short_term.stop_loss_price",
+    "st_pre_gate_action": "$.short_term.pre_gate_trade_action",
+    "st_manager_action": "$.short_term.manager_verdict.trade_action",
+    "st_ids_manager_action": "$.short_term.investment_debate_state.manager_verdict.trade_action",
+    "mt_trade_action": "$.medium_term.trade_action",
+    "mt_analysis_status": "$.medium_term.analysis_status",
+    "mt_risk_status": "$.medium_term.risk_status",
+    "mt_direction": "$.medium_term.direction",
+    "mt_decision_status": "$.medium_term.decision_status",
+    "mt_reason_codes": "$.medium_term.reason_codes",
+    "mt_gate_status": "$.medium_term.price_basis_gate.status",
+    "mt_status": "$.medium_term.status",
+    "mt_confidence": "$.medium_term.confidence",
+    "mt_target_price": "$.medium_term.target_price",
+    "mt_stop_loss_price": "$.medium_term.stop_loss_price",
+    "mt_pre_gate_action": "$.medium_term.pre_gate_trade_action",
+    "mt_manager_action": "$.medium_term.manager_verdict.trade_action",
+    "mt_ids_manager_action": "$.medium_term.investment_debate_state.manager_verdict.trade_action",
     "top_ds_reason_codes": "$.decision_status.reason_codes",
     "top_reason_codes": "$.reason_codes",
     "confidence": "$.confidence",
@@ -2107,6 +2216,37 @@ def load_post_gate_fragments(
                 "reason_codes": _js(vals["st_reason_codes"]),
                 "price_basis_gate": (
                     {"status": vals["st_gate_status"]} if vals["st_gate_status"] else None
+                ),
+                "status": vals["st_status"],
+                "confidence": vals["st_confidence"],
+                "target_price": vals["st_target_price"],
+                "stop_loss_price": vals["st_stop_loss_price"],
+                "pre_gate_trade_action": vals["st_pre_gate_action"],
+                "manager_verdict": (
+                    {"trade_action": vals["st_manager_action"] or vals["st_ids_manager_action"]}
+                    if (vals["st_manager_action"] or vals["st_ids_manager_action"])
+                    else None
+                ),
+            },
+            "medium_term": {
+                "trade_action": vals["mt_trade_action"],
+                "analysis_status": vals["mt_analysis_status"],
+                "risk_status": vals["mt_risk_status"],
+                "direction": vals["mt_direction"],
+                "decision_status": _js(vals["mt_decision_status"]),
+                "reason_codes": _js(vals["mt_reason_codes"]),
+                "price_basis_gate": (
+                    {"status": vals["mt_gate_status"]} if vals["mt_gate_status"] else None
+                ),
+                "status": vals["mt_status"],
+                "confidence": vals["mt_confidence"],
+                "target_price": vals["mt_target_price"],
+                "stop_loss_price": vals["mt_stop_loss_price"],
+                "pre_gate_trade_action": vals["mt_pre_gate_action"],
+                "manager_verdict": (
+                    {"trade_action": vals["mt_manager_action"] or vals["mt_ids_manager_action"]}
+                    if (vals["mt_manager_action"] or vals["mt_ids_manager_action"])
+                    else None
                 ),
             },
             "confidence": vals["confidence"],

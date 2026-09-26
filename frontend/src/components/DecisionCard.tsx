@@ -2,13 +2,18 @@ import { useState } from 'react'
 import { TrendingUp, TrendingDown, Target, Shield, ChevronDown, ChevronUp, Info, Ban, AlertTriangle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { AnalysisReport } from '@/types'
+import type { AnalysisReport, HorizonDecision } from '@/types'
 import {
     sanitizeReportMarkdown,
     localizeDirection,
     parseDecisionAction,
     type DecisionAction,
 } from '@/utils/reportText'
+import {
+    buildHorizonDowngradeNote,
+    formatHorizonDecisionLabel,
+    horizonLabel,
+} from '@/utils/horizonDecisions'
 
 interface DecisionCardProps {
     symbol: string
@@ -25,6 +30,8 @@ interface DecisionCardProps {
     analysisStatus?: string | null
     tradeAction?: string | null
     report?: AnalysisReport
+    /** DAV-1301: per-horizon decisions of a dual-horizon report. */
+    horizonDecisions?: HorizonDecision[] | null
 }
 
 const decisionConfig: Record<DecisionAction, { label: string; color: string; icon: typeof TrendingUp }> = {
@@ -55,6 +62,17 @@ function resolveDecision(
     return parseDecisionAction(report?.decision || report?.final_trade_decision)
 }
 
+/** Map one horizon decision to the badge vocabulary for coloring. */
+function horizonDecisionAction(hd: HorizonDecision): DecisionAction | undefined {
+    const status = String(hd.status || '').toLowerCase()
+    if (status === 'failed' || status === 'error') return undefined
+    const analysis = String(hd.analysis_status || '').toUpperCase()
+    if (analysis === 'INVALID_RUN' || analysis === 'DATA_ERROR') return 'invalid'
+    if (analysis === 'ABSTAIN') return 'no_trade'
+    if (analysis === 'PARTIAL') return 'watch'
+    return parseDecisionAction(hd.trade_action)
+}
+
 export default function DecisionCard({
     symbol,
     name = symbol,
@@ -70,15 +88,20 @@ export default function DecisionCard({
     analysisStatus,
     tradeAction,
     report,
+    horizonDecisions,
 }: DecisionCardProps) {
     const [expanded, setExpanded] = useState(false)
 
+    // DAV-1301: dual-horizon reports render one line per horizon; the
+    // top-level decision/direction/numerics belong to the primary horizon
+    // only and must not masquerade as the whole report's conclusion.
+    const dual = horizonDecisions && horizonDecisions.length > 1 ? horizonDecisions : null
     const decision = resolveDecision(propDecision, tradeAction, analysisStatus, report)
     const config = decision ? decisionConfig[decision] : null
     const DecisionIcon = config?.icon
     const nonExecutable = decision === 'invalid' || decision === 'no_trade' || decision === 'watch'
-    const showPrices = !nonExecutable && (targetPrice != null || stopLoss != null)
-    const showConfidence = confidence != null && !nonExecutable
+    const showPrices = !dual && !nonExecutable && (targetPrice != null || stopLoss != null)
+    const showConfidence = !dual && confidence != null && !nonExecutable
 
     const riskLabels: Record<string, string> = { low: '低', medium: '中等', high: '高' }
     const riskColors: Record<string, string> = {
@@ -98,22 +121,74 @@ export default function DecisionCard({
                     <div>
                         <h3 className="font-semibold text-slate-900 dark:text-slate-100">{name}</h3>
                         <p className="text-sm text-slate-500">{symbol}</p>
-                        {direction && (
+                        {direction && !dual && (
                             <p className="text-xs text-slate-400 mt-0.5">方向：{localizeDirection(direction)}</p>
                         )}
                     </div>
                 </div>
-                {config && DecisionIcon ? (
-                    <div className={`px-4 py-2 rounded-full border font-medium flex items-center gap-1.5 ${config.color}`}>
-                        <DecisionIcon className="w-4 h-4" />
-                        {config.label}
-                    </div>
-                ) : (
-                    <div className="px-4 py-2 rounded-full border font-medium text-slate-400 border-slate-200 dark:border-slate-700">
-                        等待裁决
-                    </div>
+                {!dual && (
+                    config && DecisionIcon ? (
+                        <div className={`px-4 py-2 rounded-full border font-medium flex items-center gap-1.5 ${config.color}`}>
+                            <DecisionIcon className="w-4 h-4" />
+                            {config.label}
+                        </div>
+                    ) : (
+                        <div className="px-4 py-2 rounded-full border font-medium text-slate-400 border-slate-200 dark:border-slate-700">
+                            等待裁决
+                        </div>
+                    )
                 )}
             </div>
+
+            {/* DAV-1301: 双档结论——每档一行，数值只挂在产出该值的档位下 */}
+            {dual && (
+                <div className="mb-4 space-y-2" data-testid="horizon-decisions">
+                    {dual.map((hd) => {
+                        const hdAction = horizonDecisionAction(hd)
+                        const hdConfig = hdAction ? decisionConfig[hdAction] : null
+                        const HdIcon = hdConfig?.icon
+                        const downgradeNote = buildHorizonDowngradeNote(hd)
+                        const numerics = [
+                            hd.confidence != null ? `置信度 ${hd.confidence}%` : null,
+                            hd.target_price != null ? `目标价 ¥${hd.target_price}` : null,
+                            hd.stop_loss_price != null ? `止损价 ¥${hd.stop_loss_price}` : null,
+                        ].filter((v): v is string => Boolean(v))
+                        return (
+                            <div
+                                key={hd.horizon}
+                                className="rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2"
+                                data-testid={`horizon-decision-${hd.horizon}`}
+                            >
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400 shrink-0">
+                                        {horizonLabel(hd.horizon)}
+                                    </span>
+                                    {hdConfig && HdIcon ? (
+                                        <span className={`px-2.5 py-1 rounded-full border text-xs font-medium flex items-center gap-1 ${hdConfig.color}`}>
+                                            <HdIcon className="w-3 h-3" />
+                                            {formatHorizonDecisionLabel(hd)}
+                                        </span>
+                                    ) : (
+                                        <span className="text-xs text-slate-400">
+                                            {formatHorizonDecisionLabel(hd)}
+                                        </span>
+                                    )}
+                                </div>
+                                {numerics.length > 0 && (
+                                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {numerics.join(' · ')}
+                                    </p>
+                                )}
+                                {downgradeNote && (
+                                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                        {downgradeNote}
+                                    </p>
+                                )}
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
 
             {/* 置信度 */}
             {showConfidence && (
@@ -163,7 +238,7 @@ export default function DecisionCard({
                     )}
                 </div>
             </div>
-            ) : nonExecutable ? (
+            ) : nonExecutable && !dual ? (
                 <div className="mb-4 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
                     非可执行状态：不展示目标价 / 止损 / 置信度交易参数。
                 </div>
