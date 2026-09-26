@@ -11,7 +11,6 @@ from tradingagents.graph.intent_parser import (
     get_bound_research_horizon,
 )
 from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, check_llm_output_degraded, check_stream_chunk_degraded
-from api.database import log_llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +92,8 @@ def create_volume_price_analyst(llm, data_collector=None):
 
         # ── 实现 Token 级流式输出（含降级保障） ──────────────────
         tracker = current_tracker_var.get()
-        import time as _time
         full_content = ""
-        _last_chunk = None
-        _t0 = _time.monotonic()
+
         try:
             async for chunk in llm.astream(messages):
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
@@ -120,20 +117,7 @@ def create_volume_price_analyst(llm, data_collector=None):
 
         if check_llm_output_degraded(full_content, "Volume Price Analyst"):
             full_content = "量价分析生成异常（输出退化），本项不可用"
-        _elapsed = _time.monotonic() - _t0
-        _meta = getattr(_last_chunk, "response_metadata", {}) or {}
-        _usage = _meta.get("token_usage") or _meta.get("usage") or {}
-        log_llm_call(
-            agent_name="Volume Price Analyst",
-            model_name=getattr(llm, "model_name", None) or getattr(llm, "model", None),
-            finish_reason=_meta.get("finish_reason"),
-            prompt_tokens=_usage.get("prompt_tokens"),
-            completion_tokens=_usage.get("completion_tokens"),
-            total_tokens=_usage.get("total_tokens"),
-            elapsed_seconds=round(_elapsed, 2),
-            response_chars=len(full_content),
-            degraded=full_content.endswith("本项不可用"),
-        )
+        # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
         verdict, confidence = extract_verdict(full_content)
 
         return {

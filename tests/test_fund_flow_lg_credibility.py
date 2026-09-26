@@ -218,7 +218,7 @@ def test_smart_money_dual_source_lg_reference_report_retained_not_empty_shell():
         patch("tradingagents.agents.analysts.smart_money_analyst.get_config", return_value={}),
         patch("tradingagents.agents.analysts.smart_money_analyst.get_prompt", return_value="提示词"),
         patch("tradingagents.agents.analysts.smart_money_analyst.build_horizon_context", return_value="上下文"),
-        patch("tradingagents.agents.analysts.smart_money_analyst.log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, _DualSourceCollector(ths_lg_val="0.5"))(state)
@@ -267,7 +267,7 @@ def test_smart_money_netamount_only_still_blocks_main_force_accumulation_claims(
         patch("tradingagents.agents.analysts.smart_money_analyst.get_config", return_value={}),
         patch("tradingagents.agents.analysts.smart_money_analyst.get_prompt", return_value="提示词"),
         patch("tradingagents.agents.analysts.smart_money_analyst.build_horizon_context", return_value="上下文"),
-        patch("tradingagents.agents.analysts.smart_money_analyst.log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, netamount_collector)(state)

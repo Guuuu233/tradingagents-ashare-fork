@@ -1089,7 +1089,15 @@ def extract_structured_data(
             "9. not_applicable：报告明确表示本分析框架不适用时为 true，否则为 false"
         )
 
-        response = llm.invoke([HumanMessage(content=prompt)])
+        # DAV-1314: 结构化提取的角色标识（非图内调用，走角色 contextvar；
+        # report_id 走 current_report_id 上下文）
+        from api.usage_logging import current_llm_role
+
+        _role_tok = current_llm_role.set("结构化提取")
+        try:
+            response = llm.invoke([HumanMessage(content=prompt)])
+        finally:
+            current_llm_role.reset(_role_tok)
         raw = response.content if hasattr(response, "content") else str(response)
         parsed = json_repair.loads(raw)
         result = StructuredReport(**parsed)
@@ -1792,6 +1800,14 @@ def create_report(
                 canonical_result_data["investment_debate_state"]["model_tier_warning"] = tier_meta
                 canonical_result_data["investment_debate_state"]["model_tier_warnings"] = tier_meta["warnings"]
                 canonical_result_data["investment_debate_state"]["model_tier_check"] = tier_meta
+        # DAV-1314 §7.6: 每份报告随 result_data 持久化按角色汇总的 LLM 用量摘要。
+        # 注意须在所有 LLM 调用（含结构化提取）完成后调用 create_report 才完整。
+        if report_id:
+            from api.usage_logging import build_llm_usage_summary
+
+            _usage_summary = build_llm_usage_summary(report_id)
+            if _usage_summary is not None:
+                canonical_result_data["usage_summary"] = _usage_summary
 
     now = datetime.now(timezone.utc)
     target_status = status or "completed"

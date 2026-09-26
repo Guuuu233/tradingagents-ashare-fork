@@ -362,9 +362,20 @@ def _migrate_api_keys_reencrypt() -> None:
 
 # Report Model
 def _ensure_llm_call_log_schema() -> None:
-    """Create llm_call_logs table on first boot (safe for existing deployments)."""
+    """Create llm_call_logs table and add DAV-1314 usage-detail columns to
+    existing deployments. Additive only — never backfills or alters old rows."""
     try:
         Base.metadata.create_all(bind=engine, tables=[LLMCallLogDB.__table__], checkfirst=True)
+        with engine.begin() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(llm_call_logs)"))}
+            if "horizon" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN horizon VARCHAR(20)"))
+            if "cached_prompt_tokens" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN cached_prompt_tokens INTEGER"))
+            if "reasoning_tokens" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN reasoning_tokens INTEGER"))
+            if "retried" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN retried BOOLEAN NOT NULL DEFAULT 0"))
     except Exception as e:
         logger.error("Failed to ensure llm_call_log schema: %s", e)
 
@@ -393,6 +404,10 @@ def log_llm_call(
     response_chars: int | None = None,
     degraded: bool = False,
     report_id: str | None = None,
+    horizon: str | None = None,
+    cached_prompt_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+    retried: bool = False,
 ) -> None:
     """Fire-and-forget: write one LLM call record to llm_call_logs.
 
@@ -415,6 +430,10 @@ def log_llm_call(
                 elapsed_seconds=elapsed_seconds,
                 response_chars=response_chars,
                 degraded=degraded,
+                horizon=horizon,
+                cached_prompt_tokens=cached_prompt_tokens,
+                reasoning_tokens=reasoning_tokens,
+                retried=retried,
             ))
             db.commit()
     except Exception as exc:
@@ -778,6 +797,11 @@ class LLMCallLogDB(Base):
     elapsed_seconds = Column(Float, nullable=True)
     response_chars = Column(Integer, nullable=True)
     degraded = Column(Boolean, nullable=False, default=False, server_default="0")
+    # DAV-1314: usage-detail columns, additive (NULL/default on legacy rows)
+    horizon = Column(String(20), nullable=True)
+    cached_prompt_tokens = Column(Integer, nullable=True)
+    reasoning_tokens = Column(Integer, nullable=True)
+    retried = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 

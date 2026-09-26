@@ -61,6 +61,10 @@ class GoogleClient(BaseLLMClient):
                 # Gemini 2.5: map to thinking_budget
                 llm_kwargs["thinking_budget"] = -1 if thinking_level == "high" else 0
 
+        # DAV-1314: 与 UnifiedChatOpenAI 同一账本 —— Google 角色同样挂用量回调
+        from .usage_hook import attach_usage_logger
+
+        llm_kwargs = attach_usage_logger(llm_kwargs)
         return NormalizedChatGoogleGenerativeAI(**llm_kwargs)
 
     def validate_model(self) -> bool:

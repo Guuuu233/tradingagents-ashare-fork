@@ -46,7 +46,7 @@ def test_smart_money_prompt_preserves_fund_flow_source_semantics():
         patch.object(module, "get_config", return_value={}),
         patch.object(module, "get_prompt", return_value="固定系统提示"),
         patch.object(module, "build_horizon_context", return_value="固定上下文"),
-        patch.object(module, "log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, _FundFlowCollector())(state)
@@ -114,7 +114,7 @@ def test_smart_money_ths_netamount_allowed_for_total_flow_direction():
         patch.object(module, "get_config", return_value={}),
         patch.object(module, "get_prompt", return_value="固定系统提示"),
         patch.object(module, "build_horizon_context", return_value="固定上下文"),
-        patch.object(module, "log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, _StructuredTHSCollector())(state)
@@ -144,7 +144,7 @@ def test_smart_money_ths_netamount_blocks_main_force_accumulation_claims():
         patch.object(module, "get_config", return_value={}),
         patch.object(module, "get_prompt", return_value="固定系统提示"),
         patch.object(module, "build_horizon_context", return_value="固定上下文"),
-        patch.object(module, "log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, _StructuredTHSCollector())(state)
@@ -203,7 +203,7 @@ def test_smart_money_dc_r0_net_allows_main_force_direction_when_model_matches():
         patch.object(module, "get_config", return_value={}),
         patch.object(module, "get_prompt", return_value="固定系统提示"),
         patch.object(module, "build_horizon_context", return_value="固定上下文"),
-        patch.object(module, "log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         result = asyncio.run(
             create_smart_money_analyst(llm, _StructuredDCCollector())(state)

@@ -84,6 +84,10 @@ class AnthropicClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
+        # DAV-1314: 与 UnifiedChatOpenAI 同一账本 —— Anthropic 角色同样挂用量回调
+        from .usage_hook import attach_usage_logger
+
+        llm_kwargs = attach_usage_logger(llm_kwargs)
         return NormalizedChatAnthropic(**llm_kwargs)
 
     def validate_model(self) -> bool:

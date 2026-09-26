@@ -608,7 +608,7 @@ class TestResearchManagerScaleNonInterventionContract:
             patch.object(module, "get_config", return_value={}),
             patch.object(module, "get_prompt", return_value="固定提示词"),
             patch.object(module, "build_horizon_context", return_value="固定上下文"),
-            patch.object(module, "log_llm_call"),
+            patch("api.database.log_llm_call"),
         ):
             res = asyncio.run(create_smart_money_analyst(_RecordingLLM(), _MockCollector())(state))
 

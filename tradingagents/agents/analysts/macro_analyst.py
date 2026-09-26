@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import time as _time
 from datetime import datetime, timedelta
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -26,7 +25,6 @@ from tradingagents.dataflows.industry_linkage import (
     format_industry_linkage_for_prompt,
 )
 from tradingagents.graph.data_collector import _map_stock_to_industry
-from api.database import log_llm_call
 from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 logger = logging.getLogger(__name__)
@@ -248,12 +246,9 @@ def create_macro_analyst(llm, data_collector=None):
         # ── 实现 Token 级流式输出（含降级保障） ──────────────────
         tracker = current_tracker_var.get()
         full_content = ""
-        _last_chunk = None
-        _t0 = _time.monotonic()
 
         try:
             async for chunk in llm.astream(messages):
-                _last_chunk = chunk
                 content = chunk.content if hasattr(chunk, "content") else str(chunk)
                 full_content += content
                 if check_stream_chunk_degraded(full_content, "Macro Analyst"):
@@ -284,20 +279,7 @@ def create_macro_analyst(llm, data_collector=None):
             deterministic_check=lambda t: not check_llm_output_degraded(
                 t, "Macro Analyst"),
         )
-        _elapsed = _time.monotonic() - _t0
-        _meta = getattr(_last_chunk, "response_metadata", {}) or {}
-        _usage = _meta.get("token_usage") or _meta.get("usage") or {}
-        log_llm_call(
-            agent_name="Macro Analyst",
-            model_name=getattr(llm, "model_name", None) or getattr(llm, "model", None),
-            finish_reason=_meta.get("finish_reason"),
-            prompt_tokens=_usage.get("prompt_tokens"),
-            completion_tokens=_usage.get("completion_tokens"),
-            total_tokens=_usage.get("total_tokens"),
-            elapsed_seconds=round(_elapsed, 2),
-            response_chars=len(full_content),
-            degraded=full_content.endswith("本项不可用"),
-        )
+        # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
         verdict, confidence = extract_verdict(full_content)
         return {
             "macro_report": full_content,

@@ -25,6 +25,17 @@ class UnifiedChatOpenAI(ChatOpenAI):
         if os.environ.get("LOG_LEVEL", "").upper() == "DEBUG":
             kwargs["verbose"] = True
 
+        # DAV-1314: 自定义 base_url（如 CPA）时 langchain-openai 默认不开启
+        # stream_usage，流式响应不会回用量 → llm_call_logs 全为 NULL。显式开启，
+        # 让请求带上 stream_options.include_usage；上游不回时 usage 记 NULL。
+        kwargs.setdefault("stream_usage", True)
+
+        # DAV-1314: 统一用量采集 —— 挂上全局回调，覆盖所有角色/返修/意图解析/
+        # 结构化提取，不再依赖各角色手写 log_llm_call。
+        from .usage_hook import attach_usage_logger
+
+        kwargs = attach_usage_logger(kwargs)
+
         # 1. Reasoning models (O1 etc) typically don't support temperature
         if self._is_reasoning_model(model):
             kwargs.pop("temperature", None)

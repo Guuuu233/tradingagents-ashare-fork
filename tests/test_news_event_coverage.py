@@ -296,7 +296,7 @@ def test_news_analyst_returns_event_coverage_in_state():
     with patch("tradingagents.agents.analysts.news_analyst.get_cn_stock_name", return_value="东方国信"), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_industry_context", return_value=(None, "【行业常识知识库】\n【知识库未命中】")), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_macro_event_context", return_value=(None, "【宏观事件传导图谱】\n【知识库未命中】")), \
-         patch("tradingagents.agents.analysts.news_analyst.log_llm_call"):
+         patch("api.database.log_llm_call"):
         result = asyncio.run(news_node(state))
 
     assert "news_report" in result
@@ -449,7 +449,7 @@ def test_news_analyst_without_focus_areas_does_not_inject_default_themes():
     with patch("tradingagents.agents.analysts.news_analyst.get_cn_stock_name", return_value="东方国信"), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_industry_context", return_value=(None, "【行业常识知识库】\n【知识库未命中】")), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_macro_event_context", return_value=(None, "【宏观事件传导图谱】\n【知识库未命中】")), \
-         patch("tradingagents.agents.analysts.news_analyst.log_llm_call"):
+         patch("api.database.log_llm_call"):
         result = asyncio.run(news_node(state))
 
     assert "event_coverage" in result
@@ -500,7 +500,7 @@ def test_news_analyst_with_focus_areas_retains_manifest():
     with patch("tradingagents.agents.analysts.news_analyst.get_cn_stock_name", return_value="东方国信"), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_industry_context", return_value=(None, "【行业常识知识库】\n【知识库未命中】")), \
          patch("tradingagents.agents.analysts.news_analyst.resolve_macro_event_context", return_value=(None, "【宏观事件传导图谱】\n【知识库未命中】")), \
-         patch("tradingagents.agents.analysts.news_analyst.log_llm_call"):
+         patch("api.database.log_llm_call"):
         result = asyncio.run(news_node(state))
 
     assert "event_coverage" in result

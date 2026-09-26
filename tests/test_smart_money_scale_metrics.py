@@ -92,7 +92,7 @@ def _run_analyst_node(llm, collector, state=None):
         patch.object(module, "get_config", return_value={}),
         patch.object(module, "get_prompt", return_value="固定系统提示"),
         patch.object(module, "build_horizon_context", return_value="固定上下文"),
-        patch.object(module, "log_llm_call"),
+        patch("api.database.log_llm_call"),
     ):
         return asyncio.run(create_smart_money_analyst(llm, collector)(state))
 

@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
+from api.usage_logging import current_llm_role
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service, social_data_service
 import jwt
@@ -3249,6 +3250,13 @@ async def _run_job_inner(
                 if "config" not in h_args:
                     h_args["config"] = {}
                 h_args["config"]["configurable"] = {"thread_id": f"{job_id}_{horizon}"}
+                # DAV-1314: 用量回调从 run metadata 取 report_id/档位；
+                # 角色名由 LangGraph 注入的 langgraph_node 提供。
+                h_args["config"]["metadata"] = {
+                    **(h_args["config"].get("metadata") or {}),
+                    "report_id": job_id,
+                    "horizon": horizon,
+                }
 
                 init_state = horizon_graph.propagator.create_initial_state(
                     ticker, request.trade_date,
@@ -3984,6 +3992,12 @@ async def _run_job_inner(
             if "config" not in args:
                 args["config"] = {}
             args["config"]["configurable"] = {"thread_id": job_id}
+            # DAV-1314: 用量回调 metadata（report_id/档位）
+            args["config"]["metadata"] = {
+                **(args["config"].get("metadata") or {}),
+                "report_id": job_id,
+                "horizon": request.horizons[0] if request.horizons else "short",
+            }
 
             report_keys = (
                 "market_report",
@@ -4189,6 +4203,12 @@ async def _run_job_inner(
                 if "config" not in args:
                     args["config"] = {}
                 args["config"]["configurable"] = {"thread_id": job_id}
+                # DAV-1314: 用量回调 metadata（report_id/档位）
+                args["config"]["metadata"] = {
+                    **(args["config"].get("metadata") or {}),
+                    "report_id": job_id,
+                    "horizon": single_horizon,
+                }
                 final_state = await asyncio.to_thread(
                     graph.graph.invoke,
                     init_state,
@@ -5124,15 +5144,20 @@ async def _ai_extract_symbol_and_date_streaming(
         _log(f"[LLM Debug] Streaming StockExtract with model: {getattr(llm, 'model_name', 'unknown')}")
 
         full_content = ""
-        async for chunk in llm.astream(prompt):
-            token = chunk.content if hasattr(chunk, "content") else str(chunk)
-            full_content += token
-            if token:
-                _emit_job_event(job_id, "agent.token", {
-                    "agent": "意图解析",
-                    "report": "stock_extract",
-                    "token": token,
-                })
+        # DAV-1314: 非图内调用的角色标识（report_id 走 current_report_id 上下文）
+        _role_tok = current_llm_role.set("意图解析")
+        try:
+            async for chunk in llm.astream(prompt):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                full_content += token
+                if token:
+                    _emit_job_event(job_id, "agent.token", {
+                        "agent": "意图解析",
+                        "report": "stock_extract",
+                        "token": token,
+                    })
+        finally:
+            current_llm_role.reset(_role_tok)
 
         _log(f"[LLM Debug] StockExtract response: {full_content[:200]}")
         m = re.search(r"\{.*\}", full_content, re.DOTALL)
@@ -5245,7 +5270,12 @@ def _ai_extract_symbol_and_date(
         _log(f"[LLM Debug] Requesting StockExtract with model: {getattr(llm, 'model_name', 'unknown')} at {target_url}")
         _log(f"[LLM Debug] Prompt: {prompt[:500]}...")
 
-        response = llm.invoke(prompt)
+        # DAV-1314: 非图内调用的角色标识（report_id 走 current_report_id 上下文）
+        _role_tok = current_llm_role.set("意图解析")
+        try:
+            response = llm.invoke(prompt)
+        finally:
+            current_llm_role.reset(_role_tok)
         raw = response if isinstance(response, str) else getattr(response, "content", str(response))
         
         # 调试日志：打印原始响应
@@ -6052,7 +6082,11 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
             max_retries=0,
         )
         llm = client.get_llm()
-        response = llm.invoke(_CONFIG_PROBE_PROMPT)
+        _role_tok = current_llm_role.set("config_probe")  # DAV-1314
+        try:
+            response = llm.invoke(_CONFIG_PROBE_PROMPT)
+        finally:
+            current_llm_role.reset(_role_tok)
         raw = response if isinstance(response, str) else getattr(response, "content", str(response))
         preview = str(raw).strip().replace("\n", " ")[:80] or "<empty>"
         return {"status": "ok", "model": model, "preview": preview}
@@ -6149,7 +6183,11 @@ def _invoke_runtime_warmup(
                 max_retries=0,
             )
             llm = client.get_llm()
-            response = llm.invoke(prompt)
+            _role_tok = current_llm_role.set("llm_warmup")  # DAV-1314
+            try:
+                response = llm.invoke(prompt)
+            finally:
+                current_llm_role.reset(_role_tok)
             raw = response if isinstance(response, str) else getattr(response, "content", str(response))
             content = str(raw).strip() or "<empty>"
             preview = content.replace("\n", " ")[:80]

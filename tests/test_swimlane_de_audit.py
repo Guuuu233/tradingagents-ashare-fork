@@ -161,12 +161,60 @@ class _MockDataCollector:
         return pool
 
 
+def _callback_llm():
+    """DAV-1314: a UnifiedChatOpenAI wired to a MockTransport — exercises the
+    real LLMUsageLogger callback path (no hand-written per-role logging)."""
+    import json as _json
+
+    import httpx
+
+    from tradingagents.llm_clients.openai_client import UnifiedChatOpenAI
+
+    def _sse():
+        chunks = [
+            {"id": "c1", "object": "chat.completion.chunk", "created": 1,
+             "model": "mock-gpt-4o",
+             "choices": [{"index": 0,
+                          "delta": {"role": "assistant",
+                                    "content": "看多 (置信度: 85%)"},
+                          "finish_reason": "stop"}]},
+            {"id": "c1", "object": "chat.completion.chunk", "created": 1,
+             "model": "mock-gpt-4o", "choices": [],
+             "usage": {"prompt_tokens": 80, "completion_tokens": 40,
+                       "total_tokens": 120}},
+        ]
+        return "".join(f"data: {_json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=_sse(), headers={"content-type": "text/event-stream"}
+        )
+
+    transport = httpx.MockTransport(_handle)
+    return UnifiedChatOpenAI(
+        model="mock-gpt-4o",
+        base_url="http://test.invalid/v1",
+        api_key="sk-test",
+        http_client=httpx.Client(transport=transport),
+        http_async_client=httpx.AsyncClient(transport=transport),
+    )
+
+
 def test_analysts_execution_under_contextvar_logs_report_id_zero_null():
-    """End-to-end simulation: multiple analysts execute within a job context; assert zero NULLs on new logs."""
+    """End-to-end simulation: multiple analysts execute within a job context; assert zero NULLs on new logs.
+
+    DAV-1314: rows are now written by the LLMUsageLogger callback on the model
+    (not by per-analyst code). Nodes run outside a LangGraph here, so each
+    analyst's role label is provided via run metadata (llm_role) bound to the
+    runnable — equivalent to what langgraph_node metadata carries in production.
+    """
     init_db()
     job_id = f"simulated-job-{uuid4().hex[:12]}"
-    mock_llm = _MockStreamingLLM()
+    base_llm = _callback_llm()
     mock_collector = _MockDataCollector()
+
+    def _llm_for(role: str):
+        return base_llm.with_config({"metadata": {"llm_role": role}})
 
     state = {
         "trade_date": "2026-08-20",
@@ -179,16 +227,16 @@ def test_analysts_execution_under_contextvar_logs_report_id_zero_null():
     token = current_report_id.set(job_id)
     try:
         # Run market analyst
-        m_analyst = create_market_analyst(mock_llm, data_collector=mock_collector)
+        m_analyst = create_market_analyst(_llm_for("Market Analyst"), data_collector=mock_collector)
         asyncio.run(m_analyst(state))
 
         # Run macro analyst
-        macro_analyst = create_macro_analyst(mock_llm, data_collector=mock_collector)
+        macro_analyst = create_macro_analyst(_llm_for("Macro Analyst"), data_collector=mock_collector)
         with patch("tradingagents.agents.analysts.macro_analyst.resolve_macro_event_context", return_value=([], "")):
             asyncio.run(macro_analyst(state))
 
         # Run volume price analyst
-        vp_analyst = create_volume_price_analyst(mock_llm)
+        vp_analyst = create_volume_price_analyst(_llm_for("Volume Price Analyst"))
         asyncio.run(vp_analyst(state))
     finally:
         current_report_id.reset(token)
