@@ -8,7 +8,11 @@ intent parsing, and structured extraction without per-role instrumentation.
 Run context (report_id / horizon / role) comes from LangChain run metadata,
 which flows down from the graph invocation config (``metadata`` merges into
 child runs; LangGraph also injects ``langgraph_node`` with the node name), or
-from ``api.database.current_report_id`` as fallback for report_id.
+from contextvars as fallback: ``api.database.current_report_id`` for
+report_id, ``current_llm_role`` for the role, ``current_llm_horizon`` for
+horizon. The contextvar channel exists because child-run metadata does not
+reach LLM calls made inside graph nodes (nodes do not forward RunnableConfig
+and sync nodes run in a thread pool).
 
 Usage is read from ``usage_metadata`` (input_tokens / output_tokens /
 total_tokens + input_token_details.cache_read + output_token_details.reasoning)
@@ -40,6 +44,16 @@ logger = logging.getLogger(__name__)
 # RunnableConfig without touching the context.
 current_llm_role: ContextVar[Optional[str]] = ContextVar(
     "current_llm_role", default=None
+)
+
+# Horizon label for the same reason: graph-level RunnableConfig metadata does
+# not reach LLM calls inside nodes. Each horizon pipeline (``_process_horizon``
+# in api.main, ``TradingAgentsGraph.propagate``) sets this before running the
+# graph; dual-horizon runs execute in separate asyncio tasks so the two
+# context copies never bleed into each other. metadata["horizon"] still wins
+# when present; missing everywhere → NULL horizon column.
+current_llm_horizon: ContextVar[Optional[str]] = ContextVar(
+    "current_llm_horizon", default=None
 )
 
 
@@ -290,7 +304,7 @@ class LLMUsageLogger(BaseCallbackHandler):
                 # 回调层拿不到该语义，统一记 False；列保留兼容旧数据。
                 degraded=False,
                 report_id=report_id,
-                horizon=metadata.get("horizon"),
+                horizon=metadata.get("horizon") or current_llm_horizon.get(),
                 retried=bool(run.get("retried")),
             )
         except Exception as exc:  # pragma: no cover - defensive

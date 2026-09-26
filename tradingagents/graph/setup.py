@@ -1,5 +1,7 @@
 # TradingAgents/graph/setup.py
 
+import functools
+import inspect
 from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph, START
@@ -9,6 +11,61 @@ from tradingagents.agents.utils.agent_states import AgentState
 from tradingagents.agents.utils.prompt_injection import Placement, DEFAULT_PLACEMENT
 
 from .conditional_logic import ConditionalLogic
+
+
+def _with_llm_role(role: str, node):
+    """Wrap a graph node so LLM calls inside it are attributed to ``role``
+    in the usage ledger (DAV-1330).
+
+    LangChain run metadata never reaches LLM calls made inside graph nodes
+    (nodes do not forward RunnableConfig, and sync nodes run in a thread
+    pool), so ``langgraph_node`` is unavailable to the usage callback. The
+    ``api.usage_logging.current_llm_role`` contextvar is set inside the
+    wrapper instead — the executor's context copy (sync nodes) and the
+    awaiting coroutine's context (async nodes) both carry it. Repair passes
+    inside the node temporarily override the label with ``<role>/返修`` and
+    reset afterwards.
+
+    Degrades to a no-op when ``api.usage_logging`` is unavailable
+    (standalone CLI use). Both sync and async node callables are supported;
+    a sync callable that returns an awaitable is re-wrapped so the role
+    also covers the awaited coroutine.
+    """
+    try:
+        from api.usage_logging import current_llm_role
+    except Exception:  # pragma: no cover - standalone CLI without api layer
+        return node
+
+    if inspect.iscoroutinefunction(node):
+        @functools.wraps(node)
+        async def _async_role_node(*args, **kwargs):
+            tok = current_llm_role.set(role)
+            try:
+                return await node(*args, **kwargs)
+            finally:
+                current_llm_role.reset(tok)
+
+        return _async_role_node
+
+    @functools.wraps(node)
+    def _sync_role_node(*args, **kwargs):
+        tok = current_llm_role.set(role)
+        try:
+            result = node(*args, **kwargs)
+        finally:
+            current_llm_role.reset(tok)
+        if inspect.isawaitable(result):
+            async def _await_role_node():
+                tok = current_llm_role.set(role)
+                try:
+                    return await result
+                finally:
+                    current_llm_role.reset(tok)
+
+            return _await_role_node()
+        return result
+
+    return _sync_role_node
 
 
 def _load_agent_factories() -> dict[str, Any]:
@@ -208,9 +265,13 @@ class GraphSetup:
             """Convert analyst_type key to display name, e.g. 'smart_money' -> 'Smart Money'."""
             return analyst_type.replace("_", " ").title()
 
-        # Add analyst nodes to the graph
+        # Add analyst nodes to the graph. LLM-calling nodes are wrapped so
+        # every in-graph model call is attributed to its role in the usage
+        # ledger (DAV-1330); tools/done/gate nodes make no LLM calls and stay
+        # unwrapped.
         for analyst_type, node in analyst_nodes.items():
-            workflow.add_node(f"{analyst_display_name(analyst_type)} Analyst", node)
+            analyst_label = f"{analyst_display_name(analyst_type)} Analyst"
+            workflow.add_node(analyst_label, _with_llm_role(analyst_label, node))
             workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
             workflow.add_node(f"{analyst_display_name(analyst_type)} Analyst Done", done_nodes[analyst_type])
 
@@ -218,14 +279,14 @@ class GraphSetup:
         from tradingagents.agents.utils.run_integrity import create_run_integrity_gate
 
         workflow.add_node("Run Integrity Gate", create_run_integrity_gate())
-        workflow.add_node("Bull Researcher", bull_researcher_node)
-        workflow.add_node("Bear Researcher", bear_researcher_node)
-        workflow.add_node("Research Manager", research_manager_node)
-        workflow.add_node("Trader", trader_node)
-        workflow.add_node("Aggressive Analyst", aggressive_analyst)
-        workflow.add_node("Neutral Analyst", neutral_analyst)
-        workflow.add_node("Conservative Analyst", conservative_analyst)
-        workflow.add_node("Risk Judge", risk_manager_node)
+        workflow.add_node("Bull Researcher", _with_llm_role("Bull Researcher", bull_researcher_node))
+        workflow.add_node("Bear Researcher", _with_llm_role("Bear Researcher", bear_researcher_node))
+        workflow.add_node("Research Manager", _with_llm_role("Research Manager", research_manager_node))
+        workflow.add_node("Trader", _with_llm_role("Trader", trader_node))
+        workflow.add_node("Aggressive Analyst", _with_llm_role("Aggressive Analyst", aggressive_analyst))
+        workflow.add_node("Neutral Analyst", _with_llm_role("Neutral Analyst", neutral_analyst))
+        workflow.add_node("Conservative Analyst", _with_llm_role("Conservative Analyst", conservative_analyst))
+        workflow.add_node("Risk Judge", _with_llm_role("Risk Judge", risk_manager_node))
 
         # Define edges
         # Two-stage analyst topology:

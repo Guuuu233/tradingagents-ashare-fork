@@ -358,7 +358,8 @@ def _normalize_messages(orig: Any) -> List[Any]:
 
 async def _invoke_revision_llm(llm: Any, original_text: str,
                                message: str,
-                               orig_messages: Any = None) -> Optional[str]:
+                               orig_messages: Any = None,
+                               role_key_hint: Optional[str] = None) -> Optional[str]:
     """返修请求追加在该角色原始调用的完整消息序列之后（V2）：
     原系统提示与输入上下文原样保留（含用户自定义提示词注入），
     末尾追加 AIMessage(原稿) + HumanMessage(返修要求)。"""
@@ -366,6 +367,16 @@ async def _invoke_revision_llm(llm: Any, original_text: str,
         AIMessage(content=original_text),
         HumanMessage(content=message),
     ]
+    # DAV-1330: 返修调用在账本里与角色正常产出区分开（"<role>/返修"）。
+    # 取不到外层角色时退回 role_key；api 层不可用时静默降级。
+    _role_var = _role_tok = None
+    try:
+        from api.usage_logging import current_llm_role
+
+        _role_var = current_llm_role
+        _role_tok = _role_var.set(f"{_role_var.get() or role_key_hint or 'unknown'}/返修")
+    except Exception:  # pragma: no cover - standalone CLI
+        _role_var = _role_tok = None
     try:
         if hasattr(llm, "ainvoke"):
             res = await llm.ainvoke(messages)
@@ -376,6 +387,9 @@ async def _invoke_revision_llm(llm: Any, original_text: str,
     except Exception as exc:
         logger.warning("[price_ref_revision] revision call failed: %r", exc)
         return None
+    finally:
+        if _role_var is not None:
+            _role_var.reset(_role_tok)
 
 
 def _base_record(role_key: str, report_field: str,
@@ -507,7 +521,8 @@ async def maybe_revise_role_report(
     else:
         message = build_revision_message(problems, table_text)
     revised = await _invoke_revision_llm(llm, text, message,
-                                         orig_messages=orig_messages)
+                                         orig_messages=orig_messages,
+                                         role_key_hint=role_key)
 
     if revised is None:
         rec["adopted"] = "original"

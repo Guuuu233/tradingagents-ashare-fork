@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
-from api.usage_logging import current_llm_role
+from api.usage_logging import current_llm_horizon, current_llm_role
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service, social_data_service
 import jwt
@@ -3284,6 +3284,9 @@ async def _run_job_inner(
 
                 # 通过 ContextVar 将 tracker 传入 async 节点（LangGraph 不传递 schema 外的字段）
                 _tracker_token = current_tracker_var.set(h_tracker)
+                # DAV-1330: 档位走同一 contextvar 通道——run metadata 传不进图内
+                # LLM 调用，双档并行时两个 task 各持独立 context，不会串档。
+                _horizon_token = current_llm_horizon.set(horizon)
                 try:
                     async for chunk in horizon_graph.graph.astream(init_state, **h_args):
                         horizon_final = chunk
@@ -3351,6 +3354,7 @@ async def _run_job_inner(
                     raise
                 finally:
                     current_tracker_var.reset(_tracker_token)
+                    current_llm_horizon.reset(_horizon_token)
 
                 if horizon_final is None:
                     raise RuntimeError(f"Horizon '{horizon}' produced no output")
@@ -4017,6 +4021,10 @@ async def _run_job_inner(
             accumulated_state: Dict[str, Any] = dict(init_state) if isinstance(init_state, dict) else {}
             final_state = accumulated_state
             _tracker_token = current_tracker_var.set(tracker)
+            # DAV-1330: single-horizon streaming path — tag in-graph LLM calls.
+            _horizon_token = current_llm_horizon.set(
+                request.horizons[0] if request.horizons else "short"
+            )
             try:
                 async for chunk in graph.graph.astream(init_state, **args):
                     if isinstance(chunk, dict):
@@ -4143,6 +4151,7 @@ async def _run_job_inner(
                 raise
             finally:
                 current_tracker_var.reset(_tracker_token)
+                current_llm_horizon.reset(_horizon_token)
 
             # DAV-1211: the streaming single-horizon path bypasses
             # propagate(), so run the shared price_ref finalization here —
@@ -4209,11 +4218,17 @@ async def _run_job_inner(
                     "report_id": job_id,
                     "horizon": single_horizon,
                 }
-                final_state = await asyncio.to_thread(
-                    graph.graph.invoke,
-                    init_state,
-                    **args,
-                )
+                # DAV-1330: medium-horizon raw-invoke path — to_thread copies
+                # the current context, so the tag reaches in-graph LLM calls.
+                _h_tok = current_llm_horizon.set(single_horizon)
+                try:
+                    final_state = await asyncio.to_thread(
+                        graph.graph.invoke,
+                        init_state,
+                        **args,
+                    )
+                finally:
+                    current_llm_horizon.reset(_h_tok)
                 # DAV-1207/1211: parity with propagate() — the raw-invoke
                 # medium path runs the same shared price_ref finalization,
                 # otherwise the persisted payload carries no real gate output.

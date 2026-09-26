@@ -1,5 +1,6 @@
 # TradingAgents/graph/trading_graph.py
 
+import contextlib
 import copy
 import os
 import re
@@ -57,6 +58,31 @@ from tradingagents.agents.utils.model_tier_warning import check_model_tier_warni
 
 
 _logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _llm_usage_horizon(horizon: Optional[str]):
+    """Tag LLM calls made during a graph run with the ledger horizon (DAV-1330).
+
+    RunnableConfig metadata never reaches LLM calls inside graph nodes, so the
+    usage callback reads ``api.usage_logging.current_llm_horizon`` as a
+    contextvar fallback. No-op when the api layer is unavailable (standalone
+    CLI) or the horizon is unknown.
+    """
+    var = tok = None
+    if horizon:
+        try:
+            from api.usage_logging import current_llm_horizon
+
+            var = current_llm_horizon
+            tok = var.set(horizon)
+        except Exception:  # pragma: no cover - standalone CLI
+            var = tok = None
+    try:
+        yield
+    finally:
+        if var is not None:
+            var.reset(tok)
 
 
 class GameTheoryWiringError(RuntimeError):
@@ -645,20 +671,23 @@ class TradingAgentsGraph:
             # Default fallback for standalone runs: isolate by horizon to prevent thread collision
             args["config"]["configurable"] = {"thread_id": f"{company_name}_{trade_date}_{state_horizon}"}
 
-        if self.debug:
-            # Debug mode with tracing
-            trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
+        # DAV-1330: tag in-graph LLM calls with this run's horizon; the
+        # contextvar travels into nodes via the executor's context copy.
+        with _llm_usage_horizon(state_horizon):
+            if self.debug:
+                # Debug mode with tracing
+                trace = []
+                for chunk in self.graph.stream(init_agent_state, **args):
+                    if len(chunk["messages"]) == 0:
+                        pass
+                    else:
+                        chunk["messages"][-1].pretty_print()
+                        trace.append(chunk)
 
-            final_state = trace[-1]
-        else:
-            # Standard mode without tracing
-            final_state = self.graph.invoke(init_agent_state, **args)
+                final_state = trace[-1]
+            else:
+                # Standard mode without tracing
+                final_state = self.graph.invoke(init_agent_state, **args)
 
         self._ensure_game_theory_state(final_state, horizon=effective_horizon)
 
@@ -736,7 +765,9 @@ class TradingAgentsGraph:
             runtime_config=self.config,
         )
         attach_price_ref_source(state, collected, symbol=ticker, trade_date=trade_date)
-        final_state = await self.graph.ainvoke(state, **graph_args)
+        # DAV-1330: single-horizon path — tag in-graph LLM calls with "short".
+        with _llm_usage_horizon("short"):
+            final_state = await self.graph.ainvoke(state, **graph_args)
 
         self._ensure_game_theory_state(final_state, horizon="short")
 
