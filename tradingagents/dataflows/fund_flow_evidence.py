@@ -2216,6 +2216,409 @@ _FIELD_VALUE_PATTERNS = {
 
 _CUMULATIVE_KEYWORDS = ("累计", "合计", "总计", "5日", "五日", "近5", "近五")
 
+# ---------------------------------------------------------------------------
+# DAV-1291 F1/F2: date binding and generalized interval attribution for model
+# value mentions. A mention is classified as ``daily`` (compare against the
+# requested as-of day), ``dated`` (compare against the same calendar date in
+# structured records), ``interval`` (compare against the same N-day cumulative
+# window), ``cumulative`` (legacy 累计/合计/总计 wording without an explicit N,
+# compared against the caller's window), or ``interval_unverifiable`` (symbolic
+# ranges such as 近一月/本周/以来 that have no exact structured window).
+# ---------------------------------------------------------------------------
+
+_CN_DIGIT = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def _cn_int(text: str | None) -> int | None:
+    """Parse Arabic digits or simple Chinese numerals (一..九十九/百)."""
+    if not text:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    if "百" in text:
+        left, _, right = text.partition("百")
+        hundreds = _CN_DIGIT.get(left, 1) if left else 1
+        if left and left not in _CN_DIGIT:
+            return None
+        rest = _cn_int(right) if right else 0
+        if rest is None:
+            return None
+        return hundreds * 100 + rest
+    if "十" in text:
+        left, _, right = text.partition("十")
+        if left and left not in _CN_DIGIT:
+            return None
+        if right and right not in _CN_DIGIT:
+            return None
+        tens = _CN_DIGIT.get(left, 1) if left else 1
+        units = _CN_DIGIT.get(right, 0) if right else 0
+        return tens * 10 + units
+    if len(text) == 1 and text in _CN_DIGIT:
+        return _CN_DIGIT[text]
+    return None
+
+
+# Explicit calendar dates inside model prose.
+_MODEL_DATE_YMD = re.compile(
+    r"(\d{4})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})\s*日?"
+)
+_MODEL_DATE_MD_CN = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_MODEL_DATE_MD_NUM = re.compile(r"(?<![\d\-/.])(\d{1,2})\s*[-/]\s*(\d{1,2})(?![\d\-/亿])")
+
+# Interval window markers; numeric forms generalize ``N日 / 近N日 / N个交易日``.
+_INTERVAL_NUM = r"(?:\d+|十|[一二三四五六七八九两]十[一二三四五六七八九]?|[一二三四五六七八九两]?十|[一二三四五六七八九两])"
+_MODEL_INTERVAL_TRADE_DAYS = re.compile(
+    rf"(?:近|最近|过去)?\s*(?<![前上下第])({_INTERVAL_NUM})\s*个?交易日"
+)
+_MODEL_INTERVAL_NEAR_DAYS = re.compile(
+    rf"(?:近|最近|过去)\s*({_INTERVAL_NUM})\s*日"
+)
+_MODEL_INTERVAL_BARE_DAYS = re.compile(
+    rf"(?<![前上下第昨当])({_INTERVAL_NUM})\s*日(?!内|均|期|历|前|后)"
+)
+_MODEL_INTERVAL_SYMBOLIC = re.compile(
+    rf"本周|上周|当周|周内|本周以来|本个?月|上月|当月|月内|本季度?|上季度?|"
+    rf"年以来|月以来|以来|区间|期间|时段|周期|"
+    rf"近\s*(?:{_INTERVAL_NUM}\s*个?)?\s*(?:周|星期|月|季度?|年)"
+)
+_MODEL_CUMULATIVE = re.compile(r"累计|合计|总计|累加|共计")
+_MODEL_DAILY_MARKER = re.compile(r"今日|当日|单日|本日|日内")
+_MODEL_YI_NUMBER = re.compile(r"\d+(?:\.\d*)?\s*亿")
+# Values whose clause explicitly scopes them to the sector/market rather than
+# the analysed symbol (e.g. ``9月10日银行板块整体主力资金净流入2.10亿元``)
+# must not be compared against the symbol's own structured records.
+_OUT_OF_SCOPE_MARKERS = ("板块", "行业", "全市场", "两市")
+
+
+def _iter_model_dates(segment: str) -> list[tuple[int, int, int | None, int, int]]:
+    """Return (start, end, year|None, month, day) for explicit dates in segment."""
+    found: list[tuple[int, int, int | None, int, int]] = []
+    for match in _MODEL_DATE_YMD.finditer(segment):
+        year, month, day = (int(g) for g in match.groups())
+        found.append((match.start(), match.end(), year, month, day))
+    for match in _MODEL_DATE_MD_CN.finditer(segment):
+        month, day = (int(g) for g in match.groups())
+        found.append((match.start(), match.end(), None, month, day))
+    for match in _MODEL_DATE_MD_NUM.finditer(segment):
+        month, day = (int(g) for g in match.groups())
+        found.append((match.start(), match.end(), None, month, day))
+    found.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    deduped: list[tuple[int, int, int | None, int, int]] = []
+    occupied = -1
+    for item in found:
+        if item[0] < occupied:
+            continue
+        try:
+            datetime(item[2] or 2000, item[3], item[4])
+        except ValueError:
+            continue
+        deduped.append(item)
+        occupied = item[1]
+    return deduped
+
+
+def _mask_spans(segment: str, spans: list[tuple[int, int]]) -> str:
+    """Blank out date spans so interval patterns cannot re-read them."""
+    chars = list(segment)
+    for start, end in spans:
+        for idx in range(max(0, start), min(len(chars), end)):
+            chars[idx] = " "
+    return "".join(chars)
+
+
+def _resolve_model_date(
+    year: int | None,
+    month: int,
+    day: int,
+    requested_as_of: str | None,
+) -> str | None:
+    """Resolve a prose date to ``YYYY-MM-DD``; month-day only when no as-of."""
+    if year is not None:
+        try:
+            return datetime(year, month, day).date().isoformat()
+        except ValueError:
+            return None
+    asof = _normalise_date_text(requested_as_of) if requested_as_of else None
+    if asof:
+        anchor_year = int(asof[:4])
+        for candidate_year in (anchor_year, anchor_year - 1):
+            try:
+                candidate = datetime(candidate_year, month, day).date()
+            except ValueError:
+                return None
+            if candidate.isoformat() <= asof:
+                return candidate.isoformat()
+        return None
+    return f"{month:02d}-{day:02d}"
+
+
+def _date_context(
+    text: str,
+    sent_start: int,
+    sent_end: int,
+    clause_start: int,
+    clause_end: int,
+) -> tuple[int | None, int, int] | None:
+    """Find the explicit date bound to a value mention.
+
+    The mention's own clause is authoritative (per DAV-1291 F1 同一子句). When
+    the clause carries no date, fall back to the date in the adjacent prefix or
+    suffix segment of the same sentence only when that segment contains no
+    other 亿 value of its own (e.g. ``在9月24日，主力净流入1.09亿``).
+    """
+    clause = text[clause_start:clause_end]
+    dates = _iter_model_dates(clause)
+    if dates:
+        # Multiple dates in one clause are usually a range (``9月18日至9月24日``);
+        # the trailing date is the anchor the value is stated for.
+        _, _, year, month, day = dates[-1]
+        return year, month, day
+    # Scope header: a sentence-initial clause ending in a colon (``5日累计：``
+    # or ``9月24日：``) binds every value listed after it, even when later
+    # clauses carry their own 亿 numbers.
+    sentence = text[sent_start:sent_end]
+    colon_pos = min(
+        (pos for m in ("：", ":") if (pos := sentence.find(m)) != -1),
+        default=-1,
+    )
+    if 0 <= colon_pos < clause_start - sent_start:
+        header = sentence[: colon_pos + 1]
+        dates = _iter_model_dates(header)
+        if dates:
+            _, _, year, month, day = dates[-1]
+            return year, month, day
+    prefix = text[sent_start:clause_start]
+    if prefix.strip() and not _MODEL_YI_NUMBER.search(prefix):
+        dates = _iter_model_dates(prefix)
+        if dates:
+            _, _, year, month, day = dates[-1]
+            return year, month, day
+    suffix = text[clause_end:sent_end]
+    if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
+        dates = _iter_model_dates(suffix)
+        if dates:
+            _, _, year, month, day = dates[0]
+            return year, month, day
+    return None
+
+
+def _interval_context(
+    text: str,
+    sent_start: int,
+    sent_end: int,
+    clause_start: int,
+    clause_end: int,
+) -> tuple[str, int | None] | None:
+    """Detect generalized interval windows; returns (kind, window_days|None).
+
+    kind ``interval`` carries a concrete N-day window; ``interval_unverifiable``
+    covers symbolic ranges (近一月/本周/区间/以来…) with no exact structured
+    window, which must be reported as unverifiable rather than mismatch.
+    """
+
+    def scan(segment: str) -> tuple[str, int | None] | None:
+        masked = _mask_spans(
+            segment, [(d[0], d[1]) for d in _iter_model_dates(segment)]
+        )
+        for pattern in (
+            _MODEL_INTERVAL_TRADE_DAYS,
+            _MODEL_INTERVAL_NEAR_DAYS,
+            _MODEL_INTERVAL_BARE_DAYS,
+        ):
+            match = pattern.search(masked)
+            if match:
+                window = _cn_int(match.group(1))
+                if window and window > 0:
+                    return "interval", window
+        if _MODEL_INTERVAL_SYMBOLIC.search(masked):
+            return "interval_unverifiable", None
+        if _MODEL_CUMULATIVE.search(masked):
+            return "cumulative", None
+        return None
+
+    clause = text[clause_start:clause_end]
+    hit = scan(clause)
+    if hit:
+        return hit
+    # Scope header (``5日累计：``) binds every value listed after the colon.
+    sentence = text[sent_start:sent_end]
+    colon_pos = min(
+        (pos for m in ("：", ":") if (pos := sentence.find(m)) != -1),
+        default=-1,
+    )
+    if 0 <= colon_pos < clause_start - sent_start:
+        hit = scan(sentence[: colon_pos + 1])
+        if hit:
+            return hit
+    prefix = text[sent_start:clause_start]
+    if prefix.strip() and not _MODEL_YI_NUMBER.search(prefix):
+        hit = scan(prefix)
+        if hit:
+            return hit
+    suffix = text[clause_end:sent_end]
+    if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
+        hit = scan(suffix)
+        if hit:
+            return hit
+    return None
+
+
+def _extract_model_mentions(
+    text: str | None,
+    *,
+    requested_as_of: str | None = None,
+) -> list[dict[str, Any]]:
+    """Extract model 亿 value mentions with date/interval attribution.
+
+    Each mention dict: ``field``, ``value_text``, ``value`` (Decimal), ``kind``
+    (daily|dated|interval|interval_unverifiable|cumulative), ``date`` (resolved
+    ISO or ``MM-DD`` when the model gave no year and no as-of exists) and
+    ``window_days`` for interval mentions.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return []
+    mentions: list[dict[str, Any]] = []
+    asof = _normalise_date_text(requested_as_of) if requested_as_of else None
+    for field, patterns in _FIELD_VALUE_PATTERNS.items():
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                sent_start = max(
+                    (text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "\n")),
+                    default=-1,
+                ) + 1
+                sent_end = min(
+                    (pos for m in ("。", "；", ";", "\n") if (pos := text.find(m, match.end())) != -1),
+                    default=len(text),
+                )
+                clause_start = max(
+                    (text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "，", ",", "\n")),
+                    default=-1,
+                ) + 1
+                clause_end = min(
+                    (pos for m in ("。", "；", ";", "，", ",", "\n") if (pos := text.find(m, match.end())) != -1),
+                    default=len(text),
+                )
+                clause = text[clause_start:clause_end]
+
+                if field == "netamount" and "主力" in clause:
+                    continue
+                if any(marker in clause for marker in _OUT_OF_SCOPE_MARKERS):
+                    continue
+                matched_prefix = text[match.start():match.end()]
+                num_str = match.groups()[-1]
+                value = decimal_value(num_str)
+                if value is None:
+                    continue
+                if (
+                    "流出" in matched_prefix
+                    and value > 0
+                    and not num_str.startswith("+")
+                    and not num_str.startswith("-")
+                ):
+                    value = -value
+
+                kind = "daily"
+                resolved_date: str | None = None
+                window_days: int | None = None
+                date_ctx = _date_context(
+                    text, sent_start, sent_end, clause_start, clause_end
+                )
+                if date_ctx is not None:
+                    year, month, day = date_ctx
+                    resolved_date = _resolve_model_date(
+                        year, month, day, requested_as_of
+                    )
+                    if resolved_date is None:
+                        kind = "interval_unverifiable"
+                    elif len(resolved_date) != 10:
+                        # Month-day only and no as-of anchor to resolve a year.
+                        kind = "dated"
+                    elif asof is None:
+                        # Bare extractor use without as-of context: keep the
+                        # historical behaviour (dated prose still counts as the
+                        # model's single-day claim); validate_model_summary
+                        # always passes as-of and gets true attribution.
+                        kind = "daily"
+                    elif resolved_date == asof:
+                        kind = "daily"
+                    else:
+                        kind = "dated"
+                elif _MODEL_DAILY_MARKER.search(clause):
+                    kind = "daily"
+                else:
+                    interval = _interval_context(
+                        text, sent_start, sent_end, clause_start, clause_end
+                    )
+                    if interval is None:
+                        kind = "daily"
+                    else:
+                        kind, window_days = interval
+
+                mentions.append(
+                    {
+                        "field": field,
+                        "value_text": _decimal_text(value) or "",
+                        "value": value,
+                        "kind": kind,
+                        "date": resolved_date,
+                        "window_days": window_days,
+                    }
+                )
+    return mentions
+
+
+def _structured_value_on_date(
+    records: Iterable[Mapping[str, Any]],
+    field: str,
+    target_date: str,
+    source: str | None,
+) -> tuple[Decimal | None, str]:
+    """Return the structured field value recorded on ``target_date``.
+
+    ``target_date`` is either ``YYYY-MM-DD`` (full match) or ``MM-DD`` (matched
+    by month-day suffix when the model gave no year). Multiple sources on the
+    same date only compare when they agree; ambiguity stays unverifiable.
+    """
+    values: list[Decimal] = []
+    for record in records:
+        if not isinstance(record, Mapping) or record.get("status") != "available":
+            continue
+        if source is not None and str(record.get("source") or "") != str(source):
+            continue
+        normalized, error = _normalise_summary_record(record, field=field)
+        if normalized is None or error:
+            continue
+        record_date = str(normalized.get("date") or "")
+        if len(target_date) == 10:
+            hit = record_date == target_date
+        else:
+            hit = record_date[5:] == target_date
+        if not hit:
+            continue
+        value = decimal_value(normalized.get(field))
+        if value is not None:
+            values.append(value)
+    unique = set(values)
+    if len(unique) == 1:
+        return values[0], "ok"
+    if not unique:
+        return None, "no_record_on_date"
+    return None, "conflicting_records_on_date"
+
 
 def extract_model_totals(text: str | None) -> dict[str, str]:
     """Extract only explicitly labelled cumulative亿元 values from model text."""
@@ -2250,40 +2653,25 @@ def extract_model_totals(text: str | None) -> dict[str, str]:
     return found
 
 
-def extract_model_daily_values(text: str | None) -> dict[str, str]:
-    """Extract daily (single-day) 亿元 values from model text."""
-    if not isinstance(text, str) or not text.strip():
-        return {}
+def extract_model_daily_values(
+    text: str | None,
+    *,
+    requested_as_of: str | None = None,
+) -> dict[str, str]:
+    """Extract daily (single-day) 亿元 values from model text.
+
+    DAV-1291 F1: when ``requested_as_of`` is provided, values carrying an
+    explicit date that differs from the as-of day are attributed to their own
+    date and are NOT returned here (they are compared against that date's
+    structured record inside :func:`validate_model_summary` instead).
+    """
     found: dict[str, str] = {}
-    for field, patterns in _FIELD_VALUE_PATTERNS.items():
-        for pattern in patterns:
-            for match in pattern.finditer(text):
-                sent_start = max((text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "\n")), default=-1) + 1
-                sent_end = min((pos for m in ("。", "；", ";", "\n") if (pos := text.find(m, match.end())) != -1), default=len(text))
-                sentence = text[sent_start:sent_end]
-
-                clause_start = max((text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "，", ",", "\n")), default=-1) + 1
-                clause_end = min((pos for m in ("。", "；", ";", "，", ",", "\n") if (pos := text.find(m, match.end())) != -1), default=len(text))
-                clause = text[clause_start:clause_end]
-
-                has_cum_in_sentence = any(kw in sentence for kw in _CUMULATIVE_KEYWORDS)
-                has_cum_in_clause = any(kw in clause for kw in _CUMULATIVE_KEYWORDS)
-                has_daily_in_clause = any(kw in clause for kw in ("今日", "当日", "单日", "本日", "日内"))
-                # DAV-1104: If clause explicitly describes daily, don't discard it just because another clause in the sentence mentions multi-day trend
-                if has_cum_in_clause or (has_cum_in_sentence and not has_daily_in_clause):
-                    continue
-                if field == "netamount" and "主力" in clause:
-                    continue
-                matched_prefix = text[match.start():match.end()]
-                num_str = match.groups()[-1]
-                value = decimal_value(num_str)
-                if value is not None:
-                    if "流出" in matched_prefix and value > 0 and not num_str.startswith("+") and not num_str.startswith("-"):
-                        value = -value
-                    found[field] = _decimal_text(value) or ""
-                    break
-            if field in found:
-                break
+    for mention in _extract_model_mentions(text, requested_as_of=requested_as_of):
+        if mention["kind"] != "daily":
+            continue
+        field = mention["field"]
+        if field not in found:
+            found[field] = mention["value_text"]
     return found
 
 
@@ -2298,6 +2686,8 @@ def validate_model_summary(
     requested_as_of: str | None = None,
 ) -> dict[str, Any]:
     """Mark model totals and daily values against structured evidence."""
+    # Materialize once: dated/interval attribution re-iterates the records.
+    records = list(records)
     structured_cum = summarize_evidence(
         records,
         window_days=window_days if window_days > 1 else DEFAULT_WINDOW_DAYS,
@@ -2314,60 +2704,139 @@ def validate_model_summary(
     )
 
     model_totals = extract_model_totals(model_text)
-    model_daily = extract_model_daily_values(model_text)
+    model_daily = extract_model_daily_values(
+        model_text, requested_as_of=requested_as_of
+    )
+    mentions = _extract_model_mentions(model_text, requested_as_of=requested_as_of)
 
     mismatches: list[dict[str, str]] = []
     unverifiable: list[str] = []
     matched_fields: list[str] = []
+    interval_summary_cache: dict[int, dict[str, Any]] = {}
 
-    for model_field, model_value_text in model_totals.items():
-        structured_value = decimal_value(structured_cum.get(model_field))
-        model_value = decimal_value(model_value_text)
-        if structured_value is None or model_value is None:
-            if structured_value is None:
-                unverifiable.append(model_field)
-            continue
-        # DAV-1104: When window_days == 1 and structured_cum only has 1 record,
-        # structured evidence does not provide multi-day cumulative data.
-        # A model narrative mentioning a multi-day trend cannot be compared
-        # against a single-day record as if 1-day were the 5-day sum.
-        if window_days == 1 and (structured_cum.get("record_count") or 0) <= 1:
+    def _note_unverifiable(model_field: str) -> None:
+        if model_field not in unverifiable:
             unverifiable.append(model_field)
-            continue
-        if abs(structured_value - model_value) > tolerance:
-            mismatches.append(
-                {
-                    "field": model_field,
-                    "structured": _decimal_text(structured_value) or "",
-                    "model": _decimal_text(model_value) or "",
-                    "unit": "亿元",
-                    "reason": "model cumulative total differs from structured evidence",
-                }
-            )
-        else:
-            matched_fields.append(model_field)
 
-    for model_field, model_value_text in model_daily.items():
-        structured_value = decimal_value(structured_daily.get(model_field))
-        model_value = decimal_value(model_value_text)
-        if structured_value is None or model_value is None:
+    def _compare_mention(
+        mention: Mapping[str, Any],
+        structured_value: Decimal | None,
+        scope: dict[str, Any],
+        reason: str,
+    ) -> None:
+        model_field = str(mention["field"])
+        model_value = mention.get("value")
+        if structured_value is None or not isinstance(model_value, Decimal):
             if structured_value is None:
-                unverifiable.append(model_field)
-            continue
+                _note_unverifiable(model_field)
+            return
         if abs(structured_value - model_value) > tolerance:
-            mismatches.append(
-                {
-                    "field": model_field,
-                    "structured": _decimal_text(structured_value) or "",
-                    "model": _decimal_text(model_value) or "",
-                    "unit": "亿元",
-                    "reason": "model daily value differs from structured evidence",
-                }
-            )
+            mismatch = {
+                "field": model_field,
+                "structured": _decimal_text(structured_value) or "",
+                "model": _decimal_text(model_value) or "",
+                "unit": "亿元",
+                "reason": reason,
+            }
+            mismatch.update(scope)
+            mismatches.append(mismatch)
         else:
             matched_fields.append(model_field)
 
-    combined_model = {**model_daily, **model_totals}
+    seen_mentions: set[tuple[Any, ...]] = set()
+    for mention in mentions:
+        model_field = str(mention["field"])
+        kind = str(mention["kind"])
+        # Parity with the legacy first-match-wins extraction: compare only the
+        # first mention per (field, comparison scope). A scope is the as-of day
+        # for daily, each explicit date for dated, each N-day window for
+        # interval, and the caller window for cumulative.
+        dedupe_key = (
+            model_field,
+            kind,
+            mention.get("date") if kind == "dated" else None,
+            mention.get("window_days") if kind == "interval" else None,
+        )
+        if dedupe_key in seen_mentions:
+            continue
+        seen_mentions.add(dedupe_key)
+
+        if kind == "daily":
+            _compare_mention(
+                mention,
+                decimal_value(structured_daily.get(model_field)),
+                {"kind": "daily", "as_of": structured_daily.get("as_of")},
+                "model daily value differs from structured evidence",
+            )
+        elif kind == "dated":
+            target_date = str(mention.get("date") or "")
+            structured_value, _why = _structured_value_on_date(
+                records, model_field, target_date, selected_source
+            )
+            _compare_mention(
+                mention,
+                structured_value,
+                {"kind": "dated", "date": target_date},
+                "model dated value differs from structured evidence of the same date",
+            )
+        elif kind == "interval":
+            window = int(mention.get("window_days") or 0)
+            if window <= 0:
+                _note_unverifiable(model_field)
+                continue
+            interval_summary = interval_summary_cache.get(window)
+            if interval_summary is None:
+                interval_summary = summarize_evidence(
+                    records,
+                    window_days=window,
+                    field=selected_field,
+                    source=selected_source,
+                    requested_as_of=requested_as_of,
+                )
+                interval_summary_cache[window] = interval_summary
+            # DAV-1291 F2: only compare when the structured evidence actually
+            # covers the exact same N-day window; otherwise unverifiable.
+            if interval_summary.get("status") != "available":
+                _note_unverifiable(model_field)
+                continue
+            _compare_mention(
+                mention,
+                decimal_value(interval_summary.get(model_field)),
+                {"kind": "interval", "window_days": window},
+                "model interval value differs from structured evidence of the same window",
+            )
+        elif kind == "cumulative":
+            # DAV-1104: When window_days == 1 and structured_cum only has 1
+            # record, structured evidence does not provide multi-day cumulative
+            # data; a multi-day narrative cannot be compared against a
+            # single-day record as if 1-day were the N-day sum.
+            if window_days == 1 and (structured_cum.get("record_count") or 0) <= 1:
+                _note_unverifiable(model_field)
+                continue
+            _compare_mention(
+                mention,
+                decimal_value(structured_cum.get(model_field)),
+                {"kind": "cumulative", "window_days": window_days},
+                "model cumulative total differs from structured evidence",
+            )
+        else:  # interval_unverifiable: 近一月/本周/以来/区间 等无精确窗口
+            _note_unverifiable(model_field)
+
+    model_dated: dict[str, str] = {}
+    model_interval: dict[str, str] = {}
+    for mention in mentions:
+        field_name = str(mention["field"])
+        if mention["kind"] == "dated" and field_name not in model_dated:
+            model_dated[field_name] = mention["value_text"]
+        if mention["kind"] == "interval" and field_name not in model_interval:
+            model_interval[field_name] = mention["value_text"]
+
+    combined_model = {
+        **model_daily,
+        **model_totals,
+        **model_dated,
+        **model_interval,
+    }
     primary_structured = structured_daily if window_days == 1 else structured_cum
 
     # DAV-1104: Distinguish directional contradiction or exact assertion mismatch
@@ -2426,6 +2895,14 @@ def validate_model_summary(
     else:
         status = "not_checked"
 
+    # DAV-1291 rework: ``validation_warning`` is reserved for actual
+    # within-tolerance rhetorical deviations. When nothing deviated and the
+    # warning only reflects unverifiable mentions / partial structured windows,
+    # report ``unverifiable`` so downstream copy does not falsely claim a
+    # discrepancy. Both statuses stay non-blocking.
+    if status == "validation_warning" and not rhetorical_warnings:
+        status = "unverifiable"
+
     return {
         "status": status,
         "hard_guard": {
@@ -2435,7 +2912,11 @@ def validate_model_summary(
             else (
                 "模型数值表述与结构化基准存在局部偏差，降级为警示"
                 if status == "validation_warning"
-                else "no explicit model total"
+                else (
+                    "部分模型数值无法与结构化数据核对（缺对应日期或窗口），未作偏差判定"
+                    if status == "unverifiable"
+                    else "no explicit model total"
+                )
             ),
         },
         "structured": primary_structured,
@@ -2445,6 +2926,8 @@ def validate_model_summary(
         "model": combined_model,
         "model_totals": model_totals,
         "model_daily": model_daily,
+        "model_dated": model_dated,
+        "model_interval": model_interval,
         "unverifiable_fields": unverifiable,
         "mismatches": mismatches,
         "tolerance": _decimal_text(tolerance),

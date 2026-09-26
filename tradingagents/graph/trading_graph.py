@@ -855,6 +855,8 @@ class TradingAgentsGraph:
             "fundamentals_report": final_state.get("fundamentals_report", ""),
             "macro_report": final_state.get("macro_report", ""),
             "smart_money_report": final_state.get("smart_money_report", ""),
+            # DAV-1291 F3: 被守卫拦截的主力报告原稿 + mismatch 明细
+            "smart_money_report_blocked_original": final_state.get("smart_money_report_blocked_original"),
             "volume_price_report": final_state.get("volume_price_report", ""),
             "game_theory_report": final_state.get("game_theory_report"),
             "game_theory_signals": final_state.get("game_theory_signals"),
@@ -1037,6 +1039,7 @@ class TradingAgentsGraph:
             "fundamentals_report": final_state.get("fundamentals_report", ""),
             "macro_report": final_state.get("macro_report", ""),
             "smart_money_report": final_state.get("smart_money_report", ""),
+            "smart_money_report_blocked_original": final_state.get("smart_money_report_blocked_original"),
             "volume_price_report": final_state.get("volume_price_report", ""),
             "investment_debate_state": logged_inv_state,
             "manager_verdict": final_state.get("manager_verdict") or (inv_state.get("manager_verdict") if isinstance(inv_state, dict) else None),

@@ -463,6 +463,11 @@ class AgentState(MessagesState):
 
     macro_report: Annotated[str, "Report from the Macro/Sector Analyst"]
     smart_money_report: Annotated[str, "Report from the Smart Money Analyst"]
+    # DAV-1291 F3: 被数值校验/守卫拦截的主力报告原稿 + mismatch 明细（不展示为结论）
+    smart_money_report_blocked_original: Annotated[
+        Optional[dict[str, Any]],
+        "Original smart-money report blocked by the numeric guard, with mismatch detail",
+    ]
     volume_price_report: Annotated[str, "Report from the Volume Price Analyst"]
     game_theory_report: Annotated[Optional[str], "Report from the Game Theory Analyst"]
     game_theory_signals: Annotated[Optional[dict[str, Any]], "Structured game theory signals"]

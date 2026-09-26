@@ -156,8 +156,9 @@ def test_mechanism_b_model_mentioning_multi_day_does_not_mismatch_single_day():
     )
 
     # 不应导致 hard_guard.blocked=True，也不应置 status='mismatch' 阻止流程
+    # DAV-1291 rework: 无偏差仅无法逐日核对的场景归 unverifiable（同样不阻断）
     assert val["hard_guard"]["blocked"] is False
-    assert val["status"] in {"matched", "validation_warning"}
+    assert val["status"] in {"matched", "validation_warning", "unverifiable"}
 
 
 def test_mechanism_b_rhetorical_deviation_downgrades_to_warning():
@@ -176,8 +177,9 @@ def test_mechanism_b_rhetorical_deviation_downgrades_to_warning():
     )
 
     # 修辞偏差降级为 warning，不得硬阻断
+    # DAV-1291 rework: 该场景语义唯一，收紧为精确状态断言（复审建议）
     assert val["hard_guard"]["blocked"] is False
-    assert val["status"] in {"matched", "validation_warning"}
+    assert val["status"] == "validation_warning"
 
 
 # =========================================================================

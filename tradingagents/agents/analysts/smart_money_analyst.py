@@ -435,6 +435,56 @@ def format_fund_flow_scale_metrics_prompt(
     return "\n".join(lines)
 
 
+def build_blocked_report_original(
+    validation: Any,
+    selection: Any,
+    original_text: str,
+) -> dict:
+    """DAV-1291 F3: assemble the preserved-original payload stored in result_data.
+
+    Contains the blocked model draft plus the mismatch/unverifiable detail that
+    triggered the guard. It is persisted for audit only and must not surface as
+    a directional conclusion.
+    """
+    validation_dict = validation if isinstance(validation, dict) else {}
+    selection_dict = selection if isinstance(selection, dict) else {}
+    return {
+        "schema": "smart_money_report_blocked_original.v1",
+        "original_text": original_text,
+        "validation_status": validation_dict.get("status"),
+        "mismatches": validation_dict.get("mismatches") or [],
+        "unverifiable_fields": validation_dict.get("unverifiable_fields") or [],
+        "guard_reason": (
+            (validation_dict.get("hard_guard") or {}).get("reason")
+            or selection_dict.get("reason")
+        ),
+    }
+
+
+def validation_notice_header(validation: Any) -> str | None:
+    """DAV-1291 rework: report-top notice for the validation outcome.
+
+    ``validation_warning`` keeps the original deviation wording (a real
+    within-tolerance deviation was found). ``unverifiable`` only means some
+    values could not be checked day-by-day — the notice must stay neutral and
+    must not claim 出入/偏差. Other statuses render nothing.
+    """
+    if not isinstance(validation, dict):
+        return None
+    status = validation.get("status")
+    if status == "validation_warning":
+        return (
+            "⚠️ 【资金流数值校准提示】模型正文部分表述与结构化基准存在细微出入，"
+            "以结构化原值校验为准，不影响方向决策。\n\n"
+        )
+    if status == "unverifiable":
+        return (
+            "ℹ️ 【资金流数值核对提示】部分资金数值无法与结构化数据逐日核对"
+            "（数据源未提供对应日期或区间），以结构化原值为准。\n\n"
+        )
+    return None
+
+
 def create_smart_money_analyst(llm, data_collector=None):
     async def _safe(tool, payload):
         try:
@@ -703,7 +753,13 @@ def create_smart_money_analyst(llm, data_collector=None):
             )
         if check_llm_output_degraded(full_content, "Smart Money Analyst"):
             full_content = "主力资金分析生成异常（输出退化），本项不可用"
+        # DAV-1291 F3: 被守卫拦截时保留模型原稿与 mismatch 明细，供事后复核；
+        # 正文仍显示占位文案，方向阻断语义不变。
+        blocked_original: dict | None = None
         if consensus_blocked:
+            blocked_original = build_blocked_report_original(
+                validation, selection, full_content
+            )
             full_content = (
                 "资金流来源选择不可用或结构化累计存在冲突；已阻断增持、减持、吸筹方向摘要。"
                 "请保留各来源原值，待日期、窗口、单位和字段语义校验通过后复核。"
@@ -727,10 +783,13 @@ def create_smart_money_analyst(llm, data_collector=None):
                     f"{credibility_reason}\n\n"
                 )
                 full_content = header + full_content
-            if isinstance(validation, dict) and validation.get("status") == "validation_warning":
-                warning_header = "⚠️ 【资金流数值校准提示】模型正文部分表述与结构化基准存在细微出入，以结构化原值校验为准，不影响方向决策。\n\n"
-                if "【资金流数值校准提示】" not in full_content:
-                    full_content = warning_header + full_content
+            notice_header = validation_notice_header(validation)
+            if (
+                notice_header
+                and "【资金流数值校准提示】" not in full_content
+                and "【资金流数值核对提示】" not in full_content
+            ):
+                full_content = notice_header + full_content
         # DAV-1249 R1/R2: 逐角色 price_ref 检查 + 定向返修一次
         full_content, _rev_rec = await maybe_revise_role_report(
             state, role_key="smart_money", report_field="smart_money_report",
@@ -792,6 +851,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                     consensus_guard[key] = selection[key]
         return {
             "smart_money_report": full_content,
+            "smart_money_report_blocked_original": blocked_original,
             "price_ref_revision": {"smart_money": _rev_rec} if _rev_rec else {},
             "fund_flow_consensus_guard": consensus_guard,
             "analyst_traces": [{
