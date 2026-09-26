@@ -226,7 +226,10 @@ def test_e03c_decision_status_consumes_adopt_partial_reject():
         claim_evidence_summary=summary_reject,
         rejected_claim_ids=["C-1", "C-2"],
     )
-    assert st_reject == CONFIRM_CONFIRMED
+    # DAV-1349：焦点论点全部被否决且核验非 adopt 后 core_eval 为空，经理又零采纳
+    # → 不得判 CONFIRMED，返回 UNRESOLVED + no_adjudicated_support。
+    assert st_reject == CONFIRM_UNRESOLVED
+    assert "no_adjudicated_support" in codes_reject
     assert not any("unverified_core_claims" in c for c in codes_reject)
 
     # 3b. 同论点但经理未否决（未裁决/采纳）→ 仍 UNRESOLVED（DAV-1343 回归保护）
@@ -571,7 +574,8 @@ def test_compliance_violation_end_to_end_partial_not_valid():
         manager_verdict, prior_analysis_status=integrity.analysis_status
     )
     assert status.analysis_status == ANALYSIS_PARTIAL
-    assert status.trade_action == "NO_TRADE"
+    # DAV-1349：空裁决账本确认态为 UNRESOLVED -> WAIT（非方向性动作，partial_status 原样保留）。
+    assert status.trade_action == "WAIT"
 
 
 def test_compliance_clean_and_not_checked_do_not_fail():

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from tradingagents.agents.utils.decision_status import (
     CONFIRM_CONFIRMED,
+    CONFIRM_UNRESOLVED,
     evaluate_confirmation_state,
 )
 from tradingagents.agents.utils.evidence_verifier import (
@@ -251,4 +252,6 @@ def test_confirmation_gate_consumes_semantic_decision_not_legacy():
         rejected_claim_ids=["INV-2"],
     )
     assert not any("verdict_consistency_rejected_adopt" in c for c in codes)
-    assert state == CONFIRM_CONFIRMED
+    # DAV-1349：唯一论点被合法否决、经理零采纳零部分采纳 → 不得 CONFIRMED。
+    assert state == CONFIRM_UNRESOLVED
+    assert "no_adjudicated_support" in codes

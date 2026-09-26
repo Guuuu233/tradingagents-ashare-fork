@@ -337,7 +337,7 @@ def test_status_from_manager_verdict_tie_with_unresolved_claims_is_wait():
 
 
 def test_status_from_manager_verdict_tie_with_all_confirmed_is_hold():
-    """winner=tie with no unconfirmed disputes -> CONFIRMED + HOLD."""
+    """winner=tie 且无任何裁决账本（DAV-1349：无采纳依据不得 CONFIRMED）-> UNRESOLVED + WAIT。"""
     mv = {
         "direction": "中性",
         "winner": "tie",
@@ -351,8 +351,9 @@ def test_status_from_manager_verdict_tie_with_all_confirmed_is_hold():
         unresolved_claim_ids=[],
         claims_verification=[],
     )
-    assert status.confirmation_state == CONFIRM_CONFIRMED
-    assert status.trade_action == ACTION_HOLD
+    assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert "no_adjudicated_support" in (status.reason_codes or [])
+    assert status.trade_action == ACTION_WAIT
 
 
 def test_prior_gates_take_precedence_over_confirmation():
@@ -373,13 +374,14 @@ def test_prior_gates_take_precedence_over_confirmation():
     assert st1.trade_action == ACTION_NO_TRADE
     assert st1.confirmation_state == CONFIRM_UNRESOLVED
 
-    # 2. Upstream PARTIAL failure -> PARTIAL / NO_TRADE
+    # 2. Upstream PARTIAL failure -> PARTIAL / 非方向性动作原样保留
     st2 = status_from_manager_verdict(
         {"direction": "看多", "winner": "bull", "consistency_check_passed": True},
         prior_analysis_status="PARTIAL",
     )
     assert st2.analysis_status == "PARTIAL"
-    assert st2.trade_action == ACTION_NO_TRADE
+    # DAV-1349：空账本确认态变为 UNRESOLVED -> WAIT（仍不可执行）。
+    assert st2.trade_action == ACTION_WAIT
 
 
 # ── Integration: Goertek Nail & Research Manager Node ─────────────────────────
@@ -793,14 +795,31 @@ def test_fallback_behavior_when_no_focus_claims():
     assert c_state_ad == CONFIRM_CONFIRMED
     assert "all_core_claims_verified:U-1" in r_codes_ad
 
-    # 6c. All empty, no fatal contradictions -> CONFIRMED
-    c_state_empty, _ = evaluate_confirmation_state(
+    # 6c. DAV-1349：没有核心论点、也没有采纳论点时不得判 CONFIRMED。
+    # adopted/partial 全空 -> UNRESOLVED + no_adjudicated_support
+    c_state_empty, r_codes_empty = evaluate_confirmation_state(
         focus_claim_ids=[],
         unresolved_claim_ids=[],
         adopted_claim_ids=[],
         rejected_claim_ids=[],
     )
-    assert c_state_empty == CONFIRM_CONFIRMED
+    assert c_state_empty == CONFIRM_UNRESOLVED
+    assert "no_adjudicated_support" in r_codes_empty
+
+    # 6d. DAV-1349：无核心/无采纳但存在部分采纳 -> PARTIAL + partial_only_support
+    summary_partial_only = {
+        "P-1": {"counts": {"total": 3, "verified": 2, "unsupported": 1, "contradicted": 0, "source_unavailable": 0}, "coverage": 2 / 3, "decision": "partial"},
+    }
+    c_state_po, r_codes_po = evaluate_confirmation_state(
+        focus_claim_ids=[],
+        unresolved_claim_ids=[],
+        adopted_claim_ids=[],
+        partially_adopted_claims=["P-1"],
+        rejected_claim_ids=[],
+        claim_evidence_summary=summary_partial_only,
+    )
+    assert c_state_po == CONFIRM_PARTIAL
+    assert "partial_only_support" in r_codes_po
 
 
 def test_unadjudicated_material_claims_integrity_check():

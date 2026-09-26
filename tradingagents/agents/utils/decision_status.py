@@ -627,7 +627,13 @@ def evaluate_confirmation_state(
             if unadjudicated_partial_cids:
                 p_codes.append(f"unadjudicated_partial_claims:{','.join(sorted(unadjudicated_partial_cids))}")
             return CONFIRM_PARTIAL, p_codes + audit_rejected_codes
-        return CONFIRM_CONFIRMED, audit_rejected_codes
+        # DAV-1349：走到这里说明没有核心论点、也没有采纳论点——经理
+        # 什么都没采纳时不得判 CONFIRMED（1343 把被否决焦点论点移出
+        # core_eval 后该分支会被 adopted=[] 命中）。无任何采纳依据 →
+        # UNRESOLVED；仅有部分采纳 → PARTIAL，与现有 partial 类原因码并列。
+        if not eff_partial_ids:
+            return CONFIRM_UNRESOLVED, ["no_adjudicated_support"] + audit_rejected_codes
+        return CONFIRM_PARTIAL, ["partial_only_support"] + audit_rejected_codes
 
     # Core claims verification
     if core_eval_ids:

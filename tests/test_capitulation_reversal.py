@@ -129,17 +129,21 @@ def test_high_volume_stagnation_candidate_feature_and_decision_routing():
     assert vpa["as_of"] == cutoff
 
     # Decision status wiring: manager verdict with BULL direction must NOT produce BUY
+    # （DAV-1349：空账本确认态已变 UNRESOLVED，给一条已采纳已核实论点让确认通过，
+    #  使本用例继续覆盖 VPA stagnation 门本身）
     manager_verdict = {
         "direction": "看多",
         "winner": "bull",
         "position_pct": 60,
         "consistency_check_passed": True,
         "failed_checks": [],
+        "adopted_claim_ids": ["C-1"],
     }
     status = status_from_manager_verdict(
         manager_verdict,
         vpa_context=vpa,
         claims_verification=[],
+        claim_evidence_summary={"C-1": {"decision": "adopt", "counts": {"total": 1, "verified": 1}}},
     )
     # High volume stagnation candidate blocks BUY -> routes to WAIT
     assert status.analysis_status == ANALYSIS_VALID
@@ -169,17 +173,21 @@ def test_capitulation_candidate_unconfirmed_blocks_buy():
     assert vpa["features"]["pct_change"] <= -0.03
 
     # Decision status wiring: manager bull verdict must be mapped to WAIT, not BUY
+    # （DAV-1349：空账本确认态已变 UNRESOLVED，给一条已采纳已核实论点让确认通过，
+    #  使本用例继续覆盖 VPA capitulation 门本身）
     manager_verdict = {
         "direction": "看多",
         "winner": "bull",
         "position_pct": 50,
         "consistency_check_passed": True,
         "failed_checks": [],
+        "adopted_claim_ids": ["C-1"],
     }
     status = status_from_manager_verdict(
         manager_verdict,
         vpa_context=vpa,
         claims_verification=[],
+        claim_evidence_summary={"C-1": {"decision": "adopt", "counts": {"total": 1, "verified": 1}}},
     )
     assert status.analysis_status == ANALYSIS_VALID
     assert status.trade_action == ACTION_WAIT
@@ -275,17 +283,20 @@ def test_reversal_confirmed_allows_staged_entry_with_position_cap():
     assert vpa["reversal_state"] == REVERSAL_STATE_CONFIRMED
 
     # Wire to manager verdict: BUY is allowed as staged entry, but position_pct capped <= 10%
+    # （DAV-1349：空账本确认态已变 UNRESOLVED，给一条已采纳已核实论点让确认通过）
     manager_verdict = {
         "direction": "看多",
         "winner": "bull",
         "position_pct": 50,  # Manager requested 50%
         "consistency_check_passed": True,
         "failed_checks": [],
+        "adopted_claim_ids": ["C-1"],
     }
     status = status_from_manager_verdict(
         manager_verdict,
         vpa_context=vpa,
         claims_verification=[],
+        claim_evidence_summary={"C-1": {"decision": "adopt", "counts": {"total": 1, "verified": 1}}},
     )
     assert status.analysis_status == ANALYSIS_VALID
     assert status.trade_action == ACTION_BUY
