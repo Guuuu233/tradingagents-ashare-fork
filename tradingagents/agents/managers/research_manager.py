@@ -43,6 +43,7 @@ from tradingagents.agents.utils.claim_cluster import (
     RELATION_GRAPH_STATUS_AVAILABLE,
     RELATION_GRAPH_STATUS_INVALID,
     RELATION_GRAPH_STATUS_PENDING,
+    _normalize_stance,
     cluster_claims,
     format_claim_cluster_summary_for_prompt,
     tally_cluster_votes,
@@ -1300,6 +1301,15 @@ def apply_manager_double_count_guard(
     3. Is fully idempotent: repeat invocations do not subtract again.
     4. Strips duplicate event claims from manager_verdict['adopted_claim_ids'] into excluded_evidence.
     5. Records structured audit metadata in metrics.
+
+    DAV-1338 修正（防重复计入守卫误把证据簇当同一事件）：
+    - cluster_id 不再参与「同一事件」判定与事件键——证据簇去重由 E-01 关系图
+      （independent_cluster_count）负责；守卫只作用于真事件论点（有 event_id，
+      或文本命中业绩预告/快报/公告等事件关键词）。
+    - 守卫仅在论点对应侧 expectation_revision 的 double_count_guard 状态为
+      accounted_for 或 unknown 时生效；prevent_double_voting 旗标不再单独激活。
+    - 同一事件的去重只在同一立场内进行；立场相反的论点是对同一事件的不同解读，
+      不构成重复加票，不得跨多空立场剔除。
     """
     if isinstance(expectation_revisions, Sequence) and not isinstance(expectation_revisions, Mapping):
         fund_er = None
@@ -1332,9 +1342,11 @@ def apply_manager_double_count_guard(
     fund_st = fund_dc.get("status", "unknown")
     news_st = news_dc.get("status", "unknown")
 
-    prevent_fund = bool(fund_dc.get("prevent_double_voting", True)) or fund_st in ("accounted_for", "unknown")
-    prevent_news = bool(news_dc.get("prevent_double_voting", True)) or news_st in ("accounted_for", "unknown")
-    is_active = prevent_fund or prevent_news
+    # DAV-1338：只在对应侧 expectation_revision 判定同一事件已计入(accounted_for)
+    # 或无法确证(unknown)时才阻止重复加票。
+    fund_guarded = fund_st in ("accounted_for", "unknown")
+    news_guarded = news_st in ("accounted_for", "unknown")
+    is_active = fund_guarded or news_guarded
 
     metrics = dict(claim_cluster_metrics or {})
     if not is_active:
@@ -1364,7 +1376,7 @@ def apply_manager_double_count_guard(
 
     claims_list = list(claims or [])
     duplicate_claims: list[Mapping[str, Any]] = []
-    seen_event_keys: set[str] = set()
+    seen_event_keys: set[tuple[str, str]] = set()
 
     for c in claims_list:
         if not isinstance(c, Mapping):
@@ -1372,22 +1384,32 @@ def apply_manager_double_count_guard(
         ev_type = str(c.get("event_type") or "").lower()
         txt = str(c.get("claim_text") or c.get("claim") or c.get("text") or "")
         event_id = c.get("event_id")
-        cluster_id = c.get("cluster_id")
         evidence = c.get("evidence") or []
 
+        # DAV-1338：cluster_id 不再作为事件判据——证据簇由 E-01 关系图去重；
+        # 守卫只作用于真事件论点：有 event_id，或命中业绩预告/快报/公告类事件关键词。
         is_event_claim = (
-            ev_type in ("event", "fundamental")
-            or bool(event_id)
-            or bool(cluster_id)
+            bool(event_id)
+            or ev_type in ("event",)
             or any(kw in txt for kw in ("预告", "预测", "快报", "业绩", "财报", "公告", "earnings", "forecast"))
         )
         if not is_event_claim:
             continue
 
+        # 论点对应侧的 double_count_guard 状态须为 accounted_for/unknown：
+        # fundamental 论点对应 fundamentals 腿，event 论点对应 news 腿，
+        # 无法归因时两侧任一满足即可（业绩预告/公告类事件本就跨两腿）。
+        if ev_type == "fundamental":
+            leg_guarded = fund_guarded
+        elif ev_type in ("event", "news"):
+            leg_guarded = news_guarded
+        else:
+            leg_guarded = fund_guarded or news_guarded
+        if not leg_guarded:
+            continue
+
         if event_id:
             event_key = f"event_id:{event_id}"
-        elif cluster_id:
-            event_key = f"cluster_id:{cluster_id}"
         elif evidence:
             ev_key_str = "|".join(sorted(str(e) for e in evidence))
             event_key = f"evidence:{ev_key_str}"
@@ -1416,10 +1438,15 @@ def apply_manager_double_count_guard(
                 topic = re.sub(r"[^\w]", "", topic)
                 event_key = f"topic:{topic}"
 
-        if event_key in seen_event_keys:
+        # DAV-1338：同一事件的重复计票只在同一立场内去重；立场相反的论点是
+        # 对同一事件的不同解读，不算重复加票，不得跨多空立场剔除。
+        stance_bucket = _normalize_stance(
+            c.get("stance"), c.get("speaker") or c.get("speaker_key"))
+        dedup_key = (event_key, stance_bucket)
+        if dedup_key in seen_event_keys:
             duplicate_claims.append(c)
         else:
-            seen_event_keys.add(event_key)
+            seen_event_keys.add(dedup_key)
 
     blocked_count = len(duplicate_claims)
 
@@ -1427,11 +1454,12 @@ def apply_manager_double_count_guard(
         orig_indep = metrics.get("independent_cluster_count", 0)
         metrics["independent_cluster_count"] = max(1, orig_indep - blocked_count)
         for dup in duplicate_claims:
-            stance = str(dup.get("stance") or "").lower()
-            if "bull" in stance or stance == "positive":
+            stance = _normalize_stance(
+                dup.get("stance"), dup.get("speaker") or dup.get("speaker_key"))
+            if stance == "bull":
                 if metrics.get("bull_cluster_count", 0) > 1:
                     metrics["bull_cluster_count"] -= 1
-            elif "bear" in stance or stance == "negative":
+            elif stance == "bear":
                 if metrics.get("bear_cluster_count", 0) > 1:
                     metrics["bear_cluster_count"] -= 1
             else:

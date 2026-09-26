@@ -1606,7 +1606,8 @@ def test_negative_manager_guard_covers_english_exceed_surpass_expected_and_fall_
 
 
 def test_double_count_guard_cluster_id_deduplication_and_idempotency():
-    """DAV-877 Item 2 & 3: Double count guard incorporates bool(cluster_id) in is_event_claim; deduplicates once; idempotent."""
+    """DAV-1338: cluster_id 不再是「同一事件」判据——同簇论点不再被守卫剔除；
+    证据簇去重归 E-01 关系图（independent_cluster_count）管辖。"""
     fund_er = make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_AVAILABLE)
     fund_er["double_count_guard"] = {
         "status": DOUBLE_COUNT_ACCOUNTED_FOR,
@@ -1622,7 +1623,7 @@ def test_double_count_guard_cluster_id_deduplication_and_idempotency():
     exp_revs = {"fundamentals": fund_er, "news": news_er}
 
     # 1. Claims with cluster_id but NO event_id, neutral event_type, and no financial keywords in claim_text
-    # Previously, is_event_claim evaluated to False because cluster_id was omitted from is_event_claim
+    # DAV-1338：cluster_id 不再参与事件判定，这些非事件论点不得被守卫剔除
     claims_same_cluster = [
         {
             "claim_id": "c1",
@@ -1654,14 +1655,13 @@ def test_double_count_guard_cluster_id_deduplication_and_idempotency():
         manager_verdict=dict(initial_verdict),
     )
 
-    # Identical cluster_id claims ARE deduplicated once!
+    # DAV-1338：同一 cluster_id 不再触发去重——两条论点均保留
     assert m_out["double_count_guard_active"] is True
-    assert m_out["duplicate_voting_prevented"] is True
-    assert m_out["independent_cluster_count"] == 1
-    assert m_out["bull_cluster_count"] == 1
-    assert v_out["adopted_claim_ids"] == ["c1"]
-    assert len(v_out["excluded_evidence"]) == 1
-    assert v_out["excluded_evidence"][0]["claim_id"] == "c2"
+    assert m_out["duplicate_voting_prevented"] is False
+    assert m_out["independent_cluster_count"] == 2
+    assert m_out["bull_cluster_count"] == 2
+    assert v_out["adopted_claim_ids"] == ["c1", "c2"]
+    assert len(v_out["excluded_evidence"]) == 0
 
     # Idempotent re-invocation: calling again does not subtract again
     m_out2, v_out2, _ = apply_manager_double_count_guard(
@@ -1670,10 +1670,50 @@ def test_double_count_guard_cluster_id_deduplication_and_idempotency():
         claims=claims_same_cluster,
         manager_verdict=v_out,
     )
-    assert m_out2["independent_cluster_count"] == 1
-    assert m_out2["bull_cluster_count"] == 1
-    assert v_out2["adopted_claim_ids"] == ["c1"]
-    assert len(v_out2["excluded_evidence"]) == 1
+    assert m_out2["independent_cluster_count"] == 2
+    assert m_out2["bull_cluster_count"] == 2
+    assert v_out2["adopted_claim_ids"] == ["c1", "c2"]
+    assert len(v_out2["excluded_evidence"]) == 0
+
+    # 1b. DAV-1338：同一事件(event_id)的重复计票只在同一立场内去重；
+    # 立场相反的论点是对同一事件的不同解读，不得跨多空立场剔除。
+    claims_cross_stance = [
+        {
+            "claim_id": "c1",
+            "event_id": "ev_guidance",
+            "claim_text": "公司业绩预告大幅增长",
+            "evidence": ["预告披露增长50%"],
+            "stance": "bull",
+        },
+        {
+            "claim_id": "c2",
+            "event_id": "ev_guidance",
+            "claim_text": "业绩预告增长但增速环比放缓",
+            "evidence": ["预告披露增长50%"],
+            "stance": "bear",
+        },
+        {
+            "claim_id": "c3",
+            "event_id": "ev_guidance",
+            "claim_text": "新闻报道业绩预告大幅增长",
+            "evidence": ["预告披露增长50%"],
+            "stance": "bull",
+        },
+    ]
+    m_cs, v_cs, _ = apply_manager_double_count_guard(
+        claim_cluster_metrics={"independent_cluster_count": 3,
+                               "bull_cluster_count": 2, "bear_cluster_count": 1},
+        expectation_revisions=exp_revs,
+        claims=claims_cross_stance,
+        manager_verdict={"adopted_claim_ids": ["c1", "c2", "c3"],
+                         "excluded_evidence": []},
+    )
+    # 同立场 bull 的 c3 被去重；立场相反的 bear c2 保留
+    assert m_cs["independent_cluster_count"] == 2
+    assert m_cs["bull_cluster_count"] == 1
+    assert m_cs["bear_cluster_count"] == 1
+    assert v_cs["adopted_claim_ids"] == ["c1", "c2"]
+    assert [e["claim_id"] for e in v_cs["excluded_evidence"]] == ["c3"]
 
     # 2. Distinct cluster_ids are NOT deduplicated
     claims_diff_cluster = [
