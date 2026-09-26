@@ -66,13 +66,13 @@ class TestC2TypedDisclosureAndConversion:
         assert out["verdict"] == "false" and out["subtype"] == "other_symbol"
 
     def test_block_trade_sentence_not_auto_typed(self):
-        # C2 判定对象是「该值是否披露价」：句级检测无法绑定数值 → verdict
-        # false，不再自动贴 raw 披露标签；该值保持 unspecified，由
-        # decision-driving / cross-basis 规则问责（b188060f 锚点仍 blocked）。
+        # [DAV-1321 N3] 逐值判定：「今日大宗交易成交 78.61 元」中 78.61
+        # 正是大宗披露成交价 → raw + disclosure_type=block_trade；该值是
+        # 真披露价不再误判 unspecified（坐标位/报价侧数字仍不挂）。
         refs, g, _ = run({"news_report": "今日大宗交易成交 78.61 元，较收盘折价 6.45%。"})
-        assert not any(r.get("disclosure_type") == "block_trade" for r in refs)
         r = [r for r in refs if abs(r["value"] - 78.61) <= TOL]
-        assert r and r[0]["basis"] == "unspecified"
+        assert r and r[0]["basis"] == "raw"
+        assert r[0].get("disclosure_type") == "block_trade"
 
     def test_valuation_zhe_suan_not_conversion(self):
         # 「折合每股」估值算术 → 不再登记 conversion，不产出 invalid_conversion

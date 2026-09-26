@@ -475,8 +475,11 @@ _NUMBER_QUOTE_HEAD = re.compile(r"[\"'“”‘’]\s*$")
 _NUMBER_QUOTE_TAIL = re.compile(r"^\s*[\"'“”‘’]")
 # 财务金额语境词（值本身带「元」但量词是利润/金额，不是股价坐标）
 _NUMBER_FIN_AMOUNT_WORD = (
-    r"毛利|净利|归母净利|利润|盈利|营收|收入|成本|费用|利息|汇兑|"
+    r"毛利|净利|归母净利|利润|盈利|营收|收入|费用|利息|汇兑|"
     r"节税|亏损|分红|派息|薪资|造价|成交额|交易额|货值"
+    # 「成本」不收进通用金额词——「VWMA 加权成本 4.84 元」「持仓成本 900 元」
+    # 是坐标语境下的真实成本价；成本金额（BOM/单车成本）由 non_stock_price
+    # 语境或量级守卫覆盖
 )
 _NUMBER_FIN_AMOUNT_HEAD = re.compile(
     rf"(?:{_NUMBER_FIN_AMOUNT_WORD})"
@@ -531,10 +534,14 @@ def _nonprice_number_flag(text: str, start: int, end: int) -> Optional[str]:
         except ValueError:
             tv = 0
         m = _NUMBER_MD_TAIL.match(tail)
-        if m and 1 <= tv <= 12 and 1 <= int(m.group(1)) <= 31:
+        if m and 1 <= tv <= 12 and 1 <= int(m.group(1)) <= 31 \
+                and not re.match(r"^\s*元", tail[m.end():]):
+            # 「8-9元」区间：第二段紧跟「元」→ 价位区间，不是月日
             return "date_fragment_mmdd"
         m = _NUMBER_MD_HEAD.search(head)
-        if m and 1 <= int(m.group(1)) <= 12 and 1 <= tv <= 31:
+        if m and 1 <= int(m.group(1)) <= 12 and 1 <= tv <= 31 \
+                and not re.match(r"^\s*元", tail):
+            # 「8-9元」中被判定侧紧跟「元」→ 价位，不是月日
             return "date_fragment_mmdd"
     if _NUMBER_CURRENCY_TAIL.match(tail):
         return "foreign_currency"

@@ -93,7 +93,7 @@
     - 34.89 raw typed_disclosure:block_trade | * 大宗交易观察：6月8日、9日、10日连续发生小规模平价大宗交易（成交均价34.07元、34.89元、35.10元，与收盘价持平，成交金额在200-300万元
     - 35.1 raw typed_disclosure:block_trade | * 大宗交易观察：6月8日、9日、10日连续发生小规模平价大宗交易（成交均价34.07元、34.89元、35.10元，与收盘价持平，成交金额在200-300万元
 - daily0925:7afcc2d6:short_term sym=600760.SH kinds={'decision_driving_missing_as_of': 1, 'cross_basis_coordinate_mix': 20}
-    - 40.0 pit_raw typed_disclosure:shareholder_increase | - *走势演化*：受RSI（29.39）超卖修正及高管增持底托底，股价在39.90-40.00元区域探底企稳，短线向上反抽测试 **41.98 - 42.59 
+    - 40.0 pit_raw typed_disclosure:shareholder_increase | - *走势演化*：受RSI（29.39）超卖修正及高管增持底托底，股价在39.90-40.00元区域探底企稳，短线向上反抽测试 **41.98 - 42.59
     - 41.22 pit_raw derived:typed_disclosure:shareholder_increase | - **披露与统计原始坐标**：高管增持均价 41.22 元（原始披露价 raw）、单日融资买入额 4329.65 万元（交易所原始统计 pit_raw）与前复
 - daily0925:9b70d0a1:medium_term sym=000333.SZ kinds={'decision_driving_missing_as_of': 1, 'cross_basis_coordinate_mix': 28}
     - 73.66 pit_raw typed_disclosure:repurchase | - **逻辑阐述**：宏观端回购下限 73.66 元与 06-25 量价见底的 72.87 元形成精确的价格支撑共振
