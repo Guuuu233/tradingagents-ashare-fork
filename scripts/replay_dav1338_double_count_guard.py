@@ -1,18 +1,22 @@
 # -*- coding: utf-8 -*-
-"""DAV-1338 零 LLM 离线重放：候选 double_count_guard 对存量档位的重算。
+"""DAV-1338 零 LLM 离线重放 v2（返工口径）：候选 double_count_guard 对存量档位重算。
 
 只读活库 mode=ro；无模型、无网络、不写库。
 
-口径：
-- 语料 = 09-25 以来全部档位 + 全库 ABSTAIN 档位（DAV-1261 语料）。
-- 每档：用存储的 claims / expectation_revision / relation_graph 先以
-  tally_cluster_votes 重建守卫前的簇指标，把守卫前账本（stored adopted ∪
-  旧审计 excluded_claim_ids，按 claims 原顺序）喂给候选
-  apply_manager_double_count_guard，再 refresh_direction_basis 与
-  status_from_manager_verdict 重算终态。
-- 前后对比：守卫剔除条数、direction_basis.status、一致性失败项
-  （stored failed_checks 中引用被剔除论点的条目计为「随账本修复消除」）、
-  analysis_status / trade_action 翻转清单。
+口径（按总控 09-26 打回要求修正）：
+- 守卫前账本一律取研究经理原始输出 MANAGER_VERDICT 机读块：
+  对 investment_debate_state.judge_decision（缺失时退回该档 investment_plan）
+  跑产品函数 extract_and_validate_manager_verdict，原汁原味复现
+  adopted / partially_adopted / rejected / excluded_evidence 与提取期一致性检查。
+  绝不用「落库 adopted ∪ 旧审计 excluded」兜底——那会误把经理否决/未采纳
+  论点塞回 adopted。
+- 完整链路与产品代码同序：extract → （claim_evidence_summary 取落库值）
+  → 候选 apply_manager_double_count_guard → refresh_direction_basis
+  → refresh_evidence_basis → validate_manager_expectation_revision_consumption
+  → status_from_manager_verdict。
+- 语料 = 09-25 以来全部档位 + 全库 ABSTAIN 档（DAV-1261 语料）；
+  MANAGER_VERDICT 解析失败/缺失的档位单列，不计入分布。
+- 翻转逐例列出：原始 adopted、守卫剔除、最终 adopted、同向已核实论点。
 """
 import copy
 import json
@@ -23,6 +27,7 @@ from collections import Counter
 sys.path.insert(0, ".")
 from tradingagents.agents.managers.research_manager import (  # noqa: E402
     apply_manager_double_count_guard,
+    validate_manager_expectation_revision_consumption,
 )
 from tradingagents.agents.utils.claim_cluster import (  # noqa: E402
     _normalize_stance,
@@ -32,32 +37,22 @@ from tradingagents.agents.utils.decision_status import (  # noqa: E402
     status_from_manager_verdict,
 )
 from tradingagents.agents.utils.evidence_verifier import (  # noqa: E402
+    extract_and_validate_manager_verdict,
     refresh_direction_basis,
+    refresh_evidence_basis,
 )
 
 DB = "file:/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db?mode=ro"
 SINCE = "2026-09-25"
 HORIZONS = ("short_term", "medium_term")
-REPORT_FIELDS = [
-    "market_report", "sentiment_report", "news_report", "fundamentals_report",
-    "macro_report", "smart_money_report", "volume_price_report", "game_theory_report",
+SEVEN_REPORT_FIELDS = [
+    "macro_report", "market_report", "sentiment_report", "news_report",
+    "fundamentals_report", "smart_money_report", "volume_price_report",
 ]
 
 
-def _guard_excluded_ids(mv):
-    audit = ((mv.get("double_count_guard_audit") or {})
-             if isinstance(mv.get("double_count_guard_audit"), dict) else {})
-    ids = list(audit.get("excluded_claim_ids") or [])
-    for e in mv.get("excluded_evidence") or []:
-        if isinstance(e, dict) and "double_count_guard" in str(e.get("reason") or ""):
-            cid = e.get("claim_id")
-            if cid and cid not in ids:
-                ids.append(cid)
-    return ids
-
-
 def _same_dir_support(verdict, claims):
-    """返回终态账本中支撑 winner 方向的同向已核实论点 id 列表。"""
+    """终态账本中支撑 winner 方向的同向已核实论点 (claim_id, stance, verified)。"""
     winner = str(verdict.get("winner") or "").lower()
     adopted = set(verdict.get("adopted_claim_ids") or [])
     summary = verdict.get("claim_evidence_summary") or {}
@@ -73,7 +68,7 @@ def _same_dir_support(verdict, claims):
             continue
         info = summary.get(cid) or {}
         verified = ((info.get("counts") or {}).get("verified") or 0) > 0
-        out.append((cid, stance, verified))
+        out.append([cid, stance, verified])
     return out
 
 
@@ -88,7 +83,8 @@ def main():
     basis_before, basis_after = Counter(), Counter()
     checks_before = checks_after = 0
     flips = []
-    n_tiers = n_corpus = 0
+    parse_failures = []
+    n_tiers = 0
 
     for rid, sym, td, created, rd in rows:
         try:
@@ -110,36 +106,64 @@ def main():
             in_scope = (created or "") >= SINCE or status_old == "ABSTAIN"
             if not in_scope:
                 continue
-            n_corpus += 1
 
+            # ── 守卫前账本：原始 MANAGER_VERDICT 机读块 ──
+            raw = ids.get("judge_decision")
+            source = "judge_decision"
+            if not isinstance(raw, str) or "MANAGER_VERDICT" not in raw:
+                alt = t.get("investment_plan")
+                if isinstance(alt, str) and "MANAGER_VERDICT" in alt:
+                    raw, source = alt, "investment_plan"
+            if not isinstance(raw, str) or "MANAGER_VERDICT" not in raw:
+                parse_failures.append({
+                    "report_id": rid, "symbol": sym, "trade_date": td,
+                    "horizon": h, "reason": "no MANAGER_VERDICT block",
+                })
+                continue
+            try:
+                verdict = extract_and_validate_manager_verdict(
+                    raw_response=raw,
+                    claims_verification=ids.get("evidence_verification"),
+                    claims=claims,
+                    challenges=ids.get("challenges"),
+                    challenges_verification=ids.get("challenge_verification"),
+                    market_data_context=t.get("market_data_context"),
+                    seven_reports={k: t.get(k) for k in SEVEN_REPORT_FIELDS if t.get(k)},
+                )
+            except Exception as e:  # noqa: BLE001
+                parse_failures.append({
+                    "report_id": rid, "symbol": sym, "trade_date": td,
+                    "horizon": h, "reason": f"extract error: {e!r}",
+                })
+                continue
+            orig_adopted = list(verdict.get("adopted_claim_ids") or [])
+            if not orig_adopted and any(
+                    "未提取到有效的研究总监结构化裁决机读块" in str(f)
+                    for f in (verdict.get("failed_checks") or [])):
+                parse_failures.append({
+                    "report_id": rid, "symbol": sym, "trade_date": td,
+                    "horizon": h, "reason": "MANAGER_VERDICT payload empty",
+                })
+                continue
+            n_tiers += 1
+
+            # ── before（落库值）──
             ccm_stored = ids.get("claim_cluster_metrics") or {}
             old_audit = (ccm_stored.get("double_count_guard_audit")
                          or mv.get("double_count_guard_audit") or {})
             old_blocked = int(old_audit.get("blocked_duplicate_votes") or 0)
-            old_excluded = list(dict.fromkeys(
-                list(old_audit.get("excluded_claim_ids") or [])
-                + _guard_excluded_ids(mv)))
             dist_before[old_blocked] += 1
+            basis_before[str((mv.get("direction_basis") or {}).get("status"))] += 1
+            old_failed = list(mv.get("failed_checks") or [])
+            checks_before += len(old_failed)
+            action_old = mv.get("trade_action") or t.get("trade_action")
 
-            # 重建守卫前账本与簇指标
-            claims_order = [c.get("claim_id") for c in claims if isinstance(c, dict)]
-            adopted_old = list(mv.get("adopted_claim_ids") or [])
-            pre_adopted = [cid for cid in claims_order
-                           if cid in set(adopted_old) | set(old_excluded)]
-            for cid in adopted_old + old_excluded:  # 兜底：不在 claims 里的保留原序
-                if cid not in pre_adopted:
-                    pre_adopted.append(cid)
-            pre_excluded = [
-                e for e in (mv.get("excluded_evidence") or [])
-                if not (isinstance(e, dict)
-                        and ("double_count_guard" in str(e.get("reason") or "")
-                             or e.get("claim_id") in set(old_excluded)))
-            ]
-            reports = {k: t.get(k) for k in REPORT_FIELDS if t.get(k)}
+            # ── 守卫前簇指标重建（与运行时同一函数、同输入）──
+            reports7 = {k: t.get(k) for k in SEVEN_REPORT_FIELDS if t.get(k)}
             try:
                 pre_metrics = tally_cluster_votes(
                     claims=claims,
-                    reports=reports,
+                    reports=reports7,
                     claims_verification=ids.get("evidence_verification"),
                     symbol=d.get("symbol") or sym,
                     trade_date=t.get("trade_date") or td,
@@ -149,17 +173,20 @@ def main():
                     relation_graph_reason=ids.get("evidence_relation_reason"),
                 )
             except Exception:
-                pre_metrics = dict(ids.get("claim_cluster_metrics") or {})
+                pre_metrics = dict(ccm_stored)
 
-            verdict = copy.deepcopy(mv)
-            verdict["adopted_claim_ids"] = pre_adopted
-            verdict["excluded_evidence"] = pre_excluded
-            verdict.pop("double_count_guard_audit", None)
-
-            er = ids.get("expectation_revision") or mv.get("expectation_revision") or {}
+            # ── 候选链路（与产品代码同序）──
+            verdict["claim_evidence_summary"] = (
+                verdict.get("claim_evidence_summary")
+                or mv.get("claim_evidence_summary") or {})
+            # 前置门控终态（nested decision_status：INVALID/DATA_ERROR/ABSTAIN
+            # 优先于经理账本路径）从落库原样保留，与产品语义一致。
+            if mv.get("decision_status"):
+                verdict["decision_status"] = copy.deepcopy(mv["decision_status"])
             metrics_new, verdict, _ = apply_manager_double_count_guard(
                 claim_cluster_metrics=pre_metrics,
-                expectation_revisions=er,
+                expectation_revisions=(ids.get("expectation_revision")
+                                       or mv.get("expectation_revision") or {}),
                 claims=claims,
                 manager_verdict=verdict,
             )
@@ -167,52 +194,60 @@ def main():
             new_blocked = int(new_audit.get("blocked_duplicate_votes") or 0)
             dist_after[new_blocked] += 1
 
-            basis_before[str((mv.get("direction_basis") or {}).get("status"))] += 1
             refresh_direction_basis(verdict, claims=claims)
+            refresh_evidence_basis(verdict)
             basis_after[str((verdict.get("direction_basis") or {}).get("status"))] += 1
 
-            old_failed = list(mv.get("failed_checks") or [])
-            checks_before += len(old_failed)
-            # 一致性失败项重算口径：旧失败项中引用「旧守卫剔除、候选恢复采纳」
-            # 论点的属于过期账本失败，候选账本下不再产生；其余失败项保留。
-            restored_ids = set(old_excluded) - set(new_audit.get("excluded_claim_ids") or [])
-            still_failed = [f for f in old_failed
-                            if not any(str(cid) in str(f) for cid in restored_ids)]
-            checks_after += len(still_failed)
-            excluded_new = set(new_audit.get("excluded_claim_ids") or [])
+            er_ok, er_viol = validate_manager_expectation_revision_consumption(
+                manager_verdict=verdict,
+                raw_response=raw,
+                expectation_revisions=(ids.get("expectation_revision")
+                                       or mv.get("expectation_revision") or {}),
+                claims=claims,
+                seven_reports=reports7,
+            )
+            if not er_ok:
+                verdict["consistency_check_passed"] = False
+                verdict.setdefault("failed_checks", [])
+                verdict["failed_checks"].extend(er_viol)
+            checks_after += len(verdict.get("failed_checks") or [])
 
             st = status_from_manager_verdict(
                 verdict,
                 investment_debate_state={**ids, "claim_cluster_metrics": metrics_new},
                 claims_verification=ids.get("evidence_verification"),
-                claim_evidence_summary=mv.get("claim_evidence_summary"),
+                claim_evidence_summary=verdict.get("claim_evidence_summary"),
                 focus_claim_ids=ids.get("focus_claim_ids"),
                 unresolved_claim_ids=ids.get("unresolved_claim_ids"),
                 claims=claims,
                 market_data_context=t.get("market_data_context"),
             )
             status_new = st.analysis_status
-            action_old = mv.get("trade_action") or t.get("trade_action")
             action_new = st.trade_action
-            n_tiers += 1
 
             if (status_old, action_old) != (status_new, action_new):
                 flips.append({
                     "report_id": rid, "symbol": sym, "trade_date": td,
                     "horizon": h, "created_at": created,
+                    "ledger_source": source,
                     "before": f"{status_old}/{action_old}",
                     "after": f"{status_new}/{action_new}",
+                    "orig_adopted": orig_adopted,
+                    "orig_partial": verdict.get("partially_adopted_claims"),
+                    "orig_rejected": verdict.get("rejected_claim_ids"),
+                    "guard_excluded": sorted(new_audit.get("excluded_claim_ids") or []),
+                    "final_adopted": verdict.get("adopted_claim_ids"),
                     "blocked_before": old_blocked, "blocked_after": new_blocked,
                     "basis_before": (mv.get("direction_basis") or {}).get("status"),
                     "basis_after": (verdict.get("direction_basis") or {}).get("status"),
-                    "adopted_before": adopted_old,
-                    "adopted_after": verdict.get("adopted_claim_ids"),
-                    "excluded_new": sorted(excluded_new),
+                    "failed_before": old_failed,
+                    "failed_after": list(verdict.get("failed_checks") or []),
                     "same_dir_support": _same_dir_support(verdict, claims),
                     "reason_codes": list(st.reason_codes or []),
                 })
 
-    print(f"== DAV-1338 replay ==  tiers evaluated: {n_tiers} (corpus rows {n_corpus})")
+    print(f"== DAV-1338 replay v2 ==  tiers evaluated: {n_tiers} "
+          f"| MANAGER_VERDICT parse failures: {len(parse_failures)}")
     print("\n-- 守卫剔除条数分布 (blocked -> tier count) --")
     print("before:", dict(sorted(dist_before.items())))
     print("after :", dict(sorted(dist_after.items())))
@@ -220,7 +255,10 @@ def main():
     print("before:", dict(basis_before.most_common()))
     print("after :", dict(basis_after.most_common()))
     print("\n-- 一致性失败项 --")
-    print(f"before total: {checks_before} | after(剔除过期账本项后): {checks_after}")
+    print(f"before total: {checks_before} | after: {checks_after}")
+    print("\n-- MANAGER_VERDICT 解析失败档位（单列，未计入分布）--")
+    for p in parse_failures:
+        print(json.dumps(p, ensure_ascii=False))
     print("\n-- analysis_status/trade_action 翻转清单 --")
     if not flips:
         print("(无翻转)")
