@@ -1,0 +1,533 @@
+[
+ {
+  "report_id": "1312d27a84564e8aa136f2f5ce1c1b4f",
+  "symbol": "600036.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "d5fc9336864549b063d71beb2c5182674d3b33575045abad54e59b573e8364b2"
+ },
+ {
+  "report_id": "a747371c9f744bbe89c03a98789c9ab2",
+  "symbol": "600276.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "09cd407968d01c96494a67cbf6a3f5633bb222c50dac0d27b8784534eab96325"
+ },
+ {
+  "report_id": "ed55577312f6495b90fdb0e38ff78b09",
+  "symbol": "600519.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "92e7e9821441a673b4e979f365b28cca81cd276fbf788f1b7bd28c60be160c5e"
+ },
+ {
+  "report_id": "9b70d0a1571b4d6196e29cf7bdaf8d78",
+  "symbol": "000333.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "7a8656505d300ab367469edbf7c4b1ce47a70bbe22ce1e21ea24f15ecf2548a5"
+ },
+ {
+  "report_id": "84c5dfc87138469b95605a8b2ddf79f3",
+  "symbol": "688981.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "3e9a6ff03d28dd64fb76274ef766c6d83629317524c19ecaf69eb186a15b5244"
+ },
+ {
+  "report_id": "be99f770ae2d4820b78aed0e3cf6dfe3",
+  "symbol": "601088.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "f54a4b85ee763191d282cce6f794ec8d5cca220efa126467e3ac37fe28c88c20"
+ },
+ {
+  "report_id": "1827101791cd4a4fa8b951a2e85647cb",
+  "symbol": "601899.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "bb56b7ec6cf598490221aa74b9e6dcad7074bd220db8cba1a4a9ed9b0ce423db"
+ },
+ {
+  "report_id": "e50b30f3b707488fab30342212c10815",
+  "symbol": "600030.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "36cd8cf8637f49b1d3346e4fd0810e06bc7cae52d3d3542c989dd985db73479e"
+ },
+ {
+  "report_id": "d93a03ef6bbd45af96033d941381b012",
+  "symbol": "002594.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "a2402b1d64c4d639f8e224715ecd55a3ebee8f80001e06fbf7666fd0e78e03ed"
+ },
+ {
+  "report_id": "f48dd11966de47a084e29254f0291860",
+  "symbol": "600900.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "200dceb860cd735681d3a2c735f4eecc18b0dbcdbe667894c1681ef890dd952f"
+ },
+ {
+  "report_id": "426bab7714b14efc80a7dd50d5afe814",
+  "symbol": "001979.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "6f17cc1db0a76c93c1ddb1034256b9bb365d7a600865c9cfc11040f7838e2383"
+ },
+ {
+  "report_id": "827ba5c1c53d4a398569062976c3c62b",
+  "symbol": "600036.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "39c05b9a156e6f3c15e8bd093837bc572d4ad817dab8e0d49ace876f03286184"
+ },
+ {
+  "report_id": "4198ef36af014cd38a40696c1513255b",
+  "symbol": "600519.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "f2c339792ac1ee974c38f12288689ed936a97747ad89302f932c9027e17937ca"
+ },
+ {
+  "report_id": "fe47cd30a3fd4f19b0ce1c6416071cd3",
+  "symbol": "300750.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "8494429fa777c8c9487ae2f7ff0ac713d3b6db4c8c9bd71be09be1446cda0fc1"
+ },
+ {
+  "report_id": "aa6d45a593e842059061cd8ab56a7361",
+  "symbol": "600276.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "1ef6eef05310b9930bc54352924629e45d907c13d95cb594783dbb314b725509"
+ },
+ {
+  "report_id": "af25901ec32e4a44ad2aef3db8a09487",
+  "symbol": "688981.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "c626ac716d3647b83444d3577078be26a629e616b37f6e3a5d358c7fe160fc86"
+ },
+ {
+  "report_id": "b0cdfe45a3a34bb4989bcc5fa7553f08",
+  "symbol": "000333.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "86639fddb854c049dbd64bc99177615dbf556fdb151215b6d229e7901e414c6b"
+ },
+ {
+  "report_id": "a810f96492cd463bb049cbb572818837",
+  "symbol": "300750.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "05143b178482d28c014d8dabe76d55cc8a7daa518d1df75d4b1c44c75bc8bd46"
+ },
+ {
+  "report_id": "edd20aef54f543039806e982abccd6da",
+  "symbol": "601899.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "65db184d52d8f4438118aaff0f8d4105025d2355c48400dfb75ad62549905bfe"
+ },
+ {
+  "report_id": "d33b28d8c5d14533af206d0be6bd8609",
+  "symbol": "002594.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "6761185f74ae31644f07ab817b7344c1b577c968daa7f676d3c34160fdbf067f"
+ },
+ {
+  "report_id": "c590d9258c9049439db8b8a30a3a6441",
+  "symbol": "600030.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "c3fe9139c978d54678c842af4651c0d8789f8b72e8572aa5a75c249504ff002d"
+ },
+ {
+  "report_id": "ebc41de27b2f40a9b5c6cecf6e75823f",
+  "symbol": "600900.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "83e37a93d52553fe7d12c81714b89428a2e58170a6c7bd9606fcca5f66aecd30"
+ },
+ {
+  "report_id": "21e993fdf65b43dbb7622bdcd4aa2860",
+  "symbol": "001979.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "265a09b34b48e0e9cb09e456e66cae4b195105e0a823537f94650439374436d1"
+ },
+ {
+  "report_id": "e8ef16472cbb4195ab57b006fe1eb1be",
+  "symbol": "600519.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "7843fa888581d13175e9ffa6098fe017197c7c054b874d6e3f067d43fc0a566e"
+ },
+ {
+  "report_id": "117557c3cd6c4294ae543dd0462f7692",
+  "symbol": "600276.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "e4658a698bf5f78a06ca2a69174b7ab0f06c9c74ebe9daa0dc29e637fdb55924"
+ },
+ {
+  "report_id": "7f494a9737a94d1fb31c4ac12364b239",
+  "symbol": "300750.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "9724464ecf6c8015d716a167a63abf5125753953c5cece125a9fe972feaa7ed9"
+ },
+ {
+  "report_id": "a4c3392d4ddb4b82a7201ca7c4b5fd74",
+  "symbol": "600036.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "d0975e533db7026c7f2914e29a43b48b8e1535638dda4cb4b91bb3ceedb2dcef"
+ },
+ {
+  "report_id": "fd45ac180656400484378e13d5c4156d",
+  "symbol": "688981.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "6f22d687443d7c3345da4abeadf2bef3c5f7145094131b4fc5f08771713b35df"
+ },
+ {
+  "report_id": "882c2cbce0fd4e99b683d5156efed12c",
+  "symbol": "000333.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "c85819a2b354dcb4679dea070040100922211d6c3bc19ea8f8a5c120d1134579"
+ },
+ {
+  "report_id": "9477ba3641c142ddb640726545f52aab",
+  "symbol": "601899.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "64e1f318cd7657afc7ab9718e0e1f13e65ec5049e27586f08d3883f7290aa9de"
+ },
+ {
+  "report_id": "fc17f885cdce4fa0a4dbaeb39a40d03c",
+  "symbol": "600030.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "7d93e89be9d0dbbda65a56b79b10e8d21c2e09c6b5c1edee5ff132ce1c5e9a30"
+ },
+ {
+  "report_id": "b03c6a97f67e481fa4b40da43df4b106",
+  "symbol": "601088.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "284f0f48f4a2028272468bbd87d7187770b9ddde3fea4d1c179dc86ed6c7ca51"
+ },
+ {
+  "report_id": "3150f7d0972341b899597c89ba4a83aa",
+  "symbol": "002594.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "a0551914e73217df0b89965a742b4e17eb7339836347a58a3492b5ae5e770548"
+ },
+ {
+  "report_id": "9bdef4096bb74122815bef083c0d6150",
+  "symbol": "600900.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "8665cabd5c59c07f4ff7fe151d5419c5db3a62f4aeb31e2e911a16e5ffd38238"
+ },
+ {
+  "report_id": "dfc4662b9cdd47b3b2f32fcb964f569a",
+  "symbol": "001979.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "35dbe9df42179658444292adec00c4342aa4485dfa954cdab9065e6d4371b00a"
+ },
+ {
+  "report_id": "acbb32d017024400b6bd0e3f96b5cbbf",
+  "symbol": "601088.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "cb831910d2aaacfad3f45479ce97ad5659f003f44ab5a31f9b57defcd0ea7db3"
+ },
+ {
+  "report_id": "0c1d99663a4a48948bcae3bb75abdc3a",
+  "symbol": "601012.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "2ec59d0361edfd22b38350ad26327355356cd11f7769983b3d1c164403c9c18c"
+ },
+ {
+  "report_id": "eb610dafadb241aaa8711aa247baf23d",
+  "symbol": "600309.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "4495ba9a7219a71db781a9bb986ca6235cbb718fb314cb1aefd44c3f7213d8b0"
+ },
+ {
+  "report_id": "f088d66ac7f8426b98bcd696eb585368",
+  "symbol": "000063.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "6b9c2c6d4662dc7b606fde7325d8d3b7d7d9b52571c6a974cf1c288eaac989a7"
+ },
+ {
+  "report_id": "d4489983f942456c881a9380673001e5",
+  "symbol": "600760.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "5c6d1fbfcbbf37e3bb9531365829c6319dec54b91c832b11be6fb794512a3af5"
+ },
+ {
+  "report_id": "127108b61ac747ccbf2c85362cc823d8",
+  "symbol": "603288.SH",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "a5789afb6e4a9019f71ca03d2791fff93a4e1f923466aedfc59373ce09899bc8"
+ },
+ {
+  "report_id": "ad72af61833d412dbe4b43c7562c3d45",
+  "symbol": "002027.SZ",
+  "trade_date": "2026-07-08",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "97af51613d6ff3d9590dec0b4d59b3fcb9c0bf4de7f7fbfcedc6e32a0280151b"
+ },
+ {
+  "report_id": "28f6a1e0335646e7b1932cee471b2810",
+  "symbol": "000063.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "97668f293a79779254acc5fcbb218d3060280bd15c4ffc05733d7eed8daa617f"
+ },
+ {
+  "report_id": "61cffb85ee5d4dbcbd41ebea32ec2f55",
+  "symbol": "603288.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "001b982f75025d1b4fcd02bc371f618bea2d3a8ea3a75f8e945acb88620e1e15"
+ },
+ {
+  "report_id": "7afcc2d6d02940589f3e9d244fda9f7f",
+  "symbol": "600760.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "081b861a820a645aa5fd3137e7805cb82462db180f07f71b5c262df76029a347"
+ },
+ {
+  "report_id": "07480d15181442b5ab549d30249047d7",
+  "symbol": "601012.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "c997f8f579275d43afd30c695bfbec115ee8e17b82d4cb26b9c13e6eaf4e12b9"
+ },
+ {
+  "report_id": "31f3b28981b6415997052f75318c1e81",
+  "symbol": "002027.SZ",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "56d63b9d0cddcec6acb45dd74cdbfa4e42617aeacb4b4937705a5fc59ef46bc6"
+ },
+ {
+  "report_id": "239d8af87e054b7d967e6da52820185f",
+  "symbol": "600309.SH",
+  "trade_date": "2026-06-10",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "de7b63c835e527c4da86229645d06408420e2863aaa730360da2fac6916b280c"
+ },
+ {
+  "report_id": "4bc9a4aad4524f36b1862a94c2142b6d",
+  "symbol": "600760.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "dedce955432604260d59579dd3c58439a98d6be0052470827298fd94206019e6"
+ },
+ {
+  "report_id": "3fc1beba1ee74b53bf634d4a35eddbf6",
+  "symbol": "603288.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "3cd13e2f5a58d94d7c16fdc38ee596d8380dbf22d2f7502374923b6fe3e2ef4e"
+ },
+ {
+  "report_id": "73100827cc3c4e00a7fed3e15c78b06b",
+  "symbol": "000063.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "51821630e7a1f5215e5ba142ae35e7de0ca7588e158deb088068a7b7bbdd96d1"
+ },
+ {
+  "report_id": "762aaa24b6244952840553563e0e0308",
+  "symbol": "601012.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "154fd8b2a8f9c9d76337363c0a66d3ad46136f78174d527981310f04d1c07842"
+ },
+ {
+  "report_id": "8c0285523b26431cac84b5010cc36e64",
+  "symbol": "600309.SH",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "62273271ea0228e3cab9b52b999a8dc2e5ee74cf7006351da0c5562c3d00d204"
+ },
+ {
+  "report_id": "360d917b6dbd4bbeba988970a6ebdb25",
+  "symbol": "002027.SZ",
+  "trade_date": "2026-07-22",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "57d9649ec8d4eab58637b0b29a7e9161c1c827cd8ef07de0259a21521cfb87c3"
+ },
+ {
+  "report_id": "fdc9352b89554177bb78ea7a33eac2fd",
+  "symbol": "600519.SH",
+  "trade_date": "2026-05-20",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "949fdac33b7d0baef348b94a90854ce95f031a72f54763c5bae01da75386269b"
+ },
+ {
+  "report_id": "3f0e273e6bab49b094a80b292567262b",
+  "symbol": "600036.SH",
+  "trade_date": "2026-05-20",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "9f9c310bb324864875dd87588c3e2f4e9545c3485ae3c1e2981c63869686cf8e"
+ },
+ {
+  "report_id": "78fe0ecbc97a404ab694ada9f7e2a695",
+  "symbol": "600276.SH",
+  "trade_date": "2026-05-20",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "d0801e6af7bfa171823b97a0bfc3314a1979f331decc573571d1f7a27aed9017"
+ },
+ {
+  "report_id": "d06b66d264e64f45b5388dace9207f4d",
+  "symbol": "300750.SZ",
+  "trade_date": "2026-05-20",
+  "model": [
+   "gemini-3.8-flash-high"
+  ],
+  "result_data_sha256": "169dac1a3e68b3d123a734c1029d3ad81e4470781b26010710cf10277e2c6631"
+ },
+ {
+  "report_id": "7177a07234794cb5abcb04eac47794f9",
+  "symbol": "688981.SH",
+  "trade_date": "2026-05-20",
+  "model": [
+   "gpt-6-luna"
+  ],
+  "result_data_sha256": "2aaba0ec474c320254179d14109146071db4771de23ba26cad7025cc36883461"
+ }
+]

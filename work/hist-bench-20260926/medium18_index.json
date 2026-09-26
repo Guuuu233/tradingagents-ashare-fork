@@ -1,0 +1,167 @@
+{
+ "note": "中线 18 个有方向判断的索引；盲分类所据的研究经理理由/采纳论点原文见各报告 result_data.medium_term.manager_verdict（不入库原文，D-040）",
+ "items": [
+  {
+   "n": 1,
+   "report_id": "b0cdfe45a3a34bb4989bcc5fa7553f08",
+   "horizon": "medium_term",
+   "symbol": "000333.SZ",
+   "trade_date": "2026-06-10",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 2,
+   "report_id": "fe47cd30a3fd4f19b0ce1c6416071cd3",
+   "horizon": "medium_term",
+   "symbol": "300750.SZ",
+   "trade_date": "2026-06-10",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 3,
+   "report_id": "827ba5c1c53d4a398569062976c3c62b",
+   "horizon": "medium_term",
+   "symbol": "600036.SH",
+   "trade_date": "2026-06-10",
+   "direction": "BULL",
+   "tier": "①最终买卖"
+  },
+  {
+   "n": 4,
+   "report_id": "239d8af87e054b7d967e6da52820185f",
+   "horizon": "medium_term",
+   "symbol": "600309.SH",
+   "trade_date": "2026-06-10",
+   "direction": "BEAR",
+   "tier": "①最终买卖"
+  },
+  {
+   "n": 5,
+   "report_id": "ebc41de27b2f40a9b5c6cecf6e75823f",
+   "horizon": "medium_term",
+   "symbol": "600900.SH",
+   "trade_date": "2026-06-10",
+   "direction": "BULL",
+   "tier": "①最终买卖"
+  },
+  {
+   "n": 6,
+   "report_id": "07480d15181442b5ab549d30249047d7",
+   "horizon": "medium_term",
+   "symbol": "601012.SH",
+   "trade_date": "2026-06-10",
+   "direction": "BEAR",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 7,
+   "report_id": "f088d66ac7f8426b98bcd696eb585368",
+   "horizon": "medium_term",
+   "symbol": "000063.SZ",
+   "trade_date": "2026-07-08",
+   "direction": "BEAR",
+   "tier": "①最终买卖"
+  },
+  {
+   "n": 8,
+   "report_id": "426bab7714b14efc80a7dd50d5afe814",
+   "horizon": "medium_term",
+   "symbol": "001979.SZ",
+   "trade_date": "2026-07-08",
+   "direction": "BEAR",
+   "tier": "③观望但有方向"
+  },
+  {
+   "n": 9,
+   "report_id": "1312d27a84564e8aa136f2f5ce1c1b4f",
+   "horizon": "medium_term",
+   "symbol": "600036.SH",
+   "trade_date": "2026-07-08",
+   "direction": "BULL",
+   "tier": "③观望但有方向"
+  },
+  {
+   "n": 10,
+   "report_id": "a747371c9f744bbe89c03a98789c9ab2",
+   "horizon": "medium_term",
+   "symbol": "600276.SH",
+   "trade_date": "2026-07-08",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 11,
+   "report_id": "d4489983f942456c881a9380673001e5",
+   "horizon": "medium_term",
+   "symbol": "600760.SH",
+   "trade_date": "2026-07-08",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 12,
+   "report_id": "f48dd11966de47a084e29254f0291860",
+   "horizon": "medium_term",
+   "symbol": "600900.SH",
+   "trade_date": "2026-07-08",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 13,
+   "report_id": "84c5dfc87138469b95605a8b2ddf79f3",
+   "horizon": "medium_term",
+   "symbol": "688981.SH",
+   "trade_date": "2026-07-08",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 14,
+   "report_id": "3150f7d0972341b899597c89ba4a83aa",
+   "horizon": "medium_term",
+   "symbol": "002594.SZ",
+   "trade_date": "2026-07-22",
+   "direction": "BEAR",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 15,
+   "report_id": "7f494a9737a94d1fb31c4ac12364b239",
+   "horizon": "medium_term",
+   "symbol": "300750.SZ",
+   "trade_date": "2026-07-22",
+   "direction": "BEAR",
+   "tier": "③观望但有方向"
+  },
+  {
+   "n": 16,
+   "report_id": "a4c3392d4ddb4b82a7201ca7c4b5fd74",
+   "horizon": "medium_term",
+   "symbol": "600036.SH",
+   "trade_date": "2026-07-22",
+   "direction": "BULL",
+   "tier": "③观望但有方向"
+  },
+  {
+   "n": 17,
+   "report_id": "b03c6a97f67e481fa4b40da43df4b106",
+   "horizon": "medium_term",
+   "symbol": "601088.SH",
+   "trade_date": "2026-07-22",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  },
+  {
+   "n": 18,
+   "report_id": "3fc1beba1ee74b53bf634d4a35eddbf6",
+   "horizon": "medium_term",
+   "symbol": "603288.SH",
+   "trade_date": "2026-07-22",
+   "direction": "BULL",
+   "tier": "②被降级的买卖"
+  }
+ ]
+}

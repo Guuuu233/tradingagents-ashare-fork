@@ -1,15 +1,25 @@
 # Project State
 
-## 当前状态头部（2026-09-26 总控更新；开工前必须重新回读，D-005）
+## 当前状态头部（2026-09-26 20:40 总控更新；开工前必须重新回读，D-005）
 
 > 项目总图见 `docs/PROJECT_PANORAMA.md`（快照，给全体成员看的概览）。
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `fb1d171198f3500bfb49dcde78261f0c858d0c77`（`/healthz` 精确回读；09-26，DAV-1297：主力资金数值按日期/区间核对、unverifiable 中性提示、被拦原稿留存；**价格返修与 E-04 返修均开启**）。上一版 `f427d54`（DAV-1290） |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`fb1d171` 之后若只有治理或测试提交，产品代码与生产逐字节一致 |
-| 待发布提交 | 无 |
+| 生产代码 SHA | `37885276962061039f3df140d81a47867f70094f`（09-26 19:37，DAV-1306，含 DAV-1300 双档正文入库与读取回退、DAV-1301 双档结论分档显示；**价格返修与 E-04 返修均开启**）。回退为 `releases/fb1d171`，`f427d54` 已删除 |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。09-26 主干为 `70961ba` 加治理提交；与生产的产品代码差异只有 DAV-1305（`70961ba`） |
+| 待发布提交 | `70961ba`（DAV-1305，已签准予合入并快进主干；待总控在样本批结束后发出部署窗口） |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
+
+**09-26 新发现（D-046）：H1b 测量通道断开。** 09-19 起生产的 157 份 completed 报告全部为 `v1_legacy`，而 H1b 只收 `v2_structured`。当前 cohort `decision_model.v1:evidence_contract.v2:price_basis.unspecified` 的 H1b 样本量为 0/60。诊断见 DAV-1310。
+
+**09-26 第一阶段剩余工作（D-046，按顺序）：**
+1. DAV-1310：H1b 资格诊断；
+2. DAV-1311、DAV-1312：两道门的精确率审计，并行；
+3. 概率输出契约；
+4. 测量。
+
+B2+B3 已结案，保留为诊断语料。方差政策并入协议阶段 R。
 
 漏斗的统计口径：
 - **数据来源**：生产库 `.backup()` 副本，快照时间 2026-09-23 21:54。
@@ -19,7 +29,7 @@
 
 - **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
 - **服务运行态**（D-038、D-041、D-044、D-045、DAV-1276）：
-  - PID 36057，运行目录 `releases/fb1d171`（locked）；回退源为 `releases/f427d54`（DAV-1297）。
+  - PID 58735，运行目录 `releases/3788527`（locked）；回退源为 `releases/fb1d171`（DAV-1306，09-26 19:37 部署，总控签收）。
   - 启动环境：`env -i` 白名单 16 项，与 DAV-1270 相同，含两个返修开关，不含 DUMP_DIR。
   - bundle 为 `index-DXhIKhFl.js`，含博弈论报告显示。
   - 回退启动命令存于 `logs/prev-launch-f427d54.txt`；`releases/dc0b143` 在签收后删除。

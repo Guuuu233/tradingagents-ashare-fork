@@ -1,0 +1,21 @@
+{"note": "总控 2026-09-26 盲分类：只看研究经理理由/采纳论点/依据，未看任何收益结果。类别=主要驱动：F 基本面边际变化（利润/现金流/毛利/存货），V 估值与股息/资本回报，I 行业与宏观景气（原料价/油价/政策/利率），T 技术与资金（量价/均线/大单）。flag: contra=采纳论点方向与结论相反；no_adopt=没有完整采纳的论点。",
+ "items": {
+  "1":  {"cls": "V", "flags": []},
+  "2":  {"cls": "F", "flags": []},
+  "3":  {"cls": "T", "flags": ["no_adopt"]},
+  "4":  {"cls": "I", "flags": ["no_adopt"]},
+  "5":  {"cls": "F", "flags": ["no_adopt"]},
+  "6":  {"cls": "F", "flags": ["no_adopt"]},
+  "7":  {"cls": "F", "flags": []},
+  "8":  {"cls": "F", "flags": ["contra"]},
+  "9":  {"cls": "V", "flags": ["no_adopt"]},
+  "10": {"cls": "T", "flags": []},
+  "11": {"cls": "T", "flags": []},
+  "12": {"cls": "V", "flags": []},
+  "13": {"cls": "T", "flags": []},
+  "14": {"cls": "F", "flags": ["contra"]},
+  "15": {"cls": "T", "flags": ["no_adopt"]},
+  "16": {"cls": "T", "flags": []},
+  "17": {"cls": "V", "flags": ["no_adopt"]},
+  "18": {"cls": "F", "flags": []}
+ }}
