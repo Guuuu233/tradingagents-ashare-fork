@@ -453,7 +453,7 @@ _NUMBER_FRACTION_TAIL = re.compile(r"^\s*/\s*\d{1,3}(?![\d.,])")
 _NUMBER_FRACTION_HEAD = re.compile(r"(?<![\d.,])\d{1,3}\s*/\s*$")
 # 「1/3」的 3；「156.35/160」一侧带小数点/千分位 → 不命中
 _NUMBER_CURRENCY_TAIL = re.compile(
-    r"^\s*(?:美元|港元|欧元|日元|英镑|美分|USD|usd|HKD)"
+    r"^\s*(?:美元|港元|欧元|日元|英镑|美分|瑞士法郎|瑞郎|法郎|新台币|USD|usd|HKD)"
 )                                                        # 「85美元/桶」
 _NUMBER_INDICATOR_TAIL = re.compile(
     r"^\s*(?:VWMA|VWAP|EMA|SMA|WMA|DMA|BOLL|ATR|RSI|MACD|MA|PE|PB|PS|PEG|BPs?|bps|基点)\b",
@@ -724,7 +724,9 @@ def _kw_window(ctx: str, i: int, n: int = 10) -> str:
 
 _DISCLOSURE_KW = re.compile(
     r"大宗|龙虎榜|增持|减持|回购|定增|增发|发行|发股|配售|申购|募资|"
-    r"成交|作价|均价|折价|溢价|席位|解禁|上市日|IPO|预案价|对价"
+    r"成交价|成交额|成交均价|作价|均价|折价|溢价|席位|解禁|上市日|"
+    r"IPO|预案价|对价"
+    # 注意不收裸「成交」——「成交量」是量能词不是披露价语境
 )
 
 _GOODS_CTX = re.compile(
@@ -732,6 +734,24 @@ _GOODS_CTX = re.compile(
     r"LME|COMEX|原油|布伦特|黄金|贵金属|铜|铝|镍|上游|采购|BOM|进口"
 )
 _REAL_BLOCK = re.compile(r"大宗交易|大宗平价|平价大宗|大宗\s*成交")
+_BLOCK_NEAR_NOUN = re.compile(
+    r"成交价|成交额|成交均价|均价|大宗|平价|折价|溢价|席位|作价|"
+    r"收盘价|报收|成交[^量]"
+)
+
+
+def _value_near_block_noun(ctx: str, value: float) -> bool:
+    """该值 token 的紧贴邻域（±10 字内）含大宗披露价名词。"""
+    for m in re.finditer(r"\d+(?:\.\d+)?", ctx or ""):
+        try:
+            if abs(float(m.group(0)) - value) > _VALUE_MATCH_TOLERANCE:
+                continue
+        except ValueError:
+            continue
+        near = ctx[max(0, m.start() - 10):m.end() + 4]
+        if _BLOCK_NEAR_NOUN.search(near):
+            return True
+    return False
 
 
 def _num_windows(ctx: str, value: float, half: int = 15) -> List[str]:
@@ -754,8 +774,11 @@ def _value_is_quote_side(wins: List[str]) -> bool:
     for w in wins:
         if len(w) <= 15:
             continue
-        if re.search(r"(?:现价|收盘价|当前价|市价|当前)\s*[（(]?\s*[\d.]*$",
-                     w[:len(w) - 15]):
+        if re.search(
+            r"(?:现价|收盘价|当前价|市价|当前价?|股价|收报|报收|目前|当前)"
+            r"[^\d%]{0,6}[\d.]*$",
+            w[:len(w) - 15],
+        ):
             return True
     return False
 
@@ -787,12 +810,15 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
         real = any(re.search(r"大宗(?:交易|平价|成交|折价|溢价|席位|接盘|买入)"
                              r"|(?:交易|平价|折价|溢价|席位|接盘)[^。]{0,10}大宗", w)
                    for w in wins)
-        # [DAV-1321 N3] 披露子句语义：该值位于成交/作价/溢折价/席位/对价
-        # 描述窗口内才是披露价；「大宗折价盘锁死向 35.00 元进攻」中的 35.00
-        # 只是坐标位，不误挂 raw。坐标语境词（支撑/阻力/跟踪/冲击等）出现在
-        # 值窗口时否决——「跟踪76.3—76.8元支撑」「向130元上方冲击」不是披露价。
+        # [DAV-1321 复审③] 披露名词紧邻判定：披露价名词（成交价/均价/
+        # 大宗/平价/溢折价/席位/作价/收盘价）贴近该值本身才是披露价——
+        # 「大宗折价成交价 78.61 元共振支撑」中 78.61 是披露价被用于坐标
+        # 语境（仍挂 raw，由混用探测问责）；「跟踪 76.8 元支撑」「大宗折价
+        # 盘锁死向 35.00 元进攻」中的值只是坐标位，不挂。
+        near = _value_near_block_noun(ctx, value)
         clause = any(
-            re.search(r"成交|作价|万元|亿元|席位|vs\s|VS\s|溢价|折价", w)
+            re.search(r"成交价|成交额|成交均价|作价|万元|亿元|席位|vs\s|VS\s|"
+                      r"溢价|折价|成交[^量]", w)
             for w in wins
         )
         coord_veto = any(
@@ -800,7 +826,7 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
                       r"锁死|进攻|考验|下探|上看|挑战|触及|逼近|修复", w)
             for w in wins
         )
-        if (real or clause) and not coord_veto:
+        if near or ((real or clause) and not coord_veto):
             verdict, reason = "true", "数值紧邻大宗交易/平价/成交语义"
         elif goods or any(_GOODS_CTX.search(w) for w in wins):
             verdict, reason = "false", "大宗为商品/材料/成本语境，非披露价"
@@ -1441,9 +1467,63 @@ _PIT_DTYPE_QUOTE_GUARD = frozenset(
      "shareholder_increase", "shareholder_decrease")
 )
 
+# [DAV-1321 复审③] 披露口径只给披露事项本身的价格。值紧邻技术名词或
+# 行情动作词时是技术位/行情价，绝不挂披露口径：
+# 「年线（39.21 元）」「close_50_sma 117.31」「前期低点 34.31」
+# 「放量击穿 1268 元」「大宗折价…与 close_200_sma 重叠」均否决。
+_VALUE_TECH_HEAD = re.compile(
+    r"(?:年线|半年线|季线|月线|周线|日线|均线|缺口|颈线|下轨|中轨|上轨|"
+    r"前低|前高|低点|高点|新低|新高|分位|箱顶|箱底|布林|"
+    r"boll|ema|sma|wma|vma|vwma|ma|rsi|macd|atr|kdj|obv)\s*[（(:：]?\s*$",
+    re.I,
+)
+_VALUE_ACTION_HEAD = re.compile(
+    r"(?:击穿|跌破|突破|触及|下探|上攻|回抽|受阻|回落|考验|站上|回踩|"
+    r"冲击|挑战|逼近|上看|探至|达到|跌至|回升至|反弹至|跌至|修复至|"
+    r"运行至|试盘至|推高至|压制|承压于?)\s*[（(]?\s*$",
+    re.I,
+)
+_VALUE_ACTION_TAIL = re.compile(
+    r"^\s*元?\s*[）)]?\s*(?:区[域间]|价格带|平台|位)?\s*"
+    r"(?:探底|企稳|回落|受阻|新低|新高|前低|前高|一线|附近|破位|走弱)"
+)    # 「39.90-40.00 元区域探底企稳」「34.31 元探底」
+# 值显式标注口径（「26.92 元（qfq）」「X 元（pit_raw）」）→ 声明坐标优先，
+# 不挂披露类型
+_VALUE_DECLARED_NEAR = re.compile(
+    r"^\s*元?\s*[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)"
+    r"|元?\s*[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)",
+    re.I,
+)
+
+
+def _value_disclosure_veto(sentence: str, value: float) -> bool:
+    """[DAV-1321 复审③] 该值自身是技术位/行情价/显式口径价 → 否决披露挂接。"""
+    for m in re.finditer(r"\d+(?:\.\d+)?", sentence or ""):
+        try:
+            if abs(float(m.group(0)) - value) > _VALUE_MATCH_TOLERANCE:
+                continue
+        except ValueError:
+            continue
+        head = sentence[max(0, m.start() - 12):m.start()]
+        tail = sentence[m.end():m.end() + 12]
+        if _VALUE_TECH_HEAD.search(head) or _VALUE_ACTION_HEAD.search(head):
+            return True
+        if _VALUE_ACTION_TAIL.match(tail):
+            return True
+        if _VALUE_DECLARED_NEAR.match(tail) or re.search(
+            r"[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)\s*[）)]?\s*$",
+            head, re.I,
+        ):
+            return True
+    return False
+
 
 def _value_disclosure_type(sentence: str, dtype: str, value: float) -> Optional[str]:
-    """[DAV-1321 N3] 按该值自身的 ±15 字窗口判定它是否该类披露价。"""
+    """[DAV-1321 N3] 按该值自身的 ±15 字窗口判定它是否该类披露价。
+
+    复审③收紧：先否决「技术位/行情动作/显式口径」值，再跑逐值 verdict。"""
+    if _value_disclosure_veto(sentence, value):
+        return None
     verdict = classify_typed_disclosure(
         {"context": sentence, "disclosure_type": dtype, "value": value}
     )
@@ -1654,14 +1734,16 @@ def build_price_ref_registry(
             sentence_ref_ids: List[Tuple[str, float, str]] = []
             for value, pos, pend in mentions:
                 mention_window = sentence[max(0, pos - 15):pos]
-                declared = _declared_basis(mention_window)
-                declared_scope = ""
+                # [DAV-1321 复审③] 值自身紧邻尾标优先于左侧窗口——「X 元（qfq）」
+                # 的 qfq 是它自己的坐标声明，不能被同句他值的（pit_raw）抢占。
+                declared = None
+                tm = _DECLARED_TAIL_RE.match(sentence[pend:pend + 14])
+                if tm:
+                    declared = _basis_token_basis(tm.group(1))
+                    declared_scope = "tail"
                 if declared is None:
-                    # 「48.50 元（前复权）」式紧邻括号口径。
-                    tm = _DECLARED_TAIL_RE.match(sentence[pend:pend + 14])
-                    if tm:
-                        declared = _basis_token_basis(tm.group(1))
-                        declared_scope = "tail"
+                    declared = _declared_basis(mention_window)
+                    declared_scope = ""
                 if declared is None:
                     declared = sentence_basis
                     declared_scope = "sentence" if declared else ""

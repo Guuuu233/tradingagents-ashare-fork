@@ -1,0 +1,374 @@
+### daily0925:127108b6:short_term (603288.SH)
+- 34.1 `raw` `typed_disclosure:block_trade` | - **短线交易层面**：显著折价的大宗成交水平对当前 34.10 元的现价形成心理重击
+- 34.1 `vendor_qfq` `registry_backref:vendor_qfq` | 连续两笔大幅折价成交，给二级市场筹码稳定性带来显著阴影，当前 34.10 元现价尚未完全反映潜在抛压
+- 34.1 `raw` `typed_disclosure:block_trade` | - **2026-07-08（公司微观资金）**：海天味业发生一笔大宗交易，成交 115.90 万股，金额 3558.13 万元，占流通市值 0.02%，较当日收盘价（34.10 元）**折价 9.97%**
+- 34.36 `raw` `typed_disclosure:block_trade` | - **2026-07-06（公司微观资金与产业）**：海天味业发生大宗交易 140.40 万股，金额 4297.64 万元，较当日收盘价（34.36 元）**折价 10.91%**
+- 34.1 `vendor_qfq` `registry_backref:vendor_qfq` | | 1 | 连续发生折价近10%大宗交易 | 公司微观资金 | **偏空** | 中等偏强 | 1-2周（即时） | 高（交易所公告数据） | 现价 34.10 元面临大宗贴水心理压制与套利抛压 |
+- 30.7 `raw` `typed_disclosure:block_trade` | - **大额订单主动卖盘占优假设**：超大单与大单持续净流出，结合当日发生 3558.13 万元、折价率达 9.97%（成交均价 30.70 元）的大宗交易，假设场内具备大额挂单能力的筹码持有方，在 34.00 元上方呈
+- 34.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **大额订单主动卖盘占优假设**：超大单与大单持续净流出，结合当日发生 3558.13 万元、折价率达 9.97%（成交均价 30.70 元）的大宗交易，假设场内具备大额挂单能力的筹码持有方，在 34.00 元上方呈
+- 33.9 `vendor_qfq` `registry_backref:vendor_qfq` | - **偏空演化路径（高概率）**：大额订单若维持连续单边净流出（日均超 0.3-0.5 亿元），而成交量持续无法放大，股价将快速击穿 33.85-33.90 元微观成本带，向 32.58 元布林下轨寻找流动性支撑
+- 32.58 `vendor_qfq` `registry_backref:vendor_qfq` | - **偏空演化路径（高概率）**：大额订单若维持连续单边净流出（日均超 0.3-0.5 亿元），而成交量持续无法放大，股价将快速击穿 33.85-33.90 元微观成本带，向 32.58 元布林下轨寻找流动性支撑
+- 34.1 `vendor_qfq` `registry_backref:vendor_qfq` | - 最新收盘价 34.10 元略高于 VWMA（33.90 元），价格在成交量加权均线之上仅 0.59% 的窄幅空间浮动
+- 33.9 `vendor_qfq` `registry_backref:vendor_qfq` | - 最新收盘价 34.10 元略高于 VWMA（33.90 元），价格在成交量加权均线之上仅 0.59% 的窄幅空间浮动
+- 35.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态阻力测试**：上方 35.00 - 35.13 元（50日均线与布林上轨）面临重度抛压
+- 35.13 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态阻力测试**：上方 35.00 - 35.13 元（50日均线与布林上轨）面临重度抛压
+- 33.85 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近
+- 33.9 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近
+- 33.85 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近
+- 32.58 `vendor_qfq` `registry_backref:vendor_qfq` | - **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近
+- 35.13 `vendor_qfq` `registry_backref:vendor_qfq` | - 大单分组连续两日以上呈现净流入，且单日成交额温和放大至反弹初期水平（突破 2500 万股），收盘强力突破 35.13 元阻力区
+- 33.9 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭
+- 34.1 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭
+- 33.9 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭
+### daily0925:239d8af8:medium_term (600309.SH)
+- 58.0 `unspecified` `model_text` | - **原油破百美元极值情景**：若布伦特原油突破 100 美元/桶，模型显示综合毛利率将跌破 10%，单季归母净利承压跌破 15 亿元，立即下调股票中线估值中枢至 55.00 - 58.00 元，届时无论亏损与否，存量
+### daily0925:28f6a1e0:medium_term (000063.SZ)
+- 29.44 `unspecified` `model_text` | | **2026-06-09 11:29** | 机构/评级 | 摩根士丹利（大摩）将中兴通讯H股评级上调至“增持”（目标价31.5→39港元），A股升至“与大市同步”（目标价由29.44元人民币上调），核心逻辑为豆包A
+### daily0925:7afcc2d6:short_term (600760.SH)
+- 41.05 `vendor_qfq` `declared_basis:doc:vendor_qfq` | 1. **涨跌停**：现价 41.05 元，距当日跌停板及涨停板均存在充分安全空间
+- 41.22 `pit_raw` `derived:typed_disclosure:shareholder_increase` | - **披露与统计原始坐标**：高管增持均价 41.22 元（原始披露价 raw）、单日融资买入额 4329.65 万元（交易所原始统计 pit_raw）与前复权坐标口径不同，**不可直接比较**，严禁将 41.22 元
+- 41.22 `pit_raw` `derived:typed_disclosure:shareholder_increase` | - **披露与统计原始坐标**：高管增持均价 41.22 元（原始披露价 raw）、单日融资买入额 4329.65 万元（交易所原始统计 pit_raw）与前复权坐标口径不同，**不可直接比较**，严禁将 41.22 元
+- 41.05 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **风控与技术操作坐标**：现价 41.05 元、硬止损价 42.60 元、波段破位触发线 39.90 元、目标平仓/防御价 39.20 元，统一锁定为**前复权（vendor_qfq）**口径
+- 42.6 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **风控与技术操作坐标**：现价 41.05 元、硬止损价 42.60 元、波段破位触发线 39.90 元、目标平仓/防御价 39.20 元，统一锁定为**前复权（vendor_qfq）**口径
+- 39.9 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **风控与技术操作坐标**：现价 41.05 元、硬止损价 42.60 元、波段破位触发线 39.90 元、目标平仓/防御价 39.20 元，统一锁定为**前复权（vendor_qfq）**口径
+- 39.2 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **风控与技术操作坐标**：现价 41.05 元、硬止损价 42.60 元、波段破位触发线 39.90 元、目标平仓/防御价 39.20 元，统一锁定为**前复权（vendor_qfq）**口径
+- 42.6 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **硬性风控止损/认错价**：**42.60 元**（前复权，成交量突破 2500 万股并站稳时认错终止卖出逻辑）
+- 41.05 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **减仓执行区间**：**41.05 - 41.50 元**（前复权），分两批执行（现价执行 50%，冲高 41.50 元出清剩余 50%）
+- 41.5 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **减仓执行区间**：**41.05 - 41.50 元**（前复权），分两批执行（现价执行 50%，冲高 41.50 元出清剩余 50%）
+- 41.5 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **减仓执行区间**：**41.05 - 41.50 元**（前复权），分两批执行（现价执行 50%，冲高 41.50 元出清剩余 50%）
+- 41.05 `vendor_qfq` `declared_basis:doc:vendor_qfq` | 中性分析师指出现价 41.05 元向下试探止损线的跌幅空间大于向上触及直接阻力位 41.98 元的收益空间，盈亏比严重不足 1:1
+- 41.98 `vendor_qfq` `declared_basis:doc:vendor_qfq` | 中性分析师指出现价 41.05 元向下试探止损线的跌幅空间大于向上触及直接阻力位 41.98 元的收益空间，盈亏比严重不足 1:1
+- 42.6 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - 逆转买入前置条件（极严）：只有当标的日成交量放大至 **≥2500 万股**，日 K 线以实体大阳线突破并收盘站稳 **42.60 元**（前复权 qfq，VWMA 与均线压制区）上方，且连续 2 个交易日不破，方可
+- 39.2 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **目标价**：**39.20**（前复权 qfq）
+- 42.6 `vendor_qfq` `derived:declared_basis:sentence:vendor_qfq` | - **止损价**：**42.60**（前复权 qfq）
+### daily0925:9b70d0a1:medium_term (000333.SZ)
+- 73.66 `pit_raw` `typed_disclosure:repurchase` | - **逻辑阐述**：宏观端回购下限 73.66 元与 06-25 量价见底的 72.87 元形成精确的价格支撑共振
+- 72.87 `vendor_qfq` `technical_report:vendor_qfq` | - **逻辑阐述**：宏观端回购下限 73.66 元与 06-25 量价见底的 72.87 元形成精确的价格支撑共振
+- 79.0 `vendor_qfq` `technical_report:vendor_qfq` | - 到了 07-07 与 07-08，价格在 79.00~80.35 元阻力区间波动，成交量骤降至 3400 万股和 3154 万股（量比 0.8 与 0.7）
+- 80.35 `vendor_qfq` `technical_report:vendor_qfq` | - 到了 07-07 与 07-08，价格在 79.00~80.35 元阻力区间波动，成交量骤降至 3400 万股和 3154 万股（量比 0.8 与 0.7）
+- 78.0 `vendor_qfq` `technical_report:vendor_qfq` | - 当前在 78.00~80.35 元的窄幅震荡区间，累计时间仅 2-3 个交易日，所积累的筹码换手因（Cause）尚不足以支撑直接突破 81.83 元的前高天花板，仍需进一步的时间与空间蓄势
+- 80.35 `vendor_qfq` `technical_report:vendor_qfq` | - 当前在 78.00~80.35 元的窄幅震荡区间，累计时间仅 2-3 个交易日，所积累的筹码换手因（Cause）尚不足以支撑直接突破 81.83 元的前高天花板，仍需进一步的时间与空间蓄势
+- 81.83 `vendor_qfq` `technical_report:vendor_qfq` | - 当前在 78.00~80.35 元的窄幅震荡区间，累计时间仅 2-3 个交易日，所积累的筹码换手因（Cause）尚不足以支撑直接突破 81.83 元的前高天花板，仍需进一步的时间与空间蓄势
+- 81.83 `vendor_qfq` `technical_report:vendor_qfq` | - 自 06-25 低点展开的 V 型修复已基本收复前期跌幅，但在逼近前高 81.83 元阻力区前，连续遭遇上影线压制与量能萎缩，显示行情由前期强动能拉升转入阻力位消化阶段
+- 79.0 `vendor_qfq` `technical_report:vendor_qfq` | - **放量滞涨候选（high_volume_stagnation_candidate）**：07-02 至 07-03 在 79.00 元附近录得长上影线且伴随 5500 万股以上的高成交量，符合放量滞涨候选特征，提示
+- 79.0 `vendor_qfq` `technical_report:vendor_qfq` | - **引用结论**：阶段一技术面指出，均线呈多头排列，但 7 月 7 日至 8 日在 79~80 元关口缩量至 3100~3400 万股，呈现“缩量滞涨整理”特征，短期面临 80.35~80.50 元阻力与 81.80
+- 80.0 `vendor_qfq` `technical_report:vendor_qfq` | - **引用结论**：阶段一技术面指出，均线呈多头排列，但 7 月 7 日至 8 日在 79~80 元关口缩量至 3100~3400 万股，呈现“缩量滞涨整理”特征，短期面临 80.35~80.50 元阻力与 81.80
+- 80.35 `vendor_qfq` `technical_report:vendor_qfq` | - **引用结论**：阶段一技术面指出，均线呈多头排列，但 7 月 7 日至 8 日在 79~80 元关口缩量至 3100~3400 万股，呈现“缩量滞涨整理”特征，短期面临 80.35~80.50 元阻力与 81.80
+- 80.5 `vendor_qfq` `technical_report:vendor_qfq` | - **引用结论**：阶段一技术面指出，均线呈多头排列，但 7 月 7 日至 8 日在 79~80 元关口缩量至 3100~3400 万股，呈现“缩量滞涨整理”特征，短期面临 80.35~80.50 元阻力与 81.80
+- 81.8 `vendor_qfq` `technical_report:vendor_qfq` | - **引用结论**：阶段一技术面指出，均线呈多头排列，但 7 月 7 日至 8 日在 79~80 元关口缩量至 3100~3400 万股，呈现“缩量滞涨整理”特征，短期面临 80.35~80.50 元阻力与 81.80
+- 78.0 `vendor_qfq` `technical_report:vendor_qfq` | - 路径：由于 07-08 缩量严重且上攻乏力，股价未来 1-2 日可能主动回撤测试下方 78.00~78.30 元支撑区间
+- 78.3 `vendor_qfq` `technical_report:vendor_qfq` | - 路径：由于 07-08 缩量严重且上攻乏力，股价未来 1-2 日可能主动回撤测试下方 78.00~78.30 元支撑区间
+- 80.35 `vendor_qfq` `technical_report:vendor_qfq` | - 第一阻力位：**80.35~80.50 元**（07-07 盘中高点及整数阻力位，短期放量突破的关键关口）
+- 80.5 `vendor_qfq` `technical_report:vendor_qfq` | - 第一阻力位：**80.35~80.50 元**（07-07 盘中高点及整数阻力位，短期放量突破的关键关口）
+- 81.8 `vendor_qfq` `technical_report:vendor_qfq` | - 强阻力位：**81.80~82.00 元**（2026-06-11 阶段高点 81.83 元及布林上轨，前期套牢筹码密集带）
+- 82.0 `vendor_qfq` `technical_report:vendor_qfq` | - 强阻力位：**81.80~82.00 元**（2026-06-11 阶段高点 81.83 元及布林上轨，前期套牢筹码密集带）
+- 81.83 `vendor_qfq` `technical_report:vendor_qfq` | - 强阻力位：**81.80~82.00 元**（2026-06-11 阶段高点 81.83 元及布林上轨，前期套牢筹码密集带）
+- 78.0 `vendor_qfq` `technical_report:vendor_qfq` | - 第一支撑位：**78.00~78.30 元**（07-06 阳线低点、07-08 回踩低点及 10 EMA 77.78 元附近）
+- 78.3 `vendor_qfq` `technical_report:vendor_qfq` | - 第一支撑位：**78.00~78.30 元**（07-06 阳线低点、07-08 回踩低点及 10 EMA 77.78 元附近）
+- 77.78 `vendor_qfq` `technical_report:vendor_qfq` | - 第一支撑位：**78.00~78.30 元**（07-06 阳线低点、07-08 回踩低点及 10 EMA 77.78 元附近）
+- 78.0 `vendor_qfq` `technical_report:vendor_qfq` | 多头持仓可依托 78.00 元作为短期动态止盈保护，中线投资者逢缩量回踩 78.00 元或 76.80 元企稳时可分批关注
+- 78.0 `vendor_qfq` `technical_report:vendor_qfq` | 多头持仓可依托 78.00 元作为短期动态止盈保护，中线投资者逢缩量回踩 78.00 元或 76.80 元企稳时可分批关注
+- 76.8 `vendor_qfq` `technical_report:vendor_qfq` | 多头持仓可依托 78.00 元作为短期动态止盈保护，中线投资者逢缩量回踩 78.00 元或 76.80 元企稳时可分批关注
+### daily0925:a58e144e:short_term (000657.SZ)
+- 48.0 `unspecified` `model_text` | 若海外流动性紧缩（美债收益率 5.18%）与大宗滞胀持续发酵，中钨高新高达 91.89 亿元的存货与 60.50% 的资产负债率将面临营运资金成本大幅上升的压力，极端情景下估值存在杀跌至 45.00-48.00 元的风险
+### daily0925:af25901e:short_term (688981.SH)
+- 115.0 `raw` `typed_disclosure:block_trade` | - **深层多头底线：115.87 - 117.31 元**（50日均线与200日均线汇聚的强技术防线，同时靠近大宗交易折价成交价 115.00 元）
+- 115.87 `vendor_qfq` `technical_report:vendor_qfq` | - **深层多头底线：115.87 - 117.31 元**（50日均线与200日均线汇聚的强技术防线，同时靠近大宗交易折价成交价 115.00 元）
+- 117.31 `vendor_qfq` `technical_report:vendor_qfq` | - **深层多头底线：115.87 - 117.31 元**（50日均线与200日均线汇聚的强技术防线，同时靠近大宗交易折价成交价 115.00 元）
+- 139.76 `vendor_qfq` `technical_report:vendor_qfq` | - **06-01**：开盘 139.76 元，收于 132.44 元（-5.3%），最低 132.04 元，成交量 100,884,914 股，持续跌破短期均线
+- 115.0 `raw` `typed_disclosure:block_trade` | - 阶段一宏观报告指出：“全球半导体与硬科技遭遇避险离场潮（日韩暴跌，港股硬科技ETF大跌超5%），中芯国际发生 115.00 元折价 8.25% 的大宗交易，短线情绪处于退潮去杠杆阶段”
+- 132.44 `vendor_qfq` `technical_report:vendor_qfq` | - **06-01**：开盘 139.76 元，收于 132.44 元（-5.3%），最低 132.04 元，成交量 100,884,914 股，持续跌破短期均线
+- 132.04 `vendor_qfq` `technical_report:vendor_qfq` | - **06-01**：开盘 139.76 元，收于 132.44 元（-5.3%），最低 132.04 元，成交量 100,884,914 股，持续跌破短期均线
+- 131.18 `vendor_qfq` `technical_report:vendor_qfq` | - **量价验证**：06-10 最高价精准触及 131.18 元（处于 130.26-132.32 元阻力带内）并留下极长上影线，成交量萎缩至 6,691 万股，完美契合技术面“缩量反抽受制于短期均线”的推演
+- 130.26 `vendor_qfq` `technical_report:vendor_qfq` | - **量价验证**：06-10 最高价精准触及 131.18 元（处于 130.26-132.32 元阻力带内）并留下极长上影线，成交量萎缩至 6,691 万股，完美契合技术面“缩量反抽受制于短期均线”的推演
+- 132.32 `vendor_qfq` `technical_report:vendor_qfq` | - **量价验证**：06-10 最高价精准触及 131.18 元（处于 130.26-132.32 元阻力带内）并留下极长上影线，成交量萎缩至 6,691 万股，完美契合技术面“缩量反抽受制于短期均线”的推演
+- 131.18 `vendor_qfq` `technical_report:vendor_qfq` | - **路径描述**：受 06-10 长上影线（131.18 元压制）及缩量背离影响，市场做多动能耗尽，未来 1-3 个交易日价格将顺应阻力最小方向向下回落，再度测试 120.00-120.89 元平台低点的承接力量
+- 120.0 `vendor_qfq` `technical_report:vendor_qfq` | - **路径描述**：受 06-10 长上影线（131.18 元压制）及缩量背离影响，市场做多动能耗尽，未来 1-3 个交易日价格将顺应阻力最小方向向下回落，再度测试 120.00-120.89 元平台低点的承接力量
+- 120.89 `vendor_qfq` `technical_report:vendor_qfq` | - **路径描述**：受 06-10 长上影线（131.18 元压制）及缩量背离影响，市场做多动能耗尽，未来 1-3 个交易日价格将顺应阻力最小方向向下回落，再度测试 120.00-120.89 元平台低点的承接力量
+- 122.0 `vendor_qfq` `technical_report:vendor_qfq` | - **路径描述**：多空双方在 122.00-128.00 元区间维持极度缩量（日成交维持在 6,000 万股左右）的弱平衡，等待均线系统下移粘合
+- 128.0 `vendor_qfq` `technical_report:vendor_qfq` | - **路径描述**：多空双方在 122.00-128.00 元区间维持极度缩量（日成交维持在 6,000 万股左右）的弱平衡，等待均线系统下移粘合
+- 130.26 `vendor_qfq` `technical_report:vendor_qfq` | - **第一阻力位：130.26 - 131.18 元**（10日 EMA 动态压制带与 06-10 遇阻高点）
+- 131.18 `vendor_qfq` `technical_report:vendor_qfq` | - **第一阻力位：130.26 - 131.18 元**（10日 EMA 动态压制带与 06-10 遇阻高点）
+- 132.32 `vendor_qfq` `technical_report:vendor_qfq` | - **第二阻力位：132.32 - 134.00 元**（布林带中轨及前期反弹平台高点密集区）
+- 134.0 `vendor_qfq` `technical_report:vendor_qfq` | - **第二阻力位：132.32 - 134.00 元**（布林带中轨及前期反弹平台高点密集区）
+- 124.5 `vendor_qfq` `technical_report:vendor_qfq` | - **第一支撑位：124.50 元**（06-10 日内低点，短线多头日内防守线）
+- 120.0 `vendor_qfq` `technical_report:vendor_qfq` | - **核心防守支撑位：120.00 - 120.89 元**（06-08 阶段低点与前期心理整数关口颈线）
+- 120.89 `vendor_qfq` `technical_report:vendor_qfq` | - **核心防守支撑位：120.00 - 120.89 元**（06-08 阶段低点与前期心理整数关口颈线）
+### daily0925:b0cdfe45:short_term (000333.SZ)
+- 80.0 `vendor_qfq` `registry_backref:vendor_qfq` | 以当前A股约80元股价测算，回购价格区间（上限84.55元）形成实质性二级市场心理托底垫
+- 84.55 `pit_raw` `typed_disclosure:repurchase` | 以当前A股约80元股价测算，回购价格区间（上限84.55元）形成实质性二级市场心理托底垫
+- 79.92 `vendor_qfq` `registry_backref:vendor_qfq` | **标的现价**：79.92 元（日内放量突破前高，创近一年新高）
+- 81.69 `pit_raw` `typed_disclosure:repurchase` | | **2026-06-10 18:05** | 微观/公司 | 美的集团公告实施A股股份回购，耗资4538.9万元回购54.55万股，回购价格区间为81.69元-84.55元/股
+- 79.5 `vendor_qfq` `registry_backref:vendor_qfq` | - 与阿里及微信的AI合作在6月10日盘中引发了科技资金的技术性追捧（日内放量突破79.50元阻力位）
+- 77.4 `vendor_qfq` `registry_backref:vendor_qfq` | 跌破77.40元止损
+- 80.5 `vendor_qfq` `registry_backref:vendor_qfq` | | 价格在布林上轨与10日均线之间宽幅震荡（78.50 - 80.50元），换手消化近期获利盘
+- 78.34 `vendor_qfq` `registry_backref:vendor_qfq` | | 放量跌穿突破平台下沿，失守10日均线（78.34元）及布林中轨（77.68元），回撤至中长期均线支撑位附近
+- 77.68 `vendor_qfq` `registry_backref:vendor_qfq` | | 放量跌穿突破平台下沿，失守10日均线（78.34元）及布林中轨（77.68元），回撤至中长期均线支撑位附近
+- 77.4 `vendor_qfq` `registry_backref:vendor_qfq` | | 破位77.40元坚决止损离场，规避系统性杀跌风险
+### daily0925:df8bdbf9:medium_term (600030.SH)
+- 25.6 `vendor_qfq` `registry_backref:vendor_qfq` | 短线层面，阶段一技术资料显示股价靠近25.4—25.6元支撑区，但仍低于10日EMA、VWMA及200日均线，技术结构偏弱
+- 26.27 `raw` `typed_disclosure:block_trade` | | 2026-05-20 17:22 | 中信证券一笔大宗交易60万股、成交额1576.20万元、均价26.27元
+- 26.08 `raw` `typed_disclosure:block_trade` | - **新闻中存在价格口径冲突：**大宗交易报道将当日收盘价写为26.08元
+- 26.27 `raw` `typed_disclosure:block_trade` | 新闻称一笔60万股大宗交易，成交额1576.20万元、均价26.27元，较新闻所列收盘价26.08元溢价0.73%
+- 26.08 `raw` `typed_disclosure:block_trade` | 新闻称一笔60万股大宗交易，成交额1576.20万元、均价26.27元，较新闻所列收盘价26.08元溢价0.73%
+- 25.4 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一技术报告给出的关键区间为：支撑25.4—25.6元、阻力26.0—26.2元及26.6—27.0元
+- 25.6 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一技术报告给出的关键区间为：支撑25.4—25.6元、阻力26.0—26.2元及26.6—27.0元
+- 26.0 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一技术报告给出的关键区间为：支撑25.4—25.6元、阻力26.0—26.2元及26.6—27.0元
+- 26.2 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一技术报告给出的关键区间为：支撑25.4—25.6元、阻力26.0—26.2元及26.6—27.0元
+- 27.0 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一技术报告给出的关键区间为：支撑25.4—25.6元、阻力26.0—26.2元及26.6—27.0元
+- 27.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **偏多触发条件：**统一口径的收盘行情确认后，价格放量站上短期阻力并继续突破阶段一所列26.6—27.0元区间
+- 25.4 `vendor_qfq` `registry_backref:vendor_qfq` | - **偏空触发条件：**统一口径下有效跌破阶段一所列25.4元附近支撑，且成交放大、券商板块同步走弱
+### daily0925:df8bdbf9:short_term (600030.SH)
+- 25.6 `vendor_qfq` `registry_backref:vendor_qfq` | 2. **观察价格确认：**按阶段一技术数据，25.4—25.6元为近端支撑参考
+- 26.27 `raw` `typed_disclosure:block_trade` | - 标的新闻称大宗交易价格为**26.27元**，较“当日收盘价**26.08元**”溢价0.73%
+- 26.08 `raw` `typed_disclosure:block_trade` | - 标的新闻称大宗交易价格为**26.27元**，较“当日收盘价**26.08元**”溢价0.73%
+- 26.27 `raw` `typed_disclosure:block_trade` | | 5月20日 | 中信证券发生一笔60万股大宗交易，金额1,576.20万元，报道价格26.27元 | **媒体报道的交易数据**
+- 25.4 `vendor_qfq` `registry_backref:vendor_qfq` | | **偏空：支撑有效失守** | 核实后收盘有效跌破阶段一参考25.4元，且未能快速收复
+- 25.6 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一给出的25.4—25.6元支撑、25.9—26.1元及26.3—26.6元压力，因行情口径不一致仅作为**条件性参考**，不构成经核验的实时交易指令
+- 25.9 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一给出的25.4—25.6元支撑、25.9—26.1元及26.3—26.6元压力，因行情口径不一致仅作为**条件性参考**，不构成经核验的实时交易指令
+- 26.1 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一给出的25.4—25.6元支撑、25.9—26.1元及26.3—26.6元压力，因行情口径不一致仅作为**条件性参考**，不构成经核验的实时交易指令
+- 26.6 `vendor_qfq` `registry_backref:vendor_qfq` | 阶段一给出的25.4—25.6元支撑、25.9—26.1元及26.3—26.6元压力，因行情口径不一致仅作为**条件性参考**，不构成经核验的实时交易指令
+- 25.6 `vendor_qfq` `registry_backref:vendor_qfq` | 9. **技术与短线交易风险：**阶段一技术数据提示25.4—25.6元为近端支撑区，收盘有效跌破25.4元将强化偏空判断
+- 25.66 `raw` `typed_disclosure:block_trade` | 阶段一技术报告给出5月20日收盘价25.66元，而宏观报告提到大宗交易日收盘价26.08元，二者口径冲突
+- 26.08 `raw` `typed_disclosure:block_trade` | 阶段一技术报告给出5月20日收盘价25.66元，而宏观报告提到大宗交易日收盘价26.08元，二者口径冲突
+- 25.4 `vendor_qfq` `registry_backref:vendor_qfq` | 9. **技术与短线交易风险：**阶段一技术数据提示25.4—25.6元为近端支撑区，收盘有效跌破25.4元将强化偏空判断
+- 25.66 `vendor_qfq` `declared_basis:sentence:vendor_qfq` | **价格坐标纪律：**25.66元收盘口径冲突未解决，支撑、压力及技术指标也未证实为同源`vendor_qfq`数据
+- 26.27 `raw` `derived:typed_disclosure:block_trade` | 大宗交易报道价26.27元为`raw/pit_raw`披露价，与前复权技术价位**不可直接比较**
+### daily0925:e12d190d:short_term (601398.SH)
+- 6.67 `unspecified` `model_text` | - 极端宏观紧缩下（美债破 5.4%、地缘能源高企），工行 0.73 倍 PB 与 >5.5% 股息率具备较强中长期抗压底线，空头预期的 0.60 倍 PB（6.67 元，-17.96%）发生概率极低
+### daily0925:e29fd742:medium_term (000333.SZ)
+- 81.5 `raw` `typed_disclosure:block_trade` | - **关键数据冲突：**新闻称5月20日大宗交易“当日收盘价81.50元”，与技术资料所列77.64元不一致
+- 77.64 `vendor_qfq` `registry_backref:vendor_qfq` | - **关键数据冲突：**新闻称5月20日大宗交易“当日收盘价81.50元”，与技术资料所列77.64元不一致
+- 78.7 `raw` `typed_disclosure:block_trade` | **交易纪律：**阶段一技术价格资料与大宗交易报道冲突，78.7元、79.3—79.5元及76.3—76.8元等价位仅可作为阶段一口径下的观察参考，使用前应先核对原始行情
+- 79.5 `vendor_qfq` `registry_backref:vendor_qfq` | **交易纪律：**阶段一技术价格资料与大宗交易报道冲突，78.7元、79.3—79.5元及76.3—76.8元等价位仅可作为阶段一口径下的观察参考，使用前应先核对原始行情
+- 76.8 `vendor_qfq` `registry_backref:vendor_qfq` | **交易纪律：**阶段一技术价格资料与大宗交易报道冲突，78.7元、79.3—79.5元及76.3—76.8元等价位仅可作为阶段一口径下的观察参考，使用前应先核对原始行情
+- 77.64 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 72.9 `raw` `typed_disclosure:block_trade` | | 5月20日 | 一笔大宗交易25万股、成交1822.5万元，价格72.90元
+- 76.3 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 76.8 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 78.2 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 78.7 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 79.5 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线技术面：**阶段一技术资料给出的收盘价为77.64元，股价在50日及200日均线之上，支撑区为76.3—76.8元，阻力区为78.2—78.7元及79.3—79.5元
+- 76.8 `vendor_qfq` `registry_backref:vendor_qfq` | 5. **筹码与技术验证：**核对5月20日原始日线、成交量和大宗交易行情，并跟踪76.3—76.8元支撑及78.7元、79.3—79.5元阻力区（均以阶段一技术价格口径为条件）
+- 78.7 `vendor_qfq` `registry_backref:vendor_qfq` | 5. **筹码与技术验证：**核对5月20日原始日线、成交量和大宗交易行情，并跟踪76.3—76.8元支撑及78.7元、79.3—79.5元阻力区（均以阶段一技术价格口径为条件）
+- 79.5 `vendor_qfq` `registry_backref:vendor_qfq` | 5. **筹码与技术验证：**核对5月20日原始日线、成交量和大宗交易行情，并跟踪76.3—76.8元支撑及78.7元、79.3—79.5元阻力区（均以阶段一技术价格口径为条件）
+- 76.8 `vendor_qfq` `registry_backref:vendor_qfq` | | **偏多情景** | 核实原始日线后，股价守住阶段一技术资料给出的76.3—76.8元支撑
+### daily0925:e50b30f3:medium_term (600030.SH)
+- 28.0 `raw` `typed_disclosure:block_trade` | 观察28.00元大宗成本支撑有效性，以及未来1-2周境内发债融资成本（低息环境）对券商债务置换利差的释放
+- 28.0 `raw` `derived:typed_disclosure:block_trade` | - **多头脆弱假设击穿**：多头将 6.64 亿元平价大宗交易（raw 口径 28.00 元）直接跨坐标等同于二级市场前复权（qfq）支撑，违反坐标转换纪律
+- 27.7 `vendor_qfq` `technical_report:vendor_qfq` | - 自 2026-06-22 脉冲启动以来，该股在 27.70 - 29.88 元区间仅换手整理了 13 个交易日，时间积累尚不足以构成大级别的派发完成，也不足以支撑直接跨越 30.00 元历史巨量解套压力区
+- 28.0 `raw` `typed_disclosure:block_trade` | 但中信证券当日发生 2372.38 万股、6.64 亿元的**平价大宗交易（成交价 28.00 元，占当日成交总额 14.8%）**
+- 29.88 `vendor_qfq` `technical_report:vendor_qfq` | - 自 2026-06-22 脉冲启动以来，该股在 27.70 - 29.88 元区间仅换手整理了 13 个交易日，时间积累尚不足以构成大级别的派发完成，也不足以支撑直接跨越 30.00 元历史巨量解套压力区
+- 30.0 `vendor_qfq` `technical_report:vendor_qfq` | - 自 2026-06-22 脉冲启动以来，该股在 27.70 - 29.88 元区间仅换手整理了 13 个交易日，时间积累尚不足以构成大级别的派发完成，也不足以支撑直接跨越 30.00 元历史巨量解套压力区
+- 28.0 `vendor_qfq` `technical_report:vendor_qfq` | 但盘后 6.64 亿元的平价大宗交易与 07-08 二级市场 1.35 亿股地量相呼应，印证了主力大资金并未折价抛售，28.00 元附近存在强烈的机构中线底仓成本锚定
+- 28.4 `vendor_qfq` `technical_report:vendor_qfq` | 随后收出长下影锤头线或缩量十字星，完成对供给的最终测试，进而反弹重测 28.40 - 28.50 元阻力位
+- 28.5 `vendor_qfq` `technical_report:vendor_qfq` | 随后收出长下影锤头线或缩量十字星，完成对供给的最终测试，进而反弹重测 28.40 - 28.50 元阻力位
+- 27.7 `vendor_qfq` `technical_report:vendor_qfq` | - **演化路径**：受外部地缘通胀或大盘下行拖累，跌破 27.70 元关键平台，成交量异常放大（量比 > 1.2），说明场内止损盘被迫离场，价格将深踩 200 日均线 27.08 元附近
+- 27.08 `vendor_qfq` `technical_report:vendor_qfq` | - **演化路径**：受外部地缘通胀或大盘下行拖累，跌破 27.70 元关键平台，成交量异常放大（量比 > 1.2），说明场内止损盘被迫离场，价格将深踩 200 日均线 27.08 元附近
+- 29.4 `vendor_qfq` `technical_report:vendor_qfq` | - 核心强阻力位：**29.40 - 29.88 元**（07-01 巨量上影线高点与放量滞涨套牢区）
+- 29.88 `vendor_qfq` `technical_report:vendor_qfq` | - 核心强阻力位：**29.40 - 29.88 元**（07-01 巨量上影线高点与放量滞涨套牢区）
+- 27.7 `vendor_qfq` `technical_report:vendor_qfq` | - 第一支撑区：**27.70 - 27.85 元**（布林中轨支撑，叠加 06-24 及 06-26 盘中多次回踩防守底线，房屋法则中坚固的地板）
+- 27.85 `vendor_qfq` `technical_report:vendor_qfq` | - 第一支撑区：**27.70 - 27.85 元**（布林中轨支撑，叠加 06-24 及 06-26 盘中多次回踩防守底线，房屋法则中坚固的地板）
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | 但受6.64亿元平价大宗支撑，27.70元附近承接力度强劲
+- 28.0 `raw` `typed_disclosure:block_trade` | | **2026-07-08 17:31** | 中信证券 (600030.SH) | 二级大宗 | 中信证券发生单笔2372.38万股平价大宗交易，成交金额6.64亿元，成交价28.00元（占当日全市场成交总额14.8
+- 28.0 `raw` `typed_disclosure:block_trade` | 同日，中信证券录得6.64亿元、占当日总量14.8%的平价大宗交易（28.00元）
+- 28.0 `raw` `typed_disclosure:block_trade` | - 7月8日中信证券二级市场中阴线破位下行（收于28.00元），但盘后平价大宗6.64亿元成交，买卖双方对28.00元净资产与护城河价值极度认可，否定了机构恐慌性甩卖（未见深幅折价），预期差在于下行空间被机构大宗锁死
+- 28.0 `raw` `typed_disclosure:block_trade` | - 7月8日中信证券二级市场中阴线破位下行（收于28.00元），但盘后平价大宗6.64亿元成交，买卖双方对28.00元净资产与护城河价值极度认可，否定了机构恐慌性甩卖（未见深幅折价），预期差在于下行空间被机构大宗锁死
+- 28.0 `raw` `typed_disclosure:block_trade` | | **中信证券平价大宗6.64亿元** | 标的/交易 | 28.00元平价成交占14.8% → 机构成本线清晰锁定 → 封死深幅下行空间 | 正向 | 中等 | 即时-2周 | 极高（交易所公布） |
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | | 跌破27.70元，向下探寻中长期均线密集区 **27.00 - 27.10 元**（200日SMA 27.08元）防守
+- 27.1 `vendor_qfq` `registry_backref:vendor_qfq` | | 跌破27.70元，向下探寻中长期均线密集区 **27.00 - 27.10 元**（200日SMA 27.08元）防守
+- 27.08 `vendor_qfq` `registry_backref:vendor_qfq` | | 跌破27.70元，向下探寻中长期均线密集区 **27.00 - 27.10 元**（200日SMA 27.08元）防守
+- 28.0 `raw` `typed_disclosure:block_trade` | - **核心防守线**：中信证券 2026-07-08 发生 6.64 亿元平价大宗交易（成交价 28.00 元），同时技术面 200 日线在 27.08 元构筑第一道中线强防守
+- 27.08 `vendor_qfq` `registry_backref:vendor_qfq` | - **核心防守线**：中信证券 2026-07-08 发生 6.64 亿元平价大宗交易（成交价 28.00 元），同时技术面 200 日线在 27.08 元构筑第一道中线强防守
+- 28.0 `vendor_qfq` `registry_backref:vendor_qfq` | 现价（28.00 元）距极端底线存在约 19% - 22% 的极限回撤空间
+- 28.43 `vendor_qfq` `registry_backref:vendor_qfq` | 4. **技术面筹码阻力**：前期筹码套牢盘密集，短线 EMA10（28.43 元）与 VWMA（28.48 元）已失守，技术面进入量价背离回踩周期
+- 28.48 `vendor_qfq` `registry_backref:vendor_qfq` | 4. **技术面筹码阻力**：前期筹码套牢盘密集，短线 EMA10（28.43 元）与 VWMA（28.48 元）已失守，技术面进入量价背离回踩周期
+- 27.85 `vendor_qfq` `registry_backref:vendor_qfq` | 若超大单/大单净流出未在未来 1-2 个交易日收敛，价格将顺应惯性考验布林中轨（27.85 元）及 6 月下旬平台支撑（27.70 元）
+- 28.0 `raw` `typed_disclosure:block_trade` | - **平价大宗交易事实**：基准日记录发生一笔 2372.38 万股、金额 6.64 亿元的平价大宗交易（成交价 28.00 元，折溢价率为 0.00%）
+- 28.0 `raw` `typed_disclosure:block_trade` | - 平价大宗交易（28.00 元，6.64 亿元）表明机构级底仓在中线位置并未发生恐慌折价抛售，基本面底仓防御性仍在
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | 若超大单/大单净流出未在未来 1-2 个交易日收敛，价格将顺应惯性考验布林中轨（27.85 元）及 6 月下旬平台支撑（27.70 元）
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | 若跌破 27.70 元并伴随大单净流出再度扩大，短期止损盘涌出，下行空间将指向 200 日线（27.08 元）及 50 日线（26.70 元）核心防守带
+- 27.08 `vendor_qfq` `registry_backref:vendor_qfq` | 若跌破 27.70 元并伴随大单净流出再度扩大，短期止损盘涌出，下行空间将指向 200 日线（27.08 元）及 50 日线（26.70 元）核心防守带
+- 26.7 `vendor_qfq` `registry_backref:vendor_qfq` | 若跌破 27.70 元并伴随大单净流出再度扩大，短期止损盘涌出，下行空间将指向 200 日线（27.08 元）及 50 日线（26.70 元）核心防守带
+- 28.43 `vendor_qfq` `registry_backref:vendor_qfq` | - 现价跌破短线筹码成交密集价格带，VWMA 与 EMA10（28.43 元）在 28.40 - 28.50 元区间重叠，由前期动态支撑彻底转化为反弹第一强阻力带
+- 28.5 `vendor_qfq` `registry_backref:vendor_qfq` | - 现价跌破短线筹码成交密集价格带，VWMA 与 EMA10（28.43 元）在 28.40 - 28.50 元区间重叠，由前期动态支撑彻底转化为反弹第一强阻力带
+- 29.4 `vendor_qfq` `registry_backref:vendor_qfq` | - **前高阻力区**：29.40 - 29.88 元（7 月 1 日高点，套牢筹码集中区）
+- 29.88 `vendor_qfq` `registry_backref:vendor_qfq` | - **前高阻力区**：29.40 - 29.88 元（7 月 1 日高点，套牢筹码集中区）
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线第一支撑带**：27.70 - 27.85 元（布林中轨 27.85 元 + 前期平台下沿 27.70 元）
+- 27.85 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线第一支撑带**：27.70 - 27.85 元（布林中轨 27.85 元 + 前期平台下沿 27.70 元）
+- 27.85 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线第一支撑带**：27.70 - 27.85 元（布林中轨 27.85 元 + 前期平台下沿 27.70 元）
+- 27.7 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线第一支撑带**：27.70 - 27.85 元（布林中轨 27.85 元 + 前期平台下沿 27.70 元）
+- 27.08 `vendor_qfq` `registry_backref:vendor_qfq` | - **中线防守支撑带**：27.08 元（200 日 SMA 均线，牛熊分水岭）
+- 27.85 `vendor_qfq` `registry_backref:vendor_qfq` | 2. 价格在测试 27.70 - 27.85 元支撑带时的分单结构，若出现缩量且超大单停止压盘，属于企稳信号
+- 26.7 `vendor_qfq` `registry_backref:vendor_qfq` | - 价格仍运行于 50 日均线（26.70 元）与 200 日均线（27.08 元）上方，中线趋势骨架未被根本性破坏
+- 27.08 `vendor_qfq` `registry_backref:vendor_qfq` | - 价格仍运行于 50 日均线（26.70 元）与 200 日均线（27.08 元）上方，中线趋势骨架未被根本性破坏
+- 28.0 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 位置关系** | 收盘价 28.00 元 < VWMA 28.48 元 | 跌破成交量加权成本带候选 | 高 | 28.40-28.50 元转为强阻力区，不宜追高 |
+- 28.48 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 位置关系** | 收盘价 28.00 元 < VWMA 28.48 元 | 跌破成交量加权成本带候选 | 高 | 28.40-28.50 元转为强阻力区，不宜追高 |
+- 28.5 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 位置关系** | 收盘价 28.00 元 < VWMA 28.48 元 | 跌破成交量加权成本带候选 | 高 | 28.40-28.50 元转为强阻力区，不宜追高 |
+### daily0925:ebc41de2:medium_term (600900.SH)
+- 27.3 `vendor_qfq` `registry_backref:vendor_qfq` | 杠杆盘在前期股价上攻至27.3元阻力位后主动降杠杆，属于技术性浮筹清洗
+- 25.12 `raw` `typed_disclosure:block_trade` | | **2026-06-04** | 公司/交易 | 大宗交易折价 | 发生一笔222.06万元大宗交易，成交8.84万股，成交价25.12元，较当日收盘价折价9.38%
+- 27.4 `vendor_qfq` `registry_backref:vendor_qfq` | - **第一阶段（1-2周，短线）**：外盘动荡与动力煤引发的电力板块回调接近尾声，被动型红利ETF“越跌越买”构筑买盘底座，长江电力将在26.50~27.40元完成筹码换手与均线整固
+- 26.5 `vendor_qfq` `registry_backref:vendor_qfq` | **短线（1-2周）视角**：技术面已在26.50元（200日均线与布林中轨）完成缩量回踩确认，短期多头控盘蓄势，重点把握区间震荡突破节奏
+- 27.4 `vendor_qfq` `registry_backref:vendor_qfq` | <br>3. 股价放量突破27.40元阻力位
+- 27.35 `vendor_qfq` `registry_backref:vendor_qfq` | | 价格在26.70~27.35元之间窄幅收敛整固，波动率（ATR）进一步收窄，均线系统逐步收敛金叉
+- 26.45 `vendor_qfq` `registry_backref:vendor_qfq` | | **逢低吸纳**：中线底仓持有，短线贴近10日均线支撑分步低吸，止损设在26.45元下方
+- 26.26 `vendor_qfq` `registry_backref:vendor_qfq` | | 防御溢价退潮，机构减仓调仓，价格跌破200日线并向50日均线（26.26元）甚至26.00元整数关口寻底
+- 26.0 `vendor_qfq` `registry_backref:vendor_qfq` | | 防御溢价退潮，机构减仓调仓，价格跌破200日线并向50日均线（26.26元）甚至26.00元整数关口寻底
+- 26.45 `vendor_qfq` `registry_backref:vendor_qfq` | | **严格防守**：日K线实体跌破26.45元触发短线止损或对冲，中线头寸降仓观望水情反转
+### daily0925:ebc41de2:short_term (600900.SH)
+- 26.92 `vendor_qfq` `registry_backref:vendor_qfq` | 在微观层面，长江电力顺利推进董事会换届治理平稳过渡，融资余额微幅回落，股价在 200 日均线上方缩量企稳（报 26.92 元）
+- 25.12 `raw` `typed_disclosure:block_trade` | - **2026-06-04**【公司微观 / 资金动向】：长江电力发生一笔大宗交易，成交 8.84 万股，成交额 222.06 万元，成交均价 25.12 元，相对当日收盘价（27.72 元）大幅折价 9.38%（一手
+- 27.72 `raw` `typed_disclosure:block_trade` | - **2026-06-04**【公司微观 / 资金动向】：长江电力发生一笔大宗交易，成交 8.84 万股，成交额 222.06 万元，成交均价 25.12 元，相对当日收盘价（27.72 元）大幅折价 9.38%（一手
+- 27.36 `vendor_qfq` `registry_backref:vendor_qfq` | - **定价充分性**：前期股价冲高 27.36 元已部分消化迎峰度夏负荷预期，但 6 月 10 日回调使股价回踩 200 日线关键支撑，短线泡沫出清，防御红利属性吸引力增强
+- 26.54 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易表现**：长江电力依托 200 日均线及布林中轨（26.50-26.54 元）构筑的强支撑平台止跌反弹，日线回补 10 日均线（26.80 元），向 27.20-27.36 元阻力位发起进攻
+- 26.8 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易表现**：长江电力依托 200 日均线及布林中轨（26.50-26.54 元）构筑的强支撑平台止跌反弹，日线回补 10 日均线（26.80 元），向 27.20-27.36 元阻力位发起进攻
+- 27.36 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易表现**：长江电力依托 200 日均线及布林中轨（26.50-26.54 元）构筑的强支撑平台止跌反弹，日线回补 10 日均线（26.80 元），向 27.20-27.36 元阻力位发起进攻
+- 26.8 `vendor_qfq` `registry_backref:vendor_qfq` | - **策略指引**：在 26.60-26.80 元区间逢低介入，止损设于 26.45 元，目标看至 27.30-27.40 元
+- 26.45 `vendor_qfq` `registry_backref:vendor_qfq` | - **策略指引**：在 26.60-26.80 元区间逢低介入，止损设于 26.45 元，目标看至 27.30-27.40 元
+- 27.4 `vendor_qfq` `registry_backref:vendor_qfq` | - **策略指引**：在 26.60-26.80 元区间逢低介入，止损设于 26.45 元，目标看至 27.30-27.40 元
+- 26.5 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易表现**：放量跌破 26.50 元牛熊生命线，下探 50 日均线 26.26 元
+- 26.26 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易表现**：放量跌破 26.50 元牛熊生命线，下探 50 日均线 26.26 元
+### daily0925:ed555773:medium_term (600519.SH)
+- 1170.0 `vendor_qfq` `registry_backref:vendor_qfq` | - *表现形式*：跌破 1170 元关键支撑，二次下探前期阶段低点 1151.01 元，并考验下方整数关口估值底线
+- 1192.14 `raw` `typed_disclosure:block_trade` | - **2026-07-07 17:21:00（盘面大宗交易）**：贵州茅台发生两笔大宗交易，合计成交18.50万股，总金额2.21亿元，成交均价1192.14元，较收盘价（1188.80元）溢价0.28%
+- 1188.8 `raw` `typed_disclosure:block_trade` | - **2026-07-07 17:21:00（盘面大宗交易）**：贵州茅台发生两笔大宗交易，合计成交18.50万股，总金额2.21亿元，成交均价1192.14元，较收盘价（1188.80元）溢价0.28%
+- 1192.14 `raw` `typed_disclosure:block_trade` | 7月7日机构席位以 1192.14 元（溢价 0.28%）通过大宗交易买入贵州茅台 1.71 亿元
+- 1151.01 `vendor_qfq` `registry_backref:vendor_qfq` | - *表现形式*：跌破 1170 元关键支撑，二次下探前期阶段低点 1151.01 元，并考验下方整数关口估值底线
+- 1220.0 `vendor_qfq` `registry_backref:vendor_qfq` | - *表现形式*：单日成交量放大至 500 万股以上，放量收复 1220.00 元阻力位，向 50日SMA 发起波段估值修复
+### daily0925:ed555773:short_term (600519.SH)
+- 1192.14 `raw` `typed_disclosure:block_trade` | 但7月7日茅台出现机构席位出资1.71亿元通过大宗交易溢价0.28%（均价1192.14元）接盘，并在7月8日逆势收涨0.88%于1199.30元，直逼1200元整数心理关口
+- 1199.3 `vendor_qfq` `registry_backref:vendor_qfq` | 但7月7日茅台出现机构席位出资1.71亿元通过大宗交易溢价0.28%（均价1192.14元）接盘，并在7月8日逆势收涨0.88%于1199.30元，直逼1200元整数心理关口
+- 1200.0 `vendor_qfq` `registry_backref:vendor_qfq` | 但7月7日茅台出现机构席位出资1.71亿元通过大宗交易溢价0.28%（均价1192.14元）接盘，并在7月8日逆势收涨0.88%于1199.30元，直逼1200元整数心理关口
+- 1170.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：依托1170元支撑平台，价格在1180-1215元之间窄幅震荡整理
+- 1192.14 `raw` `typed_disclosure:block_trade` | - **2026-07-07（资金博弈）**：贵州茅台发生两笔大宗交易，合计成交18.50万股，成交额2.21亿元，成交均价1192.14元，较收盘价溢价0.28%，其中机构席位买入1.71亿元
+- 1180.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：依托1170元支撑平台，价格在1180-1215元之间窄幅震荡整理
+- 1215.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：依托1170元支撑平台，价格在1180-1215元之间窄幅震荡整理
+- 1250.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：短线博弈窗口打开，目标位上看至布林上轨与50日均线压力区（1250-1258元），触及强压带坚决止盈
+- 1258.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：短线博弈窗口打开，目标位上看至布林上轨与50日均线压力区（1250-1258元），触及强压带坚决止盈
+- 1151.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：大宗交易支撑假设失效，价格下探测试前低1151元甚至布林下轨，需严格执行止损（建议止损位：1165元）
+- 1165.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易含义**：大宗交易支撑假设失效，价格下探测试前低1151元甚至布林下轨，需严格执行止损（建议止损位：1165元）
+### daily0925:f088d66a:medium_term (000063.SZ)
+- 32.0 `unspecified` `model_text` | - **极端通胀/海外杀估值压力测试**：若布伦特原油持续运行于 85 美元上方导致 10 年期美债收益率突破 4.70%，全球通信硬件估值中枢下移 15%-20%，标的将面临向 28.80 - 32.00 元（PB 1
+- 34.31 `vendor_qfq` `technical_report:vendor_qfq` | - 在 2026-06-29 价格跌至 34.31 元后，成交量萎缩至 1.18 亿股，显示在 34.30-34.80 元区间（靠近公司回购均价 34.80 元及 BOLL 下轨），市场的浮动筹码与主动做空供给急剧枯竭
+- 34.3 `vendor_qfq` `technical_report:vendor_qfq` | - 在 2026-06-29 价格跌至 34.31 元后，成交量萎缩至 1.18 亿股，显示在 34.30-34.80 元区间（靠近公司回购均价 34.80 元及 BOLL 下轨），市场的浮动筹码与主动做空供给急剧枯竭
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | - 在 2026-06-29 价格跌至 34.31 元后，成交量萎缩至 1.18 亿股，显示在 34.30-34.80 元区间（靠近公司回购均价 34.80 元及 BOLL 下轨），市场的浮动筹码与主动做空供给急剧枯竭
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | - 在 2026-06-29 价格跌至 34.31 元后，成交量萎缩至 1.18 亿股，显示在 34.30-34.80 元区间（靠近公司回购均价 34.80 元及 BOLL 下轨），市场的浮动筹码与主动做空供给急剧枯竭
+- 34.31 `vendor_qfq` `technical_report:vendor_qfq` | - **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | - **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）
+- 34.31 `vendor_qfq` `technical_report:vendor_qfq` | - **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | - **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）
+- 36.7 `vendor_qfq` `technical_report:vendor_qfq` | - 这表明在 36.70-37.00 元关键阻力带（对应 50日SMA 36.66 元与 VWMA 36.72 元），多头的“高投入”换来的是“中等产出”，上方存在显著的潜在抛压吸收过程
+- 37.0 `vendor_qfq` `technical_report:vendor_qfq` | - 这表明在 36.70-37.00 元关键阻力带（对应 50日SMA 36.66 元与 VWMA 36.72 元），多头的“高投入”换来的是“中等产出”，上方存在显著的潜在抛压吸收过程
+- 36.66 `vendor_qfq` `technical_report:vendor_qfq` | - 这表明在 36.70-37.00 元关键阻力带（对应 50日SMA 36.66 元与 VWMA 36.72 元），多头的“高投入”换来的是“中等产出”，上方存在显著的潜在抛压吸收过程
+- 36.72 `vendor_qfq` `technical_report:vendor_qfq` | - 这表明在 36.70-37.00 元关键阻力带（对应 50日SMA 36.66 元与 VWMA 36.72 元），多头的“高投入”换来的是“中等产出”，上方存在显著的潜在抛压吸收过程
+- 40.0 `vendor_qfq` `technical_report:vendor_qfq` | 目前所积累的底部筹码换手因（Cause），尚不足以直接支撑中线向 40.00 元上方发起单边反转，短线仍属于反弹测试与筹码消化过程
+- 34.31 `vendor_qfq` `technical_report:vendor_qfq` | 06-29 的 34.31 元初步确立为抛售阶段后的初级支撑
+- 36.66 `vendor_qfq` `technical_report:vendor_qfq` | - **阶段一结论**：短线偏多，但明确指出现价受制于 50日SMA（36.66 元）、BOLL中轨（36.63 元）及 VWMA（36.72 元）构成的三合一密集阻力带，冲高回落留下上影线，反弹属性暂为箱体内技术性修复
+- 36.63 `vendor_qfq` `technical_report:vendor_qfq` | - **阶段一结论**：短线偏多，但明确指出现价受制于 50日SMA（36.66 元）、BOLL中轨（36.63 元）及 VWMA（36.72 元）构成的三合一密集阻力带，冲高回落留下上影线，反弹属性暂为箱体内技术性修复
+- 36.72 `vendor_qfq` `technical_report:vendor_qfq` | - **阶段一结论**：短线偏多，但明确指出现价受制于 50日SMA（36.66 元）、BOLL中轨（36.63 元）及 VWMA（36.72 元）构成的三合一密集阻力带，冲高回落留下上影线，反弹属性暂为箱体内技术性修复
+- 36.72 `vendor_qfq` `technical_report:vendor_qfq` | - **逻辑剖析**：VPA 的投入产出分析直接验证了技术面阻力判断——07-08 日成交 1.98 亿股却无法突破 VWMA（36.72 元）的压制，表明当前筹码主导权仍处多空拉锯状态，需后续量能进一步确认
+- 35.8 `vendor_qfq` `technical_report:vendor_qfq` | 鉴于 07-08 上影线吸收了一定套牢盘，短期价格将在 35.80 - 36.70 元进行 1-3 天的缩量整理，回踩 10日EMA（36.07 元）确认支撑，洗净浮筹后再次放量冲关 37.05 元并挑战 37.90 元
+- 36.7 `vendor_qfq` `technical_report:vendor_qfq` | 鉴于 07-08 上影线吸收了一定套牢盘，短期价格将在 35.80 - 36.70 元进行 1-3 天的缩量整理，回踩 10日EMA（36.07 元）确认支撑，洗净浮筹后再次放量冲关 37.05 元并挑战 37.90 元
+- 36.07 `vendor_qfq` `technical_report:vendor_qfq` | 鉴于 07-08 上影线吸收了一定套牢盘，短期价格将在 35.80 - 36.70 元进行 1-3 天的缩量整理，回踩 10日EMA（36.07 元）确认支撑，洗净浮筹后再次放量冲关 37.05 元并挑战 37.90 元
+- 37.05 `vendor_qfq` `technical_report:vendor_qfq` | 鉴于 07-08 上影线吸收了一定套牢盘，短期价格将在 35.80 - 36.70 元进行 1-3 天的缩量整理，回踩 10日EMA（36.07 元）确认支撑，洗净浮筹后再次放量冲关 37.05 元并挑战 37.90 元
+- 37.9 `vendor_qfq` `technical_report:vendor_qfq` | 鉴于 07-08 上影线吸收了一定套牢盘，短期价格将在 35.80 - 36.70 元进行 1-3 天的缩量整理，回踩 10日EMA（36.07 元）确认支撑，洗净浮筹后再次放量冲关 37.05 元并挑战 37.90 元
+- 35.7 `vendor_qfq` `technical_report:vendor_qfq` | 若后续量能急剧萎缩至 1 亿股以下，或出现长阴线反包，表明阻力带多头乏力，价格将跌破 35.70 元日内低点，重回 34.80-35.20 元回购区间整固
+- 34.8 `vendor_qfq` `technical_report:vendor_qfq` | 若后续量能急剧萎缩至 1 亿股以下，或出现长阴线反包，表明阻力带多头乏力，价格将跌破 35.70 元日内低点，重回 34.80-35.20 元回购区间整固
+- 35.2 `vendor_qfq` `technical_report:vendor_qfq` | 若后续量能急剧萎缩至 1 亿股以下，或出现长阴线反包，表明阻力带多头乏力，价格将跌破 35.70 元日内低点，重回 34.80-35.20 元回购区间整固
+- 36.72 `vendor_qfq` `technical_report:vendor_qfq` | - **2026-07-09 至 2026-07-13（未来 1-3 个交易日内）**：必须给出针对 36.72 元阻力带的有效放量站稳或缩量回踩确认，不可在高位无量横盘
+- 38.8 `vendor_qfq` `technical_report:vendor_qfq` | - **强阻力位**：**38.80 - 38.91 元**（BOLL 上轨与 200日SMA 长期趋势均线强压区）
+- 38.91 `vendor_qfq` `technical_report:vendor_qfq` | - **强阻力位**：**38.80 - 38.91 元**（BOLL 上轨与 200日SMA 长期趋势均线强压区）
+- 36.66 `vendor_qfq` `technical_report:vendor_qfq` | - **短线多空分水岭（第一阻力带）**：**36.66 - 36.72 元**（50日SMA 与 VWMA 交织区，07-08 日冲高受阻核心位）
+- 36.72 `vendor_qfq` `technical_report:vendor_qfq` | - **短线多空分水岭（第一阻力带）**：**36.66 - 36.72 元**（50日SMA 与 VWMA 交织区，07-08 日冲高受阻核心位）
+- 35.7 `vendor_qfq` `technical_report:vendor_qfq` | - **短期第一支撑位**：**35.70 - 36.07 元**（07-08 日内低点 35.70 与 10日EMA 36.07 元重合支撑）
+- 36.07 `vendor_qfq` `technical_report:vendor_qfq` | - **短期第一支撑位**：**35.70 - 36.07 元**（07-08 日内低点 35.70 与 10日EMA 36.07 元重合支撑）
+- 36.07 `vendor_qfq` `technical_report:vendor_qfq` | - **短期第一支撑位**：**35.70 - 36.07 元**（07-08 日内低点 35.70 与 10日EMA 36.07 元重合支撑）
+- 36.75 `vendor_qfq` `technical_report:vendor_qfq` | 稳健者等待日线收盘放量站稳 36.75 元右侧跟随，激进者可于缩量回踩 35.80-36.07 元企稳时轻仓介入，止损设于 35.10 元
+- 35.8 `vendor_qfq` `technical_report:vendor_qfq` | 稳健者等待日线收盘放量站稳 36.75 元右侧跟随，激进者可于缩量回踩 35.80-36.07 元企稳时轻仓介入，止损设于 35.10 元
+- 36.07 `vendor_qfq` `technical_report:vendor_qfq` | 稳健者等待日线收盘放量站稳 36.75 元右侧跟随，激进者可于缩量回踩 35.80-36.07 元企稳时轻仓介入，止损设于 35.10 元
+- 35.1 `vendor_qfq` `technical_report:vendor_qfq` | 稳健者等待日线收盘放量站稳 36.75 元右侧跟随，激进者可于缩量回踩 35.80-36.07 元企稳时轻仓介入，止损设于 35.10 元
+- 34.44 `pit_raw` `typed_disclosure:repurchase` | 【确定性高 | 即时至1个月】回购均价（34.44 - 35.16 元）直接在技术图表上确立了强心理底线（与日线 BOLL 下轨 34.35 元高度重叠）
+- 35.16 `pit_raw` `typed_disclosure:repurchase` | 【确定性高 | 即时至1个月】回购均价（34.44 - 35.16 元）直接在技术图表上确立了强心理底线（与日线 BOLL 下轨 34.35 元高度重叠）
+- 34.35 `vendor_qfq` `registry_backref:vendor_qfq` | 【确定性高 | 即时至1个月】回购均价（34.44 - 35.16 元）直接在技术图表上确立了强心理底线（与日线 BOLL 下轨 34.35 元高度重叠）
+- 36.43 `vendor_qfq` `registry_backref:vendor_qfq` | - 估值锚定：现价 36.43 元较前期回购区间上限溢价约 3.6%，下行空间受资本结构调整约束，中线具备不对称收益风险比
+- 34.44 `pit_raw` `typed_disclosure:repurchase` | - **2026-07-02【公司治理/资本运作】**：中兴通讯公告披露，截至 2026-06-30，累计回购 A 股 2455.82 万股，占总股本 0.51%，耗资约 8.55 亿元，回购价格区间为 34.44 - 
+- 36.43 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线观察窗（1-2周）**：技术面价格报 36.43 元，放量逼近 50日SMA（36.66元）、BOLL中轨（36.63元）与 VWMA（36.72元）的核心多空共振阻力区
+- 36.66 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线观察窗（1-2周）**：技术面价格报 36.43 元，放量逼近 50日SMA（36.66元）、BOLL中轨（36.63元）与 VWMA（36.72元）的核心多空共振阻力区
+- 36.63 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线观察窗（1-2周）**：技术面价格报 36.43 元，放量逼近 50日SMA（36.66元）、BOLL中轨（36.63元）与 VWMA（36.72元）的核心多空共振阻力区
+- 36.72 `vendor_qfq` `registry_backref:vendor_qfq` | - **短线观察窗（1-2周）**：技术面价格报 36.43 元，放量逼近 50日SMA（36.66元）、BOLL中轨（36.63元）与 VWMA（36.72元）的核心多空共振阻力区
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | - **中线视角（1-3月）**：8.55 亿回购与外资高比例持股构筑基本面坚固支撑盘，34.30 元及前期低位区间已成为高胜率安全底，等待三季度集采与 AI 终端放量带动中枢回升
+- 35.7 `vendor_qfq` `registry_backref:vendor_qfq` | | 55% | 股价在 35.70 元上方维持箱体震荡，回踩 10日EMA（36.07元）确认下档支撑
+- 36.07 `vendor_qfq` `registry_backref:vendor_qfq` | | 55% | 股价在 35.70 元上方维持箱体震荡，回踩 10日EMA（36.07元）确认下档支撑
+- 35.18 `vendor_qfq` `registry_backref:vendor_qfq` | | 15% | 跌破短期支撑 35.18 元，向前回撤考验 34.35 元（回购区间下沿与 BOLL 下轨）
+- 34.35 `vendor_qfq` `registry_backref:vendor_qfq` | | 15% | 跌破短期支撑 35.18 元，向前回撤考验 34.35 元（回购区间下沿与 BOLL 下轨）
+- 35.1 `vendor_qfq` `registry_backref:vendor_qfq` | | 触发 35.10 元硬止损线离场，等待 34.30 元企稳二次筑底
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | | 触发 35.10 元硬止损线离场，等待 34.30 元企稳二次筑底
+- 36.43 `vendor_qfq` `registry_backref:vendor_qfq` | - **估值支撑底线**：在 2026-07-08 股价 36.43 元对应每股净资产（16.03 元）的 2.27 倍 PB
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | 回购均价（34.80 元）将成为中线第一道防线
+### daily0925:f088d66a:short_term (000063.SZ)
+- 37.0 `vendor_qfq` `registry_backref:vendor_qfq` | 但杠杆资金连续净偿还（两日合计撤出超1.25亿元），显示境内散户及游资在37.00元阻力位选择套现防守，压制反弹动能【确定性：高
+- 34.44 `pit_raw` `typed_disclosure:repurchase` | - **2026-07-02（资本运作/外资流向）**：公司公告截至6月30日已累计耗资8.55亿元回购A股2455.82万股（占总股本0.51%），回购价格区间为34.44-35.16元/股
+- 34.8 `pit_raw` `typed_disclosure:repurchase` | 同时在回购均价平台（34.80-35.20元）获得强承接，维持缩量拉锯
+- 35.2 `pit_raw` `typed_disclosure:repurchase` | 同时在回购均价平台（34.80-35.20元）获得强承接，维持缩量拉锯
+- 36.66 `vendor_qfq` `registry_backref:vendor_qfq` | - **走势表现**：价格受制于50日均线（36.66元）与布林中轨（36.63元），多次冲高37.00元回落
+- 36.63 `vendor_qfq` `registry_backref:vendor_qfq` | - **走势表现**：价格受制于50日均线（36.66元）与布林中轨（36.63元），多次冲高37.00元回落
+- 37.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **走势表现**：价格受制于50日均线（36.66元）与布林中轨（36.63元），多次冲高37.00元回落
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | - **走势表现**：日K线实体放量站上37.10元阻力带，打开向上空间，向200日均线（38.81元）冲击
+- 38.81 `vendor_qfq` `registry_backref:vendor_qfq` | - **走势表现**：日K线实体放量站上37.10元阻力带，打开向上空间，向200日均线（38.81元）冲击
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易应对**：日K线收盘站稳37.10元上方右侧轻仓跟进，止损设在36.20元，止盈目标38.50元
+- 36.2 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易应对**：日K线收盘站稳37.10元上方右侧轻仓跟进，止损设在36.20元，止盈目标38.50元
+- 38.5 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易应对**：日K线收盘站稳37.10元上方右侧轻仓跟进，止损设在36.20元，止盈目标38.50元
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易应对**：跌破34.30元（布林下轨）必须执行严格无条件止损
+- 36.43 `vendor_qfq` `registry_backref:vendor_qfq` | - **核销依据**：现价 36.43 元距上方箱顶阻力 37.10 元空间极其狭窄，而距下方支撑 35.20 元回撤敞口更大，静态盈亏比严重倒挂
+- 34.44 `pit_raw` `derived:typed_disclosure:repurchase` | - **跨坐标禁止提示**：公司历史公告披露的累计回购价格区间 **34.44 - 35.16 元/股** 属于历史成交原始价（pit_raw），与二级市场前复权坐标不可直接比较，严禁混算支撑位或作为折溢价安全边际依据
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | - **核销依据**：现价 36.43 元距上方箱顶阻力 37.10 元空间极其狭窄，而距下方支撑 35.20 元回撤敞口更大，静态盈亏比严重倒挂
+- 35.2 `vendor_qfq` `registry_backref:vendor_qfq` | - **核销依据**：现价 36.43 元距上方箱顶阻力 37.10 元空间极其狭窄，而距下方支撑 35.20 元回撤敞口更大，静态盈亏比严重倒挂
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | 风控体系通过设立“绝对禁止左侧加仓、严禁追高、设置 34.30 元硬止损”的硬约束，已完全对冲该下行套牢风险
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | - **核销依据**：通过确立“突破 37.10 元并放量站稳”作为后续右侧进场的硬性前置条件，彻底阻断在 36.43 元阻力位下方的不合理博弈
+- 36.43 `vendor_qfq` `registry_backref:vendor_qfq` | - **核销依据**：通过确立“突破 37.10 元并放量站稳”作为后续右侧进场的硬性前置条件，彻底阻断在 36.43 元阻力位下方的不合理博弈
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | - **目标价**：第一目标价 **37.10 元**
+- 38.8 `vendor_qfq` `registry_backref:vendor_qfq` | 第二目标价 **38.80 元**
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | - **止损价**：硬性清仓止损价 **34.30 元**
+- 35.2 `vendor_qfq` `registry_backref:vendor_qfq` | - *第一防线（35.20 元）*：10 日均线防守位，若跌破且无大单承接，存量持仓立即无条件被动减半
+- 37.1 `vendor_qfq` `derived:declared_basis:tail:vendor_qfq` | 1. **右侧放量突破**：日 K 线实体收盘价有效站稳 **37.10 元（前复权 vendor_qfq）** 箱顶阻力位上方
+- 34.3 `vendor_qfq` `derived:declared_basis:tail:vendor_qfq` | 2. **硬性止损熔断**：盘中触及或收盘跌破 **34.30 元（前复权 vendor_qfq）**，必须无条件执行 **100% 全部清仓**，隔绝本金永久性损失
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | 目标价：37.10
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | 止损价：34.30
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | -- RISK_JUDGE: {"verdict": "pass", "revision_reason": "", "hard_constraints": ["空仓账户开仓上限0%", "存量底仓上限10%", "硬止损
+- 37.1 `vendor_qfq` `registry_backref:vendor_qfq` | -- RISK_JUDGE: {"verdict": "pass", "revision_reason": "", "hard_constraints": ["空仓账户开仓上限0%", "存量底仓上限10%", "硬止损
+- 35.2 `vendor_qfq` `registry_backref:vendor_qfq` | -- RISK_JUDGE: {"verdict": "pass", "revision_reason": "", "hard_constraints": ["空仓账户开仓上限0%", "存量底仓上限10%", "硬止损
+- 34.3 `vendor_qfq` `registry_backref:vendor_qfq` | -- RISK_JUDGE: {"verdict": "pass", "revision_reason": "", "hard_constraints": ["空仓账户开仓上限0%", "存量底仓上限10%", "硬止损
+### daily0925:fdc9352b:medium_term (600519.SH)
+- 1312.52 `vendor_qfq` `technical_report:vendor_qfq` | - **结论引用**：技术面报告研判“均线强空头排列贴下轨阴跌，10日EMA（1312.52元）形成强阻力，日线MACD未见底背离，研判倾向偏空，关注布林下轨1268.50元支撑”
+- 1218.61 `raw` `typed_disclosure:block_trade` | 白酒板块下跌0.82%，行业处于去库存寻底周期，大宗交易折价7.33%（均价1218.61元）反映大资金释放风险意愿强烈”
+- 1268.5 `vendor_qfq` `technical_report:vendor_qfq` | - **结论引用**：技术面报告研判“均线强空头排列贴下轨阴跌，10日EMA（1312.52元）形成强阻力，日线MACD未见底背离，研判倾向偏空，关注布林下轨1268.50元支撑”
+- 1268.0 `vendor_qfq` `technical_report:vendor_qfq` | - **基准路径（偏空惯性探底，概率 65%）**：由于 05-20 尾盘收于极低点且形成长上影，未来 1-3 个交易日股价将继续承压惯性下探，测试技术面给出的布林带下轨 1268–1270 元关键支撑带
+- 1270.0 `vendor_qfq` `technical_report:vendor_qfq` | - **基准路径（偏空惯性探底，概率 65%）**：由于 05-20 尾盘收于极低点且形成长上影，未来 1-3 个交易日股价将继续承压惯性下探，测试技术面给出的布林带下轨 1268–1270 元关键支撑带
+- 1265.0 `vendor_qfq` `technical_report:vendor_qfq` | - **防守支撑破位条件**：若跌破 1265.00 元且日 K 线收于该点位之下，则判定短线支撑彻底失效，空头空间进一步打开
+- 1344.2 `vendor_qfq` `technical_report:vendor_qfq` | - **动态天花板（强阻力位）**：1344.20–1350.00 元（BOLL 中轨与 5 月初跳空平台密集压制带）
+- 1350.0 `vendor_qfq` `technical_report:vendor_qfq` | - **动态天花板（强阻力位）**：1344.20–1350.00 元（BOLL 中轨与 5 月初跳空平台密集压制带）
+- 1312.5 `vendor_qfq` `technical_report:vendor_qfq` | - **短线第一阻力位（破位颈线）**：1312.50 元（10日 EMA 压制区与 05-14 盘中冲高抛压位）
+- 1300.0 `vendor_qfq` `technical_report:vendor_qfq` | - **短线多空分水岭**：1300.00 元（心理整数关口，原支撑转为第一道反抽反压）
+- 1268.5 `vendor_qfq` `technical_report:vendor_qfq` | - **第一核心支撑位**：1268.50 元（布林下轨动态支撑位与短期预期下探极限）
+- 1268.0 `vendor_qfq` `registry_backref:vendor_qfq` | 结合当前技术面（日线RSI为26.87严重超卖、均线呈空头排列、支撑位1268元）与中线基本面（直营支撑、去库尾声），未来1-4周推演如下情景：
+- 1218.61 `raw` `typed_disclosure:block_trade` | 2. *大宗交易放量折价*：5月20日盘后，贵州茅台发生大宗交易，成交19.42万股，金额2.37亿元（占当日成交额3.64%），成交均价1218.61元，较收盘价（1315.00元）大幅折价7.33%，买方席位为机构专
+- 1315.0 `raw` `typed_disclosure:block_trade` | 2. *大宗交易放量折价*：5月20日盘后，贵州茅台发生大宗交易，成交19.42万股，金额2.37亿元（占当日成交额3.64%），成交均价1218.61元，较收盘价（1315.00元）大幅折价7.33%，买方席位为机构专
+- 1315.0 `raw` `typed_disclosure:block_trade` | 另一方面在二级市场遭遇严重流动性抛压与风格挤压——盘中下探1314元创近20个月新低，盘后出现折价7.33%的2.37亿元大宗交易，全天收报1284.60元/1315元区间（注：收盘价系统数据1284.60元，盘中大宗基
+- 1284.6 `raw` `typed_disclosure:block_trade` | 另一方面在二级市场遭遇严重流动性抛压与风格挤压——盘中下探1314元创近20个月新低，盘后出现折价7.33%的2.37亿元大宗交易，全天收报1284.60元/1315元区间（注：收盘价系统数据1284.60元，盘中大宗基
+- 1315.0 `raw` `typed_disclosure:block_trade` | 另一方面在二级市场遭遇严重流动性抛压与风格挤压——盘中下探1314元创近20个月新低，盘后出现折价7.33%的2.37亿元大宗交易，全天收报1284.60元/1315元区间（注：收盘价系统数据1284.60元，盘中大宗基
+- 1268.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **盘面走势**：跌破 1268 元动态下轨支撑，向 1250 元历史筹码真空区及整数心理关口下探
+- 1250.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **盘面走势**：跌破 1268 元动态下轨支撑，向 1250 元历史筹码真空区及整数心理关口下探
+- 1315.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **盘面走势**：单日放量突破1315元，并向上挑战布林中轨 1344 元阻力带
+- 1344.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **盘面走势**：单日放量突破1315元，并向上挑战布林中轨 1344 元阻力带
+- 1312.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易策略**：顺势跟进超跌反弹行情，第一止盈位设于 1312 元，第二目标位 1344 元
+- 1344.0 `vendor_qfq` `registry_backref:vendor_qfq` | - **交易策略**：顺势跟进超跌反弹行情，第一止盈位设于 1312 元，第二目标位 1344 元
+- 1270.0 `vendor_qfq` `registry_backref:vendor_qfq` | 若次日超大单/大单无法收敛至净买入状态，中单承接力将被迅速消耗，股价将进一步向下考验布林带下轨 1268–1270 元支撑带
+- 1218.61 `raw` `typed_disclosure:block_trade` | - 另据阶段一大宗交易公开信息：当日发生大宗交易成交额 2.37 亿元，成交均价 1218.61 元，折价率达 7.33%，买入方显示为机构席位，表明场外存在较大折价的大额筹码交割
+- 1312.5 `vendor_qfq` `registry_backref:vendor_qfq` | 未来若出现价格回抽，**VWMA 价格参考带** 与 **1312.50 元（10日 EMA）** 将形成双重重压区，解套盘与回本减仓抛压将显著增大
+- 1268.5 `vendor_qfq` `registry_backref:vendor_qfq` | - 动态下轨支撑：**1268.50 元**（布林带动态下限）
+- 1250.0 `vendor_qfq` `registry_backref:vendor_qfq` | - 心理整数支撑：**1250.00 元**
+- 1268.0 `vendor_qfq` `registry_backref:vendor_qfq` | 若 1268 元支撑失效，大额抛盘可能进一步向该区域测试流动性厚度
+- 1326.27 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA 报 1326.27 元，现价 1284.60 元（负倒挂） | 均价倒挂/重阻力候选 (resistance_candidate) | 高 | 反弹至 1312 元至 VWMA
+- 1284.6 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA 报 1326.27 元，现价 1284.60 元（负倒挂） | 均价倒挂/重阻力候选 (resistance_candidate) | 高 | 反弹至 1312 元至 VWMA
+- 1312.0 `vendor_qfq` `registry_backref:vendor_qfq` | | **VWMA 价格带** | VWMA 报 1326.27 元，现价 1284.60 元（负倒挂） | 均价倒挂/重阻力候选 (resistance_candidate) | 高 | 反弹至 1312 元至 VWMA

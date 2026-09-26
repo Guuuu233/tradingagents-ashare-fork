@@ -16583,6 +16583,14 @@
     {
      "kind": "decision_driving_missing_as_of",
      "source": "news_report",
+     "detail": "决策驱动价格 28.0(pr-126) 缺少 as_of",
+     "ref_ids": [
+      "pr-126"
+     ]
+    },
+    {
+     "kind": "decision_driving_missing_as_of",
+     "source": "news_report",
      "detail": "决策驱动价格 28.0(pr-137) 缺少 as_of",
      "ref_ids": [
       "pr-137"
@@ -16788,13 +16796,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 28.0(pr-124) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.0(pr-124) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-124",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -16802,27 +16812,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.85(pr-125) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.85(pr-125) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-125",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
-      "pr-130",
-      "pr-137"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 28.0(pr-126) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
+      "pr-123",
       "pr-126",
-      "pr-117",
-      "pr-118",
-      "pr-120",
-      "pr-122",
       "pr-130",
       "pr-137"
      ]
@@ -16830,13 +16828,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.5(pr-134) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.5(pr-134) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -16844,13 +16844,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.08(pr-135) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.08(pr-135) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-135",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -16858,13 +16860,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 26.7(pr-136) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 26.7(pr-136) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-136",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -16872,10 +16876,11 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "fundamentals_report",
-     "detail": "qfq 价格 28.0(pr-139) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.0(pr-139) 与 raw/pit_raw 价格 ['pr-141', 'pr-145'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-139",
-      "pr-141"
+      "pr-141",
+      "pr-145"
      ]
     },
     {
@@ -17029,6 +17034,14 @@
      "ref_ids": [
       "pr-174",
       "pr-149"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "raw 价格 28.0(pr-126) 直接进入坐标语境，禁止跨坐标混用",
+     "ref_ids": [
+      "pr-126"
      ]
     },
     {
@@ -18150,10 +18163,10 @@
     {
      "ref_id": "pr-123",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "通常大宗交易折价率在 3%~8% 区间，平价成交显示接盘方对 28.00 元估值平台高度认可"
     },
     {
@@ -18177,10 +18190,10 @@
     {
      "ref_id": "pr-126",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "2. **大宗平价支撑**：28.00 元的大宗平价锁仓为盘面提供了明确的情绪缓冲，但由于当日属于日线“冲高受阻回踩”，普通散户与短线游资尚未充分消化其背后的机构成本底线含义，存在一定的**情绪过度悲观预期差**"
     },
     {
@@ -18348,10 +18361,10 @@
     {
      "ref_id": "pr-145",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "fundamentals_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "- **估值消化与中线收益比**：平价大宗交易构筑28元平台托底，估值需要大盘成交量放大以助推兑现，短线承压中线稳健，风险等级【中】，结论倾向【中性】"
     },
     {
@@ -18789,90 +18802,73 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-141', 'pr-142']",
-     "ref_ids": [
-      "pr-141",
-      "pr-142"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 88.5(pr-130) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 88.5(pr-130) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-130",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 88.5(pr-134) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 88.5(pr-134) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 92.25(pr-144) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 92.25(pr-144) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-144",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 93.74(pr-145) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 93.74(pr-145) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-145",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 84.5(pr-146) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 84.5(pr-146) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-146",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 83.8(pr-147) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 83.8(pr-147) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-147",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 81.0(pr-148) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 81.0(pr-148) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-148",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 81.5(pr-149) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 81.5(pr-149) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-149",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     }
    ],
@@ -20140,10 +20136,10 @@
     {
      "ref_id": "pr-141",
      "value": 88.5,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "消化 88.50 元附近抛压与大宗交易筹码，回踩 85.00-85.50 元布林中轨为较优低吸防守位"
     },
     {
@@ -24660,7 +24656,7 @@
      "value": 26.5,
      "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **价格区间准入**：标的前复权价格盘中回调至 **26.50 元（qfq）上方回踩确认** 区间"
     },
@@ -33082,121 +33078,110 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.01(pr-088) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.01(pr-088) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-088",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.64(pr-089) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.64(pr-089) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-089",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 49.42(pr-090) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 49.42(pr-090) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-090",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 48.5(pr-091) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 48.5(pr-091) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-091",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.5(pr-092) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.5(pr-092) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-092",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 48.5(pr-093) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 48.5(pr-093) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-093",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.64(pr-097) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.64(pr-097) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-097",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 49.5(pr-098) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 49.5(pr-098) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-098",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.26(pr-099) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.26(pr-099) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-099",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 44.64(pr-100) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 44.64(pr-100) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-100",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.26(pr-101) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.26(pr-101) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-101",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
@@ -34172,9 +34157,9 @@
     {
      "ref_id": "pr-084",
      "value": 46.02,
-     "basis": "pit_raw",
+     "basis": "unspecified",
      "source": "news_report",
-     "provenance": "typed_disclosure:repurchase",
+     "provenance": "model_text",
      "as_of": null,
      "context": "- 恒瑞当前回购价格（46.02-46.06 元）已形成公司管理层认定的阶段性心理底，后续需观察员工持股计划回购资金的加码执行力度及 1-2 周内能否守稳 45.26 元平台"
     },
@@ -51228,114 +51213,6 @@
      "ref_ids": [
       "pr-173"
      ]
-    },
-    {
-     "kind": "decision_driving_missing_as_of",
-     "source": "final_trade_decision",
-     "detail": "决策驱动价格 35.04(pr-213) 缺少 as_of",
-     "ref_ids": [
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-211', 'pr-212', 'pr-213']",
-     "ref_ids": [
-      "pr-211",
-      "pr-212",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 35.04(pr-196) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-196",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 34.1(pr-199) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-199",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-200) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-200",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 36.3(pr-202) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-202",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-203) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-203",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 35.04(pr-205) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-205",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 36.3(pr-207) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-207",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-208) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-208",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 33.0(pr-209) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-209",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 34.1(pr-210) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-210",
-      "pr-213"
-     ]
     }
    ],
    "refs": [
@@ -53250,10 +53127,10 @@
     {
      "ref_id": "pr-213",
      "value": 35.04,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "-- RISK_JUDGE: {\"verdict\": \"pass\", \"revision_reason\": \"方案审定通过补充风控约束\", \"hard_constraints\": [\"仓位上限锁死0%\",\"触发前置建仓上限8%\",\"破32."
     }
    ],
@@ -73098,7 +72975,7 @@
      "value": 38.58,
      "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "declared_basis:vendor_qfq",
+     "provenance": "declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **条件 B（右侧放量突破）**：若未发生回踩，股价必须以日线收盘价**有效放量站上日内 VWMA 37.74 元（qfq）并向 SMA200 38.58 元（qfq）发起实质性突破**，单日特大单净买入维持正向流入，方可执行右侧 10"
     },
@@ -81289,7 +81166,7 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1284.6(pr-122) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1284.6(pr-122) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-122",
       "pr-116",
@@ -81298,14 +81175,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1268.0(pr-123) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.0(pr-123) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-123",
       "pr-116",
@@ -81314,14 +81191,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1250.0(pr-126) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1250.0(pr-126) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-126",
       "pr-116",
@@ -81330,14 +81207,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1315.0(pr-131) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1315.0(pr-131) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-131",
       "pr-116",
@@ -81346,7 +81223,7 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
@@ -82648,19 +82525,19 @@
     {
      "ref_id": "pr-129",
      "value": 1268.0,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-05-20",
      "context": "- *演化路径*：股价反抽1300-1312元受阻，顺势向布林带下轨1268元及大宗交易成交位（1218-1250元区间）惯性下探寻底"
     },
     {
      "ref_id": "pr-130",
      "value": 1250.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-05-20",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "- *演化路径*：股价反抽1300-1312元受阻，顺势向布林带下轨1268元及大宗交易成交位（1218-1250元区间）惯性下探寻底"
     },
     {
@@ -82846,9 +82723,9 @@
     {
      "ref_id": "pr-151",
      "value": 1314.0,
-     "basis": "raw",
+     "basis": "unspecified",
      "source": "macro_report",
-     "provenance": "typed_disclosure:block_trade",
+     "provenance": "model_text",
      "as_of": null,
      "context": "- 股价破位跌至1314元新低，且伴随大宗交易折价7.33%的抛压，技术形态处于寻底期，左侧切入风险偏大"
     },
@@ -83217,7 +83094,7 @@
      "value": 1284.6,
      "basis": "vendor_qfq",
      "source": "trader_investment_plan",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": "2026-05-20",
      "context": "标的贵州茅台（600519.SH）于2026年5月20日以日线平量阴线击穿前低关键支撑位1291.44元（前复权），收盘录得1284.60元（前复权），盘中反抽遇阻留下0.63长上影，微观盘口呈现主动买盘真空特征"
     },
@@ -133553,6 +133430,22 @@
    "status": "blocked",
    "violations": [
     {
+     "kind": "decision_driving_missing_as_of",
+     "source": "news_report",
+     "detail": "决策驱动价格 55.63(pr-137) 缺少 as_of",
+     "ref_ids": [
+      "pr-137"
+     ]
+    },
+    {
+     "kind": "decision_driving_missing_as_of",
+     "source": "news_report",
+     "detail": "决策驱动价格 55.63(pr-143) 缺少 as_of",
+     "ref_ids": [
+      "pr-143"
+     ]
+    },
+    {
      "kind": "decision_driving_unspecified_basis",
      "source": "fundamentals_report",
      "detail": "决策驱动价格 13.5(pr-154) basis 无法归因，禁止消费",
@@ -133601,123 +133494,167 @@
      ]
     },
     {
+     "kind": "decision_driving_missing_as_of",
+     "source": "macro_report",
+     "detail": "决策驱动价格 55.63(pr-158) 缺少 as_of",
+     "ref_ids": [
+      "pr-158"
+     ]
+    },
+    {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 58.5(pr-136) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-136', 'pr-137', 'pr-138']",
+     "ref_ids": [
+      "pr-136",
+      "pr-137",
+      "pr-138"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-142', 'pr-143', 'pr-144']",
+     "ref_ids": [
+      "pr-142",
+      "pr-143",
+      "pr-144"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "qfq 价格 58.5(pr-136) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-136",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 55.63(pr-137) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
       "pr-137",
-      "pr-128",
-      "pr-129",
-      "pr-130",
-      "pr-141"
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 54.5(pr-138) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 54.5(pr-138) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-138",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 57.93(pr-142) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 57.93(pr-142) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-142",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 55.63(pr-143) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-143",
-      "pr-128",
-      "pr-129",
-      "pr-130",
-      "pr-141"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 54.5(pr-144) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 54.5(pr-144) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-144",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 58.5(pr-145) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 58.5(pr-145) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-145",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 59.38(pr-146) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 59.38(pr-146) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-146",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 54.5(pr-147) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 54.5(pr-147) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-147",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 52.65(pr-148) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 52.65(pr-148) 与 raw/pit_raw 价格 ['pr-128', 'pr-129', 'pr-130', 'pr-137', 'pr-141', 'pr-143'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-148",
       "pr-128",
       "pr-129",
       "pr-130",
-      "pr-141"
+      "pr-137",
+      "pr-141",
+      "pr-143"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "raw 价格 55.63(pr-137) 直接进入坐标语境，禁止跨坐标混用",
+     "ref_ids": [
+      "pr-137"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "raw 价格 55.63(pr-143) 直接进入坐标语境，禁止跨坐标混用",
+     "ref_ids": [
+      "pr-143"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "macro_report",
+     "detail": "raw 价格 55.63(pr-158) 直接进入坐标语境，禁止跨坐标混用",
+     "ref_ids": [
+      "pr-158"
      ]
     }
    ],
@@ -134949,10 +134886,10 @@
     {
      "ref_id": "pr-137",
      "value": 55.63,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-08-14",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "若买盘量能无法放大至 1.8 亿股/日以上，股价难以突破 58.50 元强套牢筹码带，大概率向下回试 8 月 11 日大宗平价支撑位 55.63 元乃至 54.50 元缓冲带（预期短线下行空间约 -2.0% 至 -3.7%）"
     },
     {
@@ -135003,10 +134940,10 @@
     {
      "ref_id": "pr-143",
      "value": 55.63,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-08-14",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "- *盘面路径*：股价反抽 57.00-57.93 元（布林中轨）受阻，受外资减持及中报前避险情绪拖累，逐步下探测试大宗交易价格支撑位 55.63 元，若破位则考验 54.50 元"
     },
     {
@@ -135138,10 +135075,10 @@
     {
      "ref_id": "pr-158",
      "value": 55.63,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "macro_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-08-14",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "| 股价跌破前期平价大宗支撑位（55.63元），短线回撤风险放大至-8%至-12%"
     },
     {
@@ -166405,7 +166342,7 @@
      "value": 8.32,
      "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "declared_basis:vendor_qfq",
+     "provenance": "declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **竞价踩踏触发**：次日早盘集合竞价低开于 8.25 元（qfq）下方或开盘直接跌破 8.32 元（qfq），存量仓位开盘 15 分钟内执行市价清仓"
     },
@@ -199690,7 +199627,7 @@
      "value": 1215.0,
      "basis": "vendor_qfq",
      "source": "trader_investment_plan",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "交易执行端严格采纳量价与均线客观事实——缩量反抽无法确认真实买盘进场，上方布林中轨 1206.50 元（前复权）与 1215.00 元（前复权）密集套牢带构成重力压制，短线反弹空间仅约 +1.31%，而下方破位风险达 -2.86% 至 -4"
     },
@@ -217456,6 +217393,14 @@
     {
      "kind": "decision_driving_missing_as_of",
      "source": "news_report",
+     "detail": "决策驱动价格 28.0(pr-126) 缺少 as_of",
+     "ref_ids": [
+      "pr-126"
+     ]
+    },
+    {
+     "kind": "decision_driving_missing_as_of",
+     "source": "news_report",
      "detail": "决策驱动价格 28.0(pr-137) 缺少 as_of",
      "ref_ids": [
       "pr-137"
@@ -217661,13 +217606,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 28.0(pr-124) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.0(pr-124) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-124",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -217675,27 +217622,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.85(pr-125) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.85(pr-125) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-125",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
-      "pr-130",
-      "pr-137"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 28.0(pr-126) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
+      "pr-123",
       "pr-126",
-      "pr-117",
-      "pr-118",
-      "pr-120",
-      "pr-122",
       "pr-130",
       "pr-137"
      ]
@@ -217703,13 +217638,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.5(pr-134) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.5(pr-134) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -217717,13 +217654,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.08(pr-135) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.08(pr-135) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-135",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -217731,13 +217670,15 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 26.7(pr-136) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 26.7(pr-136) 与 raw/pit_raw 价格 ['pr-117', 'pr-118', 'pr-120', 'pr-122', 'pr-123', 'pr-126', 'pr-130', 'pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-136",
       "pr-117",
       "pr-118",
       "pr-120",
       "pr-122",
+      "pr-123",
+      "pr-126",
       "pr-130",
       "pr-137"
      ]
@@ -217745,10 +217686,11 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "fundamentals_report",
-     "detail": "qfq 价格 28.0(pr-139) 与 raw/pit_raw 价格 ['pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.0(pr-139) 与 raw/pit_raw 价格 ['pr-141', 'pr-145'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-139",
-      "pr-141"
+      "pr-141",
+      "pr-145"
      ]
     },
     {
@@ -217902,6 +217844,14 @@
      "ref_ids": [
       "pr-174",
       "pr-149"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "raw 价格 28.0(pr-126) 直接进入坐标语境，禁止跨坐标混用",
+     "ref_ids": [
+      "pr-126"
      ]
     },
     {
@@ -219023,10 +218973,10 @@
     {
      "ref_id": "pr-123",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "通常大宗交易折价率在 3%~8% 区间，平价成交显示接盘方对 28.00 元估值平台高度认可"
     },
     {
@@ -219050,10 +219000,10 @@
     {
      "ref_id": "pr-126",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "2. **大宗平价支撑**：28.00 元的大宗平价锁仓为盘面提供了明确的情绪缓冲，但由于当日属于日线“冲高受阻回踩”，普通散户与短线游资尚未充分消化其背后的机构成本底线含义，存在一定的**情绪过度悲观预期差**"
     },
     {
@@ -219221,10 +219171,10 @@
     {
      "ref_id": "pr-145",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "fundamentals_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "- **估值消化与中线收益比**：平价大宗交易构筑28元平台托底，估值需要大盘成交量放大以助推兑现，短线承压中线稳健，风险等级【中】，结论倾向【中性】"
     },
     {
@@ -219650,10 +219600,10 @@
    "violations": [
     {
      "kind": "decision_driving_missing_as_of",
-     "source": "volume_price_report",
-     "detail": "决策驱动价格 28.0(pr-085) 缺少 as_of",
+     "source": "news_report",
+     "detail": "决策驱动价格 28.0(pr-108) 缺少 as_of",
      "ref_ids": [
-      "pr-085"
+      "pr-108"
      ]
     },
     {
@@ -219667,134 +219617,120 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 27.7(pr-072) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.7(pr-072) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-072",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 29.88(pr-073) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 29.88(pr-073) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-073",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 30.0(pr-074) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 30.0(pr-074) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-074",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 28.4(pr-088) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.0(pr-085) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
+     "ref_ids": [
+      "pr-085",
+      "pr-084"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "volume_price_report",
+     "detail": "qfq 价格 28.4(pr-088) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-088",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 28.5(pr-089) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 28.5(pr-089) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-089",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 27.7(pr-092) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.7(pr-092) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-092",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 27.08(pr-093) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.08(pr-093) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-093",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 29.4(pr-097) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 29.4(pr-097) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-097",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 29.88(pr-098) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 29.88(pr-098) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-098",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 27.7(pr-099) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.7(pr-099) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-099",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 27.85(pr-100) 与 raw/pit_raw 价格 ['pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.85(pr-100) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-100",
-      "pr-084",
-      "pr-085"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 28.0(pr-108) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-108",
-      "pr-105",
-      "pr-106",
-      "pr-112",
-      "pr-113",
-      "pr-126"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 27.7(pr-118) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.7(pr-118) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-108', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-118",
       "pr-105",
       "pr-106",
+      "pr-108",
       "pr-112",
       "pr-113",
       "pr-126"
@@ -219803,11 +219739,12 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.7(pr-121) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.7(pr-121) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-108', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-121",
       "pr-105",
       "pr-106",
+      "pr-108",
       "pr-112",
       "pr-113",
       "pr-126"
@@ -219816,11 +219753,12 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.1(pr-122) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.1(pr-122) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-108', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-122",
       "pr-105",
       "pr-106",
+      "pr-108",
       "pr-112",
       "pr-113",
       "pr-126"
@@ -219829,11 +219767,12 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 27.08(pr-123) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 27.08(pr-123) 与 raw/pit_raw 价格 ['pr-105', 'pr-106', 'pr-108', 'pr-112', 'pr-113', 'pr-126'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-123",
       "pr-105",
       "pr-106",
+      "pr-108",
       "pr-112",
       "pr-113",
       "pr-126"
@@ -220077,10 +220016,10 @@
     },
     {
      "kind": "cross_basis_coordinate_mix",
-     "source": "volume_price_report",
-     "detail": "raw 价格 28.0(pr-085) 直接进入坐标语境，禁止跨坐标混用",
+     "source": "news_report",
+     "detail": "raw 价格 28.0(pr-108) 直接进入坐标语境，禁止跨坐标混用",
      "ref_ids": [
-      "pr-085"
+      "pr-108"
      ]
     },
     {
@@ -220852,10 +220791,10 @@
     {
      "ref_id": "pr-085",
      "value": 28.0,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "volume_price_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "technical_report:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "但盘后 6.64 亿元的平价大宗交易与 07-08 二级市场 1.35 亿股地量相呼应，印证了主力大资金并未折价抛售，28.00 元附近存在强烈的机构中线底仓成本锚定"
     },
     {
@@ -221059,10 +220998,10 @@
     {
      "ref_id": "pr-108",
      "value": 28.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "观察28.00元大宗成本支撑有效性，以及未来1-2周境内发债融资成本（低息环境）对券商债务置换利差的释放"
     },
     {
@@ -223559,90 +223498,73 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-141', 'pr-142']",
-     "ref_ids": [
-      "pr-141",
-      "pr-142"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 88.5(pr-130) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 88.5(pr-130) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-130",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 88.5(pr-134) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 88.5(pr-134) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 92.25(pr-144) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 92.25(pr-144) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-144",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 93.74(pr-145) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 93.74(pr-145) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-145",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 84.5(pr-146) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 84.5(pr-146) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-146",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 83.8(pr-147) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 83.8(pr-147) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-147",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 81.0(pr-148) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 81.0(pr-148) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-148",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 81.5(pr-149) 与 raw/pit_raw 价格 ['pr-137', 'pr-141'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 81.5(pr-149) 与 raw/pit_raw 价格 ['pr-137'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-149",
-      "pr-137",
-      "pr-141"
+      "pr-137"
      ]
     }
    ],
@@ -224910,10 +224832,10 @@
     {
      "ref_id": "pr-141",
      "value": 88.5,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "消化 88.50 元附近抛压与大宗交易筹码，回踩 85.00-85.50 元布林中轨为较优低吸防守位"
     },
     {
@@ -229428,7 +229350,7 @@
      "value": 26.5,
      "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **价格区间准入**：标的前复权价格盘中回调至 **26.50 元（qfq）上方回踩确认** 区间"
     },
@@ -244186,121 +244108,110 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.01(pr-088) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.01(pr-088) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-088",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.64(pr-089) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.64(pr-089) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-089",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 49.42(pr-090) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 49.42(pr-090) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-090",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 48.5(pr-091) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 48.5(pr-091) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-091",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.5(pr-092) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.5(pr-092) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-092",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 48.5(pr-093) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 48.5(pr-093) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-093",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 47.64(pr-097) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 47.64(pr-097) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-097",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 49.5(pr-098) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 49.5(pr-098) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-098",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.26(pr-099) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.26(pr-099) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-099",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 44.64(pr-100) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 44.64(pr-100) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-100",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 45.26(pr-101) 与 raw/pit_raw 价格 ['pr-081', 'pr-084', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 45.26(pr-101) 与 raw/pit_raw 价格 ['pr-081', 'pr-085'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-101",
       "pr-081",
-      "pr-084",
       "pr-085"
      ]
     },
@@ -245276,9 +245187,9 @@
     {
      "ref_id": "pr-084",
      "value": 46.02,
-     "basis": "pit_raw",
+     "basis": "unspecified",
      "source": "news_report",
-     "provenance": "typed_disclosure:repurchase",
+     "provenance": "model_text",
      "as_of": null,
      "context": "- 恒瑞当前回购价格（46.02-46.06 元）已形成公司管理层认定的阶段性心理底，后续需观察员工持股计划回购资金的加码执行力度及 1-2 周内能否守稳 45.26 元平台"
     },
@@ -248993,10 +248904,10 @@
     {
      "ref_id": "pr-127",
      "value": 130.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "macro_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-06-10",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "| **估值全面修复**：短线1-2周止跌回升，收复大宗折价缺口（向130元上方冲击）"
     },
     {
@@ -249013,106 +248924,8 @@
    "trade_date": "2026-06-10"
   },
   "daily0925:af25901e:medium_term": {
-   "status": "blocked",
-   "violations": [
-    {
-     "kind": "decision_driving_missing_as_of",
-     "source": "news_report",
-     "detail": "决策驱动价格 117.31(pr-119) 缺少 as_of",
-     "ref_ids": [
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-118', 'pr-119']",
-     "ref_ids": [
-      "pr-118",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 140.1(pr-114) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-114",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 132.0(pr-115) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-115",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 115.87(pr-118) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-118",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 125.34(pr-120) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-120",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 130.26(pr-121) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-121",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 132.32(pr-122) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-122",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 140.1(pr-123) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-123",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 140.1(pr-125) 与 raw/pit_raw 价格 ['pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-125",
-      "pr-119"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "raw 价格 117.31(pr-119) 直接进入坐标语境，禁止跨坐标混用",
-     "ref_ids": [
-      "pr-119"
-     ]
-    }
-   ],
+   "status": "pass",
+   "violations": [],
    "refs": [
     {
      "ref_id": "pr-001",
@@ -250179,10 +249992,10 @@
     {
      "ref_id": "pr-119",
      "value": 117.31,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-06-10",
      "context": "- **利空扰动点**：大宗交易折价8.25%成交，恰好与中长期均线汇聚位（close_200_sma 115.87元、close_50_sma 117.31元）重叠，市场对该折价是否会诱发二级市场二次探底存在短期分歧"
     },
     {
@@ -250573,77 +250386,79 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 79.92(pr-101) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "同句混用 basis ['pit_raw', 'vendor_qfq']: ['pr-103', 'pr-104']",
+     "ref_ids": [
+      "pr-103",
+      "pr-104"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "news_report",
+     "detail": "qfq 价格 79.92(pr-101) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-101",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 79.5(pr-106) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 79.5(pr-106) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-106",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 77.4(pr-112) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 77.4(pr-112) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-112",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 80.5(pr-113) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 80.5(pr-113) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-113",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 78.34(pr-116) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 78.34(pr-116) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-116",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 77.68(pr-117) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 77.68(pr-117) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-117",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 77.4(pr-118) 与 raw/pit_raw 价格 ['pr-102', 'pr-103', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 77.4(pr-118) 与 raw/pit_raw 价格 ['pr-102', 'pr-104'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-118",
       "pr-102",
-      "pr-103",
       "pr-104"
      ]
     }
@@ -251570,10 +251385,10 @@
     {
      "ref_id": "pr-103",
      "value": 80.0,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:repurchase",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-06-10",
      "context": "以当前A股约80元股价测算，回购价格区间（上限84.55元）形成实质性二级市场心理托底垫"
     },
     {
@@ -266217,141 +266032,6 @@
       "pr-114",
       "pr-099"
      ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.92(pr-174) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-174",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.7(pr-175) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-175",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.92(pr-176) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-176",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.85(pr-177) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-177",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.45(pr-178) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-178",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.45(pr-184) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-184",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.45(pr-185) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-185",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.85(pr-186) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-186",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.4(pr-187) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-187",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.92(pr-188) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-188",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.4(pr-189) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-189",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.45(pr-190) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-190",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.85(pr-191) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-191",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 26.45(pr-192) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-192",
-      "pr-179"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 27.4(pr-193) 与 raw/pit_raw 价格 ['pr-179'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-193",
-      "pr-179"
-     ]
     }
    ],
    "refs": [
@@ -267960,9 +267640,9 @@
     {
      "ref_id": "pr-179",
      "value": 26.92,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "typed_disclosure:block_trade",
+     "provenance": "declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **【不可直接比较】**：大宗交易成交价（pit_raw）严禁与 26.92 元（qfq）直接进行折溢价计算作为短线抛压参考，亦严禁跨坐标推导支撑线，两套系统互不构成技术共振"
     },
@@ -309183,72 +308863,8 @@
    "trade_date": "2026-07-22"
   },
   "daily0925:dfc4662b:medium_term": {
-   "status": "blocked",
-   "violations": [
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 7.61(pr-119) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-119",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 7.61(pr-121) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-121",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 7.0(pr-123) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-123",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 6.7(pr-124) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-124",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 7.61(pr-125) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-125",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 7.6(pr-126) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-126",
-      "pr-127"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 6.7(pr-128) 与 raw/pit_raw 价格 ['pr-127'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-128",
-      "pr-127"
-     ]
-    }
-   ],
+   "status": "pass",
+   "violations": [],
    "refs": [
     {
      "ref_id": "pr-001",
@@ -310387,10 +310003,10 @@
     {
      "ref_id": "pr-127",
      "value": 6.78,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-22",
      "context": "| **情景三：放量反包破位（风险情景）** | **15%** | 美伊冲突恶化导致大盘系统性杀跌，深投控解禁后出现大额大宗交易大幅折价减持，单日放量跌破 6.78 元（10 日 EMA）"
     },
     {
@@ -313989,22 +313605,6 @@
      ]
     },
     {
-     "kind": "decision_driving_unspecified_basis",
-     "source": "fundamentals_report",
-     "detail": "决策驱动价格 84.11(pr-123) basis 无法归因，禁止消费",
-     "ref_ids": [
-      "pr-123"
-     ]
-    },
-    {
-     "kind": "decision_driving_missing_as_of",
-     "source": "fundamentals_report",
-     "detail": "决策驱动价格 84.11(pr-123) 缺少 as_of",
-     "ref_ids": [
-      "pr-123"
-     ]
-    },
-    {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
      "detail": "qfq 价格 34.1(pr-121) 与 raw/pit_raw 价格 ['pr-118', 'pr-119', 'pr-120'] 处于同一坐标语境（现价/支撑/锚等）",
@@ -314029,136 +313629,136 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-131', 'pr-132']",
+     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-130', 'pr-131']",
      "ref_ids": [
-      "pr-131",
-      "pr-132"
+      "pr-130",
+      "pr-131"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.9(pr-135) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.9(pr-134) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "ref_ids": [
+      "pr-134",
+      "pr-130"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "smart_money_report",
+     "detail": "qfq 价格 32.58(pr-135) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-135",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 32.58(pr-136) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 34.1(pr-138) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
-      "pr-136",
-      "pr-131"
+      "pr-138",
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 34.1(pr-139) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.9(pr-139) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-139",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.9(pr-140) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.0(pr-143) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
-      "pr-140",
-      "pr-131"
+      "pr-143",
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 35.0(pr-144) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.13(pr-144) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-144",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 35.13(pr-145) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.85(pr-145) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-145",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.85(pr-146) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.9(pr-146) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-146",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.9(pr-147) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.85(pr-147) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-147",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.85(pr-148) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 32.58(pr-148) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-148",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 32.58(pr-149) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.13(pr-151) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
-      "pr-149",
-      "pr-131"
+      "pr-151",
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 35.13(pr-152) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.9(pr-152) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-152",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 33.9(pr-153) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 34.1(pr-153) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-153",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "smart_money_report",
-     "detail": "qfq 价格 34.1(pr-154) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 33.9(pr-154) 与 raw/pit_raw 价格 ['pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-154",
-      "pr-131"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "smart_money_report",
-     "detail": "qfq 价格 33.9(pr-155) 与 raw/pit_raw 价格 ['pr-131'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-155",
-      "pr-131"
+      "pr-130"
      ]
     },
     {
@@ -315271,15 +314871,6 @@
     },
     {
      "ref_id": "pr-123",
-     "value": 84.11,
-     "basis": "unspecified",
-     "source": "fundamentals_report",
-     "provenance": "model_text",
-     "as_of": null,
-     "context": "- **跨市场对标**：海外包装食品巨头雀巢（NESN.SW，最新价84.11瑞士法郎，月环比+9.79%）与可口可乐（KO.N，最新价82.91美元，月环比+9.27%）近期走出独立上涨的抗通胀与高股息行情"
-    },
-    {
-     "ref_id": "pr-124",
      "value": 20.0,
      "basis": "derived_estimate",
      "source": "fundamentals_report",
@@ -315288,7 +314879,7 @@
      "context": "- **估值支撑底位**：在极端业绩底（约50亿元净利润）下，按A股白马消费防御底线估值20倍PE测算，市值支撑位在1000亿元，折合股价底线约**18.00 - 20.00元**"
     },
     {
-     "ref_id": "pr-125",
+     "ref_id": "pr-124",
      "value": 34.1,
      "basis": "vendor_qfq",
      "source": "fundamentals_report",
@@ -315297,7 +314888,7 @@
      "context": "- **估值水平**：截至2026-07-08，股价为34.10元"
     },
     {
-     "ref_id": "pr-126",
+     "ref_id": "pr-125",
      "value": 35.04,
      "basis": "vendor_qfq",
      "source": "fundamentals_report",
@@ -315306,7 +314897,7 @@
      "context": "- 均线呈空头压制（50日均线35.04元压制明显），且微观盘面连续出现两笔折价达9.97%-10.91%的大宗交易，显示特定资金变现意愿较强"
     },
     {
-     "ref_id": "pr-127",
+     "ref_id": "pr-126",
      "value": 35.0,
      "basis": "vendor_qfq",
      "source": "fundamentals_report",
@@ -315315,8 +314906,17 @@
      "context": "叠加原油带动PET成本上行，短线缺乏进攻催化剂，走势以33.50-35.00元箱体中枢拉锯为主"
     },
     {
-     "ref_id": "pr-128",
+     "ref_id": "pr-127",
      "value": 30.7,
+     "basis": "raw",
+     "source": "macro_report",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": "2026-07-08",
+     "context": "- 2026-07-08，海天味业发生大宗交易3558.13万元，成交均价30.70元，较当日收盘价34.10元**大幅折价 9.97%**"
+    },
+    {
+     "ref_id": "pr-128",
+     "value": 34.1,
      "basis": "raw",
      "source": "macro_report",
      "provenance": "typed_disclosure:block_trade",
@@ -315326,15 +314926,6 @@
     {
      "ref_id": "pr-129",
      "value": 34.1,
-     "basis": "raw",
-     "source": "macro_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": "2026-07-08",
-     "context": "- 2026-07-08，海天味业发生大宗交易3558.13万元，成交均价30.70元，较当日收盘价34.10元**大幅折价 9.97%**"
-    },
-    {
-     "ref_id": "pr-130",
-     "value": 34.1,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315342,12 +314933,21 @@
      "context": "当日海天味业微幅收于 34.10 元，全天呈现缩量中枢横盘整理状态"
     },
     {
-     "ref_id": "pr-131",
+     "ref_id": "pr-130",
      "value": 30.7,
      "basis": "raw",
      "source": "smart_money_report",
      "provenance": "typed_disclosure:block_trade",
      "as_of": null,
+     "context": "- **大额订单主动卖盘占优假设**：超大单与大单持续净流出，结合当日发生 3558.13 万元、折价率达 9.97%（成交均价 30.70 元）的大宗交易，假设场内具备大额挂单能力的筹码持有方，在 34.00 元上方呈现主动减压、套现分流"
+    },
+    {
+     "ref_id": "pr-131",
+     "value": 34.0,
+     "basis": "vendor_qfq",
+     "source": "smart_money_report",
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "- **大额订单主动卖盘占优假设**：超大单与大单持续净流出，结合当日发生 3558.13 万元、折价率达 9.97%（成交均价 30.70 元）的大宗交易，假设场内具备大额挂单能力的筹码持有方，在 34.00 元上方呈现主动减压、套现分流"
     },
     {
@@ -315357,7 +314957,7 @@
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
      "as_of": "2026-07-08",
-     "context": "- **大额订单主动卖盘占优假设**：超大单与大单持续净流出，结合当日发生 3558.13 万元、折价率达 9.97%（成交均价 30.70 元）的大宗交易，假设场内具备大额挂单能力的筹码持有方，在 34.00 元上方呈现主动减压、套现分流"
+     "context": "- **中小订单接盘对冲假设**：中单与小单呈现正向流入（合计 +0.4922 亿元），表明在股价紧贴 34.00 元关口时，散单与小额挂单承接意愿偏高，形成被动流动性托底，但由于资金规模分散，难以形成主动推升合力"
     },
     {
      "ref_id": "pr-133",
@@ -315366,20 +314966,20 @@
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
      "as_of": "2026-07-08",
-     "context": "- **中小订单接盘对冲假设**：中单与小单呈现正向流入（合计 +0.4922 亿元），表明在股价紧贴 34.00 元关口时，散单与小额挂单承接意愿偏高，形成被动流动性托底，但由于资金规模分散，难以形成主动推升合力"
+     "context": "- **核心风险点**在于：中小单的承接力若随大盘走弱而减退，大单主动卖压将打破 33.80-34.00 元的平衡带，引发向下破位"
     },
     {
      "ref_id": "pr-134",
-     "value": 34.0,
+     "value": 33.9,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
      "as_of": "2026-07-08",
-     "context": "- **核心风险点**在于：中小单的承接力若随大盘走弱而减退，大单主动卖压将打破 33.80-34.00 元的平衡带，引发向下破位"
+     "context": "- **偏空演化路径（高概率）**：大额订单若维持连续单边净流出（日均超 0.3-0.5 亿元），而成交量持续无法放大，股价将快速击穿 33.85-33.90 元微观成本带，向 32.58 元布林下轨寻找流动性支撑"
     },
     {
      "ref_id": "pr-135",
-     "value": 33.9,
+     "value": 32.58,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315388,15 +314988,6 @@
     },
     {
      "ref_id": "pr-136",
-     "value": 32.58,
-     "basis": "vendor_qfq",
-     "source": "smart_money_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
-     "context": "- **偏空演化路径（高概率）**：大额订单若维持连续单边净流出（日均超 0.3-0.5 亿元），而成交量持续无法放大，股价将快速击穿 33.85-33.90 元微观成本带，向 32.58 元布林下轨寻找流动性支撑"
-    },
-    {
-     "ref_id": "pr-137",
      "value": 34.5,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315405,7 +314996,7 @@
      "context": "- **多头修复路径（低概率）**：需观察大单/超大单分组是否由净流出转为持续主动净流入，且单日成交额出现倍量放大，重新站稳 34.50 元中枢，方可打破当前大单撤离、小单买套的承压结构"
     },
     {
-     "ref_id": "pr-138",
+     "ref_id": "pr-137",
      "value": 33.9,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315414,8 +315005,17 @@
      "context": "- **VWMA 关键指标**：当日成交量加权价格（VWMA）为 **33.90 元**"
     },
     {
-     "ref_id": "pr-139",
+     "ref_id": "pr-138",
      "value": 34.1,
+     "basis": "vendor_qfq",
+     "source": "smart_money_report",
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
+     "context": "- 最新收盘价 34.10 元略高于 VWMA（33.90 元），价格在成交量加权均线之上仅 0.59% 的窄幅空间浮动"
+    },
+    {
+     "ref_id": "pr-139",
+     "value": 33.9,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315424,16 +315024,16 @@
     },
     {
      "ref_id": "pr-140",
-     "value": 33.9,
+     "value": 33.92,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
      "as_of": "2026-07-08",
-     "context": "- 最新收盘价 34.10 元略高于 VWMA（33.90 元），价格在成交量加权均线之上仅 0.59% 的窄幅空间浮动"
+     "context": "- 结合 10日 EMA（33.92 元）与布林中轨（33.85 元），**33.85 - 33.92 元**构成了当前盘面最核心的微观流动性共振带"
     },
     {
      "ref_id": "pr-141",
-     "value": 33.92,
+     "value": 33.85,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315442,15 +315042,6 @@
     },
     {
      "ref_id": "pr-142",
-     "value": 33.85,
-     "basis": "vendor_qfq",
-     "source": "smart_money_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
-     "context": "- 结合 10日 EMA（33.92 元）与布林中轨（33.85 元），**33.85 - 33.92 元**构成了当前盘面最核心的微观流动性共振带"
-    },
-    {
-     "ref_id": "pr-143",
      "value": 33.92,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315459,7 +315050,7 @@
      "context": "- 结合 10日 EMA（33.92 元）与布林中轨（33.85 元），**33.85 - 33.92 元**构成了当前盘面最核心的微观流动性共振带"
     },
     {
-     "ref_id": "pr-144",
+     "ref_id": "pr-143",
      "value": 35.0,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315468,7 +315059,7 @@
      "context": "- **动态阻力测试**：上方 35.00 - 35.13 元（50日均线与布林上轨）面临重度抛压"
     },
     {
-     "ref_id": "pr-145",
+     "ref_id": "pr-144",
      "value": 35.13,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315477,8 +315068,17 @@
      "context": "- **动态阻力测试**：上方 35.00 - 35.13 元（50日均线与布林上轨）面临重度抛压"
     },
     {
-     "ref_id": "pr-146",
+     "ref_id": "pr-145",
      "value": 33.85,
+     "basis": "vendor_qfq",
+     "source": "smart_money_report",
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
+     "context": "- **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近"
+    },
+    {
+     "ref_id": "pr-146",
+     "value": 33.9,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315487,7 +315087,7 @@
     },
     {
      "ref_id": "pr-147",
-     "value": 33.9,
+     "value": 33.85,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315496,15 +315096,6 @@
     },
     {
      "ref_id": "pr-148",
-     "value": 33.85,
-     "basis": "vendor_qfq",
-     "source": "smart_money_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
-     "context": "- **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近"
-    },
-    {
-     "ref_id": "pr-149",
      "value": 32.58,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315513,7 +315104,7 @@
      "context": "- **动态支撑测试**：33.85 - 33.90 元作为 VWMA 及均线共振支撑带，一旦大单抛压延续并导致收盘价有效击穿 33.85 元，则确认资金微观结构恶化，下方支撑将退守至布林下轨 32.58 元附近"
     },
     {
-     "ref_id": "pr-150",
+     "ref_id": "pr-149",
      "value": 33.85,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315522,7 +315113,7 @@
      "context": "- 若盘中大单+超大单净流出持续扩大至 0.6 亿元以上，且股价以长阴线跌破 **33.85 元（VWMA与布林中轨）**，表明中小单承接衰竭，应视为短线破位离场信号"
     },
     {
-     "ref_id": "pr-151",
+     "ref_id": "pr-150",
      "value": 33.0,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315531,7 +315122,7 @@
      "context": "若大单分组净流出收窄至 0.1 亿元以内，且成交量维持缩量极值，可关注 32.60 - 33.00 元区间的企稳候选机会"
     },
     {
-     "ref_id": "pr-152",
+     "ref_id": "pr-151",
      "value": 35.13,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315540,8 +315131,17 @@
      "context": "- 大单分组连续两日以上呈现净流入，且单日成交额温和放大至反弹初期水平（突破 2500 万股），收盘强力突破 35.13 元阻力区"
     },
     {
-     "ref_id": "pr-153",
+     "ref_id": "pr-152",
      "value": 33.9,
+     "basis": "vendor_qfq",
+     "source": "smart_money_report",
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
+     "context": "| **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭，跌破则下行空间打开"
+    },
+    {
+     "ref_id": "pr-153",
+     "value": 34.1,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
      "provenance": "registry_backref:vendor_qfq",
@@ -315550,15 +315150,6 @@
     },
     {
      "ref_id": "pr-154",
-     "value": 34.1,
-     "basis": "vendor_qfq",
-     "source": "smart_money_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
-     "context": "| **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭，跌破则下行空间打开"
-    },
-    {
-     "ref_id": "pr-155",
      "value": 33.9,
      "basis": "vendor_qfq",
      "source": "smart_money_report",
@@ -315567,7 +315158,7 @@
      "context": "| **VWMA 价格带** | VWMA = 33.90 元，现价 34.10 元贴近该线 | 均线带测试候选 (price_vwma_test_candidate) | 高 | 33.85-33.90 元为多空分水岭，跌破则下行空间打开"
     },
     {
-     "ref_id": "pr-156",
+     "ref_id": "pr-155",
      "value": 35.13,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315576,7 +315167,7 @@
      "context": "独立性 UNKNOWN，属于折叠组件（comp_INV-1_42c0539ac744），区间收敛，33.85-35.13 元箱体拉锯"
     },
     {
-     "ref_id": "pr-157",
+     "ref_id": "pr-156",
      "value": 34.1,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315585,8 +315176,17 @@
      "context": "- 多头核心 Claim 1（INV-1）核验通过（Coverage=100%，收盘34.10元守住布林中轨33.85元及VWMA 33.90元，量比降至0.7），予以采纳（adopted）"
     },
     {
-     "ref_id": "pr-158",
+     "ref_id": "pr-157",
      "value": 33.85,
+     "basis": "vendor_qfq",
+     "source": "investment_plan",
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
+     "context": "- 多头核心 Claim 1（INV-1）核验通过（Coverage=100%，收盘34.10元守住布林中轨33.85元及VWMA 33.90元，量比降至0.7），予以采纳（adopted）"
+    },
+    {
+     "ref_id": "pr-158",
+     "value": 33.9,
      "basis": "vendor_qfq",
      "source": "investment_plan",
      "provenance": "registry_backref:vendor_qfq",
@@ -315600,19 +315200,10 @@
      "source": "investment_plan",
      "provenance": "registry_backref:vendor_qfq",
      "as_of": "2026-07-08",
-     "context": "- 多头核心 Claim 1（INV-1）核验通过（Coverage=100%，收盘34.10元守住布林中轨33.85元及VWMA 33.90元，量比降至0.7），予以采纳（adopted）"
-    },
-    {
-     "ref_id": "pr-160",
-     "value": 33.9,
-     "basis": "vendor_qfq",
-     "source": "investment_plan",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-07-08",
      "context": "- 多头证明了 33.80-33.90 元微观成本簇存在初步止跌承接"
     },
     {
-     "ref_id": "pr-161",
+     "ref_id": "pr-160",
      "value": 35.04,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315621,7 +315212,7 @@
      "context": "但空头同样硬核证明了“缩量缺乏增量需求推动（lack_of_demand）”与“主力大单撤离、中小单被动接盘”，上方 50 日均线（35.04 元）与布林上轨（35.13 元）压制沉重，短线多头缺乏突破催化剂"
     },
     {
-     "ref_id": "pr-162",
+     "ref_id": "pr-161",
      "value": 35.13,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315630,7 +315221,7 @@
      "context": "但空头同样硬核证明了“缩量缺乏增量需求推动（lack_of_demand）”与“主力大单撤离、中小单被动接盘”，上方 50 日均线（35.04 元）与布林上轨（35.13 元）压制沉重，短线多头缺乏突破催化剂"
     },
     {
-     "ref_id": "pr-163",
+     "ref_id": "pr-162",
      "value": 32.58,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315639,7 +315230,7 @@
      "context": "- 若原油持续高位且大宗低价筹码在二级市场抛售，现货将测试布林下轨 32.58 元"
     },
     {
-     "ref_id": "pr-164",
+     "ref_id": "pr-163",
      "value": 35.13,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315648,7 +315239,7 @@
      "context": "- 上行空间（前复权）：测试布林上轨 35.13 元（+3.02%）"
     },
     {
-     "ref_id": "pr-165",
+     "ref_id": "pr-164",
      "value": 32.58,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315657,7 +315248,7 @@
      "context": "- 下行风险（前复权）：回踩布林下轨 32.58 元（-4.46%）"
     },
     {
-     "ref_id": "pr-166",
+     "ref_id": "pr-165",
      "value": 0.19,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315666,7 +315257,7 @@
      "context": "- **数据点 1：缩量横盘（量比 0.7，实体 0.19 元）**"
     },
     {
-     "ref_id": "pr-167",
+     "ref_id": "pr-166",
      "value": 34.0,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315675,7 +315266,7 @@
      "context": "缩量盘整反映的是多空在 34.00 元附近的脆弱平衡，而非反转确认点"
     },
     {
-     "ref_id": "pr-168",
+     "ref_id": "pr-167",
      "value": 33.5,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315684,7 +315275,7 @@
      "context": "若回踩 33.50 元企稳且大单流出收敛，方可轻仓参与"
     },
     {
-     "ref_id": "pr-169",
+     "ref_id": "pr-168",
      "value": 35.1,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315693,7 +315284,7 @@
      "context": "- **目标止盈位（前复权）**：35.10 元（布林上轨与 50 日均线处）"
     },
     {
-     "ref_id": "pr-170",
+     "ref_id": "pr-169",
      "value": 33.4,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315702,7 +315293,7 @@
      "context": "- **硬性止损位（前复权）**：**33.40 元**（击穿平台下沿及 10 日线支撑，潜在跌幅 -2.05%）"
     },
     {
-     "ref_id": "pr-171",
+     "ref_id": "pr-170",
      "value": 33.4,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315711,7 +315302,7 @@
      "context": "- **失效条件**：单日放量击穿 33.40 元，或主力大单单日净流出超 0.8 亿元，无条件止损离场"
     },
     {
-     "ref_id": "pr-172",
+     "ref_id": "pr-171",
      "value": 34.0,
      "basis": "vendor_qfq",
      "source": "investment_plan",
@@ -315740,114 +315331,6 @@
      "detail": "决策驱动价格 22.5(pr-173) 缺少 as_of",
      "ref_ids": [
       "pr-173"
-     ]
-    },
-    {
-     "kind": "decision_driving_missing_as_of",
-     "source": "final_trade_decision",
-     "detail": "决策驱动价格 35.04(pr-213) 缺少 as_of",
-     "ref_ids": [
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-211', 'pr-212', 'pr-213']",
-     "ref_ids": [
-      "pr-211",
-      "pr-212",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 35.04(pr-196) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-196",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 34.1(pr-199) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-199",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-200) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-200",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 36.3(pr-202) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-202",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-203) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-203",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 35.04(pr-205) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-205",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 36.3(pr-207) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-207",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 32.4(pr-208) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-208",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 33.0(pr-209) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-209",
-      "pr-213"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 34.1(pr-210) 与 raw/pit_raw 价格 ['pr-213'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-210",
-      "pr-213"
      ]
     }
    ],
@@ -317763,10 +317246,10 @@
     {
      "ref_id": "pr-213",
      "value": 35.04,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "-- RISK_JUDGE: {\"verdict\": \"pass\", \"revision_reason\": \"方案审定通过补充风控约束\", \"hard_constraints\": [\"仓位上限锁死0%\",\"触发前置建仓上限8%\",\"破32."
     }
    ],
@@ -320364,420 +319847,371 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.7(pr-088) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "同句混用 basis ['pit_raw', 'vendor_qfq']: ['pr-127', 'pr-128', 'pr-129', 'pr-130']",
+     "ref_ids": [
+      "pr-127",
+      "pr-128",
+      "pr-129",
+      "pr-130"
+     ]
+    },
+    {
+     "kind": "cross_basis_coordinate_mix",
+     "source": "volume_price_report",
+     "detail": "qfq 价格 36.7(pr-088) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-088",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 37.0(pr-089) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 37.0(pr-089) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-089",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.66(pr-090) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.66(pr-090) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-090",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.72(pr-091) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.72(pr-091) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-091",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 40.0(pr-094) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 40.0(pr-094) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-094",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 34.31(pr-095) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 34.31(pr-095) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-095",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.66(pr-102) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.66(pr-102) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-102",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.63(pr-103) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.63(pr-103) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-103",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.72(pr-104) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.72(pr-104) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-104",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.72(pr-105) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.72(pr-105) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-105",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.8(pr-106) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.8(pr-106) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-106",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.7(pr-107) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.7(pr-107) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-107",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.07(pr-108) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.07(pr-108) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-108",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 37.05(pr-109) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 37.05(pr-109) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-109",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 37.9(pr-110) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 37.9(pr-110) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-110",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.7(pr-111) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.7(pr-111) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-111",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 34.8(pr-112) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 34.8(pr-112) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-112",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.2(pr-113) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.2(pr-113) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-113",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.72(pr-119) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.72(pr-119) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-119",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 38.8(pr-120) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 38.8(pr-120) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-120",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 38.91(pr-121) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 38.91(pr-121) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-121",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.66(pr-122) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.66(pr-122) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-122",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.72(pr-123) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.72(pr-123) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-123",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.7(pr-124) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.7(pr-124) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-124",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.07(pr-125) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.07(pr-125) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-125",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.07(pr-126) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.07(pr-126) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-126",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.75(pr-132) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.75(pr-132) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-132",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.8(pr-133) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.8(pr-133) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-133",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 36.07(pr-134) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 36.07(pr-134) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 35.1(pr-135) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-127', 'pr-128', 'pr-129', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 35.1(pr-135) 与 raw/pit_raw 价格 ['pr-077', 'pr-078', 'pr-128', 'pr-130'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-135",
       "pr-077",
       "pr-078",
-      "pr-127",
       "pr-128",
-      "pr-129",
       "pr-130"
      ]
     },
@@ -322071,10 +321505,10 @@
     {
      "ref_id": "pr-127",
      "value": 34.31,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "volume_price_report",
-     "provenance": "typed_disclosure:repurchase",
-     "as_of": null,
+     "provenance": "technical_report:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "- **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）"
     },
     {
@@ -322089,10 +321523,10 @@
     {
      "ref_id": "pr-129",
      "value": 34.31,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "volume_price_report",
-     "provenance": "typed_disclosure:repurchase",
-     "as_of": null,
+     "provenance": "technical_report:vendor_qfq",
+     "as_of": "2026-07-08",
      "context": "- **中线强防守底线**：**34.31 - 34.80 元**（06-29 前期低点 34.31 元与公司回购均价平台 34.80 元）"
     },
     {
@@ -335143,99 +334577,8 @@
    "trade_date": "2026-07-08"
   },
   "daily0925:61cffb85:short_term": {
-   "status": "blocked",
-   "violations": [
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 32.62(pr-128) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-128",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 33.6(pr-138) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-138",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 32.62(pr-139) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-139",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 32.8(pr-140) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-140",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 34.8(pr-141) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-141",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 36.0(pr-142) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-142",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 33.6(pr-144) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-144",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 33.9(pr-145) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-145",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 34.62(pr-146) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-146",
-      "pr-135"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 34.8(pr-147) 与 raw/pit_raw 价格 ['pr-135'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-147",
-      "pr-135"
-     ]
-    }
-   ],
+   "status": "pass",
+   "violations": [],
    "refs": [
     {
      "ref_id": "pr-001",
@@ -336446,10 +335789,10 @@
     {
      "ref_id": "pr-135",
      "value": 34.0,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-06-10",
      "context": "* 34.00 元附近连续三天平价大宗交易（无折价）表明机构协议换手态度平稳，不存在恐慌性折价砸盘"
     },
     {
@@ -338454,107 +337797,8 @@
    "trade_date": "2026-06-10"
   },
   "daily0925:28f6a1e0:short_term": {
-   "status": "blocked",
-   "violations": [
-    {
-     "kind": "decision_driving_missing_as_of",
-     "source": "investment_plan",
-     "detail": "决策驱动价格 39.21(pr-174) 缺少 as_of",
-     "ref_ids": [
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 40.8(pr-173) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-173",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 40.8(pr-175) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-175",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 36.92(pr-177) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-177",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 36.45(pr-178) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-178",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 35.72(pr-179) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-179",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 39.21(pr-182) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-182",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 40.03(pr-183) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-183",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 36.45(pr-188) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-188",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 35.72(pr-189) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-189",
-      "pr-174"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "investment_plan",
-     "detail": "qfq 价格 36.8(pr-190) 与 raw/pit_raw 价格 ['pr-174'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-190",
-      "pr-174"
-     ]
-    }
-   ],
+   "status": "pass",
+   "violations": [],
    "refs": [
     {
      "ref_id": "pr-001",
@@ -340116,10 +339360,10 @@
     {
      "ref_id": "pr-174",
      "value": 39.21,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "investment_plan",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-06-10",
      "context": "相反，上游大宗辅料涨价向成本端传导迅速，且 108.08 亿元的高额两融余额在遭遇年线（39.21 元）受阻回落时，平仓风险更具短线传导即时性"
     },
     {
@@ -341938,59 +341182,6 @@
    "status": "blocked",
    "violations": [
     {
-     "kind": "decision_driving_missing_as_of",
-     "source": "news_report",
-     "detail": "决策驱动价格 40.0(pr-090) 缺少 as_of",
-     "ref_ids": [
-      "pr-090"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "同句混用 basis ['pit_raw', 'vendor_qfq']: ['pr-090', 'pr-091']",
-     "ref_ids": [
-      "pr-090",
-      "pr-091"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 40.0(pr-089) 与 raw/pit_raw 价格 ['pr-090'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-089",
-      "pr-090"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 42.59(pr-091) 与 raw/pit_raw 价格 ['pr-090'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-091",
-      "pr-090"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 39.9(pr-093) 与 raw/pit_raw 价格 ['pr-090'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-093",
-      "pr-090"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 39.2(pr-094) 与 raw/pit_raw 价格 ['pr-090'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-094",
-      "pr-090"
-     ]
-    },
-    {
      "kind": "cross_basis_coordinate_mix",
      "source": "final_trade_decision",
      "detail": "qfq 价格 41.05(pr-158) 与 raw/pit_raw 价格 ['pr-163', 'pr-164'] 处于同一坐标语境（现价/支撑/锚等）",
@@ -342128,14 +341319,6 @@
       "pr-177",
       "pr-163",
       "pr-164"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "pit_raw 价格 40.0(pr-090) 直接进入坐标语境，禁止跨坐标混用",
-     "ref_ids": [
-      "pr-090"
      ]
     }
    ],
@@ -342944,10 +342127,10 @@
     {
      "ref_id": "pr-090",
      "value": 40.0,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:shareholder_increase",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-06-10",
      "context": "- *走势演化*：受RSI（29.39）超卖修正及高管增持底托底，股价在39.90-40.00元区域探底企稳，短线向上反抽测试 **41.98 - 42.59 元**（10日均线与VWMA重叠阻力区）"
     },
     {
@@ -360428,7 +359611,7 @@
      "value": 38.58,
      "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "declared_basis:vendor_qfq",
+     "provenance": "declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "- **条件 B（右侧放量突破）**：若未发生回踩，股价必须以日线收盘价**有效放量站上日内 VWMA 37.74 元（qfq）并向 SMA200 38.58 元（qfq）发起实质性突破**，单日特大单净买入维持正向流入，方可执行右侧 10"
     },
@@ -362767,117 +361950,8 @@
    "trade_date": "2026-07-22"
   },
   "daily0925:4bc9a4aa:short_term": {
-   "status": "blocked",
-   "violations": [
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 42.74(pr-213) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-213",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 41.06(pr-214) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-214",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 42.74(pr-215) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-215",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 43.3(pr-216) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-216",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 43.0(pr-217) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-217",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 42.74(pr-219) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-219",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 42.74(pr-222) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-222",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 43.0(pr-223) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-223",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 43.3(pr-224) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-224",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 41.06(pr-225) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-225",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 42.7(pr-227) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-227",
-      "pr-220"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "final_trade_decision",
-     "detail": "qfq 价格 43.0(pr-228) 与 raw/pit_raw 价格 ['pr-220'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-228",
-      "pr-220"
-     ]
-    }
-   ],
+   "status": "pass",
+   "violations": [],
    "refs": [
     {
      "ref_id": "pr-001",
@@ -364702,7 +363776,7 @@
      "value": 42.74,
      "basis": "vendor_qfq",
      "source": "trader_investment_plan",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": null,
      "context": "中航沈飞（600760.SH）自 7 月 15 日探底 38.00 元（前复权）反弹至当前 42.74 元（前复权），已触及上方关键筹码密集区与强阻力带（43.00 - 43.30 元）"
     },
@@ -364853,9 +363927,9 @@
     {
      "ref_id": "pr-220",
      "value": 41.22,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "final_trade_decision",
-     "provenance": "derived:typed_disclosure:shareholder_increase",
+     "provenance": "derived:declared_basis:sentence:vendor_qfq",
      "as_of": null,
      "context": "- **原始披露价（raw）**：2026年6月管理层增持成交均价约为 41.22 元（raw），此为历史记账价格，**与技术面基于前复权（vendor_qfq）的 42.74 元不可直接比较**，严禁混算盈亏比"
     },
@@ -381100,7 +380174,7 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1284.6(pr-122) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1284.6(pr-122) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-122",
       "pr-116",
@@ -381109,14 +380183,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1268.0(pr-123) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.0(pr-123) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-123",
       "pr-116",
@@ -381125,14 +380199,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1250.0(pr-126) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1250.0(pr-126) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-126",
       "pr-116",
@@ -381141,14 +380215,14 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1315.0(pr-131) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-129', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1315.0(pr-131) 与 raw/pit_raw 价格 ['pr-116', 'pr-120', 'pr-121', 'pr-124', 'pr-125', 'pr-127', 'pr-130', 'pr-134'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-131",
       "pr-116",
@@ -381157,7 +380231,7 @@
       "pr-124",
       "pr-125",
       "pr-127",
-      "pr-129",
+      "pr-130",
       "pr-134"
      ]
     },
@@ -382459,19 +381533,19 @@
     {
      "ref_id": "pr-129",
      "value": 1268.0,
-     "basis": "raw",
+     "basis": "vendor_qfq",
      "source": "news_report",
-     "provenance": "typed_disclosure:block_trade",
-     "as_of": null,
+     "provenance": "registry_backref:vendor_qfq",
+     "as_of": "2026-05-20",
      "context": "- *演化路径*：股价反抽1300-1312元受阻，顺势向布林带下轨1268元及大宗交易成交位（1218-1250元区间）惯性下探寻底"
     },
     {
      "ref_id": "pr-130",
      "value": 1250.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-05-20",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "- *演化路径*：股价反抽1300-1312元受阻，顺势向布林带下轨1268元及大宗交易成交位（1218-1250元区间）惯性下探寻底"
     },
     {
@@ -382657,9 +381731,9 @@
     {
      "ref_id": "pr-151",
      "value": 1314.0,
-     "basis": "raw",
+     "basis": "unspecified",
      "source": "macro_report",
-     "provenance": "typed_disclosure:block_trade",
+     "provenance": "model_text",
      "as_of": null,
      "context": "- 股价破位跌至1314元新低，且伴随大宗交易折价7.33%的抛压，技术形态处于寻底期，左侧切入风险偏大"
     },
@@ -383028,7 +382102,7 @@
      "value": 1284.6,
      "basis": "vendor_qfq",
      "source": "trader_investment_plan",
-     "provenance": "derived:declared_basis:vendor_qfq",
+     "provenance": "derived:declared_basis:tail:vendor_qfq",
      "as_of": "2026-05-20",
      "context": "标的贵州茅台（600519.SH）于2026年5月20日以日线平量阴线击穿前低关键支撑位1291.44元（前复权），收盘录得1284.60元（前复权），盘中反抽遇阻留下0.63长上影，微观盘口呈现主动买盘真空特征"
     },
@@ -383258,118 +382332,101 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "同句混用 basis ['pit_raw', 'vendor_qfq']: ['pr-092', 'pr-093']",
-     "ref_ids": [
-      "pr-092",
-      "pr-093"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "volume_price_report",
-     "detail": "qfq 价格 1312.52(pr-086) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1312.52(pr-086) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-086",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1268.5(pr-087) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.5(pr-087) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-087",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1268.0(pr-090) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.0(pr-090) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-090",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1270.0(pr-091) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1270.0(pr-091) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-091",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1265.0(pr-100) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1265.0(pr-100) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-100",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1344.2(pr-103) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1344.2(pr-103) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-103",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1350.0(pr-104) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1350.0(pr-104) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-104",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1312.5(pr-105) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1312.5(pr-105) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-105",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1300.0(pr-106) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1300.0(pr-106) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-106",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "volume_price_report",
-     "detail": "qfq 价格 1268.5(pr-107) 与 raw/pit_raw 价格 ['pr-084', 'pr-092'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.5(pr-107) 与 raw/pit_raw 价格 ['pr-084'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-107",
-      "pr-084",
-      "pr-092"
+      "pr-084"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "同句混用 basis ['raw', 'vendor_qfq']: ['pr-116', 'pr-117', 'pr-118', 'pr-119']",
+     "detail": "qfq 价格 1268.0(pr-124) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
-      "pr-116",
+      "pr-124",
+      "pr-111",
+      "pr-112",
       "pr-117",
       "pr-118",
       "pr-119"
@@ -383378,78 +382435,79 @@
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1268.0(pr-124) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
-     "ref_ids": [
-      "pr-124",
-      "pr-111",
-      "pr-112",
-      "pr-118"
-     ]
-    },
-    {
-     "kind": "cross_basis_coordinate_mix",
-     "source": "news_report",
-     "detail": "qfq 价格 1268.0(pr-129) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1268.0(pr-129) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-129",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1250.0(pr-130) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1250.0(pr-130) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-130",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1315.0(pr-132) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1315.0(pr-132) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-132",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1344.0(pr-133) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1344.0(pr-133) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-133",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1312.0(pr-134) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1312.0(pr-134) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-134",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
      "kind": "cross_basis_coordinate_mix",
      "source": "news_report",
-     "detail": "qfq 价格 1344.0(pr-135) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-118'] 处于同一坐标语境（现价/支撑/锚等）",
+     "detail": "qfq 价格 1344.0(pr-135) 与 raw/pit_raw 价格 ['pr-111', 'pr-112', 'pr-117', 'pr-118', 'pr-119'] 处于同一坐标语境（现价/支撑/锚等）",
      "ref_ids": [
       "pr-135",
       "pr-111",
       "pr-112",
-      "pr-118"
+      "pr-117",
+      "pr-118",
+      "pr-119"
      ]
     },
     {
@@ -384348,10 +383406,10 @@
     {
      "ref_id": "pr-092",
      "value": 1268.0,
-     "basis": "pit_raw",
+     "basis": "vendor_qfq",
      "source": "volume_price_report",
-     "provenance": "typed_disclosure:shareholder_decrease",
-     "as_of": null,
+     "provenance": "technical_report:vendor_qfq",
+     "as_of": "2026-05-20",
      "context": "- **弱势阴跌破位路径（概率 25%）**：若市场流动性进一步向成长题材倾斜，大资金持续减持，股价放量击穿 1268 元且收盘无法收回，跌势将向 1250 元整数关口延伸"
     },
     {
@@ -384573,10 +383631,10 @@
     {
      "ref_id": "pr-117",
      "value": 1315.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-05-20",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "另一方面在二级市场遭遇严重流动性抛压与风格挤压——盘中下探1314元创近20个月新低，盘后出现折价7.33%的2.37亿元大宗交易，全天收报1284.60元/1315元区间（注：收盘价系统数据1284.60元，盘中大宗基准申报1315元），"
     },
     {
@@ -384591,10 +383649,10 @@
     {
      "ref_id": "pr-119",
      "value": 1315.0,
-     "basis": "vendor_qfq",
+     "basis": "raw",
      "source": "news_report",
-     "provenance": "registry_backref:vendor_qfq",
-     "as_of": "2026-05-20",
+     "provenance": "typed_disclosure:block_trade",
+     "as_of": null,
      "context": "另一方面在二级市场遭遇严重流动性抛压与风格挤压——盘中下探1314元创近20个月新低，盘后出现折价7.33%的2.37亿元大宗交易，全天收报1284.60元/1315元区间（注：收盘价系统数据1284.60元，盘中大宗基准申报1315元），"
     },
     {
