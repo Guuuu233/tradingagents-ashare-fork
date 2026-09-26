@@ -1,0 +1,63 @@
+{
+ "entry_verdicts": {
+  "correct": 18,
+  "false": 29
+ },
+ "hit_counts": {
+  "reject_in_partial": {
+   "total": 46,
+   "correct": 3,
+   "false": 43
+  },
+  "e04": {
+   "total": 25,
+   "correct": 13,
+   "false": 12
+  },
+  "coverage_mixed_adopted": {
+   "total": 25,
+   "correct": 5,
+   "false": 20
+  },
+  "coverage_text_conflict": {
+   "total": 3,
+   "correct": 3,
+   "false": 0
+  },
+  "winner_conflict": {
+   "total": 1,
+   "correct": 0,
+   "false": 1
+  },
+  "coverage_floor": {
+   "total": 1,
+   "correct": 0,
+   "false": 1
+  },
+  "partial_threshold_adopted": {
+   "total": 2,
+   "correct": 0,
+   "false": 2
+  },
+  "reject_in_adopted": {
+   "total": 3,
+   "correct": 3,
+   "false": 0
+  }
+ },
+ "e04_classes": {
+  "bare_assertion": 13,
+  "conditional": 5,
+  "traceable_inference": 2,
+  "negation_mechanical": 2,
+  "mechanical": 1,
+  "downgrade_heuristic": 2
+ },
+ "pseudo_atom_cases": [
+  [
+   "fdc9352b89554177bb78ea7a33eac2fd:medium_term",
+   "coverage:INV-4"
+  ]
+ ],
+ "missing_in_index": []
+}
