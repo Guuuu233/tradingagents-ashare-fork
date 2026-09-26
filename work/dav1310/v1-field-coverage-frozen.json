@@ -1,0 +1,234 @@
+{
+  "task_id": "DAV-1310",
+  "db_path": "tradingagents.db",
+  "since": null,
+  "id_manifest": "frozen-20260926.json",
+  "reports_loaded": 59,
+  "as_is": {
+    "raw_count": 59,
+    "as_is_pipeline_ledger": {
+      "raw_count": 59,
+      "qualifying_v2_count": 0,
+      "eligible_count": 0,
+      "non_v2_excluded": 59,
+      "d009_excluded": 0,
+      "hold_defensive": 0,
+      "hold_conflict": 0,
+      "hold_unresolved": 0,
+      "hold_semantic_isolated": 0,
+      "prediction_eligible_count": 0,
+      "hold_price_basis_overlap": 0,
+      "price_basis_contaminated": 0,
+      "price_basis_pending_review": 0,
+      "price_basis_contract_incomplete": 0,
+      "price_basis_isolated": 0,
+      "clean_count": 0
+    },
+    "d009_excluded_counts": {
+      "legacy_null": 0,
+      "abstain": 0,
+      "invalid_run": 0,
+      "data_error": 0,
+      "no_trade": 0,
+      "wait": 0
+    },
+    "clean_report_ids_count": 0
+  },
+  "horizon_unpacked": {
+    "unit_count": 177,
+    "horizon_distribution": {
+      "top": 59,
+      "short_term": 59,
+      "medium_term": 59
+    },
+    "cohort_key_distribution": {
+      "decision_model.v1:evidence_contract.v2:price_basis.unspecified": 98,
+      "decision_model.v1:evidence_contract.v2:price_basis.vendor_qfq": 79
+    },
+    "pipeline_ledger_on_units": {
+      "non_v2_excluded": 59,
+      "qualifying_v2_count": 118,
+      "d009_excluded": 78,
+      "d009.abstain": 44,
+      "eligible_count": 40,
+      "clean_count": 24,
+      "price_basis.price_basis_contract_incomplete": 13,
+      "price_basis_isolated": 13,
+      "d009.wait": 22,
+      "hold.hold_conflict": 4,
+      "hold_semantic_isolated": 4,
+      "d009.no_trade": 12
+    },
+    "field_presence": {
+      "analysis_status": {
+        "analysis_status|result_data.analysis_status|decision_status.analysis_status": 177
+      },
+      "challenges": {
+        "<missing>": 59,
+        "investment_debate_state.challenges|challenges": 118
+      },
+      "claims": {
+        "<missing>": 59,
+        "investment_debate_state.claims|claims": 118
+      },
+      "decision_model_version": {
+        "decision_model_version (top|result_data|inv_state|metadata)": 177
+      },
+      "entry_price_or_target": {
+        "<missing>": 62,
+        "manager_verdict.entry|entry_price|target_price": 115
+      },
+      "entry_price_source": {
+        "<missing>": 177
+      },
+      "evidence_contract_version": {
+        "evidence_contract_version (top|result_data|inv_state|metadata)": 177
+      },
+      "fundamentals_report": {
+        "<missing>": 59,
+        "fundamentals_report": 118
+      },
+      "generated_by_commit_sha": {
+        "generated_by_commit_sha (top|result_data|inv_state|metadata)": 177
+      },
+      "industry": {
+        "industry|sector|instrument_context|market_data_context.industry_linkage|data_collection_provenance|quadrant_1|short_term|medium_term": 168,
+        "<missing>": 9
+      },
+      "is_in_flight": {
+        "<missing>": 177
+      },
+      "is_suspended": {
+        "<missing>": 177
+      },
+      "is_t_plus_5_due": {
+        "<missing>": 177
+      },
+      "macro_report": {
+        "<missing>": 59,
+        "macro_report": 118
+      },
+      "manager_verdict.adopted_challenge_ids": {
+        "<missing>": 177
+      },
+      "manager_verdict.claim_evidence_summary": {
+        "<missing>": 59,
+        "manager_verdict.claim_evidence_summary": 118
+      },
+      "manager_verdict.consistency_check_passed": {
+        "<missing>": 59,
+        "manager_verdict.consistency_check_passed": 118
+      },
+      "manager_verdict.direction": {
+        "manager_verdict.direction|direction": 177
+      },
+      "manager_verdict.fund_flow_dispute_gate_applied": {
+        "<missing>": 62,
+        "manager_verdict.fund_flow_dispute_gate_applied": 115
+      },
+      "manager_verdict.ohlcv_gate_applied": {
+        "<missing>": 62,
+        "manager_verdict.ohlcv_gate_applied": 115
+      },
+      "manager_verdict.winner": {
+        "<missing>": 59,
+        "manager_verdict.winner|investment_debate_state.manager_verdict.winner|debate_winner": 118
+      },
+      "market_data_context": {
+        "market_data_context|result_data.market_data_context": 177
+      },
+      "market_data_context.ohlcv_unavailable": {
+        "market_data_context.source_provenance.stock_data": 59,
+        "<missing>": 118
+      },
+      "market_regime": {
+        "<missing>": 177
+      },
+      "market_report": {
+        "<missing>": 59,
+        "market_report": 118
+      },
+      "model_id_by_stance": {
+        "<missing>": 177
+      },
+      "news_report": {
+        "<missing>": 59,
+        "news_report": 118
+      },
+      "price_basis_version": {
+        "price_basis_version (top|result_data|inv_state|metadata)": 177
+      },
+      "price_ref_contract_version": {
+        "<missing>": 59,
+        "price_ref_contract_version|result_data.price_ref_contract_version|metadata": 118
+      },
+      "protocol_version": {
+        "protocol_version|investment_debate_state.protocol_version": 177
+      },
+      "report_id": {
+        "id|report_id": 177
+      },
+      "round_messages": {
+        "<missing>": 59,
+        "investment_debate_state.round_messages|round_messages": 118
+      },
+      "sentiment_report": {
+        "<missing>": 59,
+        "sentiment_report": 118
+      },
+      "shadow_credit_metrics": {
+        "shadow_credit_metrics|result_data.shadow_credit_metrics": 177
+      },
+      "shadow_credit_metrics.bear_challenge_adoption_rate": {
+        "<missing>": 177
+      },
+      "shadow_credit_metrics.bear_verified_rate": {
+        "shadow_credit_metrics.bear_verified_rate": 177
+      },
+      "shadow_credit_metrics.bull_challenge_adoption_rate": {
+        "<missing>": 177
+      },
+      "shadow_credit_metrics.bull_verified_rate": {
+        "shadow_credit_metrics.bull_verified_rate": 177
+      },
+      "shadow_credit_metrics.manager_consistency_gate_triggered": {
+        "shadow_credit_metrics.manager_consistency_gate_triggered": 177
+      },
+      "smart_money_report": {
+        "<missing>": 59,
+        "smart_money_report": 118
+      },
+      "status": {
+        "status": 177
+      },
+      "symbol": {
+        "symbol|ticker": 177
+      },
+      "t_plus_1_open": {
+        "<missing>": 177
+      },
+      "t_plus_5_date": {
+        "<missing>": 177
+      },
+      "t_plus_5_direction_hit": {
+        "<missing>": 177
+      },
+      "t_plus_5_price": {
+        "<missing>": 177
+      },
+      "t_plus_5_status": {
+        "<missing>": 177
+      },
+      "trade_action": {
+        "trade_action|result_data.trade_action|decision_status.trade_action": 177
+      },
+      "trade_date": {
+        "trade_date|date|created_at": 177
+      },
+      "volume_price_report": {
+        "<missing>": 59,
+        "volume_price_report": 118
+      }
+    }
+  }
+}
