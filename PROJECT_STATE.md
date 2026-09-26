@@ -6,8 +6,8 @@
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `f427d54d1967e8a7bb4af0d25865063cb0a955a8`（`/healthz` 精确回读；09-26 03:19 起，DAV-1290：聊天入口可选中线（显式 horizons）；**价格返修与 E-04 返修均开启**）。上一版 `dc0b143`（DAV-1287） |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`f427d54` 之后若只有治理文档提交，代码树与生产逐字节一致 |
+| 生产代码 SHA | `fb1d171198f3500bfb49dcde78261f0c858d0c77`（`/healthz` 精确回读；09-26，DAV-1297：主力资金数值按日期/区间核对、unverifiable 中性提示、被拦原稿留存；**价格返修与 E-04 返修均开启**）。上一版 `f427d54`（DAV-1290） |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。`fb1d171` 之后若只有治理或测试提交，产品代码与生产逐字节一致 |
 | 待发布提交 | 无 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
@@ -19,13 +19,13 @@
 
 - **H1b 门槛**：FAIL / `KEEP_FALSE`。门槛要求单一 cohort ≥60，v1 cohort 目前只有 6 条。`credit_weighting_enabled=False`。
 - **服务运行态**（D-038、D-041、D-044、D-045、DAV-1276）：
-  - PID 68906，运行目录 `releases/f427d54`（locked）；回退源为 `releases/dc0b143`（DAV-1290）。
+  - PID 36057，运行目录 `releases/fb1d171`（locked）；回退源为 `releases/f427d54`（DAV-1297）。
   - 启动环境：`env -i` 白名单 16 项，与 DAV-1270 相同，含两个返修开关，不含 DUMP_DIR。
   - bundle 为 `index-DXhIKhFl.js`，含博弈论报告显示。
-  - 回退启动命令存于 `logs/prev-launch-dc0b143.txt`；`releases/c5a90d5` 在签收后删除。
+  - 回退启动命令存于 `logs/prev-launch-f427d54.txt`；`releases/dc0b143` 在签收后删除。
   - 按 David 09-25 的指示，已清理更早的发布目录 `f075124`、`b0ceff3`、`a181e4a`（git worktree 已解锁并移除，`.env` 为软链，目标文件未受影响）。今后只保留「当前」与「回退」两个发布目录，发布签收后删除更早的那个。
 - **生产库**：
-  - reports 共 1832 份：completed 1068、failed 764（09-26 03:3x）。
+  - reports 共 1834 份：completed 1070、failed 764（09-26）。
   - 部署前备份为 `data/tradingagents.db.bak-20260925-deploy-a666be5`。
   - 历史报告的 `game_theory_report` 列**不回填**（总控裁定，David 授权「你看着办」）：API 读取时回退取值，显示已经完整；回填属于生产库业务写入，没有收益，只有风险。
 - **本次 smoke**（3c55216a，000725.SZ@2026-09-24）：
