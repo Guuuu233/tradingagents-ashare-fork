@@ -59,6 +59,42 @@ DECISION_MODEL_V1: str = "decision_model.v1"
 EVIDENCE_CONTRACT_V0: str = "evidence_contract.v0"
 PRICE_BASIS_UNSPECIFIED: str = "price_basis.unspecified"
 
+# ── Dual-Horizon Unit Splitting (DAV-1322) ────────────────────────────────────
+# Dual-horizon packaged reports nest each horizon's full debate payload under
+# ``result_data.short_term`` / ``result_data.medium_term``. The packaged top
+# level is an aggregate slice copy (e.g. mixed PARTIAL/NO_TRADE decision_status)
+# and must NEVER be counted as an evaluation unit — only the per-horizon
+# sub-reports are units. Single-horizon reports remain a single unit.
+DUAL_HORIZON_SUB_UNITS: tuple[tuple[str, str], ...] = (
+    ("short_term", "short"),
+    ("medium_term", "medium"),
+)
+# Cohort 键第四元（档位）缺省哨兵：无 horizon 信息的样本归入 unspecified，
+# 与显式 short/medium 永不混入同一 cohort。
+HORIZON_UNSPECIFIED: str = "horizon.unspecified"
+
+_HORIZON_NORMALIZE_MAP: dict[str, str] = {
+    "short": "short",
+    "short_term": "short",
+    "短线": "short",
+    "medium": "medium",
+    "medium_term": "medium",
+    "mid": "medium",
+    "中线": "medium",
+}
+
+
+def normalize_horizon_label(raw: Any) -> Optional[str]:
+    """Normalize a horizon value to 'short'/'medium' (or pass through unknown labels).
+
+    Returns None when no horizon value is present."""
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    if not s:
+        return None
+    return _HORIZON_NORMALIZE_MAP.get(s, s)
+
 # ── H1b 入场价契约 (DAV-1107) ──────────────────────────────────────────────
 # 评价入口统一为 T+1 Open 真实成交价；manager_verdict.entry / report entry /
 # T 日 close 禁止作为 H1b 评价基准，仅作遗留记账口径并归入 unspecified cohort。
@@ -622,13 +658,106 @@ def extract_report_analysis_status_and_action(report: Mapping[str, Any]) -> tupl
     return analysis_status, trade_action
 
 
+def split_report_into_units(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Expand a report into per-horizon evaluation units (DAV-1322).
+
+    Dual-horizon packaged reports carry the complete debate payload under
+    ``result_data.short_term`` / ``result_data.medium_term``. Each present
+    horizon sub-report becomes exactly one evaluation unit; the packaged top
+    level is an aggregate slice copy and is NEVER emitted as a unit, so a
+    dual-horizon report contributes exactly ``len(units) ∈ {1,2}`` units and
+    the top level never double-counts. Single-horizon reports pass through
+    unchanged as one unit.
+
+    Each unit inherits row-level identity fields (id/report_id/symbol/
+    trade_date/industry/status/created_at/user_id) that the horizon sub-report
+    may not re-stamp, plus cohort version fields from the parent
+    ``result_data`` when the sub-report lacks them. Aggregate-only top-level
+    fields (analysis_status / trade_action / decision_status / decision /
+    direction / manager_verdict / investment_debate_state) are deliberately
+    NOT inherited — the packaged top level mixes both horizons and would
+    poison unit-level D-009 classification.
+    """
+    if not isinstance(report, Mapping):
+        return []
+
+    res_data = report.get("result_data") if isinstance(report.get("result_data"), Mapping) else {}
+
+    def _inherit(target: dict[str, Any]) -> dict[str, Any]:
+        # Row-level identity fields
+        for key in (
+            "id",
+            "report_id",
+            "symbol",
+            "trade_date",
+            "industry",
+            "status",
+            "created_at",
+            "updated_at",
+            "user_id",
+        ):
+            val = report.get(key)
+            if val is None and isinstance(res_data, Mapping):
+                val = res_data.get(key)
+            if val is not None and (target.get(key) is None or target.get(key) == ""):
+                target[key] = val
+        # Cohort / contract version fields from parent result_data
+        for key in (
+            "decision_model_version",
+            "evidence_contract_version",
+            "price_basis_version",
+            "price_ref_contract_version",
+            "generated_by_commit_sha",
+        ):
+            if (target.get(key) is None or target.get(key) == "") and res_data.get(key) is not None:
+                target[key] = res_data[key]
+        return target
+
+    units: list[dict[str, Any]] = []
+    for sub_key, horizon_label in DUAL_HORIZON_SUB_UNITS:
+        sub = res_data.get(sub_key)
+        if not isinstance(sub, Mapping):
+            continue
+        unit = _inherit(dict(sub))
+        sub_hz = normalize_horizon_label(unit.get("horizon"))
+        if sub_hz and sub_hz != horizon_label:
+            # 槽位键为准：子档自带 horizon 与嵌套槽位冲突时以槽位为准并告警。
+            logger.warning(
+                "dual-horizon unit horizon mismatch: sub.%s self-declares horizon=%r, "
+                "slot key wins (unit assigned to %r)",
+                sub_key, sub_hz, horizon_label,
+            )
+        unit["horizon"] = horizon_label
+        parent_rid = report.get("id") or report.get("report_id")
+        if parent_rid is not None and str(parent_rid).strip():
+            unit.setdefault("parent_report_id", str(parent_rid).strip())
+        units.append(unit)
+
+    if units:
+        return units
+    return [dict(report)]
+
+
 def is_qualifying_v2_report(report: Mapping[str, Any]) -> bool:
-    """Return True if report is a completed v2 structured debate report with a valid v2 manager verdict winner.
+    """Return True if report is a completed structured debate report with a valid
+    manager verdict winner AND complete structured evidence (DAV-1322).
+
+    资格判据（D-046 测量层）：结构化证据齐备，而不是 ``protocol_version ==
+    v2_structured`` —— v1_legacy 生产报告同样持久化了 claims /
+    claim_evidence_summary / challenges。``protocol_version`` 照常随样本记录，
+    仅作元数据，不再作为资格门槛。
+
+    Qualifies when ALL hold:
+    - status == 'completed' (when present)
+    - manager_verdict.winner in {'bull', 'bear', 'tie'}
+    - at least one structured debate evidence artifact is non-empty:
+      ``investment_debate_state.claims`` / ``manager_verdict.claim_evidence_summary`` /
+      ``investment_debate_state.challenges``
 
     Excludes:
     - Non-completed reports (if status is present and != 'completed')
-    - Legacy v1 reports without v2 structured disagreement / without v2 manager_verdict.winner
-    - Reports without winner in manager_verdict
+    - Reports without a valid winner in manager_verdict
+    - Reports missing every structured evidence artifact
     """
     if not isinstance(report, Mapping):
         return False
@@ -646,15 +775,7 @@ def is_qualifying_v2_report(report: Mapping[str, Any]) -> bool:
     if not isinstance(inv_state, Mapping):
         inv_state = target
 
-    # 2. Protocol version check:
-    meta = get_protocol_metadata(target)
-    proto_ver = meta.get("protocol_version") or target.get("protocol_version") or inv_state.get("protocol_version")
-    is_v2 = (
-        proto_ver == PROTOCOL_VERSION_V2_STRUCTURED
-        or is_v2_debate_enabled(target)
-    )
-
-    # 3. Manager verdict & winner check:
+    # 2. Manager verdict & winner check:
     verdict = (
         target.get("manager_verdict")
         or inv_state.get("manager_verdict")
@@ -666,17 +787,20 @@ def is_qualifying_v2_report(report: Mapping[str, Any]) -> bool:
     raw_winner = verdict.get("winner") or target.get("debate_winner")
     winner_str = str(raw_winner or "").strip().lower()
     has_valid_winner = winner_str in ("bull", "bear", "tie")
+    if not has_valid_winner:
+        return False
 
-    if is_v2 and has_valid_winner:
-        return True
-    if has_valid_winner and (
-        bool(verdict.get("claim_evidence_summary"))
-        or verdict.get("consistency_check_passed") is not None
-        or bool(inv_state.get("claims"))
-    ):
-        return True
+    # 3. Structured evidence gate (replaces the former protocol_version gate):
+    claims = inv_state.get("claims") or target.get("claims")
+    challenges = inv_state.get("challenges") or target.get("challenges")
+    claim_evidence_summary = (
+        verdict.get("claim_evidence_summary")
+        or inv_state.get("claim_evidence_summary")
+        or target.get("claim_evidence_summary")
+    )
+    has_structured_evidence = bool(claims) or bool(challenges) or bool(claim_evidence_summary)
 
-    return False
+    return has_structured_evidence
 
 
 # Alias for clarity in multi-stage pipeline accounting
@@ -980,6 +1104,10 @@ def filter_v2_completed_reports(
     }
     ledger: dict[str, int] = {
         "raw_count": len(reports),
+        # DAV-1322: dual-horizon reports are unpacked into per-horizon units
+        # before any stage evaluation; the packaged top level never counts.
+        "unit_count": 0,
+        "dual_horizon_split_reports": 0,
         "qualifying_v2_count": 0,
         "eligible_count": 0,
         "non_v2_excluded": 0,
@@ -1001,63 +1129,76 @@ def filter_v2_completed_reports(
     exclusion_reasons: dict[str, list[str]] = {}
 
     for r in reports:
-        # Stage 1 -> Stage 2: Must be a qualifying v2 protocol report first
-        if not is_v2_protocol_report(r):
-            ledger["non_v2_excluded"] += 1
-            continue
+        # Stage 1.0 (DAV-1322): expand dual-horizon packaged reports into
+        # per-horizon units. The packaged top level is never a unit, so the
+        # same report contributes at most one unit per horizon cohort.
+        units = split_report_into_units(r)
+        if len(units) > 1:
+            ledger["dual_horizon_split_reports"] += 1
+        ledger["unit_count"] += len(units)
 
-        ledger["qualifying_v2_count"] += 1
+        for unit in units:
+            # Stage 1 -> Stage 2: Must be a qualifying structured-debate report first
+            if not is_v2_protocol_report(unit):
+                ledger["non_v2_excluded"] += 1
+                continue
 
-        # Stage 2 -> Stage 3: Classify under D-009 §5
-        cat = classify_v2_report_d009_exclusion(r)
-        if cat is not None:
-            ledger["d009_excluded"] += 1
-            if cat in excluded_counts:
-                excluded_counts[cat] += 1
-            else:
-                excluded_counts[cat] = excluded_counts.get(cat, 0) + 1
-            continue
+            ledger["qualifying_v2_count"] += 1
 
-        ledger["eligible_count"] += 1
+            # Stage 2 -> Stage 3: Classify under D-009 §5
+            cat = classify_v2_report_d009_exclusion(unit)
+            if cat is not None:
+                ledger["d009_excluded"] += 1
+                if cat in excluded_counts:
+                    excluded_counts[cat] += 1
+                else:
+                    excluded_counts[cat] = excluded_counts.get(cat, 0) + 1
+                continue
 
-        # Stage 3 -> Stage 3.5: HOLD semantic isolation (DAV-1139 Phase B).
-        hold_reasons = collect_hold_semantic_reasons(r)
+            ledger["eligible_count"] += 1
 
-        # Stage 3 -> Stage 4: deterministic price-basis isolation (DAV-1200).
-        # Computed for EVERY eligible sample even when Stage 3.5 already
-        # isolated it — dropping it here would erase multi-reason auditability
-        # (e.g. hold_conflict + price_basis_contaminated).
-        pb_reason = classify_price_basis_exclusion(r)
+            # Stage 3 -> Stage 3.5: HOLD semantic isolation (DAV-1139 Phase B).
+            hold_reasons = collect_hold_semantic_reasons(unit)
 
-        sample_reasons: list[str] = list(hold_reasons)
-        if pb_reason is not None:
-            sample_reasons.append(pb_reason)
+            # Stage 3 -> Stage 4: deterministic price-basis isolation (DAV-1200).
+            # Computed for EVERY eligible sample even when Stage 3.5 already
+            # isolated it — dropping it here would erase multi-reason auditability
+            # (e.g. hold_conflict + price_basis_contaminated).
+            pb_reason = classify_price_basis_exclusion(unit)
 
-        if pb_reason is not None:
-            ledger["price_basis_isolated"] += 1
-            if pb_reason in (REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE):
-                ledger[pb_reason] += 1
-            else:  # pragma: no cover - defensive, classifier contract is fixed
-                ledger[REASON_CONTRACT_INCOMPLETE] += 1
-
-        if hold_reasons:
-            ledger["hold_semantic_isolated"] += 1
-            for hr in hold_reasons:
-                if hr in ledger:
-                    ledger[hr] += 1
-                else:  # pragma: no cover - defensive, reason set is fixed
-                    ledger[hr] = ledger.get(hr, 0) + 1
+            sample_reasons: list[str] = list(hold_reasons)
             if pb_reason is not None:
-                ledger["hold_price_basis_overlap"] += 1
+                sample_reasons.append(pb_reason)
 
-        if sample_reasons:
-            rid = extract_report_id(r) or f"<unknown:{id(r)}>"
-            exclusion_reasons[rid] = sample_reasons
-            continue
+            if pb_reason is not None:
+                ledger["price_basis_isolated"] += 1
+                if pb_reason in (REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE):
+                    ledger[pb_reason] += 1
+                else:  # pragma: no cover - defensive, classifier contract is fixed
+                    ledger[REASON_CONTRACT_INCOMPLETE] += 1
 
-        normalized = normalize_report_for_evaluation(r)
-        qualifying.append(normalized)
-        ledger["clean_count"] += 1
+            if hold_reasons:
+                ledger["hold_semantic_isolated"] += 1
+                for hr in hold_reasons:
+                    if hr in ledger:
+                        ledger[hr] += 1
+                    else:  # pragma: no cover - defensive, reason set is fixed
+                        ledger[hr] = ledger.get(hr, 0) + 1
+                if pb_reason is not None:
+                    ledger["hold_price_basis_overlap"] += 1
+
+            if sample_reasons:
+                rid = extract_report_id(unit) or f"<unknown:{id(unit)}>"
+                # 双档单元的 report_id 与父报告相同，按档位区分台账键避免互相覆盖。
+                hz = normalize_horizon_label(unit.get("horizon"))
+                if hz:
+                    rid = f"{rid}@{hz}"
+                exclusion_reasons[rid] = sample_reasons
+                continue
+
+            normalized = normalize_report_for_evaluation(unit)
+            qualifying.append(normalized)
+            ledger["clean_count"] += 1
 
     ledger["prediction_eligible_count"] = ledger["eligible_count"] - ledger["hold_semantic_isolated"]
 
@@ -1073,12 +1214,19 @@ def filter_v2_completed_reports(
 # ── Cohort Isolation Helpers (DAV-601) ────────────────────────────────────────
 
 def extract_sample_cohort(sample: Mapping[str, Any]) -> dict[str, Optional[str]]:
-    """Extract cohort triad and commit sha from report/sample dictionary."""
+    """Extract cohort quad (decision model / evidence contract / price basis /
+    horizon) and commit sha from report/sample dictionary.
+
+    ``horizon``（档位，DAV-1322）是 cohort 键的第四元：short 与 medium 永远
+    不会进入同一 cohort，同一份报告在同一 cohort 中至多贡献一个单元。
+    样本不带 horizon 信息时返回 None（canonical key 中归 horizon.unspecified）。
+    """
     if not isinstance(sample, Mapping):
         return {
             "decision_model_version": None,
             "evidence_contract_version": None,
             "price_basis_version": None,
+            "horizon": None,
             "generated_by_commit_sha": None,
         }
 
@@ -1105,8 +1253,33 @@ def extract_sample_cohort(sample: Mapping[str, Any]) -> dict[str, Optional[str]]
         "decision_model_version": _find_field("decision_model_version"),
         "evidence_contract_version": _find_field("evidence_contract_version"),
         "price_basis_version": _find_field("price_basis_version"),
+        "horizon": normalize_horizon_label(_find_field("horizon")),
         "generated_by_commit_sha": _find_field("generated_by_commit_sha") or _find_field("commit_sha"),
     }
+
+
+def _cohort_canonical_key(
+    decision_model_version: Optional[str],
+    evidence_contract_version: Optional[str],
+    price_basis_version: Optional[str],
+    horizon: Optional[str],
+) -> str:
+    """Canonical cohort key: ``dmv:ecv:pbv:hz`` （四元，档位缺省为 horizon.unspecified）。"""
+    hz = normalize_horizon_label(horizon) or HORIZON_UNSPECIFIED
+    return f"{decision_model_version}:{evidence_contract_version}:{price_basis_version}:{hz}"
+
+
+def _legacy_cohort_key(horizon: Optional[str]) -> str:
+    """Canonical key for the legacy-unversioned cohort family.
+
+    ``legacy_unversioned`` for samples without horizon info (backward-compat),
+    ``legacy_unversioned:<hz>`` for horizon-stamped samples — legacy 样本
+    同样受档位隔离（DAV-1322 rework）。
+    """
+    hz = normalize_horizon_label(horizon)
+    if not hz or hz == HORIZON_UNSPECIFIED:
+        return COHORT_LEGACY_UNVERSIONED
+    return f"{COHORT_LEGACY_UNVERSIONED}:{hz}"
 
 
 def is_legacy_unversioned_sample(sample: Mapping[str, Any]) -> bool:
@@ -1132,13 +1305,16 @@ def parse_cohort_spec(cohort: Union[str, Mapping[str, Any]]) -> dict[str, Any]:
         ecv = cohort.get("evidence_contract_version")
         pbv = cohort.get("price_basis_version")
         if cohort_type == COHORT_LEGACY_UNVERSIONED or dmv in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+            hz = normalize_horizon_label(cohort.get("horizon"))
             return {
                 "cohort_type": COHORT_LEGACY_UNVERSIONED,
                 "decision_model_version": DECISION_MODEL_LEGACY,
                 "evidence_contract_version": None,
                 "price_basis_version": None,
-                "canonical_key": COHORT_LEGACY_UNVERSIONED,
+                "horizon": hz or HORIZON_UNSPECIFIED,
+                "canonical_key": _legacy_cohort_key(hz),
             }
+        hz_str = normalize_horizon_label(cohort.get("horizon")) or HORIZON_UNSPECIFIED
         dmv_str = str(dmv or DECISION_MODEL_V1).strip()
         ecv_str = str(ecv or EVIDENCE_CONTRACT_V0).strip()
         pbv_str = str(pbv or PRICE_BASIS_UNSPECIFIED).strip()
@@ -1147,20 +1323,28 @@ def parse_cohort_spec(cohort: Union[str, Mapping[str, Any]]) -> dict[str, Any]:
             "decision_model_version": dmv_str,
             "evidence_contract_version": ecv_str,
             "price_basis_version": pbv_str,
-            "canonical_key": f"{dmv_str}:{ecv_str}:{pbv_str}",
+            "horizon": hz_str,
+            "canonical_key": _cohort_canonical_key(dmv_str, ecv_str, pbv_str, hz_str),
         }
 
     s = str(cohort).strip()
     if not s:
         raise ValueError("Cohort specification is required and cannot be empty (fail-closed)")
 
-    if s in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+    if s in (COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY) or s.startswith(
+        COHORT_LEGACY_UNVERSIONED + ":"
+    ):
+        # DAV-1322 rework: legacy cohort also carries the horizon component
+        # ('legacy_unversioned:<hz>'); bare 'legacy_unversioned' means the
+        # horizon.unspecified legacy bucket.
+        hz = normalize_horizon_label(s.split(":", 1)[1]) if ":" in s else None
         return {
             "cohort_type": COHORT_LEGACY_UNVERSIONED,
             "decision_model_version": DECISION_MODEL_LEGACY,
             "evidence_contract_version": None,
             "price_basis_version": None,
-            "canonical_key": COHORT_LEGACY_UNVERSIONED,
+            "horizon": hz or HORIZON_UNSPECIFIED,
+            "canonical_key": _legacy_cohort_key(hz),
         }
 
     if s.startswith("{"):
@@ -1177,12 +1361,18 @@ def parse_cohort_spec(cohort: Union[str, Mapping[str, Any]]) -> dict[str, Any]:
         dmv_str = parts[0]
         ecv_str = parts[1] if len(parts) > 1 and parts[1] else EVIDENCE_CONTRACT_V0
         pbv_str = parts[2] if len(parts) > 2 and parts[2] else PRICE_BASIS_UNSPECIFIED
+        hz_str = (
+            normalize_horizon_label(parts[3])
+            if len(parts) > 3 and parts[3]
+            else HORIZON_UNSPECIFIED
+        )
         return {
             "cohort_type": "triad",
             "decision_model_version": dmv_str,
             "evidence_contract_version": ecv_str,
             "price_basis_version": pbv_str,
-            "canonical_key": f"{dmv_str}:{ecv_str}:{pbv_str}",
+            "horizon": hz_str,
+            "canonical_key": _cohort_canonical_key(dmv_str, ecv_str, pbv_str, hz_str),
         }
 
     return {
@@ -1190,14 +1380,20 @@ def parse_cohort_spec(cohort: Union[str, Mapping[str, Any]]) -> dict[str, Any]:
         "decision_model_version": s,
         "evidence_contract_version": EVIDENCE_CONTRACT_V0,
         "price_basis_version": PRICE_BASIS_UNSPECIFIED,
-        "canonical_key": f"{s}:{EVIDENCE_CONTRACT_V0}:{PRICE_BASIS_UNSPECIFIED}",
+        "horizon": HORIZON_UNSPECIFIED,
+        "canonical_key": _cohort_canonical_key(s, EVIDENCE_CONTRACT_V0, PRICE_BASIS_UNSPECIFIED, None),
     }
 
 
 def is_cohort_homogeneous(
     reports: Sequence[Mapping[str, Any]],
 ) -> Tuple[bool, Optional[str]]:
-    """Check if all reports in collection belong to the same cohort generation."""
+    """Check if all reports in collection belong to the same cohort generation.
+
+    Legacy-unversioned samples are keyed ``legacy_unversioned[:<hz>]`` — the
+    horizon component isolates short/medium units even when version fields are
+    absent (DAV-1322 rework).
+    """
     reps = list(reports or [])
     if not reps:
         return True, None
@@ -1205,13 +1401,13 @@ def is_cohort_homogeneous(
     keys = set()
     for r in reps:
         if is_legacy_unversioned_sample(r):
-            keys.add(COHORT_LEGACY_UNVERSIONED)
+            keys.add(_legacy_cohort_key(extract_sample_cohort(r).get("horizon")))
         else:
             c_info = extract_sample_cohort(r)
             dmv = c_info["decision_model_version"]
             ecv = c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0
             pbv = c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED
-            keys.add(f"{dmv}:{ecv}:{pbv}")
+            keys.add(_cohort_canonical_key(dmv, ecv, pbv, c_info.get("horizon")))
 
     if len(keys) == 1:
         return True, list(keys)[0]
@@ -1228,10 +1424,17 @@ def assert_cohort_homogeneity(
         cohort_keys = set()
         for r in reps:
             if is_legacy_unversioned_sample(r):
-                cohort_keys.add(COHORT_LEGACY_UNVERSIONED)
+                cohort_keys.add(_legacy_cohort_key(extract_sample_cohort(r).get("horizon")))
             else:
                 c = extract_sample_cohort(r)
-                cohort_keys.add(f"{c['decision_model_version']}:{c['evidence_contract_version']}:{c['price_basis_version']}")
+                cohort_keys.add(
+                    _cohort_canonical_key(
+                        c["decision_model_version"],
+                        c["evidence_contract_version"],
+                        c["price_basis_version"],
+                        c.get("horizon"),
+                    )
+                )
         raise ValueError(f"Mixed cohort generations detected in evaluation pool: {sorted(cohort_keys)}")
 
 
@@ -1242,8 +1445,11 @@ def filter_reports_by_cohort(
     """Filter reports strictly by cohort specification.
 
     Rules:
-    - --cohort=legacy_unversioned: only samples lacking version fields or marked legacy; never label as v1.
-    - Triad version: strictly all 3 fields matching; commit SHA is provenance metadata, not filter key.
+    - --cohort=legacy_unversioned[:<hz>]: only samples lacking version fields or marked
+      legacy, isolated by horizon (bare spec = horizon.unspecified bucket only);
+      never label as v1.
+    - Quad version ``dmv:ecv:pbv:hz``: strictly all 4 fields matching; a 3-part spec
+      means horizon.unspecified; commit SHA is provenance metadata, not filter key.
     - Fail-closed on invalid or empty cohort specification.
     """
     spec = parse_cohort_spec(cohort)
@@ -1252,10 +1458,14 @@ def filter_reports_by_cohort(
     shas: set[str] = set()
 
     if spec["cohort_type"] == COHORT_LEGACY_UNVERSIONED:
+        target_hz = spec.get("horizon") or HORIZON_UNSPECIFIED
         for r in reps:
             if is_legacy_unversioned_sample(r):
                 c_info = extract_sample_cohort(r)
                 if c_info["decision_model_version"] not in (None, "", COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+                    continue
+                # 档位隔离：legacy 样本同样按 horizon 分 cohort（DAV-1322 rework）。
+                if (c_info.get("horizon") or HORIZON_UNSPECIFIED) != target_hz:
                     continue
                 filtered.append(dict(r))
                 sha = c_info["generated_by_commit_sha"]
@@ -1265,15 +1475,18 @@ def filter_reports_by_cohort(
         target_dmv = spec["decision_model_version"]
         target_ecv = spec["evidence_contract_version"]
         target_pbv = spec["price_basis_version"]
+        target_hz = spec.get("horizon") or HORIZON_UNSPECIFIED
 
         for r in reps:
             if is_legacy_unversioned_sample(r):
                 continue
             c_info = extract_sample_cohort(r)
+            c_hz = c_info.get("horizon") or HORIZON_UNSPECIFIED
             if (
                 c_info["decision_model_version"] == target_dmv
                 and c_info["evidence_contract_version"] == target_ecv
                 and c_info["price_basis_version"] == target_pbv
+                and c_hz == target_hz
             ):
                 filtered.append(dict(r))
                 sha = c_info["generated_by_commit_sha"]
@@ -1286,6 +1499,7 @@ def filter_reports_by_cohort(
         "decision_model_version": spec["decision_model_version"],
         "evidence_contract_version": spec["evidence_contract_version"],
         "price_basis_version": spec["price_basis_version"],
+        "horizon": spec.get("horizon"),
         "commit_shas": sorted(shas),
     }
     return filtered, cohort_meta

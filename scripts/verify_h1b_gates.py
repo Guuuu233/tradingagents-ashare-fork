@@ -98,8 +98,10 @@ def load_reports_from_db(
         # When explicit db_path is provided, strictly return filtered results from this db without fallback
         v2_reports, excluded_counts, ledger = filter_v2_completed_reports(raw_reports, return_ledger=True)
         logger.info(
-            "【三段台账】从指定数据库共检索到 %d 份原始样本，筛选出 %d 份合格 v2 结构化辩论样本 (非v2排除 %d 份)；贯彻 D-009 §5 筛选出 %d 份合格样本 (排除 %d 份: legacy_null=%d, abstain=%d, invalid_run=%d, data_error=%d, no_trade=%d, wait=%d)",
+            "【四段台账 (DAV-1322)】从指定数据库共检索到 %d 份原始报告，双档拆包后 %d 个评估单元 (双档报告 %d 份)，筛选出 %d 份结构化证据齐备单元 (不合格排除 %d 个)；贯彻 D-009 §5 筛选出 %d 份合格样本 (排除 %d 份: legacy_null=%d, abstain=%d, invalid_run=%d, data_error=%d, no_trade=%d, wait=%d)",
             ledger["raw_count"],
+            ledger.get("unit_count", ledger["raw_count"]),
+            ledger.get("dual_horizon_split_reports", 0),
             ledger["qualifying_v2_count"],
             ledger["non_v2_excluded"],
             ledger["eligible_count"],
@@ -196,8 +198,10 @@ def load_reports_from_db(
     # 6. Filter strictly for completed v2 reports with winner and D-009 §5 analysis_status
     v2_reports, excluded_counts, ledger = filter_v2_completed_reports(raw_reports, return_ledger=True)
     logger.info(
-        "【三段台账】共检索到 %d 份原始样本，筛选出 %d 份合格 v2 结构化辩论样本 (非v2排除 %d 份)；贯彻 D-009 §5 筛选出 %d 份合格样本 (排除 %d 份: legacy_null=%d, abstain=%d, invalid_run=%d, data_error=%d, no_trade=%d, wait=%d)",
+        "【四段台账 (DAV-1322)】共检索到 %d 份原始报告，双档拆包后 %d 个评估单元 (双档报告 %d 份)，筛选出 %d 份结构化证据齐备单元 (不合格排除 %d 个)；贯彻 D-009 §5 筛选出 %d 份合格样本 (排除 %d 份: legacy_null=%d, abstain=%d, invalid_run=%d, data_error=%d, no_trade=%d, wait=%d)",
         ledger["raw_count"],
+        ledger.get("unit_count", ledger["raw_count"]),
+        ledger.get("dual_horizon_split_reports", 0),
         ledger["qualifying_v2_count"],
         ledger["non_v2_excluded"],
         ledger["eligible_count"],
@@ -311,10 +315,12 @@ def format_gates_matrix_text(evaluation: Dict[str, Any], cohort_info: Optional[D
     lines.append("-" * 80)
     if ledger:
         lines.append(
-            f"【三段台账 (DAV-783)】: 原始样本={ledger.get('raw_count', 0)} -> "
-            f"v2候选={ledger.get('qualifying_v2_count', 0)} -> "
+            f"【四段台账 (DAV-783/DAV-1322)】: 原始报告={ledger.get('raw_count', 0)} -> "
+            f"拆包单元={ledger.get('unit_count', ledger.get('raw_count', 0))} "
+            f"(双档报告={ledger.get('dual_horizon_split_reports', 0)}) -> "
+            f"结构化候选={ledger.get('qualifying_v2_count', 0)} -> "
             f"D-009合格={ledger.get('eligible_count', 0)} "
-            f"(非v2排除={ledger.get('non_v2_excluded', 0)})"
+            f"(不合格排除={ledger.get('non_v2_excluded', 0)})"
         )
         lines.append(
             f"【Stage 3.5/4 隔离台账 (DAV-1139/1200)】: "
@@ -440,7 +446,7 @@ if __name__ == "__main__":
         "--cohort",
         type=str,
         default=None,
-        help="Cohort 标识 (必填, 如 legacy_unversioned 或三元版本 decision_model.v1:evidence_contract.v0:price_basis.unspecified)",
+        help="Cohort 标识 (必填, 如 legacy_unversioned 或四元版本 decision_model.v1:evidence_contract.v0:price_basis.unspecified:short；第四元档位缺省为 horizon.unspecified)",
     )
     parser.add_argument("--db-path", type=str, default=None, help="SQLite 数据库路径")
     parser.add_argument("--input-file", type=str, default=None, help="指定评测 JSON 文件路径")

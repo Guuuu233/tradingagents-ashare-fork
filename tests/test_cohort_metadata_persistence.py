@@ -383,8 +383,10 @@ class TestCohortMetadataPersistence:
         assert extracted["price_basis_version"] == "price_basis.unspecified"
         assert len(extracted["generated_by_commit_sha"]) == 40
 
+        # DAV-1322: cohort canonical key appends the horizon component;
+        # a report without horizon lands in the horizon.unspecified cohort.
         target_cohort = "decision_model.v1:evidence_contract.v2:price_basis.unspecified"
         filtered, meta = filter_reports_by_cohort([rep.to_dict()], cohort=target_cohort)
         assert len(filtered) == 1
-        assert meta["canonical_key"] == target_cohort
+        assert meta["canonical_key"] == f"{target_cohort}:horizon.unspecified"
         assert meta["commit_shas"] == [extracted["generated_by_commit_sha"]]

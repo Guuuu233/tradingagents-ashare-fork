@@ -443,7 +443,8 @@ class TestCohortMetadataAndHomogeneity:
         ]
         is_homo_v1, cohort_key_v1 = is_cohort_homogeneous(pure_v1)
         assert is_homo_v1 is True
-        assert cohort_key_v1 == "decision_model.v1:evidence_contract.v0:price_basis.unspecified"
+        # DAV-1322: canonical cohort key appends horizon (fourth component)
+        assert cohort_key_v1 == "decision_model.v1:evidence_contract.v0:price_basis.unspecified:horizon.unspecified"
         assert_cohort_homogeneity(pure_v1)
 
         # Mixed generations: legacy + v1

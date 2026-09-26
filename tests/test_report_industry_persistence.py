@@ -340,6 +340,7 @@ class TestH1bGateMultiIndustryVerification:
                     "analysis_status": "VALID",
                     "trade_action": "BUY" if winner == "bull" else "SELL",
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bull" if winner == "bull" else "Bear"}],
                     "manager_verdict": {"winner": winner, "direction": "看多" if winner == "bull" else "看空"},
                     # DAV-1207: create_report stamps evidence_contract.v2, making
                     # these contract-era samples — clean eligibility requires the

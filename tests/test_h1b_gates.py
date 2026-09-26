@@ -630,12 +630,15 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
 
     def test_is_qualifying_v2_report_true_for_valid_v2_and_winner(self):
         """is_qualifying_v2_report returns True only for completed v2 reports with analysis_status=VALID, directional action, and winner."""
-        # Standard v2 report with winner
+        # Standard v2 report with winner + structured evidence (DAV-1322:
+        # winner alone is no longer sufficient — claims / claim_evidence_summary
+        # / challenges must be present)
         v2_bull = {
             "status": "completed",
             "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
             "analysis_status": "VALID",
             "trade_action": "BUY",
+            "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
             "manager_verdict": {"winner": "bull", "direction": "看多"},
         }
         assert is_qualifying_v2_report(v2_bull) is True
@@ -645,6 +648,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
             "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
             "analysis_status": "VALID",
             "trade_action": "SELL",
+            "claims": [{"claim_id": "c1", "speaker_key": "Bear", "stance": "bearish"}],
             "manager_verdict": {"winner": "bear", "direction": "看空"},
         }
         assert is_qualifying_v2_report(v2_bear) is True
@@ -657,6 +661,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
             "result_data": {
                 "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                 "investment_debate_state": {
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bull"}],
                     "manager_verdict": {"winner": "tie", "direction": "中性"}
                 },
             },
@@ -720,6 +725,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
                 "trade_action": "BUY",
                 "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                 "trade_date": "2026-08-01",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
                 "manager_verdict": {"winner": "bull", "direction": "看多"},
             },
             {
@@ -730,6 +736,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
                 "trade_action": "BUY",
                 "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                 "trade_date": "2026-08-02",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
                 "manager_verdict": {"winner": "bull", "direction": "看多"},
             },
             {
@@ -740,6 +747,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
                 "trade_action": "SELL",
                 "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                 "trade_date": "2026-08-03",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bear", "stance": "bearish"}],
                 "manager_verdict": {"winner": "bear", "direction": "看空"},
             },
             {
@@ -750,6 +758,7 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
                 "trade_action": "SELL",
                 "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                 "trade_date": "2026-08-04",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bear", "stance": "bearish"}],
                 "manager_verdict": {"winner": "bear", "direction": "看空"},
             },
         ]
@@ -878,7 +887,9 @@ class TestH1bV2OnlySampleFilteringAndIndustry:
             json.dump(qualifying_samples, f)
 
         out_json = str(tmp_path / "test_h1b_report.json")
-        res = run_verify(input_file=sample_file, output_json=out_json, cohort="legacy_unversioned")
+        # Golden samples carry horizon='short' (result_data.horizon) -> cohort
+        # legacy_unversioned:short under the DAV-1322 horizon-isolation contract.
+        res = run_verify(input_file=sample_file, output_json=out_json, cohort="legacy_unversioned:short")
         assert res["task_id"] == "P3-H1b"
         assert res["sample_count"] == 3
         assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["unique_industries"] == 3
@@ -915,6 +926,7 @@ class TestH1bVerifyGatesDbPath:
                 result_data={
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                     "industry": "白酒",
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
                     "manager_verdict": {"winner": "bull", "direction": "看多"},
                     "shadow_credit_metrics": {"bull_verified_rate": 0.9, "bear_verified_rate": 0.8},
                 },
@@ -929,6 +941,7 @@ class TestH1bVerifyGatesDbPath:
                 result_data={
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                     "industry": "白酒",
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
                     "manager_verdict": {"winner": "bull", "direction": "看多"},
                     "shadow_credit_metrics": {"bull_verified_rate": 0.9, "bear_verified_rate": 0.8},
                 },
@@ -943,6 +956,7 @@ class TestH1bVerifyGatesDbPath:
                 result_data={
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                     "industry": "医药",
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bear", "stance": "bearish"}],
                     "manager_verdict": {"winner": "bear", "direction": "看空"},
                     "shadow_credit_metrics": {"bull_verified_rate": 0.85, "bear_verified_rate": 0.85},
                 },
@@ -957,6 +971,7 @@ class TestH1bVerifyGatesDbPath:
                 result_data={
                     "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
                     "industry": "新能源",
+                    "claims": [{"claim_id": "c1", "speaker_key": "Bear", "stance": "bearish"}],
                     "manager_verdict": {"winner": "bear", "direction": "看空"},
                     "shadow_credit_metrics": {"bull_verified_rate": 0.8, "bear_verified_rate": 0.9},
                 },
@@ -1128,8 +1143,8 @@ class TestH1bVerifyGatesDbPath:
         conn.execute(
             """
             INSERT INTO reports (id, symbol, trade_date, status, analysis_status, trade_action, result_data) VALUES
-            ('rep-unmig-1', '600519.SH', '2026-08-01', 'completed', 'VALID', 'BUY', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bull", "direction": "看多"}}'),
-            ('rep-unmig-2', '000858.SZ', '2026-08-02', 'completed', 'VALID', 'SELL', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "manager_verdict": {"winner": "bear", "direction": "看空"}}'),
+            ('rep-unmig-1', '600519.SH', '2026-08-01', 'completed', 'VALID', 'BUY', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "claims": [{"claim_id": "c1", "speaker_key": "Bull"}], "manager_verdict": {"winner": "bull", "direction": "看多"}}'),
+            ('rep-unmig-2', '000858.SZ', '2026-08-02', 'completed', 'VALID', 'SELL', '{"protocol_version": "v2_structured_disagreement", "industry": "白酒", "claims": [{"claim_id": "c1", "speaker_key": "Bear"}], "manager_verdict": {"winner": "bear", "direction": "看空"}}'),
             ('rep-unmig-3', '600036.SH', '2026-08-03', 'failed', 'INVALID_RUN', 'NO_TRADE', '{"protocol_version": "v2_structured_disagreement", "manager_verdict": {"winner": "bull"}}')
             """
         )

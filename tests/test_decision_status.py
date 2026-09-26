@@ -122,6 +122,8 @@ def test_is_calibration_eligible_winner_only_flag():
         "result_data": {
             "status": "completed",
             "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+            # DAV-1322: structured-evidence gate requires claims/ces/challenges
+            "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
             "manager_verdict": {
                 "winner": "bull",
                 "direction": "看多",
