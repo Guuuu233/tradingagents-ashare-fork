@@ -971,6 +971,28 @@ def sanitize_debate_response(
     return _quarantine_rejected_machine_blocks(text, tags)
 
 
+def _sanitize_persisted_attempt(attempt: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip machine-block markup from a rejected attempt's ``raw_response``.
+
+    Rejected responses already failed the per-attempt protocol check, but their
+    verbatim text was being persisted into ``investment_debate_state.attents`` /
+    ``round_messages[].attempts`` inside ``result_data``. The report persistence
+    validator scans every string and hard-fails on duplicated or malformed
+    machine blocks, so one rejected attempt could drop a fully computed report
+    (DAV-1315). Accepted attempts keep their verbatim ``raw_response``.
+    """
+    record = dict(attempt)
+    if record.get("accepted"):
+        return record
+    raw = record.get("raw_response")
+    if isinstance(raw, str) and raw:
+        cleaned = _quarantine_rejected_machine_blocks(raw)
+        if cleaned != raw:
+            record["raw_response"] = cleaned
+            record["raw_response_quarantined"] = True
+    return record
+
+
 def build_debate_report_manifest(
     reports_or_state: Mapping[str, Any],
     pass_info: Mapping[str, tuple[str, int]] | None = None,
@@ -1982,13 +2004,14 @@ def update_debate_state_with_payload(
         round_msg["self_win_prob"] = payload["self_win_prob"]
     if model_name is not None:
         round_msg["model_name"] = model_name
-    if attempts:
-        round_msg["attempts"] = [dict(a) for a in attempts]
+    sanitized_attempts = [_sanitize_persisted_attempt(a) for a in attempts] if attempts else []
+    if sanitized_attempts:
+        round_msg["attempts"] = sanitized_attempts
     round_messages.append(round_msg)
 
     state_attempts = [dict(a) for a in (state.get("attempts", []) or [])]
-    if attempts:
-        for a in attempts:
+    if sanitized_attempts:
+        for a in sanitized_attempts:
             if not any(
                 sa.get("attempt_index") == a.get("attempt_index")
                 and sa.get("message_index") == a.get("message_index")
