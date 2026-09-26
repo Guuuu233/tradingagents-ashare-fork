@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 _logger = logging.getLogger(__name__)
 
 from .base_client import BaseLLMClient
+from .concurrency_gate import acquire_llm_slot, acquire_llm_slot_async
 from .validators import validate_model
 
 
@@ -59,6 +60,31 @@ class UnifiedChatOpenAI(ChatOpenAI):
             kwargs["temperature"] = 0.01
 
         super().__init__(**kwargs)
+
+    # DAV-1331: concurrency gate on all four call paths. LangChain funnels
+    # every entry point into exactly one of _generate/_agenerate/_stream/
+    # _astream (non-streaming goes to *_generate; streaming and the
+    # _should_stream fallback inside *_generate_with_cache go to *_stream),
+    # so gating all four covers sync/async + streaming/non-streaming once.
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        with acquire_llm_slot(self.model_name):
+            return super()._generate(*args, **kwargs)
+
+    async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
+        async with acquire_llm_slot_async(self.model_name):
+            return await super()._agenerate(*args, **kwargs)
+
+    def _stream(self, *args: Any, **kwargs: Any) -> Any:
+        # The slot is held for the whole generator lifecycle; closing the
+        # generator early (broken stream, caller abort) still releases it
+        # via the context manager's finally.
+        with acquire_llm_slot(self.model_name):
+            yield from super()._stream(*args, **kwargs)
+
+    async def _astream(self, *args: Any, **kwargs: Any) -> Any:
+        async with acquire_llm_slot_async(self.model_name):
+            async for chunk in super()._astream(*args, **kwargs):
+                yield chunk
 
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
         result = super().invoke(input=input, config=config, **kwargs)
