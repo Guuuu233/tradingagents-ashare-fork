@@ -530,7 +530,9 @@ def test_router_global_news_fallback_with_dynamic_today():
     frozen_today = datetime(2026, 8, 5, 0, 1, tzinfo=CN_TZ)
     with patch.object(iface, "_registry", registry), \
          patch.object(iface, "get_vendor", return_value="cn_akshare,yfinance"), \
-         patch("tradingagents.dataflows.trade_calendar.now_cn", return_value=frozen_today):
+         patch("tradingagents.dataflows.trade_calendar.now_cn", return_value=frozen_today), \
+         patch("tradingagents.dataflows.trade_calendar.cn_today_str", return_value="2026-08-05"), \
+         patch("tests.test_vendor_chain_semantics.cn_today_str", return_value="2026-08-05"):
         out = iface.route_to_vendor("get_global_news", cn_today_str(), 7, 10)
     assert out == "## yfinance global news"
 

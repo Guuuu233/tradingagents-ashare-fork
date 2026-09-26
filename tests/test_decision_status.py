@@ -182,8 +182,17 @@ def test_consistency_hard_gate_maps_to_abstain_not_valid_buy():
     assert status.direction == DIRECTION_NA
 
 
-def test_dav1093_reason_codes_machine_readable_and_failed_checks_preserved():
+def test_dav1093_reason_codes_machine_readable_and_failed_checks_preserved(monkeypatch, offline_vendor_router):
     """DAV-1093: reason_codes 保持机读，不得被自然语言自由文本污染；叙述句转移至 failed_checks/human_reasons。"""
+    # 固定时钟（DAV-1293）：trade_date=2026-09-19 保持「历史日」语义，
+    # is_historical_analysis_date 等依赖 now_cn() 的判定锚定固定日期，消除随运行日期波动。
+    from datetime import datetime
+    from tradingagents.dataflows import trade_calendar as _tc
+
+    _fixed_now = datetime(2026, 9, 21, 16, 0, 0, tzinfo=_tc.CN_TZ)
+    monkeypatch.setattr(_tc, "now_cn", lambda: _fixed_now)
+    monkeypatch.setattr(_tc, "cn_today_str", lambda: "2026-09-21")
+
     from tradingagents.agents.utils.decision_status import (
         status_from_manager_verdict,
         apply_decision_status_to_result,

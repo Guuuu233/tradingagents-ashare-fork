@@ -37,6 +37,25 @@ from tradingagents.agents.utils.shadow_credit import (
 )
 from scripts.backfill_tplus5_shadow import load_raw_reports, run_backfill
 
+# 固定时钟：本文件内任何缺省 as_of/today 的路径一律锚定冻结交易日，
+# 消除随运行日期波动的失败（DAV-1293）。
+pytestmark = pytest.mark.usefixtures("frozen_trade_date", "offline_vendor_router")
+
+# 子进程 CLI 测试无法继承 conftest 的离线交易日历补丁，运行前先在子进程内
+# 预置确定性日历缓存，避免 akshare 联网拉取受运行环境/日期影响。
+_SUBPROCESS_OFFLINE_CAL_SNIPPET = (
+    "import sys,time,runpy;"
+    "from datetime import date,timedelta;"
+    "from tradingagents.dataflows import trade_calendar as tc;"
+    "d0=date(2024,1,1);n=(date(2027,12,31)-d0).days;"
+    "ds=[d0+timedelta(days=i) for i in range(n+1) if (d0+timedelta(days=i)).weekday()<5];"
+    "tc._TRADE_DATES_CACHE['dates']=ds;"
+    "tc._TRADE_DATES_CACHE['dates_set']=set(ds);"
+    "tc._TRADE_DATES_CACHE['loaded_at']=time.time();"
+    "sys.argv=sys.argv[1:];"
+    "runpy.run_path(sys.argv[0],run_name='__main__')"
+)
+
 
 def _build_v2_report_fixture(
     *,
@@ -369,7 +388,7 @@ class TestBatchBackfillAndSystemGatesIntegration:
             get_price_fn=lambda sym, t0, t5: price_map.get(sym, {}).get(t5),
         )
 
-        gate_res = evaluate_h1b_system_gates(backfilled)
+        gate_res = evaluate_h1b_system_gates(backfilled, as_of="2026-08-15")
         dim_t5 = gate_res["matrix"]["dimension_t5"]
 
         assert dim_t5["details"]["due_count"] == 60
@@ -613,7 +632,7 @@ class TestBackfillTplus5ShadowDbPath:
         if db_ctx:
             db_ctx[0].__exit__(None, None, None)
 
-        res = run_backfill(db_path=empty_db, dry_run=True)
+        res = run_backfill(db_path=empty_db, as_of="2026-08-15", dry_run=True)
         assert res["sample_count"] == 0
         assert res["stats"]["total_scanned"] == 0
 
@@ -706,7 +725,8 @@ class TestBackfillTplus5ShadowDbPath:
             "backfill_tplus5_shadow.py",
         )
         proc = subprocess.run(
-            [sys.executable, script_path, "--db-path", custom_sqlite_db, "--dry-run", "--as-of", "2026-08-15"],
+            [sys.executable, "-c", _SUBPROCESS_OFFLINE_CAL_SNIPPET, script_path,
+             "--db-path", custom_sqlite_db, "--dry-run", "--as-of", "2026-08-15"],
             capture_output=True,
             text=True,
         )
@@ -724,7 +744,8 @@ class TestBackfillTplus5ShadowDbPath:
         )
         fake_db = "/non/existent/path/fake.db"
         proc = subprocess.run(
-            [sys.executable, script_path, "--db-path", fake_db],
+            [sys.executable, "-c", _SUBPROCESS_OFFLINE_CAL_SNIPPET, script_path,
+             "--db-path", fake_db],
             capture_output=True,
             text=True,
         )

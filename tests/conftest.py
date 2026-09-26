@@ -828,3 +828,37 @@ def frozen_trade_date(monkeypatch):
     """
     _apply_frozen_trade_date(monkeypatch)
     return FROZEN_TRADE_DATE
+
+
+@pytest.fixture
+def offline_vendor_router(monkeypatch):
+    """Deterministic offline vendor router for tests that must not depend on
+    ambient network availability (DAV-1293 rework).
+
+    Stubs ``tradingagents.dataflows.interface.route_to_vendor`` to return an
+    empty payload, so T+1 Open / T+5 价格等供应商解析路径一律落到
+    「vendor 无数据」分支，与被断网守卫拦截的效果一致——无论运行环境是否
+    有真实 akshare/网络可达，结果都确定。
+
+    测试内部若自行 patch ``route_to_vendor``（如 CSV fixture），其作用域内
+    后生效的 patch 覆盖本存根，互不影响。
+
+    注意：多个模块以 ``from interface import route_to_vendor`` 顶层绑定
+    （如 game_theory_tools / data_collector），仅 patch interface 模块属性
+    覆盖不到这些已绑定引用，因此一并扫荡已加载模块中的同名属性。
+    """
+    stub = lambda *args, **kwargs: ""  # noqa: E731
+    monkeypatch.setattr(
+        "tradingagents.dataflows.interface.route_to_vendor", stub
+    )
+    import sys
+
+    for mod in list(sys.modules.values()):
+        name = getattr(mod, "__name__", "") or ""
+        if (
+            mod is not None
+            and name.startswith("tradingagents")
+            and getattr(mod, "route_to_vendor", None) is not None
+        ):
+            monkeypatch.setattr(mod, "route_to_vendor", stub)
+    yield

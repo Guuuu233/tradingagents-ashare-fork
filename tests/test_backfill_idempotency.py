@@ -21,6 +21,9 @@ from tradingagents.agents.utils.shadow_credit import (
     backfill_tplus5_shadow_for_reports,
 )
 
+# 固定时钟：缺省 as_of/today 的路径锚定冻结交易日（DAV-1293）。
+pytestmark = pytest.mark.usefixtures("frozen_trade_date", "offline_vendor_router")
+
 
 def _build_test_report(
     *,

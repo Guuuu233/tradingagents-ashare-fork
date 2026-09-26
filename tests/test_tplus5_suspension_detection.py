@@ -35,6 +35,15 @@ from tradingagents.agents.utils.shadow_credit import (
 )
 from tradingagents.dataflows.trade_calendar import trading_days_forward
 
+# 固定时钟：缺省 as_of/today 的路径锚定冻结交易日，消除随运行日期波动（DAV-1293）。
+pytestmark = pytest.mark.usefixtures("frozen_trade_date", "offline_vendor_router")
+
+# 显式注入的确定性日历，替代环境交易日历（离线补丁/akshare 实时日历）。
+_FIXED_SEP2026_CALENDAR = [
+    "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04",
+    "2026-09-07", "2026-09-08",
+]
+
 
 def _build_v2_report(
     symbol: str = "600519.SH",
@@ -152,7 +161,7 @@ class TestDetectTPlus5SuspensionHelper:
     def test_codex_david_reproducer_vendor_truncated_at_t4_returns_false(self):
         """Codex/David reproducer: vendor data truncated at T+4 (no T+6) must return False."""
         T0 = "2026-09-01"
-        fwd = trading_days_forward(T0, 5)  # fwd[3]=09-07 (T+4), fwd[4]=09-08 (T+5)
+        fwd = trading_days_forward(T0, 5, calendar_dates=_FIXED_SEP2026_CALENDAR)  # fwd[3]=09-07 (T+4), fwd[4]=09-08 (T+5)
         # 供应商数据刚好截断在 T+4, T+5 及以后没返回:
         qa = {fwd[0]: 10.0, fwd[1]: 10.1, fwd[2]: 10.2, fwd[3]: 10.3}  # 只到 T+4
         # 必须断言 False，防止把管道截断/延迟洗成合法停牌
@@ -269,7 +278,7 @@ class TestTPlus5SuspensionDetectionIntegration:
         """Case 2: Vendor data truncated at T+4 (no T+6) -> data_missing (fail-closed to due)."""
         T0 = "2026-09-01"
         report = _build_v2_report(trade_date=T0, entry_price=10.0)
-        fwd = trading_days_forward(T0, 5)
+        fwd = trading_days_forward(T0, 5, calendar_dates=_FIXED_SEP2026_CALENDAR)
         # Only up to T+4
         qa = {fwd[0]: 10.0, fwd[1]: 10.1, fwd[2]: 10.2, fwd[3]: 10.3}
         res = backfill_tplus5_shadow_for_report(report, as_of="2026-09-15", price_series=qa)

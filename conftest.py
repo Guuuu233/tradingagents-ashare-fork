@@ -14,6 +14,45 @@ from unittest.mock import patch
 
 import pytest
 
+# DAV-1293: session-wide fixed clock for date-sensitivity verification.
+# Set RT_FAKE_TODAY="YYYY-MM-DD" to pin now_cn()/cn_today_str() across the
+# trade_calendar module and every already-imported tradingagents/api module
+# for the entire run; unset = real clock. Patching happens once at
+# pytest_sessionstart so per-test monkeypatch ordering is unaffected.
+_RT_FAKE_TODAY = os.environ.get("RT_FAKE_TODAY", "").strip()
+_RT_CLOCK_ORIGINALS: list = []
+
+
+def _pin_rt_fake_today_clock() -> None:
+    """Apply the RT_FAKE_TODAY clock override at session start (idempotent)."""
+    if not _RT_FAKE_TODAY or _RT_CLOCK_ORIGINALS:
+        return
+    import sys
+    from datetime import datetime
+    from tradingagents.dataflows import trade_calendar as tc
+
+    fixed_dt = datetime.fromisoformat(_RT_FAKE_TODAY).replace(
+        hour=16, minute=0, second=0, tzinfo=tc.CN_TZ
+    )
+    fixed_str = fixed_dt.date().strftime("%Y-%m-%d")
+
+    targets = [tc]
+    for mod in list(sys.modules.values()):
+        name = getattr(mod, "__name__", "") or ""
+        if mod is not None and name.startswith(("tradingagents", "api")) and mod is not tc:
+            targets.append(mod)
+    for mod in targets:
+        for attr, val in (("now_cn", lambda: fixed_dt), ("cn_today_str", lambda: fixed_str)):
+            if hasattr(mod, attr):
+                _RT_CLOCK_ORIGINALS.append((mod, attr, getattr(mod, attr)))
+                setattr(mod, attr, val)
+
+
+def _restore_rt_fake_today_clock() -> None:
+    while _RT_CLOCK_ORIGINALS:
+        mod, attr, val = _RT_CLOCK_ORIGINALS.pop()
+        setattr(mod, attr, val)
+
 _ORIGINAL_DATABASE_URL = os.environ.get("DATABASE_URL")
 _DB_DIR = tempfile.mkdtemp(prefix="ta-pytest-")
 os.environ["DATABASE_URL"] = "sqlite:///" + _DB_DIR + "/pytest.db"
@@ -45,6 +84,7 @@ _OFFLINE_TRADE_DATES = [
 
 
 def pytest_sessionstart(session):
+    _pin_rt_fake_today_clock()
     from api.database import init_db
 
     init_db()
@@ -129,6 +169,7 @@ def _guard_socket_default_timeout():
 
 def pytest_sessionfinish(session, exitstatus):
     """Restore the caller's DATABASE_URL and remove the temp SQLite dir."""
+    _restore_rt_fake_today_clock()
     if _ORIGINAL_DATABASE_URL is None:
         os.environ.pop("DATABASE_URL", None)
     else:
