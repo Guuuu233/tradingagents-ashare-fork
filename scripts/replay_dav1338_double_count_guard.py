@@ -82,6 +82,12 @@ def main():
     dist_before, dist_after = Counter(), Counter()
     basis_before, basis_after = Counter(), Counter()
     checks_before = checks_after = 0
+    # 09-25+ 子集单独计数：该子集运行时代码版本与候选基线一致，
+    # 重算失败项可直接与落库值对账（AF25901e 级别逐字段吻合已验证）；
+    # 更老语料的失败项差异含版本漂移，不能与守卫效果混读。
+    s25 = dict(n=0, checks_before=0, checks_after=0,
+               dist_before=Counter(), dist_after=Counter(),
+               basis_before=Counter(), basis_after=Counter())
     flips = []
     parse_failures = []
     n_tiers = 0
@@ -154,6 +160,7 @@ def main():
             old_blocked = int(old_audit.get("blocked_duplicate_votes") or 0)
             dist_before[old_blocked] += 1
             basis_before[str((mv.get("direction_basis") or {}).get("status"))] += 1
+            is_25 = (created or "") >= SINCE
             old_failed = list(mv.get("failed_checks") or [])
             checks_before += len(old_failed)
             action_old = mv.get("trade_action") or t.get("trade_action")
@@ -197,6 +204,13 @@ def main():
             refresh_direction_basis(verdict, claims=claims)
             refresh_evidence_basis(verdict)
             basis_after[str((verdict.get("direction_basis") or {}).get("status"))] += 1
+            if is_25:
+                s25["n"] += 1
+                s25["checks_before"] += len(old_failed)
+                s25["dist_before"][old_blocked] += 1
+                s25["dist_after"][new_blocked] += 1
+                s25["basis_before"][str((mv.get("direction_basis") or {}).get("status"))] += 1
+                s25["basis_after"][str((verdict.get("direction_basis") or {}).get("status"))] += 1
 
             er_ok, er_viol = validate_manager_expectation_revision_consumption(
                 manager_verdict=verdict,
@@ -211,6 +225,8 @@ def main():
                 verdict.setdefault("failed_checks", [])
                 verdict["failed_checks"].extend(er_viol)
             checks_after += len(verdict.get("failed_checks") or [])
+            if is_25:
+                s25["checks_after"] += len(verdict.get("failed_checks") or [])
 
             st = status_from_manager_verdict(
                 verdict,
@@ -251,6 +267,12 @@ def main():
     print("\n-- 守卫剔除条数分布 (blocked -> tier count) --")
     print("before:", dict(sorted(dist_before.items())))
     print("after :", dict(sorted(dist_after.items())))
+    print(f"\n-- 09-25+ 子集（{s25['n']} 档，版本对账可靠区间）--")
+    print("blocked before:", dict(sorted(s25["dist_before"].items())),
+          "| after:", dict(sorted(s25["dist_after"].items())))
+    print("basis before:", dict(s25["basis_before"].most_common()))
+    print("basis after :", dict(s25["basis_after"].most_common()))
+    print(f"failed_checks before: {s25['checks_before']} | after: {s25['checks_after']}")
     print("\n-- direction_basis.status 分布 --")
     print("before:", dict(basis_before.most_common()))
     print("after :", dict(basis_after.most_common()))
