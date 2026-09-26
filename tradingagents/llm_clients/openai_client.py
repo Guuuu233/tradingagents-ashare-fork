@@ -45,6 +45,19 @@ class UnifiedChatOpenAI(ChatOpenAI):
         if self._is_moonshot_model(model, base_url):
             kwargs["temperature"] = 1
 
+        # 3. devin/* models reject temperature=0 with a 502 invalid_argument
+        # (DAV-1325). Near-greedy 0.01 keeps behavior close to deterministic;
+        # an explicitly configured non-zero value is passed through unchanged.
+        # Reasoning devin models (e.g. devin/gpt-5-5, devin/*-thinking) are
+        # excluded: rule 1 already stripped temperature and they must keep
+        # the provider default rather than get one re-injected.
+        if (
+            self._is_devin_model(model)
+            and not self._is_reasoning_model(model)
+            and not kwargs.get("temperature")
+        ):
+            kwargs["temperature"] = 0.01
+
         super().__init__(**kwargs)
 
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
@@ -73,6 +86,11 @@ class UnifiedChatOpenAI(ChatOpenAI):
         m = str(model).lower()
         b = (base_url or "").lower()
         return "moonshot" in m or "kimi" in m or "moonshot" in b or "kimi" in b
+
+    @staticmethod
+    def _is_devin_model(model: str) -> bool:
+        """Check if model is a devin/* model (devin/swe-2, devin/swe-1-7, ...)."""
+        return str(model).lower().startswith("devin/")
 
 
 class OpenAIClient(BaseLLMClient):
