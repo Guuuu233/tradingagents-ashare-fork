@@ -32,6 +32,7 @@ from tradingagents.agents.utils.evidence_verifier import (
     format_claims_with_verification_for_prompt,
     refresh_direction_basis,
     refresh_evidence_basis,
+    refresh_ledger_consistency_checks,
 )
 from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 from tradingagents.agents.utils.e04_revision import (
@@ -2370,11 +2371,30 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         manager_verdict["evidence_relation_reason"] = claim_cluster_metrics.get("relation_graph_reason", "")
         manager_verdict["expectation_revision"] = expectation_revisions
 
+        # DAV-1320：守卫裁剪前快照账本，供裁剪后重算替换账本相关一致性检查。
+        _pre_guard_adopted = list(manager_verdict.get("adopted_claim_ids") or [])
+        _pre_guard_partial = list(manager_verdict.get("partially_adopted_claims") or [])
+        _pre_guard_rejected = list(manager_verdict.get("rejected_claim_ids") or [])
         claim_cluster_metrics, manager_verdict, _ = apply_manager_double_count_guard(
             claim_cluster_metrics=claim_cluster_metrics,
             expectation_revisions=expectation_revisions,
             claims=claims,
             manager_verdict=manager_verdict,
+        )
+
+        # DAV-1320：一致性检查原在守卫裁剪前的原始账本上计算，守卫把重复计入
+        # 的论点剔除进 excluded_evidence 后，原失败项可能已过期（所指论点不在
+        # 最终账本）。此处按最终账本重算账本相关检查（采纳/部分采纳/coverage
+        # 类）并替换旧结果；与账本无关的检查（E-04 文本类、正文与机读块矛盾）
+        # 保持原样。幂等，守卫未剔除时结果不变。
+        refresh_ledger_consistency_checks(
+            manager_verdict,
+            pre_guard_adopted_claim_ids=_pre_guard_adopted,
+            pre_guard_partially_adopted_claims=_pre_guard_partial,
+            pre_guard_rejected_claim_ids=_pre_guard_rejected,
+            claims=claims,
+            claims_verification=claims_verification,
+            raw_response=full_content,
         )
 
         # DAV-1111 B1: guard 可能将同向 adopted claim 剥离进 excluded_evidence，

@@ -4985,6 +4985,197 @@ def refresh_evidence_basis(manager_verdict: dict[str, Any]) -> dict[str, Any]:
     return manager_verdict
 
 
+def _claim_ledger_consistency_checks(
+    *,
+    adopted_claim_ids: Sequence[Any] | None,
+    partially_adopted_claims: Sequence[Any] | None,
+    rejected_claim_ids: Sequence[Any] | None,
+    claims: Sequence[Mapping[str, Any]] | None,
+    claim_evidence_summary: Mapping[str, Mapping[str, Any]] | None,
+    claims_verification: Sequence[Mapping[str, Any]] | None,
+    prose: str,
+) -> list[str]:
+    """账本相关一致性硬门（Check 6 存在性 + Check 7 coverage/consistency）。
+
+    只依赖 adopted / partially_adopted / rejected 账本清单与确定性证据汇总；
+    守卫（double_count_guard）裁剪账本后可在最终账本上重算，结果幂等。
+    """
+    failed_checks: list[str] = []
+    adopted_claim_ids = list(adopted_claim_ids or [])
+    partially_adopted_claims = list(partially_adopted_claims or [])
+    rejected_claim_ids = list(rejected_claim_ids or [])
+
+    # Check 6: Claim ledger subset and existence validation
+    if claims is not None:
+        known_cids = {
+            str(c.get("claim_id", "")).strip()
+            for c in claims
+            if str(c.get("claim_id", "")).strip()
+        }
+        for cid in adopted_claim_ids:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+        for cid in partially_adopted_claims:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决部分采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+        for cid in rejected_claim_ids:
+            if cid not in known_cids:
+                failed_checks.append(f"裁决拒绝了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
+
+    # Check 7: Claim Evidence Coverage & Consistency Hard Gate
+    if claim_evidence_summary:
+        for cid in adopted_claim_ids:
+            if cid in claim_evidence_summary:
+                s = claim_evidence_summary[cid]
+                cnt = s.get("counts", {})
+                cov = s.get("coverage", 0.0)
+                dec = s.get("decision")
+                is_obs = s.get("is_observation_or_hypothesis", False)
+                sem_dec = s.get("semantic_decision")
+                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                    failed_checks.append(f"裁决采纳了存在事实冲突/前视偏差的矛盾 claim: {cid}")
+                elif cnt.get("source_unavailable", 0) > 0:
+                    failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
+                elif is_obs:
+                    failed_checks.append(f"裁决全额采纳了观察/假设类 claim: {cid}，观察/假设类命题不得升级为已验证事实 (adopt)")
+                elif cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
+                    failed_checks.append(f"裁决采纳了全部证据未获验证 (unsupported) 的 claim: {cid}")
+                elif cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3):
+                    failed_checks.append(f"裁决采纳了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
+                elif dec == DECISION_PARTIAL or (0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)):
+                    failed_checks.append(
+                        f"裁决全额采纳了含未核实混合证据的 claim: {cid} (coverage={cov:.1%})，混合证据仅允许记录于 partially_adopted_claims 并剔除未验证项"
+                    )
+                # DAV-1193 B2 semantic hard gate：legacy 证据全绿但藏未证实质
+                # 命题/E-04 hard guard/纯修辞 claim 一律不得全额 adopt
+                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                    failed_checks.append(
+                        f"裁决采纳了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
+                    )
+                elif sem_dec == SEM_PREVIEW_REJECT:
+                    sem_cov = s.get("semantic_coverage")
+                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
+                    failed_checks.append(
+                        f"裁决全额采纳了 semantic_decision=reject 的 claim: {cid} (semantic_coverage={sem_txt})，实质命题覆盖不足不得 adopt"
+                    )
+                elif sem_dec == SEM_PREVIEW_PARTIAL or (s.get("semantic_hard_guards") and sem_dec):
+                    sem_cov = s.get("semantic_coverage")
+                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
+                    failed_checks.append(
+                        f"裁决全额采纳了 semantic_decision=partial_threshold 的 claim: {cid} (semantic_coverage={sem_txt})，仅允许记录于 partially_adopted_claims"
+                    )
+
+        for cid in partially_adopted_claims:
+            if cid in claim_evidence_summary:
+                s = claim_evidence_summary[cid]
+                cnt = s.get("counts", {})
+                cov = s.get("coverage", 0.0)
+                is_obs = s.get("is_observation_or_hypothesis", False)
+                sem_dec = s.get("semantic_decision")
+                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                    failed_checks.append(f"部分采纳列表中包含了存在事实冲突/前视偏差的矛盾 claim: {cid}")
+                elif cnt.get("source_unavailable", 0) > 0:
+                    failed_checks.append(f"部分采纳列表中包含了不可用数据源的严重幻觉 claim: {cid}")
+                elif not is_obs and (cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0):
+                    failed_checks.append(f"部分采纳列表中包含了全部证据未获验证 (unsupported) 的 claim: {cid}")
+                elif not is_obs and (cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3)):
+                    failed_checks.append(f"部分采纳列表中包含了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
+                # DAV-1193 B2：semantic reject / non_factual_only 绝不偷升 partial
+                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                    failed_checks.append(
+                        f"部分采纳列表中包含了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
+                    )
+                elif sem_dec == SEM_PREVIEW_REJECT:
+                    failed_checks.append(
+                        f"部分采纳列表中包含了 semantic_decision=reject 的 claim: {cid}，reject_with_supported_subset 不得偷升为部分采纳"
+                    )
+
+        # Check prose consistency against claim verification
+        for cid, s in claim_evidence_summary.items():
+            cov = s.get("coverage", 0.0)
+            dec = s.get("decision")
+            if dec != DECISION_ADOPT or cov < 1.0:
+                pattern = build_claim_evidence_sufficient_pattern(cid)
+                for line in prose.splitlines():
+                    if pattern.search(line):
+                        if not re.search(r"非[^\n]*?证据充分|不[^\n]*?证据充分|未[^\n]*?证据充分|不能[^\n]*?证据充分", line):
+                            failed_checks.append(
+                                f"裁决正文将未完全核实的 claim {cid} (coverage={cov:.1%}, decision={dec}) 标注为'证据充分'，正文与证据核验严重冲突"
+                            )
+                            break
+    elif claims_verification:
+        # Fallback fatal check if only raw verification list was provided without claim summary
+        fatal_cids = {
+            str(item.get("claim_id"))
+            for item in claims_verification
+            if item.get("is_fatal") is True or (item.get("is_fatal") is None and item.get("status") == STATUS_SOURCE_UNAVAILABLE)
+        }
+        for cid in adopted_claim_ids:
+            if str(cid) in fatal_cids:
+                failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
+
+    return failed_checks
+
+
+def refresh_ledger_consistency_checks(
+    manager_verdict: dict[str, Any],
+    *,
+    pre_guard_adopted_claim_ids: Sequence[Any] | None,
+    pre_guard_partially_adopted_claims: Sequence[Any] | None,
+    pre_guard_rejected_claim_ids: Sequence[Any] | None,
+    claims: Sequence[Mapping[str, Any]] | None = None,
+    claims_verification: Sequence[Mapping[str, Any]] | None = None,
+    raw_response: str = "",
+) -> dict[str, Any]:
+    """DAV-1320：double_count_guard 裁剪 adopted 账本后，在最终账本上重算
+    账本相关一致性检查（Check 6 存在性 + Check 7 coverage/consistency），
+    用重算结果替换旧账本产生的失败项。
+
+    与账本无关的检查（E-04 文本类、正文与机读块矛盾等）不在本函数范围，
+    保持原样。幂等：重复调用结果不变。
+    """
+    if not isinstance(manager_verdict, dict):
+        return manager_verdict
+
+    from tradingagents.agents.utils.debate_utils import strip_tagged_json
+
+    prose = ""
+    if raw_response:
+        prose = strip_tagged_json(raw_response, "MANAGER_VERDICT")
+        prose = strip_tagged_json(prose, "VERDICT")
+    summary = manager_verdict.get("claim_evidence_summary") or {}
+
+    # 用守卫前的账本快照识别旧失败项中哪些属于账本检查，多重集相减剔除。
+    old_ledger_checks = _claim_ledger_consistency_checks(
+        adopted_claim_ids=pre_guard_adopted_claim_ids,
+        partially_adopted_claims=pre_guard_partially_adopted_claims,
+        rejected_claim_ids=pre_guard_rejected_claim_ids,
+        claims=claims,
+        claim_evidence_summary=summary,
+        claims_verification=claims_verification,
+        prose=prose,
+    )
+    remaining = list(manager_verdict.get("failed_checks") or [])
+    for item in old_ledger_checks:
+        try:
+            remaining.remove(item)
+        except ValueError:
+            pass
+
+    remaining.extend(_claim_ledger_consistency_checks(
+        adopted_claim_ids=list(manager_verdict.get("adopted_claim_ids") or []),
+        partially_adopted_claims=list(manager_verdict.get("partially_adopted_claims") or []),
+        rejected_claim_ids=list(manager_verdict.get("rejected_claim_ids") or []),
+        claims=claims,
+        claim_evidence_summary=summary,
+        claims_verification=claims_verification,
+        prose=prose,
+    ))
+    manager_verdict["failed_checks"] = remaining
+    manager_verdict["consistency_check_passed"] = len(remaining) == 0
+    return manager_verdict
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -5205,114 +5396,17 @@ def extract_and_validate_manager_verdict(
         if winner == "bear":
             failed_checks.append("正文明确判定多头胜，但机读块为空头胜(bear)，正文与机读裁决严重矛盾")
 
-    # Check 6: Claim ledger subset and existence validation
-    if claims is not None:
-        known_cids = {
-            str(c.get("claim_id", "")).strip()
-            for c in claims
-            if str(c.get("claim_id", "")).strip()
-        }
-        for cid in adopted_claim_ids:
-            if cid not in known_cids:
-                failed_checks.append(f"裁决采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
-        for cid in partially_adopted_claims:
-            if cid not in known_cids:
-                failed_checks.append(f"裁决部分采纳了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
-        for cid in rejected_claim_ids:
-            if cid not in known_cids:
-                failed_checks.append(f"裁决拒绝了不存在的 claim ID: {cid} (当前账本: {sorted(known_cids)})")
-
-    # Check 7: Claim Evidence Coverage & Consistency Hard Gate
-    if claim_evidence_summary:
-        for cid in adopted_claim_ids:
-            if cid in claim_evidence_summary:
-                s = claim_evidence_summary[cid]
-                cnt = s.get("counts", {})
-                cov = s.get("coverage", 0.0)
-                dec = s.get("decision")
-                is_obs = s.get("is_observation_or_hypothesis", False)
-                sem_dec = s.get("semantic_decision")
-                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
-                    failed_checks.append(f"裁决采纳了存在事实冲突/前视偏差的矛盾 claim: {cid}")
-                elif cnt.get("source_unavailable", 0) > 0:
-                    failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
-                elif is_obs:
-                    failed_checks.append(f"裁决全额采纳了观察/假设类 claim: {cid}，观察/假设类命题不得升级为已验证事实 (adopt)")
-                elif cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
-                    failed_checks.append(f"裁决采纳了全部证据未获验证 (unsupported) 的 claim: {cid}")
-                elif cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3):
-                    failed_checks.append(f"裁决采纳了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
-                elif dec == DECISION_PARTIAL or (0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)):
-                    failed_checks.append(
-                        f"裁决全额采纳了含未核实混合证据的 claim: {cid} (coverage={cov:.1%})，混合证据仅允许记录于 partially_adopted_claims 并剔除未验证项"
-                    )
-                # DAV-1193 B2 semantic hard gate：legacy 证据全绿但藏未证实质
-                # 命题/E-04 hard guard/纯修辞 claim 一律不得全额 adopt
-                elif sem_dec == SEM_DECISION_NON_FACTUAL:
-                    failed_checks.append(
-                        f"裁决采纳了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
-                    )
-                elif sem_dec == SEM_PREVIEW_REJECT:
-                    sem_cov = s.get("semantic_coverage")
-                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
-                    failed_checks.append(
-                        f"裁决全额采纳了 semantic_decision=reject 的 claim: {cid} (semantic_coverage={sem_txt})，实质命题覆盖不足不得 adopt"
-                    )
-                elif sem_dec == SEM_PREVIEW_PARTIAL or (s.get("semantic_hard_guards") and sem_dec):
-                    sem_cov = s.get("semantic_coverage")
-                    sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
-                    failed_checks.append(
-                        f"裁决全额采纳了 semantic_decision=partial_threshold 的 claim: {cid} (semantic_coverage={sem_txt})，仅允许记录于 partially_adopted_claims"
-                    )
-
-        for cid in partially_adopted_claims:
-            if cid in claim_evidence_summary:
-                s = claim_evidence_summary[cid]
-                cnt = s.get("counts", {})
-                cov = s.get("coverage", 0.0)
-                is_obs = s.get("is_observation_or_hypothesis", False)
-                sem_dec = s.get("semantic_decision")
-                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
-                    failed_checks.append(f"部分采纳列表中包含了存在事实冲突/前视偏差的矛盾 claim: {cid}")
-                elif cnt.get("source_unavailable", 0) > 0:
-                    failed_checks.append(f"部分采纳列表中包含了不可用数据源的严重幻觉 claim: {cid}")
-                elif not is_obs and (cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0):
-                    failed_checks.append(f"部分采纳列表中包含了全部证据未获验证 (unsupported) 的 claim: {cid}")
-                elif not is_obs and (cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3)):
-                    failed_checks.append(f"部分采纳列表中包含了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
-                # DAV-1193 B2：semantic reject / non_factual_only 绝不偷升 partial
-                elif sem_dec == SEM_DECISION_NON_FACTUAL:
-                    failed_checks.append(
-                        f"部分采纳列表中包含了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
-                    )
-                elif sem_dec == SEM_PREVIEW_REJECT:
-                    failed_checks.append(
-                        f"部分采纳列表中包含了 semantic_decision=reject 的 claim: {cid}，reject_with_supported_subset 不得偷升为部分采纳"
-                    )
-
-        # Check prose consistency against claim verification
-        for cid, s in claim_evidence_summary.items():
-            cov = s.get("coverage", 0.0)
-            dec = s.get("decision")
-            if dec != DECISION_ADOPT or cov < 1.0:
-                pattern = build_claim_evidence_sufficient_pattern(cid)
-                for line in prose.splitlines():
-                    if pattern.search(line):
-                        if not re.search(r"非[^\n]*?证据充分|不[^\n]*?证据充分|未[^\n]*?证据充分|不能[^\n]*?证据充分", line):
-                            failed_checks.append(
-                                f"裁决正文将未完全核实的 claim {cid} (coverage={cov:.1%}, decision={dec}) 标注为'证据充分'，正文与证据核验严重冲突"
-                            )
-                            break
-    elif claims_verification:
-        # Fallback fatal check if only raw verification list was provided without claim summary
-        fatal_cids = {
-            str(item.get("claim_id"))
-            for item in claims_verification
-            if item.get("is_fatal") is True or (item.get("is_fatal") is None and item.get("status") == STATUS_SOURCE_UNAVAILABLE)
-        }
-        for cid in adopted_claim_ids:
-            if str(cid) in fatal_cids:
-                failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
+    # Check 6 + Check 7: 账本相关一致性硬门（存在性 + coverage/consistency）。
+    # DAV-1320：抽到 _claim_ledger_consistency_checks，守卫裁剪后可按最终账本重算。
+    failed_checks.extend(_claim_ledger_consistency_checks(
+        adopted_claim_ids=adopted_claim_ids,
+        partially_adopted_claims=partially_adopted_claims,
+        rejected_claim_ids=rejected_claim_ids,
+        claims=claims,
+        claim_evidence_summary=claim_evidence_summary,
+        claims_verification=claims_verification,
+        prose=prose,
+    ))
 
     # ── Check 8: Fatal Challenge Consistency Hard Gate ──────────────────
     ch_map: dict[str, Mapping[str, Any]] = {}
