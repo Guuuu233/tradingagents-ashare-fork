@@ -44,11 +44,10 @@ def test_b188060f_anchor_disclosure_raw_vs_qfq_mismatch():
 
     r7861 = _refs_by_value(result, 78.61)
     assert r7861, "78.61 must be registered"
-    # DAV-1224 C2：句级 typed 检测无法把数值绑定到披露价 → verdict false，
-    # 不再自动贴 raw；该值保持 unspecified，由 decision-driving / gate 问责
-    # （b188060f 锚点在 gate 层仍 blocked，见 gate 测试与冻结重算）。
-    assert r7861[0]["basis"] == PRICE_BASIS_UNSPECIFIED
-    assert "disclosure_type" not in r7861[0]
+    # DAV-1321 C2→N3：数值级披露判定。「今日大宗交易成交 78.61 元」中该值
+    # 确为大宗披露成交价 → 确定贴 raw；与 qfq 现价混用在 gate 层仍 blocked。
+    assert r7861[0]["basis"] == PRICE_BASIS_RAW
+    assert r7861[0]["disclosure_type"] == "block_trade"
 
     # 现价 81.19 in a technical report is vendor_qfq; news 内同值 backref 继承。
     tech = _refs_by_value(result, 81.19)
@@ -62,24 +61,20 @@ def test_b188060f_anchor_disclosure_raw_vs_qfq_mismatch():
 
 
 def test_typed_disclosures_deterministic_basis():
-    # DAV-1224 C2：typed 判定对象是「该值是否该类披露价」。句级无法绑定时
-    # 大宗交易/龙虎榜/增持/减持/回购 verdict=false → 保持 unspecified；
-    # 定增/增发为确定披露词（true），发行 verdict=ambiguous 保留标签。
-    suppressed = ("大宗交易", "龙虎榜", "增持", "减持", "回购")
-    for kw in suppressed:
+    # DAV-1321：数值级披露绑定——「公司披露{kw}价格 10.50 元」中该值即披露价，
+    # 按契约确定性贴标：大宗交易/龙虎榜→raw；增持/减持/回购/定增/增发→pit_raw。
+    expected = {
+        "大宗交易": PRICE_BASIS_RAW, "龙虎榜": PRICE_BASIS_RAW,
+        "增持": PRICE_BASIS_PIT_RAW, "减持": PRICE_BASIS_PIT_RAW,
+        "回购": PRICE_BASIS_PIT_RAW, "定增": PRICE_BASIS_PIT_RAW,
+        "增发": PRICE_BASIS_PIT_RAW,
+    }
+    for kw, basis in expected.items():
         reports = {"news_report": f"公司披露{kw}价格 10.50 元。"}
         result = build_price_ref_registry(reports, cutoff="2026-05-22")
         refs = _refs_by_value(result, 10.50)
         assert refs, f"{kw} price must be registered"
-        assert refs[0]["basis"] == PRICE_BASIS_UNSPECIFIED, kw
-        assert "disclosure_type" not in refs[0], kw
-
-    for kw in ("定增", "增发"):
-        reports = {"news_report": f"公司披露{kw}价格 10.50 元。"}
-        result = build_price_ref_registry(reports, cutoff="2026-05-22")
-        refs = _refs_by_value(result, 10.50)
-        assert refs, f"{kw} price must be registered"
-        assert refs[0]["basis"] == PRICE_BASIS_PIT_RAW, kw
+        assert refs[0]["basis"] == basis, kw
         assert refs[0]["provenance"].startswith("typed_disclosure"), kw
 
 
@@ -125,10 +120,11 @@ def test_missing_basis_and_missing_as_of_gaps():
     result = build_price_ref_registry(reports, cutoff="2026-05-22")
     ref = _refs_by_value(result, 12.34)[0]
     kinds = {(g["kind"], g["ref_id"]) for g in result["price_basis_gaps"]}
-    # DAV-1224 C2：头寸语境「减持」不再贴 pit_raw → unspecified，
-    # missing_basis 与 missing_as_of 同时成立。
+    # DAV-1321：「减持价格 12.34」该值即披露价 → pit_raw，missing_basis
+    # 不再成立；无日期上下文 → missing_as_of 仍成立。
+    assert ref["basis"] == PRICE_BASIS_PIT_RAW
     assert ("missing_as_of", ref["ref_id"]) in kinds
-    assert ("missing_basis", ref["ref_id"]) in kinds
+    assert ("missing_basis", ref["ref_id"]) not in kinds
 
 
 def test_disclosure_date_in_sentence_supplies_as_of():

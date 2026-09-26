@@ -82,6 +82,33 @@ DAV-1246 A 部分补漏（零 LLM 抽取修正，总控裁决单独合入）：
   长度）N 元」两种写法中的数值。动词后不允许「的」——「留下的 35.36 元
   上影线供应」「跌破 835.00 元下影线低点」是真实价位坐标，不误伤。
 - A2 C5 指标别名增加「牛熊线」，映射到 ``close_200_sma``。
+
+DAV-1321 提取器精度（DAV-1312 审计：(b) 类误报占违规 90.8%）：
+
+- N1 非价格数字守卫（``_nonprice_number_flag``，mention 与 anchor-level
+  两路共用）：百分数截断（``-6.5%`` 被回溯成 ``6``，``_PRICE_KEYWORD_PATTERN``
+  lookahead 同步禁止 ``.\d`` 截断）、千分位（``3,840``）、字母/连字符
+  粘连 token（``SMA50``/``INV-4``/``LPR_1Y``/``2026Q1``/``0.75x``/``25BP``）、
+  分数（``1/3``）、MM-DD 日期片段（``07-22``）、外币单位（``85美元/桶``）、
+  指标/估值词后缀（``10 EMA``/``42倍PE``）、``N档``、``元/吨``类单位价格、
+  每10股派X元股利、止损敞口差额、JSON 引号内孤立数字、
+  ``excluded_evidence`` 列表整体隔离。
+- N2 anchor-level 路径补齐同一套守卫（``_is_skip_level_number`` 复用同一
+  helper），且 ``v <= 0`` 一律跳过（``仓位0%``/``position_pct:0``）。
+- N3 typed_disclosure 改为逐值判定：句级候选 dtype 仅作候选，是否挂
+  provenance 由 ``classify_typed_disclosure`` 按该值自身的 ±15 字窗口裁决；
+  block_trade 要求该值落在成交/作价/溢折价/席位语义子句内，否则 false；
+  private_placement 要求值窗口含定增/增发/发行价/定价/募资等发行语义；
+  issuance 增加永续债/债券/国债等「非股票发行」语境否决，且 true/ambiguous
+  也要求值窗口含发行语义词。
+- N4 明示口径传播：``_declared_basis`` 识别字面 token（``pit_raw`` →
+  pit_raw、``vendor_qfq``/``qfq`` → qfq、裸 ``raw`` → raw）；数字右侧紧邻
+  「元（前复权）」式括号口径同样生效；句内口径唯一时传播到句内未声明
+  ref，句内出现多个不同口径则视为混用不传播；文档级声明（「一律/所有/
+  统一/本文…前复权」或「前复权…口径/为准」）传播到**同一报告字段**内
+  未声明 ref——边界即字段级文本，不跨 report。
+- N5 区间起点补登记：「A-B 元」中 A 原本只在带「区间」锚词时才登记，
+  现对任何 ``N-M元`` 形式的裸元区间起点同样登记（仍过全部伪命中守卫）。
 """
 
 from __future__ import annotations
@@ -186,19 +213,25 @@ COORDINATE_KEYWORDS = (
 # Markers that a price was derived / converted from another price.
 DERIVED_KEYWORDS = ("换算", "折算", "折合", "复权因子", "前复权", "除权")
 
+# [DAV-1321 N1] lookahead 追加 `\.\d`：「-6.5%」的回溯会把 6.5 截成 6
+# （「6」后面跟 「.5%」不被原 lookahead 拦截），补上后数字 token 不允许
+# 落在另一个数字的小数点之前。
 _PRICE_KEYWORD_PATTERN = re.compile(
     r"(?:现价|最新价|当前价|收盘价?|收于|开盘价?|最高|最低|均价|成本价?|"
     r"目标价|止损|止盈|支撑|压力位?|阻力位?|成交价|作价|单价|定增价|"
     r"发行价|回购价|增持价|减持价|投标价|锚定?|报价|每股)"
-    r"[^0-9%]{0,8}?(\d+(?:\.\d+)?)(?!\s*[%％倍分角]|亿|万|股|手|户|家|次|日|天|年|月)"
+    # [DAV-1321] (?<![\d.]) 阻止右截断（「x.5」中的「5」），lookahead 的
+    # `\d|\.\d` 阻止左截断（「12.0%」回溯出「1」「-6.5%」回溯出「6」）。
+    r"[^0-9%]{0,8}?(?<![\d.])(\d+(?:\.\d+)?)(?!\s*[%％倍分角]|亿|万|股|手|户|家|次|日|天|年|月|\d|\.\d)"
 )
 
 _BARE_YUAN_PATTERN = re.compile(
-    r"(?<![\d.])(\d+(?:\.\d+)?)\s*元(?!\s*[/%％]|/股|吨|克|人|次)"
+    # [DAV-1321] 「元」后排除每股/每吨等量词；不允许空格后裸「/」误判为每股
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*元(?!\s*/\s*股|\s*/\s*吨|[/%％]|[吨克人次])"
 )
 
 _PER_SHARE_PATTERN = re.compile(
-    r"(\d+(?:\.\d+)?)\s*元/股|每股\s*(\d+(?:\.\d+)?)\s*元"
+    r"(\d+(?:\.\d+)?)\s*元\s*/\s*股|每股\s*(\d+(?:\.\d+)?)\s*元"
 )
 
 _DATE_PATTERN = re.compile(
@@ -280,8 +313,8 @@ _BARE_DAY_TAIL = re.compile(r"^\s*日")          # 「N日」时长/日期碎片
 _ENUM_HEAD = re.compile(r"[（(]\s*$")          # 列表枚举（N）
 _ENUM_TAIL = re.compile(r"^\s*[)）]")
 _TIME_TAIL = re.compile(
-    r"^\s*(?:分钟|小时|交易日|个月|天|周|年|季度)"
-)                                                # 「N分钟/小时/天/周…」时长
+    r"^\s*(?:个\s*)?(?:分钟|小时|交易日|天|周|个月|月|年|季度)"
+)                                                # 「N分钟/小时/天/周/个交易日…」时长
 
 
 def _is_false_level(text: str, nstart: int, nend: int, value: float) -> bool:
@@ -327,6 +360,17 @@ def _is_skip_level_number(text: str, nstart: int, nend: int) -> bool:
         return True
     if _TIME_TAIL.match(tail):                               # 时长「N分钟/天/周…」
         return True
+    # [DAV-1321 N2] 与 mention 路径共用同一套非价格数字守卫：倍数/档数
+    # （「1.5倍ATR」「盘口5档」「14倍PE」）、分数（「减仓1/3」）、编号
+    # （「RISK-3」）、指标周期（「SMA50」「10 EMA」「0.75x PB」）、外币
+    # （「85美元/桶」）、差额语境（「止损敞口 0.65 元」）、千分位、JSON
+    # 引号数字与 excluded_evidence。
+    if _DIFF_HEAD.search(text[max(0, nstart - 12):nstart]) or _DIFF_TAIL.match(tail):
+        return True
+    if _nonprice_number_flag(text, nstart, nend) is not None:
+        return True
+    if _NUMBER_LEVEL_COUNT_TAIL.match(tail):                 # 「5档」「1.5 倍」
+        return True
     return False
 
 
@@ -355,6 +399,8 @@ def _iter_anchor_levels(
                 v = float(n.group(0))
             except (TypeError, ValueError):
                 continue
+            if v <= 0:                                       # [DAV-1321 N2] 0/负数不是价位
+                continue
             if _is_false_level(text, n.start(), n.end(), v):
                 continue
             if _is_skip_level_number(text, n.start(), n.end()):
@@ -381,24 +427,157 @@ def extract_executable_levels(text: str) -> List[Tuple[float, int, int]]:
 _UNIT_TAIL = {
     # e.g. 「50%」回溯截出的 5、LaTeX \%
     "percent": re.compile(r"^\s*\d*\\?[%％]"),
-    # 「1.8-2.0倍」「1.8~2.0倍」「12-14 倍」区间倍数（P5′：允许小数区间）
-    "multiple": re.compile(r"^\s*[-~—]?\s*\d*(?:\.\d+)?\s*倍"),
+    # 「1.8-2.0倍」「1.8~2.0倍」「12-14 倍」区间倍数（P5′：允许小数区间）；
+    # [DAV-1321] 补 en-dash – 与全角 ～（「1.05–1.15倍」此前漏判）。
+    "multiple": re.compile(r"^\s*[-~～—–]?\s*\d*(?:\.\d+)?\s*倍"),
     "shares": re.compile(r"^\s*(?:亿|万)?\s*(?:股|手|户|份)"),
     # [P5] 「N 板」连板数（「最高4板」），非价格计量；(?!块) 防「板块」误伤
     "board_count": re.compile(r"^\s*(?:连)?板(?!块)"),
     # 时间/日期碎片：含范围写法「1-2周」「3 个月」「10 日 EMA」
     "time": re.compile(
-        r"^\s*[-~—]?\s*\d*\s*(?:个)?\s*"
-        r"(?:分钟|小时|交易日|日|天|周|个月|月|年|季度|期|次|条|家|人|档|位)"
+        r"^\s*[-~—–]?\s*[\d,]*\s*(?:个)?\s*"
+        r"(?:分钟|小时|交易日|日|天|周|个月|月|年|季度|期|次|条|家|人|档|位|倍)"
     ),
     "ratio": re.compile(r"^\s*[:：]"),
 }
+
+# [DAV-1321 N1] 非价格数字守卫——mention 路径（_token_tail_flags）与
+# anchor-level 路径（_is_skip_level_number）共用同一套判定。
+_NUMBER_DECIMAL_TAIL = re.compile(r"^\.\d")             # 「6.5%」截出的「6」
+_NUMBER_THOUSANDS_TAIL = re.compile(r"^,\d{3}\b")       # 「3,840」截出的「3」
+_NUMBER_THOUSANDS_HEAD = re.compile(r"\d,\s*$")         # 「4,480」截出的「480」
+_NUMBER_LETTER_HEAD = re.compile(r"[A-Za-z][\-_]*$")    # SMA50 / INV-4 / E-04
+_NUMBER_LETTER_TAIL = re.compile(r"^[A-Za-z_]")         # 2026Q1 / LPR_1Y / 0.75x / 25BP
+_NUMBER_FRACTION_TAIL = re.compile(r"^\s*/\s*\d{1,3}(?![\d.,])")
+# 「1/3」的 1；「141/156.35 元」后跟小数 → 价位列表，不命中
+_NUMBER_FRACTION_HEAD = re.compile(r"(?<![\d.,])\d{1,3}\s*/\s*$")
+# 「1/3」的 3；「156.35/160」一侧带小数点/千分位 → 不命中
+_NUMBER_CURRENCY_TAIL = re.compile(
+    r"^\s*(?:美元|港元|欧元|日元|英镑|美分|瑞士法郎|瑞郎|法郎|新台币|USD|usd|HKD)"
+)                                                        # 「85美元/桶」
+_NUMBER_INDICATOR_TAIL = re.compile(
+    r"^\s*(?:VWMA|VWAP|EMA|SMA|WMA|DMA|BOLL|ATR|RSI|MACD|MA|PE|PB|PS|PEG|BPs?|bps|基点)\b",
+    re.I,
+)                                                        # 「10 EMA」「5 PE」
+_NUMBER_MD_TAIL = re.compile(r"^-(\d{1,2})(?![\d.])")   # 「07-22」的 07
+_NUMBER_MD_HEAD = re.compile(r"(?<![\d.])(\d{1,2})-\s*$")  # 「07-22」的 22
+_NUMBER_PERUNIT_TAIL = re.compile(
+    r"^\s*元\s*[/／]\s*(?:股|吨|克|公斤|升|瓶|箱|平方米?|平米|人|次|份|例|"
+    r"件|条|张|个|度|瓦|[Ww]|[Kk][Ww][Hh]|[Gg]|[Gg][Bb]|年|天|日|月|周|小时|客|户|头|只|艘|架|辆|台)"
+)    # 「5400元/年」「9766.67元/吨」「0.05元/W」；「87.47 元 / VWMA」分隔符不命中
+_NUMBER_DIVIDEND_HEAD = re.compile(
+    r"(?:每\s*\d+\s*股|每\s*股|\d+\s*股)\s*派\s*(?:现金|红利|息|发现金|含税)?\s*$"
+)                                                        # 「每10股派5元」
+_NUMBER_STOCK_CODE_TAIL = re.compile(
+    r"^\s*\.\s*(?:SZ|SH|BJ|HK|of|OF)\b"
+)                                                        # 「001258.SZ」证券代码
+_NUMBER_QUOTE_HEAD = re.compile(r"[\"'“”‘’]\s*$")
+_NUMBER_QUOTE_TAIL = re.compile(r"^\s*[\"'“”‘’]")
+# 财务金额语境词（值本身带「元」但量词是利润/金额，不是股价坐标）
+_NUMBER_FIN_AMOUNT_WORD = (
+    r"毛利|净利|归母净利|利润|盈利|营收|收入|费用|利息|汇兑|"
+    r"节税|亏损|分红|派息|薪资|造价|成交额|交易额|货值"
+    # 「成本」不收进通用金额词——「VWMA 加权成本 4.84 元」「持仓成本 900 元」
+    # 是坐标语境下的真实成本价；成本金额（BOM/单车成本）由 non_stock_price
+    # 语境或量级守卫覆盖
+)
+_NUMBER_FIN_AMOUNT_HEAD = re.compile(
+    rf"(?:{_NUMBER_FIN_AMOUNT_WORD})"
+    r"\s*(?:约|达|为|有|近|超|超过|不足|增厚|节约|摊薄|锁定|位于)?\s*$"
+)    # 注意不接 \w*——「成交额放量且两次冲锋 40 元」「成本位于千元上方或 900
+    # 元中枢」中量词与数字之间隔了叙述词，不能整段吞掉
+_NUMBER_FIN_AMOUNT_RANGE = re.compile(
+    rf"(?:{_NUMBER_FIN_AMOUNT_WORD})"
+    rf"(?:[\d.,\-–~—\s，、/]|约|达|为|有|近|超|超过|不足|增厚|节约|摊薄|"
+    rf"锁定|位于|于|至|到|亿|万|元|区间)*$"
+)    # 「毛利约1000-2000元」量词区间：关键词到 token 之间只允许金额片段字符
+_NUMBER_INDEX_TAIL = re.compile(r"^\s*点(?![位击])")     # 「收于 4668.23 点」
+_NUMBER_UNIT_CTX = re.compile(r"每升|每吨|每克|每公斤|每平米|每瓶|每箱|每桶")
+_NUMBER_LEVEL_COUNT_TAIL = re.compile(r"^\s*(?:档|板(?!块)|倍)")
+_EXCLUDED_EVIDENCE_SPAN = re.compile(
+    r"excluded_evidence[\"']?\s*[:：]\s*\[[^\]]*\]", re.I
+)
+
+
+def _nonprice_number_flag(text: str, start: int, end: int) -> Optional[str]:
+    """[DAV-1321 N1] token 级非价格数字判定，返回子类名或 None。
+
+    与 _token_tail_flags 互补：这里覆盖「token 形态本身证明不是股价坐标」
+    的情形（截断/千分位/编号粘连/分数/日期片段/外币单位/指标后缀/档数/
+    单位价格/股利/引号内孤立数字/excluded_evidence 列表），供 mention 与
+    anchor-level 两条抽取路径共用。"""
+    tail = text[end:end + 12]
+    head = text[max(0, start - 12):start]
+    tok = text[start:end]
+    if _NUMBER_DECIMAL_TAIL.match(tail):
+        return "truncated_decimal"
+    if _NUMBER_THOUSANDS_TAIL.match(tail) or _NUMBER_THOUSANDS_HEAD.search(head):
+        return "thousands_sep"
+    if _NUMBER_LETTER_HEAD.search(head):
+        return "identifier_or_indicator"
+    if _NUMBER_LETTER_TAIL.match(tail):
+        return "identifier_suffix"
+    if _NUMBER_INDICATOR_TAIL.match(tail):
+        return "indicator_or_multiple"
+    # 分数「1/3」仅限整数 token——「6.63/6.68 元」这类斜杠价位列表的小数
+    # 两侧都是真价位，不得误判为分数。
+    if "." not in tok and (
+        _NUMBER_FRACTION_TAIL.match(tail) or _NUMBER_FRACTION_HEAD.search(head)
+    ):
+        return "fraction"
+    # MM-DD 日期片段：两侧均为 1~12/1~31 的整数短写法（「07-22」）。
+    # 含小数点的区间（45.50-47.50）不命中；「8-9元」之类单边一位数也不命中
+    # （要求被判定侧 token 无小数点且 ≤12，另一侧 ≤31）。
+    if "." not in tok:
+        try:
+            tv = int(tok)
+        except ValueError:
+            tv = 0
+        m = _NUMBER_MD_TAIL.match(tail)
+        if m and 1 <= tv <= 12 and 1 <= int(m.group(1)) <= 31 \
+                and not re.match(r"^\s*元", tail[m.end():]):
+            # 「8-9元」区间：第二段紧跟「元」→ 价位区间，不是月日
+            return "date_fragment_mmdd"
+        m = _NUMBER_MD_HEAD.search(head)
+        if m and 1 <= int(m.group(1)) <= 12 and 1 <= tv <= 31 \
+                and not re.match(r"^\s*元", tail):
+            # 「8-9元」中被判定侧紧跟「元」→ 价位，不是月日
+            return "date_fragment_mmdd"
+    if _NUMBER_CURRENCY_TAIL.match(tail):
+        return "foreign_currency"
+    if _NUMBER_PERUNIT_TAIL.match(tail):
+        return "per_unit_rate"
+    if _NUMBER_DIVIDEND_HEAD.search(head):
+        return "dividend_per_share"
+    # JSON 引号内孤立数字（"…目标价", "7", "0.8"）：两侧紧贴引号且
+    # 不带「元」——引号字符串中部的真实价位（"52.00元"）不误伤。
+    if _NUMBER_QUOTE_HEAD.search(head) and _NUMBER_QUOTE_TAIL.match(tail):
+        return "json_or_prob_token"
+    # [DAV-1321 N1] 金额性量词与下标单位：盈利/毛利/汇兑/利息等财务额
+    # （「增厚单车毛利约1000-2000元」）、「收于 4668.23 点」指数点位、
+    # 「每升/每吨/每克」单位价格语境。
+    if _NUMBER_FIN_AMOUNT_HEAD.search(head) or _NUMBER_FIN_AMOUNT_RANGE.search(head):
+        return "fin_amount"
+    if _NUMBER_STOCK_CODE_TAIL.match(tail):
+        return "stock_code"
+    if _NUMBER_INDEX_TAIL.match(tail):
+        return "index_points"
+    if _NUMBER_UNIT_CTX.search(text[max(0, start - 12):end + 12]):
+        return "per_unit_ctx"
+    # MANAGER_VERDICT excluded_evidence 列表：被拒证据不算决策驱动，
+    # 其中的数字（含「42-50元」估值区间）不登记为 price_ref。
+    for sp in _EXCLUDED_EVIDENCE_SPAN.finditer(text):
+        if sp.start() <= start and end <= sp.end():
+            return "excluded_evidence"
+        if sp.start() > end:
+            break
+    return None
 
 # [P3] 差额语境：数字是「空间/回撤/滑点/价差/差价/幅度」的量值，或「涨/跌 N 元」
 # 的变动量——不是价格坐标，不登记。粒子白名单刻意不含 至/到/破/穿：
 # 「跌至 45 元」「跌破 2000 元」仍是坐标价。
 _DIFF_HEAD = re.compile(
-    r"(?:空间|回撤|滑点|价差|差价|幅度)\s*(?:约|达|为|有|近|超|超过|不足)?\s*$"
+    r"(?:空间|回撤|滑点|价差|差价|幅度|敞口)\s*(?:约|达|为|有|近|超|超过|不足)?\s*$"
     r"|(?<![停板])(?:上涨|下跌|涨|跌)\s*(?:了|达|约|近|超|超过|不足|幅|逾)?\s*$"
 )
 _DIFF_TAIL = re.compile(r"^\s*元\s*(?:滑点|价差|差价)")
@@ -424,7 +603,7 @@ _SHADOW_LEN_HEAD2 = re.compile(
 
 _PERSHARE_FIN = re.compile(
     r"每股净资产|每股收益|每股派|每股股利|每股现金|每股盈余|"
-    r"净资产收益|每股未分配|每股公积金|每股经营"
+    r"净资产收益|每股未分配|每股公积金|每股经营|(?<![A-Za-z])BPS(?![A-Za-z])"
 )
 _JSON_BLOB = re.compile(r"MANAGER_VERDICT|\"reason\"|\"confidence\"|\"winner\"|position_pct|JSON")
 _DATE_TOKEN = re.compile(r"20\d{2}\s*[-/年.]")
@@ -467,15 +646,17 @@ def _token_tail_flags(sentence: str, start: int, end: int) -> Optional[str]:
         return "per_share_financial"
     # 金额/市值/数量：亿/万紧贴 token（含回溯截断，如「900亿元」截出 90
     # → tail='0亿元'，及区间「300-390亿元」的 '300' → tail='-390亿'）；
-    # 真实股价不会被 亿/万 直接修饰。
-    if re.match(r"^\s*[-~—]?\s*\d*\s*(?:亿|万)", tail):
+    # 真实股价不会被 亿/万 直接修饰。[DAV-1321] 允许千分位逗号（「4,480亿」）。
+    if re.match(r"^\s*[-~—–]?\s*[\d,]*\s*(?:亿|万)", tail):
         return "amount_or_marketcap"
     # [DAV-1246 A1] 影线长度：动词 + N 元（的）（长）影线，或 影线（达/长约）N 元。
     if _SHADOW_LEN_TAIL.match(tail) and _SHADOW_LEN_HEAD.search(head):
         return "shadow_length"
     if _SHADOW_LEN_HEAD2.search(head):
         return "shadow_length"
-    return None
+    # [DAV-1321 N1] 通用非价格数字守卫（截断/千分位/编号/分数/日期/
+    # 外币/指标后缀/单位价格/股利/JSON 引号/excluded_evidence）。
+    return _nonprice_number_flag(sentence, start, end)
 
 
 def _match_spans(sentence: str, value: float, tol: float = _VALUE_MATCH_TOLERANCE) -> List[Tuple[int, int, str]]:
@@ -519,7 +700,9 @@ def _is_false_mention(sentence: str, start: int, end: int, value: float) -> Opti
         return flag
     if _JSON_BLOB.search(sentence) and "元" not in sentence:
         return "json_or_prob_token"
-    if _FOREIGN_CTX.search(sentence):
+    # [DAV-1321 N5] 外币/商品语境改为 token ±12 字窗口：原整句判定把
+    # 「若美债收益率…工行前复权股价跌破 8.00 元」整句本股价位全部误删。
+    if _FOREIGN_CTX.search(sentence[max(0, start - 12):end + 12]):
         return "foreign_or_commodity"
     # [P4] 数值 ±40/±12 字窗口内的商品/产品价格词 → 非本股价格坐标
     if _NON_STOCK_PRICE_CTX.search(sentence[max(0, start - 40):end + 12]):
@@ -539,11 +722,36 @@ def _kw_window(ctx: str, i: int, n: int = 10) -> str:
     return ctx[max(0, i - n):i + n]
 
 
+_DISCLOSURE_KW = re.compile(
+    r"大宗|龙虎榜|增持|减持|回购|定增|增发|发行|发股|配售|申购|募资|"
+    r"成交价|成交额|成交均价|作价|均价|折价|溢价|席位|解禁|上市日|"
+    r"IPO|预案价|对价"
+    # 注意不收裸「成交」——「成交量」是量能词不是披露价语境
+)
+
 _GOODS_CTX = re.compile(
     r"商品|物资|原料|材料|成本|金属|能源|化石|资产|涨价|通胀|"
     r"LME|COMEX|原油|布伦特|黄金|贵金属|铜|铝|镍|上游|采购|BOM|进口"
 )
 _REAL_BLOCK = re.compile(r"大宗交易|大宗平价|平价大宗|大宗\s*成交")
+_BLOCK_NEAR_NOUN = re.compile(
+    r"成交价|成交额|成交均价|均价|大宗|平价|折价|溢价|席位|作价|"
+    r"收盘价|报收|成交[^量]"
+)
+
+
+def _value_near_block_noun(ctx: str, value: float) -> bool:
+    """该值 token 的紧贴邻域（±10 字内）含大宗披露价名词。"""
+    for m in re.finditer(r"\d+(?:\.\d+)?", ctx or ""):
+        try:
+            if abs(float(m.group(0)) - value) > _VALUE_MATCH_TOLERANCE:
+                continue
+        except ValueError:
+            continue
+        near = ctx[max(0, m.start() - 10):m.end() + 4]
+        if _BLOCK_NEAR_NOUN.search(near):
+            return True
+    return False
 
 
 def _num_windows(ctx: str, value: float, half: int = 15) -> List[str]:
@@ -556,6 +764,23 @@ def _num_windows(ctx: str, value: float, half: int = 15) -> List[str]:
         except ValueError:
             pass
     return wins
+
+
+def _value_is_quote_side(wins: List[str]) -> bool:
+    """[DAV-1321 N3] 该值本身是行情报价而非披露价：值紧邻 现价/收盘价/
+    当前价/市价/当前 之左（「按当前48.03元股价折算」「高于现价（79.92元）」）。
+    只用于 pit_raw 族（回购/发行/定增/增减持）——block_trade/龙虎榜的
+    「成交价/收盘价」并列正是披露本体，不适用。"""
+    for w in wins:
+        if len(w) <= 15:
+            continue
+        if re.search(
+            r"(?:现价|收盘价|当前价|市价|当前价?|股价|收报|报收|目前|当前)"
+            r"[^\d%]{0,6}[\d.]*$",
+            w[:len(w) - 15],
+        ):
+            return True
+    return False
 
 
 def classify_typed_disclosure(ref: Mapping[str, Any],
@@ -580,16 +805,34 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
     if dtype == "block_trade":
         goods = bool(_GOODS_CTX.search(ctx)) and not _REAL_BLOCK.search(ctx)
         # 值紧邻『大宗交易/平价/成交/折价/席位/接盘』→ 真披露价
-        real = any(re.search(r"大宗（交易|平价|成交|折价|溢价|席位|接盘|买入）"
-                             r"|（交易|平价|折价|溢价|席位|接盘）[^。]{0,10}大宗", w)
+        # [DAV-1321 N3 修复] 原写法把正则组误写成全角（），| 变成顶层
+        # 分支导致「成交/买入/价格」裸词随处命中；改回 (?:…)。
+        real = any(re.search(r"大宗(?:交易|平价|成交|折价|溢价|席位|接盘|买入)"
+                             r"|(?:交易|平价|折价|溢价|席位|接盘)[^。]{0,10}大宗", w)
                    for w in wins)
-        if real:
+        # [DAV-1321 复审③] 披露名词紧邻判定：披露价名词（成交价/均价/
+        # 大宗/平价/溢折价/席位/作价/收盘价）贴近该值本身才是披露价——
+        # 「大宗折价成交价 78.61 元共振支撑」中 78.61 是披露价被用于坐标
+        # 语境（仍挂 raw，由混用探测问责）；「跟踪 76.8 元支撑」「大宗折价
+        # 盘锁死向 35.00 元进攻」中的值只是坐标位，不挂。
+        near = _value_near_block_noun(ctx, value)
+        clause = any(
+            re.search(r"成交价|成交额|成交均价|作价|万元|亿元|席位|vs\s|VS\s|"
+                      r"溢价|折价|成交[^量]", w)
+            for w in wins
+        )
+        coord_veto = any(
+            re.search(r"支撑|阻力|关口|平台|冲击|反抽|收复|跟踪|止损|止盈|目标|"
+                      r"锁死|进攻|考验|下探|上看|挑战|触及|逼近|修复", w)
+            for w in wins
+        )
+        if near or ((real or clause) and not coord_veto):
             verdict, reason = "true", "数值紧邻大宗交易/平价/成交语义"
         elif goods or any(_GOODS_CTX.search(w) for w in wins):
             verdict, reason = "false", "大宗为商品/材料/成本语境，非披露价"
-        elif _REAL_BLOCK.search(ctx):
-            # 句中有真大宗语义但该值不紧邻 → 该值不是披露价
-            verdict, reason = "false", "句内有大宗交易但该值非披露价"
+        elif _REAL_BLOCK.search(ctx) or "大宗" in ctx:
+            # 句内有大宗语义但该值不在披露子句 → 该值不是披露价
+            verdict, reason = "false", "句内有大宗语境但该值非披露价"
         else:
             verdict, reason = "ambiguous", "大宗语境无法定夺"
 
@@ -608,8 +851,8 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
                 verdict, subtype = "false", "other_symbol"
                 reason = f"发行价主语为『{subj}』，非本标的 {stock_name}"
         if verdict != "false":
-            if re.search(r"票据|中票|中期票据|债券|总股本|股本|成本|已完成|已发行", ctx):
-                verdict, reason = "false", "发行属票据/股本/成本语境，非股票发行披露价"
+            if re.search(r"票据|中票|中期票据|永续债|债券|国债|总股本|股本|成本|已完成|已发行|RWA|信贷", ctx):
+                verdict, reason = "false", "发行属票据/债券/股本/成本语境，非股票发行披露价"
             elif other:
                 verdict, reason = "true", "定增/增发为确定披露词"
             elif real_fa:
@@ -631,12 +874,15 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
                   for i in _occurrences(ctx, "回购") for w in [_kw_window(ctx, i)])
         # 真披露价：回购价/回购金额/回购均价/以 X 元回购股份 等；
         # 「回购为股价提供 X 元安全垫」中的 X 是坐标价，非披露价。
-        price_like = any(re.search(r"回购（价|金额|均价|上限|下限|价格|股份|注销|方案|"
-                                   r"拟|计划|公告）|（以|按|不超过）[^。]{0,6}元[^。]{0,4}回购", w)
+        # [DAV-1321 N3 修复] 同上，全角（）组误写修复为 (?:…)。
+        price_like = any(re.search(r"回购(?:价|金额|均价|上限|下限|价格|股份|注销|方案|"
+                                   r"拟|计划|公告)|(?:以|按|不超过)[^。]{0,6}元[^。]{0,4}回购", w)
                          for w in wins)
         coord = any(re.search(r"支撑|站稳|安全垫|关口|一线", w) for w in wins)
         if bad:
             verdict, reason = "false", "逆回购/央行/国债回购语境"
+        elif _value_is_quote_side(wins):
+            verdict, reason = "false", "该值为现价/收盘报价侧，非回购披露价"
         elif price_like:
             verdict, reason = "true", "回购价/回购方案语义贴近该值"
         elif coord or wins:
@@ -679,7 +925,34 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
             verdict, reason = "false", "龙虎榜语境但该值非榜价"
 
     elif dtype == "private_placement":
-        verdict, reason = "true", "定增/增发字面命中"
+        # [DAV-1321 N3] 逐值判定：值窗口必须含发行/定价语义（定增/增发/发行/
+        # 定价/配售/募资/认购/缴款/摊薄/私募/解禁）。「按当前48.03元股价折算」
+        # 与定增同句但不是定增价 → false；「增发对定价 5.11 元」→ true。
+        price_like = any(
+            re.search(r"定增|增发|发行价|定价|配售|募资|认购|缴款|摊薄|私募|解禁",
+                      w)
+            for w in wins
+        )
+        if _value_is_quote_side(wins):
+            verdict, reason = "false", "该值为现价/收盘报价侧，非定增发行价"
+        elif price_like:
+            verdict, reason = "true", "定增/增发发行定价语义贴近该值"
+        elif wins:
+            verdict, reason = "false", "该值不在定增/增发发行定价子句内"
+        else:
+            verdict, reason = "ambiguous", "值不可定位，定增语境无法定夺"
+
+    # [DAV-1321 N3] ambiguous 收紧：披露关键词须落在该值自身 ±15 字
+    # 窗口内，否则按 false 处理——「大宗减持概率低」句中的 EMA 值、
+    # 「永续债发行」句中的 RWA 数字不再因同句关键词被误挂 provenance。
+    # verdict=true（值已在披露子句内）不受影响：大宗成交价 39.60 元照常 true。
+    if verdict == "ambiguous" and wins:
+        # 关键词用跨 dtype 同族披露词集合：发行→发股/发行价、大宗→成交价/折价
+        # 等，防止「重组发股底价 5.30→5.11 元」「折价 7.33%（1218.61 元）」
+        # 这类真披露值因 dtype 词恰不在窗口而漏挂。
+        kw_hit = any(_DISCLOSURE_KW.search(w) for w in wins)
+        if not kw_hit:
+            verdict, reason = "false", "披露关键词不在该值窗口内"
 
     return {
         "ref_id": ref.get("ref_id"), "value": ref.get("value"),
@@ -1102,13 +1375,26 @@ def _extract_dates(text: str) -> List[str]:
     return dates
 
 
-def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
-    """Extract (value, position) price mentions from a sentence, deduplicated.
+# [DAV-1321 N5] 「A-B 元」区间起点补登记：原本只有带「区间」锚词的区间
+# 两端才进 refs，裸写区间（「反抽401.00-404.36元」「46.00-46.50元」）的起点
+# 会漏登记导致 unbacked_executable_level。起点仍须过全部伪命中守卫。
+_RANGE_START_PATTERN = re.compile(
+    r"(?<![\d.,])(\d+(?:\.\d+)?)\s*[-~—–](?=\s*\d+(?:\.\d+)?\s*元)"
+)
+
+
+def _extract_price_values(
+    sentence: str, *, include_range_start: bool = False
+) -> List[Tuple[float, int, int]]:
+    """Extract (value, num_start, num_end) price mentions from a sentence.
 
     [C1]/[C4]：命中后按 token 语境过滤伪命中（单位/日期/JSON/外币/每股财务），
-    并把共享可执行价位词（含区间写法）并入抽取。position 为数字 token 起点。
-    """
-    found: List[Tuple[float, int]] = []
+    并把共享可执行价位词（含区间写法）并入抽取。position 为数字 token 起点；
+    [DAV-1321] 返回值追加 num_end，供口径右侧括号（「N 元（前复权）」）判定。
+    ``include_range_start``：[DAV-1321 N5] 裸元区间起点（「A-B 元」的 A）
+    仅在句内/文档内有口径可传递或技术报告自带口径时才登记——否则登记的
+    只是无法归因的模型自拟值，反而制造新的 missing_basis。"""
+    found: List[Tuple[float, int, int]] = []
     seen_spans: List[Tuple[int, int]] = []
 
     def _add(value_str: str, start: int, end: int, nstart: int, nend: int) -> None:
@@ -1124,7 +1410,7 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
         if _is_false_mention(sentence, nstart, nend, value):  # [C1]
             return
         seen_spans.append((start, end))
-        found.append((value, nstart))
+        found.append((value, nstart, nend))
 
     for m in _PER_SHARE_PATTERN.finditer(sentence):
         num = m.group(1) or m.group(2)
@@ -1135,6 +1421,11 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
         _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
     for m in _PRICE_KEYWORD_PATTERN.finditer(sentence):
         _add(m.group(1), m.start(), m.end(), m.start(1), m.end(1))
+
+    # [DAV-1321 N5] 裸元区间起点（「A-B 元」中的 A），受调用方开关控制。
+    if include_range_start:
+        for m in _RANGE_START_PATTERN.finditer(sentence):
+            _add(m.group(1), m.start(1), m.end(1), m.start(1), m.end(1))
 
     # [C4] shared executable parser：gate 价位词并入 registry 抽取。
     # [DAV-1255] 同一锚点窗口扫描：日期/周期/金额碎片跳过后继续取真实价位。
@@ -1147,16 +1438,18 @@ def _extract_price_values(sentence: str) -> List[Tuple[float, int]]:
             continue
         if _is_false_level(sentence, nstart, nend, value):
             continue
-        if any(abs(v - value) <= _VALUE_MATCH_TOLERANCE for v, _p in found):
+        if any(abs(v - value) <= _VALUE_MATCH_TOLERANCE for v, _p, _e in found):
             continue
-        found.append((value, nstart))
+        found.append((value, nstart, nend))
 
     found.sort(key=lambda item: item[1])
     return found
 
 
 def _detect_disclosure_type(sentence: str) -> Optional[str]:
-    """[C2] 最长匹配后过 verdict 规则：verdict=false → 不是该类披露价。"""
+    """[C2] 句级候选 dtype：最长匹配的关键词类型。仅作候选——是否挂到
+    某个 ref 由调用方按该 ref 的值再过 classify_typed_disclosure 决定
+    （DAV-1321 N3：typed_disclosure 是逐值判定，不再句级连坐）。"""
     best: Optional[Tuple[int, str]] = None  # (keyword length, type)
     for kw, dtype in TYPED_DISCLOSURE_KEYWORDS.items():
         if kw in sentence:
@@ -1164,10 +1457,83 @@ def _detect_disclosure_type(sentence: str) -> Optional[str]:
                 best = (len(kw), dtype)
     if best is None:
         return None
-    verdict = classify_typed_disclosure({"context": sentence, "disclosure_type": best[1]})
+    return best[1]
+
+
+# pit_raw 族披露类型：价格为当时成交/发行披露，值若是现价/收盘报价侧
+# 数字则一律非披露价（block_trade/龙虎榜的成交价并列是披露本体，不适用）。
+_PIT_DTYPE_QUOTE_GUARD = frozenset(
+    ("repurchase", "issuance", "private_placement",
+     "shareholder_increase", "shareholder_decrease")
+)
+
+# [DAV-1321 复审③] 披露口径只给披露事项本身的价格。值紧邻技术名词或
+# 行情动作词时是技术位/行情价，绝不挂披露口径：
+# 「年线（39.21 元）」「close_50_sma 117.31」「前期低点 34.31」
+# 「放量击穿 1268 元」「大宗折价…与 close_200_sma 重叠」均否决。
+_VALUE_TECH_HEAD = re.compile(
+    r"(?:年线|半年线|季线|月线|周线|日线|均线|缺口|颈线|下轨|中轨|上轨|"
+    r"前低|前高|低点|高点|新低|新高|分位|箱顶|箱底|布林|"
+    r"boll|ema|sma|wma|vma|vwma|ma|rsi|macd|atr|kdj|obv)\s*[（(:：]?\s*$",
+    re.I,
+)
+_VALUE_ACTION_HEAD = re.compile(
+    r"(?:击穿|跌破|突破|触及|下探|上攻|回抽|受阻|回落|考验|站上|回踩|"
+    r"冲击|挑战|逼近|上看|探至|达到|跌至|回升至|反弹至|跌至|修复至|"
+    r"运行至|试盘至|推高至|压制|承压于?)\s*[（(]?\s*$",
+    re.I,
+)
+_VALUE_ACTION_TAIL = re.compile(
+    r"^\s*元?\s*[）)]?\s*(?:区[域间]|价格带|平台|位)?\s*"
+    r"(?:探底|企稳|回落|受阻|新低|新高|前低|前高|一线|附近|破位|走弱)"
+)    # 「39.90-40.00 元区域探底企稳」「34.31 元探底」
+# 值显式标注口径（「26.92 元（qfq）」「X 元（pit_raw）」）→ 声明坐标优先，
+# 不挂披露类型
+_VALUE_DECLARED_NEAR = re.compile(
+    r"^\s*元?\s*[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)"
+    r"|元?\s*[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)",
+    re.I,
+)
+
+
+def _value_disclosure_veto(sentence: str, value: float) -> bool:
+    """[DAV-1321 复审③] 该值自身是技术位/行情价/显式口径价 → 否决披露挂接。"""
+    for m in re.finditer(r"\d+(?:\.\d+)?", sentence or ""):
+        try:
+            if abs(float(m.group(0)) - value) > _VALUE_MATCH_TOLERANCE:
+                continue
+        except ValueError:
+            continue
+        head = sentence[max(0, m.start() - 12):m.start()]
+        tail = sentence[m.end():m.end() + 12]
+        if _VALUE_TECH_HEAD.search(head) or _VALUE_ACTION_HEAD.search(head):
+            return True
+        if _VALUE_ACTION_TAIL.match(tail):
+            return True
+        if _VALUE_DECLARED_NEAR.match(tail) or re.search(
+            r"[（(]\s*(?:qfq|前复权|vendor_qfq|pit_raw|raw|不复权|未复权)\s*[）)]?\s*$",
+            head, re.I,
+        ):
+            return True
+    return False
+
+
+def _value_disclosure_type(sentence: str, dtype: str, value: float) -> Optional[str]:
+    """[DAV-1321 N3] 按该值自身的 ±15 字窗口判定它是否该类披露价。
+
+    复审③收紧：先否决「技术位/行情动作/显式口径」值，再跑逐值 verdict。"""
+    if _value_disclosure_veto(sentence, value):
+        return None
+    verdict = classify_typed_disclosure(
+        {"context": sentence, "disclosure_type": dtype, "value": value}
+    )
     if verdict["verdict"] == "false":
         return None
-    return best[1]
+    if dtype in _PIT_DTYPE_QUOTE_GUARD and _value_is_quote_side(
+        _num_windows(sentence, value)
+    ):
+        return None
+    return dtype
 
 
 def _has_coordinate_keyword(sentence: str) -> bool:
@@ -1183,14 +1549,100 @@ def _conversion_target_basis(sentence: str) -> Optional[str]:
     return _declared_basis(sentence)
 
 
+def _basis_token_basis(token: str) -> Optional[str]:
+    """[DAV-1321 N4] 口径 token → canonical basis。后复权无对应 canonical
+    basis，不映射；字面 ``raw`` 只在词边界内识别（避免 pit_raw 内部误中）。"""
+    t = (token or "").lower()
+    if t in ("不复权", "未复权"):
+        return PRICE_BASIS_RAW
+    if t == "pit_raw":
+        return PRICE_BASIS_PIT_RAW
+    if t in ("前复权", "vendor_qfq", "qfq"):
+        return PRICE_BASIS_VENDOR_QFQ
+    return None
+
+
 def _declared_basis(window: str) -> Optional[str]:
     """Basis explicitly declared by sentence keywords (deterministic text marker,
     not model self-certification — the label comes from the declared word).
+
+    [DAV-1321 N4] 追加字面 basis token：``pit_raw`` → pit_raw、
+    ``vendor_qfq``/``qfq`` → qfq、词边界内裸 ``raw`` → raw。
     """
     if "不复权" in window or "未复权" in window:
         return PRICE_BASIS_RAW
-    if "前复权" in window or "qfq" in window.lower():
+    low = window.lower()
+    if "pit_raw" in low:
+        return PRICE_BASIS_PIT_RAW
+    if "前复权" in window or "vendor_qfq" in low or "qfq" in low:
         return PRICE_BASIS_VENDOR_QFQ
+    if re.search(r"(?<![\w])raw(?![\w])", low):
+        return PRICE_BASIS_RAW
+    return None
+
+
+# [DAV-1321 N4] 数字右侧紧邻括号口径：「48.50 元（前复权）」「94.00 元（前复权）」。
+_DECLARED_TAIL_RE = re.compile(
+    r"^\s*元?\s*[（(]\s*(前复权|不复权|未复权|vendor_qfq|pit_raw|qfq)", re.I
+)
+
+# [DAV-1321 N4] 文档级口径声明：仅认「一律/一概/全部/所有/统一/以下/
+# 本文/本报告/本计划/本方案 …前复权」这类全文档 scope 词引导的声明。
+# 「回购均价（pit_raw 坐标）」这类单值标注不是文档声明，不匹配；
+# pit_raw/raw 是披露/原始口径，不会成为「全文一律」的坐标声明对象，
+# 故文档级 token 只收前复权/不复权/未复权/vendor_qfq/qfq。
+_DOC_DECL_RE = re.compile(
+    r"(?:一律|一概|全部|所有|统一|以下|本文|本报告|本计划|本方案)"
+    r"[^。\n]{0,15}?"
+    r"(前复权|不复权|未复权|vendor_qfq|qfq)",
+    re.I,
+)
+
+_BASIS_TOKEN_RE = re.compile(r"不复权|未复权|前复权|vendor_qfq|pit_raw|qfq", re.I)
+
+
+# 值绑定判定：口径词紧贴一个数字（「未复权价 84.03 元」「前复权价 8.09」）
+# 时，它只声明该值的坐标，不构成句/段级传播源——否则会把句内另一口径的
+# 现价也传染成同 basis，抹掉 same_sentence_mixed_basis 应捕捉的混用。
+_BASIS_VALUE_BOUND_RE = re.compile(
+    r"^\s*(?:价格|价|坐标|位)?\s*(?:为|约|[:：])?\s*\d"
+)
+
+
+def _free_basis_tokens(text: str) -> List[str]:
+    """只保留非值绑定的口径 token（声明语义，不紧跟数字）。"""
+    toks: List[str] = []
+    for m in _BASIS_TOKEN_RE.finditer(text or ""):
+        tail = (text or "")[m.end():m.end() + 12]
+        if _BASIS_VALUE_BOUND_RE.match(tail):
+            continue
+        toks.append(m.group(0))
+    return toks
+
+
+def _single_declared_basis(text: str) -> Optional[str]:
+    """[DAV-1321 N4] 文本内所有自由口径 token 收敛到唯一 basis 才返回；
+    多种口径并存（如坐标隔离声明句）→ None，不传播。"""
+    bases = {
+        _basis_token_basis(t)
+        for t in _free_basis_tokens(text)
+    }
+    bases.discard(None)
+    if len(bases) == 1:
+        return next(iter(bases))
+    return None
+
+
+def _doc_declared_basis(text: str) -> Optional[str]:
+    bases = {
+        _basis_token_basis(m.group(1))
+        for m in _DOC_DECL_RE.finditer(text or "")
+        # 排除值绑定 token（「未复权价 84.03」）
+        if not _BASIS_VALUE_BOUND_RE.match((text or "")[m.end():m.end() + 12])
+    }
+    bases.discard(None)
+    if len(bases) == 1:
+        return next(iter(bases))
     return None
 
 
@@ -1208,6 +1660,15 @@ def _norm_date(value: Any) -> Optional[str]:
 # 「折合/折算」单出现只是估值算术动词，不构成口径转换。
 _REAL_CONVERSION_CTX = re.compile(r"复权|qfq|前复权|不复权|因子", re.I)
 _CONVERSION_VERB_PATTERN = re.compile(r"换算|折算|折合|转换")
+
+
+def _is_conversion_sentence(ctx: str) -> bool:
+    """真转换句：复权语义 + 换算动词同现。该句内的 raw/qfq 并存是
+    「换算自 raw=X 得 qfq=Y」的合法对照，不是坐标混用。"""
+    return bool(
+        _REAL_CONVERSION_CTX.search(ctx or "")
+        and _CONVERSION_VERB_PATTERN.search(ctx or "")
+    )
 
 
 def build_price_ref_registry(
@@ -1251,19 +1712,51 @@ def build_price_ref_registry(
         if not isinstance(text, str) or not text.strip():
             continue
         is_technical = report_name in TECHNICAL_REPORT_FIELDS
+        # [DAV-1321 N4] 文档级口径声明（边界=本报告字段文本）。
+        doc_basis = _doc_declared_basis(text)
         for sentence in _split_sentences(text):
-            mentions = _extract_price_values(sentence)      # [C1]+[C4]
+            # [DAV-1321 N4] 句级口径：句内只出现一种口径声明时，传播到
+            # 句内未单独声明的 ref；多种口径并存（坐标隔离声明）不传播。
+            sentence_basis = _single_declared_basis(sentence)
+            mentions = _extract_price_values(                 # [C1]+[C4]+[N5]
+                sentence,
+                include_range_start=bool(
+                    is_technical or sentence_basis or doc_basis
+                ),
+            )
             if not mentions:
                 continue
-            disclosure_type = _detect_disclosure_type(sentence)  # [C2]
+            disclosure_type = _detect_disclosure_type(sentence)  # [C2] 候选
             derived = _has_derived_keyword(sentence)
             sentence_dates = _extract_dates(sentence)
             sentence_as_of = sentence_dates[0] if sentence_dates else None
 
             sentence_ref_ids: List[Tuple[str, float, str]] = []
-            for value, pos in mentions:
+            for value, pos, pend in mentions:
                 mention_window = sentence[max(0, pos - 15):pos]
-                declared = _declared_basis(mention_window)
+                # [DAV-1321 复审③] 值自身紧邻尾标优先于左侧窗口——「X 元（qfq）」
+                # 的 qfq 是它自己的坐标声明，不能被同句他值的（pit_raw）抢占。
+                declared = None
+                tm = _DECLARED_TAIL_RE.match(sentence[pend:pend + 14])
+                if tm:
+                    declared = _basis_token_basis(tm.group(1))
+                    declared_scope = "tail"
+                if declared is None:
+                    declared = _declared_basis(mention_window)
+                    declared_scope = ""
+                if declared is None:
+                    declared = sentence_basis
+                    declared_scope = "sentence" if declared else ""
+                if declared is None:
+                    declared = doc_basis
+                    declared_scope = "doc" if declared else ""
+                # [DAV-1321 N3] typed_disclosure 逐值判定：dtype 是句级候选，
+                # 该 ref 的值过 verdict 规则，false → 不挂 provenance。
+                dtype = (
+                    _value_disclosure_type(sentence, disclosure_type, value)
+                    if disclosure_type is not None
+                    else None
+                )
                 ref: Dict[str, Any] = {
                     "ref_id": _next_id(),
                     "value": value,
@@ -1276,13 +1769,17 @@ def build_price_ref_registry(
                     # 可能丢失价格本身）；仅追溯用，不参与判定。
                     "sentence": sentence,
                 }
-                if disclosure_type is not None:
-                    ref["basis"] = DISCLOSURE_TYPE_BASIS[disclosure_type]
-                    ref["provenance"] = f"typed_disclosure:{disclosure_type}"
-                    ref["disclosure_type"] = disclosure_type
+                if dtype is not None:
+                    ref["basis"] = DISCLOSURE_TYPE_BASIS[dtype]
+                    ref["provenance"] = f"typed_disclosure:{dtype}"
+                    ref["disclosure_type"] = dtype
                 elif declared is not None:
                     ref["basis"] = declared
-                    ref["provenance"] = f"declared_basis:{declared}"
+                    ref["provenance"] = (
+                        f"declared_basis:{declared}"
+                        if not declared_scope
+                        else f"declared_basis:{declared_scope}:{declared}"
+                    )
                 elif is_technical:
                     ref["basis"] = PRICE_BASIS_VENDOR_QFQ
                     ref["provenance"] = "technical_report:vendor_qfq"
@@ -1304,7 +1801,7 @@ def build_price_ref_registry(
                             "factor_as_of": sentence_as_of,
                         }
                         target = _conversion_target_basis(sentence)
-                        if target is not None and disclosure_type is None:
+                        if target is not None and dtype is None:
                             ref["basis"] = target
 
                 refs.append(ref)
@@ -1407,7 +1904,8 @@ def build_price_ref_registry(
             by_sentence.setdefault(ref["context"], []).append(ref)
         for _ctx, s_refs in by_sentence.items():
             bases = {r["basis"] for r in s_refs} & concrete_bases
-            if len(bases) > 1:
+            # [DAV-1321] 真转换句是契约明示的合法双坐标展示
+            if len(bases) > 1 and not _is_conversion_sentence(_ctx):
                 ids = [r["ref_id"] for r in s_refs]
                 finding = {
                     "kind": "basis_mismatch",
@@ -1427,11 +1925,17 @@ def build_price_ref_registry(
         # R2: a qfq ref anchored to technical coordinates while the same report
         # also carries raw/pit_raw refs (the b188060f pattern: raw 大宗价 vs
         # qfq 现价/锚/支撑混用).
-        non_qfq = [r for r in report_refs if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)]
+        non_qfq = [
+            r for r in report_refs
+            if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
+            and not _is_conversion_sentence(r.get("context") or "")
+        ]
         if not non_qfq:
             continue
         for ref in report_refs:
             if ref["basis"] != PRICE_BASIS_VENDOR_QFQ:
+                continue
+            if _is_conversion_sentence(ref.get("context") or ""):
                 continue
             if not _has_coordinate_keyword(ref["context"]):
                 continue
