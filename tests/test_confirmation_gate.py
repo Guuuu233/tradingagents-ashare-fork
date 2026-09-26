@@ -1505,3 +1505,127 @@ def test_dav1091_pit_failed_unconditional_hard_gate_preserved():
     assert any("pit_failed" in c or "fatal" in c for c in r_codes)
     assert "fatal_adopted_claims:CLM-PIT" in r_codes
     assert "pit_failed_adopted_claims:CLM-PIT" in r_codes
+
+
+# ── DAV-1343：经理已否决的未核实焦点论点视同已裁决零贡献 ──────────────
+
+
+def test_dav1343_rejected_unverified_focus_claim_not_unresolved():
+    """焦点论点在经理最终账本 rejected 且核验非 adopt → 不再打 UNRESOLVED。"""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "failed_checks": [],
+        "adopted_claim_ids": ["CLM-OK"],
+        "rejected_claim_ids": ["CLM-REJ"],
+    }
+    claim_evidence_summary = {
+        "CLM-OK": {
+            "counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        },
+        "CLM-REJ": {
+            "counts": {"total": 1, "verified": 0, "unsupported": 1, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 0.0,
+            "decision": "reject",
+        },
+    }
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-OK", "CLM-REJ"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    # 被否决的未核实焦点论点不再把正确裁决降为 WAIT
+    assert status.confirmation_state == CONFIRM_CONFIRMED
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.trade_action == ACTION_BUY
+    assert not any("unverified_core_claims" in c for c in status.reason_codes)
+
+
+def test_dav1343_adopted_unverified_focus_claim_still_waits():
+    """焦点论点含经理采纳的未核实论点 → 仍 WAIT（回归保护）。"""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "failed_checks": [],
+        "adopted_claim_ids": ["CLM-UNV"],
+        "rejected_claim_ids": [],
+    }
+    claim_evidence_summary = {
+        "CLM-UNV": {
+            "counts": {"total": 1, "verified": 0, "unsupported": 1, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 0.0,
+            "decision": "reject",
+        },
+    }
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-UNV"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert status.trade_action == ACTION_WAIT
+    assert any("unverified_core_claims" in c and "CLM-UNV" in c for c in status.reason_codes)
+
+
+def test_dav1343_rejected_but_verified_adopt_goes_consistency():
+    """焦点论点被否决但核验 adopt → 仍走 verdict_consistency_rejected_adopt（不排除）。"""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "failed_checks": [],
+        "adopted_claim_ids": [],
+        "rejected_claim_ids": ["CLM-RJ"],
+    }
+    claim_evidence_summary = {
+        "CLM-RJ": {
+            "counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0},
+            "coverage": 1.0,
+            "decision": "adopt",
+        },
+    }
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-RJ"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    # 一致性失败 → ABSTAIN + NO_TRADE
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.trade_action == ACTION_NO_TRADE
+    assert any("verdict_consistency_rejected_adopt" in c and "CLM-RJ" in c for c in status.reason_codes)
+
+
+def test_dav1343_fatal_focus_claim_still_unresolved():
+    """fatal 焦点论点即便被经理否决 → 仍 UNRESOLVED（fatal 检查在原 core 全集）。"""
+    mv = {
+        "direction": "看多",
+        "winner": "bull",
+        "position_pct": 60,
+        "consistency_check_passed": True,
+        "failed_checks": [],
+        "adopted_claim_ids": [],
+        "rejected_claim_ids": ["CLM-FATAL"],
+    }
+    claim_evidence_summary = {
+        "CLM-FATAL": {
+            "is_fatal": True,
+            "counts": {"total": 1, "verified": 0, "unsupported": 0, "contradicted": 1, "source_unavailable": 0},
+            "coverage": 0.0,
+            "decision": "reject",
+        },
+    }
+    status = status_from_manager_verdict(
+        mv,
+        focus_claim_ids=["CLM-FATAL"],
+        claim_evidence_summary=claim_evidence_summary,
+    )
+    assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert status.trade_action == ACTION_WAIT
+    assert any("fatal_core_claims" in c and "CLM-FATAL" in c for c in status.reason_codes)

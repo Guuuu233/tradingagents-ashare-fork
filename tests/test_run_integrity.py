@@ -214,7 +214,9 @@ def test_e03c_decision_status_consumes_adopt_partial_reject():
     assert st_partial == CONFIRM_PARTIAL
     assert any("partial_core_claims" in c or "partially_adopted_claims" in c for c in codes_partial)
 
-    # 3. Rejected core claims -> UNRESOLVED (WAIT)
+    # 3. Rejected core claims with non-adopt evidence verdict -> CONFIRMED
+    # （DAV-1343：经理已否决且核验非 adopt 的焦点论点视为「已裁决、零贡献」，
+    #  从 core_eval 排除；经理采纳的未核实论点仍 UNRESOLVED，见下方补充断言）
     summary_reject = {
         "C-1": {"decision": "reject", "counts": {"total": 1, "verified": 0, "unsupported": 1, "contradicted": 0, "source_unavailable": 0}},
         "C-2": {"decision": "reject", "counts": {"total": 1, "verified": 0, "unsupported": 1, "contradicted": 0, "source_unavailable": 0}},
@@ -224,8 +226,17 @@ def test_e03c_decision_status_consumes_adopt_partial_reject():
         claim_evidence_summary=summary_reject,
         rejected_claim_ids=["C-1", "C-2"],
     )
-    assert st_reject == CONFIRM_UNRESOLVED
-    assert any("unverified_core_claims" in c for c in codes_reject)
+    assert st_reject == CONFIRM_CONFIRMED
+    assert not any("unverified_core_claims" in c for c in codes_reject)
+
+    # 3b. 同论点但经理未否决（未裁决/采纳）→ 仍 UNRESOLVED（DAV-1343 回归保护）
+    st_unadj, codes_unadj = evaluate_confirmation_state(
+        focus_claim_ids=["C-1", "C-2"],
+        claim_evidence_summary=summary_reject,
+        adopted_claim_ids=["C-1"],
+    )
+    assert st_unadj == CONFIRM_UNRESOLVED
+    assert any("unverified_core_claims" in c for c in codes_unadj)
 
 
 def test_e03c_pit_failure_cannot_be_whitewashed_by_direction_or_adopted_status():

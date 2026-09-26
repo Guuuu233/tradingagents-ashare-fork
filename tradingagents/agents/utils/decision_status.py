@@ -511,6 +511,18 @@ def evaluate_confirmation_state(
             return False
         return _get_claim_decision(cid) == "adopt"
 
+    # DAV-1343：焦点论点同时满足「①在研究经理最终账本 rejected 里、
+    # ②证据核验结论非 adopt」时，视为「已裁决、零贡献」，与 legit_excluded
+    # 一样从 core_eval 排除——经理正确否决未核实争议论点不应把确认状态
+    # 打成 UNRESOLVED。核验为 adopt 却被否决的保留在 core_eval（且已由
+    # 下方 verdict_consistency_rejected_adopt 处理）。fatal 检查仍在原
+    # core 全集上执行，不受本排除影响。
+    _rejected_ledger = set(rejected_ids)
+    core_eval_ids = [
+        cid for cid in core_eval_ids
+        if cid not in _rejected_ledger or _get_claim_decision(cid) == "adopt"
+    ]
+
     # Row 5: rejected + deterministic adopt -> verdict consistency failure
     rejected_adopt_cids = [
         cid for cid in eff_rejected_ids
