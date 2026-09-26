@@ -1540,6 +1540,47 @@ def _has_coordinate_keyword(sentence: str) -> bool:
     return any(kw in sentence for kw in COORDINATE_KEYWORDS)
 
 
+# [DAV-1346] R2 raw 侧触发词表：raw/pit_raw 价格只有在其“自身句子”已经使用
+# 坐标语言时才去追问同字段的 qfq 坐标价。纯事实句里的披露原价（成交均价、
+# 相对当日收盘价的折溢价描述等）不再触发字段级连坐。词表 = 坐标词 +
+# 「平台/目标/成本线/关口/底线/安全垫/中枢/承接」等价格充当技术位的表述
+# （如「回购均价平台获得强承接」「回购价格底线成为安全垫」）。
+RAW_COORDINATE_TRIGGER_KEYWORDS = COORDINATE_KEYWORDS + (
+    "平台",
+    "目标",
+    "成本线",
+    "关口",
+    "底线",
+    "安全垫",
+    "中枢",
+    "承接",
+)
+
+# [DAV-1346] 坐标句中的价格回指词：「该价格对现价形成向下锚」这类句子
+# 语义上是把前一句的披露原价当成坐标使用——raw 价自身句子无坐标词，
+# 但字段内存在坐标语境的回指句时，该字段的 raw 价仍应触发 R2。
+_COORDINATE_ANAPHORA_TOKENS = (
+    "该价格",
+    "该价位",
+    "此价格",
+    "该成交价",
+    "上述价格",
+    "这一价格",
+    "该大宗价",
+)
+
+
+def _has_raw_coordinate_trigger(sentence: str) -> bool:
+    return any(kw in sentence for kw in RAW_COORDINATE_TRIGGER_KEYWORDS)
+
+
+def _has_coordinate_anaphora(sentence: str) -> bool:
+    """句子同时含坐标触发词与价格回指词（坐标句在引用某个披露价）。"""
+    return _has_raw_coordinate_trigger(sentence) and any(
+        tok in sentence for tok in _COORDINATE_ANAPHORA_TOKENS
+    )
+
+
 def _has_derived_keyword(sentence: str) -> bool:
     return any(kw in sentence for kw in DERIVED_KEYWORDS)
 
@@ -1925,10 +1966,19 @@ def build_price_ref_registry(
         # R2: a qfq ref anchored to technical coordinates while the same report
         # also carries raw/pit_raw refs (the b188060f pattern: raw 大宗价 vs
         # qfq 现价/锚/支撑混用).
+        # [DAV-1346] 收窄 R2 触发池：只有自身句子带坐标语境的 raw/pit_raw
+        # 才构成字段级威胁；纯事实句的披露原价不再连坐全段 qfq 坐标价。
+        # 例外：字段内出现「坐标词+价格回指词」句（如「该价格对现价形成锚」）
+        # 表明披露原价被坐标化引用，此时该字段 raw 价仍进入触发池。
+        field_anaphora = any(
+            _has_coordinate_anaphora(s)
+            for s in _SENTENCE_SPLIT_PATTERN.split(reports.get(report_name) or "")
+        )
         non_qfq = [
             r for r in report_refs
             if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
             and not _is_conversion_sentence(r.get("context") or "")
+            and (field_anaphora or _has_raw_coordinate_trigger(r.get("context") or ""))
         ]
         if not non_qfq:
             continue

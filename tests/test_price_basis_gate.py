@@ -282,3 +282,57 @@ def test_gate_internal_exception_fails_closed(monkeypatch):
     assert any(
         g["kind"] == "price_basis_gate_violation" for g in state["price_basis_gaps"]
     )
+
+
+# ---------------------------------------------------------------------------
+# DAV-1346 — R2 收窄：raw 侧自身坐标语境才触发字段级追问
+# ---------------------------------------------------------------------------
+
+
+def test_dav1346_fact_sentence_raw_does_not_collateral_qfq_coordinates():
+    """ebc41de2 形态：raw 只出现在新闻事实句（成交均价/折价描述），同字段的
+    qfq 坐标价不再被 R2 整段连坐。"""
+    state = _state(
+        market_report="现价 27.72 元，支撑位 26.50 元，止损位 26.45 元。",
+        news_report=(
+            "支撑位 26.50 元，止损位 26.45 元。"
+            "公司发生大宗交易，成交均价 25.12 元，较当日收盘价折价 9.38%。"
+        ),
+    )
+    # 事实句 raw 不产生 cross_basis 字段级 finding
+    findings = state["price_basis_validation"]["findings"]
+    assert not any(
+        f.get("rule") == "cross_basis_coordinate_reference" for f in findings
+    )
+    gate = enforce_price_basis_gate(state)
+    assert gate["status"] == "pass", gate["violations"]
+
+
+def test_dav1346_raw_in_coordinate_context_still_triggers_field_check():
+    """f088d66a 形态：pit_raw 回购均价被写成「平台/承接」坐标，R2 仍追问同字段
+    qfq 坐标价。"""
+    state = _state(
+        market_report="现价 37.00 元。",
+        news_report=(
+            "现价 37.00 元附近震荡。"
+            "同时在回购均价平台（34.80 元）获得强承接，维持缩量拉锯。"
+        ),
+    )
+    gate = enforce_price_basis_gate(state)
+    assert gate["status"] == "blocked"
+    assert "cross_basis_coordinate_mix" in _violation_kinds(gate)
+
+
+def test_dav1346_pit_raw_used_as_floor_is_still_blocked():
+    """603288/3fc1beba 形态：披露原价被当作底线/安全垫坐标使用，未标不可比，
+    仍属跨坐标混用。"""
+    state = _state(
+        market_report="现价 37.00 元。",
+        news_report=(
+            "现价 37.00 元附近震荡。"
+            "回购价格底线（36.02 元）成为空头短线难以击穿的心理安全垫。"
+        ),
+    )
+    gate = enforce_price_basis_gate(state)
+    assert gate["status"] == "blocked"
+    assert "cross_basis_coordinate_mix" in _violation_kinds(gate)
