@@ -448,18 +448,23 @@ _NUMBER_THOUSANDS_TAIL = re.compile(r"^,\d{3}\b")       # 「3,840」截出的�
 _NUMBER_THOUSANDS_HEAD = re.compile(r"\d,\s*$")         # 「4,480」截出的「480」
 _NUMBER_LETTER_HEAD = re.compile(r"[A-Za-z][\-_]*$")    # SMA50 / INV-4 / E-04
 _NUMBER_LETTER_TAIL = re.compile(r"^[A-Za-z_]")         # 2026Q1 / LPR_1Y / 0.75x / 25BP
-_NUMBER_FRACTION_TAIL = re.compile(r"^\s*/\s*\d")        # 「1/3」的 1
-_NUMBER_FRACTION_HEAD = re.compile(r"\d\s*/\s*$")       # 「1/3」的 3
+_NUMBER_FRACTION_TAIL = re.compile(r"^\s*/\s*\d{1,3}(?![\d.,])")
+# 「1/3」的 1；「141/156.35 元」后跟小数 → 价位列表，不命中
+_NUMBER_FRACTION_HEAD = re.compile(r"(?<![\d.,])\d{1,3}\s*/\s*$")
+# 「1/3」的 3；「156.35/160」一侧带小数点/千分位 → 不命中
 _NUMBER_CURRENCY_TAIL = re.compile(
     r"^\s*(?:美元|港元|欧元|日元|英镑|美分|USD|usd|HKD)"
 )                                                        # 「85美元/桶」
 _NUMBER_INDICATOR_TAIL = re.compile(
-    r"^\s*(?:VWMA|VWAP|EMA|SMA|WMA|DMA|BOLL|ATR|RSI|MACD|MA|PE|PB|PS|PEG|BPs?|bps)\b",
+    r"^\s*(?:VWMA|VWAP|EMA|SMA|WMA|DMA|BOLL|ATR|RSI|MACD|MA|PE|PB|PS|PEG|BPs?|bps|基点)\b",
     re.I,
 )                                                        # 「10 EMA」「5 PE」
 _NUMBER_MD_TAIL = re.compile(r"^-(\d{1,2})(?![\d.])")   # 「07-22」的 07
 _NUMBER_MD_HEAD = re.compile(r"(?<![\d.])(\d{1,2})-\s*$")  # 「07-22」的 22
-_NUMBER_PERUNIT_TAIL = re.compile(r"^\s*元\s*[/／]")    # 「5400元/年」「9766.67元/吨」
+_NUMBER_PERUNIT_TAIL = re.compile(
+    r"^\s*元\s*[/／]\s*(?:股|吨|克|公斤|升|瓶|箱|平方米?|平米|人|次|份|例|"
+    r"件|条|张|个|度|瓦|[Ww]|[Kk][Ww][Hh]|[Gg]|[Gg][Bb]|年|天|日|月|周|小时|客|户|头|只|艘|架|辆|台)"
+)    # 「5400元/年」「9766.67元/吨」「0.05元/W」；「87.47 元 / VWMA」分隔符不命中
 _NUMBER_DIVIDEND_HEAD = re.compile(
     r"(?:每\s*\d+\s*股|每\s*股|\d+\s*股)\s*派\s*(?:现金|红利|息|发现金|含税)?\s*$"
 )                                                        # 「每10股派5元」
@@ -469,11 +474,20 @@ _NUMBER_STOCK_CODE_TAIL = re.compile(
 _NUMBER_QUOTE_HEAD = re.compile(r"[\"'“”‘’]\s*$")
 _NUMBER_QUOTE_TAIL = re.compile(r"^\s*[\"'“”‘’]")
 # 财务金额语境词（值本身带「元」但量词是利润/金额，不是股价坐标）
-_NUMBER_FIN_AMOUNT_HEAD = re.compile(
-    r"(?:毛利|净利|归母净利|利润|盈利|营收|收入|成本|费用|利息|汇兑|"
-    r"节税|亏损|分红|派息|薪资|造价|成交额|交易额|货值)\w*"
-    r"\s*(?:约|达|为|有|近|超|超过|不足|增厚|节约|摊薄|锁定)?\s*$"
+_NUMBER_FIN_AMOUNT_WORD = (
+    r"毛利|净利|归母净利|利润|盈利|营收|收入|成本|费用|利息|汇兑|"
+    r"节税|亏损|分红|派息|薪资|造价|成交额|交易额|货值"
 )
+_NUMBER_FIN_AMOUNT_HEAD = re.compile(
+    rf"(?:{_NUMBER_FIN_AMOUNT_WORD})"
+    r"\s*(?:约|达|为|有|近|超|超过|不足|增厚|节约|摊薄|锁定|位于)?\s*$"
+)    # 注意不接 \w*——「成交额放量且两次冲锋 40 元」「成本位于千元上方或 900
+    # 元中枢」中量词与数字之间隔了叙述词，不能整段吞掉
+_NUMBER_FIN_AMOUNT_RANGE = re.compile(
+    rf"(?:{_NUMBER_FIN_AMOUNT_WORD})"
+    rf"(?:[\d.,\-–~—\s，、/]|约|达|为|有|近|超|超过|不足|增厚|节约|摊薄|"
+    rf"锁定|位于|于|至|到|亿|万|元|区间)*$"
+)    # 「毛利约1000-2000元」量词区间：关键词到 token 之间只允许金额片段字符
 _NUMBER_INDEX_TAIL = re.compile(r"^\s*点(?![位击])")     # 「收于 4668.23 点」
 _NUMBER_UNIT_CTX = re.compile(r"每升|每吨|每克|每公斤|每平米|每瓶|每箱|每桶")
 _NUMBER_LEVEL_COUNT_TAIL = re.compile(r"^\s*(?:档|板(?!块)|倍)")
@@ -535,7 +549,7 @@ def _nonprice_number_flag(text: str, start: int, end: int) -> Optional[str]:
     # [DAV-1321 N1] 金额性量词与下标单位：盈利/毛利/汇兑/利息等财务额
     # （「增厚单车毛利约1000-2000元」）、「收于 4668.23 点」指数点位、
     # 「每升/每吨/每克」单位价格语境。
-    if _NUMBER_FIN_AMOUNT_HEAD.search(head):
+    if _NUMBER_FIN_AMOUNT_HEAD.search(head) or _NUMBER_FIN_AMOUNT_RANGE.search(head):
         return "fin_amount"
     if _NUMBER_STOCK_CODE_TAIL.match(tail):
         return "stock_code"
