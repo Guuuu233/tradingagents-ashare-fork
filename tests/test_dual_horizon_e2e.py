@@ -54,6 +54,17 @@ class _FakeGraphStream:
                 f"- 【数据获取失败】{horizon} horizon 新闻接口超时"
             ),
             "final_trade_decision": f"{horizon} 结论：持有",
+            # DAV-1300: full set of report body fields + a status marker so
+            # _primary_horizon_slice can select this slice.
+            "market_report": f"{horizon} 市场分析正文",
+            "sentiment_report": f"{horizon} 情绪分析正文",
+            "fundamentals_report": f"{horizon} 基本面正文",
+            "macro_report": f"{horizon} 宏观正文",
+            "smart_money_report": f"{horizon} 主力资金正文",
+            "volume_price_report": f"{horizon} 量价正文",
+            "investment_plan": f"{horizon} 投资计划正文",
+            "trader_investment_plan": f"{horizon} 交易员计划正文",
+            "trade_action": "HOLD",
             "market_data_context": init_state["market_data_context"],
             "analyst_traces": [{"horizon": horizon}],
         }
@@ -90,7 +101,7 @@ class _FakeTradingGraph:
         return dict(state)
 
 
-def _run_dual_horizon_job(*, fail_horizons=(), empty_horizons=(), build_fail_horizons=(), horizons=("short", "medium")):
+def _run_dual_horizon_job(*, fail_horizons=(), empty_horizons=(), build_fail_horizons=(), horizons=("short", "medium"), structured_fails=False):
     """Run the full dual-horizon job path with fakes, returning observable state."""
     job_id = f"dual-e2e-{uuid4().hex}"
     store = InMemoryJobStore()
@@ -117,11 +128,23 @@ def _run_dual_horizon_job(*, fail_horizons=(), empty_horizons=(), build_fail_hor
         saved_reports.append(kwargs)
 
     def structured_for(final_trade_decision, *_args, **_kwargs):
+        if structured_fails:
+            raise RuntimeError("structured extraction unavailable")
         horizon = next((h for h in horizons if h in final_trade_decision), "short")
         return report_service.StructuredReport(
             decision="BUY" if horizon == "short" else "SELL",
             confidence=80 if horizon == "short" else 60,
             probability=0.8 if horizon == "short" else 0.4,
+            risks=[
+                report_service.RiskItemSchema(
+                    name=f"{horizon}波动风险", level="medium", description="测试风险"
+                )
+            ],
+            key_metrics=[
+                report_service.KeyMetricSchema(
+                    name="PE", value=f"{horizon}-28.5x", status="neutral"
+                )
+            ],
             data_gaps=[f"模型补充：{horizon} 数据不完整"],
             falsification_conditions=[f"条件：{horizon} 业绩不达预期"],
             not_applicable=(horizon == "medium"),

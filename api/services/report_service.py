@@ -1234,6 +1234,43 @@ def _primary_horizon_slice(result_data: Dict[str, Any]) -> Optional[Dict[str, An
     return None
 
 
+# DAV-1300: the 10 report body fields that live on each horizon slice of a
+# dual-horizon ``result_data`` and must be hoisted to the top level so
+# ``resolve_report_fields`` / ``create_report`` persist them into their columns.
+PRIMARY_HORIZON_REPORT_FIELDS = (
+    "market_report",
+    "sentiment_report",
+    "news_report",
+    "fundamentals_report",
+    "macro_report",
+    "smart_money_report",
+    "volume_price_report",
+    "investment_plan",
+    "trader_investment_plan",
+    "final_trade_decision",
+)
+
+
+def resolve_primary_horizon_report_fields(
+    result_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """DAV-1300: report body fields copied whole from the primary horizon slice.
+
+    Returns ``{field: value}`` for all :data:`PRIMARY_HORIZON_REPORT_FIELDS`
+    taken from ``_primary_horizon_slice(result_data)`` (short slice when it
+    carries a recorded status, otherwise medium). Values may be ``None`` —
+    callers that fill read payloads must apply them only over empty fields.
+    Read-only — never mutates ``result_data``. Returns ``{}`` when no primary
+    slice exists.
+    """
+    if not isinstance(result_data, dict):
+        return {}
+    primary = _primary_horizon_slice(result_data)
+    if not isinstance(primary, dict):
+        return {}
+    return {field: primary.get(field) for field in PRIMARY_HORIZON_REPORT_FIELDS}
+
+
 def resolve_post_gate_decision_fields(
     result_data: Optional[Dict[str, Any]],
     *,

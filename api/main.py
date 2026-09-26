@@ -3650,6 +3650,23 @@ async def _run_job_inner(
                     top_meta["notice"] = request.horizons_notice
                 result["horizon_run_metadata"] = top_meta
 
+                # DAV-1300: hoist the primary horizon slice's report body
+                # fields to the top level so resolve_report_fields /
+                # create_report persist them into their columns — same shape
+                # as the intent-resolved path below. Whole-slice copy via the
+                # shared _primary_horizon_slice rule (short slice with a
+                # recorded status, else medium); no per-field mixing.
+                primary_slice = report_service._primary_horizon_slice(result) or {}
+                result.update(
+                    report_service.resolve_primary_horizon_report_fields(result)
+                )
+                # Per-horizon structured extraction already stored risk_items /
+                # key_metrics on each completed slice (extract_structured_data,
+                # non-fatal); expose the primary slice's pair at top level so
+                # create_report writes the two columns instead of NULL.
+                result["risk_items"] = list(primary_slice.get("risk_items") or [])
+                result["key_metrics"] = list(primary_slice.get("key_metrics") or [])
+
                 # D-009 P0-1: aggregate short/medium decision_status onto the top-level row.
                 from tradingagents.agents.utils.decision_status import (
                     aggregate_horizon_decision_statuses,
@@ -3696,8 +3713,8 @@ async def _run_job_inner(
                                 decision=report_decision,
                                 result_data=result,
                                 user_id=user_id,
-                                risk_items=None,
-                                key_metrics=None,
+                                risk_items=result.get("risk_items") or None,
+                                key_metrics=result.get("key_metrics") or None,
                                 probability=(
                                     None
                                     if len(request.horizons) > 1 or dual_decision in {"NO_TRADE", "WAIT"}
@@ -5681,6 +5698,14 @@ def get_report_endpoint(
     payload = ReportDetailResponse.model_validate(report)
     if not payload.game_theory_report:
         payload.game_theory_report = report_service.resolve_game_theory_report(report.result_data)
+    # DAV-1300: read-only fallback — historical dual-horizon rows whose report
+    # body columns were never hoisted resolve them from the primary horizon
+    # slice (same _primary_horizon_slice rule). Never writes back to the DB.
+    for _field, _value in report_service.resolve_primary_horizon_report_fields(
+        report.result_data
+    ).items():
+        if _value and not getattr(payload, _field, None):
+            setattr(payload, _field, _value)
     # DAV-1283 D2: read-only fallback to post-gate primary-horizon fields.
     payload = ReportDetailResponse.model_validate(
         report_service.apply_post_gate_read_fallback(payload.model_dump(), report.result_data)
