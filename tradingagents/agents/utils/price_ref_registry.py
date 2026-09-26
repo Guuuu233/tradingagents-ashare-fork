@@ -1561,6 +1561,15 @@ _REAL_CONVERSION_CTX = re.compile(r"复权|qfq|前复权|不复权|因子", re.I
 _CONVERSION_VERB_PATTERN = re.compile(r"换算|折算|折合|转换")
 
 
+def _is_conversion_sentence(ctx: str) -> bool:
+    """真转换句：复权语义 + 换算动词同现。该句内的 raw/qfq 并存是
+    「换算自 raw=X 得 qfq=Y」的合法对照，不是坐标混用。"""
+    return bool(
+        _REAL_CONVERSION_CTX.search(ctx or "")
+        and _CONVERSION_VERB_PATTERN.search(ctx or "")
+    )
+
+
 def build_price_ref_registry(
     reports: Mapping[str, Any],
     *,
@@ -1792,7 +1801,8 @@ def build_price_ref_registry(
             by_sentence.setdefault(ref["context"], []).append(ref)
         for _ctx, s_refs in by_sentence.items():
             bases = {r["basis"] for r in s_refs} & concrete_bases
-            if len(bases) > 1:
+            # [DAV-1321] 真转换句是契约明示的合法双坐标展示
+            if len(bases) > 1 and not _is_conversion_sentence(_ctx):
                 ids = [r["ref_id"] for r in s_refs]
                 finding = {
                     "kind": "basis_mismatch",
@@ -1812,11 +1822,17 @@ def build_price_ref_registry(
         # R2: a qfq ref anchored to technical coordinates while the same report
         # also carries raw/pit_raw refs (the b188060f pattern: raw 大宗价 vs
         # qfq 现价/锚/支撑混用).
-        non_qfq = [r for r in report_refs if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)]
+        non_qfq = [
+            r for r in report_refs
+            if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
+            and not _is_conversion_sentence(r.get("context") or "")
+        ]
         if not non_qfq:
             continue
         for ref in report_refs:
             if ref["basis"] != PRICE_BASIS_VENDOR_QFQ:
+                continue
+            if _is_conversion_sentence(ref.get("context") or ""):
                 continue
             if not _has_coordinate_keyword(ref["context"]):
                 continue
