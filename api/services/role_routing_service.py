@@ -131,6 +131,117 @@ def migrate_legacy_user_llm_config(db: Session, user_id: str) -> None:
         logger.error(f"Failed to migrate legacy LLM config for user {user_id}: {e}")
 
 
+_TIER_DISPLAY_LABELS = {"quick": "常规模型", "deep": "推理模型"}
+
+
+def _normalize_base_url(url: Optional[str]) -> Optional[str]:
+    normalized = (url or "").strip().rstrip("/")
+    return normalized or None
+
+
+def sync_tier_profiles_from_user_config(db: Session, user_id: str) -> None:
+    """Keep quick/deep tier ModelProfiles aligned with the settings-page models.
+
+    user_llm_configs.quick_think_llm / deep_think_llm is the source of truth shown
+    on the settings page. Roles without explicit bindings resolve through tier
+    default profiles, so the tier profiles must track these values — otherwise
+    unbound roles keep calling a stale model after the user changes 常规/推理模型
+    (DAV-1305). Idempotent: no writes when the stored config has no model names
+    or when the tier profiles already match.
+    """
+    cfg = db.query(UserLLMConfigDB).filter(UserLLMConfigDB.user_id == user_id).first()
+    if not cfg:
+        return
+
+    quick_model = (cfg.quick_think_llm or cfg.deep_think_llm or "").strip()
+    deep_model = (cfg.deep_think_llm or cfg.quick_think_llm or "").strip()
+    if not quick_model and not deep_model:
+        return
+
+    desired_type = cfg.llm_provider or "openai"
+    cfg_url = _normalize_base_url(cfg.backend_url)
+    providers = db.query(ProviderDB).filter(ProviderDB.user_id == user_id).all()
+
+    def _matches(p: ProviderDB) -> bool:
+        return p.provider_type == desired_type and _normalize_base_url(p.base_url) == cfg_url
+
+    provider = next((p for p in providers if p.enabled and _matches(p)), None) or next(
+        (p for p in providers if _matches(p)), None
+    )
+    now = _utcnow()
+    if provider is None:
+        provider = ProviderDB(
+            id=uuid4().hex,
+            user_id=user_id,
+            provider_type=desired_type,
+            base_url=cfg.backend_url,
+            api_key_encrypted=cfg.api_key_encrypted,
+            display_name=f"默认厂商 ({desired_type})",
+            enabled=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(provider)
+        db.flush()
+
+    profiles = db.query(ModelProfileDB).filter(ModelProfileDB.user_id == user_id).all()
+    changed = False
+    for tier, model_name in (("quick", quick_model), ("deep", deep_model)):
+        if not model_name:
+            continue
+        # A profile can only hold one tier flag; when 常规/推理 use the same model
+        # each tier keeps its own profile row.
+        target = next(
+            (
+                p
+                for p in profiles
+                if p.model_name == model_name
+                and p.provider_id == provider.id
+                and p.tier in (None, tier)
+            ),
+            None,
+        )
+        if target is None:
+            target = ModelProfileDB(
+                id=uuid4().hex,
+                user_id=user_id,
+                provider_id=provider.id,
+                model_name=model_name,
+                display_name=f"{_TIER_DISPLAY_LABELS[tier]} ({model_name})",
+                tier=None,
+                is_default=False,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(target)
+            profiles.append(target)
+            changed = True
+        # Only one profile may carry a tier flag; stale tier holders lose it.
+        for p in profiles:
+            if p is not target and p.tier == tier:
+                p.tier = None
+                p.updated_at = now
+                changed = True
+        if target.tier != tier:
+            target.tier = tier
+            changed = True
+        if tier == "quick":
+            # Mirror migrate_legacy_user_llm_config: the quick-tier profile is the
+            # global default, so step-4 fallback also lands on the current model.
+            for p in profiles:
+                if p.is_default and p is not target:
+                    p.is_default = False
+                    changed = True
+            if not target.is_default:
+                target.is_default = True
+                changed = True
+        if changed:
+            target.updated_at = now
+
+    if changed:
+        db.commit()
+
+
 def resolve_role_model_config(
     db: Optional[Session],
     user_id: Optional[str],

@@ -360,6 +360,13 @@ def upsert_user_llm_config(
 
     db.commit()
     db.refresh(row)
+
+    # Settings-page quick/deep models are the source of truth for unbound roles.
+    # Sync the tier default profiles so they cannot drift onto stale models
+    # (DAV-1305). Lazy import: role_routing_service imports auth_service.
+    from api.services import role_routing_service
+
+    role_routing_service.sync_tier_profiles_from_user_config(db, user_id)
     return row
 
 
