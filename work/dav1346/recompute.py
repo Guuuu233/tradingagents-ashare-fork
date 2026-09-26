@@ -115,7 +115,7 @@ def run_one(impl, h: Mapping[str, Any], pool) -> Dict[str, Any]:
         "refs": [
             {k: r.get(k) for k in (
                 "ref_id", "value", "basis", "source", "provenance",
-                "as_of", "context")}
+                "as_of", "context", "sentence")}
             for r in result["price_refs"]
         ],
     }

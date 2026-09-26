@@ -336,3 +336,24 @@ def test_dav1346_pit_raw_used_as_floor_is_still_blocked():
     gate = enforce_price_basis_gate(state)
     assert gate["status"] == "blocked"
     assert "cross_basis_coordinate_mix" in _violation_kinds(gate)
+
+
+def test_dav1346_r2_trigger_uses_full_sentence_beyond_context_truncation():
+    """🟡-1 返修回归：ref['context'] 建档截断为 120 字，raw 原句坐标词落在
+    截断点之后时 R2 仍须触发（判定源为完整 sentence）。"""
+    filler = "，" + "公司就回购事项披露的执行进展与相关安排说明" * 6
+    long_sentence = (
+        "回购均价 34.80 元" + filler + "，该价格在平台获得强承接"
+    )
+    assert long_sentence.index("平台") > 120  # 坐标词在 context 截断点之后
+    state = _state(
+        market_report="现价 37.00 元。",
+        news_report="现价 37.00 元附近震荡。" + long_sentence + "。",
+    )
+    findings = state["price_basis_validation"]["findings"]
+    assert any(
+        f.get("rule") == "cross_basis_coordinate_reference" for f in findings
+    )
+    gate = enforce_price_basis_gate(state)
+    assert gate["status"] == "blocked"
+    assert "cross_basis_coordinate_mix" in _violation_kinds(gate)

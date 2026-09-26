@@ -21,13 +21,17 @@ sys.path.insert(0, REPO)
 
 from tradingagents.agents.utils.price_ref_registry import (  # noqa: E402
     RAW_COORDINATE_TRIGGER_KEYWORDS,
+    _NON_COMPARABLE_MARKERS,
 )
 
 OUT = os.path.join(HERE, "out")
 
 
-def trig_words(ctx: str):
-    return [kw for kw in RAW_COORDINATE_TRIGGER_KEYWORDS if kw in (ctx or "")]
+def trig_words(ref) -> list:
+    text = ref.get("sentence") or ref.get("context") or ""
+    if any(m in text for m in _NON_COMPARABLE_MARKERS):
+        return []  # 已标不可比的合规声明句不进触发池（与 R2 判定同口径）
+    return [kw for kw in RAW_COORDINATE_TRIGGER_KEYWORDS if kw in text]
 
 
 def main() -> None:
@@ -45,15 +49,15 @@ def main() -> None:
         if not b_cb:
             continue
         raws = [r for r in b["refs"] if r["basis"] in ("raw", "pit_raw")]
-        trig = [r for r in raws if trig_words(r["context"])]
-        quiet = [r for r in raws if not trig_words(r["context"])]
+        trig = [r for r in raws if trig_words(r)]
+        quiet = [r for r in raws if not trig_words(r)]
         c_cb = [v for v in c["violations"] if v["kind"] == "cross_basis_coordinate_mix"]
         if trig or c_cb:
             cls = "a"
             parts = []
             if trig:
                 parts.append(
-                    f"raw 侧触发词命中 {sorted({w for r in trig for w in trig_words(r['context'])})}"
+                    f"raw 侧触发词命中 {sorted({w for r in trig for w in trig_words(r)})}"
                     f"（{len(trig)} 条坐标语境 raw）")
             r1 = sum(1 for v in c_cb if (v.get('detail') or '').startswith('同句混用'))
             if r1:

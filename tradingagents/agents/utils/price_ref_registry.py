@@ -1581,6 +1581,24 @@ def _has_coordinate_anaphora(sentence: str) -> bool:
     )
 
 
+# [DAV-1346] 与 price_basis_gate.NON_COMPARABLE_MARKERS 同口径（gate 依赖
+# 本模块，不能反向引用，故并列一份）。显式声明「不可直接比较」的披露句
+# 是契约 §3 允许的合规双列展示，其中出现的坐标词（如否定句「严禁视为…
+# 技术支撑」）不构成坐标化使用，该 raw 价不进 R2 触发池。
+_NON_COMPARABLE_MARKERS = (
+    "不可直接比较",
+    "不可直接对比",
+    "不可比",
+    "不同坐标",
+    "口径不同",
+    "双列",
+)
+
+
+def _has_non_comparable_label(sentence: str) -> bool:
+    return any(marker in (sentence or "") for marker in _NON_COMPARABLE_MARKERS)
+
+
 def _has_derived_keyword(sentence: str) -> bool:
     return any(kw in sentence for kw in DERIVED_KEYWORDS)
 
@@ -1971,14 +1989,20 @@ def build_price_ref_registry(
         # 例外：字段内出现「坐标词+价格回指词」句（如「该价格对现价形成锚」）
         # 表明披露原价被坐标化引用，此时该字段 raw 价仍进入触发池。
         field_anaphora = any(
-            _has_coordinate_anaphora(s)
+            _has_coordinate_anaphora(s) and not _has_non_comparable_label(s)
             for s in _SENTENCE_SPLIT_PATTERN.split(reports.get(report_name) or "")
         )
+        # [DAV-1346 返工 🟡-1] 触发判定用完整原句（sentence），不用截断到
+        # 120 字的 context——坐标词落在截断点之后时不能让真混用漏拦。
         non_qfq = [
             r for r in report_refs
             if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
             and not _is_conversion_sentence(r.get("context") or "")
-            and (field_anaphora or _has_raw_coordinate_trigger(r.get("context") or ""))
+            and not _has_non_comparable_label(r.get("sentence") or r.get("context"))
+            and (
+                field_anaphora
+                or _has_raw_coordinate_trigger(r.get("sentence") or r.get("context") or "")
+            )
         ]
         if not non_qfq:
             continue
