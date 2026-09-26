@@ -701,6 +701,11 @@ def _kw_window(ctx: str, i: int, n: int = 10) -> str:
     return ctx[max(0, i - n):i + n]
 
 
+_DISCLOSURE_KW = re.compile(
+    r"大宗|龙虎榜|增持|减持|回购|定增|增发|发行|发股|配售|申购|募资|"
+    r"成交|作价|均价|折价|溢价|席位|解禁|上市日|IPO|预案价|对价"
+)
+
 _GOODS_CTX = re.compile(
     r"商品|物资|原料|材料|成本|金属|能源|化石|资产|涨价|通胀|"
     r"LME|COMEX|原油|布伦特|黄金|贵金属|铜|铝|镍|上游|采购|BOM|进口"
@@ -718,6 +723,20 @@ def _num_windows(ctx: str, value: float, half: int = 15) -> List[str]:
         except ValueError:
             pass
     return wins
+
+
+def _value_is_quote_side(wins: List[str]) -> bool:
+    """[DAV-1321 N3] 该值本身是行情报价而非披露价：值紧邻 现价/收盘价/
+    当前价/市价/当前 之左（「按当前48.03元股价折算」「高于现价（79.92元）」）。
+    只用于 pit_raw 族（回购/发行/定增/增减持）——block_trade/龙虎榜的
+    「成交价/收盘价」并列正是披露本体，不适用。"""
+    for w in wins:
+        if len(w) <= 15:
+            continue
+        if re.search(r"(?:现价|收盘价|当前价|市价|当前)\s*[（(]?\s*[\d.]*$",
+                     w[:len(w) - 15]):
+            return True
+    return False
 
 
 def classify_typed_disclosure(ref: Mapping[str, Any],
@@ -742,16 +761,31 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
     if dtype == "block_trade":
         goods = bool(_GOODS_CTX.search(ctx)) and not _REAL_BLOCK.search(ctx)
         # 值紧邻『大宗交易/平价/成交/折价/席位/接盘』→ 真披露价
-        real = any(re.search(r"大宗（交易|平价|成交|折价|溢价|席位|接盘|买入）"
-                             r"|（交易|平价|折价|溢价|席位|接盘）[^。]{0,10}大宗", w)
+        # [DAV-1321 N3 修复] 原写法把正则组误写成全角（），| 变成顶层
+        # 分支导致「成交/买入/价格」裸词随处命中；改回 (?:…)。
+        real = any(re.search(r"大宗(?:交易|平价|成交|折价|溢价|席位|接盘|买入)"
+                             r"|(?:交易|平价|折价|溢价|席位|接盘)[^。]{0,10}大宗", w)
                    for w in wins)
-        if real:
+        # [DAV-1321 N3] 披露子句语义：该值位于成交/作价/溢折价/席位/对价
+        # 描述窗口内才是披露价；「大宗折价盘锁死向 35.00 元进攻」中的 35.00
+        # 只是坐标位，不误挂 raw。坐标语境词（支撑/阻力/跟踪/冲击等）出现在
+        # 值窗口时否决——「跟踪76.3—76.8元支撑」「向130元上方冲击」不是披露价。
+        clause = any(
+            re.search(r"成交|作价|万元|亿元|席位|vs\s|VS\s|溢价|折价", w)
+            for w in wins
+        )
+        coord_veto = any(
+            re.search(r"支撑|阻力|关口|平台|冲击|反抽|收复|跟踪|止损|止盈|目标|"
+                      r"锁死|进攻|考验|下探|上看|挑战|触及|逼近|修复", w)
+            for w in wins
+        )
+        if (real or clause) and not coord_veto:
             verdict, reason = "true", "数值紧邻大宗交易/平价/成交语义"
         elif goods or any(_GOODS_CTX.search(w) for w in wins):
             verdict, reason = "false", "大宗为商品/材料/成本语境，非披露价"
-        elif _REAL_BLOCK.search(ctx):
-            # 句中有真大宗语义但该值不紧邻 → 该值不是披露价
-            verdict, reason = "false", "句内有大宗交易但该值非披露价"
+        elif _REAL_BLOCK.search(ctx) or "大宗" in ctx:
+            # 句内有大宗语义但该值不在披露子句 → 该值不是披露价
+            verdict, reason = "false", "句内有大宗语境但该值非披露价"
         else:
             verdict, reason = "ambiguous", "大宗语境无法定夺"
 
@@ -770,8 +804,8 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
                 verdict, subtype = "false", "other_symbol"
                 reason = f"发行价主语为『{subj}』，非本标的 {stock_name}"
         if verdict != "false":
-            if re.search(r"票据|中票|中期票据|债券|总股本|股本|成本|已完成|已发行", ctx):
-                verdict, reason = "false", "发行属票据/股本/成本语境，非股票发行披露价"
+            if re.search(r"票据|中票|中期票据|永续债|债券|国债|总股本|股本|成本|已完成|已发行|RWA|信贷", ctx):
+                verdict, reason = "false", "发行属票据/债券/股本/成本语境，非股票发行披露价"
             elif other:
                 verdict, reason = "true", "定增/增发为确定披露词"
             elif real_fa:
@@ -793,12 +827,15 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
                   for i in _occurrences(ctx, "回购") for w in [_kw_window(ctx, i)])
         # 真披露价：回购价/回购金额/回购均价/以 X 元回购股份 等；
         # 「回购为股价提供 X 元安全垫」中的 X 是坐标价，非披露价。
-        price_like = any(re.search(r"回购（价|金额|均价|上限|下限|价格|股份|注销|方案|"
-                                   r"拟|计划|公告）|（以|按|不超过）[^。]{0,6}元[^。]{0,4}回购", w)
+        # [DAV-1321 N3 修复] 同上，全角（）组误写修复为 (?:…)。
+        price_like = any(re.search(r"回购(?:价|金额|均价|上限|下限|价格|股份|注销|方案|"
+                                   r"拟|计划|公告)|(?:以|按|不超过)[^。]{0,6}元[^。]{0,4}回购", w)
                          for w in wins)
         coord = any(re.search(r"支撑|站稳|安全垫|关口|一线", w) for w in wins)
         if bad:
             verdict, reason = "false", "逆回购/央行/国债回购语境"
+        elif _value_is_quote_side(wins):
+            verdict, reason = "false", "该值为现价/收盘报价侧，非回购披露价"
         elif price_like:
             verdict, reason = "true", "回购价/回购方案语义贴近该值"
         elif coord or wins:
@@ -841,7 +878,34 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
             verdict, reason = "false", "龙虎榜语境但该值非榜价"
 
     elif dtype == "private_placement":
-        verdict, reason = "true", "定增/增发字面命中"
+        # [DAV-1321 N3] 逐值判定：值窗口必须含发行/定价语义（定增/增发/发行/
+        # 定价/配售/募资/认购/缴款/摊薄/私募/解禁）。「按当前48.03元股价折算」
+        # 与定增同句但不是定增价 → false；「增发对定价 5.11 元」→ true。
+        price_like = any(
+            re.search(r"定增|增发|发行价|定价|配售|募资|认购|缴款|摊薄|私募|解禁",
+                      w)
+            for w in wins
+        )
+        if _value_is_quote_side(wins):
+            verdict, reason = "false", "该值为现价/收盘报价侧，非定增发行价"
+        elif price_like:
+            verdict, reason = "true", "定增/增发发行定价语义贴近该值"
+        elif wins:
+            verdict, reason = "false", "该值不在定增/增发发行定价子句内"
+        else:
+            verdict, reason = "ambiguous", "值不可定位，定增语境无法定夺"
+
+    # [DAV-1321 N3] ambiguous 收紧：披露关键词须落在该值自身 ±15 字
+    # 窗口内，否则按 false 处理——「大宗减持概率低」句中的 EMA 值、
+    # 「永续债发行」句中的 RWA 数字不再因同句关键词被误挂 provenance。
+    # verdict=true（值已在披露子句内）不受影响：大宗成交价 39.60 元照常 true。
+    if verdict == "ambiguous" and wins:
+        # 关键词用跨 dtype 同族披露词集合：发行→发股/发行价、大宗→成交价/折价
+        # 等，防止「重组发股底价 5.30→5.11 元」「折价 7.33%（1218.61 元）」
+        # 这类真披露值因 dtype 词恰不在窗口而漏挂。
+        kw_hit = any(_DISCLOSURE_KW.search(w) for w in wins)
+        if not kw_hit:
+            verdict, reason = "false", "披露关键词不在该值窗口内"
 
     return {
         "ref_id": ref.get("ref_id"), "value": ref.get("value"),
@@ -1346,10 +1410,29 @@ def _detect_disclosure_type(sentence: str) -> Optional[str]:
                 best = (len(kw), dtype)
     if best is None:
         return None
-    verdict = classify_typed_disclosure({"context": sentence, "disclosure_type": best[1]})
+    return best[1]
+
+
+# pit_raw 族披露类型：价格为当时成交/发行披露，值若是现价/收盘报价侧
+# 数字则一律非披露价（block_trade/龙虎榜的成交价并列是披露本体，不适用）。
+_PIT_DTYPE_QUOTE_GUARD = frozenset(
+    ("repurchase", "issuance", "private_placement",
+     "shareholder_increase", "shareholder_decrease")
+)
+
+
+def _value_disclosure_type(sentence: str, dtype: str, value: float) -> Optional[str]:
+    """[DAV-1321 N3] 按该值自身的 ±15 字窗口判定它是否该类披露价。"""
+    verdict = classify_typed_disclosure(
+        {"context": sentence, "disclosure_type": dtype, "value": value}
+    )
     if verdict["verdict"] == "false":
         return None
-    return best[1]
+    if dtype in _PIT_DTYPE_QUOTE_GUARD and _value_is_quote_side(
+        _num_windows(sentence, value)
+    ):
+        return None
+    return dtype
 
 
 def _has_coordinate_keyword(sentence: str) -> bool:
@@ -1555,6 +1638,13 @@ def build_price_ref_registry(
                 if declared is None:
                     declared = doc_basis
                     declared_scope = "doc" if declared else ""
+                # [DAV-1321 N3] typed_disclosure 逐值判定：dtype 是句级候选，
+                # 该 ref 的值过 verdict 规则，false → 不挂 provenance。
+                dtype = (
+                    _value_disclosure_type(sentence, disclosure_type, value)
+                    if disclosure_type is not None
+                    else None
+                )
                 ref: Dict[str, Any] = {
                     "ref_id": _next_id(),
                     "value": value,
@@ -1567,10 +1657,10 @@ def build_price_ref_registry(
                     # 可能丢失价格本身）；仅追溯用，不参与判定。
                     "sentence": sentence,
                 }
-                if disclosure_type is not None:
-                    ref["basis"] = DISCLOSURE_TYPE_BASIS[disclosure_type]
-                    ref["provenance"] = f"typed_disclosure:{disclosure_type}"
-                    ref["disclosure_type"] = disclosure_type
+                if dtype is not None:
+                    ref["basis"] = DISCLOSURE_TYPE_BASIS[dtype]
+                    ref["provenance"] = f"typed_disclosure:{dtype}"
+                    ref["disclosure_type"] = dtype
                 elif declared is not None:
                     ref["basis"] = declared
                     ref["provenance"] = (
@@ -1599,7 +1689,7 @@ def build_price_ref_registry(
                             "factor_as_of": sentence_as_of,
                         }
                         target = _conversion_target_basis(sentence)
-                        if target is not None and disclosure_type is None:
+                        if target is not None and dtype is None:
                             ref["basis"] = target
 
                 refs.append(ref)
