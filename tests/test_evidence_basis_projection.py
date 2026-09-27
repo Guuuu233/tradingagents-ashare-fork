@@ -108,10 +108,12 @@ def test_adopted_projection_deterministic_and_traceable():
 
 def test_partial_projection_only_verified_subfacts():
     claims = [_claim("INV-1", "Bear", "bearish")]
+    # DAV-1351：verified 凭证须命中 claim 命题文本使 semantic_decision=adopt，
+    # 否则 partial 中的 sem-reject 论点会被账本纠正改挂 rejected_subfact 通道。
     vers = [
-        {"claim_id": "INV-1", "status": STATUS_VERIFIED, "raw": "INV-1 已验证证据"},
+        {"claim_id": "INV-1", "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元·凭证1"},
         {"claim_id": "INV-1", "status": STATUS_UNSUPPORTED, "raw": "INV-1 未验证证据"},
-        {"claim_id": "INV-1", "status": STATUS_VERIFIED, "raw": "INV-1 已验证证据2"},
+        {"claim_id": "INV-1", "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元·凭证2"},
     ]
     raw = _verdict_block(partially_adopted_claims=["INV-1"])
     result = _run(raw, claims, vers)
@@ -119,7 +121,7 @@ def test_partial_projection_only_verified_subfacts():
     item = _items_by_cid(result)["INV-1"]
     assert item["source"] == "partial"
     # 未验证项绝不进 verified_subfacts
-    assert item["verified_subfacts"] == ["INV-1 已验证证据", "INV-1 已验证证据2"]
+    assert item["verified_subfacts"] == ["主力净流出1.2亿元·凭证1", "主力净流出1.2亿元·凭证2"]
     assert item["verified_count"] == 2
     assert "INV-1 未验证证据" not in item["verified_subfacts"]
 
@@ -331,12 +333,14 @@ def test_bull_winner_symmetric_projection():
     vers = (
         _verification("INV-1")
         + [
-            {"claim_id": "INV-2", "status": STATUS_VERIFIED, "raw": "INV-2 已验证证据"},
+            # DAV-1351：verified 凭证须命中 claim 命题文本（sem=adopt），
+            # 避免 partial 中的 sem-reject 论点触发账本纠正改挂 rejected_subfact
+            {"claim_id": "INV-2", "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元·凭证1"},
             {"claim_id": "INV-2", "status": STATUS_UNSUPPORTED, "raw": "INV-2 未验证项"},
-            {"claim_id": "INV-2", "status": STATUS_VERIFIED, "raw": "INV-2 已验证证据2"},
+            {"claim_id": "INV-2", "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元·凭证2"},
         ]
         + [
-            {"claim_id": "INV-3", "status": STATUS_VERIFIED, "raw": "INV-3 已验证子事实"},
+            {"claim_id": "INV-3", "status": STATUS_VERIFIED, "raw": "主力净流出1.2亿元·凭证3"},
             {"claim_id": "INV-3", "status": STATUS_UNSUPPORTED, "raw": "INV-3 未验证项"},
         ]
     )
@@ -346,7 +350,7 @@ def test_bull_winner_symmetric_projection():
     assert items["INV-1"]["source"] == "adopted"
     assert items["INV-2"]["source"] == "partial"
     assert items["INV-3"]["source"] == "rejected_subfact"
-    assert items["INV-3"]["verified_subfacts"] == ["INV-3 已验证子事实"]
+    assert items["INV-3"]["verified_subfacts"] == ["主力净流出1.2亿元·凭证3"]
     assert result["winner"] == "bull"
 
 
