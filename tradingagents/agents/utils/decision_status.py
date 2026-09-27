@@ -913,16 +913,30 @@ def status_from_manager_verdict(
                 else:
                     vpa_codes.append("vpa_reversal_confirmed_staged_entry")
 
+    # DAV-1353（D-051 补“同向”）：可执行动作必须有同向依据——direction_basis
+    # 非 ledgered 时 BUY/SELL/HOLD 一律降 WAIT。中性方向 not_applicable 的 HOLD
+    # 不豁免（是否豁免待总控裁定）。只影响 trade_action，不改 analysis_status、
+    # 不改 direction_basis 计算本身。
+    db_codes: list[str] = []
+    if trade_action in {ACTION_BUY, ACTION_SELL, ACTION_HOLD}:
+        _db = mv.get("direction_basis")
+        if not isinstance(_db, Mapping) and isinstance(mv_in_deb, Mapping):
+            _db = mv_in_deb.get("direction_basis")
+        _db_status = str(_db.get("status") or "").strip() if isinstance(_db, Mapping) else ""
+        if _db_status != "ledgered":
+            trade_action = ACTION_WAIT
+            db_codes.append(f"direction_basis_not_ledgered:{_db_status or 'missing'}")
+
     if prior_analysis_status == ANALYSIS_PARTIAL:
         return partial_status(
-            reason_codes=["prior_partial_analyst_failures", *confirm_codes, *vpa_codes],
+            reason_codes=["prior_partial_analyst_failures", *confirm_codes, *vpa_codes, *db_codes],
             trade_action=ACTION_NO_TRADE
             if trade_action not in NON_DIRECTIONAL_TRADE_ACTIONS
             else trade_action,
             direction=DIRECTION_NA,
         )
     if direction == DIRECTION_NA and trade_action in NON_DIRECTIONAL_TRADE_ACTIONS and confirmation_state == CONFIRM_CONFIRMED:
-        return abstain_status(reason_codes=["manager_direction_na", *confirm_codes, *vpa_codes])
+        return abstain_status(reason_codes=["manager_direction_na", *confirm_codes, *vpa_codes, *db_codes])
 
     raw_conf = mv.get("confidence")
     raw_prob = mv.get("probability")
@@ -945,7 +959,7 @@ def status_from_manager_verdict(
         trade_action=trade_action if trade_action != ACTION_NO_TRADE else ACTION_HOLD,
         risk_status=RISK_OK,
         confirmation_state=confirmation_state,
-        reason_codes=["manager_terminal", *confirm_codes, *vpa_codes],
+        reason_codes=["manager_terminal", *confirm_codes, *vpa_codes, *db_codes],
         confidence=conf_val,
         probability=prob_val,
     )

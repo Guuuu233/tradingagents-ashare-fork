@@ -307,6 +307,8 @@ def test_r1_goertek_evidence_verification_transition():
     assert confirm_state == CONFIRM_CONFIRMED
     assert "all_core_claims_verified:CLM-1,CLM-2" in reason_codes
 
+    # DAV-1353：fixture 无 direction_basis，该裁决存在同向采纳，补 ledgered
+    data["manager_verdict"].setdefault("direction_basis", {"status": "ledgered"})
     status = status_from_manager_verdict(
         data["manager_verdict"],
         investment_debate_state=inv_state,

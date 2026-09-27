@@ -262,6 +262,8 @@ def test_status_from_manager_verdict_all_core_verified_confirmed():
         "position_pct": 60,
         "consistency_check_passed": True,
         "failed_checks": [],
+        # DAV-1353：可执行动作需 direction_basis=ledgered
+        "direction_basis": {"status": "ledgered"},
     }
     claims_verification = [
         {"claim_id": "CLM-1", "status": "verified", "raw": "良率数据已证实"},
@@ -482,6 +484,8 @@ def test_midea_real_fixture_non_core_rejected_contradiction_does_not_block():
         data = json.load(f)
 
     mv = data["manager_verdict"]
+    # DAV-1353：fixture 无 direction_basis 字段，该裁决存在同向采纳，补 ledgered
+    mv.setdefault("direction_basis", {"status": "ledgered"})
     inv = data["investment_debate_state"]
     ev_ver = data["evidence_verification"]
     ev_summary = inv.get("claim_evidence_summary") or mv.get("claim_evidence_summary")
@@ -710,6 +714,7 @@ def test_bull_bear_symmetry_lifecycle():
         "adopted_claim_ids": ["BEAR-1"],
         "partially_adopted_claims": [],
         "rejected_claim_ids": ["BULL-1"],
+        "direction_basis": {"status": "ledgered"},
     }
     summary_bear = {
         "BEAR-1": {"counts": {"total": 2, "verified": 2, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
@@ -1073,6 +1078,7 @@ def test_dav854_rt5_observation_hypotheses_stratification():
         "adopted_claim_ids": ["CLM-FACT"],
         "partially_adopted_claims": ["CLM-OBS"],
         "consistency_check_passed": True,
+        "direction_basis": {"status": "ledgered"},
     }
     status = status_from_manager_verdict(
         mv,
@@ -1182,6 +1188,7 @@ def test_dav1068_dedup_excluded_claim_not_unadjudicated():
         "partially_adopted_claims": [],
         "rejected_claim_ids": [],
         "excluded_evidence": verdict["excluded_evidence"],
+        "direction_basis": {"status": "ledgered"},
     }
     status = status_from_manager_verdict(
         mv,
@@ -1539,6 +1546,7 @@ def test_dav1343_rejected_unverified_focus_claim_not_unresolved():
         "failed_checks": [],
         "adopted_claim_ids": ["CLM-OK"],
         "rejected_claim_ids": ["CLM-REJ"],
+        "direction_basis": {"status": "ledgered"},
     }
     claim_evidence_summary = {
         "CLM-OK": {

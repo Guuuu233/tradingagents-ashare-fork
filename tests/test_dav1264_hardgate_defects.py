@@ -179,6 +179,7 @@ def test_dav1264_f2_excluded_claim_not_rejected_adopt():
         "adopted_claim_ids": verdict["adopted_claim_ids"],
         "partially_adopted_claims": [],
         "rejected_claim_ids": ["INV-2"],  # 落库账本：excluded 项仍挂 rejected
+        "direction_basis": {"status": "ledgered"},
     }
     st = status_from_manager_verdict(
         mv,
@@ -218,6 +219,7 @@ def test_dav1264_f2_excluded_claim_in_partial_not_double_counted():
         "adopted_claim_ids": ["INV-1"],
         "partially_adopted_claims": ["INV-2"],  # 裁剪前账本残留
         "rejected_claim_ids": [],
+        "direction_basis": {"status": "ledgered"},
     }
     st = status_from_manager_verdict(
         mv,

@@ -138,6 +138,7 @@ def test_high_volume_stagnation_candidate_feature_and_decision_routing():
         "consistency_check_passed": True,
         "failed_checks": [],
         "adopted_claim_ids": ["C-1"],
+        "direction_basis": {"status": "ledgered"},
     }
     status = status_from_manager_verdict(
         manager_verdict,
@@ -291,6 +292,7 @@ def test_reversal_confirmed_allows_staged_entry_with_position_cap():
         "consistency_check_passed": True,
         "failed_checks": [],
         "adopted_claim_ids": ["C-1"],
+        "direction_basis": {"status": "ledgered"},
     }
     status = status_from_manager_verdict(
         manager_verdict,

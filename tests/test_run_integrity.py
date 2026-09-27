@@ -324,6 +324,7 @@ def test_e03c_observation_hypotheses_do_not_unconditionally_force_wait():
         "consistency_check_passed": True,
         "stop_loss": "1500元",
         "entry": "1600元",
+        "direction_basis": {"status": "ledgered"},
     }
     ds = status_from_manager_verdict(
         mv,
