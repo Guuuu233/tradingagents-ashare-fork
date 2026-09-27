@@ -377,6 +377,17 @@
 - **放行：** 准予部署 `eec0168b09dff0d27361494e8f82c23d3b0a3d08`（1346 + 1349）。上线后总控复跑 600519、002594 两题核对。
 - **教训：** 改变确认 / 放行规则的规格，必须同时写明“修改后可能落入哪些原本很少触达的分支”，并要求重放按结论类别（可执行 / WAIT / ABSTAIN × basis 状态）给出交叉表，而不是只列翻转清单。
 
+### D-052：可执行结论必须有同向依据；中性 HOLD 不豁免；1351 账本纠正与 1353 同批放行（有效，2026-09-27）
+
+- **补正 D-051：** 可执行结论（BUY / SELL / HOLD）要求 manager_verdict.direction_basis.status = `ledgered`，即至少有一条研究经理全额采纳、且与裁决方向一致的论点；否则 trade_action 一律降为 WAIT（原因码 `direction_basis_not_ledgered:<status>`），analysis_status 不变（DAV-1353）。D-051 原文漏写“同向”，导致 c590d925 短线（bull 胜，但只采纳了一条 Bear 论点）仍可执行。
+- **中性 HOLD 不豁免：** 方向为中性、basis 为 not_applicable 的 HOLD（重放中 10 档）一律降为 WAIT。理由：它的含义就是“没有方向判断、原样不动”，对用户而言与 WAIT 等价；H1b 对 HOLD 本来就做语义隔离。
+- **DAV-1351 账本纠正（不降门）：** 三类确定性纠正都只读研究经理自填的内容：
+  1. semantic reject 的论点误挂在 partial、且只消费了已核实子事实 → 改挂 rejected_subfact；
+  2. 全额采纳论点的未核实原子全部在研究经理自填的 excluded_evidence 中 → 改挂 partial；
+  3. winner_conflict 只锚定显式裁决语。
+  同时修复告警尾缀在落库重扫时自指命中的缺陷。重放：8 档 ABSTAIN → VALID，没有反向翻转，可执行档全部为 ledgered。
+- **放行：** 准予部署 `49744b30c808156dad71bc94e99cd68938a0f95e`（1351 + 1353）。上线后总控复跑两题核对。
+
 ### D-013 附注（2026-09-23）
 
 D-013 的证据清单不变，签字人由「总工」改为「总控」（见 D-033）。
