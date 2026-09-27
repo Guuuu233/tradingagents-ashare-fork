@@ -283,9 +283,29 @@ class LLMUsageLogger(BaseCallbackHandler):
 
                 report_id = current_report_id.get()
             extracted = _extract_llm_result(response)
+            # DAV-1334: the gate publishes its queue wait via contextvar;
+            # elapsed_seconds must exclude it so the ledger reflects model
+            # call time, not gate wait. Read-then-clear: the var persists
+            # after the gate exits, and clearing prevents a leftover wait
+            # from being attributed to a later ungated call in this context.
+            queue_seconds = None
+            queue_wait = 0.0
+            try:
+                from tradingagents.llm_clients.concurrency_gate import (
+                    llm_queue_wait_seconds,
+                )
+
+                queue_wait = llm_queue_wait_seconds.get(0.0) or 0.0
+                llm_queue_wait_seconds.set(0.0)
+            except Exception:  # pragma: no cover - gate module always present
+                queue_wait = 0.0
+            if queue_wait > 0:
+                queue_seconds = round(queue_wait, 2)
             elapsed = None
             if run.get("t0") is not None:
-                elapsed = round(time.monotonic() - run["t0"], 2)
+                elapsed = round(
+                    max(0.0, time.monotonic() - run["t0"] - queue_wait), 2
+                )
 
             from api.database import log_llm_call
 
@@ -306,6 +326,7 @@ class LLMUsageLogger(BaseCallbackHandler):
                 report_id=report_id,
                 horizon=metadata.get("horizon") or current_llm_horizon.get(),
                 retried=bool(run.get("retried")),
+                queue_seconds=queue_seconds,
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("LLMUsageLogger.on_llm_end failed (non-fatal): %s", exc)
@@ -350,6 +371,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
                     "reasoning_tokens": 0,
                     "total_tokens": 0,
                     "elapsed_seconds": 0.0,
+                    "queue_seconds": 0.0,
                     "retried_calls": 0,
                 },
             )
@@ -368,6 +390,8 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
                     entry[dst] += v
             if r.elapsed_seconds is not None:
                 entry["elapsed_seconds"] += r.elapsed_seconds
+            if getattr(r, "queue_seconds", None) is not None:
+                entry["queue_seconds"] += r.queue_seconds
             if r.retried:
                 entry["retried_calls"] += 1
 
@@ -385,6 +409,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
                     "reasoning_tokens": e["reasoning_tokens"],
                     "total_tokens": e["total_tokens"],
                     "elapsed_seconds": round(e["elapsed_seconds"], 2),
+                    "queue_seconds": round(e["queue_seconds"], 2),
                     "retried_calls": e["retried_calls"],
                 }
             )
@@ -398,6 +423,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
             "reasoning_tokens": _sum("reasoning_tokens"),
             "total_tokens": _sum("total_tokens"),
             "elapsed_seconds": _sum("elapsed_seconds"),
+            "queue_seconds": _sum("queue_seconds"),
             "retried_calls": sum(1 for r in rows if r.retried),
             "by_role": roles,
         }

@@ -429,7 +429,67 @@ class TestSchemaEnsure:
         with engine.begin() as conn:
             cols = {row[1] for row in conn.execute(
                 sa_text("PRAGMA table_info(llm_call_logs)"))}
-        for c in ("horizon", "cached_prompt_tokens", "reasoning_tokens", "retried"):
+        for c in ("horizon", "cached_prompt_tokens", "reasoning_tokens",
+                  "retried", "queue_seconds"):
             assert c in cols
         # idempotent
         _ensure_llm_call_log_schema()
+
+
+class TestQueueSeconds:
+    """DAV-1334: elapsed_seconds must exclude concurrency-gate queue wait;
+    the wait is recorded in the separate queue_seconds column."""
+
+    def _run_call(self, report_id, queue_wait=None):
+        from tradingagents.llm_clients.concurrency_gate import (
+            llm_queue_wait_seconds,
+        )
+
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+        handler.on_chat_model_start(
+            {},
+            [[{"role": "user", "content": "hi"}]],
+            run_id=run_id,
+            metadata={"report_id": report_id, "langgraph_node": "N"},
+        )
+        if queue_wait is not None:
+            # Simulates the gate having just acquired after queue_wait
+            # seconds (it sets the contextvar at acquire time).
+            llm_queue_wait_seconds.set(queue_wait)
+        handler.on_llm_end(_llm_result(usage=_usage_metadata()), run_id=run_id)
+
+    def test_queue_wait_split_out_of_elapsed(self):
+        report_id = uuid.uuid4().hex
+        self._run_call(report_id, queue_wait=50.0)
+        rows = _rows_for(report_id)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r.queue_seconds == 50.0
+        # The 50s gate wait must not leak into elapsed_seconds.
+        assert r.elapsed_seconds is not None
+        assert r.elapsed_seconds < 5
+
+    def test_no_gate_wait_records_null_queue(self):
+        report_id = uuid.uuid4().hex
+        self._run_call(report_id, queue_wait=0.0)
+        rows = _rows_for(report_id)
+        assert len(rows) == 1
+        assert rows[0].queue_seconds is None
+        assert rows[0].elapsed_seconds is not None
+
+    def test_consumed_wait_not_attributed_to_next_call(self):
+        """After a gated call is logged, the marker is cleared so a later
+        call in the same context doesn't inherit the stale wait."""
+        from tradingagents.llm_clients.concurrency_gate import (
+            llm_queue_wait_seconds,
+        )
+
+        report_id = uuid.uuid4().hex
+        self._run_call(report_id, queue_wait=30.0)
+        assert llm_queue_wait_seconds.get() == 0.0
+        self._run_call(report_id)  # no new wait set
+        rows = sorted(_rows_for(report_id), key=lambda r: r.created_at)
+        assert len(rows) == 2
+        assert rows[0].queue_seconds == 30.0
+        assert rows[1].queue_seconds is None

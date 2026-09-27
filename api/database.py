@@ -376,6 +376,10 @@ def _ensure_llm_call_log_schema() -> None:
                 conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN reasoning_tokens INTEGER"))
             if "retried" not in columns:
                 conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN retried BOOLEAN NOT NULL DEFAULT 0"))
+            # DAV-1334: queue wait at the concurrency gate, recorded
+            # separately from elapsed_seconds (which excludes it).
+            if "queue_seconds" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN queue_seconds FLOAT"))
     except Exception as e:
         logger.error("Failed to ensure llm_call_log schema: %s", e)
 
@@ -408,6 +412,7 @@ def log_llm_call(
     cached_prompt_tokens: int | None = None,
     reasoning_tokens: int | None = None,
     retried: bool = False,
+    queue_seconds: float | None = None,
 ) -> None:
     """Fire-and-forget: write one LLM call record to llm_call_logs.
 
@@ -434,6 +439,7 @@ def log_llm_call(
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_tokens=reasoning_tokens,
                 retried=retried,
+                queue_seconds=queue_seconds,
             ))
             db.commit()
     except Exception as exc:
@@ -802,6 +808,9 @@ class LLMCallLogDB(Base):
     cached_prompt_tokens = Column(Integer, nullable=True)
     reasoning_tokens = Column(Integer, nullable=True)
     retried = Column(Boolean, nullable=False, default=False, server_default="0")
+    # DAV-1334: seconds spent queued at the concurrency gate for this call.
+    # NULL for calls that never waited (or never touched the gate).
+    queue_seconds = Column(Float, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 

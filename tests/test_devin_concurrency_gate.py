@@ -264,3 +264,91 @@ class TestDevinConcurrencyCap:
                 break
             time.sleep(0.01)
         assert _gate_sem()._value == 4
+
+
+class TestReentrantAcquire:
+    """DAV-1334: a nested acquire for a prefix this context already holds
+    must pass through instead of taking a second slot. Guards against a
+    langchain upgrade that reintroduces _generate -> _stream nesting, which
+    would otherwise let 4 outer calls occupy all slots and deadlock every
+    inner call (and thus the whole analysis)."""
+
+    def test_nested_stream_inside_generate_no_deadlock(self, monkeypatch):
+        from langchain_openai.chat_models.base import BaseChatOpenAI
+
+        def fake_stream(self, *args, **kwargs):
+            time.sleep(0.01)
+            yield "chunk"
+
+        monkeypatch.setattr(
+            UnifiedChatOpenAI.__mro__[1], "_stream", fake_stream
+        )
+        llm = _make_llm("devin/swe-2")
+
+        def fake_generate(self, *args, **kwargs):
+            # Simulates a library-internal nested call: while this _generate
+            # holds a devin/ slot, it calls _stream on the same model.
+            return list(llm._stream([], stop=None))
+
+        monkeypatch.setattr(BaseChatOpenAI, "_generate", fake_generate)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [
+                pool.submit(llm._generate, [], stop=None) for _ in range(6)
+            ]
+            # Without reentrancy handling this deadlocks: 4 slots held by
+            # _generate, nested _stream waits forever on a 5th slot.
+            results = [f.result(timeout=15) for f in futures]
+
+        assert all(r == ["chunk"] for r in results)
+        # Nested calls took no extra slot; gate returns to full capacity.
+        assert _gate_sem()._value == 4
+
+    def test_nested_astream_inside_agenerate_no_deadlock(self, monkeypatch):
+        from langchain_openai.chat_models.base import BaseChatOpenAI
+
+        async def fake_astream(self, *args, **kwargs):
+            await asyncio.sleep(0.01)
+            yield "chunk"
+
+        monkeypatch.setattr(
+            UnifiedChatOpenAI.__mro__[1], "_astream", fake_astream
+        )
+        llm = _make_llm("devin/swe-2")
+
+        async def fake_agenerate(self, *args, **kwargs):
+            return [c async for c in llm._astream([], stop=None)]
+
+        monkeypatch.setattr(BaseChatOpenAI, "_agenerate", fake_agenerate)
+
+        async def run():
+            return await asyncio.wait_for(
+                asyncio.gather(
+                    *(llm._agenerate([], stop=None) for _ in range(6))
+                ),
+                timeout=15,
+            )
+
+        results = asyncio.run(run())
+        assert all(r == ["chunk"] for r in results)
+        assert _gate_sem()._value == 4
+
+    def test_nested_acquire_does_not_consume_slot(self, monkeypatch):
+        """Inside a held slot, a nested acquire must leave the semaphore
+        count untouched (still 3 free of 4 while one outer call holds)."""
+        llm = _make_llm("devin/swe-2")
+        observations = []
+
+        def fake(self, *args, **kwargs):
+            # One outer call holds a slot: 3 remain. Nested acquire must be
+            # a pass-through so the count stays 3, not 2.
+            with concurrency_gate.acquire_llm_slot(self.model_name):
+                observations.append(_gate_sem()._value)
+            return "ok"
+
+        from langchain_openai.chat_models.base import BaseChatOpenAI
+
+        monkeypatch.setattr(BaseChatOpenAI, "_generate", fake)
+        assert llm._generate([], stop=None) == "ok"
+        assert observations == [3]
+        assert _gate_sem()._value == 4
