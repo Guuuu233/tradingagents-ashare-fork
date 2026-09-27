@@ -5002,12 +5002,55 @@ _LEDGER_ANCHOR_LCS_MIN = 3
 
 # 系统硬闸告警尾缀（与 research_manager._SYS_GATE_ALARM_TAIL_RE 同模板的
 # 只读副本——research_manager 反向 import 本模块，不能交叉引用）。重扫落库
-# judge_decision 时先剥离，避免告警引文被当成经理文本二次命中。
+# judge_decision 时先剥离，避免告警引文被当成经理文本二次命中（实测命中：
+# d93a03ef 尾缀引文「…判定空头胜…」会被正文胜负矛盾检查再次命中）。
 _SYS_GATE_ALARM_TAIL_RE = re.compile(
     re.escape("\n\n[系统硬闸告警] 裁决自洽硬闸未通过：")
     + r"(?:(?!\[系统硬闸告警\]).)*?，已阻断后续交易。\s*\Z",
     re.DOTALL,
 )
+
+# DAV-1351③ winner_conflict 锚定：只匹配显式裁决语后的胜负表述
+# （「综合裁决/裁定/判定/winner=X」引导的同句窗口），不匹配分歧表角色词
+# （空头方/空头主张/空头胜出维度等）。
+_PROSE_VERDICT_ANCHOR_RE = re.compile(
+    r"(?:综合裁决|最终裁决|裁决结果|裁定结果|裁定为|判定为|裁决为|裁定|判定|裁决|winner)\s*[:：=＝]?",
+    re.IGNORECASE,
+)
+_PROSE_SIDE_BULL_RE = re.compile(
+    r"(?:多头|多方|bull)\s*(?:微弱|小幅|大幅|明显|全面|暂时|阶段性)?\s*(?:胜|胜出|占优|取胜)"
+    r"|winner\s*[:：=＝]?\s*bull\b"
+    r"|[（(]\s*bull\s*[)）]",
+    re.IGNORECASE,
+)
+_PROSE_SIDE_BEAR_RE = re.compile(
+    r"(?:空头|空方|bear)\s*(?:微弱|小幅|大幅|明显|全面|暂时|阶段性)?\s*(?:胜|胜出|占优|取胜)"
+    r"|winner\s*[:：=＝]?\s*bear\b"
+    r"|[（(]\s*bear\s*[)）]",
+    re.IGNORECASE,
+)
+_PROSE_ANCHOR_WINDOW = 120
+
+
+def _prose_declared_winner_sides(prose: str) -> set[str]:
+    """从经理正文提取显式裁决语声明的胜方集合 {'bull','bear'} 子集。
+
+    每个锚点（综合裁决/裁定/判定/winner 等）截取其后同句窗口（至句号/换行
+    或 _PROSE_ANCHOR_WINDOW 字符），窗口内出现「多方胜/多头占优/(bull)/
+    winner=bull」等显式胜负表述才计入；空方同理。纯角色词、维度标题
+    （「空头胜出维度」）、非锚句（「……，多头胜」逐条分歧结论文）不匹配。
+    """
+    sides: set[str] = set()
+    if not prose:
+        return sides
+    for m in _PROSE_VERDICT_ANCHOR_RE.finditer(prose):
+        seg = prose[m.start(): m.start() + _PROSE_ANCHOR_WINDOW]
+        seg = re.split(r"[。\n]", seg, maxsplit=1)[0]
+        if _PROSE_SIDE_BULL_RE.search(seg):
+            sides.add("bull")
+        if _PROSE_SIDE_BEAR_RE.search(seg):
+            sides.add("bear")
+    return sides
 
 
 def _ledger_norm_text(s: Any) -> str:
@@ -5377,12 +5420,14 @@ def extract_and_validate_manager_verdict(
                 pass
 
     # Check 5: Contradiction between prose text and verdict winner
-    if "空头胜" in prose or "空方胜" in prose or "空头全面占优" in prose:
-        if winner == "bull":
-            failed_checks.append("正文明确判定空头胜，但机读块为多头胜(bull)，正文与机读裁决严重矛盾")
-    elif "多头胜" in prose or "多方胜" in prose or "多头全面占优" in prose:
-        if winner == "bear":
-            failed_checks.append("正文明确判定多头胜，但机读块为空头胜(bear)，正文与机读裁决严重矛盾")
+    # DAV-1351③：只匹配显式裁决语（「综合裁决…X胜 / 裁定 X 胜 / winner=X」
+    # 锚点同句窗口内的胜负表述），分歧表角色词（空头方/空头主张/
+    # 「X胜出维度」标题等）不再触发。双向声明时按反向声明照拦不误放。
+    declared_sides = _prose_declared_winner_sides(prose)
+    if winner == "bull" and "bear" in declared_sides:
+        failed_checks.append("正文明确判定空头胜，但机读块为多头胜(bull)，正文与机读裁决严重矛盾")
+    elif winner == "bear" and "bull" in declared_sides:
+        failed_checks.append("正文明确判定多头胜，但机读块为空头胜(bear)，正文与机读裁决严重矛盾")
 
     # Check 6: Claim ledger subset and existence validation
     if claims is not None:

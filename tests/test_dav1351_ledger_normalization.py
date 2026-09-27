@@ -199,3 +199,38 @@ def test_dav1351_coverage_deterministic_excluded_not_counted():
     assert not any("adopt_to_partial:INV-5" in n for n in v["ledger_normalizations"])
 
 
+# ═══════════════════════ ③ winner_conflict 锚定 ════════════════════════════
+
+def test_dav1351_winner_conflict_dimension_heading_released():
+    """d93a03ef 形态：「空头胜出维度」标题不触发；显式综合裁决与机读一致 → 放行。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """#### 焦点分歧裁决
+- **多头胜出维度**：现价守住中轨，大单净买入支撑。
+- **空头胜出维度**：缩量回抽暴露上方筹码供应未消化。
+- **综合裁决**：短线多头结构占优，裁定为多头微弱胜出（bull）。
+<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "大单净买入守中轨", "position_pct": 25, "entry": "10.0", "target": "12.0", "stop_loss": "9.0", "adopted_claim_ids": [], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": [], "excluded_evidence": ["某机构私下调研看好翻倍"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert not any("正文与机读裁决严重矛盾" in e for e in v["failed_checks"])
+    assert v["consistency_check_passed"] is True
+
+
+def test_dav1351_winner_conflict_explicit_verdict_still_fails():
+    """显式裁决语「综合裁决：空头胜」与机读 bull 矛盾 → 照拦。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """综合裁决：空头胜。
+<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "看多", "position_pct": 25, "entry": "10.0", "target": "12.0", "stop_loss": "9.0", "adopted_claim_ids": [], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": [], "excluded_evidence": ["某机构私下调研看好翻倍"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert v["consistency_check_passed"] is False
+    assert any("正文明确判定空头胜" in e for e in v["failed_checks"])
+
+
+def test_dav1351_winner_conflict_alarm_tail_no_self_hit():
+    """落库 judge_decision 尾缀告警引文不得二次命中正文胜负检查。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """综合裁决：裁定为多头微弱胜出（bull）。
+<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "看多", "position_pct": 25, "entry": "10.0", "target": "12.0", "stop_loss": "9.0", "adopted_claim_ids": [], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": [], "excluded_evidence": ["某机构私下调研看好翻倍"]} -->
+
+[系统硬闸告警] 裁决自洽硬闸未通过：正文明确判定空头胜，但机读块为多头胜(bull)，正文与机读裁决严重矛盾，已阻断后续交易。"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert not any("正文明确判定空头胜" in e for e in v["failed_checks"])
+    assert v["consistency_check_passed"] is True
