@@ -178,13 +178,24 @@ def test_gate_adopt_semantic_reject_claim_fails():
 
 
 def test_gate_semantic_reject_in_partial_fails_no_stealth_upgrade():
-    """semantic reject（含 supported 子集）进 partially_adopted → fail，不偷升。"""
+    """semantic reject 进 partially_adopted：DAV-1351 起改为确定性归类纠正。
+
+    裁决只消费 verified 子事实且未证命题锚点未进结论 → 账本确定性改挂
+    rejected + basis_from_rejected_claim_ids（rejected_subfact 通道，与「偷升
+    partial」相反——是降级到更严格的拒斥侧），审计记录
+    ledger_normalized:reject_to_subfact:INV-2。锚点被消费的形态仍照拦，
+    见 tests/test_dav1351_ledger_normalization.py。
+    """
     claims, ver = _inv2_claims_and_ver()
     raw = """裁决正文。
 <!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "部分采纳", "position_pct": 0, "adopted_claim_ids": [], "partially_adopted_claims": ["INV-2"], "rejected_claim_ids": []} -->"""
     v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
-    assert v["consistency_check_passed"] is False
-    assert any("semantic_decision=reject" in e and "INV-2" in e for e in v["failed_checks"])
+    assert "INV-2" not in v["partially_adopted_claims"]
+    assert "INV-2" in v["rejected_claim_ids"]
+    assert "INV-2" in v["basis_from_rejected_claim_ids"]
+    assert "ledger_normalized:reject_to_subfact:INV-2" in v["ledger_normalizations"]
+    assert not any("semantic_decision=reject" in e and "INV-2" in e
+                   for e in v["failed_checks"])
 
 
 def test_gate_non_factual_in_adopted_fails():

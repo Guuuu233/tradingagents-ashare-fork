@@ -7,6 +7,7 @@ fatal hallucinations when citations reference failed or unavailable data sources
 
 from __future__ import annotations
 
+import difflib
 import logging
 import math
 import re
@@ -4985,6 +4986,63 @@ def refresh_evidence_basis(manager_verdict: dict[str, Any]) -> dict[str, Any]:
     return manager_verdict
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# DAV-1351：经理账本归类确定性纠正（只改归类，不新增采纳、不降低门禁）
+# ═══════════════════════════════════════════════════════════════════════
+#
+# 审计记录键：写入 verdict["ledger_normalizations"]，供重放/落库审计机读。
+LEDGER_NORM_REJECT_TO_SUBFACT = "ledger_normalized:reject_to_subfact"
+
+# 未证命题锚点判定阈值：命题文本与裁决文本（reason + 正文 + dispute_map）
+# 去空白后最长公共子串 >=3 字即视为该命题被结论消费——宁拦勿放。阈值 3 取自
+# 审计回归样例 28f6a1e0：reason「年线双顶假突破」与被拒命题「超大单坚决流出
+# 年线假突破见顶」最长公共子串「假突破」=3 字，按卡面仍须拦。
+_LEDGER_ANCHOR_LCS_MIN = 3
+
+# 系统硬闸告警尾缀（与 research_manager._SYS_GATE_ALARM_TAIL_RE 同模板的
+# 只读副本——research_manager 反向 import 本模块，不能交叉引用）。重扫落库
+# judge_decision 时先剥离，避免告警引文被当成经理文本二次命中。
+_SYS_GATE_ALARM_TAIL_RE = re.compile(
+    re.escape("\n\n[系统硬闸告警] 裁决自洽硬闸未通过：")
+    + r"(?:(?!\[系统硬闸告警\]).)*?，已阻断后续交易。\s*\Z",
+    re.DOTALL,
+)
+
+
+def _ledger_norm_text(s: Any) -> str:
+    """锚点比对用归一化文本：去全部空白（含全角空格）。"""
+    return re.sub(r"[\s　]+", "", str(s or ""))
+
+
+def _ledger_unverified_prop_consumed(
+    summary_item: Mapping[str, Any],
+    matcher: Any,
+) -> bool:
+    """判定 claim 的未证实质命题锚点是否出现在裁决文本中。
+
+    仅扫描 support_status ∈ {unsupported, provenance_blocked} 的命题
+    （non_factual_or_normative 属修辞性命题，不参与「未证实消费」判定）。
+    matcher 为 b 侧已绑定归一化裁决文本的 difflib.SequenceMatcher；每条未证
+    命题文本与裁决文本的最长公共子串 ≥ _LEDGER_ANCHOR_LCS_MIN（或命题全长，
+    取较小者）即视为被消费。
+    """
+    for p in summary_item.get("proposition_audit") or []:
+        if not isinstance(p, Mapping):
+            continue
+        if p.get("support_status") not in {
+            SEM_SUPPORT_UNSUPPORTED,
+            SEM_SUPPORT_PROVENANCE_BLOCKED,
+        }:
+            continue
+        ptxt = _ledger_norm_text(p.get("text"))
+        if not ptxt:
+            continue
+        matcher.set_seq1(ptxt)
+        if matcher.find_longest_match().size >= min(_LEDGER_ANCHOR_LCS_MIN, len(ptxt)):
+            return True
+    return False
+
+
 def extract_and_validate_manager_verdict(
     raw_response: str,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -5020,6 +5078,9 @@ def extract_and_validate_manager_verdict(
         - direction_basis (DAV-1111 B1 同向 claim 账本可观测性结构化字段)
         - basis_from_rejected_claim_ids (DAV-1111 B2 经理可选指认的 rejected 子事实依据)
         - evidence_basis (DAV-1111 B2 winner/action 到 verified 子事实的机读投影)
+        - ledger_normalizations (DAV-1351 账本归类纠正审计记录，
+          ledger_normalized:reject_to_subfact:<cid> /
+          ledger_normalized:adopt_to_partial:<cid>)
     """
     from tradingagents.agents.utils.debate_utils import extract_tagged_json, strip_tagged_json
 
@@ -5133,6 +5194,67 @@ def extract_and_validate_manager_verdict(
     elif payload and isinstance(payload.get("claim_evidence_summary"), dict):
         claim_evidence_summary = payload["claim_evidence_summary"]
 
+    # 经理正文（剥离机读块与系统告警尾缀）——正文胜负矛盾检查与账本归类
+    # 纠正的锚点扫描共用此文本。
+    prose = strip_tagged_json(raw_response, "MANAGER_VERDICT")
+    prose = strip_tagged_json(prose, "VERDICT")
+    prose = _SYS_GATE_ALARM_TAIL_RE.sub("", prose)
+
+    # ── DAV-1351：账本归类确定性纠正（一致性检查前执行）─────────────────
+    # 只改账本归类：reject→rejected_subfact 通道、adopt(全剔除)→partial。
+    # 条件不满足时不做任何改动（原硬门照拦）；纠正后所有检查在纠正后账本
+    # 上照常运行，不新增任何采纳、不放宽任一既有判定。
+    ledger_normalizations: list[str] = []
+    if claim_evidence_summary:
+        anchor_haystack = _ledger_norm_text(
+            "\n".join(
+                [reason, prose]
+                + [
+                    " ".join(
+                        str(r.get(k) or "")
+                        for k in (
+                            "data_point", "bull_interpretation",
+                            "bear_interpretation", "evidence_decision", "winner",
+                        )
+                    )
+                    for r in dispute_map
+                ]
+            )
+        )
+        anchor_matcher = difflib.SequenceMatcher(
+            None, "", anchor_haystack, autojunk=False
+        )
+
+        # ① reject_in_partial 归类纠正：partial 中的 semantic_decision=reject
+        #    论点，若证据消费物全为 verified 子事实（verified>0）且裁决
+        #    reason/正文/dispute_map 不含其未证命题锚点，则确定性改挂
+        #    rejected + basis_from_rejected_claim_ids（rejected_subfact 通道）。
+        for cid in list(partially_adopted_claims):
+            s = claim_evidence_summary.get(cid)
+            if not isinstance(s, Mapping):
+                continue
+            if s.get("semantic_decision") != SEM_PREVIEW_REJECT:
+                continue
+            cnt = s.get("counts") or {}
+            if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                continue
+            if cnt.get("source_unavailable", 0) > 0:
+                continue
+            if int(cnt.get("verified", 0) or 0) <= 0:
+                continue
+            if _ledger_unverified_prop_consumed(s, anchor_matcher):
+                continue
+            partially_adopted_claims = [
+                c for c in partially_adopted_claims if c != cid
+            ]
+            if cid not in rejected_claim_ids:
+                rejected_claim_ids.append(cid)
+            if cid not in basis_from_rejected_claim_ids:
+                basis_from_rejected_claim_ids.append(cid)
+            ledger_normalizations.append(
+                f"{LEDGER_NORM_REJECT_TO_SUBFACT}:{cid}"
+            )
+
     deterministic_excluded: list[str] = []
     for cid, s in claim_evidence_summary.items():
         if cid in partially_adopted_claims or cid in rejected_claim_ids or s.get("decision") in {DECISION_PARTIAL, DECISION_REJECT}:
@@ -5196,8 +5318,6 @@ def extract_and_validate_manager_verdict(
                 pass
 
     # Check 5: Contradiction between prose text and verdict winner
-    prose = strip_tagged_json(raw_response, "MANAGER_VERDICT")
-    prose = strip_tagged_json(prose, "VERDICT")
     if "空头胜" in prose or "空方胜" in prose or "空头全面占优" in prose:
         if winner == "bull":
             failed_checks.append("正文明确判定空头胜，但机读块为多头胜(bull)，正文与机读裁决严重矛盾")
@@ -5413,6 +5533,7 @@ def extract_and_validate_manager_verdict(
         "direction_basis": direction_basis,
         "basis_from_rejected_claim_ids": basis_from_rejected_claim_ids,
         "evidence_basis": evidence_basis,
+        "ledger_normalizations": ledger_normalizations,
         "ohlcv_gate_applied": ohlcv_gate_applied,
         "fund_flow_dispute_gate_applied": fund_flow_dispute_gate_applied,
     }
