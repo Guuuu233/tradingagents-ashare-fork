@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import re
 import time
@@ -1188,6 +1189,118 @@ def _sentence_span(text: str, start: int, end: int) -> str:
     return text[left:right]
 
 
+# DAV-1358：MANAGER_VERDICT 机读块内的「已剔除/已否决」清单字段不属于经理自己的
+# 结论文本，命中其中的敏感词是清单引文而非断言（d06b66d2：命中句只出现在
+# excluded_evidence 内）。掩码区间一律限定在机读块内部——同一句话若被经理写进
+# 正文/reason/plan（块外或 reason 字段值内），仍走正常断言判定，防止「引用后采纳」逃逸。
+_E04_VERDICT_BLOCK_RE = re.compile(r"<!--\s*MANAGER_VERDICT\s*:\s*(\{.*?\})\s*-->", re.DOTALL)
+_E04_DISPUTE_VIEW_KEYS = ("bull_interpretation", "bear_interpretation")
+
+
+def _json_array_span(s: str, key: str) -> tuple[int, int] | None:
+    """返回 ``"key": [ ... ]`` 数组的方括号区间（含括号）；未找到或截断返回 None。"""
+    km = re.search(rf'"{re.escape(key)}"\s*:\s*\[', s)
+    if not km:
+        return None
+    i = km.end() - 1  # '[' 位置
+    depth = 0
+    in_str = False
+    esc = False
+    for j in range(i, len(s)):
+        ch = s[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == '[':
+                depth += 1
+            elif ch == ']':
+                depth -= 1
+                if depth == 0:
+                    return (i, j + 1)
+    return None
+
+
+def _json_string_value_spans(s: str, region: tuple[int, int], keys: Sequence[str]) -> list[tuple[int, int]]:
+    """region 内 ``"key": "..."`` 形态中字符串值的引号区间；非字符串值跳过。"""
+    spans: list[tuple[int, int]] = []
+    pat = re.compile(r'"(?:' + "|".join(re.escape(k) for k in keys) + r')"\s*:\s*"')
+    for km in pat.finditer(s, region[0], region[1]):
+        j = km.end()  # 值起始引号之后
+        esc = False
+        while j < region[1]:
+            ch = s[j]
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                spans.append((km.end() - 1, j + 1))
+                break
+            j += 1
+    return spans
+
+
+def _e04_verdict_excluded_spans(
+    full_text: str,
+    manager_verdict: Mapping[str, Any],
+    claims: Sequence[Mapping[str, Any]] | None,
+) -> list[tuple[int, int]]:
+    """机读块内「已剔除/已否决」清单字段的掩码区间（full_text 坐标）。
+
+    掩码对象（均限定在 ``<!-- MANAGER_VERDICT: {...} -->`` 块内）：
+      1. ``excluded_evidence`` 数组整体——经理已剔除的论点/原子引文；
+      2. ``dispute_map`` 各项的 bull/bear_interpretation 值——对方观点转述；
+         data_point 与 evidence_decision 属经理自陈，仍扫描；
+      3. ``rejected_claim_ids`` 对应 claim 文本在块内的逐字引文。
+    """
+    spans: list[tuple[int, int]] = []
+    rejected_ids: set[str] = set()
+    blocks: list[tuple[int, int]] = []
+    for m in _E04_VERDICT_BLOCK_RE.finditer(full_text):
+        blocks.append((m.start(), m.end()))
+        blk = m.group(1)
+        blk_base = m.start(1)
+        arr = _json_array_span(blk, "excluded_evidence")
+        if arr:
+            spans.append((blk_base + arr[0], blk_base + arr[1]))
+        dmap = _json_array_span(blk, "dispute_map")
+        if dmap:
+            for vs, ve in _json_string_value_spans(blk, dmap, _E04_DISPUTE_VIEW_KEYS):
+                spans.append((blk_base + vs, blk_base + ve))
+        try:
+            payload = json.loads(blk)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if isinstance(payload, Mapping):
+            rejected_ids.update(str(x) for x in (payload.get("rejected_claim_ids") or []))
+    for cid in manager_verdict.get("rejected_claim_ids") or []:
+        rejected_ids.add(str(cid))
+    if rejected_ids and claims and blocks:
+        for c in claims:
+            if not isinstance(c, Mapping) or str(c.get("claim_id") or "").strip() not in rejected_ids:
+                continue
+            for key in ("claim", "claim_text", "text"):
+                v = c.get(key)
+                if not v:
+                    continue
+                needle = str(v)
+                if not needle:
+                    continue
+                for bs, be in blocks:
+                    idx = full_text.find(needle, bs, be)
+                    while idx >= 0:
+                        spans.append((idx, idx + len(needle)))
+                        idx = full_text.find(needle, idx + 1, be)
+    return spans
+
+
 def validate_manager_expectation_revision_consumption(
     manager_verdict: Mapping[str, Any],
     raw_response: str,
@@ -1238,13 +1351,25 @@ def validate_manager_expectation_revision_consumption(
     # DAV-1264 F1：扫描前剥离系统硬闸文案——raw_response 若为重扫的落库
     # judge_decision，其尾部「[系统硬闸告警] …{failed_reasons}…」引文会二次命中；
     # investment_plan 若为阻断占位文本同理。
-    texts_to_check = [
-        _strip_system_gate_text(str(raw_response or "")),
-        _strip_system_gate_text(str(manager_verdict.get("reason") or "")),
-    ]
+    raw_txt = _strip_system_gate_text(str(raw_response or ""))
+    reason_txt = _strip_system_gate_text(str(manager_verdict.get("reason") or ""))
+    # DAV-1358：reason/plan 通常已逐字随 MANAGER_VERDICT 机读块出现在 raw_response 中，
+    # 重复追加会让同一段文本被二次扫描；仅当字段文本不在 raw 中时才补扫。
+    texts_to_check = [raw_txt]
+    if reason_txt and reason_txt not in raw_txt:
+        texts_to_check.append(reason_txt)
     if manager_verdict.get("investment_plan"):
-        texts_to_check.append(_strip_system_gate_text(str(manager_verdict.get("investment_plan"))))
+        plan_txt = _strip_system_gate_text(str(manager_verdict.get("investment_plan")))
+        if plan_txt and plan_txt not in raw_txt and plan_txt != reason_txt:
+            texts_to_check.append(plan_txt)
     full_text = "\n".join(t for t in texts_to_check if t)
+
+    # DAV-1358：机读块内「已剔除/已否决」清单字段（excluded_evidence、rejected 论点
+    # 引文、dispute_map 对方观点转述）属清单引用而非经理断言，命中一律跳过。
+    _excluded_spans = _e04_verdict_excluded_spans(full_text, manager_verdict, claims)
+
+    def _in_excluded_list(start: int, end: int) -> bool:
+        return any(s <= start and end <= e for s, e in _excluded_spans)
 
     def _hit(vmsg: str, start: int | None = None,
              end: int | None = None, match: str = "") -> None:
@@ -1291,6 +1416,8 @@ def validate_manager_expectation_revision_consumption(
         ):
             pi_occurrences.append((m.start(), m.end()))
         for start, end in pi_occurrences:
+            if _in_excluded_list(start, end):
+                continue
             # DAV-1355：名词性「定价」词面命中（定价权/定价能力/定价模型…）直接跳过，
             # 先于引用豁免判定——名词用法本就不算 priced-in 提及。
             if _e04_priced_in_nominal_tail(full_text, start, end):
@@ -1353,6 +1480,8 @@ def validate_manager_expectation_revision_consumption(
                 continue
             bm_dedup.append(occ)
         for start, end, kw in bm_dedup:
+            if _in_excluded_list(start, end):
+                continue
             if _is_claim_quotation(full_text, start, end, claim_index, _BM_QUOTE_KW):
                 continue
             if not _is_beat_miss_assertion(full_text, start, end):
@@ -1368,6 +1497,8 @@ def validate_manager_expectation_revision_consumption(
                 re.IGNORECASE,
             ))
             for m_en_beat in en_beat_iter:
+                if _in_excluded_list(m_en_beat.start(), m_en_beat.end()):
+                    continue
                 if _is_claim_quotation(full_text, m_en_beat.start(), m_en_beat.end(), claim_index, _BM_QUOTE_KW):
                     continue
                 if not _is_beat_miss_assertion(full_text, m_en_beat.start(), m_en_beat.end()):
@@ -1385,6 +1516,8 @@ def validate_manager_expectation_revision_consumption(
                     re.IGNORECASE,
                 ))
                 for m_en_miss in en_miss_iter:
+                    if _in_excluded_list(m_en_miss.start(), m_en_miss.end()):
+                        continue
                     if _is_claim_quotation(full_text, m_en_miss.start(), m_en_miss.end(), claim_index, _BM_QUOTE_KW):
                         continue
                     if not _is_beat_miss_assertion(full_text, m_en_miss.start(), m_en_miss.end()):
@@ -1437,6 +1570,8 @@ def validate_manager_expectation_revision_consumption(
     all_metric_matches = metric_matches + en_metric_matches
     if all_metric_matches:
         for m in all_metric_matches:
+            if _in_excluded_list(m.start(), m.end()):
+                continue
             matched_full = m.group(0).strip()
             num_part = m.group(1).strip() if m.lastindex and m.lastindex >= 1 else ""
             clean_num = re.sub(r"[^\d.]", "", num_part)
@@ -1473,6 +1608,8 @@ def validate_manager_expectation_revision_consumption(
         dc_pats_zh = ("双重支持", "额外支持", "双重加票", "额外加票", "两项独立票", "重复计入", "双重印证加票")
         for dc_pat in dc_pats_zh:
             for m_dc in re.finditer(re.escape(dc_pat), full_text):
+                if _in_excluded_list(m_dc.start(), m_dc.end()):
+                    continue
                 # DAV-1355 (b)：防范/否定前缀修饰的命中是合规陈述而非加票断言
                 # （「定性记录且防重复计入」「避免双重支持」）。
                 _cl, _ = _priced_in_clause(full_text, m_dc.start(), m_dc.end())
@@ -1490,7 +1627,7 @@ def validate_manager_expectation_revision_consumption(
                 full_text,
                 re.IGNORECASE,
             )
-            if m_en_dc:
+            if m_en_dc and not _in_excluded_list(m_en_dc.start(), m_en_dc.end()):
                 _hit(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中 {m_en_dc.group(0)!r}）",
                      m_en_dc.start(), m_en_dc.end(), m_en_dc.group(0))
 

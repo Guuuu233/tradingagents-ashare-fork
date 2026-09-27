@@ -3063,3 +3063,118 @@ def test_dav1355_r1_unknown_mark_scope_and_substring_still_flagged():
         )
         assert not any("定价" in v or "priced" in v.lower() for v in viols), \
             f"锚定未知形态误拦: {text!r} -> {viols}"
+
+
+# ==============================================================================
+# DAV-1358：E-04 守卫不扫描 MANAGER_VERDICT 机读块内「已剔除/已否决」清单引文
+# ==============================================================================
+
+def _dav1358_gap_exp():
+    return [
+        make_default_expectation_revision(event_type=EVENT_TYPE_FUNDAMENTAL, status=STATUS_GAP),
+        make_default_expectation_revision(event_type=EVENT_TYPE_EVENT, status=STATUS_GAP),
+    ]
+
+
+def _dav1358_verdict_block(**over):
+    payload = {
+        "winner": "bear", "direction": "偏空",
+        "reason": "长上影确认供给压制且量能匮乏",
+        "position_pct": 10, "entry": "逢高减仓", "target": "TBD", "stop_loss": "n/a",
+        "upside": 2.7, "downside": 4.7, "odds": 0.6,
+        "adopted_claim_ids": ["INV-3"], "partially_adopted_claims": [],
+        "rejected_claim_ids": ["INV-1"],
+        "excluded_evidence": [],
+        "dispute_map": [],
+    }
+    payload.update(over)
+    return "<!-- MANAGER_VERDICT: " + json.dumps(payload, ensure_ascii=False) + " -->"
+
+
+def test_dav1358_excluded_evidence_priced_in_citation_not_flagged():
+    """d06b66d2 形态：命中句只出现在机读块 excluded_evidence 清单里 → 放行。"""
+    verdict = {"direction": "BEARISH", "reason": "长上影确认供给压制且量能匮乏"}
+    raw = ("### 裁决\n长上影确认供给压制，短线盈亏比倒挂。\n"
+           + _dav1358_verdict_block(
+               excluded_evidence=["404元", "《基本面报告》Q1高增早于4月16日披露已充分定价"]))
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, raw, _dav1358_gap_exp()
+    )
+    assert not any("定价" in v or "priced" in v.lower() for v in viols), viols
+
+
+def test_dav1358_rejected_claim_quote_in_block_not_flagged():
+    """rejected_claim_ids 对应 claim 文本在机读块内的逐字引文 → 放行。"""
+    claims = [
+        {"claim_id": "INV-1", "claim_text": "利空已充分定价未验证"},
+        {"claim_id": "INV-3", "claim_text": "长上影供给压制"},
+    ]
+    verdict = {"direction": "BEARISH", "reason": "缩量冲高回落"}
+    raw = ("缩量冲高回落。\n" + _dav1358_verdict_block(
+        excluded_evidence=["INV-1:利空已充分定价未验证"]))
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, raw, _dav1358_gap_exp(), claims=claims
+    )
+    assert not any("定价" in v or "priced" in v.lower() for v in viols), viols
+
+
+def test_dav1358_dispute_map_opponent_view_not_flagged_but_decision_flagged():
+    """dispute_map 中 bull/bear_interpretation（对方观点转述）不扫；
+    经理自陈的 evidence_decision 仍扫。"""
+    verdict = {"direction": "NEUTRAL", "reason": "多空均衡观望"}
+    dmap_ok = [{"data_point": "大单口径分歧",
+                "bull_interpretation": "主力吸筹业绩将超预期",
+                "bear_interpretation": "派发前兆",
+                "evidence_decision": "口径冲突不得单独支撑方向", "winner": "tie"}]
+    raw_ok = "多空均衡。\n" + _dav1358_verdict_block(dispute_map=dmap_ok)
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, raw_ok, _dav1358_gap_exp()
+    )
+    assert not any("超预期" in v for v in viols), viols
+
+    dmap_bad = [{"data_point": "大单口径分歧",
+                 "bull_interpretation": "吸筹",
+                 "bear_interpretation": "派发",
+                 "evidence_decision": "我方裁定业绩超预期", "winner": "bull"}]
+    raw_bad = "多空均衡。\n" + _dav1358_verdict_block(dispute_map=dmap_bad)
+    is_valid2, viols2 = validate_manager_expectation_revision_consumption(
+        verdict, raw_bad, _dav1358_gap_exp()
+    )
+    assert not is_valid2 and any("超预期" in v for v in viols2), viols2
+
+
+def test_dav1358_adopted_quote_in_prose_still_flagged():
+    """防逃逸：同一句话被经理写进正文/reason（块外或块内 reason 字段）= 引用后采纳，仍拦。
+    区分依据：掩码只作用于机读块的清单字段区间；命中落在这些区间之外即按断言判定。"""
+    verdict = {"direction": "BULLISH", "reason": "趋势转多"}
+    excluded = "《基本面报告》Q1高增早于4月16日披露已充分定价"
+    # ① 正文采纳同一表述 → 拦
+    raw_prose = ("综合研判：Q1高增早于4月16日披露已充分定价，追高空间有限。\n"
+                 + _dav1358_verdict_block(excluded_evidence=[excluded]))
+    ok1, v1 = validate_manager_expectation_revision_consumption(
+        verdict, raw_prose, _dav1358_gap_exp()
+    )
+    assert not ok1 and any("定价" in v for v in v1), v1
+    # ② reason 字段采纳同一表述（reason 属经理结论文本，不在掩码内）→ 拦
+    #    注意：句级豁免的 sentence span 会覆盖整个机读块，excluded_evidence 里若带
+    #    「披露日/不追高」字样会构成既有降权豁免语境——本用例刻意用裸断言与无关清单项。
+    raw_reason = _dav1358_verdict_block(
+        reason="综合裁定利好已充分定价", excluded_evidence=["404元"])
+    verdict2 = {"direction": "BULLISH", "reason": "综合裁定利好已充分定价"}
+    ok2, v2 = validate_manager_expectation_revision_consumption(
+        verdict2, raw_reason, _dav1358_gap_exp()
+    )
+    assert not ok2 and any("定价" in v for v in v2), v2
+
+
+def test_dav1358_reason_embedded_in_block_not_double_counted():
+    """同段文本不重复计数：reason 随机读块已出现在 raw 中时不再追加扫描。"""
+    reason = "本期营业收入约250.5亿元，维持中性"
+    verdict = {"direction": "NEUTRAL", "reason": reason}
+    raw = "概述。\n" + _dav1358_verdict_block(reason=reason)
+    hits = []
+    ok, viols = validate_manager_expectation_revision_consumption(
+        verdict, raw, _dav1358_gap_exp(), hit_collector=hits
+    )
+    num_hits = [h for h in hits if "财务指标数值" in (h.get("violation") or "")]
+    assert len(num_hits) <= 1, f"同一文本被重复计数: {[h.get('sentence') for h in num_hits]}"
