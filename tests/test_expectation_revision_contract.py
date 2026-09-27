@@ -2849,3 +2849,217 @@ def test_dav1135_affirmative_and_double_negation_still_flagged():
         )
         assert not is_valid, f"双重否定/伪否定漏拦: {text!r}"
         assert any("预期" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+# ==============================================================================
+# DAV-1355：E-04 守卫校准——条件/否定/明示未知/词面误命中豁免 +
+# 「不无」双重否定与裸「无+主谓」漏拦（并入 DAV-1217）
+# ==============================================================================
+
+def _dav1355_gap_revs():
+    return _dav1068_gap_revs()
+
+
+def test_dav1355_conditional_and_hypothetical_scope_exemption():
+    """DAV-1355 (a)：疑问词/失效条件/依赖谓词/「在…情景下」框架/后果前枚举 豁免。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 是否/疑问悬挂（真实样例 31f3b289:medium_term）
+        "负向预期差在于日化快消大盘的预算收缩是否超预期",
+        "核心分歧在于 0.90x PB 是否等于悲观已定价",
+        # 失效条件标签（真实样例 4198ef36:medium_term / 7a2cc852:short_term）
+        "逻辑失效条件：6 月 11 日股东大会分红/回购不及预期，或日线放量贯穿 1215 元",
+        "失效条件：连续两日站稳 1273 且放量破 1281，或节后动销量价超预期",
+        # 依赖/待决谓词 + 或 枚举（真实样例 117557c3:medium_term）
+        "但中线质变依赖后续海外授权（BD）或中报扣非超预期催化",
+        "反弹高度取决于三季报是否超预期",
+        # 「在…情景下」框架包裹（真实样例 dc1dc116:medium_term，标签落在命中之后）
+        "在宏观流动性紧缩与 LPR 超预期下调 20-30bps 极端情景下，工行仍具盈利底线",
+        "在需求大幅下滑的情形下，业绩或不及预期",
+        # 后果引导词前的并列假设枚举（真实样例 acbb32d0:short_term）
+        "极端地缘缓和与汛期水电超预期将导致避险溢价瓦解，股价面临下探风险",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"条件/推演域误拦: {text!r} -> {viols}"
+
+
+def test_dav1355_absence_negation_extended_exemption():
+    """DAV-1355 (b)：存在否定豁免——名词宾语带定语、增补宾语、对称到 priced-in。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 真实样例 18271017:short_term「缺少超预期增量信息」、3150f7d0「无超预期修正」
+        "处于中报预告窗口，但缺少超预期增量信息",
+        "出口与地缘油价事件定性，无超预期修正",
+        "未见超预期边际改善迹象",
+        # 对称到 priced-in：「缺乏/未见 + 已定价 + 名词」
+        "缺乏该利好已定价的证据，暂不作方向断言",
+        "未见市场预期已定价迹象",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"存在否定误拦: {text!r} -> {viols}"
+
+
+def test_dav1355_explicit_unknown_exemption():
+    """DAV-1355 (c)：句内明示 UNKNOWN/未知/未确证/仅作降权 → 放行。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 真实样例 7177a072:medium_term
+        "是否充分定价、市场分歧幅度均为unknown，不能据此声称发现未定价机会",
+        # 真实样例 764772cb:medium_term / 282acb4c:short_term
+        "已定价状态仍为unknown，不能视作额外催化",
+        "证据贡献状态为 UNKNOWN（中报及高管批复属于公开事实已定价）",
+        # 真实样例 7a2cc852:short_term
+        "国庆动销为未验证变量（E-04契约下priced_in=unknown，双方均不得断言已定价）",
+        "该利好定价程度未确证，仅作降权处理",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert is_valid, f"明示未知误拦: {text!r} -> {viols}"
+
+
+def test_dav1355_nominal_pricing_noun_not_flagged():
+    """DAV-1355 词表收紧：「定价权/定价能力/定价模型」名词用法不算 priced-in。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 真实样例 a810f964:short_term
+        "光脚大阴线收于全天最低点证实卖方具备完全定价权",
+        "上游资源品涨价令公司重获定价能力",
+        "券商研报更新了该股的定价模型",
+        "买卖双方争夺定价权，博弈激烈",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not any("定价" in v or "priced" in v.lower() for v in viols), \
+            f"名词性定价误拦: {text!r} -> {viols}"
+
+
+def test_dav1355_inferential_traceable_pricing_exemption():
+    """DAV-1355 口径3：公开时长+可核对价格反应+推断语气放行；事实语气/仅时长仍拦。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    # 放行：披露依据 + 价格反应数据 + 推断语气
+    for text in (
+        "该公告披露已超 20 个交易日，股价自 72.59 元反弹 9.4%，利好或已部分消化",
+        "中报已披露 15 个交易日，区间涨幅 12%，利好可能已大部分定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not any("已定价" in v or "priced" in v.lower() or "消化" in v for v in viols), \
+            f"可回溯推断误拦: {text!r} -> {viols}"
+
+    # 仍拦①：仅公开时长无价格反应数据（真实样例 f4f0cac6:short_term 口径）
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "中报业绩与 200 亿永续债属于公开超 14 天事实，已充分定价（Priced-in）",
+        gap_exp,
+    )
+    assert not is_valid, "仅时长无价格反应的裸断言漏拦"
+    assert any("定价" in v or "priced" in v.lower() for v in viols)
+
+    # 仍拦②：有数据但为事实语气（「已充分定价」→ 转 DAV-1267 返修引导改写）
+    # （真实样例 9b70d0a1:short_term「…反弹逾 9.4% 已充分消化（Priced-in）」同型）
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict,
+        "该信息公开超 14 个交易日，股价自 72.59 元反弹逾 9.4%，已充分定价",
+        gap_exp,
+    )
+    assert not is_valid, "事实语气已定价漏拦"
+    assert any("定价" in v or "priced" in v.lower() for v in viols)
+
+
+def test_dav1355_double_negation_buwu_and_subject_predicate_escape_blocked():
+    """DAV-1355（并入 DAV-1217）：「不无」按肯定处理；裸「无+人/机构+动词」主谓结构不算否定。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 「不无」双重否定 = 肯定断言，必须拦
+        "板块后续表现不无超预期的可能",
+        "中报弹性不无有超预期的空间",
+        # 裸「无」+ 人/机构 + 动词：主谓歧义，不算存在否定，必须拦
+        "该票此前是无人问津的超预期催化标的",
+        "无机构覆盖的超预期事件",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"双重否定/主谓歧义漏拦: {text!r}"
+        assert any("预期" in v for v in viols), f"未报违规: {text!r} -> {viols}"
+
+
+def test_dav1355_double_count_negated_purpose_exemption():
+    """DAV-1355 (b) 对称：「防/避免/剔除 + 重复计入/双重支持」是合规陈述而非加票断言。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+    # double_count_guard 生效状态（gap er 默认 prevent_double_voting=True）
+    for text in (
+        # 真实样例 882c2cbc:short_term
+        "公募二季报重仓披露虽印证机构持仓，但新闻正文未结构化提取，定性记录且防重复计入",
+        "该事件已在基本面侧计入，此处避免重复计入",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not any("重复计入" in v or "加票" in v for v in viols), \
+            f"防范性表述误拦: {text!r} -> {viols}"
+
+    # 裸「重复计入/额外支持」断言仍拦
+    is_valid, viols = validate_manager_expectation_revision_consumption(
+        verdict, "该利好与业绩高增构成双重支持，可加仓", gap_exp
+    )
+    assert not is_valid, "双重支持断言漏拦"
+
+
+def test_dav1355_r1_unknown_mark_scope_and_substring_still_flagged():
+    """DAV-1355 返修 🔴-1：明示未知豁免的作用域/子串收口——泛化表述与跨子句标记不得放行。"""
+    verdict = {"direction": "NEUTRAL", "reason": "保持跟踪"}
+    gap_exp = _dav1355_gap_revs()
+
+    for text in (
+        # 复审 PoC①：「不确定性」泛化表述不得触发豁免
+        "市场不确定性高企，利好已充分定价",
+        "定价不确定度仍存，该利好已定价",
+        # 复审 PoC②：「待确认」跨子句不得豁免（冒号不是句界）
+        "传闻尚待确认：该利好已充分定价",
+        "数据尚待确认，利好已充分定价",
+        "消息有待确认，中报业绩超预期",
+        # 同义变体：标记在命中之后的另一子句同样不得豁免
+        "该利好已充分定价，真实性待确认",
+        # 回转断言不因前句 unknown 豁免（DAV-1076 同口径）
+        "已定价状态为unknown，但我方独立判断该利好已定价",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not is_valid, f"明示未知豁免溢出漏拦: {text!r}"
+        assert any("定价" in v or "预期" in v or "priced" in v.lower() for v in viols), \
+            f"未报违规: {text!r} -> {viols}"
+
+    # 收紧后仍须放行的锚定形态（与重放语料一致）
+    for text in (
+        "已定价状态仍为unknown，不能视作额外催化",
+        "是否充分定价、市场分歧幅度均为unknown，不能据此声称发现未定价机会",
+        "国庆动销为未验证变量（E-04契约下priced_in=unknown，双方均不得断言已定价）",
+        "证据贡献状态为 UNKNOWN（中报及高管批复属于公开事实已定价）",
+    ):
+        is_valid, viols = validate_manager_expectation_revision_consumption(
+            verdict, text, gap_exp
+        )
+        assert not any("定价" in v or "priced" in v.lower() for v in viols), \
+            f"锚定未知形态误拦: {text!r} -> {viols}"

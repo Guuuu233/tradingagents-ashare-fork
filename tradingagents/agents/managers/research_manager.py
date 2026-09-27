@@ -446,7 +446,9 @@ _PRICED_IN_REJECT_ZH = re.compile(r"驳回|不成立|不予采纳|不能成立|�
 # DAV-1135：双重否定结构（整体语义为肯定断言，不得按单否定豁免）。
 # 命中双重否定 token 内的单否定词不计入奇偶，token 本身贡献偶数（净效果=断言）。
 _PRICED_IN_DBL_NEG_ZH = re.compile(
-    r"无不是|无不|并非没有|并非不|并非未|并非无|不是没有|没有不|不得不|不能不|未必不|不见得"
+    # DAV-1355（并入 DAV-1217）：补「不无」——不+无 为双重否定（=肯定断言），
+    # 此前「不」按单否定计入使「不无超预期可能」逃逸。
+    r"无不是|无不|不无|并非没有|并非不|并非未|并非无|不是没有|没有不|不得不|不能不|未必不|不见得"
 )
 # DAV-1135：名词性存在否定（absence）豁免 —— 「缺乏/缺少/没有/无 + 超预期 + 名词宾语」
 # 是「不存在」的客观陈述而非断言业绩超预期。按存在性否定结构判定，绝不把「无/没有」
@@ -459,9 +461,18 @@ _E04_ABSENCE_VERB_ZH = re.compile(
 )
 # 命中后须紧跟名词性宾语，使「超预期」降级为定语（超预期催化/证据/事件/题材…）。
 _E04_ABSENCE_NOUN_SUFFIX = re.compile(
-    r"^\s*(?:的\s*)?(?:催化|催化剂|催化点|证据|事件|信息|题材|因素|信号|支撑|驱动|动力|"
+    # DAV-1355：名词宾语允许 ≤4 字定语修饰（「超预期增量信息/超预期修正」同型）；
+    # 增补 修正/迹象/事实/佐证/痕迹/贡献 等宾语。
+    r"^\s*(?:的\s*)?[\u4e00-\u9fff]{0,4}?"
+    r"(?:催化|催化剂|催化点|证据|事件|信息|题材|因素|信号|支撑|驱动|动力|"
     r"基础|依据|条件|情形|情况|可能|空间|幅度|逻辑|故事|利好|利空|变量|新闻|公告|"
-    r"披露|预期差|增长点|亮点|素材|理由|消息面|风险)"
+    r"披露|预期差|增长点|亮点|素材|理由|消息面|风险|修正|迹象|事实|佐证|痕迹|贡献)"
+)
+# DAV-1355（并入 DAV-1217）：裸「无」后接 人/机构/资金 等主语+动词 是主谓结构
+# （「无人问津的超预期催化」「无机构覆盖的超预期事件」），不构成存在否定。
+_E04_ABSENCE_SUBJ_ZH = re.compile(
+    r"^(?:人|机构|主力|资金|散户|游资|外资|内资|庄家|大户|买家|卖方|买方|"
+    r"空头|多头|投资者|分析师|券商|基金|公司|管理层|股东|主力机构|机构资金)"
 )
 # absence 动词与命中之间出现否定词（双重否定回转）、转折或断言标记 → 不构成存在否定
 _E04_ABSENCE_BREAK_ZH = re.compile(
@@ -486,6 +497,82 @@ _E04_CONSEQ_ZH = re.compile(
     r"^\s*将(?:会|要|令|致|使|对|为|在|于|把)?"
 )
 _E04_CONSEQ_EN = re.compile(r"\b(?:then|therefore|thus|hence|consequently)\b", re.IGNORECASE)
+# DAV-1355 (a)：扩展条件域——
+#   疑问-条件词（是否/能否/会否…）：「预算收缩是否超预期」是疑问悬挂而非断言；
+#   推演标签（失效条件/证伪条件/候选情形/触发条件/前提条件…）：标签引导的子句域
+#     均属假设推演，至回转/后果/证伪标记为止；
+#   待决谓词（依赖/取决于/有待/尚需/等待/观望…）：命中位于其宾语域内属待定推演。
+_E04_QUESTION_ZH = re.compile(r"是否|能否|会否|会不会|有无|究竟|何時|何时")
+_E04_HYPOTH_LABEL_ZH = re.compile(
+    r"逻辑失效条件|失效条件|证伪条件|失效情形|失效假设|风险情形|风险情景|"
+    r"触发条件|前提条件|候选(?:情形|情景|条件|因素|催化|事件|标的|方向|变量)?|"
+    r"备选情景|备选情形|情景假设|假设情形|推演情景"
+)
+_E04_HYPOTH_DEP_ZH = re.compile(r"依赖|取决于|有待|尚需|等待|寄望|押注|观望")
+# 「在…情景/情形/假设/情况 下·中·里」框架：命中词被框架包裹（标签可落在命中之后，
+# 如「在宏观流动性紧缩与 LPR 超预期下调极端情景下」）。
+_E04_HYPOTH_FRAME_ZH = re.compile(
+    r"在[^。！？；;:：\n]{0,80}?(?:情景|情形|假设|情况下|情形下)[下中里]"
+)
+# 后果引导词前的并列假设枚举（「极端地缘缓和与汛期水电超预期将导致避险溢价瓦解」）：
+# 命中在 将/致/令 等后果词之前且同子句存在 与/或/及/、 并列或假设标记。
+_E04_HYPOTH_FWD_ZH = re.compile(
+    r"将(?:会|要|令|致|使|导致|推动|带动|引发|触发|瓦解|抬升|压制|重塑|改写)|"
+    r"或(?:将|致|令)|恐将"
+)
+_E04_ENUM_HINT_ZH = re.compile(r"与|或|及|、|若|如果|极端|假设|一旦|倘若")
+# DAV-1355 (c)：明示未知/仅作降权豁免——自标 未知/UNKNOWN/未确证/仅作降权，
+# 属对状态不确定性的诚实标注而非事实断言。
+# 🔴-1 返修收紧：剔除泛化「待确认/待验证/尚待确认」（「传闻尚待确认：利好已定价」
+# 不得豁免）；「不确定」排除「不确定性/不确定度」泛化表述。
+_E04_UNKNOWN_MARK = re.compile(
+    r"未知|未确证|未确认|不确定(?!性|度)|尚不明确|"
+    r"仅作降权|仅(?:为|作|供).{0,4}降权|"
+    r"unknown|uncertain|unconfirmed|undetermined|to be determined|\btbd\b",
+    re.IGNORECASE,
+)
+# 枚举统括：「A、B 均为 unknown/未知」对整句枚举项生效（跨子句覆盖命中所在子句）
+_E04_UNKNOWN_ENUM = re.compile(
+    r"(?:均|都|皆|双方|两方|全部|所有)\s*.{0,8}?"
+    r"(?:为|是|记为|标为|属于)?\s*"
+    r"(?:未知|未确证|未确认|不确定(?!性|度)|尚不明确|unknown|uncertain|unconfirmed)",
+    re.IGNORECASE,
+)
+# 栏位/标注形态：「priced_in=unknown」「已定价状态为 unknown」「贡献状态：未知」——
+# 标注谓词紧邻取值，句级生效（标注对象即定价状态本身）。
+_E04_UNKNOWN_ANNOT = re.compile(
+    r"(?:[:：=]|为|是|状态|标为|记为)\s*"
+    r"(?:unknown|uncertain|unconfirmed|undetermined|tbd|未知|未确证|未确认)",
+    re.IGNORECASE,
+)
+# DAV-1355：「公开时长 + 可核对价格反应数据」且推断语气 → 可回溯推断放行；
+# 事实语气（裸「已充分消化/已定价」）仍拦，由 DAV-1267 E-04 返修引导改写。
+_E04_PRICE_REACTION = re.compile(
+    r"(?:自|从)\s*\d+(?:\.\d+)?\s*(?:元|块|港元|美元)?\s*"
+    r"(?:反弹|回落|回撤|上涨|下跌|修复|冲高|探底|回升|走低|上行|下行)"
+    r"\s*(?:约|近|逾|超|超过|达|至|到)?\s*\d+(?:\.\d+)?\s*(?:%|个百分点|bp|bps?|元|块)|"
+    r"(?:反弹|回落|回撤|上涨|下跌|涨幅|跌幅|修复|冲高|探底|回升|大涨|大跌)"
+    r"\s*(?:约|近|逾|超|超过|达|至|到)?\s*\d+(?:\.\d+)?\s*(?:%|个百分点|元|块|bp|bps?)|"
+    r"(?:涨|跌)\s*(?:约|近|逾|超|超过|达)?\s*\d+(?:\.\d+)?\s*(?:%|个百分点)"
+)
+_E04_INFERENTIAL_TONE = re.compile(
+    r"可能|大概率|推测|推断|预计|估计|倾向|疑似|初步|或已|或将|或未|未必|"
+    r"一定程度上|部分|或许|兴许|大致|约莫|"
+    r"likely|probably|possibly|approximately|roughly|appears|seems|partially",
+    re.IGNORECASE,
+)
+_E04_FACT_TONE = re.compile(r"确已|确实|证实|确定性|板上钉钉|早已|already\s+confirmed", re.IGNORECASE)
+# DAV-1355：名词性「定价」用法排除——「定价权/定价能力/定价模型/定价机制…」
+# 是名词性词面命中，非谓词性 priced-in 断言。
+_E04_PI_NOMINAL_SUFFIX = re.compile(
+    r"^(?:权|能力|模型|机制|效率|策略|工具|体系|区间|范围|程度|水平|过程|结果|阶段|基准)"
+)
+# DAV-1355：double_count 命中词的否定/防范前缀（「防重复计入」「避免双重支持」
+# 是合规陈述而非加票断言）。
+_E04_DC_NEG_PREFIX = re.compile(
+    r"(?:防|防止|防范|避免|杜绝|严禁|禁止|不得|不能|勿|不|不再|"
+    r"剔除|排除|不计入|不纳入|予以剔除|已剔除|须防|需防|不可|不宜|不建议)\s*$"
+)
 # DAV-1110 rerun：情景标签开启条件域（情景推演段内的命中属情景假设，非事实断言）
 # 中文：悲观情景/乐观情景/基准情景/极端情景/情景测试/压力测试（容忍 markdown 加粗与冒号/括号间隔）
 _E04_SCENARIO_ZH = re.compile(
@@ -766,6 +853,10 @@ def _is_clause_break(text: str, i: int) -> bool:
         return False
     if ch in ".,，" and i > 0 and i + 1 < len(text) and text[i - 1].isdigit() and text[i + 1].isdigit():
         return False
+    # DAV-1355：数字区间破折号（「20–30 bps」「5—8%」）同理不作子句边界，
+    # 否则「在…超预期下调 20–30bps 极端情景下」框架被截断。
+    if ch in "—–" and i > 0 and i + 1 < len(text) and text[i - 1].isdigit() and text[i + 1].isdigit():
+        return False
     return True
 
 
@@ -864,6 +955,54 @@ def _in_conditional_clause(text: str, hit_start: int, hit_end: int) -> bool:
                 # 未命中标签也未终止：继续向前倒查，允许情景内容跨多子句
             # 情景标签搜索无果 → 继续合取链判定
 
+    # 2.5 DAV-1355：扩展条件域（误拦校准，并入 DAV-1217 边界）
+    # 命中所在子句的绝对区间与命中后的同子句尾部
+    cl_abs = sl + clause_spans[-1][0]
+    cr = hit_end
+    while cr < len(text) and not _is_clause_break(text, cr):
+        cr += 1
+    enclosing_clause = text[cl_abs:cr]
+    tail_after_hit = text[hit_end:cr]
+
+    # (i) 同子句命中前的疑问词 / 推演标签 / 待决谓词，且与命中之间无后果标记
+    for rx in (_E04_QUESTION_ZH, _E04_HYPOTH_LABEL_ZH, _E04_HYPOTH_DEP_ZH):
+        m_h = list(rx.finditer(current_clause))
+        if m_h:
+            after_marker = current_clause[m_h[-1].end():]
+            if not (_E04_CONSEQ_ZH.search(after_marker) or _E04_CONSEQ_EN.search(after_marker)):
+                return True
+
+    # (ii) 「在…情景/情形/假设 下·中·里」框架包裹命中（标签可落在命中词之后）
+    rel_hit = hit_start - cl_abs
+    for m_f in _E04_HYPOTH_FRAME_ZH.finditer(enclosing_clause):
+        if m_f.start() <= rel_hit < m_f.end():
+            return True
+
+    # (iii) 后果引导词前的并列假设枚举：同子句命中后出现 将/致/令 等后果词，
+    # 且命中前有 与/或/及/、 并列或假设标记 → 命中属假设枚举而非断言
+    if _E04_HYPOTH_FWD_ZH.search(tail_after_hit) and _E04_ENUM_HINT_ZH.search(current_clause):
+        return True
+
+    # (iv) 前序子句的推演标签（「失效条件：…」「候选情景：…」）跨子句生效，
+    # 至回转/后果/证伪标记或句界为止
+    for prev_clause in reversed(clauses[:-1]):
+        if not prev_clause:
+            continue
+        if (
+            _E04_SCENARIO_BREAK_ZH.search(prev_clause)
+            or _E04_SCENARIO_BREAK_EN.search(prev_clause)
+            or _E04_CONSEQ_ZH.search(prev_clause)
+            or _E04_CONSEQ_EN.search(prev_clause)
+            or _E04_SCENARIO_REJECT_ZH.search(prev_clause)
+            or _E04_SCENARIO_REJECT_EN.search(prev_clause)
+        ):
+            break
+        if (
+            _E04_HYPOTH_LABEL_ZH.search(prev_clause)
+            or _E04_HYPOTH_FRAME_ZH.search(prev_clause)
+        ):
+            return True
+
     # 3. 跨子句并列条件合取链（DAV-1110）
     # 当前子句无条件词，必须以合取连词引导（且/并/及/and...）
     if not (_E04_COND_CONJ_ZH.search(current_clause) or _E04_COND_CONJ_EN.search(current_clause)):
@@ -901,8 +1040,15 @@ def _is_priced_in_assertion(text: str, start: int, end: int) -> bool:
     after_sentence = text[end:strong_right]
     if _PRICED_IN_REJECT_ZH.search(after_sentence) or _PRICED_IN_REJECT_ZH.search(before):
         return False
-    # DAV-1071 缺陷1 / DAV-1110：条件/假设从句内命中（含「若A，且B」并列条件从句）属情景推演，非断言
+    # DAV-1071 缺陷1 / DAV-1110 / DAV-1355：条件/假设/情景/失效条件/待决谓词域内命中
+    # 属情景推演，非断言
     if _in_conditional_clause(text, start, end):
+        return False
+    # DAV-1355 (b)：存在否定对称到 priced-in——「无/缺乏/缺少/未见 + 已定价 + 名词」
+    if _is_absence_negation_zh(text, start, end):
+        return False
+    # DAV-1355 (c)：句内明示「未知/UNKNOWN/仅作降权/状态未确证」→ 非断言
+    if _e04_explicit_unknown(text, start, end):
         return False
     # 同一句内一处否定不豁免另一处肯定：按出现位置所在子句计数否定词，奇数为否定、偶数为双重否定
     # DAV-1135：双重否定 token（无不是/无不/并非没有…）整体计偶数，其内部单否定词不重复计数，
@@ -938,6 +1084,10 @@ def _is_absence_negation_zh(text: str, start: int, end: int) -> bool:
         return False
     before, _ = _priced_in_clause(text, start, end)
     for m in _E04_ABSENCE_VERB_ZH.finditer(before):
+        # DAV-1355（并入 DAV-1217）：裸「无」+ 人/机构/资金等主语是主谓结构
+        # （「无人问津的超预期催化」），不是存在否定，跳过该候选。
+        if m.group(0) == "无" and _E04_ABSENCE_SUBJ_ZH.match(before[m.end():]):
+            continue
         if _E04_ABSENCE_PREFIX_NEG_ZH.search(before[: m.start()]):
             continue
         if _E04_ABSENCE_BREAK_ZH.search(before[m.end() :]):
@@ -959,6 +1109,52 @@ def _is_beat_miss_assertion(text: str, start: int, end: int) -> bool:
     if _is_absence_negation_zh(text, start, end):
         return False
     return _is_priced_in_assertion(text, start, end)
+
+
+def _e04_explicit_unknown(text: str, start: int, end: int) -> bool:
+    """DAV-1355 (c)：明示未知豁免——以下三种锚定形态之一才放行：
+
+      1. 未知标记与命中同子句（「已定价状态仍为unknown」「…UNKNOWN（…已定价…）」）；
+      2. 枚举统括标记「均为/都是 unknown」句级生效（「是否充分定价、分歧幅度均为unknown」）；
+      3. 栏位标注形态「X=/：/为 unknown」句级生效（「priced_in=unknown，双方均不得断言已定价」）。
+
+    🔴-1：标记不得跨任意子句豁免（「传闻尚待确认：利好已充分定价」仍拦）；
+    句内含自主判断/转折标记（但/我方独立判断…）时不豁免（DAV-1076 🔴-3 同口径约束）。
+    """
+    sentence = _sentence_span(text, start, end)
+    if _E04_OWN_VOICE.search(sentence):
+        return False
+    before, after = _priced_in_clause(text, start, end)
+    if _E04_UNKNOWN_MARK.search(before) or _E04_UNKNOWN_MARK.search(after):
+        return True
+    if _E04_UNKNOWN_ENUM.search(sentence):
+        return True
+    if _E04_UNKNOWN_ANNOT.search(sentence):
+        return True
+    return False
+
+
+def _e04_priced_in_nominal_tail(text: str, start: int, end: int) -> bool:
+    """DAV-1355：命中词尾部紧跟名词性后缀（定价权/定价能力/定价模型…）→ 词面误命中，非 priced-in。"""
+    return bool(_E04_PI_NOMINAL_SUFFIX.match(text[end:]))
+
+
+def _e04_inferential_traceable(text: str, start: int, end: int) -> bool:
+    """DAV-1355 口径3：披露/公开时长依据 + 可核对价格反应数据 + 推断语气 → 可回溯推断放行。
+
+    仅「公开 N 天」无价格反应数据、或事实语气（「已充分消化/确已定价」）一律仍拦，
+    由 DAV-1267 E-04 返修引导改写为推断语气。
+    """
+    sentence = _sentence_span(text, start, end)
+    if not _has_traceable_pricing_basis(sentence):
+        return False
+    if not _E04_PRICE_REACTION.search(sentence):
+        return False
+    if not _E04_INFERENTIAL_TONE.search(sentence):
+        return False
+    if _E04_FACT_TONE.search(sentence):
+        return False
+    return True
 
 
 def _has_traceable_pricing_basis(sentence: str) -> bool:
@@ -1095,6 +1291,10 @@ def validate_manager_expectation_revision_consumption(
         ):
             pi_occurrences.append((m.start(), m.end()))
         for start, end in pi_occurrences:
+            # DAV-1355：名词性「定价」词面命中（定价权/定价能力/定价模型…）直接跳过，
+            # 先于引用豁免判定——名词用法本就不算 priced-in 提及。
+            if _e04_priced_in_nominal_tail(full_text, start, end):
+                continue
             # DAV-1071 缺陷0 + DAV-1073：命中处于分析师 claim 文本/改写/ID引用内属引用，非自行断言；
             # 「已定价状态为 unknown」显式标注引用同样放行
             if _is_claim_quotation(full_text, start, end, claim_index, _PI_QUOTE_KW):
@@ -1119,6 +1319,10 @@ def validate_manager_expectation_revision_consumption(
             # DAV-1071 缺陷2：附带可回溯披露依据且用于降权的 priced-in 引用放行
             sentence = _sentence_span(full_text, start, end)
             if _has_traceable_pricing_basis(sentence) and _is_downweighting_pricing(sentence):
+                continue
+            # DAV-1355 口径3：公开时长 + 可核对价格反应数据 + 推断语气 → 可回溯推断放行；
+            # 仅时长无数据或事实语气仍拦（总控裁定统一 9b70d0a1 与 f4f0cac6 口径）
+            if _e04_inferential_traceable(full_text, start, end):
                 continue
             has_pi_asserted = True
             pi_start, pi_end = start, end
@@ -1268,11 +1472,17 @@ def validate_manager_expectation_revision_consumption(
         has_dc_violation = False
         dc_pats_zh = ("双重支持", "额外支持", "双重加票", "额外加票", "两项独立票", "重复计入", "双重印证加票")
         for dc_pat in dc_pats_zh:
-            if dc_pat in full_text:
+            for m_dc in re.finditer(re.escape(dc_pat), full_text):
+                # DAV-1355 (b)：防范/否定前缀修饰的命中是合规陈述而非加票断言
+                # （「定性记录且防重复计入」「避免双重支持」）。
+                _cl, _ = _priced_in_clause(full_text, m_dc.start(), m_dc.end())
+                if _E04_DC_NEG_PREFIX.search(_cl):
+                    continue
                 has_dc_violation = True
-                _dc_idx = full_text.find(dc_pat)
                 _hit(f"E-04 守卫拦截：double_count_guard 生效，已计入或未确证事件不得作为额外支持再次加票/计入（命中“{dc_pat}”）",
-                     _dc_idx, _dc_idx + len(dc_pat), dc_pat)
+                     m_dc.start(), m_dc.end(), dc_pat)
+                break
+            if has_dc_violation:
                 break
         if not has_dc_violation:
             m_en_dc = re.search(
