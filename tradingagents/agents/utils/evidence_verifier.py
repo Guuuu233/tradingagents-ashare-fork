@@ -80,7 +80,10 @@ REPORT_TO_PROVENANCE_SOURCES: dict[str, tuple[str, ...]] = {
 }
 
 # Chinese and English quantity/unit patterns
-_UNIT_STR = r"(?:万股|亿股|股|亿元|万元|万户|万人|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手|户|人)"
+# DAV-1365: 「个百分点/个基点/基点」量纲归一——报告侧惯用「下滑1.38个百分点」
+# 「上行10个基点」，旧词表无落点导致单位解析为 raw，与证据侧「1.38pct」「10BP」
+# （归一为 %）量纲不匹配，同值互判失配。
+_UNIT_STR = r"(?:个百分点|个基点|基点|万股|亿股|股|亿元|万元|万户|万人|万|亿|%|％|pct|bp|点|元|港元|美元|倍|次|手|户|人)"
 
 _RANGE_BOTH_UNIT_PATTERN = re.compile(
     r"(?<![\d.])(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*(" + _UNIT_STR + r")(?![\d.])"
@@ -113,6 +116,10 @@ _DATE_MASK_PATTERN = re.compile(
     # 「08-19」，漏掩后 6/25 被抽成两个伪原子并错绑邻近指标。强制带「日」
     # 后缀，防止误吞「6-25元」式价格区间。
     r"(?<![\d.])(?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12]\d|3[01])日(?![\d.])|"
+    # DAV-1365: 非补零斜杠月-日「9/24」「10/8」——斜杠在本文语料中不是区间
+    # 分隔符（区间用 -~至到），不掩码会把 24 抽成伪数字并就近绑上资金流
+    # 指标（「9/24超大单-2.63亿」），无中生有的待证数字拖垮整条证据。
+    r"(?<![\d.])(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?![\d.])|"
     # DAV-1177: 「2025全年」「2025 年全年」年度期间形态——原掩码仅覆盖
     # 「2025年/2025年度」，漏掩后「2025」被抽成伪原子阻断全数命中。
     r"(?<![\d.])\d{4}\s*年?\s*全\s*年(?![\d.])|"
@@ -123,6 +130,10 @@ _PERIOD_QUARTER_RE = re.compile(r"(\d{4})年?[-_]?[qQ]([1-4])")
 _PERIOD_SINGLE_QUARTER_RE = re.compile(r"(?<!\w)[qQ]([1-4])(?!\w)")
 _PERIOD_HALF_RE = re.compile(r"(\d{4})年?[-_]?[hH]([1-2])")
 _PERIOD_DATE_RE = re.compile(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?")
+# DAV-1365: 中文半年度形态「2026年上半年/2026下半年」——旧 normalize 不认，
+# 回退年度或漏判，且整句归一时后文「2025H1」抢跑（H 字形式优先于中文
+# 形态被先匹配），把当期值错绑基期。置于 H 形态之前：中文半年度优先。
+_PERIOD_CN_HALF_RE = re.compile(r"(\d{4})\s*年?\s*(上\s*半\s*年|下\s*半\s*年)")
 _PERIOD_MD_RE = re.compile(r"(\d{1,2})月(\d{1,2})日?")
 # DAV-1169: 空格断开的年度/全年形态（「2024 年」「2025 全年」「2025全年」）
 # 同样归一为年度期间——旧式 \d{4}年 要求紧邻「年」，漏绑后数字被整句
@@ -137,6 +148,9 @@ def normalize_period(text: str) -> str | None:
     m = _PERIOD_QUARTER_RE.search(text)
     if m:
         return f"{m.group(1)}Q{m.group(2)}"
+    m = _PERIOD_CN_HALF_RE.search(text)
+    if m:
+        return f"{m.group(1)}H{1 if '上' in m.group(2) else 2}"
     m = _PERIOD_HALF_RE.search(text)
     if m:
         return f"{m.group(1)}H{m.group(2)}"
@@ -200,9 +214,9 @@ def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, st
         return num * 10_000.0, "元"
     elif unit in {"元", "港元", "美元"}:
         return num, "元"
-    elif unit in {"%", "％", "pct"}:
+    elif unit in {"%", "％", "pct", "个百分点"}:
         return num, "%"
-    elif unit == "bp":
+    elif unit in {"bp", "个基点", "基点"}:
         return num / 100.0, "%"
     elif unit == "万户":
         # 股东户数等计数单位：归一为「户」，不得折叠为元（DAV-1144）
@@ -714,7 +728,12 @@ def _classify_semantic_type(
         return STYPE_UNKNOWN
     # raw / 倍 / 点 / 次 / 手 等无标准量纲单位
     _succ_seg = re.split(r"[，。；、,;（）()【】]", text[n_end:n_end + 8])[0]
-    if _GROWTH_CONTEXT_RE.search(window) or re.search(
+    # DAV-1365: 「收窄至19.16」「降至86.20」等 raw 量纲数字以 至/到/为/达 收尾
+    # 时是**水平值**声明而非变动量——与 % 分支 level_suffix 同规则，不得因
+    # 窗口内「收窄/回落」方向词判同比增速，与报告侧「ATR为19.16」绝对额互判失配。
+    if re.search(r"[至到为达得][\s\*_~]*$", window):
+        pass
+    elif _GROWTH_CONTEXT_RE.search(window) or re.search(
         r"增速|增长|增幅|跌幅|涨幅", _succ_seg
     ):
         # 「下降 1.38 个百分点」等变动量，语义同同比增速
@@ -1600,12 +1619,34 @@ def _bind_period_for_number(
     if m:
         inner = m.group(1).strip()
         p = normalize_period(inner)
-        if p:
+        # DAV-1365: 括号是对比注记而非期间标注——「（同比2025H1的888.06亿元
+        # 增长37.55%）」「（2025年末为3623.24亿元）」内含期间之外的其他数值，
+        # 其期间属括号内基期值，不得回绑括号前的当期值（否则 1221.53亿/43.92%
+        # 当期值被错绑基期，与证据侧同值互判跨期失配）。
+        _inner_rest = _DATE_MASK_PATTERN.sub("", inner)
+        if p and not re.search(r"\d", _inner_rest):
             return p
-        # 裸年份括号「（2024）」——normalize_period 要求「年」后缀，此处宽收
-        if re.fullmatch(r"\d{4}", inner):
-            return inner
+        if not p:
+            # 裸年份括号「（2024）」——normalize_period 要求「年」后缀，此处宽收
+            if re.fullmatch(r"\d{4}", inner):
+                return inner
     clause = _CLAUSE_BREAK_FOR_PERIOD.split(text[max(0, n_start - 40):n_start])[-1]
+    # DAV-1365: 括号注记截断子句（「毛利率（根据摘要毛利率口径）为 50.95%」
+    # 中 clause 只剩「为」）时，剥除括号内容重切，恢复数字前的期间语境。
+    # 若被剥括号内含数值（对比基期值「同比2025Q1（127.50亿）下滑14.02%」），
+    # 记 consumed_base=True——基期已被括号内基期值占用，当前数字是当期变动量。
+    consumed_base = False
+    if clause and not re.search(r"\d{4}|去年同期|上年同期|上半年|下半年", clause):
+        _prefix = text[max(0, n_start - 40):n_start]
+        for _pm in re.finditer(r"（[^（）]*）|\([^()]*\)|【[^【】]*】", _prefix):
+            if re.search(r"\d", _pm.group(0)):
+                consumed_base = True
+        _prefix_wo_paren = re.sub(
+            r"（[^（）]*）|\([^()]*\)|【[^【】]*】", "", _prefix,
+        )
+        _alt = _CLAUSE_BREAK_FOR_PERIOD.split(_prefix_wo_paren)[-1]
+        if _alt:
+            clause = _alt
     if clause:
         # DAV-1163: 「去年同期/上年同期」把本子句数字的期间前移一年——
         # 「由去年同期+311.37亿元骤降至-21.54亿元」中 311.37 属 2025H1 而非
@@ -1635,7 +1676,27 @@ def _bind_period_for_number(
             if not first_num or first_num.start() >= first_period.start():
                 p = normalize_period(clause)
                 if p:
-                    return p
+                    # DAV-1365: 对比基期期间只锚定紧随其后的第一个数字——
+                    # 「同比2025H1的888.06亿元增长37.55%」「同比2025H1的52.33%
+                    # 下滑1.38个百分点」中 2025H1 属基期值；旧逻辑继续后绑给
+                    # 同子句后续的当期值/变动量，造成期间门误判。
+                    _pre = clause[: first_period.start()]
+                    if re.search(r"同比|环比|较上年|较上|相比|对比", _pre):
+                        # 基期已被括号内基期值占用（「同比2025Q1（127.50亿）
+                        # 下滑14.02%」），当前数字是当期变动量——不绑基期。
+                        if consumed_base:
+                            return None
+                        _base = n_start - len(clause)
+                        # 子句内无在先数字 → 当前数字即期间后首个数字，锚定
+                        if first_num is None or n_start == _base + first_num.start():
+                            return p
+                        # 非首个数字：对比基期不向后绑；此时期间语义是
+                        # 「当期对基期的变动」，属未标注——返回 None（单侧
+                        # 未标注与期间门兼容），不得回退到整句归一期间
+                        # （整句归一常取到对比基期本身，反而错绑）。
+                        return None
+                    else:
+                        return p
     return fallback
 
 
@@ -2453,8 +2514,79 @@ def _value_covered(
         )
     # 证据区间 [e_lo,e_hi] 与报告值/区间在容差内重叠即覆盖：报告点值落在
     # 证据区间内（「底线67-77元」被「77元」覆盖）或两侧区间相交均算命中。
+    # DAV-1365: 原式 l_hi*(1+rt) 对负值反向——负数乘 (1+rt) 变得更小，
+    # 「净流出1.96至2.93亿」负值区间永不可能覆盖 -1.9635/-2.9256。改为
+    # 绝对值容差的外扩重叠判定（符号仍须一致，不做绝对值等价）。
     margin = abs_tol
-    return e_lo <= l_hi * (1 + rt) + margin and l_lo <= e_hi * (1 + rt) + margin
+    return (
+        e_lo <= l_hi + (abs(l_hi) * rt + margin)
+        and l_lo <= e_hi + (abs(e_hi) * rt + margin)
+    )
+
+
+_BARE_NUMERIC_STRIP_RE = re.compile(
+    r"[\d.,%％\s\-—−+~～/\\(（）()【】\[\]<>≤≥=·:：;；.。,，、'‘’“”]"
+    r"|万亿|亿元|万元|亿股|万股|亿|万|元|股|个百分点|个基点|基点|bp|pct|倍|次|手|户|人|日|月|年",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_numeric_evidence(text: str, keywords: list | None = None) -> bool:
+    """证据文本剥除数字/量纲/标点后是否无实义锚点（裸数字原子）。"""
+    if keywords is None:
+        keywords = _extract_metric_keywords(text)
+    if keywords:
+        return False
+    rest = _BARE_NUMERIC_STRIP_RE.sub("", str(text))
+    return len(rest) < 4
+
+
+# DAV-1365: 资金流族规范化指标——ev 侧「净流出收窄57.1%」缺指标词、报告侧同值
+# 绑「现金流」严格指标时，若两侧文本共享资金流方向词，方向语义已对齐，
+# 允许单侧严格匹配（其余门不放宽）。
+_FLOW_BINDABLE_METRICS = frozenset({
+    "主力", "超大单", "大单", "中单", "小单", "中小单", "两融",
+    "现金流", "投资现金流", "筹资现金流", "自由现金流",
+})
+
+
+def _metric_bridge_ok(
+    ev_bn: BoundNumber,
+    l_bn: BoundNumber,
+    ev_text: str | None,
+    l_text: str | None,
+) -> bool:
+    """指标绑定不对称时的字面桥接（仅替换指标门，其余白名单门不放宽）。
+
+    抽取层常在长句/表格中丢绑指标（报告行首指标词离数字太远、证据原子缺
+    指标词），形成「同一事实两侧一边绑定一边未绑」或「双侧绑定不同名」。
+    放行条件（任一）：
+    - 已绑侧指标的任一 canonical 同义词字面出现在另一侧文本中——说明该侧
+      语义上具备同一指标锚点，是抽取丢绑而非语义不同；
+    - 两侧文本均含资金流方向词（净流入/净流出/买入/卖出等）且已绑指标属
+      资金流族——方向语义对齐。
+    """
+    if ev_text is None or l_text is None:
+        return False
+    # 仅当恰好一侧未绑定时桥接——双侧已绑不同名是真实的指标分歧（「营收增
+    # 3.55%」中 3.55% 属营收，不得被「毛利率」证据借同句词放行）。
+    if bool(ev_bn.metric) == bool(l_bn.metric):
+        return False
+    bound_bn, other_text = (ev_bn, l_text) if ev_bn.metric else (l_bn, ev_text)
+    m = bound_bn.metric
+    other_lower = str(other_text).lower()
+    for k, v in _METRIC_CANONICAL_MAP.items():
+        if v == m and k.lower() in other_lower:
+            return True
+    if m.lower() in other_lower:
+        return True
+    if (
+        m in _FLOW_BINDABLE_METRICS
+        and _FLOW_DIRECTION_RE.search(str(ev_text))
+        and _FLOW_DIRECTION_RE.search(str(l_text))
+    ):
+        return True
+    return False
 
 
 def _is_bound_num_match(
@@ -2462,23 +2594,61 @@ def _is_bound_num_match(
     l_bn: BoundNumber,
     rel_tol: float = 0.02,
     abs_tol: float = 0.05,
+    ev_text: str | None = None,
+    l_text: str | None = None,
 ) -> bool:
     """Whitelist match: 指标、单位（数值容差内）、语义类型、期间四者均兼容才放行。
 
     DAV-1088: 不再维持「只要不明确矛盾就通过」。绑定到严格指标的数字只能与
     同名严格指标匹配；任一侧严格、另一侧非严格/未绑定即拒绝。两侧均非严格时
     要求规范化指标同名或双方均未绑定；语义类型必须一致，否则不可比。
+
+    DAV-1365: 两项校准——
+    (1) 方向界（bound=min/max）数字不得作为另一数字的核验依据，除非指标与
+        主体均绑定一致：报告「投资预计超5万亿元」的 l_bn 是下界 5万，旧逻辑
+        对任何更大的待证值都返回覆盖，造成跨指标/跨主体误认；
+    (2) 指标门失败时允许字面桥接（_metric_bridge_ok），仅当双侧文本可证明
+        同一指标锚点存在时放行，不得放宽成「数字出现即算」。
     """
     if not _value_covered(ev_bn, l_bn, rel_tol, abs_tol):
         return False
+    if ev_bn.bound in (BOUND_MIN, BOUND_MAX) or l_bn.bound in (
+        BOUND_MIN, BOUND_MAX
+    ):
+        # DAV-1365: 方向界（超/不足）数字不得作为另一数字的核验依据，除非
+        # 指标绑定一致；双侧均未绑定时要求文本级语义锚点（共享 canonical
+        # 关键词，如「回购」），防止「投资预计超5万亿元」吞没任意大数字。
+        if ev_bn.metric or l_bn.metric:
+            if not ev_bn.metric or not l_bn.metric or ev_bn.metric != l_bn.metric:
+                return False
+        else:
+            _ev_kw = {
+                _METRIC_CANONICAL_MAP.get(k, k)
+                for k in _extract_metric_keywords(str(ev_text or ""))
+            }
+            _l_kw = {
+                _METRIC_CANONICAL_MAP.get(k, k)
+                for k in _extract_metric_keywords(str(l_text or ""))
+            }
+            if not (_ev_kw and _l_kw and _ev_kw & _l_kw):
+                return False
     ev_strict = ev_bn.metric if ev_bn.metric in _STRICT_METRICS else None
     l_strict = l_bn.metric if l_bn.metric in _STRICT_METRICS else None
+    metric_ok = True
     if ev_strict or l_strict:
-        if not ev_strict or not l_strict or ev_strict != l_strict:
-            return False
+        metric_ok = bool(ev_strict and l_strict and ev_strict == l_strict)
     elif ev_bn.metric != l_bn.metric:
-        return False
-    if ev_bn.stype != l_bn.stype:
+        metric_ok = False
+    bridged = False
+    if not metric_ok:
+        if not _metric_bridge_ok(ev_bn, l_bn, ev_text, l_text):
+            return False
+        bridged = True
+    # DAV-1365: 桥接已证明同一指标锚点在另一侧文本中字面存在，此时 stype 由
+    # 上下文修饰词推导，两侧推导口径常不对称（「减少约41.66%」行侧 stype=未知
+    # vs 证据侧「下降」=同比增速；「现金余额」绝对额 vs 「现金流」总量）——
+    # 桥接成立时 stype 差异不再否决，避免抽取侧推导噪声拖垮真实同值。
+    if ev_bn.stype != l_bn.stype and not bridged:
         return False
     # DAV-1177: 情景/假设前提的证据原子不得由实绩行佐证——「极端压力下仍有
     # 350亿利润底座」的数值撞上实绩「至少110亿」不构成记录事实支撑（总工
@@ -2764,6 +2934,13 @@ class EvidenceFactualTruthEvaluator:
         # 3. Deterministic Matching against 7 Reports
         ev_keywords = _extract_metric_keywords(raw_text)
 
+        # DAV-1365: 裸数字原子无语义锚点——「25%」「15」「1250」式证据靠逐字
+        # 子串必然命中（任何含该数字的文本都算），造成「数字碰巧相同但含义
+        # 不同」的误认。判定：剥除数字/单位/标点/空白后无实义字符，且无任何
+        # 指标关键词时，跳过逐字子串与 market_data_context 子串路径，只能经
+        # BoundNumber 语义门核验。
+        bare_numeric = _is_bare_numeric_evidence(raw_text, ev_keywords)
+
         # 3.1 Exact substring match in any report
         for role_key in SEVEN_REPORT_KEYS:
             if self._is_report_unavailable(role_key, unavailable_sources):
@@ -2771,7 +2948,13 @@ class EvidenceFactualTruthEvaluator:
             report_body = str(seven_reports.get(role_key, "") or "")
             if not report_body.strip():
                 continue
-            if raw_text in report_body or any(len(p) >= 4 and p in report_body for p in raw_text.split("，")):
+            if not bare_numeric and (
+                raw_text in report_body
+                or any(
+                    len(p) >= 4 and p in report_body
+                    for p in raw_text.split("，")
+                )
+            ):
                 return {
                     "raw": raw_text,
                     "claim_id": claim_id,
@@ -2908,7 +3091,10 @@ class EvidenceFactualTruthEvaluator:
                     for ev_bn in all_ev_bns:
                         num_found_in_line = False
                         for l_bn in line_bns:
-                            if _is_bound_num_match(ev_bn, l_bn, self.rel_tol, self.abs_tol):
+                            if _is_bound_num_match(
+                                ev_bn, l_bn, self.rel_tol, self.abs_tol,
+                                ev_text=raw_text, l_text=line_text,
+                            ):
                                 num_found_in_line = True
                                 found_match = True
                                 break
@@ -2965,7 +3151,10 @@ class EvidenceFactualTruthEvaluator:
                             continue
                         line_bns = extract_bound_numbers(line_text)
                         for l_bn in line_bns:
-                            if _is_bound_num_match(ev_bn, l_bn, self.rel_tol, self.abs_tol):
+                            if _is_bound_num_match(
+                                ev_bn, l_bn, self.rel_tol, self.abs_tol,
+                                ev_text=raw_text, l_text=line_text,
+                            ):
                                 num_hits_by_report.setdefault(role_key, set()).add(num_idx)
                                 all_hit_num_indices.add(num_idx)
                                 if _entities_consistent_for_join(ev_bn.entity, l_bn.entity):
@@ -3127,7 +3316,7 @@ class EvidenceFactualTruthEvaluator:
                 if str(k).strip().lower() in unavailable_sources:
                     continue
                 v_str = str(v or "")
-                if raw_text in v_str:
+                if not bare_numeric and raw_text in v_str:
                     return {
                         "raw": raw_text,
                         "claim_id": claim_id,
@@ -3222,13 +3411,128 @@ class EvidenceFactualTruthEvaluator:
                         # DAV-1164 🟢-2：溯源三件套齐备——非拆分项也补 clause
                         it.setdefault("clause", substantive[idx])
                         items.append(it)
+                self._recheck_unverified_facts(
+                    items, seven_reports, market_data_context
+                )
                 return items
             return [res]
         # 单子句多数字：整句未获验但部分数字事实已命中 → 逐事实独立计分
         items = self._facts_or_self(res, ev_str, ev_str)
+        # DAV-1365: 零命中子句同样进原子级补检——整句关键词门可能把「数值在行
+        # 级真实命中但行内无整句指标词交集」的原子全部拦下（如「综合负债成本
+        # 下行10BP」中 10BP 真实存在于「成本率上行10个基点」行），此时按原子
+        # 粒度重计分（与已命中子句的拆分语义一致），全部仍失配才回退单点结论。
+        if len(items) == 1 and items[0] is res:
+            fc = res.get("fact_coverage") or {}
+            uf = fc.get("unverified_facts") or []
+            vf = fc.get("verified_facts") or []
+            if uf:
+                cand: list[dict[str, Any]] = []
+                for fact in vf:
+                    cand.append({
+                        "raw": fact, "claim_id": res.get("claim_id"),
+                        "matched_role": res.get("matched_role"),
+                        "matched_source": res.get("matched_source"),
+                        "status": STATUS_VERIFIED, "is_fatal": False,
+                        "details": f"复合句原子事实已在报告中命中 (atomic_fact): {fact}",
+                        "parent_evidence": ev_str, "clause": ev_str,
+                    })
+                for fact in uf:
+                    cand.append({
+                        "raw": fact, "claim_id": res.get("claim_id"),
+                        "matched_role": None, "matched_source": None,
+                        "status": STATUS_UNSUPPORTED, "is_fatal": False,
+                        "details": f"复合句原子事实未在报告中找到支撑 (atomic_fact): {fact}",
+                        "parent_evidence": ev_str, "clause": ev_str,
+                    })
+                self._recheck_unverified_facts(cand, seven_reports, market_data_context)
+                if any(i.get("status") == STATUS_VERIFIED for i in cand):
+                    return cand
         for it in items:
             it.setdefault("clause", ev_str)
+        self._recheck_unverified_facts(items, seven_reports, market_data_context)
         return items
+
+    def _recheck_unverified_facts(
+        self,
+        items: list[dict[str, Any]],
+        seven_reports: Mapping[str, str],
+        market_data_context: Mapping[str, Any] | None,
+        unavailable_sources: set[str] | None = None,
+    ) -> None:
+        """DAV-1365: 原子事实级补检——消除「同一原子单独核验 verified、整条
+        论点核验 unsupported」的上下文依赖。
+
+        根因：fact_coverage 的命中判定在**整条子句语境**下进行——
+        (a) 逐数字命中沿用整句关键词交集门，命中行不含整句指标词即被拒
+            （「东财-1.82亿仅占流通市值0.022%」中 -1.82亿 撞上 r0_net 行但
+            该行无「流通市值」类词）；
+        (b) BoundNumber 在子句级抽取，原子继承子句内其他数字的指标/期间
+            语境（「主力资金…净流出仅361万」把 361万 绑到「主力」严格指标，
+            而报告行 -0.0361亿 未绑定 → 单侧严格被拒）。
+        补检策略：以原子事实自身文本为语境重评 BoundNumber 匹配，不再沿用
+        整句关键词门；指标/期间等白名单语义门与字面桥接规则原样适用，不
+        放宽成「数字出现即算」。
+        """
+        if unavailable_sources is None:
+            unavailable_sources = set()
+        for it in items:
+            if it.get("status") != STATUS_UNSUPPORTED:
+                continue
+            if "atomic_fact" not in str(it.get("details") or ""):
+                continue
+            fact_raw = str(it.get("raw") or "")
+            clause = str(it.get("clause") or it.get("parent_evidence") or fact_raw)
+            # 先在子句语境找该原子的 BoundNumber（保留其既有绑定），找不到
+            # 再用原子文本自身抽取。
+            bns = []
+            period = normalize_period(clause)
+            for c in split_compound_evidence(clause):
+                bns.extend(
+                    extract_bound_numbers(
+                        c, default_period=normalize_period(c) or period
+                    )
+                )
+            fact_bn = next((b for b in bns if b.raw == fact_raw), None)
+            if fact_bn is None:
+                sub_bns = extract_bound_numbers(fact_raw)
+                fact_bn = sub_bns[0] if sub_bns else None
+            if fact_bn is None:
+                continue
+            lit = _NUMBER_WITH_UNIT_RE.search(fact_raw)
+            digit = lit.group(1) if lit else None
+            if not digit:
+                continue
+            digit = digit.lstrip("+-")
+            for role_key in SEVEN_REPORT_KEYS:
+                if self._is_report_unavailable(role_key, unavailable_sources):
+                    continue
+                report_body = str(seven_reports.get(role_key, "") or "")
+                if not report_body.strip():
+                    continue
+                hit = False
+                for line in report_body.splitlines():
+                    line_text = line.strip()
+                    if not line_text or digit not in line_text:
+                        continue
+                    for l_bn in extract_bound_numbers(line_text):
+                        if _is_bound_num_match(
+                            fact_bn, l_bn, self.rel_tol, self.abs_tol,
+                            ev_text=clause, l_text=line_text,
+                        ):
+                            it["status"] = STATUS_VERIFIED
+                            it["matched_role"] = role_key
+                            it["matched_source"] = role_key.replace("_report", "")
+                            it["details"] = (
+                                f"复合句原子事实在 {role_key} 中经原子级补检命中 "
+                                f"(atomic_fact_recheck): {fact_raw}"
+                            )
+                            hit = True
+                            break
+                    if hit:
+                        break
+                if hit:
+                    break
 
     @staticmethod
     def _facts_or_self(
