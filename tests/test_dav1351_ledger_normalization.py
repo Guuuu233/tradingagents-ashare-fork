@@ -141,3 +141,61 @@ def test_dav1351_reject_already_in_basis_from_rejected_dedup():
     assert "ledger_normalized:reject_to_subfact:INV-2" in v["ledger_normalizations"]
 
 
+# ════════════════════════ ② adopted(全剔除)→partial ═════════════════════════
+
+def test_dav1351_coverage_all_atoms_excluded_normalized_to_partial():
+    """全额采纳含未核实原子，原子逐字在 excluded_evidence → 改挂 partial。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """裁决正文：观望。
+<!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "观望", "position_pct": 0, "adopted_claim_ids": ["INV-5"], "partially_adopted_claims": [], "rejected_claim_ids": [], "excluded_evidence": ["某机构私下调研看好翻倍"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert "INV-5" not in v["adopted_claim_ids"]
+    assert "INV-5" in v["partially_adopted_claims"]
+    assert "ledger_normalized:adopt_to_partial:INV-5" in v["ledger_normalizations"]
+    assert not any("含未核实混合证据" in e and "INV-5" in e
+                   for e in v["failed_checks"])
+    assert v["consistency_check_passed"] is True
+
+
+def test_dav1351_coverage_atom_excluded_as_substring():
+    """fb53ab62 INV-11 形态：原子作为 excluded 条目的子串也算已剔除。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """裁决正文：观望。
+<!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "观望", "position_pct": 0, "adopted_claim_ids": ["INV-5"], "partially_adopted_claims": [], "rejected_claim_ids": [], "excluded_evidence": ["某机构私下调研看好翻倍未核验项"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert "INV-5" in v["partially_adopted_claims"]
+    assert "ledger_normalized:adopt_to_partial:INV-5" in v["ledger_normalizations"]
+
+
+def test_dav1351_coverage_unexcluded_atom_still_fails():
+    """fb53ab62 INV-3 '18亿' 形态：任一未剔除原子 → 不纠正、照拦。"""
+    claims, ver = _inv5_claims_and_ver()
+    raw = """裁决正文：观望。
+<!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "观望", "position_pct": 0, "adopted_claim_ids": ["INV-5"], "partially_adopted_claims": [], "rejected_claim_ids": [], "excluded_evidence": ["其他已剔除项"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert v["consistency_check_passed"] is False
+    assert "INV-5" in v["adopted_claim_ids"]
+    assert not v["ledger_normalizations"]
+    assert any("含未核实混合证据" in e and "INV-5" in e for e in v["failed_checks"])
+
+
+def test_dav1351_coverage_deterministic_excluded_not_counted():
+    """判定只读经理自填 excluded_evidence——deterministic 补全的未证实质命题
+    条目不得顶替 unsupported 原子的剔除证明。"""
+    claims, ver = _inv5_claims_and_ver()
+    # INV-7 为 partial（其 deterministic 补全会写 excluded），INV-5 adopted
+    # 但 '某机构私下调研看好翻倍' 未被经理自填剔除 → 仍拦。
+    claims.append({
+        "claim_id": "INV-7", "speaker": "Bear", "speaker_key": "Bear",
+        "stance": "bearish", "claim": "未经证实的市场担忧",
+        "evidence": ["传闻中的利空"],
+    })
+    ver.append({"claim_id": "INV-7", "raw": "传闻中的利空", "status": STATUS_UNSUPPORTED})
+    raw = """裁决正文：观望。
+<!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "观望", "position_pct": 0, "adopted_claim_ids": ["INV-5"], "partially_adopted_claims": [], "rejected_claim_ids": ["INV-7"], "excluded_evidence": ["传闻中的利空"]} -->"""
+    v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
+    assert v["consistency_check_passed"] is False
+    assert "INV-5" in v["adopted_claim_ids"]
+    assert not any("adopt_to_partial:INV-5" in n for n in v["ledger_normalizations"])
+
+

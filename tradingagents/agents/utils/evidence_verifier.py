@@ -4992,6 +4992,7 @@ def refresh_evidence_basis(manager_verdict: dict[str, Any]) -> dict[str, Any]:
 #
 # 审计记录键：写入 verdict["ledger_normalizations"]，供重放/落库审计机读。
 LEDGER_NORM_REJECT_TO_SUBFACT = "ledger_normalized:reject_to_subfact"
+LEDGER_NORM_ADOPT_TO_PARTIAL = "ledger_normalized:adopt_to_partial"
 
 # 未证命题锚点判定阈值：命题文本与裁决文本（reason + 正文 + dispute_map）
 # 去空白后最长公共子串 >=3 字即视为该命题被结论消费——宁拦勿放。阈值 3 取自
@@ -5254,6 +5255,64 @@ def extract_and_validate_manager_verdict(
             ledger_normalizations.append(
                 f"{LEDGER_NORM_REJECT_TO_SUBFACT}:{cid}"
             )
+
+        # ② coverage 归类纠正：全额采纳的论点存在未核实原子（混合证据/
+        #    语义 partial），且全部 unsupported 原子逐字出现于经理自填
+        #    excluded_evidence（payload 字段，含子串形态），确定性改挂
+        #    partially_adopted_claims；存在任一未剔除原子时照拦不改账。
+        #    注意：判定只读经理自填 excluded_evidence，不含确定性补全项——
+        #    decision=partial 的 claim 其 summary.excluded_evidence 会被自动
+        #    并入 deterministic_excluded，若用合并集判定将无条件放行
+        #    （fb53ab62 INV-3 '18亿' 回归须仍拦）。
+        for cid in list(adopted_claim_ids):
+            s = claim_evidence_summary.get(cid)
+            if not isinstance(s, Mapping):
+                continue
+            cnt = s.get("counts") or {}
+            cov = s.get("coverage", 0.0)
+            dec = s.get("decision")
+            is_obs = s.get("is_observation_or_hypothesis", False)
+            sem_dec = s.get("semantic_decision")
+            # 任一前序硬约束不满足即非归类问题，照拦不改账
+            if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                continue
+            if cnt.get("source_unavailable", 0) > 0:
+                continue
+            if is_obs:
+                continue
+            if cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
+                continue
+            if cov < MIN_COVERAGE_THRESHOLD and not math.isclose(
+                cov, 2 / 3, abs_tol=1e-3
+            ):
+                continue
+            if sem_dec in {SEM_PREVIEW_REJECT, SEM_DECISION_NON_FACTUAL}:
+                continue
+            mixed_evidence = dec == DECISION_PARTIAL or (
+                0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)
+            )
+            sem_partial = sem_dec == SEM_PREVIEW_PARTIAL or bool(
+                s.get("semantic_hard_guards") and sem_dec
+            )
+            if not (mixed_evidence or sem_partial):
+                continue
+            unsupported_atoms = [
+                str(e).strip()
+                for e in (s.get("unsupported_evidence") or [])
+                if str(e).strip()
+            ]
+            if not unsupported_atoms:
+                continue
+            if all(
+                any(atom in ex for ex in excluded_evidence)
+                for atom in unsupported_atoms
+            ):
+                adopted_claim_ids = [c for c in adopted_claim_ids if c != cid]
+                if cid not in partially_adopted_claims:
+                    partially_adopted_claims.append(cid)
+                ledger_normalizations.append(
+                    f"{LEDGER_NORM_ADOPT_TO_PARTIAL}:{cid}"
+                )
 
     deterministic_excluded: list[str] = []
     for cid, s in claim_evidence_summary.items():
