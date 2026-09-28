@@ -36,14 +36,16 @@ INV2_REPORTS = {
 
 
 def test_inv2_anchor_semantic_25pct_preview_reject():
-    """000895 INV-2 锚点：4 命题仅数值命题 supported → semantic=25%，preview=reject。"""
+    """000895 INV-2 锚点：「Q1扣非增20%」supported，E-04 子句「食安利空已定价
+    超6天」unsupported → coverage=1/2，preview=reject。DAV-1369：非 E-04 解读
+    子句「高股息构筑估值底」整句退出分母。"""
     res = audit_claim_semantic_coverage(
         INV2_CLAIM,
         verified_evidence=INV2_VERIFIED,
         report_fields=INV2_REPORTS,
         claim_id="INV-2",
     )
-    assert res["semantic_coverage"] == 0.25
+    assert res["semantic_coverage"] == 0.5
     assert res["semantic_decision_preview"] == "reject"
     assert res["semantic_partial_origin_preview"] == "reject_with_supported_subset"
     kinds = [p["kind"] for p in res["proposition_audit"]]
@@ -52,15 +54,20 @@ def test_inv2_anchor_semantic_25pct_preview_reject():
     assert res["semantic_hard_guards"], "E-04 未证命题必须进入 semantic_hard_guards"
     guard_texts = [g["text"] for g in res["semantic_hard_guards"]]
     assert any("已定价" in t for t in guard_texts)
-    # E-04 谓词不得走 causal 放宽
+    # E-04 谓词不得走 causal 放宽（DAV-1369：解读类一律不得 supported）
     for p in res["proposition_audit"]:
         if "已定价" in p["text"]:
             assert p["support_status"] == "unsupported"
             assert p["support_kind"] != "grounded_interpretation"
+    # DAV-1369：非 E-04 解读命题判 non_factual 退出分母，而不是 supported
+    causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
+    assert all(p["support_status"] != "supported_available" for p in causal)
+    assert any(p["support_status"] == "non_factual_or_normative" for p in causal)
 
 
 def test_grounded_interpretation_positive():
-    """显式同义关系 + 全部前提 verified → grounded_interpretation，preview=adopt。"""
+    """DAV-1369：grounded interpretation 放宽取消。解读命题不参与支持判定，
+    coverage 只由事实命题决定；前提数值全 supported → adopt 仍可达。"""
     claim = "Q1扣非增20%与回购70亿构筑估值底"
     verified = ["2026Q1扣非净利润同比增长20.24%，派现70亿元"]
     reports = {"sentiment_report": "扣非增长20%与70亿回购构筑估值底，彰显管理层信心。"}
@@ -68,22 +75,23 @@ def test_grounded_interpretation_positive():
         claim, verified_evidence=verified, report_fields=reports, claim_id="INV-9"
     )
     causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
-    assert causal and causal[0]["support_status"] == "supported_available"
-    assert causal[0]["support_kind"] == "grounded_interpretation"
-    assert causal[0]["report_source"] == "sentiment_report"
+    assert causal and causal[0]["support_status"] == "non_factual_or_normative"
+    assert causal[0]["support_kind"] != "grounded_interpretation"
     assert res["semantic_coverage"] == 1.0
     assert res["semantic_decision_preview"] == "adopt"
 
 
 def test_causal_synonym_without_premise_chain_unsupported():
-    """报告有同义解释句但前提链未全 supported → 仍 unsupported。"""
+    """DAV-1369：解读命题不参与支持判定（non_factual 退出分母）；
+    未证事实前提仍 unsupported → coverage < 1。"""
     claim = "公司近70亿元回购构筑铁底"
     # 前提数值无任何证据命中（verified 与 report 都不含 70）→ 前提 unsupported
     reports = {"sentiment_report": "回购构筑铁底，但具体金额未披露。"}
     res = audit_claim_semantic_coverage(claim, verified_evidence=[], report_fields=reports)
     causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
-    assert causal[0]["support_status"] == "unsupported"
-    assert res["semantic_coverage"] < 1.0
+    assert causal[0]["support_status"] == "non_factual_or_normative"
+    # R3：整子句归 interpretation，无可核验事实命题 → coverage=None
+    assert res["semantic_coverage"] is None
 
 
 def test_non_factual_excluded_from_denominator():
@@ -138,11 +146,12 @@ def test_preview_thresholds_and_origins():
     assert full["semantic_decision_preview"] == "adopt"
     assert full["semantic_partial_origin_preview"] == "adopt_full_coverage"
 
+    # R3：verified 为空 → 无已核实原子 → 非事实路径（不再计 reject）
     zero = audit_claim_semantic_coverage(
         "主力净流出1.2亿", verified_evidence=[], report_fields={}
     )
-    assert zero["semantic_decision_preview"] == "reject"
-    assert zero["semantic_partial_origin_preview"] == "reject_no_supported_subset"
+    assert zero["semantic_decision_preview"] == "non_factual_only"
+    assert zero["semantic_partial_origin_preview"] == "non_factual_only"
 
     subset = audit_claim_semantic_coverage(
         INV2_CLAIM, verified_evidence=INV2_VERIFIED, report_fields=INV2_REPORTS
@@ -196,7 +205,9 @@ def test_aggregate_adds_semantic_fields_without_changing_decision():
         "semantic_hard_guards",
     ):
         assert k in s
-    assert s["semantic_coverage"] == 0.25
+    # DAV-1369：「Q1扣非增20%」supported + E-04 子句 unsupported → 1/2；
+    # 非 E-04 解读子句整句退出分母
+    assert s["semantic_coverage"] == 0.5
     assert s["semantic_decision_preview"] == "reject"
     for p in s["proposition_audit"]:
         assert p["proposition_id"].startswith("INV-2#p")

@@ -663,17 +663,31 @@ class TestManagerVerdictConsistencyHardGateCoverage:
         assert verdict_bad["consistency_check_passed"] is False
         assert any("观察/假设类" in err for err in verdict_bad["failed_checks"])
 
-        # 2. Putting in partially_adopted_claims -> PASSES
+        # 2. Putting in partially_adopted_claims -> DAV-1369 起 FAILS：
+        # 该 claim 无任何可核验事实命题 → non_factual_only → 无采纳资格
         raw_output_partial = """【投研经理裁决报告】
 看多。
 <!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "部分采纳观察", "position_pct": 50, "stop_loss": "19.0", "adopted_claim_ids": [], "partially_adopted_claims": ["CLM-OBS"], "rejected_claim_ids": []} -->"""
-        verdict_ok = extract_and_validate_manager_verdict(
+        verdict_partial = extract_and_validate_manager_verdict(
             raw_response=raw_output_partial,
             claims_verification=verifications,
             claims=[obs_claim],
             seven_reports=obs_reports,
         )
-        assert verdict_ok["consistency_check_passed"] is True
+        assert verdict_partial["consistency_check_passed"] is False
+        assert any("non_factual_only" in err for err in verdict_partial["failed_checks"])
+
+        # 3. rejected_claim_ids -> PASSES（合法排除路径）
+        raw_output_reject = """【投研经理裁决报告】
+看多。
+<!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "否决观察", "position_pct": 50, "stop_loss": "19.0", "adopted_claim_ids": [], "partially_adopted_claims": [], "rejected_claim_ids": ["CLM-OBS"]} -->"""
+        verdict_ok = extract_and_validate_manager_verdict(
+            raw_response=raw_output_reject,
+            claims_verification=verifications,
+            claims=[obs_claim],
+            seven_reports=obs_reports,
+        )
+        assert verdict_ok["consistency_check_passed"] is True, verdict_ok["failed_checks"]
 
 
 class TestPromptFormatAndVerificationPresentation:

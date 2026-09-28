@@ -48,7 +48,10 @@ INV2_VERIFIED = [
 # ────────────────────────── 🟡-1 grounded causal 假阳修复 ──────────────────
 
 def test_red1_paragraph_cooccurrence_not_grounded():
-    """RED：报告仅同段出现“高胜率…扣非高增长…”但无同句因果关系 → 不得 grounded。"""
+    """RED：报告仅同段出现“高胜率…扣非高增长…”但无同句因果关系 → 不得 grounded。
+
+    DAV-1369：grounded 放宽取消，解读命题一律不参与支持判定（non_factual
+    退出分母）；强度更高，原假阳路径不复存在。"""
     res = audit_claim_semantic_coverage(
         "扣非增20%印证高胜率",
         verified_evidence=["扣非净利润同比增长20%"],
@@ -59,13 +62,16 @@ def test_red1_paragraph_cooccurrence_not_grounded():
     )
     causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
     assert causal, "claim 应拆出 interpretation_causal 命题"
-    assert causal[0]["support_status"] == "unsupported"
+    assert causal[0]["support_status"] == "non_factual_or_normative"
     assert causal[0]["support_kind"] != "grounded_interpretation"
-    assert res["semantic_decision"] != "adopt"
 
 
 def test_red2_premise_fact_only_not_strict_supported():
-    """RED：verified 只有回购事实、没有“构筑铁底”关系 → 不得 strict supported。"""
+    """RED：verified 只有回购事实、没有“构筑铁底”关系 → 解读命题不得 supported。
+
+    DAV-1369：解读命题一律 non_factual 退出分母；事实前提（回购70亿）
+    经 verified 命中照常 supported → semantic=adopt（事实部分决定的
+    新语义，非 grounded 放宽）。"""
     res = audit_claim_semantic_coverage(
         "公司回购70亿元构筑铁底",
         verified_evidence=["公司累计回购70亿元，彰显信心"],
@@ -74,22 +80,24 @@ def test_red2_premise_fact_only_not_strict_supported():
     )
     causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
     assert causal
-    # “回购”是前提名词不是关系谓词——strict 不得因前提名词命中判 supported
-    assert causal[0]["support_status"] == "unsupported"
+    # “回购”是前提名词不是关系谓词——解读命题永不可 supported
+    assert causal[0]["support_status"] == "non_factual_or_normative"
     assert causal[0]["support_kind"] == "none"
-    assert res["semantic_decision"] == "reject"
+    # R3：子句内不切，回购70亿与构筑铁底同一子句 → 无可核验事实命题
+    assert res["semantic_decision"] == "non_factual_only"
 
 
 def test_grounded_positive_same_sentence_relation_kept():
-    """GREEN 保留：同句关系陈述 + 前提链 verified → grounded_interpretation。"""
+    """DAV-1369：grounded 放宽取消。解读命题 non_factual 退出分母，
+    adopt 完全由事实前提命题（数值命中）决定。"""
     res = audit_claim_semantic_coverage(
         "Q1扣非增20%与回购70亿构筑估值底",
         verified_evidence=["2026Q1扣非净利润同比增长20.24%，派现70亿元"],
         report_fields={"sentiment_report": "扣非增长20%与70亿回购构筑估值底，彰显管理层信心。"},
     )
     causal = [p for p in res["proposition_audit"] if p["kind"] == "interpretation_causal"]
-    assert causal[0]["support_status"] == "supported_available"
-    assert causal[0]["support_kind"] == "grounded_interpretation"
+    assert causal[0]["support_status"] == "non_factual_or_normative"
+    assert causal[0]["support_kind"] != "grounded_interpretation"
     assert res["semantic_decision"] == "adopt"
 
 
@@ -112,7 +120,8 @@ def test_grounded_anchor_not_borrowed_from_sibling_propositions():
         if p["kind"] == "interpretation_causal" and "高胜率" in p["text"]
     ]
     assert causal
-    assert causal[0]["support_status"] == "unsupported"
+    # DAV-1369：解读命题一律 non_factual，不可能因借用锚点被误判 supported
+    assert causal[0]["support_status"] == "non_factual_or_normative"
     assert causal[0]["support_kind"] != "grounded_interpretation"
 
 
@@ -131,14 +140,14 @@ def test_red_pure_rhetoric_non_factual_only_no_adopt():
 
 
 def test_red_norm_risk_warning_not_non_factual():
-    """RED：“建议警惕商誉减值风险” → 降档可审计命题，不得全归 non_factual。"""
+    """“建议警惕商誉减值风险” 仍拆为可审计 scenario 命题（kind 不归
+    non_factual）；DAV-1369 起 scenario 不参与支持判定 → non_factual_only。"""
     kinds = [p["type"] for p in decompose_claim_propositions("建议警惕商誉减值风险")]
     assert "non_factual_or_normative" not in kinds
     res = audit_claim_semantic_coverage("建议警惕商誉减值风险", verified_evidence=[], report_fields={})
-    assert res["semantic_counts"]["verifiable"] >= 1
-    assert res["semantic_coverage"] is not None
-    assert res["semantic_decision"] != "non_factual_only"
-    assert res["semantic_decision"] != "adopt"
+    assert res["semantic_counts"]["verifiable"] == 0
+    assert res["semantic_coverage"] is None
+    assert res["semantic_decision"] == "non_factual_only"
 
 
 def test_non_factual_claim_in_rejected_ledger_passes_gate():
@@ -222,7 +231,8 @@ def test_gate_semantic_adopt_legacy_adopt_passes():
 
 
 def test_partial_claim_unsupported_propositions_enter_excluded():
-    """partial_threshold claim 被部分采纳时，未证实质命题必须进 excluded_evidence。"""
+    """DAV-1369：解读命题退出分母后，前提数值全 verified → semantic=adopt，
+    无未证命题进 excluded_evidence；部分采纳仍为合法裁决。"""
     claims = [{
         "claim_id": "INV-3", "speaker": "Bull", "speaker_key": "Bull",
         "stance": "bullish",
@@ -233,14 +243,12 @@ def test_partial_claim_unsupported_propositions_enter_excluded():
         {"claim_id": "INV-3", "raw": "2026Q1扣非净利润同比增长20.24%", "status": STATUS_VERIFIED},
         {"claim_id": "INV-3", "raw": "派现70亿元", "status": STATUS_VERIFIED},
     ]
-    # 无报告文本 → causal 未证 → semantic=2/3 partial_threshold
     raw = """裁决正文。
 <!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "部分采纳", "position_pct": 0, "adopted_claim_ids": [], "partially_adopted_claims": ["INV-3"], "rejected_claim_ids": []} -->"""
     v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
     s = v["claim_evidence_summary"]["INV-3"]
-    assert s["semantic_decision"] == "partial_threshold"
+    assert s["semantic_decision"] == "adopt"
     assert v["consistency_check_passed"] is True, v["failed_checks"]
-    assert any("未证实质命题" in e and "构筑估值底" in e for e in v["excluded_evidence"])
 
 
 # ──────────────── 下游 decision_status 消费正式 semantic decision ────────────
