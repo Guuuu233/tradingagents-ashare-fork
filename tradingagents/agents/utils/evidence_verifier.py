@@ -4876,6 +4876,86 @@ def aggregate_claim_evidence(
     return summary_map
 
 
+def ledger_eligibility(summary: Mapping[str, Any]) -> dict[str, str | None]:
+    """Compute the same maximum ledger bucket and failure precedence as Check 7.
+
+    The failure codes preserve the hard gate's existing error ordering independently
+    for adopted and partial; neither the prompt nor normalization guesses from the
+    legacy evidence decision alone.
+    """
+    cnt = summary.get("counts") or {}
+    cov = summary.get("coverage", 0.0)
+    sem = summary.get("semantic_decision")
+    obs = summary.get("is_observation_or_hypothesis", False)
+    fatal = summary.get("pit_failed") or cnt.get("contradicted", 0) > 0
+    unavailable = cnt.get("source_unavailable", 0) > 0
+    no_verified = cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0
+    low_coverage = cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3)
+
+    partial_failure = None
+    if fatal:
+        partial_failure = "conflict"
+    elif unavailable:
+        partial_failure = "unavailable"
+    elif not obs and no_verified:
+        partial_failure = "unsupported"
+    elif not obs and low_coverage:
+        partial_failure = "low_coverage"
+    elif sem == SEM_DECISION_NON_FACTUAL:
+        partial_failure = "non_factual_only"
+    elif sem == SEM_PREVIEW_REJECT:
+        partial_failure = "semantic_reject"
+
+    adopt_failure = None
+    if fatal:
+        adopt_failure = "conflict"
+    elif unavailable:
+        adopt_failure = "unavailable"
+    elif obs:
+        adopt_failure = "observation"
+    elif no_verified:
+        adopt_failure = "unsupported"
+    elif low_coverage:
+        adopt_failure = "low_coverage"
+    elif summary.get("decision") == DECISION_PARTIAL or (
+        0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)
+    ):
+        adopt_failure = "mixed"
+    elif sem == SEM_DECISION_NON_FACTUAL:
+        adopt_failure = "non_factual_only"
+    elif sem == SEM_PREVIEW_REJECT:
+        adopt_failure = "semantic_reject"
+    elif sem == SEM_PREVIEW_PARTIAL or (summary.get("semantic_hard_guards") and sem):
+        adopt_failure = "semantic_partial"
+
+    if partial_failure:
+        bucket = "rejected_only"
+        reason = {
+            "conflict": "事实冲突或前视偏差",
+            "unavailable": "数据源不可用",
+            "unsupported": "没有已核实的有效证据",
+            "low_coverage": "证据覆盖率不足 67%",
+            "non_factual_only": "non_factual_only 无可采纳的事实命题",
+            "semantic_reject": "语义 reject 不可采纳",
+        }[partial_failure]
+        if sem == SEM_DECISION_NON_FACTUAL:
+            reason = "non_factual_only 无可采纳的事实命题"
+        elif sem == SEM_PREVIEW_REJECT:
+            reason = "语义 reject 不可采纳"
+    elif adopt_failure:
+        bucket = "partial"
+        reason = {
+            "observation": "观察/假设不得升级为已验证事实",
+            "mixed": "存在未核实的混合证据，仅可消费已核实子结论",
+            "semantic_partial": "语义命题部分支持或存在未证 hard guard",
+        }.get(adopt_failure, "仅可部分采纳")
+    else:
+        bucket = "adopted"
+        reason = "核验事实与语义命题均满足全额采纳条件"
+    return {"max_bucket": bucket, "reason": reason,
+            "adopt_failure": adopt_failure, "partial_failure": partial_failure}
+
+
 def format_claims_with_verification_for_prompt(
     claims: Sequence[Mapping[str, Any]] | None,
     claims_verification: Sequence[Mapping[str, Any]] | None = None,
@@ -4896,12 +4976,6 @@ def format_claims_with_verification_for_prompt(
     focus_set = {str(item) for item in (focus_claim_ids or []) if str(item).strip()}
     lines: list[str] = []
 
-    badge_map = {
-        DECISION_ADOPT: "证据充分 / 全Verified",
-        DECISION_PARTIAL: "部分支持 / 混合证据(仅采纳Verified子结论)",
-        DECISION_REJECT: "证据薄弱/不支持/矛盾(驳回)",
-    }
-
     for claim in claim_list:
         cid = str(claim.get("claim_id", "")).strip()
         status = str(claim.get("status", "open")).strip() or "open"
@@ -4921,31 +4995,17 @@ def format_claims_with_verification_for_prompt(
             lines.append(f"{prefix}{cid} [{status}] {speaker}{stance_str}: {summary_text} | 证据: {ev_text}")
             continue
 
-        decision = sum_info.get("decision", DECISION_REJECT)
-        is_obs = sum_info.get("is_observation_or_hypothesis", False)
-        badge = "观察/假设类命题 (可审计未验证/部分采纳)" if is_obs else badge_map.get(decision, "待核验")
+        eligibility = ledger_eligibility(sum_info)
         cov = sum_info.get("coverage", 0.0)
         counts = sum_info.get("counts", {})
         total = counts.get("total", 0)
         verified = counts.get("verified", 0)
-        reason = sum_info.get("reason", "")
+        bucket_name = {"adopted": "全额", "partial": "部分", "rejected_only": "仅可驳回"}[
+            eligibility["max_bucket"]
+        ]
 
         lines.append(f"{prefix}{cid} [{status}] {speaker}{stance_str}: {summary_text}")
-        lines.append(f"  * 核验评级: 【{badge}】 覆盖率={cov:.1%} ({verified}/{total} verified) | 规则判定: {decision}")
-        lines.append(f"  * 判定说明: {reason}")
-        # DAV-1193 B2：把正式 semantic decision 透传给 manager，消费正式
-        # 判定而非让其自行从 legacy coverage 推断
-        sem_dec = sum_info.get("semantic_decision")
-        if sem_dec:
-            sem_cov = sum_info.get("semantic_coverage")
-            sem_cnt = sum_info.get("semantic_counts") or {}
-            sem_cov_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
-            guards = sum_info.get("semantic_hard_guards") or []
-            guard_txt = f" | E-04未证hard guard={len(guards)}" if guards else ""
-            lines.append(
-                f"  * 语义命题判定: semantic_decision={sem_dec} | semantic_coverage={sem_cov_txt} "
-                f"(supported {sem_cnt.get('supported', 0)}/{sem_cnt.get('verifiable', 0)} 可证命题){guard_txt}"
-            )
+        lines.append(f"  * 账本资格上限：{bucket_name} — {eligibility['reason']}；覆盖率={cov:.1%} ({verified}/{total} verified)")
         if sum_info.get("applicability"):
             app = sum_info["applicability"]
             lines.append(f"  * 适用档规格: 标的={app.get('symbol')}, 观察窗={app.get('horizon')}, 计量基准={app.get('metric_basis')}, PIT截止日={app.get('pit_date')}")
@@ -5504,6 +5564,8 @@ def refresh_evidence_basis(manager_verdict: dict[str, Any]) -> dict[str, Any]:
 # 审计记录键：写入 verdict["ledger_normalizations"]，供重放/落库审计机读。
 LEDGER_NORM_REJECT_TO_SUBFACT = "ledger_normalized:reject_to_subfact"
 LEDGER_NORM_ADOPT_TO_PARTIAL = "ledger_normalized:adopt_to_partial"
+LEDGER_NORM_ADOPTED_TO_REJECTED = "ledger_normalized:adopted_to_rejected"
+LEDGER_NORM_PARTIAL_TO_REJECTED = "ledger_normalized:partial_to_rejected"
 
 # 未证命题锚点判定阈值：命题文本与裁决文本（reason + 正文 + dispute_map）
 # 去空白后最长公共子串 >=3 字即视为该命题被结论消费——宁拦勿放。阈值 3 取自
@@ -5786,6 +5848,24 @@ def extract_and_validate_manager_verdict(
             None, "", anchor_haystack, autojunk=False
         )
 
+        # 纯修辞/规范性论点没有可消费的事实命题：直接移出采纳账本，
+        # 不适用 reject→subfact 的未证锚点保护，也不凭空建立 verified 依据。
+        for claim_ids, audit_code in (
+            (adopted_claim_ids, LEDGER_NORM_ADOPTED_TO_REJECTED),
+            (partially_adopted_claims, LEDGER_NORM_PARTIAL_TO_REJECTED),
+        ):
+            for cid in list(claim_ids):
+                s = claim_evidence_summary.get(cid)
+                # 仅凭核验状态补出的空 claim 无从确认是否为纯修辞，保留原硬门。
+                if (not isinstance(s, Mapping)
+                    or not str(s.get("claim") or "").strip()
+                    or s.get("semantic_decision") != SEM_DECISION_NON_FACTUAL):
+                    continue
+                claim_ids.remove(cid)
+                if cid not in rejected_claim_ids:
+                    rejected_claim_ids.append(cid)
+                ledger_normalizations.append(f"{audit_code}:{cid}")
+
         # ① reject_in_partial 归类纠正：partial 中的 semantic_decision=reject
         #    论点，若证据消费物全为 verified 子事实（verified>0）且裁决
         #    reason/正文/dispute_map 不含其未证命题锚点，则确定性改挂
@@ -5828,41 +5908,13 @@ def extract_and_validate_manager_verdict(
             s = claim_evidence_summary.get(cid)
             if not isinstance(s, Mapping):
                 continue
-            cnt = s.get("counts") or {}
-            cov = s.get("coverage", 0.0)
-            dec = s.get("decision")
-            is_obs = s.get("is_observation_or_hypothesis", False)
-            sem_dec = s.get("semantic_decision")
-            # 任一前序硬约束不满足即非归类问题，照拦不改账
-            if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
-                continue
-            if cnt.get("source_unavailable", 0) > 0:
-                continue
-            if is_obs:
-                continue
-            if cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
-                continue
-            if cov < MIN_COVERAGE_THRESHOLD and not math.isclose(
-                cov, 2 / 3, abs_tol=1e-3
-            ):
-                continue
-            if sem_dec in {SEM_PREVIEW_REJECT, SEM_DECISION_NON_FACTUAL}:
-                continue
-            mixed_evidence = dec == DECISION_PARTIAL or (
-                0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)
-            )
-            sem_partial = sem_dec == SEM_PREVIEW_PARTIAL or bool(
-                s.get("semantic_hard_guards") and sem_dec
-            )
-            if not (mixed_evidence or sem_partial):
+            if ledger_eligibility(s)["max_bucket"] != "partial":
                 continue
             unsupported_atoms = [
                 str(e).strip()
                 for e in (s.get("unsupported_evidence") or [])
                 if str(e).strip()
             ]
-            if not unsupported_atoms:
-                continue
             if all(
                 any(atom in ex for ex in excluded_evidence)
                 for atom in unsupported_atoms
@@ -5968,38 +6020,33 @@ def extract_and_validate_manager_verdict(
         for cid in adopted_claim_ids:
             if cid in claim_evidence_summary:
                 s = claim_evidence_summary[cid]
-                cnt = s.get("counts", {})
+                failure = ledger_eligibility(s)["adopt_failure"]
                 cov = s.get("coverage", 0.0)
-                dec = s.get("decision")
-                is_obs = s.get("is_observation_or_hypothesis", False)
-                sem_dec = s.get("semantic_decision")
-                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                if failure == "conflict":
                     failed_checks.append(f"裁决采纳了存在事实冲突/前视偏差的矛盾 claim: {cid}")
-                elif cnt.get("source_unavailable", 0) > 0:
+                elif failure == "unavailable":
                     failed_checks.append(f"裁决采纳了不可用数据源的严重幻觉 claim: {cid}")
-                elif is_obs:
+                elif failure == "observation":
                     failed_checks.append(f"裁决全额采纳了观察/假设类 claim: {cid}，观察/假设类命题不得升级为已验证事实 (adopt)")
-                elif cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0:
+                elif failure == "unsupported":
                     failed_checks.append(f"裁决采纳了全部证据未获验证 (unsupported) 的 claim: {cid}")
-                elif cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3):
+                elif failure == "low_coverage":
                     failed_checks.append(f"裁决采纳了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
-                elif dec == DECISION_PARTIAL or (0.67 <= cov < 1.0 and not math.isclose(cov, 1.0)):
+                elif failure == "mixed":
                     failed_checks.append(
                         f"裁决全额采纳了含未核实混合证据的 claim: {cid} (coverage={cov:.1%})，混合证据仅允许记录于 partially_adopted_claims 并剔除未验证项"
                     )
-                # DAV-1193 B2 semantic hard gate：legacy 证据全绿但藏未证实质
-                # 命题/E-04 hard guard/纯修辞 claim 一律不得全额 adopt
-                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                elif failure == "non_factual_only":
                     failed_checks.append(
                         f"裁决采纳了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
                     )
-                elif sem_dec == SEM_PREVIEW_REJECT:
+                elif failure == "semantic_reject":
                     sem_cov = s.get("semantic_coverage")
                     sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
                     failed_checks.append(
                         f"裁决全额采纳了 semantic_decision=reject 的 claim: {cid} (semantic_coverage={sem_txt})，实质命题覆盖不足不得 adopt"
                     )
-                elif sem_dec == SEM_PREVIEW_PARTIAL or (s.get("semantic_hard_guards") and sem_dec):
+                elif failure == "semantic_partial":
                     sem_cov = s.get("semantic_coverage")
                     sem_txt = f"{sem_cov:.1%}" if isinstance(sem_cov, (int, float)) else "n/a"
                     failed_checks.append(
@@ -6009,24 +6056,21 @@ def extract_and_validate_manager_verdict(
         for cid in partially_adopted_claims:
             if cid in claim_evidence_summary:
                 s = claim_evidence_summary[cid]
-                cnt = s.get("counts", {})
+                failure = ledger_eligibility(s)["partial_failure"]
                 cov = s.get("coverage", 0.0)
-                is_obs = s.get("is_observation_or_hypothesis", False)
-                sem_dec = s.get("semantic_decision")
-                if s.get("pit_failed") or cnt.get("contradicted", 0) > 0:
+                if failure == "conflict":
                     failed_checks.append(f"部分采纳列表中包含了存在事实冲突/前视偏差的矛盾 claim: {cid}")
-                elif cnt.get("source_unavailable", 0) > 0:
+                elif failure == "unavailable":
                     failed_checks.append(f"部分采纳列表中包含了不可用数据源的严重幻觉 claim: {cid}")
-                elif not is_obs and (cnt.get("verified", 0) == 0 or cnt.get("total", 0) == 0):
+                elif failure == "unsupported":
                     failed_checks.append(f"部分采纳列表中包含了全部证据未获验证 (unsupported) 的 claim: {cid}")
-                elif not is_obs and (cov < MIN_COVERAGE_THRESHOLD and not math.isclose(cov, 2 / 3, abs_tol=1e-3)):
+                elif failure == "low_coverage":
                     failed_checks.append(f"部分采纳列表中包含了证据覆盖率不足 ({cov:.1%} < 67%) 的 claim: {cid}")
-                # DAV-1193 B2：semantic reject / non_factual_only 绝不偷升 partial
-                elif sem_dec == SEM_DECISION_NON_FACTUAL:
+                elif failure == "non_factual_only":
                     failed_checks.append(
                         f"部分采纳列表中包含了纯修辞/规范性 claim: {cid} (semantic_decision=non_factual_only)，无证据采纳资格"
                     )
-                elif sem_dec == SEM_PREVIEW_REJECT:
+                elif failure == "semantic_reject":
                     failed_checks.append(
                         f"部分采纳列表中包含了 semantic_decision=reject 的 claim: {cid}，reject_with_supported_subset 不得偷升为部分采纳"
                     )

@@ -13,7 +13,7 @@
 - “后市值得关注，静待验证” → semantic_coverage=None +
   semantic_decision=non_factual_only，不得伪装 1.0/adopt；
 - “建议警惕商誉减值风险” → 降档可审计命题，不得全归 non_factual；
-- 纯修辞 claim 进 adopted/partial → consistency fail；进 rejected → PASS。
+- 纯修辞 claim 误进 adopted/partial → 降级到 rejected；进 rejected → PASS。
 
 三、正式 decision/gate：
 - legacy evidence=100% 但 semantic_decision=reject 的 claim 被全额采纳
@@ -207,16 +207,18 @@ def test_gate_semantic_reject_in_partial_fails_no_stealth_upgrade():
                    for e in v["failed_checks"])
 
 
-def test_gate_non_factual_in_adopted_fails():
-    """纯修辞 claim 被 manager 当 adopted → deterministic gate fail。"""
+def test_gate_non_factual_in_adopted_normalized():
+    """纯修辞 claim 被 manager 当 adopted → 确定性降级到 rejected。"""
     claims = [{"claim_id": "INV-NF", "speaker": "Bull", "speaker_key": "Bull",
                "stance": "bullish", "claim": "后市值得关注，静待验证", "evidence": ["后市展望"]}]
     ver = [{"claim_id": "INV-NF", "raw": "后市展望", "status": STATUS_VERIFIED}]
     raw = """裁决正文。
 <!-- MANAGER_VERDICT: {"winner": "bull", "direction": "看多", "reason": "修辞采纳", "position_pct": 20, "entry": "10.0", "target": "11.0", "stop_loss": "9.0", "adopted_claim_ids": ["INV-NF"], "partially_adopted_claims": [], "rejected_claim_ids": []} -->"""
     v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
-    assert v["consistency_check_passed"] is False
-    assert any("non_factual_only" in e and "INV-NF" in e for e in v["failed_checks"])
+    assert v["consistency_check_passed"] is True, v["failed_checks"]
+    assert not v["adopted_claim_ids"]
+    assert v["rejected_claim_ids"] == ["INV-NF"]
+    assert "ledger_normalized:adopted_to_rejected:INV-NF" in v["ledger_normalizations"]
 
 
 def test_gate_semantic_adopt_legacy_adopt_passes():

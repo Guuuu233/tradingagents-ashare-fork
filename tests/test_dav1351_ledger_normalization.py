@@ -117,16 +117,17 @@ def test_dav1351_reject_in_partial_zero_verified_still_fails():
     """reject_no_supported_subset（verified=0）无子事实可消费 → 照拦。"""
     claims = [{
         "claim_id": "INV-9", "speaker": "Bull", "speaker_key": "Bull",
-        "stance": "bullish", "claim": "某项未经证实的远期利好",
+        "stance": "bullish", "claim": "公司2026Q1净利润增长30%",
         "evidence": ["未经证实的传闻一"],
     }]
     ver = [{"claim_id": "INV-9", "raw": "未经证实的传闻一", "status": STATUS_UNSUPPORTED}]
     raw = """裁决正文。
 <!-- MANAGER_VERDICT: {"winner": "tie", "direction": "中性", "reason": "观望", "position_pct": 0, "adopted_claim_ids": [], "partially_adopted_claims": ["INV-9"], "rejected_claim_ids": []} -->"""
     v = extract_and_validate_manager_verdict(raw, claims_verification=ver, claims=claims)
-    assert v["consistency_check_passed"] is False
-    assert "INV-9" in v["partially_adopted_claims"]
-    assert not v["ledger_normalizations"]
+    assert v["consistency_check_passed"] is True, v["failed_checks"]
+    assert "INV-9" not in v["partially_adopted_claims"]
+    assert "INV-9" in v["rejected_claim_ids"]
+    assert "ledger_normalized:partial_to_rejected:INV-9" in v["ledger_normalizations"]
 
 
 def test_dav1351_reject_already_in_basis_from_rejected_dedup():

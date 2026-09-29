@@ -538,8 +538,9 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             claims_verification=claims_verification,
             claims=state["investment_debate_state"]["claims"],
         )
-        assert verdict["consistency_check_passed"] is False
-        assert any("存在事实冲突" in err or "矛盾" in err for err in verdict["failed_checks"])
+        assert verdict["adopted_claim_ids"] == []
+        assert verdict["rejected_claim_ids"] == ["INV-4"]
+        assert "ledger_normalized:adopted_to_rejected:INV-4" in verdict["ledger_normalizations"]
 
     def test_adopting_low_coverage_claim_fails_gate(self):
         state = _make_e2e_debate_state()
@@ -569,14 +570,15 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             claims_verification=claims_verification,
             claims=state["investment_debate_state"]["claims"],
         )
-        assert verdict["consistency_check_passed"] is False
-        assert any("证据覆盖率不足" in err for err in verdict["failed_checks"])
+        assert verdict["adopted_claim_ids"] == []
+        assert verdict["rejected_claim_ids"] == ["INV-6"]
+        assert "ledger_normalized:adopted_to_rejected:INV-6" in verdict["ledger_normalizations"]
 
     def test_manager_verdict_cannot_whitewash_pit_failure(self):
         """Manager verdict attempting to adopt a claim with lookahead PIT failure is rejected (fail-closed)."""
         claim = {
             "claim_id": "CLM-PIT",
-            "claim": "未来营收高增",
+            "claim": "营收增长50%",
             "evidence": ["营收增长50%"],
             "applicability": {
                 "symbol": "000001",
@@ -605,7 +607,7 @@ class TestManagerVerdictConsistencyHardGateCoverage:
         """Manager verdict attempting to adopt a claim whose invalidation condition triggered is rejected."""
         claim = {
             "claim_id": "CLM-TRIG",
-            "claim": "估值安全",
+            "claim": "PE估值40倍",
             "evidence": ["估值处于合理分位"],
             "invalidation_conditions": [
                 {
@@ -633,8 +635,9 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             claims=[claim],
             market_data_context=market_ctx,
         )
-        assert verdict["consistency_check_passed"] is False
-        assert any("存在事实冲突/前视偏差" in err or "矛盾" in err for err in verdict["failed_checks"])
+        assert verdict["adopted_claim_ids"] == []
+        assert verdict["rejected_claim_ids"] == ["CLM-TRIG"]
+        assert "ledger_normalized:adopted_to_rejected:CLM-TRIG" in verdict["ledger_normalizations"]
 
     def test_manager_verdict_observation_hypothesis_cannot_be_adopted(self):
         """Adopting observation/hypothesis claim fails consistency check; partial adoption passes."""
@@ -660,8 +663,9 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             claims=[obs_claim],
             seven_reports=obs_reports,
         )
-        assert verdict_bad["consistency_check_passed"] is False
-        assert any("观察/假设类" in err for err in verdict_bad["failed_checks"])
+        assert verdict_bad["consistency_check_passed"] is True
+        assert verdict_bad["rejected_claim_ids"] == ["CLM-OBS"]
+        assert "ledger_normalized:adopted_to_rejected:CLM-OBS" in verdict_bad["ledger_normalizations"]
 
         # 2. Putting in partially_adopted_claims -> DAV-1369 起 FAILS：
         # 该 claim 无任何可核验事实命题 → non_factual_only → 无采纳资格
@@ -674,8 +678,9 @@ class TestManagerVerdictConsistencyHardGateCoverage:
             claims=[obs_claim],
             seven_reports=obs_reports,
         )
-        assert verdict_partial["consistency_check_passed"] is False
-        assert any("non_factual_only" in err for err in verdict_partial["failed_checks"])
+        assert verdict_partial["consistency_check_passed"] is True
+        assert verdict_partial["rejected_claim_ids"] == ["CLM-OBS"]
+        assert "ledger_normalized:partial_to_rejected:CLM-OBS" in verdict_partial["ledger_normalizations"]
 
         # 3. rejected_claim_ids -> PASSES（合法排除路径）
         raw_output_reject = """【投研经理裁决报告】
@@ -706,12 +711,14 @@ class TestPromptFormatAndVerificationPresentation:
         ]
         text = format_claims_with_verification_for_prompt(claims=claims, claims_verification=verifications)
         assert "INV-1" in text
-        assert "【证据充分 / 全Verified】" in text
+        assert "账本资格上限：仅可驳回" in text  # 非事实命题不能沿用旧评级
         assert "覆盖率=100.0%" in text
         assert "[VERIFIED / 真实核验] 营收30%" in text
 
         assert "INV-5" in text
-        assert "【部分支持 / 混合证据(仅采纳Verified子结论)】" in text
+        assert "账本资格上限：" in text
+        assert "规则判定:" not in text
+        assert "证据充分 / 全Verified" not in text
         assert "[UNSUPPORTED / 未获支撑] 传闻" in text
         assert "严禁作为采纳依据，必须剔除" in text
 
@@ -913,10 +920,10 @@ class TestResearchManagerIntegrationWithEvidenceGate:
         rm_node = create_research_manager(mock_llm, memory)
         result = asyncio.run(rm_node(state))
 
-        assert result["manager_verdict"]["consistency_check_passed"] is False
-        assert any("观察/假设类" in err for err in result["manager_verdict"]["failed_checks"])
-        assert result["decision_status"]["analysis_status"] == "ABSTAIN"
-        assert result["decision_status"]["trade_action"] == "NO_TRADE"
+        assert result["manager_verdict"]["consistency_check_passed"] is True
+        assert "INV-5" not in result["manager_verdict"]["adopted_claim_ids"]
+        assert "INV-5" in result["manager_verdict"]["rejected_claim_ids"]
+        assert "ledger_normalized:adopted_to_rejected:INV-5" in result["manager_verdict"]["ledger_normalizations"]
 
     def test_research_manager_aggregation_receives_symbol_and_baseline_date(self):
         """Research manager passes resolved expected symbol and baseline date to claim evidence aggregation."""
