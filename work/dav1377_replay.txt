@@ -1,0 +1,44 @@
+report_rows 1968 result_data_rows_sha256 6329c21def39660d529c3d08287ceb64382cc3ee449c5ad9cac5851bc518645a replayed_distinct_horizons 471 errors 0
+CROSS 199 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE
+CROSS 104 VALID/CONFIRMED/WAIT => VALID/CONFIRMED/WAIT
+CROSS 71 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT
+CROSS 70 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT
+CROSS 12 ABSTAIN/UNRESOLVED/NO_TRADE => VALID/UNRESOLVED/WAIT
+CROSS 10 VALID/CONFIRMED/BUY => VALID/CONFIRMED/BUY
+CROSS 5 VALID/CONFIRMED/SELL => VALID/CONFIRMED/SELL
+BASIS 115 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE missing
+BASIS 82 VALID/CONFIRMED/WAIT => VALID/CONFIRMED/WAIT missing
+BASIS 29 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT not_applicable
+BASIS 28 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE partial_only
+BASIS 26 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE ledgered
+BASIS 21 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE not_applicable
+BASIS 19 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT partial_only
+BASIS 18 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT missing
+BASIS 17 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT not_applicable
+BASIS 14 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT missing
+BASIS 14 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT partial_only
+BASIS 13 VALID/CONFIRMED/WAIT => VALID/CONFIRMED/WAIT not_applicable
+BASIS 11 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT unledgered
+BASIS 10 VALID/CONFIRMED/BUY => VALID/CONFIRMED/BUY ledgered
+BASIS 10 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT ledgered
+BASIS 9 ABSTAIN/UNRESOLVED/NO_TRADE => ABSTAIN/UNRESOLVED/NO_TRADE unledgered
+BASIS 7 ABSTAIN/UNRESOLVED/NO_TRADE => VALID/UNRESOLVED/WAIT ledgered
+BASIS 6 VALID/CONFIRMED/WAIT => VALID/CONFIRMED/WAIT unledgered
+BASIS 6 VALID/PARTIAL/WAIT => VALID/PARTIAL/WAIT unledgered
+BASIS 5 ABSTAIN/UNRESOLVED/NO_TRADE => VALID/UNRESOLVED/WAIT missing
+BASIS 5 VALID/CONFIRMED/SELL => VALID/CONFIRMED/SELL ledgered
+BASIS 3 VALID/CONFIRMED/WAIT => VALID/CONFIRMED/WAIT partial_only
+BASIS 3 VALID/UNRESOLVED/WAIT => VALID/UNRESOLVED/WAIT ledgered
+non_executable_to_executable 0 changed 12
+FLIP 123595bd26d245bebf9ca0b9ca7631cb medium_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2,INV-6,INV-9'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2,INV-6,INV-9']
+FLIP 343493aa2440463f9e67da5de67c9b9e short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') missing ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2,INV-3'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2,INV-3']
+FLIP 3585ac0a92124e93b1b7a60a8559d9b4 medium_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-1'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-1']
+FLIP 37f00b4c88574ab580b4fa10cabad6c3 short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-6'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-6']
+FLIP 37f00b4c88574ab580b4fa10cabad6c3 medium_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2,INV-6'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2,INV-6']
+FLIP 4df491a89d2641158c766135947d1400 short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2']
+FLIP 5afef2696cd545cfbf2a26643d26d3a6 short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2']
+FLIP 6bac6b3786fd444b898358f3c5e43bb3 short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') missing ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-1,INV-3'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-1,INV-3']
+FLIP caf667d2df4546b2a93b6241dd971845 short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') missing ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-2'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-2']
+FLIP da59b5ae34504872bad04422d573e4b6 medium_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') ledgered ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-6'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-6']
+FLIP ef9fa75f16f54412963a6d74093067cb short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') missing ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-1,INV-2,INV-3'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-1,INV-2,INV-3']
+FLIP fc342f20d073488abd201cc3cd72cf5b short_term ('ABSTAIN', 'UNRESOLVED', 'NO_TRADE') ('VALID', 'UNRESOLVED', 'WAIT') missing ['manager_consistency_hard_gate', 'verdict_consistency_rejected_adopt:INV-3'] ['manager_terminal', 'verdict_consistency_rejected_adopt:INV-3']

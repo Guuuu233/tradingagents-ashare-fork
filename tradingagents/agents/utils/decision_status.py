@@ -321,7 +321,7 @@ def evaluate_confirmation_state(
     - partially adopted (incomplete evidence) -> PARTIAL + WAIT
     - rejected, non-core with reject -> do NOT block confirmation; keep audited reason/log
     - rejected with partial -> conservative -> PARTIAL + WAIT
-    - rejected with adopt -> verdict consistency failure -> ABSTAIN + NO_TRADE (evaluated as UNRESOLVED here)
+    - rejected with full ledger eligibility -> UNRESOLVED + WAIT, not a report-wide hard gate
     - unadjudicated material claims with adopt/partial -> completeness/consistency check
     """
     focus_ids = [str(x).strip() for x in (focus_claim_ids or []) if str(x).strip()]
@@ -511,27 +511,27 @@ def evaluate_confirmation_state(
             return False
         return _get_claim_decision(cid) == "adopt"
 
-    # DAV-1343：焦点论点同时满足「①在研究经理最终账本 rejected 里、
-    # ②证据核验结论非 adopt」时，视为「已裁决、零贡献」，与 legit_excluded
-    # 一样从 core_eval 排除——经理正确否决未核实争议论点不应把确认状态
-    # 打成 UNRESOLVED。核验为 adopt 却被否决的保留在 core_eval（且已由
-    # 下方 verdict_consistency_rejected_adopt 处理）。fatal 检查仍在原
-    # core 全集上执行，不受本排除影响。
+    from tradingagents.agents.utils.evidence_verifier import ledger_eligibility
+
+    def _has_full_eligibility(cid: str) -> bool:
+        summary = summary_map.get(cid)
+        return isinstance(summary, Mapping) and ledger_eligibility(summary)["max_bucket"] == "adopted"
+
+    # DAV-1343：经理已驳回、无全额账本资格的焦点论点按已裁决零贡献处理；
+    # 原 core 集合的 fatal 检查仍执行。仅有 legacy adopt 不足以证明全额资格。
     _rejected_ledger = set(rejected_ids)
     core_eval_ids = [
         cid for cid in core_eval_ids
-        if cid not in _rejected_ledger or _get_claim_decision(cid) == "adopt"
+        if cid not in _rejected_ledger or _has_full_eligibility(cid)
     ]
 
-    # Row 5: rejected + deterministic adopt -> verdict consistency failure
-    rejected_adopt_cids = [
-        cid for cid in eff_rejected_ids
-        if _get_claim_decision(cid) == "adopt"
-    ]
-    if rejected_adopt_cids:
-        return CONFIRM_UNRESOLVED, [
-            f"verdict_consistency_rejected_adopt:{','.join(sorted(rejected_adopt_cids))}"
-        ]
+    # Row 5: verified facts rejected by manager leave the conclusion unresolved,
+    # but do not invalidate the entire report. Keep the historical diagnostic code.
+    rejected_adopt_cids = [cid for cid in eff_rejected_ids if _has_full_eligibility(cid)]
+    rejected_verified_codes = (
+        [f"verdict_consistency_rejected_adopt:{','.join(sorted(rejected_adopt_cids))}"]
+        if rejected_adopt_cids else []
+    )
 
     # Row 6: Unadjudicated material claims check
     unadjudicated_adopt_cids: list[str] = []
@@ -554,7 +554,8 @@ def evaluate_confirmation_state(
 
     if unadjudicated_adopt_cids:
         return CONFIRM_UNRESOLVED, [
-            f"unadjudicated_material_claims_adopt:{','.join(sorted(unadjudicated_adopt_cids))}"
+            f"unadjudicated_material_claims_adopt:{','.join(sorted(unadjudicated_adopt_cids))}",
+            *rejected_verified_codes,
         ]
 
     # Row 3: rejected, non-core with reject -> audit record, does not block
@@ -594,7 +595,10 @@ def evaluate_confirmation_state(
     if partially_adopted_pit:
         fatal_codes.append(f"pit_failed_partially_adopted_claims:{','.join(sorted(partially_adopted_pit))}")
     if fatal_codes:
-        return CONFIRM_UNRESOLVED, fatal_codes
+        return CONFIRM_UNRESOLVED, fatal_codes + rejected_verified_codes
+
+    if rejected_verified_codes:
+        return CONFIRM_UNRESOLVED, rejected_verified_codes
 
     # If neither core claims nor adopted claims exist
     if not core_eval_ids and not eff_adopted_ids:
@@ -844,7 +848,7 @@ def status_from_manager_verdict(
         excluded_claim_ids=dcg_excluded_ids,
     )
 
-    # Consistency hard gate: rejected + adopt, unadjudicated material claim with adopt, or PIT failure in adopted/partially adopted
+    # Consistency hard gate: unadjudicated material claim with adopt or PIT failure in adopted/partially adopted.
     # DAV-1264 F2：被 guard 合法折叠的 claim 已裁决为零贡献，不再占用 adopted/
     # partial 账本——PIT 检查同样按裁剪后账本执行（此处 ev_summary.get(cid) 命中
     # 即满足 legit 绑定条件，与 evaluate_confirmation_state 同口径）。
@@ -863,8 +867,7 @@ def status_from_manager_verdict(
                 break
 
     if adopted_has_pit or any(
-        code.startswith("verdict_consistency_rejected_adopt:")
-        or code.startswith("unadjudicated_material_claims_adopt:")
+        code.startswith("unadjudicated_material_claims_adopt:")
         or code.startswith("pit_failed_adopted_claims:")
         or code.startswith("pit_failed_partially_adopted_claims:")
         for code in confirm_codes
