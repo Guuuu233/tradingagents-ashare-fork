@@ -20,7 +20,7 @@ class FakeClient(tgn.TushareNewsClient):
         self.handler = handler
         self.calls = []
 
-    def query(self, api_name, params=None, fields=None):
+    def query(self, api_name, params=None, fields=None, deadline=None):
         self.calls.append((api_name, dict(params or {}), fields))
         return self.handler(api_name, dict(params or {}), fields)
 
@@ -431,3 +431,89 @@ class TestIntradayRawCachePromotion:
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"ts": after, "data": "## 完整结果"}, f)
         assert cache.get_filtered(y_str, 7, 30) == "## 完整结果"
+
+
+class TestV4IncidentFixes:
+    """v4 上线事故修复：窗口封顶 / single-flight / 总预算 / 429 退避。"""
+
+    def _pool(self, day="2025-06-10"):
+        return [{
+            "_source": "news:cls", "datetime": f"{day} 10:00:00",
+            "title": "央行宣布降准0.5个百分点", "content": "x", "channels": "加红",
+        }]
+
+    def test_lookback_clamped_to_7d_and_header_noted(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def fake_pool(client, s, e, cache=None, max_workers=12, deadline=None):
+            seen["range"] = (s, e)
+            return (self._pool(), [], [])
+
+        monkeypatch.setattr(tgn, "fetch_news_pool", fake_pool)
+        text, err = tgn.get_global_news(
+            "2025-06-10", 90, 30,
+            client=FakeClient(lambda *a: ([], None, None)),
+            cache=tgn.TushareNewsCache(str(tmp_path)),
+        )
+        assert err is None and text
+        assert "回看已封顶为近 7 天" in text
+        assert (seen["range"][1] - seen["range"][0]).days == 7
+
+    def test_single_flight_one_fetch_for_concurrent_calls(self, tmp_path, monkeypatch):
+        import threading, time as _t
+        calls = {"n": 0}
+
+        def fake_pool(*a, **k):
+            calls["n"] += 1
+            _t.sleep(0.15)
+            return (self._pool(), [], [])
+
+        monkeypatch.setattr(tgn, "fetch_news_pool", fake_pool)
+        results = []
+
+        def worker(d):
+            text, err = tgn.get_global_news(
+                "2025-06-10", 7, 30,
+                client=FakeClient(lambda *a: ([], None, None)),
+                cache=tgn.TushareNewsCache(str(tmp_path / d)),
+            )
+            results.append(err)
+
+        threads = [threading.Thread(target=worker, args=(f"c{i}",)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        assert calls["n"] == 1          # 只拉取一次
+        assert all(e is None for e in results)
+
+    def test_budget_exceeded_returns_fallback_error(self, tmp_path, monkeypatch):
+        def fake_pool(*a, **k):
+            return ([], [], ["news:cls@2025-06-10: budget_exceeded"])
+
+        monkeypatch.setattr(tgn, "fetch_news_pool", fake_pool)
+        text, err = tgn.get_global_news(
+            "2025-06-10", 7, 30,
+            client=FakeClient(lambda *a: ([], None, None)),
+            cache=tgn.TushareNewsCache(str(tmp_path)),
+        )
+        assert text is None and "超时" in err
+
+    def test_429_retries_with_backoff(self, monkeypatch):
+        attempts = {"n": 0}
+        r429 = MagicMock(); r429.status_code = 429
+        r200 = MagicMock(); r200.status_code = 200
+        r200.json.return_value = {
+            "code": 0, "data": {"fields": ["t"], "items": [["x"]]},
+        }
+
+        def post(*a, **k):
+            attempts["n"] += 1
+            return r429 if attempts["n"] < 3 else r200
+
+        monkeypatch.setattr(tgn.requests, "post", post)
+        monkeypatch.setattr(tgn.time, "sleep", lambda *a: None)
+        client = tgn.TushareNewsClient(api_url="http://x", token="t")
+        rows, cat, _ = client.query("news", {}, "t")
+        assert cat is None and rows == [{"t": "x"}]
+        assert attempts["n"] == 3

@@ -63,6 +63,21 @@ def _get_news_token() -> str:
     )
 
 
+import threading
+
+# ── v4 上线事故修复常量 ────────────────────────────────────
+# 生产调用方传 look_back_days=90，但验收只覆盖 7 天窗口；本路径
+# 上限钉死 7 天（今日投资实际也只给到分析日最后一段）。
+TUSHARE_GLOBAL_NEWS_MAX_LOOKBACK_DAYS = 7
+# 单次 get_global_news 冷启动总耗时上限：超时放弃并回落今日投资，
+# 不得阻塞分析流程。
+_GLOBAL_NEWS_BUDGET_S = 180.0  # 实测冷启动分布 72–126s（含 enrich 回补），取 180s 为上限
+# 对新闻网关的全局请求并发上限（429 事故修复：4 份并发冷启动曾
+# 在 4 分钟内触发 21 次 429）
+_GATEWAY_MAX_CONCURRENCY = 8  # 实测：3→113s / 6→76s / 8→64s 且 0 次 429；取 8 使 p95<90s
+_GATEWAY_SEM = threading.BoundedSemaphore(_GATEWAY_MAX_CONCURRENCY)
+
+
 class TushareNewsClient:
     """Tushare 新闻独立权限网关客户端（协议同 _query_tushare_api）。"""
 
@@ -75,10 +90,11 @@ class TushareNewsClient:
         self._api_url = api_url if api_url is not None else _get_news_api_url()
         self._token = token if token is not None else _get_news_token()
         self._timeout = timeout
+        self.backoff_s = 0.0  # 累计重试退避等待（观测用）
 
-    # 可重试的瞬时错误；api_error 也重试一次（网关在并发下偶发返回非 0 code）
+    # 可重试的瞬时错误；api_error 也重试（网关在并发下偶发返回非 0 code）
     _RETRYABLE = frozenset({"timeout", "network_error", "rate_limited", "http_error"})
-    _RETRY_ATTEMPTS = 3
+    _RETRY_ATTEMPTS = 5
     _RETRY_BACKOFF_S = 1.5
 
     def query(
@@ -86,23 +102,44 @@ class TushareNewsClient:
         api_name: str,
         params: Optional[Dict[str, Any]] = None,
         fields: Optional[str] = None,
+        deadline: Optional[float] = None,
     ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
         """返回 (rows, err_cat, err_note)。rows 为 dict 列表；失败为 None。
 
-        瞬时错误（超时/网络/限频/http/网关偶发 api_error）带退避重试。
+        瞬时错误（超时/网络/限频/http/网关偶发 api_error）带指数退避重试；
+        每次实际 HTTP 请求受全局并发上限 _GATEWAY_MAX_CONCURRENCY 约束。
+        deadline 感知：剩余预算耗尽时立即返回 timeout（不重试不排队），
+        且单次请求超时收缩到剩余预算内。
         """
         last: Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]] = (
             None, "unknown", "no attempt"
         )
         attempts = self._RETRY_ATTEMPTS
         for i in range(attempts):
-            last = self._query_once(api_name, params, fields)
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None, "timeout", "tushare 冷启动预算耗尽"
+                req_timeout = min(self._timeout, remaining)
+            else:
+                req_timeout = None
+            with _GATEWAY_SEM:
+                last = self._query_once(
+                    api_name, params, fields, req_timeout=req_timeout
+                )
             cat = last[1]
             if cat is None or cat == "empty_rows":
                 return last
             if cat in self._RETRYABLE or (cat == "api_error" and i < attempts - 1):
                 if i < attempts - 1:
-                    time.sleep(self._RETRY_BACKOFF_S * (i + 1))
+                    # 指数退避；429 额外加倍；退避不越过 deadline
+                    backoff = self._RETRY_BACKOFF_S * (2 ** i)
+                    if cat == "rate_limited":
+                        backoff *= 2
+                    if deadline is not None:
+                        backoff = min(backoff, max(0.0, deadline - time.time()))
+                    self.backoff_s += backoff
+                    time.sleep(backoff)
                 continue
             return last
         return last
@@ -112,6 +149,7 @@ class TushareNewsClient:
         api_name: str,
         params: Optional[Dict[str, Any]] = None,
         fields: Optional[str] = None,
+        req_timeout: Optional[float] = None,
     ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
         if not self._token:
             return None, "token", "Tushare 新闻网关 Token 未配置 (TUSHARE_NEWS_TOKEN missing)"
@@ -125,7 +163,11 @@ class TushareNewsClient:
             "fields": fields or "",
         }
         try:
-            resp = requests.post(self._api_url, json=payload, timeout=self._timeout)
+            resp = requests.post(
+                self._api_url,
+                json=payload,
+                timeout=req_timeout if req_timeout is not None else self._timeout,
+            )
         except requests.Timeout as e:
             return None, "timeout", f"Tushare 新闻请求超时: {type(e).__name__}"
         except requests.RequestException as e:
@@ -278,8 +320,12 @@ def _fetch_window_paginated(
     end: datetime,
     report: SegmentReport,
     fields: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> bool:
-    """对 [start, end] 窗口分页拉取。返回 True=完整，False=截断/失败。"""
+    """对 [start, end] 窗口分页拉取。返回 True=完整，False=截断/失败。
+
+    deadline：总耗时预算（epoch 秒）；超过立即判截断，由上层回落。
+    """
     page_size = spec["page_size"]
     req_fields = fields or spec["fields"]
     params_base = dict(spec["params"])
@@ -289,11 +335,16 @@ def _fetch_window_paginated(
     offset = 0
     prev_first: Optional[str] = None
     for page in range(_MAX_PAGES_PER_SEGMENT):
+        if deadline is not None and time.time() > deadline:
+            report.errors.append("budget_exceeded: 冷启动总耗时超限")
+            return False
         params = dict(params_base)
         params["limit"] = page_size
         if offset:
             params["offset"] = offset
-        rows, err_cat, err_note = client.query(spec["api"], params, req_fields)
+        rows, err_cat, err_note = client.query(
+            spec["api"], params, req_fields, deadline=deadline
+        )
         if rows is None:
             report.errors.append(f"{err_cat}: {err_note}")
             return False
@@ -324,10 +375,13 @@ def _fetch_segment(
     reports: List[SegmentReport],
     depth: int = 0,
     fields: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> None:
     report = SegmentReport(spec["key"], start, end)
     reports.append(report)
-    ok = _fetch_window_paginated(client, spec, start, end, report, fields=fields)
+    ok = _fetch_window_paginated(
+        client, spec, start, end, report, fields=fields, deadline=deadline
+    )
     if ok:
         report.rows = _dedupe_rows(report.rows, spec)
         return
@@ -343,8 +397,14 @@ def _fetch_segment(
     mid = start + span / 2
     mid = mid.replace(second=0, microsecond=0)
     report.rows = []
-    _fetch_segment(client, spec, start, mid, reports, depth + 1, fields=fields)
-    _fetch_segment(client, spec, mid, end, reports, depth + 1, fields=fields)
+    _fetch_segment(
+        client, spec, start, mid, reports, depth + 1,
+        fields=fields, deadline=deadline,
+    )
+    _fetch_segment(
+        client, spec, mid, end, reports, depth + 1,
+        fields=fields, deadline=deadline,
+    )
 
 
 def _dedupe_rows(rows: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -366,11 +426,80 @@ def _cctv_date_param(d: date) -> str:
     return d.strftime("%Y%m%d")
 
 
+# ── 段级 single-flight：同进程内相同 (源, 日期, 字段形态) 的拉取只执行一次，
+# 并发调用方等待共享结果，避免并发分析把同一批段重复打向网关。
+_SEG_INFLIGHT: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+_SEG_INFLIGHT_LOCK = threading.Lock()
+# waiter 等待上限不得越过外层 provider 超时（registry 210s）
+_SEG_WAIT_S = _GLOBAL_NEWS_BUDGET_S + 20
+
+
+def _fetch_source_day_sf(
+    client: TushareNewsClient,
+    spec: Dict[str, Any],
+    day: date,
+    cache: Optional["TushareNewsCache"],
+    fields: Optional[str] = None,
+    deadline: Optional[float] = None,
+) -> Tuple[List[Dict[str, Any]], List[SegmentReport], Optional[str]]:
+    """_fetch_source_day 的 single-flight 包装（含二次缓存检查）。"""
+    kind = "full" if (fields and "content" in fields) else "light"
+    key = (spec["key"], day.isoformat(), kind)
+    with _SEG_INFLIGHT_LOCK:
+        ent = _SEG_INFLIGHT.get(key)
+        if ent is None:
+            ent = {"event": threading.Event(), "res": None}
+            _SEG_INFLIGHT[key] = ent
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        ent["event"].wait(_SEG_WAIT_S)
+        res = ent.get("res")
+        if res is None:
+            return [], [], f"{key}: single-flight 主调用失败或超时"
+        return res
+    try:
+        # 另一个并发可能刚好完成并写缓存——先再查一次（仅轻量段；
+        # full 回补段的缓存键不同，由调用方在锁外先查）
+        if cache is not None and kind == "light":
+            cached_rows = cache.get_raw(spec["key"], day.isoformat())
+            if cached_rows is not None:
+                rep = SegmentReport(
+                    spec["key"],
+                    datetime(day.year, day.month, day.day),
+                    datetime(day.year, day.month, day.day)
+                    + timedelta(days=1) - timedelta(seconds=1),
+                )
+                rep.rows = cached_rows
+                res = (cached_rows, [rep], None)
+                with _SEG_INFLIGHT_LOCK:
+                    ent["res"] = res
+                    del _SEG_INFLIGHT[key]
+                ent["event"].set()
+                return res
+        res = _fetch_source_day(
+            client, spec, day, fields=fields, deadline=deadline
+        )
+        with _SEG_INFLIGHT_LOCK:
+            ent["res"] = res
+            del _SEG_INFLIGHT[key]
+        ent["event"].set()
+        return res
+    except BaseException as e:
+        with _SEG_INFLIGHT_LOCK:
+            ent["res"] = ([], [], f"{key}: 异常 {type(e).__name__}")
+            del _SEG_INFLIGHT[key]
+        ent["event"].set()
+        raise
+
+
 def _fetch_source_day(
     client: TushareNewsClient,
     spec: Dict[str, Any],
     day: date,
     fields: Optional[str] = None,
+    deadline: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], List[SegmentReport], Optional[str]]:
     """拉取一个 (source, 日期) 段。返回 (rows, reports, fatal_or_none)。"""
     seg_start = datetime(day.year, day.month, day.day)
@@ -380,15 +509,24 @@ def _fetch_source_day(
         rep = SegmentReport(spec["key"], seg_start, seg_end)
         reports.append(rep)
         params = dict(spec["params"])
+        if deadline is not None and time.time() > deadline:
+            rep.errors.append("budget_exceeded: 冷启动总耗时超限")
+            rep.truncated = True
+            return [], reports, f"{spec['key']}@{day.isoformat()}: budget_exceeded"
         params["date"] = _cctv_date_param(day)
-        rows, err_cat, err_note = client.query(spec["api"], params, spec["fields"])
+        rows, err_cat, err_note = client.query(
+            spec["api"], params, spec["fields"], deadline=deadline
+        )
         if rows is None:
             rep.errors.append(f"{err_cat}: {err_note}")
             rep.truncated = True
             return [], reports, f"{spec['key']}@{day.isoformat()}: {err_cat}"
         rep.rows = rows
         return rows, reports, None
-    _fetch_segment(client, spec, seg_start, seg_end, reports, fields=fields)
+    _fetch_segment(
+        client, spec, seg_start, seg_end, reports, fields=fields,
+        deadline=deadline,
+    )
     seg_rows: List[Dict[str, Any]] = []
     seg_failed = False
     for rep in reports:
@@ -406,6 +544,7 @@ def fetch_news_pool(
     end_date: date,
     cache: Optional["TushareNewsCache"] = None,
     max_workers: int = 12,
+    deadline: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], List[SegmentReport], List[str]]:
     """拉取全部来源原始池。返回 (rows, reports, fatal_errors)。
 
@@ -446,7 +585,19 @@ def fetch_news_pool(
 
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
-                (spec, day, ex.submit(_fetch_source_day, client, spec, day))
+                (
+                    spec,
+                    day,
+                    ex.submit(
+                        _fetch_source_day_sf,
+                        client,
+                        spec,
+                        day,
+                        cache,
+                        fields=None,
+                        deadline=deadline,
+                    ),
+                )
                 for spec, day in pending
             ]
             for spec, day, fut in futures:
@@ -471,7 +622,7 @@ def fetch_news_pool(
 
 
 # ── 筛选层 ─────────────────────────────────────────────────
-FILTER_POLICY_VERSION = "v3.1"  # 口径：条目≤50、正文截100字（体积≤对照源1.5×）
+FILTER_POLICY_VERSION = "v4"  # v4：窗口封顶7天/并发限流/single-flight/180s预算
 
 # 频道策略：每来源 label→tier；tier ∈ {high, medium, supplemental, exclude}
 # 未知标签 → 记入日志并归入 "supplemental"（不静默丢弃）。
@@ -1171,6 +1322,7 @@ def enrich_selected_content(
     max_items: int,
     cache: Optional["TushareNewsCache"] = None,
     stats: Optional[Dict[str, Any]] = None,
+    deadline: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """为入选+候补条目回补正文（按来源/日聚合，全量段带 content 字段重拉）。
 
@@ -1191,13 +1343,20 @@ def enrich_selected_content(
         specs_needed[src] = spec
 
     def _enrich_one(src: str, day: date) -> List[Dict[str, Any]]:
+        if deadline is not None and time.time() > deadline:
+            return []
         spec = specs_needed[src]
         if cache is not None:
             hit = cache.get_raw(f"{src}__full", day.isoformat())
             if hit is not None:
                 return hit
-        rows, _reps, ferr = _fetch_source_day(
-            client, spec, day, fields=spec.get("fields_full")
+        rows, _reps, ferr = _fetch_source_day_sf(
+            client,
+            spec,
+            day,
+            cache,
+            fields=spec.get("fields_full"),
+            deadline=deadline,
         )
         if ferr is not None:
             logger.warning("tushare_news enrich failed: %s", ferr)
@@ -1387,6 +1546,12 @@ class TushareNewsCache:
 
 
 # ── 对外入口 ───────────────────────────────────────────────
+# ── 调用级 single-flight：同一 (日期, 回看, 策略) 的冷启动全进程只做一次，
+# 并发分析共享同一次拉取与筛选结果（v4：4 份并发曾各自冷拉 90 天原始池）。
+_CALL_INFLIGHT: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+_CALL_INFLIGHT_LOCK = threading.Lock()
+
+
 def get_global_news(
     curr_date: str,
     look_back_days: int = 7,
@@ -1396,14 +1561,70 @@ def get_global_news(
 ) -> Tuple[Optional[str], Optional[str]]:
     """返回 (rendered_text, error_reason)。error_reason 非空时必须回落。
 
+    v4 事故修复：
+    - look_back_days 封顶 TUSHARE_GLOBAL_NEWS_MAX_LOOKBACK_DAYS(7)；
+      验收口径只覆盖 7 天，超限截断并在输出头注明。
+    - 同参数冷启动进程内 single-flight，并发分析共享结果。
+    - 冷启动总耗时超过 _GLOBAL_NEWS_BUDGET_S(180s) 放弃并回落。
+
     注：limit 按卡文口径仅作上限（封顶 50），实现上固定按 50 条筛选，
     传入更小值不会减少条数——如需更少的条数请改 FILTER_POLICY_VERSION
     系列常量，勿依赖本参数。
     """
     try:
-        end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+        datetime.strptime(curr_date, "%Y-%m-%d")
     except ValueError:
         return None, f"分析日期非法: {curr_date!r}"
+    requested_days = int(look_back_days)
+    eff_days = min(requested_days, TUSHARE_GLOBAL_NEWS_MAX_LOOKBACK_DAYS)
+    clamped = eff_days < requested_days
+
+    def _annotate(res):
+        """窗口被截为 7 天时，无论结果来自自拉取/single-flight/缓存，
+        输出头都必须带『已截为近 7 天』注记（🟡-2 修复：注记跟随调用方，
+        不再依赖主调用者是否也被截）。"""
+        text, err = res
+        if text and clamped and "回看已封顶为近 7 天" not in text:
+            text = text.replace("数据窗口：", "数据窗口（回看已封顶为近 7 天）：", 1)
+        return text, err
+
+    key = (curr_date, eff_days, FILTER_POLICY_VERSION)
+    with _CALL_INFLIGHT_LOCK:
+        ent = _CALL_INFLIGHT.get(key)
+        if ent is None:
+            ent = {"event": threading.Event(), "res": None}
+            _CALL_INFLIGHT[key] = ent
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        # 并发调用方：等待主调用结果（含主调用失败场景，均回落）
+        ent["event"].wait(_GLOBAL_NEWS_BUDGET_S + 20)  # ≤外层 registry 210s
+        res = ent.get("res")
+        if res is None:
+            return None, "tushare single-flight 等待超时或主调用失败"
+        return _annotate(res)
+    try:
+        res = _get_global_news_impl(
+            curr_date, eff_days, limit, client, cache,
+        )
+    except BaseException as e:
+        res = (None, f"tushare get_global_news 内部异常: {type(e).__name__}")
+    with _CALL_INFLIGHT_LOCK:
+        ent["res"] = res
+        del _CALL_INFLIGHT[key]
+    ent["event"].set()
+    return _annotate(res)
+
+
+def _get_global_news_impl(
+    curr_date: str,
+    look_back_days: int,
+    limit: int,
+    client: Optional[TushareNewsClient],
+    cache: Optional[TushareNewsCache],
+) -> Tuple[Optional[str], Optional[str]]:
+    end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
     start_dt = end_dt - timedelta(days=look_back_days)
     start_label = start_dt.strftime("%Y-%m-%d")
 
@@ -1416,9 +1637,12 @@ def get_global_news(
     if client is None:
         client = TushareNewsClient()
 
+    deadline = time.time() + _GLOBAL_NEWS_BUDGET_S
+    _t_fetch0 = time.time()
     pool, reports, fatal = fetch_news_pool(
-        client, start_dt.date(), end_dt.date(), cache
+        client, start_dt.date(), end_dt.date(), cache, deadline=deadline
     )
+    _t_fetch = time.time() - _t_fetch0
     seg_count = len(reports)
     err_segs = [r for r in reports if r.truncated or r.errors]
     logger.info(
@@ -1426,29 +1650,53 @@ def get_global_news(
         len(pool), seg_count, len(err_segs), curr_date, look_back_days,
     )
     if fatal:
+        budget_hit = any("budget_exceeded" in f for f in fatal)
+        reason = (
+            f"冷启动超时(>{_GLOBAL_NEWS_BUDGET_S:.0f}s)放弃"
+            if budget_hit else "截断/失败段"
+        )
         return None, (
-            f"Tushare 新闻池存在截断/失败段（{'; '.join(fatal[:5])}），"
+            f"Tushare 新闻池存在{reason}（{'; '.join(fatal[:5])}），"
             "不得将截断结果当作完整结果"
         )
     if not pool:
         return None, "Tushare 新闻网关全部来源无数据或不可用"
+    if time.time() > deadline:
+        return None, f"tushare 冷启动超时(>{_GLOBAL_NEWS_BUDGET_S:.0f}s)，放弃并回落"
 
     stats: Dict[str, Any] = {}
+    _t_filter0 = time.time()
     selected = filter_global_news(pool, curr_date, look_back_days, limit, stats)
+    _t_filter = time.time() - _t_filter0
     if not selected:
         return None, "Tushare 新闻池经筛选后为空"
     max_items = min(max(int(limit), 50), 50)
     bench = stats.pop("_kept_tail", [])
+    if time.time() > deadline:
+        return None, f"tushare 冷启动超时(>{_GLOBAL_NEWS_BUDGET_S:.0f}s)，放弃并回落"
+    _t_enrich0 = time.time()
     selected = enrich_selected_content(
-        client, selected, bench, max_items, cache=cache, stats=stats
+        client, selected, bench, max_items, cache=cache, stats=stats,
+        deadline=deadline,
     )
+    _t_enrich = time.time() - _t_enrich0
     logger.info(
-        "tushare_news filter stats: %s",
+        "tushare_news filter stats: %s; timing: fetch=%.1fs filter=%.1fs "
+        "enrich=%.1fs backoff_wait=%.1fs total=%.1fs",
         {k: v for k, v in stats.items() if not k.startswith("_")},
+        _t_fetch,
+        _t_filter,
+        _t_enrich,
+        getattr(client, "backoff_s", 0.0),
+        time.time() - _t_fetch0,
     )
+    if time.time() > deadline:
+        return None, f"tushare 冷启动超时(>{_GLOBAL_NEWS_BUDGET_S:.0f}s)，放弃并回落"
     if not selected:
         return None, "Tushare 新闻池经筛选后为空"
 
     text = render_global_news(selected, curr_date, look_back_days, start_label)
+    # 缓存存未注记文本：『已截为近 7 天』注记在调用方返回侧按各自请求追加
+    # （同一 eff_days 键可能被传 7 与传 90 的调用方共享）
     cache.put_filtered(curr_date, look_back_days, min(max(int(limit), 50), 50), text)
     return text, None
