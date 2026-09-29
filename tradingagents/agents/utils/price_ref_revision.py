@@ -110,6 +110,20 @@ def _project_conclusion(block: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _role_price_gate(state: Mapping[str, Any], report_field: str,
+                     text: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    from tradingagents.agents.utils.price_basis_gate import evaluate_price_basis_gate
+
+    reports = {name: state.get(name) for name in REPORT_FIELDS}
+    reports[report_field] = text
+    cutoff = state.get("trade_date") if isinstance(state.get("trade_date"), str) else None
+    result = build_price_ref_registry(reports, cutoff=cutoff, pool=_pool_from_state(state))
+    gate = evaluate_price_basis_gate({**reports, "trade_date": cutoff,
+                                      "price_refs": result["price_refs"],
+                                      "price_basis_validation": result["validation"]})
+    return result, gate
+
+
 def check_role_price_refs(
     state: Mapping[str, Any],
     report_field: str,
@@ -127,12 +141,9 @@ def check_role_price_refs(
     """
     if not isinstance(text, str) or not text.strip():
         return []
-    reports = {name: state.get(name) for name in REPORT_FIELDS}
-    reports[report_field] = text
-    pool = _pool_from_state(state)
     cutoff = state.get("trade_date") if isinstance(state.get("trade_date"), str) else None
     try:
-        result = build_price_ref_registry(reports, cutoff=cutoff, pool=pool)
+        result, gate = _role_price_gate(state, report_field, text)
     except Exception:
         # fail-open for the revision path: 检查失败不返修，最终 gate 仍兜底。
         logger.exception("[price_ref_revision] registry build failed for %s", report_field)
@@ -164,6 +175,17 @@ def check_role_price_refs(
                 "sentence": ref.get("sentence") or ref.get("context") or "",
             }
         )
+    ref_by_id = {r["ref_id"]: r for r in result.get("price_refs") or []}
+    for violation in gate["violations"]:
+        if violation["kind"] != "cross_basis_coordinate_mix" or violation.get("source") != report_field:
+            continue
+        ids = violation.get("ref_ids") or []
+        ref = next((ref_by_id[rid] for rid in ids if rid in ref_by_id), {})
+        problems.append({"ref_id": ref.get("ref_id"), "value": ref.get("value"),
+                         "basis": ref.get("basis"), "as_of": ref.get("as_of"),
+                         "kind": "cross_basis_coordinate_mix",
+                         "sentence": ref.get("sentence") or "",
+                         "ref_ids": ids, "detail": violation.get("detail")})
     return problems
 
 
@@ -291,11 +313,12 @@ def _render_price_ref_table(source: Optional[Mapping[str, Any]],
 def build_revision_message(problems: List[Dict[str, Any]],
                            table_text: str) -> str:
     """构造发回同一角色的一次性追加消息。"""
-    lines = ["你刚才的报告中，以下价格无法归因到本次运行的行情来源"
-             "（basis 无法归因或缺少日期）：", ""]
+    lines = ["你刚才的报告中，以下价格无法归因到本次运行的行情来源，"
+             "或披露 raw 价与前复权 qfq 坐标直接混用：", ""]
     for i, p in enumerate(problems, 1):
         sentence = (p.get("sentence") or "").strip()
-        lines.append(f"{i}. 价格 {p.get('value')} —— 原句：「{sentence}」")
+        lines.append(f"{i}. [{p.get('kind')}] 价格 {p.get('value')} —— 原句：「{sentence}」"
+                     f"；关联 ref：{p.get('ref_ids') or [p.get('ref_id')]}")
     lines += [
         "",
         "【本次可引用价位表】（来自本次运行行情数据，引用时原样抄写数值并写出名称与日期）：",
@@ -305,6 +328,8 @@ def build_revision_message(problems: List[Dict[str, Any]],
         "a) 改用表内数值，并写出该价位的名称与日期；",
         "b) 改写成相对于某个表内价格的百分比；",
         "c) 删除该价格。",
+        "跨口径比较须删除或仅并列展示且注明不可直接比较；披露 raw 价不得"
+        "直接用于前复权 qfq 的折价/支撑/距离计算。",
         "",
         "严格要求：结论、方向、交易动作、概率均不得改变；除上述价格外其余"
         "内容不得改动。请输出修改后的报告全文。",
@@ -407,6 +432,7 @@ def _base_record(role_key: str, report_field: str,
         "original_len": None,
         "revised_len": None,
         "post_revision_problem_count": None,
+        "post_gate": None,
         "new_problem_values": [],
     }
 
@@ -583,6 +609,12 @@ async def maybe_revise_role_report(
     rec["adopted"] = "revised"
     # 返修后复检：记录残余问题与返修引入的新问题价格（供返修漏斗统计）。
     post = check_role_price_refs(state, report_field, revised)
+    try:
+        _result, post_gate = _role_price_gate(state, report_field, revised)
+        rec["post_gate"] = post_gate
+    except Exception:
+        logger.exception("[price_ref_revision] post-gate evaluation failed")
+        rec["post_gate"] = {"status": "blocked", "violations": [{"kind": "audit_unavailable"}]}
     rec["post_revision_problem_count"] = len(post)
     orig_values = {p.get("value") for p in problems}
     rec["new_problem_values"] = sorted(

@@ -45,7 +45,7 @@ def test_b188060f_raw_disclosure_as_qfq_target_is_blocked():
     state = _state(
         market_report="现价 81.19 元，均线呈多头排列。",
         news_report=(
-            "今日大宗交易成交 78.61 元，较当日收盘 84.03 元折价 6.45%。"
+            "2026-05-21 今日大宗交易成交 78.61 元，较当日收盘 84.03 元折价 6.45%。"
             "该价格对现价 81.19 形成向下锚。"
         ),
         trader_investment_plan="下行风险较大，第一下行目标 78.61 元（大宗折价锚位）。",
@@ -73,7 +73,7 @@ def test_f1_resonant_support_mixed_basis_is_blocked():
     """F1 form: raw disclosure price listed as joint support with qfq level."""
     state = _state(
         volume_price_report="现价 81.19 元，布林下轨 77.48 元。",
-        news_report="布林下轨 77.48 元与大宗折价成交价 78.61 元共振支撑。",
+        news_report="2026-05-21 已成交大宗折价成交价 78.61 元与布林下轨 77.48 元共振支撑。",
     )
     gate = enforce_price_basis_gate(state)
     assert gate["status"] == "blocked"
@@ -315,7 +315,7 @@ def test_dav1346_raw_in_coordinate_context_still_triggers_field_check():
         market_report="现价 37.00 元。",
         news_report=(
             "现价 37.00 元附近震荡。"
-            "同时在回购均价平台（34.80 元）获得强承接，维持缩量拉锯。"
+            "同时在2026-05-21已成交回购均价平台（34.80 元）获得强承接，维持缩量拉锯。"
         ),
     )
     gate = enforce_price_basis_gate(state)
@@ -330,7 +330,7 @@ def test_dav1346_pit_raw_used_as_floor_is_still_blocked():
         market_report="现价 37.00 元。",
         news_report=(
             "现价 37.00 元附近震荡。"
-            "回购价格底线（36.02 元）成为空头短线难以击穿的心理安全垫。"
+            "2026-05-21已成交回购价格底线（36.02 元）成为空头短线难以击穿的心理安全垫。"
         ),
     )
     gate = enforce_price_basis_gate(state)
@@ -343,7 +343,7 @@ def test_dav1346_r2_trigger_uses_full_sentence_beyond_context_truncation():
     截断点之后时 R2 仍须触发（判定源为完整 sentence）。"""
     filler = "，" + "公司就回购事项披露的执行进展与相关安排说明" * 6
     long_sentence = (
-        "回购均价 34.80 元" + filler + "，该价格在平台获得强承接"
+        "2026-05-21已成交回购均价 34.80 元" + filler + "，该价格在平台获得强承接"
     )
     assert long_sentence.index("平台") > 120  # 坐标词在 context 截断点之后
     state = _state(
