@@ -256,8 +256,8 @@ def test_dav1264_f2_true_unadjudicated_still_blocked():
                for c in st.reason_codes)
 
 
-def test_dav1264_f2_real_rejected_adopt_still_blocked():
-    """对照：未被 guard 排除的 rejected+adopt 真实不一致照样拦。"""
+def test_dav1264_f2_real_rejected_adopt_still_unresolved():
+    """对照：未被 guard 排除的 rejected+adopt 保留未确认及审计原因。"""
     claims, summary, ver = _claims_ev("INV-1", "INV-2")
     metrics, _, _ = apply_manager_double_count_guard(
         claim_cluster_metrics={"independent_cluster_count": 2},
@@ -266,7 +266,7 @@ def test_dav1264_f2_real_rejected_adopt_still_blocked():
         claims=claims,
         manager_verdict={"adopted_claim_ids": ["INV-1"]},
     )
-    # guard 未激活 → 无 excluded；INV-2 在 rejected 且确定性 adopt → 必须拦
+    # guard 未激活 → 无 excluded；INV-2 在 rejected 且全额资格 → 不得确认
     mv = {
         "direction": "看多", "winner": "bull", "position_pct": 50,
         "consistency_check_passed": True,
@@ -281,7 +281,9 @@ def test_dav1264_f2_real_rejected_adopt_still_blocked():
         claim_evidence_summary=summary,
         claims=claims,
     )
-    assert st.analysis_status == ANALYSIS_ABSTAIN
+    assert st.analysis_status == ANALYSIS_VALID
+    assert st.trade_action == "WAIT"
+    assert st.confirmation_state == "UNRESOLVED"
     assert any(str(c).startswith("verdict_consistency_rejected_adopt:INV-2")
                for c in st.reason_codes)
 

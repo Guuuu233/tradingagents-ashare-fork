@@ -613,8 +613,8 @@ def test_focus_or_adopted_claim_contradicted_remains_wait():
     assert st2.trade_action == ACTION_WAIT
 
 
-def test_rejected_with_deterministic_adopt_must_abstain_no_trade():
-    """3. rejected + deterministic adopt -> verdict consistency failure -> ABSTAIN + NO_TRADE."""
+def test_rejected_with_deterministic_adopt_waits_without_invalidating_report():
+    """3. Rejected fully eligible claim is unresolved, not a consistency hard gate."""
     mv = {
         "direction": "看多",
         "winner": "bull",
@@ -651,10 +651,12 @@ def test_rejected_with_deterministic_adopt_must_abstain_no_trade():
         focus_claim_ids=["CLM-1"],
         claim_evidence_summary=claim_evidence_summary,
     )
-    assert status.analysis_status == ANALYSIS_ABSTAIN
-    assert status.trade_action == ACTION_NO_TRADE
-    assert status.risk_status == "BLOCKED"
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.trade_action == ACTION_WAIT
+    assert status.risk_status == "OK"
     assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert "verdict_consistency_rejected_adopt:CLM-2" in status.reason_codes
+    assert "manager_consistency_hard_gate" not in status.reason_codes
     assert is_non_executable_status(status) is True
     assert is_calibration_eligible(status) is False
 
@@ -753,7 +755,7 @@ def test_bull_bear_symmetry_lifecycle():
     assert status_bear_contra.confirmation_state == CONFIRM_UNRESOLVED
     assert status_bear_contra.trade_action == ACTION_WAIT
 
-    # 5c. Bear winner with rejected bull claim having adopt -> ABSTAIN + NO_TRADE
+    # 5c. Bear winner with rejected fully eligible bull claim -> UNRESOLVED + WAIT
     summary_bear_rej_adopt = {
         "BEAR-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
         "BULL-1": {"counts": {"total": 1, "verified": 1, "unsupported": 0, "contradicted": 0, "source_unavailable": 0}, "coverage": 1.0, "decision": "adopt"},
@@ -763,8 +765,9 @@ def test_bull_bear_symmetry_lifecycle():
         focus_claim_ids=["BEAR-1"],
         claim_evidence_summary=summary_bear_rej_adopt,
     )
-    assert status_bear_rej_adopt.analysis_status == ANALYSIS_ABSTAIN
-    assert status_bear_rej_adopt.trade_action == ACTION_NO_TRADE
+    assert status_bear_rej_adopt.analysis_status == ANALYSIS_VALID
+    assert status_bear_rej_adopt.confirmation_state == CONFIRM_UNRESOLVED
+    assert status_bear_rej_adopt.trade_action == ACTION_WAIT
 
 
 def test_fallback_behavior_when_no_focus_claims():
@@ -1623,9 +1626,10 @@ def test_dav1343_rejected_but_verified_adopt_goes_consistency():
         focus_claim_ids=["CLM-RJ"],
         claim_evidence_summary=claim_evidence_summary,
     )
-    # 一致性失败 → ABSTAIN + NO_TRADE
-    assert status.analysis_status == ANALYSIS_ABSTAIN
-    assert status.trade_action == ACTION_NO_TRADE
+    # 经理驳回全额资格的焦点论点仍未确认，但不作废整份报告。
+    assert status.analysis_status == ANALYSIS_VALID
+    assert status.confirmation_state == CONFIRM_UNRESOLVED
+    assert status.trade_action == ACTION_WAIT
     assert any("verdict_consistency_rejected_adopt" in c and "CLM-RJ" in c for c in status.reason_codes)
 
 

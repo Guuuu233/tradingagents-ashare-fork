@@ -1,0 +1,9 @@
+## DAV-1377 零模型决策状态重放台账（候选 9e0fb9f4 之子）
+
+- 原因码**保留** `verdict_consistency_rejected_adopt:<cids>`：仅表明经理驳回账本全额资格论点，确认状态 `UNRESOLVED`，**不再作为** `manager_consistency_hard_gate` 的升级依据；没有改名，不将该码当作“论点推论成立”。Row 5 对存在摘要的论点只用 `ledger_eligibility(summary)["max_bucket"] == "adopted"`；对公开接口允许的摘要缺条目但 `claims_verification` 有该 cid 的输入，沿用原实现全 verified 的兜底，且 core_eval 共用判断，防止静默放出 CONFIRMED/BUY。
+- 同时存在未裁决全额论点或采纳 PIT 失败时，保留该码及对应硬门原因码，仍然 `ABSTAIN/NO_TRADE`；上游经理原生一致性失败仍优先。
+- 重放范围：生产 SQLite `mode=ro`，`reports` 1968 行，根 / short_term / medium_term / primary 中有非空 `investment_debate_state.claim_evidence_summary` 的独立档位 471（同报告内重复顶层投影按摘要+账本去重）。逐行 `id\0result_data\0` 按 id 排序的 SHA256：`6329c21def39660d529c3d08287ceb64382cc3ee449c5ad9cac5851bc518645a`。这比仅 hash .db 文件更准确，因为活库 WAL 非空；不是静态数据库文件的 SHA。
+- 复现：在仓库根目录运行 `env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python work/dav1377_replay.py`。基线代码从固定父 `9e0fb9f4f95ec0c20474f3909ca39037161186e3` 的 `decision_status.py` 加载；当前代码同输入对照。清除经理裁决里落库的旧 `decision_status` 避免缓存短路；只读存量经理、摘要、焦点、PIT 与账本；不重新调用模型/供应商。完整可复核输出在 `work/dav1377_replay.txt`。
+- 交叉表（旧 → 新，`analysis/confirmation/action`）：199 `ABSTAIN/UNRESOLVED/NO_TRADE` → 同值；104 `VALID/CONFIRMED/WAIT` → 同值；71 `VALID/UNRESOLVED/WAIT` → 同值；70 `VALID/PARTIAL/WAIT` → 同值；**12 `ABSTAIN/UNRESOLVED/NO_TRADE` → `VALID/UNRESOLVED/WAIT`**；10 `VALID/CONFIRMED/BUY` → 同值；5 `VALID/CONFIRMED/SELL` → 同值。错误 0，非可执行 → BUY/SELL/HOLD **0**。12 个翻转档及其 direction_basis 和原因码逐条见 txt（missing 5、ledgered 7）。
+- 易漏分支：12 档从旧 hard gate 进入 `manager_terminal` 的 `VALID/UNRESOLVED/WAIT` 分支，虽名为 VALID 但不是可执行（`is_non_executable_status` 因 `UNRESOLVED` 为真）；不会因 ledgered basis 升格 BUY/SELL/HOLD（D-051/D-052 要求 `CONFIRMED` 且同向 ledgered）。其他 459 档状态未翻转。下游若按 `VALID` 而非 confirmation/action 判交易资格，需另行审计；本卡未扩大为全链路重生成。
+- 范围限制：本次重放的是**经理决策状态重算**，不是存量报告全图重演/在线展示回填；不改历史结果，不写生产库。任何上线及发布后受控核对仍需总控按 D-057 附注与独立发布门授权。
