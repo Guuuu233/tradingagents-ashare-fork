@@ -41,7 +41,9 @@ def test_global_news_historical_routes_only_to_investoday():
             "cn_investoday": investoday,
             "yfinance": yfinance,
         }.get
-        with patch.object(iface, "get_vendor", return_value="cn_akshare,yfinance"):
+        with patch.object(
+            iface, "get_vendor", return_value="cn_akshare,cn_investoday,yfinance"
+        ):
             out = iface.route_to_vendor(
                 "get_global_news", "2026-08-11", look_back_days=14, limit=5
             )
@@ -73,7 +75,9 @@ def test_global_news_historical_investoday_failure_is_explicit_without_fallback(
             "cn_akshare": akshare,
             "cn_investoday": investoday,
         }.get
-        with patch.object(iface, "get_vendor", return_value="cn_akshare"):
+        with patch.object(
+            iface, "get_vendor", return_value="cn_akshare,cn_investoday"
+        ):
             out = iface.route_to_vendor(
                 "get_global_news", past_date, look_back_days=14, limit=5
             )

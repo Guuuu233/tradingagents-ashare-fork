@@ -390,8 +390,18 @@ class TushareProvider(BaseMarketDataProvider):
 
     def get_global_news(
         self, curr_date: str, look_back_days: int = 7, limit: int = 50
-    ) -> str:
-        raise NotImplementedError("TushareProvider currently only implements get_global_indices")
+    ) -> Union[str, VendorFail]:
+        """全市场宏观新闻：Tushare 新闻网关（major_news/news/cctv_news 分段拉取
+        + 确定性筛选层 + 本地缓存）。失败返回 VendorFail 并带明确原因，由路由
+        回落今日投资；截断段绝不当作完整结果返回。"""
+        from ..tushare_global_news import get_global_news as _tushare_global_news
+
+        text, err = _tushare_global_news(
+            curr_date, look_back_days=look_back_days, limit=limit
+        )
+        if err is not None or text is None:
+            return VendorFail(f"tushare_news: {err or 'unknown failure'}")
+        return text
 
     def get_insider_transactions(self, symbol: str, curr_date: str = None) -> str:
         raise NotImplementedError("TushareProvider currently only implements get_global_indices")

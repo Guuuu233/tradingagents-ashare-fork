@@ -173,6 +173,11 @@ def _resolve_vendor_chain(method: str, configured_vendor: str) -> list[str]:
         return ["cn_fuyao"]
 
     configured = [v.strip() for v in configured_vendor.split(",") if v.strip()]
+    if method == "get_global_news":
+        # DAV-1374：链固定为配置项（默认 tushare → cn_investoday），不自动追加
+        # 其它源；两者都失败时由路由返回【数据获取失败】。
+        return configured
+
     fallback = configured.copy()
 
     for provider_name in _registry.list_names():
@@ -192,7 +197,7 @@ def _resolve_vendor_chain(method: str, configured_vendor: str) -> list[str]:
 # publication window. Live/current sources never receive a historical as-of.
 _HISTORICAL_NEAR_WINDOW_NEWS_PROVIDER_ALLOWLIST = {
     "get_news": frozenset({"cn_akshare", "cn_investoday"}),
-    "get_global_news": frozenset({"cn_investoday"}),
+    "get_global_news": frozenset({"tushare", "cn_investoday"}),
 }
 
 # Historical fundamental and insider methods must not use date-blind providers
@@ -349,8 +354,8 @@ def _historical_news_failure(method: str) -> str:
             "不得回退到实时新闻源，本项不可用。"
         )
     return (
-        "【数据获取失败】历史宏观新闻仅允许使用今日投资历史接口；"
-        "未获取到可验证数据（缺少 API Key、接口失败或返回结构异常），"
+        "【数据获取失败】历史宏观新闻仅允许使用 Tushare 新闻网关或今日投资历史接口；"
+        "未获取到可验证数据（缺少 API Key、接口失败、截断或返回结构异常），"
         "不得回退到实时新闻源，本项不可用。"
     )
 
@@ -670,6 +675,15 @@ def route_to_vendor(method: str, *args, **kwargs):
             "reason=no-verified-historical-fundamental-data"
         )
         return _historical_fundamental_failure(method, as_of)
+    if method == "get_global_news":
+        _trace(
+            f"method={method} {args_summary} status=failed "
+            "reason=all-configured-news-vendors-failed"
+        )
+        return (
+            "【数据获取失败】全市场新闻未获取到可验证数据"
+            "（Tushare 新闻网关与今日投资均不可用），本项不可用。"
+        )
     _trace(f"method={method} {args_summary} status=failed reason=no-available-vendor")
     if last_exc is not None:
         raise RuntimeError(

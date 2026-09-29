@@ -49,6 +49,8 @@ DEFAULT_CONFIG = {
         "macro_market_data": "tushare,cn_akshare",
     },
     "tool_vendors": {
+        # 全市场新闻：Tushare 新闻网关为主、今日投资兜底（DAV-1374）
+        "get_global_news": "tushare,cn_investoday",
         "get_zt_pool": "cn_akshare,cn_fuyao",
         "get_lhb_detail": "cn_akshare,cn_fuyao",
         "get_board_fund_flow": "cn_akshare",
