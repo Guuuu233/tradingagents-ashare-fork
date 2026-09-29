@@ -290,7 +290,7 @@ _LEVEL_PATTERN_EXTENDED = re.compile(
 # [DAV-1255 E4] post-anchor scan window: 40 chars, same clause only.
 _ANCHOR_LEVEL_WINDOW = 40
 _LEVEL_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
-_LEVEL_CLAUSE_BREAK = re.compile(r"[。；;！!？？\n\r]")
+_LEVEL_CLAUSE_BREAK = re.compile(r'[。；;！!？？，,\n\r]|"\s*:\s*"|"\s*,\s*"')
 
 # [DAV-1255 E1] 「M月D日」 date fragments.
 _DATE_MD_TAIL = re.compile(r"^\s*月\s*\d{1,2}\s*日")      # number is the M
@@ -494,6 +494,12 @@ _NUMBER_FIN_AMOUNT_RANGE = re.compile(
 _NUMBER_INDEX_TAIL = re.compile(r"^\s*点(?![位击])")     # 「收于 4668.23 点」
 _NUMBER_UNIT_CTX = re.compile(r"每升|每吨|每克|每公斤|每平米|每瓶|每箱|每桶")
 _NUMBER_LEVEL_COUNT_TAIL = re.compile(r"^\s*(?:档|板(?!块)|倍)")
+_RATIO_METRIC_HEAD = re.compile(r"(?:量比|换手率|市盈率|市净率|市销率|PE|PB|PS|PEG)\s*(?:[（(]?\s*(?:TTM|动态|静态)?\s*[）)]?\s*)?(?:约|为|达|[:：=<>＞＜])?\s*$", re.I)
+_PER_SHARE_METRIC_HEAD = re.compile(
+    r"(?:每股(?:净资产|收益|现金流(?:量)?|经营现金流)|EPS|BVPS)"
+    r"\s*(?:[（(][^）)]{1,12}[）)])?\s*(?:约|为|达|[:：=])?\s*$", re.I
+)
+_FIBONACCI_HEAD = re.compile(r"(?:波段|斐波那契|黄金分割|回撤|比例)\s*$")
 _EXCLUDED_EVIDENCE_SPAN = re.compile(
     r"excluded_evidence[\"']?\s*[:：]\s*\[[^\]]*\]", re.I
 )
@@ -511,6 +517,12 @@ def _nonprice_number_flag(text: str, start: int, end: int) -> Optional[str]:
     tok = text[start:end]
     if _NUMBER_DECIMAL_TAIL.match(tail):
         return "truncated_decimal"
+    if _RATIO_METRIC_HEAD.search(text[max(0, start - 30):start]):
+        return "ratio_metric"
+    if _PER_SHARE_METRIC_HEAD.search(text[max(0, start - 35):start]):
+        return "per_share_financial"
+    if tok in ("0.618", "0.382") and (_FIBONACCI_HEAD.search(head) or not re.match(r"^\s*元", tail)):
+        return "fibonacci_ratio"
     if _NUMBER_THOUSANDS_TAIL.match(tail) or _NUMBER_THOUSANDS_HEAD.search(head):
         return "thousands_sep"
     if _NUMBER_LETTER_HEAD.search(head):
@@ -875,7 +887,7 @@ def classify_typed_disclosure(ref: Mapping[str, Any],
         # 真披露价：回购价/回购金额/回购均价/以 X 元回购股份 等；
         # 「回购为股价提供 X 元安全垫」中的 X 是坐标价，非披露价。
         # [DAV-1321 N3 修复] 同上，全角（）组误写修复为 (?:…)。
-        price_like = any(re.search(r"回购(?:价|金额|均价|上限|下限|价格|股份|注销|方案|"
+        price_like = any(re.search(r"回购(?:成交(?:底价|均价|价)|最低成交价|价|金额|均价|上限|下限|价格|股份|注销|方案|"
                                    r"拟|计划|公告)|(?:以|按|不超过)[^。]{0,6}元[^。]{0,4}回购", w)
                          for w in wins)
         coord = any(re.search(r"支撑|站稳|安全垫|关口|一线", w) for w in wins)
@@ -1518,11 +1530,34 @@ def _value_disclosure_veto(sentence: str, value: float) -> bool:
     return False
 
 
-def _value_disclosure_type(sentence: str, dtype: str, value: float) -> Optional[str]:
+_DISCLOSED_PRICE_WORDS = re.compile(
+    r"(?:回购|增持|减持|大宗|定增|增发|发行|龙虎榜)"
+    r"[^。；\n]{0,100}?(?:成交|均价|发行价|定价|公告|披露|价格|价位|区间)", re.I
+)
+_SPECULATIVE_PRICE_WORDS = re.compile(
+    r"(?:计划|拟|预设|预测|预计|假设|推测)[^。；\n]{0,32}"
+    r"(?:托底|买盘|支撑|价格带|区间)|(?:托底|推测|预设)[^。；\n]{0,20}(?:计划|回购)", re.I
+)
+
+
+def _dated_disclosure_evidence(sentence: str, dtype: str, value: float) -> bool:
+    """Disclosure's own value must have dated executed/announced provenance."""
+    if not _extract_dates(sentence) or _SPECULATIVE_PRICE_WORDS.search(sentence):
+        return False
+    if not _DISCLOSED_PRICE_WORDS.search(sentence):
+        return False
+    return any(abs(float(m.group()) - value) <= _VALUE_MATCH_TOLERANCE
+               for m in re.finditer(r"\d+(?:\.\d+)?", sentence))
+
+
+def _value_disclosure_type(sentence: str, dtype: str, value: float,
+                           dated_evidence: bool = False) -> Optional[str]:
     """[DAV-1321 N3] 按该值自身的 ±15 字窗口判定它是否该类披露价。
 
     复审③收紧：先否决「技术位/行情动作/显式口径」值，再跑逐值 verdict。"""
     if _value_disclosure_veto(sentence, value):
+        return None
+    if not dated_evidence or _SPECULATIVE_PRICE_WORDS.search(sentence):
         return None
     verdict = classify_typed_disclosure(
         {"context": sentence, "disclosure_type": dtype, "value": value}
@@ -1574,6 +1609,77 @@ def _has_raw_coordinate_trigger(sentence: str) -> bool:
     return any(kw in sentence for kw in RAW_COORDINATE_TRIGGER_KEYWORDS)
 
 
+# An undated mention can be a raw disclosure *candidate*, never a typed
+# pit_raw ref. Fail closed only if it is used against a qfq price as a level.
+_DISCLOSURE_VALUE_HEAD = re.compile(
+    r"(?:回购(?:均价|价(?:格)?(?:区间|区)?(?:下沿|上沿|下限|上限|底线|底价)?|"
+    r"底价|下限|上限|执行价|成交(?:价|均价|底价))|"
+    r"大宗(?:交易)?(?:折价)?(?:成交价|成交位|均价|作价|价区)|"
+    r"(?:增发|定增|发行|增持|减持)[^\d。；，]{0,10}(?:定价|成交价|均价|价格))"
+    r"[^\d。；，]{0,16}$"
+)
+_COORDINATE_RELATION_RE = re.compile(
+    r"支撑|阻力|底线|防线|平台|轴心|共振|击穿|跌破|站稳|靠近|依托|守住|"
+    r"托底|企稳|防守|压制|受制|锚定|成交位|跌穿|低于|高于|折价于|"
+    r"价差|目标|止损|入场|低吸|回购(?:价格)?区间下沿"
+)
+
+
+def _potential_disclosure_price_ref(ref: Mapping[str, Any]) -> bool:
+    ctx = ref.get("sentence") or ""
+    value = ref.get("value")
+    if not isinstance(value, (int, float)):
+        return False
+    if _SPECULATIVE_PRICE_WORDS.search(ctx) and not re.search(
+        r"(?:现价|收盘)[^。；]{0,24}(?:跌穿|跌破|击穿|低于)", ctx
+    ):
+        return False
+    for m in re.finditer(r"\d+(?:\.\d+)?", ctx):
+        head = ctx[max(0, m.start() - 36):m.start()]
+        if abs(float(m.group()) - value) > _VALUE_MATCH_TOLERANCE:
+            continue
+        normalized_head = re.sub(r"\d{1,2}\s*月\s*\d{1,2}\s*日[，,]?", "", head)
+        normalized_head = re.sub(r"\d+(?:\.\d+)?\s*[-~—–]\s*$", "", normalized_head)
+        tail_link = re.match(r"\s*元\s*附近回购(?:密集)?(?:承接区|成交区)",
+                             ctx[m.end():m.end()+24])
+        disclosed_head = _DISCLOSURE_VALUE_HEAD.search(normalized_head) or (
+            re.search(r"(?:成交价|成交均价)[^\d。；，]{0,8}$", normalized_head)
+            and "大宗" in ctx[:m.start()]
+        ) or tail_link
+        if not disclosed_head or (_value_disclosure_veto(ctx, value) and
+                                 not (tail_link or re.search(r"回购均价(?:下轨|下沿)", head))):
+            continue
+        if not any(kw in head for kw in ("回购", "大宗")) and any(
+            classify_typed_disclosure({"context": ctx, "disclosure_type": dtype,
+                                       "value": value})["verdict"] == "false"
+            for kw, dtype in (("增持", "shareholder_increase"),
+                              ("减持", "shareholder_decrease")) if kw in head
+        ):
+            continue
+        return True
+    return False
+
+
+_CROSS_REFERENCE = re.compile(
+    r"(?:低于|高于|跌破|击穿|依托|靠近|守住|站稳|较|折价|溢价|对比|比较|共振|回购底价|回购成本)"
+    r"[^。；\n]{0,24}?(回购|增持|减持|大宗|发行|定增)"
+    r"|(?:回购|增持|减持|大宗|发行|定增)[^。；\n]{0,16}"
+    r"(?:价|底价|均价|成本线)[^。；\n]{0,16}"
+    r"(?:低于|高于|跌破|击穿|折价|溢价|共振|支撑|平台|依托|靠近|守住|站稳)", re.I
+)
+
+
+def _explicit_disclosure_reference(sentence: str) -> Optional[str]:
+    m = _CROSS_REFERENCE.search(sentence)
+    if not m:
+        return None
+    token = m.group(1) or next((t for t in ("回购", "增持", "减持", "大宗", "发行", "定增")
+                                if t in m.group()), None)
+    return {"回购": "repurchase", "增持": "shareholder_increase",
+            "减持": "shareholder_decrease", "大宗": "block_trade",
+            "发行": "issuance", "定增": "private_placement"}.get(token)
+
+
 def _has_coordinate_anaphora(sentence: str) -> bool:
     """句子同时含坐标触发词与价格回指词（坐标句在引用某个披露价）。"""
     return _has_raw_coordinate_trigger(sentence) and any(
@@ -1601,6 +1707,17 @@ def _has_non_comparable_label(sentence: str) -> bool:
 
 def _has_derived_keyword(sentence: str) -> bool:
     return any(kw in sentence for kw in DERIVED_KEYWORDS)
+
+
+_VALUATION_SCENARIO = re.compile(
+    r"(?:PB|PE|市净率|市盈率)[^。；\n]{0,70}"
+    r"(?:对应股价|推算|测算|估值|极限支撑|支撑带)", re.I
+)
+
+
+def _is_valuation_scenario(ref: Mapping[str, Any]) -> bool:
+    ctx = ref.get("sentence") or ""
+    return bool(_VALUATION_SCENARIO.search(ctx) and re.search(r"支撑|目标|股价", ctx))
 
 
 def _conversion_target_basis(sentence: str) -> Optional[str]:
@@ -1773,7 +1890,17 @@ def build_price_ref_registry(
         is_technical = report_name in TECHNICAL_REPORT_FIELDS
         # [DAV-1321 N4] 文档级口径声明（边界=本报告字段文本）。
         doc_basis = _doc_declared_basis(text)
-        for sentence in _split_sentences(text):
+        sentences = _split_sentences(text)
+        # A repeated disclosure price may omit the date; retain its earlier
+        # dated, executed/announced provenance within this report only.
+        dated_prices = {
+            (dtype, float(m.group()))
+            for s in sentences
+            for m in re.finditer(r"\d+(?:\.\d+)?", s)
+            for dtype in [_detect_disclosure_type(s)]
+            if dtype and _dated_disclosure_evidence(s, dtype, float(m.group()))
+        }
+        for sentence in sentences:
             # [DAV-1321 N4] 句级口径：句内只出现一种口径声明时，传播到
             # 句内未单独声明的 ref；多种口径并存（坐标隔离声明）不传播。
             sentence_basis = _single_declared_basis(sentence)
@@ -1811,11 +1938,13 @@ def build_price_ref_registry(
                     declared_scope = "doc" if declared else ""
                 # [DAV-1321 N3] typed_disclosure 逐值判定：dtype 是句级候选，
                 # 该 ref 的值过 verdict 规则，false → 不挂 provenance。
-                dtype = (
-                    _value_disclosure_type(sentence, disclosure_type, value)
-                    if disclosure_type is not None
-                    else None
-                )
+                candidates = [disclosure_type] if disclosure_type else []
+                candidates += [dt for dt, v in dated_prices
+                               if v == value and dt not in candidates
+                               and any(kw in sentence for kw, typ in TYPED_DISCLOSURE_KEYWORDS.items()
+                                       if typ == dt)]
+                dtype = next((dt for dt in candidates if _value_disclosure_type(
+                    sentence, dt, value, (dt, value) in dated_prices)), None)
                 ref: Dict[str, Any] = {
                     "ref_id": _next_id(),
                     "value": value,
@@ -1845,6 +1974,13 @@ def build_price_ref_registry(
                     if ref["as_of"] is None:
                         ref["as_of"] = cutoff_norm
 
+                if dtype is not None and ref["as_of"] is None:
+                    # Dated evidence for this precise value is an attribution,
+                    # not the run cutoff (which cannot date a raw disclosure).
+                    for evidence in sentences:
+                        if _dated_disclosure_evidence(evidence, dtype, value):
+                            ref["as_of"] = _extract_dates(evidence)[0]
+                            break
                 if derived:
                     ref["provenance"] = "derived:" + ref["provenance"]
                     # [C2] conversion 语义修正：仅当句内同时有复权语义才登记
@@ -1891,7 +2027,7 @@ def build_price_ref_registry(
         # 只把「无 concrete basis」的派生值改写为 derived_estimate；
         # 已声明 qfq/raw/pit_raw 的 ref（如『前复权目标价』）保持原 basis，
         # conversion 记录也保留——合法转换仍是合法 executable。
-        if is_derived and ref.get("disclosure_type") is None \
+        if (is_derived or _is_valuation_scenario(ref)) and ref.get("disclosure_type") is None \
                 and ref["basis"] == PRICE_BASIS_UNSPECIFIED:
             ref["basis"] = PRICE_BASIS_DERIVED_ESTIMATE
             ref["provenance"] = "role:derived_estimate|" + prov
@@ -1963,8 +2099,17 @@ def build_price_ref_registry(
             by_sentence.setdefault(ref["context"], []).append(ref)
         for _ctx, s_refs in by_sentence.items():
             bases = {r["basis"] for r in s_refs} & concrete_bases
-            # [DAV-1321] 真转换句是契约明示的合法双坐标展示
-            if len(bases) > 1 and not _is_conversion_sentence(_ctx):
+            inferred = [r for r in s_refs if _potential_disclosure_price_ref(r)]
+            qfq = [r for r in s_refs if r["basis"] == PRICE_BASIS_VENDOR_QFQ
+                   and r not in inferred]
+            # Narrative facts (dated block-trade price and a later close) do
+            # not form a coordinate relation. An unlabeled undated disclosure
+            # candidate remains unspecified/qfq-by-technical-report in the
+            # registry, but must not be consumed as qfq in a resonance claim.
+            mixed = len(bases) > 1 or bool(inferred and qfq)
+            if mixed and (_COORDINATE_RELATION_RE.search(_ctx) or
+                          (len(bases) > 1 and re.search(r"现价|当前价|前复权|未复权|不复权|qfq|pit_raw", _ctx, re.I))) and \
+                    not _is_conversion_sentence(_ctx):
                 ids = [r["ref_id"] for r in s_refs]
                 finding = {
                     "kind": "basis_mismatch",
@@ -1981,53 +2126,64 @@ def build_price_ref_registry(
                     finding["detail"],
                 )
 
-        # R2: a qfq ref anchored to technical coordinates while the same report
-        # also carries raw/pit_raw refs (the b188060f pattern: raw 大宗价 vs
-        # qfq 现价/锚/支撑混用).
-        # [DAV-1346] 收窄 R2 触发池：只有自身句子带坐标语境的 raw/pit_raw
-        # 才构成字段级威胁；纯事实句的披露原价不再连坐全段 qfq 坐标价。
-        # 例外：字段内出现「坐标词+价格回指词」句（如「该价格对现价形成锚」）
-        # 表明披露原价被坐标化引用，此时该字段 raw 价仍进入触发池。
-        field_anaphora = any(
-            _has_coordinate_anaphora(s) and not _has_non_comparable_label(s)
-            for s in _SENTENCE_SPLIT_PATTERN.split(reports.get(report_name) or "")
-        )
-        # [DAV-1346 返工 🟡-1] 触发判定用完整原句（sentence），不用截断到
-        # 120 字的 context——坐标词落在截断点之后时不能让真混用漏拦。
-        non_qfq = [
-            r for r in report_refs
-            if r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
-            and not _is_conversion_sentence(r.get("context") or "")
-            and not _has_non_comparable_label(r.get("sentence") or r.get("context"))
-            and (
-                field_anaphora
-                or _has_raw_coordinate_trigger(r.get("sentence") or r.get("context") or "")
-            )
-        ]
-        if not non_qfq:
-            continue
+        # R2: only an explicit reference chain can join separate sentences.
+        # One finding per sentence/evidence chain, never a report-wide cartesian
+        # product of every qfq coordinate and every disclosure price.
+        non_qfq = [r for r in report_refs
+                    if (r["basis"] in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
+                        or _potential_disclosure_price_ref(r))
+                    and not _is_conversion_sentence(r.get("sentence") or "")
+                    and not _has_non_comparable_label(r.get("sentence") or "")]
+        seen_chains: set = set()
         for ref in report_refs:
-            if ref["basis"] != PRICE_BASIS_VENDOR_QFQ:
+            ctx = ref.get("sentence") or ref.get("context") or ""
+            if ref["basis"] != PRICE_BASIS_VENDOR_QFQ or _potential_disclosure_price_ref(ref):
                 continue
-            if _is_conversion_sentence(ref.get("context") or ""):
+            if not (_has_coordinate_keyword(ctx) or _COORDINATE_RELATION_RE.search(ctx)):
                 continue
-            if not _has_coordinate_keyword(ref["context"]):
+            if _is_conversion_sentence(ctx) or _has_non_comparable_label(ctx):
                 continue
-            other_ids = [r["ref_id"] for r in non_qfq]
-            detail = (
-                f"qfq 价格 {ref['value']}({ref['ref_id']}) 与 raw/pit_raw 价格 "
-                f"{other_ids} 处于同一坐标语境（现价/支撑/锚等）"
-            )
-            findings.append(
-                {
-                    "kind": "basis_mismatch",
-                    "rule": "cross_basis_coordinate_reference",
-                    "source": report_name,
-                    "ref_ids": [ref["ref_id"], *other_ids],
-                    "detail": detail,
-                }
-            )
+            if any(r["sentence"] == ctx for r in non_qfq):
+                continue  # R1 already covers same-sentence comparisons.
+            chain = _explicit_disclosure_reference(ctx)
+            anaphora = _has_coordinate_anaphora(ctx)
+            if (not chain and not anaphora) or ctx in seen_chains:
+                continue
+            # Match the referenced disclosure type, not an unrelated raw price
+            # elsewhere in the report. A bare "回购资金承接" is not a price link.
+            matches = [r for r in non_qfq
+                       if (chain and (chain == (r.get("disclosure_type")
+                                                or _detect_disclosure_type(r.get("sentence") or ""))
+                                      or (chain == "block_trade" and r.get("basis") == PRICE_BASIS_RAW)))
+                       or (anaphora and not chain and report_refs.index(r) < report_refs.index(ref))]
+            if matches:
+                previous = [r for r in matches if report_refs.index(r) < report_refs.index(ref)]
+                matches = (previous or matches)[-1:]  # one named disclosure, no fan-out
+            if not matches:
+                continue
+            seen_chains.add(ctx)
+            other_ids = [r["ref_id"] for r in matches]
+            detail = f"qfq {ref['ref_id']} 显式引用披露价 {other_ids}"
+            findings.append({"kind": "basis_mismatch", "rule": "cross_basis_coordinate_reference",
+                             "source": report_name, "ref_ids": [ref["ref_id"], *other_ids],
+                             "detail": detail})
             _add_gap("basis_mismatch", ref["ref_id"], report_name, detail)
+
+        # An anaphoric sentence without its own numeric qfq reference can
+        # still promote a disclosed raw price to a coordinate ("该价格在平台").
+        for raw in non_qfq:
+            sentence = raw.get("sentence") or ""
+            if not _has_coordinate_anaphora(sentence) or _has_non_comparable_label(sentence):
+                continue
+            qfq = next((r for r in report_refs if r["basis"] == PRICE_BASIS_VENDOR_QFQ
+                        and r["sentence"] != sentence), None)
+            if qfq and sentence not in seen_chains:
+                detail = f"披露价 {raw['ref_id']} 被回指为坐标，与 {qfq['ref_id']} 混用"
+                findings.append({"kind": "basis_mismatch", "rule": "cross_basis_coordinate_reference",
+                                 "source": report_name, "ref_ids": [qfq["ref_id"], raw["ref_id"]],
+                                 "detail": detail})
+                seen_chains.add(sentence)
+                _add_gap("basis_mismatch", raw["ref_id"], report_name, detail)
 
     # Pass 5 — conversion validity preview.
     invalid = False

@@ -1,0 +1,6 @@
+[
+  {"report_id": "36fff9fc5aa041a6960c22925b5f0a9e", "horizon": "short", "field": "news_report", "sentence_indices": [31, 92]},
+  {"report_id": "9b70d0a1571b4d6196e29cf7bdaf8d78", "horizon": "medium", "field": "volume_price_report", "sentence_indices": [59]},
+  {"report_id": "af25901ec32e4a44ad2aef3db8a09487", "horizon": "short", "field": "volume_price_report", "sentence_indices": [80]},
+  {"report_id": "3fc1beba1ee74b53bf634d4a35eddbf6", "horizon": "short", "field": "news_report", "sentence_indices": [97]}
+]

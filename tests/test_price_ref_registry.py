@@ -36,7 +36,7 @@ def test_b188060f_anchor_disclosure_raw_vs_qfq_mismatch():
     reports = {
         "volume_price_report": "现价 81.19 元，均线呈多头排列。",
         "news_report": (
-            "今日大宗交易成交 78.61 元，较当日收盘 84.03 元折价 6.45%。"
+            "2026-05-21 今日大宗交易成交 78.61 元，较当日收盘 84.03 元折价 6.45%。"
             "该价格对现价 81.19 形成向下锚。"
         ),
     }
@@ -70,7 +70,7 @@ def test_typed_disclosures_deterministic_basis():
         "增发": PRICE_BASIS_PIT_RAW,
     }
     for kw, basis in expected.items():
-        reports = {"news_report": f"公司披露{kw}价格 10.50 元。"}
+        reports = {"news_report": f"2026-05-21 公司公告已成交{kw}价格 10.50 元。"}
         result = build_price_ref_registry(reports, cutoff="2026-05-22")
         refs = _refs_by_value(result, 10.50)
         assert refs, f"{kw} price must be registered"
@@ -120,11 +120,10 @@ def test_missing_basis_and_missing_as_of_gaps():
     result = build_price_ref_registry(reports, cutoff="2026-05-22")
     ref = _refs_by_value(result, 12.34)[0]
     kinds = {(g["kind"], g["ref_id"]) for g in result["price_basis_gaps"]}
-    # DAV-1321：「减持价格 12.34」该值即披露价 → pit_raw，missing_basis
-    # 不再成立；无日期上下文 → missing_as_of 仍成立。
-    assert ref["basis"] == PRICE_BASIS_PIT_RAW
+    # DAV-1392：无日期的所谓披露价格不得自称 pit_raw。
+    assert ref["basis"] == PRICE_BASIS_UNSPECIFIED
     assert ("missing_as_of", ref["ref_id"]) in kinds
-    assert ("missing_basis", ref["ref_id"]) not in kinds
+    assert ("missing_basis", ref["ref_id"]) in kinds
 
 
 def test_disclosure_date_in_sentence_supplies_as_of():

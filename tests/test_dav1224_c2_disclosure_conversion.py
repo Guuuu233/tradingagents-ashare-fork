@@ -69,7 +69,7 @@ class TestC2TypedDisclosureAndConversion:
         # [DAV-1321 N3] 逐值判定：「今日大宗交易成交 78.61 元」中 78.61
         # 正是大宗披露成交价 → raw + disclosure_type=block_trade；该值是
         # 真披露价不再误判 unspecified（坐标位/报价侧数字仍不挂）。
-        refs, g, _ = run({"news_report": "今日大宗交易成交 78.61 元，较收盘折价 6.45%。"})
+        refs, g, _ = run({"news_report": "2026-05-21 大宗交易成交 78.61 元，较收盘折价 6.45%。"})
         r = [r for r in refs if abs(r["value"] - 78.61) <= TOL]
         assert r and r[0]["basis"] == "raw"
         assert r[0].get("disclosure_type") == "block_trade"
@@ -157,13 +157,13 @@ class TestDav1321PerValueMislabels:
     def test_genuine_disclosure_prices_still_attached(self):
         # 保持样例：成交均价/回购均价仍挂披露口径
         refs = self._basis_of(
-            {"news_report": "中芯国际今日发生一笔大宗交易，成交均价 115.00 元，"
+            {"news_report": "2026-05-21 中芯国际发生一笔大宗交易，成交均价 115.00 元，"
                             "较当日收盘价 125.34 元大幅折价 8.25%"},
             115.00)
         assert refs and refs[0]["basis"] == "raw" \
             and refs[0]["disclosure_type"] == "block_trade"
         refs = self._basis_of(
-            {"news_report": "公司公告回购价格区间为 46.02 - 46.06 元/股"},
+            {"news_report": "2026-05-21 公司公告已成交回购价格区间为 46.02 - 46.06 元/股"},
             46.02)
         assert refs and refs[0]["basis"] == "pit_raw" \
             and refs[0]["disclosure_type"] == "repurchase"

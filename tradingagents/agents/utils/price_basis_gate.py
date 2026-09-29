@@ -50,6 +50,9 @@ from tradingagents.agents.utils.price_ref_registry import (
     COORDINATE_KEYWORDS,
     PRICE_BASIS_DERIVED_ESTIMATE,
     _LEVEL_PATTERN,
+    _has_raw_coordinate_trigger,
+    _COORDINATE_RELATION_RE,
+    _potential_disclosure_price_ref,
     attach_price_ref_source,
     audit_price_ref_registry,
     extract_executable_levels,
@@ -263,10 +266,12 @@ def evaluate_price_basis_gate(state: Mapping[str, Any]) -> Dict[str, Any]:
     for ref in refs:
         if not isinstance(ref, Mapping):
             continue
-        if ref.get("basis") not in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW):
+        context = ref.get("sentence") or ref.get("context") or ""
+        concrete_raw = ref.get("basis") in (PRICE_BASIS_RAW, PRICE_BASIS_PIT_RAW)
+        inferred_raw = _potential_disclosure_price_ref(ref)
+        if not (concrete_raw or inferred_raw):
             continue
-        context = ref.get("context") or ""
-        if not any(kw in context for kw in COORDINATE_KEYWORDS):
+        if not (_has_raw_coordinate_trigger(context) or _COORDINATE_RELATION_RE.search(context)):
             continue
         if _has_non_comparable_label(context):
             allowed_dual_display.append(
@@ -280,6 +285,10 @@ def evaluate_price_basis_gate(state: Mapping[str, Any]) -> Dict[str, Any]:
             continue
         if _is_real_conversion(ref) and ref.get("ref_id") not in invalid_ref_ids:
             continue
+        if any(f.get("kind") == "basis_mismatch"
+               and f.get("rule") == "same_sentence_mixed_basis"
+               and ref.get("ref_id") in (f.get("ref_ids") or []) for f in findings):
+            continue  # one evidence chain, not one finding per value
         _violate(
             "cross_basis_coordinate_mix",
             f"{ref.get('basis')} 价格 {ref.get('value')}({ref.get('ref_id')}) 直接进入坐标语境，禁止跨坐标混用",
