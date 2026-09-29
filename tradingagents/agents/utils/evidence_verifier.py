@@ -3915,11 +3915,12 @@ _SEM_KW_VOCAB = re.compile(r'已定价|已计价|双底|估值底|托底|超卖|
 # 区间/盈亏比派生数）不得命中。
 _SEM_PREDICT = re.compile(
     r'面临[^，；。；;、]{0,12}'
-    r'|难(?:破|以|越|改|抗|救|守|达|逃|挡)[^，；。；;、]{0,10}'
+    r'|难(?:破|以|越|改|抗|救|守|达|逃|挡|抵)[^，；。；;、]{0,10}'
     r'|必(?:将|会|破|须|定|然|下探|跌|涨)[^，；。；;、]{0,10}'
     r'|(?:势必|注定|大概率|有望|预计|预期将|不排除|恐将)[^，；。；;、]{0,12}'
     r'|(?:反抽|反弹|突破|破位|下跌|上涨|探底|冲关|变盘|拉升|杀跌|企稳|拐头|启动|爆发|出清|轮动|修复|补缺)在即'
     r'|将(?:破位|下探|下杀|上行|二次|引爆|回落|反弹|反抽|突破|跌|涨|考验|挑战|继续|开启|见顶|迎来|维持|延续|保持|击穿|跌穿|回抽|回踩|修复|补缺|走高|走低|成为|转入|进入|加速)[^，；。；;、]{0,10}'
+    r'|(?:将破|或破|料将|上探|下探)[^，；。；;、]{0,10}'
     r'|二次(?:探底|杀跌|破位|下杀|回踩|探底|探底回升|下探|冲击)[^，；。；;、]{0,6}'
     r'|价值陷阱|杀估值|均值回归|假突破|假跌破|诱多|诱空|骗线'
     r'|确立[^，；。；;、]{0,8}(?:终局|天花板|假突破|假跌破|见顶|见底|顶部|底部|拐点|破位|诱多|诱空|双顶|双底|头部|反转|趋势)'
@@ -3996,13 +3997,61 @@ _SEM_DOMAIN_KEYWORDS = {
 }
 
 
+# 指标窗口是名称的一部分，不是已核实的指标数值；保留紧邻的真实值。
+_SEM_INDICATOR_PERIOD = re.compile(
+    r'(?i)(?<![A-Za-z0-9])\d+\s*(?:(?:日|天)\s*(?:线|均线|MA|EMA|SMA|WMA|VWMA)|(?:EMA|SMA|MA|WMA|VWMA))(?![A-Za-z])'
+    r'|(?i:(?:RSI|ATR|MACD|KDJ|CCI|BOLL))\s*[（(]\s*\d+\s*[）)]'
+)
+_SEM_INDICATOR_NAME = re.compile(
+    r'(?i)(?:\d+\s*(?:(?:日|天)\s*(?:线|均线|MA|EMA|SMA|WMA|VWMA)|(?:EMA|SMA|MA|WMA|VWMA))'
+    r'|(?:RSI|ATR|MACD|KDJ|CCI|BOLL)(?:\s*[（(]\s*\d+\s*[）)])?)'
+)
+_SEM_NOUN_FRAGMENT = re.compile(
+    r'(?:(?:主力|北向|机构|市场|短线|中期|长期)?(?:资金|筹码|股价|均线|量价|技术面|基本面)'
+    r'|(?:空头|多头)均线|(?:布林|BOLL)(?:上|中|下)轨'
+    r'|\d+\s*(?:(?:日|天)\s*(?:线|均线|EMA|SMA|MA)|(?:EMA|SMA|MA))\s*(?:均线带|均线|指标|支撑位|阻力位))',
+    re.IGNORECASE,
+)
+
+
+def _sem_is_noun_fragment(text: str) -> bool:
+    return bool(_SEM_INDICATOR_NAME.fullmatch(text) or _SEM_NOUN_FRAGMENT.fullmatch(text))
+
+
 def _sem_extract_nums(text: str) -> set[str]:
-    return set(re.findall(r'\d+(?:\.\d+)?%?', text))
+    spans = [m.span() for m in _SEM_INDICATOR_PERIOD.finditer(text)]
+    return {m.group() for m in re.finditer(r'\d+(?:\.\d+)?%?', text)
+            if not any(start <= m.start() and m.end() <= end for start, end in spans)}
 
 
 def _sem_split_clauses(text: str) -> list[str]:
-    parts = [p.strip() for p in _SEM_CLAUSE_SPLIT.split(text) if p and p.strip()]
-    return parts or [text]
+    parts: list[str] = []
+    separators: list[str] = []
+    pos = 0
+    for match in _SEM_CLAUSE_SPLIT.finditer(text):
+        part = text[pos:match.start()].strip()
+        if part:
+            parts.append(part)
+            separators.append(match.group())
+        pos = match.end()
+    tail = text[pos:].strip()
+    if tail:
+        parts.append(tail)
+    if not parts:
+        return [text]
+    # 并列名词没有独立谓词：并回同一并列结构的相邻子句，不能跨标点合并。
+    out: list[str] = []
+    current = parts[0]
+    for separator, part in zip(separators, parts[1:]):
+        if separator in ('与', '和', '及', '且', '并', '以及') and (
+            _sem_is_noun_fragment(current) or _sem_is_noun_fragment(part)
+        ):
+            current = current + separator + part
+        else:
+            out.append(current)
+            current = part
+    out.append(current)
+    return out
 
 
 # DAV-1369 R4 总控逐词裁定：判断词表只在以下披露搭配内豁免，其余一律不放——
@@ -4015,6 +4064,14 @@ _SEM_RELEASE_DISCLOSURE = re.compile(
 _SEM_RELEASE_DISCLOSURE_EXCL = re.compile(r'属|是|要求|合理|情绪|倍PE')
 _SEM_RELEASE_UNLOCK = re.compile(
     r'(?:\d+(?:\.\d+)?(?:亿|万)?股?解禁|解禁\d+(?:\.\d+)?(?:亿|万)?股?)(?:筹码|股份)?(压顶)')
+# 名词构词不作归因；先按整词识别，再只屏蔽其中的「属/系」，保留同句其余判断词。
+_SEM_ATTR_NOUN = re.compile(
+    r'属性|属地|金属|下属|亲属|附属|归属|所属|属实|系统|关系|体系|系列|联系|派系|直系|菌系|系数'
+)
+_SEM_ATTR_PREDICATE = re.compile(r'属|系|实为|乃')
+_SEM_RELEASE_PAST_PROBE = re.compile(
+    r'(?:盘中|一度|最低|曾|已)[^，；。；;、]{0,16}?(下探)(?:至|到)\s*[-+]?\d+(?:\.\d+)?'
+)
 
 
 def _sem_mask_released(clause: str) -> str:
@@ -4023,6 +4080,10 @@ def _sem_mask_released(clause: str) -> str:
     if not _SEM_RELEASE_DISCLOSURE_EXCL.search(clause):
         spans.extend(m.span(1) for m in _SEM_RELEASE_DISCLOSURE.finditer(clause))
     spans.extend(m.span(1) for m in _SEM_RELEASE_UNLOCK.finditer(clause))
+    spans.extend(m.span(1) for m in _SEM_RELEASE_PAST_PROBE.finditer(clause))
+    nouns = [m.span() for m in _SEM_ATTR_NOUN.finditer(clause)]
+    spans.extend(m.span() for m in _SEM_ATTR_PREDICATE.finditer(clause)
+                 if any(start <= m.start() and m.end() <= end for start, end in nouns))
     if not spans:
         return clause
     chars = list(clause)
@@ -4038,7 +4099,9 @@ def _sem_classify_clause(clause: str) -> list[dict[str, str]]:
     scenario_hypothesis 或 interpretation_causal（不参与支持判定）→
     其余子句按事实分类。事实片段永远是原文完整子句的逐字原文。
     """
-    has_num = bool(_SEM_NUM.search(clause))
+    if _sem_is_noun_fragment(clause):
+        return [{'text': clause, 'type': SEM_KIND_NON_FACTUAL}]
+    has_num = bool(_sem_extract_nums(clause))
     if _SEM_NORM.search(clause) and not has_num:
         # DAV-1193 🟡-2：NORM 命中不等于 non_factual——含事实性风险/事件/
         # 状态谓词的警示句降档为可审计 scenario_hypothesis，保留在分母内；
@@ -4049,6 +4112,8 @@ def _sem_classify_clause(clause: str) -> list[dict[str, str]]:
             return [{'text': clause, 'type': SEM_KIND_NON_FACTUAL}]
     # 判断谓词命中 → 整个子句归判断类（预测/情景 → scenario；其余 → causal）
     judged = _sem_mask_released(clause)
+    if _SEM_ATTR_PREDICATE.search(judged):
+        return [{'text': clause, 'type': SEM_KIND_CAUSAL}]
     for pat, kind in (
         (_SEM_PREDICT, SEM_KIND_SCENARIO),
         (_SEM_SCEN, SEM_KIND_SCENARIO),
@@ -4063,7 +4128,7 @@ def _sem_classify_clause(clause: str) -> list[dict[str, str]]:
 
 def _sem_classify_fact_clause(clause: str) -> list[dict[str, str]]:
     """事实性子句 → proposition 列表（无判断谓词命中时进入，整句不切）。"""
-    has_num = bool(_SEM_NUM.search(clause))
+    has_num = bool(_sem_extract_nums(clause))
     if has_num:
         # 数值句中若含事件谓词（缩量/破位/净流入等），事件状态与数值分别立命题
         ev = _SEM_EVENT.search(clause)
