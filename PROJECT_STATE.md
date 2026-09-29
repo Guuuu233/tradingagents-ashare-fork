@@ -6,9 +6,9 @@
 
 | 项 | 值 |
 |---|---|
-| 生产代码 SHA | `eb6cc89fc897679f961c7488a23aa46abe89fdcc`（09-29 16:39 由 f4175b89 回退，PID 85977，16 项 env，两个返修开关为 1）。f4175b89 上线事故见 D-057 附注 |
+| 生产代码 SHA | `d17b0fe5bb7b8f9027b09e8aef7263aa56230736`（09-29 19:3x 部署，1374 v4 + 1375 + 1377，上线核对通过：ABSTAIN 约 22%，新闻只拉 1 次、429 为 0；PID 74417，16 项 env）。回退为 `releases/eb6cc89f` |
 | 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。09-29 主干 = `d17b0fe5`（1374 v4，含 1375/1377）加本次台账提交。**只有总控或按总控签字 SHA 快进的总工可以推主干（D-048）** |
-| 待发布提交 | `d17b0fe5`（1374 v4 + 1375 + 1377）**准予同批部署（D-058）**，回退点 `releases/eb6cc89f`；上线核对通过后解除 D-057 附注的闸门 |
+| 待发布提交 | 无。部署闸门已解除（D-058 附注）。backlog：DAV-1388（新闻延迟与缓存共享）、DAV-1362/1367/1368/1323 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
 **09-26 新发现（D-046）：H1b 测量通道断开。** 09-19 起生产的 157 份 completed 报告全部为 `v1_legacy`，而 H1b 只收 `v2_structured`。当前 cohort `decision_model.v1:evidence_contract.v2:price_basis.unspecified` 的 H1b 样本量为 0/60。诊断见 DAV-1310。
