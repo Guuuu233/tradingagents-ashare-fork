@@ -50,6 +50,7 @@ import pandas as pd
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
 from api.usage_logging import current_llm_horizon, current_llm_role
+from api.services import stock_map_service
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service, social_data_service
 import jwt
@@ -728,8 +729,8 @@ def _stock_map_refresh_needed(now: Optional[float] = None) -> bool:
     if cache_is_fresh:
         return False
 
-    # A recent failure is deliberately left as an empty placeholder by the
-    # loader, but it must not cause every report request to retry the provider.
+    # An archive/stale map remains usable after a failure, but report requests
+    # must still honor the short provider retry window.
     return not (
         _cn_stock_map_last_failure_at
         and current_time - _cn_stock_map_last_failure_at < _STOCK_MAP_FAILURE_RETRY_INTERVAL
@@ -771,16 +772,22 @@ def _schedule_cn_stock_map_refresh() -> None:
 
 def _fetch_cn_stock_map() -> Tuple[Dict[str, str], int, int]:
     """Fetch and validate stock/fund names without touching shared cache state."""
-    import akshare as ak
-
     result: Dict[str, str] = {}
-    # A-share stocks (static list, no anti-crawl issue)
-    df = ak.stock_info_a_code_name()
-    for _, row in df.iterrows():
-        name = str(row.get("name", "")).strip()
-        code = str(row.get("code", "")).strip()
-        if name and code:
-            result[name] = _normalize_symbol(code)
+    try:
+        import akshare as ak
+
+        df = ak.stock_info_a_code_name()
+        for _, row in df.iterrows():
+            name, code = row.get("name"), row.get("code")
+            if isinstance(name, str) and name.strip() and isinstance(code, str) and re.fullmatch(r"[0-9]{6}", code):
+                # Beijing's current 92xxxx codes must not be inferred as SH.
+                market = "BJ" if code.startswith(("4", "8", "92")) else ("SH" if code.startswith("6") else "SZ")
+                result[name.strip()] = f"{code}.{market}"
+        if not result:
+            raise ValueError("AkShare returned an empty stock name map")
+    except Exception as exc:
+        _log(f"[StockMap] AkShare stock source failed: {exc}; trying Sina backup")
+        result = stock_map_service.fetch_sina_stock_names()
     stock_count = len(result)
 
     # ETF / funds are supplemental; a provider failure here does not discard
@@ -812,6 +819,7 @@ def _finish_cn_stock_map_refresh(
     stock_count: int = 0,
     fund_count: int = 0,
     error: Optional[Exception] = None,
+    archive_map: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Publish one refresh outcome while holding the lock only briefly."""
     global _cn_stock_map, _cn_stock_reverse_map, _cn_stock_map_norm, _cn_stock_map_norm_src
@@ -835,8 +843,9 @@ def _finish_cn_stock_map_refresh(
                 f"{len(loaded_map)} total."
             )
         else:
-            _cn_stock_map = {}
-            _cn_stock_reverse_map = {}
+            # A live-source outage must not erase previously usable names.
+            _cn_stock_map = archive_map or _cn_stock_map or {}
+            _cn_stock_reverse_map = {code: name for name, code in _cn_stock_map.items()}
             _cn_stock_map_norm = None
             _cn_stock_map_norm_src = None
             _cn_stock_map_loaded_at = 0
@@ -856,7 +865,11 @@ def _run_cn_stock_map_refresh(refresh_event: Event) -> Dict[str, str]:
     try:
         result, stock_count, fund_count = _fetch_cn_stock_map()
     except Exception as exc:
-        return _finish_cn_stock_map_refresh(refresh_event, error=exc)
+        archive = stock_map_service.read_archive()
+        return _finish_cn_stock_map_refresh(
+            refresh_event, error=exc, archive_map=archive[0] if archive else None,
+        )
+    stock_map_service.write_archive(result, stock_count, fund_count)
     return _finish_cn_stock_map_refresh(
         refresh_event,
         result=result,
@@ -868,8 +881,8 @@ def _run_cn_stock_map_refresh(refresh_event: Event) -> Dict[str, str]:
 def _load_cn_stock_map() -> Dict[str, str]:
     """Lazy-load and cache A-share stock + ETF/fund name→code mapping (7-day TTL).
 
-    Uses akshare stock_info_a_code_name (static list, no anti-crawl) for A-shares,
-    plus fund_name_em for ETFs/funds.
+    Uses AkShare first, independently complete Sina names second, and the
+    durable local archive on live-source failure; fund_name_em is supplemental.
 
     Failure handling (DAV-92): a failed load records ``_cn_stock_map_last_failure_at``
     and is NOT treated as a valid cache, so the 7-day TTL only starts on success.
@@ -884,11 +897,8 @@ def _load_cn_stock_map() -> Dict[str, str]:
     now = time.time()
 
     with _cn_stock_map_lock:
-        if _cn_stock_map is not None and (now - _cn_stock_map_loaded_at) > _STOCK_MAP_TTL:
-            _cn_stock_map = None  # expire cache
-            _cn_stock_reverse_map = None
-            _cn_stock_map_norm = None
-            _cn_stock_map_norm_src = None
+        # Expiry triggers a refresh, not deletion: stale/archive names remain
+        # useful while sources are unavailable (and during the retry backoff).
         cache_is_fresh = (
             _cn_stock_map is not None
             and _cn_stock_reverse_map is not None

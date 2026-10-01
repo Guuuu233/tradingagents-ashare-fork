@@ -39,8 +39,12 @@ def _reset_cold():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_stock_map_globals():
-    """Snapshot/restore stock-map globals so cache mutations never leak."""
+def _isolate_stock_map_globals(monkeypatch):
+    """Snapshot/restore globals; retry cases model BOTH live sources failing."""
+    monkeypatch.setattr(
+        main.stock_map_service, "fetch_sina_stock_names",
+        MagicMock(side_effect=RuntimeError("backup unavailable")),
+    )
     saved = (
         main._cn_stock_map,
         main._cn_stock_reverse_map,
@@ -109,12 +113,11 @@ def test_empty_provider_results_use_failure_backoff_then_recover():
     """Empty stock and fund responses are failures, not a successful 7-day cache."""
     _reset_cold()
     empty_stock = pd.DataFrame(columns=["name", "code"])
-    empty_fund = pd.DataFrame(columns=["基金代码", "基金简称"])
     recovered_stock = _stock_df(("贵州茅台", "600519"))
     recovered_fund = pd.DataFrame([{"基金代码": "159915", "基金简称": "创业板ETF"}])
     ak = _akshare_stub(
         stock_behavior=[empty_stock, recovered_stock],
-        fund_behavior=[empty_fund, recovered_fund],
+        fund_behavior=recovered_fund,
     )
 
     with patch.dict(sys.modules, {"akshare": ak}):
@@ -150,12 +153,11 @@ def test_empty_stock_source_with_fund_rows_still_uses_failure_backoff():
     """A fund-only partial response must not start the success TTL."""
     _reset_cold()
     empty_stock = pd.DataFrame(columns=["name", "code"])
-    fund_only = pd.DataFrame([{"基金代码": "159915", "基金简称": "创业板ETF"}])
     recovered_stock = _stock_df(("贵州茅台", "600519"))
     recovered_fund = pd.DataFrame([{"基金代码": "159915", "基金简称": "创业板ETF"}])
     ak = _akshare_stub(
         stock_behavior=[empty_stock, recovered_stock],
-        fund_behavior=[fund_only, recovered_fund],
+        fund_behavior=recovered_fund,
     )
 
     with patch.dict(sys.modules, {"akshare": ak}):

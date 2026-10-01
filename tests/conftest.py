@@ -623,6 +623,25 @@ def _reset_baostock_context() -> None:
 # --------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
+def isolated_stock_map_archive(tmp_path):
+    """Never read/write the operator's persistent name archive from tests.
+
+    Do not depend on monkeypatch here: that would make its teardown follow the
+    network guard's integrity check, leaving socket test doubles active there.
+    """
+    key = "TA_STOCK_MAP_ARCHIVE_PATH"
+    previous = os.environ.get(key)
+    os.environ[key] = str(tmp_path / "stock-map.json")
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+@pytest.fixture(autouse=True)
 def offline_network_guard(request):
     """Pytest autouse fixture enforcing offline socket isolation for all tests.
 
