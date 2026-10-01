@@ -7,8 +7,8 @@
 | 项 | 值 |
 |---|---|
 | 生产代码 SHA | `5b113089d9dc1c22827a8a8037a7a49ec3c66efc`（10-01 晚部署，DAV-1412 名称表兜底，D-062；核对通过；PID 41469，16 项 env）。回退为 `releases/31c0715c` |
-| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。10-01 主干 = `5b113089`（DAV-1412 名称表兜底，D-062）加本次台账提交。**只有总控或按总控签字 SHA 快进的总工可以推主干（D-048）** |
-| 待发布提交 | 无。下一步：研究经理 WAIT/UNRESOLVED 成因诊断（方案待 David 过目）；新浪源读超时重试小卡（D-062 附注）；backlog：1388、1391、1362/1367/1368/1323 |
+| 主干 | 以 `git ls-remote origin codex/dav-4-p2a-trunk` 回读为准。10-01 主干 = `f87613d3`（DAV-1415，D-063）加本次台账提交。**只有总控或按总控签字 SHA 快进的总工可以推主干（D-048）** |
+| 待发布提交 | `f87613d36802e7811b48539db60f64f10f7e2115`（D-063 已准予部署，回退点 `releases/5b113089`）。在施工：DAV-1417 partial 确认门离线对照（零模型）；backlog：1388、1391、1362/1367/1368/1323 |
 | H1b 漏斗（D-035；生产与主干已同口径） | completed 1052 → v2 390 → D-009 合格 43 → HOLD 语义隔离 4 → 39 → 价格口径隔离 28（与 HOLD 重叠 1）→ **clean 12**（legacy 6 + v1 6） |
 
 **09-26 新发现（D-046）：H1b 测量通道断开。** 09-19 起生产的 157 份 completed 报告全部为 `v1_legacy`，而 H1b 只收 `v2_structured`。当前 cohort `decision_model.v1:evidence_contract.v2:price_basis.unspecified` 的 H1b 样本量为 0/60。诊断见 DAV-1310。
