@@ -312,13 +312,16 @@ def evaluate_confirmation_state(
     partially_adopted_claims: Sequence[Any] | None = None,
     rejected_claim_ids: Sequence[Any] | None = None,
     excluded_claim_ids: Sequence[Any] | None = None,
+    manager_direction: Any = None,
 ) -> tuple[str, list[str]]:
     """Determine confirmation_state (CONFIRMED / PARTIAL / UNRESOLVED) and diagnostic codes.
 
     Deterministic rules (D-009 P0-5b / Confirmation Gate Claim Lifecycle):
     - confirmation_relevant_claims = focus ∪ adopted ∪ partially_adopted ∪ rejected_but_deterministically_adopted
     - focus / adopted with reject or fatal -> UNRESOLVED -> WAIT
-    - partially adopted (incomplete evidence) -> PARTIAL + WAIT
+    - factual partially adopted -> PARTIAL + WAIT unless explicitly same-direction (D-064)
+    - factual adopted with explicitly opposite direction -> PARTIAL + WAIT (D-064)
+    - manager_direction omitted/None preserves the legacy confirmation rules
     - rejected, non-core with reject -> do NOT block confirmation; keep audited reason/log
     - rejected with partial -> conservative -> PARTIAL + WAIT
     - rejected with full ledger eligibility -> UNRESOLVED + WAIT, not a report-wide hard gate
@@ -511,7 +514,10 @@ def evaluate_confirmation_state(
             return False
         return _get_claim_decision(cid) == "adopt"
 
-    from tradingagents.agents.utils.evidence_verifier import ledger_eligibility
+    from tradingagents.agents.utils.evidence_verifier import _claim_side, ledger_eligibility
+
+    direction = map_verdict_direction(manager_direction)
+    manager_side = "bull" if direction == DIRECTION_BULL else "bear" if direction == DIRECTION_BEAR else None
 
     def _has_full_eligibility(cid: str) -> bool:
         summary = summary_map.get(cid)
@@ -668,6 +674,19 @@ def evaluate_confirmation_state(
     # Assemble partial reasons
     partial_codes: list[str] = []
     audit_obs_codes: list[str] = []
+    audit_direction_codes: list[str] = []
+
+    # D-064: check the manager's effective adopted ledger, not evidence coverage;
+    # neutral/unknown directions and observation/hypothesis claims do not trigger B.
+    adopted_opposite_factual = [
+        cid for cid in eff_adopted_ids
+        if manager_side is not None and not _is_claim_obs_hypo(cid)
+        and _claim_side(cid, summary_map, known_claims) == ("bear" if manager_side == "bull" else "bull")
+    ]
+    if adopted_opposite_factual:
+        partial_codes.append(
+            f"adopted_opposite_direction_claims:{','.join(sorted(adopted_opposite_factual))}"
+        )
 
     if core_has_partial:
         partial_codes.append(
@@ -691,6 +710,17 @@ def evaluate_confirmation_state(
 
     partially_adopted_factual = [cid for cid in eff_partial_ids if not _is_claim_obs_hypo(cid)]
     partially_adopted_obs = [cid for cid in eff_partial_ids if _is_claim_obs_hypo(cid)]
+    # D-064: only filter this blocking reason; leave the partial ledger and all
+    # fatal/PIT/core/other partial checks intact. Unknown sides stay blocking.
+    released_same_direction = [
+        cid for cid in partially_adopted_factual
+        if manager_side is not None and _claim_side(cid, summary_map, known_claims) == manager_side
+    ]
+    if released_same_direction:
+        partially_adopted_factual = [cid for cid in partially_adopted_factual if cid not in released_same_direction]
+        audit_direction_codes.append(
+            f"released_same_direction_partial:{','.join(sorted(released_same_direction))}"
+        )
     if partially_adopted_factual:
         partial_codes.append(
             f"partially_adopted_claims:{','.join(sorted(partially_adopted_factual))}"
@@ -729,16 +759,16 @@ def evaluate_confirmation_state(
     consolidated_obs_codes = [f"audited_observation_claims:{','.join(all_obs_cids)}"] if all_obs_cids else []
 
     if partial_codes:
-        return CONFIRM_PARTIAL, partial_codes + consolidated_obs_codes + audit_rejected_codes
+        return CONFIRM_PARTIAL, partial_codes + consolidated_obs_codes + audit_rejected_codes + audit_direction_codes
 
     # Everything confirmed
     verified_core = core_verified if core_claim_ids else [cid for cid in eff_adopted_ids if _is_claim_verified(cid)]
     if verified_core:
-        return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(verified_core)}"] + consolidated_obs_codes + audit_rejected_codes
+        return CONFIRM_CONFIRMED, [f"all_core_claims_verified:{','.join(verified_core)}"] + consolidated_obs_codes + audit_rejected_codes + audit_direction_codes
     elif all_obs_cids:
         # If ONLY observations exist and NO verified factual claims exist, cannot confirm
         return CONFIRM_UNRESOLVED, [f"observation_hypotheses_unverified_without_factual_core:{','.join(all_obs_cids)}"] + audit_rejected_codes
-    return CONFIRM_CONFIRMED, audit_rejected_codes
+    return CONFIRM_CONFIRMED, audit_rejected_codes + audit_direction_codes
 
 
 def status_from_manager_verdict(
@@ -840,6 +870,7 @@ def status_from_manager_verdict(
             if isinstance(_audit, Mapping):
                 dcg_excluded_ids.extend(_audit.get("excluded_claim_ids") or [])
 
+    direction = map_verdict_direction(mv.get("direction"))
     confirmation_state, confirm_codes = evaluate_confirmation_state(
         focus_claim_ids=f_ids,
         unresolved_claim_ids=u_ids,
@@ -850,6 +881,7 @@ def status_from_manager_verdict(
         partially_adopted_claims=partially_adopted_ids,
         rejected_claim_ids=rejected_ids,
         excluded_claim_ids=dcg_excluded_ids,
+        manager_direction=direction,
     )
 
     # Consistency hard gate: unadjudicated material claim with adopt or PIT failure in adopted/partially adopted.
@@ -897,7 +929,6 @@ def status_from_manager_verdict(
     vpa_rev_state = str(vpa.get("reversal_state") or "").strip() if isinstance(vpa, Mapping) else ""
     vpa_codes: list[str] = []
 
-    direction = map_verdict_direction(mv.get("direction"))
     if confirmation_state in {CONFIRM_UNRESOLVED, CONFIRM_PARTIAL}:
         trade_action = ACTION_WAIT
     else:

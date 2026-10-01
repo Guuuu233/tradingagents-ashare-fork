@@ -6718,6 +6718,36 @@ def build_claim_evidence_sufficient_pattern(cid: str) -> re.Pattern:
     )
 
 
+def _claim_side(
+    cid: str,
+    summary: Mapping[str, Any],
+    claims_by_cid: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    """确定性判定账本 claim 的立场侧别：'bull' | 'bear' | None。"""
+    sources: list[Mapping[str, Any]] = []
+    s = summary.get(cid)
+    if isinstance(s, Mapping):
+        sources.append(s)
+    c = claims_by_cid.get(cid)
+    if isinstance(c, Mapping) and c is not s:
+        sources.append(c)
+    # speaker_key 优先；缺失时降级用 stance；仍不可判返回 None。
+    # summary 命中但 speaker_key/stance 均空时回退 claims_by_cid。
+    for src in sources:
+        speaker_key = str(src.get("speaker_key") or src.get("speaker") or "").strip().lower()
+        if "bull" in speaker_key or "多" in speaker_key:
+            return "bull"
+        if "bear" in speaker_key or "空" in speaker_key:
+            return "bear"
+    for src in sources:
+        stance = str(src.get("stance") or "").strip().lower()
+        if stance in {"bullish", "bull", "看多", "偏多", "多头", "多方"}:
+            return "bull"
+        if stance in {"bearish", "bear", "看空", "偏空", "空头", "空方"}:
+            return "bear"
+    return None
+
+
 def compute_direction_basis(
     winner: Any,
     adopted_claim_ids: Sequence[str] | None,
@@ -6754,39 +6784,14 @@ def compute_direction_basis(
                     if cid_key:
                         claims_by_cid[cid_key] = c
 
-        def _claim_side(cid: str) -> str | None:
-            """确定性判定账本 claim 的立场侧别：'bull' | 'bear' | None。"""
-            sources: list[Mapping[str, Any]] = []
-            s = summary.get(cid)
-            if isinstance(s, Mapping):
-                sources.append(s)
-            c = claims_by_cid.get(cid)
-            if isinstance(c, Mapping) and c is not s:
-                sources.append(c)
-            # speaker_key 优先；缺失时降级用 stance；仍不可判返回 None。
-            # summary 命中但 speaker_key/stance 均空时回退 claims_by_cid。
-            for src in sources:
-                speaker_key = str(src.get("speaker_key") or src.get("speaker") or "").strip().lower()
-                if "bull" in speaker_key or "多" in speaker_key:
-                    return "bull"
-                if "bear" in speaker_key or "空" in speaker_key:
-                    return "bear"
-            for src in sources:
-                stance = str(src.get("stance") or "").strip().lower()
-                if stance in {"bullish", "bull", "看多", "偏多", "多头", "多方"}:
-                    return "bull"
-                if stance in {"bearish", "bear", "看空", "偏空", "空头", "空方"}:
-                    return "bear"
-            return None
-
         for cid in adopted_claim_ids or []:
-            side = _claim_side(cid)
+            side = _claim_side(cid, summary, claims_by_cid)
             if side == w:
                 same_direction_claims.append({"claim_id": cid, "source": "adopted"})
             elif side is None:
                 undetermined_claim_ids.append(cid)
         for cid in partially_adopted_claims or []:
-            side = _claim_side(cid)
+            side = _claim_side(cid, summary, claims_by_cid)
             if side == w:
                 same_direction_claims.append({"claim_id": cid, "source": "partial"})
             elif side is None:
