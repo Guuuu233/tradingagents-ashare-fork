@@ -105,7 +105,8 @@ _DATE_MASK_PATTERN = re.compile(
     r"(?<![\d.])\d{4}年\d{1,2}月\d{1,2}日?(?![\d.])|"
     r"(?<![\d.])\d{1,2}月\d{1,2}日?(?![\d.])|"
     # DAV-1405: 紧跟量纲的「10.12%」「10-12亿」是数值/区间，不是 MM.DD 日期。
-    r"(?<![\d.])(0[1-9]|1[0-2])[-/.](0[1-9]|[12]\d|3[01])(?![\d.]|\s*(?:%|％|pct|个百分点|bp|亿|万|元|倍|股))|"
+    r"(?<![\d.])(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01])(?![\d.]|\s*" + _UNIT_STR + r")|"
+    r"(?<![\d.])(0[1-9]|1[0-2])[/\.](0[1-9]|[12]\d|3[01])(?![\d.]|\s*(?:%|％|pct|个百分点|bp|亿|万|元|倍|股))|"
     r"(?<![\d.])\d{4}\s*年?\s*[hHqQ][1-4](?![\d.])|"
     r"(?<![\d.])\d{4}\s*年?\s*(?:中报|半年报|[一二三四]季报|年报)(?![\d.])|"
     r"(?<![\d.])[hHqQ][1-4](?![\d.])|"
@@ -130,6 +131,11 @@ _DATE_MASK_PATTERN = re.compile(
     # 「2025年/2025年度」，漏掩后「2025」被抽成伪原子阻断全数命中。
     r"(?<![\d.])\d{4}\s*年?\s*全\s*年(?![\d.])|"
     r"(?<![\d.])\d{4}\s*年度?(?![\d.])|"
+    # DAV-1408: 年份预测标签与准则编号不是独立数量；保留紧邻的实际指标值。
+    r"(?<![\d.])(?:19|20)\d{2}(?=\s*(?:预测|预期|预计|展望))|"
+    r"(?<![\d.])(?:19|20)\d{2}\s*[EFef](?![A-Za-z\d.])|"
+    r"(?<![A-Za-z])(?i:IFRS|IAS)\s*\d+(?![\d.])|"
+    r"(?:国际财务报告准则|国际会计准则|企业会计准则)(?:第)?\s*\d+\s*号?|"
     # DAV-1389: 行首章节/列表序号（「#### 3. 政策催化」「3、…」）——序号
     # 不是事实数字，不掩码会让「赔率3:1」的「3」撞上小节编号。仅行首 1-2
     # 位序号且序号后随空白，不波及「3.04亿」类小数。
@@ -261,12 +267,29 @@ def normalize_numeric_value(val_str: str, unit_str: str = "") -> tuple[float, st
         return num, "raw"
 
 
+def _mask_nonfact_numbers(text: str) -> str:
+    """保位掩去日期/年份/准则编号；价格语境中的 MM.DD 小数仍是数值。"""
+    cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), text)
+    for match in re.finditer(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?![\d.])", text):
+        if not (1 <= int(match.group(1)) <= 12 and 1 <= int(match.group(2)) <= 31):
+            continue
+        start, end = match.span()
+        if re.search(
+            r"(?:上轨|下轨|中轨|布林|均线|价|元|阻力|支撑|关口|触及|探|为|报|线|峰|谷|位|带|区|高|低)\s*$",
+            text[max(0, start - 8):start],
+        ) or re.match(
+            r"^\s*(?:元|关口|附近|区域|一带|一线|位|线|阻力|支撑)", text[end:end + 6],
+        ):
+            cleaned = cleaned[:start] + match.group(0) + cleaned[end:]
+    return cleaned
+
+
 def _extract_numbers_and_units(text: str) -> list[tuple[float, str, str]]:
     """Extract list of (normalized_val, canonical_unit, raw_substr) from text."""
     if not text:
         return []
     # 1. Mask dates to prevent temporal anchors from polluting financial metric matching
-    cleaned = _DATE_MASK_PATTERN.sub(" ", text)
+    cleaned = _mask_nonfact_numbers(text)
     # 2. Expand ranges so the first number inherits trailing unit (e.g. 450~470亿元 -> 450亿元 ~ 470亿元)
     cleaned = _RANGE_BOTH_UNIT_PATTERN.sub(r"\1\2 ~ \3\4", cleaned)
     cleaned = _RANGE_END_UNIT_PATTERN.sub(r"\1\3 ~ \2\3", cleaned)
@@ -412,6 +435,7 @@ _METRIC_CANONICAL_MAP: dict[str, str] = {
     # DAV-1177: 扣非口径独立于归母净利——「扣非净利增74%」与「归母净利+70%」
     # 是不同科目，并入净利润会互判伪冲突（fa50d0d8）；扣非行与扣非值同键互配。
     "扣非净利润": "扣非净利润", "扣非净利": "扣非净利润",
+    "扣除非经常性损益后净利润": "扣非净利润", "扣除非经常性损益后净利": "扣非净利润",
     "扣非归母净利润": "扣非净利润", "扣非归母净利": "扣非净利润",
     "扣非降幅": "扣非净利润", "扣非增速": "扣非净利润", "扣非": "扣非净利润",
     "扣非利润": "扣非净利润",
@@ -1626,9 +1650,9 @@ _APPROX_REL_TOL = 0.10
 
 
 class BoundNumber:
-    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span", "provider", "timepoint")
+    __slots__ = ("val", "unit", "raw", "metric", "period", "raw_metric", "stype", "entity", "role", "basis", "bound", "range_span", "provider", "timepoint", "proportion")
 
-    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None, provider: tuple[str, ...] | None = None, timepoint: str | None = None):
+    def __init__(self, val: float, unit: str, raw: str, metric: str | None, period: str | None, raw_metric: str | None, stype: str = STYPE_UNKNOWN, entity: str | None = None, role: str = ROLE_ACTUAL, basis: str | None = None, bound: str | None = None, range_span: tuple[float, float] | None = None, provider: tuple[str, ...] | None = None, timepoint: str | None = None, proportion: tuple[str | None, str] | None = None):
         self.val = val
         self.unit = unit
         self.raw = raw
@@ -1643,6 +1667,7 @@ class BoundNumber:
         self.range_span = range_span  # DAV-1163: 「A-B」区间对合并的 (lo,hi)，None = 非区间
         self.provider = provider      # DAV-1158: 数据源/口径命名空间（src:*/fld:* 元组），None = 未标注
         self.timepoint = timepoint    # DAV-1169: 时点/价格基准（tp:stock/flow/hist/cost），None = 未标注
+        self.proportion = proportion  # DAV-1408: (分子, 分母) 身份独立于占比 canonical；不得折叠大单与主力。
 
     def __repr__(self) -> str:
         return f"BoundNumber({self.raw!r}, val={self.val}, unit={self.unit!r}, metric={self.metric!r}, period={self.period!r}, stype={self.stype!r}, entity={self.entity!r}, role={self.role!r}, basis={self.basis!r}, bound={self.bound!r}, range={self.range_span!r}, provider={self.provider!r}, timepoint={self.timepoint!r})"
@@ -1849,26 +1874,10 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
     # period_view = 未掩码日期 + 已去逗号，与 cleaned 严格同坐标系，专供
     # 数字级期间绑定读取局部期间标注（「（2024）」「2026H1」）。
     period_view = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", _numeric_markup_view(text))
-    cleaned = _DATE_MASK_PATTERN.sub(lambda m: " " * len(m.group(0)), period_view)
+    cleaned = _mask_nonfact_numbers(period_view)
     # DAV-1158: 字段代码口径（r0_net/netamount 等）保位掩码——其内部数字
     # （r0_net 的 0）不得被当作独立数值抽取；口径信息由 provider 绑定另行读取
     cleaned = _PROVIDER_FIELD_RE.sub(lambda m: " " * len(m.group(0)), cleaned)
-    # DAV-1177: 点分十进制「12.03」在价格语境（上轨/阻力/关口/元）中是价位
-    # 而非日期——MM.DD 掩码分支会把它抹成伪日期。按上下文还原：前随价格/
-    # 轨位/动词词尾或后随元/关口/区域类后缀时解除掩码；连字符 08-19 仍按日期。
-    for _dm in re.finditer(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?![\d.])", period_view):
-        if not (1 <= int(_dm.group(1)) <= 12 and 1 <= int(_dm.group(2)) <= 31):
-            continue
-        _s, _e = _dm.span()
-        _pre = period_view[max(0, _s - 8):_s]
-        _post = period_view[_e:_e + 6]
-        if re.search(
-            r"(?:上轨|下轨|中轨|布林|均线|价|元|阻力|支撑|关口|触及|探|为|报|线|峰|谷|位|带|区|高|低)\s*$",
-            _pre,
-        ) or re.match(
-            r"^\s*(?:元|关口|附近|区域|一带|一线|位|线|阻力|支撑)", _post
-        ):
-            cleaned = cleaned[:_s] + _dm.group(0) + cleaned[_e:]
     cleaned = _TRANSMISSION_WINDOW_RE.sub(lambda m: " " * len(m.group(0)), cleaned)
     # 比值是一个派生原子；不把归一基数「1」计入事实覆盖。
     ratio_matches = list(_RATIO_LITERAL_RE.finditer(cleaned))
@@ -2603,7 +2612,12 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
         # DAV-1169: 余额/流量共用指标与价格类数字的时点/价格基准命名空间；
         # 同 provider 读取约定（period_view 坐标系）。
         timepoint = _bind_timepoint_for_number(period_view, n_start, n_end, metric)
-        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound, None, provider, timepoint)
+        proportion = _bind_proportion(period_view, n_start, n_end, filtered_spans, metric) if unit == "%" else None
+        # 口径注释可能把「占」挤出紧邻窗口；明确命名的净额/流通市值比仍是
+        # 派生占比，而非注释里的主力金额科目。
+        if (_mv_ratio_pct or (proportion and proportion[1] == "流通市值")) and metric not in {"持股比例", "capex_ocf比重"}:
+            metric, raw_metric, stype = "流通市值占比", "占流通市值比", STYPE_PROPORTION
+        bn = BoundNumber(val, unit, raw, metric, num_period, raw_metric, stype, entity, role, basis, bound, None, provider, timepoint, proportion)
         res.append(bn)
         res_spans.append((n_start, n_end))
         last_res_match_end = n_end
@@ -2656,6 +2670,11 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
             hi = max(res[j].val, res[j + 1].val)
             res[j].range_span = (lo, hi)
             res[j + 1].range_span = (lo, hi)
+            # 同一区间的后端省略「占」关系时，仍须保留前端的分子身份。
+            if res[j].proportion is None:
+                res[j].proportion = res[j + 1].proportion
+            if res[j + 1].proportion is None:
+                res[j + 1].proportion = res[j].proportion
             # 区间端点共享指标/语义绑定——「市值底线67-77元」中 77 因前一数字
             # 占先而失绑，区间两端同属「市值」；未绑定端点继承对端绑定。
             if res[j + 1].metric is None and res[j].metric is not None:
@@ -2792,7 +2811,7 @@ def _is_rounding_equivalent(ev_bn: BoundNumber, l_bn: BoundNumber) -> bool:
     # 比值的显示精度不等于归一商值的精度，不能把1:3与1:2都舍入为0。
     if "ratio" in (ev_bn.unit, l_bn.unit):
         return False
-    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+    from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 
     def places(bn: BoundNumber) -> int | None:
         token = _NUMBER_WITH_UNIT_RE.search(bn.raw)
@@ -2818,8 +2837,16 @@ def _is_rounding_equivalent(ev_bn: BoundNumber, l_bn: BoundNumber) -> bool:
         if abs(ev_bn.val - l_bn.val) > 0.15:
             return False
     try:
-        quantum = Decimal(10) ** (-d)
-        return Decimal(str(ev_bn.val)).quantize(quantum, rounding=ROUND_HALF_UP) == Decimal(str(l_bn.val)).quantize(quantum, rounding=ROUND_HALF_UP)
+        quantum = Decimal("1").scaleb(-d)
+        evidence = Decimal(str(ev_bn.val)).quantize(quantum, rounding=ROUND_HALF_UP)
+        source = Decimal(str(l_bn.val))
+        if evidence == source.quantize(quantum, rounding=ROUND_HALF_UP):
+            return True
+        # 只允许证据的显示数值是整数，按该显示单位向零截断来源；小数精度
+        # 与反向粗报告不放宽，量纲/符号/指标门仍由上游白名单执行。
+        token = _NUMBER_WITH_UNIT_RE.search(ev_bn.raw)
+        return bool(token and "." not in token.group(1) and ev_places < l_places
+                    and evidence == source.quantize(quantum, rounding=ROUND_DOWN))
     except InvalidOperation:
         return False
 
@@ -2883,7 +2910,7 @@ def _sign_contextualize(bn: "BoundNumber", text: str | None) -> "BoundNumber":
         val=-bn.val, unit=bn.unit, raw=bn.raw, metric=bn.metric,
         period=bn.period, raw_metric=bn.raw_metric, stype=bn.stype,
         entity=bn.entity, role=bn.role, basis=bn.basis, bound=bn.bound,
-        provider=bn.provider, timepoint=bn.timepoint,
+        provider=bn.provider, timepoint=bn.timepoint, proportion=bn.proportion,
     )
     if bn.range_span is not None:
         cp.range_span = (-bn.range_span[1], -bn.range_span[0])
@@ -3222,6 +3249,86 @@ def _metric_literals(metric: str) -> list[str]:
     return [metric] + [k for k, v in _METRIC_CANONICAL_MAP.items() if v == metric and k != metric]
 
 
+def _bind_proportion(
+    text: str, n_start: int, n_end: int,
+    metric_spans: list[tuple[int, int, str]], metric: str | None,
+) -> tuple[str | None, str] | None:
+    """只保留明确的分子身份；命名净额占比按其主力口径和行内注释解析。"""
+    if metric == "capex_ocf比重":
+        return "capex", "现金流"
+    if metric == "持股比例":
+        return "持股", "总股本"
+    start = max(text.rfind(c, 0, n_start) for c in "。；;\n") + 1
+    prefix = text[start:n_start]
+    occurrences = list(re.finditer("占", prefix))
+    named_flow = bool(re.search(r"net[_\\]*to[_\\]*circ[_\\]*mv|净额占流通市值(?:比)?", prefix, re.I))
+    if not occurrences:
+        return ("主力", "流通市值") if named_flow else None
+    pos = start + occurrences[-1].start()
+    tail = re.sub(r"（[^（）]*）|\([^()]*\)|【[^【】]*】", "", text[pos + 1:n_start]).strip()
+    aliases = {"流通盘": "流通市值", "流通股本": "流通市值", "总股本": "总股本", "总盘子": "总市值", "归母": "净利润"}
+    den = next((k for k in sorted(set(_SORTED_METRIC_MAP_KEYS) | set(aliases), key=len, reverse=True)
+                if tail.lower().startswith(k.lower())), None)
+    head_end = pos
+    if den is None and re.match(r"(?:比|的比重|比重)", tail):
+        anchor = re.search(r"在(?:总)?([^，。；,;]{1,12})中?$", text[start:pos])
+        if anchor:
+            den = next((k for k in _SORTED_METRIC_MAP_KEYS if anchor.group(1).startswith(k)), None)
+            head_end = start + anchor.start()
+    if den is None or re.search(r"[\d%]", tail):
+        return ("主力", "流通市值") if named_flow else None
+    num = next((raw for s, e, raw in reversed(metric_spans) if start <= s and e <= head_end), None)
+    head = text[start:head_end]
+    if "折旧" in head:
+        numerator = "折旧"
+    else:
+        numerator = "大单" if num and re.fullmatch(r"大单(?:净流入|净流出|净额)?", num) else _canonicalize_metric(num, "%")
+    denominator = aliases.get(den, _canonicalize_metric(den, "%"))
+    if denominator == "流通市值":
+        # 分子位的显式大单/超大单优先，不能因金额侧别名折叠为主力。
+        gran = list(_PROVIDER_GRAN_RE.finditer(head))
+        if num and _canonicalize_metric(num, "%") in {"主力", "中小单"} and re.search(r"[与和及+]", num):
+            numerator = _canonicalize_metric(num, "%")
+        elif gran:
+            numerator = gran[-1].group(0)
+        elif named_flow:
+            # 净额占比表头和注释属于同一字段；无主语的表格复述仍保留主力
+            # 契约，避免明确大单绕过有主语的原句去借同报告的无主语行。
+            post = _PAREN_POST_NUM_RE.match(text[n_end:n_end + 48])
+            scope = tail + (post.group(1) if post else "")
+            annotated = list(_PROVIDER_GRAN_RE.finditer(scope))
+            numerator = annotated[-1].group(0) if annotated else "主力"
+    return numerator, denominator
+
+
+def _report_bound_numbers(line: str, report: str) -> list[BoundNumber]:
+    """无主语的相对规模表格行继承本报告明确命名的主力净额字段契约。"""
+    numbers = extract_bound_numbers(line)
+    named_main_ratio = re.search(
+        r"net[_\\]*to[_\\]*circ[_\\]*mv|净额占流通市值(?:比)?", _numeric_markup_view(report), re.I,
+    )
+    if named_main_ratio:
+        for number in numbers:
+            if number.unit == "%" and number.proportion == (None, "流通市值"):
+                number.proportion = ("主力", "流通市值")
+    return numbers
+
+
+def _proportion_identity_ok(ev_bn: BoundNumber, l_bn: BoundNumber) -> bool:
+    ep, lp = ev_bn.proportion, l_bn.proportion
+    # 命名资金占比的百分数不借括号内归一分数（0.02% vs 0.0002），也不
+    # 让 raw↔% 的绝对容差绕过分子门；未新增比例/百分数换算通道。
+    if ev_bn.unit != l_bn.unit and any(p and p[1] == "流通市值" for p in (ep, lp)):
+        return False
+    if ep is None and lp is None:
+        return True
+    if ep is None or lp is None:
+        return True
+    # 缺绑不是口径冲突；只有两侧都明确绑定且分子不同才由分子门拒绝。
+    # 双侧已写明的分母仍须一致，原分母桥接规则不放宽。
+    return ep[1] == lp[1] and (ep[0] is None or lp[0] is None or ep[0] == lp[0])
+
+
 def _proportion_pairs(text: str, m1: str, m2: str) -> set[tuple[str, str]]:
     """文本写出的「分子…占分母」方向对（同一句内，分子在「占」前 40 字内、
     分母紧随「占」）。"""
@@ -3509,6 +3616,9 @@ def _is_bound_num_match(
     (2) 指标门失败时允许字面桥接（_metric_bridge_ok），仅当双侧文本可证明
         同一指标锚点存在时放行，不得放宽成「数字出现即算」。
     """
+    # 分子身份门先于同值/舍入/区间/桥接/派生加总，原子补检同样消费它。
+    if not _proportion_identity_ok(ev_bn, l_bn):
+        return False
     # DAV-1389: 裸整数原子要求报告侧至少带一个锚点（指标/实体/期间/界）——
     # 「赔率3:1」的「3」撞上「3连板」「#### 3.」类碎片时，被引侧无任何绑定
     # 上下文，同值纯属巧合。非整数值（0.03 类比率）不受此限。
@@ -3786,6 +3896,18 @@ def _is_bound_num_contradicted(
     if not _timepoints_comparable(ev_bn, l_bn):
         return False
     return _bound_num_value_conflicts(ev_bn, l_bn)
+
+
+def _unrecorded_qualitative_judgment(text: str) -> bool:
+    """剔除标签数字不能让判断/归因/反驳借泛关键词获验；逐字报告路径不改。"""
+    return bool(
+        _JUDGMENT_MARKER_RE.search(text)
+        or re.search(
+            r"概率[^，。；]{0,12}(?:高于|低于|更高|更低)|误把|永远有效|反映|"
+            r"脱敏|正确方法|错算|定价权|无复苏催化",
+            text,
+        )
+    )
 
 
 def _qualitative_record_match(raw: str, line: str) -> bool:
@@ -4117,7 +4239,7 @@ class EvidenceFactualTruthEvaluator:
                 ev_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in ev_keywords}
                 line_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in line_keywords}
                 common_kw = ev_canon.intersection(line_canon)
-                line_bns = extract_bound_numbers(line_text)
+                line_bns = _report_bound_numbers(line_text, report_body)
 
                 if not all_ev_bns and _qualitative_record_match(raw_text, line_text):
                     return {"raw": raw_text, "claim_id": claim_id, "matched_role": role_key,
@@ -4139,7 +4261,7 @@ class EvidenceFactualTruthEvaluator:
                     # R8: 含辩手预测/因果判断的子句不能靠两个泛关键词获验。
                     if (
                         len(common_kw) >= 2 and any(kw in line_text for kw in ev_keywords)
-                        and not _JUDGMENT_MARKER_RE.search(raw_text)
+                        and not _unrecorded_qualitative_judgment(raw_text)
                     ):
                         return {
                             "raw": raw_text,
@@ -4175,6 +4297,7 @@ class EvidenceFactualTruthEvaluator:
                 }
                 if (
                     not all_ev_bns and len(common_kw) >= 2
+                    and not _unrecorded_qualitative_judgment(raw_text)
                     and common_kw & _QUAL_ANCHOR_KWS
                     and not re.search(r"持续|连续|多日|连日|逐日|每日", raw_text)
                     and any(kw in line_text for kw in ev_keywords)
@@ -4275,7 +4398,7 @@ class EvidenceFactualTruthEvaluator:
                             and not _metric_anchor
                         ):
                             continue
-                        line_bns = extract_bound_numbers(line_text)
+                        line_bns = _report_bound_numbers(line_text, report_body)
                         for l_bn in line_bns:
                             if _is_bound_num_match(
                                 ev_bn, l_bn, self.rel_tol, self.abs_tol,
@@ -4350,7 +4473,7 @@ class EvidenceFactualTruthEvaluator:
                     line_text = line.strip()
                     if not line_text:
                         continue
-                    line_bns = extract_bound_numbers(line_text)
+                    line_bns = _report_bound_numbers(line_text, report_body)
                     for num_idx, ev_bn in enumerate(all_ev_bns):
                         if num_idx in all_hit_num_indices:
                             continue
@@ -4532,7 +4655,7 @@ class EvidenceFactualTruthEvaluator:
             qualitative_parts = [
                 c for c in substantive
                 if not extract_bound_numbers(c)
-                and (_JUDGMENT_MARKER_RE.search(c) or _CN_MAGNITUDE_RE.search(c))
+                and (_unrecorded_qualitative_judgment(c) or _CN_MAGNITUDE_RE.search(c))
             ]
             verbatim = any(ev_core in str(v or "") for v in seven_reports.values())
             if len(substantive) < 2 or not qualitative_parts or verbatim:
@@ -4638,7 +4761,7 @@ class EvidenceFactualTruthEvaluator:
         """
         if unavailable_sources is None:
             unavailable_sources = set()
-        line_numbers: dict[str, list[BoundNumber]] = {}
+        line_numbers: dict[tuple[str, str], list[BoundNumber]] = {}
         for it in items:
             if it.get("status") != STATUS_UNSUPPORTED:
                 continue
@@ -4699,9 +4822,10 @@ class EvidenceFactualTruthEvaluator:
                     if not line_text:
                         continue
                     # 不能用字面子串预筛掉舍入/单位等价（6.925%→6.93%）。
-                    if line_text not in line_numbers:
-                        line_numbers[line_text] = extract_bound_numbers(line_text)
-                    line_bns = line_numbers[line_text]
+                    key = (role_key, line_text)
+                    if key not in line_numbers:
+                        line_numbers[key] = _report_bound_numbers(line_text, report_body)
+                    line_bns = line_numbers[key]
                     for l_bn in line_bns:
                         if _is_bound_num_match(
                             fact_bn, l_bn, self.rel_tol, self.abs_tol,
@@ -5231,6 +5355,7 @@ def _sem_is_noun_fragment(text: str) -> bool:
 
 
 def _sem_extract_nums(text: str) -> set[str]:
+    text = _mask_nonfact_numbers(text)
     spans = [m.span() for m in _SEM_INDICATOR_PERIOD.finditer(text)]
     return {m.group() for m in re.finditer(r'\d+(?:\.\d+)?%?', text)
             if not any(start <= m.start() and m.end() <= end for start, end in spans)}
