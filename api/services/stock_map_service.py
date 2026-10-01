@@ -30,7 +30,14 @@ _SINA_PAGE_SIZE = 100
 _SINA_MIN_STOCK_COUNT = 4000
 _SINA_MAX_STOCK_COUNT = 20000
 _SINA_REQUEST_TIMEOUT = (5, 10)
-_SINA_TOTAL_TIMEOUT_SECONDS = 120
+# Sina paging jitters often: a read timeout on one page usually recovers on a
+# retry, so each request gets a few attempts before the fetch is abandoned.
+_SINA_MAX_ATTEMPTS = 3
+_SINA_RETRY_BACKOFF_SECONDS = 0.5
+# Worst case ~56 pages; measured clean pull is ~66-74s. 240s leaves room for a
+# handful of recovered page timeouts plus slow pages, while still aborting the
+# run when the overall budget is exhausted.
+_SINA_TOTAL_TIMEOUT_SECONDS = 240
 
 
 def archive_path() -> Path:
@@ -112,10 +119,32 @@ def write_archive(names: Dict[str, str], stock_count: int, fund_count: int) -> N
                 logger.warning("[StockMap] Cannot clean temporary archive: %s", exc)
 
 
-def _sina_json(session: requests.Session, endpoint: str, params: dict):
-    response = session.get(_SINA_BASE_URL + endpoint, params=params, timeout=_SINA_REQUEST_TIMEOUT)
-    response.raise_for_status()
-    return response.json()
+# The HTTPAdapter Retry only retries HTTP status codes; read timeouts and
+# connection-layer drops surface as exceptions and are retried here instead.
+_SINA_RETRIABLE_ERRORS = (
+    requests.Timeout,
+    requests.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _sina_json(session: requests.Session, endpoint: str, params: dict, deadline: float):
+    attempt = 0
+    while True:
+        if time.monotonic() >= deadline:
+            raise requests.Timeout("Sina stock-map total deadline exceeded")
+        try:
+            response = session.get(_SINA_BASE_URL + endpoint, params=params, timeout=_SINA_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            return response.json()
+        except _SINA_RETRIABLE_ERRORS as exc:
+            attempt += 1
+            if attempt >= _SINA_MAX_ATTEMPTS:
+                raise
+            wait = min(_SINA_RETRY_BACKOFF_SECONDS * attempt, max(deadline - time.monotonic(), 0))
+            logger.info("[StockMap] Sina %s attempt %d failed (%s); retrying", endpoint, attempt, exc)
+            if wait > 0:
+                time.sleep(wait)
 
 
 def _sina_row(row: dict) -> Tuple[str, str]:
@@ -141,7 +170,7 @@ def fetch_sina_stock_names() -> Dict[str, str]:
         session.mount("https://", HTTPAdapter(max_retries=Retry(
             total=1, backoff_factor=0.2, status_forcelist=[429, 500, 502, 503, 504],
         )))
-        raw_count = _sina_json(session, "getHQNodeStockCount", {"node": "hs_a"})
+        raw_count = _sina_json(session, "getHQNodeStockCount", {"node": "hs_a"}, deadline)
         if not isinstance(raw_count, (str, int)) or isinstance(raw_count, bool):
             raise ValueError("Sina returned an invalid stock count")
         count = int(raw_count)
@@ -154,7 +183,7 @@ def fetch_sina_stock_names() -> Dict[str, str]:
                 raise requests.Timeout("Sina stock-map total deadline exceeded")
             rows = _sina_json(session, "getHQNodeData", {
                 "node": "hs_a", "page": page, "num": _SINA_PAGE_SIZE, "sort": "symbol", "asc": 1,
-            })
+            }, deadline)
             expected = min(_SINA_PAGE_SIZE, count - (page - 1) * _SINA_PAGE_SIZE)
             if not isinstance(rows, list) or len(rows) != expected:
                 raise ValueError(f"Sina incomplete page {page}; expected {expected} rows")

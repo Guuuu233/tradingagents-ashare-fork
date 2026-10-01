@@ -2,6 +2,7 @@
 import json
 import sys
 import threading
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -166,10 +167,11 @@ def test_default_archive_path_survives_release_cwd(monkeypatch, tmp_path):
         assert service.archive_path() == tmp_path / "state" / "tradingagents" / "stock-map.json"
 
 
-def sina_fixture(monkeypatch, pages=None, error=None, count="3"):
+def sina_fixture(monkeypatch, pages=None, error=None, count="3", page_failures=None):
     from api.services import stock_map_service as service
     monkeypatch.setattr(service, "_SINA_MIN_STOCK_COUNT", 3)
     monkeypatch.setattr(service, "_SINA_PAGE_SIZE", 2)
+    monkeypatch.setattr(service, "_SINA_RETRY_BACKOFF_SECONDS", 0)
     rows = [
         {"symbol": "bj920001", "code": "920001", "name": "纬达光电"},
         {"symbol": "sh600519", "code": "600519", "name": "贵州茅台"},
@@ -181,6 +183,10 @@ def sina_fixture(monkeypatch, pages=None, error=None, count="3"):
         assert timeout == (5, 10)
         if error:
             raise error
+        page = params.get("page")
+        if page_failures and page_failures.get(page, 0) > 0:
+            page_failures[page] -= 1
+            raise requests.ReadTimeout("read timed out")
         return SimpleNamespace(raise_for_status=lambda: None, json=lambda: next(payloads))
     session = SimpleNamespace(get=get, mount=lambda *a: None, trust_env=True)
     fake = MagicMock()
@@ -210,6 +216,29 @@ def test_sina_adapter_propagates_network_failure(monkeypatch):
     service = sina_fixture(monkeypatch, error=requests.Timeout("provider timed out"))
     with pytest.raises(requests.Timeout):
         service.fetch_sina_stock_names()
+
+
+def test_sina_adapter_recovers_from_page_read_timeouts(monkeypatch):
+    service = sina_fixture(monkeypatch, page_failures={1: 1, 2: 2})
+    assert service.fetch_sina_stock_names() == {
+        "纬达光电": "920001.BJ", "贵州茅台": "600519.SH", "京东方Ａ": "000725.SZ",
+    }
+
+
+def test_sina_adapter_fails_after_page_retries_exhausted(monkeypatch):
+    service = sina_fixture(monkeypatch, page_failures={1: 99})
+    with pytest.raises(requests.ReadTimeout):
+        service.fetch_sina_stock_names()
+    assert not archive_path().exists()
+
+
+def test_sina_adapter_aborts_when_total_budget_exhausted(monkeypatch):
+    service = sina_fixture(monkeypatch)
+    ticks = iter([0.0, 0.0])
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks, 999.0))
+    with pytest.raises(requests.Timeout, match="total deadline exceeded"):
+        service.fetch_sina_stock_names()
+    assert not archive_path().exists()
 
 
 def test_failed_atomic_replace_preserves_last_good_archive():
