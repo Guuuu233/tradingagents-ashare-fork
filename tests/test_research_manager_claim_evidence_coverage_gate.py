@@ -762,8 +762,9 @@ class TestResearchManagerIntegrationWithEvidenceGate:
         assert result["evidence_verification"] == result["investment_debate_state"]["evidence_verification"]
         assert result["decision_status"]["analysis_status"] == "VALID"
         assert result["decision_status"]["direction"] == "BULL"
-        assert result["decision_status"]["trade_action"] == "WAIT"
-        assert result["decision_status"]["confirmation_state"] == "PARTIAL"
+        assert result["decision_status"]["trade_action"] == "BUY"
+        assert result["decision_status"]["confirmation_state"] == "CONFIRMED"
+        assert "released_same_direction_partial:INV-5" in result["decision_status"]["reason_codes"]
 
     def test_research_manager_pre_gate_blocked_path_structural_roundtrip(self):
         """Debate pre-gate check failure blocks before LLM, and preserves structured summary across all locations."""
