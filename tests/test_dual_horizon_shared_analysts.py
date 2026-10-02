@@ -250,3 +250,26 @@ class TestEmailHorizonDerivation:
         assert _report_horizon(r) == "medium"
         r.result_data = None
         assert _report_horizon(r) is None
+
+    def test_report_horizon_prefers_recorded_slice(self):
+        """双档 short 失败、medium 完成时，主档应取 medium（对齐 _primary_horizon_slice）。"""
+        from api.services.email_report_service import _report_horizon
+
+        class R:
+            pass
+
+        r = R()
+        # short 失败（无已记录状态）、medium 完成 → medium
+        r.result_data = {
+            "horizons": {"short": {}, "medium": {}},
+            "short_term": {"status": "failed"},
+            "medium_term": {"trade_action": "BUY"},
+        }
+        assert _report_horizon(r) == "medium"
+        # 两档均完成 → short
+        r.result_data = {
+            "horizons": {"short": {}, "medium": {}},
+            "short_term": {"trade_action": "HOLD"},
+            "medium_term": {"trade_action": "BUY"},
+        }
+        assert _report_horizon(r) == "short"

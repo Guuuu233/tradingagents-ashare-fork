@@ -144,6 +144,16 @@ def _report_horizon(report: "ReportDB") -> Optional[str]:
     h = rd.get("horizon")
     if h in ("short", "medium"):
         return h
+    # 与 report_service._primary_horizon_slice 同口径：优先取带已记录状态的
+    # 主档切片（short→medium），双档部分失败时与正文提升列一致。
+    for key, horizon_name in (("short_term", "short"), ("medium_term", "medium")):
+        slice_ = rd.get(key)
+        if isinstance(slice_, dict) and (
+            slice_.get("trade_action")
+            or slice_.get("analysis_status")
+            or slice_.get("decision_status")
+        ):
+            return horizon_name
     horizons = rd.get("horizons")
     if isinstance(horizons, dict) and horizons:
         if "short" in horizons:
