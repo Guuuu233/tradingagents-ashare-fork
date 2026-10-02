@@ -229,3 +229,24 @@ class TestSharedAnalystStageRunsOnce:
         }
         asyncio.run(compiled.ainvoke(initial_state))
         assert calls["count"] == 7
+
+
+class TestEmailHorizonDerivation:
+    """复审 🟡-2：ReportDB 无 horizon 列，从 result_data 推导本档。"""
+
+    def test_report_horizon_from_result_data(self):
+        from api.services.email_report_service import _report_horizon
+
+        class R:  # 轻量替身，只需 result_data 属性
+            pass
+
+        r = R(); r.result_data = {"horizon": "medium"}
+        assert _report_horizon(r) == "medium"
+        r.result_data = {"horizons": {"short": {}, "medium": {}}}
+        assert _report_horizon(r) == "short"
+        r.result_data = {"horizons": {"medium": {}}}
+        assert _report_horizon(r) == "medium"
+        r.result_data = {"requested_horizons": ["medium"]}
+        assert _report_horizon(r) == "medium"
+        r.result_data = None
+        assert _report_horizon(r) is None

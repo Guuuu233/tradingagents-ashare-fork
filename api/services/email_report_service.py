@@ -132,6 +132,29 @@ def _extract_verdict(text: str, horizon: Optional[str] = None) -> Optional[dict]
         return None
 
 
+def _report_horizon(report: "ReportDB") -> Optional[str]:
+    """推导报告对应档位供双档 VERDICT 按档取值（D-068）。
+
+    ReportDB 无 horizon 列；单档取 result_data.horizon，双档取
+    result_data.horizons 的主档（优先 short）。取不到返回 None。
+    """
+    rd = getattr(report, "result_data", None)
+    if not isinstance(rd, dict):
+        return None
+    h = rd.get("horizon")
+    if h in ("short", "medium"):
+        return h
+    horizons = rd.get("horizons")
+    if isinstance(horizons, dict) and horizons:
+        if "short" in horizons:
+            return "short"
+        return next(iter(horizons))
+    requested = rd.get("requested_horizons")
+    if isinstance(requested, list) and requested:
+        return str(requested[0])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering
 # ---------------------------------------------------------------------------
@@ -281,7 +304,7 @@ def render_report_html(report: "ReportDB", frontend_url: str = "", stock_name: s
         content = getattr(report, attr, None)
         if content is None:
             continue
-        verdict = _extract_verdict(content, horizon=getattr(report, "horizon", None))
+        verdict = _extract_verdict(content, horizon=_report_horizon(report))
         if verdict:
             verdicts.append((title, verdict))
 
