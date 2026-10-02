@@ -135,6 +135,27 @@ def _validate_bull_claim_references(
     return True, "valid", ""
 
 
+def _format_debate_prompt(template: str, *, horizon_context: str, **values: Any) -> str:
+    """Share report rendering across sides; keep all variable context behind it.
+
+    Split template placeholders before substitution so braces or delimiter-like
+    text inside reports/custom instructions cannot be interpreted as a template.
+    The existing before_data slot now precedes the variable debate data, not the
+    shared analyst reports, which must stay independent of role and round.
+    """
+    report_end = "{volume_price_report}\n"
+    report_head, role_and_round = template.split(report_end, 1)
+    role_template, round_template = role_and_round.split("{custom_prompt_before_data}", 1)
+    shared_report_block = (report_head + report_end).format(**values)
+    return (
+        shared_report_block
+        + role_template.format(**values)
+        + horizon_context
+        + values["custom_prompt_before_data"]
+        + round_template.format(**values)
+    )
+
+
 def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
     async def bull_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
@@ -207,7 +228,9 @@ def create_bull_researcher(llm, memory, custom_prompt: str = "", placement: Plac
             is_challenge_stage=is_challenge_stage,
             language=prompt_language,
         )
-        prompt = horizon_ctx + rendered_template.format(
+        prompt = _format_debate_prompt(
+            rendered_template,
+            horizon_context=horizon_ctx,
             macro_report=macro_report,
             market_research_report=market_research_report,
             sentiment_report=sentiment_report,

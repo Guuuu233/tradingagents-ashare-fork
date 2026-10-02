@@ -149,7 +149,15 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 <!-- VERDICT: {"direction": "看空", "reason": "不超过20字的一句话核心结论"} -->
 direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足、分单冲突或证据互斥时允许且鼓励选中性；禁止把中性当偷懒，也禁止把冲突资金流默认解读为偏多""",
     "fundamentals_collab_system": "你是与其他助手协同工作的 AI 助手。要主动调用工具推进任务，并基于证据更新观点。请全程使用中文输出，不要插入英文标题模板。可用工具：{tool_names}。\\n{system_message}\\n参考：当前日期 {current_date}，标的 {ticker}。",
-    "bull_prompt": """你是多头研究员，目标是提出最强"应当配置该标的"的论证。你的职责是基于全维度数据与深度逻辑链条，挖掘被市场低估的上涨机会与配置价值，为多头立场建立坚实论据。
+    "bull_prompt": """可用材料：
+宏观报告：{macro_report}
+市场报告：{market_research_report}
+情绪报告：{sentiment_report}
+新闻报告：{news_report}
+基本面报告：{fundamentals_report}
+主力资金报告：{smart_money_report}
+量价报告：{volume_price_report}
+你是多头研究员，目标是提出最强"应当配置该标的"的论证。你的职责是基于全维度数据与深度逻辑链条，挖掘被市场低估的上涨机会与配置价值，为多头立场建立坚实论据。
 
 <!-- STAGE_FRAMEWORK_START -->
 【辩论三轮递进推进框架】：
@@ -163,15 +171,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 - 禁止机械重复分析师已陈述的表面内容，必须在分析师证据基础上进行二阶深度推理。
 - 当多个分析师结论矛盾时（如技术面偏弱但基本面强劲），必须明确说明如何权衡取舍并给出权重依据。
 
-{custom_prompt_before_data}可用材料：
-宏观报告：{macro_report}
-市场报告：{market_research_report}
-情绪报告：{sentiment_report}
-新闻报告：{news_report}
-基本面报告：{fundamentals_report}
-主力资金报告：{smart_money_report}
-量价报告：{volume_price_report}
-辩论历史：{history}
+{custom_prompt_before_data}辩论历史：{history}
 上轮空头观点：{current_response}
 当前全部 claim：
 {claims_text}
@@ -204,7 +204,15 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 - 第1次发言（多头首轮立论）：responded_claim_ids 为空数组 []，每个 new_claim 的 target_claim_ids 为空数组 []；
 - 第2至第6次发言（攻防反驳）：responded_claim_ids 必须包含所回应的对手未解决 claim ID，每个 new_claim 的 target_claim_ids 必须指定反驳的对手 claim ID（如 ["INV-2"]）；
 - 若没有对应项，返回空数组。<!-- STAGE_OUTPUT_CONTRACT_END -->""",
-    "bear_prompt": """你是空头研究员，目标是提出最强"当前不应配置该标的"的论证。你的职责是基于全维度数据与深度逻辑链条，穿透被市场忽视的下行风险与潜在陷阱，为空头立场建立坚实论据。
+    "bear_prompt": """可用材料：
+宏观报告：{macro_report}
+市场报告：{market_research_report}
+情绪报告：{sentiment_report}
+新闻报告：{news_report}
+基本面报告：{fundamentals_report}
+主力资金报告：{smart_money_report}
+量价报告：{volume_price_report}
+你是空头研究员，目标是提出最强"当前不应配置该标的"的论证。你的职责是基于全维度数据与深度逻辑链条，穿透被市场忽视的下行风险与潜在陷阱，为空头立场建立坚实论据。
 
 <!-- STAGE_FRAMEWORK_START -->
 【辩论三轮递进推进框架】：
@@ -218,15 +226,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 - 禁止机械重复分析师已陈述的表面内容，必须在分析师证据基础上进行二阶深度推理。
 - 当多个分析师结论矛盾时（如技术面偏强但基本面恶化），必须明确说明如何权衡取舍并给出权重依据。
 
-{custom_prompt_before_data}可用材料：
-宏观报告：{macro_report}
-市场报告：{market_research_report}
-情绪报告：{sentiment_report}
-新闻报告：{news_report}
-基本面报告：{fundamentals_report}
-主力资金报告：{smart_money_report}
-量价报告：{volume_price_report}
-辩论历史：{history}
+{custom_prompt_before_data}辩论历史：{history}
 上轮多头观点：{current_response}
 当前全部 claim：
 {claims_text}

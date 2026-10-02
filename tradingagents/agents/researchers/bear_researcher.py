@@ -2,6 +2,7 @@ import logging
 from typing import Any, Mapping
 from tradingagents.dataflows.config import get_config
 from tradingagents.prompts import get_prompt
+from tradingagents.agents.researchers.bull_researcher import _format_debate_prompt
 from tradingagents.graph.intent_parser import build_horizon_context
 from tradingagents.agents.utils.agent_states import current_tracker_var, is_v2_debate_enabled
 from tradingagents.agents.utils.debate_utils import (
@@ -207,7 +208,9 @@ def create_bear_researcher(llm, memory, custom_prompt: str = "", placement: Plac
             is_challenge_stage=is_challenge_stage,
             language=prompt_language,
         )
-        prompt = horizon_ctx + rendered_template.format(
+        prompt = _format_debate_prompt(
+            rendered_template,
+            horizon_context=horizon_ctx,
             macro_report=macro_report,
             market_research_report=market_research_report,
             sentiment_report=sentiment_report,

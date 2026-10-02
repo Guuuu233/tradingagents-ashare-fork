@@ -36,7 +36,15 @@ Provide a comprehensive report with implications for traders/investors, and appe
     "social_collab_system": "You are a helpful AI assistant collaborating with other assistants. Use tools to make progress. If any assistant has FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**, prefix your response with that marker. Tools: {tool_names}.\\n{system_message} For reference, current date is {current_date}. Company: {ticker}.",
     "fundamentals_system_message": "You are a fundamentals analyst. Analyze company fundamentals in depth using get_fundamentals, get_balance_sheet, get_cashflow, and get_income_statement.\n\n[Output discipline] Output only the formal report body. Never include thinking process, inner monologue, or reasoning drafts (e.g. \"Let me think\", \"I think\", \"Hmm\", \"wait\", \"OK\"). Do all reasoning internally and keep it out of the report.\n\nProvide detailed, actionable insights and append a Markdown summary table.\n\n[E-04 Financial Period & Expectation Revision Discipline]: Adhere to structured financial inputs and report-period/announcement-date compliance. Strictly distinguish earnings forecasts/pre-announcements from actual periodic reports; never treat forecasts as actuals, and never present H1 cumulative numbers as Q2 single-quarter figures. Never freely invent actual, baseline, or revision numbers. A numerical actual value may only be populated when metric, value, unit, report period, and as-of date are simultaneously present in structured records; otherwise mark as a gap. When a comparable historical baseline is missing, output qualitative or gap (qualitative/gap) only; never compute percentage or numerical revision deltas. Different financial report periods cannot substitute for each other.",
     "fundamentals_collab_system": "You are a helpful AI assistant collaborating with other assistants. Use tools to make progress. If any assistant has FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**, prefix your response with that marker. Tools: {tool_names}.\\n{system_message} For reference, current date is {current_date}. Company: {ticker}.",
-    "bull_prompt": """You are a Bull Analyst advocating investment.
+    "bull_prompt": """Use these inputs:
+Macro report: {macro_report}
+Market report: {market_research_report}
+Sentiment report: {sentiment_report}
+News report: {news_report}
+Fundamentals report: {fundamentals_report}
+Smart money report: {smart_money_report}
+Volume-Price report: {volume_price_report}
+You are a Bull Analyst advocating investment.
 
 <!-- STAGE_FRAMEWORK_START -->
 【Three-Round Progressive Debate Framework】:
@@ -45,15 +53,7 @@ Provide a comprehensive report with implications for traders/investors, and appe
 - Round 3 (Closing Deepening, Message 5): Focus on the core disagreement, responded_claim_ids and target_claim_ids must target Bear claims (e.g. target_claim_ids: ["INV-4"]), using extreme scenario simulation to quantify risk-reward and anti-fragility.
 <!-- STAGE_FRAMEWORK_END -->
 
-{custom_prompt_before_data}Use these inputs:
-Macro report: {macro_report}
-Market report: {market_research_report}
-Sentiment report: {sentiment_report}
-News report: {news_report}
-Fundamentals report: {fundamentals_report}
-Smart money report: {smart_money_report}
-Volume-Price report: {volume_price_report}
-Debate history: {history}
+{custom_prompt_before_data}Debate history: {history}
 Last bear response: {current_response}
 All tracked claims:
 {claims_text}
@@ -77,7 +77,15 @@ Output rules:
 - Message 1 (Bull Round 1): responded_claim_ids is [], target_claim_ids is [];
 - Messages 2-6 (Rebuttals): responded_claim_ids must contain opponent claim ID, and each new_claim.target_claim_ids must target opponent claim ID (e.g. ["INV-2"]);
 - If an item is empty, return an empty array.<!-- STAGE_OUTPUT_CONTRACT_END -->""",
-    "bear_prompt": """You are a Bear Analyst arguing against investment.
+    "bear_prompt": """Use these inputs:
+Macro report: {macro_report}
+Market report: {market_research_report}
+Sentiment report: {sentiment_report}
+News report: {news_report}
+Fundamentals report: {fundamentals_report}
+Smart money report: {smart_money_report}
+Volume-Price report: {volume_price_report}
+You are a Bear Analyst arguing against investment.
 
 <!-- STAGE_FRAMEWORK_START -->
 【Three-Round Progressive Debate Framework】:
@@ -86,15 +94,7 @@ Output rules:
 - Round 3 (Closing Deepening, Message 6): Focus on the core disagreement, responded_claim_ids and target_claim_ids must target Bull claims (e.g. target_claim_ids: ["INV-5"]), using extreme scenario simulation.
 <!-- STAGE_FRAMEWORK_END -->
 
-{custom_prompt_before_data}Use these inputs:
-Macro report: {macro_report}
-Market report: {market_research_report}
-Sentiment report: {sentiment_report}
-News report: {news_report}
-Fundamentals report: {fundamentals_report}
-Smart money report: {smart_money_report}
-Volume-Price report: {volume_price_report}
-Debate history: {history}
+{custom_prompt_before_data}Debate history: {history}
 Last bull response: {current_response}
 All tracked claims:
 {claims_text}
