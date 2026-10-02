@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import http.client
 import ipaddress
 import json
@@ -2646,6 +2647,98 @@ async def _save_report_or_raise(
 _INJECT_ROLES = ("bull_researcher", "bear_researcher", "research_manager", "trader", "risk_manager")
 
 
+def _compute_input_snapshot(pool: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """DAV-1430 (D-066 B3): canonical sha256 of the collected input pool.
+
+    The pool handed to the graph is serialized as canonical JSON
+    (sort_keys, no whitespace, UTF-8, ensure_ascii=False); values that are
+    not JSON-serializable fall back to a deterministic ``default=str`` and
+    their top-level keys are listed under ``default_str_keys`` for audit.
+    Returns None when no pool is available — the field is written as null.
+    """
+    if not isinstance(pool, dict):
+        return None
+    try:
+        default_str_keys: List[str] = []
+        for key, value in pool.items():
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                default_str_keys.append(str(key))
+        canonical = json.dumps(
+            pool,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        encoded = canonical.encode("utf-8")
+        snapshot = {
+            "algo": "sha256",
+            "hash": hashlib.sha256(encoded).hexdigest(),
+            "keys": sorted(str(k) for k in pool.keys()),
+            "bytes": len(encoded),
+        }
+        if default_str_keys:
+            snapshot["default_str_keys"] = sorted(default_str_keys)
+        return snapshot
+    except Exception as exc:  # pragma: no cover - defensive
+        _log(f"[B1b] input_snapshot computation failed (non-fatal): {exc}")
+        return None
+
+
+def _build_run_identity(
+    graph: Any, prompt_snapshot: Dict[str, Any]
+) -> Dict[str, Any]:
+    """DAV-1430 (D-066 B3): code + prompt + nominal model binding identity.
+
+    Records the runtime commit sha (same source as /healthz), the per-role
+    resolved_hash from the frozen custom-prompt snapshot, and each role's
+    resolved nominal model/temperature/max_tokens. Credentials (api_key) and
+    endpoints (base_url) are deliberately excluded.
+    """
+    roles_cfg = getattr(graph, "role_resolved_configs", None) or {}
+    role_models = {
+        role: {
+            "model_name": (cfg or {}).get("model_name"),
+            "temperature": (cfg or {}).get("temperature"),
+            "max_tokens": (cfg or {}).get("max_tokens"),
+        }
+        for role, cfg in roles_cfg.items()
+        if isinstance(cfg, dict)
+    }
+    prompt_hashes = {
+        role: (entry or {}).get("resolved_hash")
+        for role, entry in (prompt_snapshot.get("roles") or {}).items()
+    }
+    return {
+        "commit_sha": _get_runtime_identity().commit_sha,
+        "prompt_resolved_hashes": prompt_hashes,
+        "role_models": role_models,
+    }
+
+
+def _attach_traceability_fields(
+    result: Dict[str, Any],
+    *,
+    pool: Optional[Dict[str, Any]],
+    graph: Any,
+    prompt_snapshot: Dict[str, Any],
+    report_id: Optional[str],
+) -> Dict[str, Any]:
+    """DAV-1430 (D-066 B3): one attach point for input_snapshot / run_identity
+    / served_models on every save path — same rules everywhere."""
+    result["input_snapshot"] = _compute_input_snapshot(pool)
+    result["run_identity"] = _build_run_identity(graph, prompt_snapshot)
+    try:
+        from api.usage_logging import build_served_models_summary
+
+        result["served_models"] = build_served_models_summary(report_id)
+    except Exception:
+        result["served_models"] = None
+    return result
+
+
 def _attach_custom_prompt_snapshot(result: Dict[str, Any], prompt_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """Attach a deep-copied custom_prompt_snapshot onto result_data before it is saved.
 
@@ -3125,6 +3218,10 @@ async def _run_job_inner(
             custom_prompt_placement=_PROMPT_PLACEMENT,
         )
         final_state: Optional[Dict[str, Any]] = None
+        # DAV-1430: bound by whichever branch collected the pool; the
+        # propagate() path leaves it None and the snapshot falls back to the
+        # shared collector's cache below.
+        collected_pool: Optional[Dict[str, Any]] = None
 
         res = resolve_analysis_horizons(
             request.horizons,
@@ -3873,6 +3970,19 @@ async def _run_job_inner(
                 primary_completed_r = horizon_results.get(primary_horizon) or {}
                 _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=primary_completed_r)
                 _attach_custom_prompt_snapshot(result, _prompt_snapshot)
+                # DAV-1430 (D-066 B3): traceability fields. Both horizon
+                # slices share the same collected pool → identical hash.
+                _attach_traceability_fields(
+                    result,
+                    pool=collected_pool,
+                    graph=graph,
+                    prompt_snapshot=_prompt_snapshot,
+                    report_id=job_id,
+                )
+                for _h in request.horizons:
+                    _slice = horizon_results.get(_h)
+                    if isinstance(_slice, dict) and _slice.get("status") == "completed":
+                        _slice["input_snapshot"] = result["input_snapshot"]
 
                 if save_report:
                     report_decision = None if len(request.horizons) > 1 else dual_decision
@@ -4050,6 +4160,18 @@ async def _run_job_inner(
                 decision = str(result.get("trade_action") or decision)
             _mount_or_refresh_protocol_metadata_and_metrics(result)
             _attach_custom_prompt_snapshot(result, _prompt_snapshot)
+            # DAV-1430 (D-066 B3): traceability fields; single-horizon
+            # dual-mode shares the collected pool with the slice payloads.
+            _attach_traceability_fields(
+                result,
+                pool=collected_pool,
+                graph=graph,
+                prompt_snapshot=_prompt_snapshot,
+                report_id=job_id,
+            )
+            for _slice in (short_r, medium_r):
+                if isinstance(_slice, dict):
+                    _slice["input_snapshot"] = result["input_snapshot"]
 
             # 自动保存报告到数据库
             if save_report:
@@ -4442,6 +4564,24 @@ async def _run_job_inner(
         )
         _mount_or_refresh_protocol_metadata_and_metrics(result)
         _attach_custom_prompt_snapshot(result, _prompt_snapshot)
+        # DAV-1430 (D-066 B3): traceability fields. The propagate() path
+        # collects the pool internally; recover the identical cached pool
+        # from the shared collector (same content → same hash).
+        _pool_for_snapshot = collected_pool
+        if _pool_for_snapshot is None:
+            try:
+                _pool_for_snapshot = graph.data_collector.get(
+                    request.symbol, request.trade_date
+                )
+            except Exception:
+                _pool_for_snapshot = None
+        _attach_traceability_fields(
+            result,
+            pool=_pool_for_snapshot,
+            graph=graph,
+            prompt_snapshot=_prompt_snapshot,
+            report_id=job_id,
+        )
 
         # 自动保存/收口报告到数据库
         if save_report:

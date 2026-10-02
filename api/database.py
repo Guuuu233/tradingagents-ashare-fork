@@ -380,6 +380,16 @@ def _ensure_llm_call_log_schema() -> None:
             # separately from elapsed_seconds (which excludes it).
             if "queue_seconds" not in columns:
                 conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN queue_seconds FLOAT"))
+            # DAV-1430 (D-066 B3): traceability columns — nominal model sent in
+            # the request, the model the provider actually reported serving
+            # (NULL unless the response body carried a `model` field), and the
+            # provider's system_fingerprint. All nullable; legacy rows keep NULL.
+            if "requested_model" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN requested_model VARCHAR(255)"))
+            if "served_model" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN served_model VARCHAR(255)"))
+            if "system_fingerprint" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN system_fingerprint VARCHAR(255)"))
     except Exception as e:
         logger.error("Failed to ensure llm_call_log schema: %s", e)
 
@@ -413,6 +423,9 @@ def log_llm_call(
     reasoning_tokens: int | None = None,
     retried: bool = False,
     queue_seconds: float | None = None,
+    requested_model: str | None = None,
+    served_model: str | None = None,
+    system_fingerprint: str | None = None,
 ) -> None:
     """Fire-and-forget: write one LLM call record to llm_call_logs.
 
@@ -440,6 +453,9 @@ def log_llm_call(
                 reasoning_tokens=reasoning_tokens,
                 retried=retried,
                 queue_seconds=queue_seconds,
+                requested_model=requested_model,
+                served_model=served_model,
+                system_fingerprint=system_fingerprint,
             ))
             db.commit()
     except Exception as exc:
@@ -811,6 +827,13 @@ class LLMCallLogDB(Base):
     # DAV-1334: seconds spent queued at the concurrency gate for this call.
     # NULL for calls that never waited (or never touched the gate).
     queue_seconds = Column(Float, nullable=True)
+    # DAV-1430 (D-066 B3): requested_model = nominal model sent in the request;
+    # served_model = model field actually returned in the response body (NULL
+    # when the provider did not report one — never falls back to nominal);
+    # system_fingerprint = provider fingerprint when reported.
+    requested_model = Column(String(255), nullable=True)
+    served_model = Column(String(255), nullable=True)
+    system_fingerprint = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 

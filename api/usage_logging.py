@@ -35,6 +35,52 @@ from langchain_core.outputs import LLMResult
 
 logger = logging.getLogger(__name__)
 
+
+def _install_openai_served_model_capture() -> None:
+    """DAV-1430 (D-066 B3): preserve the raw response-body ``model`` field.
+
+    langchain_openai merges ``response_dict.get("model", self.model_name)``
+    into ``llm_output["model_name"]``, so downstream code cannot tell whether
+    the provider actually reported a served model or the value is the nominal
+    fallback. This wrapper re-reads the raw response inside
+    ``_create_chat_result`` and, only when the response body truly carried a
+    ``model`` key, stashes it under ``llm_output["served_model"]`` — a
+    distinct key that can never be confused with the fallback merge. Streaming
+    needs no patch: ``_convert_chunk_to_generation_chunk`` already copies the
+    raw chunk ``model`` into ``generation_info["model_name"]``.
+
+    Idempotent and defensive: any failure leaves the class untouched.
+    """
+    try:
+        from langchain_openai.chat_models.base import ChatOpenAI
+
+        original = ChatOpenAI._create_chat_result
+        if getattr(original, "_served_model_capture_installed", False):
+            return
+
+        def _create_chat_result_with_served_model(self, response, generation_info=None):
+            result = original(self, response, generation_info)
+            try:
+                raw = (
+                    response
+                    if isinstance(response, dict)
+                    else response.model_dump()
+                )
+                served = raw.get("model") if isinstance(raw, dict) else None
+                if served and isinstance(result.llm_output, dict):
+                    result.llm_output["served_model"] = served
+            except Exception:
+                pass
+            return result
+
+        _create_chat_result_with_served_model._served_model_capture_installed = True
+        ChatOpenAI._create_chat_result = _create_chat_result_with_served_model
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("served_model capture patch unavailable", exc_info=True)
+
+
+_install_openai_served_model_capture()
+
 # Role label for LLM calls that run OUTSIDE the LangGraph graph (intent
 # parsing, structured extraction, config probes, warmup). Graph nodes are
 # named automatically via langgraph_node metadata; direct calls set this
@@ -103,6 +149,46 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
     if not model_name:
         model_name = llm_output.get("model_name")
 
+    # DAV-1430 (D-066 B3): served_model / system_fingerprint.
+    # served_model may ONLY come from sources provably carrying the raw
+    # response-body `model` field — never from the fallback-merged
+    # llm_output["model_name"] (non-streaming) or self.model_name:
+    #   1. llm_output["served_model"]    — set by the _create_chat_result
+    #      wrapper above only when the response body had `model` (non-streaming
+    #      OpenAI-compatible path).
+    #   2. generation_info["model_name"] — langchain_openai streaming copies the
+    #      raw chunk `model` here (only on chunks that carried it).
+    #   3. llm_output["model"]           — langchain_anthropic keeps the raw
+    #      response field under this key.
+    served_model: Optional[str] = None
+    if isinstance(llm_output.get("served_model"), str) and llm_output["served_model"]:
+        served_model = llm_output["served_model"]
+    elif isinstance(llm_output.get("model"), str) and llm_output["model"]:
+        served_model = llm_output["model"]
+    if not served_model:
+        for gens in (response.generations or []):
+            for gen in gens:
+                gen_info = getattr(gen, "generation_info", None) or {}
+                if gen_info.get("model_name"):
+                    served_model = gen_info["model_name"]
+                    break
+            if served_model:
+                break
+
+    system_fingerprint: Optional[str] = None
+    fp = llm_output.get("system_fingerprint")
+    if isinstance(fp, str) and fp:
+        system_fingerprint = fp
+    if not system_fingerprint:
+        for gens in (response.generations or []):
+            for gen in gens:
+                gen_info = getattr(gen, "generation_info", None) or {}
+                if gen_info.get("system_fingerprint"):
+                    system_fingerprint = gen_info["system_fingerprint"]
+                    break
+            if system_fingerprint:
+                break
+
     input_tokens = output_tokens = total_tokens = None
     cached_prompt_tokens = reasoning_tokens = None
     if usage:
@@ -137,6 +223,8 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
         "total_tokens": _usage_to_int(total_tokens),
         "finish_reason": finish_reason,
         "model_name": model_name,
+        "served_model": served_model,
+        "system_fingerprint": system_fingerprint,
         "response_chars": response_chars if saw_text else None,
     }
 
@@ -162,15 +250,26 @@ class LLMUsageLogger(BaseCallbackHandler):
     # ── lifecycle bookkeeping ──────────────────────────────────────────
 
     def _register_run(
-        self, run_id: Optional[UUID], metadata: Optional[Dict[str, Any]]
+        self,
+        run_id: Optional[UUID],
+        metadata: Optional[Dict[str, Any]],
+        invocation_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         if run_id is None:
             return
+        # DAV-1430: the nominal model actually sent in the request payload.
+        # LangChain passes _get_invocation_params() through kwargs; its "model"
+        # key is self.model_name for OpenAI/Anthropic/Google chat clients.
+        params = invocation_params or {}
+        requested_model = params.get("model") or params.get("model_name")
         with self._lock:
             self._runs[str(run_id)] = {
                 "t0": time.monotonic(),
                 "metadata": metadata or {},
                 "retried": False,
+                "requested_model": (
+                    str(requested_model) if requested_model else None
+                ),
             }
 
     def _mark_retried(self, run_id: Optional[UUID]) -> None:
@@ -200,7 +299,9 @@ class LLMUsageLogger(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
-        self._register_run(run_id, metadata)
+        self._register_run(
+            run_id, metadata, invocation_params=kwargs.get("invocation_params")
+        )
 
     def on_chat_model_start(
         self,
@@ -213,7 +314,9 @@ class LLMUsageLogger(BaseCallbackHandler):
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> None:
-        self._register_run(run_id, metadata)
+        self._register_run(
+            run_id, metadata, invocation_params=kwargs.get("invocation_params")
+        )
 
     def on_retry(
         self,
@@ -327,6 +430,9 @@ class LLMUsageLogger(BaseCallbackHandler):
                 horizon=metadata.get("horizon") or current_llm_horizon.get(),
                 retried=bool(run.get("retried")),
                 queue_seconds=queue_seconds,
+                requested_model=run.get("requested_model"),
+                served_model=extracted["served_model"],
+                system_fingerprint=extracted["system_fingerprint"],
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("LLMUsageLogger.on_llm_end failed (non-fatal): %s", exc)
@@ -429,6 +535,50 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
         }
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("build_llm_usage_summary failed (non-fatal): %s", exc)
+        return None
+
+
+def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """DAV-1430 (D-066 B3): per-role actual served models for one report.
+
+    Returns ``{"by_role": {agent_name: [deduped served models]},
+    "served_model_missing": <count>, "call_count": <count>}`` — the missing
+    counter covers calls whose response body carried no ``model`` field (or
+    errored before one could be read). Returns None when nothing was logged;
+    swallows errors (summary must never break report persistence).
+    """
+    if not report_id:
+        return None
+    try:
+        from api.database import LLMCallLogDB, get_db_ctx
+
+        with get_db_ctx() as db:
+            rows = (
+                db.query(LLMCallLogDB)
+                .filter(LLMCallLogDB.report_id == report_id)
+                .all()
+            )
+        if not rows:
+            return None
+        by_role: Dict[str, set] = {}
+        missing = 0
+        for r in rows:
+            role = r.agent_name or "unknown"
+            if r.served_model:
+                by_role.setdefault(role, set()).add(r.served_model)
+            else:
+                missing += 1
+        return {
+            "report_id": report_id,
+            "call_count": len(rows),
+            "by_role": {
+                role: sorted(models)
+                for role, models in sorted(by_role.items())
+            },
+            "served_model_missing": missing,
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("build_served_models_summary failed (non-fatal): %s", exc)
         return None
 
 
