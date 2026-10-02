@@ -2588,6 +2588,9 @@ async def _run_job(
                 try:
                     with get_db_ctx() as db:
                         report_service.mark_report_failed(db, job_id, err_msg)
+                        failed_result = _build_b1_unrun_result(request)
+                        report_service.update_report_partial(db, job_id, result_data=failed_result)
+                        _set_job(job_id, result=failed_result)
                 except Exception:
                     pass
                 _emit_job_event(
@@ -2624,6 +2627,9 @@ async def _run_job(
         try:
             with get_db_ctx() as db:
                 report_service.mark_report_failed(db, job_id, err_msg)
+                failed_result = _build_b1_unrun_result(request)
+                report_service.update_report_partial(db, job_id, result_data=failed_result)
+                _set_job(job_id, result=failed_result)
         except Exception:
             pass
         _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": err_msg})
@@ -2855,6 +2861,96 @@ def _apply_structured_report_fields(
     return decision
 
 
+def _apply_b1_output_contract(result: Dict[str, Any], market_source: Optional[Dict[str, Any]] = None) -> str:
+    """Finalize one horizon after all existing extraction/decision gates."""
+    from tradingagents.agents.utils.decision_status import apply_decision_status_to_result
+
+    result["forecast"] = report_service.parse_horizon_forecast(result)
+    manager = result.get("manager_verdict")
+    if not isinstance(manager, dict):
+        debate = result.get("investment_debate_state") or {}
+        manager = debate.get("manager_verdict") if isinstance(debate, dict) else None
+    captured = manager.get("forecast_input") if isinstance(manager, dict) else None
+    gap = captured.get("data_gap") if isinstance(captured, dict) else None
+    if isinstance(gap, str) and gap:
+        result["data_gaps"] = _merge_deduplicated_strings(result.get("data_gaps"), [gap])
+    prior = result.get("price_plan_check")
+    if (isinstance(prior, dict) and prior.get("status") in report_service.B1_PRICE_FAILURES
+            and result.get("trade_action") == "NO_TRADE"
+            and "price_plan_invalid" in (result.get("reason_codes") or [])):
+        apply_decision_status_to_result(result, result["decision_status"])
+        return "NO_TRADE"
+    _ds = result.get("decision_status") if isinstance(result.get("decision_status"), dict) else {}
+    _action = str(result.get("trade_action") or _ds.get("trade_action") or result.get("decision") or "").upper()
+    if _action == "SELL":
+        result.update(report_service.resolve_b1_sell_price_fields(result))
+    check = report_service.check_price_plan(result, market_source)
+    result["price_plan_check"] = check
+    if check["original_executable"] and check["status"] in report_service.B1_PRICE_FAILURES:
+        ds = dict(result.get("decision_status") or {})
+        codes = list(result.get("reason_codes") or ds.get("reason_codes") or [])
+        if "price_plan_invalid" not in codes:
+            codes.append("price_plan_invalid")
+        ds.update(analysis_status=result.get("analysis_status") or ds.get("analysis_status") or "ABSTAIN",
+                  direction=ds.get("direction") or result.get("direction") or "N/A",
+                  trade_action="NO_TRADE", risk_status="BLOCKED", reason_codes=codes)
+        apply_decision_status_to_result(result, ds)
+    return str(result.get("trade_action") or result.get("decision") or "UNKNOWN")
+
+
+def _build_b1_unrun_result(request: "AnalyzeRequest", *, status: str = "failed",
+                          seed: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Represent requested horizons whose manager never produced an adopted block."""
+    result = dict(seed or {})
+    result.update(symbol=request.symbol, trade_date=request.trade_date, status=status)
+    _apply_b1_output_contract(result)
+    horizons = list(request.horizons or ["short"])
+    if len(horizons) > 1:
+        result["mode"] = "dual_horizon"
+        result["requested_horizons"] = horizons
+        result["horizon_status"] = {h: status for h in horizons}
+        units = {}
+        for h in horizons:
+            unit = {"horizon": h, "status": status,
+                    "forecast": deepcopy(result["forecast"]),
+                    "price_plan_check": deepcopy(result["price_plan_check"])}
+            for key in ("analysis_status", "trade_action", "decision_status", "reason_codes"):
+                if key in result:
+                    unit[key] = deepcopy(result[key])
+            units[h] = unit
+            result[f"{h}_term"] = unit
+        result["horizons"] = units
+    else:
+        result["horizon"] = horizons[0]
+    return result
+
+
+def _persist_b1_price_fields(report: Any) -> None:
+    """Keep saved numerics equal to validated levels, not legacy regex fallback.
+
+    create_report may re-extract old labels when a canonical value is null.
+    Do not let that resurrect a rejected level or an explicit SELL dash.
+    Absolute probability still uses its unchanged existing persistence chain.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    result = getattr(report, "result_data", None)
+    if not isinstance(result, dict):
+        return
+    check = result.get("price_plan_check")
+    if not isinstance(check, dict):
+        return
+    if check.get("status") == "ok":
+        for key in ("target_price", "stop_loss_price"):
+            value = (check.get("raw") or {}).get(key)
+            result[key] = value
+            setattr(report, key, value)
+    elif check.get("status") in report_service.B1_PRICE_FAILURES and check.get("original_executable"):
+        from tradingagents.agents.utils.decision_status import apply_decision_status_to_result
+        apply_decision_status_to_result(result, result["decision_status"])
+    flag_modified(report, "result_data")
+
+
 def _build_custom_prompt_snapshot(
     frozen_bundle: Dict[str, Dict[str, Any]],
     injection_enabled: bool,
@@ -3020,6 +3116,7 @@ async def _handle_prompt_guard_interception(
         },
     }
     apply_decision_status_to_result(result, status_obj)
+    result = _build_b1_unrun_result(request, status="completed", seed=result)
     _mount_or_refresh_protocol_metadata_and_metrics(result)
     _attach_custom_prompt_snapshot(result, prompt_snapshot)
 
@@ -3710,6 +3807,7 @@ async def _run_job_inner(
                             ),
                             "horizon_run_metadata": _build_failed_slice_meta(),
                         }
+                        _apply_b1_output_contract(horizon_results[horizon])
                         continue
 
                     try:
@@ -3748,6 +3846,7 @@ async def _run_job_inner(
                             graph_decision=graph_decision,
                             resolved=resolved,
                         )
+                        decision = _apply_b1_output_contract(horizon_result, collected_pool)
                         _mount_or_refresh_protocol_metadata_and_metrics(horizon_result)
                         horizon_result.update(
                             {
@@ -3779,6 +3878,7 @@ async def _run_job_inner(
                             ),
                             "horizon_run_metadata": _build_failed_slice_meta(),
                         }
+                        _apply_b1_output_contract(horizon_results[horizon])
 
                 completed_horizons = [
                     h for h in request.horizons
@@ -3926,6 +4026,8 @@ async def _run_job_inner(
                 # shared _primary_horizon_slice rule (short slice with a
                 # recorded status, else medium); no per-field mixing.
                 primary_slice = report_service._primary_horizon_slice(result) or {}
+                # F1's primary forecast is short, even when the short node failed.
+                result["forecast"] = deepcopy(short_r.get("forecast"))
                 result.update(
                     report_service.resolve_primary_horizon_report_fields(result)
                 )
@@ -4158,6 +4260,12 @@ async def _run_job_inner(
                 if primary_r.get("price_basis_gate") is not None:
                     result["price_basis_gate"] = primary_r.get("price_basis_gate")
                 decision = str(result.get("trade_action") or decision)
+            decision = _apply_b1_output_contract(result, collected_pool)
+            for _key in ("forecast", "price_plan_check", "decision_status", "analysis_status",
+                         "trade_action", "decision", "risk_status", "reason_codes", "confidence",
+                         "probability", "target_price", "stop_loss_price", "data_gaps"):
+                if _key in result:
+                    primary_r[_key] = deepcopy(result[_key])
             _mount_or_refresh_protocol_metadata_and_metrics(result)
             _attach_custom_prompt_snapshot(result, _prompt_snapshot)
             # DAV-1430 (D-066 B3): traceability fields; single-horizon
@@ -4177,7 +4285,7 @@ async def _run_job_inner(
             if save_report:
                 def _save_report_sync():
                     with get_db_ctx() as save_db:
-                        report_service.create_report(
+                        saved_report = report_service.create_report(
                             db=save_db,
                             symbol=request.symbol,
                             trade_date=request.trade_date,
@@ -4196,6 +4304,7 @@ async def _run_job_inner(
                             report_id=job_id,
                             analyst_traces=result.get("analyst_traces"),
                         )
+                        _persist_b1_price_fields(saved_report)
                         save_db.commit()
 
                 await _save_report_or_raise(job_id, _save_report_sync, stage="save")
@@ -4575,6 +4684,10 @@ async def _run_job_inner(
                 )
             except Exception:
                 _pool_for_snapshot = None
+        decision = _apply_b1_output_contract(
+            result, final_state.get("price_ref_source") or _pool_for_snapshot,
+        )
+        _mount_or_refresh_protocol_metadata_and_metrics(result)
         _attach_traceability_fields(
             result,
             pool=_pool_for_snapshot,
@@ -4587,7 +4700,7 @@ async def _run_job_inner(
         if save_report:
             def _save_report_final_sync():
                 with get_db_ctx() as save_db:
-                    report_service.create_report(
+                    saved_report = report_service.create_report(
                         db=save_db,
                         symbol=request.symbol,
                         trade_date=request.trade_date,
@@ -4606,6 +4719,7 @@ async def _run_job_inner(
                         report_id=job_id,
                         analyst_traces=result.get("analyst_traces"),
                     )
+                    _persist_b1_price_fields(saved_report)
                     save_db.commit()
 
             await _save_report_or_raise(job_id, _save_report_final_sync, stage="finalize")
@@ -4643,9 +4757,11 @@ async def _run_job_inner(
         _log(f"[Timer] TOTAL Job execution (single_horizon) took {time.time() - job_start_t:.2f}s")
     except Exception as exc:
         err_msg = _humanize_analysis_error(f"{type(exc).__name__}: {exc}")
+        failed_result = _build_b1_unrun_result(request)
         _set_job(
             job_id,
             status="failed",
+            result=failed_result,
             error=err_msg,
             overtime=False,
             overtime_at=None,
@@ -4658,6 +4774,7 @@ async def _run_job_inner(
             def _record_failure():
                 with get_db_ctx() as err_db:
                     report_service.mark_report_failed(err_db, job_id, f"{err_msg}\n\n{traceback.format_exc()}")
+                    report_service.update_report_partial(err_db, job_id, result_data=failed_result)
             await asyncio.to_thread(_record_failure)
         except Exception as db_exc:
             _log(f"Failed to record failure in DB: {db_exc}")

@@ -96,7 +96,12 @@ class _FakeGraphStream:
             "macro_report": report_text,
             "smart_money_report": report_text,
             "volume_price_report": report_text,
-            "final_trade_decision": f"{horizon} decision",
+            # B1 v1: executable actions carry contract prices; ref close is 1700 (collector fixture).
+            "final_trade_decision": (
+                f"{horizon} decision 目标价：1800；止损价：1600"
+                if horizon == "short"
+                else f"{horizon} decision 失效价：1800；下行参考：1600"
+            ),
             "market_data_context": init_state["market_data_context"],
             "analyst_traces": [{"horizon": horizon}],
             "horizon_run_metadata": meta,
@@ -155,7 +160,9 @@ def _run_dual_job(
     store = InMemoryJobStore()
     collector = MagicMock()
     collector.collect.return_value = {
-        "market_data_context": collector_context or {"source": "fixture"}
+        "market_data_context": collector_context or {"source": "fixture"},
+        # B1 v1: named ref close 1700 @2026-07-31 for executable BUY/SELL checks.
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-07-31,1600,1800,1650\n",
     }
     saved_reports = []
     db = MagicMock()
@@ -185,6 +192,8 @@ def _run_dual_job(
             decision="BUY" if horizon == "short" else "SELL",
             confidence=80 if horizon == "short" else 60,
             probability=0.8 if horizon == "short" else 0.4,
+            target_price=1800.0 if horizon == "short" else 1600.0,
+            stop_loss_price=1600.0 if horizon == "short" else 1800.0,
             data_gaps=[f"{horizon} LLM gap"],
             falsification_conditions=[f"{horizon} falsification condition"],
             not_applicable=horizon == "medium",

@@ -453,7 +453,11 @@ class TestJobExecutionDebatePersistence:
         job_id = f"job-{uuid4().hex}"
         store = InMemoryJobStore()
         collector = MagicMock()
-        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        collector.collect.return_value = {
+        "market_data_context": {"daily": {"as_of": "2026-08-20"}},
+        # B1 v1: executable actions need a verifiable named ref close (1700 sits between stop 1600 and target 1800).
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-08-20,1600,1800,1650\n",
+    }
         saved_reports = []
         db = MagicMock()
 
@@ -574,7 +578,11 @@ class TestJobExecutionDebatePersistence:
         job_id = f"job-{uuid4().hex}"
         store = InMemoryJobStore()
         collector = MagicMock()
-        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        collector.collect.return_value = {
+        "market_data_context": {"daily": {"as_of": "2026-08-20"}},
+        # B1 v1: executable actions need a verifiable named ref close (1700 sits between stop 1600 and target 1800).
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-08-20,1600,1800,1650\n",
+    }
         saved_reports = []
         db = MagicMock()
 
@@ -680,7 +688,11 @@ class TestJobExecutionDebatePersistence:
         job_id = f"job-{uuid4().hex}"
         store = InMemoryJobStore()
         collector = MagicMock()
-        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        collector.collect.return_value = {
+        "market_data_context": {"daily": {"as_of": "2026-08-20"}},
+        # B1 v1: executable actions need a verifiable named ref close (1700 sits between stop 1600 and target 1800).
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-08-20,1600,1800,1650\n",
+    }
         saved_reports = []
         db = MagicMock()
 
@@ -890,7 +902,11 @@ class TestJobExecutionDebatePersistence:
         job_id = f"job-{uuid4().hex}"
         store = InMemoryJobStore()
         collector = MagicMock()
-        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        collector.collect.return_value = {
+        "market_data_context": {"daily": {"as_of": "2026-08-20"}},
+        # B1 v1: executable actions need a verifiable named ref close (1700 sits between stop 1600 and target 1800).
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-08-20,1600,1800,1650\n",
+    }
         saved_reports = []
         db = MagicMock()
 
@@ -1020,7 +1036,11 @@ class TestJobExecutionDebatePersistence:
         job_id = f"job-{uuid4().hex}"
         store = InMemoryJobStore()
         collector = MagicMock()
-        collector.collect.return_value = {"market_data_context": {"daily": {"as_of": "2026-08-20"}}}
+        collector.collect.return_value = {
+        "market_data_context": {"daily": {"as_of": "2026-08-20"}},
+        # B1 v1: executable actions need a verifiable named ref close (1700 sits between stop 1600 and target 1800).
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1700,2026-08-20,1600,1800,1650\n",
+    }
         saved_reports = []
         db = MagicMock()
 

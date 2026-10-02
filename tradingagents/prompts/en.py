@@ -1,3 +1,20 @@
+_LONG_ONLY_PRICE_CONTRACT = """[B1 long-only price contract] Long-only account: no securities borrowing or short sales. SELL means reduce, exit, or avoid ownership; it is NOT a short position.
+ref is this horizon's actual baseline-day vendor_qfq close. BUY requires stop < ref < target. SELL requires invalidation price > ref; an optional downside reference must be < ref.
+SELL invalidation price (stored as stop_loss_price): a rise here proves the bearish thesis wrong; it MUST be above the close. Downside reference (target_price): expected decline or a re-entry observation level below the close; optional.
+A 'break below X confirms exit' level belongs ONLY in the downside reference or prose, NEVER in invalidation price. Write SELL prices as 'Invalidation price: xx; Downside reference: xx or —'; explicitly write — for missing values, never invent them.
+Positive example: ref=100, SELL invalidation price:105; downside reference:95 (or —). Counterexample: invalidation price:95 as a breakdown/exit confirmation is WRONG; 95 can only be a downside reference.
+SELL entry is 'not applicable'; position_pct is the post-operation ownership cap, with 0 valid for exit/no ownership. HOLD/WAIT/NO_TRADE/ABSTAIN require no levels.
+All generic stop/target/entry wording below must follow these SELL meanings, not a long-position stop. A forecast is not a trading signal.
+
+"""
+
+_MANAGER_RELATIVE_PROBABILITY_CONTRACT = """[B1 industry-relative forecast] Each MANAGER_VERDICT must add the single key p_rel_t10: integer percentage points 1–99, never a percentage string or 0/100.
+Meaning: the probability that this stock's return from the analysis-day close over T+10 trading days exceeds the simultaneous return of its Shenwan 2021 L1 industry index, conditional on lawful information available by the analysis day.
+Both short and medium horizons output this T+10 forecast. Short is the primary value; medium is for consistency monitoring only. Keep it for every action, including non-executable outcomes. When benchmark retrieval fails, acknowledge the gap but still forecast; do not retry formatting to fill this key.
+p_rel_t10 is a forecast, not a trading signal; do not substitute confidence or the existing absolute-upside probability, whose meaning remains unchanged.
+
+"""
+
 PROMPTS = {
     "market_system_message": """You are a trading assistant tasked with analyzing financial markets. Your role is to select the most relevant indicators for a given market condition or trading strategy from the allowed list. Choose up to 8 indicators that provide complementary insights without redundancy.
 
@@ -183,7 +200,7 @@ Last round summary:
 - If report-level confidence is requested, it must be an integer in the range 0-100; claim confidence is a finite number in the range 0.00-1.00, not a percentage.
 - Probability has a separate meaning. When provided, it is the probability of a higher end price than the explicitly stated benchmark price at the end of the explicitly stated primary horizon (the upside probability). If either the primary horizon or benchmark price is missing, use null instead of guessing.
 - Bull and Bear use the same probability semantics: Bear probability is not a downside probability; do not invert it and do not use 1-p.
-- Keep the existing VERDICT boundary and keys; do not add new canonical body fields or machine-readable keys.
+- Keep the existing VERDICT boundary and keys; the only new machine key is MANAGER_VERDICT.p_rel_t10. Do not add other canonical body fields or researcher machine keys.
 - [E-04 Expectation Revision Review Discipline]: The portfolio manager must only consume structured expectation_revision fields provided by analysts; never synthesize numbers from unstructured text, and never convert unknown/gap states into facts. When an analyst has already incorporated an event into forecasts or event columns, double_count_guard blocks duplicate addition; if unjudgeable, it must remain unknown and cannot serve as extra support. 'Priced in' must remain unknown without traceable evidence and cannot be treated as factual. 'Above/below expectations' holds only when a genuine comparable baseline exists.
 Output:
 1) Tally independent evidence clusters (deduplicating claims by cluster_id) and compute cluster-based directional weight; analyst list serves as explanatory context only (analyst_count must not be used directly as independent voting weight).
@@ -205,7 +222,7 @@ Output:
 Price-coordinate contract (price_ref.v1): all execution levels (current price/support/resistance/entry/target/stop) use the vendor_qfq (forward-adjusted) coordinate; disclosure prices (block trades, dragon-tiger list, holder increase/decrease, repurchase, placement/issuance) are raw/pit_raw and must never directly serve as qfq levels nor enter discount/distance/odds math against qfq prices. Cross-basis comparison is legal only via raw↔raw re-pricing or an explicit conversion stating the adjustment factor and factor date (not later than the analysis cutoff). raw+qfq dual display must be labeled "not directly comparable"; cross-coordinate "resonant support" reasoning is forbidden. Executable levels must be qfq-basis or carry a complete conversion lineage; prices whose basis cannot be attributed are display-only and must not be consumed. A deterministic validator enforces this and fail-closes violations.
 Avoid defaulting to Hold unless strongly justified.
 At the very end, append this machine-readable line (fixed format, do not omit):
-<!-- MANAGER_VERDICT: {{"winner": "tie", "direction": "NEUTRAL", "reason": "conflicting fund-flow prints; no directional call", "position_pct": 10, "entry": "wait", "target": "TBD", "stop_loss": "n/a", "upside": 8.0, "downside": 8.0, "odds": 1.0, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["unverified evidence details"], "dispute_map": [{{"data_point": "Large-order inflow vs mid-order outflow", "bull_interpretation": "Accumulation", "bear_interpretation": "Distribution", "evidence_decision": "Conflicting prints cannot alone support direction", "winner": "tie"}}]}} -->
+<!-- MANAGER_VERDICT: {{"winner": "tie", "direction": "NEUTRAL", "reason": "conflicting fund-flow prints; no directional call", "p_rel_t10": 50, "position_pct": 10, "entry": "wait", "target": "TBD", "stop_loss": "n/a", "upside": 8.0, "downside": 8.0, "odds": 1.0, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["unverified evidence details"], "dispute_map": [{{"data_point": "Large-order inflow vs mid-order outflow", "bull_interpretation": "Accumulation", "bear_interpretation": "Distribution", "evidence_decision": "Conflicting prints cannot alone support direction", "winner": "tie"}}]}} -->
 <!-- VERDICT: {{"direction": "NEUTRAL", "reason": "one-sentence conclusion under 15 words"}} -->
 winner must be one of: bull / bear / tie; direction must be one of: BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEARISH (when data is insufficient, conflicting, or fund-flow prints contradict, prefer NEUTRAL; do not treat NEUTRAL as laziness; do not default conflicting fund-flow to bullish)
 Optional field basis_from_rejected_claim_ids (array, may be omitted): only when a claim already listed in rejected_claim_ids still has verified sub-evidence that you actually used in the winner/action reasoning, list that claim_id; never guess, and never upgrade a rejected claim to adopted.""",
@@ -247,7 +264,7 @@ Last round summary:
 1. State a clear Buy/Sell/Hold conclusion (should normally align with the trader's direction).
 2. Provide constraints on position sizing, drawdown tolerance, liquidity, and event risk.
 3. Must provide "execution preconditions" and "immediate de-risk triggers".
-4. Must provide target price and stop-loss price (use "—" if not applicable).
+4. BUY: provide target and stop-loss prices. SELL: write 'Invalidation price: xx; Downside reference: xx or —'; explicitly mark missing prices with —.
 5. Must name which risk claims are resolved vs. unresolved.
 6. If revision is needed, provide specific requirements for the trader.
 7. If your direction differs from the trader, you must explicitly identify the material risk that upstream missed.
@@ -557,3 +574,7 @@ At the very end, append:
 <!-- VERDICT: {"direction": "NEUTRAL", "reason": "core conclusion under 15 words"} -->
 direction must be one of: BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEARISH""",
 }
+
+for _role in ("research_manager_prompt", "trader_system_prompt", "risk_manager_prompt"):
+    PROMPTS[_role] = _LONG_ONLY_PRICE_CONTRACT + PROMPTS[_role]
+PROMPTS["research_manager_prompt"] = _MANAGER_RELATIVE_PROBABILITY_CONTRACT + PROMPTS["research_manager_prompt"]

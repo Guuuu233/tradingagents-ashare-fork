@@ -90,7 +90,7 @@ def _clean_qfq_chunks() -> list[dict]:
         {
             "market_report": "现价 1700.00 元，支撑位 1650.00 元。",
             "final_trade_decision": (
-                "买入。目标价 1700.00，止损 1650.00。"
+                "买入。目标价：1700.00，止损价：1650.00。"
                 "<!-- VERDICT: {\"decision\": \"BUY\"} -->"
             ),
             "decision_status": _valid_decision_status("BUY"),
@@ -119,7 +119,11 @@ def _raw_target_chunks() -> list[dict]:
 def _fake_graph(chunks) -> SimpleNamespace:
     graph = SimpleNamespace()
     graph.data_collector = MagicMock()
-    graph.data_collector.collect.return_value = {}
+    # B1 v1: executable BUY needs a verifiable named ref close; 1680 sits inside
+    # (stop 1650, target 1700) and outside the raw-basis SELL's required side.
+    graph.data_collector.collect.return_value = {
+        "stock_data": "# price_basis: vendor_qfq\nvolume,close,date,low,high,open\n100,1680,2026-08-20,1650,1690,1660\n"
+    }
     graph.propagator = _FakePropagator()
     graph.graph = _FakeGraphStream(chunks)
     graph.role_resolved_configs = {}

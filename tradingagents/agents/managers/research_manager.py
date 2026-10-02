@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -6,6 +7,7 @@ import time
 from typing import Any, Mapping, Sequence
 
 from tradingagents.dataflows.config import get_config
+from tradingagents.dataflows.sw_industry import resolve_sw_l1_benchmark
 from tradingagents.prompts import get_prompt
 from tradingagents.prompts.catalog import _resolve_language
 from tradingagents.agents.utils.agent_states import (
@@ -1989,6 +1991,23 @@ def _blocked_manager_payload(
     return payload
 
 
+def capture_manager_forecast_input(text: str, benchmark: dict | None = None) -> dict:
+    """Use the SAME canonical block parser as the adopted manager verdict.
+
+    Called only after the existing revision seam has selected its final text.
+    No VERDICT/body fallback, format retry, extraction model or value coercion.
+    """
+    from tradingagents.agents.utils.debate_utils import extract_tagged_json
+
+    block = extract_tagged_json(text, "MANAGER_VERDICT")
+    return {
+        "node_ran": True,
+        "p_rel_t10": block.get("p_rel_t10") if isinstance(block, dict) else None,
+        "benchmark": dict(benchmark) if isinstance(benchmark, dict) else None,
+        "data_gap": None,
+    }
+
+
 def create_research_manager(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
     async def research_manager_node(state) -> dict:
         research_horizon = _resolve_research_horizon(state)
@@ -2520,6 +2539,19 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 research_horizon=research_horizon,
                 expectation_revision=expectation_revisions,
             )
+        benchmark, benchmark_gap = await asyncio.to_thread(
+            resolve_sw_l1_benchmark,
+            expected_symbol or state.get("company_of_interest") or "",
+            analysis_baseline_date,
+        )
+        if benchmark is not None:
+            benchmark_line = (
+                f"行业基准：申万一级 {benchmark['name']}（{benchmark['code']}）"
+                if prompt_language == "zh" else
+                f"Industry benchmark: Shenwan L1 {benchmark['name']} ({benchmark['code']})"
+            )
+        else:
+            benchmark_line = "行业基准：获取失败" if prompt_language == "zh" else "Industry benchmark: retrieval failed"
         base_prompt = prompt_template.format(
             past_memory_str=past_memory_str,
             provenance_context=provenance_context,
@@ -2547,7 +2579,7 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             prompt_language,
         )
         base_prompt = f"{base_prompt}\n\n{relation_guard}"
-        prompt = f"{horizon_ctx}\n\n{base_prompt}"
+        prompt = f"{horizon_ctx}\n\n{benchmark_line}\n\n{base_prompt}"
 
         _logger.info(
             "[research_manager] prompt size: total=%d chars | "
@@ -2738,6 +2770,10 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             market_data_context=effective_market_data_context,
             seven_reports=seven_reports,
         )
+        forecast_input = capture_manager_forecast_input(full_content, benchmark)
+        forecast_input["data_gap"] = benchmark_gap
+        manager_verdict["forecast_input"] = forecast_input
+        manager_verdict["p_rel_t10"] = forecast_input["p_rel_t10"]
         manager_verdict["claim_evidence_summary"] = claim_evidence_summary
         manager_verdict["horizon"] = research_horizon
         manager_verdict["research_horizon"] = research_horizon

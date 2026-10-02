@@ -1427,6 +1427,134 @@ def resolve_horizon_decisions(
     return entries if len(entries) > 1 else None
 
 
+# B1 v1 is a generation contract, not a read-time historical backfill.
+B1_CONTRACT = "b1.v1"
+B1_PRICE_FAILURES = frozenset({"violation", "missing_required", "unverifiable"})
+_B1_SELL_LABELS = {
+    "stop_loss_price": r"失效价|invalidation(?:\s+price)?",
+    "target_price": r"下行参考(?:价)?|downside\s+reference(?:\s+price)?",
+}
+
+
+def parse_horizon_forecast(slice_: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse only the input captured from the adopted manager machine block."""
+    manager = slice_.get("manager_verdict")
+    if not isinstance(manager, dict):
+        debate = slice_.get("investment_debate_state") or {}
+        manager = debate.get("manager_verdict") if isinstance(debate, dict) else None
+    captured = manager.get("forecast_input") if isinstance(manager, dict) else None
+    captured = captured if isinstance(captured, dict) else {}
+    benchmark = captured.get("benchmark")
+    if not (isinstance(benchmark, dict) and benchmark.get("src") == "SW2021"
+            and benchmark.get("level") == "L1"
+            and all(isinstance(benchmark.get(k), str) and benchmark[k].strip() for k in ("code", "name"))):
+        benchmark = None
+    else:
+        benchmark = {k: benchmark[k] for k in ("src", "level", "code", "name")}
+    value = captured.get("p_rel_t10")
+    parsed = None
+    if slice_.get("status") == "failed" or captured.get("node_ran") is not True:
+        status = "node_failed"
+    elif value is None:
+        status = "missing"
+    elif type(value) not in (int, float) or not 1 <= value <= 99:
+        status = "malformed"
+    elif isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+        status = "malformed"
+    else:
+        status, parsed = "valid", int(value)
+    return {"contract": B1_CONTRACT, "p_rel_t10": parsed, "status": status,
+            "benchmark": benchmark, "node": "research_manager"}
+
+
+def _b1_positive_price(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        price = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _b1_reference_close(slice_: Dict[str, Any], source: Optional[Dict[str, Any]]) -> tuple:
+    from tradingagents.agents.utils.price_ref_registry import build_market_data_pool, MarketDataPoolError
+
+    context = slice_.get("market_data_context") or {}
+    daily = context.get("daily") if isinstance(context, dict) else None
+    date_ = ((daily.get("as_of") if isinstance(daily, dict) else None)
+             or slice_.get("analysis_baseline_date") or slice_.get("trade_date"))
+    field = f"stock_data.{date_}.close" if date_ else None
+    if not isinstance(source, dict) or not date_:
+        return None, field
+    if source.get("price_basis") not in (None, "vendor_qfq"):
+        return None, field
+    try:
+        pool = build_market_data_pool(source, slice_.get("symbol") or slice_.get("company_of_interest") or "", date_)
+    except (MarketDataPoolError, ValueError, TypeError, OverflowError):
+        return None, field
+    matches = [nv for nv in pool.named_values if nv.field == field]
+    if len(matches) != 1 or matches[0].basis_hint != "vendor_qfq":
+        return None, field
+    return _b1_positive_price(matches[0].value), field
+
+
+def resolve_b1_sell_price_fields(slice_: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve new SELL labels before validation, independently of model extraction.
+
+    The final plan owns BOTH fields when either B1 label is present. An
+    explicit dash (or an unparseable label) never resurrects an older level.
+    """
+    for key in ("final_trade_decision", "trader_investment_plan"):
+        text = slice_.get(key)
+        if not isinstance(text, str):
+            continue
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+        found = False
+        prices = {}
+        for field, label in _B1_SELL_LABELS.items():
+            prefix = rf"(?:{label})\s*\*{{0,2}}\s*[:：=]\s*\*{{0,2}}\s*"
+            if re.search(prefix, text, re.IGNORECASE):
+                found = True
+            values = re.findall(prefix + r"(\d+(?:\.\d+)?|—|--|N/A)(?!\d|\.\d|[%％万亿])", text, re.IGNORECASE)
+            normalized = {_b1_positive_price(float(v)) if re.fullmatch(r"\d+(?:\.\d+)?", v) else None for v in values}
+            prices[field] = normalized.pop() if len(normalized) == 1 else None
+        if found:
+            return prices
+    return {}
+
+
+def check_price_plan(slice_: Dict[str, Any], market_source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Check final parsed levels against this run's named D.close, without I/O."""
+    ds = slice_.get("decision_status") or {}
+    ds = ds if isinstance(ds, dict) else {}
+    action = str(slice_.get("trade_action") or ds.get("trade_action") or slice_.get("decision") or "").upper()
+    analysis = str(slice_.get("analysis_status") or ds.get("analysis_status") or "").upper()
+    executable = (action in {"BUY", "SELL"} and slice_.get("status") != "failed"
+                  and analysis not in {"INVALID_RUN", "DATA_ERROR", "ABSTAIN", "PARTIAL"})
+    raw = {k: slice_.get(k) for k in ("target_price", "stop_loss_price")}
+    check = {"status": "not_applicable", "ref_close": None, "ref_field": None,
+             "rule": "not_applicable", "raw": raw,
+             "original_action": action or None, "original_executable": executable}
+    if not executable:
+        return check
+    ref, field = _b1_reference_close(slice_, market_source)
+    check.update(ref_close=ref, ref_field=field, rule=(
+        "stop_loss_price < ref_close < target_price" if action == "BUY" else
+        "stop_loss_price > ref_close; target_price is null or target_price < ref_close"
+    ))
+    stop, target = _b1_positive_price(raw["stop_loss_price"]), _b1_positive_price(raw["target_price"])
+    if stop is None or (action == "BUY" and target is None):
+        check["status"] = "missing_required"
+    elif ref is None:
+        check["status"] = "unverifiable"
+    else:
+        valid = (stop < ref < target if action == "BUY" else
+                 stop > ref and (raw["target_price"] is None or (target is not None and target < ref)))
+        check["status"] = "ok" if valid else "violation"
+    return check
+
+
 def resolve_report_fields(
     result_data: Optional[Dict[str, Any]] = None,
     confidence_override: Optional[int] = None,
