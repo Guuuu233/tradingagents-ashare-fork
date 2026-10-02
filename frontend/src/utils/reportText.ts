@@ -435,15 +435,31 @@ export function substituteUpstreamBlockedPlaceholder(
  * Extract the structured verdict embedded by the agent as an HTML comment.
  * Format: <!-- VERDICT: {"direction": "...", "reason": "..."} -->
  */
-export function extractVerdict(text?: string | null): Verdict | null {
+export function extractVerdict(text?: string | null, horizon?: string | null): Verdict | null {
     if (!text) return null
     const m = text.match(/<!--\s*VERDICT:\s*(\{[^>]+\})\s*-->/)
     if (!m) return null
     try {
-        const parsed = JSON.parse(m[1]) as { direction?: string; reason?: string }
-        if (!parsed.direction || !parsed.reason) return null
-        const direction = DIRECTION_ALIAS[parsed.direction.toUpperCase()] ?? parsed.direction
-        return { direction, reason: parsed.reason.trim().slice(0, 42) }
+        const parsed = JSON.parse(m[1]) as {
+            direction?: string
+            reason?: string
+            directions?: Record<string, string>
+            reasons?: Record<string, string>
+        }
+        let direction: string | undefined
+        let reason: string | undefined
+        if (parsed.directions && typeof parsed.directions === 'object') {
+            // D-068 双档块：按本档取值，缺档不借用另一档方向
+            if (horizon !== 'short' && horizon !== 'medium') return null
+            direction = parsed.directions[horizon]
+            reason = parsed.reasons?.[horizon]
+        } else {
+            direction = parsed.direction
+            reason = parsed.reason
+        }
+        if (!direction || !reason) return null
+        const normalized = DIRECTION_ALIAS[direction.toUpperCase()] ?? direction
+        return { direction: normalized, reason: reason.trim().slice(0, 42) }
     } catch {
         return null
     }

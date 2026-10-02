@@ -340,10 +340,10 @@ export default function AgentCollaboration({ onSelectSection, onOpenDebate, sele
             meta,
             status: (agent?.status ?? 'pending') as AgentStatus,
             isStreaming: !!streamState?.isTyping,
-            verdict: extractVerdict(src),
+            verdict: extractVerdict(src, currentHorizon),
             isParticipating,
         }
-    }), [agents, report, streamingSections, isAnalyzing])
+    }), [agents, report, streamingSections, isAnalyzing, currentHorizon])
 
     const cardMap = useMemo(() => new Map(cards.map(c => [c.meta.name, c])), [cards])
     const doneN = cards.filter(c => c.status === 'completed').length
