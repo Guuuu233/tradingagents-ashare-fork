@@ -2214,8 +2214,6 @@ _FIELD_VALUE_PATTERNS = {
     ),
 }
 
-_CUMULATIVE_KEYWORDS = ("累计", "合计", "总计", "5日", "五日", "近5", "近五")
-
 # ---------------------------------------------------------------------------
 # DAV-1291 F1/F2: date binding and generalized interval attribution for model
 # value mentions. A mention is classified as ``daily`` (compare against the
@@ -2303,6 +2301,332 @@ _MODEL_YI_NUMBER = re.compile(r"\d+(?:\.\d*)?\s*亿")
 # must not be compared against the symbol's own structured records.
 _OUT_OF_SCOPE_MARKERS = ("板块", "行业", "全市场", "两市")
 
+# DAV-1428: these are attribution rules, not changes to the guard's tolerance.
+_MODEL_NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+_MODEL_AMOUNT_RANGE = re.compile(
+    rf"{_MODEL_NUMBER}\s*(?:亿元?)?\s*[~～至到–-]\s*{_MODEL_NUMBER}\s*亿"
+)
+_MODEL_DATE_RANGE = re.compile(
+    r"(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*[至到–-]\s*"
+    r"(?:(\d{1,2})\s*月\s*)?(\d{1,2})\s*日"
+)
+_MODEL_CONDITION = re.compile(
+    r"若|如果|预期|预计|预测|目标|情景|假设|路径|条件|阈值|推演|预警|触发|观察项|"
+    r"能否|是否|需(?:达到|突破|维持)|维持在.*以上|[>≥].*亿元?/日"
+)
+_MODEL_CURRENT = re.compile(r"今日|当日|实测|当前|截至分析日")
+_MODEL_OTHER_SUBJECT = re.compile(r"板块|行业|全市场|两市|概念|可比公司|同行|龙头")
+_MODEL_LOWER_BOUND = re.compile(r"(?:不低于|突破|超过|超|逾)\s*$")
+_MODEL_UPPER_BOUND = re.compile(r"(?:不足|低于|不到)\s*$")
+_MODEL_OTHER_FIELDS = tuple(sorted({
+    *(_COMPONENT_ALIASES.keys()),
+    *(name for name, field in _FIELD_ALIASES.items()
+      if field == "netamount" and name != "净额"),
+    "中单", "小单", "总净额", "netamount", "非主力", "同花顺大单",
+}, key=len, reverse=True))
+
+
+def _normalise_model_signs(text: str) -> str:
+    # En dash remains a range separator; U+2212 is an arithmetic minus.
+    return text.translate(str.maketrans({"−": "-", "－": "-"}))
+
+
+def _model_line_labels(text: str) -> dict[int, str]:
+    """Track Markdown heading/list/table scope without leaking into siblings."""
+    headings: list[tuple[int, str]] = []
+    items: list[tuple[int, str]] = []
+    table_header = ""
+    bold_label = ""
+    labels: dict[int, str] = {}
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        heading = re.match(r"^(#{1,6})\s+(.+)", stripped)
+        item = re.match(r"^(\s*)(?:\d+[.、)]|[-*])\s+(.+)", line)
+        if heading:
+            depth = len(heading.group(1))
+            headings = [h for h in headings if h[0] < depth]
+            headings.append((depth, heading.group(2)))
+            items, table_header, bold_label = [], "", ""
+        elif item:
+            indent = len(item.group(1))
+            items = [entry for entry in items if entry[0] < indent]
+            items.append((indent, item.group(2)))
+            table_header, bold_label = "", ""
+        elif stripped.startswith("|"):
+            if not table_header:
+                table_header = stripped
+        elif stripped:
+            table_header = ""
+            if re.fullmatch(r"\*\*[^*]+\*\*", stripped):
+                bold_label = stripped
+            elif not line[:1].isspace():
+                items = []
+                bold_label = ""
+        labels[offset] = " ".join([
+            *(label for _, label in headings),
+            *(label for _, label in items), table_header, bold_label,
+        ])
+        offset += len(line)
+    return labels
+
+
+def _model_table_cells(line: str, offset: int) -> list[tuple[int, int, str]]:
+    pipes = [index for index, char in enumerate(line) if char == "|"]
+    cells = [(offset + left + 1, offset + right, line[left + 1:right].strip()) for left, right in zip(pipes, pipes[1:])]
+    if pipes and line[pipes[-1] + 1:].strip():
+        cells.append((offset + pipes[-1] + 1, offset + len(line.rstrip("\r\n")), line[pipes[-1] + 1:].strip()))
+    return cells
+
+
+def _model_table_role(header: str) -> str:
+    if re.search(r"前提|条件", header):
+        return "premise"
+    if re.search(r"日期|时点|时间|分析日|交易日|数据日|截至", header):
+        return "time"
+    if re.fullmatch(r"(?:证券|标的|股票|个股)(?:代码|名称)?[A-Za-z0-9]*", re.sub(r"[\s*`]", "", header)):
+        return "subject"
+    return "label"
+
+
+def _model_table_group(header: str) -> str:
+    return re.sub(
+        r"资金数据|数据表现|实际值|资金|数据|主力|净额|数值|读数|时点|日期|时间|"
+        r"分析日|交易日|数据日|前提|条件|截至|证券|标的|股票|个股|代码|名称|[\s*`()（）\[\]：:]", "", header,
+    )
+
+
+def _model_table_owner(
+    column: int, headers: list[str], roles: list[str], data_columns: list[int],
+) -> int | None:
+    if not data_columns:
+        return None
+    group = _model_table_group(headers[column]) if column < len(headers) else ""
+    grouped = [i for i in data_columns if group and i < len(headers) and _model_table_group(headers[i]) == group]
+    if len(grouped) == 1:
+        return grouped[0]
+    matching_headers = [i for i, header in enumerate(headers) if i < len(roles) and roles[i] == "label" and group and _model_table_group(header) == group]
+    if matching_headers or (
+        re.fullmatch(r"[A-Za-z0-9]+", group)
+        and any(i < len(headers) and re.fullmatch(r"[A-Za-z0-9]+", _model_table_group(headers[i])) for i in data_columns)
+    ):
+        # An explicitly grouped context is not reassigned when its value is
+        # empty. Otherwise another column's current point/premise leaks over.
+        return None
+    distance = min(abs(i - column) for i in data_columns)
+    nearest = [i for i in data_columns if abs(i - column) == distance]
+    if len(nearest) == 1:
+        return nearest[0]
+    same_role = [i for i, role in enumerate(roles) if role == roles[column]]
+    # Before-value and after-value column layouts have opposite tie direction.
+    # A genuinely ambiguous middle context does not bind either value.
+    if any(i < data_columns[0] for i in same_role):
+        return max(nearest)
+    if any(i > data_columns[-1] for i in same_role):
+        return min(nearest)
+    return None
+
+
+def _model_table_row_scopes(
+    cells: list[tuple[int, int, str]], headers: list[str],
+) -> list[dict[str, Any]]:
+    roles = [_model_table_role(headers[i]) if i < len(headers) else "label" for i in range(len(cells))]
+    values = [i for i, (_, _, content) in enumerate(cells) if _MODEL_YI_NUMBER.search(content)]
+    data_columns = [i for i in values if roles[i] == "label"]
+    bound = {
+        i: _model_table_owner(i, headers, roles, data_columns)
+        for i, role in enumerate(roles) if role in {"time", "premise", "subject"}
+    }
+    scopes: list[dict[str, Any]] = []
+    for column in values:
+        start, end, content = cells[column]
+        times = " ".join(cells[i][2] for i, owner in bound.items() if owner == column and roles[i] == "time")
+        premises = " ".join(cells[i][2] for i, owner in bound.items() if owner == column and roles[i] == "premise")
+        subject = " ".join(cells[i][2] for i, owner in bound.items() if owner == column and roles[i] == "subject")
+        subject_bound = any(owner == column and roles[i] == "subject" for i, owner in bound.items())
+        labels = " ".join(c[2] for i, c in enumerate(cells) if i not in values and roles[i] == "label")
+        field_label = ""
+        if column and column - 1 not in values and roles[column - 1] == "label":
+            prior = cells[column - 1][2]
+            if re.search(r"主力|净额|累计|合计|\d+\s*日", prior):
+                field_label = prior
+        scopes.append({
+            "start": start, "end": end, "content": content, "time": times,
+            "premise": premises, "labels": labels, "field_label": field_label,
+            "subject": subject, "subject_bound": subject_bound,
+        })
+    return scopes
+
+
+def _model_table_scopes(text: str) -> dict[int, list[dict[str, Any]]]:
+    """Bind date/premise columns to values in the same Markdown row only."""
+    rows: dict[int, list[dict[str, Any]]] = {}
+    headers: list[str] = []
+    previous: list[tuple[int, int, str]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        if not line.lstrip().startswith("|"):
+            headers, previous = [], []
+        else:
+            cells = _model_table_cells(line, offset)
+            if cells and all(re.fullmatch(r":?-+:?", cell[2]) for cell in cells):
+                headers = [cell[2] for cell in previous]
+            else:
+                rows[offset] = _model_table_row_scopes(cells, headers)
+                previous = cells
+        offset += len(line)
+    return rows
+
+
+def _model_is_conditional(
+    clause: str, sentence_prefix: str, labels: str, requested_as_of: str | None,
+    table_scope: Mapping[str, Any] | None = None,
+) -> bool:
+    # Current facts override ordinary labels, never a bound explicit premise.
+    content = clause
+    point = ""
+    if table_scope:
+        content = table_scope["content"]
+        point = table_scope["time"] + " " + table_scope["field_label"]
+        labels += " " + table_scope["labels"]
+        sentence_prefix = table_scope["prefix"]
+        if re.search(r"若|如果", table_scope["premise"]):
+            return True
+    header = re.match(r"^([^：:]*[：:])(.*)$", content, re.DOTALL)
+    if header and _MODEL_CONDITION.search(header.group(1)) and not re.search(r"若|如果", header.group(1)):
+        content = header.group(2)
+        labels += " " + header.group(1)
+    if _MODEL_CONDITION.search(content) or re.search(r"若|如果", sentence_prefix):
+        return True
+    current = bool(_MODEL_CURRENT.search(content + " " + point))
+    if requested_as_of and not current:
+        current = any(
+            _resolve_model_date(year, month, day, requested_as_of) == requested_as_of
+            for _, _, year, month, day in _iter_model_dates(content + " " + point)
+        )
+    # A current measurement overrides inherited hypothesis/forecast headings,
+    # not an explicit "若今日..." condition in the sentence itself.
+    return not current and bool(_MODEL_CONDITION.search(labels))
+
+
+def _model_other_field(prefix: str) -> bool:
+    """Reject explicit component ownership, retain ambiguous 主力/大单 claims."""
+    clean = re.sub(r"[*`\s]", "", prefix)
+    other = [(clean.rfind(name), name) for name in _MODEL_OTHER_FIELDS if name in clean]
+    if not other:
+        return False
+    pos, name = max(other)
+    main = list(re.finditer(r"(?<!非)主力(?:资金)?(?:[^，,。；;]{0,8}?)?(?:净额|净流入|净流出)", clean))
+    if not main:
+        return True
+    last_main = main[-1]
+    if pos < last_main.end():
+        return False
+    if name in {"中单", "小单", "总净额", "netamount", "同花顺大单", "非主力"}:
+        return True
+    if name in _FIELD_ALIASES and _FIELD_ALIASES[name] == "netamount":
+        return True
+    # Merely saying 主力大单 / 主力(超大单+大单) is ambiguous: compare.
+    return bool(re.search(r"由|计入|贡献|分量|分别|即|其中", clean[last_main.start():]))
+
+
+def _model_code_subjects(text: str) -> list[tuple[int, str]]:
+    """Separate security identifiers from amounts before subject inheritance."""
+    found: list[tuple[int, str]] = []
+    for match in re.finditer(
+        r"(?<![A-Za-z0-9.])(?:SH|SZ|BJ)?(\d{6})(?:\.(?:SH|SZ|BJ))?(?![A-Za-z0-9.])",
+        text, re.IGNORECASE,
+    ):
+        code = match.group(1)
+        if match.group(0) == code:
+            tail = text[match.end():].lstrip(" \t（(）)[]*`")
+            if re.match(r"(?:单位[：:为]?\s*)?(?:万亿|万元?|亿元?|元|美元|港元|股|手|%|％)", tail):
+                continue
+            leader = text[max(0, match.start() - 32):match.start()]
+            if re.search(
+                r"(?:成交额|金额|净额|市值|资金|价格|现金|流入|流出|总额)"
+                r"(?:(?:大约|预计|预估|合计|累计|达到|接近|为|约|是|达)|[：:\s（(])*$",
+                leader,
+            ):
+                continue
+        found.append((match.start(1), code))
+    return found
+
+
+def _model_security_names(text: str) -> dict[str, str]:
+    """Use the existing offline name lexicon, never a quote/name provider."""
+    from tradingagents.dataflows.social.entity_resolver import BUILTIN_EQUITY_ENTITIES
+
+    names = {
+        name: entity.symbol[:6]
+        for entity in BUILTIN_EQUITY_ENTITIES
+        for name in (entity.standard_name, *entity.aliases)
+        # These names also identify data vendors; code mentions disambiguate them.
+        if name not in {"东方财富", "东财"}
+    }
+    # Reports may supply names outside the built-in sample lexicon themselves.
+    code_positions = dict(_model_code_subjects(text))
+    for match in re.finditer(r"([\u4e00-\u9fffA-Za-z]{2,12})[（(]\s*(\d{6})(?:\.[A-Z]{2})?\s*[）)]", text, re.IGNORECASE):
+        if code_positions.get(match.start(2)) == match.group(2):
+            names[match.group(1)] = match.group(2)
+    return names
+
+
+def _model_subject_is_other(
+    text: str, sent_start: int, clause_start: int, number_start: int,
+    symbol: str | None, names: Mapping[str, str],
+) -> bool:
+    clause_prefix = text[clause_start:number_start]
+    if not symbol:
+        return any(marker in clause_prefix for marker in _OUT_OF_SCOPE_MARKERS)
+    code_match = re.search(r"\d{6}", symbol)
+    target = code_match.group() if code_match else symbol
+    prefix = text[sent_start:number_start]
+    subjects = _model_code_subjects(prefix)
+    if names:
+        # Leftmost, longest names consume their whole span. A short target alias
+        # inside another security's full name is not an independent mention.
+        name_pattern = "|".join(re.escape(name) for name in sorted(names, key=lambda name: (-len(name), name)))
+        for match in re.finditer(name_pattern, prefix):
+            name = match.group()
+            # An unknown extended company name is not confirmation of a short
+            # alias embedded in it. Do not invent the unknown company's ticker.
+            if len(name) <= 2 and re.match(r"股份|集团|科技|公司|控股|国际|银行|证券|药业|电力|电子|工业|能源|实业|化学|材料|医药", prefix[match.end():]):
+                continue
+            subjects.append((match.start(), names[name]))
+    subjects.extend((m.start(), "other") for m in _MODEL_OTHER_SUBJECT.finditer(prefix))
+    local_start = clause_start - sent_start
+    # Explicitly naming this security in the clause is authoritative even when
+    # a peer/sector preceded it in the same sentence.
+    if any(pos >= local_start and code == target for pos, code in subjects):
+        return False
+    return bool(subjects and max(subjects, key=lambda item: item[0])[1] != target)
+
+
+def _model_bound(prefix: str, suffix: str) -> str | None:
+    prefix = re.sub(r"[*`\s]", "", prefix)
+    suffix = re.sub(r"[*`\s]", "", suffix)
+    if _MODEL_LOWER_BOUND.search(prefix) or suffix.startswith("以上"):
+        return "lower"
+    if _MODEL_UPPER_BOUND.search(prefix) or suffix.startswith("以内"):
+        return "upper"
+    return None
+
+
+def _model_value_matches(
+    mention: Mapping[str, Any], structured: Decimal, tolerance: Decimal,
+) -> bool:
+    model = mention["value"]
+    bound = mention.get("comparison")
+    if bound:
+        same_direction = (structured > 0) == (model > 0) and (structured < 0) == (model < 0)
+        if not same_direction:
+            return False
+        if bound == "lower":
+            return abs(structured) >= abs(model) - tolerance
+        return abs(structured) <= abs(model) + tolerance
+    return abs(structured - model) <= tolerance
+
 
 def _iter_model_dates(segment: str) -> list[tuple[int, int, int | None, int, int]]:
     """Return (start, end, year|None, month, day) for explicit dates in segment."""
@@ -2372,6 +2696,7 @@ def _date_context(
     sent_end: int,
     clause_start: int,
     clause_end: int,
+    number_start: int | None = None,
 ) -> tuple[int | None, int, int] | None:
     """Find the explicit date bound to a value mention.
 
@@ -2383,8 +2708,11 @@ def _date_context(
     clause = text[clause_start:clause_end]
     dates = _iter_model_dates(clause)
     if dates:
-        # Multiple dates in one clause are usually a range (``9月18日至9月24日``);
-        # the trailing date is the anchor the value is stated for.
+        # Separate value/date pairs may share a clause (e.g. joined with 、).
+        # A following peer's date cannot take ownership of the preceding value.
+        if number_start is not None:
+            preceding = [d for d in dates if clause_start + d[0] < number_start]
+            dates = preceding or dates[:1]
         _, _, year, month, day = dates[-1]
         return year, month, day
     # Scope header: a sentence-initial clause ending in a colon (``5日累计：``
@@ -2432,7 +2760,9 @@ def _interval_context(
 
     def scan(segment: str) -> tuple[str, int | None] | None:
         masked = _mask_spans(
-            segment, [(d[0], d[1]) for d in _iter_model_dates(segment)]
+            segment,
+            [(d[0], d[1]) for d in _iter_model_dates(segment)]
+            + [(m.start(), m.end()) for m in _MODEL_DATE_RANGE.finditer(segment)],
         )
         for pattern in (
             _MODEL_INTERVAL_TRADE_DAYS,
@@ -2444,7 +2774,7 @@ def _interval_context(
                 window = _cn_int(match.group(1))
                 if window and window > 0:
                     return "interval", window
-        if _MODEL_INTERVAL_SYMBOLIC.search(masked):
+        if _MODEL_DATE_RANGE.search(segment) or _MODEL_INTERVAL_SYMBOLIC.search(masked):
             return "interval_unverifiable", None
         if _MODEL_CUMULATIVE.search(masked):
             return "cumulative", None
@@ -2481,18 +2811,25 @@ def _extract_model_mentions(
     text: str | None,
     *,
     requested_as_of: str | None = None,
+    symbol: str | None = None,
 ) -> list[dict[str, Any]]:
     """Extract model 亿 value mentions with date/interval attribution.
 
     Each mention dict: ``field``, ``value_text``, ``value`` (Decimal), ``kind``
     (daily|dated|interval|interval_unverifiable|cumulative), ``date`` (resolved
     ISO or ``MM-DD`` when the model gave no year and no as-of exists) and
-    ``window_days`` for interval mentions.
+    ``window_days`` for interval mentions. Bounds and approximation labels
+    belong to the captured number; exclusions apply before first-match dedupe.
     """
     if not isinstance(text, str) or not text.strip():
         return []
+    text = _normalise_model_signs(text)
     mentions: list[dict[str, Any]] = []
     asof = _normalise_date_text(requested_as_of) if requested_as_of else None
+    line_labels = _model_line_labels(text)
+    table_scopes = _model_table_scopes(text)
+    names = _model_security_names(text) if symbol else {}
+    ranges = [(m.start(), m.end()) for m in _MODEL_AMOUNT_RANGE.finditer(text)]
     for field, patterns in _FIELD_VALUE_PATTERNS.items():
         for pattern in patterns:
             for match in pattern.finditer(text):
@@ -2516,7 +2853,42 @@ def _extract_model_mentions(
 
                 if field == "netamount" and "主力" in clause:
                     continue
-                if any(marker in clause for marker in _OUT_OF_SCOPE_MARKERS):
+                number_start = match.start(1)
+                # Postfixed scope belongs to this value/cell, not a subsequent
+                # clause or table column about the sector.
+                suffix = re.split(r"[、|]", text[match.end():clause_end], maxsplit=1)[0]
+                if any(marker in suffix for marker in _OUT_OF_SCOPE_MARKERS):
+                    continue
+                if not symbol and any(marker in clause for marker in _OUT_OF_SCOPE_MARKERS):
+                    continue
+                if any(start <= number_start < end for start, end in ranges):
+                    continue
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                table_scope = next((
+                    dict(scope) for scope in table_scopes.get(line_start, [])
+                    if scope["start"] <= number_start < scope["end"]
+                ), None)
+                if table_scope:
+                    table_scope["content"] = text[max(clause_start, table_scope["start"]):min(clause_end, table_scope["end"])]
+                    table_scope["prefix"] = text[table_scope["start"]:max(clause_start, table_scope["start"])]
+                if _model_is_conditional(
+                    clause, text[sent_start:clause_start],
+                    line_labels.get(line_start, ""), asof, table_scope,
+                ):
+                    continue
+                if table_scope and table_scope["subject_bound"]:
+                    subject_prefix = " ".join((
+                        table_scope["subject"], table_scope["field_label"],
+                        text[max(clause_start, table_scope["start"]):number_start],
+                    ))
+                    other_subject = _model_subject_is_other(subject_prefix, 0, 0, len(subject_prefix), symbol, names)
+                else:
+                    other_subject = _model_subject_is_other(
+                        text, sent_start, clause_start, number_start, symbol, names,
+                    )
+                if other_subject:
+                    continue
+                if field == "r0_net" and _model_other_field(text[clause_start:number_start]):
                     continue
                 matched_prefix = text[match.start():match.end()]
                 num_str = match.groups()[-1]
@@ -2534,10 +2906,51 @@ def _extract_model_mentions(
                 kind = "daily"
                 resolved_date: str | None = None
                 window_days: int | None = None
-                date_ctx = _date_context(
-                    text, sent_start, sent_end, clause_start, clause_end
+                window_start: str | None = None
+                scope_clause = clause
+                if table_scope:
+                    scope_clause = " ".join(table_scope[key] for key in ("field_label", "time", "content"))
+                    own_dates = _iter_model_dates(table_scope["content"])
+                    bound_dates = own_dates or _iter_model_dates(table_scope["field_label"] + " " + table_scope["time"])
+                    date_ctx = bound_dates[-1][2:] if bound_dates else None
+                    if date_ctx is None and asof and _MODEL_CURRENT.search(table_scope["time"]):
+                        date_ctx = tuple(int(part) for part in asof.split("-"))
+                    interval = _interval_context(scope_clause, 0, len(scope_clause), 0, len(scope_clause))
+                else:
+                    date_ctx = _date_context(
+                        text, sent_start, sent_end, clause_start, clause_end, number_start
+                    )
+                    interval = _interval_context(
+                        text, sent_start, sent_end, clause_start, clause_end
+                    )
+                own_window = bool(
+                    _MODEL_CUMULATIVE.search(scope_clause)
+                    or _MODEL_INTERVAL_BARE_DAYS.search(_mask_spans(
+                        scope_clause, [(d[0], d[1]) for d in _iter_model_dates(scope_clause)]
+                    ))
+                    or _MODEL_DATE_RANGE.search(scope_clause)
                 )
-                if date_ctx is not None:
+                if interval and (own_window or not _MODEL_DAILY_MARKER.search(scope_clause)):
+                    kind, window_days = interval
+                    # A historical N-day claim is anchored to its own window
+                    # end, not silently compared with the latest N records.
+                    date_range = _MODEL_DATE_RANGE.search(scope_clause if table_scope else text[sent_start:clause_end])
+                    if date_range:
+                        month, day, end_month, end_day = date_range.groups()
+                        window_start = _resolve_model_date(
+                            None, int(month), int(day), requested_as_of
+                        )
+                        resolved_date = _resolve_model_date(
+                            None, int(end_month or month), int(end_day), requested_as_of
+                        )
+                    elif date_ctx and kind == "interval":
+                        # A cumulative row can list each day's value after the
+                        # total. Its last date closes the window, unlike daily
+                        # mentions which bind to their nearest preceding date.
+                        dates = _iter_model_dates(scope_clause)
+                        window_date = dates[-1][2:] if dates else date_ctx
+                        resolved_date = _resolve_model_date(*window_date, requested_as_of)
+                elif date_ctx is not None:
                     year, month, day = date_ctx
                     resolved_date = _resolve_model_date(
                         year, month, day, requested_as_of
@@ -2557,7 +2970,7 @@ def _extract_model_mentions(
                         kind = "daily"
                     else:
                         kind = "dated"
-                elif _MODEL_DAILY_MARKER.search(clause):
+                elif _MODEL_DAILY_MARKER.search(scope_clause):
                     kind = "daily"
                 else:
                     interval = _interval_context(
@@ -2576,6 +2989,15 @@ def _extract_model_mentions(
                         "kind": kind,
                         "date": resolved_date,
                         "window_days": window_days,
+                        "window_start": window_start,
+                        "comparison": _model_bound(
+                            text[match.start():number_start],
+                            text[match.end():clause_end].lstrip("元"),
+                        ),
+                        "approximate": any(
+                            word in text[max(clause_start, number_start - 15):match.end() + 15]
+                            for word in ("约", "大致", "大约", "左右", "接近", "达", "超")
+                        ),
                     }
                 )
     return mentions
@@ -2620,36 +3042,17 @@ def _structured_value_on_date(
     return None, "conflicting_records_on_date"
 
 
-def extract_model_totals(text: str | None) -> dict[str, str]:
-    """Extract only explicitly labelled cumulative亿元 values from model text."""
-    if not isinstance(text, str) or not text.strip():
-        return {}
+def extract_model_totals(
+    text: str | None,
+    *,
+    requested_as_of: str | None = None,
+    symbol: str | None = None,
+) -> dict[str, str]:
+    """Extract cumulative claims using the same attribution as daily claims."""
     found: dict[str, str] = {}
-    for field, patterns in _FIELD_VALUE_PATTERNS.items():
-        for pattern in patterns:
-            for match in pattern.finditer(text):
-                sent_start = max((text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "\n")), default=-1) + 1
-                sent_end = min((pos for m in ("。", "；", ";", "\n") if (pos := text.find(m, match.end())) != -1), default=len(text))
-                sentence = text[sent_start:sent_end]
-
-                clause_start = max((text.rfind(m, 0, match.start()) for m in ("。", "；", ";", "，", ",", "\n")), default=-1) + 1
-                clause_end = min((pos for m in ("。", "；", ";", "，", ",", "\n") if (pos := text.find(m, match.end())) != -1), default=len(text))
-                clause = text[clause_start:clause_end]
-
-                if not any(kw in sentence for kw in _CUMULATIVE_KEYWORDS):
-                    continue
-                if field == "netamount" and "主力" in clause:
-                    continue
-                matched_prefix = text[match.start():match.end()]
-                num_str = match.groups()[-1]
-                value = decimal_value(num_str)
-                if value is not None:
-                    if "流出" in matched_prefix and value > 0 and not num_str.startswith("+") and not num_str.startswith("-"):
-                        value = -value
-                    found[field] = _decimal_text(value) or ""
-                    break
-            if field in found:
-                break
+    for mention in _extract_model_mentions(text, requested_as_of=requested_as_of, symbol=symbol):
+        if mention["kind"] in {"cumulative", "interval"}:
+            found.setdefault(mention["field"], mention["value_text"])
     return found
 
 
@@ -2657,6 +3060,7 @@ def extract_model_daily_values(
     text: str | None,
     *,
     requested_as_of: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, str]:
     """Extract daily (single-day) 亿元 values from model text.
 
@@ -2666,7 +3070,7 @@ def extract_model_daily_values(
     structured record inside :func:`validate_model_summary` instead).
     """
     found: dict[str, str] = {}
-    for mention in _extract_model_mentions(text, requested_as_of=requested_as_of):
+    for mention in _extract_model_mentions(text, requested_as_of=requested_as_of, symbol=symbol):
         if mention["kind"] != "daily":
             continue
         field = mention["field"]
@@ -2684,6 +3088,7 @@ def validate_model_summary(
     selected_field: str | None = None,
     selected_source: str | None = None,
     requested_as_of: str | None = None,
+    symbol: str | None = None,
 ) -> dict[str, Any]:
     """Mark model totals and daily values against structured evidence."""
     # Materialize once: dated/interval attribution re-iterates the records.
@@ -2703,16 +3108,18 @@ def validate_model_summary(
         requested_as_of=requested_as_of,
     )
 
-    model_totals = extract_model_totals(model_text)
-    model_daily = extract_model_daily_values(
-        model_text, requested_as_of=requested_as_of
+    model_totals = extract_model_totals(
+        model_text, requested_as_of=requested_as_of, symbol=symbol
     )
-    mentions = _extract_model_mentions(model_text, requested_as_of=requested_as_of)
+    model_daily = extract_model_daily_values(
+        model_text, requested_as_of=requested_as_of, symbol=symbol
+    )
+    mentions = _extract_model_mentions(model_text, requested_as_of=requested_as_of, symbol=symbol)
 
     mismatches: list[dict[str, str]] = []
     unverifiable: list[str] = []
     matched_fields: list[str] = []
-    interval_summary_cache: dict[int, dict[str, Any]] = {}
+    interval_summary_cache: dict[tuple[int, str | None], dict[str, Any]] = {}
 
     def _note_unverifiable(model_field: str) -> None:
         if model_field not in unverifiable:
@@ -2730,7 +3137,7 @@ def validate_model_summary(
             if structured_value is None:
                 _note_unverifiable(model_field)
             return
-        if abs(structured_value - model_value) > tolerance:
+        if not _model_value_matches(mention, structured_value, tolerance):
             mismatch = {
                 "field": model_field,
                 "structured": _decimal_text(structured_value) or "",
@@ -2739,6 +3146,12 @@ def validate_model_summary(
                 "reason": reason,
             }
             mismatch.update(scope)
+            if mention.get("comparison"):
+                mismatch["comparison"] = mention["comparison"]
+            elif mention.get("approximate"):
+                # Keep the existing rhetorical-warning thresholds; attribute
+                # approximation to this mention, not an earlier equal substring.
+                mismatch["approximate"] = True
             mismatches.append(mismatch)
         else:
             matched_fields.append(model_field)
@@ -2754,7 +3167,7 @@ def validate_model_summary(
         dedupe_key = (
             model_field,
             kind,
-            mention.get("date") if kind == "dated" else None,
+            mention.get("date") if kind in {"dated", "interval"} else None,
             mention.get("window_days") if kind == "interval" else None,
         )
         if dedupe_key in seen_mentions:
@@ -2784,19 +3197,24 @@ def validate_model_summary(
             if window <= 0:
                 _note_unverifiable(model_field)
                 continue
-            interval_summary = interval_summary_cache.get(window)
+            window_end = mention.get("date") or requested_as_of
+            cache_key = (window, window_end)
+            interval_summary = interval_summary_cache.get(cache_key)
             if interval_summary is None:
                 interval_summary = summarize_evidence(
                     records,
                     window_days=window,
                     field=selected_field,
                     source=selected_source,
-                    requested_as_of=requested_as_of,
+                    requested_as_of=window_end,
                 )
-                interval_summary_cache[window] = interval_summary
+                interval_summary_cache[cache_key] = interval_summary
             # DAV-1291 F2: only compare when the structured evidence actually
             # covers the exact same N-day window; otherwise unverifiable.
-            if interval_summary.get("status") != "available":
+            window_start = mention.get("window_start")
+            if interval_summary.get("status") != "available" or (
+                window_start and any(date < window_start for date in interval_summary.get("dates", []))
+            ):
                 _note_unverifiable(model_field)
                 continue
             _compare_mention(
@@ -2861,7 +3279,7 @@ def validate_model_summary(
                 ctx_start = max(0, pos - 15)
                 ctx_end = min(len(model_text), pos + len(search_str) + 15)
                 ctx = model_text[ctx_start:ctx_end]
-                is_approx = any(w in ctx for w in ("约", "大致", "大约", "左右", "预估", "预计", "接近", "达", "超"))
+                is_approx = not m.get("comparison") and (m.get("approximate", False) or any(w in ctx for w in ("约", "大致", "大约", "左右", "预估", "预计", "接近", "达", "超")))
         if s_val is not None and m_val is not None and s_val * m_val > 0 and is_approx:
             rel_diff = abs(s_val - m_val) / max(abs(s_val), Decimal("0.01"))
             if rel_diff <= Decimal("0.25") or abs(s_val - m_val) <= Decimal("0.10"):
