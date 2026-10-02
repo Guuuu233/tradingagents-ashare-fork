@@ -187,8 +187,14 @@ class TradingAgentsGraph:
         custom_prompts: Optional[Dict[str, str]] = None,
         custom_prompt_placement: str = DEFAULT_PLACEMENT,
         strict_game_theory_wiring: Optional[bool] = None,
+        graph_stage: str = "full",
     ):
-        """Initialize the trading agents graph and components."""
+        """Initialize the trading agents graph and components.
+
+        ``graph_stage``（D-068）："full" 默认；"analysts" 只跑分析师+完整性门
+        （双档共享阶段）；"downstream" 不跑分析师，从完整性门/辩论开始，须由
+        调用方把共享阶段产出的报告字段注入初始状态。
+        """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
@@ -335,9 +341,23 @@ class TradingAgentsGraph:
         self.ticker = None
         self.log_states_dict = _LogStatesDict()  # date/horizon to full state dict
 
+        self.graph_stage = graph_stage
+
         # Set up the graph with checkpointer
-        raw_graph = self.graph_setup.setup_graph(selected_analysts, checkpointer=self.checkpointer)
-        self.graph = self._wire_game_theory_into_graph(raw_graph)
+        raw_graph = self.graph_setup.setup_graph(
+            selected_analysts, checkpointer=self.checkpointer, stage=graph_stage
+        )
+        if graph_stage == "analysts":
+            # 共享分析师阶段无 Research Manager→Trader 锚点边，跳过博弈节点接线。
+            self.graph = raw_graph
+            self.game_theory_wired = False
+            self.game_theory_unavailable = {
+                "status": "unavailable",
+                "reason_code": "analyst_stage_graph",
+                "message": "Analyst-stage graph carries no debate/game-theory nodes",
+            }
+        else:
+            self.graph = self._wire_game_theory_into_graph(raw_graph)
 
     def _wire_game_theory_into_graph(self, raw_graph: Any) -> Any:
         """Wire Game Theory node into the compiled graph with hardened contract (P0-B / DAV-881)."""

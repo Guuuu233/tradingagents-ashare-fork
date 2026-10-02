@@ -12,6 +12,7 @@ from tradingagents.graph.intent_parser import (
 from tradingagents.agents.utils.agent_states import (
     current_tracker_var,
     extract_verdict,
+    verdict_label,
     check_llm_output_degraded,
     check_stream_chunk_degraded,
 )
@@ -280,7 +281,7 @@ def create_macro_analyst(llm, data_collector=None):
                 t, "Macro Analyst"),
         )
         # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
         return {
             "macro_report": full_content,
             "price_ref_revision": {"macro": _rev_rec} if _rev_rec else {},
@@ -290,7 +291,7 @@ def create_macro_analyst(llm, data_collector=None):
                 "research_horizon": research_horizon,
                 "observation_horizon": observation_horizon,
                 "data_window": data_window,
-                "key_finding": f"宏观板块分析结论：{verdict}",
+                "key_finding": f"宏观板块分析结论：{verdict_label(verdict)}",
                 "verdict": verdict,
                 "confidence": confidence,
             }],

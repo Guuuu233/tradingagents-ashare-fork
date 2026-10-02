@@ -141,7 +141,9 @@ class Propagator:
         if notice is not None:
             horizon_run_metadata["notice"] = notice
 
-        if horizon in resolved:
+        if horizon in resolved or horizon == "dual":
+            # "dual"（D-068 双档共享分析师阶段）：解析出多个档位时统一以
+            # 双视角标签绑定研究周期，分析师报告同时覆盖两档。
             bind_research_horizon(horizon)
         else:
             clear_research_horizon()

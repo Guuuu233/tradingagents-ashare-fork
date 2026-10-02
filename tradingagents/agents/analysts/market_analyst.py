@@ -12,7 +12,7 @@ from tradingagents.graph.intent_parser import (
     build_horizon_context,
     get_bound_research_horizon,
 )
-from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, check_llm_output_degraded, check_stream_chunk_degraded
+from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, verdict_label, check_llm_output_degraded, check_stream_chunk_degraded
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ def create_market_analyst(llm, data_collector=None):
             full_content = "市场技术分析生成异常（输出退化），本项不可用"
         # DAV-1314: 用量记录已由 LLMUsageLogger 回调统一采集（见 openai_client），
         # 此处不再手写 log_llm_call。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
 
         return {
             "market_report": full_content,
@@ -221,7 +221,7 @@ def create_market_analyst(llm, data_collector=None):
                 "research_horizon": research_horizon,
                 "observation_horizon": observation_horizon,
                 "data_window": data_window,
-                "key_finding": f"市场技术面结论：{verdict}",
+                "key_finding": f"市场技术面结论：{verdict_label(verdict)}",
                 "verdict": verdict,
                 "confidence": confidence,
             }],

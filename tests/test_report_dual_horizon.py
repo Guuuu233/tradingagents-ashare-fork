@@ -255,10 +255,12 @@ def test_dual_job_keeps_horizon_scoped_fields_and_propagates_result_sse_and_repo
         "short": {"source": "fixture"},
         "medium": {"source": "fixture"},
     }
-    assert len(_FakeTradingGraph.thread_ids) == 2
+    # D-068：双档先跑一轮共享分析师图（thread 后缀 dual），再各档一图
+    assert len(_FakeTradingGraph.thread_ids) == 3
     assert {thread_id.rsplit("_", 1)[-1] for thread_id in _FakeTradingGraph.thread_ids} == {
         "short",
         "medium",
+        "dual",
     }
     assert all(thread_id.startswith("dual-") for thread_id in _FakeTradingGraph.thread_ids)
     assert "horizon_run_metadata" in result

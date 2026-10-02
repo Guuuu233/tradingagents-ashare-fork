@@ -76,7 +76,7 @@ def create_trader(llm, memory, custom_prompt: str = "", placement: Placement = D
         # Custom-prompt injection (3000-char constraints e.g. confidence ceiling /
         # falsification conditions) must reach the trader like any other data-fed role.
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="trader")
-        evidence_summary = build_seven_source_evidence_summary(state)
+        evidence_summary = build_seven_source_evidence_summary(state, horizon=state.get("horizon"))
         user_prompt = get_prompt("trader_user_prompt", config=config).format(
             company_name=company_name,
             investment_plan=investment_plan,

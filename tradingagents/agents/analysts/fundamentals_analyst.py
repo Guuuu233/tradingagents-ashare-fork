@@ -14,6 +14,7 @@ from tradingagents.graph.intent_parser import (
 from tradingagents.agents.utils.agent_states import (
     current_tracker_var,
     extract_verdict,
+    verdict_label,
     check_llm_output_degraded,
     check_stream_chunk_degraded,
 )
@@ -797,7 +798,7 @@ def create_fundamentals_analyst(llm, data_collector=None):
                 t, "Fundamentals Analyst"),
         )
         # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
         try:
             compliance = check_financial_period_compliance(full_content, outputs)
         except Exception as exc:
@@ -822,7 +823,7 @@ def create_fundamentals_analyst(llm, data_collector=None):
                 "research_horizon": research_horizon,
                 "observation_horizon": observation_horizon,
                 "data_window": data_window,
-                "key_finding": f"基本面分析结论：{verdict}",
+                "key_finding": f"基本面分析结论：{verdict_label(verdict)}",
                 "verdict": verdict,
                 "confidence": confidence,
                 "financial_period_compliance": compliance,

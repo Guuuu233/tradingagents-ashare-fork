@@ -15,6 +15,7 @@ from tradingagents.graph.intent_parser import (
 from tradingagents.agents.utils.agent_states import (
     current_tracker_var,
     extract_verdict,
+    verdict_label,
     check_llm_output_degraded,
     check_stream_chunk_degraded,
 )
@@ -1016,7 +1017,7 @@ def create_news_analyst(llm, data_collector=None):
                 t, "News Analyst"),
         )
         # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
         expectation_revision = build_news_expectation_revision(
             event_coverage=event_coverage,
             all_evidences=all_evidences,
@@ -1033,7 +1034,7 @@ def create_news_analyst(llm, data_collector=None):
                 "research_horizon": research_horizon,
                 "observation_horizon": observation_horizon,
                 "data_window": data_window,
-                "key_finding": f"新闻分析结论：{verdict}",
+                "key_finding": f"新闻分析结论：{verdict_label(verdict)}",
                 "verdict": verdict,
                 "confidence": confidence,
                 "expectation_revision": expectation_revision,

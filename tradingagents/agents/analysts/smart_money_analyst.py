@@ -20,7 +20,7 @@ from tradingagents.graph.intent_parser import (
     build_horizon_context,
     get_bound_research_horizon,
 )
-from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, check_llm_output_degraded, check_stream_chunk_degraded
+from tradingagents.agents.utils.agent_states import current_tracker_var, extract_verdict, verdict_label, check_llm_output_degraded, check_stream_chunk_degraded
 from tradingagents.agents.utils.price_ref_revision import maybe_revise_role_report
 
 logger = logging.getLogger(__name__)
@@ -791,7 +791,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                 t, "Smart Money Analyst"),
         )
         # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
         consensus_guard.update({
             "blocked": consensus_blocked,
             "direction_allowed": not consensus_blocked,
@@ -839,7 +839,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                 "research_horizon": research_horizon,
                 "observation_horizon": observation_horizon,
                 "data_window": "近期可用",
-                "key_finding": f"主力资金分析结论：{verdict}",
+                "key_finding": f"主力资金分析结论：{verdict_label(verdict)}",
                 "verdict": verdict,
                 "confidence": confidence,
             }],

@@ -133,7 +133,7 @@ def test_analyze_job_paths_forward_runtime_config_into_create_initial_state():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "create_initial_state"
     ]
-    assert len(calls) == 3
+    assert len(calls) == 4
     for call in calls:
         forwarded = {
             kw.arg: ast.unparse(kw.value)

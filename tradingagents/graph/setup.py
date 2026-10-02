@@ -153,15 +153,23 @@ class GraphSetup:
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals", "macro", "smart_money"],
-        checkpointer=None
+        checkpointer=None,
+        stage: str = "full",
     ):
         """Set up and compile the agent workflow graph.
 
         Args:
             selected_analysts (list): List of analyst types to include.
             checkpointer: Optional LangGraph checkpointer for state persistence.
+            stage: "full"（默认，全图）；"analysts"（D-068 双档共享阶段：只跑
+                分析师+完整性门，门后直接 END）；"downstream"（D-068 下游阶段：
+                不挂分析师节点，START 直接进完整性门，从辩论开始）。
         """
-        if len(selected_analysts) == 0:
+        if stage not in ("full", "analysts", "downstream"):
+            raise ValueError(f"Unknown graph stage: {stage!r}")
+        if stage == "downstream":
+            selected_analysts = []
+        elif len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
 
         factories = _load_agent_factories()
@@ -314,15 +322,23 @@ class GraphSetup:
             for analyst_type in phase2_types:
                 workflow.add_edge(START, f"{analyst_display_name(analyst_type)} Analyst")
             workflow.add_edge(phase2_dones, "Run Integrity Gate")
+        else:
+            # stage="downstream"：分析师阶段已由共享图跑完，START 直进完整性门
+            workflow.add_edge(START, "Run Integrity Gate")
 
-        workflow.add_conditional_edges(
-            "Run Integrity Gate",
-            self.conditional_logic.should_continue_after_integrity,
-            {
-                "Bull Researcher": "Bull Researcher",
-                "END": END,
-            },
-        )
+        if stage == "analysts":
+            # 共享分析师阶段：完整性门后直接收束，辩论/交易/风控由两档各自的
+            # downstream 图按 horizon 分别运行。
+            workflow.add_edge("Run Integrity Gate", END)
+        else:
+            workflow.add_conditional_edges(
+                "Run Integrity Gate",
+                self.conditional_logic.should_continue_after_integrity,
+                {
+                    "Bull Researcher": "Bull Researcher",
+                    "END": END,
+                },
+            )
 
         # Each analyst loops independently with its tool node until done
         for analyst_type in selected_analysts:

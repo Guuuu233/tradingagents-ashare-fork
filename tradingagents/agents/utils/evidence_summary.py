@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
+from tradingagents.agents.utils.agent_states import resolve_verdict_direction
 from tradingagents.agents.utils.debate_utils import extract_tagged_json, strip_tagged_json
 
 DEFAULT_MAX_CHARS = 300
@@ -38,13 +39,20 @@ _EVIDENCE_RE = re.compile(
 _TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?[\s:\-|]+\|?\s*$")
 
 
-def extract_verdict_direction(report: str) -> str:
-    """Return the analyst's own direction from the VERDICT machine block, if any."""
+def extract_verdict_direction(report: str, horizon: Optional[str] = None) -> str:
+    """Return the analyst's own direction from the VERDICT machine block, if any.
+
+    双档块（``directions``，D-068）必须给出 ``horizon``（short/medium）取本档
+    方向；缺档或取值非法返回 ""——与现行“VERDICT 无效”路径一致，不借用
+    另一档方向。
+    """
     if not report:
         return ""
     payload = extract_tagged_json(report, "VERDICT")
     if not payload:
         payload = extract_tagged_json(report, "MANAGER_VERDICT")
+    if isinstance(payload.get("directions"), Mapping):
+        return resolve_verdict_direction(payload, horizon)
     return str(payload.get("direction", "")).strip()
 
 
@@ -96,6 +104,7 @@ def build_dense_report_input(
     report: str,
     max_chars: int = DEFAULT_DENSE_INPUT_MAX_CHARS,
     role_name: str = "",
+    horizon: Optional[str] = None,
 ) -> tuple[str, str, int]:
     """Return structured high-density summary and key evidence excerpts for a report.
 
@@ -116,7 +125,7 @@ def build_dense_report_input(
     if raw_len <= max_chars:
         return raw_text, "full", raw_len
 
-    direction = extract_verdict_direction(raw_text)
+    direction = extract_verdict_direction(raw_text, horizon=horizon)
     body = strip_machine_blocks(raw_text)
 
     lines: list[str] = []
@@ -153,7 +162,7 @@ def build_dense_report_input(
     return final_text, "structured_dense_summary_and_excerpts", len(final_text)
 
 
-def build_evidence_summary(report: str, max_chars: int = DEFAULT_MAX_CHARS) -> str:
+def build_evidence_summary(report: str, max_chars: int = DEFAULT_MAX_CHARS, horizon: Optional[str] = None) -> str:
     """Return a bounded, fact-dense evidence summary of one analyst report.
 
     The summary is composed of the report's evidence-bearing lines (those
@@ -174,7 +183,7 @@ def build_evidence_summary(report: str, max_chars: int = DEFAULT_MAX_CHARS) -> s
     if not report or not report.strip():
         return ""
 
-    direction = extract_verdict_direction(report)
+    direction = extract_verdict_direction(report, horizon=horizon)
     body = strip_machine_blocks(report)
 
     lines: list[str] = []
@@ -321,6 +330,7 @@ class SevenSourceEvidenceBundle:
 
 def build_seven_source_evidence_bundle(
     reports: Mapping[str, Any] | None = None,
+    horizon: Optional[str] = None,
     **kwargs: Any,
 ) -> SevenSourceEvidenceBundle:
     """Combine seven analyst reports into bounded evidence summaries.
@@ -365,10 +375,10 @@ def build_seven_source_evidence_bundle(
             failed_sources.append(source_key)
             continue
 
-        direction = extract_verdict_direction(text)
+        direction = extract_verdict_direction(text, horizon=horizon)
         prefix_len = len(f"[分析师结论：{direction}] ") if direction else 0
         budget = max(20, cap - len(label) - prefix_len)
-        summary = build_evidence_summary(text, max_chars=budget)
+        summary = build_evidence_summary(text, max_chars=budget, horizon=horizon)
         if not summary.strip():
             continue
 
@@ -394,6 +404,7 @@ def build_seven_source_evidence_bundle(
 
 def build_seven_source_evidence_summary(
     reports: Mapping[str, Any] | None = None,
+    horizon: Optional[str] = None,
     **kwargs: Any,
 ) -> str:
     """Return bounded 7-source first-hand evidence summary string.
@@ -401,5 +412,5 @@ def build_seven_source_evidence_summary(
     Fixed order: market, news, fundamentals, macro, sentiment, smart_money, volume_price.
     Hard cap: len(text) <= 2400.
     """
-    bundle = build_seven_source_evidence_bundle(reports, **kwargs)
+    bundle = build_seven_source_evidence_bundle(reports, horizon=horizon, **kwargs)
     return bundle.text

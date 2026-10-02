@@ -3227,10 +3227,121 @@ async def _run_job_inner(
 
             horizon_states: Dict[str, Any] = {}
 
+            dual_mode = len(request.horizons) > 1
+            shared_analyst_state: Optional[Dict[str, Any]] = None
+
+            # D-068：双档共用一套分析师报告。共享阶段产出的 state 键值，下游
+            # 两档图的初始状态原样注入（报告/provenance/返修记录/trace 完全一致）。
+            _SHARED_ANALYST_KEYS = (
+                "market_report", "sentiment_report", "news_report",
+                "fundamentals_report", "macro_report", "smart_money_report",
+                "smart_money_report_blocked_original", "volume_price_report",
+                "market_data_context", "event_coverage",
+                "fund_flow_consensus_guard", "analyst_traces",
+                "price_ref_revision", "price_ref_source",
+            )
+
+            async def _run_shared_analyst_stage() -> Dict[str, Any]:
+                """双档请求时 7 位分析师（含返修/price_ref 修订）只跑一次。
+
+                账本 horizon 记为 "dual"；分析师写出的报告携带双档 VERDICT 块。
+                """
+                shared_analysts = _get_horizon_analysts("dual", request.selected_analysts)
+                analyst_graph = TradingAgentsGraph(
+                    selected_analysts=shared_analysts,
+                    debug=False,
+                    config=config,
+                    data_collector=graph.data_collector,
+                    custom_prompts=_custom_prompts_for_graph,
+                    custom_prompt_placement=_PROMPT_PLACEMENT,
+                    graph_stage="analysts",
+                )
+                s_tracker = AgentProgressTracker(shared_analysts, job_id, horizon="dual")
+                _emit_job_event(job_id, "agent.snapshot", s_tracker.snapshot())
+                for analyst_key in ANALYST_ORDER:
+                    if analyst_key in shared_analysts:
+                        aname = ANALYST_AGENT_NAMES[analyst_key]
+                        s_tracker._set_status(aname, "in_progress")
+                        s_tracker._emit_writing_status(aname, ANALYST_REPORT_MAP[analyst_key])
+
+                s_args = analyst_graph.propagator.get_graph_args()
+                if "config" not in s_args:
+                    s_args["config"] = {}
+                s_args["config"]["configurable"] = {"thread_id": f"{job_id}_dual"}
+                s_args["config"]["metadata"] = {
+                    **(s_args["config"].get("metadata") or {}),
+                    "report_id": job_id,
+                    "horizon": "dual",
+                }
+                s_init = analyst_graph.propagator.create_initial_state(
+                    ticker, request.trade_date,
+                    user_context=user_context_payload,
+                    selected_analysts=shared_analysts,
+                    request_source=request_source,
+                    user_intent=user_intent,
+                    horizon="dual",
+                    market_data_context=market_data_context,
+                    social_data_context=social_data_context,
+                    runtime_config=config,
+                    horizon_resolution=horizon_resolution,
+                )
+                # 与单档路径一致：图运行期间挂上本次运行 pool，供逐角色
+                # price_ref 检查/返修使用（DAV-1249）。
+                attach_price_ref_source(
+                    s_init, collected_pool,
+                    symbol=ticker, trade_date=request.trade_date,
+                )
+
+                shared_final: Optional[Dict[str, Any]] = None
+                seen_reports: Dict[str, bool] = {}
+                last_report: Dict[str, str] = {}
+                _tracker_token = current_tracker_var.set(s_tracker)
+                # 用量账本：分析师环节调用记 horizon="dual"
+                _horizon_token = current_llm_horizon.set("dual")
+                try:
+                    async for chunk in analyst_graph.graph.astream(s_init, **s_args):
+                        shared_final = chunk
+                        for analyst_key in ANALYST_ORDER:
+                            if analyst_key not in shared_analysts:
+                                continue
+                            rkey = ANALYST_REPORT_MAP[analyst_key]
+                            aname = ANALYST_AGENT_NAMES[analyst_key]
+                            if chunk.get(rkey) and not seen_reports.get(rkey):
+                                seen_reports[rkey] = True
+                                s_tracker._set_status(aname, "completed")
+                        # 分析师报告分片只在共享阶段推送一次，下游两档不再重复推
+                        for key in report_keys:
+                            value = chunk.get(key)
+                            if value and value != last_report.get(key):
+                                last_report[key] = value
+                                s_tracker._emit_report_chunked(job_id, key, str(value))
+                except Exception as e:
+                    _log(
+                        f"Error during shared analyst stage: {e!r}\n"
+                        f"{traceback.format_exc()}"
+                    )
+                    raise
+                finally:
+                    current_tracker_var.reset(_tracker_token)
+                    current_llm_horizon.reset(_horizon_token)
+
+                if shared_final is None:
+                    raise RuntimeError("Shared analyst stage produced no output")
+                for agent, st in s_tracker.status.items():
+                    if st not in ("completed", "skipped"):
+                        s_tracker._set_status(agent, "completed")
+                return shared_final
+
             async def _process_horizon(horizon: str):
                 """Async helper to run analysis for a single horizon."""
-                # 根据周期过滤 analyst，共享已采集的数据缓存
-                horizon_analysts = _get_horizon_analysts(horizon, request.selected_analysts)
+                if shared_analyst_state is not None:
+                    # 双档：分析师已共享跑完，本图从辩论环节开始
+                    horizon_analysts: List[str] = []
+                    graph_stage = "downstream"
+                else:
+                    # 根据周期过滤 analyst，共享已采集的数据缓存
+                    horizon_analysts = _get_horizon_analysts(horizon, request.selected_analysts)
+                    graph_stage = "full"
                 horizon_graph = TradingAgentsGraph(
                     selected_analysts=horizon_analysts,
                     debug=False,
@@ -3238,6 +3349,7 @@ async def _run_job_inner(
                     data_collector=graph.data_collector,
                     custom_prompts=_custom_prompts_for_graph,
                     custom_prompt_placement=_PROMPT_PLACEMENT,
+                    graph_stage=graph_stage,
                 )
 
                 horizon_label = "短线" if horizon == "short" else "中线"
@@ -3280,6 +3392,12 @@ async def _run_job_inner(
                     runtime_config=config,
                     horizon_resolution=horizon_resolution,
                 )
+                if shared_analyst_state is not None:
+                    # 注入共享分析师阶段产出（报告/trace/返修/provenance 等），
+                    # 保证两档消费同一套报告且字段结构与单档一致。
+                    for _k in _SHARED_ANALYST_KEYS:
+                        if _k in shared_analyst_state:
+                            init_state[_k] = shared_analyst_state[_k]
                 last_report: Dict[str, str] = {}
                 seen: Dict[str, bool] = {}   # 追踪哪些字段已出现过，避免重复事件
                 horizon_final = None
@@ -3349,6 +3467,12 @@ async def _run_job_inner(
                         # 避免两个 graph 并发把不同 horizon 的字段相互覆盖。
                         db_updates = {}
                         for key in report_keys:
+                            if (
+                                shared_analyst_state is not None
+                                and key in ANALYST_REPORT_MAP.values()
+                            ):
+                                # D-068：分析师报告由共享阶段已推送，不重复
+                                continue
                             value = chunk.get(key)
                             if value and value != last_report.get(key):
                                 last_report[key] = value
@@ -3375,7 +3499,27 @@ async def _run_job_inner(
                         h_tracker._set_status(agent, "completed")
                 _emit_job_event(job_id, "agent.horizon_done", {"horizon": horizon})
 
-            # 3. 按解析出的 horizons 并行运行 astream()，事件实时推给前端
+            # 3. 双档先跑共享分析师阶段（一次 7 位分析师），再并行两档
+            if dual_mode:
+                try:
+                    shared_analyst_state = await _run_shared_analyst_stage()
+                except Exception as e:
+                    for horizon in request.horizons:
+                        _emit_job_event(
+                            job_id,
+                            "agent.horizon_failed",
+                            {
+                                "horizon": horizon,
+                                "status": "failed",
+                                "error": _humanize_analysis_error(str(e)),
+                                "impact": "shared analyst stage failed; no horizon can proceed.",
+                            },
+                        )
+                    raise RuntimeError(
+                        f"Shared analyst stage failed: {e}"
+                    ) from e
+
+            # 按解析出的 horizons 并行运行 astream()，事件实时推给前端
             results = await asyncio.gather(
                 *[_process_horizon(h) for h in request.horizons],
                 return_exceptions=True,
@@ -3633,11 +3777,14 @@ async def _run_job_inner(
                     ),
                     "not_applicable": horizon_metadata["not_applicable"],
                     "not_applicable_by_horizon": horizon_metadata["not_applicable_by_horizon"],
-                    "analyst_traces": [
-                        trace
-                        for horizon in request.horizons
-                        for trace in horizon_results[horizon].get("analyst_traces", [])
-                    ],
+                    "analyst_traces": next(
+                        (
+                            horizon_results[h].get("analyst_traces", [])
+                            for h in request.horizons
+                            if horizon_results[h].get("analyst_traces")
+                        ),
+                        [],
+                    ),
                 }
                 top_cutoff = next(
                     (
@@ -3839,7 +3986,8 @@ async def _run_job_inner(
                 "smart_money_report": primary_r.get("smart_money_report", ""),
                 "volume_price_report": primary_r.get("volume_price_report", ""),
                 "analyst_traces": (
-                    short_r.get("analyst_traces", []) + medium_r.get("analyst_traces", [])
+                    # D-068：双档两切片 trace 同源同内容，取一份即可（horizon=dual）
+                    short_r.get("analyst_traces") or medium_r.get("analyst_traces") or []
                 ),
             }
             _mount_or_refresh_protocol_metadata_and_metrics(result, source_state=primary_r)

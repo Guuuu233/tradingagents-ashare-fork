@@ -13,6 +13,7 @@ from tradingagents.agents.utils.agent_states import (
     TraceItem,
     current_tracker_var,
     extract_verdict,
+    verdict_label,
     check_llm_output_degraded,
     check_stream_chunk_degraded,
 )
@@ -182,11 +183,11 @@ def create_social_media_analyst(llm, data_collector=None):
                 t, "Social Analyst"),
         )
         # DAV-1314: 用量记录由 LLMUsageLogger 回调统一采集。
-        verdict, confidence = extract_verdict(full_content)
+        verdict, confidence = extract_verdict(full_content, horizon=research_horizon)
         key_finding = (
-            f"舆情分析结论：{verdict}（社交数据不可用/方向不可判断）"
+            f"舆情分析结论：{verdict_label(verdict)}（社交数据不可用/方向不可判断）"
             if not resolved.direction_allowed
-            else f"舆情分析结论：{verdict}"
+            else f"舆情分析结论：{verdict_label(verdict)}"
         )
 
         trace_item: TraceItem = {

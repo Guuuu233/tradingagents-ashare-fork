@@ -112,7 +112,7 @@ def create_risk_manager(llm, memory, custom_prompt: str = "", placement: Placeme
         # Custom-prompt injection (3000-char constraints e.g. confidence ceiling /
         # falsification conditions) must reach the risk adjudicator too.
         injection_slots = build_injection_slots(custom_prompt, placement, role_key="risk_manager")
-        evidence_summary = build_seven_source_evidence_summary(state)
+        evidence_summary = build_seven_source_evidence_summary(state, horizon=state.get("horizon"))
         prompt = get_prompt("risk_manager_prompt", config=get_config()).format(
             trader_plan=trader_plan,
             evidence_summary=evidence_summary,

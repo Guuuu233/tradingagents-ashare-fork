@@ -93,7 +93,7 @@ def revision_enabled() -> bool:
 # V1 签名白名单：只比对结论字段——方向/动作/赢家/状态/概率。
 # 理由文本与机读块内价格字段不参与比对，允许按三选一规则修改。
 _CONCLUSION_KEYS = (
-    "direction", "trade_action", "winner",
+    "direction", "directions", "trade_action", "winner",
     "analysis_status", "confirmation_state", "probability",
 )
 

@@ -2065,13 +2065,13 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         round_summary_text = round_summary or "暂无轮次摘要。"
 
         # ── Seven Reports Input Extraction & Manifest ──────────────────────
-        macro_input, macro_mode, macro_chars = build_dense_report_input(macro_report, max_chars=1800, role_name="macro")
-        market_input, market_mode, market_chars = build_dense_report_input(market_research_report, max_chars=1800, role_name="market")
-        sentiment_input, sentiment_mode, sentiment_chars = build_dense_report_input(sentiment_report, max_chars=1800, role_name="sentiment")
-        news_input, news_mode, news_chars = build_dense_report_input(news_report, max_chars=1800, role_name="news")
-        fundamentals_input, fundamentals_mode, fundamentals_chars = build_dense_report_input(fundamentals_report, max_chars=1800, role_name="fundamentals")
-        smart_money_input, smart_money_mode, smart_money_chars = build_dense_report_input(smart_money_report, max_chars=1800, role_name="smart_money")
-        volume_price_input, volume_price_mode, volume_price_chars = build_dense_report_input(volume_price_report, max_chars=1800, role_name="volume_price")
+        macro_input, macro_mode, macro_chars = build_dense_report_input(macro_report, max_chars=1800, role_name="macro", horizon=research_horizon)
+        market_input, market_mode, market_chars = build_dense_report_input(market_research_report, max_chars=1800, role_name="market", horizon=research_horizon)
+        sentiment_input, sentiment_mode, sentiment_chars = build_dense_report_input(sentiment_report, max_chars=1800, role_name="sentiment", horizon=research_horizon)
+        news_input, news_mode, news_chars = build_dense_report_input(news_report, max_chars=1800, role_name="news", horizon=research_horizon)
+        fundamentals_input, fundamentals_mode, fundamentals_chars = build_dense_report_input(fundamentals_report, max_chars=1800, role_name="fundamentals", horizon=research_horizon)
+        smart_money_input, smart_money_mode, smart_money_chars = build_dense_report_input(smart_money_report, max_chars=1800, role_name="smart_money", horizon=research_horizon)
+        volume_price_input, volume_price_mode, volume_price_chars = build_dense_report_input(volume_price_report, max_chars=1800, role_name="volume_price", horizon=research_horizon)
 
         seven_reports = {
             "macro_report": macro_report,
@@ -2221,10 +2221,10 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
         prov_lines.append(format_expectation_revisions_for_prompt(expectation_revisions, language=prompt_language))
         provenance_context = "\n".join(prov_lines)
 
-        market_evidence_summary = build_evidence_summary(market_research_report)
-        news_evidence_summary = build_evidence_summary(news_report)
-        fundamentals_evidence_summary = build_evidence_summary(fundamentals_report)
-        macro_evidence_summary = build_evidence_summary(macro_report)
+        market_evidence_summary = build_evidence_summary(market_research_report, horizon=research_horizon)
+        news_evidence_summary = build_evidence_summary(news_report, horizon=research_horizon)
+        fundamentals_evidence_summary = build_evidence_summary(fundamentals_report, horizon=research_horizon)
+        macro_evidence_summary = build_evidence_summary(macro_report, horizon=research_horizon)
 
         macro_evidence_line = ""
         if macro_evidence_summary:

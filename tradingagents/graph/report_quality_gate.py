@@ -749,14 +749,23 @@ def check_forbidden_social_directional_claims(text: str) -> List[str]:
                     violations.append(s_clean)
                     break
     # Also check machine verdict in text
-    verdict_match = re.search(r'<!--\s*VERDICT:\s*(\{[^}]+\})\s*-->', text)
+    verdict_match = re.search(r'<!--\s*VERDICT:\s*(\{.*?\})\s*-->', text, re.DOTALL)
     if verdict_match:
         try:
             import json
             v_data = json.loads(verdict_match.group(1))
-            v_dir = str(v_data.get("direction", "")).strip()
-            if v_dir in ("看多", "偏多", "看空", "偏空", "BULLISH", "LEAN_BULLISH", "BEARISH", "LEAN_BEARISH"):
-                violations.append(f"machine verdict direction='{v_dir}'")
+            _DIRECTIONAL = ("看多", "偏多", "看空", "偏空", "BULLISH", "LEAN_BULLISH", "BEARISH", "LEAN_BEARISH")
+            v_dirs = v_data.get("directions")
+            if isinstance(v_dirs, dict):
+                # D-068 双档块：两档任一方向性取值即违规（语义不放宽）
+                for h, hv in v_dirs.items():
+                    if str(hv).strip() in _DIRECTIONAL:
+                        violations.append(f"machine verdict directions.{h}='{hv}'")
+                        break
+            else:
+                v_dir = str(v_data.get("direction", "")).strip()
+                if v_dir in _DIRECTIONAL:
+                    violations.append(f"machine verdict direction='{v_dir}'")
         except Exception:
             pass
     return violations

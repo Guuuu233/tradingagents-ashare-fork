@@ -52,12 +52,40 @@ def research_horizon_context(horizon: Optional[str]):
 _HORIZON_LABELS_ZH: Dict[str, str] = {
     "short": "短线（1-2周，技术面主导）",
     "medium": "中线（1-3月，基本面主导）",
+    # D-068：双档共用分析师报告时的研究周期标签
+    "dual": "短线+中线双视角（同时覆盖1-2周技术面与1-3月基本面）",
 }
 
 _HORIZON_LABELS_EN: Dict[str, str] = {
     "short": "Short-term (1-2 weeks, technicals-driven)",
     "medium": "Medium-term (1-3 months, fundamentals-driven)",
+    "dual": "Dual horizon (short-term 1-2 weeks + medium-term 1-3 months)",
 }
+
+# D-068：双档模式下追加到分析师视角上下文末尾的写作要求。
+_DUAL_VIEW_INSTRUCTION_ZH = (
+    "\n【双档写作要求】本次报告同时服务短线与中线两档：\n"
+    "- 数据事实只写一遍；凡涉及方向判断、影响、时滞的段落，分别写出"
+    "「【短线视角】」与「【中线视角】」两个小节，不得只写一个周期。\n"
+    "- 你的专业观察窗保持不变。\n"
+    "- 报告末尾的机读块改用双档格式（两档各填一个方向，只可填：看多 / 偏多 / 中性 / 偏空 / 看空）：\n"
+    '<!-- VERDICT: {"directions": {"short": "偏多", "medium": "中性"}, '
+    '"reasons": {"short": "不超过20字", "medium": "不超过20字"}} -->\n'
+    "不得再输出单档 direction 键。"
+)
+
+_DUAL_VIEW_INSTRUCTION_EN = (
+    "\n[Dual-horizon report] This report serves BOTH horizons:\n"
+    "- Write data facts once. For any directional judgment, impact or "
+    "time-lag paragraph, write two subsections labeled [Short-term view] "
+    "and [Medium-term view]; never cover only one horizon.\n"
+    "- Your professional observation window stays unchanged.\n"
+    "- Append the machine block in dual form (one direction per horizon, "
+    "each one of BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEARISH):\n"
+    '<!-- VERDICT: {"directions": {"short": "LEAN_BULLISH", "medium": "NEUTRAL"}, '
+    '"reasons": {"short": "under 15 words", "medium": "under 15 words"}} -->\n'
+    "Do NOT emit a top-level direction key."
+)
 
 _HORIZON_LABELS = _HORIZON_LABELS_ZH
 
@@ -162,7 +190,7 @@ def build_horizon_context(
         else unbound_label
     )
 
-    return template.format(
+    block = template.format(
         research_horizon_label=research_horizon_label,
         observation_horizon_label=observation_horizon_label,
         research_horizon=research_horizon_label,
@@ -172,6 +200,9 @@ def build_horizon_context(
         specific_questions_str=questions_str,
         weight_hint="",
     )
+    if target_research == "dual":
+        block += _DUAL_VIEW_INSTRUCTION_ZH if lang == "zh" else _DUAL_VIEW_INSTRUCTION_EN
+    return block
 
 
 def _merge_inferred_user_context(

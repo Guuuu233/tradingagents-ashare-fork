@@ -104,18 +104,26 @@ _DIRECTION_ALIAS = {
 }
 
 
-def _extract_verdict(text: str) -> Optional[dict]:
+def _extract_verdict(text: str, horizon: Optional[str] = None) -> Optional[dict]:
     """Extract structured verdict from agent report HTML comment.
 
     Returns {"direction": "看多", "reason": "..."} or None.
+    D-068 双档块（directions/reasons）：必须给出本档 horizon，缺档或非法返回
+    None（与现行无效路径一致，不借用另一档方向）。
     """
     m = _VERDICT_RE.search(text)
     if not m:
         return None
     try:
         parsed = json.loads(m.group(1))
-        direction = parsed.get("direction", "")
-        reason = parsed.get("reason", "")
+        directions = parsed.get("directions")
+        if isinstance(directions, dict):
+            reasons = parsed.get("reasons") or {}
+            direction = str(directions.get(horizon) or "") if horizon else ""
+            reason = str(reasons.get(horizon) or "") if isinstance(reasons, dict) else ""
+        else:
+            direction = parsed.get("direction", "")
+            reason = parsed.get("reason", "")
         if not direction or not reason:
             return None
         direction = _DIRECTION_ALIAS.get(direction.upper(), direction)
@@ -273,7 +281,7 @@ def render_report_html(report: "ReportDB", frontend_url: str = "", stock_name: s
         content = getattr(report, attr, None)
         if content is None:
             continue
-        verdict = _extract_verdict(content)
+        verdict = _extract_verdict(content, horizon=getattr(report, "horizon", None))
         if verdict:
             verdicts.append((title, verdict))
 

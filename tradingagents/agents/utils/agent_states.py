@@ -15,16 +15,99 @@ current_tracker_var: contextvars.ContextVar = contextvars.ContextVar(
 )
 
 
-def extract_verdict(text: str) -> Tuple[str, str]:
-    """Extract VERDICT block from analyst output. Returns (direction, confidence)."""
-    m = re.search(r'<!--\s*VERDICT:\s*(\{.*?\})\s*-->', text or "", re.DOTALL)
-    if m:
-        try:
-            d = json.loads(m.group(1))
-            return d.get("direction", "中性"), "中"
-        except Exception:
-            pass
-    return "中性", "低"
+VERDICT_BLOCK_RE = re.compile(r'<!--\s*VERDICT:\s*(\{.*?\})\s*-->', re.DOTALL)
+
+# 双档（D-068）VERDICT 机读块的档位键与合法方向取值。
+DUAL_HORIZON_KEYS = ("short", "medium")
+DUAL_HORIZON_LEDGER_VALUE = "dual"
+_VALID_VERDICT_DIRECTIONS = {
+    "看多", "偏多", "中性", "偏空", "看空",
+    "BULLISH", "LEAN_BULLISH", "NEUTRAL", "LEAN_BEARISH", "BEARISH",
+}
+
+_INVALID_VERDICT: Tuple[str, str] = ("中性", "低")
+
+
+def parse_verdict_block(text: str) -> Optional[dict]:
+    """解析报告中的 ``<!-- VERDICT: {...} -->`` 机读块。
+
+    返回 JSON payload；缺块或 JSON 非法返回 None（=现行"VERDICT 无效"路径）。
+    """
+    m = VERDICT_BLOCK_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group(1))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def resolve_verdict_direction(payload: Optional[Mapping[str, Any]], horizon: Optional[str]) -> str:
+    """从 VERDICT payload 中取本档 direction。
+
+    - 单档块（顶层 ``direction``）：原样返回，不做合法性校验（与现行一致）。
+    - 双档块（``directions: {short, medium}``）：必须给出 ``short``/``medium``
+      horizon 且对应值为合法方向，否则返回 ""（无效，调用方走现行
+      "VERDICT 无效"路径）。不借用另一档方向，不默认中性。
+    """
+    if not isinstance(payload, Mapping):
+        return ""
+    directions = payload.get("directions")
+    if isinstance(directions, Mapping):
+        if horizon not in DUAL_HORIZON_KEYS:
+            return ""
+        value = str(directions.get(horizon) or "").strip()
+        return value if value in _VALID_VERDICT_DIRECTIONS else ""
+    return str(payload.get("direction") or "")
+
+
+def resolve_verdict_reason(payload: Optional[Mapping[str, Any]], horizon: Optional[str]) -> str:
+    """同 ``resolve_verdict_direction``，取 ``reason``/``reasons[horizon]``。"""
+    if not isinstance(payload, Mapping):
+        return ""
+    reasons = payload.get("reasons")
+    if isinstance(reasons, Mapping):
+        if horizon not in DUAL_HORIZON_KEYS:
+            return ""
+        return str(reasons.get(horizon) or "").strip()
+    return str(payload.get("reason") or "")
+
+
+def extract_verdict(text: str, horizon: Optional[str] = None) -> Tuple[Any, str]:
+    """Extract VERDICT block from analyst output. Returns (direction, confidence).
+
+    - 单档块：``(direction_str, "中")``，与现行行为一致。
+    - 双档块（``directions``）：
+      - ``horizon`` 为 short/medium → 本档 direction 字符串；本档缺失或取值
+        非法 → 无效路径 ``("中性", "低")``。
+      - ``horizon="dual"`` → 两档方向 dict ``{"short": …, "medium": …}``，
+        供 analyst_traces 记录；任一档缺失/非法 → 无效路径。
+    """
+    payload = parse_verdict_block(text)
+    if payload is None:
+        return _INVALID_VERDICT
+    confidence = str(payload.get("confidence") or "中")
+    if isinstance(payload.get("directions"), Mapping):
+        if horizon == DUAL_HORIZON_LEDGER_VALUE:
+            dual: dict = {}
+            for h in DUAL_HORIZON_KEYS:
+                d = resolve_verdict_direction(payload, h)
+                if not d:
+                    return _INVALID_VERDICT
+                dual[h] = d
+            return dual, confidence
+        d = resolve_verdict_direction(payload, horizon)
+        return (d if d else "中性"), (confidence if d else "低")
+    return payload.get("direction", "中性"), confidence
+
+
+def verdict_label(verdict: Any) -> str:
+    """把 extract_verdict 的 direction 结果渲染成人读标签（trace key_finding 用）。"""
+    if isinstance(verdict, Mapping):
+        return "短线{} / 中线{}".format(
+            verdict.get("short", "中性"), verdict.get("medium", "中性"))
+    return str(verdict)
 
 
 class UserIntent(TypedDict, total=False):

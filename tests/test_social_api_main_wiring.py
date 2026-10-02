@@ -1,15 +1,16 @@
 """Tests for api/main.py social_data_context wiring (Task 9 / D-009 / §8).
 
-Asserts that all three create_initial_state call sites in api/main.py
-(dual-horizon, streaming, and single-horizon) properly forward social_data_context.
+Asserts that all four create_initial_state call sites in api/main.py
+(dual-horizon shared analyst stage, dual-horizon per-horizon, streaming, and
+single-horizon) properly forward social_data_context.
 """
 
 import ast
 from pathlib import Path
 
 
-def test_api_main_three_create_initial_state_forward_social_data_context():
-    """All three create_initial_state calls in api/main.py must pass social_data_context."""
+def test_api_main_create_initial_state_sites_forward_social_data_context():
+    """All create_initial_state calls in api/main.py must pass social_data_context."""
     source_path = Path("api/main.py")
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
 
@@ -21,8 +22,9 @@ def test_api_main_three_create_initial_state_forward_social_data_context():
         and node.func.attr == "create_initial_state"
     ]
 
-    # Exactly three call sites: dual-horizon, streaming, single-horizon
-    assert len(calls) == 3, f"Expected 3 create_initial_state calls in api/main.py, found {len(calls)}"
+    # Exactly four call sites: dual-horizon shared analyst stage (D-068),
+    # dual-horizon per-horizon, streaming, single-horizon
+    assert len(calls) == 4, f"Expected 4 create_initial_state calls in api/main.py, found {len(calls)}"
 
     for idx, call in enumerate(calls, 1):
         forwarded = {
