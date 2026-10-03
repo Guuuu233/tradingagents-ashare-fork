@@ -705,6 +705,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                 selected_field=selected_field,
                 selected_source=selected_source,
                 requested_as_of=current_date,
+                symbol=ticker,
             )
             fund_flow_evidence["consensus"] = current_selection
             if isinstance(market_data_context, dict):
