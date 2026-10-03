@@ -207,7 +207,7 @@ function getAggregateNotApplicable(
     return values.every(value => value === true)
 }
 
-function isReportDualHorizon(report: AnalysisReport): boolean {
+export function isReportDualHorizon(report: AnalysisReport): boolean {
     if (report.mode === 'single_horizon') return false
     if (Array.isArray(report.requested_horizons) && report.requested_horizons.length > 1) return true
 
