@@ -902,7 +902,31 @@ def status_from_manager_verdict(
                 adopted_has_pit = True
                 break
 
-    if adopted_has_pit or any(
+    # DAV-1440：无同向裁决支持是判断无依据，不是有效的中性观点。
+    # 按最终 manager 账本判定；异向 adopted / 非空 partial 均不豁免。
+    direction_basis = mv.get("direction_basis")
+    if not isinstance(direction_basis, Mapping):
+        direction_basis = mv_in_deb.get("direction_basis")
+    no_adjudicated_support = any(
+        "no_adjudicated_support" in codes
+        for codes in (
+            confirm_codes,
+            mv.get("reason_codes") or [],
+            from_nested.reason_codes if from_nested is not None else [],
+        )
+    )
+    direction_without_support = no_adjudicated_support or (
+        isinstance(direction_basis, Mapping)
+        and direction_basis.get("status") == "unledgered"
+        and direction_basis.get("same_direction_claims") == []
+    )
+    if direction_without_support:
+        confirm_codes = list(confirm_codes)
+        if no_adjudicated_support and "no_adjudicated_support" not in confirm_codes:
+            confirm_codes.append("no_adjudicated_support")
+        confirm_codes.append("direction_without_adjudicated_support")
+
+    if direction_without_support or adopted_has_pit or any(
         code.startswith("unadjudicated_material_claims_adopt:")
         or code.startswith("pit_failed_adopted_claims:")
         or code.startswith("pit_failed_partially_adopted_claims:")

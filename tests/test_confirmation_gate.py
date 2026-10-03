@@ -339,7 +339,7 @@ def test_status_from_manager_verdict_tie_with_unresolved_claims_is_wait():
 
 
 def test_status_from_manager_verdict_tie_with_all_confirmed_is_hold():
-    """winner=tie 且无任何裁决账本（DAV-1349：无采纳依据不得 CONFIRMED）-> UNRESOLVED + WAIT。"""
+    """DAV-1440：空裁决账本不是有效持平观点，必须 ABSTAIN / NO_TRADE。"""
     mv = {
         "direction": "中性",
         "winner": "tie",
@@ -355,7 +355,10 @@ def test_status_from_manager_verdict_tie_with_all_confirmed_is_hold():
     )
     assert status.confirmation_state == CONFIRM_UNRESOLVED
     assert "no_adjudicated_support" in (status.reason_codes or [])
-    assert status.trade_action == ACTION_WAIT
+    assert "direction_without_adjudicated_support" in status.reason_codes
+    assert status.analysis_status == ANALYSIS_ABSTAIN
+    assert status.direction == DIRECTION_NA
+    assert status.trade_action == ACTION_NO_TRADE
 
 
 def test_prior_gates_take_precedence_over_confirmation():
@@ -376,14 +379,14 @@ def test_prior_gates_take_precedence_over_confirmation():
     assert st1.trade_action == ACTION_NO_TRADE
     assert st1.confirmation_state == CONFIRM_UNRESOLVED
 
-    # 2. Upstream PARTIAL failure -> PARTIAL / 非方向性动作原样保留
+    # 2. DAV-1440：空账本的 no_adjudicated_support 硬闸优先于 prior PARTIAL。
     st2 = status_from_manager_verdict(
         {"direction": "看多", "winner": "bull", "consistency_check_passed": True},
         prior_analysis_status="PARTIAL",
     )
-    assert st2.analysis_status == "PARTIAL"
-    # DAV-1349：空账本确认态变为 UNRESOLVED -> WAIT（仍不可执行）。
-    assert st2.trade_action == ACTION_WAIT
+    assert st2.analysis_status == ANALYSIS_ABSTAIN
+    assert st2.trade_action == ACTION_NO_TRADE
+    assert "direction_without_adjudicated_support" in st2.reason_codes
 
 
 # ── Integration: Goertek Nail & Research Manager Node ─────────────────────────
@@ -409,12 +412,14 @@ def test_goertek_nail_unconfirmed_core_disagreement_emits_wait():
 
     manager_res = asyncio.run(manager_node(state))
 
-    # Assertions on Research Manager output
-    assert manager_res["analysis_status"] == ANALYSIS_VALID
+    # DAV-1440：新生成的裁决没有同向采纳依据，不得保留 VALID 方向。
+    assert manager_res["analysis_status"] == ANALYSIS_ABSTAIN
     assert manager_res["confirmation_state"] == CONFIRM_UNRESOLVED
-    assert manager_res["trade_action"] == ACTION_WAIT
-    assert manager_res["decision_status"]["trade_action"] == ACTION_WAIT
+    assert manager_res["trade_action"] == ACTION_NO_TRADE
+    assert manager_res["decision_status"]["trade_action"] == ACTION_NO_TRADE
+    assert manager_res["decision_status"]["direction"] == DIRECTION_NA
     assert manager_res["decision_status"]["confirmation_state"] == CONFIRM_UNRESOLVED
+    assert "direction_without_adjudicated_support" in manager_res["decision_status"]["reason_codes"]
 
     # Now pass state to Trader node: Trader must short-circuit and NOT generate buy orders
     trader_state = {

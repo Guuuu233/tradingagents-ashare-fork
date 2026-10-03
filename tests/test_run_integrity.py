@@ -570,13 +570,18 @@ def test_compliance_violation_end_to_end_partial_not_valid():
         "confidence": 80,
         "probability": 0.7,
         "consistency_check_passed": True,
+        # DAV-1440：本用例隔离 prior PARTIAL 门，不用空账本触发新硬闸。
+        "adopted_claim_ids": ["C-1"],
+        "direction_basis": {"status": "ledgered", "same_direction_claims": [{"claim_id": "C-1", "source": "adopted"}]},
     }
     status = status_from_manager_verdict(
-        manager_verdict, prior_analysis_status=integrity.analysis_status
+        manager_verdict, prior_analysis_status=integrity.analysis_status,
+        claim_evidence_summary={"C-1": {"decision": "adopt", "counts": {"total": 1, "verified": 1}, "stance": "bullish"}},
     )
     assert status.analysis_status == ANALYSIS_PARTIAL
-    # DAV-1349：空裁决账本确认态为 UNRESOLVED -> WAIT（非方向性动作，partial_status 原样保留）。
-    assert status.trade_action == "WAIT"
+    assert status.trade_action == ACTION_NO_TRADE
+    assert "prior_partial_analyst_failures" in status.reason_codes
+    assert "direction_without_adjudicated_support" not in status.reason_codes
 
 
 def test_compliance_clean_and_not_checked_do_not_fail():

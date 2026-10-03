@@ -232,13 +232,16 @@ def test_r1_goertek_research_manager_and_trader_node_execution():
 
     manager_res = asyncio.run(manager_node(data))
     assert manager_calls["n"] == 1
-    assert manager_res["analysis_status"] == ANALYSIS_VALID
+    # DAV-1440：只更新新生成裁决的期望，不改写上面的历史 fixture。
+    assert manager_res["analysis_status"] == "ABSTAIN"
     assert manager_res["confirmation_state"] == CONFIRM_UNRESOLVED
-    assert manager_res["trade_action"] == ACTION_WAIT
-    assert manager_res["decision_status"]["trade_action"] == ACTION_WAIT
+    assert manager_res["trade_action"] == ACTION_NO_TRADE
+    assert manager_res["decision_status"]["trade_action"] == ACTION_NO_TRADE
+    assert manager_res["decision_status"]["direction"] == DIRECTION_NA
     assert manager_res["decision_status"]["confirmation_state"] == CONFIRM_UNRESOLVED
+    assert "direction_without_adjudicated_support" in manager_res["decision_status"]["reason_codes"]
 
-    # Trader execution: must short-circuit on WAIT without LLM call
+    # Trader execution: must short-circuit on ABSTAIN without LLM call
     trader_state = {
         "company_of_interest": "002241.SZ",
         "investment_plan": manager_res["investment_plan"],
