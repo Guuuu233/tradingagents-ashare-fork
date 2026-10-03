@@ -431,36 +431,235 @@ export function substituteUpstreamBlockedPlaceholder(
     return explanation || text
 }
 
+const VERDICT_BLOCK_RE = /<!--\s*VERDICT:\s*(\{[^>]+\})\s*-->/
+
+interface RawVerdictBlock {
+    direction?: string
+    reason?: string
+    directions?: Record<string, string>
+    reasons?: Record<string, string>
+}
+
+function parseVerdictBlock(text?: string | null): RawVerdictBlock | null {
+    if (!text) return null
+    const m = text.match(VERDICT_BLOCK_RE)
+    if (!m) return null
+    try {
+        const parsed = JSON.parse(m[1]) as unknown
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+        return parsed as RawVerdictBlock
+    } catch {
+        return null
+    }
+}
+
+/**
+ * DAV-1429: does this section carry any VERDICT block at all?
+ *
+ * Distinguishes "this section never emits a verdict" (missing — the card keeps
+ * its plain 完成 state) from "it emits one but this horizon's value is unusable"
+ * (invalid — the card must show 无效 rather than borrow the other horizon).
+ */
+function hasVerdictBlock(text?: string | null): boolean {
+    return !!text && VERDICT_BLOCK_RE.test(text)
+}
+
+function normalizeVerdict(direction: unknown, reason: unknown): Verdict | null {
+    if (typeof direction !== 'string' || typeof reason !== 'string') return null
+    const dir = direction.trim()
+    const why = reason.trim()
+    if (!dir || !why) return null
+    const normalized = DIRECTION_ALIAS[dir.toUpperCase()] ?? dir
+    return { direction: normalized, reason: why.slice(0, 42) }
+}
+
 /**
  * Extract the structured verdict embedded by the agent as an HTML comment.
  * Format: <!-- VERDICT: {"direction": "...", "reason": "..."} -->
  */
 export function extractVerdict(text?: string | null, horizon?: string | null): Verdict | null {
-    if (!text) return null
-    const m = text.match(/<!--\s*VERDICT:\s*(\{[^>]+\})\s*-->/)
-    if (!m) return null
-    try {
-        const parsed = JSON.parse(m[1]) as {
-            direction?: string
-            reason?: string
-            directions?: Record<string, string>
-            reasons?: Record<string, string>
-        }
-        let direction: string | undefined
-        let reason: string | undefined
-        if (parsed.directions && typeof parsed.directions === 'object') {
-            // D-068 双档块：按本档取值，缺档不借用另一档方向
-            if (horizon !== 'short' && horizon !== 'medium') return null
-            direction = parsed.directions[horizon]
-            reason = parsed.reasons?.[horizon]
-        } else {
-            direction = parsed.direction
-            reason = parsed.reason
-        }
-        if (!direction || !reason) return null
-        const normalized = DIRECTION_ALIAS[direction.toUpperCase()] ?? direction
-        return { direction: normalized, reason: reason.trim().slice(0, 42) }
-    } catch {
-        return null
+    const block = parseVerdictBlock(text)
+    if (!block) return null
+    if (block.directions && typeof block.directions === 'object') {
+        // D-068 双档块：按本档取值，缺档不借用另一档方向
+        if (horizon !== 'short' && horizon !== 'medium') return null
+        return normalizeVerdict(block.directions[horizon], block.reasons?.[horizon])
     }
+    return normalizeVerdict(block.direction, block.reason)
+}
+
+export const VERDICT_HORIZONS = ['short', 'medium'] as const
+
+export type VerdictHorizon = (typeof VERDICT_HORIZONS)[number]
+
+/** One horizon's slot in a dual-horizon VERDICT block. */
+export type HorizonVerdictSlot =
+    | { state: 'ok'; verdict: Verdict }
+    | { state: 'missing' }
+    | { state: 'invalid' }
+
+export interface HorizonVerdictSet {
+    /** True when the source carried a dual-horizon (`directions`) VERDICT block. */
+    isDual: boolean
+    /** Legacy single-horizon verdict from a `direction` block; never borrowed from a dual block. */
+    single: Verdict | null
+    /** Per-horizon slots. A missing/invalid horizon is never filled from the other one. */
+    slots: Record<VerdictHorizon, HorizonVerdictSlot>
+}
+
+/**
+ * DAV-1429: take both horizons out of one section's text.
+ *
+ * The collaboration graph used to read a single direction through
+ * `extractVerdict(text, currentHorizon)`, which depends on the last
+ * `agent.horizon_start` event and therefore shows only 中线 during a dual run.
+ * This helper returns every horizon the section itself declares, each from its
+ * own key: a horizon that is absent or unusable stays empty (never borrowed).
+ */
+export function extractHorizonVerdicts(text?: string | null): HorizonVerdictSet {
+    const block = parseVerdictBlock(text)
+    const slots: Record<VerdictHorizon, HorizonVerdictSlot> = {
+        short: { state: 'missing' },
+        medium: { state: 'missing' },
+    }
+    const isDual = !!block?.directions && typeof block.directions === 'object'
+    let single: Verdict | null = null
+    if (block) {
+        if (isDual) {
+            for (const horizon of VERDICT_HORIZONS) {
+                const rawDirection = block.directions?.[horizon]
+                if (rawDirection === undefined || rawDirection === null) continue
+                const verdict = normalizeVerdict(rawDirection, block.reasons?.[horizon])
+                slots[horizon] = verdict ? { state: 'ok', verdict } : { state: 'invalid' }
+            }
+        } else {
+            single = normalizeVerdict(block.direction, block.reason)
+        }
+    }
+    return { isDual, single, slots }
+}
+
+/**
+ * DAV-1429: per-horizon verdicts for one collaboration card.
+ *
+ * @param text         section text as displayed for this task (streaming buffer or report field)
+ * @param horizonTexts horizon-specific section texts, when the report exposes per-horizon slices
+ * @param isDualTask   true when the task/report requests more than one horizon
+ */
+export interface SectionHorizonVerdictSource {
+    text?: string | null
+    horizonTexts?: Partial<Record<VerdictHorizon, string | null>> | null
+    isDualTask?: boolean
+}
+
+/**
+ * DAV-1429: resolve both horizon slots for one section of a dual-horizon task.
+ *
+ * Prefers the report's per-horizon slices (each read with its own horizon, so a
+ * missing slice can never borrow the other one) and falls back to the dual
+ * `directions` block that the shared analyst stage streams. A section that only
+ * carries a legacy single `direction` block keeps the old single-verdict
+ * rendering unless the task itself is dual, in which case both slots stay empty
+ * rather than being attributed to a horizon the text does not name.
+ */
+export function resolveSectionHorizonVerdicts(
+    source: SectionHorizonVerdictSource,
+): HorizonVerdictSet {
+    const horizonTexts = source.horizonTexts
+    if (source.isDualTask && horizonTexts && typeof horizonTexts === 'object') {
+        const usable = VERDICT_HORIZONS.some(
+            h => typeof horizonTexts[h] === 'string' && (horizonTexts[h] as string).trim().length > 0,
+        )
+        if (usable) {
+            const slots: Record<VerdictHorizon, HorizonVerdictSlot> = {
+                short: { state: 'missing' },
+                medium: { state: 'missing' },
+            }
+            for (const horizon of VERDICT_HORIZONS) {
+                const text = horizonTexts[horizon]
+                if (typeof text !== 'string' || !text.trim()) continue
+                if (!hasVerdictBlock(text)) continue
+                const verdict = extractVerdict(text, horizon)
+                slots[horizon] = verdict ? { state: 'ok', verdict } : { state: 'invalid' }
+            }
+            return { isDual: true, single: null, slots }
+        }
+    }
+
+    const parsed = extractHorizonVerdicts(source.text)
+    if (parsed.isDual) return parsed
+    if (source.isDualTask) {
+        // Dual task, single-block text: the section does carry a verdict but it
+        // names no horizon, so neither slot may inherit it (DAV-1429：缺档不借用
+        // 另一档). A section with no verdict block at all stays "missing" so the
+        // card keeps its plain 完成 state.
+        const unnamed: HorizonVerdictSlot = parsed.single
+            ? { state: 'invalid' }
+            : { state: 'missing' }
+        return { isDual: true, single: null, slots: { short: unnamed, medium: unnamed } }
+    }
+    return parsed
+}
+
+export type HorizonViewKey = 'short' | 'medium' | 'dual'
+
+function toKnownHorizons(value?: ReadonlyArray<string> | null): Array<'short' | 'medium'> {
+    return Array.from(
+        new Set(
+            (value ?? []).filter((h): h is 'short' | 'medium' => h === 'short' || h === 'medium'),
+        ),
+    )
+}
+
+/**
+ * DAV-1429: resolve which horizon label the collaboration header shows.
+ *
+ * A dual run fires `agent.horizon_start` for short and then medium within the
+ * same second, so a header driven by the last event sticks on 中线 for the whole
+ * downstream phase. Accept `dual` from any signal — requested horizons, report
+ * mode, or both horizons having started in this run — regardless of event order.
+ */
+export function resolveHorizonViewKey(
+    requestedHorizons?: ReadonlyArray<string> | null,
+    mode?: string | null,
+    seenHorizons?: ReadonlyArray<string> | null,
+): HorizonViewKey {
+    const requested = toKnownHorizons(requestedHorizons)
+    const seen = toKnownHorizons(seenHorizons)
+    if (requested.length > 1) return 'dual'
+    if (seen.length > 1) return 'dual'
+    if (mode === 'dual_horizon') return 'dual'
+    // A single-horizon task keeps its own horizon whether the report declares it
+    // or only this run's events show it — a medium-only run must not fall back
+    // to the default 短线.
+    if (requested.length === 1) return requested[0]
+    if (seen.length === 1) return seen[0]
+    return 'short'
+}
+
+/** Everything the collaboration header may use to decide its horizon label. */
+export interface HorizonViewSource {
+    /** `report.requested_horizons` — the horizons the user asked for. */
+    requestedHorizons?: ReadonlyArray<string> | null
+    /** `report.mode` — `dual_horizon` for a dual task. */
+    mode?: string | null
+    /** Horizons observed in this run (agent.snapshot / agent.horizon_start). */
+    seenHorizons?: ReadonlyArray<string> | null
+    /** True once a dual run has been recognised (e.g. the shared-stage "dual"). */
+    isDualHorizon?: boolean
+}
+
+/**
+ * DAV-1429: the single decision behind the collaboration header label.
+ *
+ * Deliberately takes the *set* of horizons seen in the run plus the report's
+ * declared horizons rather than "the current horizon": the last
+ * `agent.horizon_start` is short-then-medium within one second on a dual run, so
+ * any last-write-wins signal ends up pinned to 中线 for the whole downstream
+ * phase. When the report also names two horizons (report slices, horizon_status
+ * keys), callers pass those through `requestedHorizons`.
+ */
+export function resolveCollaborationHorizonKey(source: HorizonViewSource): HorizonViewKey {
+    if (source.isDualHorizon) return 'dual'
+    return resolveHorizonViewKey(source.requestedHorizons, source.mode, source.seenHorizons)
 }
