@@ -282,3 +282,59 @@ comm -23 <(git ls-files --others --exclude-from=/tmp/gi_old.txt | sort) \
 ### 11.4 数据库备份不等于可删
 
 `work/` 下 61 个、`data/` 下 14 个备份合计约 12 GiB。忽略它们只是让 `git status` 干净，**不代表可以删**。删除前必须逐个确认：`quick_check` 是否完好、对应哪个部署 SHA、是不是某次发布的唯一回滚点。确认后也走可恢复方式，不要 `rm -rf`。
+
+---
+
+## 12. 备份生命周期与夸克云归档
+
+本项目禁止“只增不减”地长期堆积本地备份。**任务正式验收后，备份归档属于强制收尾动作，并应由自动调度触发，不等待用户再次提醒。**
+
+### 12.1 本地保留策略
+
+默认只保留：
+
+- 当前活库 `data/tradingagents.db`；
+- 最近 **5 份**已验证可用的数据库备份；
+- 当前施工、复审、发布门仍依赖的快照/实验包；
+- 当前唯一回滚点；
+- 尚未完成远端核验的待归档文件。
+
+超出上述范围的旧数据库副本、replay/corpus/frozen snapshot、历史实验包、大体积一次性交付物，优先上传夸克网盘后释放本地空间。
+
+### 12.2 自动触发与执行分工
+
+- 「项目调度助手」负责 post-accept archive hook：巡查新验收/新 done 任务、去重、创建归档卡、消费归档结果；
+- 「备份归档助手」负责实际夸克上传、远端回读核验和核验后的本地旧副本清理；
+- 同一 `issue + accepted SHA` 只允许一条有效归档任务；已有 `ARCHIVE_DONE` 时不得重复上传或重复删除。
+
+自动归档采用**事件驱动**：成员完成/验收任务后按既有协作规范 @项目调度助手，调度助手在这次正常唤醒中顺带执行 post-accept archive hook。不得为了归档另建定时轮询 autopilot；没有新交付时应为零额外调度消耗。
+
+### 12.3 固定流水线
+
+1. 识别已验收任务产生/引用的旧备份和大体积归档对象；
+2. 排除当前活库、最近 5 份备份、`git worktree list` 中仍登记的 worktree、当前唯一回滚点、仍被在途任务引用的文件、未确认已落库的 `.patch` 救援快照、Git 已跟踪源码/测试/正式文档；
+3. 归档助手按官方 `quarkclouddrive` Skill 上传；
+4. 上传后必须回读远端对象，至少核对**文件名、大小、远端存在性**；
+5. 只有远端核验全部通过，才允许删除对应本地旧副本；
+6. 成功写 `ARCHIVE_DONE`；上传/授权/核验失败写 `ARCHIVE_PENDING`，本地原件保留，后续巡检再重试。
+
+归档失败不否定代码/功能验收结论，但存储收尾状态必须单独如实记录。
+
+### 12.4 夸克授权上下文
+
+Multica 的「备份归档助手」绑定 Codex runtime，但官方 Quark CLI 的 `resolve-agent`
+结果会随具体执行入口变化；2026-09-27 已实测同一机器上出现过
+`QK_AGENT_ID=codex` 与 `QK_AGENT_ID=claudecode` 两种正常值。**不得把某一个 ID
+写死成唯一合法值。**
+
+正式归档每次都按当前进程实际解析结果选择对应授权命名空间，固定流程为：
+
+`install.sh → resolve-agent → get-user-info → upload → 远端回读核验`
+
+其中真正的授权门是 `get-user-info`：只要当前 `resolve-agent` 返回受支持 Agent
+且 `get-user-info code=0`，即可继续；若未登录/授权失效或 Agent 不受支持，则必须
+fail-close：不上传、不删本地，写 `ARCHIVE_PENDING` 并请求重新走官方 OAuth。
+**禁止**复制或迁移 codex/claudecode 的 config、access token、refresh token、
+cookie、授权码来“修复”登录态。
+
+任何授权码、token、cookie、deviceId 等凭据都不得写入仓库、issue、评论、日志、脚本或 Git 历史。
