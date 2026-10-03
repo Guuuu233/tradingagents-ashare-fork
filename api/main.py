@@ -2650,6 +2650,17 @@ async def _save_report_or_raise(
         raise RuntimeError(message) from exc
 
 
+def _quarantine_machine_blocks_before_save(result: Dict[str, Any]) -> None:
+    """DAV-1432: degrade only the horizon that owns an illegal machine block.
+
+    Runs immediately before persistence so an otherwise complete dual report is
+    no longer discarded whole when one slice carries a block the in-graph gate
+    accepted but the persistence gate rejects. Mutates ``result`` in place; a
+    report with no illegal block is untouched (idempotent).
+    """
+    report_service.quarantine_invalid_report_machine_blocks(result)
+
+
 _INJECT_ROLES = ("bull_researcher", "bear_researcher", "research_manager", "trader", "risk_manager")
 
 
@@ -4088,6 +4099,8 @@ async def _run_job_inner(
 
                 if save_report:
                     report_decision = None if len(request.horizons) > 1 else dual_decision
+                    _quarantine_machine_blocks_before_save(result)
+
                     def _save_dual_report_sync():
                         with get_db_ctx() as save_db:
                             report_service.create_report(
@@ -4283,6 +4296,8 @@ async def _run_job_inner(
 
             # 自动保存报告到数据库
             if save_report:
+                _quarantine_machine_blocks_before_save(result)
+
                 def _save_report_sync():
                     with get_db_ctx() as save_db:
                         saved_report = report_service.create_report(
@@ -4698,6 +4713,8 @@ async def _run_job_inner(
 
         # 自动保存/收口报告到数据库
         if save_report:
+            _quarantine_machine_blocks_before_save(result)
+
             def _save_report_final_sync():
                 with get_db_ctx() as save_db:
                     saved_report = report_service.create_report(
