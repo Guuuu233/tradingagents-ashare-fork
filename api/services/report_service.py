@@ -13,7 +13,7 @@ from numbers import Real
 
 logger = logging.getLogger(__name__)
 from datetime import date, datetime, timezone
-from typing import List, Optional, Dict, Any, Iterable
+from typing import List, Optional, Dict, Any, Iterable, Tuple
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -381,6 +381,42 @@ def _strict_claim_confidence(value: Any) -> float:
     return _strict_unit_interval(value, "claim confidence")
 
 
+# DAV-1432: 落库前的非法机读块证据。键路径整体不参与机读块扫描（原文即非法块本身）。
+MACHINE_BLOCK_INVALID_KEY: str = "machine_block_invalid"
+MACHINE_BLOCK_INVALID_PLACEHOLDER_TEMPLATE: str = "<!-- MACHINE_BLOCK_INVALID: {tag} -->"
+MACHINE_BLOCK_INVALID_REASON_CODE: str = "machine_block_invalid"
+# DAV-1432 裁定 1：claim confidence 三类问题（缺失/越界/百分号）在图内已 warn 并丢弃该
+# claim，保存期不得比图内更严，只记警告。列表/文本字段类型仍然 fail-closed。
+_SOFT_CLAIM_CONFIDENCE_MESSAGE: str = "claim_confidence_rejected"
+
+
+def _machine_block_invalid_scan_exempt(path: Tuple[str, ...]) -> bool:
+    """Return True when ``path`` is the machine_block_invalid evidence subtree."""
+    return MACHINE_BLOCK_INVALID_KEY in path
+
+
+def _is_persisted_debate_attempt_path(path: Tuple[str, ...]) -> bool:
+    """True for the persisted verbatim text of a debate attempt.
+
+    DAV-1432 裁定 1 scopes the confidence downgrade to "attempts the in-graph
+    gate already accepted". Those are exactly the strings under
+    ``<debate_state>.attempts[*].raw_response`` and
+    ``<debate_state>.round_messages[*].attempts[*].raw_response`` — the only
+    places production carries a model block verbatim (measured: 8 field shapes,
+    all of them attempts[].raw_response). Report prose such as
+    ``final_trade_decision`` is not an accepted attempt and keeps the DAV-210
+    fail-closed contract.
+    """
+    # Path shape is ``... . attempts . [i] . raw_response`` (and the same under
+    # ``round_messages.[i].attempts.[j].raw_response``), so the index segment sits
+    # between the container key and ``raw_response``.
+    return (
+        len(path) >= 2
+        and path[-1] == "raw_response"
+        and "attempts" in path[:-1]
+    )
+
+
 def _iter_report_strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -392,80 +428,623 @@ def _iter_report_strings(value: Any) -> Iterable[str]:
             yield from _iter_report_strings(child)
 
 
-def _validate_report_machine_payload(payload: Dict[str, Any], tag: str) -> None:
+def _find_report_machine_block_close(text: str, start: int) -> int:
+    """Return the first ``-->`` that is not inside a JSON string literal.
+
+    DAV-1432: the persistence gate must locate the closing marker exactly the
+    way ``debate_utils._find_machine_block_close`` does. The previous naive
+    ``str.find('-->')`` cut the payload at any arrow the model wrote inside a
+    string value (``round_summary``/``evidence`` such as ``A --> B`` is routine
+    Chinese financial prose), yielding half a JSON document and the
+    ``contains invalid JSON`` failure that discarded whole dual reports.
+    """
+    in_string = False
+    escaped = False
+    index = start
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        else:
+            if char == '"':
+                in_string = True
+            elif text.startswith("-->", index):
+                return index
+        index += 1
+    return -1
+
+
+def _classify_claim_confidence(value: Any) -> Optional[str]:
+    """Return a warning label when ``value`` is a claim confidence the in-graph
+    gate already tolerates, else None.
+
+    ``debate_utils._claim_confidence`` warns and drops the offending claim for a
+    missing / out-of-range / percentage confidence; the persistence gate used to
+    raise instead, so an attempt the graph had accepted still killed the report.
+    """
+    if "confidence" not in value:
+        return "confidence_missing"
+    raw = value.get("confidence")
+    if isinstance(raw, bool) or not isinstance(raw, Real):
+        return "confidence_not_a_number"
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return "confidence_not_a_number"
+    if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+        return "confidence_out_of_range"
+    return None
+
+
+def _validate_report_machine_payload(
+    payload: Dict[str, Any], tag: str, *, path: str = "", soft_confidence: bool = False
+) -> List[str]:
+    """Validate one machine payload. Returns soft (warning-only) findings.
+
+    DAV-1432 裁定 1: for a debate attempt the in-graph gate already accepted,
+    persistence must not be stricter — claim-confidence problems the graph
+    tolerates by dropping the claim are downgraded to warnings carrying the
+    field path. ``soft_confidence`` is False for report prose, which keeps the
+    DAV-210 fail-closed contract. Every other check still raises.
+    """
+    where = f" at {path}" if path else ""
     allowed_fields = (*_REPORT_MACHINE_LIST_FIELDS, *_REPORT_MACHINE_TEXT_FIELDS)
     unknown_fields = sorted(str(key) for key in payload if key not in allowed_fields)
     if unknown_fields:
         logger.warning(
-            "[report_service] unknown machine fields ignored for %s: %s",
+            "[report_service] unknown machine fields ignored for %s%s: %s",
             tag,
+            where,
             ", ".join(unknown_fields),
         )
 
     for field_name in _REPORT_MACHINE_LIST_FIELDS:
         value = payload.get(field_name)
         if value is not None and not isinstance(value, list):
-            raise ValueError(f"{tag} machine field {field_name} must be an array")
+            raise ValueError(f"{tag} machine field {field_name}{where} must be an array")
     for field_name in _REPORT_MACHINE_TEXT_FIELDS:
         value = payload.get(field_name)
         if value is not None and not isinstance(value, str):
-            raise ValueError(f"{tag} machine field {field_name} must be a string")
+            raise ValueError(f"{tag} machine field {field_name}{where} must be a string")
 
+    soft: List[str] = []
     claims = payload.get("new_claims") or []
     for index, claim in enumerate(claims, start=1):
+        claim_path = f"{path}.new_claims[{index}]" if path else f"new_claims[{index}]"
         if not isinstance(claim, dict):
-            raise ValueError(f"{tag} claim {index} must be an object")
+            raise ValueError(f"{tag} claim {index} at {claim_path} must be an object")
         if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
-            raise ValueError(f"{tag} claim {index} must contain non-empty claim text")
+            raise ValueError(f"{tag} claim {index} at {claim_path} must contain non-empty claim text")
         evidence = claim.get("evidence")
         if evidence is not None and not isinstance(evidence, list):
-            raise ValueError(f"{tag} claim {index} evidence must be an array")
+            raise ValueError(f"{tag} claim {index} at {claim_path} evidence must be an array")
         target_claim_ids = claim.get("target_claim_ids")
         if target_claim_ids is not None and not isinstance(target_claim_ids, list):
-            raise ValueError(f"{tag} claim {index} target_claim_ids must be an array")
-        if "confidence" not in claim:
-            raise ValueError(f"{tag} claim {index} confidence is required")
-        _strict_claim_confidence(claim.get("confidence"))
+            raise ValueError(f"{tag} claim {index} at {claim_path} target_claim_ids must be an array")
+        confidence_problem = _classify_claim_confidence(claim)
+        if confidence_problem is not None:
+            soft.append(
+                f"{_SOFT_CLAIM_CONFIDENCE_MESSAGE}:{tag} claim {index} at {claim_path}:{confidence_problem}"
+            )
+            if not soft_confidence:
+                # Report prose keeps the DAV-210 fail-closed contract: a block
+                # that never entered the debate protocol must still be rejected.
+                if "confidence" not in claim:
+                    raise ValueError(f"{tag} claim {index} at {claim_path} confidence is required")
+                _strict_claim_confidence(claim.get("confidence"))
+            logger.warning(
+                "[report_service] %s machine claim %s rejected by in-graph gate, downgraded to warning: %s",
+                tag,
+                claim_path,
+                confidence_problem,
+            )
         claim_unknown_fields = sorted(
             str(key) for key in claim if key not in ("claim", "evidence", "confidence", "target_claim_ids")
         )
         if claim_unknown_fields:
             logger.warning(
-                "[report_service] unknown machine claim fields ignored for %s claim %d: %s",
+                "[report_service] unknown machine claim fields ignored for %s claim %d at %s: %s",
                 tag,
                 index,
+                claim_path,
                 ", ".join(claim_unknown_fields),
             )
+    return soft
+
+
+def _locate_horizon_for_path(path: Tuple[str, ...]) -> Optional[str]:
+    """Map a result_data key path to its horizon slice.
+
+    ``horizons.<h>.*`` and ``*_term.*`` are the two persisted aliases of the same
+    horizon payload (verified: equal content, distinct objects). A root-level key
+    carries no slice of its own.
+    """
+    if not path:
+        return None
+    head = path[0]
+    if head == "horizons" and len(path) >= 2 and path[1] in ("short", "medium"):
+        return path[1]
+    if head == "short_term":
+        return "short"
+    if head == "medium_term":
+        return "medium"
+    return None
+
+
+# DAV-1432: legacy human-readable reason per failure kind. The structured
+# metadata below is additive, so pre-existing log greps and the DAV-210
+# fail-closed regression assertions keep matching.
+_MACHINE_BLOCK_REASON_PHRASES: Dict[str, str] = {
+    "invalid_json": "machine block contains invalid JSON",
+    "truncated": "machine block is truncated",
+    "duplicated": "machine block must not be duplicated",
+    "missing_colon": "machine block must use ':' after the marker",
+    "not_an_object": "machine block must contain an object",
+    "payload_schema": "machine block payload failed schema validation",
+}
+
+
+def _machine_block_error_detail(
+    *,
+    path: Tuple[str, ...],
+    tag: str,
+    reason: str,
+    json_error: Optional[BaseException] = None,
+) -> str:
+    """Build the metadata-only error string persisted in the ``error`` column.
+
+    No report prose is included: only tag, horizon, field path and error type
+    (DAV-1432 卡面第 1 条). The 80-char context window around the offending
+    offset goes to the local log only.
+    """
+    horizon = _locate_horizon_for_path(path) or "root"
+    phrase = _MACHINE_BLOCK_REASON_PHRASES.get(reason, "machine block is invalid")
+    parts = [
+        f"{tag} {phrase}",
+        f"machine_block_invalid",
+        f"tag={tag}",
+        f"horizon={horizon}",
+        f"path={'.'.join(path)}",
+        f"error={reason}",
+    ]
+    if json_error is not None:
+        parts.append(f"json_error={type(json_error).__name__}")
+        pos = getattr(json_error, "pos", None)
+        if pos is not None:
+            parts.append(f"json_pos={pos}")
+        lineno = getattr(json_error, "lineno", None)
+        colno = getattr(json_error, "colno", None)
+        if lineno is not None:
+            parts.append(f"json_lineno={lineno}")
+        if colno is not None:
+            parts.append(f"json_colno={colno}")
+    return " ".join(parts)
+
+
+def _log_machine_block_context(
+    *,
+    path: Tuple[str, ...],
+    tag: str,
+    text: str,
+    offset: int,
+    reason: str,
+) -> None:
+    """Local-only 80-char context window around the offending machine block."""
+    start = max(0, offset - 80)
+    end = min(len(text), offset + 80)
+    logger.error(
+        "[report_service] machine block invalid reason=%s tag=%s path=%s offset=%d context=%r",
+        reason,
+        tag,
+        ".".join(path),
+        offset,
+        text[start:end],
+    )
+
+
+def _iter_machine_block_findings(
+    result_data: Dict[str, Any],
+) -> Iterable[Tuple[Tuple[str, ...], str, str, int, Optional[BaseException]]]:
+    """Yield ``(path, tag, reason, offset, json_error)`` for every illegal block.
+
+    Paths are walked with their key trail so diagnostics can name the field and
+    the horizon slice. The ``machine_block_invalid`` evidence subtree is skipped
+    by construction, so writing the raw text there cannot re-trip this scan.
+    """
+    stack: List[Tuple[Tuple[str, ...], Any]] = [((), result_data)]
+    while stack:
+        path, value = stack.pop()
+        if isinstance(value, str):
+            for tag in _REPORT_MACHINE_BLOCK_TAGS:
+                openings = list(re.finditer(rf"<!--\s*{re.escape(tag)}\b", value))
+                if not openings:
+                    continue
+                if len(openings) > 1:
+                    yield path, tag, "duplicated", openings[1].start(), None
+                    break
+                opening = openings[0]
+                marker_suffix = value[opening.end():].lstrip()
+                if not marker_suffix.startswith(":"):
+                    yield path, tag, "missing_colon", opening.start(), None
+                    break
+                payload_text = marker_suffix[1:]
+                payload_offset = value.index(marker_suffix, opening.end()) + 1
+                closing_index = _find_report_machine_block_close(value, opening.end() + 1)
+                if closing_index < 0:
+                    yield path, tag, "truncated", opening.start(), None
+                    break
+                raw_payload = value[opening.end() + 1:closing_index]
+                try:
+                    payload = json.loads(raw_payload.strip())
+                except (json.JSONDecodeError, TypeError) as exc:
+                    yield path, tag, "invalid_json", closing_index, exc
+                    break
+                if not isinstance(payload, dict):
+                    yield path, tag, "not_an_object", opening.start(), None
+                    break
+                try:
+                    soft = _validate_report_machine_payload(
+                        payload,
+                        tag,
+                        path=".".join(path) if path else "",
+                        soft_confidence=_is_persisted_debate_attempt_path(path),
+                    )
+                except ValueError as exc:
+                    # A confidence failure inside an accepted attempt is already
+                    # downgraded to a soft finding above, so anything raised here
+                    # is a structural defect the graph never tolerated.
+                    yield path, tag, "payload_schema", opening.start(), None
+                    break
+                for message in soft:
+                    yield path, tag, f"soft:{message}", opening.start(), None
+                break
+        elif isinstance(value, dict):
+            if _machine_block_invalid_scan_exempt(path):
+                continue
+            for key, child in value.items():
+                stack.append((path + (str(key),), child))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                stack.append((path + (f"[{index}]",), child))
 
 
 def validate_report_machine_blocks(result_data: Optional[Dict[str, Any]]) -> None:
-    """Validate every embedded machine block before a report is persisted."""
+    """Validate every embedded machine block before a report is persisted.
+
+    Raises on the first structurally illegal block, naming the field path, tag,
+    horizon slice and JSON error position (DAV-1432 卡面第 1 条). The offending
+    text itself never enters the message — it goes to the local log only.
+    """
     if result_data is None:
         return
     if not isinstance(result_data, dict):
         raise ValueError("result_data must be an object")
 
-    for text in _iter_report_strings(result_data):
-        for tag in _REPORT_MACHINE_BLOCK_TAGS:
-            openings = list(re.finditer(rf"<!--\s*{re.escape(tag)}\b", text))
-            if not openings:
-                continue
-            if len(openings) > 1:
-                raise ValueError(f"{tag} machine block must not be duplicated")
-            marker_suffix = text[openings[0].end():].lstrip()
-            if not marker_suffix.startswith(":"):
-                raise ValueError(f"{tag} machine block must use ':' after the marker")
-            payload_text = marker_suffix[1:]
-            closing_index = payload_text.find("-->")
-            if closing_index < 0:
-                raise ValueError(f"{tag} machine block is truncated")
+    for path, tag, reason, offset, json_error in _iter_machine_block_findings(result_data):
+        if reason.startswith("soft:"):
+            continue
+        detail = _machine_block_error_detail(
+            path=path, tag=tag, reason=reason, json_error=json_error
+        )
+        _log_machine_block_context(
+            path=path,
+            tag=tag,
+            text=_string_at_path(result_data, path),
+            offset=offset,
+            reason=reason,
+        )
+        raise ValueError(detail)
+
+
+def _string_at_path(result_data: Dict[str, Any], path: Tuple[str, ...]) -> str:
+    current: Any = result_data
+    for part in path:
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.startswith("[") and part.endswith("]"):
             try:
-                payload = json.loads(payload_text[:closing_index].strip())
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise ValueError(f"{tag} machine block contains invalid JSON") from exc
-            if not isinstance(payload, dict):
-                raise ValueError(f"{tag} machine block must contain an object")
-            _validate_report_machine_payload(payload, tag)
+                current = current[int(part[1:-1])]
+            except (IndexError, ValueError):
+                return ""
+        else:
+            return ""
+    return current if isinstance(current, str) else ""
+
+
+def _replace_string_at_path(result_data: Dict[str, Any], path: Tuple[str, ...], new_text: str) -> bool:
+    """Rewrite the string at ``path`` in place; True when the write landed."""
+    if not path:
+        return False
+    parent_path, last = path[:-1], path[-1]
+    current: Any = result_data
+    for part in parent_path:
+        if isinstance(current, dict):
+            if part not in current:
+                return False
+            current = current[part]
+        elif isinstance(current, list) and part.startswith("[") and part.endswith("]"):
+            try:
+                current = current[int(part[1:-1])]
+            except (IndexError, ValueError):
+                return False
+        else:
+            return False
+    if isinstance(current, dict) and last in current and isinstance(current[last], str):
+        current[last] = new_text
+        return True
+    if isinstance(current, list) and last.startswith("[") and last.endswith("]"):
+        try:
+            index = int(last[1:-1])
+        except ValueError:
+            return False
+        if 0 <= index < len(current) and isinstance(current[index], str):
+            current[index] = new_text
+            return True
+    return False
+
+
+def _append_horizon_reason_code(container: Dict[str, Any], reason_code: str) -> None:
+    """Append ``reason_code`` to a slice's reason_codes without duplicating it."""
+    existing = container.get("reason_codes")
+    if isinstance(existing, list):
+        if reason_code not in existing:
+            existing.append(reason_code)
+    else:
+        container["reason_codes"] = [reason_code]
+
+
+def _debate_content_signature(state: Any) -> Optional[str]:
+    """A cheap content fingerprint for attributing a root-level debate state.
+
+    The root-level copy carries no horizon tag of its own, so attribution falls
+    back to matching its claim-id set against each persisted slice alias.
+    """
+    if not isinstance(state, dict):
+        return None
+    claims = state.get("claims")
+    if not isinstance(claims, list) or not claims:
+        return None
+    ids = sorted(
+        str(claim.get("claim_id"))
+        for claim in claims
+        if isinstance(claim, dict) and claim.get("claim_id")
+    )
+    return "|".join(ids) if ids else None
+
+
+def _resolve_root_level_horizons(result_data: Dict[str, Any], root_key: str) -> List[str]:
+    """Decide which horizon(s) an illegal root-level ``root_key`` block affects.
+
+    DAV-1432 裁定 2: attribute by content first, downgrade to SHARED only when
+    the root copy cannot be tied to exactly one slice.
+    """
+    horizons = result_data.get("horizons")
+    has_slices = isinstance(horizons, dict) and any(
+        isinstance(horizons.get(name), dict) and horizons.get(name, {}).get(root_key)
+        for name in ("short", "medium")
+    )
+    if not has_slices:
+        # Single-horizon report: the root copy is the only record of this run.
+        return []
+
+    signature = _debate_content_signature(result_data.get(root_key))
+    matched: List[str] = []
+    if signature is not None:
+        for name in ("short", "medium"):
+            slice_state = horizons.get(name, {}).get(root_key)
+            if isinstance(slice_state, dict) and _debate_content_signature(slice_state) == signature:
+                matched.append(name)
+    if len(matched) == 1:
+        return matched
+    if len(matched) == 2:
+        return []
+    # No usable discriminator: treat as genuinely shared and degrade both.
+    return []
+
+
+def _horizon_containers(result_data: Dict[str, Any], horizon: str) -> List[Tuple[Optional[str], Dict[str, Any]]]:
+    """Every persisted alias of one horizon slice."""
+    out: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    payload = result_data.get(f"{horizon}_term")
+    if isinstance(payload, dict):
+        out.append((f"{horizon}_term", payload))
+    horizons = result_data.get("horizons")
+    if isinstance(horizons, dict) and isinstance(horizons.get(horizon), dict):
+        out.append((f"horizons.{horizon}", horizons[horizon]))
+    if not out:
+        out.append((None, result_data))
+    return out
+
+
+def _resolve_quarantine_containers(result_data: Dict[str, Any], path: Tuple[str, ...]) -> List[Tuple[Optional[str], Dict[str, Any]]]:
+    """Containers whose executable state must flip when ``path`` holds a bad block.
+
+    A finding at ``horizons.short.investment_debate_state.attempts[0].raw_response``
+    belongs to the *short slice*, whose trade_action lives on the slice dict —
+    not on ``investment_debate_state``. The owning container for the ABSTAIN
+    flags is therefore the nearest enclosing dict, but the evidence must be
+    written to the slice so ``machine_block_invalid.raw`` is reachable per
+    horizon.
+    """
+    containers: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    if path and path[0] == "horizons" and len(path) >= 2:
+        horizon = path[1]
+        horizon_payload = result_data.get("horizons")
+        if isinstance(horizon_payload, dict) and isinstance(horizon_payload.get(horizon), dict):
+            containers.append((f"horizons.{horizon}", horizon_payload[horizon]))
+        alias_payload = result_data.get(f"{horizon}_term")
+        if isinstance(alias_payload, dict):
+            containers.append((f"{horizon}_term", alias_payload))
+    elif path and path[0] in ("short_term", "medium_term"):
+        horizon = "short" if path[0] == "short_term" else "medium"
+        alias_payload = result_data.get(path[0])
+        if isinstance(alias_payload, dict):
+            containers.append((path[0], alias_payload))
+        horizon_payload = result_data.get("horizons")
+        if (
+            isinstance(horizon_payload, dict)
+            and isinstance(horizon_payload.get(horizon), dict)
+            and horizon_payload[horizon] is not alias_payload
+        ):
+            containers.append((f"horizons.{horizon}", horizon_payload[horizon]))
+    else:
+        # Root-level copy: evidence belongs on the report itself; the ABSTAIN
+        # flags are applied to whichever horizon the content attributes to.
+        containers.append((None, result_data))
+    return containers
+
+
+def _apply_horizon_abstain(
+    result_data: Dict[str, Any], containers: List[Tuple[Optional[str], Dict[str, Any]]]
+) -> None:
+    """Make the owning horizon(s) non-executable (DAV-1432 A1 hard constraint)."""
+    for label, container in containers:
+        container["trade_action"] = "NO_TRADE"
+        container["analysis_status"] = "ABSTAIN"
+        _append_horizon_reason_code(container, MACHINE_BLOCK_INVALID_REASON_CODE)
+
+
+def _record_invalid_block_evidence(
+    container: Dict[str, Any], *, tag: str, path: Tuple[str, ...], reason: str, raw_text: str
+) -> None:
+    """Attach the raw offending text plus scope metadata to one container."""
+    evidence = container.get(MACHINE_BLOCK_INVALID_KEY)
+    if not isinstance(evidence, dict):
+        evidence = {}
+    scope = label_for = container.get("horizon") if isinstance(container.get("horizon"), str) else None
+    del label_for
+    if isinstance(evidence.get("horizons"), list):
+        if scope not in evidence["horizons"]:
+            evidence["horizons"] = [*evidence["horizons"], scope or "report"]
+    else:
+        evidence["horizons"] = [scope or "report"]
+    raws = evidence.get("raw")
+    if not isinstance(raws, list):
+        raws = []
+    entry = {"tag": tag, "path": ".".join(path), "reason": reason, "text": raw_text}
+    # The same occurrence is reported once per persisted alias; collapse those
+    # duplicates so the evidence list stays one entry per real defect.
+    if not any(
+        isinstance(existing, dict)
+        and existing.get("tag") == tag
+        and existing.get("reason") == reason
+        and existing.get("text") == raw_text
+        for existing in raws
+    ):
+        raws.append(entry)
+    evidence["raw"] = raws
+    container[MACHINE_BLOCK_INVALID_KEY] = evidence
+
+
+
+def quarantine_invalid_report_machine_blocks(
+    result_data: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Degrade per horizon instead of discarding the whole report.
+
+    Returns ``result_data`` mutated in place plus a diagnostics summary keyed by
+    ``_dav1432`` (never a machine block, so it does not re-trip the scanner).
+    Illegal blocks are replaced by a JSON-free placeholder and their raw text is
+    kept under ``machine_block_invalid.raw`` for forensics. The call is
+    idempotent: a second run over the same payload reports nothing and writes
+    nothing.
+    """
+    if not isinstance(result_data, dict):
+        return result_data if isinstance(result_data, dict) else {}
+
+    summary: Dict[str, Any] = {"invalid_blocks": [], "degraded_horizons": [], "a4_excluded": False}
+    findings = [f for f in _iter_machine_block_findings(result_data) if not f[2].startswith("soft:")]
+    if not findings:
+        return result_data
+
+    # Snapshot every offending text BEFORE mutating: a slice is persisted under
+    # two aliases (horizons.<h>.* and <h>_term.*), so the second finding would
+    # otherwise read back the placeholder already written for the first and lose
+    # the raw evidence.
+    snapshots = [(f, _string_at_path(result_data, f[0])) for f in findings]
+
+    for (path, tag, reason, offset, json_error), raw_text in snapshots:
+        horizon = _locate_horizon_for_path(path)
+        placeholder = MACHINE_BLOCK_INVALID_PLACEHOLDER_TEMPLATE.format(tag=tag)
+        a4_excluded = False
+        containers = _resolve_quarantine_containers(result_data, path)
+
+        if horizon is not None:
+            # Inside one horizon slice: rewrite it and its twin alias copy.
+            _rewrite_alias_family(result_data, path, placeholder)
+            affected = [horizon]
+        else:
+            # Root-level copy: attribute by content, else treat as shared.
+            _replace_string_at_path(result_data, path, placeholder)
+            # ``_locate_horizon_for_path`` already established that path[0] is not
+            # a slice alias, so it names the root-level state key to attribute.
+            matched = _resolve_root_level_horizons(result_data, path[0] if path else "")
+            if matched:
+                affected = list(matched)
+            else:
+                affected = ["short", "medium"]
+                a4_excluded = True
+
+        for target in affected:
+            if target not in summary["degraded_horizons"]:
+                summary["degraded_horizons"].append(target)
+            if target in ("short", "medium"):
+                _apply_horizon_abstain(result_data, _horizon_containers(result_data, target))
+            else:
+                _apply_horizon_abstain(result_data, [(None, result_data)])
+        for _, container in containers:
+            _record_invalid_block_evidence(
+                container, tag=tag, path=path, reason=reason, raw_text=raw_text
+            )
+        if a4_excluded:
+            summary["a4_excluded"] = True
+
+        summary["invalid_blocks"].append(
+            {
+                "tag": tag,
+                "horizon": horizon or "root",
+                "path": ".".join(path),
+                "reason": reason,
+                "json_error": type(json_error).__name__ if json_error is not None else None,
+            }
+        )
+        _log_machine_block_context(
+            path=path, tag=tag, text=raw_text, offset=offset, reason=reason
+        )
+
+    result_data.setdefault("_dav1432", summary)
+    return result_data
+
+
+def _rewrite_alias_family(
+    result_data: Dict[str, Any], path: Tuple[str, ...], replacement: str
+) -> None:
+    """Rewrite ``path`` in every persisted alias of the owning slice.
+
+    ``horizons.short.*`` and ``short_term.*`` are equal-but-distinct copies, so
+    rewriting only the reported path would leave the twin copy illegal and the
+    save would still raise.
+    """
+    if not path:
+        return
+    head = path[0]
+    if head == "horizons" and len(path) >= 3:
+        horizon = path[1]
+        tail = path[2:]
+        _replace_string_at_path(result_data, path, replacement)
+        _replace_string_at_path(result_data, ("short_term",) + tail if horizon == "short" else ("medium_term",) + tail, replacement)
+    elif head in ("short_term", "medium_term"):
+        horizon = "short" if head == "short_term" else "medium"
+        tail = path[1:]
+        _replace_string_at_path(result_data, path, replacement)
+        _replace_string_at_path(result_data, ("horizons", horizon) + tail, replacement)
+    else:
+        _replace_string_at_path(result_data, path, replacement)
 
 
 def _parse_iso_date(raw_date: Any) -> Optional[date]:
