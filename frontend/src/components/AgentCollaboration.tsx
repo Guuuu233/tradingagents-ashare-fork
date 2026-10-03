@@ -12,14 +12,23 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useAnalysisStore } from '@/stores/analysisStore'
-import type { AgentStatus } from '@/types'
+import type { AgentStatus, AnalysisReport, StreamingSectionState } from '@/types'
 import {
     TrendingUp, MessageCircle, Newspaper, Calculator,
     BarChart2, DollarSign, ArrowBigUp, ArrowBigDown,
     Brain, Briefcase, Flame, Scale, Shield, CheckCircle2, Loader2,
     Activity,
 } from 'lucide-react'
-import { extractVerdict, localizeDirection, type Verdict } from '@/utils/reportText'
+import {
+    localizeDirection,
+    resolveSectionHorizonVerdicts,
+    resolveCollaborationHorizonKey,
+    VERDICT_HORIZONS,
+    type HorizonVerdictSet,
+    type HorizonViewKey,
+    type Verdict,
+    type VerdictHorizon,
+} from '@/utils/reportText'
 
 // ── Agent 元数据 ──────────────────────────────────────────────────────────────
 
@@ -64,6 +73,74 @@ export const VERDICT_COLORS: Record<string, string> = {
     '看空': 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300',
     '谨慎': 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300', // 向后兼容旧报告
     _default: 'bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400',
+}
+
+// DAV-1429: short label for each horizon chip inside a dual-horizon card.
+const HORIZON_CHIP_LABEL: Record<VerdictHorizon, string> = { short: '短', medium: '中' }
+
+/**
+ * DAV-1429: per-horizon section texts from a report that exposes horizon slices.
+ *
+ * Returns null when the report carries no usable slice for this section, in
+ * which case the caller falls back to the section text itself (streaming buffer
+ * or top-level report field).
+ */
+function readHorizonTexts(
+    report: AnalysisReport | null,
+    section: string,
+    streaming?: Record<string, Partial<Record<string, string>>> | null,
+): Partial<Record<VerdictHorizon, string | null>> | null {
+    const out: Partial<Record<VerdictHorizon, string | null>> = {}
+    let found = false
+    for (const horizon of VERDICT_HORIZONS) {
+        // Prefer the live per-horizon stream (a dual run interleaves both
+        // horizons into the merged buffer, so only this copy stays attributable),
+        // then fall back to the finished report's own horizon slice.
+        const live = streaming?.[section]?.[horizon]
+        const stored = (() => {
+            const slice = horizon === 'short' ? report?.short_term : report?.medium_term
+            if (!slice || typeof slice !== 'object') return undefined
+            const value = (slice as Record<string, unknown>)[section]
+            return typeof value === 'string' ? value : undefined
+        })()
+        const value = live && live.trim() ? live : stored
+        if (value && value.trim()) {
+            out[horizon] = value
+            found = true
+        }
+    }
+    return found ? out : null
+}
+
+/**
+ * DAV-1429: the one decision behind a card's horizon directions.
+ *
+ * Exported and free of React so a test can prove that the same card shows the
+ * same values while the run streams and after the report is loaded — that is the
+ * acceptance requirement, and the reason the live per-horizon stream is read
+ * before the finished report slices.
+ */
+export function resolveCardHorizonVerdicts(
+    report: AnalysisReport | null | undefined,
+    section: string,
+    options: {
+        /** Merged streaming state for this section (typewriter buffer). */
+        streaming?: StreamingSectionState | null
+        /** Per-horizon streaming buffers fed by `agent.report.chunk`. */
+        streamingHorizons?: Record<string, Partial<Record<string, string>>> | null
+        isDualTask?: boolean
+    } = {},
+): HorizonVerdictSet {
+    const stored = report ? (report[section as keyof AnalysisReport] as string | undefined) : undefined
+    return resolveSectionHorizonVerdicts({
+        text: options.streaming?.displayed || stored || '',
+        horizonTexts: readHorizonTexts(report ?? null, section, options.streamingHorizons ?? null),
+        isDualTask: !!options.isDualTask,
+    })
+}
+
+function hasAddressableHorizon(verdicts: HorizonVerdictSet | null): boolean {    if (!verdicts?.isDual) return false
+    return VERDICT_HORIZONS.some(h => verdicts.slots[h].state !== 'missing')
 }
 
 // ── 流程图布局 ────────────────────────────────────────────────────────────────
@@ -156,7 +233,10 @@ const FIT_VIEW_OPTIONS = {
 interface AgentNodeData {
     meta: AgentMeta
     status: AgentStatus
+    /** Legacy single-horizon verdict (kept for callers that pass one directly). */
     verdict: Verdict | null
+    /** DAV-1429: per-horizon verdicts; takes precedence when it names a horizon. */
+    verdicts?: HorizonVerdictSet | null
     isParticipating: boolean
     selected: boolean
     [key: string]: unknown
@@ -173,11 +253,15 @@ type GroupLabelFlowNode = Node<GroupLabelNodeData, 'groupLabel'>
 type CollaborationNode = AgentFlowNode | GroupLabelFlowNode
 
 export function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
-    const { meta, status, verdict, isParticipating, selected } = data
+    const { meta, status, verdict, verdicts, isParticipating, selected } = data
     const active = status === 'in_progress'
     const done = status === 'completed'
     const skipped = status === 'skipped'
     const { Icon } = meta
+    // DAV-1429: a dual-horizon card renders one row per horizon, each from its
+    // own value; a horizon without a value shows 无效/空 and never borrows.
+    const showHorizonRows = done && hasAddressableHorizon(verdicts ?? null)
+    const fallbackVerdict = verdicts?.single ?? verdict
 
     return (
         <div
@@ -242,22 +326,58 @@ export function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
                 </div>
             )}
 
-            {/* 第二行：完成后的判定结果 */}
-            {done && verdict && (() => {
-                const localizedDirection = localizeDirection(verdict.direction) || verdict.direction
+            {/* 第二行：完成后的判定结果（双档：每档一行，各自取值，不借用） */}
+            {showHorizonRows && (
+                <div className="mt-2 space-y-1" data-testid="agent-horizon-verdicts">
+                    {VERDICT_HORIZONS.map(horizon => {
+                        const slot = verdicts?.slots[horizon]
+                        const chip = HORIZON_CHIP_LABEL[horizon]
+                        if (slot?.state === 'ok') {
+                            const localized = localizeDirection(slot.verdict.direction) || slot.verdict.direction
+                            return (
+                                <div key={horizon} className="flex items-start gap-1.5 min-w-0" data-horizon={horizon}>
+                                    <span className="shrink-0 mt-0.5 text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 leading-none">
+                                        {chip}
+                                    </span>
+                                    <span className={`shrink-0 mt-0.5 text-[11px] font-black px-2 py-0.5 rounded-full leading-none ${VERDICT_COLORS[localized] ?? VERDICT_COLORS[slot.verdict.direction] ?? VERDICT_COLORS._default}`}>
+                                        {localized}
+                                    </span>
+                                    <span className="text-[12px] text-slate-500 dark:text-slate-400 leading-snug line-clamp-1">
+                                        {slot.verdict.reason}
+                                    </span>
+                                </div>
+                            )
+                        }
+                        return (
+                            <div key={horizon} className="flex items-center gap-1.5" data-horizon={horizon}>
+                                <span className="shrink-0 text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-slate-700/50 dark:text-slate-400 leading-none">
+                                    {chip}
+                                </span>
+                                <span className="shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full leading-none bg-slate-100 text-slate-400 dark:bg-slate-700/50 dark:text-slate-500">
+                                    {slot?.state === 'invalid' ? '无效' : '—'}
+                                </span>
+                            </div>
+                        )
+                    })}
+                </div>
+            )}
+
+            {/* 第二行：完成后的判定结果（单档） */}
+            {done && !showHorizonRows && fallbackVerdict && (() => {
+                const localizedDirection = localizeDirection(fallbackVerdict.direction) || fallbackVerdict.direction
                 return (
                     <div className="flex items-start gap-2 mt-2 min-w-0">
-                        <span className={`shrink-0 mt-0.5 text-[11px] font-black px-2 py-0.5 rounded-full leading-none ${VERDICT_COLORS[localizedDirection] ?? VERDICT_COLORS[verdict.direction] ?? VERDICT_COLORS._default}`}>
+                        <span className={`shrink-0 mt-0.5 text-[11px] font-black px-2 py-0.5 rounded-full leading-none ${VERDICT_COLORS[localizedDirection] ?? VERDICT_COLORS[fallbackVerdict.direction] ?? VERDICT_COLORS._default}`}>
                             {localizedDirection}
                         </span>
                         <span className="text-[12px] text-slate-500 dark:text-slate-400 leading-snug line-clamp-2">
-                            {verdict.reason}
+                            {fallbackVerdict.reason}
                         </span>
                     </div>
                 )
             })()}
 
-            {done && !verdict && (
+            {done && !showHorizonRows && !fallbackVerdict && (
                 <div className="flex items-center gap-1.5 mt-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                     <span className="text-[12px] text-emerald-600 dark:text-emerald-400 font-bold">完成</span>
@@ -290,6 +410,34 @@ const nodeTypes: NodeTypes = {
 
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
+/**
+ * DAV-1429: header badge for the running task's horizon coverage.
+ *
+ * Extracted so the label mapping (single vs. 双档) is testable without React
+ * Flow and without relying on the persisted store: the label must come from the
+ * horizons the task declares/observed, never from a last-write-wins slot.
+ */
+export function CollaborationHorizonBadge({ horizonKey }: { horizonKey: HorizonViewKey }) {
+    const label = horizonKey === 'dual'
+        ? '双档 · 短+中'
+        : horizonKey === 'medium'
+        ? '🔭 中线视角'
+        : '⚡ 短线视角'
+    const tone = horizonKey === 'short'
+        ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border-blue-400/30'
+        : horizonKey === 'medium'
+        ? 'bg-purple-600/10 text-purple-600 dark:text-purple-400 border-purple-400/30'
+        : 'bg-gradient-to-r from-blue-600/10 to-purple-600/10 text-indigo-600 dark:text-indigo-300 border-indigo-400/30'
+    return (
+        <span
+            data-testid="collaboration-horizon-badge"
+            data-horizon-key={horizonKey}
+            className={`px-3 py-1 rounded-full text-[11px] font-black tracking-widest border animate-in fade-in duration-300 ${tone}`}>
+            {label}
+        </span>
+    )
+}
+
 interface AgentCollaborationProps {
     onSelectSection: (section?: string) => void
     onOpenDebate: (debate: 'research' | 'risk') => void
@@ -297,8 +445,18 @@ interface AgentCollaborationProps {
 }
 
 export default function AgentCollaboration({ onSelectSection, onOpenDebate, selectedSection }: AgentCollaborationProps) {
-    const { agents, isAnalyzing, streamingSections, report, currentHorizon } = useAnalysisStore()
+    const {
+        agents, isAnalyzing, streamingSections, streamingHorizonSections,
+        report, seenHorizons,
+    } = useAnalysisStore()
     const flowInstanceRef = useRef<ReactFlowInstance<CollaborationNode, Edge> | null>(null)
+    // DAV-1429: the horizons this task covers, taken from the report and from the
+    // events this run has actually seen — never from the last horizon_start.
+    const horizonViewKey = resolveCollaborationHorizonKey({
+        report,
+        seenHorizons,
+    })
+    const dualTask = horizonViewKey === 'dual'
 
     const fitGraph = useCallback((duration = 300) => {
         void flowInstanceRef.current?.fitView({
@@ -332,18 +490,24 @@ export default function AgentCollaboration({ onSelectSection, onOpenDebate, sele
     const cards = useMemo(() => META.map((meta) => {
         const agent = agents.find(a => a.name === meta.name)
         const streamState = meta.section ? streamingSections[meta.section] : undefined
-        const stored = meta.section ? (report?.[meta.section as keyof typeof report] as string | undefined) : undefined
-        const src = streamState?.displayed || stored || ''
         const isParticipating = isAnalyzing ? (agent ? agent.status !== 'skipped' : false) : true
+        const verdicts = meta.section
+            ? resolveCardHorizonVerdicts(report, meta.section, {
+                streaming: streamState,
+                streamingHorizons: streamingHorizonSections,
+                isDualTask: dualTask,
+            })
+            : null
 
         return {
             meta,
             status: (agent?.status ?? 'pending') as AgentStatus,
             isStreaming: !!streamState?.isTyping,
-            verdict: extractVerdict(src, currentHorizon),
+            verdicts,
+            verdict: verdicts?.single ?? null,
             isParticipating,
         }
-    }), [agents, report, streamingSections, isAnalyzing, currentHorizon])
+    }), [agents, report, streamingSections, streamingHorizonSections, isAnalyzing, dualTask])
 
     const cardMap = useMemo(() => new Map(cards.map(c => [c.meta.name, c])), [cards])
     const doneN = cards.filter(c => c.status === 'completed').length
@@ -359,6 +523,7 @@ export default function AgentCollaboration({ onSelectSection, onOpenDebate, sele
                 meta: card.meta,
                 status: card.status,
                 verdict: card.verdict,
+                verdicts: card.verdicts,
                 isParticipating: card.isParticipating,
                 selected: !!card.meta.section && card.meta.section === selectedSection,
             } satisfies AgentNodeData,
@@ -449,15 +614,7 @@ export default function AgentCollaboration({ onSelectSection, onOpenDebate, sele
                 </div>
                 {isAnalyzing && (
                     <div className="flex items-center gap-4">
-                        {currentHorizon && (
-                            <span className={`px-3 py-1 rounded-full text-[11px] font-black tracking-widest border animate-in fade-in duration-300 ${
-                                currentHorizon === 'short'
-                                    ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 border-blue-400/30'
-                                    : 'bg-purple-600/10 text-purple-600 dark:text-purple-400 border-purple-400/30'
-                            }`}>
-                                {currentHorizon === 'short' ? '⚡ 短线视角' : '🔭 中线视角'}
-                            </span>
-                        )}
+                        <CollaborationHorizonBadge horizonKey={horizonViewKey} />
                         <div className="text-right">
                             <div className="text-2xl font-black text-blue-600 dark:text-blue-400 tabular-nums">
                                 {participatingCount > 0 ? Math.round((doneN / participatingCount) * 100) : 0}%

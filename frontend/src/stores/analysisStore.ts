@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { reconcilePersistedChatMessages } from '@/utils/chatRecovery'
+import { isReportDualHorizon } from '@/utils/reportDualHorizon'
 import type {
     Agent,
     JobStatus,
@@ -83,6 +84,12 @@ interface AnalysisState {
     // Current analysis horizon (for badge display)
     currentHorizon: string | null
 
+    // DAV-1429: horizons observed in the running task ("dual" from the shared
+    // analyst stage, plus "short"/"medium" from the per-horizon runs).
+    seenHorizons: string[]
+    // DAV-1429: true once the running task is known to cover both horizons.
+    isDualHorizon: boolean
+
     // Actions
     setCurrentJobId: (jobId: string | null) => void
     setCurrentSymbol: (symbol: string) => void
@@ -91,6 +98,10 @@ interface AnalysisState {
     updateAgentSnapshot: (event: AgentSnapshotEvent) => void
     addAgentReport: (event: AgentReportEvent) => void
     addReportChunk: (event: ReportChunkEvent) => void
+    // DAV-1429: the same report sections split per horizon, so a dual run can be
+    // displayed per horizon while it streams (the merged buffers interleave both
+    // horizons and cannot be attributed after the fact).
+    streamingHorizonSections: Record<string, Partial<Record<string, string>>>
     addAgentToken: (event: AgentTokenEvent) => void
     addMilestone: (event: AgentMilestoneEvent) => void
     addLog: (log: LogEntry) => void
@@ -107,6 +118,8 @@ interface AnalysisState {
     setAnalysisRunState: (state: 'idle' | 'running' | 'completed' | 'failed', error?: string | null) => void
     setAnalysisOvertimeNotice: (notice: string | null) => void
     setCurrentHorizon: (horizon: string | null) => void
+    noteHorizonEvent: (horizon: string | null) => void
+    resetHorizonTracking: () => void
     addChatMessage: (message: ChatMessage) => void
     appendToChatMessage: (id: string, chunk: string) => void
     setMessageContent: (id: string, content: string) => void
@@ -168,6 +181,96 @@ function createDebouncedStorage(delay = 800) {
 }
 const debouncedStorage = createDebouncedStorage()
 
+// ─── DAV-1429 dual-horizon bookkeeping ──────────────────────────────────────
+// The collaboration header/cards used to read the last `agent.horizon_start`
+// value, which a dual run overwrites (short then medium, same second) and which
+// is cleared at job.completed — so a dual task ended up labelled/valued 中线.
+// The store now latches the SET of horizons a run covers so display never
+// depends on event order. Everything below is runtime-only (not persisted).
+
+const KNOWN_HORIZONS = ['short', 'medium'] as const
+type KnownHorizon = (typeof KNOWN_HORIZONS)[number]
+const isKnownHorizon = (value: string): value is KnownHorizon =>
+    (KNOWN_HORIZONS as readonly string[]).includes(value)
+
+// `dual` is the shared-analyst-stage marker; `all` is the shared method that
+// fans out to both horizons. Either one alone means "this task is dual".
+const DUAL_MARKERS = ['dual', 'all'] as const
+
+/** Read the horizon values an SSE payload carries, if any (all optional). */
+function horizonsOf(event: unknown): Array<string | null | undefined> {
+    if (!event || typeof event !== 'object') return []
+    const record = event as Record<string, unknown>
+    const values: Array<string | null | undefined> = [
+        record.horizon as string | null | undefined,
+        typeof record.horizons === 'string' ? (record.horizons as string) : undefined,
+    ]
+    if (Array.isArray(record.horizons)) {
+        values.push(...(record.horizons as Array<string | null | undefined>))
+    }
+    return values
+}
+
+function mergeHorizons(
+    state: Pick<AnalysisState, 'seenHorizons' | 'isDualHorizon'>,
+    values: Array<string | null | undefined>,
+): Partial<AnalysisState> {
+    const next = new Set(state.seenHorizons)
+    let isDualHorizon = state.isDualHorizon
+    let changed = false
+
+    for (const raw of values) {
+        const value = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
+        if (!value) continue
+        if (DUAL_MARKERS.includes(value as (typeof DUAL_MARKERS)[number])) {
+            if (!next.has(value)) {
+                next.add(value)
+                changed = true
+            }
+            if (!isDualHorizon) {
+                isDualHorizon = true
+                changed = true
+            }
+            continue
+        }
+        if (!isKnownHorizon(value)) continue
+        if (!next.has(value)) {
+            next.add(value)
+            changed = true
+        }
+    }
+
+    // Both per-horizon passes observed => the task is dual even if no marker
+    // arrived (e.g. the shared stage was skipped).
+    let short = false
+    let medium = false
+    for (const value of next) {
+        if (value === 'short') short = true
+        else if (value === 'medium') medium = true
+    }
+    if (short && medium && !isDualHorizon) {
+        isDualHorizon = true
+        changed = true
+    }
+
+    if (!changed) return {}
+    return { seenHorizons: Array.from(next), isDualHorizon }
+}
+
+/** Horizon latch for the events the store receives directly (DAV-1429). */
+function noteHorizonsFromEvent(
+    state: Pick<AnalysisState, 'seenHorizons' | 'isDualHorizon'>,
+    event: unknown,
+): Partial<AnalysisState> {
+    return mergeHorizons(state, horizonsOf(event))
+}
+
+/** DAV-1429: does this finished report cover both horizons? */
+export function isDualHorizonReport(report: AnalysisReport | null | undefined): boolean {
+    // Keep the collaboration graph and Reports summary on the same detector.
+    return !!report && isReportDualHorizon(report)
+}
+
 export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     currentJobId: null,
     currentSymbol: '000001.SH',
@@ -180,6 +283,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     jobTargetPrice: null,
     jobStopLoss: null,
     streamingSections: {},
+    streamingHorizonSections: {},
     milestones: [],
     debateMessages: {},
         debateScrollTick: 0,
@@ -191,6 +295,8 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     analysisRunError: null,
     analysisOvertimeNotice: null,
     currentHorizon: null,
+    seenHorizons: [],
+    isDualHorizon: false,
 
     setCurrentJobId: (jobId) => set({ currentJobId: jobId }),
 
@@ -199,6 +305,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     setJobStatus: (status) => set({ jobStatus: status }),
 
     updateAgentStatus: (event) => set((state) => ({
+        ...noteHorizonsFromEvent(state, event),
         agents: state.agents.map(agent => {
             if (agent.name !== event.agent) return agent
             const updates: Partial<Agent> = { status: event.status }
@@ -211,6 +318,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     updateAgentSnapshot: (event) => set((state) => {
         const agentMap = new Map(event.agents.map(a => [a.agent, a.status]))
         return {
+            ...noteHorizonsFromEvent(state, event),
             agents: state.agents.map(agent => ({
                 ...agent,
                 status: agentMap.get(agent.name) || agent.status
@@ -228,6 +336,22 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     // 处理报告分片（支持打字机效果）
     addReportChunk: (event) => set((state) => {
         const { section, chunk, is_complete } = event
+        // DAV-1429: dual-horizon runs tag every chunk with its horizon ("dual" for
+        // the shared analyst stage), so this is where a task is recognised as dual
+        // before any report exists.
+        const horizonUpdate = noteHorizonsFromEvent(state, event)
+        // `ReportChunkEvent` does not declare `horizon` yet, but dual runs emit it.
+        const rawHorizon = (event as unknown as { horizon?: unknown }).horizon
+        const horizonKey = typeof rawHorizon === 'string' ? rawHorizon.trim().toLowerCase() : ''
+        const horizonSections = horizonKey && chunk
+            ? {
+                ...state.streamingHorizonSections,
+                [section]: {
+                    ...state.streamingHorizonSections[section],
+                    [horizonKey]: (state.streamingHorizonSections[section]?.[horizonKey] ?? '') + chunk,
+                },
+            }
+            : state.streamingHorizonSections
         const current = state.streamingSections[section] || {
             buffer: '',
             displayed: '',
@@ -238,6 +362,8 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         if (is_complete) {
             // 完成时，确保显示完整内容
             return {
+                ...horizonUpdate,
+                streamingHorizonSections: horizonSections,
                 streamingSections: {
                     ...state.streamingSections,
                     [section]: {
@@ -254,6 +380,8 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         // 追加到缓冲区
         const newBuffer = current.buffer + chunk
         return {
+            ...horizonUpdate,
+            streamingHorizonSections: horizonSections,
             streamingSections: {
                 ...state.streamingSections,
                 [section]: {
@@ -386,6 +514,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         jobTargetPrice: null,
         jobStopLoss: null,
         streamingSections: {},
+        streamingHorizonSections: {},
         debateMessages: {},
         debateScrollTick: 0,
         milestones: [],
@@ -397,6 +526,8 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         analysisRunError: null,
         analysisOvertimeNotice: null,
         currentHorizon: null,
+        seenHorizons: [],
+        isDualHorizon: false,
     }),
 
     addLog: (log) => set((state) => ({
@@ -406,6 +537,14 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     setReport: (report) => set((state) => ({
         report,
         currentSymbol: report?.symbol || state.currentSymbol,
+        // A finished/reopened report is authoritative, including id-less legacy
+        // result_data. Never carry a previous task's latch or streamed verdicts
+        // into it; deriving only from mode would mislabel single-horizon reports.
+        seenHorizons: isDualHorizonReport(report) ? ['dual'] : [],
+        isDualHorizon: isDualHorizonReport(report),
+        currentHorizon: null,
+        streamingSections: {},
+        streamingHorizonSections: {},
     })),
 
     setStructuredData: (data) => set({
@@ -428,7 +567,21 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
 
     setAnalysisOvertimeNotice: (analysisOvertimeNotice) => set({ analysisOvertimeNotice }),
 
-    setCurrentHorizon: (horizon) => set({ currentHorizon: horizon }),
+    // DAV-1429: `currentHorizon` is last-write-wins (a dual run emits
+    // short-then-medium inside one second), so it is no longer used for display.
+    // Every horizon the run reports is latched separately instead.
+    setCurrentHorizon: (horizon) => set((state) => ({
+        currentHorizon: horizon,
+        ...mergeHorizons(state, [horizon]),
+    })),
+
+    // DAV-1429: the header must stop depending on the LAST agent.horizon_start.
+    // A dual run reports horizon "dual" for the shared analyst stage and then
+    // fires short/medium within the same second, so latch the fact that more
+    // than one horizon is in play and never let event order decide the label.
+    noteHorizonEvent: (horizon) => set((state) => mergeHorizons(state, [horizon])),
+
+    resetHorizonTracking: () => set({ seenHorizons: [], isDualHorizon: false }),
 
     reset: () => set((state) => ({
         currentJobId: null,
@@ -442,6 +595,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         jobTargetPrice: null,
         jobStopLoss: null,
         streamingSections: {},
+        streamingHorizonSections: {},
         debateMessages: {},
         debateScrollTick: 0,
         milestones: [],
@@ -453,6 +607,8 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
         analysisRunError: null,
         analysisOvertimeNotice: null,
         currentHorizon: null,
+        seenHorizons: [],
+        isDualHorizon: false,
     }))
 }), {
     name: 'tradingagents-analysis',
@@ -483,8 +639,12 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
             jobStatus: null,
             agents: initialAgents.map(a => ({ ...a, status: 'pending' })),
             streamingSections: {},
+            streamingHorizonSections: {},
+            seenHorizons: [],
+            isDualHorizon: false,
+            currentHorizon: null,
             debateMessages: {},
-        debateScrollTick: 0,
+            debateScrollTick: 0,
             milestones: [],
             logs: [],
             isAnalyzing: false,
