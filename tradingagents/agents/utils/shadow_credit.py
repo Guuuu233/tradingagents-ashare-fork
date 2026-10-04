@@ -77,15 +77,23 @@ _HORIZON_NORMALIZE_MAP: dict[str, str] = {
     "short": "short",
     "short_term": "short",
     "短线": "short",
+    "horizon.short": "short",
     "medium": "medium",
     "medium_term": "medium",
     "mid": "medium",
     "中线": "medium",
+    "horizon.medium": "medium",
 }
 
 
 def normalize_horizon_label(raw: Any) -> Optional[str]:
     """Normalize a horizon value to 'short'/'medium' (or pass through unknown labels).
+
+    Namespaced spellings printed by the cohort key format (``horizon.short`` /
+    ``horizon.medium``) collapse to the bare tier label, so a printed canonical
+    key fed back as a ``--cohort`` spec selects the same sample set. The
+    sentinel ``horizon.unspecified`` intentionally stays unmapped: it is the
+    default no-tier bucket, not a tier alias.
 
     Returns None when no horizon value is present."""
     if raw is None:
