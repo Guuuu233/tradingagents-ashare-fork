@@ -388,6 +388,9 @@ MACHINE_BLOCK_INVALID_REASON_CODE: str = "machine_block_invalid"
 # DAV-1432 裁定 1：claim confidence 三类问题（缺失/越界/百分号）在图内已 warn 并丢弃该
 # claim，保存期不得比图内更严，只记警告。列表/文本字段类型仍然 fail-closed。
 _SOFT_CLAIM_CONFIDENCE_MESSAGE: str = "claim_confidence_rejected"
+# Quarantine summary key. DAV-1432 裁定 4：两档都非法时报告仍落库 completed，
+# 该键供 A4 统计排除出分子。刻意不携带卡号。
+MACHINE_BLOCK_QUARANTINE_KEY: str = "machine_block_quarantine"
 
 
 def _machine_block_invalid_scan_exempt(path: Tuple[str, ...]) -> bool:
@@ -948,7 +951,8 @@ def quarantine_invalid_report_machine_blocks(
     """Degrade per horizon instead of discarding the whole report.
 
     Returns ``result_data`` mutated in place plus a diagnostics summary keyed by
-    ``_dav1432`` (never a machine block, so it does not re-trip the scanner).
+    ``machine_block_quarantine`` (never a machine block, so it does not re-trip
+    the scanner).
     Illegal blocks are replaced by a JSON-free placeholder and their raw text is
     kept under ``machine_block_invalid.raw`` for forensics. The call is
     idempotent: a second run over the same payload reports nothing and writes
@@ -1017,7 +1021,7 @@ def quarantine_invalid_report_machine_blocks(
             path=path, tag=tag, text=raw_text, offset=offset, reason=reason
         )
 
-    result_data.setdefault("_dav1432", summary)
+    result_data.setdefault(MACHINE_BLOCK_QUARANTINE_KEY, summary)
     return result_data
 
 
