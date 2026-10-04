@@ -334,13 +334,18 @@ def test_insufficient_confirmation_maintains_wait_not_no_trade():
         "position_pct": 30,
         "consistency_check_passed": True,
         "failed_checks": [],
+        # DAV-1440：给本 VPA 用例同向采纳依据；空账本另测 ABSTAIN。
+        "adopted_claim_ids": ["C-1"],
+        "direction_basis": {"status": "ledgered", "same_direction_claims": [{"claim_id": "C-1", "source": "adopted"}]},
     }
     status = status_from_manager_verdict(
         manager_verdict,
         vpa_context=vpa,
         claims_verification=[],
+        claim_evidence_summary={"C-1": {"decision": "adopt", "counts": {"total": 1, "verified": 1}, "stance": "bullish"}},
     )
-    # Crucial assertion: analysis_status is VALID, trade_action is WAIT (NOT NO_TRADE, NOT ABSTAIN)
+    assert "vpa_capitulation_unconfirmed_wait" in status.reason_codes
+    # Crucial assertion: supported analysis remains VALID/WAIT under the VPA gate.
     assert status.analysis_status == ANALYSIS_VALID
     assert status.trade_action == ACTION_WAIT
     assert status.trade_action != ACTION_NO_TRADE

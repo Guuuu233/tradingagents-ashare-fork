@@ -70,10 +70,11 @@ def test_unledgered_buy_downgraded_wait():
         focus_claim_ids=["BULL-1"],
         claim_evidence_summary=_summary_adopt("BULL-1"),
     )
-    # analysis_status 不变，仅动作降级
-    assert st.analysis_status == ANALYSIS_VALID
-    assert st.trade_action == ACTION_WAIT
-    assert "direction_basis_not_ledgered:unledgered" in st.reason_codes
+    # DAV-1440：空同向账本升级为 ABSTAIN，而非只保留方向降 WAIT。
+    assert st.analysis_status == "ABSTAIN"
+    assert st.direction == "N/A"
+    assert st.trade_action == ACTION_NO_TRADE
+    assert "direction_without_adjudicated_support" in st.reason_codes
 
 
 def test_partial_only_sell_downgraded_wait():
@@ -148,7 +149,9 @@ def test_already_wait_unresolved_no_db_code():
         focus_claim_ids=["BULL-1"],
         claim_evidence_summary=summary,
     )
-    assert st.trade_action == ACTION_WAIT
+    assert st.analysis_status == "ABSTAIN"
+    assert st.trade_action == ACTION_NO_TRADE
+    assert "direction_without_adjudicated_support" in st.reason_codes
     assert not any(c.startswith("direction_basis_not_ledgered") for c in st.reason_codes)
 
 
@@ -162,5 +165,7 @@ def test_direction_basis_from_nested_debate_state_verdict():
         focus_claim_ids=["BULL-1"],
         claim_evidence_summary=_summary_adopt("BULL-1"),
     )
-    assert st.trade_action == ACTION_WAIT
-    assert "direction_basis_not_ledgered:unledgered" in st.reason_codes
+    assert st.analysis_status == "ABSTAIN"
+    assert st.direction == "N/A"
+    assert st.trade_action == ACTION_NO_TRADE
+    assert "direction_without_adjudicated_support" in st.reason_codes
