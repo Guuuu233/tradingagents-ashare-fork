@@ -303,3 +303,7 @@ work/run_tushare_sampling.py
 work/phase2-ledger/
 work/phase2-weekly/
 work/storage/
+
+# V-03b 测量副本与逐样本原始输出行（行情原始数据 D-040，本机留证不入库）
+work/v03b-1479/
+work/v03b_replica.db

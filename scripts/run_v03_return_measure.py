@@ -28,11 +28,11 @@ from tradingagents.eval.v03_return_measure import (
     BASELINE_GLOBAL_PROMPT_HASH,
     BASELINE_MODEL,
     BASELINE_RUNNING_SERVICE_SHA,
+    DEFAULT_EVAL_OFFSET_FROM_SIGNAL,
     DEFAULT_BENCHMARK_SYMBOL,
     DEFAULT_FORWARD_OOS_END_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATE,
     DEFAULT_HISTORICAL_CUTOFF_DATETIME,
-    DEFAULT_HOLD_DAYS,
     DEFAULT_STATUS_FILTER,
     DEFAULT_TARGET_USER_ID,
     HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
@@ -174,7 +174,9 @@ def run_measurement_and_ablations(
     output_manifest: str,
     output_audit: str,
     output_ablation: str,
-    hold_days: int = DEFAULT_HOLD_DAYS,
+    output_comparison: Optional[str] = None,
+    eval_offset_from_signal: int = DEFAULT_EVAL_OFFSET_FROM_SIGNAL,
+    horizon_key: str = "legacy",
     limit: Optional[int] = None,
     target_user_id: str = DEFAULT_TARGET_USER_ID,
     status_filter: str = DEFAULT_STATUS_FILTER,
@@ -229,7 +231,8 @@ def run_measurement_and_ablations(
 
     engine = V03ReturnMeasureEngine(
         cost_model=CostModel(),
-        hold_days=hold_days,
+        eval_offset_from_signal=eval_offset_from_signal,
+        horizon_key=horizon_key,
         benchmark_symbol=DEFAULT_BENCHMARK_SYMBOL,
         price_provider=price_provider,
         target_user_id=target_user_id,
@@ -320,6 +323,18 @@ def run_measurement_and_ablations(
         )
         print(f"Wrote 25-field Offline Audit Records ({len(result.audit_table)} rows) to: {output_audit}")
 
+    # V-03a↔V-03b row-level diff report (frozen inputs, both conventions).
+    if output_comparison:
+        comp = engine.emit_v03a_v03b_comparison(result.records, reports)
+        Path(output_comparison).write_text(
+            json.dumps(comp, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        n_diff = sum(1 for r in comp if r.get("diff_flags"))
+        print(
+            f"Wrote V-03a↔V-03b comparison ({len(comp)} rows, {n_diff} with diff flags) "
+            f"to: {output_comparison}"
+        )
+
     # Step 5: Run 4 Ablation Controls
     if run_ablations:
         print("\n[5/5] Executing 4 Ablation Controls via OfflineReplayHarness...")
@@ -355,7 +370,32 @@ def main() -> None:
     parser.add_argument(
         "--output-ablation", default=DEFAULT_ABLATION_JSON, help="Output ablation summary path"
     )
-    parser.add_argument("--hold-days", type=int, default=DEFAULT_HOLD_DAYS, help="Holding days")
+    parser.add_argument(
+        "--eval-offset-from-signal",
+        type=int,
+        default=None,
+        help=(
+            "V-03b exit anchor: N-th trading day counted from the signal date "
+            "(short=10, medium=40). Default: legacy 6 (numeric parity with the "
+            "retired V-03a hold_days=5 window)."
+        ),
+    )
+    parser.add_argument(
+        "--horizon-key",
+        type=str,
+        default=None,
+        choices=["short", "medium", "legacy"],
+        help=(
+            "Canonical horizon profile (short=T+10/roll<=2, medium=T+40/roll<=5). "
+            "'legacy' keeps the retired 6-day window for V-03a parity."
+        ),
+    )
+    parser.add_argument(
+        "--hold-days",
+        type=int,
+        default=None,
+        help="DEPRECATED (V-03a): mapped to eval_offset_from_signal = hold_days + 1 with a warning.",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Limit records for quick audit")
     parser.add_argument(
         "--target-user-id",
@@ -418,6 +458,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--output-comparison",
+        type=str,
+        default=None,
+        help=(
+            "Optional path for the V-03a↔V-03b row-level diff report "
+            "(frozen inputs run under both conventions; written under work/)."
+        ),
+    )
+    parser.add_argument(
         "--skip-backup", action="store_true", help="Skip backup if replica already exists"
     )
     parser.add_argument(
@@ -427,6 +476,30 @@ def main() -> None:
 
     if args.price_snapshot and not args.offline:
         parser.error("--price-snapshot requires --offline (online path must stay untouched)")
+
+    # V-03b horizon resolution (mirrors engine CLI semantics).
+    _canonical_offsets = {"short": 10, "medium": 40, "legacy": DEFAULT_EVAL_OFFSET_FROM_SIGNAL}
+    horizon_key = args.horizon_key or "legacy"
+    if args.horizon_key:
+        eval_offset = _canonical_offsets[args.horizon_key]
+    elif args.eval_offset_from_signal is not None:
+        eval_offset = args.eval_offset_from_signal
+        horizon_key = (
+            "short" if eval_offset == 10
+            else "medium" if eval_offset == 40
+            else "legacy"
+        )
+    elif args.hold_days is not None:
+        eval_offset = args.hold_days + 1
+        print(
+            f"WARNING: --hold-days is DEPRECATED (V-03a). Mapped to "
+            f"eval_offset_from_signal={eval_offset} (= hold_days+1). "
+            f"Use --horizon-key or --eval-offset-from-signal instead.",
+            file=sys.stderr,
+        )
+    else:
+        eval_offset = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
+    print(f"Horizon: key={horizon_key}, eval_offset_from_signal=T+{eval_offset}")
 
     # Running service SHA provenance resolution (DAV-865 & DAV-866)
     running_sha = args.running_service_sha
@@ -466,7 +539,9 @@ def main() -> None:
         output_manifest=args.output_manifest,
         output_audit=args.output_audit,
         output_ablation=args.output_ablation,
-        hold_days=args.hold_days,
+        output_comparison=args.output_comparison,
+        eval_offset_from_signal=eval_offset,
+        horizon_key=horizon_key,
         limit=args.limit,
         target_user_id=args.target_user_id,
         status_filter=args.status_filter,
