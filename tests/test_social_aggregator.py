@@ -17,6 +17,7 @@ from tradingagents.dataflows.social.classifier import (
 )
 from tradingagents.dataflows.social.aggregator import (
     HALF_LIFE_DAYS,
+    MAX_ANONYMOUS_AUTHOR_RATIO,
     MAX_PLATFORM_SHARE,
     SocialSentimentAggregator,
     aggregate_sentiment_bundle,
@@ -25,6 +26,7 @@ from tradingagents.dataflows.social.aggregator import (
     compute_time_decay,
 )
 from tradingagents.dataflows.social.contracts import (
+    REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT,
     REASON_SOCIAL_EMPTY,
     REASON_SOCIAL_INSUFFICIENT_COVERAGE,
     REASON_SOCIAL_PLATFORM_PARTIAL,
@@ -548,3 +550,179 @@ def test_aggregator_zero_rows_after_deduplication_marked_empty():
     assert bundle.social_attention.post_count == 0
     assert bundle.social_attention.comment_count == 0
 
+
+
+# ============================================================================
+# DAV-1462 requirement 3 / DAV-1460 gap 4: single anonymous bucket protection
+# ============================================================================
+
+def _make_window(records_spec):
+    """Build a dual-platform window from (platform, record_type, author) tuples."""
+    out = []
+    for i, (platform, rtype, author) in enumerate(records_spec):
+        out.append(
+            make_record(
+                f"{platform}:{rtype}:{i}",
+                platform=platform,
+                record_type=rtype,
+                title=f"标题{i}",
+                text=f"看多大涨{i}",
+                author_id_hash=author,
+            )
+        )
+    return out
+
+
+def test_threshold_constant_is_fifty_percent():
+    """The documented fail-closed threshold lives in one named constant."""
+    assert MAX_ANONYMOUS_AUTHOR_RATIO == 0.50
+
+
+def test_all_anonymous_records_fail_closed_not_partial():
+    """100% anonymous -> failed bundle, explicit reason, no score/evidence."""
+    records = _make_window(
+        [("xhs", "post", None), ("xhs", "comment", None), ("dy", "post", None), ("dy", "comment", None)]
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+
+    assert bundle.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT in bundle.reason_codes
+    assert bundle.direction_allowed is False
+    assert bundle.social_sentiment.score is None
+    assert bundle.social_sentiment.label == "insufficient"
+    assert bundle.evidence_samples == []
+    assert bundle.symbol == "600519.SH"
+
+
+def test_dav1460_357_null_authors_shape_fails_closed():
+    """The exact production shape: every row NULL author -> not a 'partial' bundle.
+
+    Before this guard 357 author-less rows produced status=partial with 5 records
+    and 1 pseudo-author, which reads as 'we collected a little, sentiment weak'.
+    """
+    records = _make_window([("xhs", "post", None)] * 20 + [("dy", "post", None)] * 20)
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+
+    assert bundle.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT in bundle.reason_codes
+    assert bundle.direction_allowed is False
+    # No fabricated attention numbers either.
+    assert bundle.social_attention.post_count == 0
+    assert bundle.social_attention.author_count == 0
+
+
+def test_just_below_threshold_still_aggregates():
+    """40% anonymous (below 50%) keeps the pre-existing partial behavior."""
+    records = _make_window(
+        [("xhs", "post", f"sha:a{i}") for i in range(6)] + [("dy", "post", None)] * 4
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert bundle.status == SocialStatus.PARTIAL.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in bundle.reason_codes
+
+
+def test_exactly_at_threshold_does_not_trip():
+    """Threshold is exclusive ('exceeds'), so exactly 50% still aggregates."""
+    records = _make_window(
+        [("xhs", "post", f"sha:a{i}") for i in range(5)] + [("dy", "post", None)] * 5
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in bundle.reason_codes
+    assert bundle.status == SocialStatus.PARTIAL.value
+
+
+def test_blank_author_hash_counts_as_anonymous():
+    """Whitespace-only author_id_hash is an author-less record, not a real bucket."""
+    records = _make_window([("xhs", "post", "   "), ("dy", "post", "   ")])
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert bundle.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT in bundle.reason_codes
+
+
+def test_single_anonymous_record_alone_does_not_trip():
+    """100% of a 1-record window is technically over threshold, but 1 record is thin
+    data, already covered by the coverage gate -- not the anonymous-bucket anomaly.
+    The guard needs at least 2 author-less records to be meaningful evidence."""
+    records = _make_window([("xhs", "post", None), ("dy", "post", "sha:real")])
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in bundle.reason_codes
+    assert bundle.status == SocialStatus.PARTIAL.value
+
+
+def test_threshold_is_measured_before_per_author_capping():
+    """The guard runs on the raw window; capping must not be able to hide the anomaly.
+
+    40 records from a single real author would be capped to 5, but the guard is
+    about author-less rows, so a mixed window of 30 anonymous + 1 author still
+    trips regardless of the cap.
+    """
+    records = _make_window(
+        [("xhs", "post", None)] * 30 + [("dy", "post", "sha:solo")] * 1
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert bundle.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT in bundle.reason_codes
+
+
+def test_guard_needs_at_least_two_authorless_records():
+    """A lone author-less record cannot establish a single-anonymous-bucket collapse."""
+    one = _make_window([("xhs", "post", None), ("dy", "post", "sha:a"), ("dy", "post", "sha:b")])
+    assert (
+        aggregate_sentiment_bundle(one, symbol="600519.SH", as_of="2026-08-27T00:00:00Z").status
+        != SocialStatus.FAILED.value
+    )
+    two = _make_window(
+        [("xhs", "post", None), ("xhs", "post", None), ("dy", "post", "sha:a")]
+    )
+    assert (
+        aggregate_sentiment_bundle(two, symbol="600519.SH", as_of="2026-08-27T00:00:00Z").status
+        == SocialStatus.FAILED.value
+    )
+
+
+def test_threshold_knob_is_overridable_and_documented_default():
+    """Operators can relax/tighten the ratio; the default stays 0.50."""
+    records = _make_window([("xhs", "post", f"sha:a{i}") for i in range(8)] + [("dy", "post", None)] * 2)
+    # 20% anonymous: passes at the default...
+    assert (
+        aggregate_sentiment_bundle(
+            records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z"
+        ).status
+        == SocialStatus.PARTIAL.value
+    )
+    # ...but trips when an operator tightens the guard to 10%.
+    tight = aggregate_sentiment_bundle(
+        records,
+        symbol="600519.SH",
+        as_of="2026-08-27T00:00:00Z",
+        max_anonymous_author_ratio=0.10,
+    )
+    assert tight.status == SocialStatus.FAILED.value
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT in tight.reason_codes
+
+
+def test_all_authored_records_never_trip_the_guard():
+    """Regression guard: healthy fully-authored windows are unaffected."""
+    records = _make_window(
+        [("xhs", "post", f"sha:x{i}") for i in range(10)]
+        + [("dy", "post", f"sha:d{i}") for i in range(10)]
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in bundle.reason_codes
+    assert bundle.status == SocialStatus.AVAILABLE.value
+    assert bundle.social_attention.post_count == 20
+
+
+def test_provider_failure_takes_precedence_over_anonymous_guard():
+    """A provider-level failure keeps its own status/reasons, not the anonymous code."""
+    records = _make_window([("xhs", "post", None), ("dy", "post", None)])
+    fetch = SocialFetchResult(
+        status=SocialStatus.REFUSED.value,
+        requested_as_of="2026-08-27T00:00:00Z",
+        cutoff_at="2026-08-27T00:00:00Z",
+        reason_codes=["social_no_historical_snapshot"],
+        records=records,
+    )
+    bundle = aggregate_sentiment_bundle(fetch, symbol="600519.SH")
+    assert bundle.status == SocialStatus.REFUSED.value
+    assert bundle.reason_codes == ["social_no_historical_snapshot"]

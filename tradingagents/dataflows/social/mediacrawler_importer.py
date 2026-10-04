@@ -49,6 +49,37 @@ REQUIRED_SOURCE_COLUMNS: Dict[str, Set[str]] = {
     "douyin_aweme_comment": {"comment_id", "aweme_id", "create_time", "add_ts", "last_modify_ts"},
 }
 
+# ---------------------------------------------------------------------------
+# Author column mapping (DAV-1462 requirement 1 / DAV-1460 blocking A)
+#
+# MediaCrawler ships in two incompatible shapes:
+#   * Upstream build: xhs_note / xhs_note_comment carry `user_id`; douyin_aweme /
+#     douyin_aweme_comment carry `sec_uid` (+ `user_id`).
+#   * Teaching/privacy build (the local sandbox pin d6f7c5bb, models.py:38/60/76/
+#     90/113/129): NO `user_id` / `sec_uid` at all. The creator column is
+#     `creator_hash`, produced by tools/user_hash.py:anonymize_user_id() as a
+#     16-hex-char truncation of sha256(real_id).
+#
+# Mapping rule, per table, highest trust first:
+#   1. `sec_uid`   - Douyin stable creator identifier (strongest, platform-wide).
+#   2. `user_id`   - Upstream XHS/Douyin numeric creator identifier.
+#   3. `creator_hash` - Anonymized/truncated hash; already one-way.
+# All three are consumed ONLY through compute_author_id_hash(), so a raw
+# identifier never reaches the archive: `creator_hash` gets hashed a second time
+# into `sha256:<64hex>`, which is still a one-way digest and still stable per
+# creator. Doubling the hash costs no privacy (sha256 of a truncated sha256 is
+# not invertible) and keeps a single hashing rule for every source shape.
+#
+# A row whose author columns are all empty/blank is NOT a silent NULL: the batch
+# is rejected by the schema guard below before any row is read, and per-row
+# `author_id_hash` is never NULL for accepted rows.
+AUTHOR_COLUMN_PRIORITY: Dict[str, Tuple[str, ...]] = {
+    "xhs_note": ("user_id", "creator_hash"),
+    "xhs_note_comment": ("user_id", "creator_hash"),
+    "douyin_aweme": ("sec_uid", "user_id", "creator_hash"),
+    "douyin_aweme_comment": ("sec_uid", "user_id", "creator_hash"),
+}
+
 
 # ============================================================================
 # Helper Parsing Functions
@@ -172,6 +203,29 @@ def compute_author_id_hash(author_id: Optional[str]) -> Optional[str]:
     return f"sha256:{digest}"
 
 
+def resolve_source_author_id(
+    row_dict: Dict[str, Any],
+    table_name: str,
+) -> Optional[str]:
+    """Pick the creator identifier from a source row per AUTHOR_COLUMN_PRIORITY.
+
+    Returns the first non-blank candidate column value, or None when the row
+    carries no creator identifier at all. The returned value is still a raw
+    source identifier and MUST be passed through compute_author_id_hash() before
+    it is written to the archive.
+    """
+    for col in AUTHOR_COLUMN_PRIORITY.get(table_name, ()):
+        if col not in row_dict:
+            continue
+        val = row_dict.get(col)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if s:
+            return s
+    return None
+
+
 def compute_schema_fingerprint(conn: sqlite3.Connection, table_name: str) -> str:
     """Compute deterministic SHA-256 fingerprint of table schema."""
     cursor = conn.cursor()
@@ -287,6 +341,38 @@ class MediaCrawlerImporter:
                 if not required.issubset(cols):
                     # Schema mismatch: missing required columns
                     err_msg = f"Table {tbl} is missing required columns: {required - cols}"
+                    self._record_failed_run(
+                        run_id=run_id,
+                        platform=platform_str,
+                        query_text=q_text,
+                        started_at=started_at,
+                        fingerprint="invalid",
+                        error_code="social_schema_mismatch",
+                        error_detail=err_msg,
+                    )
+                    if owns_source_conn:
+                        source_conn.close()
+                    return {
+                        "run_id": run_id,
+                        "status": "failed",
+                        "rows_read": 0,
+                        "rows_inserted": 0,
+                        "rows_rejected": 0,
+                        "error_code": "social_schema_mismatch",
+                        "error_detail": err_msg,
+                    }
+                # DAV-1462 requirement 1: at least one author column must exist.
+                # Without it every row would land with author_id_hash = NULL and
+                # the aggregator would collapse the symbol into a single
+                # __anonymous__ bucket. Reject the whole batch instead of
+                # silently writing NULL.
+                author_cols = AUTHOR_COLUMN_PRIORITY.get(tbl, ())
+                if not any(col in cols for col in author_cols):
+                    err_msg = (
+                        f"Table {tbl} has no author column: none of {list(author_cols)} "
+                        f"present in {sorted(cols)}; refusing the whole batch "
+                        f"(author_id_hash would be NULL for every row)"
+                    )
                     self._record_failed_run(
                         run_id=run_id,
                         platform=platform_str,
@@ -568,7 +654,9 @@ class MediaCrawlerImporter:
             title = row_dict.get("title")
             text = row_dict.get("desc") or ""
             canonical_url = clean_canonical_url(row_dict.get("note_url"))
-            author_id_hash = compute_author_id_hash(row_dict.get("user_id"))
+            author_id_hash = compute_author_id_hash(
+                resolve_source_author_id(row_dict, "xhs_note")
+            )
             source_keyword = row_dict.get("source_keyword") or row_dict.get("keyword")
 
             metrics = SocialMetrics(
@@ -641,7 +729,9 @@ class MediaCrawlerImporter:
                 max_first_seen = first_seen_at
 
             text = row_dict.get("content") or ""
-            author_id_hash = compute_author_id_hash(row_dict.get("user_id"))
+            author_id_hash = compute_author_id_hash(
+                resolve_source_author_id(row_dict, "xhs_note_comment")
+            )
 
             parent_cid = row_dict.get("parent_comment_id")
             parent_record_id = f"xhs:comment:{parent_cid}" if parent_cid and str(parent_cid).strip() and str(parent_cid).strip() != "0" else None
@@ -717,7 +807,9 @@ class MediaCrawlerImporter:
             title = row_dict.get("title")
             text = row_dict.get("desc") or ""
             canonical_url = clean_canonical_url(row_dict.get("aweme_url"))
-            author_id_hash = compute_author_id_hash(row_dict.get("sec_uid") or row_dict.get("user_id"))
+            author_id_hash = compute_author_id_hash(
+                resolve_source_author_id(row_dict, "douyin_aweme")
+            )
             source_keyword = row_dict.get("source_keyword") or row_dict.get("keyword")
 
             metrics = SocialMetrics(
@@ -790,7 +882,9 @@ class MediaCrawlerImporter:
                 max_first_seen = first_seen_at
 
             text = row_dict.get("content") or ""
-            author_id_hash = compute_author_id_hash(row_dict.get("sec_uid") or row_dict.get("user_id"))
+            author_id_hash = compute_author_id_hash(
+                resolve_source_author_id(row_dict, "douyin_aweme_comment")
+            )
 
             parent_cid = row_dict.get("parent_comment_id")
             parent_record_id = f"dy:comment:{parent_cid}" if parent_cid and str(parent_cid).strip() and str(parent_cid).strip() != "0" else None

@@ -31,6 +31,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Set, Union
 
 from tradingagents.dataflows.social.aggregator import (
+    MAX_ANONYMOUS_AUTHOR_RATIO,
     SocialSentimentAggregator,
     aggregate_sentiment_bundle,
 )
@@ -265,6 +266,18 @@ class SocialDataCollector:
             or os.getenv("TA_SOCIAL_EVIDENCE_LIMIT")
             or 20
         )
+        # DAV-1462 requirement 3: share of author-less records above which the
+        # symbol's bundle is a data anomaly instead of a partial.
+        anon_ratio_raw = (
+            kwargs.get("max_anonymous_author_ratio")
+            or cfg.get("max_anonymous_author_ratio")
+            or os.getenv("TA_SOCIAL_MAX_ANONYMOUS_AUTHOR_RATIO")
+        )
+        self.max_anonymous_author_ratio = (
+            float(anon_ratio_raw)
+            if anon_ratio_raw
+            else MAX_ANONYMOUS_AUTHOR_RATIO
+        )
 
         # 6. Canary Symbols: active whitelist; empty = all (§7)
         canary_raw = (
@@ -484,6 +497,7 @@ class SocialDataCollector:
             min_classified=self.min_classified,
             min_authors=self.min_authors,
             evidence_limit=self.evidence_limit,
+            max_anonymous_author_ratio=self.max_anonymous_author_ratio,
             now=now,
             platforms=self.platforms,
         )
