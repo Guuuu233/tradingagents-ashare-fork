@@ -5153,6 +5153,14 @@ async def healthz():
         payload["executor_queued"] = _default_executor._work_queue.qsize()
         payload["executor_threads"] = len(_default_executor._threads)
     try:
+        payload["active_analysis_count"] = get_job_store().active_job_count()
+    except Exception as exc:
+        # A counting failure must never break the liveness probe; report the
+        # error alongside a null count instead.
+        payload["active_analysis_count"] = None
+        payload["active_analysis_count_error"] = f"{type(exc).__name__}: {exc}"
+        _log(f"[healthz] active_analysis_count failed: {type(exc).__name__}: {exc}")
+    try:
         loop = asyncio.get_running_loop()
         await asyncio.wait_for(loop.run_in_executor(None, int), timeout=5)
     except asyncio.TimeoutError:

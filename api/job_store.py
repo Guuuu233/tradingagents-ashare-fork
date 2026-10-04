@@ -56,6 +56,16 @@ class JobStore(Protocol):
         """
         ...
 
+    def active_job_count(self) -> int:
+        """Return the number of jobs whose status is not terminal.
+
+        Counts every job in the store whose ``status`` field is absent or not
+        in ``_TERMINAL_STATUSES`` (completed / failed) — that includes queued
+        and pending jobs, which ``running_jobs()`` misses. Implementations
+        must only count, not copy job contents.
+        """
+        ...
+
     def emit_event(self, job_id: str, event: str, data: Dict[str, Any]) -> None:
         """Push SSE event for job (thread-safe, works from both event loop and worker threads)."""
         ...
@@ -141,6 +151,18 @@ class InMemoryJobStore:
                 for job_id, fields in self._jobs.items()
                 if fields.get("status") == "running"
             }
+
+    def active_job_count(self) -> int:
+        """Count jobs not in a terminal status (completed / failed).
+
+        Only counts under the lock; job field dicts are never copied.
+        """
+        with self._lock:
+            return sum(
+                1
+                for fields in self._jobs.values()
+                if fields.get("status") not in _TERMINAL_STATUSES
+            )
 
     def delete_job(self, job_id: str) -> None:
         with self._lock:
