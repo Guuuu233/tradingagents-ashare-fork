@@ -234,6 +234,7 @@ def resolve_horizon_calendar_window(
     trading_days: Sequence[str],
     as_of: str,
     as_of_market_closed: bool,
+    eval_offset: Optional[int] = None,
 ) -> HorizonCalendarWindow:
     """Resolve a multi-horizon trading calendar window based strictly on an explicit trading days sequence.
 
@@ -244,6 +245,11 @@ def resolve_horizon_calendar_window(
     4. Exact signal_date presence: no bisect backwards/forwards shifting.
     5. Fails closed with ValueError (or InsufficientTradingCalendarError) if calendar coverage is less than T+N+max_roll.
     6. Does not compute prices or returns; does not output OutcomeStatus.EVALUATED_OK.
+
+    ``eval_offset`` (optional, added DAV-1479) overrides the canonical
+    HORIZON_PROFILE_V1 primary_eval_offset for this call only. None (default)
+    preserves the canonical behaviour byte-for-byte. ``horizon`` still selects
+    the max-roll policy (short: 2, medium: 5).
     """
     # 1. Validate horizon: must be native str (reject str Enum, plain Enum, stringifiable objects)
     if type(horizon) is not str or horizon not in SUPPORTED_HORIZONS:
@@ -291,24 +297,29 @@ def resolve_horizon_calendar_window(
         raise ValueError(f"signal_date {signal_date!r} not found in trading_days")
 
     # 7. Eval offset & max_roll_days
-    eval_offset = int(HORIZON_PROFILE_V1[horizon]["primary_eval_offset"])
+    if eval_offset is None:
+        resolved_eval_offset = int(HORIZON_PROFILE_V1[horizon]["primary_eval_offset"])
+    else:
+        if not isinstance(eval_offset, int) or isinstance(eval_offset, bool) or eval_offset < 1:
+            raise ValueError(f"eval_offset must be a positive int, got {eval_offset!r}")
+        resolved_eval_offset = eval_offset
     max_roll_days = HORIZON_MAX_ROLL_DAYS[horizon]
 
     # 8. Calendar coverage check (must cover up to T+N+max_roll)
-    required_index = signal_idx + eval_offset + max_roll_days
+    required_index = signal_idx + resolved_eval_offset + max_roll_days
     if len(trading_days) <= required_index:
         raise InsufficientTradingCalendarError(
-            f"trading_days does not cover up to T+{eval_offset}+{max_roll_days}: "
+            f"trading_days does not cover up to T+{resolved_eval_offset}+{max_roll_days}: "
             f"needs index {required_index}, but length is {len(trading_days)} "
-            f"(signal_idx={signal_idx}, offset={eval_offset}, max_roll={max_roll_days})"
+            f"(signal_idx={signal_idx}, offset={resolved_eval_offset}, max_roll={max_roll_days})"
         )
 
     # 9. Extract window components
     executable_entry_date = trading_days[signal_idx + 1]
-    target_calendar_date = trading_days[signal_idx + eval_offset]
-    holding_trading_days = tuple(trading_days[signal_idx + 1 : signal_idx + eval_offset + 1])
+    target_calendar_date = trading_days[signal_idx + resolved_eval_offset]
+    holding_trading_days = tuple(trading_days[signal_idx + 1 : signal_idx + resolved_eval_offset + 1])
     roll_candidate_dates = tuple(
-        trading_days[signal_idx + eval_offset + 1 : signal_idx + eval_offset + max_roll_days + 1]
+        trading_days[signal_idx + resolved_eval_offset + 1 : signal_idx + resolved_eval_offset + max_roll_days + 1]
     )
 
     # 10. Due calculation
@@ -322,7 +333,7 @@ def resolve_horizon_calendar_window(
     return HorizonCalendarWindow(
         signal_date=signal_date,
         horizon=horizon,
-        eval_offset=eval_offset,
+        eval_offset=resolved_eval_offset,
         max_roll_days=max_roll_days,
         executable_entry_date=executable_entry_date,
         target_calendar_date=target_calendar_date,
@@ -512,6 +523,7 @@ def resolve_horizon_return_label(
     price_fetcher: Optional[Callable[[str, str], Any]] = None,
     dividend_data: Optional[Mapping[str, float]] = None,
     split_data: Optional[Mapping[str, float]] = None,
+    eval_offset: Optional[int] = None,
 ) -> HorizonReturnResult:
     """Resolve and evaluate multi-horizon return label with real market settlement rules (V-01-2).
 
@@ -574,6 +586,7 @@ def resolve_horizon_return_label(
         trading_days=trading_days,
         as_of=as_of,
         as_of_market_closed=as_of_market_closed,
+        eval_offset=eval_offset,
     )
 
     # 5. Check Cutoff Eligibility (Maturity)

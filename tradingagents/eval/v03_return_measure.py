@@ -1,6 +1,28 @@
-"""V-03a Read-Only Return Measurement Engine (Baseline Progress Measurement).
+"""V-03b Read-Only Return Measurement Engine (Baseline Progress Measurement).
 
-Strict Frozen Specification (work/v03-freeze-sheet-20260909.md / DAV-802):
+V-03b spec delta (DAV-1479 / phase2-midterm plan v1.0 §4 P2):
+  * Settlement truth source unified: entry/target/exit dates, suspension roll
+    policy, and entry-viability are CONSUMED from
+    ``tradingagents.dataflows.return_labels`` (resolve_horizon_calendar_window
+    + resolve_horizon_return_label). This engine no longer computes its own
+    exit date (old ``T+1+hold_days`` convention retired).
+  * ``hold_days`` renamed to ``eval_offset_from_signal``: "T+N" now means
+    enter at T+1 open, exit at the N-th trading day counted from the SIGNAL
+    date (old hold_days=5 == eval_offset_from_signal=6).
+  * Three return bases stored separately per sample:
+      - prediction_* : standard window entry=T+1 open -> target_calendar_date
+        close, NO suspension roll (target suspended -> typed status);
+      - (default fields) execution basis: actual_exit_date incl. roll,
+        frozen V-03a cost model applied on top of label prices;
+      - research_* : T close -> target close academic basis, never mixed
+        into return metrics.
+  * Benchmark legs: CSI 300 retained as SECONDARY; SW2021 L1 industry index
+    (point-in-time membership via resolve_sw_l1_benchmark, Tushare sw_daily)
+    added for both prediction & execution windows; y_rel = 1[R_stock - R_SW > 0].
+  * V-03a conclusions computed under the old convention are marked
+    "须重算后引用" (must recompute before citation).
+
+V-03a frozen items that carry over unchanged:
 1. Positioning: System is incomplete (game theory 0%, real news/sentiment unconnected,
    ~30% missing items). This engine is a PROGRESS BASELINE MEASUREMENT TOOL,
    NOT A QUALITATIVE JUDGMENT on whether AI can make profit.
@@ -11,14 +33,14 @@ Strict Frozen Specification (work/v03-freeze-sheet-20260909.md / DAV-802):
 3. Entry: T+1 Open price (signal at T, execute at T+1 Open; no look-ahead).
    If T+1 is suspended, locked at limit-up/down, or untradable -> marked as 'untradable';
    strictly forbidden to pretend to fill at Open.
-4. Costs:
+4. Costs (execution basis only):
    - Commission: <= 3‰ (default account assumption 0.025% = 2.5 bps), min 5 RMB.
      Commission INCLUDES regulatory fees; STRICTLY NO extra handling/supervision fees.
    - Transfer fee: 0.01‰ (0.001% = 0.1 bps) each way (buy & sell).
    - Stamp duty: 0.5‰ (0.05% = 5 bps) sell side only.
    - Slippage: fixed 5 bps single side (10 bps round trip).
-5. Benchmark: CSI 300 (000300.SH / 沪深300) over the exact same holding window;
-   calculates excess return (alpha).
+5. Benchmarks: SW2021 L1 industry index (primary relative leg, prediction &
+   execution windows) + CSI 300 (000300.SH) retained as secondary.
 6. OOS 3-Segment Partition:
    - DEV <= 2025-12-31
    - HISTORICAL_OOS = 2026-01-01 ~ 2026-09-08
@@ -60,6 +82,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+import warnings
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set, Tuple
 
 # Ensure project root is on sys.path
@@ -70,6 +93,13 @@ if str(PROJECT_ROOT) not in sys.path:
 logger = logging.getLogger(__name__)
 
 from tradingagents.dataflows.interface import NetworkAccessDeniedError
+from tradingagents.dataflows.return_labels import (
+    InsufficientTradingCalendarError,
+    OutcomeStatus,
+    resolve_horizon_calendar_window,
+    resolve_horizon_return_label,
+)
+from tradingagents.dataflows.sw_benchmark import resolve_sw_benchmark_leg
 from tradingagents.agents.utils.symbol_canonical import (
     CanonicalStatus,
     CanonicalSymbolResult,
@@ -188,8 +218,17 @@ DEFAULT_MIN_COMMISSION: float = 5.0  # 5 RMB minimum
 DEFAULT_TRANSFER_FEE_RATE: float = 0.00001  # 0.01‰ = 0.1 bps (both buy & sell)
 DEFAULT_STAMP_DUTY_RATE: float = 0.0005  # 0.5‰ = 5 bps (sell side only)
 DEFAULT_SLIPPAGE_BPS: float = 5.0  # 5 bps single side (0.0005)
-DEFAULT_HOLD_DAYS: int = 5
+# V-03b: "T+N" = T+1 open entry, N-th trading day from the SIGNAL date as the
+# standard exit anchor (return_labels convention). DEFAULT_EVAL_OFFSET 6 keeps
+# numeric parity with the retired V-03a hold_days=5 convention (entry T+1,
+# exit T+6); medium-horizon runs pass 40, short passes 10.
+DEFAULT_EVAL_OFFSET_FROM_SIGNAL: int = 6
+DEFAULT_HOLD_DAYS: int = 5  # DEPRECATED (V-03a): kept for CLI back-compat only
 DEFAULT_BENCHMARK_SYMBOL: str = "000300.SH"
+# Reports generated materially after their signal date (created_at - trade_date
+# > BACKFILL_CREATED_AT_LAG_DAYS calendar days) are tagged cohort_tag=backfill
+# (D-067 cohort isolation); otherwise 'live'.
+BACKFILL_CREATED_AT_LAG_DAYS: int = 2
 DEFAULT_TARGET_USER_ID: str = "429163f7-50b6-4982-8bdf-96ae99506843"
 DEFAULT_STATUS_FILTER: str = "completed"
 DEFAULT_HISTORICAL_CUTOFF_DATE: str = "2026-09-08"
@@ -664,7 +703,7 @@ class SampleMeasureRecord:
     missing_reason: Optional[str] = None
     entry_date: Optional[str] = None  # T+1
     entry_price: Optional[float] = None  # T+1 Open
-    exit_date: Optional[str] = None  # T+1+hold_days
+    exit_date: Optional[str] = None  # execution basis: actual_exit_date (incl. roll)
     exit_price: Optional[float] = None
     gross_return: Optional[float] = None
     net_return: Optional[float] = None
@@ -681,7 +720,7 @@ class SampleMeasureRecord:
     sample_role: str = SampleRole.HISTORICAL_OOS.value
     evaluation_eligible: bool = True
     exclusion_reason: Optional[str] = None
-    label_horizon: str = "T+5"
+    label_horizon: str = "T+6"
     eval_offset_days: int = 1
     roll_days_used: int = 0
     trade_action: Optional[str] = None
@@ -694,6 +733,34 @@ class SampleMeasureRecord:
     prompt_version: str = ""
     cost_assumptions: Optional[Dict[str, float]] = None
     performance_category: str = "evaluated"
+
+    # V-03b extensions (DAV-1479 P2) — prediction / research / industry legs
+    cohort_tag: str = "live"  # live | backfill (D-067 cohort isolation)
+    target_calendar_date: Optional[str] = None  # standard window anchor (no roll)
+    # Prediction basis: T+1 open -> target_calendar_date close, NO roll
+    prediction_entry_price: Optional[float] = None
+    prediction_exit_price: Optional[float] = None
+    prediction_return: Optional[float] = None  # gross, no cost model
+    prediction_outcome_status: Optional[str] = None
+    # Research basis: T close -> target close, research_-prefixed, never mixed
+    research_entry_price: Optional[float] = None
+    research_exit_price: Optional[float] = None
+    research_return: Optional[float] = None
+    research_outcome_status: Optional[str] = None
+    # SW2021 L1 industry benchmark leg (primary relative benchmark)
+    sw_index_code: Optional[str] = None
+    sw_index_name: Optional[str] = None
+    sw_membership_gap: Optional[str] = None
+    sw_prediction_window_return: Optional[float] = None
+    sw_prediction_window_start: Optional[str] = None
+    sw_prediction_window_end: Optional[str] = None
+    sw_prediction_status: Optional[str] = None
+    sw_execution_window_return: Optional[float] = None
+    sw_execution_window_start: Optional[str] = None
+    sw_execution_window_end: Optional[str] = None
+    sw_execution_status: Optional[str] = None
+    y_rel: Optional[bool] = None  # 1[R_stock - R_SW > 0] on prediction window
+    r_stock_prediction: Optional[float] = None
 
     def to_audit_row(self) -> Dict[str, Any]:
         """Convert record to strict 25-field offline audit format (V-03a-3 Section 2)."""
@@ -778,6 +845,12 @@ class SegmentMetrics:
     mean_excess_return: Optional[float] = None
     win_rate: Optional[float] = None  # % of net_return > 0
     excess_win_rate: Optional[float] = None  # % of excess_return > 0
+    # V-03b industry-relative leg aggregates (prediction window, gross basis)
+    sw_leg_evaluated_count: int = 0  # samples with ok SW prediction window
+    mean_sw_prediction_return: Optional[float] = None
+    mean_sw_excess_return: Optional[float] = None  # R_stock - R_SW, prediction window
+    sw_excess_win_rate: Optional[float] = None   # % of (R_stock - R_SW) > 0
+    y_rel_hit_rate: Optional[float] = None       # % of y_rel == True
     profit_loss_ratio: Optional[float] = None  # avg_gain / avg_loss
     max_return: Optional[float] = None
     min_return: Optional[float] = None
@@ -863,6 +936,14 @@ class PriceDataProvider(Protocol):
         """Get the N-th trading day after base_date."""
         ...
 
+    def list_trade_dates(self) -> Optional[List[str]]:
+        """Return the provider's known trading calendar (sorted ISO dates).
+
+        May return a PARTIAL window around the measured signals; None when the
+        provider cannot supply a calendar (fail-closed -> typed_missing).
+        """
+        ...
+
     def is_st(self, symbol: str, date: str) -> Optional[bool]:
         """Check if stock was ST/*ST on date. Returns None if unknown (fail-closed)."""
         ...
@@ -921,6 +1002,9 @@ class DictPriceDataProvider:
             return dates[target_idx]
         return None
 
+    def list_trade_dates(self) -> Optional[List[str]]:
+        return list(self._trade_dates) if self._trade_dates else None
+
     def is_st(self, symbol: str, date: str) -> Optional[bool]:
         if symbol in self._unknown_metadata_stocks:
             return None
@@ -961,12 +1045,25 @@ class VendorPriceDataProvider:
         self._st_cache: Dict[Tuple[str, str], Optional[bool]] = {}
         self._listing_cache: Dict[Tuple[str, str, int], Optional[bool]] = {}
         self._meta_cache: Dict[str, Optional[Dict[str, str]]] = {}
+        self._trade_dates_cache: Optional[List[str]] = None
 
     def get_t_plus_n_date(self, base_date: str, n: int) -> Optional[str]:
         from tradingagents.dataflows.trade_calendar import get_t_plus_n_trading_day
 
         try:
             return get_t_plus_n_trading_day(base_date, n)
+        except Exception:
+            return None
+
+    def list_trade_dates(self) -> Optional[List[str]]:
+        if getattr(self, "_trade_dates_cache", None) is not None:
+            return list(self._trade_dates_cache)
+        try:
+            from tradingagents.dataflows.trade_calendar import require_cn_trade_dates
+
+            all_dates, _ = require_cn_trade_dates()
+            self._trade_dates_cache = sorted(d.isoformat() for d in all_dates)
+            return list(self._trade_dates_cache)
         except Exception:
             return None
 
@@ -1574,6 +1671,9 @@ class OfflineSnapshotPriceDataProvider:
             return self._trade_dates[target]
         return None
 
+    def list_trade_dates(self) -> Optional[List[str]]:
+        return list(self._trade_dates) if self._trade_dates else None
+
     def get_bar(self, symbol: str, date: str) -> Optional[DailyBar]:
         clean_date = str(date).strip()[:10]
         if self.forward_oos_end_date is not None and clean_date > self.forward_oos_end_date:
@@ -1616,6 +1716,19 @@ class OfflineSnapshotPriceDataProvider:
             return None
         count = sum(1 for d in self._trade_dates if list_date <= d <= str(date)[:10])
         return count >= min_days
+
+
+def classify_cohort_tag(trade_date: str, created_at: Any) -> str:
+    """Return 'backfill' when created_at lags trade_date by more than the frozen
+    threshold (D-067 cohorts are batch-generated long after the signal day),
+    otherwise 'live'. Unparseable timestamps fail closed to 'live' (the strict
+    majority class) rather than fabricating a backfill claim."""
+    try:
+        td = datetime.strptime(str(trade_date).strip()[:10], "%Y-%m-%d").date()
+        ca = datetime.strptime(str(created_at).strip()[:19], "%Y-%m-%d %H:%M:%S").date()
+    except Exception:
+        return "live"
+    return "backfill" if (ca - td).days > BACKFILL_CREATED_AT_LAG_DAYS else "live"
 
 
 def calculate_roll_days(trade_date_str: str, entry_date_str: str) -> int:
@@ -1776,13 +1889,39 @@ def apply_purging_and_embargo(
 
 
 class V03ReturnMeasureEngine:
-    """V-03a Read-Only Return Measurement Engine (with V-03a-3 Snapshot & Audit)."""
+    """V-03b Read-Only Return Measurement Engine (with V-03a-3 Snapshot & Audit).
+
+    V-03b: settlement truth source is tradingagents.dataflows.return_labels;
+    this engine only consumes its dates/labels and applies the frozen cost
+    model plus benchmark legs. ``horizon_key`` maps to canonical
+    HORIZON_PROFILE_V1 ("short"=T+10, "medium"=T+40) and must be consistent
+    with ``eval_offset_from_signal`` (validated below).
+    """
+
+    # Canonical offset per horizon key (return_labels HORIZON_PROFILE_V1).
+    _HORIZON_OFFSETS: Dict[str, int] = {
+        "short": 10,
+        "medium": 40,
+        # "legacy" is a synthetic key for parity with retired V-03a windows
+        # (eval_offset_from_signal=6 == old hold_days=5). Not a canonical
+        # horizon; roll policy borrowed from 'short' (2 days) — documented.
+        "legacy": DEFAULT_EVAL_OFFSET_FROM_SIGNAL,
+    }
+    _HORIZON_ROLL_KEY: Dict[str, str] = {
+        "short": "short",
+        "medium": "medium",
+        "legacy": "short",
+    }
 
     def __init__(
         self,
         cost_model: Optional[CostModel] = None,
-        hold_days: int = DEFAULT_HOLD_DAYS,
+        eval_offset_from_signal: int = DEFAULT_EVAL_OFFSET_FROM_SIGNAL,
+        horizon_key: str = "legacy",
+        sw_daily_fetcher: Optional[Callable[..., Any]] = None,
+        sw_membership_resolver: Optional[Callable[..., Any]] = None,
         benchmark_symbol: str = DEFAULT_BENCHMARK_SYMBOL,
+        hold_days: Optional[int] = None,  # DEPRECATED (V-03a back-compat shim)
         price_provider: Optional[PriceDataProvider] = None,
         target_user_id: Optional[str] = DEFAULT_TARGET_USER_ID,
         status_filter: Optional[str] = DEFAULT_STATUS_FILTER,
@@ -1792,6 +1931,7 @@ class V03ReturnMeasureEngine:
         replica_sha256: Optional[str] = None,
         cutoff_datetime: Optional[str] = None,
         requested_as_of: Optional[str] = None,
+        requested_as_of_market_closed: bool = True,
         dev_cutoff_date: str = "2025-12-31",
         historical_cutoff_date: str = DEFAULT_HISTORICAL_CUTOFF_DATE,
         forward_oos_end_date: Optional[str] = DEFAULT_FORWARD_OOS_END_DATE,
@@ -1806,7 +1946,38 @@ class V03ReturnMeasureEngine:
         sample_generating_service_sha: str = HISTORICAL_SAMPLE_GENERATING_SERVICE_SHA,
     ):
         self.cost_model = cost_model or CostModel()
-        self.hold_days = hold_days
+        if hold_days is not None:
+            warnings.warn(
+                "hold_days is DEPRECATED (V-03a). It is mapped to "
+                "eval_offset_from_signal = hold_days + 1; pass "
+                "eval_offset_from_signal / horizon_key instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if eval_offset_from_signal != DEFAULT_EVAL_OFFSET_FROM_SIGNAL:
+                raise ValueError(
+                    "pass only one of eval_offset_from_signal / deprecated hold_days"
+                )
+            eval_offset_from_signal = int(hold_days) + 1
+        if not isinstance(eval_offset_from_signal, int) or eval_offset_from_signal < 2:
+            raise ValueError(
+                f"eval_offset_from_signal must be int >= 2, got {eval_offset_from_signal!r}"
+            )
+        self.eval_offset_from_signal = eval_offset_from_signal
+        if horizon_key not in self._HORIZON_OFFSETS:
+            raise ValueError(
+                f"horizon_key must be one of {sorted(self._HORIZON_OFFSETS)}, got {horizon_key!r}"
+            )
+        canonical_offset = self._HORIZON_OFFSETS[horizon_key]
+        if horizon_key != "legacy" and eval_offset_from_signal != canonical_offset:
+            raise ValueError(
+                f"eval_offset_from_signal ({eval_offset_from_signal}) must equal "
+                f"canonical offset for horizon {horizon_key!r} ({canonical_offset})"
+            )
+        self.horizon_key = self._HORIZON_ROLL_KEY[horizon_key]
+        self.horizon_profile_key = horizon_key
+        self.sw_daily_fetcher = sw_daily_fetcher
+        self.sw_membership_resolver = sw_membership_resolver
         self.benchmark_symbol = benchmark_symbol
         self.target_user_id = target_user_id
         self.status_filter = status_filter
@@ -1830,7 +2001,13 @@ class V03ReturnMeasureEngine:
         self.historical_cutoff_date = historical_cutoff_date
         self.forward_oos_end_date = forward_oos_end_date
         self.cutoff_datetime = cutoff_datetime or f"{self.historical_cutoff_date} 23:59:59"
-        self.requested_as_of = requested_as_of or self.historical_cutoff_date
+        self.requested_as_of = requested_as_of
+        self.requested_as_of_explicit = requested_as_of is not None
+        # When the caller does not pin as_of explicitly (requested_as_of falls
+        # back to a horizon-relative date), labels use "as_of = end of provider
+        # calendar, market closed" — the correct maturity semantics for
+        # offline replay where price coverage itself bounds the future.
+        self.requested_as_of_market_closed = bool(requested_as_of_market_closed)
 
         if price_provider is not None:
             self.price_provider = price_provider
@@ -2150,7 +2327,7 @@ class V03ReturnMeasureEngine:
             ),
             evaluation_eligible=True,
             exclusion_reason=None,
-            label_horizon=f"T+{self.hold_days}",
+            label_horizon=f"T+{self.eval_offset_from_signal}",
             eval_offset_days=1,
             roll_days_used=0,
             trade_action=str(decision or "NO_TRADE").upper(),
@@ -2158,12 +2335,15 @@ class V03ReturnMeasureEngine:
             evidence_provenance=provenance,
             cutoff_datetime=self.cutoff_datetime or f"{trade_date} 15:00:00",
             requested_as_of=self.requested_as_of or trade_date,
-            profile_id="default_t5",
+            profile_id="horizon_profile_v1",
             model_name=BASELINE_MODEL,
             prompt_version=f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}",
             cost_assumptions=cost_assump,
             performance_category="evaluated",
         )
+
+        rec.cohort_tag = classify_cohort_tag(trade_date, report.get("created_at"))
+        provenance["cohort_tag"] = rec.cohort_tag
 
         # 1. Stock Pool Filtering & Canonical Normalization
         pool_status, canonical_sym = self.evaluate_stock_pool(raw_sym, trade_date)
@@ -2243,105 +2423,266 @@ class V03ReturnMeasureEngine:
                     rec.included_in_return_metrics = False
                     return rec
 
-        # 2. Resolve T+1 Entry Date and Exit Date
+        # 2. Resolve settlement dates & label via return_labels (single truth source).
+        #    V-03b consumes dates/label; it never computes T+N itself.
         gap_describer = getattr(self.price_provider, "describe_price_gap", None)
-        entry_date = self.price_provider.get_t_plus_n_date(trade_date, 1)
-        if not entry_date:
-            rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = self._enrich_missing_reason(
-                "calendar_missing_t_plus_1", canonical_sym, trade_date, gap_describer
-            )
-            rec.performance_category = "typed_missing"
-            rec.evaluation_eligible = False
-            rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
-            return rec
-        rec.entry_date = entry_date
-        rec.roll_days_used = calculate_roll_days(trade_date, entry_date)
 
-        exit_date = self.price_provider.get_t_plus_n_date(entry_date, self.hold_days)
-        if not exit_date:
+        def _fail_typed(base_reason: str, sym: Optional[str], dt: Optional[str]) -> "SampleMeasureRecord":
             rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = self._enrich_missing_reason(
-                f"calendar_missing_t_plus_{self.hold_days}",
-                canonical_sym,
-                entry_date,
-                gap_describer,
-            )
-            rec.performance_category = "typed_missing"
-            rec.evaluation_eligible = False
-            rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
-            return rec
-        rec.exit_date = exit_date
-
-        # 3. Retrieve T+1 Entry Bar and Check Tradability
-        entry_bar = self.price_provider.get_bar(canonical_sym, entry_date)
-        if entry_bar is None:
-            rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = self._enrich_missing_reason(
-                "entry_bar_missing", canonical_sym, entry_date, gap_describer
-            )
+            rec.missing_reason = self._enrich_missing_reason(base_reason, sym, dt, gap_describer)
             rec.performance_category = "typed_missing"
             rec.evaluation_eligible = False
             rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
             return rec
 
-        # Tradability / Suspension / Limit Check
-        # If suspended or zero volume
-        if entry_bar.is_suspended or entry_bar.volume <= 0 or entry_bar.open <= 0:
+        calendar = None
+        list_fn = getattr(self.price_provider, "list_trade_dates", None)
+        if callable(list_fn):
+            try:
+                calendar = list_fn()
+            except Exception:
+                calendar = None
+        if not calendar:
+            return _fail_typed("calendar_unavailable", canonical_sym, trade_date)
+
+        as_of = str(self.requested_as_of or calendar[-1])[:10]
+        as_of = max(as_of, trade_date)
+        try:
+            window = resolve_horizon_calendar_window(
+                signal_date=trade_date,
+                horizon=self.horizon_key,
+                trading_days=calendar,
+                as_of=as_of,
+                as_of_market_closed=self.requested_as_of_market_closed,
+                eval_offset=self.eval_offset_from_signal,
+            )
+        except InsufficientTradingCalendarError:
+            return _fail_typed("calendar_insufficient_coverage", canonical_sym, trade_date)
+        except Exception:
+            return _fail_typed("calendar_unavailable", canonical_sym, trade_date)
+
+        rec.entry_date = window.executable_entry_date
+        rec.target_calendar_date = window.target_calendar_date
+
+        if not window.is_due:
+            return _fail_typed("pending_due", canonical_sym, trade_date)
+
+        # Bars needed by prediction/research bases (same fetcher the label uses).
+        def _bar_or_none(sym: str, d: Optional[str]) -> Optional[DailyBar]:
+            if not d:
+                return None
+            try:
+                return self.price_provider.get_bar(sym, d)
+            except Exception:
+                return None
+
+        signal_bar = _bar_or_none(canonical_sym, trade_date)
+        entry_bar = _bar_or_none(canonical_sym, window.executable_entry_date)
+        target_bar = _bar_or_none(canonical_sym, window.target_calendar_date)
+        exit_candidates = (window.target_calendar_date,) + tuple(window.roll_candidate_dates)
+        last_exit_bar = next(
+            (b for b in (_bar_or_none(canonical_sym, d) for d in reversed(exit_candidates)) if b is not None),
+            None,
+        )
+
+        # Execution-basis label: entry at T+1 open, exit at actual_exit_date
+        # (roll over suspension/limit-lock within max_roll, suspension beyond).
+        # NOTE: entry viability is judged against the LONG-side convention of
+        # return_labels (BUY). For bearish calls the long-side entry/exit
+        # symmetry still defines the measurable counterfactual price path; the
+        # sign convention is applied when reading the return, not here.
+        try:
+            label = resolve_horizon_return_label(
+                symbol=canonical_sym,
+                signal_date=trade_date,
+                horizon=self.horizon_key,
+                trading_days=calendar,
+                as_of=as_of,
+                as_of_market_closed=self.requested_as_of_market_closed,
+                direction="BUY",
+                price_fetcher=lambda s, d: self.price_provider.get_bar(s, d),
+                eval_offset=self.eval_offset_from_signal,
+            )
+        except Exception:
+            return _fail_typed("label_resolution_failed", canonical_sym, trade_date)
+
+        # 3. Prediction basis: standard window, NO roll. Entry = T+1 open,
+        #    exit = target_calendar_date close. Target suspension -> typed
+        #    status (never rolled), per P2 ruling.
+        def _entry_viability_gap() -> Optional[str]:
+            """Typed status when T+1 entry was not executable (bar-level check)."""
+            if entry_bar is None:
+                return "entry_bar_missing"
+            if entry_bar.is_suspended or entry_bar.volume <= 0 or entry_bar.open <= 0:
+                return "unexecutable_entry"
+            return None
+
+        pred_status: Optional[str]
+        pred_entry_px: Optional[float] = None
+        pred_exit_px: Optional[float] = None
+        pred_ret: Optional[float] = None
+        entry_gap = _entry_viability_gap()
+        if entry_gap is not None:
+            pred_status = entry_gap
+        else:
+            pred_entry_px = float(entry_bar.open)
+            if target_bar is None:
+                pred_status = "target_bar_missing"
+            elif target_bar.is_suspended or target_bar.close <= 0:
+                pred_status = "target_suspended"
+            else:
+                pred_exit_px = float(target_bar.close)
+                pred_ret = (pred_exit_px - pred_entry_px) / pred_entry_px
+                pred_status = "evaluated"
+        rec.prediction_entry_price = round(pred_entry_px, 4) if pred_entry_px is not None else None
+        rec.prediction_exit_price = round(pred_exit_px, 4) if pred_exit_px is not None else None
+        rec.prediction_return = round(pred_ret, 6) if pred_ret is not None else None
+        rec.prediction_outcome_status = pred_status
+        rec.r_stock_prediction = rec.prediction_return
+
+        # 4. Research basis: T close -> target close. research_-prefixed only.
+        res_status: Optional[str]
+        res_entry_px: Optional[float] = None
+        res_exit_px: Optional[float] = None
+        res_ret: Optional[float] = None
+        if signal_bar is None or signal_bar.close <= 0:
+            res_status = "signal_bar_missing"
+        elif target_bar is None:
+            res_status = "target_bar_missing"
+        elif target_bar.close <= 0:
+            res_status = "target_bar_invalid"
+        else:
+            res_entry_px = float(signal_bar.close)
+            res_exit_px = float(target_bar.close)
+            res_ret = (res_exit_px - res_entry_px) / res_entry_px
+            res_status = "evaluated"
+        rec.research_entry_price = round(res_entry_px, 4) if res_entry_px is not None else None
+        rec.research_exit_price = round(res_exit_px, 4) if res_exit_px is not None else None
+        rec.research_return = round(res_ret, 6) if res_ret is not None else None
+        rec.research_outcome_status = res_status
+
+
+        # 5. Industry benchmark leg (SW2021 L1, point-in-time membership at T).
+        #    Filled BEFORE the early exits below so prediction/research legs and
+        #    typed SW statuses survive untradable/suspension outcomes.
+        def _fill_sw_leg() -> None:
+            pred_window = (
+                (window.executable_entry_date, window.target_calendar_date)
+                if pred_status == "evaluated"
+                else None
+            )
+            exec_exit = label.get("actual_exit_date")
+            exec_window = (
+                (window.executable_entry_date, str(exec_exit)) if exec_exit else None
+            )
+            if pred_window is None and exec_window is None:
+                return
+            try:
+                leg = resolve_sw_benchmark_leg(
+                    symbol=canonical_sym,
+                    signal_date=trade_date,
+                    prediction_window=pred_window,
+                    execution_window=exec_window,
+                    sw_daily_fetcher=self.sw_daily_fetcher,
+                    membership_resolver=self.sw_membership_resolver,
+                )
+            except Exception:
+                leg = {"membership_status": "gap", "membership_gap_note": "sw_leg_exception"}
+            rec.sw_index_code = leg.get("index_code")
+            rec.sw_index_name = leg.get("index_name")
+            rec.sw_membership_gap = leg.get("membership_gap_note")
+            pred_leg = leg.get("prediction") or {}
+            exec_leg = leg.get("execution") or {}
+            rec.sw_prediction_status = pred_leg.get("status")
+            rec.sw_prediction_window_return = pred_leg.get("r_sw")
+            rec.sw_prediction_window_start = pred_leg.get("window_start")
+            rec.sw_prediction_window_end = pred_leg.get("window_end")
+            rec.sw_execution_status = exec_leg.get("status")
+            rec.sw_execution_window_return = exec_leg.get("r_sw")
+            rec.sw_execution_window_start = exec_leg.get("window_start")
+            rec.sw_execution_window_end = exec_leg.get("window_end")
+            rec.y_rel = (
+                bool(rec.prediction_return - rec.sw_prediction_window_return > 0)
+                if (rec.prediction_return is not None and rec.sw_prediction_window_return is not None)
+                else None
+            )
+
+        _fill_sw_leg()
+
+        label_status = str(label.get("outcome_status"))
+        rec.roll_days_used = int(label.get("roll_days_used") or 0)
+        if label_status == OutcomeStatus.PENDING_DUE.value:
+            return _fail_typed("pending_due", canonical_sym, trade_date)
+        if label_status == OutcomeStatus.UNEXECUTABLE_ENTRY.value:
             rec.outcome_status = MeasurementOutcomeStatus.UNTRADABLE.value
-            rec.untradable_reason = "suspended"
+            # Refine reason from the entry bar when observable.
+            reason = "unexecutable_entry"
+            if entry_bar is not None:
+                if (
+                    entry_bar.limit_up is not None
+                    and entry_bar.open >= entry_bar.limit_up
+                    and entry_bar.high == entry_bar.low == entry_bar.limit_up
+                ):
+                    reason = "limit_up_locked"
+                elif (
+                    entry_bar.limit_down is not None
+                    and entry_bar.open <= entry_bar.limit_down
+                    and entry_bar.high == entry_bar.low == entry_bar.limit_down
+                ):
+                    reason = "limit_down_locked"
+                else:
+                    reason = "suspended"
+            rec.untradable_reason = reason
             rec.trade_action = "untradable"
             rec.performance_category = "untradable"
             rec.evaluation_eligible = False
-            rec.exclusion_reason = "regression_sample_isolated" if is_regression else "untradable_suspended"
-            return rec
-
-        # Check limit-up locked when BUY (cannot execute at Open)
-        if entry_bar.limit_up is not None and entry_bar.open >= entry_bar.limit_up:
-            if entry_bar.high == entry_bar.low == entry_bar.limit_up:
-                rec.outcome_status = MeasurementOutcomeStatus.UNTRADABLE.value
-                rec.untradable_reason = "limit_up_locked"
-                rec.trade_action = "untradable"
-                rec.performance_category = "untradable"
-                rec.evaluation_eligible = False
-                rec.exclusion_reason = "regression_sample_isolated" if is_regression else "untradable_limit_up_locked"
-                return rec
-
-        entry_price = float(entry_bar.open)
-        rec.entry_price = round(entry_price, 4)
-
-        # 4. Retrieve Exit Bar
-        exit_bar = self.price_provider.get_bar(canonical_sym, exit_date)
-        if exit_bar is None:
-            rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = self._enrich_missing_reason(
-                "exit_bar_missing", canonical_sym, exit_date, gap_describer
+            rec.exclusion_reason = (
+                "regression_sample_isolated" if is_regression else f"untradable_{reason}"
             )
-            rec.performance_category = "typed_missing"
-            rec.evaluation_eligible = False
-            rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
             return rec
+        if label_status == OutcomeStatus.SUSPENSION.value:
+            return _fail_typed("exit_suspension_window_exhausted", canonical_sym, window.target_calendar_date)
+        if label_status == OutcomeStatus.PROVIDER_FAILURE.value:
+            return _fail_typed("provider_failure", canonical_sym, trade_date)
+        if label_status == OutcomeStatus.UNSUPPORTED_PRICE_BASIS.value:
+            return _fail_typed("unsupported_price_basis", canonical_sym, trade_date)
+        if label_status == OutcomeStatus.DATA_MISSING.value:
+            # Refine which leg is missing from provider-side evidence.
+            if entry_bar is None:
+                refined = "entry_bar_missing"
+            elif last_exit_bar is None:
+                refined = "exit_bar_missing"
+            else:
+                refined = "label_data_missing"
+            return _fail_typed(refined, canonical_sym, trade_date)
+        if label_status != OutcomeStatus.EVALUATED_OK.value:
+            return _fail_typed("label_unknown_status", canonical_sym, trade_date)
 
-        if exit_bar.is_suspended or exit_bar.close <= 0:
-            rec.outcome_status = MeasurementOutcomeStatus.TYPED_MISSING.value
-            rec.missing_reason = "exit_bar_suspended_or_invalid"
-            rec.performance_category = "typed_missing"
-            rec.evaluation_eligible = False
-            rec.exclusion_reason = "regression_sample_isolated" if is_regression else rec.missing_reason
-            return rec
+        actual_exit_date = str(label.get("actual_exit_date") or "")
+        entry_price = label.get("entry_price")
+        exit_price = label.get("exit_price")
+        if (
+            not actual_exit_date
+            or not isinstance(entry_price, (int, float))
+            or not isinstance(exit_price, (int, float))
+            or entry_price <= 0
+            or exit_price <= 0
+        ):
+            return _fail_typed("label_data_missing", canonical_sym, trade_date)
 
-        exit_price = float(exit_bar.close)
-        rec.exit_price = round(exit_price, 4)
+        rec.exit_date = actual_exit_date
+        rec.entry_price = round(float(entry_price), 4)
+        rec.exit_price = round(float(exit_price), 4)
 
-        # 5. Calculate Stock Returns & Costs
-        costs = self.cost_model.calculate_costs(entry_price, exit_price)
+        # 6. Execution basis: frozen V-03a cost model on label prices.
+        costs = self.cost_model.calculate_costs(float(entry_price), float(exit_price))
         rec.gross_return = round(costs["gross_return"], 6)
         rec.net_return = round(costs["net_return"], 6)
         rec.cost_breakdown = costs
 
-        # 6. Retrieve Benchmark (CSI 300) and Calculate Excess Return
-        bmk_entry_bar = self.price_provider.get_bar(self.benchmark_symbol, entry_date)
-        bmk_exit_bar = self.price_provider.get_bar(self.benchmark_symbol, exit_date)
+        # 7. Secondary benchmark: CSI 300 over the EXECUTION window (kept).
+        bmk_entry_bar = _bar_or_none(self.benchmark_symbol, window.executable_entry_date)
+        bmk_exit_bar = _bar_or_none(self.benchmark_symbol, actual_exit_date)
 
         if bmk_entry_bar and bmk_exit_bar and bmk_entry_bar.open > 0 and bmk_exit_bar.close > 0:
             bmk_entry_price = float(bmk_entry_bar.open)
@@ -2356,7 +2697,7 @@ class V03ReturnMeasureEngine:
             rec.benchmark_return = None
             rec.excess_return = None
 
-        # 7. Final Classification: Actionable vs Non-Actionable
+        # 8. Final Classification: Actionable vs Non-Actionable
         # In A-share long-only, BUY / positive decisions enter return metrics
         # WAIT / HOLD / SELL / non-BUY are diagnostic and not included in long return metrics
         norm_decision = str(decision or "").upper()
@@ -2409,6 +2750,9 @@ class V03ReturnMeasureEngine:
         gross_returns: List[float] = []
         bmk_returns: List[float] = []
         excess_returns: List[float] = []
+        sw_excess_returns: List[float] = []
+        sw_window_returns: List[float] = []
+        y_rel_flags: List[bool] = []
 
         # Diagnostic counters
         directional_total = 0
@@ -2460,6 +2804,14 @@ class V03ReturnMeasureEngine:
                     bmk_returns.append(r.benchmark_return)
                 if r.excess_return is not None:
                     excess_returns.append(r.excess_return)
+
+            # V-03b industry-relative leg (prediction window; gross stock return)
+            if r.sw_prediction_window_return is not None:
+                sw_window_returns.append(r.sw_prediction_window_return)
+                if r.prediction_return is not None:
+                    sw_excess_returns.append(r.prediction_return - r.sw_prediction_window_return)
+            if r.y_rel is not None:
+                y_rel_flags.append(bool(r.y_rel))
 
             # Directional Diagnostics (Evaluated on any record with valid gross return)
             if r.gross_return is not None:
@@ -2539,6 +2891,20 @@ class V03ReturnMeasureEngine:
             metrics.mean_excess_return = round(sum(excess_returns) / len(excess_returns), 6)
             excess_wins = sum(1 for ex in excess_returns if ex > 0)
             metrics.excess_win_rate = round(excess_wins / len(excess_returns), 4)
+
+        if sw_window_returns:
+            metrics.sw_leg_evaluated_count = len(sw_window_returns)
+            metrics.mean_sw_prediction_return = round(
+                sum(sw_window_returns) / len(sw_window_returns), 6
+            )
+        if sw_excess_returns:
+            metrics.mean_sw_excess_return = round(
+                sum(sw_excess_returns) / len(sw_excess_returns), 6
+            )
+            sw_wins = sum(1 for x in sw_excess_returns if x > 0)
+            metrics.sw_excess_win_rate = round(sw_wins / len(sw_excess_returns), 4)
+        if y_rel_flags:
+            metrics.y_rel_hit_rate = round(sum(1 for y in y_rel_flags if y) / len(y_rel_flags), 4)
 
         # Directional Diagnostics
         metrics.total_directional_predictions = directional_total
@@ -2712,7 +3078,7 @@ class V03ReturnMeasureEngine:
             model_name=BASELINE_MODEL,
             temperature=0.0,
             prompt_hash=f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}",
-            horizon_profile=f"T+{self.hold_days}",
+            horizon_profile=f"T+{self.eval_offset_from_signal}",
             cost_assumptions={
                 "commission_rate": self.cost_model.commission_rate,
                 "transfer_fee_rate": self.cost_model.transfer_fee_rate,
@@ -2751,6 +3117,106 @@ class V03ReturnMeasureEngine:
             snapshot_manifest=manifest,
             audit_table=audit_table,
         )
+
+    # -----------------------------------------------------------------------
+    # V-03a legacy-window comparison (DAV-1479 P2)
+    # -----------------------------------------------------------------------
+
+    def measure_sample_v03a_legacy(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        """Frozen V-03a single-window result for side-by-side comparison only.
+
+        Reproduces the retired convention exactly: entry = T+1 open,
+        exit = get_t_plus_n_date(entry, hold_days) (i.e. T+1+hold_days, the
+        signal-date offset being hold_days+1), no suspension roll, CSI-300-only
+        benchmark. Used ONLY to emit the V-03a↔V-03b diff report; the V-03b
+        pipeline never calls this.
+        """
+        legacy_hold = self.eval_offset_from_signal - 1
+        out: Dict[str, Any] = {
+            "report_id": str(report.get("id", "")),
+            "symbol": report.get("symbol"),
+            "trade_date": str(report.get("trade_date", "")).strip()[:10],
+            "hold_days": legacy_hold,
+        }
+        trade_date = out["trade_date"]
+        res = canonicalize_symbol(report.get("symbol"))
+        canonical = res.canonical_symbol if res.canonical_symbol else None
+        out["canonical_symbol"] = canonical
+        entry = self.price_provider.get_t_plus_n_date(trade_date, 1) if canonical else None
+        exit_d = (
+            self.price_provider.get_t_plus_n_date(entry, legacy_hold)
+            if entry else None
+        )
+        out["legacy_entry_date"] = entry
+        out["legacy_exit_date"] = exit_d
+        if not (canonical and entry and exit_d):
+            out["legacy_status"] = "typed_missing"
+            return out
+        e_bar = self.price_provider.get_bar(canonical, entry)
+        x_bar = self.price_provider.get_bar(canonical, exit_d)
+        if e_bar is None or x_bar is None:
+            out["legacy_status"] = "typed_missing"
+            return out
+        if e_bar.is_suspended or e_bar.volume <= 0 or e_bar.open <= 0:
+            out["legacy_status"] = "untradable"
+            return out
+        if x_bar.is_suspended or x_bar.close <= 0:
+            out["legacy_status"] = "typed_missing"
+            return out
+        e_px, x_px = float(e_bar.open), float(x_bar.close)
+        out["legacy_status"] = "evaluated"
+        out["legacy_entry_price"] = round(e_px, 4)
+        out["legacy_exit_price"] = round(x_px, 4)
+        costs = self.cost_model.calculate_costs(e_px, x_px)
+        out["legacy_gross_return"] = round(costs["gross_return"], 6)
+        out["legacy_net_return"] = round(costs["net_return"], 6)
+        return out
+
+    def emit_v03a_v03b_comparison(
+        self, records: List["SampleMeasureRecord"], reports: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Row-level diff of the retired V-03a window vs the new V-03b bases.
+
+        For each in-pool sample: legacy entry/exit/status/returns vs V-03b
+        entry/target/actual-exit/status, plus flags marking the semantic
+        changes (offset convention, suspension roll, industry leg presence).
+        """
+        rows: List[Dict[str, Any]] = []
+        by_id = {r.report_id: r for r in records}
+        for rep in reports:
+            rid = str(rep.get("id", ""))
+            rec = by_id.get(rid)
+            legacy = self.measure_sample_v03a_legacy(rep)
+            row = dict(legacy)
+            if rec is not None:
+                row.update({
+                    "v03b_outcome_status": rec.outcome_status,
+                    "v03b_entry_date": rec.entry_date,
+                    "v03b_target_date": rec.target_calendar_date,
+                    "v03b_exit_date": rec.exit_date,
+                    "v03b_roll_days_used": rec.roll_days_used,
+                    "v03b_net_return": rec.net_return,
+                    "v03b_prediction_return": rec.prediction_return,
+                    "v03b_research_return": rec.research_return,
+                    "v03b_sw_prediction_return": rec.sw_prediction_window_return,
+                    "v03b_y_rel": rec.y_rel,
+                    "cohort_tag": rec.cohort_tag,
+                })
+                # Semantic diffs
+                diffs = []
+                if legacy.get("legacy_exit_date") and rec.target_calendar_date:
+                    if legacy["legacy_exit_date"] != rec.target_calendar_date:
+                        diffs.append("exit_date_convention")
+                if legacy.get("legacy_status") == "typed_missing" and rec.outcome_status == MeasurementOutcomeStatus.EVALUATED.value:
+                    diffs.append("roll_or_window_rescued")
+                if legacy.get("legacy_status") == "evaluated" and rec.outcome_status != MeasurementOutcomeStatus.EVALUATED.value:
+                    diffs.append("new_typed_status")
+                if rec.y_rel is not None:
+                    diffs.append("industry_leg_present")
+                row["diff_flags"] = diffs
+            rows.append(row)
+        return rows
+
 
     # -----------------------------------------------------------------------
     # Markdown & JSON Output Generators
@@ -2862,7 +3328,8 @@ class V03ReturnMeasureEngine:
   - 印花税: `0.5‰` (0.05% 卖方单向)
   - 滑点: 固定单边 `5 bps` (0.05% 单边, 双向合计 10 bps)
   - 总往返成本: 约 `20.2 bps`
-- **基准资产**: 沪深300指数 (`000300.SH`)，同周期超额收益 (Alpha)
+- **基准资产**: 主基准 = 申万一级行业指数（T 日时点成分，Tushare `sw_daily`）；次要基准 = 沪深300指数 (`000300.SH`)，同周期超额收益 (Alpha)
+- **口径分离 (V-03b)**: 预测口径(T+1 open→target close，不顺延) / 执行口径(T+1 open→实际退出，含顺延+成本) / 研究口径(T close→target close，`research_` 前缀，不进收益指标)
 - **Typed-Missing (缺口类)**: `return=NULL`，进 Coverage 分母，**不进** Return 分子分母，禁止 Carry-Forward，禁止静默 Drop
 
 ---
@@ -2895,6 +3362,9 @@ class V03ReturnMeasureEngine:
 | **平均净收益率 (Net Return)** | {f"{m_dev.mean_net_return * 100:.2f}%" if m_dev.mean_net_return is not None else "N/A"} | {f"{m_hist.mean_net_return * 100:.2f}%" if m_hist.mean_net_return is not None else "N/A"} | {f"{m_fwd.mean_net_return * 100:.2f}%" if m_fwd.mean_net_return is not None else "N/A"} | {f"{m_all.mean_net_return * 100:.2f}%" if m_all.mean_net_return is not None else "N/A"} |
 | **中位数净收益率 (Median Return)** | {f"{m_dev.median_net_return * 100:.2f}%" if m_dev.median_net_return is not None else "N/A"} | {f"{m_hist.median_net_return * 100:.2f}%" if m_hist.median_net_return is not None else "N/A"} | {f"{m_fwd.median_net_return * 100:.2f}%" if m_fwd.median_net_return is not None else "N/A"} | {f"{m_all.median_net_return * 100:.2f}%" if m_all.median_net_return is not None else "N/A"} |
 | **沪深300同期收益 (Benchmark)** | {f"{m_dev.mean_benchmark_return * 100:.2f}%" if m_dev.mean_benchmark_return is not None else "N/A"} | {f"{m_hist.mean_benchmark_return * 100:.2f}%" if m_hist.mean_benchmark_return is not None else "N/A"} | {f"{m_fwd.mean_benchmark_return * 100:.2f}%" if m_fwd.mean_benchmark_return is not None else "N/A"} | {f"{m_all.mean_benchmark_return * 100:.2f}%" if m_all.mean_benchmark_return is not None else "N/A"} |
+| **申万一级同期收益 (SW Leg, 预测窗)** | {f"{m_dev.mean_sw_prediction_return * 100:.2f}%" if m_dev.mean_sw_prediction_return is not None else "N/A"} | {f"{m_hist.mean_sw_prediction_return * 100:.2f}%" if m_hist.mean_sw_prediction_return is not None else "N/A"} | {f"{m_fwd.mean_sw_prediction_return * 100:.2f}%" if m_fwd.mean_sw_prediction_return is not None else "N/A"} | {f"{m_all.mean_sw_prediction_return * 100:.2f}%" if m_all.mean_sw_prediction_return is not None else "N/A"} |
+| **行业相对收益 (R_stock − R_SW)** | {f"{m_dev.mean_sw_excess_return * 100:.2f}%" if m_dev.mean_sw_excess_return is not None else "N/A"} | {f"{m_hist.mean_sw_excess_return * 100:.2f}%" if m_hist.mean_sw_excess_return is not None else "N/A"} | {f"{m_fwd.mean_sw_excess_return * 100:.2f}%" if m_fwd.mean_sw_excess_return is not None else "N/A"} | {f"{m_all.mean_sw_excess_return * 100:.2f}%" if m_all.mean_sw_excess_return is not None else "N/A"} |
+| **y_rel 命中率 (R_stock > R_SW)** | {f"{m_dev.y_rel_hit_rate * 100:.2f}%" if m_dev.y_rel_hit_rate is not None else "N/A"} | {f"{m_hist.y_rel_hit_rate * 100:.2f}%" if m_hist.y_rel_hit_rate is not None else "N/A"} | {f"{m_fwd.y_rel_hit_rate * 100:.2f}%" if m_fwd.y_rel_hit_rate is not None else "N/A"} | {f"{m_all.y_rel_hit_rate * 100:.2f}%" if m_all.y_rel_hit_rate is not None else "N/A"} |
 | **平均超额收益 (Excess Alpha)** | {f"{m_dev.mean_excess_return * 100:.2f}%" if m_dev.mean_excess_return is not None else "N/A"} | {f"{m_hist.mean_excess_return * 100:.2f}%" if m_hist.mean_excess_return is not None else "N/A"} | {f"{m_fwd.mean_excess_return * 100:.2f}%" if m_fwd.mean_excess_return is not None else "N/A"} | {f"{m_all.mean_excess_return * 100:.2f}%" if m_all.mean_excess_return is not None else "N/A"} |
 | **绝对胜率 (Win Rate)** | {f"{m_dev.win_rate * 100:.2f}%" if m_dev.win_rate is not None else "N/A"} | {f"{m_hist.win_rate * 100:.2f}%" if m_hist.win_rate is not None else "N/A"} | {f"{m_fwd.win_rate * 100:.2f}%" if m_fwd.win_rate is not None else "N/A"} | {f"{m_all.win_rate * 100:.2f}%" if m_all.win_rate is not None else "N/A"} |
 | **超额胜率 (Excess Win Rate)** | {f"{m_dev.excess_win_rate * 100:.2f}%" if m_dev.excess_win_rate is not None else "N/A"} | {f"{m_hist.excess_win_rate * 100:.2f}%" if m_hist.excess_win_rate is not None else "N/A"} | {f"{m_fwd.excess_win_rate * 100:.2f}%" if m_fwd.excess_win_rate is not None else "N/A"} | {f"{m_all.excess_win_rate * 100:.2f}%" if m_all.excess_win_rate is not None else "N/A"} |
@@ -3014,7 +3484,9 @@ class OfflineReplayHarness:
 
         engine = V03ReturnMeasureEngine(
             cost_model=self.engine.cost_model,
-            hold_days=self.engine.hold_days,
+            eval_offset_from_signal=self.engine.eval_offset_from_signal,
+            horizon_key=self.engine.horizon_profile_key,
+            sw_daily_fetcher=self.engine.sw_daily_fetcher,
             benchmark_symbol=self.engine.benchmark_symbol,
             price_provider=self.engine.price_provider,
             target_user_id=self.engine.target_user_id,
@@ -3158,10 +3630,34 @@ def main() -> None:
         help="Limit number of reports to measure",
     )
     parser.add_argument(
+        "--eval-offset-from-signal",
+        type=int,
+        default=None,
+        help=(
+            "V-03b exit anchor: N-th trading day counted from the signal date "
+            "(short=10, medium=40). Default: legacy 6 (numeric parity with the "
+            "retired V-03a hold_days=5 window)."
+        ),
+    )
+    parser.add_argument(
+        "--horizon-key",
+        type=str,
+        default=None,
+        choices=["short", "medium", "legacy"],
+        help=(
+            "Canonical horizon profile (short=T+10/roll<=2, medium=T+40/roll<=5). "
+            "'legacy' keeps the retired 6-day window for V-03a parity. When set, "
+            "overrides --eval-offset-from-signal to the canonical offset."
+        ),
+    )
+    parser.add_argument(
         "--hold-days",
         type=int,
-        default=DEFAULT_HOLD_DAYS,
-        help="Holding days horizon (default: 5)",
+        default=None,
+        help=(
+            "DEPRECATED (V-03a): mapped to eval_offset_from_signal = hold_days + 1 "
+            "with a warning. Use --horizon-key/--eval-offset-from-signal instead."
+        ),
     )
     parser.add_argument(
         "--output-md",
@@ -3207,6 +3703,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # V-03b horizon resolution: --horizon-key wins; then --eval-offset-from-signal;
+    # deprecated --hold-days maps to offset = hold_days + 1 with a loud warning.
+    _canonical_offsets = {"short": 10, "medium": 40, "legacy": DEFAULT_EVAL_OFFSET_FROM_SIGNAL}
+    horizon_key = args.horizon_key or "legacy"
+    if args.horizon_key:
+        eval_offset = _canonical_offsets[args.horizon_key]
+    elif args.eval_offset_from_signal is not None:
+        eval_offset = args.eval_offset_from_signal
+        horizon_key = "legacy" if eval_offset not in _canonical_offsets.values() else (
+            "short" if eval_offset == 10 else "medium" if eval_offset == 40 else "legacy"
+        )
+    elif args.hold_days is not None:
+        eval_offset = args.hold_days + 1
+        print(
+            f"WARNING: --hold-days is DEPRECATED (V-03a). Mapped to "
+            f"eval_offset_from_signal={eval_offset} (= hold_days+1). "
+            f"Use --horizon-key or --eval-offset-from-signal instead.",
+            file=sys.stderr,
+        )
+    else:
+        eval_offset = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
+    print(f"Horizon: key={horizon_key}, eval_offset_from_signal=T+{eval_offset}")
+
     user_stats = V03ReturnMeasureEngine.get_user_report_counts(
         args.db_path, target_user_id=args.target_user_id, cutoff_date=args.cutoff_date
     )
@@ -3215,7 +3734,8 @@ def main() -> None:
     print(f"Account stats: total={user_stats['total']}, completed={user_stats['completed']}, failed={user_stats['failed']}")
 
     engine = V03ReturnMeasureEngine(
-        hold_days=args.hold_days,
+        eval_offset_from_signal=eval_offset,
+        horizon_key=horizon_key,
         target_user_id=args.target_user_id,
         status_filter=args.status_filter,
         target_user_stats=user_stats,

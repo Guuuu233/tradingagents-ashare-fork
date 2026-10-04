@@ -307,3 +307,6 @@ work/storage/
 # T+5 回填运行产物（回滚 journal + 独立前像导出，本机证据不入库；DAV-1544）
 work/tplus5-rollback/
 work/tplus5-pre-export/
+# V-03b 测量副本与逐样本原始输出行（行情原始数据 D-040，本机留证不入库）
+work/v03b-1479/
+work/v03b_replica.db
