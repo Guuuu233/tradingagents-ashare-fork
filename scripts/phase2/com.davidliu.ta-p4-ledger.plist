@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- DAV-1480 P4 snapshot ledger. Template only — install after 总控 sign-off:
+       cp scripts/phase2/com.davidliu.ta-p4-ledger.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-ledger.plist
+     Runs Mon-Fri 19:45 (after the 16:37 measurement batch). The script itself
+     exits 2 + logs when reports are still running/pending/queued, so a late
+     batch only postpones sealing, it never corrupts the ledger. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.davidliu.ta-p4-ledger</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
+        <string>/Users/davidliu/Documents/TradingAgents-AShare/scripts/phase2/daily_snapshot_ledger.py</string>
+        <string>run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_PROXY</key>
+        <string>127.0.0.1,localhost</string>
+        <key>no_proxy</key>
+        <string>127.0.0.1,localhost</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>45</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/work/phase2-ledger/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/work/phase2-ledger/launchd.err.log</string>
+</dict>
+</plist>
