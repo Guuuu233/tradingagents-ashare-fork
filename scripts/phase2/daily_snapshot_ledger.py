@@ -31,7 +31,18 @@ ledger under ``work/phase2-ledger/``. Each line carries:
   Source timestamps come from result_data.market_data_context[hz].source_provenance
   (written by data_collector._build_source_provenance); sources absent from
   provenance fall back to "no timestamp" -> UNVERIFIED. Never defaults to
-  VERIFIED.
+  VERIFIED. requested/actual as_of values are compared as parsed timestamps
+  (_parse_dt), not raw strings, so both "YYYY-MM-DD" and ISO datetimes work.
+
+External head anchor (work/phase2-ledger/HEAD): a hash chain alone cannot
+prove the tail of the file was not truncated — every surviving line still
+verifies. "run" therefore registers the terminal chain_hash + line count in
+a separate small JSON file after each successful append, and "verify"
+re-checks the computed tail against that anchor. A ledger that predates
+anchors gets one bootstrapped (bootstrapped: true) from the current tail —
+truncations that happened BEFORE bootstrap are undetectable; only post-
+bootstrap growth is covered. Missing anchor -> explicit UNVERIFIED exit;
+corrupt anchor -> fail-close.
 
 Usage:
   python scripts/phase2/daily_snapshot_ledger.py run        [--db PATH] [--ledger-dir DIR] [--date YYYY-MM-DD]
@@ -63,11 +74,16 @@ DEFAULT_DB = REPO_ROOT / "data" / "tradingagents.db"
 DEFAULT_LEDGER_DIR = REPO_ROOT / "work" / "phase2-ledger"
 LEDGER_FILE = "forward_ledger.jsonl"
 STATE_FILE = "ledger_state.json"
+HEAD_FILE = "HEAD"
 LOG_FILE = "snapshot_ledger.log"
 
 BLOCKING_STATUSES = ("running", "pending", "queued")
 CHAIN_FIELD = "record_sha256"
 GENESIS_PREV = "GENESIS"
+# A seal this many days after report creation means the row was backfilled,
+# not a fresh forward observation — flagged so H records from the backfill
+# queue are not compared with future genuinely-forward H records.
+BACKFILL_LAG_DAYS = 2.0
 
 HORIZONS = ("short", "medium")
 ENTRY_OFFSET_TRADING_DAYS = 1   # T+1 open 09:30
@@ -179,9 +195,10 @@ def _classify_timing(
         "outcome_close_utc": None,
     }
     if entry_day is None:
-        # Calendar does not reach far enough: entry is strictly in the future,
-        # so sealed_at < entry_open is certain.
-        evidence["note"] = "calendar ends before T+1; entry is future"
+        # signal_date is earlier than the first calendar date (snap-down
+        # index < 0): the T+1 entry day cannot be resolved, so conservatively
+        # classify F0.
+        evidence["note"] = "calendar does not reach T+1; entry day unresolved"
         return "F0", evidence
 
     entry_open = cn_dt(entry_day, MARKET_OPEN_HHMM)
@@ -237,6 +254,20 @@ _NO_TIMESTAMP_SOURCES = {
 # timestamp is FAILED (look-ahead); anything without a timestamp is UNVERIFIED.
 
 
+def _pit_as_of_cmp(actual: Any, requested: Any) -> Optional[int]:
+    """Compare actual vs requested as_of; -1/0/+1, or None if unparseable.
+
+    Values in the wild are "YYYY-MM-DD" today but may become ISO datetimes;
+    parse both via _parse_dt instead of comparing raw strings (lexicographic
+    order breaks the moment a time component appears).
+    """
+    a, r = _parse_dt(actual), _parse_dt(requested)
+    if a is None or r is None:
+        return None
+    return -1 if a < r else (1 if a > r else 0)
+
+
+
 def _classify_input_pit(
     result_data: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
@@ -259,12 +290,13 @@ def _classify_input_pit(
         ps = info.get("provenance_status")
         req = info.get("requested_as_of")
         act = info.get("actual_as_of") or info.get("as_of")
-        if ps == "future" or (req and act and str(act) > str(req)):
+        cmp_asof = _pit_as_of_cmp(act, req) if (req and act) else None
+        if ps == "future" or cmp_asof == 1:
             failed.append({"source": src, "requested_as_of": req,
                            "actual_as_of": act, "status": info.get("status")})
         elif ps == "verified":
             covered.append(src)
-        elif req and act and str(act) <= str(req):
+        elif cmp_asof is not None and cmp_asof <= 0:
             # Timestamp present and inside the cutoff even though the pipeline
             # didn't mark it verified (e.g. legacy rows) -> still timeliness-ok.
             covered.append(src)
@@ -357,6 +389,10 @@ def build_record(
     seal_basis = sealed_at
     if created and created > sealed_at:
         seal_basis = created
+    sealed_lag_days: Optional[float] = None
+    if created:
+        sealed_lag_days = round((sealed_at - created).total_seconds() / 86400.0, 4)
+    backfilled = sealed_lag_days is not None and sealed_lag_days > BACKFILL_LAG_DAYS
 
     signal = _parse_dt(row["trade_date"])
     if signal is None:
@@ -391,6 +427,8 @@ def build_record(
         "direction_top": row["direction"],
         "probability_top": row["probability"],
         "timing_class": timing_class,
+        "sealed_lag_days": sealed_lag_days,
+        "backfilled": backfilled,
         "timing_evidence": timing_ev,
         "input_pit_status": pit_status,
         "input_pit_evidence": pit_evidence,
@@ -402,30 +440,113 @@ def build_record(
     return record
 
 
-def _seal_record(record: dict[str, Any]) -> None:
-    """(Re)compute the self hash over the record minus the hash field."""
-    payload = {k: v for k, v in record.items() if k != CHAIN_FIELD}
-    record[CHAIN_FIELD] = _sha256_bytes(_canonical(payload))
-
-
 # ---------------------------------------------------------------------------
 # ledger IO
 
 
-def _read_last_hash(ledger_path: Path) -> str:
+def _read_last_line(ledger_path: Path) -> Optional[dict[str, Any]]:
+    """Parsed last non-empty ledger line, or None (missing/empty file).
+
+    Raises ValueError when the tail line exists but cannot be parsed — the
+    caller must NOT treat an unreadable tail as an empty ledger.
+    """
     if not ledger_path.exists():
-        return GENESIS_PREV
-    last = ""
+        return None
+    last = b""
     with open(ledger_path, "rb") as fh:
         for line in fh:
             if line.strip():
                 last = line
     if not last:
-        return GENESIS_PREV
+        return None
     try:
-        return json.loads(last)["chain_hash"]
-    except Exception:
-        return GENESIS_PREV
+        obj = json.loads(last)
+    except Exception as exc:
+        raise ValueError(f"unparseable ledger tail line: {exc}") from exc
+    if not isinstance(obj, dict) or not obj.get("chain_hash"):
+        raise ValueError("ledger tail line lacks chain_hash")
+    return obj
+
+
+def _count_ledger_lines(ledger_path: Path) -> int:
+    if not ledger_path.exists():
+        return 0
+    with open(ledger_path, "rb") as fh:
+        return sum(1 for line in fh if line.strip())
+
+
+# ---------------------------------------------------------------------------
+# external head anchor
+#
+# A self-contained hash chain cannot detect TRUNCATION at the tail: every
+# surviving line still verifies. The anchor file (JSON, next to the ledger)
+# pins the terminal chain_hash + line count after each successful run, and
+# verify re-checks the computed tail against it.
+#
+# Ledgers written before anchors existed get one bootstrap entry stamped
+# from the current tail ("bootstrapped": true). Truncation that already
+# happened before bootstrap is undetectable — coverage starts the day the
+# anchor is first written and grows from there.
+
+
+def _write_head_anchor(ledger_dir: Path, chain_hash: str, n_lines: int,
+                       bootstrapped: bool, reason: str) -> Path:
+    tmp = ledger_dir / (HEAD_FILE + ".tmp")
+    tmp.write_text(json.dumps({
+        "chain_hash": chain_hash,
+        "lines": n_lines,
+        "anchored_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "bootstrapped": bootstrapped,
+        "reason": reason,
+    }, ensure_ascii=False, indent=1) + "\n", "utf-8")
+    tmp.replace(ledger_dir / HEAD_FILE)
+    return ledger_dir / HEAD_FILE
+
+
+def _check_head_anchor(ledger_path: Path, tail_hash: str, n_lines: int,
+                       log_dir: Optional[Path] = None) -> int:
+    """Compare the verified tail against the external anchor.
+
+    Returns 0 (anchor present and matches, or bootstrapped now), 2 (no
+    anchor yet and nothing to bootstrap from, or ledger empty), 4 (anchor
+    corrupt — fail-close), 5 (anchor mismatch — tail truncated/rewritten).
+    """
+    ledger_dir = ledger_path.parent
+    log = (lambda m: _log(log_dir, m)) if log_dir else (lambda m: print(m))
+    anchor_path = ledger_dir / HEAD_FILE
+    if tail_hash is None or n_lines == 0:
+        print("UNVERIFIED: ledger missing or empty; tail integrity "
+              "cannot be anchored", file=sys.stderr)
+        return 2
+    if not anchor_path.exists():
+        _write_head_anchor(ledger_dir, tail_hash, n_lines,
+                           bootstrapped=True,
+                           reason="ledger predates head anchor")
+        log(f"HEAD anchor bootstrapped from current tail ({n_lines} lines); "
+            "truncations before this point are undetectable")
+        return 0
+    try:
+        anchor = json.loads(anchor_path.read_text("utf-8"))
+        if not isinstance(anchor, dict) or not isinstance(anchor.get("chain_hash"), str):
+            raise ValueError("missing chain_hash")
+    except Exception as exc:
+        print(f"FAIL: head anchor {anchor_path} unreadable/corrupt: {exc} "
+              "(fail-close)", file=sys.stderr)
+        return 4
+    ok = (anchor.get("chain_hash") == tail_hash
+          and anchor.get("lines") == n_lines)
+    if ok:
+        print(f"OK: tail matches head anchor ({n_lines} lines, "
+              f"chain_hash={tail_hash[:16]}...)")
+        return 0
+    print("FAIL: ledger tail does not match head anchor — tail truncation "
+          "or rewrite detected", file=sys.stderr)
+    print(f"  anchor: lines={anchor.get('lines')} "
+          f"chain_hash={str(anchor.get('chain_hash'))[:16]}... "
+          f"anchored_at={anchor.get('anchored_at')}", file=sys.stderr)
+    print(f"  actual: lines={n_lines} chain_hash={tail_hash[:16]}...",
+          file=sys.stderr)
+    return 5
 
 
 def _load_state(ledger_dir: Path) -> dict[str, Any]:
@@ -444,16 +565,28 @@ def _save_state(ledger_dir: Path, state: dict[str, Any]) -> None:
 
 
 def _load_sealed_ids(ledger_dir: Path, state: dict[str, Any]) -> set[str]:
-    """Sealed IDs = state file ∪ ledger scan (state file is a cache only)."""
+    """Sealed IDs = state file ∪ ledger scan (state file is a cache only).
+
+    Unreadable ledger lines are counted and logged — never silently treated
+    as 'not sealed', which would re-append duplicates.
+    """
     ids = set(state.get("sealed_report_ids") or [])
     lp = ledger_dir / LEDGER_FILE
+    bad = 0
     if lp.exists():
         with open(lp, "r", encoding="utf-8") as fh:
             for line in fh:
+                if not line.strip():
+                    continue
                 try:
                     ids.add(json.loads(line)["record"]["report_id"])
                 except Exception:
-                    continue
+                    bad += 1
+    if bad:
+        _log(ledger_dir,
+             f"WARNING: {bad} unreadable ledger line(s) while loading sealed "
+             "ids; affected report_ids are treated as STILL SEALED (skipped, "
+             "not re-appended). Fix the ledger before relying on them.")
     return ids
 
 
@@ -510,7 +643,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             _log(ledger_dir, f"FAILED: trade calendar unavailable: {exc}")
             return 3
 
-        prev_hash = _read_last_hash(ledger_path)
+        # Fail-close: never append on top of an unreadable tail — that would
+        # silently start a new genesis segment detached from history.
+        try:
+            tail_obj = _read_last_line(ledger_path)
+        except ValueError as exc:
+            _log(ledger_dir,
+                 f"FAILED: ledger tail unreadable: {exc}; refusing to append "
+                 f"(would detach a new genesis segment from history). "
+                 f"ledger={ledger_path}")
+            return 4
+        prev_hash = tail_obj["chain_hash"] if tail_obj else GENESIS_PREV
         appended = 0
         with open(ledger_path, "a", encoding="utf-8") as out:
             for row in new_rows:
@@ -530,7 +673,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         state["last_run_at"] = sealed_at.isoformat()
         state["last_appended"] = appended
         _save_state(ledger_dir, state)
+        _write_head_anchor(ledger_dir, prev_hash,
+                           _count_ledger_lines(ledger_path),
+                           bootstrapped=False, reason="run append")
         _log(ledger_dir, f"OK: appended {appended} record(s); ledger={ledger_path}")
+        _log(ledger_dir, f"OK: head anchor updated ({prev_hash[:16]}...)")
         return 0
     finally:
         con.close()
@@ -576,7 +723,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(f"  line {lineno}: {msg}")
         return 1
     print(f"OK: {n} line(s) verified, chain intact")
-    return 0
+    # The chain alone cannot detect tail truncation — compare the terminal
+    # chain_hash against the external head anchor (bootstraps on first use).
+    tail_hash = prev if n else None
+    return _check_head_anchor(ledger_path, tail_hash, n)
 
 
 def cmd_baseline(args: argparse.Namespace) -> int:

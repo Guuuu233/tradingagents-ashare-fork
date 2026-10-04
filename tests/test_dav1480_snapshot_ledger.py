@@ -287,3 +287,155 @@ def test_baseline_all_match(tmp_path):
     ns = type("NS", (), {"snapshot_jsonl": str(snap), "db": str(db),
                          "ledger_dir": None})
     assert mod.cmd_baseline(ns) == 0
+
+
+# ---------------------------------------------------------------------------
+# head anchor — tail-truncation detection (DAV-1488 rework)
+
+
+def _ns(**kw):
+    return type("NS", (), kw)
+
+
+def _verify(tmp_path):
+    return mod.cmd_verify(_ns(ledger_dir=str(tmp_path)))
+
+
+def test_verify_detects_tail_truncation_via_anchor(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    r2 = mod.build_record(_row(id="b"), _rd(), SEALED, "d", _cal())
+    r3 = mod.build_record(_row(id="c"), _rd(), SEALED, "d", _cal())
+    ledger = _ledger(tmp_path, [r1, r2, r3])
+    assert _verify(tmp_path) == 0          # bootstraps anchor on first pass
+    # truncate last line — chain alone still verifies, anchor must catch it
+    lines = ledger.read_text("utf-8").splitlines()
+    ledger.write_text("\n".join(lines[:-1]) + "\n", "utf-8")
+    assert _verify(tmp_path) == 5
+
+
+def test_verify_anchor_corrupt_fails_closed(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    _ledger(tmp_path, [r1])
+    assert _verify(tmp_path) == 0          # bootstrap
+    (tmp_path / "HEAD").write_text("{not json", "utf-8")
+    assert _verify(tmp_path) == 4
+
+
+def test_verify_anchor_on_empty_ledger_unverifiable(tmp_path):
+    (tmp_path / "forward_ledger.jsonl").write_text("", "utf-8")
+    assert _verify(tmp_path) == 2          # no anchor, nothing to bootstrap
+    assert not (tmp_path / "HEAD").exists()
+
+
+def test_verify_tolerates_old_records_without_backfill_fields(tmp_path):
+    # Records written before sealed_lag_days/backfilled existed must still
+    # verify — verify recomputes record_sha256 over whatever fields exist.
+    rec = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    assert "sealed_lag_days" in rec and "backfilled" in rec
+    for k in ("sealed_lag_days", "backfilled"):
+        del rec[k]
+    # recompute self-hash for the trimmed record (simulating an old line)
+    rec["record_sha256"] = hashlib.sha256(
+        mod._canonical({k: v for k, v in rec.items()
+                      if k != "record_sha256"})).hexdigest()
+    _ledger(tmp_path, [rec])
+    assert _verify(tmp_path) == 0
+
+
+# ---------------------------------------------------------------------------
+# run — fail-close on unreadable tail (DAV-1488 rework)
+
+
+def _make_db(path, rows):
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE reports (id TEXT, user_id TEXT, symbol TEXT,"
+        " industry TEXT, trade_date TEXT, status TEXT, analysis_status TEXT,"
+        " decision TEXT, direction TEXT, probability REAL, trade_action TEXT,"
+        " risk_status TEXT, final_trade_decision TEXT, created_at TEXT,"
+        " updated_at TEXT, result_data TEXT)")
+    for r in rows:
+        con.execute(
+            "INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (r.get("id", "r1"), "u1", "600519.SH", "白酒", "2026-07-28",
+             r.get("status", "completed"), "VALID", "BUY", "看多", 60,
+             "BUY", "APPROVED", "ok",
+             r.get("created_at", "2026-07-28 15:43:57.730577"),
+             "2026-07-28 15:43:57.730577", r.get("result_data", _rd())))
+    con.commit(); con.close()
+
+
+def test_run_fail_close_on_unreadable_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [{"id": "new1"}])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ledger = ledger_dir / "forward_ledger.jsonl"
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    prev = "GENESIS"
+    chain = hashlib.sha256(
+        (prev + r1["record_sha256"]).encode()).hexdigest()
+    ledger.write_text(
+        json.dumps({"record": r1, "prev_hash": prev, "chain_hash": chain},
+                   ensure_ascii=False) + "\n" + '{"truncated_json', "utf-8")
+    before_bytes = ledger.read_bytes()
+    before_lines = len(before_bytes.splitlines())
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False)
+    rc = mod.cmd_run(ns)
+    assert rc == 4                              # fail-close, non-zero
+    assert ledger.read_bytes() == before_bytes  # not a byte appended
+    assert len(ledger.read_bytes().splitlines()) == before_lines
+
+
+def test_run_appends_and_writes_anchor(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [{"id": "x1"}, {"id": "x2"}])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False)
+    assert mod.cmd_run(ns) == 0
+    head = json.loads((ledger_dir / "HEAD").read_text("utf-8"))
+    assert head["lines"] == 2 and head["bootstrapped"] is False
+    assert _verify(ledger_dir) == 0            # anchor + chain agree
+    # idempotent second run keeps anchor valid
+    assert mod.cmd_run(ns) == 0
+    assert _verify(ledger_dir) == 0
+
+
+def test_run_defers_while_blocking_statuses(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [{"id": "x1", "status": "running"}])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False)
+    assert mod.cmd_run(ns) == 2
+    assert not (ledger_dir / "forward_ledger.jsonl").exists()
+
+
+def test_build_record_marks_backfill_fields():
+    # created_at far before sealed_at -> backfilled=True, lag recorded
+    late = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
+    rec = mod.build_record(_row(), _rd(), late, "2026-10-04", _cal())
+    assert rec["backfilled"] is True
+    assert rec["sealed_lag_days"] > 2
+    # fresh seal -> backfilled=False
+    rec2 = mod.build_record(_row(created_at="2026-10-04 11:00:00"),
+                            _rd(), late, "2026-10-04", _cal())
+    assert rec2["backfilled"] is False
+
+
+def test_pit_as_of_datetime_compare():
+    # ISO datetimes must compare by instant, not lexicographically.
+    rd = json.loads(_rd())
+    sp = rd["market_data_context"]["short"]["source_provenance"]
+    sp["news"]["actual_as_of"] = "2026-07-29T00:00:00"
+    sp["news"]["requested_as_of"] = "2026-07-28"
+    sp["news"]["provenance_status"] = "unverified"
+    rec = mod.build_record(_row(), json.dumps(rd), SEALED, "2026-07-28", _cal())
+    assert rec["input_pit_status"] == "FAILED"
