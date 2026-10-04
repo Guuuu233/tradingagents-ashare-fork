@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- TEMPLATE ONLY. Do not install during 10-08/10-09. Requires signed first
+     production handoff and active_analysis_count runtime instrumentation.
+     Intentionally omits --production-authorized until chief engineer signs. -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.tradingagents.tplus5-shadow</string>
+  <key>WorkingDirectory</key><string>/Users/davidliu/Documents/TradingAgents-AShare</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/bin/env</string><string>-u</string><string>PYTHONPATH</string>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
+    <string>scripts/backfill_tplus5_shadow.py</string>
+    <string>--db-path</string><string>data/tradingagents.db</string>
+    <string>--health-url</string><string>http://127.0.0.1:8000</string>
+  </array>
+  <key>StartCalendarInterval</key><array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/davidliu/Documents/TradingAgents-AShare/work/tplus5-shadow.stdout.log</string>
+  <key>StandardErrorPath</key><string>/Users/davidliu/Documents/TradingAgents-AShare/work/tplus5-shadow.stderr.log</string>
+  <key>RunAtLoad</key><false/>
+</dict></plist>
