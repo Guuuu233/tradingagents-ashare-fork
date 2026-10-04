@@ -448,3 +448,91 @@ def test_resolve_combined_title_text_keyword():
     assert symbols == {"600519.SH", "300750.SZ", "688256.SH"}
     assert len(res) == 3
 
+
+
+# ============================================================================
+# 12. D-065 Observation Pool Coverage (DAV-1462 requirement 2)
+# ============================================================================
+
+# (symbol, standard_name, one positive trigger, one confusable negative)
+# The positive is the exchange short name plus, where the dictionary carries an
+# exclusive keyword, that keyword. The negative is the bare brand fragment that
+# the same production corpus shows shared with other issuers / industry
+# vocabulary -- it must NOT resolve to this symbol.
+D065_POOL_ENTRIES = [
+    ("000063.SZ", "中兴通讯", "中兴通讯", "中兴"),
+    ("002304.SZ", "洋河股份", "洋河股份梦之蓝", "洋河"),
+    ("300274.SZ", "阳光电源", "阳光电源逆变器", "阳光"),
+    ("600031.SH", "三一重工", "三一重工出海", "三一"),
+    ("600048.SH", "保利发展", "保利发展", "保利"),
+    ("600104.SH", "上汽集团", "上汽集团", "上汽"),
+    ("600196.SH", "复星医药", "复星医药", "复星"),
+    ("600585.SH", "海螺水泥", "海螺水泥", "海螺"),
+    ("600905.SH", "三峡能源", "三峡能源", "三峡"),
+    ("600941.SH", "中国移动", "中国移动", "移动"),
+    ("601127.SH", "赛力斯", "赛力斯", "问界"),
+    ("601225.SH", "陕西煤业", "陕西煤业", "陕煤"),
+    ("601390.SH", "中国中铁", "中国中铁", "中铁"),
+    ("601628.SH", "中国人寿", "中国人寿", "国寿"),
+    ("601888.SH", "中国中免", "中国中免", "免税"),
+    ("601919.SH", "中远海控", "中远海控", "集运"),
+    ("603993.SH", "洛阳钼业", "洛阳钼业", "洛钼"),
+]
+
+
+@pytest.mark.parametrize("symbol,standard_name,positive,_negative", D065_POOL_ENTRIES)
+def test_d065_pool_standard_name_resolves(symbol, standard_name, positive, _negative):
+    """Each of the 17 previously-missing D-065 symbols resolves by its exchange short name."""
+    resolver = EntityResolver()
+    res = resolver.resolve(positive)
+    assert [m.symbol for m in res] == [symbol]
+    assert res[0].confidence == pytest.approx(CONFIDENCE_STANDARD_NAME)
+    assert res[0].match_method in (
+        MATCH_METHOD_STANDARD_NAME,
+        MATCH_METHOD_EXCLUSIVE_KEYWORD,
+    )
+
+
+@pytest.mark.parametrize("symbol,_name,positive,negative", D065_POOL_ENTRIES)
+def test_d065_pool_confusable_negative_does_not_bind(symbol, _name, positive, negative):
+    """The bare brand fragment must not create a mention for this symbol (§5.3 topic vs equity).
+
+    The dictionary intentionally ships no bare-fragment aliases: the production
+    report corpus shows each of these fragments shared with other issuers or
+    used as industry vocabulary, so binding them would fabricate mentions.
+    """
+    resolver = EntityResolver()
+    res = resolver.resolve(negative)
+    assert symbol not in {m.symbol for m in res}, (
+        f"{negative!r} must not resolve to {symbol}; ambiguous fragments are "
+        f"industry/common-noun topics, not unique aliases"
+    )
+
+
+def test_d065_pool_dictionary_has_no_bare_brand_aliases():
+    """Guard the design decision itself: none of the 17 entries carry a bare alias."""
+    from tradingagents.dataflows.social.entity_resolver import BUILTIN_EQUITY_ENTITIES
+
+    bare = {"中兴", "洋河", "阳光", "三一", "保利", "上汽", "复星", "海螺", "三峡",
+            "移动", "问界", "陕煤", "中铁", "国寿", "免税", "集运", "中免", "中远"}
+    for entity in BUILTIN_EQUITY_ENTITIES:
+        for alias in entity.aliases:
+            assert alias not in bare, (
+                f"{entity.symbol} carries ambiguous bare alias {alias!r}"
+            )
+
+
+def test_d065_pool_does_not_collide_with_existing_dictionary():
+    """No new standard name may shadow or be shadowed by an existing entry."""
+    from tradingagents.dataflows.social.entity_resolver import BUILTIN_EQUITY_ENTITIES
+
+    by_symbol = {e.symbol: e for e in BUILTIN_EQUITY_ENTITIES}
+    assert len(by_symbol) == len(BUILTIN_EQUITY_ENTITIES), "duplicate symbol in dictionary"
+
+    names = {}
+    for entity in BUILTIN_EQUITY_ENTITIES:
+        assert entity.standard_name not in names, (
+            f"standard name {entity.standard_name!r} shared by "
+            f"{names[entity.standard_name]} and {entity.symbol}"
+        )
+        names[entity.standard_name] = entity.symbol

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -35,6 +36,7 @@ from tradingagents.dataflows.social.classifier import (
     classify_text,
 )
 from tradingagents.dataflows.social.contracts import (
+    REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT,
     REASON_SOCIAL_ARCHIVE_LOCKED,
     REASON_SOCIAL_ARCHIVE_MISSING,
     REASON_SOCIAL_EMPTY,
@@ -59,10 +61,36 @@ from tradingagents.dataflows.social.provider import (
     parse_iso_datetime,
 )
 
+logger = logging.getLogger(__name__)
+
 HALF_LIFE_DAYS: float = 3.5
 LN2: float = math.log(2.0)
 MAX_PLATFORM_SHARE: float = 0.65
 MAX_LIKES_MULTIPLIER: float = 1.5
+
+# DAV-1462 requirement 3 / DAV-1460 gap 4.
+#
+# Records without author_id_hash all collapse into the single "__anonymous__"
+# author bucket (Rule 2), which makes max_per_author=5 truncate the symbol to at
+# most 5 records no matter how much data was actually collected, and inflates the
+# apparent diversity (1 pseudo-author per platform). That is the exact shape of
+# the DAV-1460 blocking-A failure: 357/357 rows NULL -> "partial" bundle that
+# looks normal.
+#
+# Fail-closed rule: if the share of author-less records in the aggregation
+# window exceeds this threshold, the symbol is a DATA ANOMALY, not a partial.
+# The bundle is emitted with status=failed, the explicit reason code below, and
+# direction_allowed=False; no score, no label, no evidence samples. A partial
+# would let downstream consumers read a silently degraded sample as a real
+# reading of weak sentiment.
+#
+# MIN_ANONYMOUS_SAMPLE_RECORDS keeps a single author-less row from flipping the
+# bundle on its own: one record is already rejected by the coverage gate
+# (min_posts / min_classified), and reporting "unknown author" for it hides the
+# actionable reason ("insufficient coverage"). Bucket collapse only becomes
+# observable from two author-less rows onward.
+MAX_ANONYMOUS_AUTHOR_RATIO: float = 0.50
+MIN_ANONYMOUS_SAMPLE_RECORDS: int = 2
 
 
 def compute_time_decay(
@@ -135,6 +163,7 @@ class SocialSentimentAggregator:
         min_authors: int = 10,
         evidence_limit: int = 20,
         classifier: Optional[StanceClassifier] = None,
+        max_anonymous_author_ratio: float = MAX_ANONYMOUS_AUTHOR_RATIO,
     ):
         self.lookback_days = lookback_days
         self.max_posts = max_posts
@@ -144,6 +173,7 @@ class SocialSentimentAggregator:
         self.min_classified = min_classified
         self.min_authors = min_authors
         self.evidence_limit = evidence_limit
+        self.max_anonymous_author_ratio = max_anonymous_author_ratio
         self.classifier = classifier or StanceClassifier()
 
     def aggregate(
@@ -209,7 +239,39 @@ class SocialSentimentAggregator:
                 symbol=symbol,
             )
 
-        # 3. Sort records stably: posts and comments separated
+        # 3. Anonymous-author fail-closed guard (DAV-1462 requirement 3).
+        # Measured on the raw window BEFORE dedup / per-author capping, because
+        # capping is exactly what would otherwise hide the anomaly.
+        window_total = len(records)
+        window_anonymous = sum(1 for r in records if not (r.author_id_hash or "").strip())
+        anonymous_ratio = (window_anonymous / window_total) if window_total else 0.0
+        if (
+            window_total >= MIN_ANONYMOUS_SAMPLE_RECORDS
+            and window_anonymous > 0
+            and anonymous_ratio > self.max_anonymous_author_ratio
+        ):
+            logger.warning(
+                "Anonymous-author share %.1f%% (%d/%d) exceeds threshold %.1f%% for symbol %s: "
+                "emitting failed bundle with %s",
+                anonymous_ratio * 100.0,
+                window_anonymous,
+                window_total,
+                self.max_anonymous_author_ratio * 100.0,
+                symbol,
+                REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT,
+            )
+            reasons = list(provider_reason_codes or [])
+            if REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in reasons:
+                reasons.append(REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT)
+            return create_empty_sentiment_bundle(
+                status=SocialStatus.FAILED.value,
+                requested_as_of=as_of,
+                cutoff_at=cutoff_iso,
+                reason_codes=reasons,
+                symbol=symbol,
+            )
+
+        # 4. Sort records stably: posts and comments separated
         # Priority: published_at desc, tie-breaker: record_id asc (Rules 3 & 8)
         posts: List[SocialRawRecordV1] = []
         comments: List[SocialRawRecordV1] = []
@@ -228,7 +290,7 @@ class SocialSentimentAggregator:
         posts.sort(key=sort_key)
         comments.sort(key=sort_key)
 
-        # 4. Deduplicate by content hash and cap per author (Rules 1 & 2)
+        # 5. Deduplicate by content hash and cap per author (Rules 1 & 2)
         seen_content_hashes: Set[str] = set()
         author_counts: Dict[str, int] = {}
 
@@ -282,7 +344,7 @@ class SocialSentimentAggregator:
                 symbol=symbol,
             )
 
-        # 5. Classify records and calculate raw weights
+        # 6. Classify records and calculate raw weights
         classified_items: List[Dict[str, Any]] = []
         platform_records: Dict[str, List[Dict[str, Any]]] = {"xhs": [], "dy": []}
 
@@ -344,7 +406,7 @@ class SocialSentimentAggregator:
             else:
                 platform_records[rec.platform] = [item]
 
-        # 6. Check platform presence and balance weights (Rule 7)
+        # 7. Check platform presence and balance weights (Rule 7)
         present_platforms = [p for p, items in platform_records.items() if len(items) > 0]
         is_single_platform = len(present_platforms) == 1
 
@@ -371,7 +433,7 @@ class SocialSentimentAggregator:
             p = item["record"].platform
             item["effective_weight"] = item["raw_weight"] * platform_multipliers.get(p, 1.0)
 
-        # 7. Check coverage thresholds (Rule 9)
+        # 8. Check coverage thresholds (Rule 9)
         # Minimum: posts >= 3, classified >= 20, distinct authors >= 10
         total_posts = selected_posts_count
         classified_records = [
@@ -398,7 +460,7 @@ class SocialSentimentAggregator:
             and author_count_total >= self.min_authors
         )
 
-        # 8. Determine final status, direction_allowed, and reason_codes
+        # 9. Determine final status, direction_allowed, and reason_codes
         reason_codes: List[str] = []
         if is_single_platform:
             reason_codes.append(REASON_SOCIAL_PLATFORM_PARTIAL)
@@ -414,7 +476,7 @@ class SocialSentimentAggregator:
             status = SocialStatus.PARTIAL.value
             direction_allowed = False
 
-        # 9. Compute directional score and stance counts
+        # 10. Compute directional score and stance counts
         bullish_cnt = sum(1 for i in classified_items if i["classification"].stance == "bullish")
         bearish_cnt = sum(1 for i in classified_items if i["classification"].stance == "bearish")
         neutral_cnt = sum(1 for i in classified_items if i["classification"].stance == "neutral")
@@ -450,7 +512,7 @@ class SocialSentimentAggregator:
             else:
                 final_label = "neutral"
 
-        # 10. Format time as_of strings (Rule 11)
+        # 11. Format time as_of strings (Rule 11)
         content_as_of_iso = (
             content_as_of_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             if content_as_of_dt
@@ -462,7 +524,7 @@ class SocialSentimentAggregator:
             else None
         )
 
-        # 11. Build SocialAttention and SocialSentiment
+        # 12. Build SocialAttention and SocialSentiment
         interaction_velocity = round(total_interactions / max(1.0, float(self.lookback_days)), 2)
 
         social_attention = SocialAttention(
@@ -483,7 +545,7 @@ class SocialSentimentAggregator:
             is_calibrated_probability=False,
         )
 
-        # 12. Build evidence samples (top N by effective weight, tie-breaker record_id)
+        # 13. Build evidence samples (top N by effective weight, tie-breaker record_id)
         sorted_evidence = sorted(
             classified_items,
             key=lambda x: (-x["effective_weight"], x["record"].record_id),
@@ -506,7 +568,7 @@ class SocialSentimentAggregator:
                 "hit_keywords": [h.keyword for h in cls_res.hits],
             })
 
-        # 13. Build platform breakdown
+        # 14. Build platform breakdown
         platform_breakdown: Dict[str, Any] = {}
         total_effective_weight = sum(item["effective_weight"] for item in classified_items)
         for p, items in platform_records.items():
@@ -527,7 +589,7 @@ class SocialSentimentAggregator:
                 "weight_share": p_share,
             }
 
-        # 14. Compute deterministic bundle_id (Rule 10)
+        # 15. Compute deterministic bundle_id (Rule 10)
         selected_record_ids = [r.record_id for r in selected_records]
         bundle_id = compute_deterministic_bundle_id(
             symbol=symbol,
@@ -577,6 +639,7 @@ def aggregate_sentiment_bundle(
     classifier: Optional[StanceClassifier] = None,
     now: Optional[datetime] = None,
     platforms: Optional[Sequence[str]] = None,
+    max_anonymous_author_ratio: float = MAX_ANONYMOUS_AUTHOR_RATIO,
 ) -> SentimentBundleV1:
     """Convenience function to aggregate records or fetch result into SentimentBundleV1."""
     aggregator = SocialSentimentAggregator(
@@ -589,6 +652,7 @@ def aggregate_sentiment_bundle(
         min_authors=min_authors,
         evidence_limit=evidence_limit,
         classifier=classifier,
+        max_anonymous_author_ratio=max_anonymous_author_ratio,
     )
 
     provider_status = None
