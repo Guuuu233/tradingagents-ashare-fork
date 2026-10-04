@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # TTL for job state hashes (seconds). Configurable via env var.
 _JOB_STATE_TTL: int = int(os.environ.get("JOB_STATE_TTL", "86400"))
 
+_TERMINAL_STATUSES = frozenset({"completed", "failed"})
 _TERMINAL_EVENTS = frozenset({"job.completed", "job.failed"})
 
 
@@ -117,6 +118,29 @@ class RedisJobStore:
             if cursor == 0:
                 break
         return running
+
+    def active_job_count(self) -> int:
+        """Count jobs not in a terminal status (completed / failed).
+
+        Uses SCAN + pipelined HGET on the ``status`` field only — job contents
+        are never transferred.
+        """
+        keys: list = []
+        cursor = 0
+        while True:
+            cursor, batch = self._r.scan(
+                cursor=cursor, match=f"{self._prefix}job:*", count=200
+            )
+            keys.extend(batch)
+            if cursor == 0:
+                break
+        if not keys:
+            return 0
+        pipe = self._r.pipeline()
+        for key in keys:
+            pipe.hget(key, "status")
+        statuses = pipe.execute()
+        return sum(1 for s in statuses if s not in _TERMINAL_STATUSES)
 
     def delete_job(self, job_id: str) -> None:
         """Remove job state hash. Deleting a non-existent key is a no-op."""
