@@ -532,8 +532,8 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                  as_of=None, dry_run=False, verify_gates=False, audit_log=None,
                  health_url="http://127.0.0.1:8000", production_authorized=False,
                  copy_rehearsal=False):
-    if verify_gates:
-        raise RuntimeError('--verify-gates moved to scripts/verify_h1b_gates.py with an explicit cohort')
+    if verify_gates and db_path:
+        raise RuntimeError('DB gate verification requires scripts/verify_h1b_gates.py with an explicit cohort')
     as_of = as_of or now_cn().date().isoformat()
     date.fromisoformat(as_of)
     if db_path:
@@ -597,6 +597,21 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                   provider_request_count=getattr(fetch_price_series, "request_count", None))
     if writer:
         result["audit_log"] = str(journal_path)
+    if verify_gates:
+        from tradingagents.agents.utils.shadow_credit import (
+            evaluate_h1b_system_gates, filter_v2_completed_reports, extract_sample_cohort,
+        )
+        units = filter_v2_completed_reports(saved)
+        cohorts = {}
+        for unit in units:
+            cohort = extract_sample_cohort(unit)
+            key = ':'.join(str(cohort[k] or 'unspecified') for k in (
+                'decision_model_version', 'evidence_contract_version', 'price_basis_version', 'horizon'))
+            cohorts.setdefault(key, []).append(unit)
+        result['gate_evaluations'] = {
+            key: evaluate_h1b_system_gates(values, as_of=as_of, trading_calendar=calendar)
+            for key, values in cohorts.items()
+        }
     if not dry_run and not db_path and (output_file or input_file):
         Path(output_file or input_file).write_text(json.dumps({"samples": saved, "backfill_stats": stats}, ensure_ascii=False, indent=2))
     print(json.dumps(result, ensure_ascii=False, indent=2))
