@@ -430,8 +430,12 @@ class TestBackfillCLIAndPersistence:
         assert result["qualifying_count"] == 1
         assert not out_file.exists()
 
-    def test_run_backfill_active_writes_output_file(self, tmp_path):
-        """Active backfill writes output JSON with updated shadow metrics and fields."""
+    def test_run_backfill_active_writes_output_file(self, tmp_path, monkeypatch):
+        """DAV-1458 第1步裁定/第2步授权：来源不全的存量价不得复用。"""
+        from scripts import backfill_tplus5_shadow as cli
+        monkeypatch.setattr(cli, "fetch_price_series", lambda *args: {
+            "bars": {}, "missing_reason": "provenance_incomplete",
+        })
         sample_file = tmp_path / "samples.json"
         rep = _build_v2_report_fixture(winner="bull", trade_date="2026-08-03", existing_t5_price=1700.0)
         with open(sample_file, "w", encoding="utf-8") as f:
@@ -455,8 +459,13 @@ class TestBackfillCLIAndPersistence:
 
         assert "samples" in saved
         assert len(saved["samples"]) == 1
-        assert saved["samples"][0]["t_plus_5_direction_hit"] is True
-        assert saved["samples"][0]["t_plus_5_status"] == "due_and_evaluated"
+        measurement = saved["samples"][0]["result_data"]
+        assert measurement["t_plus_5_direction_hit"] is None
+        assert measurement["shadow_credit_metrics"]["t_plus_5_direction_hit"] is None
+        assert measurement["t_plus_5_price"] is None
+        assert measurement["t_plus_5_evaluated"] is False
+        assert measurement["t_plus_5_status"] == "data_missing"
+        assert measurement["t_plus_5_missing_reason"] == "provenance_incomplete"
 
 
 class TestBackfillTplus5ShadowDbPath:
@@ -553,36 +562,26 @@ class TestBackfillTplus5ShadowDbPath:
         ctx, db, ReportDBCls = db_ctx
         ctx.__exit__(None, None, None)
 
-    def test_run_backfill_active_updates_sqlite_db(self, custom_sqlite_db):
-        """Active run_backfill updates shadow metrics and T+5 direction hit in SQLite DB."""
-        res = run_backfill(db_path=custom_sqlite_db, as_of="2026-08-15", dry_run=False)
-        assert res["dry_run"] is False
-        assert res["sample_count"] == 4
-        stats = res["stats"]
-        assert stats["total_scanned"] == 4
-        assert stats["qualifying_v2_count"] == 4
-        assert stats["due_count"] == 3
-        assert stats["hit_count"] == 2
-        assert stats["miss_count"] == 1
-        assert stats["pending_due_count"] == 1
+    def test_run_backfill_active_without_runtime_count_does_not_write(self, custom_sqlite_db, monkeypatch):
+        """DAV-1458 第1步裁定/第2步授权：无完整运行守卫证据不写库。"""
+        import requests
+        from scripts import backfill_tplus5_shadow as cli
 
-        # Verify DB directly
-        engine = create_engine(f"sqlite:///{custom_sqlite_db}")
-        Session = sessionmaker(bind=engine)
-        session = Session()
-        try:
-            db_rows = session.query(ReportDB).filter(ReportDB.status == "completed").all()
-            assert len(db_rows) == 4
-            row_map = {row.symbol: row.result_data for row in db_rows}
-            assert row_map["600519.SH"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is True
-            assert row_map["600519.SH"]["t_plus_5_status"] == "due_and_evaluated"
-            assert row_map["600276.SH"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is True
-            assert row_map["000858.SZ"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is False
-            assert row_map["300750.SZ"]["shadow_credit_metrics"]["t_plus_5_direction_hit"] is None
-            assert row_map["300750.SZ"]["t_plus_5_status"] == "pending_due"
-        finally:
-            session.close()
-            engine.dispose()
+        class HealthyWithoutActivityCount:
+            status_code = 200
+
+            def json(self):
+                return {"status": "ok"}
+
+        monkeypatch.setattr(requests.Session, "get", lambda *args, **kwargs: HealthyWithoutActivityCount())
+        before = Path(custom_sqlite_db).read_bytes()
+        res = run_backfill(db_path=custom_sqlite_db, as_of="2026-08-15", dry_run=False)
+        assert res["skipped"] is True
+        assert res["guard"] == {"allowed": False, "reason": "active_analysis_count_unknown"}
+        assert res["changed_rows"] == 0
+        assert Path(custom_sqlite_db).read_bytes() == before
+        # Positive guarded/copy write and hit determination stay covered by
+        # test_tplus5_operational_backfill.py's real SQLite persistence test.
 
     def test_run_backfill_dry_run_does_not_modify_sqlite_db(self, custom_sqlite_db):
         """--dry-run mode computes statistics but leaves SQLite DB completely unchanged."""
@@ -624,24 +623,22 @@ class TestBackfillTplus5ShadowDbPath:
         with pytest.raises(RuntimeError):
             run_backfill(db_path=str(corrupt_file))
 
-    def test_empty_sqlite_db_returns_zero_samples_without_golden_fallback(self, tmp_path):
-        """Empty SQLite DB returns 0 samples without falling back to golden audit."""
+    def test_empty_sqlite_db_errors_without_golden_fallback(self, tmp_path):
+        """DAV-1458 第1步裁定/第2步授权：显式空库报错，禁止 golden 回落。"""
         empty_db = str(tmp_path / "empty.db")
         engine = create_engine(f"sqlite:///{empty_db}")
         Base.metadata.create_all(bind=engine)
         engine.dispose()
 
-        reports, db_ctx = load_raw_reports(db_path=empty_db)
-        assert len(reports) == 0
-        if db_ctx:
-            db_ctx[0].__exit__(None, None, None)
+        before = Path(empty_db).read_bytes()
+        with pytest.raises(RuntimeError, match="no completed reports"):
+            load_raw_reports(db_path=empty_db)
+        with pytest.raises(RuntimeError, match="no completed reports"):
+            run_backfill(db_path=empty_db, as_of="2026-08-15", dry_run=True)
+        assert Path(empty_db).read_bytes() == before
 
-        res = run_backfill(db_path=empty_db, as_of="2026-08-15", dry_run=True)
-        assert res["sample_count"] == 0
-        assert res["stats"]["total_scanned"] == 0
-
-    def test_unmigrated_db_without_industry_column_ensures_schema_and_loads_completed(self, tmp_path):
-        """Track A14: unmigrated SQLite DB without industry column has schema ensured on read and loads completed reports."""
+    def test_unmigrated_db_without_industry_loads_without_schema_changes(self, tmp_path):
+        """DAV-1458 第1步裁定/第2步授权：加载阶段不得补 industry/schema。"""
         import sqlite3
         from sqlalchemy import create_engine, inspect
 
@@ -710,12 +707,13 @@ class TestBackfillTplus5ShadowDbPath:
         assert db_ctx is not None
         db_ctx[0].__exit__(None, None, None)
 
-        # Verify industry column and index were added
+        # New contract explicitly supersedes Track A14's read-time migration.
         insp_after = inspect(check_engine)
         cols_after = {col["name"] for col in insp_after.get_columns("reports")}
-        assert "industry" in cols_after
+        assert cols_after == cols_before
+        assert "industry" not in cols_after
         indexes_after = {idx["name"] for idx in insp_after.get_indexes("reports")}
-        assert "ix_reports_industry" in indexes_after
+        assert "ix_reports_industry" not in indexes_after
         check_engine.dispose()
 
     def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
