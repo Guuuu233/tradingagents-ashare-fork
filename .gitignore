@@ -298,3 +298,8 @@ work/*.stdout
 work/*_probe.py
 work/dav1009_probe_pkg/
 work/run_tushare_sampling.py
+
+# 第二阶段只读账本 / 周报产物、存储治理清单（本机数据，不进公开仓库；D-071、D-072）
+work/phase2-ledger/
+work/phase2-weekly/
+work/storage/

@@ -7,6 +7,7 @@
 | `2026-09-06-integrated-construction-plan/2026-09-06_整合施工计划-v1.1.md` | `~/Documents/Codex/2026-08-27/referenced-chatgpt-conversation-this-is-an-3/.hermes/plans/` | 主体已交付（09-14 审计） |
 | `2026-09-06-integrated-construction-plan/2026-09-06_整合施工计划-v1.md` | 同上 | 已被 v1.1 取代 |
 | `2026-09-17-remaining-work-audit/plan-inventory.md` 等 3 份 | `~/Documents/Codex/2026-09-17/remaining-work-audit/` | 已取代。前三阶段已完成，其余由 `ROADMAP.md` 接续。文中「D-018 回归老流程」实为 D-032 |
+| `phase2-midterm/phase2-midterm-plan-v1.0.md` | `work/phase2-midterm-plan-draft-20261004.md`（本机草稿，不再更新） | 现行。第二阶段计划：中线 T+40 与前瞻模拟实验室（D-072，2026-10-05 入库） |
 
 ## 未复制的内容
 
