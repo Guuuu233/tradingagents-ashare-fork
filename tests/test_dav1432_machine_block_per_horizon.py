@@ -352,7 +352,7 @@ def test_裁定2_no_invalid_blocks_is_a_noop():
     before = json.dumps(report, sort_keys=True, ensure_ascii=False)
     result = report_service.quarantine_invalid_report_machine_blocks(report)
     assert json.dumps(result, sort_keys=True, ensure_ascii=False) == before
-    assert "_dav1432" not in result
+    assert "machine_block_quarantine" not in result
 
 
 def test_裁定2_both_horizons_invalid():
@@ -363,8 +363,8 @@ def test_裁定2_both_horizons_invalid():
     for name in ("short", "medium"):
         assert _horizon_of(report, name)["trade_action"] == "NO_TRADE"
         assert _horizon_of(report, name)["analysis_status"] == "ABSTAIN"
-    assert report["_dav1432"]["a4_excluded"] is False
-    assert set(report["_dav1432"]["degraded_horizons"]) == {"short", "medium"}
+    assert report["machine_block_quarantine"]["a4_excluded"] is False
+    assert set(report["machine_block_quarantine"]["degraded_horizons"]) == {"short", "medium"}
 
 
 def test_裁定4_shared_field_invalid_degrades_both():
@@ -377,7 +377,7 @@ def test_裁定4_shared_field_invalid_degrades_both():
     for name in ("short", "medium"):
         assert _horizon_of(report, name)["trade_action"] == "NO_TRADE"
         assert _horizon_of(report, name)["analysis_status"] == "ABSTAIN"
-    assert report["_dav1432"]["a4_excluded"] is True
+    assert report["machine_block_quarantine"]["a4_excluded"] is True
 
 
 def test_裁定2_root_level_block_attributed_by_content():
@@ -395,7 +395,7 @@ def test_裁定2_root_level_block_attributed_by_content():
     report_service.quarantine_invalid_report_machine_blocks(report)
     report_service.validate_report_machine_blocks(report)
 
-    assert report["_dav1432"]["degraded_horizons"] == ["medium"]
+    assert report["machine_block_quarantine"]["degraded_horizons"] == ["medium"]
     assert report["horizons"]["medium"]["trade_action"] == "NO_TRADE"
     assert report["medium_term"]["trade_action"] == "NO_TRADE"
     assert report["horizons"]["short"]["trade_action"] == "BUY"
