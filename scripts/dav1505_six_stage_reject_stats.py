@@ -48,6 +48,7 @@ import json
 import math
 import os
 import random
+import resource
 import sqlite3
 import sys
 from collections import Counter, defaultdict
@@ -245,6 +246,69 @@ def dcg_excluded_ids(ids: Mapping[str, Any], mv: Mapping[str, Any]) -> List[str]
     return out
 
 
+# Keys retained from each claim / claim_evidence_summary entry. Anything else
+# (verified_evidence arrays, proposition_audit text, ...) is dropped at extract
+# time so the full result_data never stays resident after the row is parsed.
+CLAIM_KEEP = ("claim_id", "stance", "speaker_key", "speaker")
+CES_KEEP = (
+    "decision", "semantic_decision", "semantic_counts", "semantic_hard_guards",
+    "counts", "coverage", "pit_failed", "is_observation_or_hypothesis",
+    "reason", "claim", "speaker_key", "stance", "speaker",
+)
+MV_KEEP = (
+    "direction", "consistency_check_passed", "adopted_claim_ids",
+    "partially_adopted_claims", "rejected_claim_ids", "excluded_evidence",
+    "failed_checks",
+)
+DS_KEEP = ("reason_codes", "failed_checks")
+GATE_KEEP = ("status", "violations")
+
+
+def _trim(src: Any, keys: Tuple[str, ...]) -> Dict[str, Any]:
+    if not isinstance(src, Mapping):
+        return {}
+    return {k: src.get(k) for k in keys if k in src}
+
+
+def extract_unit_parts(sl: Mapping[str, Any]) -> Dict[str, Any]:
+    """Extract only the fields the six-stage stats need from one horizon slot,
+    so the caller can release the full result_data dict immediately."""
+    ids = sl.get("investment_debate_state")
+    ids = ids if isinstance(ids, dict) else {}
+    mv = sl.get("manager_verdict")
+    mv = mv if isinstance(mv, dict) else {}
+    ds = sl.get("decision_status")
+    ds = ds if isinstance(ds, dict) else {}
+    gate = sl.get("price_basis_gate")
+    gate = gate if isinstance(gate, dict) else {}
+
+    claims_raw = ids.get("claims")
+    claims_present = claims_raw is not None
+    claims = []
+    if isinstance(claims_raw, list):
+        for c in claims_raw:
+            if isinstance(c, Mapping):
+                claims.append(_trim(c, CLAIM_KEEP))
+    ces_raw = mv.get("claim_evidence_summary")
+    ces = {}
+    if isinstance(ces_raw, Mapping):
+        for cid, s in ces_raw.items():
+            if isinstance(s, Mapping):
+                ces[str(cid).strip()] = _trim(s, CES_KEEP)
+    return {
+        "ids_present": bool(ids),
+        "claims_present": claims_present,
+        "claims": claims,
+        "mv": _trim(mv, MV_KEEP),
+        "mv_present": bool(mv),
+        "ds": _trim(ds, DS_KEEP),
+        "ces": ces,
+        "gate": _trim(gate, GATE_KEEP),
+        "gate_present": bool(gate),
+        "dcg_excluded": set(dcg_excluded_ids(ids, mv)),
+    }
+
+
 # ── Cluster bootstrap CI for a difference of proportions ────────────────────
 
 
@@ -315,45 +379,30 @@ def main() -> int:
     conflicts: Counter = Counter()
 
     # ── Load v1 fixed-account reports, version-internal dedup ────────────
-    rows = list(cur.execute(
+    # 逐行流式处理：result_data 单条可达 MB 级，绝不 list(cur.execute(...)).
+    # 每行解析后立即裁剪成 unit 字典（只保留六环节所需字段），原 result_data
+    # dict 在同一迭代内丢弃——进程峰值内存 ≈ 一行 result_data + 累积小聚合。
+    # dedup 的胜者 unit 随 best[key] 一并保留；被后行者顶掉的中间胜者即被替换。
+    best: Dict[Tuple[str, str, str], Tuple[str, str, Dict[str, Any]]] = {}
+    dup_dropped = 0
+    whole_missing = {hz: 0 for hz in HORIZONS}
+    whole_missing_report_ids = {hz: [] for hz in HORIZONS}
+    v1_report_ids = set()
+    units_before_dedup = 0
+
+    cur.execute(
         "SELECT id, symbol, trade_date, created_at, "
-        "COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date) bd, "
+        "COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date), "
         "result_data FROM reports "
         "WHERE json_extract(result_data,'$.decision_model_version')=? AND user_id=?",
         (DECISION_MODEL_V1, FIXED_USER_ID),
-    ))
-    # dedup: per (symbol, baseline_date, horizon) keep latest created_at (tie: larger id)
-    best: Dict[Tuple[str, str, str], Tuple[str, str]] = {}
-    dup_dropped = 0
-    parsed: Dict[str, Tuple[Any, ...]] = {}
-    for rid, sym, td, ca, bd, rdj in rows:
+    )
+    for rid, sym, td, ca, bd, rdj in cur:
+        v1_report_ids.add(rid)
         try:
             rd = json.loads(rdj)
         except Exception:
             rd = None
-        parsed[rid] = (sym, td, ca, bd, rd)
-        if not isinstance(rd, dict):
-            continue
-        for hz in HORIZONS:
-            sl = rd.get(hz)
-            if not isinstance(sl, dict) or not sl:
-                continue
-            key = (sym, bd, hz)
-            cand = (ca or "", rid)
-            if key not in best or cand > best[key]:
-                if key in best:
-                    dup_dropped += 1
-                best[key] = cand
-            else:
-                dup_dropped += 1
-    kept_ids = {rid for _, rid in best.values()}
-
-    # P2-1: whole-horizon-missing accounting over the full v1 sample frame
-    # (80 reports lack short_term AND the same 80 lack medium_term entirely;
-    # they never enter per-horizon missing counts inside stage loops).
-    whole_missing = {hz: 0 for hz in HORIZONS}
-    whole_missing_report_ids = {hz: [] for hz in HORIZONS}
-    for rid, (sym, td, ca, bd, rd) in parsed.items():
         if not isinstance(rd, dict):
             continue
         for hz in HORIZONS:
@@ -361,48 +410,28 @@ def main() -> int:
             if not isinstance(sl, dict) or not sl:
                 whole_missing[hz] += 1
                 whole_missing_report_ids[hz].append(rid)
-
-    # per-unit records
-    units: List[Dict[str, Any]] = []
-    for rid, sym, td, ca, bd, rdj in rows:
-        if rid not in kept_ids:
-            continue
-        rd = json.loads(rdj)
-        for hz in HORIZONS:
-            sl = rd.get(hz)
-            if not isinstance(sl, dict) or not sl:
                 continue
-            ids = sl.get("investment_debate_state")
-            ids = ids if isinstance(ids, dict) else {}
-            mv = sl.get("manager_verdict")
-            mv = mv if isinstance(mv, dict) else {}
-            ds = sl.get("decision_status")
-            ds = ds if isinstance(ds, dict) else {}
-            claims = ids.get("claims")
-            claims_present = claims is not None  # explicit [] vs missing
-            claims = claims if isinstance(claims, list) else []
-            ces = mv.get("claim_evidence_summary")
-            ces = ces if isinstance(ces, dict) else {}
-            gate = sl.get("price_basis_gate")
-            gate = gate if isinstance(gate, dict) else {}
-            dcg_ids = set(dcg_excluded_ids(ids, mv))
-            units.append({
-                "report_id": rid, "symbol": sym, "baseline": bd, "created_at": ca,
-                "horizon": hz, "ids": ids, "ids_present": bool(ids),
-                "claims_present": claims_present, "claims": claims,
-                "mv": mv, "mv_present": bool(mv), "ds": ds,
-                "ces": ces, "gate": gate, "gate_present": bool(gate),
-                "dcg_excluded": dcg_ids,
-            })
+            units_before_dedup += 1
+            key = (sym, bd, hz)
+            cand = (ca or "", rid)
+            if key not in best or cand > best[key][:2]:
+                if key in best:
+                    dup_dropped += 1
+                parts = extract_unit_parts(sl)
+                parts.update({
+                    "report_id": rid, "symbol": sym, "baseline": bd,
+                    "created_at": ca, "horizon": hz,
+                })
+                best[key] = (ca or "", rid, parts)
+            else:
+                dup_dropped += 1
+        del rd  # release full result_data before next row
+
+    units: List[Dict[str, Any]] = [v[2] for v in best.values()]
 
     out["corpus"] = {
-        "v1_fixed_account_reports": len({r[0] for r in rows}),
-        "units_before_dedup": sum(
-            1 for r in rows for hz in HORIZONS
-            if isinstance((parsed.get(r[0]) or (None,)*5)[4], dict)
-            and isinstance((parsed[r[0]][4] or {}).get(hz), dict)
-            and (parsed[r[0]][4] or {}).get(hz)
-        ),
+        "v1_fixed_account_reports": len(v1_report_ids),
+        "units_before_dedup": units_before_dedup,
         "units_after_dedup": len(units),
         "dup_dropped": dup_dropped,
         "short_units": sum(1 for u in units if u["horizon"] == "short_term"),
@@ -1067,26 +1096,35 @@ def main() -> int:
                                        "note": None if len(seen6) >= 5 else "不足5个独立报告"}
     out["asymmetry_examples"] = ex
 
-    # ── 「未标版本」背景桶（版本内去重 + 分层） ──────────────────────────────
-    null_rows = list(cur.execute(
-        "SELECT id, symbol, COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date) bd, created_at, result_data "
-        "FROM reports WHERE result_data IS NOT NULL AND json_extract(result_data,'$.decision_model_version') IS NULL AND user_id=?",
-        (FIXED_USER_ID,),
-    ))
+    # ── 「未标版本」背景桶（版本内去重 + 分层，逐行流式） ──────────────────
     v1_min_ca = cur.execute(
         "SELECT MIN(created_at) FROM reports WHERE json_extract(result_data,'$.decision_model_version')=?",
         (DECISION_MODEL_V1,)).fetchone()[0]
-    # dedup NULL bucket per (symbol, bd, hz) — same rule as v1
+    # dedup NULL bucket per (symbol, bd, hz) — same rule as v1；只保留每个报告
+    # 去重胜出后的最小必要字段，result_data 逐行即用即弃。
     nbest: Dict[Tuple[str, str, str], Tuple[str, str]] = {}
-    nparsed: Dict[str, Tuple[Any, ...]] = {}
-    for rid, sym, bd, ca, rdj in null_rows:
+    nraw_reports = 0
+    nmeta: Dict[str, Dict[str, Any]] = {}  # rid -> {sym, bd, ca, st_dir}
+    cur.execute(
+        "SELECT id, symbol, COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date), "
+        "created_at, result_data FROM reports "
+        "WHERE result_data IS NOT NULL AND json_extract(result_data,'$.decision_model_version') IS NULL AND user_id=?",
+        (FIXED_USER_ID,),
+    )
+    for rid, sym, bd, ca, rdj in cur:
+        nraw_reports += 1
         try:
             rd = json.loads(rdj)
         except Exception:
             rd = None
-        nparsed[rid] = (sym, bd, ca, rd)
         if not isinstance(rd, dict):
             continue
+        st_dir = "none"
+        st = rd.get("short_term")
+        if isinstance(st, dict):
+            mv = st.get("manager_verdict") or {}
+            st_dir = direction_side(mv.get("direction")) or "none"
+        kept_any_hz = False
         for hz in HORIZONS:
             sl = rd.get(hz)
             if not isinstance(sl, dict) or not sl:
@@ -1095,14 +1133,21 @@ def main() -> int:
             cand = (ca or "", rid)
             if key not in nbest or cand > nbest[key]:
                 nbest[key] = cand
+                kept_any_hz = True
+        if kept_any_hz:
+            nmeta[rid] = {"sym": sym, "bd": bd, "ca": ca, "st_dir": st_dir}
+        del rd
+
     nkept_reports = {rid for _, rid in nbest.values()}
     n_pre = n_post = 0
     bg_dir = Counter()
     run_month = Counter()
     base_month = Counter()
-    for rid, sym, bd, ca, rdj in null_rows:
-        if rid not in nkept_reports:
+    for rid in nkept_reports:
+        m = nmeta.get(rid)
+        if m is None:
             continue
+        ca, bd = m["ca"], m["bd"]
         if ca and v1_min_ca and ca >= v1_min_ca:
             n_post += 1
         else:
@@ -1111,15 +1156,10 @@ def main() -> int:
             run_month[ca[:7]] += 1
         if bd:
             base_month[str(bd)[:7]] += 1
-        rd = nparsed.get(rid, (None, None, None, None))[3]
-        if isinstance(rd, dict):
-            st = rd.get("short_term")
-            if isinstance(st, dict):
-                mv = st.get("manager_verdict") or {}
-                bg_dir[direction_side(mv.get("direction")) or "none"] += 1
+        bg_dir[m["st_dir"]] += 1
     bg = {
         "label": "未标版本（decision_model_version IS NULL）背景桶",
-        "raw_reports_with_result_data_fixed_account": len(null_rows),
+        "raw_reports_with_result_data_fixed_account": nraw_reports,
         "deduped_reports": len(nkept_reports),
         "deduped_units": len(nbest),
         "created_before_first_v1_run": n_pre,
@@ -1154,6 +1194,18 @@ def main() -> int:
     }
 
     # ── write outputs ───────────────────────────────────────────────────────
+    # ru_maxrss: macOS 返回 bytes，Linux 返回 KB——归一化到 bytes。
+    peak_rss_bytes = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform != "darwin":
+        peak_rss_bytes *= 1024
+    out["runtime"] = {
+        "peak_rss_bytes": peak_rss_bytes,
+        "peak_rss_gb": round(peak_rss_bytes / (1024 ** 3), 3),
+        "streaming_note": (
+            "result_data 逐行流式读取+即用即弃；单进程峰值 RSS 限 4 GB，"
+            "实测值以本键为准（macOS ru_maxrss 为字节）。"
+        ),
+    }
     if args.output_json:
         os.makedirs(os.path.dirname(os.path.abspath(args.output_json)), exist_ok=True)
         with open(args.output_json, "w", encoding="utf-8") as f:
@@ -1215,6 +1267,10 @@ def main() -> int:
     lines.append("- 可写：提出量接近、④形成率两侧差异明显（短线 CI 不含 0）。")
     lines.append("- 不可写：偏空不来自提出侧 / 最大可观测来源 / ④处突变（分母非同一串行总体）。")
     lines.append("- 中线 ④ CI 含 0 → 未见显著差异，不写差异不存在。")
+    lines.append("")
+    lines.append("## 运行时")
+    lines.append(f"- 单进程峰值 RSS：{out['runtime']['peak_rss_gb']} GB（红线 4 GB）")
+    lines.append("- result_data 逐行流式，即用即弃；产物全量落盘（stats.json / report.md）。")
     md = "\n".join(lines)
     if args.output_md:
         os.makedirs(os.path.dirname(os.path.abspath(args.output_md)), exist_ok=True)
