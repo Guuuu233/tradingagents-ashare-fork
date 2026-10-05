@@ -84,5 +84,6 @@ WATCH_AUTOPILOT_ID= bash work/watch/watch_v700.sh
 - autopilot agent 的 runtime/model 由 `bootstrap_autopilot.sh` 指定的 agent 决定。
 - v500 里存在但 v600/v700 未迁移的检测（blocked 解锁、schema drift、launchd 新增 label、1460 采集、model-400 计数）沿用 v600 的取舍——**未迁移**，如需恢复请在 v700 里补 check 再更新已签清单。
 - **check#6 去重口径**：`dedupe_key` 列在生产库 `reports` 表**当前不存在**（`pragma_table_info` 返回 0），脚本会走 `COUNT(*)` 非去重口径。若 D-072 要求按请求去重，需先在 `reports` 加 `dedupe_key` 列——属 schema/部署改动，不在本守望任务范围。
+- **check#6 水位口径**：`reports.created_at` 由 SQLAlchemy 写 **UTC 裸时间戳**；脚本 `datetime('now','-20 minutes')` 默认即 UTC，时区无关。勿改回 `'localtime'`——UTC+8 机器上会快 8 小时，突增告警恒不命中。
 - **日志轮转**：崩溃基线落盘 `ERRSTATE` 存的是绝对计数；若 uvicorn 日志被轮转/截断，`count_crashes` 会比基线低（不报「崩溃减少」事件，也不抬线）。轮转后首轮会重吸现状基线。
 - **trunk 检查语义**：远端 tip 是本地对象的祖先且属于「已签清单任一 SHA 的后代」→ `FF (signed-chain ok)`；否则 `UNSIGNED`。已签清单为 40 位全 SHA 精确匹配（非前缀）。

@@ -40,6 +40,10 @@
 #     EXPECT_PROD_SHA/CARDS/SURGE_MIN 全部 env 可覆盖。
 #   * 34 卡×2 次逐卡 CLI 并发化（MAX_PAR，默认 6），单轮最坏耗时压进 StartInterval 内。
 #
+# v700-r3（DAV-1521 复审修订）：
+#   * M1 check#6 水位改 UTC——reports.created_at 存 UTC 裸时间戳，'localtime' 在
+#     UTC+8 机器上快 8 小时，突增告警恒不触发（逻辑死代码）。
+#
 # 只检测与派发；不合并、不部署、不改库、不改模型通道。
 
 REPO="${WATCH_REPO:-/Users/davidliu/Documents/TradingAgents-AShare}"
@@ -93,8 +97,7 @@ GUARD_REVIEW="1448 1456 1484"
 REVIEW_OK_SHA=""
 REVIEWER="代码审核员"
 TERMINAL="completed failed cancelled"
-# runs 文本表里的状态词集合（含 CLI 可能输出但不在 TERMINAL 里的活跃态）
-RUNSTATUS="queued dispatched running pending completed failed cancelled error timeout"
+# 状态词集合在 runs_line 内嵌 python 中维护（STATUS set）；无独立 RUNSTATUS 变量。
 
 # 本机无 GNU timeout，用 perl alarm 包裹 CLI（防挂死；launchd 场景 PATH/env 受限）
 export WATCH_MX_TIMEOUT="$MX_TIMEOUT"
@@ -172,8 +175,10 @@ export -f count_crashes 2>/dev/null || true
 
 # ---- 成员评论增量（A4 修订：--since RFC3339；无水位时退化--since seed_start） ----
 # 输出 `id|created_at|content…`；空输出=无新或 CLI 失败（防抖不覆盖种子）。
+# 防御：_since 为空直接返回——调用方必须给水位，避免空 --since 拉到全量。
 member_comments(){
   _c=$1; _since=$2
+  [ -n "$_since" ] || return 0
   mx multica issue comment list "DAV-$_c" --since "$_since" --summary --output json 2>/dev/null | python3 -c '
 import json,sys
 try:
@@ -385,18 +390,20 @@ except: pass" 2>/dev/null)
 
   # 6) 无卡批量分析突增（D-072；v600 中 PRODDB 未定义、此项实际为死代码——本脚本已修正）
   # A7 修订：mode=ro（非 immutable=1）能见到未 checkpoint 的 WAL 行；dedupe_key 存在则按请求去重。
+  # M1 修订：水位用 UTC（datetime('now') 默认即 UTC），与 reports.created_at 的
+  #   timezone.utc 存储口径一致——'localtime' 在 UTC+8 机器上快 8 小时，恒不命中。
   if [ -f "$PRODDB" ]; then
     HAS_DEDUPE=$(sqlite3 "file:$PRODDB?mode=ro" "SELECT COUNT(*) FROM pragma_table_info('reports') WHERE name='dedupe_key'" 2>/dev/null)
     if [ "${HAS_DEDUPE:-0}" -ge 1 ] 2>/dev/null; then
       SURGE=$(sqlite3 "file:$PRODDB?mode=ro" "
         SELECT COALESCE(user_id,'unknown'), COUNT(DISTINCT dedupe_key) FROM reports
-         WHERE created_at > datetime('now','localtime','-20 minutes')
+         WHERE created_at > datetime('now','-20 minutes')
          GROUP BY 1 HAVING COUNT(DISTINCT dedupe_key) >= $SURGE_MIN AND COALESCE(user_id,'unknown') != '429163f7-50b6-4982-8bdf-96ae99506843'
       " 2>/dev/null)
     else
       SURGE=$(sqlite3 "file:$PRODDB?mode=ro" "
         SELECT COALESCE(user_id,'unknown'), COUNT(*) FROM reports
-         WHERE created_at > datetime('now','localtime','-20 minutes')
+         WHERE created_at > datetime('now','-20 minutes')
          GROUP BY 1 HAVING COUNT(*) >= $SURGE_MIN AND COALESCE(user_id,'unknown') != '429163f7-50b6-4982-8bdf-96ae99506843'
       " 2>/dev/null)
     fi
