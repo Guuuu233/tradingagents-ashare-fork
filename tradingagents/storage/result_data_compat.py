@@ -145,6 +145,13 @@ def detect_alias_conflicts(result_data: Any) -> List[str]:
     if isinstance(horizons, dict):
         for horizon, slice_payload in horizons.items():
             if not isinstance(slice_payload, dict):
+                # A non-dict slot (None, scalar, list) cannot be round-tripped
+                # through a *_term slice — encode would drop it silently and
+                # expand could never rebuild it. Report it (DAV-1514 🟢-2).
+                conflicts.append(
+                    f"horizons.{horizon} is not an object "
+                    f"({type(slice_payload).__name__}); cannot canonicalize"
+                )
                 continue
             term_key = _term_key_for(horizon)
             term = result_data.get(term_key)
@@ -352,7 +359,10 @@ def expand_compat_view(result_data: Any) -> Dict[str, Any]:
         for h in (compat.get("horizons_order") or list(masks.keys()))
         if isinstance(h, str) and h in masks
     ]
-    for h in masks:  # horizons slots absent from recorded order still render
+    # Fallback order for mask slots the recorded ``horizons_order`` does not
+    # name (e.g. hand-edited compat blocks): they are appended at the end, in
+    # mask declaration order (DAV-1514 🟢-1 — documented for B-3 checks).
+    for h in masks:
         if h not in horizons_order:
             horizons_order.append(h)
 
@@ -446,31 +456,30 @@ def strip_compat_view_for_persist(result_data: Any) -> Any:
 
     * No-op for non-canonical rows — legacy rows keep their physical aliases
       until B-3 migration encodes them.
-    * Also no-op when a v1 row's ``horizons`` content is *not* reconstructible
-      from the authoritative slices (someone hand-built extra alias content):
-      rather than silently dropping data, the row is left untouched and the
-      conflict surfaces via :func:`detect_alias_conflicts` callers.
+    * On v1 rows the virtual top keys are dropped **unconditionally**
+      (DAV-1514 🔴 fix): any content that does not match the reconstructed
+      view — e.g. read-time backfills like ``horizon_run_metadata`` stamped
+      into the served view — is *not* treated as authoritative and must not
+      be persisted. Foreign content is surfaced through
+      :func:`detect_alias_conflicts` (logged once per call), never silently
+      re-attached to the row.
     """
     if not is_canonical_storage(result_data):
         return result_data
 
-    stripped = dict(result_data)
-    # Reconstruct the view from the alias-free canonical subset, then drop a
-    # physically present virtual key only when it equals what the read layer
-    # would rebuild. Anything else is foreign content (fail-close: keep it).
-    base = {k: v for k, v in result_data.items() if k not in _VIRTUAL_TOP_KEYS}
-    try:
-        view = expand_compat_view(base)
-    except StorageCompatConflict:
-        return result_data
+    # Report (do not resurrect) physical alias content that disagrees with the
+    # authoritative slices — a caller persisting such a row needs the signal.
+    conflicts = detect_alias_conflicts(result_data)
+    if conflicts:
+        logger.warning(
+            "[result_data_compat] strip on v1 row with alias conflicts; "
+            "virtual keys dropped anyway (fail-close): %s",
+            "; ".join(conflicts),
+        )
 
+    stripped = dict(result_data)
     for key in _VIRTUAL_TOP_KEYS:
-        if key not in stripped or key not in view:
-            continue
-        if _values_equal(stripped[key], view[key]):
-            stripped.pop(key, None)
-        # A value that differs from the reconstructed view is real foreign
-        # content — keep it rather than silently lose it (fail-close).
+        stripped.pop(key, None)
     return stripped
 
 
