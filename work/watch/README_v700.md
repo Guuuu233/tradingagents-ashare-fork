@@ -6,8 +6,8 @@
 
 | 文件 | 作用 |
 |---|---|
-| `work/watch/watch_v700.sh` | 单轮事件检测脚本。launchd 每 `StartInterval` 拉起一次；检出事件则写 payload + `multica autopilot trigger`，随后退出。含 `flock` 互斥防止上一轮未结束时叠加。 |
-| `work/watch/com.davidliu.ta-watch.plist` | launchd LaunchAgent 模板（`StartInterval=120`）。**模板，不随本任务安装**。 |
+| `work/watch/watch_v700.sh` | 单轮事件检测脚本。launchd 每 `StartInterval` 拉起一次；检出事件则写 payload + `multica autopilot trigger`，随后退出。用 **PID 文件 + `pgrep -f` 双重互斥**（macOS 无 `flock`）防止上一轮未结束时叠加。 |
+| `work/watch/com.davidliu.ta-watch.plist` | launchd LaunchAgent 模板（`StartInterval=180`）。**模板，不随本任务安装**。 |
 | `work/watch/bootstrap_autopilot.sh` | 一次性创建 `run_only` autopilot（= 那个"一次性智能体"），把 autopilot id 落到 `/tmp/watch_v700.autopilot_id`。 |
 
 ## 与 v600 的关系
@@ -20,7 +20,7 @@
 ## 事件 → 一次性智能体 的数据流
 
 ```
-launchd tick (120s)
+launchd tick (180s)
    └─ watch_v700.sh one_round()
         └─ 命中若干事件 → 累积写 /tmp/watch_v700_payload/latest.json {consumed:false,events:[...]}
         └─ multica autopilot trigger <id>   ← run_only autopilot，无聊天历史
@@ -28,7 +28,8 @@ launchd tick (120s)
 ```
 
 - **节流**：同一 payload 未消费只追加；两次 `trigger` 至少隔 `WATCH_DISPATCH_MIN_INTERVAL`（默认 300s）。
-- **无 autopilot id** 时只记 alerts、不派发、不炸（`NO-AP` 行）。
+- **无 autopilot id** 时事件仍先累积进 `latest.json`（`consumed:false`），只记 `NO-AP` 告警不派发不炸——bootstrap 之后下一轮 tick 会把累积事件一并交给智能体补处理。
+- **部署顺序**：**必须先跑 `bootstrap_autopilot.sh` 再装 plist**。跳过 bootstrap 装出来的守望在拿到 autopilot id 前只会累积事件不派发（可补处理，但期间没有智能体在跑）。
 
 ## 部署（本任务只交付模板，不安装）
 
@@ -54,10 +55,16 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.davidliu.ta-watch.pl
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `WATCH_POLL` | 120 | 仅注释用；真实周期由 plist `StartInterval` 决定 |
+| `WATCH_POLL` | 180 | 仅注释用；真实周期由 plist `StartInterval` 决定（180s，覆盖最坏单轮 ≈60s） |
 | `WATCH_AUTOPILOT_ID` | `/tmp/watch_v700.autopilot_id` 内容 | 直填 uuid 可跳过文件 |
 | `WATCH_DISPATCH_MIN_INTERVAL` | 300 | 两次 trigger 最小间隔（秒） |
-| `WATCH_STATE` / `WATCH_ALERTS` / `WATCH_CARDSTATE` / `WATCH_SEEN_COMMENTS` / `WATCH_HIGHNUM` / `WATCH_PAYLOAD_DIR` / `WATCH_LOCKFILE` / `WATCH_DISPATCH_LOG` | `/tmp/watch_v700.*` | 状态文件路径 |
+| `WATCH_CLI_TIMEOUT` | 90 | 单次 `multica`/`git`/`sqlite3` 调用的 alarm 上限（秒） |
+| `WATCH_MAX_PAR` | 6 | 逐卡 CLI 的并发度（34 卡×2 轮，串行最坏 ~90s） |
+| `WATCH_SURGE_MIN` | 4 | check#6：同一账户 20min 内触发告警的去重请求数 |
+| `WATCH_EXPECT_PROD_SHA` | `c170334f…7558f` | prod healthz `commit_sha` 期望值；**每次部署后必须同步更新**（否则误报 SHA changed） |
+| `WATCH_CARDS` | 34 卡 | 监控的 issue number 列表（空格分隔） |
+| `WATCH_REPO` / `WATCH_LOG` / `WATCH_PRODDB` | 生产路径 | 监控的仓库 / uvicorn 日志 / 产品库路径；部署到其他机器或自测时可重定向 |
+| `WATCH_STATE` / `WATCH_ALERTS` / `WATCH_CARDSTATE` / `WATCH_SEEN_COMMENTS` / `WATCH_HIGHNUM` / `WATCH_PAYLOAD_DIR` / `WATCH_LOCKFILE` / `WATCH_DISPATCH_LOG` / `WATCH_ERRSTATE` / `WATCH_SINCE_FILE` | `/tmp/watch_v700.*` | 状态文件路径（崩溃基线、评论水位也在此列） |
 
 ## 自测（不装 launchd）
 

@@ -12,7 +12,7 @@
       launchctl bootout gui/$(id -u)/com.davidliu.ta-watch
 
     说明：
-    - StartInterval 每 120s 拉起脚本一次；脚本单轮检测后必退出（flock 防止上一轮未结束时叠加）。
+    - StartInterval 每 180s 拉起脚本一次；脚本单轮检测后必退出（PID 文件 + pgrep 双重互斥防止上一轮未结束时叠加）。
     - launchd 受 TCC 限制读不了 ~/Documents，因此脚本/日志一律放 /tmp（与 urgent-notify 同一约定）。
     - 真正被 launchd 执行的副本应部署到 ~/scripts/watch_v700.sh（见 README），此处为仓库模板。
   -->
@@ -25,9 +25,10 @@
     <string>/Users/davidliu/scripts/watch_v700.sh</string>
   </array>
 
-  <!-- 每 POLL 秒一次 tick；脚本自身用 PID 文件互斥（macOS 无 flock），重叠时直接退出 -->
+  <!-- 每 POLL 秒一次 tick；脚本自身用 PID 文件+pgrep 双重互斥（macOS 无 flock），重叠时直接退出。
+       180s 覆盖单轮最坏耗时（34 卡×2 次 CLI 并发 ~60s + prod DOWN 路径 curl 重试 ~60s）。 -->
   <key>StartInterval</key>
-  <integer>120</integer>
+  <integer>180</integer>
 
   <!-- 登录后自动布防首轮（种子缺失时初始化）；不需要的话可去掉 -->
   <key>RunAtLoad</key>
