@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    launchd tick driver for watch_v700.sh (DAV-1509).
+
+    安装（手工，非本任务范围）：
+      cp com.davidliu.ta-watch.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.davidliu.ta-watch.plist
+    卸载：
+      launchctl bootout gui/$(id -u)/com.davidliu.ta-watch
+
+    说明：
+    - StartInterval 每 120s 拉起脚本一次；脚本单轮检测后必退出（flock 防止上一轮未结束时叠加）。
+    - launchd 受 TCC 限制读不了 ~/Documents，因此脚本/日志一律放 /tmp（与 urgent-notify 同一约定）。
+    - 真正被 launchd 执行的副本应部署到 ~/scripts/watch_v700.sh（见 README），此处为仓库模板。
+  -->
+  <key>Label</key>
+  <string>com.davidliu.ta-watch</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/davidliu/scripts/watch_v700.sh</string>
+  </array>
+
+  <!-- 每 POLL 秒一次 tick；脚本自身用 PID 文件互斥（macOS 无 flock），重叠时直接退出 -->
+  <key>StartInterval</key>
+  <integer>120</integer>
+
+  <!-- 登录后自动布防首轮（种子缺失时初始化）；不需要的话可去掉 -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/davidliu</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/watch_v700.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/watch_v700.launchd.err</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd 不继承登录 shell PATH；multica/git/python3/sqlite3/perl 需要可见 -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>/Users/davidliu</string>
+  </dict>
+</dict>
+</plist>
