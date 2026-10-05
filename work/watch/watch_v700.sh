@@ -109,14 +109,14 @@ remote_tip(){ mx git ls-remote "$REMOTE_URL" "$TRUNK_BR" 2>/dev/null | awk '{pri
 # 兼容含空格 agent 名（`multica issue runs --output json` 无 agent name 字段，只能走文本表）。
 runs_line(){
   mx multica issue runs "DAV-$1" 2>/dev/null | python3 -c '
-import sys
+import sys,re
 STATUS={"queued","dispatched","running","pending","completed","failed","cancelled","error","timeout"}
 for ln in sys.stdin:
     f=ln.split()
-    if len(f)<3 or not all(c in "0123456789abcdef" for c in f[0]):
+    if len(f)<3 or not re.fullmatch(r"[0-9a-f]{8}", f[0]):
         continue
     si=next((i for i in range(1,len(f)) if f[i].lower() in STATUS), -1)
-    if si<0:
+    if si<0 or si==len(f)-1:  # no status token, or status is the last column
         continue
     print(f[0]+":"+f[si].lower()+":"+" ".join(f[1:si]))' | tr '\n' ','
 }
@@ -170,15 +170,11 @@ count_crashes(){
 }
 export -f count_crashes 2>/dev/null || true
 
-# ---- 成员评论增量（A4 修订：--since RFC3339；无水位时退化为 --recent 10 summary） ----
+# ---- 成员评论增量（A4 修订：--since RFC3339；无水位时退化--since seed_start） ----
 # 输出 `id|created_at|content…`；空输出=无新或 CLI 失败（防抖不覆盖种子）。
 member_comments(){
   _c=$1; _since=$2
-  if [ -n "$_since" ]; then
-    mx multica issue comment list "DAV-$_c" --since "$_since" --output json 2>/dev/null
-  else
-    mx multica issue comment list "DAV-$_c" --recent 10 --summary --output json 2>/dev/null
-  fi | python3 -c '
+  mx multica issue comment list "DAV-$_c" --since "$_since" --summary --output json 2>/dev/null | python3 -c '
 import json,sys
 try:
   d=json.load(sys.stdin)
@@ -203,13 +199,16 @@ export -f par_wait_slot par_comments par_runs 2>/dev/null || true
 # ---- 布防：种子缺失才初始化（首轮吸收现状，不算事件） ----
 if [ ! -f "$SEEN_COMMENTS" ] || [ ! -f "$HIGHNUM" ]; then
   touch "$SEEN_COMMENTS"
+  SEED_START=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   SEED_DIR=$(mktemp -d /tmp/watch_v700.seed.XXXXXX)
-  for c in $CARDS; do par_comments "$c" "" "$SEED_DIR"; done
+  for c in $CARDS; do par_comments "$c" "$SEED_START" "$SEED_DIR"; done
   wait
   cat "$SEED_DIR"/* 2>/dev/null | cut -d'|' -f1 | grep -E '^[0-9a-f-]{36}$' | sort -u >> "$SEEN_COMMENTS"
   rm -rf "$SEED_DIR"
   HN=$(mx multica issue list --sort created_at --direction desc --limit 1 --output json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('issues') or [{}])[0].get('number',0))" 2>/dev/null)
   echo "${HN:-0}" > "$HIGHNUM"
+  # 无水位文件时，用 seed 起始时刻建立水位（布防期间到达的评论下一轮再报，不丢）
+  [ -f "$SINCE_FILE" ] || echo "$SEED_START" > "$SINCE_FILE"
 fi
 if [ ! -f "$CARDSTATE" ]; then
   touch "$CARDSTATE"
@@ -290,7 +289,9 @@ except: pass" 2>/dev/null)
   fi
 
   # 2) 成员评论（--since 增量；只报 member；已有 id 跳过；CLI 拉空跳过）
+  # N3-1 修订：水位 = 本次扫描开始时刻，避免"扫描中到达"的评论被写后的水位吃掉
   SINCE=$(cat "$SINCE_FILE" 2>/dev/null)
+  SCAN_START=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   MC_DIR=$(mktemp -d /tmp/watch_v700.mc.XXXXXX)
   for c in $CARDS; do par_comments "$c" "$SINCE" "$MC_DIR"; done
   wait
@@ -304,7 +305,7 @@ except: pass" 2>/dev/null)
     done < "$MC_DIR/$c"
   done
   rm -rf "$MC_DIR"
-  date -u '+%Y-%m-%dT%H:%M:%SZ' > "$SINCE_FILE"
+  echo "$SCAN_START" > "$SINCE_FILE"
 
   # 3) 运行进入终态 + URGENT 类新 run（CLI 拉空跳过，不覆盖种子）
   RS_DIR=$(mktemp -d /tmp/watch_v700.rs.XXXXXX)
@@ -338,7 +339,7 @@ except: pass" 2>/dev/null)
     if git cat-file -e "$NEW" 2>/dev/null; then
       HAVE_NEW=1
     else
-      mx git -C "$REPO" fetch --quiet --depth 50 origin "$TRUNK_BR" 2>/dev/null || true
+      mx git -C "$REPO" fetch --quiet origin "$TRUNK_BR" 2>/dev/null || true
       git cat-file -e "$NEW" 2>/dev/null && HAVE_NEW=1
     fi
     if [ "$HAVE_NEW" -eq 0 ]; then
@@ -346,14 +347,16 @@ except: pass" 2>/dev/null)
     else
       if ! git merge-base --is-ancestor "$CUR" "$NEW" 2>/dev/null; then
         record "URGENT trunk NON-FF/rewrite: ${CUR:0:8} -> ${NEW:0:8}"
+      else
+        # 仅 FF 时才判签名链；NON-FF 已告警，不再用 signed-ancestor 粉饰成"正常前进"
+        ok=0
+        for s in $SIGNED; do
+          if [ "$NEW" = "$s" ]; then ok=1; break; fi
+          if git merge-base --is-ancestor "$s" "$NEW" 2>/dev/null; then ok=1; break; fi
+        done
+        SUBJ=$(git log -1 --format='%h %s' "$NEW" 2>/dev/null)
+        if [ "$ok" -eq 1 ]; then record "trunk FF -> $SUBJ (signed-chain ok)"; else record "URGENT trunk moved to UNSIGNED $SUBJ"; fi
       fi
-      ok=0
-      for s in $SIGNED; do
-        if [ "$NEW" = "$s" ]; then ok=1; break; fi
-        if git merge-base --is-ancestor "$s" "$NEW" 2>/dev/null; then ok=1; break; fi
-      done
-      SUBJ=$(git log -1 --format='%h %s' "$NEW" 2>/dev/null)
-      if [ "$ok" -eq 1 ]; then record "trunk FF -> $SUBJ (signed-chain ok)"; else record "URGENT trunk moved to UNSIGNED $SUBJ"; fi
     fi
     echo "$NEW" > "$STATE"
   fi

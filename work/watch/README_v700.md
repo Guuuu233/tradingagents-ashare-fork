@@ -4,11 +4,11 @@
 
 ## 组件
 
-| 文件 | 作用 |
-|---|---|
-| `work/watch/watch_v700.sh` | 单轮事件检测脚本。launchd 每 `StartInterval` 拉起一次；检出事件则写 payload + `multica autopilot trigger`，随后退出。用 **PID 文件 + `pgrep -f` 双重互斥**（macOS 无 `flock`）防止上一轮未结束时叠加。 |
-| `work/watch/com.davidliu.ta-watch.plist` | launchd LaunchAgent 模板（`StartInterval=180`）。**模板，不随本任务安装**。 |
-| `work/watch/bootstrap_autopilot.sh` | 一次性创建 `run_only` autopilot（= 那个"一次性智能体"），把 autopilot id 落到 `/tmp/watch_v700.autopilot_id`。 |
+| 文件                                     | 作用                                                                                                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `work/watch/watch_v700.sh`               | 单轮事件检测脚本。launchd 每 `StartInterval` 拉起一次；检出事件则写 payload + `multica autopilot trigger`，随后退出。用 **PID 文件 + `pgrep -f` 双重互斥**（macOS 无 `flock`）防止上一轮未结束时叠加。 |
+| `work/watch/com.davidliu.ta-watch.plist` | launchd LaunchAgent 模板（`StartInterval=180`）。**模板，不随本任务安装**。                                                                                                                            |
+| `work/watch/bootstrap_autopilot.sh`      | 一次性创建 `run_only` autopilot（= 那个"一次性智能体"），把 autopilot id 落到 `/tmp/watch_v700.autopilot_id`。                                                                                         |
 
 ## 与 v600 的关系
 
@@ -53,18 +53,19 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.davidliu.ta-watch.pl
 
 ## 环境变量覆盖
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `WATCH_POLL` | 180 | 仅注释用；真实周期由 plist `StartInterval` 决定（180s，覆盖最坏单轮 ≈60s） |
-| `WATCH_AUTOPILOT_ID` | `/tmp/watch_v700.autopilot_id` 内容 | 直填 uuid 可跳过文件 |
-| `WATCH_DISPATCH_MIN_INTERVAL` | 300 | 两次 trigger 最小间隔（秒） |
-| `WATCH_CLI_TIMEOUT` | 90 | 单次 `multica`/`git`/`sqlite3` 调用的 alarm 上限（秒） |
-| `WATCH_MAX_PAR` | 6 | 逐卡 CLI 的并发度（34 卡×2 轮，串行最坏 ~90s） |
-| `WATCH_SURGE_MIN` | 4 | check#6：同一账户 20min 内触发告警的去重请求数 |
-| `WATCH_EXPECT_PROD_SHA` | `c170334f…7558f` | prod healthz `commit_sha` 期望值；**每次部署后必须同步更新**（否则误报 SHA changed） |
-| `WATCH_CARDS` | 34 卡 | 监控的 issue number 列表（空格分隔） |
-| `WATCH_REPO` / `WATCH_LOG` / `WATCH_PRODDB` | 生产路径 | 监控的仓库 / uvicorn 日志 / 产品库路径；部署到其他机器或自测时可重定向 |
-| `WATCH_STATE` / `WATCH_ALERTS` / `WATCH_CARDSTATE` / `WATCH_SEEN_COMMENTS` / `WATCH_HIGHNUM` / `WATCH_PAYLOAD_DIR` / `WATCH_LOCKFILE` / `WATCH_DISPATCH_LOG` / `WATCH_ERRSTATE` / `WATCH_SINCE_FILE` | `/tmp/watch_v700.*` | 状态文件路径（崩溃基线、评论水位也在此列） |
+| 变量                                                                                                                                                                                                 | 默认                                | 说明                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `WATCH_POLL`                                                                                                                                                                                         | 180                                 | 仅注释用；真实周期由 plist `StartInterval` 决定（180s，覆盖最坏单轮 ≈60s）           |
+| `WATCH_AUTOPILOT_ID`                                                                                                                                                                                 | `/tmp/watch_v700.autopilot_id` 内容 | 直填 uuid 可跳过文件                                                                 |
+| `WATCH_AUTOPILOT_ID_FILE`                                                                                                                                                                            | `/tmp/watch_v700.autopilot_id`      | autopilot id 落盘文件路径（`WATCH_AUTOPILOT_ID` 为空时读取）                       |
+| `WATCH_DISPATCH_MIN_INTERVAL`                                                                                                                                                                        | 300                                 | 两次 trigger 最小间隔（秒）                                                          |
+| `WATCH_MX_TIMEOUT` / `WATCH_CLI_TIMEOUT`                                                                                                                                                            | 90                                  | 单次 `multica`/`git`/`sqlite3` 调用的 alarm 上限（秒；`MX_TIMEOUT`=`CLI_TIMEOUT`） |
+| `WATCH_MAX_PAR`                                                                                                                                                                                      | 6                                   | 逐卡 CLI 的并发度（34 卡×2 轮，串行最坏 ~90s）                                       |
+| `WATCH_SURGE_MIN`                                                                                                                                                                                    | 4                                   | check#6：同一账户 20min 内触发告警的请求档数                                       |
+| `WATCH_EXPECT_PROD_SHA`                                                                                                                                                                              | `c170334f…7558f`                    | prod healthz `commit_sha` 期望值；**每次部署后必须同步更新**（否则误报 SHA changed） |
+| `WATCH_CARDS`                                                                                                                                                                                        | 34 卡                               | 监控的 issue number 列表（空格分隔）                                                 |
+| `WATCH_REMOTE_URL` / `WATCH_REPO` / `WATCH_LOG` / `WATCH_PRODDB`                                                                                                                                     | 生产路径                            | 监控的远端 URL / 仓库 / uvicorn 日志 / 产品库路径；部署到其他机器或自测时可重定向 |
+| `WATCH_STATE` / `WATCH_ALERTS` / `WATCH_CARDSTATE` / `WATCH_SEEN_COMMENTS` / `WATCH_HIGHNUM` / `WATCH_PAYLOAD_DIR` / `WATCH_LOCKFILE` / `WATCH_DISPATCH_LOG` / `WATCH_ERRSTATE` / `WATCH_SINCE_FILE` | `/tmp/watch_v700.*`                 | 状态文件路径（崩溃基线、评论水位也在此列）                                           |
 
 ## 自测（不装 launchd）
 
@@ -82,3 +83,6 @@ WATCH_AUTOPILOT_ID= bash work/watch/watch_v700.sh
 - autopilot `trigger` 的 run 由 Multica 平台异步执行，非本脚本进程内同步等待；脚本只负责"唤起"。
 - autopilot agent 的 runtime/model 由 `bootstrap_autopilot.sh` 指定的 agent 决定。
 - v500 里存在但 v600/v700 未迁移的检测（blocked 解锁、schema drift、launchd 新增 label、1460 采集、model-400 计数）沿用 v600 的取舍——**未迁移**，如需恢复请在 v700 里补 check 再更新已签清单。
+- **check#6 去重口径**：`dedupe_key` 列在生产库 `reports` 表**当前不存在**（`pragma_table_info` 返回 0），脚本会走 `COUNT(*)` 非去重口径。若 D-072 要求按请求去重，需先在 `reports` 加 `dedupe_key` 列——属 schema/部署改动，不在本守望任务范围。
+- **日志轮转**：崩溃基线落盘 `ERRSTATE` 存的是绝对计数；若 uvicorn 日志被轮转/截断，`count_crashes` 会比基线低（不报「崩溃减少」事件，也不抬线）。轮转后首轮会重吸现状基线。
+- **trunk 检查语义**：远端 tip 是本地对象的祖先且属于「已签清单任一 SHA 的后代」→ `FF (signed-chain ok)`；否则 `UNSIGNED`。已签清单为 40 位全 SHA 精确匹配（非前缀）。
