@@ -2400,6 +2400,11 @@ def finalize_orphan_report(
     if str(report.status or "") not in ACTIVE_REPORT_STATUSES:
         return report
 
+    # DAV-1514 rework: get_report returns a DETACHED shadow; re-attach before
+    # mutating. merge() copies the detached state onto the session-managed row.
+    if report not in db:
+        report = db.merge(report)
+
     # DAV-1506: never flush a reconstructed compat view back to the row.
     if isinstance(report.result_data, dict):
         report.result_data = strip_compat_view_for_persist(report.result_data)
@@ -2794,9 +2799,17 @@ def get_report(db: Session, report_id: str, user_id: Optional[str] = None) -> Op
     report = query.first()
     if report and report.result_data and isinstance(report.result_data, dict):
         # DAV-1506 (B-1): rebuild the legacy horizons/top-market_data_context
-        # view from the authoritative *_term slices on canonical rows. The
-        # view is a copy — strip_compat_view_for_persist guards every save.
-        rd = result_data_compat_view(dict(report.result_data))
+        # view from the authoritative *_term slices on canonical rows.
+        # DAV-1514 rework + 总控验收: detach the ORM row BEFORE building the
+        # view, then expand on a deepcopy. The served object is a detached
+        # shadow — the session holds no dirty state, so no read path (list /
+        # export / finalize caller) can flush either the compat view or the
+        # read-time hrm/social backfills back into the stored row. The only
+        # write entry, finalize_orphan_report, re-attaches via db.merge and
+        # strips the view before committing.
+        stored = copy.deepcopy(report.result_data)
+        db.expunge(report)
+        rd = result_data_compat_view(stored)
         if "social_data_context" not in rd or rd["social_data_context"] is None:
             rd["social_data_context"] = {}
         ensure_horizon_run_metadata_on_read(rd)

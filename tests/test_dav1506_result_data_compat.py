@@ -384,6 +384,47 @@ def test_get_report_then_finalize_does_not_write_view_back():
         engine.dispose()
 
 
+def test_get_report_does_not_mutate_stored_nested_dicts():
+    """总控验收: get_report 的读时回填不得污染 ORM 行持有的 stored dict。
+
+    深拷贝前的旧实现里，``view['short_term']`` 与 stored ``short_term`` 是同
+    一对象，``ensure_horizon_run_metadata_on_read`` 就地写入会把
+    ``horizon_run_metadata`` 渗进 stored dict —— 下一次 commit 即写回。
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api.database import Base, ReportDB
+    from api.services import report_service
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = session_factory()
+    try:
+        canon = encode_canonical(_legacy_dual())
+        # strip hrm everywhere so read-side backfill has something to add
+        canon.pop("horizon_run_metadata", None)
+        for t in ("short_term", "medium_term"):
+            canon.get(t, {}).pop("horizon_run_metadata", None)
+        db.add(ReportDB(id="r-v1-2", symbol="X", trade_date="2026-10-02",
+                        status="completed", result_data=copy.deepcopy(canon)))
+        db.commit()
+
+        rep = report_service.get_report(db, "r-v1-2")
+        # served view carries the read-time backfill
+        assert rep.result_data.get("horizon_run_metadata")
+        # but the ORM session must hold nothing dirty — a later flush writes nothing
+        assert rep not in db.dirty or not db.is_modified(rep)
+        # stored dict untouched: no hrm bled into the stored *_term slices
+        stored = db.query(ReportDB).filter(ReportDB.id == "r-v1-2").one().result_data
+        assert "horizon_run_metadata" not in stored.get("short_term", {})
+        assert "horizons" not in stored
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_json_serialized_view_equals_legacy_serialization_subset():
     """The expanded view preserves legacy key order at every level we control."""
     rd = _legacy_dual()
