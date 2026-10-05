@@ -76,13 +76,15 @@ def _write_labels(path: Path, rows: list[dict]) -> Path:
     return path
 
 
-def _write_bench(path: Path, closes: dict[str, float],
+def _write_bench(path: Path, bars: dict[str, dict],
                  symbol: str = "000300.SH") -> Path:
+    """bars: date -> {"open": x, "close": y} (either key may be absent)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
-        for d, c in sorted(closes.items()):
-            fh.write(json.dumps({"symbol": symbol, "date": d, "close": c})
-                     + "\n")
+        for d, bar in sorted(bars.items()):
+            row = {"symbol": symbol, "date": d}
+            row.update(bar)
+            fh.write(json.dumps(row) + "\n")
     return path
 
 
@@ -98,13 +100,13 @@ def _mk_db(path: Path, rows: list[tuple[str, str]]) -> Path:
 
 
 def _run(monkeypatch, tmp_path, records, labels=None, bench=None,
-         db_rows=None, as_of="2026-12-01"):
+         db_rows=None, as_of="2026-12-01", caliber="hs300",
+         label_fields=None):
     """Invoke cmd_run with synthetic inputs; returns (exit_code, out_text)."""
     tmp_path = Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
     ledger = _write_ledger(tmp_path / "forward_ledger.jsonl", records)
     lab = _write_labels(tmp_path / "labels.jsonl", labels or [])
-    sw = _write_labels(tmp_path / "sw.jsonl", [])
     bench_f = _write_bench(tmp_path / "bench.jsonl", bench or {})
     db = _mk_db(tmp_path / "t.db", db_rows or [])
     out = tmp_path / "report.md"
@@ -114,7 +116,9 @@ def _run(monkeypatch, tmp_path, records, labels=None, bench=None,
     args = type("A", (), {
         "out_dir": str(tmp_path / "out"), "as_of": as_of,
         "ledger": str(ledger), "db": str(db),
-        "labels": str(lab), "sw_labels": str(sw),
+        "labels": str(lab),
+        "relative_caliber": caliber,
+        "label_fields": label_fields,
         "benchmarks": str(bench_f), "benchmarks_dir": str(tmp_path),
         "benchmark_symbols": ["000300.SH"], "fetch_benchmarks": False,
         "min_cross_n": 3, "min_total_n": 40, "out": str(out),
@@ -185,7 +189,7 @@ def test_daily_cross_section_ic_and_spread(tmp_path, monkeypatch):
         recs.append(_rec(f"r{i}", f"60000{i}.SH", "2026-07-28",
                          prob=50 + i))
         labs.append({"symbol": f"60000{i}.SH", "signal_date": "2026-07-28",
-                     "return_pct": float(i)})
+                     "hs300_excess_pct": float(i)})
     code, text = _run(monkeypatch, tmp_path, recs, labels=labs,
                       as_of="2026-12-01")
     assert code == 0
@@ -199,7 +203,7 @@ def test_insufficient_day_marked(tmp_path, monkeypatch):
         recs.append(_rec(f"r{i}", f"60000{i}.SH", "2026-07-28",
                          prob=50 + i))
         labs.append({"symbol": f"60000{i}.SH", "signal_date": "2026-07-28",
-                     "return_pct": float(i)})
+                     "hs300_excess_pct": float(i)})
     code, text = _run(monkeypatch, tmp_path, recs, labels=labs,
                       as_of="2026-12-01")
     assert code == 0
@@ -220,7 +224,7 @@ def test_determinism_byte_identical(tmp_path, monkeypatch):
     recs = [_rec(f"r{i}", f"60000{i}.SH", "2026-07-28", prob=40 + i)
             for i in range(8)]
     labs = [{"symbol": f"60000{i}.SH", "signal_date": "2026-07-28",
-             "return_pct": float(i * 1.5)} for i in range(8)]
+             "hs300_excess_pct": float(i * 1.5)} for i in range(8)]
     code1, t1 = _run(monkeypatch, tmp_path / "a", recs, labs)
     code2, t2 = _run(monkeypatch, tmp_path / "b", recs, labs)
     assert code1 == code2 == 0
@@ -233,7 +237,8 @@ def test_fail_close_missing_ledger(tmp_path, monkeypatch):
         "out_dir": str(tmp_path), "as_of": "2026-12-01",
         "ledger": str(tmp_path / "nope.jsonl"),
         "db": str(tmp_path / "nope.db"),
-        "labels": str(tmp_path / "x"), "sw_labels": str(tmp_path / "y"),
+        "labels": str(tmp_path / "x"),
+        "relative_caliber": "hs300", "label_fields": None,
         "benchmarks": str(tmp_path / "z"), "benchmarks_dir": str(tmp_path),
         "benchmark_symbols": ["000300.SH"], "fetch_benchmarks": False,
         "min_cross_n": 3, "min_total_n": 40, "out": str(tmp_path / "o.md"),
@@ -257,17 +262,127 @@ def test_week_anchor_uses_last_trading_day():
 
 
 def test_benchmark_return_window():
-    closes = {}
+    """D-072 window: T+1 OPEN -> T+40 trading-day CLOSE (not close-close)."""
+    bars = {}
     cal = _cal("2026-07-01", 300)
     for i, d in enumerate(cal):
-        closes[d.isoformat()] = 4000 + i
+        bars[d.isoformat()] = {"open": 3900 + i, "close": 4000 + i}
     sig = date.fromisoformat("2026-07-28")
-    v = mod._benchmark_return(closes, cal, sig, 40)
+    v = mod._benchmark_return(bars, cal, sig, 40)
     idx = cal.index(sig)
-    expect = round((closes[cal[idx + 40].isoformat()]
-                    - closes[cal[idx + 1].isoformat()])
-                   / closes[cal[idx + 1].isoformat()] * 100, 4)
+    expect = round((bars[cal[idx + 40].isoformat()]["close"]
+                    - bars[cal[idx + 1].isoformat()]["open"])
+                   / bars[cal[idx + 1].isoformat()]["open"] * 100, 4)
     assert v == pytest.approx(expect)
+
+
+def test_benchmark_return_missing_open_is_missing_not_close():
+    """入场日开盘价取不到记缺失，不得用收盘价替代。"""
+    bars = {}
+    cal = _cal("2026-07-01", 300)
+    for i, d in enumerate(cal):
+        bars[d.isoformat()] = {"open": 3900 + i, "close": 4000 + i}
+    sig = date.fromisoformat("2026-07-28")
+    idx = cal.index(sig)
+    bars[cal[idx + 1].isoformat()] = {"close": 4001}  # open stripped
+    assert mod._benchmark_return(bars, cal, sig, 40) is None
+
+
+def test_benchmark_return_missing_exit_close_is_missing():
+    bars = {}
+    cal = _cal("2026-07-01", 300)
+    for i, d in enumerate(cal):
+        bars[d.isoformat()] = {"open": 3900 + i, "close": 4000 + i}
+    sig = date.fromisoformat("2026-07-28")
+    idx = cal.index(sig)
+    del bars[cal[idx + 40].isoformat()]["close"]
+    assert mod._benchmark_return(bars, cal, sig, 40) is None
+
+
+# ---------------------------------------------------------------------------
+# DAV-1500 rework: §3 labels-only, single-field labels, caliber param
+
+
+def test_label_return_reads_exactly_one_field():
+    lab = {"hs300_excess_pct": 1.23, "return_pct": 9.99}
+    assert mod._label_return(lab, "hs300_excess_pct") == 1.23
+    # the other field must never be consulted
+    assert mod._label_return(lab, "sw_excess_pct") is None
+    assert mod._label_return({}, "hs300_excess_pct") is None
+    assert mod._label_return({"hs300_excess_pct": True},
+                             "hs300_excess_pct") is None  # bool rejected
+    assert mod._label_return({"hs300_excess_pct": "1.2"},
+                             "hs300_excess_pct") is None  # str not numeric
+
+
+def test_section3_excludes_unlabeled_and_reports_count(
+        tmp_path, monkeypatch):
+    """缺标签记录不进 §3 横截面，且缺标签计数在报告中列出。"""
+    recs = []
+    labs = []
+    for i in range(4):
+        recs.append(_rec(f"r{i}", f"60000{i}.SH", "2026-07-28",
+                         prob=50 + i))
+        labs.append({"symbol": f"60000{i}.SH",
+                     "signal_date": "2026-07-28",
+                     "hs300_excess_pct": float(i)})
+    recs.append(_rec("r9", "600099.SH", "2026-07-28", prob=99))
+    # bench bars exist — §3 must NOT fall back to them
+    cal = _cal("2026-07-01", 300)
+    bench = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+             for i, d in enumerate(cal)}
+    code, text = _run(monkeypatch, tmp_path, recs, labs, bench=bench)
+    assert code == 0
+    assert "缺标签/缺字段样本 **1** 条" in text
+    # the unlabeled record must not be in the daily cross-section n
+    assert "| 2026-07-28 | 4 | ok" in text
+
+
+def test_section3_wrong_field_does_not_fall_back(tmp_path, monkeypatch):
+    """标签行只有其他字段（return_pct）时记缺失，不回落。"""
+    recs = [_rec(f"r{i}", f"60000{i}.SH", "2026-07-28", prob=50 + i)
+            for i in range(4)]
+    labs = [{"symbol": f"60000{i}.SH", "signal_date": "2026-07-28",
+             "return_pct": float(i)} for i in range(4)]  # wrong field name
+    code, text = _run(monkeypatch, tmp_path, recs, labs)
+    assert code == 0
+    assert "缺标签/缺字段样本 **4** 条" in text
+    assert "无可用日序列" in text
+
+
+def test_caliber_param_printed_in_header(tmp_path, monkeypatch):
+    recs = [_rec("r1", "600519.SH", "2026-07-28")]
+    labs = [{"symbol": "600519.SH", "signal_date": "2026-07-28",
+             "sw_excess_pct": 2.5}]
+    code, text = _run(monkeypatch, tmp_path, recs, labs, caliber="sw")
+    assert code == 0
+    assert "relative_caliber=sw" in text
+    assert "label_field=sw_excess_pct" in text
+    assert "--relative-caliber sw" in text
+    assert "字段 sw_excess_pct" in text
+    assert "| 成熟样本 | 1 | 1 | 2.5000" in text
+
+
+def test_caliber_default_hs300(tmp_path, monkeypatch):
+    recs = [_rec("r1", "600519.SH", "2026-07-28")]
+    labs = [{"symbol": "600519.SH", "signal_date": "2026-07-28",
+             "hs300_excess_pct": -1.0}]
+    code, text = _run(monkeypatch, tmp_path, recs, labs)
+    assert code == 0
+    assert "relative_caliber=hs300" in text
+    assert "label_field=hs300_excess_pct" in text
+    assert "| 成熟样本 | 1 | 1 | -1.0000" in text
+
+
+def test_label_fields_override(tmp_path, monkeypatch):
+    recs = [_rec("r1", "600519.SH", "2026-07-28")]
+    labs = [{"symbol": "600519.SH", "signal_date": "2026-07-28",
+             "custom_rel": 7.5}]
+    code, text = _run(monkeypatch, tmp_path, recs, labs,
+                      label_fields=["hs300=custom_rel"])
+    assert code == 0
+    assert "label_field=custom_rel" in text
+    assert "| 成熟样本 | 1 | 1 | 7.5000" in text
 
 
 def test_version_queue_split(tmp_path, monkeypatch):

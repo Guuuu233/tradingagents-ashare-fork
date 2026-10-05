@@ -37,8 +37,13 @@ Sections (issue order):
     top-bottom bucket spread, flagged 未冻结 until P1 freezes
     primary_cross_sectional_metric / min_daily_cross_section_n; days below
     the floor are ``insufficient``.
- 4. Label-return side-by-side, 行业相对 vs 沪深300 — provisional caliber
-    (hs300) only until P2 lands; sw_industry column is explicit "P2 未合入".
+ 4. Label-return side-by-side under an explicit caliber switch
+    (--relative-caliber hs300|sw, default hs300). Each column reads exactly
+    one named label field — the field name is printed in the table header;
+    a row missing that field counts as missing, never falls back to another
+    field. The 沪深300 leg is window-aligned to D-072: T+1 open → 40th
+    trading-day close after the signal day; a missing index open marks the
+    window missing — close is never substituted.
  5. Risk-gate descriptive: BLOCKED vs passed cohorts, matured vs pending.
  6. Style exposure — placeholder until P1 style factors land.
  7. Report body guarantee statement.
@@ -49,19 +54,25 @@ Usage:
 Options:
   --ledger PATH       forward_ledger.jsonl (default work/phase2-ledger/…)
   --db PATH           SQLite DB opened mode=ro (default data/tradingagents.db)
-  --labels PATH       T+40 label JSONL for the provisional caliber
-                      (default work/phase2-labels/labels_t40.jsonl)
-  --sw-labels PATH    industry-relative labels once P2 lands (default
-                      work/phase2-labels/labels_t40_sw.jsonl)
-  --benchmarks PATH   index close JSONL keyed rows {"symbol","date","close"}
+  --labels PATH       T+40 label JSONL consumed under the selected
+                      --relative-caliber (default
+                      work/phase2-labels/labels_t40.jsonl)
+  --relative-caliber hs300|sw
+                      label-return caliber; selects which single label
+                      field each column reads (default hs300)
+  --label-fields      field names per caliber, e.g.
+                      hs300=hs300_excess_pct sw=sw_excess_pct
+                      (defaults: hs300_excess_pct / sw_excess_pct)
+  --benchmarks PATH   index OHLC JSONL keyed rows {"symbol","date","open",
+                      "close"} — open is required for the T+1 open entry leg
                       (default work/phase2-weekly/index_closes.jsonl)
   --benchmark-symbols 000300.SH
                       index symbols to include; if --benchmarks is absent the
                       file can be fetched via akshare (stock_zh_index_daily_tx
                       -> index_zh_a_hist -> stock_zh_index_daily_em) into
                       --benchmarks-dir (default work/phase2-weekly) when
-                      --fetch-benchmarks is passed; otherwise sections 3/4
-                      degrade without touching the network.
+                      --fetch-benchmarks is passed; otherwise section 4
+                      degrades without touching the network.
   --min-cross-n N     daily cross-section floor (default 5 — provisional,
                       P1 owns the freeze)
   --min-total-n N     overall sufficiency floor for the banner (default 40
@@ -99,7 +110,6 @@ PIPELINE_VERSION = "weekly_report.v1"
 DEFAULT_DB = REPO_ROOT / "data" / "tradingagents.db"
 DEFAULT_LEDGER = REPO_ROOT / "work" / "phase2-ledger" / "forward_ledger.jsonl"
 DEFAULT_LABELS = REPO_ROOT / "work" / "phase2-labels" / "labels_t40.jsonl"
-DEFAULT_SW_LABELS = REPO_ROOT / "work" / "phase2-labels" / "labels_t40_sw.jsonl"
 DEFAULT_OUT_DIR = REPO_ROOT / "work" / "phase2-weekly"
 DEFAULT_BENCH_DIR = REPO_ROOT / "work" / "phase2-weekly"
 DEFAULT_BENCH_FILE = "index_closes.jsonl"
@@ -242,7 +252,29 @@ def _load_risk_status(db_path: Path,
 
 
 # ---------------------------------------------------------------------------
-# labels (provisional hs300 caliber) + benchmarks
+# labels + benchmarks
+#
+# Label-field single-source rule (DAV-1500 rework, 总控): each report column
+# reads exactly one named field; a row missing that field is counted missing,
+# never falls back to another field. The mapping caliber -> field is fixed by
+# DEFAULT_LABEL_FIELDS (overridable via --label-fields for a new caliber
+# contract).
+
+DEFAULT_LABEL_FIELDS = {
+    "hs300": "hs300_excess_pct",
+    "sw": "sw_excess_pct",
+}
+
+
+def _label_return(obj: Mapping[str, Any], field: str) -> Optional[float]:
+    """Read exactly `field` from the label row. Missing/non-numeric -> None
+    (the caller counts it as missing; no other field is consulted)."""
+    v = obj.get(field)
+    if isinstance(v, bool):  # bool is int subclass — never a return value
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    return None
 
 
 def _load_label_file(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -266,20 +298,14 @@ def _load_label_file(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
     return out
 
 
-def _label_return(obj: Mapping[str, Any]) -> Optional[float]:
-    for k in ("return_pct", "hs300_excess_pct", "excess_return_pct"):
-        v = obj.get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-    return None
-
-
 def _fetch_index_closes(symbols: Sequence[str], out_dir: Path) -> Path:
-    """Fetch daily index closes via akshare -> JSONL {symbol, date, close}.
+    """Fetch daily index OHLC via akshare -> JSONL {symbol,date,open,close}.
 
     Sources tried in the same order as cn_akshare_provider: tx -> eastmoney
     hist -> em daily. Offline by default — only called when the operator
-    passes --fetch-benchmarks.
+    passes --fetch-benchmarks. `open` is required: the D-072 window enters
+    at the T+1 index open, so rows without an open are skipped (counted
+    missing downstream, never substituted with close).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / DEFAULT_BENCH_FILE
@@ -322,53 +348,73 @@ def _fetch_index_closes(symbols: Sequence[str], out_dir: Path) -> Path:
             close_col = next(
                 (c for c in df.columns
                  if str(c).lower() in ("close", "收盘")), None)
-            if date_col is None or close_col is None:
+            open_col = next(
+                (c for c in df.columns
+                 if str(c).lower() in ("open", "开盘")), None)
+            if date_col is None or close_col is None or open_col is None:
                 raise RuntimeError(
                     f"index daily schema unexpected for {sym}: "
-                    f"{list(df.columns)[:8]}")
+                    f"{list(df.columns)[:8]} (need date+open+close)")
             for _, row in df.iterrows():
                 d = str(row[date_col])[:10]
                 try:
+                    o = float(row[open_col])
                     c = float(row[close_col])
                 except (TypeError, ValueError):
                     continue
-                fh.write(json.dumps({"symbol": sym, "date": d, "close": c},
+                fh.write(json.dumps({"symbol": sym, "date": d,
+                                     "open": o, "close": c},
                                     ensure_ascii=False) + "\n")
     return path
 
 
-def _load_benchmark_closes(path: Path) -> dict[str, dict[str, float]]:
-    out: dict[str, dict[str, float]] = {}
+def _load_benchmark_bars(path: Path) -> dict[str, dict[str, dict[str, float]]]:
+    """symbol -> {date -> {"open": float|None, "close": float|None}}.
+
+    Either price may be absent in the source row; it stays absent (None)
+    downstream — the window math never substitutes close for open.
+    """
+    out: dict[str, dict[str, dict[str, float]]] = {}
     with open(path, "r", encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             obj = json.loads(line)
-            sym, d, c = obj.get("symbol"), obj.get("date"), obj.get("close")
-            if sym and d and isinstance(c, (int, float)):
-                out.setdefault(str(sym), {})[str(d)[:10]] = float(c)
+            sym, d = obj.get("symbol"), obj.get("date")
+            if not sym or not d:
+                continue
+            bar: dict[str, float] = {}
+            for k in ("open", "close"):
+                v = obj.get(k)
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, (int, float)) and v > 0:
+                    bar[k] = float(v)
+            out.setdefault(str(sym), {})[str(d)[:10]] = bar
     return out
 
 
-def _benchmark_return(closes: Mapping[str, float],
+def _benchmark_return(bars: Mapping[str, Mapping[str, float]],
                       trade_dates: list[date],
                       signal: date,
                       offset: int) -> Optional[float]:
-    """Index % return over the same T+1 -> T+offset trading-day window.
+    """Index % return over the D-072 window: T+1 OPEN -> T+offset CLOSE.
 
-    Close-to-close on trading-day anchors (signal+1 -> signal+offset);
-    documented as the provisional 沪深300 caliber until P2 supplies the
-    industry-relative leg.
+    Entry price is the index open on the first trading day after `signal`;
+    exit is the index close on the `offset`-th trading day after `signal`.
+    If the entry-day open is absent the window is missing (None) — the close
+    is never substituted, per the DAV-1500 rework.
     """
     idx = bisect.bisect_right(trade_dates, signal) - 1
     e_i, t_i = idx + 1, idx + offset
     if idx < 0 or e_i >= len(trade_dates) or t_i >= len(trade_dates):
         return None
     e_d, t_d = trade_dates[e_i].isoformat(), trade_dates[t_i].isoformat()
-    e_c, t_c = closes.get(e_d), closes.get(t_d)
-    if not e_c or not t_c or e_c <= 0:
+    e_bar, t_bar = bars.get(e_d) or {}, bars.get(t_d) or {}
+    e_o, t_c = e_bar.get("open"), t_bar.get("close")
+    if e_o is None or t_c is None or e_o <= 0:
         return None
-    return round((t_c - e_c) / e_c * 100.0, 4)
+    return round((t_c - e_o) / e_o * 100.0, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -449,8 +495,9 @@ def build_report(
     risk_status: Mapping[str, str],
     risk_note: str = "",
     labels: Mapping[tuple[str, str], dict[str, Any]],
-    sw_labels: Mapping[tuple[str, str], dict[str, Any]],
-    bench_closes: Mapping[str, Mapping[str, float]],
+    label_field: str,
+    relative_caliber: str,
+    bench_bars: Mapping[str, Mapping[str, Mapping[str, float]]],
     bench_symbols: Sequence[str],
     trade_dates: list[date],
     as_of: date,
@@ -514,29 +561,31 @@ def build_report(
                          formal_n, research_n))
 
     # --- section 3: daily cross-sectional series (provisional, 未冻结)
+    # 横截面只用有个股标签收益的样本（DAV-1500 返修）：缺标签的记录不进
+    # 日序列、也不用基准收益回落，缺标签计数在下方列出。标签字段单认
+    # `label_field`（见表头），其他字段不回落。
     def _ret_for(r: Mapping[str, Any]) -> Optional[float]:
         sig = r.get("_sig")
         if sig is None:
             return None
         lab = labels.get((r.get("symbol"), sig.isoformat()))
-        if lab:
-            v = _label_return(lab)
-            if v is not None:
-                return v
-        if bench_closes and bench_symbols:
-            first = bench_closes.get(bench_symbols[0], {})
-            return _benchmark_return(first, trade_dates, sig,
-                                     dsl.OUTCOME_OFFSET_TRADING_DAYS)
-        return None
+        if lab is None:
+            return None
+        return _label_return(lab, label_field)
 
     daily: dict[date, list[tuple[float, float]]] = {}
+    label_missing = 0          # matured 记录缺标签行或缺指定字段
+    prob_missing = 0           # matured 记录无中线概率
     for r in matured:
         sig = r.get("_sig")
         if sig is None or r["_m_prob"] is None:
+            prob_missing += 1
             continue
         ret = _ret_for(r)
-        if ret is not None:
-            daily.setdefault(sig, []).append((r["_m_prob"], ret))
+        if ret is None:
+            label_missing += 1
+            continue
+        daily.setdefault(sig, []).append((r["_m_prob"], ret))
 
     day_rows = []
     ic_series: list[float] = []
@@ -564,33 +613,42 @@ def build_report(
             spread_series.append(spread)
         day_rows.append((d.isoformat(), n, "ok", _fmt(ic), _fmt(spread)))
 
-    # --- section 4: returns side-by-side
-    lab_rets = [
-        v for r in matured
-        if (v := _label_return(labels.get(
-            (r.get("symbol"),
-             (r.get("_sig") or date.min).isoformat()), {}))) is not None
-    ]
-    sw_rets = [
-        v for r in matured
-        if (v := _label_return(sw_labels.get(
-            (r.get("symbol"),
-             (r.get("_sig") or date.min).isoformat()), {}))) is not None
-    ]
+    # --- section 4: returns side-by-side under --relative-caliber
+    # 每列只认一个指定字段/数据源：标签列只读 `label_field`；沪深300 列只
+    # 读基准行情（T+1 开盘入场 → 信号日起第 40 个交易日收盘退出），入场日
+    # 开盘价取不到记缺失，不用收盘替代。
+    lab_rets: list[float] = []
+    lab_missing = 0
+    for r in matured:
+        sig = r.get("_sig")
+        v = None
+        if sig is not None:
+            lab = labels.get((r.get("symbol"), sig.isoformat()))
+            if lab is not None:
+                v = _label_return(lab, label_field)
+        if v is None:
+            lab_missing += 1
+        else:
+            lab_rets.append(v)
     bench_rets: list[float] = []
-    if bench_closes and bench_symbols:
-        first = bench_closes.get(bench_symbols[0], {})
+    bench_missing = 0
+    if bench_bars and bench_symbols:
+        first = bench_bars.get(bench_symbols[0], {})
         for r in matured:
             sig = r.get("_sig")
-            if sig:
-                v = _benchmark_return(first, trade_dates, sig,
-                                      dsl.OUTCOME_OFFSET_TRADING_DAYS)
-                if v is not None:
-                    bench_rets.append(v)
+            v = (_benchmark_return(first, trade_dates, sig,
+                                   dsl.OUTCOME_OFFSET_TRADING_DAYS)
+                 if sig else None)
+            if v is None:
+                bench_missing += 1
+            else:
+                bench_rets.append(v)
+    else:
+        bench_missing = len(matured)
     ret_rows = [(
         "成熟样本", len(matured), len(lab_rets), _fmt(_mean(lab_rets)),
-        len(sw_rets), _fmt(_mean(sw_rets)), len(bench_rets),
-        _fmt(_mean(bench_rets)))]
+        lab_missing, len(bench_rets), _fmt(_mean(bench_rets)),
+        bench_missing)]
 
     # --- section 5: risk gate descriptive
     # Prefer DB risk_status (authoritative); fall back to the ledger's own
@@ -618,7 +676,14 @@ def build_report(
 
     out: list[str] = []
     out.append(f"<!-- pipeline={PIPELINE_VERSION} as_of={as_of_s} "
+               f"relative_caliber={relative_caliber} "
+               f"label_field={label_field} "
                f"inputs_sha256={input_digest} -->")
+    out.append("")
+    out.append(f"> 口径参数：`--relative-caliber {relative_caliber}`"
+               f"（标签字段 `{label_field}`，单字段单认、不回落）；"
+               "沪深300 腿 = T+1 开盘 → 信号日起第 40 个交易日收盘"
+               "（D-072）")
     out.append("")
     out.append("## 0. 样本量与结论判定")
     out.append("")
@@ -658,6 +723,10 @@ def build_report(
 
     out.append("## 3. 日级横截面统计量（未冻结口径，P1 裁定前双列）")
     out.append("")
+    out.append(f"> 横截面只计入有个股标签收益（字段 `{label_field}`）的样本；"
+               f"缺标签/缺字段样本 **{label_missing}** 条、缺中线概率样本 "
+               f"**{prob_missing}** 条，均不计入日序列，也不用基准收益回落。")
+    out.append("")
     if day_rows:
         out.append(_md_table(
             ("signal_date", "n", "status", "Spearman IC（未冻结）",
@@ -670,19 +739,25 @@ def build_report(
         out.append(f"- insufficient 天数（n < {min_cross_n}）："
                    f"**{insufficient_days}**。")
     else:
-        out.append("无可用日序列（成熟样本无标签或无基准数据）。")
+        out.append("无可用日序列（成熟样本均无有效个股标签收益）。")
     out.append("")
 
-    out.append("## 4. 收益口径并列（P2 未合入：沪深300 为临时口径，"
-               "行业相对列留空待 P2）")
+    out.append(f"## 4. 收益口径（--relative-caliber {relative_caliber}；"
+               "每列单认一个字段/数据源，缺失记缺失）")
     out.append("")
     out.append(_md_table(
-        ("集合", "样本数", "标签收益 n", "标签收益均值",
-         "行业相对 n(P2 未合入)", "行业相对均值(P2 未合入)",
-         "沪深300 同窗 n", "沪深300 同窗均值"), ret_rows))
+        ("集合", "样本数",
+         f"标签收益 n（字段 {label_field}）", "标签收益均值",
+         "标签缺失 n",
+         "沪深300 同窗 n（T+1 开盘→T+40 收盘）", "沪深300 同窗均值",
+         "基准缺失 n"), ret_rows))
     out.append("")
-    out.append("> 临时口径说明：标签文件来自 `return_labels.py` 沪深300 口径；"
-               "P2 合入后本表切换为行业相对口径并注明切换日期。")
+    if relative_caliber == "sw":
+        out.append("> 当前口径 `sw`：标签列读申万行业相对收益字段。P2 合入前"
+                   "该标签文件为空，缺失计数 = 全部成熟样本属预期。")
+    else:
+        out.append("> 当前口径 `hs300`：标签列读沪深300 相对收益字段；"
+                   "沪深300 列复算同窗指数收益（T+1 开盘入场）。")
     out.append("")
 
     out.append("## 5. 风险层拦截档 vs 放行档（描述性）")
@@ -729,7 +804,6 @@ def _iso_week_anchor(d: date, trade_dates: list[date]) -> str:
 
 def _input_digest(records: list[dict[str, Any]],
                   labels: Mapping[Any, Any],
-                  sw_labels: Mapping[Any, Any],
                   bench: Mapping[str, Any]) -> str:
     h = hashlib.sha256()
     for r in records:
@@ -738,8 +812,6 @@ def _input_digest(records: list[dict[str, Any]],
         h.update(b"\n")
     for k in sorted(labels):
         h.update(_canon({"k": k, "v": labels[k]}))
-    for k in sorted(sw_labels):
-        h.update(_canon({"sw_k": k, "v": sw_labels[k]}))
     h.update(_canon(bench))
     h.update(PIPELINE_VERSION.encode())
     return h.hexdigest()
@@ -824,7 +896,26 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"WARNING: {risk_note}; section 5 degraded", file=sys.stderr)
 
     labels = _load_label_file(Path(args.labels))
-    sw_labels = _load_label_file(Path(args.sw_labels))
+
+    label_fields = dict(DEFAULT_LABEL_FIELDS)
+    for kv in args.label_fields or ():
+        if "=" not in kv:
+            print(f"FAILED: --label-fields entry {kv!r} must be "
+                  "caliber=field", file=sys.stderr)
+            return 2
+        cal, fld = kv.split("=", 1)
+        cal, fld = cal.strip(), fld.strip()
+        if not cal or not fld:
+            print(f"FAILED: --label-fields entry {kv!r} must be "
+                  "caliber=field", file=sys.stderr)
+            return 2
+        label_fields[cal] = fld
+    if args.relative_caliber not in label_fields:
+        print(f"FAILED: --relative-caliber {args.relative_caliber!r} has no "
+              f"label field mapping (known: {sorted(label_fields)}; extend "
+              "with --label-fields caliber=field)", file=sys.stderr)
+        return 2
+    label_field = label_fields[args.relative_caliber]
 
     bench_path = Path(args.benchmarks) if args.benchmarks else None
     if bench_path is None or not bench_path.exists():
@@ -836,16 +927,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                     args.benchmark_symbols, bench_dir)
             except RuntimeError as exc:
                 print(f"WARNING: benchmark fetch failed: {exc}; "
-                      "sections 3/4 degraded", file=sys.stderr)
+                      "section 4 degraded", file=sys.stderr)
         bench_path = candidate
-    bench_closes = (_load_benchmark_closes(bench_path)
-                    if bench_path.exists() else {})
+    bench_bars = (_load_benchmark_bars(bench_path)
+                  if bench_path.exists() else {})
 
-    digest = _input_digest(records, labels, sw_labels, bench_closes)
+    digest = _input_digest(records, labels, bench_bars)
     body = build_report(
         records=records, risk_status=risk_status, risk_note=risk_note,
         labels=labels,
-        sw_labels=sw_labels, bench_closes=bench_closes,
+        label_field=label_field,
+        relative_caliber=args.relative_caliber,
+        bench_bars=bench_bars,
         bench_symbols=args.benchmark_symbols, trade_dates=trade_dates,
         as_of=as_of, min_cross_n=args.min_cross_n,
         min_total_n=args.min_total_n, input_digest=digest)
@@ -870,12 +963,21 @@ def main() -> int:
     p.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     p.add_argument("--db", default=str(DEFAULT_DB))
     p.add_argument("--labels", default=str(DEFAULT_LABELS),
-                   help="T+40 label JSONL (provisional hs300 caliber)")
-    p.add_argument("--sw-labels", default=str(DEFAULT_SW_LABELS),
-                   help="industry-relative label JSONL once P2 lands")
+                   help="T+40 label JSONL consumed under the selected "
+                        "--relative-caliber")
+    p.add_argument("--relative-caliber", default="hs300",
+                   choices=("hs300", "sw"),
+                   help="label-return caliber printed in the report header "
+                        "(default hs300; sw = industry-relative once P2 "
+                        "labels land)")
+    p.add_argument("--label-fields", nargs="*", default=None,
+                   metavar="CAL=FIELD",
+                   help="override the single label field read per caliber, "
+                        "e.g. hs300=hs300_excess_pct sw=sw_excess_pct")
     p.add_argument("--benchmarks", default=None,
-                   help="index close JSONL (default work/phase2-weekly/"
-                        "index_closes.jsonl)")
+                   help="index OHLC JSONL {symbol,date,open,close} (default "
+                        "work/phase2-weekly/index_closes.jsonl); open is "
+                        "required for the T+1 open entry leg")
     p.add_argument("--benchmarks-dir", default=str(DEFAULT_BENCH_DIR))
     p.add_argument("--benchmark-symbols", nargs="+",
                    default=list(DEFAULT_BENCH_SYMBOLS))
