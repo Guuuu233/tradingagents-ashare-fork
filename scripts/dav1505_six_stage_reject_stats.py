@@ -488,6 +488,10 @@ def main() -> int:
             "units_explicit_empty_claims": no_claims_explicit,
             "units_missing_claims_field_or_ids": no_claims_missing,
             "per_unit_claim_count_hist": {str(k): v for k, v in sorted(per_unit.items())},
+            "per_unit_claim_count_hist_note": (
+                "口径 = 有效 Mapping 项数（extract_unit_parts 先过滤非 Mapping 项后 len(claims)）；"
+                "本副本与原始 claims 数组长度恰逐键一致，并非通用原始长度契约。"
+            ),
         }
     out["stages"]["1_proposal"] = st1
 
@@ -1208,7 +1212,8 @@ def main() -> int:
         "frame_raw_reports": {
             "note": (
                 "原始报告框：v1 固定账户全部报告（未按档位去重），按 created_at 计运行月；"
-                "4 月基准报告存在但在去重档级框中无对应档（被后写同名档覆盖）。"
+                "4 月 3 份原始报告 result_data 的 $.short_term/$.medium_term 均为 NULL（顶层平铺结构），"
+                "未进入去重档级框——缺档原因是字段不存在，非被后写同名档覆盖。"
             ),
             "run_month": dict(sorted(v1_raw_report_run_month.items())),
         },
@@ -1290,9 +1295,33 @@ def main() -> int:
     lines.append("- 不可写：偏空不来自提出侧 / 最大可观测来源 / ④处突变（分母非同一串行总体）。")
     lines.append("- 中线 ④ CI 含 0 → 未见显著差异，不写差异不存在。")
     lines.append("")
+    lines.append("## 样本框与运行/基准月分层")
+    lines.append("两套样本框分列，不混用：")
+    lines.append("")
+    lines.append("### 原始报告框（未按档位去重）")
+    fr = out["stratification"]["frame_raw_reports"]
+    raw_tot = sum(fr["run_month"].values())
+    lines.append(f"- v1 固定账户原始报告：{raw_tot} 份")
+    for m, n in sorted(fr["run_month"].items()):
+        lines.append(f"  - 运行生成月 {m}：{n} 份")
+    lines.append("- " + fr["note"])
+    lines.append("")
+    lines.append("### 去重档级框（率/CI 口径所属）")
+    fd = out["stratification"]["frame_deduped_units"]
+    for hz in HORIZONS:
+        rm = {k.split("|", 1)[1]: v for k, v in fd["run_month"].items() if k.startswith(hz)}
+        bm = {k.split("|", 1)[1]: v for k, v in fd["baseline_month"].items() if k.startswith(hz)}
+        lines.append(f"- {HORIZON_LABEL[hz]}：{sum(rm.values())} 档；运行月 "
+                     + "、".join(f"{m}={n} 档" for m, n in sorted(rm.items()))
+                     + "；基准月 " + "、".join(f"{m}={n} 档" for m, n in sorted(bm.items()))
+                     + "（4 月、10 月档为 0 份）")
+    lines.append("- " + fd["note"])
+    lines.append("- " + out["stratification"]["frame_note"])
+    lines.append("")
     lines.append("## 运行时")
     lines.append(f"- 单进程峰值 RSS：{out['runtime']['peak_rss_gb']} GB（红线 4 GB）")
     lines.append("- result_data 逐行流式，即用即弃；产物全量落盘（stats.json / report.md）。")
+    lines.append("")
     md = "\n".join(lines)
     if args.output_md:
         os.makedirs(os.path.dirname(os.path.abspath(args.output_md)), exist_ok=True)
