@@ -163,6 +163,13 @@ async def _send_scheduled_report_notifications(
                 )
                 if report:
                     db.expunge(report)
+                    # DAV-1506 (B-1): rebuild the legacy horizons/top-mdc
+                    # compat view on canonical rows before renderers read
+                    # result_data off the detached row.
+                    from tradingagents.storage.result_data_compat import (
+                        result_data_compat_view,
+                    )
+                    report.result_data = result_data_compat_view(report.result_data)
                     report_to_send = report
                 if user:
                     wecom_report_enabled = getattr(user, "wecom_report_enabled", True)

@@ -22,6 +22,10 @@ from sqlalchemy.orm import Session, load_only
 
 from api.database import ReportDB
 from tradingagents.llm_clients.thinking_cleaner import clean_report_result_data
+from tradingagents.storage.result_data_compat import (
+    result_data_compat_view,
+    strip_compat_view_for_persist,
+)
 
 
 REPORT_SUMMARY_COLUMNS = (
@@ -1604,6 +1608,11 @@ def canonicalize_report_result_data(
     if not isinstance(result_data, dict):
         raise ValueError("result_data must be an object")
 
+    # DAV-1506 (D-072 裁定 §4): a compat view (horizons/top mdc rebuilt from
+    # the authoritative *_term slices) must never flow back into persistence.
+    # Strip reconstructed keys on v1 rows; no-op for legacy rows.
+    result_data = strip_compat_view_for_persist(result_data)
+
     validate_report_machine_blocks(result_data)
     _validate_fund_flow_evidence(result_data)
     canonical_data = dict(result_data)
@@ -2391,6 +2400,9 @@ def finalize_orphan_report(
     if str(report.status or "") not in ACTIVE_REPORT_STATUSES:
         return report
 
+    # DAV-1506: never flush a reconstructed compat view back to the row.
+    if isinstance(report.result_data, dict):
+        report.result_data = strip_compat_view_for_persist(report.result_data)
     report.status = "failed"
     report.error = error_message
     report.updated_at = datetime.now(timezone.utc)
@@ -2781,7 +2793,10 @@ def get_report(db: Session, report_id: str, user_id: Optional[str] = None) -> Op
         query = query.filter(ReportDB.user_id == user_id)
     report = query.first()
     if report and report.result_data and isinstance(report.result_data, dict):
-        rd = dict(report.result_data)
+        # DAV-1506 (B-1): rebuild the legacy horizons/top-market_data_context
+        # view from the authoritative *_term slices on canonical rows. The
+        # view is a copy — strip_compat_view_for_persist guards every save.
+        rd = result_data_compat_view(dict(report.result_data))
         if "social_data_context" not in rd or rd["social_data_context"] is None:
             rd["social_data_context"] = {}
         ensure_horizon_run_metadata_on_read(rd)

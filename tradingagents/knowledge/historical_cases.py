@@ -624,6 +624,10 @@ def extract_claims_from_report(
                 claims_list.append({"claim": claim_text})
 
     if isinstance(result_data, dict):
+        # DAV-1506 (B-1): canonical rows rebuild the legacy horizons.<h> view
+        # from the authoritative *_term slices (no-op for legacy rows).
+        from tradingagents.storage.result_data_compat import result_data_compat_view
+        result_data = result_data_compat_view(result_data)
         # 1. 顶层 debate state 中的 claims
         inv_state = result_data.get("investment_debate_state")
         if isinstance(inv_state, dict):
