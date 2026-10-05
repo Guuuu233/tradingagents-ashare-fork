@@ -389,6 +389,7 @@ def main() -> int:
     whole_missing_report_ids = {hz: [] for hz in HORIZONS}
     v1_report_ids = set()
     units_before_dedup = 0
+    v1_raw_report_run_month = Counter()  # 原始报告框（789 份，未去重）运行月计数
 
     cur.execute(
         "SELECT id, symbol, trade_date, created_at, "
@@ -399,6 +400,8 @@ def main() -> int:
     )
     for rid, sym, td, ca, bd, rdj in cur:
         v1_report_ids.add(rid)
+        if ca:
+            v1_raw_report_run_month[ca[:7]] += 1
         try:
             rd = json.loads(rdj)
         except Exception:
@@ -1175,7 +1178,13 @@ def main() -> int:
     }
     out["background_unversioned"] = bg
 
-    # ── 运行生成月 × 基准月份分层（v1 主样本） ──────────────────────────────
+    # ── 运行生成月 × 基准月份分层 ──────────────────────────────
+    # 两套样本框分列，不得混用：
+    #   原始报告框 = v1 固定账户全部 789 份（未按 symbol/基准日/档位去重），
+    #     运行月 9/10 = 423/366 份；
+    #   去重档级框 = dedup 后 1108 档（short 554 + medium 554），运行月每侧
+    #     9/10 = 232/322 档；基准月档级覆盖 5–9 月（4 月档为 0 份），
+    #     无 10 月基准日。
     strat: Dict[str, Counter] = {"run_month": Counter(), "baseline_month": Counter(),
                                  "run_x_baseline": Counter()}
     for u in units:
@@ -1187,10 +1196,23 @@ def main() -> int:
         strat["baseline_month"][(u["horizon"], bm)] += 1
         strat["run_x_baseline"][(u["horizon"], rm, bm)] += 1
     out["stratification"] = {
-        "run_month": {f"{hz}|{m}": n for (hz, m), n in sorted(strat["run_month"].items())},
-        "baseline_month": {f"{hz}|{m}": n for (hz, m), n in sorted(strat["baseline_month"].items())},
-        "run_x_baseline": {f"{hz}|{rm}|{bm}": n for (hz, rm, bm), n in sorted(strat["run_x_baseline"].items())},
-        "note": "基准日覆盖 4–9 月，无 10 月基准日；运行生成月 9/10 月。",
+        "frame_deduped_units": {
+            "note": (
+                "去重档级框：1108 档（short 554 + medium 554），symbol×基准日×档位去重后；"
+                "基准月 5–9 月（4 月档为 0 份），无 10 月基准日。"
+            ),
+            "run_month": {f"{hz}|{m}": n for (hz, m), n in sorted(strat["run_month"].items())},
+            "baseline_month": {f"{hz}|{m}": n for (hz, m), n in sorted(strat["baseline_month"].items())},
+            "run_x_baseline": {f"{hz}|{rm}|{bm}": n for (hz, rm, bm), n in sorted(strat["run_x_baseline"].items())},
+        },
+        "frame_raw_reports": {
+            "note": (
+                "原始报告框：v1 固定账户全部报告（未按档位去重），按 created_at 计运行月；"
+                "4 月基准报告存在但在去重档级框中无对应档（被后写同名档覆盖）。"
+            ),
+            "run_month": dict(sorted(v1_raw_report_run_month.items())),
+        },
+        "frame_note": "两套框口径不同，禁止同段落混用；率/CI 一律以去重档级框为准。",
     }
 
     # ── write outputs ───────────────────────────────────────────────────────
