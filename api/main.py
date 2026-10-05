@@ -3269,6 +3269,46 @@ async def _run_job_inner(
     tracker = AgentProgressTracker(request.selected_analysts, job_id)
     _emit_job_event(job_id, "agent.snapshot", tracker.snapshot())
 
+    # DAV-1535: LangGraph checkpointer thread cleanup (生产内存泄漏修复).
+    # 每个按 job_id 命名的检查点线程（单档 job_id、双档 job_id_{h}、共享阶段
+    # job_id_dual、propagate 传入 job_id）只在本任务生命周期内写入；全仓库无
+    # get_state/恢复/追问读取（已 grep 验证）。任务无论成功/失败/取消，都要在
+    # finally 中把本次登记过的线程从共享 MemorySaver 删掉，否则 storage/blobs
+    # 随任务数线性增长。清理失败只记日志，绝不影响任务结果与报告保存。
+    _job_checkpointer_threads: List[str] = []
+    _job_graph_instances: List[Any] = []
+
+    def _cleanup_checkpointer_threads() -> None:
+        """Delete every checkpoint thread this job registered.
+
+        Each thread is deleted from every distinct checkpointer store seen on
+        the graphs this job created (the production shared MemorySaver plus
+        any injected store).  All failures are logged and swallowed so a bad
+        cleanup never alters the job outcome or report persistence.
+        """
+        if not _job_checkpointer_threads:
+            return
+        seen_stores: List[Any] = []
+        for g in _job_graph_instances:
+            for store in (
+                getattr(g, "checkpointer", None),
+                getattr(getattr(g, "graph", None), "checkpointer", None),
+            ):
+                if store is not None and all(store is not s for s in seen_stores):
+                    seen_stores.append(store)
+        for store in seen_stores:
+            delete_thread = getattr(store, "delete_thread", None)
+            if not callable(delete_thread):
+                continue
+            for tid in _job_checkpointer_threads:
+                try:
+                    delete_thread(tid)
+                except Exception as exc:
+                    _log(
+                        f"[Job {job_id}] checkpointer cleanup failed for "
+                        f"thread {tid!r}: {exc!r}"
+                    )
+
     try:
         # D-015 Contract 3 & 5: Check if E-02 prompt guard intercepted any role at launch freeze
         prompt_guard_violation = next(
@@ -3331,6 +3371,7 @@ async def _run_job_inner(
             custom_prompts=_custom_prompts_for_graph,
             custom_prompt_placement=_PROMPT_PLACEMENT,
         )
+        _job_graph_instances.append(graph)
         final_state: Optional[Dict[str, Any]] = None
         # DAV-1430: bound by whichever branch collected the pool; the
         # propagate() path leaves it None and the snapshot falls back to the
@@ -3479,6 +3520,8 @@ async def _run_job_inner(
                 if "config" not in s_args:
                     s_args["config"] = {}
                 s_args["config"]["configurable"] = {"thread_id": f"{job_id}_dual"}
+                _job_checkpointer_threads.append(f"{job_id}_dual")
+                _job_graph_instances.append(analyst_graph)
                 s_args["config"]["metadata"] = {
                     **(s_args["config"].get("metadata") or {}),
                     "report_id": job_id,
@@ -3583,6 +3626,8 @@ async def _run_job_inner(
                 if "config" not in h_args:
                     h_args["config"] = {}
                 h_args["config"]["configurable"] = {"thread_id": f"{job_id}_{horizon}"}
+                _job_checkpointer_threads.append(f"{job_id}_{horizon}")
+                _job_graph_instances.append(horizon_graph)
                 # DAV-1314: 用量回调从 run metadata 取 report_id/档位；
                 # 角色名由 LangGraph 注入的 langgraph_node 提供。
                 h_args["config"]["metadata"] = {
@@ -4406,6 +4451,7 @@ async def _run_job_inner(
             if "config" not in args:
                 args["config"] = {}
             args["config"]["configurable"] = {"thread_id": job_id}
+            _job_checkpointer_threads.append(job_id)
             # DAV-1314: 用量回调 metadata（report_id/档位）
             args["config"]["metadata"] = {
                 **(args["config"].get("metadata") or {}),
@@ -4582,6 +4628,7 @@ async def _run_job_inner(
                     thread_id=job_id,
                     horizon_resolution=horizon_resolution,
                 )
+                _job_checkpointer_threads.append(job_id)
             else:
                 # TradingAgentsGraph.propagate historically defaults the
                 # propagator state to short.  Keep the API-only medium path
@@ -4622,6 +4669,7 @@ async def _run_job_inner(
                 if "config" not in args:
                     args["config"] = {}
                 args["config"]["configurable"] = {"thread_id": job_id}
+                _job_checkpointer_threads.append(job_id)
                 # DAV-1314: 用量回调 metadata（report_id/档位）
                 args["config"]["metadata"] = {
                     **(args["config"].get("metadata") or {}),
@@ -4808,6 +4856,10 @@ async def _run_job_inner(
             {"job_id": job_id, "error": err_msg},
         )
     finally:
+        try:
+            _cleanup_checkpointer_threads()
+        except Exception as cleanup_exc:
+            _log(f"[Job {job_id}] checkpointer cleanup error: {cleanup_exc!r}")
         _shared_data_collector.evict(request.symbol, request.trade_date)
 
 
