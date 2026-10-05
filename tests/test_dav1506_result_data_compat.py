@@ -271,14 +271,15 @@ def test_strip_compat_view_removes_virtual_keys_on_v1():
     assert stripped["short_term"] == canon["short_term"]
 
 
-def test_strip_keeps_foreign_alias_content_fail_closed():
+def test_strip_reports_foreign_alias_conflict_then_drops(caplog):
+    """Foreign alias content on a v1 row is logged then dropped (DAV-1514)."""
     rd = _legacy_dual()
     canon = encode_canonical(rd)
-    view = expand_compat_view(canon)
-    # foreign content that is NOT the reconstructed view must not be dropped
-    view["horizons"] = {"short": {"foreign": True}}
-    stripped = strip_compat_view_for_persist(view)
-    assert stripped["horizons"] == {"short": {"foreign": True}}
+    canon["horizons"] = {"short": {"foreign": True}}
+    with caplog.at_level("WARNING", logger="tradingagents.storage.result_data_compat"):
+        stripped = strip_compat_view_for_persist(canon)
+    assert "horizons" not in stripped
+    assert any("alias conflict" in rec.getMessage() or "conflict" in rec.getMessage().lower() for rec in caplog.records)
 
 
 def test_strip_noop_on_legacy():
@@ -288,6 +289,17 @@ def test_strip_noop_on_legacy():
 
 # ---------------------------------------------------------------------------
 # conflict detector
+
+
+def test_detect_alias_conflicts_flags_non_dict_horizon_slot():
+    """DAV-1514 🟢-2: ``horizons.<h> = None`` must be reported, not skipped."""
+    rd = _legacy_dual()
+    rd["horizons"]["short"] = None
+    conflicts = detect_alias_conflicts(rd)
+    assert any("horizons.short" in c and "not an object" in c for c in conflicts)
+    # and encode refuses (fail-close), never silently dropping the slot
+    with pytest.raises(StorageCompatConflict):
+        encode_canonical(rd)
 
 
 def test_detect_alias_conflicts_reports_each_kind():
@@ -303,6 +315,73 @@ def test_detect_alias_conflicts_reports_each_kind():
     assert any("extra" in c for c in conflicts)
     assert any("weekend" in c for c in conflicts)
     assert any("market_data_context" in c for c in conflicts)
+
+
+def test_strip_drops_virtual_keys_unconditionally_on_v1():
+    """DAV-1514 🔴: read-time backfills must not defeat the persist guard.
+
+    After ``ensure_horizon_run_metadata_on_read`` stamps hrm into the served
+    view's ``horizons.<h>`` slices (a key absent from the recorded mask), the
+    strip must still drop ``horizons`` / ``market_data_context`` wholesale.
+    """
+    rd = _legacy_dual()
+    canon = encode_canonical(rd)
+    view = expand_compat_view(canon)
+    # simulate the get_report read-side backfill into the view slices
+    view["horizons"]["short"]["horizon_run_metadata"] = {"resolved": ["short"]}
+    stripped = strip_compat_view_for_persist(view)
+    assert "horizons" not in stripped
+    assert "market_data_context" not in stripped
+    # authoritative slots survive untouched
+    assert stripped["short_term"] == canon["short_term"]
+
+
+def test_strip_keeps_legacy_rows_untouched():
+    rd = _legacy_dual()
+    assert strip_compat_view_for_persist(rd) is rd
+
+
+def test_get_report_then_finalize_does_not_write_view_back():
+    """DAV-1514 回归: v1 行缺 hrm → get_report → finalize_orphan_report 后
+    ORM 对象 ``result_data`` 不含 ``horizons`` / ``market_data_context``。"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api.database import Base, ReportDB
+    from api.services import report_service
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = session_factory()
+    try:
+        rd = _legacy_dual()
+        canon = encode_canonical(rd)
+        row = ReportDB(
+            id="r-v1-1", symbol="600519.SH", trade_date="2026-10-02",
+            status="running", result_data=canon,
+        )
+        db.add(row)
+        db.commit()
+
+        fetched = report_service.get_report(db, "r-v1-1")
+        # served view has the reconstructed aliases + read-time hrm backfill
+        assert isinstance(fetched.result_data.get("horizons"), dict)
+        assert "horizon_run_metadata" in fetched.result_data["horizons"]["short"]
+
+        report_service.finalize_orphan_report(db, fetched)
+
+        persisted = db.query(ReportDB).filter(ReportDB.id == "r-v1-1").one()
+        assert persisted.status == "failed"
+        assert "horizons" not in (persisted.result_data or {})
+        assert "market_data_context" not in (persisted.result_data or {})
+        # authoritative slices carry the backfilled hrm (term slots), but no
+        # virtual alias keys were written back.
+        assert persisted.result_data["short_term"].get("horizon_run_metadata") or \
+            persisted.result_data.get("horizon_run_metadata")
+    finally:
+        db.close()
+        engine.dispose()
 
 
 def test_json_serialized_view_equals_legacy_serialization_subset():
