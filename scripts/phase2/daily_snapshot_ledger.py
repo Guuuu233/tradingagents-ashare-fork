@@ -383,6 +383,12 @@ def build_record(
     result_data = json.loads(result_data_raw) if result_data_raw else {}
     if not isinstance(result_data, dict):
         result_data = {}
+    # DAV-1506 (B-1): canonical rows rebuild the legacy horizons.<h> and
+    # top-level market_data_context view from the authoritative *_term
+    # slices so pit/horizon extraction reads identical values on both
+    # storage layouts.
+    from tradingagents.storage.result_data_compat import result_data_compat_view
+    result_data = result_data_compat_view(result_data)
     pit_status, pit_evidence = _classify_input_pit(result_data)
 
     created = _parse_dt(row["created_at"])
