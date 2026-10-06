@@ -42,7 +42,8 @@ def board_rate(code: str, is_st: bool) -> float:
 
 
 def brute_label(code: str, signal_date: str, cal: list[str], bars: dict[str, dict],
-                is_st: bool, sw_close_by_code: dict, sw_code: str):
+                is_st: bool, sw_open_by_code: dict, sw_close_by_code: dict,
+                sw_code: str, adj_map: dict[str, dict] | None):
     """Naive per-row resolver mirroring return_labels.py (BUY leg)."""
     if signal_date not in cal:
         return dict(outcome_status="invalid_signal")
@@ -109,15 +110,29 @@ def brute_label(code: str, signal_date: str, cal: list[str], bars: dict[str, dic
                     target_exit_date=target_d, actual_exit_date="",
                     roll_days_used=0, entry_open=entry_open, exit_close=np.nan)
 
-    r_stock = exit_close / entry_open - 1.0
+    r_stock_raw = exit_close / entry_open - 1.0
+    # vendor_qfq primary basis
+    def _adj(d):
+        if not d or adj_map is None:
+            return np.nan
+        f = adj_map.get(d)
+        if f is not None:
+            return f
+        prior = [k for k in adj_map if k <= d]
+        return adj_map[max(prior)] if prior else np.nan
+    ae, ax = _adj(entry_d), _adj(actual_exit)
+    r_stock = (exit_close * ax) / (entry_open * ae) - 1.0 \
+        if (ae == ae and ax == ax and entry_open * ae > 0) else np.nan
+    # index leg: entry-date open -> exit close (same window as the stock)
+    so = sw_open_by_code.get(sw_code, {})
     sd = sw_close_by_code.get(sw_code, {})
-    s0, s1 = sd.get(signal_date), sd.get(actual_exit)
+    s0, s1 = so.get(entry_d), sd.get(actual_exit)
     r_sw = (s1 / s0 - 1.0) if (s0 and s1) else np.nan
-    r_rel = r_stock - r_sw if not np.isnan(r_sw) else np.nan
+    r_rel = r_stock - r_sw if (not np.isnan(r_stock) and not np.isnan(r_sw)) else np.nan
     return dict(outcome_status="evaluated_ok", entry_date=entry_d,
                 target_exit_date=target_d, actual_exit_date=actual_exit,
                 roll_days_used=roll, entry_open=entry_open, exit_close=exit_close,
-                r_stock=r_stock, r_sw=r_sw, r_rel=r_rel,
+                r_stock=r_stock, r_stock_raw=r_stock_raw, r_sw=r_sw, r_rel=r_rel,
                 y_rel=float(r_rel > 0) if not np.isnan(r_rel) else np.nan)
 
 
@@ -136,6 +151,7 @@ def main() -> int:
     # sw closes
     sw = pd.read_pickle(CACHE_DIR / "sw_daily.pkl")
     sw_close = {c: dict(zip(s["trade_date"], s["close"])) for c, s in sw.groupby("ts_code")}
+    sw_open = {c: dict(zip(s["trade_date"], s["open"])) for c, s in sw.groupby("ts_code")}
 
     # namechange ST intervals (to reconstruct is_st per sample date)
     nc = pd.read_pickle(CACHE_DIR / "namechange.pkl")
@@ -180,6 +196,16 @@ def main() -> int:
     def bars_for(code: str) -> dict[str, dict]:
         return all_bars.get(code, {})
 
+    # adj_factor per needed symbol
+    adj_cache: dict[str, dict] = {}
+    def adj_for(code: str) -> dict:
+        if code not in adj_cache:
+            f = CACHE_DIR / "adj_factor" / f"{code}.pkl"
+            adj_cache[code] = (dict(zip(pd.read_pickle(f)["trade_date"],
+                                      pd.read_pickle(f)["adj_factor"]))
+                               if f.exists() else {})
+        return adj_cache[code]
+
     report = {"partitions": {}, "mismatches": []}
     total_bad = 0
     for pq in chunks:
@@ -193,8 +219,8 @@ def main() -> int:
                 continue
             code = row["ts_code"]
             ref = brute_label(code, row["signal_date"], cal, bars_for(code),
-                              is_st_at(code, row["signal_date"]), sw_close,
-                              row["sw_l1_code"])
+                              is_st_at(code, row["signal_date"]), sw_open,
+                              sw_close, row["sw_l1_code"], adj_for(code))
             checked += 1
             for field in ("outcome_status", "entry_date", "actual_exit_date",
                           "roll_days_used"):
@@ -206,8 +232,8 @@ def main() -> int:
                         "got": str(row[field]), "ref": str(ref.get(field))})
                     break
             else:
-                for field in ("entry_open", "exit_close", "r_stock", "r_sw",
-                              "r_rel", "y_rel"):
+                for field in ("entry_open", "exit_close", "r_stock",
+                              "r_stock_raw", "r_sw", "r_rel", "y_rel"):
                     g, r = row[field], ref.get(field, np.nan)
                     if pd.isna(g) and pd.isna(r):
                         continue
