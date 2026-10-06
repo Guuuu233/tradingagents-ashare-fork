@@ -58,6 +58,11 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+# Top-level consolidated pkls that live outside manifest["files"] — verified
+# by chunked sha256 against the concatenation of their per-part files.
+_BIG_ALL_PKL = ("daily_all.pkl", "daily_basic_all.pkl", "adj_factor_all.pkl")
+
+
 def _peak_rss_gb() -> float:
     try:
         import resource
@@ -97,7 +102,6 @@ def check_manifest(
     manifest = json.loads((cache / "manifest.json").read_text())
     files = manifest.get("files", {})
     api_dir = cache / "api_cache"
-
     missing_file: List[str] = []
     zero_size: List[str] = []
     bad_fields: List[str] = []
@@ -146,6 +150,10 @@ def check_manifest(
             zero_size.append(fname)
 
     # ---- sha256 spot check -------------------------------------------------
+    # manifest["files"] only covers api_cache/ entries; every one is a small
+    # per-call response (< a few MB). `big` therefore stays empty in practice —
+    # kept for clarity; the 3 top-level *_all.pkl are hashed separately in
+    # check_big_all() below.
     rng = random.Random(seed)
     verified = details["checks"].setdefault("manifest_sha256", {})
     big = [f for f, m in files.items() if (api_dir / f).exists() and (api_dir / f).stat().st_size > 50 * 1024 * 1024]
@@ -165,6 +173,11 @@ def check_manifest(
         verified[fname] = {"ok": ok, "sha256_actual": actual}
         if not ok:
             sha_bad.append(fname)
+
+    sha_res = {
+        "sha256_files_sampled": len(verified),
+        "sha256_bad": sorted(set(sha_bad)),
+    }
 
     # ---- row-count spot check ----------------------------------------------
     rows_done = details["checks"].setdefault("manifest_rows", {})
@@ -201,8 +214,7 @@ def check_manifest(
         "per_api_rows": row_total,
         "fetched_at_min": fetched_min,
         "fetched_at_max": fetched_max,
-        "sha256_sampled": len(verified),
-        "sha256_bad": sorted(set(sha_bad)),
+        **sha_res,
         "rows_sampled": len(rows_done),
         "rows_bad": sorted(set(rows_bad)),
     }
@@ -354,6 +366,28 @@ def check_symbol_dir_vs_all(
     return out
 
 
+def check_big_all(cache: Path) -> Dict[str, Any]:
+    """Chunked sha256 of the 3 top-level consolidated pkls.
+
+    These files are not in manifest["files"] (manifest only tracks api_cache/
+    entries), so they are hashed here directly and the digest is written into
+    the details JSON for the reviewer to recompute. Row-parity with the
+    per-part dirs is asserted in check_daily_all / check_symbol_dir_vs_all.
+    """
+    out = {}
+    for name in _BIG_ALL_PKL:
+        p = cache / name
+        if not p.exists():
+            out[name] = {"exists": False}
+            continue
+        out[name] = {
+            "exists": True,
+            "size": p.stat().st_size,
+            "sha256": _sha256_file(p),
+        }
+    return out
+
+
 def check_index_member(cache: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     """index_member_all/ dir vs index_member_all_all.pkl; con_code gap check."""
     dirpath = cache / "index_member_all"
@@ -368,6 +402,15 @@ def check_index_member(cache: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         res["is_new_dist"] = df["is_new"].value_counts().to_dict() if "is_new" in df else {}
         res["l1_null"] = int(df["l1_code"].isna().sum()) if "l1_code" in df else None
         res["has_con_code_col"] = "con_code" in df.columns
+        # out_date semantics (Tushare index_member_all): empty string = still a
+        # member (is_new='Y'); populated YYYYMMDD = exit date (is_new='N').
+        if "out_date" in df:
+            res["out_date"] = {
+                "Y_empty": int((df.loc[df["is_new"] == "Y", "out_date"] == "").sum()),
+                "Y_populated": int(((df["is_new"] == "Y") & (df["out_date"].astype(str) != "")).sum()),
+                "N_populated": int(((df["is_new"] == "N") & (df["out_date"].astype(str) != "")).sum()),
+                "N_empty": int((df.loc[df["is_new"] == "N", "out_date"] == "").sum()),
+            }
         # per-symbol frame equality on a sample
         rng = random.Random(3)
         bad = []
@@ -505,6 +548,14 @@ def main() -> int:
         return 2
 
     details_path = Path(args.details).expanduser()
+    # Never write into the read-only cache tree: --details must live elsewhere.
+    try:
+        details_path.resolve().relative_to(cache.resolve())
+    except ValueError:
+        pass
+    else:
+        print("--details must not be inside --cache (cache is read-only)", file=sys.stderr)
+        return 2
     details = _load_details(details_path)
     t0 = time.time()
 
@@ -539,6 +590,7 @@ def main() -> int:
         "sw_daily": timed("sw_daily", check_sw_daily, cache, manifest),
         "index_weight": timed("index_weight", check_index_weight, cache, manifest),
         "stock_basic": timed("stock_basic", check_stock_basic, cache, manifest),
+        "big_all_sha256": timed("big_all_sha256", check_big_all, cache),
     }
     if not args.skip_big_concat:
         res["consolidated_all"] = timed("consolidated_all", check_daily_all, cache, trade_days)
