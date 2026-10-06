@@ -112,10 +112,12 @@ def test_slice_shaped_top_mdc_deduplicated():
     assert view["market_data_context"] == rd["market_data_context"]
 
 
-def test_unreconstructible_top_mdc_is_kept_not_dropped():
-    """B-1 confirmed stock form: a top-level mdc no slice can reproduce is the
-    record — it must survive canonicalization and read back verbatim."""
+def test_unreconstructible_top_mdc_with_no_slice_mdc_is_kept():
+    """Kept only when no slice carries an mdc to contradict it — the
+    only-record stock form (B-1 census `kept_mdc` shape)."""
     rd = _dual_writer_payload()
+    for h in ("short", "medium"):
+        del rd[f"{h}_term"]["market_data_context"]
     rd["market_data_context"] = {"legacy_only": {"sources": ["akshare"]}}
     canon = canonicalize_for_single_write(rd)
     assert is_canonical_storage(canon)
@@ -127,6 +129,56 @@ def test_unreconstructible_top_mdc_is_kept_not_dropped():
     assert strip_compat_view_for_persist(canon)["market_data_context"] == {
         "legacy_only": {"sources": ["akshare"]}
     }
+
+
+def test_contradictory_top_mdc_fails_closed_like_encode_path():
+    """DAV-1551 🟡-1: a top-level mdc that cannot be reconstructed *and*
+    contradicts a slice mdc must raise — the same verdict
+    ``encode_canonical`` returns when a ``horizons`` key is present.
+    Admissibility must not depend on the physical key set."""
+    rd = _dual_writer_payload()
+    # contradicts the short slice's own mdc but has horizon-shaped keys
+    rd["market_data_context"] = {"short": {"daily": {"as_of": "1999-01-01"}}}
+    with pytest.raises(StorageCompatConflict):
+        canonicalize_for_single_write(rd)
+    # same payload through the full-alias path: identical verdict
+    rd_alias = copy.deepcopy(rd)
+    rd_alias["horizons"] = {
+        h: {k: v for k, v in copy.deepcopy(rd[f"{h}_term"]).items()
+            if k not in ("decision_model_version", "evidence_contract_version",
+                         "generated_by_commit_sha", "instrument_context")}
+        for h in ("short", "medium")
+    }
+    with pytest.raises(StorageCompatConflict):
+        canonicalize_for_single_write(rd_alias)
+
+
+def test_non_dict_horizons_value_is_dropped_before_v1_stamp():
+    """DAV-1551 🟡-2: a non-dict ``horizons`` (str/None/scalar) is
+    unreconstructible junk, not alias content — it must not survive into
+    the stamped v1 row nor leak through the read-side view."""
+    rd = _dual_writer_payload()
+    rd["horizons"] = "junk"
+    canon = canonicalize_for_single_write(rd)
+    assert is_canonical_storage(canon)
+    assert canon.get("horizons") != "junk"
+    view = expand_compat_view(canon)
+    assert isinstance(view.get("horizons"), dict)  # rebuilt, not "junk"
+    assert view["horizons"]["short"]["status"] == "completed"
+
+
+def test_kept_mdc_row_reentering_funnel_is_idempotent():
+    """A kept-mdc canonical row passing the funnel again must come out
+    unchanged (strip keeps the physical key, no conflict is raised)."""
+    rd = _dual_writer_payload()
+    for h in ("short", "medium"):
+        del rd[f"{h}_term"]["market_data_context"]
+    rd["market_data_context"] = {"legacy_only": 1}
+    once = canonicalize_for_single_write(rd)
+    twice = canonicalize_for_single_write(copy.deepcopy(once))
+    assert twice["market_data_context"] == {"legacy_only": 1}
+    assert is_canonical_storage(twice)
+    assert detect_alias_conflicts(twice) == []
 
 
 def test_single_horizon_flat_payload_passes_through():
@@ -285,6 +337,24 @@ def test_build_b1_unrun_result_dual_emits_no_horizons_alias():
     canon = canonicalize_for_single_write(result)
     assert is_canonical_storage(canon)
     assert "horizons" not in canon
+
+
+def test_detect_alias_conflicts_on_handmade_contradictory_kept_mdc_row():
+    """DAV-1551 follow-up: the kept-mdc exemption only exempts "no slice
+    to compare" — a hand-built kept row that *does* contradict a slice mdc
+    is reported again, never silently excused."""
+    rd = _dual_writer_payload()
+    for h in ("short", "medium"):
+        del rd[f"{h}_term"]["market_data_context"]
+    rd["market_data_context"] = {"legacy_only": 1}
+    canon = canonicalize_for_single_write(rd)
+    # hand-pollute: give a slice an mdc that disagrees with the kept value
+    canon["short_term"]["market_data_context"] = {"daily": {"as_of": "1999-01-01"}}
+    conflicts = detect_alias_conflicts(canon)
+    assert any("market_data_context" in c for c in conflicts)
+    # a consistent slice mdc reports nothing
+    canon["short_term"]["market_data_context"] = {"legacy_only": 1}
+    assert detect_alias_conflicts(canon) == []
 
 
 def test_quarantine_operates_on_authoritative_slice_only():
