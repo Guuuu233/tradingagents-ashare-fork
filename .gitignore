@@ -303,3 +303,7 @@ work/run_tushare_sampling.py
 work/phase2-ledger/
 work/phase2-weekly/
 work/storage/
+
+# T+5 回填运行产物（回滚 journal + 独立前像导出，本机证据不入库；DAV-1544）
+work/tplus5-rollback/
+work/tplus5-pre-export/

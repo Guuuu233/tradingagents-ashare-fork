@@ -3,6 +3,7 @@ import copy
 import json
 import sqlite3
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -170,3 +171,72 @@ def test_health_timeout_is_busy_not_dead(tmp_path, monkeypatch):
     monkeypatch.setattr(requests.Session, "get", lambda *a, **k: (_ for _ in ()).throw(requests.Timeout()))
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard == {"allowed": False, "reason": "health_busy_timeout"}
+
+
+def test_export_failure_means_zero_writes(tmp_path, monkeypatch):
+    """DAV-1544: if the independent pre-export fails, no UPDATE may run."""
+    p = make_db(tmp_path, report())
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+    before_row = sqlite3.connect(p).execute("SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    before_bytes = p.read_bytes()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated export failure")
+    monkeypatch.setattr(cli, "export_pre_images", boom)
+
+    with pytest.raises(RuntimeError, match="simulated export failure"):
+        cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                         pre_export_dir=str(tmp_path / "exports"))
+    after_row = sqlite3.connect(p).execute("SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    assert after_row == before_row
+    assert p.read_bytes() == before_bytes
+
+
+def test_backfill_then_restore_is_byte_identical(tmp_path, monkeypatch):
+    """DAV-1544: restore subcommand returns involved rows to pre-backfill bytes."""
+    import hashlib
+    p = make_db(tmp_path, report())
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+    before_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+
+    res = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                           pre_export_dir=str(tmp_path / "exports"))
+    assert res["changed_rows"] == 1
+    export = res["pre_export"]
+    export_path = export["path"]
+    assert Path(export_path).is_file()
+    # sha256 recorded in the result matches the on-disk compressed file
+    assert hashlib.sha256(Path(export_path).read_bytes()).hexdigest() == export["sha256"]
+
+    backfilled_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    assert backfilled_row != before_row
+
+    res2 = cli.restore_from_export(str(p), export_path, sha256=export["sha256"])
+    assert res2["restored_rows"] == 1 and res2["mismatched"] == 0
+    restored_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    assert restored_row == before_row
+
+    # Idempotent: restoring again reports already_current, no rewrite.
+    res3 = cli.restore_from_export(str(p), export_path)
+    assert res3["already_current"] == 1 and res3["restored_rows"] == 0
+
+
+def test_corrupt_export_file_refuses_restore(tmp_path, monkeypatch):
+    """A tampered pre-export file (sha mismatch) must refuse to restore."""
+    p = make_db(tmp_path, report())
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+    bad = tmp_path / "bad.jsonl.zst"
+    import zstandard
+    bad.write_bytes(zstandard.ZstdCompressor().compress(b'{"kind":"row"}\n'))
+    before = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    with pytest.raises(RuntimeError, match="sha256|trailer"):
+        cli.restore_from_export(str(p), str(bad), sha256="0" * 64)
+    after = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    assert after == before

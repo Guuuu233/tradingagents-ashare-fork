@@ -4,6 +4,12 @@
 Only copies may be written until the signed first-production handoff. Production
 requires --production-authorized (after 2026-10-09), healthy/idle runtime evidence,
 and a durable rollback journal. A timeout is busy/unknown, never proof of death.
+
+Before any write transaction, every candidate row's pre-image (report_id plus the
+exact result_data bytes that would be replaced) is exported to an independent
+zstd-compressed file outside the database directory. If the export or its sha256
+check fails, no UPDATE is ever attempted. The same file drives the 'restore'
+subcommand, which writes the exported bytes back and compares row-by-row.
 """
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ import copy
 from contextlib import closing
 from datetime import date, datetime
 import hashlib
+import io
 import json
 import math
 import os
@@ -21,9 +28,16 @@ import sys
 import time
 from urllib.parse import quote
 
+import zstandard
+
+PRE_EXPORT_VERSION = 1
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Independent pre-image exports live outside the data directory (库外固定目录).
+PRE_EXPORT_DIR = ROOT / "work/tplus5-pre-export"
 
 from tradingagents.agents.utils.shadow_credit import (
     is_qualifying_v2_report, detect_tplus5_suspension,
@@ -422,6 +436,26 @@ def _iter_db(path):
         yield result
 
 
+def _iter_db_raw(path):
+    """Same paging as _iter_db; yields full columns plus raw result_data text."""
+    _validate_db(path)
+    last_id = ''
+    while True:
+        with closing(_open_db(path)) as conn:
+            row = conn.execute(
+                "SELECT rowid, * FROM reports "
+                "WHERE status='completed' AND id>? ORDER BY id LIMIT 1",
+                (last_id,)).fetchone()
+        if row is None:
+            return
+        last_id = row['id']
+        result = dict(row)
+        result["rowid"] = row["rowid"]
+        result["raw"] = result["result_data"]
+        result["result_data"] = json.loads(result["result_data"] or 'null')
+        yield result
+
+
 def load_raw_reports(db_path=None, input_file=None, input_dir=None):
     """Compatibility loader for small callers; CLI DB loop streams full rows."""
     if db_path:
@@ -528,10 +562,268 @@ def _is_production(path):
     return Path(path).resolve() == production.resolve() or (production.exists() and os.path.samefile(path, production))
 
 
+# ---------------------------------------------------------------------------
+# Independent pre-image export (DAV-1544)
+# ---------------------------------------------------------------------------
+
+def _pre_export_stream(path):
+    """Return (compressor_stream, raw_file, sha256_of_compressed_bytes) writing zstd frames."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    raw = os.fdopen(fd, "wb")
+
+    class _HashingWriter:
+        def __init__(self, sink):
+            self._sink = sink
+            self.sha = hashlib.sha256()
+
+        def write(self, data):
+            self.sha.update(data)
+            return self._sink.write(data)
+
+        def flush(self):
+            self._sink.flush()
+
+    hashing = _HashingWriter(raw)
+    stream = zstandard.ZstdCompressor(level=3).stream_writer(hashing, closefd=False)
+    return stream, raw, hashing
+
+
+def export_pre_images(db_path, *, as_of, calendar, fetch_series=None, export_dir=None):
+    """Export the exact stored bytes of every row that a backfill would change.
+
+    Returns {path, sha256, candidates}. The compressed file is re-read and its
+    sha256 verified against the in-stream hash; any failure raises before the
+    caller may open a write transaction, so a failed export means zero writes.
+    """
+    export_dir = Path(export_dir or PRE_EXPORT_DIR)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")
+    path = export_dir / (stamp + ".jsonl.zst")
+    stream = raw = None
+    candidates = []
+    try:
+        stream, raw, hashing = _pre_export_stream(path)
+
+        def emit(obj):
+            stream.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+
+        emit({
+            "version": PRE_EXPORT_VERSION, "kind": "header", "db_path": str(db_path),
+            "as_of": as_of, "created_at": datetime.now().isoformat(),
+        })
+        for report in _iter_db_raw(db_path):
+            updated, _stats = backfill_report(
+                report, as_of=as_of, calendar=calendar, fetch_series=fetch_series)
+            # Mirror the write guard: non-T+5 drift is rejected, empty
+            # measurement delta is a no-op. Only real candidates are exported.
+            if without_tplus5(report["result_data"]) != without_tplus5(updated["result_data"]):
+                continue
+            if not _measurement_delta(report["result_data"], updated["result_data"]):
+                continue
+            candidates.append(report["id"])
+            raw_bytes = report["raw"].encode("utf-8")
+            emit({
+                "kind": "row", "report_id": report["id"], "rowid": report["rowid"],
+                "result_data_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                "result_data": report["raw"],
+            })
+        emit({"kind": "trailer", "row_count": len(candidates)})
+        stream.close(); stream = None
+        raw.flush(); os.fsync(raw.fileno()); raw.close(); raw = None
+        sha = hashing.sha.hexdigest()
+    except Exception:
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+        if raw is not None:
+            raw.close()
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+    # Self-check: the bytes we just fsynced must hash to the same sha256.
+    actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    if actual != sha:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise RuntimeError("pre-export sha256 mismatch; refusing to write")
+    return {"path": str(path), "sha256": sha, "candidates": candidates}
+
+
+def _load_pre_export(path, expected_sha256=None):
+    """Decompress a pre-export file, verifying sha256 and the row trailer."""
+    p = Path(path)
+    blob = p.read_bytes()
+    sha = hashlib.sha256(blob).hexdigest()
+    if expected_sha256 is not None and sha != expected_sha256:
+        raise RuntimeError("pre-export sha256 mismatch; refusing to restore")
+    records, trailer = [], None
+    with p.open("rb") as fh:
+        reader = zstandard.ZstdDecompressor().stream_reader(fh)
+        for line in io.TextIOWrapper(io.BufferedReader(reader), encoding="utf-8"):
+            rec = json.loads(line)
+            if rec.get("kind") == "row":
+                records.append(rec)
+            elif rec.get("kind") == "trailer":
+                trailer = rec
+    if trailer is None or trailer.get("row_count") != len(records):
+        raise RuntimeError("pre-export trailer missing or row_count mismatch")
+    return {"sha256": sha, "records": records}
+
+
+def _plan_restore_patch(text, node, desired, edits):
+    """Like _plan_json_patch but also allows removing T+5 members that a
+    backfill added (e.g. keys inside a now-populated shadow_credit_metrics).
+    Non-T+5 additions/removals/changes still raise.
+
+    `text` is the raw JSON source; node spans index into it so commas can be
+    located exactly without touching string-literal contents."""
+    current = node["value"]
+    if "members" not in node:
+        if current != desired:
+            raise ValueError("non-T+5 value changed")
+        return
+    if not isinstance(desired, dict):
+        raise ValueError("non-T+5 container changed")
+    members = node["members"]
+    added = []
+    for key, value in desired.items():
+        if key not in members:
+            if key not in MEASUREMENT_KEYS and not (
+                key == "shadow_credit_metrics" and isinstance(value, dict)
+                and set(value) <= MEASUREMENT_KEYS
+            ):
+                raise ValueError("non-T+5 field added")
+            added.append(json.dumps(key) + ":" + json.dumps(value, ensure_ascii=False, allow_nan=False))
+            continue
+        child = members[key][1]
+        if key in MEASUREMENT_KEYS:
+            if child["value"] != value:
+                edits.append((child["start"], child["end"], json.dumps(value, ensure_ascii=False, allow_nan=False)))
+        else:
+            _plan_restore_patch(text, child, value, edits)
+    # Removals: only T+5 measurement members may disappear (backfill-added).
+    # Desired-key iteration order decides which comma to delete: a removed
+    # member takes its following comma only when a *surviving* member comes
+    # after it; otherwise it takes the preceding comma (trailing-member case).
+    order = list(members)
+    removed = [k for k in order if k not in desired]
+    for key in removed:
+        if key not in MEASUREMENT_KEYS:
+            raise ValueError("non-T+5 field removed")
+    removed_set = set(removed)
+    for key in removed:
+        idx = order.index(key)
+        key_start, child = members[key]
+        nxt = next((k for k in order[idx + 1:] if k not in removed_set), None)
+        if nxt is not None:
+            next_key_start = members[nxt][0]
+            comma = text.index(",", child["end"], next_key_start)
+            edits.append((key_start, comma + 1, ""))
+        else:
+            comma = text.rindex(",", node["start"] + 1, key_start)
+            edits.append((comma, child["end"], ""))
+    if added:
+        surviving = len(order) - len(removed)
+        prefix = "," if surviving > 0 else ""
+        edits.append((node["close"], node["close"], prefix + ",".join(added)))
+
+
+def _restore_pre_image(original, record):
+    """Rewrite measurement members so the whole row equals the exported bytes."""
+    record_sha = hashlib.sha256(record["result_data"].encode("utf-8")).hexdigest()
+    if record["result_data_sha256"] != record_sha:
+        raise ValueError("export record sha256 mismatch")
+    pre = json.loads(record["result_data"])
+    desired = json.loads(original)
+    if without_tplus5(desired) != without_tplus5(pre):
+        raise ValueError("non-T+5 content differs from exported pre-image; refusing restore")
+    edits = []
+    _plan_restore_patch(original, _json_node(original), pre, edits)
+    restored = original
+    for start, end, replacement in sorted(edits, reverse=True):
+        restored = restored[:start] + replacement + restored[end:]
+    if restored != record["result_data"]:
+        raise ValueError("restored bytes differ from exported pre-image")
+    if non_tplus5_bytes(original) != non_tplus5_bytes(restored):
+        raise ValueError("non-T+5 byte mismatch during restore")
+    return restored
+
+
+def restore_from_export(db_path, export_file, *, sha256=None,
+                        health_url="http://127.0.0.1:8000",
+                        production_authorized=False):
+    """Rollback subcommand: write exported pre-images back, row-by-row verified.
+
+    Every row is compared before and after: the stored current bytes must still
+    differ from (or already equal) the export, the rewritten bytes must be
+    byte-identical to the export, and non-T+5 bytes must be unchanged.
+    """
+    _validate_db(db_path)
+    if _is_production(db_path) and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):
+        raise RuntimeError("production restore forbidden before signed post-10-09 handoff")
+    export = _load_pre_export(export_file, expected_sha256=sha256)
+    guard = check_runtime_guard(db_path, health_url)
+    if not guard["allowed"]:
+        result = {"skipped": True, "guard": guard, "restored_rows": 0}
+        print(json.dumps(result, ensure_ascii=False))
+        return result
+    result = {"restored_rows": 0, "already_current": 0, "missing": 0,
+              "mismatched": 0, "conflicts": 0, "guard": guard}
+    conn = _open_db(db_path, writable=True)
+    try:
+        for record in export["records"]:
+            report_id = record["report_id"]
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT result_data FROM reports WHERE id=? AND status='completed'",
+                    (report_id,)).fetchone()
+                if row is None:
+                    conn.rollback()
+                    result["missing"] += 1
+                    continue
+                current = row[0]
+                if current == record["result_data"]:
+                    conn.rollback()
+                    result["already_current"] += 1
+                    continue
+                restored = _restore_pre_image(current, record)
+                if restored != record["result_data"]:
+                    conn.rollback()
+                    result["mismatched"] += 1
+                    continue
+                conn.execute("UPDATE reports SET result_data=? WHERE id=?",
+                             (restored, report_id))
+                stored = conn.execute(
+                    "SELECT result_data FROM reports WHERE id=?", (report_id,)).fetchone()[0]
+                if stored != record["result_data"] or \
+                        non_tplus5_bytes(current) != non_tplus5_bytes(stored):
+                    raise ValueError("post-restore verification failed")
+                conn.commit()
+                result["restored_rows"] += 1
+            except sqlite3.OperationalError:
+                conn.rollback()
+                result["conflicts"] += 1
+            except Exception:
+                conn.rollback()
+                result["mismatched"] += 1
+    finally:
+        conn.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
 def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=None,
                  as_of=None, dry_run=False, verify_gates=False, audit_log=None,
                  health_url="http://127.0.0.1:8000", production_authorized=False,
-                 copy_rehearsal=False):
+                 copy_rehearsal=False, pre_export_dir=None):
     if verify_gates and db_path:
         raise RuntimeError('DB gate verification requires scripts/verify_h1b_gates.py with an explicit cohort')
     as_of = as_of or now_cn().date().isoformat()
@@ -549,53 +841,75 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                 print(json.dumps(result, ensure_ascii=False))
                 return result
     calendar = load_calendar()
-    source = _iter_db(db_path) if db_path else iter(load_raw_reports(input_file=input_file, input_dir=input_dir)[0])
     result = {"dry_run": dry_run, "sample_count": 0, "qualifying_count": 0,
               "changed_rows": 0, "guard_mismatches": 0, "write_conflicts": 0,
               "by_horizon": {}, "missing_units": []}
     stats = dict.fromkeys(COUNTERS, 0)
     saved = []
+
+    # Pass 1 (read-only): compute every desired row and all statistics. For the
+    # JSON-file path this also materializes `saved` for the output file.
+    planned = []
+    if db_path:
+        source = _iter_db_raw(db_path)
+    else:
+        source = iter(load_raw_reports(input_file=input_file, input_dir=input_dir)[0])
+    for report in source:
+        result["sample_count"] += 1
+        updated, per_horizon = backfill_report(report, as_of=as_of, calendar=calendar)
+        for h, counts in per_horizon.items():
+            bucket = result["by_horizon"].setdefault(h, dict.fromkeys(COUNTERS, 0))
+            for key in COUNTERS:
+                bucket[key] += counts[key]
+                stats[key] += counts[key]
+            if counts["data_missing_count"]:
+                rd = updated.get("result_data", updated)
+                u = rd.get(h + "_term", rd)
+                result["missing_units"].append({"report_id": report.get("id"), "horizon": h,
+                    "reason": u.get("t_plus_5_missing_reason")})
+        if db_path and not dry_run:
+            if without_tplus5(report["result_data"]) != without_tplus5(updated["result_data"]):
+                # Same condition that makes patch_tplus5_json raise inside
+                # _write_row; count it once here and skip the write attempt.
+                result["guard_mismatches"] += 1
+            elif _measurement_delta(report["result_data"], updated["result_data"]):
+                planned.append((report["id"], updated["result_data"]))
+        elif not db_path:
+            saved.append(updated)
+
+    pre_export = None
     journal_path = Path(audit_log or ROOT / "work/tplus5-rollback" / (datetime.now().strftime("%Y%m%dT%H%M%S-%f") + ".jsonl"))
-    writer = _open_db(db_path, writable=True) if db_path and not dry_run else None
-    audit = None
-    if writer:
+    if db_path and not dry_run:
+        # Pass 1.5: the independent pre-image export MUST succeed and self-verify
+        # before any write transaction is opened. A failure raises -> zero writes.
+        pre_export = export_pre_images(db_path, as_of=as_of, calendar=calendar,
+                                       export_dir=pre_export_dir)
+        result["pre_export"] = {"path": pre_export["path"], "sha256": pre_export["sha256"],
+                                "rows": len(pre_export["candidates"])}
+        if len(pre_export["candidates"]) != len(planned):
+            raise RuntimeError("pre-export candidate count mismatch; refusing to write")
+        writer = _open_db(db_path, writable=True)
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         audit = os.fdopen(fd, "a", encoding="utf-8")
-    try:
-        for report in source:
-            result["sample_count"] += 1
-            updated, per_horizon = backfill_report(report, as_of=as_of, calendar=calendar)
-            for h, counts in per_horizon.items():
-                bucket = result["by_horizon"].setdefault(h, dict.fromkeys(COUNTERS, 0))
-                for key in COUNTERS:
-                    bucket[key] += counts[key]
-                    stats[key] += counts[key]
-                if counts["data_missing_count"]:
-                    rd = updated.get("result_data", updated)
-                    u = rd.get(h + "_term", rd)
-                    result["missing_units"].append({"report_id": report.get("id"), "horizon": h,
-                        "reason": u.get("t_plus_5_missing_reason")})
-            if writer:
+        try:
+            for report_id, desired in planned:
                 try:
-                    result["changed_rows"] += int(_write_row(writer, report["id"], updated["result_data"], audit))
+                    result["changed_rows"] += int(_write_row(writer, report_id, desired, audit))
                 except ValueError:
                     result["guard_mismatches"] += 1
                 except sqlite3.OperationalError:
                     result["write_conflicts"] += 1
-            elif not db_path:
-                saved.append(updated)
-    finally:
-        if writer:
-            writer.close()
-        if audit:
+        finally:
             audit.close()
+            writer.close()
+
     for bucket in [stats, *result["by_horizon"].values()]:
         bucket["completeness_rate"] = bucket["evaluated_count"] / bucket["due_count"] if bucket["due_count"] else 0.0
         bucket["hit_rate"] = bucket["hit_count"] / bucket["evaluated_count"] if bucket["evaluated_count"] else None
     result.update(stats=stats, qualifying_count=stats["qualifying_v2_count"],
                   provider_request_count=getattr(fetch_price_series, "request_count", None))
-    if writer:
+    if db_path and not dry_run:
         result["audit_log"] = str(journal_path)
     if verify_gates:
         from tradingagents.agents.utils.shadow_credit import (
@@ -620,19 +934,40 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("db-path", "input-file", "input-dir", "output-file", "as-of", "audit-log"):
+    for name in ("db-path", "input-file", "input-dir", "output-file", "as-of",
+                 "audit-log", "pre-export-dir"):
         parser.add_argument("--" + name)
     parser.add_argument("--health-url", default="http://127.0.0.1:8000")
     for name in ("dry-run", "verify-gates", "production-authorized", "copy-rehearsal"):
         parser.add_argument("--" + name, action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
-    args = vars(parser.parse_args()); args.pop("verbose")
+    sub = parser.add_subparsers(dest="command", required=False)
+    restore_parser = sub.add_parser(
+        "restore", help="restore rows from an independent pre-export file")
+    restore_parser.add_argument("--db-path", required=True)
+    restore_parser.add_argument("--export-file", required=True)
+    restore_parser.add_argument("--export-sha256")
+    restore_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
+    restore_parser.add_argument("--production-authorized", action="store_true")
+    args = vars(parser.parse_args())
+    command = args.pop("command")
+    args.pop("verbose")
     # Only the signed production invocation may load this machine's .env.
     # Copy rehearsal callers inject explicitly; tests never inherit live keys.
-    if args['production_authorized']:
+    if args.get('production_authorized'):
         from dotenv import load_dotenv
         load_dotenv(ROOT / '.env', override=False)
     try:
+        if command == "restore":
+            result = restore_from_export(
+                args["db_path"], args["export_file"],
+                sha256=args.get("export_sha256"), health_url=args["health_url"],
+                production_authorized=args.get("production_authorized", False))
+            if result.get("mismatched") or result.get("conflicts") or result.get("missing"):
+                return 1
+            return 0
+        args.pop("export_file", None)
+        args.pop("export_sha256", None)
         result = run_backfill(**args)
         if result.get('guard_mismatches') or result.get('write_conflicts'):
             return 1
