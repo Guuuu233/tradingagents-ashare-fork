@@ -449,8 +449,19 @@ class TestRoleProviderAndBaseUrlInheritance:
                 stack.enter_context(p)
             graph = TradingAgentsGraph(config=config, data_collector=MagicMock())
 
-        # Verify calls recorded
-        assert len(captured_calls) >= len(role_routing_service.ALL_ROLES)
+        # Verify calls recorded. DAV-1571: identical (provider/model/base_url/params)
+        # configs share one pooled client, so the factory sees each *distinct*
+        # config once — not once per role. Every role must still get an llm.
+        assert len(graph.role_llms) == len(role_routing_service.ALL_ROLES)
+        distinct_configs = {
+            (c["provider"], c["model"], c["base_url"]) for c in captured_calls
+        }
+        expected_configs = {
+            ("anthropic", "claude-3-5-haiku-20241022", None),
+            ("anthropic", "claude-3-5-haiku-20241022", "https://custom-anthropic-gw.internal/v1"),
+            ("openai", "gpt-4o-mini", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        }
+        assert expected_configs <= distinct_configs
 
         # 1. Heterogeneous role 'market' (anthropic with no base_url) must NOT inherit OpenAI custom base_url
         market_calls = [c for c in captured_calls if c["provider"] == "anthropic" and c["model"] == "claude-3-5-haiku-20241022"]
