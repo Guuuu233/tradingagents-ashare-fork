@@ -2920,7 +2920,6 @@ def _build_b1_unrun_result(request: "AnalyzeRequest", *, status: str = "failed",
         result["mode"] = "dual_horizon"
         result["requested_horizons"] = horizons
         result["horizon_status"] = {h: status for h in horizons}
-        units = {}
         for h in horizons:
             unit = {"horizon": h, "status": status,
                     "forecast": deepcopy(result["forecast"]),
@@ -2928,9 +2927,10 @@ def _build_b1_unrun_result(request: "AnalyzeRequest", *, status: str = "failed",
             for key in ("analysis_status", "trade_action", "decision_status", "reason_codes"):
                 if key in result:
                     unit[key] = deepcopy(result[key])
-            units[h] = unit
             result[f"{h}_term"] = unit
-        result["horizons"] = units
+        # DAV-1545 (B-2): the ``horizons.<h>`` physical alias is no longer
+        # persisted — readers rebuild it from the ``*_term`` slots via the
+        # B-1 compat view.
     else:
         result["horizon"] = horizons[0]
     return result
@@ -3961,11 +3961,6 @@ async def _run_job_inner(
                     "failed_horizons": failed_horizons,
                     "user_intent": user_intent,
                     "model_config_snapshot": model_snapshot,
-                    "market_data_context": {
-                        horizon: horizon_results[horizon].get("market_data_context")
-                        for horizon in request.horizons
-                        if horizon_results[horizon].get("status") == "completed"
-                    },
                     "social_data_context": {
                         horizon: (
                             horizon_results[horizon].get("social_data_context")
@@ -3977,7 +3972,10 @@ async def _run_job_inner(
                     },
                     "short_term": short_r,
                     "medium_term": medium_r,
-                    "horizons": {"short": short_r, "medium": medium_r},
+                    # DAV-1545 (B-2): persist only the authoritative
+                    # ``*_term`` slots; the legacy ``horizons`` map and the
+                    # top-level ``market_data_context`` alias are no longer
+                    # written (the B-1 compat view rebuilds both read-side).
                     "data_gaps": all_data_gaps,
                     "falsification_conditions": horizon_metadata["falsification_conditions"],
                     "falsification_conditions_by_horizon": (
@@ -4184,7 +4182,9 @@ async def _run_job_inner(
                 "mode": "dual_horizon",
                 "user_intent": user_intent,
                 "model_config_snapshot": model_snapshot,
-                "market_data_context": primary_r.get("market_data_context"),
+                # DAV-1545 (B-2): no top-level ``market_data_context`` alias —
+                # each slice keeps its own copy; the compat view rebuilds the
+                # legacy top-level key read-side.
                 "social_data_context": (
                     primary_r.get("social_data_context")
                     if primary_r.get("social_data_context") is not None

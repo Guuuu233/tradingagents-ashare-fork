@@ -122,6 +122,29 @@ def _values_equal(a: Any, b: Any) -> bool:
     return bool(a == b)
 
 
+def _top_mdc_kept(result_data: Mapping[str, Any]) -> bool:
+    """True when a physically present top-level ``market_data_context`` was
+    deliberately *kept* rather than deduplicated (DAV-1545 B-2).
+
+    ``canonicalize_for_single_write`` preserves an unreconstructible
+    top-level mdc **only when no slice carries one to compare against**
+    (DAV-1551 🟡-1: exemption applies to "no reference", never to
+    "contradicts a slice"), and records ``top_market_context = {"kind":
+    "absent"}``; the physical key then co-exists with the canonical
+    markers. The conflict detector must not treat this sanctioned keep as
+    an alias conflict, and the expander must not try to rebuild it.
+    """
+    compat = result_data.get(STORAGE_COMPAT_KEY)
+    if not isinstance(compat, dict):
+        return False
+    shape = compat.get("top_market_context")
+    return (
+        isinstance(shape, dict)
+        and shape.get("kind") == "absent"
+        and "market_data_context" in result_data
+    )
+
+
 def detect_alias_conflicts(result_data: Any) -> List[str]:
     """List every disagreement between co-present alias families.
 
@@ -175,7 +198,32 @@ def detect_alias_conflicts(result_data: Any) -> List[str]:
     if "market_data_context" in result_data:
         mdc = result_data.get("market_data_context")
         if mdc is not None:
-            if not _top_mdc_shape(result_data, mdc):
+            if _top_mdc_kept(result_data):
+                # DAV-1551: the kept exemption covers only "no slice to
+                # compare". A kept-mdc row that *does* carry slice mdcs can
+                # only come from hand-editing or an out-of-band writer —
+                # compare it anyway: a ``{h: mdc}`` map matching the slice,
+                # or a verbatim copy of one slice's mdc, is consistent;
+                # anything else disagrees with the authoritative record.
+                for h in HORIZON_NAMES:
+                    term = result_data.get(_term_key_for(h))
+                    if not (isinstance(term, dict) and "market_data_context" in term):
+                        continue
+                    term_mdc = term["market_data_context"]
+                    consistent = (
+                        _values_equal(mdc, term_mdc)
+                        or (
+                            isinstance(mdc, dict)
+                            and h in mdc
+                            and _values_equal(mdc.get(h), term_mdc)
+                        )
+                    )
+                    if not consistent:
+                        conflicts.append(
+                            f"kept top-level market_data_context disagrees "
+                            f"with {_term_key_for(h)}.market_data_context"
+                        )
+            elif not _top_mdc_shape(result_data, mdc):
                 conflicts.append(
                     "top-level market_data_context matches no slice "
                     "market_data_context (unreconstructible)"
@@ -278,6 +326,158 @@ def encode_canonical(result_data: Any) -> Dict[str, Any]:
         compat["top_market_context"] = {"kind": "absent"}
 
     canonical.pop("horizons", None)
+    canonical[STORAGE_COMPAT_KEY] = compat
+    canonical[STORAGE_SCHEMA_KEY] = STORAGE_SCHEMA_VERSION
+    return canonical
+
+
+# ---------------------------------------------------------------------------
+# write-side canonicalization (DAV-1545 存储 B-2)
+
+
+def _alias_keys_equal(a: Any, b: Any) -> bool:
+    """Alias equality used by write-time canonicalization.
+
+    Same semantic-equality rule as :func:`_values_equal` (dict order
+    insignificant); a thin alias so call sites read as an explicit audit
+    step rather than a shared implementation detail.
+    """
+    return _values_equal(a, b)
+
+
+def _record_masks_for_persisted_aliases(canonical: Dict[str, Any]) -> Dict[str, Any]:
+    """Record reconstruction masks for a payload the write path already
+    holds as physical aliases.
+
+    The write-time result keeps ``short_term`` / ``medium_term`` (each with
+    its own ``market_data_context``) as the authoritative slots; every key
+    the legacy ``horizons.<h>`` alias carried is derived from the matching
+    ``<h>_term`` slice, so the recorded mask is the term slice's key order
+    minus the known term-only stamps — identical to
+    :func:`_fallback_horizon_masks`. The top-level key order is captured
+    *before* the schema markers are stamped.
+    """
+    masks = _fallback_horizon_masks(canonical)
+    return {
+        "version": 1,
+        "horizons_order": [h for h in HORIZON_NAMES if h in masks],
+        "horizon_key_masks": masks,
+        "top_key_order": list(canonical.keys()),
+    }
+
+
+def canonicalize_for_single_write(result_data: Any) -> Any:
+    """Normalize a persistence-bound ``result_data`` to the canonical
+    single-write layout (DAV-1545 / 存储 B-2).
+
+    Every save funnel calls this at the write boundary so the row stored in
+    ``reports.result_data`` only ever carries the authoritative slots:
+    ``short_term`` / ``medium_term`` and their in-slice
+    ``market_data_context`` — never a physical ``horizons.<h>`` map or a
+    duplicated top-level ``market_data_context``.
+
+    Rules:
+
+    * Already canonical (``storage_schema_version == v1``): drop any
+      physical alias keys (a compat view that slipped through
+      :func:`strip_compat_view_for_persist`, or one smuggled in by an
+      out-of-band writer). Foreign content disagreeing with the
+      authoritative slices is reported via :func:`detect_alias_conflicts`
+      — fail-close semantics are unchanged from B-1.
+    * Legacy rows carrying the ``horizons`` alias: run
+      :func:`encode_canonical`. Alias conflicts raise
+      :class:`StorageCompatConflict` (裁定 §3 fail-close) — the caller
+      rejects the payload instead of persisting a silently reconciled row.
+    * Legacy rows without ``horizons`` but with ``<h>_term`` slices
+      (dual-horizon payload built by the current writer): the top-level
+      ``market_data_context`` is deduplicated only when it is a *proven*
+      alias of slice content (same reconstruction shapes as
+      :func:`encode_canonical`: per-horizon map / single-slice copy /
+      ``null`` / absent). An unreconstructible top-level mdc
+      **fails closed** (:class:`StorageCompatConflict`) whenever a slice
+      mdc exists to contradict it — identical to the ``encode_canonical``
+      verdict on a full-alias row (DAV-1551 🟡-1: admissibility must not
+      depend on the ``horizons`` key being present); it is kept only when
+      no slice mdc exists to compare against (the only-record stock
+      form). A non-dict ``horizons`` value is dropped before stamping v1
+      (DAV-1551 🟡-2).
+    * Anything else (non-dict, single-horizon rows whose top-level mdc is
+      the record, rows with no ``*_term`` slices): passed through
+      unchanged — 卡面边界: ``no_horizons`` / ``non_dict`` 存量行为不变.
+    """
+    if not isinstance(result_data, dict):
+        return result_data
+
+    if is_canonical_storage(result_data):
+        return strip_compat_view_for_persist(result_data)
+
+    if isinstance(result_data.get("horizons"), dict):
+        # Full legacy alias form — the B-1 encoder decides canonicalization
+        # and fails closed on any unreconstructible alias content.
+        return encode_canonical(result_data)
+
+    has_term_slice = any(
+        isinstance(result_data.get(f"{h}_term"), dict) for h in HORIZON_NAMES
+    )
+    if not has_term_slice:
+        # Single-horizon / legacy flat payload: the top-level mdc is the
+        # record, not an alias — nothing to deduplicate.
+        return result_data
+
+    canonical = dict(result_data)
+    compat = _record_masks_for_persisted_aliases(canonical)
+
+    # DAV-1551 🟡-2: a non-dict ``horizons`` value (str/None/scalar) must
+    # never survive into a v1 row — the invariant is that ``horizons`` on a
+    # canonical row only exists as a read-side view and is always a dict.
+    # A dict value never reaches here (handled by encode_canonical above);
+    # any other shape is unreconstructible junk, not alias content, so
+    # dropping it loses nothing restorable.
+    canonical.pop("horizons", None)
+
+    if "market_data_context" in canonical:
+        mdc = canonical.get("market_data_context")
+        if mdc is None:
+            compat["top_market_context"] = {"kind": "null"}
+            canonical.pop("market_data_context", None)
+        else:
+            shape = _top_mdc_shape(canonical, mdc)
+            if shape is None:
+                # DAV-1551 🟡-1: an unreconstructible top-level mdc is only
+                # kept when it *cannot be compared* with any slice mdc
+                # (no term slice carries one — the same ``term_mdcs`` empty
+                # condition under which ``_top_mdc_shape`` accepts an empty
+                # dict). When slice mdcs exist, a non-matching top-level
+                # value contradicts the authoritative record: fail closed
+                # with the same ``StorageCompatConflict`` the
+                # ``encode_canonical`` path would raise on a full-alias
+                # row, instead of letting admissibility depend on whether
+                # the caller happened to carry a ``horizons`` key.
+                term_mdcs = {
+                    h: canonical[_term_key_for(h)]["market_data_context"]
+                    for h in HORIZON_NAMES
+                    if isinstance(canonical.get(_term_key_for(h)), dict)
+                    and "market_data_context" in canonical[_term_key_for(h)]
+                }
+                if term_mdcs:
+                    raise StorageCompatConflict(
+                        [
+                            "top-level market_data_context matches no slice "
+                            "market_data_context (unreconstructible); "
+                            "refusing to persist contradictory alias content"
+                        ]
+                    )
+                # No slice mdc exists to contradict — the value is the only
+                # record of its shape (B-1 confirmed stock form). Keep it;
+                # ``_top_mdc_kept`` exempts it from alias-conflict
+                # detection precisely because there is nothing to compare.
+                compat["top_market_context"] = {"kind": "absent"}
+            else:
+                compat["top_market_context"] = shape
+                canonical.pop("market_data_context", None)
+    else:
+        compat["top_market_context"] = {"kind": "absent"}
+
     canonical[STORAGE_COMPAT_KEY] = compat
     canonical[STORAGE_SCHEMA_KEY] = STORAGE_SCHEMA_VERSION
     return canonical
@@ -414,6 +614,12 @@ def expand_compat_view(result_data: Any) -> Dict[str, Any]:
             view["market_data_context"] = None
         # kind == "absent": leave the key out.
 
+    elif _top_mdc_kept(result_data):
+        # DAV-1545: an unreconstructible top-level mdc kept by the writer —
+        # serve it verbatim (the physical key is the record), never
+        # overwrite it with a slice-derived view.
+        view["market_data_context"] = copy.deepcopy(view["market_data_context"])
+
     # Restore the legacy top-level key order when recorded. Keys unknown to
     # the recorded order (e.g. post-encode stamps) keep their current order,
     # appended after the recorded ones.
@@ -479,6 +685,12 @@ def strip_compat_view_for_persist(result_data: Any) -> Any:
 
     stripped = dict(result_data)
     for key in _VIRTUAL_TOP_KEYS:
+        # DAV-1545: a top-level ``market_data_context`` the writer
+        # deliberately kept (``top_market_context.kind == "absent"`` while
+        # the physical key is present) is authoritative content, not a
+        # rebuilt view key — never strip it.
+        if key == "market_data_context" and _top_mdc_kept(result_data):
+            continue
         stripped.pop(key, None)
     return stripped
 
@@ -491,6 +703,7 @@ __all__ = [
     "STORAGE_SCHEMA_VERSION",
     "StorageCompatConflict",
     "TERM_ONLY_SLICE_KEYS",
+    "canonicalize_for_single_write",
     "detect_alias_conflicts",
     "encode_canonical",
     "expand_compat_view",

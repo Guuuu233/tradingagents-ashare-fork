@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session, load_only
 from api.database import ReportDB
 from tradingagents.llm_clients.thinking_cleaner import clean_report_result_data
 from tradingagents.storage.result_data_compat import (
+    canonicalize_for_single_write,
+    is_canonical_storage,
     result_data_compat_view,
     strip_compat_view_for_persist,
 )
@@ -831,9 +833,18 @@ def _resolve_root_level_horizons(result_data: Dict[str, Any], root_key: str) -> 
     the root copy cannot be tied to exactly one slice.
     """
     horizons = result_data.get("horizons")
-    has_slices = isinstance(horizons, dict) and any(
-        isinstance(horizons.get(name), dict) and horizons.get(name, {}).get(root_key)
+    term_slices = {
+        "short": result_data.get("short_term"),
+        "medium": result_data.get("medium_term"),
+    }
+    has_slices = any(
+        isinstance(term_slices.get(name), dict) and term_slices.get(name, {}).get(root_key)
         for name in ("short", "medium")
+    ) or (
+        isinstance(horizons, dict) and any(
+            isinstance(horizons.get(name), dict) and horizons.get(name, {}).get(root_key)
+            for name in ("short", "medium")
+        )
     )
     if not has_slices:
         # Single-horizon report: the root copy is the only record of this run.
@@ -843,7 +854,14 @@ def _resolve_root_level_horizons(result_data: Dict[str, Any], root_key: str) -> 
     matched: List[str] = []
     if signature is not None:
         for name in ("short", "medium"):
-            slice_state = horizons.get(name, {}).get(root_key)
+            # Prefer the authoritative ``*_term`` slice; a physical
+            # ``horizons.<h>`` twin (legacy payload) is an equivalent source.
+            slice_state = None
+            for container in (term_slices.get(name),
+                              horizons.get(name) if isinstance(horizons, dict) else None):
+                if isinstance(container, dict) and isinstance(container.get(root_key), dict):
+                    slice_state = container[root_key]
+                    break
             if isinstance(slice_state, dict) and _debate_content_signature(slice_state) == signature:
                 matched.append(name)
     if len(matched) == 1:
@@ -855,7 +873,12 @@ def _resolve_root_level_horizons(result_data: Dict[str, Any], root_key: str) -> 
 
 
 def _horizon_containers(result_data: Dict[str, Any], horizon: str) -> List[Tuple[Optional[str], Dict[str, Any]]]:
-    """Every persisted alias of one horizon slice."""
+    """Every persisted alias of one horizon slice.
+
+    ``<h>_term`` is authoritative; a physical ``horizons.<h>`` twin is
+    included only when the row actually carries one (B-1 legacy stock /
+    hand-built fixtures). Canonical payloads keep a single container.
+    """
     out: List[Tuple[Optional[str], Dict[str, Any]]] = []
     payload = result_data.get(f"{horizon}_term")
     if isinstance(payload, dict):
@@ -880,13 +903,20 @@ def _resolve_quarantine_containers(result_data: Dict[str, Any], path: Tuple[str,
     """
     containers: List[Tuple[Optional[str], Dict[str, Any]]] = []
     if path and path[0] == "horizons" and len(path) >= 2:
+        # Legacy physical-alias payloads only (B-1 stock / hand-built
+        # fixtures): rewrite through the authoritative ``*_term`` twin so the
+        # canonical row never re-grows the alias.
         horizon = path[1]
-        horizon_payload = result_data.get("horizons")
-        if isinstance(horizon_payload, dict) and isinstance(horizon_payload.get(horizon), dict):
-            containers.append((f"horizons.{horizon}", horizon_payload[horizon]))
         alias_payload = result_data.get(f"{horizon}_term")
         if isinstance(alias_payload, dict):
             containers.append((f"{horizon}_term", alias_payload))
+        horizon_payload = result_data.get("horizons")
+        if (
+            isinstance(horizon_payload, dict)
+            and isinstance(horizon_payload.get(horizon), dict)
+            and horizon_payload[horizon] is not alias_payload
+        ):
+            containers.append((f"horizons.{horizon}", horizon_payload[horizon]))
     elif path and path[0] in ("short_term", "medium_term"):
         horizon = "short" if path[0] == "short_term" else "medium"
         alias_payload = result_data.get(path[0])
@@ -1042,15 +1072,21 @@ def _rewrite_alias_family(
         return
     head = path[0]
     if head == "horizons" and len(path) >= 3:
+        # Legacy physical-alias payload only: keep both alias copies in sync
+        # for any B-1-era fixture still carrying ``horizons``.
         horizon = path[1]
         tail = path[2:]
         _replace_string_at_path(result_data, path, replacement)
         _replace_string_at_path(result_data, ("short_term",) + tail if horizon == "short" else ("medium_term",) + tail, replacement)
     elif head in ("short_term", "medium_term"):
+        # DAV-1545 (B-2): the canonical write path persists only ``*_term``;
+        # rewrite the physical ``horizons`` twin only when it actually exists.
         horizon = "short" if head == "short_term" else "medium"
         tail = path[1:]
         _replace_string_at_path(result_data, path, replacement)
-        _replace_string_at_path(result_data, ("horizons", horizon) + tail, replacement)
+        horizons = result_data.get("horizons")
+        if isinstance(horizons, dict) and isinstance(horizons.get(horizon), dict):
+            _replace_string_at_path(result_data, ("horizons", horizon) + tail, replacement)
     else:
         _replace_string_at_path(result_data, path, replacement)
 
@@ -1504,7 +1540,11 @@ def ensure_report_horizon_metadata_persisted(
                 nested["horizon_run_metadata"].pop("evaluation_eligible", None)
 
     horizons_dict = result_data.get("horizons")
-    if isinstance(horizons_dict, dict):
+    if isinstance(horizons_dict, dict) and not is_canonical_storage(result_data):
+        # DAV-1545 (B-2): on canonical rows ``horizons.<h>`` is a read-side
+        # compat view — stamping hrm into it only feeds the persist strip.
+        # Legacy physical-alias rows keep the twin-write so both copies stay
+        # consistent for B-1-era readers.
         for nested in horizons_dict.values():
             if isinstance(nested, dict):
                 if "horizon_run_metadata" not in nested or not isinstance(nested["horizon_run_metadata"], dict):
@@ -1578,7 +1618,10 @@ def ensure_horizon_run_metadata_on_read(
                 nested["horizon_run_metadata"].pop("evaluation_eligible", None)
 
     horizons_dict = result_data.get("horizons")
-    if isinstance(horizons_dict, dict):
+    if isinstance(horizons_dict, dict) and not is_canonical_storage(result_data):
+        # DAV-1545 (B-2): never backfill the compat view's virtual
+        # ``horizons.<h>`` slices on canonical rows — the view is rebuilt
+        # read-side; stamping it here would only feed the persist strip.
         for nested in horizons_dict.values():
             if isinstance(nested, dict):
                 if "horizon_run_metadata" not in nested or not isinstance(nested["horizon_run_metadata"], dict):
@@ -1624,16 +1667,23 @@ def canonicalize_report_result_data(
             if "social_data_context" not in nested or nested["social_data_context"] is None:
                 nested["social_data_context"] = {}
     if "structured" not in canonical_data:
-        return canonical_data
+        # DAV-1545 (存储 B-2): no-structured payloads take the same
+        # single-write canonicalization as the structured exits below.
+        return canonicalize_for_single_write(canonical_data)
 
     structured = canonical_data.get("structured")
     if isinstance(structured, StructuredReport):
         canonical_data["structured"] = structured.model_dump()
-        return canonical_data
+        return canonicalize_for_single_write(canonical_data)
     if not isinstance(structured, dict):
         raise ValueError("structured report must be an object")
     canonical_data["structured"] = StructuredReport(**structured).model_dump()
-    return canonical_data
+    # DAV-1545 (存储 B-2): every save funnel persists the authoritative
+    # single-write layout — ``short_term`` / ``medium_term`` plus their
+    # in-slice ``market_data_context`` only. Physical ``horizons.<h>`` /
+    # top-level ``market_data_context`` aliases are deduplicated here;
+    # alias conflicts fail closed via ``StorageCompatConflict``.
+    return canonicalize_for_single_write(canonical_data)
 
 
 def extract_structured_data(
