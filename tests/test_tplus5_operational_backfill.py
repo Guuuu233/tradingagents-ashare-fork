@@ -268,3 +268,88 @@ def test_restore_subcommand_argparse_wiring(tmp_path, monkeypatch, capsys):
     restored_row = sqlite3.connect(p).execute(
         "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
     assert restored_row == before_row
+
+
+def make_db_multi(tmp_path, reps):
+    """Like make_db but accepts a list of report dicts."""
+    p = tmp_path / "copy_multi.db"
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE reports(id TEXT PRIMARY KEY,symbol TEXT,trade_date TEXT,status TEXT,result_data TEXT,updated_at TEXT)")
+    for rep in reps:
+        text = json.dumps(rep["result_data"], ensure_ascii=False, indent=3)
+        c.execute("INSERT INTO reports VALUES(?,?,?,?,?,?)",
+                  (rep["id"], rep["symbol"], rep["trade_date"], rep["status"], text, "old"))
+    c.commit(); c.close(); return p
+
+
+def test_row_changed_between_export_and_write_is_skipped(tmp_path, monkeypatch):
+    """DAV-1544 返修：导出后写入前某行被改动 → 该行 pre_export_mismatch 不写，其余正常写。"""
+    r1 = report(); r2 = report(); r2["id"] = "two"; r2["symbol"] = "600276.SH"
+    p = make_db_multi(tmp_path, [r1, r2])
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+
+    before = {r["id"]: sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id=?", (r["id"],)).fetchone()[0]
+        for r in (r1, r2)}
+
+    # Simulate a concurrent modification landing AFTER the export file is
+    # sealed but BEFORE _write_row opens its BEGIN IMMEDIATE: wrap the export
+    # so that, once it returns, we overwrite row "one" with a different blob.
+    real_export = cli.export_pre_images
+    def export_then_tamper(db_path, planned, *, export_dir=None):
+        out = real_export(db_path, planned, export_dir=export_dir)
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE reports SET result_data=? WHERE id=?",
+                     ('{"tampered": true}', "one"))
+        conn.commit(); conn.close()
+        return out
+    monkeypatch.setattr(cli, "export_pre_images", export_then_tamper)
+
+    res = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                           pre_export_dir=str(tmp_path / "exports"))
+
+    # Row "one" must be skipped via the in-transaction sha check.
+    assert res["pre_export_mismatch"] == 1
+    assert res["changed_rows"] == 1  # only row "two" written
+
+    conn = sqlite3.connect(p)
+    row_one = conn.execute("SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    row_two = conn.execute("SELECT result_data FROM reports WHERE id='two'").fetchone()[0]
+    conn.close()
+    # "one" kept the tampered content — the backfill did NOT overwrite it.
+    assert row_one == '{"tampered": true}'
+    # "two" received normal T+5 stamping; its non-T+5 bytes still match its pre-image.
+    assert cli.non_tplus5_bytes(row_two) == cli.non_tplus5_bytes(before["two"])
+    assert json.loads(row_two)["short_term"]["t_plus_5_status"] == "due_and_evaluated"
+
+
+def test_pre_export_does_not_fetch_or_recompute(tmp_path, monkeypatch):
+    """DAV-1544 返修：export_pre_images 执行期间不得调用 backfill_report / 拉行情。"""
+    r = report()
+    p = make_db(tmp_path, r)
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+
+    real_export = cli.export_pre_images
+    real_backfill = cli.backfill_report
+    calls = {"n": 0}
+    def counting_backfill(*a, **k):
+        calls["n"] += 1
+        return real_backfill(*a, **k)
+    monkeypatch.setattr(cli, "backfill_report", counting_backfill)
+
+    def export_with_no_recompute(db_path, planned, *, export_dir=None):
+        before = calls["n"]
+        # Any real recompute would show up as a backfill_report call here.
+        out = real_export(db_path, planned, export_dir=export_dir)
+        assert calls["n"] == before, "export phase recomputed backfill_report"
+        return out
+    monkeypatch.setattr(cli, "export_pre_images", export_with_no_recompute)
+
+    res = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                           pre_export_dir=str(tmp_path / "exports"))
+    assert res["changed_rows"] == 1
+    assert res["pre_export"]["rows"] == 1

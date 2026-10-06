@@ -514,14 +514,26 @@ def check_runtime_guard(db_path, health_url):
     return {"allowed": n == 0, "reason": "idle" if n == 0 else "busy", "running_count": n}
 
 
-def _write_row(conn, report_id, desired, audit):
-    """Journal prepared delta before commit; compare exact stored original."""
+def _write_row(conn, report_id, desired, audit, exported_sha=None):
+    """Journal prepared delta before commit; compare exact stored original.
+
+    If `exported_sha` is given (sha256 of the pre-exported result_data for
+    this row), the row's *current* stored bytes are hashed inside the
+    BEGIN IMMEDIATE transaction; a mismatch means the row changed between
+    pre-export and write, so it is skipped as a pre_export_mismatch rather
+    than overwritten with a stale backup.
+    """
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute("SELECT result_data FROM reports WHERE id=? AND status='completed'", (report_id,)).fetchone()
         if row is None:
             raise ValueError("row disappeared")
         original = row[0]
+        if exported_sha is not None:
+            current_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
+            if current_sha != exported_sha:
+                conn.rollback()
+                return "pre_export_mismatch"
         updated = patch_tplus5_json(original, desired)
         if original == updated:
             conn.rollback()
@@ -593,18 +605,24 @@ def _pre_export_stream(path):
     return stream, raw, hashing
 
 
-def export_pre_images(db_path, *, as_of, calendar, fetch_series=None, export_dir=None):
-    """Export the exact stored bytes of every row that a backfill would change.
+def export_pre_images(db_path, planned, *, export_dir=None):
+    """Export the exact stored bytes of the rows in `planned`.
 
-    Returns {path, sha256, candidates}. The compressed file is re-read and its
-    sha256 verified against the in-stream hash; any failure raises before the
-    caller may open a write transaction, so a failed export means zero writes.
+    `planned` is the authoritative write list computed by run_backfill's
+    read-only pass. This function performs NO measurement recomputation and
+    NO price fetches: for each planned report id it re-reads the row's
+    current raw result_data bytes and appends them to the export stream.
+
+    Returns {path, sha256, records} where records maps report_id -> exported
+    sha256. The compressed file is re-read and its sha256 verified against
+    the in-stream hash; any failure raises before the caller may open a
+    write transaction, so a failed export means zero writes.
     """
     export_dir = Path(export_dir or PRE_EXPORT_DIR)
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")
     path = export_dir / (stamp + ".jsonl.zst")
     stream = raw = None
-    candidates = []
+    records = {}
     try:
         stream, raw, hashing = _pre_export_stream(path)
 
@@ -613,28 +631,30 @@ def export_pre_images(db_path, *, as_of, calendar, fetch_series=None, export_dir
 
         emit({
             "version": PRE_EXPORT_VERSION, "kind": "header", "db_path": str(db_path),
-            "as_of": as_of, "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),
         })
-        for report in _iter_db_raw(db_path):
-            updated, _stats = backfill_report(
-                report, as_of=as_of, calendar=calendar, fetch_series=fetch_series)
-            # Mirror the write guard: non-T+5 drift is rejected, empty
-            # measurement delta is a no-op. Only real candidates are exported.
-            if without_tplus5(report["result_data"]) != without_tplus5(updated["result_data"]):
-                continue
-            if not _measurement_delta(report["result_data"], updated["result_data"]):
-                continue
-            candidates.append(report["id"])
-            raw_bytes = report["raw"].encode("utf-8")
-            emit({
-                "kind": "row", "report_id": report["id"], "rowid": report["rowid"],
-                "result_data_sha256": hashlib.sha256(raw_bytes).hexdigest(),
-                "result_data": report["raw"],
-            })
-        emit({"kind": "trailer", "row_count": len(candidates)})
+        with closing(_open_db(db_path)) as conn:
+            for report_id, _desired in planned:
+                row = conn.execute(
+                    "SELECT rowid AS __rowid__, result_data FROM reports WHERE id=?",
+                    (report_id,)).fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        f"planned row {report_id} vanished before pre-export")
+                raw_text = row["result_data"]
+                raw_bytes = raw_text.encode("utf-8")
+                sha = hashlib.sha256(raw_bytes).hexdigest()
+                records[report_id] = sha
+                emit({
+                    "kind": "row", "report_id": report_id,
+                    "rowid": row["__rowid__"],
+                    "result_data_sha256": sha,
+                    "result_data": raw_text,
+                })
+        emit({"kind": "trailer", "row_count": len(records)})
         stream.close(); stream = None
         raw.flush(); os.fsync(raw.fileno()); raw.close(); raw = None
-        sha = hashing.sha.hexdigest()
+        file_sha = hashing.sha.hexdigest()
     except Exception:
         if stream is not None:
             try:
@@ -650,13 +670,13 @@ def export_pre_images(db_path, *, as_of, calendar, fetch_series=None, export_dir
         raise
     # Self-check: the bytes we just fsynced must hash to the same sha256.
     actual = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    if actual != sha:
+    if actual != file_sha:
         try:
             path.unlink()
         except OSError:
             pass
         raise RuntimeError("pre-export sha256 mismatch; refusing to write")
-    return {"path": str(path), "sha256": sha, "candidates": candidates}
+    return {"path": str(path), "sha256": file_sha, "records": records}
 
 
 def _load_pre_export(path, expected_sha256=None):
@@ -885,12 +905,14 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
     if db_path and not dry_run:
         # Pass 1.5: the independent pre-image export MUST succeed and self-verify
         # before any write transaction is opened. A failure raises -> zero writes.
-        pre_export = export_pre_images(db_path, as_of=as_of, calendar=calendar,
-                                       export_dir=pre_export_dir)
+        # The export is driven strictly by `planned` (no re-computation).
+        pre_export = export_pre_images(db_path, planned, export_dir=pre_export_dir)
+        # Requirement 2: the exported report-id set must equal `planned`'s.
+        if set(pre_export["records"]) != {rid for rid, _ in planned}:
+            raise RuntimeError("pre-export report set mismatch; refusing to write")
         result["pre_export"] = {"path": pre_export["path"], "sha256": pre_export["sha256"],
-                                "rows": len(pre_export["candidates"])}
-        if len(pre_export["candidates"]) != len(planned):
-            raise RuntimeError("pre-export candidate count mismatch; refusing to write")
+                                "rows": len(pre_export["records"])}
+        result["pre_export_mismatch"] = 0
         writer = _open_db(db_path, writable=True)
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -898,7 +920,12 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         try:
             for report_id, desired in planned:
                 try:
-                    result["changed_rows"] += int(_write_row(writer, report_id, desired, audit))
+                    outcome = _write_row(writer, report_id, desired, audit,
+                                         exported_sha=pre_export["records"].get(report_id))
+                    if outcome == "pre_export_mismatch":
+                        result["pre_export_mismatch"] += 1
+                    else:
+                        result["changed_rows"] += int(outcome)
                 except ValueError:
                     result["guard_mismatches"] += 1
                 except sqlite3.OperationalError:
