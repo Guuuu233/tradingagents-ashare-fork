@@ -88,8 +88,11 @@ def clean_report_result_data(result_data):
     """Return a cleaned copy of a report ``result_data`` dict.
 
     Cleans every top-level report section as well as the per-horizon nested
-    sections (``short_term`` / ``medium_term`` / ``horizons``). Non-text
-    fields are passed through unchanged.
+    sections (``short_term`` / ``medium_term``). The legacy ``horizons.<h>``
+    physical alias is no longer persisted (DAV-1545 存储 B-2) — on canonical
+    rows it exists only as a read-side compat view, so write-path cleaning
+    must not recurse into (and re-materialize) it. Legacy physical-alias
+    payloads still get the twin cleaned for B-1-era callers.
     """
     if not isinstance(result_data, dict):
         return result_data
@@ -104,10 +107,15 @@ def clean_report_result_data(result_data):
             cleaned[hkey] = clean_report_result_data(horizon)
     horizons = cleaned.get("horizons")
     if isinstance(horizons, dict):
-        cleaned["horizons"] = {
-            key: clean_report_result_data(value) if isinstance(value, dict) else value
-            for key, value in horizons.items()
-        }
+        from tradingagents.storage.result_data_compat import is_canonical_storage
+        if is_canonical_storage(cleaned):
+            # Compat-view artifact on a canonical row — never persist it.
+            cleaned.pop("horizons", None)
+        else:
+            cleaned["horizons"] = {
+                key: clean_report_result_data(value) if isinstance(value, dict) else value
+                for key, value in horizons.items()
+            }
     return cleaned
 
 
