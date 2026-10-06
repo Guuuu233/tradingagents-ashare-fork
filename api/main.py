@@ -458,6 +458,17 @@ async def lifespan(app: FastAPI):
         _default_executor = _prev_module_executor
         _log("Executor shutdown complete.")
 
+        # DAV-1571: explicit upstream-connection management — close every
+        # pooled LLM's httpx transports instead of leaving CLOSE_WAIT sockets
+        # to GC __del__.
+        try:
+            from tradingagents.llm_clients.pool import aclose_llm_pool
+
+            instances, transports = await aclose_llm_pool()
+            _log(f"LLM pool closed: instances={instances} transports_closed={transports}.")
+        except Exception as exc:
+            _log(f"Could not close LLM pool: {exc}")
+
 
 _is_prod = os.getenv("ENV", "").lower() == "prod"
 
@@ -5594,6 +5605,7 @@ async def _ai_extract_symbol_and_date_streaming(
     Emits agent.token events so the frontend can show streaming output during extraction.
     """
     from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients.pool import get_or_create_llm
     import json as _json
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5609,7 +5621,8 @@ async def _ai_extract_symbol_and_date_streaming(
     llm_user_context: Dict[str, Any] = {}
 
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=config.get("llm_provider", "openai"),
             model=config.get("quick_think_llm"),
             base_url=config.get("backend_url"),
@@ -5639,7 +5652,6 @@ async def _ai_extract_symbol_and_date_streaming(
 
 用户消息："{extraction_text}"
 """
-        llm = client.get_llm()
         _log(f"[LLM Debug] Streaming StockExtract with model: {getattr(llm, 'model_name', 'unknown')}")
 
         full_content = ""
@@ -5717,6 +5729,7 @@ def _ai_extract_symbol_and_date(
     Returns (symbol, date, horizons, focus_areas, specific_questions, inferred_user_context).
     """
     from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients.pool import get_or_create_llm
     import json as _json
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5732,7 +5745,8 @@ def _ai_extract_symbol_and_date(
     llm_specific_questions: List[str] = []
     llm_user_context: Dict[str, Any] = {}
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=config.get("llm_provider", "openai"),
             model=config.get("quick_think_llm"),
             base_url=config.get("backend_url"),
@@ -5762,7 +5776,6 @@ def _ai_extract_symbol_and_date(
 
 用户消息："{extraction_text}"
 """
-        llm = client.get_llm()
         
         # 调试日志：打印请求参数
         target_url = getattr(llm, 'openai_api_base', 'default')
@@ -6562,6 +6575,7 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
         classify_llm_failure,
         create_llm_client,
     )
+    from tradingagents.llm_clients.pool import get_or_create_llm
 
     provider = str(config.get("llm_provider") or "openai")
     base_url = config.get("backend_url")
@@ -6572,7 +6586,8 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
         return {"status": "skipped", "reason": "missing_model_or_key"}
 
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=provider,
             model=model,
             base_url=base_url,
@@ -6580,7 +6595,6 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
             timeout=_CONFIG_PROBE_TIMEOUT_SECONDS,
             max_retries=0,
         )
-        llm = client.get_llm()
         _role_tok = current_llm_role.set("config_probe")  # DAV-1314
         try:
             response = llm.invoke(_CONFIG_PROBE_PROMPT)
@@ -6623,6 +6637,7 @@ def _invoke_runtime_warmup(
         create_llm_client,
         resolve_role_base_url,
     )
+    from tradingagents.llm_clients.pool import get_or_create_llm
     from tradingagents.llm_clients.validators import _sanitize_error_detail
 
     provider = str(config.get("llm_provider") or "openai")
@@ -6673,7 +6688,8 @@ def _invoke_runtime_warmup(
     errors: List[str] = []
     for prov, model, b_url, a_key, labels in targets:
         try:
-            client = create_llm_client(
+            llm = get_or_create_llm(
+                create_llm_client,
                 provider=prov,
                 model=model,
                 base_url=b_url,
@@ -6681,7 +6697,6 @@ def _invoke_runtime_warmup(
                 timeout=timeout,
                 max_retries=0,
             )
-            llm = client.get_llm()
             _role_tok = current_llm_role.set("llm_warmup")  # DAV-1314
             try:
                 response = llm.invoke(prompt)

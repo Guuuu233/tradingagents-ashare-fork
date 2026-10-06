@@ -1642,14 +1642,15 @@ def extract_structured_data(
     try:
         from langchain_core.messages import HumanMessage
         from tradingagents.llm_clients import create_llm_client
+        from tradingagents.llm_clients.pool import get_or_create_llm
 
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=config.get("llm_provider", "openai"),
             model=config.get("quick_think_llm", "gpt-4o-mini"),
             base_url=config.get("backend_url"),
             api_key=config.get("api_key"),
         )
-        llm = client.get_llm()
 
         prompt = (
             "请从以下投资分析报告中提取结构化信息，并以 JSON 格式返回。\n\n"

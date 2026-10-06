@@ -14,6 +14,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
+from tradingagents.llm_clients.pool import get_or_create_llm
 
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.agents.utils.memory import FinancialSituationMemory
@@ -255,7 +256,15 @@ class TradingAgentsGraph:
             exist_ok=True,
         )
 
-        # Initialize LLMs with provider-specific thinking configuration
+        # Initialize LLMs with provider-specific thinking configuration.
+        # DAV-1571: llm instances are pooled process-wide by effective config
+        # signature (provider/model/base_url/params) via get_or_create_llm, so
+        # repeated graph constructions with identical role/global configs reuse
+        # one ChatOpenAI + httpx pool instead of rebuilding per job (DAV-1537
+        # showed ~69 client builds per analysis). When callers pass per-run
+        # callbacks, we keep them in the kwargs — a non-scalar value makes the
+        # pool key unhashable, so that call bypasses pooling and behaves
+        # exactly like the old per-graph construction.
         llm_kwargs = self._get_provider_kwargs()
 
         # Add callbacks to kwargs if provided (passed to LLM constructor)
@@ -302,29 +311,35 @@ class TradingAgentsGraph:
             if a_key:
                 r_kwargs["api_key"] = a_key
 
-            role_client = create_llm_client(
+            self.role_llms[role_key] = get_or_create_llm(
+                create_llm_client,
                 provider=p_type,
                 model=m_name,
                 base_url=b_url,
                 **r_kwargs,
             )
-            self.role_llms[role_key] = role_client.get_llm()
 
-        deep_client = create_llm_client(
-            provider=self.config.get("llm_provider", "openai"),
-            model=self.config.get("deep_think_llm", "gpt-4o"),
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-        quick_client = create_llm_client(
-            provider=self.config.get("llm_provider", "openai"),
-            model=self.config.get("quick_think_llm", "gpt-4o-mini"),
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-
-        self.deep_thinking_llm = self.role_llms.get("research_manager", deep_client.get_llm())
-        self.quick_thinking_llm = self.role_llms.get("market", quick_client.get_llm())
+        # DAV-1571: pooled by effective config signature; identical role/global
+        # configs share one ChatOpenAI + httpx pool instead of rebuilding per graph.
+        # Defaults are built lazily (dict.get would evaluate them eagerly).
+        self.deep_thinking_llm = self.role_llms.get("research_manager")
+        if self.deep_thinking_llm is None:
+            self.deep_thinking_llm = get_or_create_llm(
+                create_llm_client,
+                provider=self.config.get("llm_provider", "openai"),
+                model=self.config.get("deep_think_llm", "gpt-4o"),
+                base_url=self.config.get("backend_url"),
+                **llm_kwargs,
+            )
+        self.quick_thinking_llm = self.role_llms.get("market")
+        if self.quick_thinking_llm is None:
+            self.quick_thinking_llm = get_or_create_llm(
+                create_llm_client,
+                provider=self.config.get("llm_provider", "openai"),
+                model=self.config.get("quick_think_llm", "gpt-4o-mini"),
+                base_url=self.config.get("backend_url"),
+                **llm_kwargs,
+            )
         
         # Initialize memories
         self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
