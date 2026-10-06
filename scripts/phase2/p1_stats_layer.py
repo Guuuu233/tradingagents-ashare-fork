@@ -26,7 +26,7 @@ approved by 总控 2026-10-05). Deliverables covered:
      N ∈ {10,20,30,40} + uniform control; IC/D stats vs full universe,
      top-N overlap vs composite full ranking, industry coverage, n_eff;
      parametric token/latency cost (no currency).
-  D6 freeze-evidence: tied-rank share, NaN-IC days, quintile-vs-tercile,
+  D6 freeze-evidence: tied-rank share, NaN-IC days, min_n coverage/
      min_daily_cross_section_n ∈ {10,20,30,40} coverage/stability.
 
 Resource contract: single process, peak RSS <= 6 GB (18 GB host). Two
@@ -1096,8 +1096,8 @@ def main() -> int:
         "min_n": d6_minn,
         "frac_tied_mean": float(np.nanmean(comp["frac_tied"])),
         "ic_nan_days": int(comp["ic"].isna().sum()),
-        "note_quintile_vs_tercile": ("tercile D_T computed on composite in "
-                                   "report table below (hi_lo_tercile)"),
+        "note_quintile_vs_tercile": ("tercile sensitivity not implemented; "
+                                   "tercile_hi_lo_mean is NaN placeholder"),
     }
     # tercile hi-lo for composite: quick recompute from stored day_stats rows
     # -> approximate: use series parquet hi_lo (quintile) AND compute tercile
