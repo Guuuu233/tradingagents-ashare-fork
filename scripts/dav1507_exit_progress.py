@@ -35,7 +35,6 @@ import argparse
 import csv
 import json
 import os
-import resource
 import sqlite3
 import sys
 import tracemalloc
@@ -59,26 +58,26 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _project_imports():
     if _PROJECT_ROOT not in sys.path:
         sys.path.insert(0, _PROJECT_ROOT)
-    from tradingagents.agents.utils.shadow_credit import (  # noqa: E402
-        DUAL_HORIZON_SUB_UNITS,
-        extract_sample_cohort,
-        filter_v2_completed_reports,
-        split_report_into_units,
-        is_v2_protocol_report,
-        classify_v2_report_d009_exclusion,
-        collect_hold_semantic_reasons,
-        normalize_report_for_evaluation,
-        _is_bull,
-        _is_bear,
-    )
-    from tradingagents.agents.utils.evidence_verifier import (  # noqa: E402
+    from tradingagents.agents.utils.debate_utils import VALID_BATTLEFIELDS
+    from tradingagents.agents.utils.evidence_verifier import (
         is_observation_or_hypothesis_claim,
     )
-    from tradingagents.agents.utils.price_basis_isolation import (  # noqa: E402
+    from tradingagents.agents.utils.price_basis_isolation import (
         classify_price_basis_exclusion,
         extract_report_id,
     )
-    from tradingagents.agents.utils.debate_utils import VALID_BATTLEFIELDS  # noqa: E402
+    from tradingagents.agents.utils.shadow_credit import (
+        DUAL_HORIZON_SUB_UNITS,
+        _is_bear,
+        _is_bull,
+        classify_v2_report_d009_exclusion,
+        collect_hold_semantic_reasons,
+        extract_sample_cohort,
+        filter_v2_completed_reports,
+        is_v2_protocol_report,
+        normalize_report_for_evaluation,
+        split_report_into_units,
+    )
     return {
         "DUAL_HORIZON_SUB_UNITS": DUAL_HORIZON_SUB_UNITS,
         "extract_sample_cohort": extract_sample_cohort,

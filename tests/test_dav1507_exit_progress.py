@@ -10,8 +10,6 @@ Covers the two required additions from the打回 + spec §5 counter-examples:
 
 All samples are in-memory; no DB, no model, no provider.
 """
-import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,7 +22,7 @@ SCRIPT = ROOT / "scripts" / "dav1507_exit_progress.py"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import dav1507_exit_progress as m  # noqa: E402
+import dav1507_exit_progress as m
 
 
 def _lib():
