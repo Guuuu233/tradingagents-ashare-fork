@@ -358,6 +358,9 @@ def backfill_report(report, *, as_of, calendar, fetch_series=None):
     result = copy.deepcopy(report)
     target = result.get("result_data")
     target = target if isinstance(target, dict) else result
+    # DAV-1545 (B-2): canonical rows carry no physical ``horizons`` alias;
+    # the *_term slots are the only stamp target (mirror block below is a
+    # no-op there). Legacy rows still get their physical mirror stamped.
     slots = [(h, target[h + "_term"]) for h in ("short", "medium") if isinstance(target.get(h + "_term"), dict)]
     if not slots:
         slots = [(target.get("horizon") or report.get("horizon") or "unspecified", target)]
@@ -376,6 +379,10 @@ def backfill_report(report, *, as_of, calendar, fetch_series=None):
         td = candidate.get("analysis_baseline_date") or candidate.get("trade_date") or candidate.get("date")
         fields = _measurement(unit, symbol, td, as_of, calendar, fetch_series)
         _stamp_measurement(unit, fields)
+        # DAV-1545 (B-2): the ``horizons.<h>`` physical alias is no longer
+        # persisted — new rows carry only the authoritative ``*_term`` slots.
+        # On legacy rows that still physically carry the mirror, keep it in
+        # sync so the stored twin does not diverge from the slice.
         mirror = (target.get("horizons") or {}).get(horizon)
         if isinstance(mirror, dict):
             # Mirror may contain slightly different non-T+5 content; preserve it.

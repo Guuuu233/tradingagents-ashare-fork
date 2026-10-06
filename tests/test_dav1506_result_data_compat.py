@@ -365,9 +365,13 @@ def test_get_report_then_finalize_does_not_write_view_back():
         db.commit()
 
         fetched = report_service.get_report(db, "r-v1-1")
-        # served view has the reconstructed aliases + read-time hrm backfill
+        # served view has the reconstructed aliases; hrm is backfilled at the
+        # top level and into the authoritative *_term slices only (DAV-1545:
+        # read-time backfill must not stamp the virtual ``horizons.<h>``
+        # slices — the persist strip drops them unconditionally anyway).
         assert isinstance(fetched.result_data.get("horizons"), dict)
-        assert "horizon_run_metadata" in fetched.result_data["horizons"]["short"]
+        assert "horizon_run_metadata" in fetched.result_data
+        assert "horizon_run_metadata" in fetched.result_data["short_term"]
 
         report_service.finalize_orphan_report(db, fetched)
 
