@@ -841,7 +841,6 @@ def main() -> int:
             else:
                 oos_eval.append((X[m], r[m]))
         del df, ok
-        feats.pop(year, None)
         gc.collect()
         log(f"pass2 year={year} rss={peak_rss_gb():.2f}GB")
 
@@ -866,11 +865,20 @@ def main() -> int:
     # =====================================================================
     frontier_rows = []
     for year, pool in strat_pools.items():
+        # same 120d composite as the full-universe reference (P1-7: must hold
+        # score & pool constant; mom_40/vol_40 no longer drive the score)
+        if year in feats and len(feats[year]):
+            pool = pool.merge(feats[year], how="left",
+                              left_on=["ts_code", "signal_date"],
+                              right_index=True, sort=False)
+        else:
+            pool["mom_120s20"] = np.nan
+            pool["vol_120"] = np.nan
         for d, g in pool.groupby("signal_date", sort=True):
             comp = np.nanmean(np.vstack([
-                zscore_arr(g["mom_40"].to_numpy(dtype=float)),
+                zscore_arr(g["mom_120s20"].to_numpy(dtype=float)),
                 zscore_arr(g["value_inv"].to_numpy(dtype=float)),
-                zscore_arr(-g["vol_40"].to_numpy(dtype=float)),
+                zscore_arr(-g["vol_120"].to_numpy(dtype=float)),
                 zscore_arr(-g["log_mv"].to_numpy(dtype=float))]), axis=0)
             g = g.assign(_comp=comp)
             r = g["r_rel"].to_numpy(dtype=float)
