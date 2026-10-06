@@ -115,7 +115,7 @@
 
 ### 冻结 1：`primary_cross_sectional_metric`
 
-> **冻结值 = `daily_spearman_rank_ic`（日级 Spearman 排序 IC）为主指标，`hi_lo_quintile_diff`（高低五分位组差）为辅助指标。**
+> **建议冻结值 = `daily_spearman_rank_ic`（日级 Spearman 排序 IC）为主指标、`hi_lo_quintile_diff`（高低五分位组差）为辅助指标，待总控签字**（spec §5.6 同方向推荐）。
 
 证据：同分并列占比均值 0.0000（`frac_tied_mean`≈1.8e-7，并列不构成口径风险）；IC 缺失仅 40 天（`ic_nan_days`=40/2,451，为 2015 左端无 120 日回看的真实缺失）；quintile 分组在各 min_n 档下稳定（§7 表）。tercile 敏感性**未实现**（`p1_stats_layer.py` 只落盘 quintile 口径，`tercile_hi_lo_mean` 字段为 NaN 占位）——本冻结按 quintile 稳定证据登记，tercile 对照列为**豁免项**（DAV-1562 登记、DAV-1565 复审确认口径）。
 
