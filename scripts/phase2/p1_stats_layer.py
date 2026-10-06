@@ -2,10 +2,13 @@
 """DAV-1560 — P1 子卡三：统计层（只读子卡二落盘 parquet，产出六项交付物的数字）.
 
 Reads data/phase2/chunks/year=YYYY/data.parquet produced by DAV-1547
-(commit 390e62259c10241aa6c885c002e42e71a743fc34) strictly READ-ONLY — never
-modifies or recomputes the chunk files. Label semantics (raw r_stock,
-close-to-close r_sw, y_rel) are exactly what the builder wrote; vendor_qfq is
-derived here from the on-disk adj_factor_entry/exit columns (no refetch).
+(rework commit 8fc4468) strictly READ-ONLY — never modifies or recomputes
+the chunk files. Label semantics: r_stock is the vendor-QFQ (前复权) leg,
+r_stock_raw the raw-price leg, r_sw the same-window SW index leg
+(T+1 open → actual-exit close), r_rel = r_stock − r_sw, y_rel = 1[r_rel>0].
+The raw counterpart r_rel_raw = r_stock_raw − r_sw is derived here for the
+§5 qfq-vs-raw paired contrast — no second adjustment is ever applied
+(adj_factor_* are used ONLY to flag corporate-action windows).
 
 Spec: docs/research/phase2-midterm/p1-study-spec.md (DAV-1478, §9 six points
 approved by 总控 2026-10-05). Deliverables covered:
@@ -29,11 +32,16 @@ approved by 总控 2026-10-05). Deliverables covered:
   D6 freeze-evidence: tied-rank share, NaN-IC days, min_n coverage/
      min_daily_cross_section_n ∈ {10,20,30,40} coverage/stability.
 
-Resource contract: single process, peak RSS <= 6 GB (18 GB host). Two
+Resource contract: single process, peak RSS <= 6 GB (18 GB host). Three
 streaming passes — each year partition is materialised alone (plus the day
 panel ~10M×32B accumulators and per-year sampling pools). Every result is
 persisted to data/phase2/stats/ (json + parquet + md + run.json with measured
 peak RSS and elapsed). Nothing is print-only.
+
+Cross-section guard (frozen): signal days with < MIN_DAILY_N (10) valid
+score-label pairs are flagged `insufficient` in day_core.parquet and excluded
+from every per-day statistic (D2 IC/hi-lo series, D6 stability). The D6 min_n
+sweep {10,20,30,40} is kept as sensitivity evidence on top of the guard.
 
 Missing derived columns vs spec (chunks frozen by DAV-1547): mom_120s20 /
 vol_120 are recomputed here from the same off-repo cache's daily_by_day
@@ -72,6 +80,7 @@ CACHE_DIR = Path(os.environ.get(
 SEED = 1478
 MAIN_START = "20190603"          # spec §1 primary window
 LONG_START = "20160101"          # spec §1 sensitivity window
+MIN_DAILY_N = 10                 # frozen min_daily_cross_section_n guard
 EVAL_OK = "evaluated_ok"
 SIM_ICS = (0.00, 0.02, 0.05, 0.08, 0.12)
 NW_BANDS = (40, 60, 80, 120)
@@ -475,7 +484,7 @@ def selftest() -> None:
 
 COLS_PASS1 = ["ts_code", "signal_date", "sw_l1_code", "outcome_status",
               "universe_ok", "in_hs300", "in_zz500",
-              "r_rel", "y_rel", "r_stock",
+              "r_rel", "y_rel", "r_stock", "r_stock_raw", "r_sw",
               "entry_date", "actual_exit_date",
               "adj_factor_entry", "adj_factor_exit",
               "pe_ttm", "pb", "total_mv",
@@ -494,11 +503,14 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     ae = df["adj_factor_entry"].to_numpy(dtype=float)
     ax = df["adj_factor_exit"].to_numpy(dtype=float)
     ratio = np.where((ae > 0) & ~np.isnan(ae) & ~np.isnan(ax), ax / ae, 1.0)
-    rs = df["r_stock"].to_numpy(dtype=float)
-    df["r_stock_qfq"] = (1 + rs) * ratio - 1
-    rsw = df["r_rel"].to_numpy(dtype=float)  # r_rel = r_stock - r_sw
-    rsw = rs - rsw  # recover r_sw
-    df["r_rel_qfq"] = df["r_stock_qfq"] - rsw
+    # r_stock is ALREADY vendor_qfq in the rebuilt chunks — do NOT multiply
+    # by adj ratios again (DAV-1584 P0-1). adj_factor only flags windows that
+    # contain a corporate action (cash dividend / split / 送转 alike).
+    df["r_stock_qfq"] = df["r_stock"].to_numpy(dtype=float)
+    rsw = df["r_sw"].to_numpy(dtype=float)
+    # raw-price counterpart over the SAME holding window
+    rs_raw = df["r_stock_raw"].to_numpy(dtype=float)
+    df["r_rel_raw"] = rs_raw - rsw
     df["adj_changed"] = ~np.isclose(ratio, 1.0)
     return df
 
@@ -657,14 +669,25 @@ def main() -> int:
         # per-day aggregates --------------------------------------------------
         for d, g in ok.groupby("signal_date", sort=True):
             r = g["r_rel"].to_numpy(dtype=float)
+            r_raw = g["r_rel_raw"].to_numpy(dtype=float)
+            n_score_ok = int(g[["mom_40", "value_inv", "vol_40",
+                               "log_mv"]].notna().all(axis=1).sum())
+            n_label_ok = int(g["y_rel"].notna().sum())
             row = {"signal_date": d, "year": year, "n_ok": len(g),
                    "n_all": int(day_counts.get(d, 0)),
+                   "n_score_ok": n_score_ok, "n_label_ok": n_label_ok,
+                   # frozen guard: < MIN_DAILY_N score-label pairs → the day
+                   # is excluded from every per-day statistic
+                   "insufficient": bool(n_label_ok < MIN_DAILY_N),
                    "rho_all": np.nan, "pairs_all": 0,
                    "mkt_y": float(np.nanmean(g["y_rel"]))
                    if g["y_rel"].notna().any() else np.nan,
                    "frac_adj_chg": float(g["adj_changed"].mean()),
-                   "mean_r_rel_qfq": float(np.nanmean(g["r_rel_qfq"])),
-                   "mean_r_rel_raw": float(np.nanmean(r))}
+                   # r_rel IS the qfq relative return on the rebuilt chunks
+                   "mean_r_rel_qfq": float(np.nanmean(r)),
+                   "mean_r_rel_raw": float(np.nanmean(r_raw)),
+                   "paired_diff_qfq_minus_raw":
+                       float(np.nanmean(r - r_raw))}
             # pearson variant = single-split pair corr (robustness)
             m = ~np.isnan(r)
             if m.sum() >= 4:
@@ -751,8 +774,13 @@ def main() -> int:
 
         for d, g in ok.groupby("signal_date", sort=True):
             n = len(g)
+            n_label_ok = int(g["y_rel"].notna().sum())
+            # frozen guard: < MIN_DAILY_N valid labels → day stays in
+            # day_core flagged insufficient but feeds NO IC/D series
+            if n_label_ok < MIN_DAILY_N:
+                continue
             r = g["r_rel"].to_numpy(dtype=float)
-            rq = g["r_rel_qfq"].to_numpy(dtype=float)
+            rq = g["r_rel_raw"].to_numpy(dtype=float)
             yv = g["y_rel"].to_numpy(dtype=float)
 
             s_mom = g["mom_120s20"].to_numpy(dtype=float)
@@ -911,7 +939,7 @@ def main() -> int:
                 "days": int(day_df["rho_pearson_pairs"].notna().sum()),
                 "pearson_pairs_variant": float(day_df["rho_pearson_pairs"].mean())},
         "by_week_stratum": {
-            "weeks": int(len(wk_g)),
+            "weeks": len(wk_g),
             "mean_rho_equal_weight": float(wk_g["rho"].mean())},
         "by_industry": ind_acc.summary(),
         "by_style_bucket_4x10": style_acc.summary(),
@@ -929,7 +957,7 @@ def main() -> int:
     aligned = {}
     for name, rows in day_stats.items():
         ser = pd.DataFrame(rows, columns=["signal_date", "ic", "hi_lo",
-                                          "ic_qfq", "n", "frac_tied"])
+                                          "ic_raw", "n", "frac_tied"])
         ser = ser.sort_values("signal_date").set_index("signal_date")
         ser = ser.reindex(trading_days)   # missing signal days -> NaN rows
         aligned[name] = ser
@@ -941,16 +969,23 @@ def main() -> int:
         neff_d, rs_d = long_run_var(dv)
         nw = {str(L): newey_west_se(icv, L) for L in NW_BANDS}
         auto = nw_auto_bandwidth(icv)
-        nw["auto_andrews_bw"] = auto
-        nw["auto_andrews_se"] = newey_west_se(icv, auto) if auto else np.nan
+        nw["auto_bw_formula"] = auto
+        nw["auto_bw_se"] = newey_west_se(icv, auto) if auto else np.nan
+        nw["note"] = ("auto_bw = round(1.1447*(|ACF1|*n)^(1/3)) — plug-in "
+                      "AR(1)-motivated rule, not the Andrews(1991) estimator; "
+                      "n_eff uses L=floor(sqrt(n)) unweighted ACF sum, a "
+                      "different estimator from the NW-Bartlett SE")
         boot = {str(L): moving_block_bootstrap_se(
             icv, L, 400, np.random.default_rng(seed_for(f"boot{name}{L}")))
             for L in BLOCK_LENS}
+        boot["meta"] = ("400 replicates per block length; seeds = "
+                        "sha256(seed|boot{name}{L}); NaN days dropped before "
+                        "resampling")
         d2[name] = {
             "days_valid": int((~np.isnan(icv)).sum()),
             "ic_mean": float(np.nanmean(icv)),
             "ic_std": float(np.nanstd(icv)),
-            "ic_qfq_mean": float(np.nanmean(ser["ic_qfq"])),
+            "ic_raw_mean": float(np.nanmean(ser["ic_raw"])),
             "hi_lo_mean": float(np.nanmean(dv)),
             "hi_lo_std": float(np.nanstd(dv)),
             "acf": {str(k): _n(ac[k]) for k in range(len(ac))},
@@ -975,7 +1010,7 @@ def main() -> int:
     d3 = {
         "mean_day_r2": float(r2_days.mean()),
         "median_day_r2": float(r2_days.median()),
-        "days": int(len(r2_days)),
+        "days": len(r2_days),
         "oos_r2_last_third": oos_r2,
         "beta_insample": ([float(b) for b in beta] if beta is not None else None),
         "resid_ic_mean": float(resid_df["ic"].mean()),
@@ -1042,7 +1077,7 @@ def main() -> int:
     iy_df.to_parquet(out_dir / "base_rate_industry_year.parquet", index=False)
     d4 = {"market_mean": float(p["y"].mean()),
           "cells": len(iy_df),
-          "industries": int(len(l1_codes)),
+          "industries": len(l1_codes),
           "snapshot_table": "base_rate_industry_year.parquet",
           "expanding_table": "base_rate_expanding.parquet",
           "p_hat_mean": float(iy_df["p_hat"].mean()),
@@ -1061,7 +1096,7 @@ def main() -> int:
             full = aligned["score_composite"]["ic"]
             j = sub.join(full.rename("ic_full"), on="signal_date")
             d5.append({
-                "N": N, "kind": kind, "days": int(len(sub)),
+                "N": N, "kind": kind, "days": len(sub),
                 "ic_mean": float(np.nanmean(icv)),
                 "ic_std": float(np.nanstd(icv)),
                 "ic_mae_vs_full": float(np.nanmean(np.abs(j["ic"] - j["ic_full"]))),
@@ -1091,38 +1126,73 @@ def main() -> int:
                         "ic_mean": float(np.nanmean(icv)),
                         "ic_std": float(np.nanstd(icv)),
                         "acf1": float(acf_pacf(icv, 1)[0][1]) if len(icv) > 3 else np.nan})
-    # tercile sensitivity: recompute hi_lo with terciles on composite
+    # tercile sensitivity: NOT IMPLEMENTED — exempted per DAV-1561/1565.
+    # quintile hi-lo is the only bandwidth persisted; tercile_hi_lo_mean is a
+    # NaN placeholder by design, do not report it as verified.
     d6 = {
         "min_n": d6_minn,
         "frac_tied_mean": float(np.nanmean(comp["frac_tied"])),
         "ic_nan_days": int(comp["ic"].isna().sum()),
+        "insufficient_days_lt10": int(day_df["insufficient"].sum()),
         "note_quintile_vs_tercile": ("tercile sensitivity not implemented; "
                                    "tercile_hi_lo_mean is NaN placeholder"),
+        "tercile_hi_lo_mean": np.nan,
     }
-    # tercile hi-lo for composite: quick recompute from stored day_stats rows
-    # -> approximate: use series parquet hi_lo (quintile) AND compute tercile
-    # version here via reload of ok panel is costly; instead compute during
-    # pass2 would be ideal — simplified: report quintile only + note.
-    d6["tercile_hi_lo_mean"] = np.nan  # filled below if panel allows
 
-    # dividend-bias quantification (总控限定)
+    # ---- three-window aggregates (2019 main / 2016 sensitivity / all cached)
+    day_idx = pd.to_datetime(day_df["signal_date"], format="%Y%m%d")
+    windows = {
+        "all_cached": day_df,
+        "main_2019": day_df[day_df["signal_date"] >= MAIN_START],
+        "sens_2016": day_df[day_df["signal_date"] >= LONG_START],
+    }
+    win_out = {}
+    for wname, wdf in windows.items():
+        comp_w = comp.loc[comp.index.isin(wdf["signal_date"])]
+        win_out[wname] = {
+            "days": int(len(wdf)),
+            "panel_rows": int(wdf["n_ok"].sum()),
+            "y_nonnull_rows": int(
+                panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
+                          "y"].notna().sum()),
+            "insufficient_days": int(wdf["insufficient"].sum()),
+            "composite_ic_mean": float(np.nanmean(comp_w["ic"])),
+            "composite_ic_days_valid": int(comp_w["ic"].notna().sum()),
+            "mkt_y_rel_mean": float(np.nanmean(wdf["mkt_y"])),
+        }
+
+    # paired qfq-vs-raw diff: proper paired SE on the daily diff series
+    diffs = day_df["paired_diff_qfq_minus_raw"].to_numpy(dtype=float)
+    diffs = diffs[~np.isnan(diffs)]
+    paired_se = float(np.nanstd(diffs, ddof=1) / math.sqrt(len(diffs))) \
+        if len(diffs) > 2 else np.nan
     div = {
         "frac_rows_adj_changed": float(day_df["frac_adj_chg"].mean()),
         "mean_r_rel_qfq": float(day_df["mean_r_rel_qfq"].mean()),
         "mean_r_rel_raw": float(day_df["mean_r_rel_raw"].mean()),
         "diff_qfq_minus_raw": float(
             day_df["mean_r_rel_qfq"].mean() - day_df["mean_r_rel_raw"].mean()),
+        "paired_diff_mean": float(np.nanmean(diffs)),
+        "paired_diff_se": paired_se,
+        "paired_diff_days": int(len(diffs)),
+        "note": ("adj_factor change includes dividends AND splits/送转; "
+                 "frac is the cross-day equal-weight mean of per-day share, "
+                 "not a row-level pool share"),
     }
 
     out = {
         "meta": {"chunks_dir": str(chunks), "seed": SEED,
-                 "signal_days": int(len(day_df)),
-                 "panel_rows": int(len(panel)),
+                 "signal_days": len(day_df),
+                 "panel_rows": len(panel),
+                 "signal_date_min": str(day_df["signal_date"].min()),
+                 "signal_date_max": str(day_df["signal_date"].max()),
+                 "min_daily_n_guard": MIN_DAILY_N,
                  "started": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t0)),
                  "finished": time.strftime("%Y-%m-%dT%H:%M:%S"),
                  "elapsed_s": round(time.time() - t0, 1),
                  "peak_rss_gb": round(peak_rss_gb(), 3),
                  "main_start": MAIN_START, "long_start": LONG_START},
+        "windows": win_out,
         "d1_paircorr": d1,
         "d2_ic_structure": d2,
         "d3_style": d3,
@@ -1203,15 +1273,23 @@ def _f(v, d=4):
 
 def write_report(out: dict, aligned: dict, path: Path) -> None:
     m = out["meta"]
-    L = ["# P1 子卡三 统计层报告（DAV-1560）",
+    w = out["windows"]
+    L = ["# P1 子卡三 统计层报告（DAV-1560，DAV-1579 重跑版）",
          "",
-         f"- 数据源：子卡二 DAV-1547 落盘 parquet（只读，未改未重算），"
-         f"{m['signal_days']} 信号日、{m['panel_rows']:,} 有效股票-日",
+         f"- 数据源：子卡二 DAV-1547 返修版（8fc4468）落盘 parquet（只读，未改未重算），"
+         f"{m['signal_days']} 信号日（{m['signal_date_min']}~{m['signal_date_max']}）、"
+         f"{m['panel_rows']:,} 有效股票-日",
          f"- 运行：{m['started']} → {m['finished']}，耗时 {m['elapsed_s']}s，"
          f"峰值 RSS {m['peak_rss_gb']}GB（约束 ≤6GB，18GB 本机）",
-         f"- 主口径信号区间 {m['main_start']}+；长样本敏感性 {m['long_start']}+",
+         f"- 窗口口径：主区间 {m['main_start']}+（{w['main_2019']['days']} 日 / "
+         f"{w['main_2019']['panel_rows']:,} panel 行）；敏感性 {m['long_start']}+（"
+         f"{w['sens_2016']['days']} 日）；全缓存诊断 {w['all_cached']['days']} 日",
+         f"- 守卫：<10 有效 label 日 → insufficient（本次触发 "
+         f"{out['d6_min_n']['insufficient_days_lt10']} 天，均排除出 IC 序列）",
+         "- 标签：r_stock 为 vendor_qfq 主口径；r_stock_raw 为原始价敏感性列；"
+         "r_sw 同窗 T+1 开盘→退出收盘；qfq/raw 配对差见末节",
          "", "## 1 同日成对相关（r_rel z 乘积，组内两两）", "",
-         "| 组 | 等权 ρ | 对数加权 ρ | 规模 |", "|---|---|---|---|"]
+         "| 组 | 等权 ρ | 对数加权 ρ | 规模 |", "|---|---|---|---|---|"]
     a = out["d1_paircorr"]["all"]
     L.append(f"| 全体 | {_f(a['mean_rho_equal_weight'])} | "
              f"{_f(a['mean_rho_pair_weight'])} | {a.get('pairs',0)} 对 "
@@ -1232,7 +1310,7 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
                  f"{_f(v['ic_std'])} | {_f(v['acf'].get('1'))} | "
                  f"{_f(v['acf'].get('20'))} | {_f(v['acf'].get('40'))} | "
                  f"{_f(v['ljung_box_ic'].get(40),1)} | "
-                 f"{v['newey_west_se_ic'].get('auto_andrews_bw')} | "
+                 f"{v['newey_west_se_ic'].get('auto_bw_formula')} | "
                  f"{_f(v['n_eff_ic'],0)} |")
     L += ["", "## 3 风格暴露解释力", "",
           f"- 日横截面回归 mean R² {_f(out['d3_style']['mean_day_r2'])} / "
@@ -1277,20 +1355,28 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
                  f"{_f(r['ic_mean'])} | {_f(r['ic_std'])} | {_f(r['acf1'])} |")
     L += ["",
           f"- 同分并列占比均值 {_f(out['d6_min_n']['frac_tied_mean'])}；"
-          f"IC 缺失天数 {out['d6_min_n']['ic_nan_days']}",
+          f"IC 缺失天数 {out['d6_min_n']['ic_nan_days']}（尾部未成熟，"
+          f"见人工报告 §7）；insufficient(<10) 天数 "
+          f"{out['d6_min_n']['insufficient_days_lt10']}",
+          "- tercile 敏感性：未实现（DAV-1561/1565 已签豁免），"
+          "tercile_hi_lo_mean = NaN 占位，不作验证声明",
           "",
-          "## 分红偏差（总控限定：qfq 含分红调整 vs 价格指数基准）", "",
-          f"- 行级 adj_factor 变化占比 {_f(out['dividend_bias']['frac_rows_adj_changed'])}",
+          "## qfq vs raw 配对差（同窗 r_sw，配对差序列 SE）", "",
+          f"- 行级 adj_factor 变化占比（含送转，跨日等权）"
+          f"{_f(out['dividend_bias']['frac_rows_adj_changed'])}",
           f"- mean r_rel：qfq {_f(out['dividend_bias']['mean_r_rel_qfq'])} / "
           f"raw {_f(out['dividend_bias']['mean_r_rel_raw'])}；"
           f"差 {_f(out['dividend_bias']['diff_qfq_minus_raw'])}",
+          f"- 配对差序列：mean {_f(out['dividend_bias']['paired_diff_mean'])}"
+          f" ± SE {_f(out['dividend_bias']['paired_diff_se'])} "
+          f"（{out['dividend_bias']['paired_diff_days']} 天）",
           "", "## 局限", "",
-          "- 标签为子卡二落盘口径（raw r_stock，sw close-to-close）；"
-          "qfq 仅由落盘 adj_factor 派生为敏感性列；指数 T+1 开盘腿未重抓"
-          "（spec §3 降级路径，差异同向有界）。",
+          "- 标签为子卡二返修落盘口径（r_stock=vendor_qfq 主、r_stock_raw "
+          "原始价敏感性、r_sw 同窗 T+1 开盘→退出收盘）；指数腿为价格指数"
+          "不含分红。",
           "- mom_120s20 / vol_120 用同一仓外缓存按相同分组滚动语义重算"
-          "（只读），chunk parquet 未动；D3 回归的 mom/vol 用落盘 "
-          "mom_40/vol_40（PIT 口径一致）。",
+          "（只读），chunk parquet 未动；D3 回归用 120d 因子（mom_40/vol_40 "
+          "仅作 40d 稳健性）。",
           "- 分行业基率扩窗按 actual_exit_date≤T 判定成熟；快照按年末。",
           "- 只推 agent 分支、不合入主干。"]
     Path(path).write_text("\n".join(L))
