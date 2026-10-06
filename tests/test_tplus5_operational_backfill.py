@@ -51,8 +51,9 @@ def backfill(rep, data=None, as_of="2026-08-15"):
                                fetch_series=lambda *args: series() if data is None else data)
 
 
-def test_each_horizon_uses_own_winner_and_mirror_and_keeps_cohort():
+def test_each_horizon_uses_own_winner_and_keeps_cohort_and_mirror_untouched():
     rep = report()
+    original_mirrors = copy.deepcopy(rep["result_data"]["horizons"])
     updated, stats = backfill(rep)
     for h, expected in (("short", True), ("medium", False)):
         u = updated["result_data"][h + "_term"]
@@ -60,12 +61,17 @@ def test_each_horizon_uses_own_winner_and_mirror_and_keeps_cohort():
         assert u["t_plus_5_direction_hit"] is expected
         assert u["price_basis_version"] == "price_basis.vendor_qfq"
         assert u["manager_verdict"]["entry"] == "999"
-        assert updated["result_data"]["horizons"][h] == u
         assert stats[h]["evaluated_count"] == 1
         assert u["t_plus_5_provenance"] == {
             "source": "fixture.daily", "adjustment": "qfq", "fetched_on": "2026-08-15",
             "entry_date": "2026-08-04", "exit_date": "2026-08-10",
             "entry_price": 10., "exit_price": 11.}
+    # DAV-1572 (存储 B-3): the physical ``horizons.<h>`` mirror is never
+    # stamped — a legacy row keeps its stored alias byte-exact while only the
+    # authoritative ``*_term`` slices receive the measurement.
+    assert updated["result_data"]["horizons"] == original_mirrors
+    assert "t_plus_5_direction_hit" not in updated["result_data"]["horizons"]["short"]
+    assert "t_plus_5_direction_hit" not in updated["result_data"]["horizons"]["medium"]
     assert cli.without_tplus5(rep["result_data"]) == cli.without_tplus5(updated["result_data"])
 
 
@@ -153,8 +159,33 @@ def test_writer_only_changes_measurements_and_is_idempotent(tmp_path, monkeypatc
     assert cli.non_tplus5_bytes(before[4]) == cli.non_tplus5_bytes(after[4])
     assert first["changed_rows"] == 1 and first["guard_mismatches"] == 0
     assert json.loads(log.read_text().splitlines()[-1])["report_id"] == "one"
+    # DAV-1572 (B-3): the stored horizons.<h> mirror retains its original
+    # bytes — T+5 was written only into result_data.<h>_term.
+    stored = json.loads(after[4])
+    original = json.loads(before[4])
+    assert stored["horizons"] == original["horizons"]
+    assert "t_plus_5_direction_hit" not in stored["horizons"]["short"]
+    assert stored["short_term"]["t_plus_5_direction_hit"] is True
     second = cli.run_backfill(db_path=str(p), as_of="2026-08-15", audit_log=str(log))
     assert second["changed_rows"] == 0
+
+
+def test_persisted_row_keeps_legacy_alias_byte_exact_under_write(tmp_path, monkeypatch):
+    """B-3 存量兼容证据：legacy 双别名行写入后 horizons 物理字节逐字保留。"""
+    p = make_db(tmp_path, report()); log = tmp_path / "rollback.jsonl"
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *args: {"allowed": True,"reason": "idle"})
+    before_text = sqlite3.connect(p).execute("SELECT result_data FROM reports").fetchone()[0]
+    cli.run_backfill(db_path=str(p), as_of="2026-08-15", audit_log=str(log))
+    after_text = sqlite3.connect(p).execute("SELECT result_data FROM reports").fetchone()[0]
+
+    def _horizons_span(text):
+        node = cli._json_node(text)
+        return text[node["members"]["horizons"][1]["start"]:node["members"]["horizons"][1]["end"]]
+
+    assert _horizons_span(before_text) == _horizons_span(after_text)
+    assert json.loads(after_text)["horizons"] == json.loads(before_text)["horizons"]
 
 
 def test_busy_guard_prevents_all_writes_and_fetches(tmp_path, monkeypatch):
