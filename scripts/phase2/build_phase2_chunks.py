@@ -33,9 +33,11 @@ Label semantics (mirrors tradingagents/dataflows/return_labels.py, BUY leg):
   data_missing.
 - limit prices derived as pre_close * (1 +/- limit_rate); rate = 5% while ST,
   else board default (10% main, 20% ChiNext/STAR, 30% BSE — BSE is filtered).
-- r_stock = exit_close/entry_open - 1 on RAW prices (splits cancel in the ratio;
-  cash dividends not included — recorded as limitation); r_sw = SW L1
-  close-to-close over [signal_date, actual_exit_date];
+- r_stock = (exit_close*adj_exit)/(entry_open*adj_entry) - 1 on VENDOR-QFQ
+  adjusted prices (primary basis; raw-price return kept as r_stock_raw).
+  Rows without an adj_factor at entry or exit get r_stock=NaN, never a raw
+  fallback. r_sw = SW L1 T+1 OPEN -> actual_exit close, i.e. the same holding
+  window as the stock leg; missing index open -> r_sw=NaN.
   y_rel = 1[r_stock - r_sw > 0].
 
 Usage:
@@ -82,7 +84,7 @@ OUT_COLUMNS = [
     "in_hs300", "in_zz500", "sw_l1_code", "sw_l1_name",
     "is_st", "list_age_days", "universe_ok",
     "entry_date", "target_exit_date", "actual_exit_date", "roll_days_used",
-    "entry_open", "exit_close", "r_stock", "r_sw", "r_rel", "y_rel",
+    "entry_open", "exit_close", "r_stock", "r_stock_raw", "r_sw", "r_rel", "y_rel",
     "outcome_status",
     "pe_ttm", "pb", "total_mv", "turnover_rate",
     "mom_40", "vol_40", "ret_1d",
@@ -259,7 +261,8 @@ def process_symbol(code: str,
                    industry_pit: dict,
                    idx_snap_dates: dict,
                    index_weights: dict,
-                   sw_close: dict) -> tuple | None:
+                   sw_close: dict,
+                   sw_open: dict) -> tuple | None:
     """Vectorized T+40 label resolution for one symbol.
 
     df_code must be date-sorted and contain lookback + signal rows.
@@ -369,9 +372,10 @@ def process_symbol(code: str,
     status[mvh & entry_ok & ~has_exit & after_ok] = "suspension"
     status[mvh & entry_ok & ~has_exit & ~after_ok] = "data_missing"
 
-    r_stock = np.where(has_exit & entry_ok, exit_close / entry_price - 1.0, np.nan)
+    r_stock_raw = np.where(has_exit & entry_ok, exit_close / entry_price - 1.0, np.nan)
 
-    # PIT industry + SW index return over [signal_date -> actual_exit_date]
+    # PIT industry + SW index return over [entry_date -> actual_exit_date]
+    # (same window as the stock leg; index leg uses T+1 OPEN like the stock).
     sw_code = np.array([""] * n, dtype=object)
     sw_name = np.array([""] * n, dtype=object)
     r_sw = np.full(n, np.nan)
@@ -381,18 +385,16 @@ def process_symbol(code: str,
         okp = sig_pos < len(l1_arr)
         sw_code[okp] = l1_arr[sig_pos[okp]]
         sw_name[okp] = nm_arr[sig_pos[okp]]
-        rows = np.where(has_exit & entry_ok & (sw_code != ""))[0]
+        rows = np.where(has_exit & entry_ok & (sw_code != "") & has_entry_bar)[0]
         for i in rows:
             sd = sw_close.get(sw_code[i])
-            if sd is None:
+            so = sw_open.get(sw_code[i])
+            if sd is None or so is None:
                 continue
-            s0 = sd.get(dates[i])
+            s0 = so.get(entry_dates[i])   # SW index open at the stock's entry date
             s1 = sd.get(actual_exit_date[i])
             if s0 and s1:
                 r_sw[i] = s1 / s0 - 1.0
-
-    r_rel = np.where(~np.isnan(r_stock) & ~np.isnan(r_sw), r_stock - r_sw, np.nan)
-    y_rel = np.where(~np.isnan(r_rel), (r_rel > 0).astype(float), np.nan)
 
     snap_dates300 = idx_snap_dates["hs300"]
     snap_dates500 = idx_snap_dates["zz500"]
@@ -403,9 +405,11 @@ def process_symbol(code: str,
 
     target_dates = cal_arr[np.clip(target_pos, 0, n_cal - 1)]
 
+    # r_rel / y_rel are computed downstream in assemble_year AFTER the
+    # adjusted (vendor_qfq) r_stock is derived — never from raw here.
     return (dates, st_flags, sw_code, sw_name, in300, in500,
             entry_dates, target_dates, actual_exit_date, roll_used,
-            entry_price, exit_close, r_stock, r_sw, r_rel, y_rel, status)
+            entry_price, exit_close, r_stock_raw, r_sw, status)
 
 
 # ---------------------------------------------------------------------------
@@ -471,12 +475,12 @@ def assemble_year(year: int, months: list[int], args, ctx) -> list[dict]:
         res = process_symbol(code, df_code, cal_days, cal_arr, cal_pos,
                              ctx["st_intervals"], ctx["industry_pit"],
                              ctx["idx_snap_dates"], ctx["index_weights"],
-                             ctx["sw_close"])
+                             ctx["sw_close"], ctx["sw_open"])
         if res is None:
             continue
         (dates, st_flags, sw_code, sw_name, in300, in500,
          entry_dates, target_dates, actual_exit_date, roll_used,
-         entry_price, exit_close, r_stock, r_sw, r_rel, y_rel, status) = res
+         entry_price, exit_close, r_stock_raw, r_sw, status) = res
 
         sig_mask = np.array([d in signal_set for d in dates])
         idx = np.where(sig_mask)[0]
@@ -497,10 +501,8 @@ def assemble_year(year: int, months: list[int], args, ctx) -> list[dict]:
             "roll_days_used": roll_used[idx],
             "entry_open": entry_price[idx],
             "exit_close": exit_close[idx],
-            "r_stock": r_stock[idx],
+            "r_stock_raw": r_stock_raw[idx],
             "r_sw": r_sw[idx],
-            "r_rel": r_rel[idx],
-            "y_rel": y_rel[idx],
             "outcome_status": status[idx],
         })
         frame["year"] = year
@@ -569,6 +571,20 @@ def assemble_year(year: int, months: list[int], args, ctx) -> list[dict]:
         allf["adj_factor_entry"] = np.nan
         allf["adj_factor_exit"] = np.nan
 
+    # Primary return basis = vendor_qfq: scale entry open and exit close by the
+    # adj_factor valid at each date, then take the ratio. Rows without both
+    # factors stay NaN — no raw-price fallback (raw kept in r_stock_raw only).
+    entry_adj = allf["entry_open"] * allf["adj_factor_entry"]
+    exit_adj = allf["exit_close"] * allf["adj_factor_exit"]
+    allf["r_stock"] = np.where(
+        (allf["outcome_status"] == "evaluated_ok")
+        & entry_adj.notna() & exit_adj.notna() & (entry_adj > 0),
+        exit_adj / entry_adj - 1.0, np.nan)
+    allf["r_rel"] = np.where(allf["r_stock"].notna() & allf["r_sw"].notna(),
+                             allf["r_stock"] - allf["r_sw"], np.nan)
+    allf["y_rel"] = np.where(allf["r_rel"].notna(),
+                             (allf["r_rel"] > 0).astype(float), np.nan)
+
     stats = []
     if months:
         groups = [(m, allf.loc[allf["month"] == m]) for m in months]
@@ -599,7 +615,7 @@ def write_partition(df: pd.DataFrame, year: int, month, args) -> dict:
     oc = df["outcome_status"]
     stat = {
         "partition": tag,
-        "rows": int(len(df)),
+        "rows": len(df),
         "symbols": int(df["ts_code"].nunique()),
         "signal_date_min": str(df["signal_date"].min()),
         "signal_date_max": str(df["signal_date"].max()),
@@ -650,6 +666,7 @@ def main() -> int:
     industry_pit = pit_industry(load_index_member(CACHE_DIR), cal_days)
     sw = pd.read_pickle(CACHE_DIR / "sw_daily.pkl")
     sw_close = {c: dict(zip(s["trade_date"], s["close"])) for c, s in sw.groupby("ts_code")}
+    sw_open = {c: dict(zip(s["trade_date"], s["open"])) for c, s in sw.groupby("ts_code")}
     w300 = pd.read_pickle(CACHE_DIR / "index_weight_000300.SH.pkl")
     w500 = pd.read_pickle(CACHE_DIR / "index_weight_000905.SH.pkl")
     index_weights = {
@@ -663,7 +680,8 @@ def main() -> int:
     ctx = dict(cal_days=cal_days, cal_arr=cal_arr, cal_pos=cal_pos,
                st_intervals=st_intervals, industry_pit=industry_pit,
                index_weights=index_weights, idx_snap_dates=idx_snap_dates,
-               sw_close=sw_close, list_date_map=list_date_map, market_map=market_map)
+               sw_close=sw_close, sw_open=sw_open,
+               list_date_map=list_date_map, market_map=market_map)
 
     years = ([int(y) for y in args.years.split(",") if y] if args.years
              else sorted({int(d[:4]) for d in cal_days}))
