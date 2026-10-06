@@ -11,11 +11,11 @@
   **2015-10-08 ~ 2025-12-31**（= 缓存交易日历 2,491 个开市日全集）。
 - `data/phase2/chunks/year=YYYY/stat.json`：每分区行数/股票数/状态计数/峰值 RSS。
 - `data/phase2/stats.json`：累计清单（断点续跑依据）。
-- 分区粒度：全部年份按年单分区即可满足峰值 ≤6GB 约束（实测峰值 3.03GB，
-  `/usr/bin/time -l` 4.37GB peak footprint），未触发按月细分；`--months` 与
-  `--max-rows-per-partition`（默认 150 万）仍是现成开关。
-- 总耗时 **287s**（≈4.8min，单进程，.venv310 Python 3.10.20 + pandas 2.3.0 +
-  pyarrow 25.0.1）。
+- 分区粒度：全部年份按年单分区即可满足峰值 ≤6GB 约束（实测峰值 `ru_maxrss`
+  **2.75GB**，`/usr/bin/time -l` peak footprint 3.99GB），未触发按月细分；
+  `--months` 与 `--max-rows-per-partition`（默认 150 万）仍是现成开关。
+- 总耗时 **394s**（≈6.6min，单进程，.venv310 Python 3.10.20 + pandas 2.3.0 +
+  pyarrow 25.0.1；含 qfq 主口径返修后）。
 
 ## 2. 样本行定义与标签口径
 
@@ -29,43 +29,48 @@
 - 出场：目标日 T+40 收盘；当日不可交易则在至多 5 个顺延候选中取首个可交易收盘
   （vol>0、close>0、非一字跌停）；全部不可交易时看窗口后一日是否有 bar，有 →
   `suspension`，无 → `data_missing`。
-- `r_stock = exit_close/entry_open − 1`（**未复权价格**，拆股在比值中抵消，现金分红
-  未计入——见局限）；`r_sw = SW一级指数 close(signal) → close(actual_exit)`；
-  `r_rel = r_stock − r_sw`；`y_rel = 1[r_rel>0]`。
+- `r_stock` = `(exit_close × adj_factor_exit)/(entry_open × adj_factor_entry) − 1`，
+  **vendor_qfq 主口径**（总控批准规格 §9-2；adj_factor 为 entry/exit 日或之前的
+  最近值）。复权因子缺失的行 `r_stock=NaN`，不回落原始价。原始价收益另存
+  `r_stock_raw` 作敏感性列。
+- `r_sw` = SW一级指数 **T+1 开盘** → `actual_exit` 收盘，与个股腿同窗（P2/DAV-1479
+  裁定）；指数 T+1 开盘缺失的行 `r_sw=NaN` 记缺失，不回落收盘口径。
+- `r_rel = r_stock − r_sw`；`y_rel = 1[r_rel>0]`。
 - 涨跌停参考价 = `pre_close × (1 ± rate)`；rate：ST 期间 5%，主板 10%，创业板/科创板
   20%，北交所 30%（北交所行已被股票池剔除，rate 仅作兜底）。
 
 ## 3. 分区统计
 
-| year | rows | symbols | evaluated_ok | unexecutable | suspension | data_missing | pending_due | 耗时量级 |
-|---|---|---|---|---|---|---|---|---|
-| 2015 | 150,732 | 2,784 | 143,221 | 248 | 167 | 7,096 | 0 | ~18s |
-| 2016 | 652,864 | 3,160 | 623,177 | ~1k | ~0.2k | ~28k | 0 | ~20s |
-| 2017 | 754,372 | 3,620 | 726,432 | — | — | — | 0 | ~25s |
-| 2018 | 824,535 | 3,727 | 809,996 | — | — | — | 0 | ~24s |
-| 2019 | 894,177 | 3,926 | 889,254 | — | — | — | 0 | ~24s |
-| 2020 | 964,131 | 4,364 | 955,724 | — | — | — | 0 | ~28s |
-| 2021 | 1,085,445 | 4,840 | 1,079,862 | — | — | — | 0 | ~29s |
-| 2022 | 1,179,072 | 5,182 | 1,172,589 | — | — | — | 0 | ~31s |
-| 2023 | 1,258,734 | 5,381 | 1,256,238 | — | — | — | 0 | ~33s |
-| 2024 | 1,293,893 | 5,433 | 1,290,727 | — | — | — | 0 | ~31s |
-| 2025 | 1,313,898 | 5,500 | 1,093,920 | — | — | — | 217,695 | ~30s |
+| year | rows      | symbols | evaluated_ok | unexecutable | suspension | data_missing | pending_due | 耗时量级 |
+| ---- | --------- | ------- | ------------ | ------------ | ---------- | ------------ | ----------- | -------- |
+| 2015 | 150,732   | 2,784   | 143,221      | 248          | 167        | 7,096        | 0           | ~18s     |
+| 2016 | 652,864   | 3,160   | 623,177      | ~1k          | ~0.2k      | ~28k         | 0           | ~20s     |
+| 2017 | 754,372   | 3,620   | 726,432      | —            | —          | —            | 0           | ~25s     |
+| 2018 | 824,535   | 3,727   | 809,996      | —            | —          | —            | 0           | ~24s     |
+| 2019 | 894,177   | 3,926   | 889,254      | —            | —          | —            | 0           | ~24s     |
+| 2020 | 964,131   | 4,364   | 955,724      | —            | —          | —            | 0           | ~28s     |
+| 2021 | 1,085,445 | 4,840   | 1,079,862    | —            | —          | —            | 0           | ~29s     |
+| 2022 | 1,179,072 | 5,182   | 1,172,589    | —            | —          | —            | 0           | ~31s     |
+| 2023 | 1,258,734 | 5,381   | 1,256,238    | —            | —          | —            | 0           | ~33s     |
+| 2024 | 1,293,893 | 5,433   | 1,290,727    | —            | —          | —            | 0           | ~31s     |
+| 2025 | 1,313,898 | 5,500   | 1,093,920    | —            | —          | —            | 217,695     | ~30s     |
 
 （逐分区精确计数见 `data/phase2/stats.json` 与各 `stat.json`；2016 起每年 bar 加载量
 ≈当年信号日 + 前向 46 个日历日出場窗 + 50 日动量回看。）
 
 总体状态分布：evaluated_ok 10,041,140（96.8%）、pending_due 217,695（2.1%，2025 年
 尾部信号窗口未成熟）、data_missing 99,944（1.0%）、unexecutable_entry 10,201（0.10%）、
-suspension 2,873（0.03%）。
+suspension 2,873（0.03%）。**y_rel 正例占比 0.4591**（qfq 口径；raw 口径下 0.4467）。
+送转级窗口（adj_factor_exit/entry > 1.2）176,219 行（占 evaluated_ok 的 1.75%），
+这些行 qfq 与 raw 收益平均差 ~34.4pp；`r_stock` 因复权因子缺失记 NaN 的 ok 行 3,614（0.04%）。
 
 ## 4. 落盘 schema（列清单）
 
 `ts_code, signal_date, year, month, in_hs300, in_zz500, sw_l1_code, sw_l1_name,
 is_st, list_age_days, universe_ok, entry_date, target_exit_date, actual_exit_date,
-roll_days_used, entry_open, exit_close, r_stock, r_sw, r_rel, y_rel,
+roll_days_used, entry_open, exit_close, r_stock, r_stock_raw, r_sw, r_rel, y_rel,
 outcome_status, pe_ttm, pb, total_mv, turnover_rate, mom_40, vol_40, ret_1d,
-adj_factor_entry, adj_factor_exit`（31 列；`data/phase2/chunks` 在 .gitignore 的
-`data/` 规则内，不入库）。
+adj_factor_entry, adj_factor_exit`（32 列）
 
 - `universe_ok` = 非北交所 & 信号日非 ST/*ST（PIT，namechange 区间）&
   list_age_days ≥ 60；全样本中 90.9% 为 True。
@@ -83,9 +88,12 @@ adj_factor_entry, adj_factor_exit`（31 列；`data/phase2/chunks` 在 .gitignor
   170–190 万行×8 列 ≈ 250MB），行业 PIT 广播表 5,911×2,491 object ≈ 百 MB 级，
   均在年块结束后释放。实测 `ru_maxrss` 峰值 3.03GB，`/usr/bin/time -l` peak
   footprint 4.37GB，满足 ≤6GB 硬约束。
-- 校验：`validate_phase2_chunks.py` 抽样 200 行/分区 ×11（2,170 行非 pending 样本），
-  用独立逐行朴素实现复核 `outcome_status/entry/exit/r_stock/r_sw/r_rel/y_rel`，
+- 校验：`validate_phase2_chunks.py` 抽样 250 行/分区 ×11（2,713 行非 pending 样本），
+  用独立逐行朴素实现复核 `outcome_status/entry/exit/r_stock(qfq)/r_stock_raw/r_sw/y_rel`，
   **0 mismatches**；同时核对 stats.json 行数与 parquet 实读行数一致。
+- 单测：`tests/test_dav1547_qfq_label.py` ①合成 10 送 10（窗口内 adj_factor 翻倍、
+  原始价拦腰），断言 qfq r_stock=0 不受除权影响而 raw 呈 −50% 假跌；②合成指数
+  T+1 开盘缺失，断言 r_sw=NaN 不回落收盘口径。均通过。
 
 ## 6. 缺失与局限登记
 
@@ -97,10 +105,8 @@ adj_factor_entry, adj_factor_exit`（31 列；`data/phase2/chunks` 在 .gitignor
 2. **PIT 归属实现**：采用 D-069 口径 A 的离线等价（`in_date ≤ D < out_date`，
    `index_member_all/*.pkl` 含 is_new=Y/N 两批合并）；DAV-1446（网关 con_code 字段名）
    已验收为查询写法问题、本卡用缓存文件不受影响；DAV-1453 若未来改裁定需重建归属列。
-3. **现金分红未计入 r_stock**：未复权价比值会低估含权窗口的真实收益（分红率量级
-   ~年化 1–3%，T+40 窗口约 0.2–0.5%），`y_rel` 在 |r_rel| 接近 0 的行可能翻转；
-   `adj_factor_entry/exit` 已落盘，下游可改用复权口径重算（entry/exit 间 adj_factor
-   变化即含分红再投资的全收益近似）。bias 方向：系统性略压低 r_stock。
+3. **复权因子缺口**：3,614 行 evaluated_ok 因 adj_factor 文件未覆盖该段日期
+   （如 000022.SZ 2015 段）记 `r_stock=NaN`，按规格不回落原始价。
 4. **list_age_days 左端点**：list_date 早于日历起点（2015-10-08）时用
    `busday_count(list_date, 2015-10-08)` 近似前置交易日数，节假日使其略有高估 →
    ≥60 日过滤对窗口起点前 ~3 个月上市的股票偏松（只影响 2015Q4 边际样本）。
