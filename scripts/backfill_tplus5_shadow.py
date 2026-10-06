@@ -437,20 +437,23 @@ def _iter_db(path):
 
 
 def _iter_db_raw(path):
-    """Same paging as _iter_db; yields full columns plus raw result_data text."""
+    """Same paging as _iter_db; yields full columns plus raw result_data text.
+
+    rowid is aliased to __rowid__ so a hypothetical user column literally named
+    "rowid" cannot shadow SQLite's internal row id."""
     _validate_db(path)
     last_id = ''
     while True:
         with closing(_open_db(path)) as conn:
             row = conn.execute(
-                "SELECT rowid, * FROM reports "
+                "SELECT rowid AS __rowid__, * FROM reports "
                 "WHERE status='completed' AND id>? ORDER BY id LIMIT 1",
                 (last_id,)).fetchone()
         if row is None:
             return
         last_id = row['id']
         result = dict(row)
-        result["rowid"] = row["rowid"]
+        result["rowid"] = row["__rowid__"]
         result["raw"] = result["result_data"]
         result["result_data"] = json.loads(result["result_data"] or 'null')
         yield result

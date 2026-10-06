@@ -2,6 +2,7 @@
 import copy
 import json
 import sqlite3
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -240,3 +241,30 @@ def test_corrupt_export_file_refuses_restore(tmp_path, monkeypatch):
         cli.restore_from_export(str(p), str(bad), sha256="0" * 64)
     after = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
     assert after == before
+
+
+def test_restore_subcommand_argparse_wiring(tmp_path, monkeypatch, capsys):
+    """DAV-1544: `main()` must route the restore subcommand correctly."""
+    p = make_db(tmp_path, report())
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+    before_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+
+    res = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                           pre_export_dir=str(tmp_path / "exports"))
+    assert res["changed_rows"] == 1
+    export_path = res["pre_export"]["path"]
+
+    monkeypatch.setattr(sys, "argv", [
+        "backfill_tplus5_shadow.py", "restore",
+        "--db-path", str(p), "--export-file", export_path,
+    ])
+    capsys.readouterr()  # drop run_backfill output
+    assert cli.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["restored_rows"] == 1
+    restored_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    assert restored_row == before_row
