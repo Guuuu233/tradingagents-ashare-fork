@@ -260,10 +260,11 @@ def test_dual_job_keeps_horizon_scoped_fields_and_propagates_result_sse_and_repo
     assert result["data_gaps"] == ["short LLM gap", "medium LLM gap"]
     assert result["short_term"]["market_data_context"] == {"source": "fixture"}
     assert result["medium_term"]["market_data_context"] == {"source": "fixture"}
-    assert result["market_data_context"] == {
-        "short": {"source": "fixture"},
-        "medium": {"source": "fixture"},
-    }
+    # DAV-1545 (B-2): the persisted payload carries no top-level
+    # ``market_data_context`` physical alias — each slice keeps its own copy
+    # and the B-1 compat view rebuilds the legacy top-level key read-side.
+    assert "market_data_context" not in result
+    assert "horizons" not in result
     # D-068：双档先跑一轮共享分析师图（thread 后缀 dual），再各档一图
     assert len(_FakeTradingGraph.thread_ids) == 3
     assert {thread_id.rsplit("_", 1)[-1] for thread_id in _FakeTradingGraph.thread_ids} == {
