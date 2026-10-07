@@ -241,6 +241,19 @@ class LLMUsageLogger(BaseCallbackHandler):
     # Never let bookkeeping break an analysis run.
     raise_error = False
 
+    # DAV-1362: run the sync hooks inline on the async dispatch path.
+    # Without this, langchain_core's async callback manager submits
+    # non-inline sync handlers via ``run_in_executor(copy_context().run,
+    # ...)`` — a COPY of the caller context — so ``on_chat_model_start``
+    # could not bind the gate's per-run queue record to the calling
+    # context (``begin_queue_wait`` sets a contextvar the acquire path
+    # reads). With run_inline=True the start hook runs in the caller's
+    # own context, so the binding propagates into every copied context
+    # the acquire can run in (async dispatch task, to_thread worker).
+    # The hooks only touch a lock-guarded dict and one fire-and-forget
+    # DB write, so running inline is safe.
+    run_inline = True
+
     def __init__(self) -> None:
         super().__init__()
         self._lock = threading.Lock()
@@ -257,6 +270,21 @@ class LLMUsageLogger(BaseCallbackHandler):
     ) -> None:
         if run_id is None:
             return
+        # DAV-1362: bind this context to the new run and open its
+        # queue-wait record. Fires before the gated acquire, so the
+        # gate's ``_record_queue_wait`` can attribute the wait to THIS
+        # run even when the acquire happens in a copied context
+        # (to_thread, shielded on_llm_end task). Also clears the
+        # contextvar stale-marker so nothing from a previous call in
+        # this context leaks in.
+        try:
+            from tradingagents.llm_clients.concurrency_gate import (
+                begin_queue_wait,
+            )
+
+            begin_queue_wait(run_id)
+        except Exception:  # pragma: no cover - gate module always present
+            pass
         # DAV-1430: the nominal model actually sent in the request payload.
         # LangChain passes _get_invocation_params() through kwargs; its "model"
         # key is self.model_name for OpenAI/Anthropic/Google chat clients.
@@ -350,6 +378,14 @@ class LLMUsageLogger(BaseCallbackHandler):
         # the dict cannot grow unboundedly. Any subsequent retry registers
         # a fresh run_id and on_retry marks the parent lineage.
         self._pop_run(run_id)
+        try:
+            from tradingagents.llm_clients.concurrency_gate import (
+                pop_queue_wait,
+            )
+
+            pop_queue_wait(run_id)
+        except Exception:  # pragma: no cover - gate module always present
+            pass
 
     # ── async mirrors (same logic; async managers call these) ──────────
 
@@ -386,20 +422,21 @@ class LLMUsageLogger(BaseCallbackHandler):
 
                 report_id = current_report_id.get()
             extracted = _extract_llm_result(response)
-            # DAV-1334: the gate publishes its queue wait via contextvar;
-            # elapsed_seconds must exclude it so the ledger reflects model
-            # call time, not gate wait. Read-then-clear: the var persists
-            # after the gate exits, and clearing prevents a leftover wait
-            # from being attributed to a later ungated call in this context.
+            # DAV-1362: this run's queue wait comes from the per-run
+            # record the gate wrote at acquire time — keyed by run_id via
+            # the ``begin_queue_wait`` binding made in on_*_start. It is
+            # this call's own wait by construction: no contextvar reads,
+            # no stale inheritance, immune to shielded/copy_context
+            # dispatch. ``pop_queue_wait`` removes the record so the map
+            # cannot leak.
             queue_seconds = None
             queue_wait = 0.0
             try:
                 from tradingagents.llm_clients.concurrency_gate import (
-                    llm_queue_wait_seconds,
+                    pop_queue_wait,
                 )
 
-                queue_wait = llm_queue_wait_seconds.get(0.0) or 0.0
-                llm_queue_wait_seconds.set(0.0)
+                queue_wait = pop_queue_wait(run_id)
             except Exception:  # pragma: no cover - gate module always present
                 queue_wait = 0.0
             if queue_wait > 0:

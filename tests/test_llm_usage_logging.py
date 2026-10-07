@@ -442,7 +442,8 @@ class TestQueueSeconds:
 
     def _run_call(self, report_id, queue_wait=None):
         from tradingagents.llm_clients.concurrency_gate import (
-            llm_queue_wait_seconds,
+            begin_queue_wait,
+            _record_queue_wait,
         )
 
         handler = LLMUsageLogger()
@@ -455,9 +456,10 @@ class TestQueueSeconds:
         )
         if queue_wait is not None:
             # Simulates the gate having just acquired after queue_wait
-            # seconds (it sets the contextvar at acquire time).
-            llm_queue_wait_seconds.set(queue_wait)
+            # seconds (it writes the per-run record at acquire time).
+            _record_queue_wait(queue_wait)
         handler.on_llm_end(_llm_result(usage=_usage_metadata()), run_id=run_id)
+        return run_id
 
     def test_queue_wait_split_out_of_elapsed(self):
         report_id = uuid.uuid4().hex
@@ -479,17 +481,246 @@ class TestQueueSeconds:
         assert rows[0].elapsed_seconds is not None
 
     def test_consumed_wait_not_attributed_to_next_call(self):
-        """After a gated call is logged, the marker is cleared so a later
-        call in the same context doesn't inherit the stale wait."""
-        from tradingagents.llm_clients.concurrency_gate import (
-            llm_queue_wait_seconds,
-        )
+        """After a gated call is logged, the per-run record is popped so a
+        later call in the same context doesn't inherit the stale wait."""
+        import tradingagents.llm_clients.concurrency_gate as cg
 
         report_id = uuid.uuid4().hex
-        self._run_call(report_id, queue_wait=30.0)
-        assert llm_queue_wait_seconds.get() == 0.0
-        self._run_call(report_id)  # no new wait set
+        run_id = self._run_call(report_id, queue_wait=30.0)
+        # This run's record was consumed at on_llm_end.
+        assert str(run_id) not in cg._pop_queue_waits_for_tests()
+        self._run_call(report_id)  # no new wait recorded
         rows = sorted(_rows_for(report_id), key=lambda r: r.created_at)
         assert len(rows) == 2
         assert rows[0].queue_seconds == 30.0
         assert rows[1].queue_seconds is None
+
+
+class TestQueueWaitRunAttribution:
+    """DAV-1362: queue_seconds must come from THIS call's gate wait only.
+
+    Regression for the production bug where a repair call ("<role>/返修")
+    recorded either the previous call's stale wait or its own wait folded
+    into elapsed_seconds, because the ledger read a contextvar that the
+    callback's copied/shielded dispatch context could not see correctly.
+    """
+
+    def _handler(self):
+        return LLMUsageLogger()
+
+    def _drive(self, handler, report_id, role, queued_s):
+        """Simulate one full call: start callback → gate acquire → end.
+
+        ``queued_s`` > 0 occupies all 4 devin/ slots first so the async
+        gate really queues. Returns the run_id used.
+        """
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        run_id = uuid.uuid4()
+        handler.on_chat_model_start(
+            {}, [], run_id=run_id,
+            metadata={"report_id": report_id, "llm_role": role},
+        )
+        if queued_s and queued_s > 0:
+            # Simulate the acquire's write directly (deterministic: the
+            # gate records the wait into the run bound by
+            # begin_queue_wait inside on_chat_model_start).
+            cg._record_queue_wait(queued_s)
+        handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                           run_id=run_id)
+        return run_id
+
+    def test_queued_then_repair_call_same_context(self):
+        """Two sequential calls in the same node context: first queues,
+        repair call queues again — each row must carry its own wait."""
+        handler = self._handler()
+        report_id = uuid.uuid4().hex
+        self._drive(handler, report_id, "Smart Money Analyst", 0.40)
+        self._drive(handler, report_id, "Smart Money Analyst/返修", 0.35)
+        rows = sorted(_rows_for(report_id), key=lambda r: r.created_at)
+        assert len(rows) == 2
+        assert rows[0].agent_name == "Smart Money Analyst"
+        assert rows[0].queue_seconds == 0.40
+        assert rows[1].agent_name == "Smart Money Analyst/返修"
+        assert rows[1].queue_seconds == 0.35
+
+    def test_repair_call_without_queue_records_null_not_stale(self):
+        """The production failure: a queued original call followed by an
+        UNQUEUED repair call must not inherit the stale wait."""
+        handler = self._handler()
+        report_id = uuid.uuid4().hex
+        self._drive(handler, report_id, "Smart Money Analyst", 0.40)
+        self._drive(handler, report_id, "Smart Money Analyst/返修", 0.0)
+        rows = sorted(_rows_for(report_id), key=lambda r: r.created_at)
+        assert len(rows) == 2
+        assert rows[0].queue_seconds == 0.40
+        # Repair call had no wait — must be NULL, never the stale 0.4.
+        assert rows[1].queue_seconds is None
+
+    def test_wait_popped_at_end_leaves_no_residue(self):
+        """The run record is removed at on_llm_end — nothing leaks into
+        the shared map for a hypothetical later run_id collision."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+        handler = self._handler()
+        report_id = uuid.uuid4().hex
+        run_id = self._drive(handler, report_id, "N", 0.5)
+        assert str(run_id) not in cg._pop_queue_waits_for_tests()
+
+    def test_error_path_drops_run_record(self):
+        """on_llm_error pops the record too — failed calls cannot leak a
+        wait into a later unrelated run."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+        handler = self._handler()
+        report_id = uuid.uuid4().hex
+        run_id = uuid.uuid4()
+        handler.on_chat_model_start(
+            {}, [], run_id=run_id,
+            metadata={"report_id": report_id},
+        )
+        cg._record_queue_wait(0.9)
+        handler.on_llm_error(RuntimeError("boom"), run_id=run_id)
+        assert str(run_id) not in cg._pop_queue_waits_for_tests()
+
+    def test_run_inline_enabled(self):
+        """run_inline=True is what makes on_chat_model_start run in the
+        caller's context on the async path so begin_queue_wait's
+        contextvar binding reaches the acquire. Guard it."""
+        assert LLMUsageLogger().run_inline is True
+
+
+class TestQueueWaitAcrossCallPaths:
+    """DAV-1362: the per-run queue attribution must hold on all four real
+    call paths — sync/async × streaming/non-streaming — through the real
+    LangChain dispatch (MockTransport exercises the actual callback
+    manager, gate, and ledger together).
+    """
+
+    def _devin_llm(self, requests_log):
+        from api.usage_logging import LLM_USAGE_LOGGER
+        from tradingagents.llm_clients import concurrency_gate as cg
+        from tradingagents.llm_clients.openai_client import (
+            UnifiedChatOpenAI,
+        )
+        import httpx, json
+
+        def _handle(request):
+            requests_log.append(json.loads(request.content.decode()))
+            if request.url.path.endswith("/chat/completions"):
+                body = json.loads(request.content.decode())
+                if body.get("stream"):
+                    return httpx.Response(
+                        200, text=_sse_body(usage=_USAGE_PAYLOAD),
+                        headers={"content-type": "text/event-stream"})
+                return httpx.Response(200, json={
+                    "id": "r1", "object": "chat.completion",
+                    "created": 1, "model": "devin/swe-2",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant",
+                                             "content": "ok"}}],
+                    "usage": _USAGE_PAYLOAD,
+                })
+            return httpx.Response(404, text="nope")
+
+        cg._reset_gates_for_tests()
+        return UnifiedChatOpenAI(
+            model="devin/swe-2", base_url="http://test.invalid/v1",
+            api_key="sk-test",
+            http_client=httpx.Client(transport=httpx.MockTransport(_handle)),
+            http_async_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(_handle)),
+            callbacks=[LLM_USAGE_LOGGER],
+        )
+
+    def _latest_row(self, report_id):
+        rows = _rows_for(report_id)
+        assert len(rows) == 1
+        return rows[0]
+
+    def test_sync_invoke_path(self):
+        report_id = uuid.uuid4().hex
+        llm = self._devin_llm([])
+        llm.invoke("hi", config={"metadata": {"report_id": report_id}})
+        r = self._latest_row(report_id)
+        # No contention → acquire is instant → no queue wait recorded.
+        assert r.queue_seconds is None
+        assert r.elapsed_seconds is not None
+        assert r.prompt_tokens == 88
+
+    def test_sync_stream_path(self):
+        report_id = uuid.uuid4().hex
+        llm = self._devin_llm([])
+        text = "".join(
+            c.content if isinstance(c.content, str) else ""
+            for c in llm.stream(
+                "hi", config={"metadata": {"report_id": report_id}})
+        )
+        assert text == "你好"
+        r = self._latest_row(report_id)
+        assert r.queue_seconds is None
+        assert r.elapsed_seconds is not None
+
+    def test_async_ainvoke_path(self):
+        report_id = uuid.uuid4().hex
+        llm = self._devin_llm([])
+
+        async def _run():
+            return await llm.ainvoke(
+                "hi", config={"metadata": {"report_id": report_id}})
+
+        asyncio.run(_run())
+        r = self._latest_row(report_id)
+        assert r.queue_seconds is None
+        assert r.elapsed_seconds is not None
+        assert r.prompt_tokens == 88
+
+    def test_async_astream_path(self):
+        report_id = uuid.uuid4().hex
+        llm = self._devin_llm([])
+
+        async def _run():
+            text = ""
+            async for c in llm.astream(
+                "hi", config={"metadata": {"report_id": report_id}}):
+                if isinstance(c.content, str):
+                    text += c.content
+            return text
+
+        assert asyncio.run(_run()) == "你好"
+        r = self._latest_row(report_id)
+        assert r.queue_seconds is None
+        assert r.elapsed_seconds is not None
+        assert r.prompt_tokens == 88
+
+    def test_queued_async_call_records_own_wait(self):
+        """Occupy all devin/ slots during an ainvoke so the acquire
+        genuinely queues; the row must carry the real wait."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        report_id = uuid.uuid4().hex
+        llm = self._devin_llm([])
+
+        async def _run():
+            sem = cg._semaphore_for_prefix("devin/")
+            for _ in range(4):
+                sem.acquire()
+            async def _release():
+                await asyncio.sleep(0.3)
+                for _ in range(4):
+                    sem.release()
+            rel = asyncio.create_task(_release())
+            try:
+                await llm.ainvoke(
+                    "hi",
+                    config={"metadata": {"report_id": report_id}})
+            finally:
+                await rel
+
+        asyncio.run(_run())
+        cg._reset_gates_for_tests()
+        r = self._latest_row(report_id)
+        # The call really queued ~0.3s — the wait belongs to THIS row,
+        # and elapsed excludes it.
+        assert r.queue_seconds is not None
+        assert abs(r.queue_seconds - 0.3) < 0.15, r.queue_seconds
+        assert r.elapsed_seconds is not None
+        assert r.elapsed_seconds < 1.5

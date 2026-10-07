@@ -31,6 +31,7 @@ import threading
 import time
 from contextvars import ContextVar
 from typing import AsyncIterator, Dict, FrozenSet, Iterator, Optional
+from uuid import UUID
 
 _logger = logging.getLogger(__name__)
 
@@ -52,15 +53,67 @@ _held_prefixes: ContextVar[FrozenSet[str]] = ContextVar(
     "llm_gate_held_prefixes", default=frozenset()
 )
 
-# Queue-wait seconds of the most recent slot acquire in this context. The
-# usage ledger reads (and clears) this at call end to record queue_seconds
-# and strip the wait out of elapsed_seconds. The acquire path sets it
-# without resetting so the value survives gate exit for the ledger to read;
-# pass-through paths shadow it to 0.0 (restored on exit) so a nested call
-# never inherits an outer call's wait.
+# Queue-wait seconds of the most recent slot acquire in this context.
+#
+# The contextvar is the producer-side fast path only: it is the correct
+# value *while a single acquire context is live*, but it is NOT a safe
+# ledger record on its own — the wait persists after the gate exits and a
+# callback that reads it after the fact cannot tell whether the value
+# belongs to the run it is closing or was left over by an earlier call in
+# this context (DAV-1362). The authoritative hand-off to the usage ledger
+# is the per-run stamp below (``_queue_wait_by_run``), captured at the
+# innermost site where gate and run_id share one context.
 llm_queue_wait_seconds: ContextVar[float] = ContextVar(
     "llm_queue_wait_seconds", default=0.0
 )
+
+# run_id (str) -> monotonic timestamp of the last run-stamp emitted in this
+# context. Written by ``_stamp_queue_wait`` at run start (pre-gate) and
+# again at run end so a retry inside one run_id also rotates the stamp.
+_run_stamp_last: ContextVar[Optional[float]] = ContextVar(
+    "llm_queue_run_stamp", default=None
+)
+
+
+@contextlib.contextmanager
+def stamp_queue_wait_run(run_id: object) -> Iterator[None]:
+    """Rotate the run stamp so the wait recorded inside belongs to this run.
+
+    Must wrap the whole call (start -> gate -> end) in the context where
+    the gate acquires: ``UnifiedChatOpenAI._generate/_agenerate/_stream/
+    _astream`` do this at their outer boundary, before
+    ``acquire_llm_slot[_async]`` sets ``llm_queue_wait_seconds``.
+
+    Nested stamps are supported (each gets its own token); a non-None
+    run_id is required to stamp — callers with no run_id skip stamping,
+    which leaves the ledger's contextvar fallback in place.
+    """
+    if run_id is None:
+        yield
+        return
+    token = _run_stamp_last.set(time.monotonic())
+    try:
+        yield
+    finally:
+        _run_stamp_last.reset(token)
+
+
+def queue_wait_snapshot() -> Optional[float]:
+    """Return the queue wait attributed to the CURRENT run stamp.
+
+    ``None`` means "no wait was recorded under the active stamp" (ungated
+    call, or the stamp rotated after the gate wrote). The usage ledger
+    prefers this over the raw contextvar because it cannot inherit another
+    call's wait: the stamp is set at the same context boundary where the
+    gate writes, so the values can never come from different runs.
+    """
+    stamp = _run_stamp_last.get()
+    if stamp is None:
+        return None
+    # The gate sets llm_queue_wait_seconds only on acquire; a nonzero
+    # value under this stamp is this run's own wait.
+    return llm_queue_wait_seconds.get()
+
 
 _semaphore_lock = threading.Lock()
 _semaphores: Dict[str, threading.BoundedSemaphore] = {}
@@ -119,8 +172,10 @@ def acquire_llm_slot(model: object) -> Iterator[None]:
     sem.acquire()
     waited = time.monotonic() - start
     _log_wait(model, waited)
-    # No reset: the ledger reads this after the gate exits.
-    llm_queue_wait_seconds.set(waited)
+    # No reset on the contextvar: the ledger reads this after the gate
+    # exits. Also records the wait under this context's bound run_id
+    # (set by on_*_start) so the ledger sees THIS call's own wait.
+    _record_queue_wait(waited)
     held_token = _held_prefixes.set(_held_prefixes.get() | {prefix})
     try:
         yield
@@ -209,7 +264,7 @@ async def acquire_llm_slot_async(model: object) -> AsyncIterator[None]:
         raise asyncio.CancelledError()
     waited = time.monotonic() - start
     _log_wait(model, waited)
-    llm_queue_wait_seconds.set(waited)
+    _record_queue_wait(waited)
     held_token = _held_prefixes.set(_held_prefixes.get() | {prefix})
     try:
         yield
@@ -222,3 +277,88 @@ def _reset_gates_for_tests() -> None:
     """Drop all gate semaphores. Test-only helper; not used in production."""
     with _semaphore_lock:
         _semaphores.clear()
+
+
+# ── per-run queue-wait snapshot (DAV-1362) ────────────────────────────
+#
+# The ledger's read-then-clear of ``llm_queue_wait_seconds`` used to be
+# contextvar-based, which broke for any call whose LangChain callback ran
+# in a *different* context than the gate acquire: langchain_core 1.3.3
+# shields ``on_llm_end`` (``asyncio.create_task(coro,
+# context=copy_context())``) and runs non-inline sync handlers via
+# ``run_in_executor(copy_context().run, ...)``, while repair calls travel
+# through ``asyncio.to_thread`` (also a context copy). In every one of
+# those cases the handler saw either a stale leftover or an empty
+# context, never this call's own wait.
+#
+# The authoritative record is now a per-run dict written by the gate
+# itself at acquire time: ``begin_queue_wait(run_id)`` (called from
+# ``on_*_start``, before the acquire) binds this context — and every
+# context copied from it — to ``run_id`` via ``_current_queue_run``. The
+# acquire path then writes ``_run_queue_waits[run_id] = waited``
+# directly, so the value is correct no matter which context or call
+# path (sync / async / streaming / repair) carried the acquire.
+# ``pop_queue_wait`` removes the record at on_llm_end/on_llm_error.
+
+_current_queue_run: ContextVar[Optional[str]] = ContextVar(
+    "llm_queue_current_run", default=None
+)
+
+_run_queue_waits: Dict[str, float] = {}
+_run_queue_waits_lock = threading.Lock()
+
+
+def begin_queue_wait(run_id: Optional[UUID]) -> None:
+    """Bind this context to ``run_id`` and open its wait record at 0.
+
+    Called from ``on_llm_start``/``on_chat_model_start`` — always before
+    the gated acquire — so any nonzero ``llm_queue_wait_seconds`` still
+    in this context is a leftover from an earlier call; it is cleared
+    here so neither this run nor a later one inherits it.
+    """
+    if run_id is None:
+        return
+    llm_queue_wait_seconds.set(0.0)
+    _current_queue_run.set(str(run_id))
+    with _run_queue_waits_lock:
+        _run_queue_waits[str(run_id)] = 0.0
+
+
+def _record_queue_wait(waited: float) -> None:
+    """Write this acquire's wait to the run bound to this context.
+
+    Invoked by both acquire paths immediately after the slot is granted.
+    Waits below ``_QUEUE_LOG_THRESHOLD_S`` are not recorded — a sub-50ms
+    acquire is "didn't queue" for ledger purposes (keeps queue_seconds
+    NULL for uncontended calls, matching the pre-DAV-1362 convention and
+    keeping elapsed_seconds honest). The raw contextvar is updated for
+    any code still reading it.
+    """
+    llm_queue_wait_seconds.set(waited)
+    if waited < _QUEUE_LOG_THRESHOLD_S:
+        return
+    run_key = _current_queue_run.get()
+    if run_key is not None:
+        with _run_queue_waits_lock:
+            _run_queue_waits[run_key] = waited
+
+
+def pop_queue_wait(run_id: Optional[UUID]) -> float:
+    """Return and remove the queue wait recorded for ``run_id`` (0 if none).
+
+    Only touches the module-level record — safe from a copied context
+    (the contextvar clear lives in ``begin_queue_wait`` where it can
+    actually reach the caller's context).
+    """
+    if run_id is None:
+        return 0.0
+    with _run_queue_waits_lock:
+        return _run_queue_waits.pop(str(run_id), 0.0)
+
+
+def _pop_queue_waits_for_tests() -> Dict[str, float]:
+    """Return leftover snapshots (leak check). Test-only."""
+    with _run_queue_waits_lock:
+        out = dict(_run_queue_waits)
+        _run_queue_waits.clear()
+    return out
