@@ -11,6 +11,7 @@ from tradingagents.dataflows.providers.registry import (
     DataProviderRegistry,
     build_default_registry,
 )
+from tradingagents.dataflows.vendor_result import VendorFail
 
 
 class _FakeProvider:
@@ -127,17 +128,50 @@ def test_route_timeout_falls_back_to_next_provider():
 
 
 def test_route_timeout_retries_then_falls_back():
+    # Deterministic version (DAV-1420): the slow provider blocks on an event the
+    # test controls instead of racing time.sleep() against the policy timeout,
+    # so future.result(timeout) is guaranteed to raise TimeoutError. As in
+    # test_route_timeout_falls_back_to_next_provider, the routing thread is
+    # blocked until each retry is actually running on a worker, removing the
+    # cancel-before-start race. This test additionally patches in a dedicated
+    # executor: under RT-FULL executor load a queued (not-yet-started) call can
+    # be cancelled by future.cancel() after the result() timeout, so ``calls``
+    # ends up below max_retries+1 — a sporadic flake, not a product defect.
+    # It also returns VendorFail instead of plain None: route_to_vendor treats
+    # a bare None as an unverified provider hit and returns it (the observed
+    # ``None != 'fast'`` failure), whereas the test intends a transient failure
+    # that drives the timeout-retry -> fallback chain.
     calls = 0
+    calls_lock = threading.Lock()
+    running = [threading.Event(), threading.Event()]
+    release = threading.Event()
     done = threading.Event()
 
     def slow(*args, **kwargs):
         nonlocal calls
-        calls += 1
+        with calls_lock:
+            attempt = calls
+            calls += 1
         try:
-            time.sleep(0.05)
-            return None
+            if attempt < len(running):
+                running[attempt].set()
+            release.wait(5)
+            return VendorFail("still slow")
         finally:
             done.set()
+
+    real_submit = iface._submit_provider_call
+
+    def submit_and_wait_started(provider_name, policy, impl_func, args, kwargs):
+        future = real_submit(provider_name, policy, impl_func, args, kwargs)
+        if provider_name == "cn_akshare":
+            with calls_lock:
+                attempt = calls - 1
+            if 0 <= attempt < len(running):
+                assert running[attempt].wait(5), (
+                    f"slow provider call attempt {attempt} never started"
+                )
+        return future
 
     fast = _FakeProvider("yfinance", lambda *args, **kwargs: "fast")
     providers = {
@@ -149,15 +183,30 @@ def test_route_timeout_retries_then_falls_back():
         ProviderResourcePolicy(timeout_seconds=0.01, max_retries=1, max_concurrency=2),
     )
 
-    with patch.object(iface, "_registry", registry), \
-         patch.object(iface, "get_vendor", return_value="cn_akshare,yfinance"):
-        out = iface.route_to_vendor(
-            "get_stock_data", "600519", "2025-01-01", "2025-01-31"
-        )
+    # Dedicated executor + fresh semaphore map so no other test can occupy
+    # the shared provider-call workers or slots while this test runs. Needs
+    # enough workers that the two still-blocked slow calls leave capacity for
+    # the fallback provider call.
+    executor = ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="test-provider-call"
+    )
+    try:
+        with patch.object(iface, "_registry", registry), \
+             patch.object(iface, "get_vendor", return_value="cn_akshare,yfinance"), \
+             patch.object(iface, "_submit_provider_call", submit_and_wait_started), \
+             patch.object(iface, "_PROVIDER_CALL_EXECUTOR", executor), \
+             patch.object(iface, "_PROVIDER_SEMAPHORES", {}):
+            out = iface.route_to_vendor(
+                "get_stock_data", "600519", "2025-01-01", "2025-01-31"
+            )
 
-    assert out == "fast"
-    assert calls == 2
-    assert done.wait(0.2)
+        assert out == "fast"
+        assert calls == 2
+        release.set()
+        assert done.wait(5)
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
 
 
 def test_route_provider_error_retries_then_falls_back():
