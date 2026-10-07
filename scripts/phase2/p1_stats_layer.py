@@ -1166,7 +1166,12 @@ def main() -> int:
             "insufficient_days": int(wdf["insufficient"].sum()),
             "composite_ic_mean": float(np.nanmean(comp_w["ic"])),
             "composite_ic_days_valid": int(comp_w["ic"].notna().sum()),
-            "mkt_y_rel_mean": float(np.nanmean(wdf["mkt_y"])),
+            # row-weighted market base rate (matches reviewer convention)
+            "mkt_y_rel_rowmean": float(
+                panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
+                          "y"].mean()),
+            # equal-day-weight mean of per-day means (kept for reference)
+            "mkt_y_rel_daymean": float(np.nanmean(wdf["mkt_y"])),
         }
 
     # paired qfq-vs-raw diff: proper paired SE on the daily diff series
