@@ -140,3 +140,57 @@ is visible there and in `snapshot_ledger.log`.
   (`/Users/davidliu/Documents/TradingAgents-AShare`). Installing the plist
   before this change is merged to trunk means every weekday run fails on a
   missing script — install only after merge, per the plist header comment.
+
+---
+
+# M1 评估脚本（DAV-1678）
+
+`m1_eval.py` — 中线概率契约 `b2.v1` / `p_rel_t40` 的日级评价层。按 DAV-1573
+总控签收口径（2026-10-07，九项细则）实现；先用构造数据验证，账本到期样本
+后再接真数据。
+
+```bash
+# 构造数据自测（交付前必跑）
+python scripts/phase2/m1_eval.py --selftest
+
+# 真实信号帧 → 日序列 + 校准 + 结论分档
+python scripts/phase2/m1_eval.py --input signals.parquet \
+    [--pairs repeat_pairs.csv] [--out-dir data/phase2/m1_eval]
+```
+
+## 输入契约（每行一条候选信号，主运行去重在内部完成）
+
+| 列 | 说明 |
+|---|---|
+| `signal_date` | 信号交易日（YYYYMMDD/ISO；横截面分组键） |
+| `version_key` | 版本队列键（代码SHA+提示词哈希+实际服务模型+契约版本）；缺省 `default` |
+| `symbol` | 股票代码（与日期共同作去重单元） |
+| `run_id` + `created_at` | 主运行去重：同股同日同版本取 `created_at` 最早的已完成运行（签收④，事前固定） |
+| `timing_class` | 正式队列只收 `F0` |
+| `input_pit_status` | 只收 `VERIFIED`；`FAILED` 一律不进 |
+| `p_rel_t40`/`prob`/`q` | 整数 1–99（或 0–1），列级归一到 q∈[0,1] |
+| `r_rel`/`rel_return`/`r` | T+1 开盘→T+40 收盘的股票−申万一级指数收益（小数） |
+
+不满足正式队列规则的行按原因逐项计入 `funnel` 报告（签收 §2.3：排除前后
+分母都要报），不静默丢弃。
+
+## 实现口径（对照 DAV-1573 九项签收）
+
+| 签收项 | 落实 |
+|---|---|
+| ①日级 Spearman IC 平均秩、并列等权 | `spearman_ic` 平均秩；`eval_days` 按日输出 |
+| ③等权汇总、缺日不压缩、秩退化单列 | `grade` 用含 NaN 槽位的日序列入 NW；`insufficient`/`rank_degenerate` 单列不记 0 |
+| ③五分位边界并列按 §3.2 分数权重 | `quintile_weights` 严格按 `w=min(max(h−L,0),E)/E` |
+| ④主运行去重 | `admit` 取同股同日同版本 `created_at` 最早的完成运行 |
+| ⑤NW60 主 / NW120 稳健、95% 双侧 | `newey_west_ci`（缺口不压缩） |
+| ⑥C 档门槛 | `grade`：`valid_days>=60` 且 `nw60_lo>0` 且 `nw120_lo>0`；否则 A/B |
+| ⑦可靠性固定 10 箱 [1–10]…[91–99] | `reliability_table`；`RELIABILITY_BINS` 结果前冻结 |
+| 重复测量 C 与 A | `repeat_measures`（`--pairs` 输入 q1,q2 配对帧） |
+| ⑨结论强度 A–D | `grade`；D 档需 M2 配对+成本证据，本脚本不自动授予 |
+
+## 产物（`--out-dir`）
+
+- `m1_day_series.parquet` — 每日 `date,n_t,status,ic,quintile_diff,quintile_tied_n,brier`
+- `m1_reliability.json` — 10 箱 `bin,n,n_days,pred_mean,empirical`
+- `m1_verdict.json` — 分档结论 + NW60/120 区间 + C 档门槛明细 + funnel
+- `run.json` — 耗时、峰值内存（`/usr/bin/time -l` 口径由外部采样）、行数
