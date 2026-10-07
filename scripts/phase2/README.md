@@ -155,8 +155,16 @@ python scripts/phase2/m1_eval.py --selftest
 
 # 真实信号帧 → 日序列 + 校准 + 结论分档
 python scripts/phase2/m1_eval.py --input signals.parquet \
+    [--version-key v1] [--calendar trade_days.txt] \
     [--pairs repeat_pairs.csv] [--out-dir data/phase2/m1_eval]
 ```
+
+- `--version-key`：主日序列是**单一版本队列**（签收④ + DAV-1682 🔴）。输入帧含
+  多个 `version_key` 时必须显式指定其一，否则 **fail-close 报错**；跨版本比较
+  只走配对通道（M3），绝不混入主 IC 序列。
+- `--calendar`：交易日历文件（一行一个 YYYYMMDD）。给出后，输入 min..max 跨段内
+  每个日历日都建槽——无信号日记 `no_data` NaN 槽，NW lag 不跨越缺口（签收③ +
+  DAV-1682 🟡-1）；不给则以观测到的信号日为槽（输入须覆盖全部应计日期）。
 
 ## 输入契约（每行一条候选信号，主运行去重在内部完成）
 

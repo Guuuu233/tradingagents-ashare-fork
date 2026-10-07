@@ -48,6 +48,12 @@ Deliverables (spec §3–§4):
 Usage:
   python scripts/phase2/m1_eval.py --input signals.parquet [--out-dir DIR]
   python scripts/phase2/m1_eval.py --selftest
+
+**Single-version rule (签收 item 4 / review DAV-1682 🔴):** the main day
+series is exactly one version queue. If the input frame carries more than
+one `version_key` the run fails closed unless `--version-key` names the one
+to use. Cross-version comparison is a separate paired channel (M3) — never
+mixed into the same IC series.
 """
 
 from __future__ import annotations
@@ -57,7 +63,7 @@ import json
 import math
 import resource
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -219,16 +225,21 @@ def _norm_prob_col(s: pd.Series) -> pd.Series:
     """Normalise a probability column to q∈[0,1], column-level: per-value
     scaling is wrong because p=1 is legal on BOTH the 1–99 contract scale
     and the 0–1 scale. If any value exceeds 1 the whole column is treated
-    as the integer-percent contract scale and divided by 100."""
-    v = pd.to_numeric(s, errors="coerce").astype(float)
+    as the integer-percent contract scale and divided by 100.
+    Returns (q_series, n_bad) — n_bad counts unparseable/out-of-range rows
+    so the caller can surface mixed-scale columns in the funnel."""
+    raw = pd.to_numeric(s, errors="coerce")
+    n_bad = int(raw.isna().sum())
+    v = raw.astype(float)
     vmax = v.max(skipna=True)
     if pd.isna(vmax):
-        return v
+        return v, n_bad
     if vmax <= 1.0:
-        return v
+        return v, n_bad
     if vmax <= 100.0:
-        return v / 100.0
-    return v.where(v <= 1.0, np.nan)   # out-of-range garbage → NaN
+        return v / 100.0, n_bad
+    out = v.where(v <= 1.0, np.nan)   # out-of-range garbage → NaN
+    return out, n_bad + int(out.isna().sum() - raw.isna().sum())
 
 
 def load_frame(path: Path) -> pd.DataFrame:
@@ -255,7 +266,7 @@ def load_frame(path: Path) -> pd.DataFrame:
                              f"(aliases: {_COL_CANDIDATES[req]})")
 
     df["signal_date"] = pd.to_datetime(df["signal_date"]).dt.strftime("%Y%m%d")
-    df["q"] = _norm_prob_col(df["prob"])
+    df["q"], df["_n_bad_prob"] = _norm_prob_col(df["prob"])
     df["r"] = pd.to_numeric(df["rel_return"], errors="coerce")
     df = _ensure_defaults(df)
     return df
@@ -264,10 +275,10 @@ def load_frame(path: Path) -> pd.DataFrame:
 def _ensure_defaults(df: pd.DataFrame) -> pd.DataFrame:
     """Fill canonical columns a caller may not have supplied (also lets tests
     feed admit() directly without going through load_frame)."""
-    if "q" not in df.columns and "prob" in df.columns:
-        df["q"] = _norm_prob_col(df["prob"])
-    elif "q" in df.columns:
-        df["q"] = _norm_prob_col(df["q"])
+    df["q"], df["_n_bad_prob"] = _norm_prob_col(df["q"]) \
+        if "q" in df.columns else _norm_prob_col(df["prob"])
+    if "_n_bad_prob" not in df.columns:
+        df["_n_bad_prob"] = df["q"].isna().astype(int)
     if "r" not in df.columns and "rel_return" in df.columns:
         df["r"] = pd.to_numeric(df["rel_return"], errors="coerce")
     if "version_key" not in df.columns:
@@ -292,7 +303,11 @@ def _ensure_defaults(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Apply §2.3 rules in order; every exclusion increments a funnel count."""
+    """Apply §2.3 rules in order; every exclusion increments a funnel count.
+
+    Rows are filtered BEFORE dedup so a stray incomplete run can never leak
+    into the formal queue (review DAV-1682 🟡-2): `completed=False` is an
+    explicit funnel exclusion, not merely a sort-after in dedup."""
     df = _ensure_defaults(df)
     funnel = {"input_rows": len(df)}
     d = df.copy()
@@ -309,9 +324,18 @@ def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     d = _count(m, "excl_non_f0")
     m = d["input_pit_status"].astype(str).str.upper() != "VERIFIED"
     d = _count(m, "excl_unverified")
-    # legal probability int 1–99 → q in (0,1]; 0 and out-of-range rejected
+    # incomplete runs never reach dedup (review 🟡-2). None/NaN = flag absent
+    # → treated complete; only an explicit False/'false'/'0' marks incomplete.
+    comp = d["completed"]
+    m = comp.notna() & ~comp.astype(str).str.lower().isin(
+        ["true", "1", "completed", "complete", "done", "ok", "yes"])
+    d = _count(m, "excl_not_completed")
+    # legal probability int 1–99 → q in (0,1]; 0/out-of-range rejected.
+    # _n_bad_prob surfaces mixed-scale columns (review 🟢-3)
     m = d["q"].isna() | (d["q"] <= 0)
     d = _count(m, "excl_bad_prob")
+    funnel["bad_prob_unparseable"] = int(d["_n_bad_prob"].sum()) \
+        if "_n_bad_prob" in d.columns else 0
     # mature label required
     m = d["r"].isna()
     d = _count(m, "excl_immature_label")
@@ -349,43 +373,60 @@ class DayRow:
     brier: float = np.nan
 
 
-def eval_days(d: pd.DataFrame) -> tuple[list[DayRow], dict]:
-    """Per-(day, version) evaluation. Real date order kept; missing days are
-    simply absent from the day table (never compressed into neighbours)."""
-    days: list[DayRow] = []
-    for (vkey, day), g in d.groupby(["version_key", "signal_date"], sort=True):
+def eval_days(d: pd.DataFrame,
+              calendar: list[str] | None = None) -> list[DayRow]:
+    """Per-day evaluation on ONE version queue (caller guarantees it).
+
+    Day slots come from `calendar` (sorted YYYYMMDD list) when given: every
+    calendar day in the input's min..max span gets a slot, so days with zero
+    signals stay as no-data NaN slots and NW lags never bridge the gap
+    (签收 item 3 + review 🟡-1). With calendar=None the slot index is the
+    union of observed signal dates — i.e. the input frame is assumed to cover
+    all accountable days; a whole missing day is then invisible (documented).
+    """
+    by_day: dict[str, list[DayRow]] = {}
+    for (day), g in d.groupby("signal_date", sort=True):
         n_t = len(g)
         if n_t < MIN_DAILY_N:
-            days.append(DayRow(day, n_t, "insufficient"))
+            by_day[day] = DayRow(day, n_t, "insufficient")
             continue
         q = g["q"].to_numpy(float)
         r = g["r"].to_numpy(float)
         ic, degen = spearman_ic(q, r)
         if degen:
-            days.append(DayRow(day, n_t, "rank_degenerate"))
+            by_day[day] = DayRow(day, n_t, "rank_degenerate")
             continue
         diff, tied = quintile_diff(q, r)
         brier = float(np.mean((q - (r > 0).astype(float)) ** 2))
-        days.append(DayRow(day, n_t, "ok", ic, diff, tied, brier))
-    return days
+        by_day[day] = DayRow(day, n_t, "ok", ic, diff, tied, brier)
+
+    if calendar:
+        lo, hi = min(by_day), max(by_day)
+        idx = [c for c in calendar if lo <= c <= hi]
+        return [by_day.get(c, DayRow(c, 0, "no_data")) for c in idx]
+    return [by_day[c] for c in sorted(by_day)]
 
 
 def reliability_table(d: pd.DataFrame) -> list[dict]:
-    """Fixed 10 bins [1–10]…[91–99] on the integer p (q*100), only valid days."""
+    """Fixed 10 bins [1–10]…[91–99] on the integer p (q*100), only ok days.
+    Vectorised: one groupby pass builds the ok-day mask, then a merge keeps
+    only those days — no per-row apply (review 🟢-4)."""
     d = d.copy()
     d["p_int"] = np.clip(np.round(d["q"] * 100).astype("Int64"), 1, 99)
     d["y"] = (d["r"] > 0).astype(float)
-    # restrict to days that actually entered the main series
-    ok_days = set()
-    for (vkey, day), g in d.groupby(["version_key", "signal_date"]):
-        if len(g) >= MIN_DAILY_N:
-            q = g["q"].to_numpy(float)
-            r = g["r"].to_numpy(float)
-            _, degen = spearman_ic(q, r)
-            if not degen:
-                ok_days.add((vkey, day))
-    d = d[d.apply(lambda row: (row["version_key"], row["signal_date"])
-                  in ok_days, axis=1)]
+
+    def _ok(g: pd.DataFrame) -> bool:
+        if len(g) < MIN_DAILY_N:
+            return False
+        _, degen = spearman_ic(g["q"].to_numpy(float),
+                               g["r"].to_numpy(float))
+        return not degen
+
+    ok = (d.groupby("signal_date", sort=False)[["q", "r"]]
+            .apply(lambda g: _ok(g))
+            .rename("_ok"))
+    d = d.merge(ok, left_on="signal_date", right_index=True)
+    d = d[d["_ok"]]
     rows = []
     for lo, hi in RELIABILITY_BINS:
         sel = d[(d["p_int"] >= lo) & (d["p_int"] <= hi)]
@@ -436,6 +477,7 @@ def grade(days: list[DayRow], funnel: dict) -> dict:
         "insufficient_days": sum(1 for x in days if x.status == "insufficient"),
         "rank_degenerate_days":
             sum(1 for x in days if x.status == "rank_degenerate"),
+        "no_data_days": sum(1 for x in days if x.status == "no_data"),
         "mean_ic": mean60,
         "nw60": {"lo": lo60, "hi": hi60},
         "nw120_lo": lo120,
@@ -450,18 +492,57 @@ def grade(days: list[DayRow], funnel: dict) -> dict:
     }
 
 
+def select_version(df: pd.DataFrame,
+                   version_key: str | None = None) -> pd.DataFrame:
+    """Return the single-version sub-frame for the main day series.
+
+    签收 item 4 + review DAV-1682 🔴: the main IC series is ONE version
+    queue. If the frame holds several `version_key` values the caller MUST
+    name one via --version-key; otherwise this fails closed instead of
+    silently mixing cross-sections across versions into one series (which
+    would double-count valid_days and corrupt NW lags)."""
+    if "version_key" not in df.columns:
+        return df
+    keys = sorted(df["version_key"].dropna().unique().tolist())
+    if len(keys) <= 1:
+        return df
+    if version_key is None:
+        raise ValueError(
+            f"input frame carries {len(keys)} version_key values {keys}; "
+            "the main day series is single-version — pass --version-key "
+            "to select one (cross-version comparison belongs to the "
+            "paired channel, never the same IC series)")
+    if version_key not in keys:
+        raise ValueError(
+            f"--version-key {version_key!r} not in input {keys}")
+    return df[df["version_key"] == version_key].copy()
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
+def _load_calendar(path: Path | None) -> list[str] | None:
+    if path is None:
+        return None
+    cal = pd.read_csv(path, dtype=str).iloc[:, 0]
+    return sorted(pd.to_datetime(cal).dt.strftime("%Y%m%d").tolist())
+
+
 def run(input_path: Path, out_dir: Path,
-        pairs_path: Path | None = None) -> dict:
+        pairs_path: Path | None = None,
+        version_key: str | None = None,
+        calendar_path: Path | None = None) -> dict:
     t0 = time.time()
     log(f"loading {input_path}")
     df = load_frame(input_path)
+    df = select_version(df, version_key)          # fail-close multi-version
     formal, funnel = admit(df)
+    funnel["version_key"] = version_key or \
+        (str(df["version_key"].iloc[0])
+         if "version_key" in df.columns and len(df) else "default")
     log(f"formal rows {len(formal)} / input {len(df)}")
-    days = eval_days(formal)
+    days = eval_days(formal, calendar=_load_calendar(calendar_path))
     rel = reliability_table(formal) if len(formal) else []
     verdict = grade(days, funnel)
     out = {
@@ -486,6 +567,7 @@ def run(input_path: Path, out_dir: Path,
         "elapsed_s": round(time.time() - t0, 2),
         "peak_rss_gb": round(peak_rss_gb(), 3),
         "input_rows": len(df), "formal_rows": len(formal),
+        "version_key": funnel.get("version_key"),
     }, indent=2))
     log(f"grade={verdict['grade']} valid_days={verdict['valid_days']} "
         f"mean_ic={verdict['mean_ic']} -> {out_dir}")
@@ -608,6 +690,42 @@ def selftest() -> dict:
         and rel[-1]["bin"] == "91-99"
     checks["reliability_bins"] = len(rel)
 
+    # 11) multi-version input fails closed; --version-key selects one
+    rows = _mk_day("20260110", range(1, 21), np.linspace(0, 0.1, 20))
+    rows += _mk_day("20260110", range(1, 21), np.linspace(0, 0.1, 20),
+                    vkey="v2", start_idx=50)
+    mv = pd.DataFrame(rows)
+    try:
+        select_version(mv)
+        checks["multiversion_failclose"] = False
+    except ValueError:
+        checks["multiversion_failclose"] = True
+    one = select_version(mv, "v2")
+    days = eval_days(one)
+    assert len(days) == 1 and days[0].n_t == 20 and days[0].status == "ok"
+    checks["single_version_days"] = len(days)
+
+    # 12) incomplete run never reaches formal queue
+    rows = _mk_day("20260111", range(1, 21), np.linspace(0, 0.1, 20))
+    rows.append({"signal_date": "20260111", "version_key": "v1",
+                 "symbol": "INCOMPLETE", "q": 0.5, "r": 0.01,
+                 "timing_class": "F0", "input_pit_status": "VERIFIED",
+                 "completed": False})
+    d, fun = admit(pd.DataFrame(rows))
+    assert fun["excl_not_completed"] == 1 and len(d) == 20
+    checks["not_completed_excl"] = fun["excl_not_completed"]
+
+    # 13) calendar slots: a zero-signal day becomes no_data, kept in series
+    d, _ = admit(pd.DataFrame(
+        _mk_day("20260105", range(1, 21), np.linspace(0, 0.1, 20)) +
+        _mk_day("20260109", range(1, 21), np.linspace(0, 0.1, 20),
+                start_idx=30)))
+    cal = ["20260105", "20260106", "20260107", "20260108", "20260109"]
+    days = eval_days(d, calendar=cal)
+    assert [x.status for x in days] == ["ok", "no_data", "no_data",
+                                        "no_data", "ok"]
+    checks["calendar_slots"] = len(days)
+
     log("selftest PASS: " + json.dumps(checks, default=str))
     return checks
 
@@ -617,6 +735,13 @@ def main() -> int:
     ap.add_argument("--input", type=Path)
     ap.add_argument("--pairs", type=Path, default=None,
                     help="optional repeat-measurement frame (q1,q2,pair_id)")
+    ap.add_argument("--version-key", default=None,
+                    help="version queue to evaluate; required when the input "
+                         "frame holds more than one version_key")
+    ap.add_argument("--calendar", type=Path, default=None,
+                    help="optional trading-calendar file (one YYYYMMDD per "
+                         "line); days in the input's span with no signal "
+                         "stay as no_data NaN slots instead of compressing")
     ap.add_argument("--out-dir", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
@@ -625,7 +750,7 @@ def main() -> int:
         return 0
     if a.input is None:
         ap.error("--input required (or --selftest)")
-    run(a.input, a.out_dir, a.pairs)
+    run(a.input, a.out_dir, a.pairs, a.version_key, a.calendar)
     return 0
 
 
