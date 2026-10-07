@@ -69,6 +69,22 @@ from tradingagents.dataflows.social.registry import (
 logger = logging.getLogger(__name__)
 
 
+def _first_not_none(*candidates: Any) -> Any:
+    """Return the first candidate that is not None.
+
+    DAV-1472 cleanup: the §7 resolution chains used to be written as
+    ``kwargs or cfg or env or default``, which silently swallows legitimate
+    falsy overrides -- e.g. ``max_anonymous_author_ratio=0`` (a legal value
+    meaning "threshold 0, any anonymous share trips the guard") or an env var
+    explicitly set to "" would fall through to the default instead of being
+    honored. ``None`` is the only value that means "not configured".
+    """
+    for candidate in candidates:
+        if candidate is not None:
+            return candidate
+    return None
+
+
 # ============================================================================
 # Ledger Builder Helper (§5.5)
 # ============================================================================
@@ -185,36 +201,43 @@ class SocialDataCollector:
 
         # 1. Mode: disabled | shadow | active (default: disabled)
         self.mode = str(
-            kwargs.get("mode")
-            or cfg.get("mode")
-            or cfg.get("social_mode")
-            or os.getenv("TA_SOCIAL_MODE", "disabled")
+            _first_not_none(
+                kwargs.get("mode"),
+                cfg.get("mode"),
+                cfg.get("social_mode"),
+                os.getenv("TA_SOCIAL_MODE"),
+                "disabled",
+            )
         ).strip().lower()
 
         # 2. Provider: default archive_sqlite
         self.provider_name = str(
-            kwargs.get("provider_name")
-            or kwargs.get("provider")
-            or cfg.get("provider")
-            or cfg.get("social_provider")
-            or os.getenv("TA_SOCIAL_PROVIDER", "archive_sqlite")
+            _first_not_none(
+                kwargs.get("provider_name"),
+                kwargs.get("provider"),
+                cfg.get("provider"),
+                cfg.get("social_provider"),
+                os.getenv("TA_SOCIAL_PROVIDER"),
+                "archive_sqlite",
+            )
         ).strip()
 
         # 3. Archive DB Path: default empty
-        raw_db = (
-            kwargs.get("archive_db")
-            or cfg.get("archive_db")
-            or cfg.get("social_archive_db")
-            or os.getenv("TA_SOCIAL_ARCHIVE_DB", "")
+        raw_db = _first_not_none(
+            kwargs.get("archive_db"),
+            cfg.get("archive_db"),
+            cfg.get("social_archive_db"),
+            os.getenv("TA_SOCIAL_ARCHIVE_DB"),
         )
         self.archive_db = str(raw_db).strip() if raw_db else ""
 
         # 4. Platforms: default xhs,dy
-        platforms_raw = (
-            kwargs.get("platforms")
-            or cfg.get("platforms")
-            or cfg.get("social_platforms")
-            or os.getenv("TA_SOCIAL_PLATFORMS", "xhs,dy")
+        platforms_raw = _first_not_none(
+            kwargs.get("platforms"),
+            cfg.get("platforms"),
+            cfg.get("social_platforms"),
+            os.getenv("TA_SOCIAL_PLATFORMS"),
+            "xhs,dy",
         )
         if isinstance(platforms_raw, (list, tuple, set)):
             self.platforms = [str(p).strip() for p in platforms_raw if str(p).strip()]
@@ -225,65 +248,82 @@ class SocialDataCollector:
 
         # 5. Numerical / Threshold Settings (§7)
         self.lookback_days = int(
-            kwargs.get("lookback_days")
-            or cfg.get("lookback_days")
-            or os.getenv("TA_SOCIAL_LOOKBACK_DAYS")
-            or 7
+            _first_not_none(
+                kwargs.get("lookback_days"),
+                cfg.get("lookback_days"),
+                os.getenv("TA_SOCIAL_LOOKBACK_DAYS"),
+                7,
+            )
         )
         self.max_posts = int(
-            kwargs.get("max_posts")
-            or cfg.get("max_posts")
-            or os.getenv("TA_SOCIAL_MAX_POSTS")
-            or 100
+            _first_not_none(
+                kwargs.get("max_posts"),
+                cfg.get("max_posts"),
+                os.getenv("TA_SOCIAL_MAX_POSTS"),
+                100,
+            )
         )
         self.max_comments = int(
-            kwargs.get("max_comments")
-            or cfg.get("max_comments")
-            or os.getenv("TA_SOCIAL_MAX_COMMENTS")
-            or 300
+            _first_not_none(
+                kwargs.get("max_comments"),
+                cfg.get("max_comments"),
+                os.getenv("TA_SOCIAL_MAX_COMMENTS"),
+                300,
+            )
         )
         self.min_posts = int(
-            kwargs.get("min_posts")
-            or cfg.get("min_posts")
-            or os.getenv("TA_SOCIAL_MIN_POSTS")
-            or 3
+            _first_not_none(
+                kwargs.get("min_posts"),
+                cfg.get("min_posts"),
+                os.getenv("TA_SOCIAL_MIN_POSTS"),
+                3,
+            )
         )
         self.min_classified = int(
-            kwargs.get("min_classified")
-            or cfg.get("min_classified")
-            or os.getenv("TA_SOCIAL_MIN_CLASSIFIED")
-            or 20
+            _first_not_none(
+                kwargs.get("min_classified"),
+                cfg.get("min_classified"),
+                os.getenv("TA_SOCIAL_MIN_CLASSIFIED"),
+                20,
+            )
         )
         self.min_authors = int(
-            kwargs.get("min_authors")
-            or cfg.get("min_authors")
-            or os.getenv("TA_SOCIAL_MIN_AUTHORS")
-            or 10
+            _first_not_none(
+                kwargs.get("min_authors"),
+                cfg.get("min_authors"),
+                os.getenv("TA_SOCIAL_MIN_AUTHORS"),
+                10,
+            )
         )
         self.evidence_limit = int(
-            kwargs.get("evidence_limit")
-            or cfg.get("evidence_limit")
-            or os.getenv("TA_SOCIAL_EVIDENCE_LIMIT")
-            or 20
+            _first_not_none(
+                kwargs.get("evidence_limit"),
+                cfg.get("evidence_limit"),
+                os.getenv("TA_SOCIAL_EVIDENCE_LIMIT"),
+                20,
+            )
         )
         # DAV-1462 requirement 3: share of author-less records above which the
         # symbol's bundle is a data anomaly instead of a partial.
-        anon_ratio_raw = (
-            kwargs.get("max_anonymous_author_ratio")
-            or cfg.get("max_anonymous_author_ratio")
-            or os.getenv("TA_SOCIAL_MAX_ANONYMOUS_AUTHOR_RATIO")
+        # DAV-1472: None-only fallback so ratio=0 (never allow anonymous rows)
+        # is honored instead of being swallowed by `or` back to the default.
+        anon_ratio_raw = _first_not_none(
+            kwargs.get("max_anonymous_author_ratio"),
+            cfg.get("max_anonymous_author_ratio"),
+            os.getenv("TA_SOCIAL_MAX_ANONYMOUS_AUTHOR_RATIO"),
         )
         self.max_anonymous_author_ratio = (
             float(anon_ratio_raw)
-            if anon_ratio_raw
+            if anon_ratio_raw is not None
             else MAX_ANONYMOUS_AUTHOR_RATIO
         )
 
         # 6. Canary Symbols: active whitelist; empty = all (§7)
-        canary_raw = (
-            kwargs.get("canary_symbols")
-            or cfg.get("canary_symbols")
-            or os.getenv("TA_SOCIAL_CANARY_SYMBOLS", "")
+        canary_raw = _first_not_none(
+            kwargs.get("canary_symbols"),
+            cfg.get("canary_symbols"),
+            os.getenv("TA_SOCIAL_CANARY_SYMBOLS"),
+            "",
         )
         if isinstance(canary_raw, (list, tuple, set)):
             self.canary_symbols = {str(s).strip() for s in canary_raw if str(s).strip()}
@@ -293,12 +333,12 @@ class SocialDataCollector:
             self.canary_symbols = set()
 
         # 7. Timeout: default 5 seconds
-        timeout_val = (
-            kwargs.get("fetch_timeout")
-            or kwargs.get("timeout")
-            or cfg.get("fetch_timeout")
-            or os.getenv("TA_SOCIAL_FETCH_TIMEOUT")
-            or 5
+        timeout_val = _first_not_none(
+            kwargs.get("fetch_timeout"),
+            kwargs.get("timeout"),
+            cfg.get("fetch_timeout"),
+            os.getenv("TA_SOCIAL_FETCH_TIMEOUT"),
+            5,
         )
         self.fetch_timeout = float(timeout_val)
         self.fetch_timeout_ms = int(self.fetch_timeout * 1000)

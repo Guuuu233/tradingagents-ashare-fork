@@ -527,3 +527,51 @@ def test_collector_lookback_empty_window_produces_no_failure_ledger_entry(tmp_pa
     assert ctx["bundle"]["status"] == "empty"
     assert ctx["data_failure_ledger"] == []
 
+
+
+# ============================================================================
+# DAV-1472 cleanup: `is not None` resolution chain (falsy overrides honored)
+# ============================================================================
+
+def test_dav1472_anonymous_ratio_zero_override_is_honored():
+    """max_anonymous_author_ratio=0 is a legal value (never allow anonymous rows);
+    the `or` chain used to swallow it back to the 0.50 default."""
+    collector = SocialDataCollector(max_anonymous_author_ratio=0)
+    assert collector.max_anonymous_author_ratio == 0.0
+
+    collector_cfg = SocialDataCollector(config={"max_anonymous_author_ratio": 0})
+    assert collector_cfg.max_anonymous_author_ratio == 0.0
+
+
+def test_dav1472_anonymous_ratio_env_zero_is_honored(monkeypatch):
+    """An env var explicitly set to '0' must reach the knob, not fall to default."""
+    monkeypatch.setenv("TA_SOCIAL_MAX_ANONYMOUS_AUTHOR_RATIO", "0")
+    collector = SocialDataCollector()
+    assert collector.max_anonymous_author_ratio == 0.0
+
+
+def test_dav1472_numeric_zero_overrides_survive():
+    """Other numeric knobs accept an explicit 0 override instead of defaulting."""
+    collector = SocialDataCollector(
+        min_posts=0,
+        min_authors=0,
+        min_classified=0,
+        lookback_days=0,
+        max_posts=0,
+        evidence_limit=0,
+    )
+    assert collector.min_posts == 0
+    assert collector.min_authors == 0
+    assert collector.min_classified == 0
+    assert collector.lookback_days == 0
+    assert collector.max_posts == 0
+    assert collector.evidence_limit == 0
+
+
+def test_dav1472_unset_still_defaults():
+    """When nothing is configured the documented defaults still apply."""
+    collector = SocialDataCollector()
+    assert collector.max_anonymous_author_ratio == 0.50
+    assert collector.mode == "disabled"
+    assert collector.provider_name == "archive_sqlite"
+    assert collector.platforms == ["xhs", "dy"]

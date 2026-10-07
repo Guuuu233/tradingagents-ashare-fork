@@ -726,3 +726,39 @@ def test_provider_failure_takes_precedence_over_anonymous_guard():
     bundle = aggregate_sentiment_bundle(fetch, symbol="600519.SH")
     assert bundle.status == SocialStatus.REFUSED.value
     assert bundle.reason_codes == ["social_no_historical_snapshot"]
+
+
+# ============================================================================
+# DAV-1472 cleanup: anonymous-guard trip counter (metrics hook)
+# ============================================================================
+
+def test_anonymous_guard_trip_counter_increments():
+    """Each guard trip is counted, not just logged (DAV-1472 item 3)."""
+    import tradingagents.dataflows.social.aggregator as agg_mod
+
+    agg_mod.reset_anonymous_guard_trip_count()
+    records = _make_window(
+        [("xhs", "post", None), ("xhs", "comment", None), ("dy", "post", None), ("dy", "comment", None)]
+    )
+    agg = SocialSentimentAggregator()
+    for _ in range(2):
+        bundle = agg.aggregate(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+        assert bundle.status == SocialStatus.FAILED.value
+
+    assert agg.anonymous_guard_trips == 2
+    assert agg_mod.anonymous_guard_trip_count == 2
+    agg_mod.reset_anonymous_guard_trip_count()
+
+
+def test_anonymous_guard_counter_not_incremented_when_guard_passes():
+    """A below-threshold window must not bump the counter."""
+    import tradingagents.dataflows.social.aggregator as agg_mod
+
+    agg_mod.reset_anonymous_guard_trip_count()
+    records = _make_window(
+        [("xhs", "post", f"sha:a{i}") for i in range(6)] + [("dy", "post", None)] * 4
+    )
+    bundle = aggregate_sentiment_bundle(records, symbol="600519.SH", as_of="2026-08-27T00:00:00Z")
+    assert bundle.status == SocialStatus.PARTIAL.value
+    assert agg_mod.anonymous_guard_trip_count == 0
+    agg_mod.reset_anonymous_guard_trip_count()

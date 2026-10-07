@@ -92,6 +92,18 @@ MAX_LIKES_MULTIPLIER: float = 1.5
 MAX_ANONYMOUS_AUTHOR_RATIO: float = 0.50
 MIN_ANONYMOUS_SAMPLE_RECORDS: int = 2
 
+# DAV-1472 cleanup: the anonymous-author guard previously only wrote a
+# logger.warning, leaving nothing countable when triaging events like the
+# "357 rows all NULL" incident. This package has no metrics pipeline, so the
+# minimal inspectable instrument is a process-local trip counter.
+anonymous_guard_trip_count: int = 0
+
+
+def reset_anonymous_guard_trip_count() -> None:
+    """Reset the process-local anonymous-guard trip counter (test/ops hook)."""
+    global anonymous_guard_trip_count
+    anonymous_guard_trip_count = 0
+
 
 def compute_time_decay(
     published_dt: Optional[datetime],
@@ -174,6 +186,9 @@ class SocialSentimentAggregator:
         self.min_authors = min_authors
         self.evidence_limit = evidence_limit
         self.max_anonymous_author_ratio = max_anonymous_author_ratio
+        # Per-instance count of anonymous-guard trips (module-level aggregate in
+        # anonymous_guard_trip_count covers the module-level convenience API).
+        self.anonymous_guard_trips: int = 0
         self.classifier = classifier or StanceClassifier()
 
     def aggregate(
@@ -260,6 +275,10 @@ class SocialSentimentAggregator:
                 symbol,
                 REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT,
             )
+            # DAV-1472: countable instrumentation alongside the warning log.
+            global anonymous_guard_trip_count
+            anonymous_guard_trip_count += 1
+            self.anonymous_guard_trips += 1
             reasons = list(provider_reason_codes or [])
             if REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT not in reasons:
                 reasons.append(REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT)

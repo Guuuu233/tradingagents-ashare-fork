@@ -536,3 +536,37 @@ def test_d065_pool_does_not_collide_with_existing_dictionary():
             f"{names[entity.standard_name]} and {entity.symbol}"
         )
         names[entity.standard_name] = entity.symbol
+
+
+def test_dav1472_no_keyword_duplicates_standard_name():
+    """DAV-1472 item 2: keywords that merely repeat standard_name are removed."""
+    from tradingagents.dataflows.social.entity_resolver import BUILTIN_EQUITY_ENTITIES
+
+    for entity in BUILTIN_EQUITY_ENTITIES:
+        for kw in entity.keywords:
+            assert kw != entity.standard_name, (
+                f"{entity.symbol} keyword {kw!r} duplicates standard_name; "
+                f"standard_name already binds at confidence 1.00"
+            )
+
+
+def test_dav1472_d065_keywords_still_resolve():
+    """The 4 retained discriminating keywords still resolve to their symbol.
+
+    (Each keyword contains the standard_name as a substring, so the recorded
+    match_method is standard_name at confidence 1.00 -- what must hold is that
+    the keyword hits only its own symbol.)
+    """
+    resolver = EntityResolver()
+    for symbol, kw in (
+        ("002304.SZ", "洋河股份梦之蓝"),
+        ("300274.SZ", "阳光电源逆变器"),
+        ("300274.SZ", "阳光电源储能"),
+        ("600031.SH", "三一重工出海"),
+    ):
+        res = resolver.resolve(kw)
+        assert [m.symbol for m in res] == [symbol]
+        assert res[0].match_method in (
+            MATCH_METHOD_STANDARD_NAME,
+            MATCH_METHOD_EXCLUSIVE_KEYWORD,
+        )
