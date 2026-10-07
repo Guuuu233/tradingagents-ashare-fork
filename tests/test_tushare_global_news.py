@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
@@ -517,3 +518,125 @@ class TestV4IncidentFixes:
         rows, cat, _ = client.query("news", {}, "t")
         assert cat is None and rows == [{"t": "x"}]
         assert attempts["n"] == 3
+
+
+class TestCacheDirRelocation:
+    """DAV-1388：新闻缓存目录移出发布目录，跨发布共享不随部署清零。"""
+
+    def test_default_cache_dir_outside_release_tree(self, monkeypatch):
+        """默认 data_cache_dir 不在仓库/发布目录内，指向 XDG state 下稳定路径。"""
+        monkeypatch.delenv("TA_DATA_CACHE_DIR", raising=False)
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        import importlib
+        import tradingagents.default_config as dc
+
+        importlib.reload(dc)
+        try:
+            cache_dir = dc.DEFAULT_CONFIG["data_cache_dir"]
+        finally:
+            importlib.reload(dc)
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assert not os.path.abspath(cache_dir).startswith(repo_root + os.sep)
+        assert "releases" not in cache_dir.split(os.sep)
+        assert cache_dir.endswith(os.path.join("tradingagents", "data_cache"))
+        assert ".local" in cache_dir and "state" in cache_dir
+
+    def test_xdg_state_home_respected(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TA_DATA_CACHE_DIR", raising=False)
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+        import importlib
+        import tradingagents.default_config as dc
+
+        importlib.reload(dc)
+        try:
+            cache_dir = dc.DEFAULT_CONFIG["data_cache_dir"]
+        finally:
+            importlib.reload(dc)
+        assert cache_dir == str(tmp_path / "xdg" / "tradingagents" / "data_cache")
+
+    def test_env_override_must_be_absolute_and_outside_releases(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+        import tradingagents.default_config as dc
+
+        try:
+            # 相对路径拒绝
+            monkeypatch.setenv("TA_DATA_CACHE_DIR", "relative/dir")
+            with pytest.raises(ValueError):
+                importlib.reload(dc)
+            # 发布目录内拒绝
+            monkeypatch.setenv(
+                "TA_DATA_CACHE_DIR",
+                str(tmp_path / "releases" / "abc" / "cache"),
+            )
+            with pytest.raises(ValueError):
+                importlib.reload(dc)
+            # 合法绝对路径接受
+            monkeypatch.setenv(
+                "TA_DATA_CACHE_DIR", str(tmp_path / "stable_cache")
+            )
+            importlib.reload(dc)
+            assert dc.DEFAULT_CONFIG["data_cache_dir"] == str(
+                tmp_path / "stable_cache"
+            )
+        finally:
+            monkeypatch.delenv("TA_DATA_CACHE_DIR")
+            importlib.reload(dc)
+
+    def test_cache_base_dir_defaults_to_config(self, tmp_path, monkeypatch):
+        """TushareNewsCache 不传 base_dir 时走 config['data_cache_dir']/tushare_news。"""
+        monkeypatch.setenv("TA_DATA_CACHE_DIR", str(tmp_path / "cc"))
+        from tradingagents.dataflows.config import set_config
+        import tradingagents.default_config as dc
+        import importlib
+
+        importlib.reload(dc)
+        try:
+            set_config(dc.DEFAULT_CONFIG)
+            cache = tgn.TushareNewsCache()
+            assert cache._base == os.path.join(
+                str(tmp_path / "cc"), "tushare_news"
+            )
+        finally:
+            monkeypatch.delenv("TA_DATA_CACHE_DIR")
+            set_config({})
+
+    def test_cache_survives_release_dir_swap(self, tmp_path, monkeypatch):
+        """同一 data_cache_dir 下的缓存在两个“发布目录”进程间共享。"""
+        shared = tmp_path / "shared_state" / "tradingagents" / "data_cache"
+        monkeypatch.setenv("TA_DATA_CACHE_DIR", str(shared))
+        from tradingagents.dataflows.config import set_config
+        import tradingagents.default_config as dc
+        import importlib
+
+        importlib.reload(dc)
+        try:
+            set_config(dc.DEFAULT_CONFIG)
+            rel_a = tgn.TushareNewsCache()  # 模拟发布目录 A 进程
+            rel_a.put_raw("news:cls", "2020-01-02", [{"title": "a"}])
+            rel_b = tgn.TushareNewsCache()  # 模拟发布目录 B 进程（新 sha）
+            assert rel_b.get_raw("news:cls", "2020-01-02") == [{"title": "a"}]
+            # 文件不落在任何 releases 目录下
+            assert "releases" not in rel_a._base.split(os.sep)
+        finally:
+            monkeypatch.delenv("TA_DATA_CACHE_DIR")
+            set_config({})
+
+    def test_concurrent_writes_no_corruption(self, tmp_path):
+        """多线程并发写同一缓存键：读到的一定是完整 JSON（原子改名）。"""
+        import concurrent.futures as cf
+
+        cache = tgn.TushareNewsCache(str(tmp_path))
+
+        def write_loop(tag):
+            for i in range(10):
+                cache.put_raw("news:cls", "2020-01-02", [{"title": f"{tag}-{i}"}])
+
+        with cf.ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(write_loop, range(6)))
+        got = cache.get_raw("news:cls", "2020-01-02")
+        assert isinstance(got, list) and got and "title" in got[0]
+        # 无残留 tmp 文件
+        raw_dir = tmp_path / "raw"
+        assert not [p for p in raw_dir.iterdir() if p.name.endswith(".tmp")]

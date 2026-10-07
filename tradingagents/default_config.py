@@ -1,12 +1,39 @@
 import os
+from pathlib import Path
+
+_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _default_data_cache_dir() -> str:
+    """数据缓存默认目录：发布目录之外的稳定状态路径，跨发布保留。
+
+    历史默认 ``tradingagents/dataflows/data_cache`` 位于 ``releases/<sha>``
+    内，每次部署清零。现默认 ``${XDG_STATE_HOME}/tradingagents/data_cache``
+    （未设 XDG_STATE_HOME 时为 ``~/.local/state/...``），与 SHA/worktree
+    无关。可用 ``TA_DATA_CACHE_DIR`` 覆盖，必须是绝对路径且不得落在本
+    工作树或任何 ``releases`` 目录内（同 DAV-1412 存档路径约束）。
+    """
+    configured = os.getenv("TA_DATA_CACHE_DIR", "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            raise ValueError("TA_DATA_CACHE_DIR must be an absolute path")
+        path = path.resolve()
+        if _SOURCE_ROOT in path.parents or "releases" in path.parts:
+            raise ValueError(
+                "TA_DATA_CACHE_DIR must not live inside a worktree/release"
+            )
+        return str(path)
+    state_home = Path(
+        os.getenv("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    )
+    return str(state_home / "tradingagents" / "data_cache")
+
 
 DEFAULT_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TA_RESULTS_DIR", "./results"),
-    "data_cache_dir": os.path.join(
-        os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-        "dataflows/data_cache",
-    ),
+    "data_cache_dir": _default_data_cache_dir(),
     # LLM settings
     "llm_provider": os.getenv("TA_LLM_PROVIDER", "openai"),
     "deep_think_llm": os.getenv("TA_LLM_DEEP", "gpt-4o"),
