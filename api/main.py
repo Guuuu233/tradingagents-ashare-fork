@@ -2744,7 +2744,13 @@ def _attach_traceability_fields(
     report_id: Optional[str],
 ) -> Dict[str, Any]:
     """DAV-1430 (D-066 B3): one attach point for input_snapshot / run_identity
-    / served_models on every save path — same rules everywhere."""
+    / served_models on every save path — same rules everywhere.
+
+    DAV-1486: ``run_identity`` is unconditionally overwritten with the API
+    code/prompt/model identity.  Experiment-path identity lives under the
+    distinct ``experiment_run_identity`` key (DAV-1477 P3), so an experiment
+    result routed through this attach point keeps its thread/checkpointer
+    identity instead of being silently clobbered."""
     result["input_snapshot"] = _compute_input_snapshot(pool)
     result["run_identity"] = _build_run_identity(graph, prompt_snapshot)
     try:

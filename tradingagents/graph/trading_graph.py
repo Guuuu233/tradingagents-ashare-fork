@@ -750,8 +750,15 @@ class TradingAgentsGraph:
         # thread id + dedicated checkpointer instance) on the returned state so
         # downstream result_data packaging can carry it.  Production path never
         # sets experiment_mode, so this key only exists on experiment results.
+        # DAV-1486: the key is deliberately named ``experiment_run_identity`` —
+        # a distinct name from the API-side ``result_data.run_identity`` code
+        # identity written by ``_attach_traceability_fields`` (DAV-1430), which
+        # unconditionally overwrites ``run_identity``.  Sharing the key was an
+        # implicit contract that only held because no API construction point
+        # passes experiment_mode; a downstream harness reusing the /v1/analyze
+        # save path would have silently clobbered the experiment identity.
         if getattr(self, "experiment_mode", False):
-            final_state["run_identity"] = {
+            final_state["experiment_run_identity"] = {
                 "thread_id": thread_id,
                 "checkpointer": checkpointer_identity(
                     getattr(self, "checkpointer", None)
@@ -981,9 +988,14 @@ class TradingAgentsGraph:
 
         # DAV-1477 (P3): propagate experiment run identity into the packaged
         # result when present — absent on production runs, so production
-        # result_data shape is untouched.
-        if final_state.get("run_identity") is not None:
-            result["run_identity"] = final_state["run_identity"]
+        # result_data shape is untouched.  DAV-1486: kept under the distinct
+        # ``experiment_run_identity`` key so API-side ``run_identity`` (code
+        # identity, unconditionally overwritten by _attach_traceability_fields)
+        # can never clobber it.
+        if final_state.get("experiment_run_identity") is not None:
+            result["experiment_run_identity"] = final_state[
+                "experiment_run_identity"
+            ]
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state
         meta = get_protocol_metadata(final_state)
