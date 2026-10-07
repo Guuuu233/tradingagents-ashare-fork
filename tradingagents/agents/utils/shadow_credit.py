@@ -41,6 +41,7 @@ from tradingagents.agents.utils.debate_metrics import (
 from tradingagents.agents.utils.evidence_verifier import (
     is_daily_ohlcv_unavailable,
 )
+from tradingagents.storage.result_data_compat import result_data_compat_view
 from tradingagents.agents.utils.price_basis_isolation import (
     REASON_CONTRACT_INCOMPLETE,
     REASON_CONTAMINATED,
@@ -581,7 +582,10 @@ def extract_report_industry(sample: Mapping[str, Any]) -> Optional[str]:
             return str(ind).strip()
 
     # 4. market_data_context.industry_linkage
-    mdc = sample.get("market_data_context") or (res_data.get("market_data_context") if isinstance(res_data, Mapping) else None)
+    # DAV-1506 (B-1): on canonical rows the top-level mdc is a virtual view key
+    # — rebuild it so the industry_linkage branch still resolves.
+    _rd_view = result_data_compat_view(res_data) if isinstance(res_data, Mapping) else res_data
+    mdc = sample.get("market_data_context") or (_rd_view.get("market_data_context") if isinstance(_rd_view, Mapping) else None)
     if isinstance(mdc, Mapping):
         il = mdc.get("industry_linkage")
         if isinstance(il, Mapping):
@@ -891,10 +895,14 @@ def _extract_market_data_context_map(report: Mapping[str, Any]) -> Optional[Mapp
     if not isinstance(report, Mapping):
         return None
     res_data = report.get("result_data") if isinstance(report.get("result_data"), Mapping) else {}
+    # DAV-1506 (B-1): top-level market_data_context is a virtual view key on
+    # canonical rows — rebuild via the compat view so the legacy per-horizon
+    # ``{short: …, medium: …}`` shape is preserved for callers.
+    res_data_view = result_data_compat_view(res_data) if isinstance(res_data, Mapping) else res_data
     inv_state = report.get("investment_debate_state") if isinstance(report.get("investment_debate_state"), Mapping) else (
-        res_data.get("investment_debate_state") if isinstance(res_data.get("investment_debate_state"), Mapping) else {}
+        res_data_view.get("investment_debate_state") if isinstance(res_data_view.get("investment_debate_state"), Mapping) else {}
     )
-    for src in (report, res_data, inv_state):
+    for src in (report, res_data_view, inv_state):
         if isinstance(src, Mapping):
             mdc = src.get("market_data_context")
             if isinstance(mdc, Mapping):
