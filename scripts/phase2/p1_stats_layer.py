@@ -84,6 +84,7 @@ MIN_DAILY_N = 10                 # frozen min_daily_cross_section_n guard
 EVAL_OK = "evaluated_ok"
 SIM_ICS = (0.00, 0.02, 0.05, 0.08, 0.12)
 NW_BANDS = (40, 60, 80, 120)
+PRIMARY_NW = 60               # 裁定③: NW60 主口径（块长同 60）
 LB_LAGS = (20, 40, 80, 120)
 BLOCK_LENS = (40, 60, 80, 120)
 N_LIST = (10, 20, 30, 40)
@@ -389,15 +390,75 @@ class PairCorrAcc:
             self.acc[g] = self.acc[g].nlargest(self.MAX_KEYS_PER_GROUP,
                                                columns=[5])
 
-    def summary(self):
-        if not self.acc:
-            return {"groups": 0}
+    @staticmethod
+    def _aggregate(mps):
+        """Aggregate per-pair Pearson over the given (pair -> sums) frames.
+
+        Returns (mean_rho_equal_weight, mean_rho_pair_weight,
+                 median_pair_days, n_pairs_used, n_pairs_total).
+        pair_weight weights each pair rho by its co-occurrence day count.
+        """
         eq, wsum, wpairs, pdays = [], 0.0, 0, []
-        npairs_tot = 0
-        for g, mp in self.acc.items():
+        n_used = 0
+        n_tot = 0
+        for mp in mps:
             if not len(mp):
                 continue
-            npairs_tot += len(mp)
+            n_tot += len(mp)
+            n = mp.iloc[:, 5].to_numpy()
+            valid = n >= 2            # need >=2 co-occurrence days for a rho
+            if not valid.any():
+                continue
+            sx, sy = mp.iloc[valid, 0], mp.iloc[valid, 1]
+            sxx, syy = mp.iloc[valid, 2], mp.iloc[valid, 3]
+            sxy, nn = mp.iloc[valid, 4], mp.iloc[valid, 5]
+            cov = sxy / nn - (sx / nn) * (sy / nn)
+            vx = sxx / nn - (sx / nn) ** 2
+            vy = syy / nn - (sy / nn) ** 2
+            # df on identical-constant pairs -> rho undefined; skip (NaN),
+            # do NOT count as a real observation. The pairs count below is
+            # only of well-defined (positive-variance) pairs.
+            ok = (vx > 0) & (vy > 0)
+            if not ok.any():
+                continue
+            vals = (cov[ok] / np.sqrt(vx[ok] * vy[ok])).to_numpy()
+            cnts = nn[ok].to_numpy(dtype=float)
+            n_used += len(vals)
+            eq.append(vals.mean())
+            wsum += (vals * cnts).sum(); wpairs += cnts.sum()
+            pdays.append(cnts.mean())
+        return (eq, wsum, wpairs, pdays, n_used, n_tot)
+
+    def summary(self):
+        """DAV-1597 裁定② — D1 estimator object = the PAIR-LEVEL Pearson
+        over co-occurrence days. The MAIN number is computed over ALL
+        well-defined pairs (no post-hoc n>=3 / positive-variance screen on
+        the result). The n>=3 & positive-variance subset is emitted only as
+        a sensitivity column labelled as such (not the main conclusion)."""
+        if not self.acc:
+            return {"groups": 0}
+        mps = [mp for mp in self.acc.values()]
+        # MAIN: all well-defined pairs (n_days>=2, positive variance).
+        eq, wsum, wpairs, pdays, n_used, n_tot = self._aggregate(mps)
+        if not eq:
+            return {"groups": 0}
+        main = {"groups": len(self.acc),
+                "pairs": int(n_tot),
+                "pairs_used": int(n_used),
+                # equal = per-pair rho averaged within group, then equal
+                #   weight across groups; pair_weight = each pair weighted
+                #   by its co-occurrence day count
+                "mean_rho_equal_weight": float(np.mean(eq)),
+                "mean_rho_pair_weight": float(wsum / max(wpairs, 1)),
+                # median across groups of the mean co-occurrence days per
+                #   pair (NOT the median days across all pair obs)
+                "median_pair_days": float(np.median(pdays))}
+        # SENSITIVITY only: n>=3 & positive-variance screen. Not the main
+        # conclusion (DAV-1597 裁定②) — kept as an alongside column.
+        sens = []
+        for mp in mps:
+            if not len(mp):
+                continue
             n = mp.iloc[:, 5].to_numpy()
             good = n >= 3
             if not good.any():
@@ -409,25 +470,21 @@ class PairCorrAcc:
             vx = sxx / nn - (sx / nn) ** 2
             vy = syy / nn - (sy / nn) ** 2
             ok = (vx > 0) & (vy > 0)
-            if not ok.any():
-                continue
-            vals = (cov[ok] / np.sqrt(vx[ok] * vy[ok])).to_numpy()
-            cnts = nn[ok].to_numpy(dtype=float)
-            eq.append(vals.mean())
-            wsum += (vals * cnts).sum(); wpairs += cnts.sum()
-            pdays.append(cnts.mean())
-        if not eq:
-            return {"groups": 0}
-        return {"groups": len(self.acc),
-                "pairs": int(npairs_tot),
-                # equal = per-pair rho averaged within group, then equal
-                #   weight across groups; pair_weight = each pair weighted
-                #   by its co-occurrence day count
-                "mean_rho_equal_weight": float(np.mean(eq)),
-                "mean_rho_pair_weight": float(wsum / max(wpairs, 1)),
-                # median across groups of the mean co-occurrence days per
-                #   pair (NOT the median days across all pair obs)
-                "median_pair_days": float(np.median(pdays))}
+            if ok.any():
+                sens.append(mp[good][ok].assign(_rho=(
+                    cov[ok] / np.sqrt(vx[ok] * vy[ok]))))
+        if sens:
+            eq2, wsum2, wpairs2, pdays2, n_used2, _ = self._aggregate(
+                [s.iloc[:, :6] for s in sens])
+            main["sensitivity_n_ge3_posvar"] = {
+                "note": "筛选后，不作主结论 (DAV-1597 裁定② sensitivity)",
+                "pairs_used": int(n_used2),
+                "mean_rho_equal_weight": float(np.mean(eq2)) if eq2 else None,
+                "mean_rho_pair_weight":
+                    float(wsum2 / max(wpairs2, 1)) if wpairs2 else None,
+                "median_pair_days":
+                    float(np.median(pdays2)) if pdays2 else None}
+        return main
 
 
 # ---------------------------------------------------------------------------
@@ -929,29 +986,30 @@ def main() -> int:
         log(f"pass3 year={year} rss={peak_rss_gb():.2f}GB")
 
     # persist D1 pair-level accumulator detail with the six accumulated
-    # sums + n so rho can be recomputed offline (reviewer: D1 明细未持久化)
+    # sums + n so rho can be recomputed offline (reviewer: D1 明细未持久化).
+    # DAV-1597 裁定②: keep EVERY pair (new per-pair schema). Pairs that fail
+    # the n>=3 / positive-variance screen are NOT dropped — they are flagged
+    # `well_defined=False` (rho=NaN) so the screened subset can be rebuilt as
+    # a sensitivity column, but the main estimator runs on all pairs.
     pair_detail = []
     for gname, acc in (("all", all_acc), ("industry", ind_acc),
                        ("style_4x10", style_acc), ("coarse_25", coarse_acc)):
         for gkey, mp in acc.acc.items():
             for pid, row in mp.iterrows():
                 n_c = row.iloc[5]
-                if n_c < 3:
-                    continue
                 sx, sy = row.iloc[0], row.iloc[1]
                 sxx, syy = row.iloc[2], row.iloc[3]
                 sxy = row.iloc[4]
                 vx = sxx / n_c - (sx / n_c) ** 2
                 vy = syy / n_c - (sy / n_c) ** 2
-                if not (vx > 0 and vy > 0):
-                    continue
-                rho = float((sxy / n_c - (sx / n_c) * (sy / n_c))
-                            / np.sqrt(vx * vy))
+                well = bool(n_c >= 3 and vx > 0 and vy > 0)
+                rho = (float((sxy / n_c - (sx / n_c) * (sy / n_c))
+                            / np.sqrt(vx * vy)) if well else float("nan"))
                 pair_detail.append({
                     "group_kind": gname, "group": gkey, "pair_id": pid,
                     "n_days": float(n_c), "sx": float(sx), "sy": float(sy),
                     "sxx": float(sxx), "syy": float(syy), "sxy": float(sxy),
-                    "rho": rho})
+                    "well_defined": well, "rho": rho})
     pd.DataFrame(pair_detail).to_parquet(
         out_dir / "d1_pair_detail.parquet", index=False)
 
@@ -1187,6 +1245,12 @@ def main() -> int:
         "frac_tied_mean": float(np.nanmean(comp["frac_tied"])),
         "ic_nan_days": int(comp["ic"].isna().sum()),
         "insufficient_days_lt10": int(day_df["insufficient"].sum()),
+        # 裁定⑤: guard fired 0 days in sample -> NOT verified; do not feed
+        # it into any judgment rule until a real trigger is observed.
+        "guard_triggered": bool(int(day_df["insufficient"].sum()) > 0),
+        "guard_status": ("未在样本中触发，未经验证"
+                         if int(day_df["insufficient"].sum()) == 0
+                         else "triggered"),
         "note_quintile_vs_tercile": ("tercile sensitivity not implemented; "
                                    "tercile_hi_lo_mean is NaN placeholder"),
         "tercile_hi_lo_mean": np.nan,
@@ -1257,6 +1321,17 @@ def main() -> int:
         "paired_diff_n_eff_l49": paired_neff,
         "paired_diff_rho_sum": paired_rsum,
         "paired_diff_days": len(diffs),
+        # 裁定③: NW60 is the primary band; '显著' (paired_diff_mean != 0)
+        # is only asserted if the NW120 95% band also excludes 0, else it is
+        # labelled bandwidth-sensitive.
+        "primary_nw_band": PRIMARY_NW,
+        "paired_diff_sig_holds_nw120": bool(
+            len(diffs) > 2
+            and abs(paired_nw.get("120", float("nan"))) > 0
+            and abs(float(np.nanmean(diffs))) > 1.96 * paired_nw["120"]),
+        "paired_diff_nw60_mean_over_se": (
+            float(np.nanmean(diffs) / paired_nw["60"])
+            if len(diffs) > 2 and paired_nw.get("60") else None),
         "note": ("adj_factor change includes dividends AND splits/送转; "
                  "frac is the cross-day equal-weight mean of per-day share, "
                  "not a row-level pool share; SE uses Bartlett-HAC on the "
@@ -1300,6 +1375,8 @@ def main() -> int:
                    "source_sha": _git_sha(),
                    "source_dirty": _git_dirty(),
                    "source_file_sha256": _file_sha256(__file__),
+                   "primary_nw_band": PRIMARY_NW,
+                   "ruling": "DAV-1597 裁定①②③④⑤",
                    "env": {"python": _py_version(),
                            "env_unset_PYTHONPATH": "PYTHONPATH" not in os.environ,
                            "deps": _deps_version()},
@@ -1473,10 +1550,16 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
          f"{w['main_2019']['panel_rows']:,} panel 行）；敏感性 {m['long_start']}+（"
          f"{w['sens_2016']['days']} 日）；全缓存诊断 {w['all_cached']['days']} 日",
          f"- 守卫：<10 有效 label 日 → insufficient（本次触发 "
-         f"{out['d6_min_n']['insufficient_days_lt10']} 天，均排除出 IC 序列）",
+         f"{out['d6_min_n']['insufficient_days_lt10']} 天；"
+         f"未在样本中触发，未经验证，不入任何判断规则）",
+         # 裁定③: NW60 主口径 (block 60); 40/80/120 敏感性; '显著' 须在
+         # NW120 下也成立，否则写“对带宽敏感”。
+         "- 推断带宽：NW60 为主口径（块长同 60）；40/80/120 为敏感性；"
+         "任何‘显著’表述须在 NW120 下也成立，否则写‘对带宽敏感’",
          "- 标签：r_stock 为 vendor_qfq 主口径；r_stock_raw 为原始价敏感性列；"
          "r_sw 同窗 T+1 开盘→退出收盘；qfq/raw 配对差见末节",
-         "", "## 1 同日成对相关（同股共现日时间序列 Pearson，组内两两）", "",
+         "", "## 1 同日成对相关（同股共现日时间序列 Pearson，组内两两，"
+         "全量对为主口径）", "",
          "| 组 | 等权 ρ | 对数加权 ρ | 规模 |", "|---|---|---|---|---|"]
     a = out["d1_paircorr"]["all"]
     L.append(f"| 全体 | {_f(a['mean_rho_equal_weight'])} | "
@@ -1516,6 +1599,9 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
           "- 明细：`base_rate_industry_year.parquet`（快照）、"
           "`base_rate_expanding.parquet`（逐日扩窗）",
           "", "## 5 信息量—成本前沿（沪深300+中证500）", "",
+          # 裁定⑤: MAE 只作样本期内描述性统计，不外推、不作 M2 成本/止损假设。
+          "_（裁定⑤：下表对全集 IC 均偏/MAE 仅为样本期内描述性统计，"
+          "不外推，不作为 M2 成本或止损假设。）_", "",
           "| N | 方案 | 天数 | IC均值 | IC std | 对全集IC均偏 | "
           "行业覆盖μ | p10 | topN重合 | n_eff |",
           "|---|---|---|---|---|---|---|---|---|---|"]
