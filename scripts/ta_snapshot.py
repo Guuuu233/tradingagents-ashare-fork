@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""DAV-1528: daily post-batch compressed snapshot of the production SQLite DB.
+"""DAV-1528 (rework v2): daily post-batch compressed snapshot of the production SQLite DB.
 
 Creates one zstd-compressed snapshot per CN trading day under a fixed
 directory (default ``/private/tmp/ta-snapshot/``). Intended to run once per
 trading day after the analysis batch finishes; non-trading days exit early
-without writing anything. Cards that need production data decompress a
-snapshot on demand and delete the copy when done — they no longer copy the
-live DB themselves.
+without writing anything.
 
-Discipline (D-073 / issue body):
-- The production DB is only ever read through ``sqlite3.Connection.backup``
-  (same API the VACUUM INTO path uses); the script never writes to it.
-- Snapshots accumulate; the script reports how many exist but NEVER deletes
-  any — when the count exceeds ``RETENTION_KEEP`` it only flags
-  ``over_retention`` in the JSON report; retention is fixed in the first
-  report and overflow is cleaned manually by a human.
+Read-only cards open ``<out_dir>/current.db`` directly
+(``file:<path>?mode=ro&immutable=1``) — no copying. Only write/drill cards
+decompress a dated ``.zst`` into their own temp path and delete it when done.
+
+Discipline (D-073 / rework order):
+- The production DB is only ever read through ``sqlite3.Connection.backup``;
+  the script never writes to it.
+- Retention: keep the newest ``RETENTION_KEEP`` (=3) ``tradingagents-*.db.zst``
+  files; older matching files are deleted automatically and every deletion is
+  recorded in the output JSON.
+- After each snapshot the script refreshes ``<out_dir>/current.db``: writes a
+  temp file, verifies ``PRAGMA quick_check``, then atomically renames it into
+  place with mode ``0444``. ``current.db`` counts toward the D-073 limit of 3
+  uncompressed full-DB copies on the machine.
+- The last snapshot of each trading week doubles as the weekly baseline that
+  DAV-1508 uploads to Quark (2 remote copies kept there); DAV-1508 no longer
+  makes its own full-DB backup.
 - Nothing here is installed or scheduled; see
   ``docs/ta-snapshot-usage.md`` for the proposed launchd template.
 
@@ -41,11 +49,11 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 DEFAULT_OUT_DIR = "/private/tmp/ta-snapshot"
+CURRENT_DB_NAME = "current.db"
 ZSTD_LEVEL = 19  # max regular level; ~5 GB live DB compresses well below 1 GB
-# Retention fixed in the first report: keep the newest 14 daily snapshots
-# (~3 trading weeks). The script NEVER deletes; counts above this are only
-# flagged as over_retention for manual cleanup.
-RETENTION_KEEP = 14
+# Keep the newest 3 dated snapshots; older tradingagents-*.db.zst files in
+# out_dir are deleted automatically (deletions are reported, never silent).
+RETENTION_KEEP = 3
 
 
 def _is_trading_day(d: date, force_weekday: bool) -> bool:
@@ -110,6 +118,66 @@ def make_snapshot(db_path: str, out_dir: str, day: date) -> dict:
     return {"snapshot": final, "skipped": None, "bytes": os.path.getsize(final)}
 
 
+def refresh_current_db(out_dir: str) -> dict:
+    """Decompress the newest ``tradingagents-*.db.zst`` into ``current.db``.
+
+    Writes to a temp file, verifies ``PRAGMA quick_check``, then atomically
+    renames over ``current.db`` and chmods it ``0444`` so readers cannot
+    accidentally mutate the shared artifact.
+    """
+    snaps = sorted(
+        f for f in os.listdir(out_dir)
+        if f.startswith("tradingagents-") and f.endswith(".db.zst")
+    )
+    if not snaps:
+        raise RuntimeError(f"no tradingagents-*.db.zst found in {out_dir}")
+    newest = os.path.join(out_dir, snaps[-1])
+    final = os.path.join(out_dir, CURRENT_DB_NAME)
+
+    fd, tmp = tempfile.mkstemp(prefix=".ta-current-", suffix=".db", dir=out_dir)
+    os.close(fd)
+    try:
+        subprocess.run(
+            [_find_zstd(), "-d", "-f", newest, "-o", tmp],
+            check=True, capture_output=True, text=True,
+        )
+        # Static decompressed file -> immutable=1 (project rule: no WAL
+        # sidecars; mode=ro would create stray -shm/-wal on the temp file).
+        conn = sqlite3.connect(f"file:{tmp}?immutable=1", uri=True)
+        try:
+            result = conn.execute("PRAGMA quick_check").fetchone()
+        finally:
+            conn.close()
+        if result is None or result[0] != "ok":
+            raise RuntimeError(f"quick_check failed on decompressed {newest}: {result}")
+        os.chmod(tmp, 0o444)
+        os.replace(tmp, final)   # atomic swap; readers never see a partial file
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return {"current_db": final, "source": snaps[-1],
+            "bytes": os.path.getsize(final)}
+
+
+def apply_retention(out_dir: str) -> list[str]:
+    """Delete all but the newest ``RETENTION_KEEP`` dated snapshots.
+
+    Only files matching ``tradingagents-*.db.zst`` inside ``out_dir`` are ever
+    removed. Returns the deleted filenames for the JSON report.
+    """
+    snaps = sorted(
+        f for f in os.listdir(out_dir)
+        if f.startswith("tradingagents-") and f.endswith(".db.zst")
+    )
+    excess = snaps[:-RETENTION_KEEP] if len(snaps) > RETENTION_KEEP else []
+    deleted = []
+    for name in excess:
+        os.remove(os.path.join(out_dir, name))
+        deleted.append(name)
+    return deleted
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--db", default=os.path.join(_REPO_ROOT, "data", "tradingagents.db"),
@@ -133,21 +201,25 @@ def main() -> int:
         return 0
 
     info = make_snapshot(args.db, args.out_dir, day)
-    existing = sorted(
+    current = refresh_current_db(args.out_dir)
+    deleted = apply_retention(args.out_dir)
+    remaining = sorted(
         f for f in os.listdir(args.out_dir)
         if f.startswith("tradingagents-") and f.endswith(".db.zst")
     )
-    over = existing[:-RETENTION_KEEP] if len(existing) > RETENTION_KEEP else []
     report = {
         "date": day.isoformat(),
         "trading_day": True,
         "snapshot": info["snapshot"],
         "skipped": info["skipped"],
         "snapshot_bytes": info["bytes"],
-        "total_snapshots": len(existing),
+        "current_db": current["current_db"],
+        "current_db_source": current["source"],
+        "current_db_bytes": current["bytes"],
         "retention_keep": RETENTION_KEEP,
-        "over_retention": over,  # listed for manual cleanup; script never deletes
-        "snapshots": existing,
+        "deleted": deleted,
+        "total_snapshots": len(remaining),
+        "snapshots": remaining,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

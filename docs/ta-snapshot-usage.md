@@ -1,49 +1,61 @@
-# 共享只读快照使用说明（DAV-1528）
+# 共享只读快照使用说明（DAV-1528，v2）
 
 每个交易日批后由 `scripts/ta_snapshot.py` 生成一份压缩的生产库快照，
-固定位置 `/private/tmp/ta-snapshot/`，压缩方式 zstd，
-文件名 `tradingagents-YYYY-MM-DD.db.zst`（日期为交易日，非生成日）。
+固定位置 `/private/tmp/ta-snapshot/`：
 
-各卡需要生产数据时**不再自己复制活库**，改为解压最近一份快照使用。
+- `tradingagents-YYYY-MM-DD.db.zst` — 按交易日的压缩快照，**只保留最近 3 份**，
+  超出的旧 `.zst` 由脚本自动删除（删除记入运行 JSON）。
+- `current.db` — 每次快照后由最新 `.zst` 解压刷新的**共享只读整库**
+  （权限 `0444`，quick_check 验证后原子替换）。它计入 D-073 的全机
+  未压缩整库副本上限（3 份），各卡自己的解压副本另计。
 
 ## 各卡使用模板
 
+### 只读卡（绝大多数情况）
+
+**直接用 `current.db`，不要复制、不要解压 `.zst`。**
+
 ```bash
-# 1. 找最新快照（按文件名日期排序即时间序）
-SNAP=$(ls /private/tmp/ta-snapshot/tradingagents-*.db.zst | tail -1)
+# 只读打开共享快照（static 文件，immutable=1 最快且不建 WAL 侧文件）
+sqlite3 "file:/private/tmp/ta-snapshot/current.db?mode=ro&immutable=1" \
+  "select count(*) from reports;"
 
-# 2. 解压到自己卡的临时路径（/private/tmp 下，与快照目录分开）
-WORK=/private/tmp/ta-work-<卡号或自定义>
-mkdir -p "$WORK"
-zstd -d -f "$SNAP" -o "$WORK/tradingagents.db"
-#   （zstd 解压默认保留 .zst 源文件，快照必须留下供别的卡用）
-
-# 3. 只读使用（活库用 mode=ro；解压出的静态副本可用 immutable=1，更快）
-sqlite3 "file:$WORK/tradingagents.db?immutable=1" "select count(*) from reports;"
-#   或项目 Python：DATABASE_URL="sqlite:///$WORK/tradingagents.db" ...
-
-# 4. 用完即删（D-073：每卡同一时刻最多 1 份整库副本）
-rm -f "$WORK/tradingagents.db"
+# 项目 Python 同样方式（不要指到活库 data/tradingagents.db）
+DATABASE_URL="sqlite:////private/tmp/ta-snapshot/current.db" ...
 ```
 
-**纪律**
+**不得复制 `current.db`**——它本身就是给全机共享的那份整库；
+每多复制一份就多占一份 5 GB 磁盘并占 D-073 副本额度。
 
-- 每卡同一时刻最多 1 份解压副本；全机未压缩整库副本上限 3 份（D-073 第 4 条）。
-- 运行结束立即 `rm` 解压文件（确切路径，不进废纸篓）。
-- 解压路径必须登记在卡上，便于他人清点。
-- 磁盘可用 <100 GB（红区）不得新建整库副本，改用抽样小库或等待。
-- 解压副本是**可再生**的，一律不上传夸克、不归档（D-073 第 4 条）。
-- 快照文件本身 (`*.db.zst`) 不属于"未压缩整库副本"限额，但不要误删它——
-  别的卡还在用。
+### 需要写入的演练/测试卡
+
+只有必须对库**写**（迁移演练、写路径测试）的卡才单独解压，且必须
+解压到自己卡的临时路径、用完即删：
+
+```bash
+WORK=/private/tmp/ta-work-<卡号>
+mkdir -p "$WORK"
+zstd -d -f /private/tmp/ta-snapshot/tradingagents-<YYYY-MM-DD>.db.zst \
+  -o "$WORK/tradingagents.db"
+# ...用完...
+rm -f "$WORK/tradingagents.db"   # 确切路径，不进废纸篓
+```
+
+## 纪律（D-073）
+
+- 每卡同一时刻最多 1 份自解压整库副本；**全机未压缩整库副本上限 3 份**，
+  `current.db` 占其中 1 份，各卡自解压合计不得再超 2 份。
+- 自解压副本运行结束立即 `rm`（确切路径），路径登记在卡上。
+- 磁盘可用 <100 GB（红区）不得新建整库副本。
+- 解压/共享副本是**可再生**的，一律不上传夸克、不归档。
 
 ## 保留份数
 
-首次运行报告固定为 **保留最近 14 份**（约 3 周交易日，与 D-073 第 5 条
-"本地留 1 份压缩基线"不冲突——那是每周基线，这是日粒度快照）。
-
-**脚本不自动删除任何快照。** 每次运行输出 `total_snapshots` 和完整清单；
-超出 14 份时在运行报告里标注 `over_retention`，由人手动清理
-（`rm` 确切文件名），不复核不得删。
+- 本地 `.zst` 快照：**最近 3 份**，超出自动删除（v2 起脚本自己删，
+  只删 `out_dir` 下 `tradingagents-*.db.zst`，删除记入 JSON `deleted`）。
+- `current.db` 始终只有 1 份，随每次快照原子刷新。
+- **当周最后一份快照兼作每周基线**：DAV-1508 的周任务把该 `.zst`
+  上传夸克（远端保留 2 份），DAV-1508 不再另做整库备份。
 
 ## 定时方式（方案文本，不安装）
 
@@ -57,13 +69,13 @@ rm -f "$WORK/tradingagents.db"
 - 工作目录 `<repo>`，stdout/stderr 落 `work/ta-snapshot.{stdout,stderr}.log`
 - `RunAtLoad` false
 
-模板 plist 可参考 `scripts/com.tradingagents.tplus5-shadow.plist`
-（同为"交易日批后"语义）。安装前必须经发布流程签字，本卡不安装。
+模板 plist 可参考 `scripts/com.tradingagents.tplus5-shadow.plist`。
+安装前必须经发布流程签字，本卡不安装。
 
 ## 验证
 
 ```bash
-# 干跑（非交易日或周末也应能 --force-weekday 手动跑通）
-python scripts/ta_snapshot.py --date 2026-10-05 --force-weekday
-# 输出 JSON 含 snapshot 路径、字节数、total_snapshots、over_retention 标记
+# 手动跑一个交易日（例：2026-09-30）
+python scripts/ta_snapshot.py --date 2026-09-30
+# 输出 JSON 含 snapshot / current_db / deleted / snapshots 清单
 ```
