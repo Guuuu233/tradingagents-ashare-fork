@@ -5534,12 +5534,74 @@ async def analyze(
 
 def _require_job_owner(job_id: str, current_user: UserDB) -> Dict[str, Any]:
     job = _get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job not found")
-    owner_id = job.get("user_id")
-    if owner_id and owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="job not found")
-    return job
+    if job:
+        owner_id = job.get("user_id")
+        if owner_id and owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+    return _terminal_job_from_report(job_id, current_user)
+
+
+def _terminal_job_from_report(job_id: str, current_user: UserDB) -> Dict[str, Any]:
+    """DAV-1427: synthesize a terminal job dict from the reports row (report.id == job_id).
+
+    Job store entries expire after the terminal TTL; the persisted report row is
+    the source of truth for a completed/failed job's terminal state. Orphaned
+    pending/running rows (job store entry already gone) are finalized to failed.
+    Raises 404 when neither the store nor the reports table knows the id, or the
+    row belongs to another user.
+    """
+    try:
+        with get_db_ctx() as db:
+            report = report_service.get_report(db, job_id, user_id=current_user.id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            if str(report.status or "") in report_service.ACTIVE_REPORT_STATUSES:
+                # Job store entry is gone but the row never reached a terminal
+                # state — the run was interrupted; finalize like
+                # /v1/reports/{id} does instead of reporting a phantom active job.
+                report = report_service.finalize_orphan_report(db, report)
+            # Snapshot the finalized fields inside the session so expired ORM
+            # attributes are not re-fetched after the context closes.
+            snap = {
+                "status": report.status or "failed",
+                "created_at": report.created_at,
+                "updated_at": report.updated_at,
+                "symbol": report.symbol,
+                "trade_date": report.trade_date,
+                "error": report.error,
+                "decision": report.decision,
+                "result_data": report.result_data,
+                "user_id": report.user_id,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:  # DB unavailable — preserve 404 semantics
+        logger.warning("_terminal_job_from_report(%s) fallback query failed: %s", job_id, exc)
+        raise HTTPException(status_code=404, detail="job not found") from exc
+
+    def _iso(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
+    return {
+        "job_id": job_id,
+        "user_id": snap["user_id"],
+        "status": snap["status"],
+        "created_at": _iso(snap["created_at"]) or _utcnow_iso(),
+        "started_at": None,
+        "finished_at": _iso(snap["updated_at"]),
+        "symbol": snap["symbol"],
+        "trade_date": snap["trade_date"],
+        "error": snap["error"],
+        "decision": snap["decision"],
+        "result": snap["result_data"],
+        "overtime": False,
+        "overtime_at": None,
+    }
 
 
 @app.get("/v1/jobs/{job_id}", response_model=JobStatusResponse)

@@ -1334,3 +1334,161 @@ class TestScheduledBatchEndpoints:
         assert second_args[2]
         assert first_kwargs == {}
         assert second_kwargs == {}
+
+
+class TestJobStatusAfterStoreExpiry:
+    """DAV-1427: /v1/jobs/{id} must serve terminal state from the reports table
+    after the job-store entry expires (or was never persisted), instead of 404.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, request):
+        self.client = _get_client()
+        request.addfinalizer(self.client.close)
+        self.token = _auth_unique(self.client)
+        self.headers = {"Authorization": f"Bearer {self.token}"}
+
+    def _current_user_id(self) -> str:
+        return self.client.get("/v1/auth/me", headers=self.headers).json()["id"]
+
+    def _seed_report(self, job_id: str, user_id: str, **kwargs):
+        from api.database import ReportDB, get_db_ctx
+
+        now = datetime.now(timezone.utc)
+        with get_db_ctx() as db:
+            db.add(
+                ReportDB(
+                    id=job_id,
+                    user_id=user_id,
+                    symbol=kwargs.get("symbol", "600519.SH"),
+                    trade_date=kwargs.get("trade_date", "2024-01-15"),
+                    status=kwargs.get("status", "completed"),
+                    error=kwargs.get("error"),
+                    decision=kwargs.get("decision"),
+                    result_data=kwargs.get("result_data"),
+                    created_at=kwargs.get("created_at", now),
+                    updated_at=kwargs.get("updated_at", now),
+                )
+            )
+            db.commit()
+
+    def _evict_store_job(self, job_id: str) -> None:
+        from api.main import get_job_store
+
+        get_job_store().delete_job(job_id)
+
+    def test_completed_job_survives_store_eviction(self):
+        """Reports-row terminal state replaces the expired job-store entry."""
+        job_id = uuid4().hex
+        finished = datetime.now(timezone.utc)
+        self._seed_report(
+            job_id,
+            self._current_user_id(),
+            status="completed",
+            decision="BUY",
+            result_data={"symbol": "600519.SH", "decision": "BUY"},
+            updated_at=finished,
+        )
+        # Seed the store so the test exercises the eviction path explicitly.
+        from api.main import _set_job
+
+        _set_job(job_id, status="completed", created_at=finished.isoformat())
+        self._evict_store_job(job_id)
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["job_id"] == job_id
+        assert body["status"] == "completed"
+        assert body["symbol"] == "600519.SH"
+        assert body["trade_date"] == "2024-01-15"
+        assert body["finished_at"] is not None
+
+    def test_job_result_reads_from_reports_row(self):
+        """/result returns the persisted result payload, not a 404."""
+        job_id = uuid4().hex
+        result_data = {"symbol": "600519.SH", "decision": "HOLD", "direction": "NEUTRAL"}
+        self._seed_report(
+            job_id,
+            self._current_user_id(),
+            status="completed",
+            decision="HOLD",
+            result_data=result_data,
+        )
+
+        r = self.client.get(f"/v1/jobs/{job_id}/result", headers=self.headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "completed"
+        assert body["decision"] == "HOLD"
+        assert body["result"]["symbol"] == "600519.SH"
+
+    def test_failed_job_terminal_state_from_reports_row(self):
+        job_id = uuid4().hex
+        self._seed_report(
+            job_id,
+            self._current_user_id(),
+            status="failed",
+            error="RuntimeError: calendar unavailable",
+        )
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "failed"
+        assert body["error"] == "RuntimeError: calendar unavailable"
+
+        # /result on a non-completed terminal job keeps the 409 contract.
+        r2 = self.client.get(f"/v1/jobs/{job_id}/result", headers=self.headers)
+        assert r2.status_code == 409
+
+    def test_orphan_active_report_finalized_to_failed(self):
+        """A pending/running report row whose job-store entry is gone is an
+        interrupted run — the endpoint must resolve it to failed, not return
+        a phantom non-terminal status or 404."""
+        job_id = uuid4().hex
+        self._seed_report(job_id, self._current_user_id(), status="running")
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "failed"
+        assert body["error"]
+
+        # The finalize is persisted, so a second read stays failed.
+        from api.database import ReportDB, get_db_ctx
+
+        with get_db_ctx() as db:
+            row = db.query(ReportDB).filter(ReportDB.id == job_id).one()
+            assert row.status == "failed"
+
+    def test_truly_unknown_job_id_still_404(self):
+        r = self.client.get(f"/v1/jobs/{uuid4().hex}", headers=self.headers)
+        assert r.status_code == 404
+
+    def test_other_users_report_row_is_not_leaked(self):
+        """A report row owned by someone else must still 404 for this user."""
+        job_id = uuid4().hex
+        self._seed_report(job_id, user_id="someone-else", status="completed")
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        assert r.status_code == 404
+
+    def test_inflight_job_unaffected_by_fallback(self):
+        """An in-memory running job still returns its live store state."""
+        from api.main import _set_job
+
+        job_id = uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        _set_job(
+            job_id,
+            user_id=self._current_user_id(),
+            status="running",
+            created_at=now,
+            symbol="600519.SH",
+            trade_date="2024-01-15",
+        )
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+        assert r.status_code == 200
+        assert r.json()["status"] == "running"
