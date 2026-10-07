@@ -451,9 +451,13 @@ def _version_key(rec: Mapping[str, Any]) -> str:
     return "unversioned"
 
 
+# DAV-1498: production verdicts may carry the graded forms 偏多/偏空
+# (decision_status.py treats them as first-class DIRECTION_BULL/BEAR and
+# passes them through verbatim); bucket them with 看多/看空 so §1 does not
+# systematically under-count directional signals into 无结论.
 _DIRECTION_BUCKETS = (
-    ("看多", ("看多", "BUY", "BULL", "增持", "买入")),
-    ("看空", ("看空", "SELL", "BEAR", "减持", "卖出")),
+    ("看多", ("看多", "偏多", "BUY", "BULL", "增持", "买入")),
+    ("看空", ("看空", "偏空", "SELL", "BEAR", "减持", "卖出")),
     ("中性", ("中性", "NEUTRAL", "HOLD", "持有")),
 )
 
@@ -725,6 +729,8 @@ def build_report(
     out.append("")
 
     out.append("## 1. 中线方向分布（按版本队列）")
+    out.append("")
+    out.append("> 口径：偏多并入「看多」、偏空并入「看空」桶统计。")
     out.append("")
     out.append(_md_table(
         ("版本队列", "总数", "看多", "看空", "中性", "无结论"), dir_rows))
