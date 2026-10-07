@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import re
+from collections import OrderedDict
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from tradingagents.dataflows.providers.industry_linkage_provider import _query_tushare_api
@@ -63,8 +64,30 @@ class SwIndexWindowReturn:
         }
 
 
-# Process-local cache for sw_daily window frames: (index_code, start, end) -> {date: bar}
-_SW_DAILY_MEMO: Dict[Tuple[str, str, str], Dict[str, Dict[str, Any]]] = {}
+# Process-local cache for sw_daily window frames: (index_code, start, end) -> {date: bar}.
+# DAV-1493: bounded LRU — unbounded growth under long-running measurement runs
+# wastes memory and keys carrying exact window bounds rarely repeat. The cap
+# only controls retention; fail-closed semantics are unchanged.
+_SW_DAILY_MEMO_MAX_ENTRIES: int = 64
+_SW_DAILY_MEMO: "OrderedDict[Tuple[str, str, str], Dict[str, Dict[str, Any]]]" = OrderedDict()
+
+
+def _memo_get(key: Tuple[str, str, str]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """LRU lookup: refreshes recency; returns None on miss (distinct from a
+    cached ``{}`` empty-window result, which is a valid negative cache hit)."""
+    try:
+        value = _SW_DAILY_MEMO.pop(key)
+    except KeyError:
+        return None
+    _SW_DAILY_MEMO[key] = value
+    return value
+
+
+def _memo_put(key: Tuple[str, str, str], value: Dict[str, Dict[str, Any]]) -> None:
+    _SW_DAILY_MEMO[key] = value
+    _SW_DAILY_MEMO.move_to_end(key)
+    while len(_SW_DAILY_MEMO) > _SW_DAILY_MEMO_MAX_ENTRIES:
+        _SW_DAILY_MEMO.popitem(last=False)  # evict least-recently-used
 
 
 def _iso_to_tushare(d: str) -> str:
@@ -87,8 +110,9 @@ def default_sw_daily_fetcher(
     Raises ValueError with a deterministic reason id on any failure.
     """
     key = (index_code, _iso_to_tushare(start_date), _iso_to_tushare(end_date))
-    if key in _SW_DAILY_MEMO:
-        return _SW_DAILY_MEMO[key]
+    hit = _memo_get(key)
+    if hit is not None:
+        return hit
 
     frame, category, _note = _query_tushare_api(
         "sw_daily",
@@ -97,7 +121,7 @@ def default_sw_daily_fetcher(
         params={"start_date": key[1], "end_date": key[2]},
     )
     if category == "empty_rows":
-        _SW_DAILY_MEMO[key] = {}
+        _memo_put(key, {})
         return {}
     if category or frame is None:
         # Never echo provider notes: they may contain endpoint/credential material.
@@ -125,7 +149,7 @@ def default_sw_daily_fetcher(
         if d_iso in out and out[d_iso] != bar:
             raise ValueError("sw_daily_conflicting_rows")
         out[d_iso] = bar
-    _SW_DAILY_MEMO[key] = out
+    _memo_put(key, out)
     return out
 
 

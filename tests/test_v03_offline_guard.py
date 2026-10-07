@@ -661,3 +661,100 @@ def test_dav1054_bar_dates_reject_time_suffix(tmp_path, suffixed):
         OfflineSnapshotPriceDataProvider(
             snapshot_path=str(snap), forward_oos_end_date=FWD_END
         )
+
+
+# ---------------------------------------------------------------------------
+# DAV-1493: bounded _SW_DAILY_MEMO LRU cap + bare-run legacy deprecation label
+# ---------------------------------------------------------------------------
+
+
+def test_dav1493_sw_daily_memo_lru_eviction_still_correct(monkeypatch):
+    """After _SW_DAILY_MEMO exceeds its cap, least-recently-used entries are
+    evicted and re-fetched — values stay correct and fail-close paths are
+    unchanged."""
+    import pandas as pd
+    import tradingagents.dataflows.sw_benchmark as sw_mod
+    from tradingagents.dataflows.sw_benchmark import (
+        _SW_DAILY_MEMO,
+        _SW_DAILY_MEMO_MAX_ENTRIES,
+        default_sw_daily_fetcher,
+    )
+
+    _SW_DAILY_MEMO.clear()
+    calls: list = []
+
+    def fake_query(api, **kwargs):
+        calls.append((api, kwargs["params"]["start_date"]))
+        df = pd.DataFrame([
+            {
+                "ts_code": kwargs["ts_code"],
+                "trade_date": kwargs["params"]["start_date"],
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.05,
+            }
+        ])
+        return df, None, None
+
+    monkeypatch.setattr(sw_mod, "_query_tushare_api", fake_query)
+    try:
+        # Fill the memo past its cap with distinct keys.
+        total = _SW_DAILY_MEMO_MAX_ENTRIES + 5
+        for i in range(total):
+            default_sw_daily_fetcher(f"8{i:05d}.SI", "2026-03-05", "2026-03-12")
+        assert len(_SW_DAILY_MEMO) == _SW_DAILY_MEMO_MAX_ENTRIES
+
+        # An evicted key is re-fetched and still returns the correct frame.
+        _SW_DAILY_MEMO.clear()
+        calls.clear()
+        first = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert first["2026-03-05"]["open"] == 1.0
+        hits_after_first = len(calls)
+        cached = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert cached == first
+        assert len(calls) == hits_after_first  # served from memo, no refetch
+
+        # Eviction path: overflow once more and confirm the oldest entry is
+        # gone while a freshly re-fetched value is still correct.
+        for i in range(total):
+            default_sw_daily_fetcher(f"9{i:05d}.SI", "2026-03-05", "2026-03-12")
+        assert len(_SW_DAILY_MEMO) == _SW_DAILY_MEMO_MAX_ENTRIES
+        calls.clear()
+        refetched = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert refetched == first  # evicted -> refetched -> identical result
+        assert len(calls) == 1
+    finally:
+        _SW_DAILY_MEMO.clear()
+
+
+def test_dav1493_bare_run_marks_legacy_and_warns(capsys):
+    """总控裁定 first step: a bare run (no --horizon-key/--eval-offset) still
+    defaults to 'legacy' (non-breaking) but emits a loud deprecation warning,
+    and the resolved label is what gets written into the output manifest."""
+    import argparse
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "run_v03_return_measure",
+        PROJECT_ROOT / "scripts" / "run_v03_return_measure.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    args = argparse.Namespace(
+        horizon_key=None, eval_offset_from_signal=None, hold_days=None
+    )
+    horizon_key, eval_offset = mod.resolve_horizon_from_args(args)
+    assert horizon_key == "legacy"
+    assert eval_offset == 6
+    err = capsys.readouterr().err
+    assert "DEPRECATED" in err and "legacy" in err
+
+    # Explicit flags do not warn.
+    args2 = argparse.Namespace(
+        horizon_key="medium", eval_offset_from_signal=None, hold_days=None
+    )
+    horizon_key2, eval_offset2 = mod.resolve_horizon_from_args(args2)
+    assert (horizon_key2, eval_offset2) == ("medium", 40)
+    assert capsys.readouterr().err == ""

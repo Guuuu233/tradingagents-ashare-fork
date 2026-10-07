@@ -227,7 +227,10 @@ DEFAULT_HOLD_DAYS: int = 5  # DEPRECATED (V-03a): kept for CLI back-compat only
 DEFAULT_BENCHMARK_SYMBOL: str = "000300.SH"
 # Reports generated materially after their signal date (created_at - trade_date
 # > BACKFILL_CREATED_AT_LAG_DAYS calendar days) are tagged cohort_tag=backfill
-# (D-067 cohort isolation); otherwise 'live'.
+# (D-067 cohort isolation); reports generated before their signal date
+# (created_at date < trade_date, e.g. previous-evening runs) are tagged
+# cohort_tag=pre_signal (DAV-1493 总控裁定: third state for the lag=-1 class);
+# everything else is 'live'.
 BACKFILL_CREATED_AT_LAG_DAYS: int = 2
 DEFAULT_TARGET_USER_ID: str = "429163f7-50b6-4982-8bdf-96ae99506843"
 DEFAULT_STATUS_FILTER: str = "completed"
@@ -661,6 +664,12 @@ class SnapshotManifest:
         default_factory=lambda: f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}"
     )
     horizon_profile: str = "T+5"
+    # DAV-1493 (总控裁定 first step): canonical horizon key ('short'/'medium'/
+    # 'legacy') and the eval offset actually used, so every V-03b output record
+    # can be traced back to the exact return-window convention it was measured
+    # under (stdout alone is not a durable label).
+    horizon_key: str = "legacy"
+    eval_offset_from_signal: int = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
     cost_assumptions: Dict[str, float] = field(default_factory=dict)
     system_completeness: Dict[str, Any] = field(
         default_factory=lambda: dict(SYSTEM_COMPLETENESS_DICT)
@@ -735,7 +744,7 @@ class SampleMeasureRecord:
     performance_category: str = "evaluated"
 
     # V-03b extensions (DAV-1479 P2) — prediction / research / industry legs
-    cohort_tag: str = "live"  # live | backfill (D-067 cohort isolation)
+    cohort_tag: str = "live"  # live | pre_signal | backfill (D-067 cohort isolation)
     target_calendar_date: Optional[str] = None  # standard window anchor (no roll)
     # Prediction basis: T+1 open -> target_calendar_date close, NO roll
     prediction_entry_price: Optional[float] = None
@@ -760,7 +769,6 @@ class SampleMeasureRecord:
     sw_execution_window_end: Optional[str] = None
     sw_execution_status: Optional[str] = None
     y_rel: Optional[bool] = None  # 1[R_stock - R_SW > 0] on prediction window
-    r_stock_prediction: Optional[float] = None
 
     def to_audit_row(self) -> Dict[str, Any]:
         """Convert record to strict 25-field offline audit format (V-03a-3 Section 2)."""
@@ -1721,14 +1729,22 @@ class OfflineSnapshotPriceDataProvider:
 def classify_cohort_tag(trade_date: str, created_at: Any) -> str:
     """Return 'backfill' when created_at lags trade_date by more than the frozen
     threshold (D-067 cohorts are batch-generated long after the signal day),
-    otherwise 'live'. Unparseable timestamps fail closed to 'live' (the strict
-    majority class) rather than fabricating a backfill claim."""
+    'pre_signal' when the report was generated strictly before its signal date
+    (DAV-1493: previous-evening runs, e.g. trade_date=08-04 / created_at=08-03
+    19:01 — the signal day had not opened yet), otherwise 'live'.
+    Unparseable timestamps fail closed to 'live' (the strict majority class)
+    rather than fabricating a backfill or pre_signal claim."""
     try:
         td = datetime.strptime(str(trade_date).strip()[:10], "%Y-%m-%d").date()
         ca = datetime.strptime(str(created_at).strip()[:19], "%Y-%m-%d %H:%M:%S").date()
     except Exception:
         return "live"
-    return "backfill" if (ca - td).days > BACKFILL_CREATED_AT_LAG_DAYS else "live"
+    lag = (ca - td).days
+    if lag > BACKFILL_CREATED_AT_LAG_DAYS:
+        return "backfill"
+    if lag < 0:
+        return "pre_signal"
+    return "live"
 
 
 def calculate_roll_days(trade_date_str: str, entry_date_str: str) -> int:
@@ -1953,6 +1969,16 @@ class V03ReturnMeasureEngine:
                 "eval_offset_from_signal / horizon_key instead.",
                 DeprecationWarning,
                 stacklevel=2,
+            )
+            # DAV-1493: mirror the deprecation into the logger —
+            # DeprecationWarning is filtered out under default -W settings, so
+            # internal batch callers bypassing the CLI would see nothing.
+            logger.warning(
+                "hold_days=%r is DEPRECATED (V-03a); mapped to "
+                "eval_offset_from_signal=%s. Pass eval_offset_from_signal / "
+                "horizon_key instead.",
+                hold_days,
+                int(hold_days) + 1,
             )
             if eval_offset_from_signal != DEFAULT_EVAL_OFFSET_FROM_SIGNAL:
                 raise ValueError(
@@ -2538,7 +2564,6 @@ class V03ReturnMeasureEngine:
         rec.prediction_exit_price = round(pred_exit_px, 4) if pred_exit_px is not None else None
         rec.prediction_return = round(pred_ret, 6) if pred_ret is not None else None
         rec.prediction_outcome_status = pred_status
-        rec.r_stock_prediction = rec.prediction_return
 
         # 4. Research basis: T close -> target close. research_-prefixed only.
         res_status: Optional[str]
@@ -3079,6 +3104,8 @@ class V03ReturnMeasureEngine:
             temperature=0.0,
             prompt_hash=f"{BASELINE_GLOBAL_PROMPT_HASH}@{get_code_prompt_sha()}",
             horizon_profile=f"T+{self.eval_offset_from_signal}",
+            horizon_key=self.horizon_profile_key,
+            eval_offset_from_signal=self.eval_offset_from_signal,
             cost_assumptions={
                 "commission_rate": self.cost_model.commission_rate,
                 "transfer_fee_rate": self.cost_model.transfer_fee_rate,
@@ -3724,6 +3751,17 @@ def main() -> None:
         )
     else:
         eval_offset = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
+    # DAV-1493: warn on bare runs defaulting to the retired 'legacy' window;
+    # the durable label lives in SnapshotManifest.horizon_key (see engine).
+    if not args.horizon_key and args.eval_offset_from_signal is None:
+        print(
+            f"WARNING: no --horizon-key/--eval-offset-from-signal given; "
+            f"defaulting to DEPRECATED 'legacy' window "
+            f"(eval_offset_from_signal=T+{eval_offset}, retired V-03a parity). "
+            f"Second-phase callers must pass --horizon-key short|medium "
+            f"explicitly.",
+            file=sys.stderr,
+        )
     print(f"Horizon: key={horizon_key}, eval_offset_from_signal=T+{eval_offset}")
 
     user_stats = V03ReturnMeasureEngine.get_user_report_counts(
