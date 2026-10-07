@@ -62,3 +62,25 @@
 - 新增测试：缺日历退 2；A3 构造样本对照 `filter_v2_completed_reports` 管线结果（覆盖 §5 全部反例）。
 
 —— v4 冻结候选稿。请评估师复看；通过后冻结、落实附件并开始改代码。
+
+---
+
+## 修订说明（D-074，2026-10-07 总控裁定，针对候选 d1a4a73d 打回返修）
+
+按总控 A3 有效场次定义修订（入 D-074），`a3_session_sides` / `a3_session_effective` 改为两协议并轨：
+
+1. 报告带 battlefield 的（新协议，`protocol_version` 非 v1_legacy 且该侧开场论点含有效战场）：维持 §2 原定义——至少 3 个不同有效开场战场，并 ≥1 条已核实论点；
+2. `protocol_version=v1_legacy` 或该侧开场论点**无有效 battlefield** 的：该方开场论点（`stage='opening'`、该方 `speaker_key`、按 `claim_id` 去重、排除观察与假设类——`is_observation_or_hypothesis_claim` 为真者不计）**至少 3 条**，并且该方至少 1 条已核实论点（§3 冻结谓词不变，两处调用同一函数）；
+3. 新增观察列：该方开场论点 `cluster_type` 种类分布（per-side `Counter`）与**均值**（每单元平均 cluster_type 条数），不判达标；
+4. 其余不变：只在 clean 池计算、最近 50 场比例、各侧 ≥100 条已核实论点、按 cohort 分开。
+
+新增构造样本测试（`tests/test_dav1507_exit_progress.py`）：
+- `test_v1_legacy_opening_claims_count_rule` —— v1 协议 3 条去重开场论点（去 battlefield）+ 已核实 → 有效；2 条 → 无效；
+- `test_v1_legacy_dedup_and_obs_hypo_excluded` —— 同 `claim_id` 重复计 1、`观察：`开头论点不计；
+- `test_v2_battlefield_rule_unchanged` —— v2 仍须 ≥3 不同有效战场；同战场 3 条论点不达标；
+- `test_v2_unit_with_no_battlefield_falls_back_to_claim_count` —— v2 但开场论点无有效战场 → 回落 v1 条数规则；
+- `test_cluster_type_observational_column` —— `cluster_type` 分布/均值观察列输出正确。
+
+内存口径沿用：SQLite `PRAGMA cache_size=-65536` + `mmap_size=0`，`/usr/bin/time -l` peak footprint 实测 ≤4 GB（上一版 1.97 GB，本改动不新增大对象、不保留 unit payload）。
+
+本文档当前 SHA-256：见交付评论（自引 hash 无法在文内保持不动点；冻结基线 `65bd584b72b2bc8a1e1dcf808f8a5fb00de9c2225c551da12307a4a835e3c5ee` 对应本文件修订前版本）。

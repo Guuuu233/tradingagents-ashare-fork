@@ -322,16 +322,36 @@ def _side_of_claim(claim, lib):
 
 
 def a3_session_sides(unit, lib):
-    """Return {side: (battlefields, verified_claim_count, has_verified_claim)}.
+    """Per-side session stats for ONE clean unit (D-074 amendment).
 
-    Effective-session test for ONE clean unit: per side, distinct valid
-    opening battlefields >= 3 AND >= 1 claim satisfying is_verified_claim.
+    Effective-session rule, per side:
+    - v2 protocol (opening claims carry battlefield): ≥3 distinct
+      VALID_BATTLEFIELDS opening battlefields AND ≥1 Verified Claim;
+    - v1_legacy OR the side's opening claims lack battlefield entirely:
+      ≥3 distinct opening claims (stage='opening', side's speaker_key,
+      dedup by claim_id, excluding observation/hypothesis) AND ≥1
+      Verified Claim under the frozen is_verified_claim predicate.
+
+    Also collects the side's opening-claim cluster_type multiset
+    (observation-only distribution, not judged).
     """
-    _ids, claims, ev, summary = _unit_debate_payload(unit)
+    ids, claims, ev, summary = _unit_debate_payload(unit)
     ev_by = _ev_items_by_claim(ev)
     fields = lib["VALID_BATTLEFIELDS"]
-    out = {"bull": {"battlefields": set(), "verified_claims": 0, "has_verified_claim": False},
-           "bear": {"battlefields": set(), "verified_claims": 0, "has_verified_claim": False}}
+    # Protocol of this unit (v1 vs v2) from its debate state / unit payload.
+    try:
+        from tradingagents.agents.utils.agent_states import get_protocol_metadata
+        proto = get_protocol_metadata({
+            "investment_debate_state": ids,
+            "protocol_version": unit.get("protocol_version"),
+        }).get("protocol_version") or "v1_legacy"
+    except Exception:
+        proto = unit.get("protocol_version") or "v1_legacy"
+    out = {s: {"battlefields": set(), "verified_claims": 0,
+               "has_verified_claim": False,
+               "opening_claim_ids": set(),      # distinct opening claim_ids (non-obs/hypo)
+               "opening_cluster_types": [],      # multiset of cluster_type values
+               "protocol": proto} for s in ("bull", "bear")}
     seen = set()
     for c in claims:
         if not isinstance(c, dict):
@@ -343,6 +363,14 @@ def a3_session_sides(unit, lib):
             bf = str(c.get("battlefield") or "").strip()
             if bf in fields:
                 out[side]["battlefields"].add(bf)
+            # v1-style opening claim counting: dedup by claim_id, skip
+            # observation/hypothesis claims (they are not real positions).
+            cid = _claim_key(c)
+            if cid and not lib["is_observation_or_hypothesis_claim"](c):
+                out[side]["opening_claim_ids"].add(cid)
+            ct = str(c.get("cluster_type") or "").strip()
+            if ct:
+                out[side]["opening_cluster_types"].append(ct)
         cid = _claim_key(c)
         if cid and cid not in seen:
             seen.add(cid)
@@ -353,7 +381,16 @@ def a3_session_sides(unit, lib):
 
 
 def a3_session_effective(side_stats):
-    return len(side_stats["battlefields"]) >= 3 and side_stats["has_verified_claim"]
+    """D-074: v2 → ≥3 distinct valid opening battlefields + ≥1 verified;
+    v1_legacy / no-battlefield → ≥3 distinct non-obs/hypo opening claims
+    + ≥1 verified. Protocol recorded on the stats dict by a3_session_sides."""
+    proto = side_stats.get("protocol")
+    n_bf = len(side_stats["battlefields"])
+    n_opening_claims = len(side_stats["opening_claim_ids"])
+    has_ver = side_stats["has_verified_claim"]
+    if proto == "v1_legacy" or n_bf == 0:
+        return n_opening_claims >= 3 and has_ver
+    return n_bf >= 3 and has_ver
 
 
 def _loose_verified_counts(unit, lib):
@@ -390,6 +427,10 @@ def a3_unit_stats(unit, lib):
         "loose": loose,
         "opening_claims": len(opening),
         "opening_missing_battlefield": missing_bf,
+        # observational: per-side opening-claim cluster_type multiset
+        "opening_cluster_types": {s: sides[s]["opening_cluster_types"]
+                                  for s in ("bull", "bear")},
+        "protocol": sides["bull"]["protocol"],
     }
 
 
@@ -418,6 +459,14 @@ def metric_a3(clean_unit_stats, lib):
         ne = sum(1 for i in tail if i["eff"]["bear"])
         denom = nb + ne
         share = (nb / denom * 100) if denom else None
+        # observational: cluster_type diversity on each side's opening claims
+        ct_dist, ct_mean = {}, {}
+        for s in ("bull", "bear"):
+            counts = Counter()
+            for i in items:
+                counts.update(i.get("opening_cluster_types", {}).get(s) or [])
+            ct_dist[s] = dict(counts)
+            ct_mean[s] = round(sum(counts.values()) / len(items), 2) if items else 0
         per_cohort[cohort] = {
             "clean_units": len(items),
             "effective_sessions": {"bull": bull_sessions, "bear": bear_sessions,
@@ -434,6 +483,9 @@ def metric_a3(clean_unit_stats, lib):
                 "ratio_in_[40,60]": (40.0 <= share <= 60.0) if share is not None else None,
             },
             "observed_abs_diff_cumulative": abs(bull_sessions - bear_sessions),
+            "observed_opening_cluster_type_diversity": ct_dist,
+            "observed_opening_cluster_type_mean_per_unit": ct_mean,
+            "protocol_mix": dict(Counter(i.get("protocol") for i in items)),
             "data_health": {
                 "opening_claims": opening_total,
                 "opening_missing_or_invalid_battlefield": missing_bf,
@@ -605,7 +657,11 @@ def render_markdown(summary, meta):
             row(f"A3 · `{cohort}`", "各侧场次≥25；窗口比∈[40,60]；各侧已核实≥100",
                 f"clean {c['clean_units']}；场次 多{c['effective_sessions']['bull']}/空{c['effective_sessions']['bear']}；"
                 f"已核实 多{c['verified_claims']['bull']}/空{c['verified_claims']['bear']}；"
-                f"窗口比 {w['bull_share_pct']}%（{w['n']} 场）",
+                f"窗口比 {w['bull_share_pct']}%（{w['n']} 场）；"
+                f"开场 cluster_type 种类 多{len(c['observed_opening_cluster_type_diversity']['bull'])}/"
+                f"空{len(c['observed_opening_cluster_type_diversity']['bear'])}"
+                f"（均值 {c['observed_opening_cluster_type_mean_per_unit']['bull']}/"
+                f"{c['observed_opening_cluster_type_mean_per_unit']['bear']}）",
                 f"场次差 {c['effective_sessions']['gap_to_25']}；论点差 {c['verified_claims']['gap_to_100']}",
                 "✅/❌ 见读数")
     else:
