@@ -19,7 +19,7 @@ approved by 总控 2026-10-05). Deliverables covered:
      factor scores (mom120s20, value, lowvol, small, large, composite),
      y_rel-binary control, and simulated scores at true IC
      {0,.02,.05,.08,.12}; ACF/PACF 1..120, Ljung-Box {20,40,80,120},
-     Newey-West {40,60,80,120,Andrews-auto}, moving-block bootstrap
+     Newey-West {40,60,80,120,AR(1) plug-in auto}, moving-block bootstrap
      {40,60,80,120}, long-run n_eff; calendar-aligned (missing days stay NaN).
   D3 style explanatory power: per-day OLS r_rel ~ 1 + z(size,value,mom,vol),
      mean/median R², residualised D1/D2, 前2/3估→后1/3 OOS R².
@@ -219,6 +219,11 @@ def newey_west_se(series: np.ndarray, max_lag: int) -> float:
 
 
 def nw_auto_bandwidth(series: np.ndarray) -> int:
+    """AR(1) plug-in bandwidth: round(1.1447*(|ACF1|*n)^(1/3)).
+
+    Motivated by the Andrews(1991) AR(1) approximating model for the Bartlett
+    kernel, but NOT the full Andrews estimator (no kernel-specific weights or
+    parametric fit); kept only as a reference number, not an optimal band."""
     x = np.asarray(series, dtype=float)
     x = x[~np.isnan(x)]
     n = len(x)
@@ -415,8 +420,13 @@ class PairCorrAcc:
             return {"groups": 0}
         return {"groups": len(self.acc),
                 "pairs": int(npairs_tot),
+                # equal = per-pair rho averaged within group, then equal
+                #   weight across groups; pair_weight = each pair weighted
+                #   by its co-occurrence day count
                 "mean_rho_equal_weight": float(np.mean(eq)),
                 "mean_rho_pair_weight": float(wsum / max(wpairs, 1)),
+                # median across groups of the mean co-occurrence days per
+                #   pair (NOT the median days across all pair obs)
                 "median_pair_days": float(np.median(pdays))}
 
 
@@ -918,6 +928,18 @@ def main() -> int:
         gc.collect()
         log(f"pass3 year={year} rss={peak_rss_gb():.2f}GB")
 
+    # persist D1 pair-level accumulator detail (reviewer: D1 明细未持久化)
+    pair_detail = []
+    for gname, acc in (("all", all_acc), ("industry", ind_acc),
+                       ("style_4x10", style_acc), ("coarse_25", coarse_acc)):
+        for gkey, mp in acc.acc.items():
+            pair_detail.append({"group_kind": gname, "group": gkey,
+                                "n_pairs": int(len(mp)),
+                                "pair_days_sum": float(mp.iloc[:, 5].sum()),
+                                "pair_days_mean": float(mp.iloc[:, 5].mean())})
+    pd.DataFrame(pair_detail).to_parquet(
+        out_dir / "d1_pair_detail.parquet", index=False)
+
     # =====================================================================
     # Aggregate & persist
     # =====================================================================
@@ -952,8 +974,16 @@ def main() -> int:
         "by_industry": ind_acc.summary(),
         "by_style_bucket_4x10": style_acc.summary(),
         "by_size_value_25": coarse_acc.summary(),
-        "main_window_20190603": _subset_d1(day_df, MAIN_START),
-        "sensitivity_20160101": _subset_d1(day_df, LONG_START),
+        "main_window_20190603": {**_subset_d1(day_df, MAIN_START),
+                                  "estimator": ("fixed half-split "
+                                                "cross-sectional Pearson "
+                                                "variant (NOT the pair-level "
+                                                "co-occurrence estimator)")},
+        "sensitivity_20160101": {**_subset_d1(day_df, LONG_START),
+                                  "estimator": ("fixed half-split "
+                                                "cross-sectional Pearson "
+                                                "variant (NOT the pair-level "
+                                                "co-occurrence estimator)")},
         "estimator": ("pair-level Pearson over co-occurrence days "
                       "(Σr_i,Σr_j,Σr_i²,Σr_j²,Σr_i·r_j accumulated per "
                       "unordered pair)"),
@@ -1129,7 +1159,7 @@ def main() -> int:
     for thr in N_LIST:
         valid = day_n[day_n >= thr].index
         icv = comp.loc[comp.index.isin(valid), "ic"].dropna().to_numpy()
-        d6_minn.append({"min_n": thr, "valid_days": int(len(valid)),
+        d6_minn.append({"min_n": thr, "valid_days": len(valid),
                         "coverage": float(len(valid) / max(len(day_n), 1)),
                         "ic_mean": float(np.nanmean(icv)),
                         "ic_std": float(np.nanstd(icv)),
@@ -1158,7 +1188,7 @@ def main() -> int:
     for wname, wdf in windows.items():
         comp_w = comp.loc[comp.index.isin(wdf["signal_date"])]
         win_out[wname] = {
-            "days": int(len(wdf)),
+            "days": len(wdf),
             "panel_rows": int(wdf["n_ok"].sum()),
             "y_nonnull_rows": int(
                 panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
@@ -1174,11 +1204,19 @@ def main() -> int:
             "mkt_y_rel_daymean": float(np.nanmean(wdf["mkt_y"])),
         }
 
-    # paired qfq-vs-raw diff: proper paired SE on the daily diff series
+    # paired qfq-vs-raw diff: inference must use the diff series' OWN
+    # HAC / block-bootstrap SE — overlapping T+40 labels make consecutive
+    # daily diffs strongly autocorrelated (ACF1≈0.998), iid SE is invalid.
     diffs = day_df["paired_diff_qfq_minus_raw"].to_numpy(dtype=float)
     diffs = diffs[~np.isnan(diffs)]
-    paired_se = float(np.nanstd(diffs, ddof=1) / math.sqrt(len(diffs))) \
+    paired_se_iid = float(np.nanstd(diffs, ddof=1) / math.sqrt(len(diffs))) \
         if len(diffs) > 2 else np.nan
+    diff_ac, _ = acf_pacf(diffs, 120)
+    paired_nw = {str(L): newey_west_se(diffs, L) for L in NW_BANDS}
+    paired_neff, paired_rsum = long_run_var(diffs)
+    paired_boot = {str(L): moving_block_bootstrap_se(
+        diffs, L, 400, np.random.default_rng(seed_for(f"pairdiff{L}")))
+        for L in BLOCK_LENS}
     div = {
         "frac_rows_adj_changed": float(day_df["frac_adj_chg"].mean()),
         "mean_r_rel_qfq": float(day_df["mean_r_rel_qfq"].mean()),
@@ -1186,11 +1224,19 @@ def main() -> int:
         "diff_qfq_minus_raw": float(
             day_df["mean_r_rel_qfq"].mean() - day_df["mean_r_rel_raw"].mean()),
         "paired_diff_mean": float(np.nanmean(diffs)),
-        "paired_diff_se": paired_se,
-        "paired_diff_days": int(len(diffs)),
+        "paired_diff_std": float(np.nanstd(diffs, ddof=1)),
+        "paired_diff_se_iid_invalid": paired_se_iid,
+        "paired_diff_acf": {str(k): _n(diff_ac[k]) for k in (1, 20, 40, 60, 80, 120)},
+        "paired_diff_nw_se": paired_nw,
+        "paired_diff_blockboot_se": paired_boot,
+        "paired_diff_n_eff_l49": paired_neff,
+        "paired_diff_rho_sum": paired_rsum,
+        "paired_diff_days": len(diffs),
         "note": ("adj_factor change includes dividends AND splits/送转; "
                  "frac is the cross-day equal-weight mean of per-day share, "
-                 "not a row-level pool share"),
+                 "not a row-level pool share; SE uses Bartlett-HAC on the "
+                 "paired-diff daily series (overlapping labels → strong "
+                 "autocorr, iid SE under-reports ~6x)"),
     }
 
     out = {
@@ -1222,7 +1268,23 @@ def main() -> int:
                    "elapsed_s": out["meta"]["elapsed_s"],
                    "signal_days": out["meta"]["signal_days"],
                    "panel_rows": out["meta"]["panel_rows"],
+                   "signal_date_min": out["meta"]["signal_date_min"],
+                   "signal_date_max": out["meta"]["signal_date_max"],
+                   "min_daily_n_guard": MIN_DAILY_N,
+                   "insufficient_days": out["d6_min_n"]["insufficient_days_lt10"],
+                   "source_sha": _git_sha(),
+                   "env": {"python": _py_version(),
+                           "env_unset_PYTHONPATH": True},
                    "host_mem_gb": 18}, f, indent=1)
+    _write_manifest(out_dir, chunks)
+    selftest_rec = _run_selftest_capture()
+    with open(out_dir / "selftest_log.json", "w") as f:
+        json.dump(selftest_rec, f, ensure_ascii=False, indent=1)
+    # fold selftest outcome into run.json for single-file evidence
+    rj = json.load(open(out_dir / "run.json"))
+    rj["selftest"] = selftest_rec["log"]
+    with open(out_dir / "run.json", "w") as f:
+        json.dump(rj, f, ensure_ascii=False, indent=1)
     write_report(out, aligned, out_dir / "p1-stats-report.md")
     log(f"done {out['meta']['elapsed_s']}s peak={out['meta']['peak_rss_gb']}GB")
     return 0
@@ -1284,6 +1346,62 @@ def _f(v, d=4):
     return f"{v:.{d}f}"
 
 
+def _git_sha() -> str:
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+def _py_version() -> str:
+    import sys
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def _write_manifest(out_dir: Path, chunks_dir: Path) -> None:
+    """Read-only product manifest: file name + sha256 + row counts for every
+    persisted artifact + the 11 input partitions. No market rows."""
+    man = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+           "source_sha": _git_sha(),
+           "out_dir": str(out_dir),
+           "chunks_dir": str(chunks_dir),
+           "files": []}
+    for p in sorted(out_dir.glob("*")):
+        if p.name in ("manifest.json",):
+            continue
+        h = hashlib.sha256(p.read_bytes()).hexdigest()
+        rec = {"file": p.name, "sha256": h, "bytes": p.stat().st_size}
+        if p.suffix == ".parquet":
+            try:
+                rec["rows"] = int(pd.read_parquet(p).shape[0])
+            except Exception:
+                pass
+        man["files"].append(rec)
+    inputs = []
+    for p in sorted(chunks_dir.glob("year=*/data.parquet")):
+        inputs.append({"partition": p.parent.name,
+                       "sha256": hashlib.sha256(p.read_bytes()).hexdigest()})
+    man["input_partitions"] = inputs
+    with open(out_dir / "manifest.json", "w") as f:
+        json.dump(man, f, ensure_ascii=False, indent=1)
+    log(f"wrote {out_dir / 'manifest.json'}")
+
+
+def _run_selftest_capture() -> dict:
+    """Persisted selftest record (synthetic-data checks). Returns the
+    measured values so run.json can carry them too."""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        selftest()
+    txt = buf.getvalue().strip()
+    return {"log": txt, "ran_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+
+
 def write_report(out: dict, aligned: dict, path: Path) -> None:
     m = out["meta"]
     w = out["windows"]
@@ -1301,12 +1419,12 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
          f"{out['d6_min_n']['insufficient_days_lt10']} 天，均排除出 IC 序列）",
          "- 标签：r_stock 为 vendor_qfq 主口径；r_stock_raw 为原始价敏感性列；"
          "r_sw 同窗 T+1 开盘→退出收盘；qfq/raw 配对差见末节",
-         "", "## 1 同日成对相关（r_rel z 乘积，组内两两）", "",
+         "", "## 1 同日成对相关（同股共现日时间序列 Pearson，组内两两）", "",
          "| 组 | 等权 ρ | 对数加权 ρ | 规模 |", "|---|---|---|---|---|"]
     a = out["d1_paircorr"]["all"]
     L.append(f"| 全体 | {_f(a['mean_rho_equal_weight'])} | "
              f"{_f(a['mean_rho_pair_weight'])} | {a.get('pairs',0)} 对 "
-             f"(单日pearson变体 {_f(a['pearson_pairs_variant'])}) |")
+             f"(单日半拆横截面Pearson变体 {_f(a['pearson_pairs_variant'])}) |")
     w = out["d1_paircorr"]["by_week_stratum"]
     L.append(f"| 同周(周层聚合) | {_f(w['mean_rho_equal_weight'])} | "
              f"— | {w['weeks']} 周 |")
