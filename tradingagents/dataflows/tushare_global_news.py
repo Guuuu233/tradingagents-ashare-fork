@@ -17,7 +17,9 @@
   至少保留一条重大事件，其余按分排序，不按天平均）。
 - 缓存：原始池按 (source, date) 存 JSON——历史日期永久有效，当天短 TTL；
   筛选结果按 (analysis_date, lookback_days, policy_version, limit) 缓存。
-  目录为 ``data_cache_dir/tushare_news``（已被 .gitignore 的 data_cache 覆盖）。
+  目录为 ``data_cache_dir/tushare_news``；``data_cache_dir`` 默认位于
+  ``${XDG_STATE_HOME}/tradingagents/data_cache``（可用 ``TA_DATA_CACHE_DIR``
+  覆盖），在发布目录之外、跨发布保留（DAV-1388）。
 """
 
 from __future__ import annotations
@@ -71,10 +73,10 @@ import threading
 TUSHARE_GLOBAL_NEWS_MAX_LOOKBACK_DAYS = 7
 # 单次 get_global_news 冷启动总耗时上限：超时放弃并回落今日投资，
 # 不得阻塞分析流程。
-_GLOBAL_NEWS_BUDGET_S = 180.0  # 实测冷启动分布 72–126s（含 enrich 回补），取 180s 为上限
+_GLOBAL_NEWS_BUDGET_S = 180.0  # 冷启动总预算；d17b0fe5 上线核对实测单次冷启动 131s（fetch 31–38s + enrich 86–110s），留 180s 上限
 # 对新闻网关的全局请求并发上限（429 事故修复：4 份并发冷启动曾
 # 在 4 分钟内触发 21 次 429）
-_GATEWAY_MAX_CONCURRENCY = 8  # 实测：3→113s / 6→76s / 8→64s 且 0 次 429；取 8 使 p95<90s
+_GATEWAY_MAX_CONCURRENCY = 8  # 冷启动路径实测：3→113s / 6→76s / 8→64s 且 0 次 429（含 enrich 回补段）
 _GATEWAY_SEM = threading.BoundedSemaphore(_GATEWAY_MAX_CONCURRENCY)
 
 
@@ -1365,6 +1367,7 @@ def enrich_selected_content(
             cache.put_raw(f"{src}__full", day.isoformat(), rows)
         return rows or []
 
+    _t0 = time.time()
     tasks = [
         (src, day)
         for (src, day) in need_days
@@ -1383,6 +1386,10 @@ def enrich_selected_content(
                     txt = strip_html(r.get("content"))
                     if txt:
                         content_map[k] = txt
+        logger.info(
+            "tushare_news enrich: %d 个回补段耗时 %.1fs（并发上限 %d）",
+            len(tasks), time.time() - _t0, _GATEWAY_MAX_CONCURRENCY,
+        )
 
     for c in list(selected) + list(bench):
         if c["_clean_content"]:
@@ -1432,7 +1439,9 @@ _FILTERED_TODAY_TTL_S = 15 * 60
 
 
 class TushareNewsCache:
-    """本地 data_cache_dir 下 JSON 文件缓存（不进仓库）。"""
+    """本地 JSON 文件缓存：默认在 ``data_cache_dir/tushare_news`` 下，
+    ``data_cache_dir`` 默认在发布目录之外（见 default_config）；可用
+    ``base_dir`` 显式指定（测试用）。"""
 
     def __init__(self, base_dir: Optional[str] = None) -> None:
         config = get_config()
@@ -1468,14 +1477,22 @@ class TushareNewsCache:
         return payload["data"]
 
     def _write(self, path: str, data: Any) -> None:
+        # 多进程安全：tmp 文件名按进程区分，先 flush+fsync 再原子改名，
+        # 并发写者最后落盘者获胜（JSON 快照语义下可接受）。
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"ts": time.time(), "data": data}, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, path)
         except OSError:
             logger.warning("tushare_news cache write failed: %s", path)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     @staticmethod
     def _date_ttl(date_str: str, written_ts: float) -> Optional[float]:
