@@ -131,25 +131,30 @@ BUILTIN_EQUITY_ENTITIES: List[EquityEntity] = [
     #   中兴 (中兴系), 中铁 (中国铁建), 中远 (中远海能), 海控 (601919 + 海康),
     #   海螺 (万科A 房地产段落), 保利 (地产同业 12 家), 三一 (601668), 复星
     #   (300760/601607), 陕煤/国寿/问界/洋河/洛钼/上汽/中铁 (同业报告串味).
-    # Hence standard name only; the extra discriminating keywords listed below
-    # are verified exclusive to their own symbol in the same corpus.
+    # Hence standard name only; the few extra discriminating keywords listed
+    # below are verified exclusive to their own symbol in the same corpus, and
+    # (DAV-1472) keywords that would merely repeat standard_name are omitted
+    # since standard_name already wins at confidence 1.00.
     EquityEntity("002304.SZ", "洋河股份", [], ["洋河股份梦之蓝"]),
     EquityEntity("300274.SZ", "阳光电源", [], ["阳光电源逆变器", "阳光电源储能"]),
     EquityEntity("600031.SH", "三一重工", [], ["三一重工出海"]),
-    EquityEntity("600048.SH", "保利发展", [], ["保利发展"]),
-    EquityEntity("600104.SH", "上汽集团", [], ["上汽集团"]),
-    EquityEntity("600196.SH", "复星医药", [], ["复星医药"]),
-    EquityEntity("600585.SH", "海螺水泥", [], ["海螺水泥"]),
-    EquityEntity("600905.SH", "三峡能源", [], ["三峡能源"]),
-    EquityEntity("600941.SH", "中国移动", [], ["中国移动"]),
-    EquityEntity("601127.SH", "赛力斯", [], ["赛力斯"]),
-    EquityEntity("601225.SH", "陕西煤业", [], ["陕西煤业"]),
-    EquityEntity("601390.SH", "中国中铁", [], ["中国中铁"]),
-    EquityEntity("601628.SH", "中国人寿", [], ["中国人寿"]),
-    EquityEntity("601888.SH", "中国中免", [], ["中国中免"]),
-    EquityEntity("601919.SH", "中远海控", [], ["中远海控"]),
-    EquityEntity("603993.SH", "洛阳钼业", [], ["洛阳钼业"]),
-    EquityEntity("000063.SZ", "中兴通讯", [], ["中兴通讯"]),
+    # DAV-1472 cleanup: keywords that merely repeat standard_name are redundant
+    # (standard_name already binds at confidence 1.00 > keyword 0.90), so the
+    # remaining 13 entries ship an empty keyword list.
+    EquityEntity("600048.SH", "保利发展", [], []),
+    EquityEntity("600104.SH", "上汽集团", [], []),
+    EquityEntity("600196.SH", "复星医药", [], []),
+    EquityEntity("600585.SH", "海螺水泥", [], []),
+    EquityEntity("600905.SH", "三峡能源", [], []),
+    EquityEntity("600941.SH", "中国移动", [], []),
+    EquityEntity("601127.SH", "赛力斯", [], []),
+    EquityEntity("601225.SH", "陕西煤业", [], []),
+    EquityEntity("601390.SH", "中国中铁", [], []),
+    EquityEntity("601628.SH", "中国人寿", [], []),
+    EquityEntity("601888.SH", "中国中免", [], []),
+    EquityEntity("601919.SH", "中远海控", [], []),
+    EquityEntity("603993.SH", "洛阳钼业", [], []),
+    EquityEntity("000063.SZ", "中兴通讯", [], []),
 ]
 
 
