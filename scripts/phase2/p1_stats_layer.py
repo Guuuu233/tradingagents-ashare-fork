@@ -934,7 +934,7 @@ def main() -> int:
                        ("style_4x10", style_acc), ("coarse_25", coarse_acc)):
         for gkey, mp in acc.acc.items():
             pair_detail.append({"group_kind": gname, "group": gkey,
-                                "n_pairs": int(len(mp)),
+                                "n_pairs": len(mp),
                                 "pair_days_sum": float(mp.iloc[:, 5].sum()),
                                 "pair_days_mean": float(mp.iloc[:, 5].mean())})
     pd.DataFrame(pair_detail).to_parquet(
@@ -1192,7 +1192,7 @@ def main() -> int:
         nw_w = {str(L): newey_west_se(icv_w, L) for L in NW_BANDS}
         resid_w = resid_df[resid_df["signal_date"].isin(wdf["signal_date"])]
         win_out[wname] = {
-            "days": int(len(wdf)),
+            "days": len(wdf),
             "panel_rows": int(wdf["n_ok"].sum()),
             "y_nonnull_rows": int(
                 panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
@@ -1283,10 +1283,13 @@ def main() -> int:
                    "min_daily_n_guard": MIN_DAILY_N,
                    "insufficient_days": out["d6_min_n"]["insufficient_days_lt10"],
                    "source_sha": _git_sha(),
+                   "source_dirty": _git_dirty(),
+                   "source_file_sha256": _file_sha256(__file__),
                    "env": {"python": _py_version(),
-                           "env_unset_PYTHONPATH": True},
+                           "env_unset_PYTHONPATH": "PYTHONPATH" not in os.environ,
+                           "deps": _deps_version()},
                    "host_mem_gb": 18}, f, indent=1)
-    _write_manifest(out_dir, chunks)
+    # ---- persist EVERYTHING first, manifest LAST so hashes are final
     selftest_rec = _run_selftest_capture()
     with open(out_dir / "selftest_log.json", "w") as f:
         json.dump(selftest_rec, f, ensure_ascii=False, indent=1)
@@ -1296,6 +1299,7 @@ def main() -> int:
     with open(out_dir / "run.json", "w") as f:
         json.dump(rj, f, ensure_ascii=False, indent=1)
     write_report(out, aligned, out_dir / "p1-stats-report.md")
+    _write_manifest(out_dir, chunks)
     log(f"done {out['meta']['elapsed_s']}s peak={out['meta']['peak_rss_gb']}GB")
     return 0
 
@@ -1367,6 +1371,31 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def _git_dirty() -> bool:
+    import subprocess
+    try:
+        out = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=Path(__file__).resolve().parents[2],
+            stderr=subprocess.DEVNULL).decode().strip()
+        return bool(out)
+    except Exception:
+        return True
+
+
+def _file_sha256(path) -> str:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except Exception:
+        return "unknown"
+
+
+def _deps_version() -> dict:
+    import numpy, pandas, pyarrow
+    return {"numpy": numpy.__version__, "pandas": pandas.__version__,
+            "pyarrow": pyarrow.__version__}
+
+
 def _py_version() -> str:
     import sys
     return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
@@ -1404,7 +1433,8 @@ def _write_manifest(out_dir: Path, chunks_dir: Path) -> None:
 def _run_selftest_capture() -> dict:
     """Persisted selftest record (synthetic-data checks). Returns the
     measured values so run.json can carry them too."""
-    import io, contextlib
+    import contextlib
+    import io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         selftest()
@@ -1450,7 +1480,7 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
         L.append(f"| {name} | {v['days_valid']} | {_f(v['ic_mean'])} | "
                  f"{_f(v['ic_std'])} | {_f(v['acf'].get('1'))} | "
                  f"{_f(v['acf'].get('20'))} | {_f(v['acf'].get('40'))} | "
-                 f"{_f(v['ljung_box_ic'].get(40),1)} | "
+                 f"{_f(v['ljung_box_ic'].get('40'),1)} | "
                  f"{v['newey_west_se_ic'].get('auto_bw_formula')} | "
                  f"{_f(v['n_eff_ic'],0)} |")
     L += ["", "## 3 风格暴露解释力", "",
