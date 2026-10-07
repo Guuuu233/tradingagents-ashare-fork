@@ -6,43 +6,43 @@
 
 ## 一、主干内读取入口（已过 B-1 接线 / 或本就读权威档）
 
-| # | 入口 | 读 `horizons` | 读顶层 `market_data_context` | 经兼容层 | 结论 |
-|---|------|--------------|------------------------------|---------|------|
-| 1 | `api/services/report_service.py::get_report` | 重建 | 重建 | `result_data_compat_view` | 已接（`expunge`+`deepcopy` 后 expand，detached shadow） |
-| 2 | `tradingagents/knowledge/historical_cases.py::extract_claims_from_report` | 是 | 是 | `result_data_compat_view`(L630) | 已接 |
-| 3 | `scheduler/main.py` 通知装载 | 重建 | 重建 | `result_data_compat_view`(L172) | 已接（`expunge` 后） |
-| 4 | `scripts/phase2/daily_snapshot_ledger.py` `_horizon_judgement` / mdc provenance | 是 | 是 | `result_data_compat_view`(L390) | 已接（B-1 接线） |
-| 5 | `scripts/verify_h1b_gates.py` | 否 | 否 | — | 读权威档：`split_report_into_units` 只取 `*_term`；`extract_sample_cohort` 只取 version 键。无需兼容层 |
-| 6 | `scripts/phase2/cache_acceptance.py`（DAV-1546，新入主干） | 否 | 否 | 不适用 | 只审计 pkl 缓存目录，**不读 reports 表**，无关 |
-| 7 | `scripts/dav1507_exit_progress.py` | 否（读 `short_term`/`medium_term`，L608） | 否 | 权威档 | 读 `*_term` 即权威档，无需兼容层 |
+| #   | 入口                                                                            | 读 `horizons`                             | 读顶层 `market_data_context` | 经兼容层                        | 结论                                                                                                   |
+| --- | ------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 1   | `api/services/report_service.py::get_report`                                    | 重建                                      | 重建                         | `result_data_compat_view`       | 已接（`expunge`+`deepcopy` 后 expand，detached shadow）                                                |
+| 2   | `tradingagents/knowledge/historical_cases.py::extract_claims_from_report`       | 是                                        | 是                           | `result_data_compat_view`(L630) | 已接                                                                                                   |
+| 3   | `scheduler/main.py` 通知装载                                                    | 重建                                      | 重建                         | `result_data_compat_view`(L172) | 已接（`expunge` 后）                                                                                   |
+| 4   | `scripts/phase2/daily_snapshot_ledger.py` `_horizon_judgement` / mdc provenance | 是                                        | 是                           | `result_data_compat_view`(L390) | 已接（B-1 接线）                                                                                       |
+| 5   | `scripts/verify_h1b_gates.py`                                                   | 否                                        | 否                           | —                               | 读权威档：`split_report_into_units` 只取 `*_term`；`extract_sample_cohort` 只取 version 键。无需兼容层 |
+| 6   | `scripts/phase2/cache_acceptance.py`（DAV-1546，新入主干）                      | 否                                        | 否                           | 不适用                          | 只审计 pkl 缓存目录，**不读 reports 表**，无关                                                         |
+| 7   | `scripts/dav1507_exit_progress.py`                                              | 否（读 `short_term`/`medium_term`，L608） | 否                           | 权威档                          | 读 `*_term` 即权威档，无需兼容层                                                                       |
 
 ## 二、shadow_credit 单元拆分链（verify_h1b_gates 上游）
 
-| 函数 | 读 `horizons` | 读顶层 `market_data_context` | 经兼容层 | 结论 |
-|------|--------------|------------------------------|---------|------|
-| `split_report_into_units` (L661) | 否 | 否 | 权威档 | 只读 `short_term`/`medium_term`，canonical 行天然兼容 |
-| `extract_sample_cohort` (L1216) | 否 | 否 | — | 只取 `decision_model_version`/`evidence_contract_version`/`price_basis_version`/`generated_by_commit_sha`，不触虚拟键 |
-| `_extract_market_data_context_map` (L889) | 否 | **是**（兜底链第 1 环） | 否 | 顶层 mdc 缺失时回退 `short_term`/`medium_term`/`instrument_context`/`data_collection_provenance` 等分支——功能不丢，仅兜底链少一环；canonical 行语义可接受，**不改** |
-| `extract_report_industry` mdc 分支 (L584) | 否 | **是**（第 4 候选） | 否 | 同上——mdc 是行业判定的 7 候选之一，缺失时走 `instrument_context`/quadrant/provenance 等 |
+| 函数                                      | 读 `horizons` | 读顶层 `market_data_context` | 经兼容层 | 结论                                                                                                                                                                |
+| ----------------------------------------- | ------------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `split_report_into_units` (L661)          | 否            | 否                           | 权威档   | 只读 `short_term`/`medium_term`，canonical 行天然兼容                                                                                                               |
+| `extract_sample_cohort` (L1216)           | 否            | 否                           | —        | 只取 `decision_model_version`/`evidence_contract_version`/`price_basis_version`/`generated_by_commit_sha`，不触虚拟键                                               |
+| `_extract_market_data_context_map` (L889) | 否 | **是**（兜底链第 1 环） | **已接** `result_data_compat_view` | 总控核验发现 canonical 行顶层 mdc 为虚拟键、直读返回 `None` → 已改走兼容视图重建 `{short,medium}` 映射，505 行转换前后输出逐行一致 |
+| `extract_report_industry` mdc 分支 (L584) | 否 | **是**（第 4 候选） | **已接** `result_data_compat_view` | 同上——mdc 兜底经兼容视图后，canonical/legacy 行业判定逐行一致 |
 
 ## 三、待合入候选分支（非本卡文件，标注合入前置条件）
 
-| 候选 | 所在分支 | 读 `horizons` | 读顶层 mdc | 经兼容层 | 处置 |
-|------|---------|--------------|-----------|---------|------|
-| `scripts/phase2/weekly_report.py`（DAV-1481 P5 周报） | `agent/agent/818d0fa66181` / `a077cd3473f5` | **是**（L514 `r["horizons"][MEDIUM]`） | 间接 | 否 | **合入前必须接 `result_data_compat_view`**，否则 canonical 行拿不到 `horizons.MEDIUM` → 周报错判。已在对应卡标注 |
-| `scripts/dav1507_exit_progress.py`（DAV-1507，同 #7） | `agent/agent/f474b4c79293-v6` | 否 | 否 | 权威档 | 无需改 |
-| DAV-1531 偏空诊断 | — | — | — | — | 只读诊断分析，结论落 DECISIONS.md，**未交付可执行脚本**，无读取点 |
+| 候选                                                  | 所在分支                                    | 读 `horizons`                          | 读顶层 mdc | 经兼容层 | 处置                                                                                                             |
+| ----------------------------------------------------- | ------------------------------------------- | -------------------------------------- | ---------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `scripts/phase2/weekly_report.py`（DAV-1481 P5 周报） | `agent/agent/818d0fa66181` / `a077cd3473f5` | **是**（L514 `r["horizons"][MEDIUM]`） | 间接       | 否       | **合入前必须接 `result_data_compat_view`**，否则 canonical 行拿不到 `horizons.MEDIUM` → 周报错判。已在对应卡标注 |
+| `scripts/dav1507_exit_progress.py`（DAV-1507，同 #7） | `agent/agent/f474b4c79293-v6`               | 否                                     | 否         | 权威档   | 无需改                                                                                                           |
+| DAV-1531 偏空诊断 `scripts/dav1505_six_stage_reject_stats.py` | `agent/agent/595d9ec8c51a`（候选 `e52ead2`） | 否 | 否 | 权威档 | 逐行流式读 `result_data`、按 `short_term`/`medium_term` 槽位拆 unit（`extract_unit_parts`，L411/423），不读 `horizons`/顶层 mdc——权威档直读，无需兼容层 |
 
 ## 四、写路径（不在本卡读取点审计范围，归 B-3）
 
-| 入口 | 说明 |
-|------|------|
+| 入口                                                             | 说明                                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `scripts/backfill_tplus5_shadow.py` `backfill_report` 镜像 stamp | 读 `target["horizons"]` 是为了写镜像——写路径，已在 **DAV-1572 (B-3)** 删除镜像写入，只写 `*_term` |
 
 ## 结论
 
 - 主干内**所有**读 `result_data` 的入口已覆盖：要么读权威 `*_term`（天然兼容 canonical），要么经 `result_data_compat_view` 重建虚拟键。**无遗漏的直接读 `horizons`/顶层 mdc 且不经兼容层的主干入口**。
 - 唯一需要"改"的是 `weekly_report.py`（DAV-1481 候选，他卡分支）——合入前接兼容层，已在该卡标注，不属于本卡文件白名单。
-- `shadow_credit` 的 mdc 兜底链在 canonical 行少一环属可接受语义（有 `*_term`/instrument/quadrant 等同级兜底），不引入兼容层以保持测量层对权威档的直接读取。
+- `shadow_credit` 的顶层 mdc 兜底链已接 `result_data_compat_view`（`_extract_market_data_context_map`/`extract_report_industry`）：505 行整库转换前后 `extract_report_industry`/`_extract_market_data_context_map`/`split_report_into_units`/`collect_hold_semantic_reasons` 输出逐行一致，H1b 各 cohort 门槛读数一致。
 
 审计人：资深开发1 · 基线 `fbdbb8e5` · 2026-10-07

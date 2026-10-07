@@ -425,6 +425,44 @@ def test_get_report_does_not_mutate_stored_nested_dicts():
         engine.dispose()
 
 
+def test_shadow_credit_mdc_fallback_equivalent_on_canonical():
+    """总控核验补 1: shadow_credit 的顶层 mdc 兜底链在 canonical 行上
+    必须与 legacy 行等价——顶层 mdc 是虚拟键，须经兼容层重建。"""
+    from tradingagents.agents.utils.shadow_credit import (
+        _extract_market_data_context_map,
+        extract_report_industry,
+    )
+
+    rd = _legacy_dual()
+    mdc_s = {"industry_linkage": {"industry_name": "白酒"}}
+    mdc_m = {"industry_linkage": {"industry_name": "白酒"}}
+    rd["short_term"]["market_data_context"] = mdc_s
+    rd["medium_term"]["market_data_context"] = mdc_m
+    rd["horizons"]["short"]["market_data_context"] = mdc_s
+    rd["horizons"]["medium"]["market_data_context"] = mdc_m
+    rd["market_data_context"] = {"short": mdc_s, "medium": mdc_m}
+    legacy = {"id": "r1", "result_data": rd, "status": "completed"}
+    canon = encode_canonical(rd)
+    canonical = {"id": "r1", "result_data": canon, "status": "completed"}
+
+    # _extract_market_data_context_map must return the same per-horizon map
+    assert _extract_market_data_context_map(legacy) == _extract_market_data_context_map(canonical)
+    assert _extract_market_data_context_map(canonical) is not None
+
+    # extract_report_industry resolves the same industry via the mdc branch
+    assert extract_report_industry(legacy) == extract_report_industry(canonical)
+
+
+def test_shadow_credit_units_unchanged_on_canonical():
+    """split_report_into_units 只读 *_term，canonical 与 legacy 单元等价。"""
+    from tradingagents.agents.utils.shadow_credit import split_report_into_units
+
+    rd = _legacy_dual()
+    legacy = {"id": "r2", "result_data": rd, "status": "completed"}
+    canonical = {"id": "r2", "result_data": encode_canonical(rd), "status": "completed"}
+    assert split_report_into_units(legacy) == split_report_into_units(canonical)
+
+
 def test_json_serialized_view_equals_legacy_serialization_subset():
     """The expanded view preserves legacy key order at every level we control."""
     rd = _legacy_dual()
