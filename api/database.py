@@ -390,6 +390,12 @@ def _ensure_llm_call_log_schema() -> None:
                 conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN served_model VARCHAR(255)"))
             if "system_fingerprint" not in columns:
                 conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN system_fingerprint VARCHAR(255)"))
+            # DAV-1426: marks rows whose token counts cannot be real
+            # (streaming cumulative-usage inflation pushed prompt_tokens past
+            # the USAGE_UNRELIABLE_THRESHOLD). Historical rows keep NULL/0;
+            # aggregation code excludes flagged rows.
+            if "usage_unreliable" not in columns:
+                conn.execute(text("ALTER TABLE llm_call_logs ADD COLUMN usage_unreliable BOOLEAN NOT NULL DEFAULT 0"))
     except Exception as e:
         logger.error("Failed to ensure llm_call_log schema: %s", e)
 
@@ -426,6 +432,7 @@ def log_llm_call(
     requested_model: str | None = None,
     served_model: str | None = None,
     system_fingerprint: str | None = None,
+    usage_unreliable: bool = False,
 ) -> None:
     """Fire-and-forget: write one LLM call record to llm_call_logs.
 
@@ -456,6 +463,7 @@ def log_llm_call(
                 requested_model=requested_model,
                 served_model=served_model,
                 system_fingerprint=system_fingerprint,
+                usage_unreliable=usage_unreliable,
             ))
             db.commit()
     except Exception as exc:
@@ -834,6 +842,10 @@ class LLMCallLogDB(Base):
     requested_model = Column(String(255), nullable=True)
     served_model = Column(String(255), nullable=True)
     system_fingerprint = Column(String(255), nullable=True)
+    # DAV-1426: True when the captured token counts are provably inflated
+    # (streaming cumulative-usage merge bug, prompt > 2M). Token columns
+    # keep the raw captured values; aggregations must exclude flagged rows.
+    usage_unreliable = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
