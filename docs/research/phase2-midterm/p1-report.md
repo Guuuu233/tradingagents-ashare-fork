@@ -156,7 +156,7 @@ DAV-1547 返修（`8fc4468`）将落盘主口径由 raw 改为 **vendor_qfq 前�
 - **前沿年化信息**：抽样 n_eff 为日序列口径，未换算年化新增信息单位；股间相关修正系数未单独落表（待办）。
 - **名单 B 股/优先股**未单列剔除；list_age 在 2015-10 窗口左端点用 busday_count 近似（偏松，仅影响 2015Q4 边际样本）。
 - `sw_daily` 早期覆盖完整（77,221 行、31 个一级行业齐全），未发现需外推的缺口。
-- **selftest 留痕**：`--selftest` 合成自检日志已持久化到 `selftest_log.json`（`ic=0.076/true 0.08, rho=0.173/true 0.15, pacf1=0.52, boot=0.0385, nw=0.0390`）。`run.json` 现含 `signal_date_min/max`、`min_daily_n_guard`、`insufficient_days`、`source_sha`（执行时 HEAD `450f3ae`）、`env{python, env_unset_PYTHONPATH（实际检测）, deps}` 及 selftest 日志文本；产物清单与输入分区 hash 见 `manifest.json`（覆盖全部 24 产物）。
+- **selftest 留痕**：`--selftest` 合成自检日志已持久化到 `selftest_log.json`（`ic=0.076/true 0.08, rho=0.173/true 0.15, pacf1=0.52, boot=0.0385, nw=0.0390`）。`run.json` 现含 `signal_date_min/max`、`min_daily_n_guard`、`insufficient_days`、`source_sha`（执行时 HEAD `bb23f13`）、`env{python, env_unset_PYTHONPATH（实际检测）, deps}` 及 selftest 日志文本；产物清单与输入分区 hash 见 `manifest.json`（覆盖全部 24 产物）。
 - **未独立核验台账**：OOS 逐样本预测未持久化（只有汇总 R²）；块自助 SE 值在 JSON 但逐 replicate 采样未留痕；D1 逐股对六项累加量与残差对明细未持久化（`d1_pair_detail.parquet` 仅逐组汇总，不足以独立复算 ρ）；NW60 为暂定带宽，不能声称尾部依赖消失或覆盖已验证。
 - 环境注记：`.venv310`（Python 3.10.20），`env -u PYTHONPATH`；统计层只用 numpy/pandas/pyarrow。
 
