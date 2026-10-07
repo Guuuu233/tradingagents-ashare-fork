@@ -36,6 +36,114 @@ from langchain_core.outputs import LLMResult
 logger = logging.getLogger(__name__)
 
 
+def _install_streaming_usage_last_wins() -> None:
+    """DAV-1426: merge stream-chunk usage as last-wins, not per-chunk sum.
+
+    langchain-core's ``add_ai_message_chunks`` merges per-chunk
+    ``usage_metadata`` with ``add_usage`` (recursive add). That is correct
+    for providers that emit usage once at the end of the stream, but some
+    OpenAI-compatible providers (observed: deepseek-v4.1-flash,
+    space-bunny-free) attach the *cumulative* usage to every chunk — summing
+    then inflates tokens quadratically (real case: 2.11e8 prompt tokens on
+    a ~25K-token prompt, llm_call_logs row 5fab9ea5…).
+
+    The ledger only ever wants the provider's final accounting, so this
+    wrapper replaces the usage merge inside ``add_ai_message_chunks`` with
+    per-field last-wins for the scalar counters and per-field max for
+    ``input_token_details`` / ``output_token_details``. Chunk order is
+    stream order ⇒ the last observed value is the most complete for
+    cumulative senders and equal-or-superset for delta/final senders.
+    ``add_usage`` itself is left untouched (langchain_core.messages.ai
+    re-exports it and other merge paths may rely on add semantics).
+
+    Idempotent and defensive: any failure leaves the stock merger.
+    """
+    try:
+        from langchain_core.messages import ai as _lc_ai
+
+        original = _lc_ai.add_ai_message_chunks
+        if getattr(original, "_usage_last_wins_installed", False):
+            return
+
+        def _merge_usage_last_wins(left: Any, right: Any) -> Any:
+            """Last-wins merge of two UsageMetadata dicts.
+
+            input/output/total_tokens: right wins when present (later chunk
+            = newer cumulative reading). Detail dicts: per-key max, since
+            cumulative counters never decrease within a stream and a key
+            reported by only some chunks must not be lost or inflated.
+            """
+            if left is None:
+                return right
+            if right is None:
+                return left
+            merged = dict(left)
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                rv = right.get(key)
+                if rv is not None:
+                    merged[key] = rv
+            for details_key in ("input_token_details", "output_token_details"):
+                ld = left.get(details_key) or {}
+                rd = right.get(details_key) or {}
+                if not isinstance(ld, dict):
+                    ld = {}
+                if not isinstance(rd, dict):
+                    rd = {}
+                details = dict(ld)
+                for k, rv in rd.items():
+                    if rv is None:
+                        continue
+                    lv = details.get(k)
+                    try:
+                        details[k] = rv if lv is None else max(lv, rv)
+                    except TypeError:
+                        details[k] = rv
+                if details:
+                    merged[details_key] = details
+            return merged
+
+        def _add_ai_message_chunks_last_wins(left, *others):
+            if getattr(left, "usage_metadata", None) or any(
+                getattr(o, "usage_metadata", None) is not None for o in others
+            ):
+                try:
+                    merged = getattr(left, "usage_metadata", None)
+                    rest = []
+                    for other in others:
+                        um = getattr(other, "usage_metadata", None)
+                        merged = _merge_usage_last_wins(merged, um)
+                        # copy(): chunks yielded to callers must not be
+                        # mutated under them; the merge result carries the
+                        # final usage, per-chunk objects keep their own.
+                        rest.append(
+                            other.model_copy(update={"usage_metadata": None})
+                            if um is not None
+                            else other
+                        )
+                    left = left.model_copy(update={"usage_metadata": merged})
+                    others = tuple(rest)
+                except Exception:
+                    # Fall through un-patched rather than break streaming.
+                    return original(left, *others)
+            return original(left, *others)
+
+        _add_ai_message_chunks_last_wins._usage_last_wins_installed = True
+        _lc_ai.add_ai_message_chunks = _add_ai_message_chunks_last_wins
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("streaming usage last-wins patch unavailable", exc_info=True)
+
+
+_install_streaming_usage_last_wins()
+
+
+# DAV-1426: prompt_tokens above this bound cannot be a real reading — the
+# streaming double-count bug showed per-call usage orders of magnitude past
+# any legitimate context (~130K tokens max prompt). Rows crossing it get
+# usage_unreliable=1; their token fields stay stored as captured so
+# investigators keep the evidence, and aggregations must exclude flagged rows.
+USAGE_UNRELIABLE_THRESHOLD = 2_000_000
+
+
 def _install_openai_served_model_capture() -> None:
     """DAV-1430 (D-066 B3): preserve the raw response-body ``model`` field.
 
@@ -201,19 +309,69 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
             cached_prompt_tokens = in_details.get("cache_read")
         if isinstance(out_details, dict):
             reasoning_tokens = out_details.get("reasoning")
-    else:
-        # Non-streaming fallback: some providers only populate llm_output.
-        tu = llm_output.get("token_usage") or llm_output.get("usage") or {}
-        if isinstance(tu, dict):
-            input_tokens = tu.get("prompt_tokens") or tu.get("input_tokens")
-            output_tokens = tu.get("completion_tokens") or tu.get("output_tokens")
-            total_tokens = tu.get("total_tokens")
-            in_details = tu.get("prompt_tokens_details") or {}
-            out_details = tu.get("completion_tokens_details") or {}
-            if isinstance(in_details, dict):
-                cached_prompt_tokens = in_details.get("cached_tokens")
-            if isinstance(out_details, dict):
-                reasoning_tokens = out_details.get("reasoning_tokens")
+
+    # llm_output["token_usage"] carries the provider's single authoritative
+    # usage body (non-streaming _create_chat_result; some proxies also inject
+    # it on the aggregate). When it disagrees with the chunk-merged value
+    # upward, trust it — the merged value can only *under*state (missing
+    # chunks) or *over*state (a residual per-chunk-sum path), and the
+    # provider's final body is the better reading in both directions only
+    # when it is not itself a sum. Practically: take it when it differs,
+    # since for cumulative senders it equals the last chunk's value and for
+    # final-only senders it equals the only value.
+    tu = llm_output.get("token_usage") or llm_output.get("usage") or {}
+    if isinstance(tu, dict) and tu:
+        ti = tu.get("prompt_tokens") or tu.get("input_tokens")
+        to = tu.get("completion_tokens") or tu.get("output_tokens")
+        tt = tu.get("total_tokens")
+        in_details = tu.get("prompt_tokens_details") or {}
+        out_details = tu.get("completion_tokens_details") or {}
+        t_cached = (
+            in_details.get("cached_tokens") if isinstance(in_details, dict) else None
+        )
+        t_reason = (
+            out_details.get("reasoning_tokens")
+            if isinstance(out_details, dict)
+            else None
+        )
+        if usage is None:
+            input_tokens, output_tokens, total_tokens = ti, to, tt
+            cached_prompt_tokens = cached_prompt_tokens or t_cached
+            reasoning_tokens = reasoning_tokens or t_reason
+        else:
+            # DAV-1426 backstop: when both sources exist but differ, prefer
+            # the one with the smaller input_tokens — an inflated merged
+            # value is the bug signature; a smaller llm_output reading that
+            # is still nonzero is the provider's own accounting. Equal or
+            # unavailable → keep the merged value.
+            try:
+                if ti is not None and input_tokens is not None and int(ti) < int(input_tokens):
+                    input_tokens = ti
+            except (TypeError, ValueError):
+                pass
+            try:
+                if to is not None and output_tokens is not None and int(to) < int(output_tokens):
+                    output_tokens = to
+            except (TypeError, ValueError):
+                pass
+            try:
+                if tt is not None and total_tokens is not None and int(tt) < int(total_tokens):
+                    total_tokens = tt
+            except (TypeError, ValueError):
+                pass
+
+    # DAV-1426: prompt_tokens past USAGE_UNRELIABLE_THRESHOLD cannot be a
+    # real single-call reading (the streaming double-count bug produced
+    # values orders of magnitude beyond any legitimate prompt). Flag the
+    # row — the captured numbers stay in the token columns as evidence,
+    # but build_llm_usage_summary and ad-hoc statistics must exclude
+    # flagged rows from aggregates.
+    usage_unreliable = False
+    try:
+        if input_tokens is not None and int(input_tokens) > USAGE_UNRELIABLE_THRESHOLD:
+            usage_unreliable = True
+    except (TypeError, ValueError):
+        pass
 
     return {
         "input_tokens": _usage_to_int(input_tokens),
@@ -221,6 +379,7 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
         "output_tokens": _usage_to_int(output_tokens),
         "reasoning_tokens": _usage_to_int(reasoning_tokens),
         "total_tokens": _usage_to_int(total_tokens),
+        "usage_unreliable": usage_unreliable,
         "finish_reason": finish_reason,
         "model_name": model_name,
         "served_model": served_model,
@@ -433,6 +592,7 @@ class LLMUsageLogger(BaseCallbackHandler):
                 requested_model=run.get("requested_model"),
                 served_model=extracted["served_model"],
                 system_fingerprint=extracted["system_fingerprint"],
+                usage_unreliable=extracted["usage_unreliable"],
             )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("LLMUsageLogger.on_llm_end failed (non-fatal): %s", exc)
@@ -459,13 +619,19 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
         if not rows:
             return None
 
+        # DAV-1426: rows flagged usage_unreliable carry token counts that
+        # cannot be real (streaming cumulative-usage inflation). Keep them
+        # out of every aggregate and report the exclusion count.
+        reliable_rows = [r for r in rows if not getattr(r, "usage_unreliable", False)]
+        unreliable_count = len(rows) - len(reliable_rows)
+
         def _sum(field: str) -> Optional[int]:
-            vals = [getattr(r, field) for r in rows]
+            vals = [getattr(r, field) for r in reliable_rows]
             vals = [v for v in vals if v is not None]
             return sum(vals) if vals else None
 
         by_role: Dict[str, Dict[str, Any]] = {}
-        for r in rows:
+        for r in reliable_rows:
             entry = by_role.setdefault(
                 r.agent_name,
                 {
@@ -523,6 +689,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
         return {
             "report_id": report_id,
             "call_count": len(rows),
+            "usage_unreliable_count": unreliable_count,
             "prompt_tokens": _sum("prompt_tokens"),
             "cached_prompt_tokens": _sum("cached_prompt_tokens"),
             "completion_tokens": _sum("completion_tokens"),
@@ -530,7 +697,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
             "total_tokens": _sum("total_tokens"),
             "elapsed_seconds": _sum("elapsed_seconds"),
             "queue_seconds": _sum("queue_seconds"),
-            "retried_calls": sum(1 for r in rows if r.retried),
+            "retried_calls": sum(1 for r in reliable_rows if r.retried),
             "by_role": roles,
         }
     except Exception as exc:  # pragma: no cover - defensive

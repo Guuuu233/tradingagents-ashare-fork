@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 
 import httpx
@@ -493,3 +494,224 @@ class TestQueueSeconds:
         assert len(rows) == 2
         assert rows[0].queue_seconds == 30.0
         assert rows[1].queue_seconds is None
+
+
+# ── DAV-1426: streaming cumulative-usage inflation fix ──────────────────
+
+
+def _sse_body_deepseek(chunks_usage):
+    """SSE stream where EVERY content chunk carries cumulative usage —
+    the deepseek-v4.1-flash pattern that triggered DAV-1426."""
+    chunks = [
+        {"id": "c1", "object": "chat.completion.chunk", "created": 1,
+         "model": "deepseek-v4.1-flash",
+         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "你"},
+                      "finish_reason": None}]},
+        {"id": "c1", "object": "chat.completion.chunk", "created": 1,
+         "model": "deepseek-v4.1-flash",
+         "choices": [{"index": 0, "delta": {"content": "好"},
+                      "finish_reason": "stop"}]},
+    ]
+    # Attach cumulative usage to every chunk, incl. a trailing usage-only one.
+    for i, u in enumerate(chunks_usage):
+        chunks[min(i, len(chunks) - 1)].setdefault("usage", u)
+    lines = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks)
+    return lines + "data: [DONE]\n\n"
+
+
+_CUMULATIVE_USAGE = [
+    {"prompt_tokens": 25700, "completion_tokens": 1, "total_tokens": 25701},
+    {"prompt_tokens": 25700, "completion_tokens": 2, "total_tokens": 25702},
+]
+
+
+def _make_deepseek_llm(requests_log):
+    from tradingagents.llm_clients.openai_client import UnifiedChatOpenAI
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        requests_log.append(json.loads(request.content.decode()))
+        if request.url.path.endswith("/chat/completions"):
+            return httpx.Response(
+                200,
+                text=_sse_body_deepseek(_CUMULATIVE_USAGE),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(404, text="nope")
+
+    transport = httpx.MockTransport(_handle)
+    return UnifiedChatOpenAI(
+        model="deepseek-v4.1-flash",
+        base_url="http://test.invalid/v1",
+        api_key="sk-test",
+        http_client=httpx.Client(transport=transport),
+        http_async_client=httpx.AsyncClient(transport=transport),
+    )
+
+
+class TestCumulativeStreamUsage:
+    """DAV-1426: providers that repeat cumulative usage on every chunk must
+    produce last-chunk (not summed) token counts."""
+
+    def test_chunk_merge_is_last_wins_not_sum(self):
+        """Unit-level: merged usage_metadata equals the last chunk's values."""
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.messages.ai import add_ai_message_chunks
+
+        c1 = AIMessageChunk(content="你", usage_metadata={
+            "input_tokens": 25700, "output_tokens": 1, "total_tokens": 25701,
+        })
+        c2 = AIMessageChunk(content="好", usage_metadata={
+            "input_tokens": 25700, "output_tokens": 2, "total_tokens": 25702,
+        })
+        merged = add_ai_message_chunks(c1, c2)
+        assert merged.usage_metadata["input_tokens"] == 25700
+        assert merged.usage_metadata["output_tokens"] == 2
+        assert merged.usage_metadata["total_tokens"] == 25702
+        # chunks handed to the merger are not mutated under the caller
+        assert c2.usage_metadata["output_tokens"] == 2
+
+    def test_details_merge_takes_max(self):
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.messages.ai import add_ai_message_chunks
+
+        c1 = AIMessageChunk(content="a", usage_metadata={
+            "input_tokens": 10, "output_tokens": 1, "total_tokens": 11,
+            "input_token_details": {"cache_read": 5},
+            "output_token_details": {"reasoning": 3},
+        })
+        c2 = AIMessageChunk(content="b", usage_metadata={
+            "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+            "input_token_details": {"cache_read": 5},
+            "output_token_details": {"reasoning": 7},
+        })
+        merged = add_ai_message_chunks(c1, c2)
+        assert merged.usage_metadata["input_token_details"]["cache_read"] == 5
+        assert merged.usage_metadata["output_token_details"]["reasoning"] == 7
+
+    def test_extract_prefers_provider_body_over_inflated_merge(self):
+        """When the merged usage is inflated but llm_output carries the
+        provider's final body, extraction prefers the smaller real value."""
+        um = {
+            "input_tokens": 51400, "output_tokens": 3,
+            "total_tokens": 51403,  # 2× the real value
+        }
+        result = _llm_result(usage=um)
+        result.llm_output["token_usage"] = {
+            "prompt_tokens": 25700, "completion_tokens": 2,
+            "total_tokens": 25702,
+        }
+        out = _extract_llm_result(result)
+        assert out["input_tokens"] == 25700
+        assert out["output_tokens"] == 2
+        assert out["total_tokens"] == 25702
+        assert out["usage_unreliable"] is False
+
+    def test_prompt_over_2m_flagged_unreliable(self):
+        out = _extract_llm_result(_llm_result(usage={
+            "input_tokens": 211_262_470, "output_tokens": 33_729_692,
+            "total_tokens": 244_992_162,
+        }))
+        assert out["usage_unreliable"] is True
+        # raw evidence preserved, not nulled
+        assert out["input_tokens"] == 211_262_470
+
+    def test_astream_deepseek_records_last_chunk_usage(self):
+        """End-to-end: cumulative per-chunk usage ⇒ stored row equals the
+        last chunk's values, not the sum."""
+        reqs = []
+        llm = _make_deepseek_llm(reqs)
+        report_id = uuid.uuid4().hex
+
+        async def _run():
+            async for _ in llm.astream(
+                "hi", config={"metadata": {"report_id": report_id}}
+            ):
+                pass
+
+        asyncio.run(_run())
+        r = _rows_for(report_id)[0]
+        assert r.prompt_tokens == 25700
+        assert r.completion_tokens == 2
+        assert r.total_tokens == 25702
+        assert r.usage_unreliable is False
+
+    def test_usage_summary_excludes_unreliable_rows(self):
+        report_id = uuid.uuid4().hex
+        log_llm_call(
+            agent_name="Bear", prompt_tokens=100, completion_tokens=10,
+            total_tokens=110, report_id=report_id,
+        )
+        log_llm_call(
+            agent_name="Bear", prompt_tokens=211_262_470,
+            completion_tokens=33_729_692, total_tokens=244_992_162,
+            report_id=report_id, usage_unreliable=True,
+        )
+        s = build_llm_usage_summary(report_id)
+        assert s["call_count"] == 2
+        assert s["usage_unreliable_count"] == 1
+        assert s["prompt_tokens"] == 100
+        assert s["completion_tokens"] == 10
+        assert s["total_tokens"] == 110
+        assert s["by_role"][0]["calls"] == 1
+
+
+class TestDav1426StatsScript:
+    """The stats script drops flagged/>2M rows and labels the deepseek
+    10-01~10-02 window as unreliable."""
+
+    def test_excludes_extreme_and_annotates_window(self, tmp_path):
+        import sqlite3
+        db = tmp_path / "t.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE llm_call_logs ("
+            "id TEXT, model_name TEXT, agent_name TEXT, created_at TEXT,"
+            " prompt_tokens INTEGER, completion_tokens INTEGER,"
+            " total_tokens INTEGER, cached_prompt_tokens INTEGER,"
+            " reasoning_tokens INTEGER, usage_unreliable BOOLEAN DEFAULT 0)"
+        )
+        conn.executemany(
+            "INSERT INTO llm_call_logs VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("ok1", "gpt-6", "a", "2026-10-03 01:00:00", 100, 10, 110,
+                 None, None, 0),
+                ("bad1", "deepseek-v4.1-flash", "b", "2026-10-01 22:00:00",
+                 211_262_470, 33_729_692, 244_992_162, None, None, 0),
+                ("win1", "deepseek-v4.1-flash", "b", "2026-10-02 01:00:00",
+                 60000, 500, 60500, None, None, 0),
+                ("ok2", "deepseek-v4.1-flash", "b", "2026-10-03 01:00:00",
+                 200, 20, 220, None, None, 0),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "dav1426_usage_stats",
+            os.path.join(
+                os.path.dirname(__file__), "..", "scripts",
+                "dav1426_usage_stats.py",
+            ),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        conn = mod._connect(str(db))
+        report = mod.collect_stats(conn)
+        conn.close()
+
+        assert report["total_rows"] == 4
+        # bad1 flagged >2M, win1 in the unreliable window → 2 excluded
+        assert report["excluded_count"] == 2
+        reasons = {e["id"]: e["reason"] for e in report["excluded_rows"]}
+        assert reasons["bad1"] == "prompt_tokens>2M"
+        assert reasons["win1"].startswith("deepseek_cumulative_usage_window")
+        w = report["unreliable_window"]
+        assert w["rows_in_window"] == 2  # bad1 + win1
+        assert "unreliable" in w["label"]
+        # deepseek totals only count the post-window row
+        ds = report["by_model"]["deepseek-v4.1-flash"]
+        assert ds["calls"] == 3
+        assert ds["excluded_calls"] == 2
+        assert ds["prompt_tokens"] == 200
