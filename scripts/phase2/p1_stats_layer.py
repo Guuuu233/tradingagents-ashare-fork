@@ -1496,8 +1496,8 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
     for name, v in out["d2_ic_structure"].items():
         L.append(f"| {name} | {v['days_valid']} | {_f(v['ic_mean'])} | "
                  f"{_f(v['ic_std'])} | {_f(v['acf'].get('1'))} | "
-                 f"{_f(v['acf'].get('20'))} | {_f(v['acf'].get('40'))} | "
-                 f"{_f(v['ljung_box_ic'].get('40'),1)} | "
+                 f"{_f(v['acf'].get('20', v['acf'].get(20)))} | {_f(v['acf'].get('40', v['acf'].get(40)))} | "
+                 f"{_f(v['ljung_box_ic'].get('40', v['ljung_box_ic'].get(40)),1)} | "
                  f"{v['newey_west_se_ic'].get('auto_bw_formula')} | "
                  f"{_f(v['n_eff_ic'],0)} |")
     L += ["", "## 3 风格暴露解释力", "",
