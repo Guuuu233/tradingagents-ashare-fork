@@ -514,8 +514,13 @@ def check_runtime_guard(db_path, health_url):
     return {"allowed": n == 0, "reason": "idle" if n == 0 else "busy", "running_count": n}
 
 
-def _write_row(conn, report_id, desired, audit, exported_sha=None):
+def _write_row(conn, report_id, delta, audit, exported_sha=None):
     """Journal prepared delta before commit; compare exact stored original.
+
+    `delta` is the _measurement_delta list produced during the read pass — the
+    full desired result_data is NOT held in memory. The patched bytes are
+    rebuilt inside the transaction by stamping delta onto the verified
+    original, so peak memory stays bounded by a single row, not the cohort.
 
     If `exported_sha` is given (sha256 of the pre-exported result_data for
     this row), the row's *current* stored bytes are hashed inside the
@@ -534,11 +539,13 @@ def _write_row(conn, report_id, desired, audit, exported_sha=None):
             if current_sha != exported_sha:
                 conn.rollback()
                 return "pre_export_mismatch"
+        original_obj = json.loads(original)
+        desired = _apply_measurement_delta(original_obj, delta)
         updated = patch_tplus5_json(original, desired)
         if original == updated:
             conn.rollback()
             return False
-        old_values = _measurement_delta(json.loads(original), desired)
+        old_values = _measurement_delta(original_obj, desired)
         record = {"phase": "prepared", "report_id": report_id, "old_values": old_values,
                   "before_sha256": hashlib.sha256(original.encode()).hexdigest(),
                   "after_sha256": hashlib.sha256(updated.encode()).hexdigest()}
@@ -569,6 +576,25 @@ def _measurement_delta(original, desired, path=()):
                                    'value': before.get(key), 'new_value': child})
             else:
                 result.extend(_measurement_delta(before.get(key), child, path + (key,)))
+    return result
+
+
+def _apply_measurement_delta(original, delta):
+    """Rebuild the patched result_data by stamping delta new_values onto a deep
+    copy of `original`. Each entry is {path: [keys...], new_value}. Only keys in
+    MEASUREMENT_KEYS at each leaf are written; intermediate dicts are created
+    when absent (mirrors _stamp_measurement's setdefault behaviour)."""
+    result = copy.deepcopy(original)
+    for entry in delta:
+        node = result
+        for key in entry["path"][:-1]:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                node[key] = child
+            node = child
+        if entry["path"]:
+            node[entry["path"][-1]] = copy.deepcopy(entry["new_value"])
     return result
 
 
@@ -634,7 +660,8 @@ def export_pre_images(db_path, planned, *, export_dir=None):
             "created_at": datetime.now().isoformat(),
         })
         with closing(_open_db(db_path)) as conn:
-            for report_id, _desired in planned:
+            for item in planned:
+                report_id = item["id"]
                 row = conn.execute(
                     "SELECT rowid AS __rowid__, result_data FROM reports WHERE id=?",
                     (report_id,)).fetchone()
@@ -644,6 +671,12 @@ def export_pre_images(db_path, planned, *, export_dir=None):
                 raw_text = row["result_data"]
                 raw_bytes = raw_text.encode("utf-8")
                 sha = hashlib.sha256(raw_bytes).hexdigest()
+                # 总控返修：导出原文必须与 planned 记录的第一遍读取原文一致，
+                # 否则 delta 是冲着一份已经过时的前像算出来的，拒绝写。
+                if sha != item["sha256"]:
+                    raise RuntimeError(
+                        f"pre-export drift on {report_id}: row changed between "
+                        "plan pass and export; refusing to write")
                 records[report_id] = sha
                 emit({
                     "kind": "row", "report_id": report_id,
@@ -895,8 +928,17 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                 # Same condition that makes patch_tplus5_json raise inside
                 # _write_row; count it once here and skip the write attempt.
                 result["guard_mismatches"] += 1
-            elif _measurement_delta(report["result_data"], updated["result_data"]):
-                planned.append((report["id"], updated["result_data"]))
+            else:
+                delta = _measurement_delta(report["result_data"], updated["result_data"])
+                if delta:
+                    # 总控内存红线：planned 只存报告编号 + 原文 sha256 + 增量
+                    # delta，不保留整份 desired result_data。
+                    planned.append({
+                        "id": report["id"],
+                        "sha256": hashlib.sha256(
+                            report["raw"].encode("utf-8")).hexdigest(),
+                        "delta": delta,
+                    })
         elif not db_path:
             saved.append(updated)
 
@@ -908,7 +950,7 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         # The export is driven strictly by `planned` (no re-computation).
         pre_export = export_pre_images(db_path, planned, export_dir=pre_export_dir)
         # Requirement 2: the exported report-id set must equal `planned`'s.
-        if set(pre_export["records"]) != {rid for rid, _ in planned}:
+        if set(pre_export["records"]) != {item["id"] for item in planned}:
             raise RuntimeError("pre-export report set mismatch; refusing to write")
         result["pre_export"] = {"path": pre_export["path"], "sha256": pre_export["sha256"],
                                 "rows": len(pre_export["records"])}
@@ -918,10 +960,10 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         fd = os.open(journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         audit = os.fdopen(fd, "a", encoding="utf-8")
         try:
-            for report_id, desired in planned:
+            for item in planned:
                 try:
-                    outcome = _write_row(writer, report_id, desired, audit,
-                                         exported_sha=pre_export["records"].get(report_id))
+                    outcome = _write_row(writer, item["id"], item["delta"], audit,
+                                         exported_sha=pre_export["records"].get(item["id"]))
                     if outcome == "pre_export_mismatch":
                         result["pre_export_mismatch"] += 1
                     else:
