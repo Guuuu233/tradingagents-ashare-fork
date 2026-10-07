@@ -82,6 +82,16 @@ class TestDayStatus:
         days = mod.eval_days(d)
         assert [x.date for x in days] == ["20260105", "20260120"]
 
+    def test_calendar_slots_no_data(self):
+        # calendar aligned: a zero-signal trading day stays a no_data slot
+        rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        rows += _day("20260109", range(1, 21), np.linspace(0, 0.1, 20), start=30)
+        d, _ = mod.admit(pd.DataFrame(rows))
+        cal = ["20260105", "20260106", "20260107", "20260108", "20260109"]
+        days = mod.eval_days(d, calendar=cal)
+        assert [x.status for x in days] == ["ok", "no_data", "no_data",
+                                            "no_data", "ok"]
+
 
 class TestQuintile:
     def test_weights_sum_to_h(self):
@@ -134,6 +144,24 @@ class TestAdmission:
         assert d.iloc[0]["run_id"] == 1
         assert fun["excl_dup_run"] == 2
 
+    def test_not_completed_excluded(self):
+        # 🟡-2: a stray incomplete row must never reach the formal queue
+        rows = _day("20260111", range(1, 21), np.linspace(0, 0.1, 20))
+        rows.append({"signal_date": "20260111", "version_key": "v1",
+                     "symbol": "INC", "q": 0.5, "r": 0.01,
+                     "timing_class": "F0", "input_pit_status": "VERIFIED",
+                     "completed": False})
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert fun["excl_not_completed"] == 1
+        assert len(d) == 20
+
+    def test_bad_prob_funnel_count(self):
+        # 🟢-3: unparseable/mixed-scale prob surfaced in funnel
+        rows = _day("20260112", list(range(1, 11)) + ["abc"],
+                    np.linspace(0, 0.1, 11))
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert fun["excl_bad_prob"] == 1
+
 
 class TestInferenceAndGrade:
     def _strong_days(self, n):
@@ -159,6 +187,39 @@ class TestInferenceAndGrade:
         d, _ = mod.admit(pd.DataFrame(_day("20260105", range(1, 8), range(7))))
         v = mod.grade(mod.eval_days(d), {})
         assert v["grade"] == "A"
+
+    def test_multiversion_failclose(self):
+        # 🔴 blocking: two version keys in one frame must NOT merge into a
+        # single day series (which would double valid_days and pass C gate)
+        rows = _day("20260110", range(1, 21), np.linspace(0, 0.1, 20))
+        rows += _day("20260110", range(1, 21), np.linspace(0, 0.1, 20),
+                     vkey="v2", start=50)
+        mv = pd.DataFrame(rows)
+        with pytest.raises(ValueError):
+            mod.select_version(mv)
+
+    def test_multiversion_select_single(self):
+        # same frame, but caller picks one queue → one DayRow, valid_days=1
+        rows = _day("20260110", range(1, 21), np.linspace(0, 0.1, 20))
+        rows += _day("20260110", range(1, 21), np.linspace(0, 0.1, 20),
+                     vkey="v2", start=50)
+        one = mod.select_version(pd.DataFrame(rows), "v2")
+        days = mod.eval_days(one)
+        assert len(days) == 1 and days[0].n_t == 20
+        v = mod.grade(days, {})
+        assert v["valid_days"] == 1
+
+    def test_multiversion_no_double_valid_days(self):
+        # 35 real days × 2 versions must yield 35 valid days, not 70
+        rows = []
+        for i in range(35):
+            day = f"2026{(i // 22) + 1:02d}{(i % 22) + 1:02d}"
+            rs = np.linspace(0, 0.1, 20)
+            rows += _day(day, range(1, 21), rs)
+            rows += _day(day, range(1, 21), rs, vkey="v2", start=500)
+        one = mod.select_version(pd.DataFrame(rows), "v1")
+        v = mod.grade(mod.eval_days(one), {})
+        assert v["valid_days"] == 35
 
     def test_nw_gap_not_compressed(self):
         # two strongly-autocorrelated blocks separated by a wide NaN gap:
