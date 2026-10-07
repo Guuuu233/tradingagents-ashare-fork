@@ -31,12 +31,13 @@ def _lib():
 
 def _unit(claims, ev, summary, *, horizon="short", status="completed",
           analysis_status="VALID", trade_action="BUY", decision="BUY",
-          direction="BULL", winner="bull"):
+          direction="BULL", winner="bull", protocol="v2_structured_disagreement"):
     return {
         "status": status, "analysis_status": analysis_status,
         "trade_action": trade_action, "decision": decision, "direction": direction,
-        "horizon": horizon,
+        "horizon": horizon, "protocol_version": protocol,
         "investment_debate_state": {
+            "protocol_version": protocol,
             "claims": claims,
             "manager_verdict": {"winner": winner, "claim_evidence_summary": summary},
         },
@@ -265,6 +266,97 @@ def test_clean_units_of_keeps_ledger_and_reasons():
     rep = _report({"short": _unit(claims, _ev_for(claims), _summary_for(claims))})
     clean, ledger, reasons = m.clean_units_of(rep, lib)
     assert "clean_count" in ledger and isinstance(reasons, dict)
+
+
+# ── D-074 amendment: v2 battlefield rule vs v1/no-battlefield claim-count rule #
+
+def test_v1_legacy_opening_claims_count_rule():
+    """protocol_version=v1_legacy: ≥3 distinct non-obs/hypo opening claims
+    (dedup by claim_id) + ≥1 verified → effective; battlefield not needed."""
+    lib = _lib()
+    # 3 distinct opening claims, all same battlefield (or no battlefield)
+    claims = _claims("bull", 3, battlefields=["capital_flow"], cid_prefix="L")
+    for c in claims:
+        c.pop("battlefield", None)  # legacy claims lack battlefield
+    unit = _unit(claims, _ev_for(claims), _summary_for(claims), protocol="v1_legacy")
+    sides = m.a3_session_sides(unit, lib)
+    assert sides["bull"]["protocol"] == "v1_legacy"
+    assert len(sides["bull"]["battlefields"]) == 0
+    assert len(sides["bull"]["opening_claim_ids"]) == 3
+    assert m.a3_session_effective(sides["bull"])
+    # only 2 distinct opening claims → not effective
+    claims2 = claims[:2]
+    unit2 = _unit(claims2, _ev_for(claims2), _summary_for(claims2), protocol="v1_legacy")
+    sides2 = m.a3_session_sides(unit2, lib)
+    assert not m.a3_session_effective(sides2["bull"])
+
+
+def test_v1_legacy_dedup_and_obs_hypo_excluded():
+    """v1 rule dedups by claim_id and excludes observation/hypothesis claims."""
+    lib = _lib()
+    # same claim_id repeated + one observation claim → only 2 distinct real claims
+    c1 = {"claim_id": "D-1", "speaker_key": "Bull", "stance": "bullish",
+          "stage": "opening", "claim": "x1"}
+    c1_dup = dict(c1)
+    c2 = {"claim_id": "D-2", "speaker_key": "Bull", "stance": "bullish",
+          "stage": "opening", "claim": "x2"}
+    obs = {"claim_id": "D-3", "speaker_key": "Bull", "stance": "bullish",
+           "stage": "opening", "claim": "观察：大盘缩量"}
+    claims = [c1, c1_dup, c2, obs]
+    unit = _unit(claims, _ev_for(claims), _summary_for(claims), protocol="v1_legacy")
+    sides = m.a3_session_sides(unit, lib)
+    assert len(sides["bull"]["opening_claim_ids"]) == 2  # obs/hypo + dup excluded
+    assert not m.a3_session_effective(sides["bull"])
+
+
+def test_v2_battlefield_rule_unchanged():
+    """v2 with battlefields: still needs ≥3 distinct valid opening battlefields
+    + ≥1 verified; ≥3 opening claims alone (no distinct battlefields) fails."""
+    lib = _lib()
+    # 3 opening claims on ONE battlefield → v2 rule fails even though ≥3 claims
+    claims = _claims("bull", 3, battlefields=["capital_flow"])
+    unit = _unit(claims, _ev_for(claims), _summary_for(claims))
+    sides = m.a3_session_sides(unit, lib)
+    assert sides["bull"]["protocol"] == "v2_structured_disagreement"
+    assert len(sides["bull"]["battlefields"]) == 1
+    assert not m.a3_session_effective(sides["bull"])
+    # 3 claims across 3 battlefields → v2 rule passes
+    claims2 = _claims("bull", 3, battlefields=["capital_flow", "price_volume", "fundamentals"], cid_prefix="V")
+    unit2 = _unit(claims2, _ev_for(claims2), _summary_for(claims2))
+    sides2 = m.a3_session_sides(unit2, lib)
+    assert m.a3_session_effective(sides2["bull"])
+
+
+def test_v2_unit_with_no_battlefield_falls_back_to_claim_count():
+    """v2 unit whose opening claims carry no battlefield → v1 fallback rule."""
+    lib = _lib()
+    claims = _claims("bull", 3, battlefields=["capital_flow"], cid_prefix="NB")
+    for c in claims:
+        c["battlefield"] = ""  # present but empty → side has no valid battlefield
+    unit = _unit(claims, _ev_for(claims), _summary_for(claims))
+    sides = m.a3_session_sides(unit, lib)
+    assert len(sides["bull"]["battlefields"]) == 0
+    assert len(sides["bull"]["opening_claim_ids"]) == 3
+    assert m.a3_session_effective(sides["bull"])
+
+
+def test_cluster_type_observational_column():
+    lib = _lib()
+    c1 = {"claim_id": "T-1", "speaker_key": "Bull", "stance": "bullish",
+          "stage": "opening", "battlefield": "capital_flow", "claim": "x",
+          "cluster_type": "fundamental"}
+    c2 = {"claim_id": "T-2", "speaker_key": "Bull", "stance": "bullish",
+          "stage": "opening", "battlefield": "price_volume", "claim": "y",
+          "cluster_type": "fundamental"}
+    c3 = {"claim_id": "T-3", "speaker_key": "Bull", "stance": "bullish",
+          "stage": "opening", "battlefield": "fundamentals", "claim": "z",
+          "cluster_type": "sentiment"}
+    unit = _unit([c1, c2, c3], _ev_for([c1, c2, c3]), _summary_for([c1, c2, c3]))
+    st = m.a3_unit_stats(unit, lib)
+    out = m.metric_a3([dict(st, report_id="r", created_at="t", cohort="a:b:c:short")], lib)
+    dist = out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_diversity"]
+    assert dist["bull"] == {"fundamental": 2, "sentiment": 1}
+    assert out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_mean_per_unit"]["bull"] == 3.0
 
 
 if __name__ == "__main__":
