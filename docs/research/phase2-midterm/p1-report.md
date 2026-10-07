@@ -146,7 +146,7 @@ DAV-1547 返修（`8fc4468`）将落盘主口径由 raw 改为 **vendor_qfq 前�
 ## 8 局限与缺失台账
 
 - **行业归属缺口**：1,544 只股票部分/全部信号日无申万一级归属（evaluated_ok 行中 r_sw 缺失 153,885 行、1.5%，集中 2015–2022 与退市股），`y_rel` 记 NaN 不静默丢弃；偏差方向：早期年份与退市股占比偏高。
-- **公司行动含入主口径 r_stock（qfq）而指数腿不含分红**（见 §5）：主口径系统性抬高 r_rel 约 0.86pp/窗口（配对差 SE ±0.00026）；raw 对照列 `r_stock_raw` 已落盘供原始价口径重算。`adj_factor` 变化含送转等非分红事件。
+- **公司行动含入主口径 r_stock（qfq）而指数腿不含分红**（见 §5）：主口径系统性抬高 r_rel 约 0.86pp/窗口（配对差序列 NW60 SE ±0.0017，非 iid）；raw 对照列 `r_stock_raw` 已落盘供原始价口径重算。`adj_factor` 变化含送转等非分红事件。
 - **指数腿口径**：DAV-1547 返修后落盘 r_sw 为指数 T+1 开盘→实际退出收盘的同窗腿（与个股腿同窗口）；指数本身为价格指数不含分红，为残存限定项。
 - **`index_weight` 月度发布滞后**：T 日取最近 `trade_date ≤ T` 期次名单；`in_hs300/in_zz500` 为月末快照前向填充，滞后天数分布属已知局限。
 - **删除退市/窗口未完成样本的方向性**：pending_due 2.1% 全在 2025 尾部，data_missing 1.0%；不静默剔除，类型化台账在 `data/phase2/stats/` 与构建期 `data/phase2/stats.json`。IC 缺失 40 天全部在 2025-11-06～2025-12-31 尾部（缓存截断），非 2015 缺回看。
@@ -172,7 +172,8 @@ env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/py
     scripts/phase2/p1_stats_layer.py \
     --chunks-dir <dav-1547-workdir>/data/phase2/chunks \
     --out-dir data/phase2/stats
-# --selftest 为合成数据自检（stdout）；本次全程 2h09m，峰值 RSS 4.85GB
+# --selftest 为合成数据自检（stdout）；本次全程 2h08m，峰值 RSS 5.25GB
+# 产物核验清单：data/phase2/stats/manifest.json（文件 SHA256 + 输入分区 hash）
 ```
 
 仓外缓存 `~/Documents/TradingAgents-AShare-cache/phase2/`（5.7GB、manifest.json 22,756 条含 sha256）为构建/统计共同数据源；报告只含汇总统计，不含行情原始数据行（D-040）。
