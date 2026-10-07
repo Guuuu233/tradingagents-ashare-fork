@@ -397,3 +397,121 @@ def test_version_queue_split(tmp_path, monkeypatch):
     assert "commit:aaaa11111111" in text
     assert "commit:bbbb22222222" in text
     assert "unversioned" in text
+
+
+# ---------------------------------------------------------------------------
+# DAV-1651: compat view (canonical result_data.storage.v1 records) +
+# non-trading-day benchmark leg counted missing
+
+
+def _canonical_rec(rid: str, symbol: str, signal: str,
+                   direction: str = "看多", prob: float = 60.0,
+                   timing: str = "F0", pit: str = "VERIFIED",
+                   backfilled: bool = False, commit: str = "abc123def456"):
+    """Ledger record whose horizons payload is stored in the *canonical*
+    layout (result_data.storage.v1): ``horizons`` is a read-layer virtual
+    key absent from the stored row; the medium judgement lives under
+    ``medium_term``."""
+    rec = _rec(rid, symbol, signal, direction, prob, timing, pit,
+               backfilled, commit)
+    medium_slice = rec["horizons"].pop("medium")
+    short_slice = rec["horizons"].pop("short")
+    rec.pop("horizons")
+    rec["medium_term"] = dict(medium_slice)
+    rec["short_term"] = dict(short_slice)
+    rec["storage_schema_version"] = "result_data.storage.v1"
+    rec["storage_compat"] = {
+        "version": 1,
+        "horizons_order": ["short", "medium"],
+        "horizon_key_masks": {
+            "short": list(short_slice.keys()),
+            "medium": list(medium_slice.keys()),
+        },
+        "top_market_context": {"kind": "absent"},
+        "top_key_order": [k for k in rec.keys()
+                          if k not in ("storage_schema_version",
+                                       "storage_compat")],
+    }
+    return rec
+
+
+def test_canonical_record_resolves_medium_horizon(tmp_path, monkeypatch):
+    """新格式行（canonical storage.v1）：record 无物理 horizons 键，medium
+    判定由 medium_term 经兼容层重建——方向分布与到期样本不得丢。"""
+    recs = [_canonical_rec("r1", "600519.SH", "2026-07-28",
+                           direction="看多", prob=71.0)]
+    labs = [{"symbol": "600519.SH", "signal_date": "2026-07-28",
+             "hs300_excess_pct": 1.5}]
+    code, text = _run(monkeypatch, tmp_path, recs, labs)
+    assert code == 0
+    # record is counted in the medium pool and direction bucketed 看多
+    assert "中线账本记录总数：**1**" in text
+    assert "已到期（T+40 结果可知日 < as_of）样本：**1**" in text
+    assert "| 成熟样本 | 1 | 1 | 1.5000" in text
+    # §1 direction table: 看多=1, not dropped into 无结论
+    assert "| commit:abc123def45" in text
+    for line in text.splitlines():
+        if line.startswith("| commit:abc123def45"):
+            cells = [c.strip() for c in line.split("|")]
+            # (queue, total, 看多, 看空, 中性, 无结论)
+            assert cells[3] == "1" and cells[6] == "0", line
+
+
+def test_canonical_mixed_with_legacy_records(tmp_path, monkeypatch):
+    """canonical 与 legacy 记录混排：两种格式都进同一个版本队列。"""
+    recs = [
+        _rec("r1", "600519.SH", "2026-07-28", direction="看空"),
+        _canonical_rec("r2", "600520.SH", "2026-07-28", direction="看多"),
+    ]
+    code, text = _run(monkeypatch, tmp_path, recs)
+    assert code == 0
+    assert "中线账本记录总数：**2**" in text
+    for line in text.splitlines():
+        if line.startswith("| commit:abc123def45"):
+            cells = [c.strip() for c in line.split("|")]
+            assert cells[2] == "2"          # total
+            assert cells[3] == "1"          # 看多 (canonical row)
+            assert cells[4] == "1"          # 看空 (legacy row)
+            assert cells[6] == "0"          # 无结论
+
+
+def test_canonical_alias_conflict_fails_closed(tmp_path, monkeypatch):
+    """canonical 行若仍带物理 horizons 且与权威档冲突：fail-close 保留存储
+    形式（不重建视图）——该记录读到的仍是物理存储值，不得静默调和。"""
+    rec = _canonical_rec("r1", "600519.SH", "2026-07-28", direction="看多")
+    # Re-attach a conflicting physical alias: same key set, different value.
+    rec["horizons"] = {"short": dict(rec["short_term"]),
+                       "medium": dict(rec["medium_term"],
+                                      direction="看空")}  # conflict
+    code, text = _run(monkeypatch, tmp_path, [rec])
+    assert code == 0
+    assert "中线账本记录总数：**1**" in text
+    # fail-close: the stored (physical) horizons.medium direction is kept —
+    # 看空=1, 看多=0; nothing was reconciled to medium_term's 看多.
+    for line in text.splitlines():
+        if line.startswith("| commit:abc123def45"):
+            cells = [c.strip() for c in line.split("|")]
+            assert cells[3] == "0" and cells[4] == "1", line
+
+
+def test_benchmark_return_non_trading_day_signal_is_missing():
+    """DAV-1498/DAV-1651：signal_date 落在非交易日（周末/假日）时不得
+    向下吸附到前一交易日——记缺失。"""
+    cal = _cal("2026-07-01", 300)
+    bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+            for i, d in enumerate(cal)}
+    # 2026-08-01 is a Saturday — not a trading day in CAL
+    sig = date(2026, 8, 1)
+    assert sig not in cal
+    assert mod._benchmark_return(bars, cal, sig, 40) is None
+    # sanity: a real trading day still resolves
+    sig_td = date.fromisoformat("2026-07-28")
+    assert sig_td in cal
+    assert mod._benchmark_return(bars, cal, sig_td, 40) is not None
+
+
+def test_benchmark_return_signal_before_calendar_is_missing():
+    cal = _cal("2026-07-01", 300)
+    bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+            for i, d in enumerate(cal)}
+    assert mod._benchmark_return(bars, cal, date(2020, 1, 1), 40) is None

@@ -106,6 +106,16 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daily_snapshot_ledger as dsl  # noqa: E402
 
+# DAV-1506 (存储 B-1, D-072 附注): canonical ``result_data.storage.v1`` rows
+# no longer persist ``horizons.<h>`` — it is a read-layer virtual key rebuilt
+# from the authoritative ``<h>_term`` slice. Every record reaching
+# build_report passes through ``result_data_compat_view`` so rows sealed under
+# the new layout still resolve ``horizons.MEDIUM`` (DAV-1651; legacy rows are
+# returned untouched by the fail-close wrapper).
+from tradingagents.storage.result_data_compat import (  # noqa: E402
+    result_data_compat_view,
+)
+
 PIPELINE_VERSION = "weekly_report.v1"
 DEFAULT_DB = REPO_ROOT / "data" / "tradingagents.db"
 DEFAULT_LEDGER = REPO_ROOT / "work" / "phase2-ledger" / "forward_ledger.jsonl"
@@ -406,8 +416,13 @@ def _benchmark_return(bars: Mapping[str, Mapping[str, float]],
     is never substituted, per the DAV-1500 rework.
     """
     idx = bisect.bisect_right(trade_dates, signal) - 1
+    # DAV-1498/DAV-1651: ``signal`` must itself be a trading day. bisect snaps
+    # a non-trading-day signal down to the previous trading day, which would
+    # silently shift the D-072 window — count the leg missing instead.
+    if idx < 0 or trade_dates[idx] != signal:
+        return None
     e_i, t_i = idx + 1, idx + offset
-    if idx < 0 or e_i >= len(trade_dates) or t_i >= len(trade_dates):
+    if e_i >= len(trade_dates) or t_i >= len(trade_dates):
         return None
     e_d, t_d = trade_dates[e_i].isoformat(), trade_dates[t_i].isoformat()
     e_bar, t_bar = bars.get(e_d) or {}, bars.get(t_d) or {}
@@ -511,6 +526,10 @@ def build_report(
     # --- enrich + split ------------------------------------------------------
     medium: list[dict[str, Any]] = []
     for r in records:
+        # DAV-1651: expand the legacy ``horizons`` view on canonical
+        # (result_data.storage.v1) records; legacy records pass through
+        # unchanged (fail-close: conflicts keep the stored form).
+        r = result_data_compat_view(r)
         j = (r.get("horizons") or {}).get(MEDIUM)
         if not isinstance(j, dict):
             continue
