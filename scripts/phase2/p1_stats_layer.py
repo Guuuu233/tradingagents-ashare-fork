@@ -928,15 +928,30 @@ def main() -> int:
         gc.collect()
         log(f"pass3 year={year} rss={peak_rss_gb():.2f}GB")
 
-    # persist D1 pair-level accumulator detail (reviewer: D1 明细未持久化)
+    # persist D1 pair-level accumulator detail with the six accumulated
+    # sums + n so rho can be recomputed offline (reviewer: D1 明细未持久化)
     pair_detail = []
     for gname, acc in (("all", all_acc), ("industry", ind_acc),
                        ("style_4x10", style_acc), ("coarse_25", coarse_acc)):
         for gkey, mp in acc.acc.items():
-            pair_detail.append({"group_kind": gname, "group": gkey,
-                                "n_pairs": len(mp),
-                                "pair_days_sum": float(mp.iloc[:, 5].sum()),
-                                "pair_days_mean": float(mp.iloc[:, 5].mean())})
+            for pid, row in mp.iterrows():
+                n_c = row.iloc[5]
+                if n_c < 3:
+                    continue
+                sx, sy = row.iloc[0], row.iloc[1]
+                sxx, syy = row.iloc[2], row.iloc[3]
+                sxy = row.iloc[4]
+                vx = sxx / n_c - (sx / n_c) ** 2
+                vy = syy / n_c - (sy / n_c) ** 2
+                if not (vx > 0 and vy > 0):
+                    continue
+                rho = float((sxy / n_c - (sx / n_c) * (sy / n_c))
+                            / np.sqrt(vx * vy))
+                pair_detail.append({
+                    "group_kind": gname, "group": gkey, "pair_id": pid,
+                    "n_days": float(n_c), "sx": float(sx), "sy": float(sy),
+                    "sxx": float(sxx), "syy": float(syy), "sxy": float(sxy),
+                    "rho": rho})
     pd.DataFrame(pair_detail).to_parquet(
         out_dir / "d1_pair_detail.parquet", index=False)
 
@@ -1391,7 +1406,9 @@ def _file_sha256(path) -> str:
 
 
 def _deps_version() -> dict:
-    import numpy, pandas, pyarrow
+    import numpy
+    import pandas
+    import pyarrow
     return {"numpy": numpy.__version__, "pandas": pandas.__version__,
             "pyarrow": pyarrow.__version__}
 
