@@ -8,7 +8,10 @@ Contracts under test:
    thread ids and always hand out fresh checkpointer instances.
 3. Experiment-mode guard: ``propagate()`` without an explicit ``thread_id``
    raises instead of falling back to the production default thread name.
-4. ``result_data.run_identity`` carries ``thread_id`` + checkpointer identity.
+4. ``result_data.experiment_run_identity`` carries ``thread_id`` +
+   checkpointer identity (DAV-1486: distinct key — API-side ``run_identity``
+   is unconditionally overwritten by ``_attach_traceability_fields``, so the
+   experiment identity must never share it).
 5. Same-process repeated runs: the legacy path (default thread name + shared
    store) reproduces cross-run checkpoint crosstalk (red); the experiment
    path (dedicated store + explicit thread ids) is clean (green).
@@ -214,6 +217,27 @@ class TestExperimentHelpers:
         assert not is_experiment_thread_id(None)
         assert not is_experiment_thread_id("a:b:c:d:not-hex!")
 
+    def test_is_experiment_thread_id_rejects_empty_segments(self):
+        """DAV-1486: ``a::b:c:{hex}`` used to be accepted — an empty segment
+        is no longer a valid field value."""
+        assert not is_experiment_thread_id("a::b:c:deadbeef")
+        assert not is_experiment_thread_id(":a:b:c:deadbeef")
+        assert not is_experiment_thread_id("a:b:c:d:")
+        assert not is_experiment_thread_id("a:b:c::")  # empty + non-hex
+
+    def test_make_thread_id_rejects_colon_and_empty_fields(self):
+        """DAV-1486: fail fast at construction — the first four fields must
+        not contain ':' (the layout is parsed by splitting on ':') and must
+        not be empty."""
+        with pytest.raises(ValueError, match="must not contain ':'"):
+            make_experiment_thread_id("C:\\path\\sample", "v1", "A", 1)
+        with pytest.raises(ValueError, match="must not contain ':'"):
+            make_experiment_thread_id("600519", "v:1", "A", 1)
+        with pytest.raises(ValueError, match="must not contain ':'"):
+            make_experiment_thread_id("600519", "v1", "arm:x", 1)
+        with pytest.raises(ValueError, match="non-empty"):
+            make_experiment_thread_id("", "v1", "A", 1)
+
     def test_fresh_checkpointer_each_call(self):
         c1, c2 = new_experiment_checkpointer(), new_experiment_checkpointer()
         assert c1 is not c2
@@ -242,9 +266,24 @@ class TestExperimentHelpers:
         with pytest.raises(ExperimentThreadIdError):
             assert_experiment_thread_id("600519_2026-08-26_short")
 
+    def test_assert_thread_id_error_reports_diagnostics(self):
+        """DAV-1486: the rejection message carries the actual segment count
+        and per-segment validation results so a malformed id is locatable."""
+        with pytest.raises(ExperimentThreadIdError) as exc:
+            assert_experiment_thread_id("a:b:c:d:not-hex")
+        msg = str(exc.value)
+        assert "segments=5" in msg
+        assert "not-hex" in msg
+        assert "uuid=" in msg
+        with pytest.raises(ExperimentThreadIdError) as exc2:
+            assert_experiment_thread_id("a::b:c:deadbeef")
+        msg2 = str(exc2.value)
+        assert "segments=5" in msg2
+        assert "empty" in msg2
+
 
 # ---------------------------------------------------------------------------
-# 3. propagate() experiment-mode guard + run_identity
+# 3. propagate() experiment-mode guard + experiment_run_identity
 # ---------------------------------------------------------------------------
 
 class TestPropagateExperimentGuard:
@@ -280,8 +319,12 @@ class TestPropagateExperimentGuard:
             )
         call_kwargs = mi.call_args[1]
         assert call_kwargs["config"]["configurable"]["thread_id"] == tid
-        assert state["run_identity"]["thread_id"] == tid
-        assert "InMemorySaver" in state["run_identity"]["checkpointer"]
+        assert state["experiment_run_identity"]["thread_id"] == tid
+        assert "InMemorySaver" in state["experiment_run_identity"]["checkpointer"]
+        # DAV-1486: experiment identity must NOT reuse the API-side
+        # run_identity key — that slot belongs to _attach_traceability_fields
+        # (DAV-1430) and would be silently overwritten.
+        assert "run_identity" not in state
 
     def test_production_default_thread_name_unchanged(self):
         """Production path (experiment_mode=False) keeps the legacy default
@@ -309,10 +352,11 @@ class TestPropagateExperimentGuard:
              patch.object(ta.graph, "invoke", return_value=_final_state()):
             state, _ = ta.propagate("600519", "2026-08-26", horizon="short")
         assert "run_identity" not in state
+        assert "experiment_run_identity" not in state
 
 
 # ---------------------------------------------------------------------------
-# 4. result_data.run_identity via _build_horizon_result
+# 4. result_data.experiment_run_identity via _build_horizon_result
 # ---------------------------------------------------------------------------
 
 class TestRunIdentityInResult:
@@ -320,7 +364,7 @@ class TestRunIdentityInResult:
         ta = _make_bare_graph(checkpointer=MemorySaver(), experiment_mode=True)
         tid = make_experiment_thread_id("600519", "v2", "B", 3)
         state = _final_state()
-        state["run_identity"] = {
+        state["experiment_run_identity"] = {
             "thread_id": tid,
             "checkpointer": checkpointer_identity(ta.checkpointer),
         }
@@ -328,8 +372,9 @@ class TestRunIdentityInResult:
              patch("tradingagents.graph.trading_graph.finalize_price_ref_state",
                    return_value={"status": "ok"}):
             result = ta._build_horizon_result("short", state)
-        assert result["run_identity"]["thread_id"] == tid
-        assert result["run_identity"]["checkpointer"].startswith("InMemorySaver@")
+        assert result["experiment_run_identity"]["thread_id"] == tid
+        assert result["experiment_run_identity"]["checkpointer"].startswith("InMemorySaver@")
+        assert "run_identity" not in result
 
     def test_production_result_has_no_run_identity(self):
         ta = _make_bare_graph(checkpointer=MemorySaver(), experiment_mode=False)
@@ -339,6 +384,7 @@ class TestRunIdentityInResult:
                    return_value={"status": "ok"}):
             result = ta._build_horizon_result("short", state)
         assert "run_identity" not in result
+        assert "experiment_run_identity" not in result
 
 
 # ---------------------------------------------------------------------------

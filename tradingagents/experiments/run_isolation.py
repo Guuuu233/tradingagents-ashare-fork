@@ -50,10 +50,30 @@ def make_experiment_thread_id(
 ) -> str:
     """Build the experiment thread id ``{sample_id}:{system_version}:{arm}:{replicate}:{uuid}``.
 
+    The first four fields MUST NOT contain ``:`` — the id is parsed by
+    splitting on ``:`` into exactly 5 segments, so a colon inside
+    ``sample_id``/``system_version``/``arm``/``replicate`` would silently
+    corrupt the layout.  Empty fields are likewise rejected (DAV-1486).
+
     The uuid suffix guarantees uniqueness per invocation so two replicates can
     never share a checkpoint thread even when all other fields match.
     """
-    parts = (sample_id, system_version, arm, replicate, uuid.uuid4().hex)
+    head = (sample_id, system_version, arm, replicate)
+    labels = ("sample_id", "system_version", "arm", "replicate")
+    for label, value in zip(labels, head):
+        text = str(value)
+        if not text:
+            raise ValueError(
+                f"experiment thread_id field {label!r} must be non-empty "
+                f"(got {value!r})"
+            )
+        if ":" in text:
+            raise ValueError(
+                f"experiment thread_id field {label!r} must not contain ':' "
+                f"(got {text!r}); the id layout is parsed by splitting on ':' "
+                "into exactly 5 segments"
+            )
+    parts = (*head, uuid.uuid4().hex)
     return ":".join(str(p) for p in parts)
 
 
@@ -61,13 +81,17 @@ def is_experiment_thread_id(thread_id: Optional[str]) -> bool:
     """Return True when *thread_id* matches the experiment format.
 
     ``{sample_id}:{system_version}:{arm}:{replicate}:{uuid}`` — exactly 5
-    colon-separated segments, the last one a hex string (uuid4().hex is 32
-    chars; a shorter hex suffix is still accepted to stay permissive).
+    colon-separated segments (so the first four segments must not contain
+    ``:``), every segment non-empty, and the last segment a hex string
+    (uuid4().hex is 32 chars; a shorter hex suffix is still accepted to stay
+    permissive).
     """
     if not thread_id or not isinstance(thread_id, str):
         return False
     parts = thread_id.split(":")
     if len(parts) != EXPERIMENT_THREAD_ID_PARTS:
+        return False
+    if any(part == "" for part in parts):
         return False
     *_, uuid_part = parts
     return bool(re.fullmatch(r"[0-9a-fA-F]+", uuid_part))
@@ -83,11 +107,11 @@ def new_experiment_checkpointer() -> MemorySaver:
 
 
 def checkpointer_identity(checkpointer: Any) -> str:
-    """Stable per-instance identifier for ``result_data.run_identity``.
+    """Stable per-instance identifier for ``result_data.experiment_run_identity``.
 
     Uses ``type_name@id`` so two different ``MemorySaver`` objects can be told
     apart in recorded results.  Not persisted anywhere — only written into
-    run_identity for traceability.
+    experiment_run_identity for traceability.
     """
     if checkpointer is None:
         return "none"
@@ -107,6 +131,30 @@ def experiment_graph_kwargs() -> Dict[str, Any]:
     }
 
 
+def _thread_id_diagnostics(thread_id: str) -> str:
+    """Per-segment check results for ExperimentThreadIdError messages (DAV-1486).
+
+    Returns a compact ``label=value status`` list so a rejected id shows
+    exactly which segment failed and why (empty / not-hex), instead of a bare
+    'does not match' that leaves the caller guessing.
+    """
+    labels = ("sample_id", "system_version", "arm", "replicate", "uuid")
+    parts = thread_id.split(":")
+    checks = []
+    for i, seg in enumerate(parts):
+        label = labels[i] if i < len(labels) else f"extra_seg{i + 1}"
+        problems = []
+        if seg == "":
+            problems.append("empty")
+        if i == len(labels) - 1 and seg and not re.fullmatch(
+            r"[0-9a-fA-F]+", seg
+        ):
+            problems.append("not-hex")
+        status = "ok" if not problems else f"INVALID({','.join(problems)})"
+        checks.append(f"{label}={seg!r}:{status}")
+    return ", ".join(checks)
+
+
 def assert_experiment_thread_id(thread_id: Optional[str]) -> str:
     """Validate *thread_id* for an experiment-mode run; return it unchanged.
 
@@ -114,7 +162,9 @@ def assert_experiment_thread_id(thread_id: Optional[str]) -> str:
     match the experiment format — this is the fail-closed guard that keeps an
     experiment run from silently reusing the production default thread name
     ``"{company}_{trade_date}_{horizon}"`` and contaminating a shared
-    checkpoint store.
+    checkpoint store.  The error message reports the actual segment count and
+    per-segment validation results so a malformed id is locatable at a glance
+    (DAV-1486).
     """
     if not thread_id:
         raise ExperimentThreadIdError(
@@ -123,8 +173,11 @@ def assert_experiment_thread_id(thread_id: Optional[str]) -> str:
             "the production default thread name is forbidden here"
         )
     if not is_experiment_thread_id(thread_id):
+        parts = thread_id.split(":")
         raise ExperimentThreadIdError(
             f"experiment-mode thread_id {thread_id!r} does not match "
-            "'{sample_id}:{system_version}:{arm}:{replicate}:{uuid}'"
+            "'{sample_id}:{system_version}:{arm}:{replicate}:{uuid}' "
+            f"(segments={len(parts)}, expected {EXPERIMENT_THREAD_ID_PARTS}; "
+            f"{_thread_id_diagnostics(thread_id)})"
         )
     return thread_id
