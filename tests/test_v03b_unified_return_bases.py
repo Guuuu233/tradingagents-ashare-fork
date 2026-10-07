@@ -280,7 +280,9 @@ def test_y_rel_true_when_stock_beats_sw():
     assert rec.prediction_return == pytest.approx(0.12, abs=1e-6)
     assert rec.sw_prediction_window_return == pytest.approx(0.05, abs=1e-6)
     assert rec.y_rel is True
-    assert rec.r_stock_prediction == rec.prediction_return
+    # DAV-1493: redundant r_stock_prediction alias removed; prediction_return
+    # is the single field for the prediction-window gross return.
+    assert not hasattr(rec, "r_stock_prediction")
 
 
 def test_y_rel_false_when_stock_lags_sw():
@@ -365,13 +367,54 @@ def test_cohort_tag_backfill_vs_live():
     assert boundary.cohort_tag == "live"  # lag == threshold stays live
 
 
-def test_hold_days_kwarg_deprecated_maps_to_offset():
+def test_hold_days_kwarg_deprecated_maps_to_offset(caplog):
     prov = _provider_with({})
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        eng = V03ReturnMeasureEngine(price_provider=prov, hold_days=5)
+        with caplog.at_level("WARNING", logger="tradingagents.eval.v03_return_measure"):
+            eng = V03ReturnMeasureEngine(price_provider=prov, hold_days=5)
     assert any(issubclass(x.category, DeprecationWarning) for x in w)
+    # DAV-1493: the deprecation is also logged (not only warnings.warn) so
+    # non-CLI callers that run under default -W filters still see it.
+    assert any(
+        "DEPRECATED" in r.message and "hold_days" in r.message
+        for r in caplog.records
+        if r.name == "tradingagents.eval.v03_return_measure"
+    )
     assert eng.eval_offset_from_signal == 6
+
+
+def test_cohort_tag_pre_signal_when_created_before_trade_date():
+    """DAV-1493 (总控裁定 third state): a report generated strictly before its
+    signal date (e.g. previous evening run) is tagged 'pre_signal', not
+    silently folded into 'live'."""
+    bars = {
+        "600519.SH": {
+            SIGNAL_DATE: _bar(SIGNAL_DATE, 100.0, 101.0),
+            ENTRY_DATE: _bar(ENTRY_DATE, 110.0, 112.0),
+            TARGET_DATE: _bar(TARGET_DATE, 120.0, 121.0),
+        }
+    }
+    eng = _engine(_provider_with(bars))
+    pre = eng.measure_sample(_report(created_at="2026-03-03 19:01:00"))
+    assert pre.cohort_tag == "pre_signal"
+    same_day = eng.measure_sample(_report(created_at=f"{SIGNAL_DATE} 08:30:00"))
+    assert same_day.cohort_tag == "live"
+    unparseable = eng.measure_sample(_report(created_at="not-a-date"))
+    assert unparseable.cohort_tag == "live"  # fail-closed unchanged
+
+
+def test_manifest_carries_horizon_key_label():
+    """DAV-1493 (总控裁定 first step): every output record must expose the
+    return-window convention it was measured under — horizon_key +
+    eval_offset_from_signal on the snapshot manifest."""
+    prov = _provider_with({})
+    eng = _engine(prov)
+    res = eng.measure_dataset([_report()])
+    man = res.snapshot_manifest.to_dict()
+    assert man["horizon_key"] == "legacy"
+    assert man["eval_offset_from_signal"] == 6
+    assert man["horizon_profile"] == "T+6"
 
 
 def test_horizon_key_offset_mismatch_rejected():

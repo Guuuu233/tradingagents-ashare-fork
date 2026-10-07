@@ -311,6 +311,10 @@ def run_measurement_and_ablations(
     # Output snapshot manifest
     if result.snapshot_manifest:
         man_dict = result.snapshot_manifest.to_dict()
+        # DAV-1493 (总控裁定): explicit horizon-convention label so any V-03b
+        # manifest can be traced back to the exact window it measured under.
+        man_dict["horizon_key"] = horizon_key
+        man_dict["eval_offset_from_signal"] = eval_offset_from_signal
         Path(output_manifest).write_text(
             json.dumps(man_dict, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -351,6 +355,46 @@ def run_measurement_and_ablations(
         )
         print(f"Wrote Ablation Summary ({len(variants)} variants) to: {output_ablation}")
         print("      All ablation variants verified: 100% shared identical snapshot hash.")
+
+
+def resolve_horizon_from_args(args: argparse.Namespace) -> Tuple[str, int]:
+    """V-03b horizon resolution: --horizon-key wins; then
+    --eval-offset-from-signal; deprecated --hold-days maps to offset+1; bare
+    runs default to the retired 'legacy' window with a loud stderr warning
+    (DAV-1493 first step — making the flag *required* is a breaking change
+    gated on 总控 sign-off and is intentionally NOT implemented here).
+    Returns (horizon_key, eval_offset_from_signal)."""
+    canonical_offsets = {"short": 10, "medium": 40, "legacy": DEFAULT_EVAL_OFFSET_FROM_SIGNAL}
+    horizon_key = args.horizon_key or "legacy"
+    if args.horizon_key:
+        eval_offset = canonical_offsets[args.horizon_key]
+    elif args.eval_offset_from_signal is not None:
+        eval_offset = args.eval_offset_from_signal
+        horizon_key = (
+            "short" if eval_offset == 10
+            else "medium" if eval_offset == 40
+            else "legacy"
+        )
+    elif args.hold_days is not None:
+        eval_offset = args.hold_days + 1
+        print(
+            f"WARNING: --hold-days is DEPRECATED (V-03a). Mapped to "
+            f"eval_offset_from_signal={eval_offset} (= hold_days+1). "
+            f"Use --horizon-key or --eval-offset-from-signal instead.",
+            file=sys.stderr,
+        )
+    else:
+        eval_offset = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
+    if not args.horizon_key and args.eval_offset_from_signal is None:
+        print(
+            f"WARNING: no --horizon-key/--eval-offset-from-signal given; "
+            f"defaulting to DEPRECATED 'legacy' window "
+            f"(eval_offset_from_signal=T+{eval_offset}, retired V-03a parity). "
+            f"Second-phase callers must pass --horizon-key short|medium "
+            f"explicitly.",
+            file=sys.stderr,
+        )
+    return horizon_key, eval_offset
 
 
 def main() -> None:
@@ -478,27 +522,7 @@ def main() -> None:
         parser.error("--price-snapshot requires --offline (online path must stay untouched)")
 
     # V-03b horizon resolution (mirrors engine CLI semantics).
-    _canonical_offsets = {"short": 10, "medium": 40, "legacy": DEFAULT_EVAL_OFFSET_FROM_SIGNAL}
-    horizon_key = args.horizon_key or "legacy"
-    if args.horizon_key:
-        eval_offset = _canonical_offsets[args.horizon_key]
-    elif args.eval_offset_from_signal is not None:
-        eval_offset = args.eval_offset_from_signal
-        horizon_key = (
-            "short" if eval_offset == 10
-            else "medium" if eval_offset == 40
-            else "legacy"
-        )
-    elif args.hold_days is not None:
-        eval_offset = args.hold_days + 1
-        print(
-            f"WARNING: --hold-days is DEPRECATED (V-03a). Mapped to "
-            f"eval_offset_from_signal={eval_offset} (= hold_days+1). "
-            f"Use --horizon-key or --eval-offset-from-signal instead.",
-            file=sys.stderr,
-        )
-    else:
-        eval_offset = DEFAULT_EVAL_OFFSET_FROM_SIGNAL
+    horizon_key, eval_offset = resolve_horizon_from_args(args)
     print(f"Horizon: key={horizon_key}, eval_offset_from_signal=T+{eval_offset}")
 
     # Running service SHA provenance resolution (DAV-865 & DAV-866)
