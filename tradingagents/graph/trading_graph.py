@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
 from tradingagents.llm_clients.pool import get_or_create_llm
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, _default_data_cache_dir
 from tradingagents.agents.utils.memory import FinancialSituationMemory
 from tradingagents.dataflows.config import set_config
 from tradingagents.agents.utils.prompt_injection import DEFAULT_PLACEMENT
@@ -250,9 +250,13 @@ class TradingAgentsGraph:
         # DAV-1477: experiment-mode guard flag — see propagate().
         self.experiment_mode = bool(experiment_mode)
 
-        # Create necessary directories
+        # Create necessary directories：数据缓存目录默认在发布目录之外的
+        # 稳定状态路径（default_config._default_data_cache_dir），部署不再清零。
+        # config 可能为部分覆盖 dict（测试/调用方未给全量键），缺省回退默认。
         os.makedirs(
-            os.path.join(self.config["project_dir"], "dataflows/data_cache"),
+            self.config.get(
+                "data_cache_dir", _default_data_cache_dir()
+            ),
             exist_ok=True,
         )
 
