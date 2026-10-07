@@ -1187,15 +1187,25 @@ def main() -> int:
     win_out = {}
     for wname, wdf in windows.items():
         comp_w = comp.loc[comp.index.isin(wdf["signal_date"])]
+        icv_w = comp_w["ic"].to_numpy(dtype=float)
+        neff_w, _ = long_run_var(icv_w)
+        nw_w = {str(L): newey_west_se(icv_w, L) for L in NW_BANDS}
+        resid_w = resid_df[resid_df["signal_date"].isin(wdf["signal_date"])]
         win_out[wname] = {
-            "days": len(wdf),
+            "days": int(len(wdf)),
             "panel_rows": int(wdf["n_ok"].sum()),
             "y_nonnull_rows": int(
                 panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
                           "y"].notna().sum()),
             "insufficient_days": int(wdf["insufficient"].sum()),
-            "composite_ic_mean": float(np.nanmean(comp_w["ic"])),
+            "composite_ic_mean": float(np.nanmean(icv_w)),
             "composite_ic_days_valid": int(comp_w["ic"].notna().sum()),
+            "composite_ic_n_eff": neff_w,
+            "composite_ic_n_eff_trunc": int(
+                math.sqrt(len(icv_w[~np.isnan(icv_w)]))),
+            "composite_ic_nw_se": nw_w,
+            "style_mean_r2": float(resid_w["r2"].mean()) if len(resid_w) else np.nan,
+            "resid_ic_mean": float(resid_w["ic"].mean()) if len(resid_w) else np.nan,
             # row-weighted market base rate (matches reviewer convention)
             "mkt_y_rel_rowmean": float(
                 panel.loc[panel["signal_date"].isin(wdf["signal_date"]),
@@ -1492,15 +1502,18 @@ def write_report(out: dict, aligned: dict, path: Path) -> None:
           "- tercile 敏感性：未实现（DAV-1561/1565 已签豁免），"
           "tercile_hi_lo_mean = NaN 占位，不作验证声明",
           "",
-          "## qfq vs raw 配对差（同窗 r_sw，配对差序列 SE）", "",
+          "## qfq vs raw 配对差（同窗 r_sw，差序列自身 HAC/块自助 SE）", "",
           f"- 行级 adj_factor 变化占比（含送转，跨日等权）"
           f"{_f(out['dividend_bias']['frac_rows_adj_changed'])}",
           f"- mean r_rel：qfq {_f(out['dividend_bias']['mean_r_rel_qfq'])} / "
           f"raw {_f(out['dividend_bias']['mean_r_rel_raw'])}；"
           f"差 {_f(out['dividend_bias']['diff_qfq_minus_raw'])}",
           f"- 配对差序列：mean {_f(out['dividend_bias']['paired_diff_mean'])}"
-          f" ± SE {_f(out['dividend_bias']['paired_diff_se'])} "
-          f"（{out['dividend_bias']['paired_diff_days']} 天）",
+          f"，NW60 SE {_f(out['dividend_bias']['paired_diff_nw_se']['60'])} "
+          f"（iid SE {_f(out['dividend_bias']['paired_diff_se_iid_invalid'])} "
+          f"仅作对照，因重叠标签不可取），n_eff(L49) "
+          f"{_f(out['dividend_bias']['paired_diff_n_eff_l49'],1)}，"
+          f"{out['dividend_bias']['paired_diff_days']} 天",
           "", "## 局限", "",
           "- 标签为子卡二返修落盘口径（r_stock=vendor_qfq 主、r_stock_raw "
           "原始价敏感性、r_sw 同窗 T+1 开盘→退出收盘）；指数腿为价格指数"
