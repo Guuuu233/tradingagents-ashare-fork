@@ -14,7 +14,9 @@ python scripts/phase2/daily_snapshot_ledger.py run
 * Appends only reports whose `id` is not yet sealed; safe to re-run.
 * Fails (exit 3) when the CN trade calendar can't be loaded — timing classes
   are never approximated with a weekday fallback.
-* Fails (exit 4) when the ledger's tail line is unreadable — the run refuses
+* Fails (exit 4) when the ledger's tail line is unreadable — checked
+  **before** the DB is even opened, so a corrupt tail never costs a
+  full-table SELECT or a calendar network round-trip. The run refuses
   to append on top of a corrupt tail because that would silently start a new
   genesis segment detached from history. Fix or restore the ledger first.
 * On success it also refreshes the external head anchor (`HEAD` file, below).
@@ -27,6 +29,16 @@ python scripts/phase2/daily_snapshot_ledger.py verify
 
 Recomputes every `record_sha256` and the `prev_hash → chain_hash` link; any
 modified, reordered or inserted line is reported by line number.
+
+Exit codes:
+
+| exit | meaning |
+|---|---|
+| 0 | chain intact AND tail matches head anchor |
+| 1 | in-chain verification failed (non-anchor): a `prev_hash`/`record_sha256`/`chain_hash` mismatch — see the per-line report |
+| 2 | ledger missing/empty, or head anchor absent — see the anchor table below |
+| 4 | head anchor corrupt/unparsable (fail-close) |
+| 5 | head anchor mismatch — tail truncation or rewrite detected |
 
 **What verify can and cannot prove.** A self-contained hash chain proves only
 internal consistency — every line that is still present still links to its
@@ -43,16 +55,30 @@ Anchor semantics:
 | matches ledger tail | `OK: tail matches head anchor` (exit 0) |
 | mismatch (hash or line count) | `FAIL: … tail truncation or rewrite detected` (exit 5) |
 | corrupt / unparsable | `FAIL: … unreadable/corrupt (fail-close)` (exit 4) |
-| absent + non-empty ledger | bootstrapped from current tail once (`bootstrapped: true`), logged, exit 0 |
-| absent + empty/missing ledger | `UNVERIFIED: no anchor, tail integrity unverifiable` (exit 2) |
+| absent + non-empty ledger | `UNVERIFIED: head anchor missing` (exit 2) — **verify never anchors implicitly**; stamp it once with `bootstrap` (below) |
+| absent + empty/missing ledger | `UNVERIFIED` (exit 2) |
 
-**Bootstrap boundary.** The existing ledger predates anchors, so the first
-`verify`/`run` stamps `bootstrapped: true` with that day's tail. Any
-truncation that happened *before* the bootstrap moment is undetectable —
-the anchor only covers growth after it is first written. Keep `HEAD` and
-`forward_ledger.jsonl` in the same backup set; an attacker who can rewrite
-both can still defeat the anchor (it detects accidents and partial tamper,
-not a fully privileged adversary).
+**Bootstrap boundary.** The existing ledger predates anchors, so stamp its
+first anchor once, by hand, via `bootstrap` — it is written with
+`bootstrapped: true` and that day's tail. Any truncation that happened
+*before* the bootstrap moment is undetectable — the anchor only covers
+growth after it is first written. Keep `HEAD` and `forward_ledger.jsonl`
+in the same backup set; an attacker who can rewrite both can still defeat
+the anchor (it detects accidents and partial tamper, not a fully
+privileged adversary).
+
+## Bootstrap (one-time ops action)
+
+```bash
+python scripts/phase2/daily_snapshot_ledger.py bootstrap [--force]
+```
+
+Anchoring is a deliberate ops action, not a `verify` side effect — that way
+a *deleted* anchor surfaces as `UNVERIFIED` (exit 2) instead of being
+silently re-stamped. `bootstrap` re-verifies the chain first and refuses on
+a broken chain (exit 1), an empty/missing ledger (exit 2), or an existing
+anchor (exit 1, pass `--force` to deliberately re-anchor). Re-anchoring
+discards evidence of a possible tail mismatch, so it is explicit too.
 
 ## Baseline reconcile (one-off for the 2026-10-04 cohort snapshot)
 

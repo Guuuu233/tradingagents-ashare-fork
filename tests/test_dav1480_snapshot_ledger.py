@@ -214,6 +214,7 @@ def test_verify_ok(tmp_path):
     r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
     r2 = mod.build_record(_row(id="b"), _rd(), SEALED, "d", _cal())
     _ledger(tmp_path, [r1, r2])
+    _anchor(tmp_path)
     ns = type("NS", (), {"ledger_dir": str(tmp_path)})
     assert mod.cmd_verify(ns) == 0
 
@@ -301,22 +302,57 @@ def _verify(tmp_path):
     return mod.cmd_verify(_ns(ledger_dir=str(tmp_path)))
 
 
+def _anchor(tmp_path, bootstrapped=False, reason="test anchor"):
+    """Directly stamp the head anchor for the ledger in ``tmp_path`` —
+    test helper for _check_head_anchor paths that don't go through
+    cmd_bootstrap."""
+    lp = tmp_path / "forward_ledger.jsonl"
+    bad, n, tail_hash = mod._check_chain(lp)
+    assert not bad and tail_hash is not None
+    return mod._write_head_anchor(tmp_path, tail_hash, n,
+                                  bootstrapped=bootstrapped, reason=reason)
+
+
+def _bootstrap(tmp_path, force=False):
+    return mod.cmd_bootstrap(_ns(ledger_dir=str(tmp_path), force=force))
+
+
 def test_verify_detects_tail_truncation_via_anchor(tmp_path):
     r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
     r2 = mod.build_record(_row(id="b"), _rd(), SEALED, "d", _cal())
     r3 = mod.build_record(_row(id="c"), _rd(), SEALED, "d", _cal())
     ledger = _ledger(tmp_path, [r1, r2, r3])
-    assert _verify(tmp_path) == 0          # bootstraps anchor on first pass
+    _anchor(tmp_path)
+    assert _verify(tmp_path) == 0
     # truncate last line — chain alone still verifies, anchor must catch it
     lines = ledger.read_text("utf-8").splitlines()
     ledger.write_text("\n".join(lines[:-1]) + "\n", "utf-8")
     assert _verify(tmp_path) == 5
 
 
+def test_verify_missing_anchor_nonempty_ledger_is_explicit_nonzero(tmp_path):
+    # DAV-1491: a deleted/never-stamped anchor must surface as an explicit
+    # non-zero exit — verify never bootstraps implicitly anymore.
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    _ledger(tmp_path, [r1])
+    assert _verify(tmp_path) == 2
+    assert not (tmp_path / "HEAD").exists()       # no silent bootstrap
+
+
+def test_verify_anchor_deleted_after_bootstrap_is_explicit_nonzero(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    _ledger(tmp_path, [r1])
+    assert _bootstrap(tmp_path) == 0
+    assert _verify(tmp_path) == 0
+    (tmp_path / "HEAD").unlink()                  # anchor deleted
+    assert _verify(tmp_path) == 2                  # explicit, not re-stamped
+    assert not (tmp_path / "HEAD").exists()
+
+
 def test_verify_anchor_corrupt_fails_closed(tmp_path):
     r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
     _ledger(tmp_path, [r1])
-    assert _verify(tmp_path) == 0          # bootstrap
+    _anchor(tmp_path)
     (tmp_path / "HEAD").write_text("{not json", "utf-8")
     assert _verify(tmp_path) == 4
 
@@ -325,6 +361,60 @@ def test_verify_anchor_on_empty_ledger_unverifiable(tmp_path):
     (tmp_path / "forward_ledger.jsonl").write_text("", "utf-8")
     assert _verify(tmp_path) == 2          # no anchor, nothing to bootstrap
     assert not (tmp_path / "HEAD").exists()
+
+
+def test_bootstrap_stamps_anchor_on_pre_anchor_ledger(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    _ledger(tmp_path, [r1])
+    assert _verify(tmp_path) == 2          # not yet anchored
+    assert _bootstrap(tmp_path) == 0       # explicit ops action
+    head = json.loads((tmp_path / "HEAD").read_text("utf-8"))
+    assert head["bootstrapped"] is True and head["lines"] == 1
+    assert _verify(tmp_path) == 0          # now anchored
+
+
+def test_bootstrap_refuses_on_existing_anchor_without_force(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    _ledger(tmp_path, [r1])
+    _anchor(tmp_path)
+    assert _bootstrap(tmp_path) == 1       # won't overwrite evidence silently
+    assert _bootstrap(tmp_path, force=True) == 0   # explicit re-anchor works
+
+
+def test_bootstrap_refuses_on_broken_chain(tmp_path):
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    ledger = _ledger(tmp_path, [r1])
+    obj = json.loads(ledger.read_text("utf-8").splitlines()[0])
+    obj["record"]["direction_top"] = "篡改"
+    ledger.write_text(json.dumps(obj, ensure_ascii=False) + "\n", "utf-8")
+    assert _bootstrap(tmp_path) == 1
+    assert not (tmp_path / "HEAD").exists()
+
+
+def test_bootstrap_refuses_on_empty_ledger(tmp_path):
+    (tmp_path / "forward_ledger.jsonl").write_text("", "utf-8")
+    assert _bootstrap(tmp_path) == 2
+    assert not (tmp_path / "HEAD").exists()
+
+
+def test_bootstrap_creates_missing_ledger_dir(tmp_path):
+    # _write_head_anchor must not assume run/verify already made the dir
+    # (DAV-1491 directory guard).
+    ledger_dir = tmp_path / "not-yet-there"
+    ledger_dir.mkdir()
+    r1 = mod.build_record(_row(id="a"), _rd(), SEALED, "d", _cal())
+    prev = "GENESIS"
+    chain = hashlib.sha256(
+        (prev + r1["record_sha256"]).encode()).hexdigest()
+    (ledger_dir / "forward_ledger.jsonl").write_text(
+        json.dumps({"record": r1, "prev_hash": prev, "chain_hash": chain},
+                   ensure_ascii=False) + "\n", "utf-8")
+    # _write_head_anchor into a dir that does not exist at all:
+    mod._write_head_anchor(tmp_path / "fresh-dir", "abc", 1,
+                           bootstrapped=True, reason="unit test")
+    assert (tmp_path / "fresh-dir" / "HEAD").exists()
+    assert mod.cmd_bootstrap(_ns(ledger_dir=str(ledger_dir),
+                               force=False)) == 0
 
 
 def test_verify_tolerates_old_records_without_backfill_fields(tmp_path):
@@ -339,6 +429,7 @@ def test_verify_tolerates_old_records_without_backfill_fields(tmp_path):
         mod._canonical({k: v for k, v in rec.items()
                       if k != "record_sha256"})).hexdigest()
     _ledger(tmp_path, [rec])
+    _anchor(tmp_path)
     assert _verify(tmp_path) == 0
 
 
@@ -387,6 +478,26 @@ def test_run_fail_close_on_unreadable_tail(tmp_path, monkeypatch):
     assert rc == 4                              # fail-close, non-zero
     assert ledger.read_bytes() == before_bytes  # not a byte appended
     assert len(ledger.read_bytes().splitlines()) == before_lines
+
+
+def test_run_tail_check_fails_fast_before_db_and_calendar(tmp_path, monkeypatch):
+    # DAV-1491: the corrupt-tail check must run BEFORE _connect_ro /
+    # _load_trade_dates — a broken tail should never cost a DB open or a
+    # calendar network round-trip.
+    calls = []
+    monkeypatch.setattr(mod, "_connect_ro",
+                        lambda p: calls.append("connect") or
+                        (_ for _ in ()).throw(AssertionError("DB opened")))
+    monkeypatch.setattr(mod, "_load_trade_dates",
+                        lambda: calls.append("cal") or
+                        (_ for _ in ()).throw(AssertionError("cal loaded")))
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    (ledger_dir / "forward_ledger.jsonl").write_text('{"truncated_json', "utf-8")
+    ns = _ns(db=str(tmp_path / "t.db"), ledger_dir=str(ledger_dir),
+             date="2026-08-01", force=False)
+    assert mod.cmd_run(ns) == 4
+    assert calls == []
 
 
 def test_run_appends_and_writes_anchor(tmp_path, monkeypatch):

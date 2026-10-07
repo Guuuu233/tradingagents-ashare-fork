@@ -39,14 +39,17 @@ prove the tail of the file was not truncated — every surviving line still
 verifies. "run" therefore registers the terminal chain_hash + line count in
 a separate small JSON file after each successful append, and "verify"
 re-checks the computed tail against that anchor. A ledger that predates
-anchors gets one bootstrapped (bootstrapped: true) from the current tail —
-truncations that happened BEFORE bootstrap are undetectable; only post-
+anchors is stamped once by hand via the explicit ``bootstrap`` subcommand
+(bootstrapped: true) — verify NEVER anchors implicitly, so a deleted
+anchor surfaces as UNVERIFIED instead of being silently re-stamped.
+Truncations that happened BEFORE bootstrap are undetectable; only post-
 bootstrap growth is covered. Missing anchor -> explicit UNVERIFIED exit;
 corrupt anchor -> fail-close.
 
 Usage:
   python scripts/phase2/daily_snapshot_ledger.py run        [--db PATH] [--ledger-dir DIR] [--date YYYY-MM-DD]
   python scripts/phase2/daily_snapshot_ledger.py verify     [--ledger-dir DIR]
+  python scripts/phase2/daily_snapshot_ledger.py bootstrap  [--ledger-dir DIR] [--force]
   python scripts/phase2/daily_snapshot_ledger.py baseline   --snapshot-jsonl FILE [--db PATH] [--ledger-dir DIR]
   python scripts/phase2/daily_snapshot_ledger.py status     [--ledger-dir DIR]
 
@@ -484,13 +487,15 @@ def _count_ledger_lines(ledger_path: Path) -> int:
 # verify re-checks the computed tail against it.
 #
 # Ledgers written before anchors existed get one bootstrap entry stamped
-# from the current tail ("bootstrapped": true). Truncation that already
-# happened before bootstrap is undetectable — coverage starts the day the
-# anchor is first written and grows from there.
+# from the current tail ("bootstrapped": true) via the explicit
+# ``bootstrap`` subcommand — verify never anchors implicitly. Truncation
+# that already happened before bootstrap is undetectable — coverage
+# starts the day the anchor is first written and grows from there.
 
 
 def _write_head_anchor(ledger_dir: Path, chain_hash: str, n_lines: int,
                        bootstrapped: bool, reason: str) -> Path:
+    ledger_dir.mkdir(parents=True, exist_ok=True)
     tmp = ledger_dir / (HEAD_FILE + ".tmp")
     tmp.write_text(json.dumps({
         "chain_hash": chain_hash,
@@ -503,28 +508,27 @@ def _write_head_anchor(ledger_dir: Path, chain_hash: str, n_lines: int,
     return ledger_dir / HEAD_FILE
 
 
-def _check_head_anchor(ledger_path: Path, tail_hash: str, n_lines: int,
-                       log_dir: Optional[Path] = None) -> int:
+def _check_head_anchor(ledger_path: Path, tail_hash: str,
+                       n_lines: int) -> int:
     """Compare the verified tail against the external anchor.
 
-    Returns 0 (anchor present and matches, or bootstrapped now), 2 (no
-    anchor yet and nothing to bootstrap from, or ledger empty), 4 (anchor
-    corrupt — fail-close), 5 (anchor mismatch — tail truncated/rewritten).
+    Returns 0 (anchor present and matches), 2 (ledger empty, or anchor
+    missing — anchoring is a deliberate ops action via ``bootstrap``,
+    never a verify side effect), 4 (anchor corrupt — fail-close),
+    5 (anchor mismatch — tail truncated/rewritten).
     """
     ledger_dir = ledger_path.parent
-    log = (lambda m: _log(log_dir, m)) if log_dir else (lambda m: print(m))
     anchor_path = ledger_dir / HEAD_FILE
     if tail_hash is None or n_lines == 0:
         print("UNVERIFIED: ledger missing or empty; tail integrity "
               "cannot be anchored", file=sys.stderr)
         return 2
     if not anchor_path.exists():
-        _write_head_anchor(ledger_dir, tail_hash, n_lines,
-                           bootstrapped=True,
-                           reason="ledger predates head anchor")
-        log(f"HEAD anchor bootstrapped from current tail ({n_lines} lines); "
-            "truncations before this point are undetectable")
-        return 0
+        print("UNVERIFIED: head anchor missing — tail integrity cannot be "
+              "verified. Stamp it once with the explicit ops action: "
+              "daily_snapshot_ledger.py bootstrap "
+              f"--ledger-dir {ledger_dir}", file=sys.stderr)
+        return 2
     try:
         anchor = json.loads(anchor_path.read_text("utf-8"))
         if not isinstance(anchor, dict) or not isinstance(anchor.get("chain_hash"), str):
@@ -608,6 +612,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     snapshot_date = args.date or date.today().isoformat()
     sealed_at = datetime.now(timezone.utc)
 
+    # Fail-close FIRST, before opening the DB or touching the network:
+    # never append on top of an unreadable tail — that would silently
+    # start a new genesis segment detached from history.
+    try:
+        tail_obj = _read_last_line(ledger_path)
+    except ValueError as exc:
+        _log(ledger_dir,
+             f"FAILED: ledger tail unreadable: {exc}; refusing to append "
+             f"(would detach a new genesis segment from history). "
+             f"ledger={ledger_path}")
+        return 4
+
     con = _connect_ro(Path(args.db))
     try:
         n_block = con.execute(
@@ -643,16 +659,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             _log(ledger_dir, f"FAILED: trade calendar unavailable: {exc}")
             return 3
 
-        # Fail-close: never append on top of an unreadable tail — that would
-        # silently start a new genesis segment detached from history.
-        try:
-            tail_obj = _read_last_line(ledger_path)
-        except ValueError as exc:
-            _log(ledger_dir,
-                 f"FAILED: ledger tail unreadable: {exc}; refusing to append "
-                 f"(would detach a new genesis segment from history). "
-                 f"ledger={ledger_path}")
-            return 4
         prev_hash = tail_obj["chain_hash"] if tail_obj else GENESIS_PREV
         appended = 0
         with open(ledger_path, "a", encoding="utf-8") as out:
@@ -683,14 +689,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         con.close()
 
 
-def cmd_verify(args: argparse.Namespace) -> int:
-    ledger_path = Path(args.ledger_dir) / LEDGER_FILE
-    if not ledger_path.exists():
-        print(f"ledger not found: {ledger_path}", file=sys.stderr)
-        return 2
+def _check_chain(ledger_path: Path) -> tuple[list[tuple[int, str]], int,
+                                             Optional[str]]:
+    """Recompute every record_sha256 and the prev_hash -> chain_hash link.
+
+    Returns (bad, n_lines, tail_hash): ``bad`` is a list of (lineno, msg)
+    problems, ``n_lines`` the non-empty line count, ``tail_hash`` the
+    terminal chain_hash (None when the ledger is empty).
+    """
     prev = GENESIS_PREV
     n = 0
-    bad = []
+    bad: list[tuple[int, str]] = []
     with open(ledger_path, "r", encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, 1):
             if not line.strip():
@@ -717,16 +726,66 @@ def cmd_verify(args: argparse.Namespace) -> int:
             if obj.get("chain_hash") != expect_chain:
                 bad.append((lineno, "chain_hash mismatch"))
             prev = obj.get("chain_hash", prev)
+    return bad, n, (prev if n else None)
+
+
+def _print_chain_failures(bad: list[tuple[int, str]], n: int) -> None:
+    print(f"FAIL: {len(bad)} problem(s) in {n} line(s)")
+    for lineno, msg in bad[:20]:
+        print(f"  line {lineno}: {msg}")
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    ledger_path = Path(args.ledger_dir) / LEDGER_FILE
+    if not ledger_path.exists():
+        print(f"ledger not found: {ledger_path}", file=sys.stderr)
+        return 2
+    bad, n, tail_hash = _check_chain(ledger_path)
     if bad:
-        print(f"FAIL: {len(bad)} problem(s) in {n} line(s)")
-        for lineno, msg in bad[:20]:
-            print(f"  line {lineno}: {msg}")
+        _print_chain_failures(bad, n)
         return 1
     print(f"OK: {n} line(s) verified, chain intact")
     # The chain alone cannot detect tail truncation — compare the terminal
-    # chain_hash against the external head anchor (bootstraps on first use).
-    tail_hash = prev if n else None
+    # chain_hash against the external head anchor. An absent anchor is an
+    # explicit UNVERIFIED (exit 2), never an implicit bootstrap.
     return _check_head_anchor(ledger_path, tail_hash, n)
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    """One-time ops action: stamp the external head anchor from the
+    current verified tail.
+
+    Deliberately manual — verify refuses to anchor implicitly so a
+    deleted anchor can never be silently masked. Refuses on a broken
+    chain (exit 1), an empty/missing ledger (exit 2), or an existing
+    anchor unless --force is given (re-anchoring overwrites evidence of
+    a possible mismatch, so it must be explicit too).
+    """
+    ledger_dir = Path(args.ledger_dir)
+    ledger_path = ledger_dir / LEDGER_FILE
+    if not ledger_path.exists():
+        print(f"ledger not found: {ledger_path}", file=sys.stderr)
+        return 2
+    anchor_path = ledger_dir / HEAD_FILE
+    if anchor_path.exists() and not args.force:
+        print(f"FAIL: head anchor already exists at {anchor_path}; "
+              "refusing to overwrite (pass --force to deliberately "
+              "re-anchor)", file=sys.stderr)
+        return 1
+    bad, n, tail_hash = _check_chain(ledger_path)
+    if bad:
+        _print_chain_failures(bad, n)
+        print("refusing to anchor a broken chain", file=sys.stderr)
+        return 1
+    if tail_hash is None:
+        print("UNVERIFIED: ledger empty; nothing to anchor",
+              file=sys.stderr)
+        return 2
+    _write_head_anchor(ledger_dir, tail_hash, n,
+                       bootstrapped=True, reason="manual bootstrap")
+    print(f"OK: head anchor written ({n} lines, "
+          f"chain_hash={tail_hash[:16]}...)")
+    return 0
 
 
 def cmd_baseline(args: argparse.Namespace) -> int:
@@ -832,6 +891,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_v = sub.add_parser("verify", help="verify hash chain integrity")
     common(p_v)
     p_v.set_defaults(func=cmd_verify)
+
+    p_bs = sub.add_parser("bootstrap",
+                          help="one-time ops action: stamp the external "
+                               "head anchor from the current verified tail")
+    common(p_bs)
+    p_bs.add_argument("--force", action="store_true",
+                      help="overwrite an existing head anchor")
+    p_bs.set_defaults(func=cmd_bootstrap)
 
     p_b = sub.add_parser("baseline", help="reconcile a prior snapshot JSONL")
     common(p_b)
