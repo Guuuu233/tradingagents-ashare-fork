@@ -77,6 +77,68 @@ def test_sample_all_when_n_ge_pool():
     assert list(out["ts_code"]) == sorted(g["ts_code"])
 
 
+def test_remainder_tie_breaking_stratum_code_ascending():
+    """Ties in largest-remainder quota allocation must break by stratum code ascending."""
+    # 20 industries, 1 stock each. For N=5, raw quota is 5/20 = 0.25 for all.
+    # Floor quota is 0, leftover is 5.
+    # All 20 have equal remainder (0.25).
+    # Quota must be allocated to the 5 smallest stratum codes in ascending order:
+    # 801000.SI ... 801004.SI (reproducing the review scenario in DAV-1685).
+    rows = []
+    scrambled = [18, 5, 2, 19, 0, 11, 8, 1, 14, 3, 17, 7, 16, 4, 12, 6, 13, 9, 15, 10]
+    for i in scrambled:
+        code = f"801{i:03d}.SI"
+        rows.append((f"{i:06d}.SZ", code, f"行业{i}"))
+    df = pd.DataFrame(rows, columns=["ts_code", "sw_l1_code", "sw_l1_name"])
+
+    sample1 = ms.stratified_sample(df, 5, seed=42)
+    sample2 = ms.stratified_sample(df.sample(frac=1, random_state=99), 5, seed=42)
+
+    # Shuffled input yields identical output
+    assert sample1.equals(sample2)
+
+    # Allocated industries must be the first 5 stratum codes ascending
+    picked_strata = sorted(sample1["sw_l1_code"].unique())
+    expected_strata = [f"801{i:03d}.SI" for i in range(5)]
+    assert picked_strata == expected_strata
+
+    # Byte-identical across repeated runs under the same seed
+    sample3 = ms.stratified_sample(df, 5, seed=42)
+    assert sample1.to_dict("records") == sample3.to_dict("records")
+
+
+def test_remainder_tie_breaking_mixed_remainders():
+    """Larger remainders win first; among tied remainders, stratum code ascending breaks ties."""
+    # S1: 4 stocks -> 4/10 * 4 = 1.6 -> floor 1, rem 0.6
+    # S2: 2 stocks -> 2/10 * 4 = 0.8 -> floor 0, rem 0.8
+    # S3: 1 stock  -> 1/10 * 4 = 0.4 -> floor 0, rem 0.4
+    # S4: 1 stock  -> 1/10 * 4 = 0.4 -> floor 0, rem 0.4
+    # S5: 1 stock  -> 1/10 * 4 = 0.4 -> floor 0, rem 0.4
+    # S6: 1 stock  -> 1/10 * 4 = 0.4 -> floor 0, rem 0.4
+    # Total stocks = 10, N = 4.
+    # Floor quotas: S1: 1, S2: 0, S3: 0, S4: 0, S5: 0, S6: 0. Sum floor = 1. Leftover = 3.
+    # Remainders:
+    # S2: 0.8 (largest -> gets 1)
+    # S1: 0.6 (second largest -> gets 1)
+    # S3, S4, S5, S6: tied at 0.4. Need 1 more quota.
+    # Tie broken by stratum code ascending -> S3 gets 1.
+    # Total quotas: S1: 2, S2: 1, S3: 1, S4: 0, S5: 0, S6: 0.
+    rows = []
+    for i in range(4):
+        rows.append((f"00000{i}.SZ", "801010.SI", "S1"))
+    for i in range(2):
+        rows.append((f"00001{i}.SZ", "801020.SI", "S2"))
+    rows.append(("000020.SZ", "801030.SI", "S3"))
+    rows.append(("000030.SZ", "801040.SI", "S4"))
+    rows.append(("000040.SZ", "801050.SI", "S5"))
+    rows.append(("000050.SZ", "801060.SI", "S6"))
+    df = pd.DataFrame(rows, columns=["ts_code", "sw_l1_code", "sw_l1_name"])
+
+    out = ms.stratified_sample(df, 4, seed=42)
+    counts = out["sw_l1_code"].value_counts().to_dict()
+    assert counts == {"801010.SI": 2, "801020.SI": 1, "801030.SI": 1}
+
+
 def test_index_snapshot_pit(tmp_path):
     """Latest trade_date <= T wins; newer snapshot ignored."""
     w = pd.DataFrame([
