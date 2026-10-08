@@ -654,10 +654,11 @@ def render_markdown(summary, meta):
     if a3["per_cohort"]:
         for cohort, c in sorted(a3["per_cohort"].items()):
             w = c["last_50_window"]
+            ratio_str = f"{w['bull_share_pct']}%" if w.get("bull_share_pct") is not None else "—"
             row(f"A3 · `{cohort}`", "各侧场次≥25；窗口比∈[40,60]；各侧已核实≥100",
                 f"clean {c['clean_units']}；场次 多{c['effective_sessions']['bull']}/空{c['effective_sessions']['bear']}；"
                 f"已核实 多{c['verified_claims']['bull']}/空{c['verified_claims']['bear']}；"
-                f"窗口比 {w['bull_share_pct']}%（{w['n']} 场）；"
+                f"窗口比 {ratio_str}（{w['n']} 场）；"
                 f"开场 cluster_type 种类 多{len(c['observed_opening_cluster_type_diversity']['bull'])}/"
                 f"空{len(c['observed_opening_cluster_type_diversity']['bear'])}"
                 f"（均值 {c['observed_opening_cluster_type_mean_per_unit']['bull']}/"
@@ -674,15 +675,27 @@ def render_markdown(summary, meta):
         "—", "观察")
     if summary.get("all_history_side_reading"):
         ah = summary["all_history_side_reading"]
+        a2_rate = f"{ah['a2']['all_scope']['rate_pct']}%" if (ah.get("a2") or {}).get("all_scope", {}).get("rate_pct") is not None else "无样本"
+        a4_rate = f"{ah['a4']['completion_rate_pct']}%" if (ah.get("a4") or {}).get("completion_rate_pct") is not None else "无样本"
         row("全历史侧读", "—（对照，不计入门栏）",
-            f"{ah['reports']} 份 / {ah['units']} 档；A2 全期 {ah['a2']['all_scope']['rate_pct']}%；"
-            f"completed {ah['a4']['completion_rate_pct']}%",
+            f"{ah['reports']} 份 / {ah['units']} 档；A2 全期 {a2_rate}；"
+            f"completed {a4_rate}",
             "—", "参考")
-    row("A4", "completed ≥95%；T+5 ≥95%",
-        f"completed {a4['completion_rate_pct']}%（{a4['completed']}/{a4['submitted']}）；"
-        f"T+5 {a4['t5_rate_pct']}%（{a4['t5_present']}/{a4['mature_units']} 成熟档）" if a4["completion_rate_pct"] is not None else "无样本",
-        f"完成率 {a4['completion_gap_to_95']:+.2f}pp；T+5 {a4['t5_gap_to_95']:+.2f}pp" if a4["completion_rate_pct"] is not None else "—",
-        "✅/❌ 见读数" if a4["completion_rate_pct"] is not None else "N/A")
+    if a4["completion_rate_pct"] is not None:
+        t5_rate_str = f"{a4['t5_rate_pct']}%" if a4.get("t5_rate_pct") is not None else "—"
+        a4_reading = (
+            f"completed {a4['completion_rate_pct']}%（{a4['completed']}/{a4['submitted']}）；"
+            f"T+5 {t5_rate_str}（{a4['t5_present']}/{a4['mature_units']} 成熟档）"
+        )
+        comp_gap_str = f"{a4['completion_gap_to_95']:+.2f}pp" if a4.get("completion_gap_to_95") is not None else "—"
+        t5_gap_str = f"{a4['t5_gap_to_95']:+.2f}pp" if a4.get("t5_gap_to_95") is not None else "—"
+        a4_gap = f"完成率 {comp_gap_str}；T+5 {t5_gap_str}"
+        a4_status = "✅/❌ 见读数"
+    else:
+        a4_reading = "无样本"
+        a4_gap = "—"
+        a4_status = "N/A"
+    row("A4", "completed ≥95%；T+5 ≥95%", a4_reading, a4_gap, a4_status)
     row("B1", "b1.v1 契约上线",
         f"{b1['units_b1_v1']}/{b1['units_total']} 档带 b1.v1 forecast",
         "未上线" if not b1["live"] else "—",
@@ -691,8 +704,9 @@ def render_markdown(summary, meta):
         f"{b2['b1_v1_units_completed']} 次 b1.v1 运行，无效 {b2['invalid']}（{b2['invalid_pct']}%）" if b2["b1_v1_units_completed"] else "无 b1.v1 样本",
         f"样本差 {b2['sample_gap_to_100']}" if b2["b1_v1_units_completed"] else "—",
         "✅" if b2["meets"] else ("❌" if b2["meets"] is False else "N/A"))
+    cov_str = f"（{b3['coverage_pct']}%）" if b3.get("coverage_pct") is not None else ""
     row("B3", "运行可追溯 input hash + served_models",
-        f"{b3['traceable']}/{b3['reports_total']} 份可追溯（{b3['coverage_pct']}%）",
+        f"{b3['traceable']}/{b3['reports_total']} 份可追溯{cov_str}",
         f"缺 {b3['gap']} 份",
         "✅" if b3["gap"] == 0 and b3["reports_total"] else "❌")
     p.append("")
@@ -962,6 +976,27 @@ def _self_test():
     nb = sum(1 for i in fake if i["eff"]["bull"])
     ne = sum(1 for i in fake if i["eff"]["bear"])
     assert nb / (nb + ne) == 0.8
+
+    # render_markdown smoke check: completion_rate_pct present but t5_gap_to_95=None
+    dummy_summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": {"per_cohort": {}},
+        "A4": {"threshold": "completed ≥ 95%；T+5 完整率 ≥ 95%", "as_of": "2026-10-08",
+               "mature_cutoff": None, "submitted": 1, "completed": 1, "failed": 0,
+               "completion_rate_pct": 100.0, "completion_gap_to_95": 5.0,
+               "mature_units": 0, "mature_reports": 0, "t5_present": 0,
+               "t5_reports_present": 0, "t5_rate_pct": None, "t5_report_rate_pct": None,
+               "t5_gap_to_95": None},
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None, "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    dummy_meta = {"as_of": "2026-10-08", "start": "2026-10-08", "db": "dummy.db",
+                  "reports": 1, "units": 1, "peak_mb": 1.0}
+    md_out = render_markdown(dummy_summary, dummy_meta)
+    assert "completed 100.0%" in md_out
+    assert "完成率 +5.00pp；T+5 —" in md_out
 
     print(json.dumps({"self_test": "passed", "model_calls": 0, "provider_calls": 0}))
     return 0
