@@ -331,11 +331,17 @@ def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         ["true", "1", "completed", "complete", "done", "ok", "yes"])
     d = _count(m, "excl_not_completed")
     # legal probability int 1–99 → q in (0,1]; 0/out-of-range rejected.
-    # _n_bad_prob surfaces mixed-scale columns (review 🟢-3)
+    # bad_prob_unparseable is the column-level unparseable count (DAV-1729
+    # fix): _n_bad_prob is a scalar broadcast onto every row by
+    # _ensure_defaults, so summing the post-filter column would multiply the
+    # scalar by the surviving row count. Read the scalar before filtering —
+    # it is the number of input rows whose prob could not be parsed (those
+    # rows are the ones excl_bad_prob drops / counts).
+    n_bad_prob = int(d["_n_bad_prob"].iloc[0]) \
+        if "_n_bad_prob" in d.columns and len(d) else 0
     m = d["q"].isna() | (d["q"] <= 0)
     d = _count(m, "excl_bad_prob")
-    funnel["bad_prob_unparseable"] = int(d["_n_bad_prob"].sum()) \
-        if "_n_bad_prob" in d.columns else 0
+    funnel["bad_prob_unparseable"] = n_bad_prob
     # mature label required
     m = d["r"].isna()
     d = _count(m, "excl_immature_label")
