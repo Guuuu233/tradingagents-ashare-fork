@@ -12,14 +12,10 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
-
 from tradingagents.eval.shadow_portfolio import (
     Intent,
     RiskRules,
-    ShadowLedger,
     compare_strategies,
     ledger_confidence,
     ledger_final_action,
@@ -36,9 +32,6 @@ from tradingagents.eval.shadow_portfolio import (
 from tradingagents.eval.trade_execution import (
     DailyBar,
     ExecutionEngine,
-    OrderSide,
-    OrderStatus,
-    next_trading_day,
 )
 from tradingagents.eval.v03_return_measure import CostModel
 
@@ -65,9 +58,11 @@ def mkbar(date, o=10.0, h=10.2, l=9.9, c=10.1, pc=10.0, vol=1e6) -> DailyBar:
 
 
 def rec(symbol=SYM, signal_date=SIGNAL, direction="看多", action="BUY",
-        risk="OK", conf=80, prob=0.7, decision="BUY", rid="r1"):
+        risk="OK", conf=80, prob=0.7, decision="BUY", rid="r1",
+        sealed_at="2026-10-04 19:51:38"):
     return {
         "report_id": rid, "symbol": symbol, "signal_date": signal_date,
+        "sealed_at": sealed_at,
         "direction_top": direction, "trade_action_top": action,
         "risk_status_top": risk, "decision_top": decision,
         "probability_top": prob, "confidence_top": conf,
@@ -256,6 +251,62 @@ class TestLedgerBookkeeping:
         assert [(e.trade_date, e.symbol, e.shares) for e in a.entries] == \
                [(e.trade_date, e.symbol, e.shares) for e in b.entries]
 
+    def test_same_day_same_symbol_arbitration_by_sealed_at(self):
+        """同日同标的多条信号：按 sealed_at 先后执行（先封存的先成交），
+        不再以 report_id 字典序仲裁。为 DAV-1690 复审问题回归用例。"""
+        eng = flat_engine()
+        # 同 signal_date + symbol，先封存看空 (sealed_at=...01)，后封存看多 (...02)
+        # 按 sealed_at 执行：先 SELL (无持仓 noop) 再 BUY → 最终持仓非空
+        r_sell_first = rec(direction="看空", action="SELL", rid="zz",
+                           sealed_at="2026-10-04 19:51:01")
+        r_buy_second = rec(direction="看多", action="BUY", rid="aa",
+                           sealed_at="2026-10-04 19:51:02")
+        res = run_shadow_portfolio(
+            [r_buy_second, r_sell_first],   # 输入顺序颠倒以验证排序
+            strategy_fn=strategy_direction_intent,
+            engine=eng, rules=rules_unlimited(), initial_cash=100_000,
+            strategy_name="s",
+        )
+        # sealed_at 先者先执行：先 SELL（noop，无持仓），再 BUY（开仓）
+        assert res.summary["n_buys"] == 1
+        # 反向验证：若 report_id 序先生效，会先 BUY 再 SELL → 持仓为空
+        assert res.summary["open_positions"] != {}
+
+    def test_same_day_same_symbol_sealed_at_direction_conflict(self):
+        """同 signal_date + symbol + 不同 sealed_at：
+        看多先封存 → 看空后封存，结果应先 BUY 后 SELL（实际后封存的覆盖）。"""
+        eng = flat_engine()
+        r_buy_first = rec(direction="看多", action="BUY", rid="zz",
+                          sealed_at="2026-10-04 19:51:01")
+        r_sell_second = rec(direction="看空", action="SELL", rid="aa",
+                            sealed_at="2026-10-04 19:51:02")
+        res = run_shadow_portfolio(
+            [r_sell_second, r_buy_first],   # 输入顺序颠倒
+            strategy_fn=strategy_direction_intent,
+            engine=eng, rules=rules_unlimited(), initial_cash=100_000,
+            strategy_name="s",
+        )
+        # sealed_at 仲裁：BUY(01) 先执行，SELL(02) 后执行 → 最终无持仓
+        assert res.summary["n_buys"] == 1
+        assert res.summary["n_sells"] == 1
+        assert res.summary["open_positions"] == {}
+
+    def test_same_sealed_at_falls_back_to_report_id(self):
+        """同 signal_date + symbol + 同 sealed_at：退化为 report_id 字典序（稳定序）。"""
+        eng = flat_engine()
+        # report_id "aa" < "zz"：字典序先 BUY 后 SELL → 最终无持仓
+        r_buy = rec(direction="看多", rid="aa", sealed_at="2026-10-04 19:51:38")
+        r_sell = rec(direction="看空", rid="zz", sealed_at="2026-10-04 19:51:38")
+        res = run_shadow_portfolio(
+            [r_sell, r_buy],
+            strategy_fn=strategy_direction_intent,
+            engine=eng, rules=rules_unlimited(), initial_cash=100_000,
+            strategy_name="s",
+        )
+        assert res.summary["n_buys"] == 1
+        assert res.summary["n_sells"] == 1
+        assert res.summary["open_positions"] == {}
+
     def test_turnover_ratio_positive_on_trade(self):
         eng = flat_engine()
         res = run_shadow_portfolio(
@@ -443,6 +494,41 @@ class TestPortfolioBehaviour:
         )
         assert res.summary["n_sells"] == 1
         assert res.summary["open_positions"] == {}
+
+    def test_sell_executes_at_t1_close_not_signal_close(self):
+        """T+1 收盘卖出：信号日 CAL[8] 的看空信号应在 CAL[9] 收盘成交，
+        而非信号日当天。本用例为 DAV-1690 复审发现的卖出前视偏差回归用例。"""
+        # 信号日 CAL[8] 价格 10，T+1 CAL[9] 收盘 12
+        bars = {d: mkbar(d, o=10.0, c=10.0) for d in CAL}
+        bars[CAL[9]] = mkbar(CAL[9], o=11.0, c=12.0)
+        eng = flat_engine(bars)
+        res = run_shadow_portfolio(
+            [rec(direction="看多", signal_date=CAL[0], rid="a"),
+             rec(direction="看空", signal_date=CAL[8], rid="b")],
+            strategy_fn=strategy_direction_intent,
+            engine=eng, rules=rules_unlimited(), initial_cash=100_000,
+            strategy_name="s",
+        )
+        sell = next(e for e in res.entries if e.side == "SELL")
+        assert sell.trade_date == CAL[9]              # 信号日+1 交易日
+        assert sell.signal_date == CAL[8]             # 保留原信号日
+        assert sell.price == 12.0                     # 成交价为 T+1 收盘
+
+    def test_preempt_sell_also_at_t1_close(self):
+        """抢占平仓同样按 T+1 收盘，而非信号日收盘。"""
+        bars = {d: mkbar(d, o=10.0, c=10.0) for d in CAL}
+        bars[CAL[6]] = mkbar(CAL[6], o=15.0, c=15.0)
+        eng = flat_engine(bars)
+        res = run_shadow_portfolio(
+            [rec(direction="看多", signal_date=CAL[0], rid="a"),
+             rec(direction="看多", signal_date=CAL[5], rid="b")],
+            strategy_fn=strategy_direction_intent,
+            engine=eng, rules=rules_unlimited(), initial_cash=100_000,
+            strategy_name="s",
+        )
+        preempt_sell = next(e for e in res.entries if e.side == "SELL")
+        assert preempt_sell.trade_date == CAL[6]
+        assert preempt_sell.reason == "preempt_by_new_signal"
 
     def test_bear_signal_without_position_noop(self):
         eng = flat_engine()
