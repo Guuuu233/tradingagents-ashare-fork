@@ -21,19 +21,25 @@
 #     free, SKIP this run and log one line explaining why (never start the
 #     heavy computation on a nearly-full disk).
 #   * Seal gate — run only after the 19:45 ledger seal has completed for
-#     TODAY. The seal stamps work/phase2-ledger/ledger_state.json
-#     (last_run_at) and snapshot_ledger.log. If the seal has not landed
-#     yet, log a DEFERRED line and exit 2. The default plist template triggers
-#     once at 19:50 (matching com.davidliu.ta-p4-ledger's single-tick
-#     template); if deferred and no catchup tick is configured, the run is
-#     skipped until the next scheduled tick. (No silent "run anyway" — the
-#     shadow must consume only sealed signals, never a half-written day.)
-#   * Idempotent — a same-calendar-day re-trigger must not duplicate output.
-#     The run writes to
+#     TODAY. The seal stamps <LEDGER_DIR>/ledger_state.json (last_run_at)
+#     and snapshot_ledger.log. If the seal has not landed yet, log a
+#     DEFERRED line and exit 2. The default plist template triggers once at
+#     19:50; the ops card may add retry ticks (the production seal instance
+#     runs 19:45 + 08:30 dual ticks, so a late seal is realistic) —
+#     overlapping ticks are serialized by the per-day mkdir lock, so a
+#     deferred day is retried by the next tick instead of skipped. (No silent
+#     "run anyway" — the shadow must consume only sealed signals, never a
+#     half-written day.)
+#   * Idempotent / at-most-once — a same-calendar-day re-trigger must not
+#     duplicate output. The run publishes to
 #       work/shadow-portfolio/<UTC date>/...
 #     and maintains a marker work/shadow-portfolio/<UTC date>/.done. If the
 #     marker already exists for today the wrapper logs "already produced" and
-#     exits 0 without recomputing. Results are persisted to disk (长跑结果
+#     exits 0 without recomputing. Overlapping ticks (back-to-back retry
+#     triggers) are serialized by an atomic per-day mkdir lock
+#     (work/shadow-portfolio/.lock.<UTC date>): a tick that finds the lock
+#     held exits 0 without entering the runner, so at most one runner enters
+#     per day even when ticks overlap. Results are persisted to disk (长跑结果
 #     落盘) so a later re-read never re-runs the heavy step.
 #   * Single process, peak RSS <= 4 GiB. On systems supporting RLIMIT_AS
 #     (e.g. Linux), the wrapper sets an address-space cap (ulimit -v). On
@@ -50,12 +56,19 @@
 #   2  deferred — seal not landed yet / benign skip (disk guard logs then exits 0)
 #   1  real failure (python step raised / nonzero)
 #
-# Config (env overrides for testing; launchd plist injects none by default):
+# Config (env overrides for testing; the launchd plist pins the production
+# values, notably LEDGER_DIR):
 #   REPO_ROOT    default: repo root derived from this script's location
 #   PYTHON_BIN   default: $REPO_ROOT/.venv310/bin/python  (locked interpreter)
 #   LEDGER_DIR   default: $REPO_ROOT/work/phase2-ledger
+#                PRODUCTION: /Users/davidliu/ta-p4-2e1e199f/work/phase2-ledger
+#                (must match the seal job com.davidliu.ta-p4-ledger's
+#                --ledger-dir; the plist template injects it explicitly —
+#                a mismatch yields a permanent nightly DEFERRED).
 #   OUT_DIR      default: $REPO_ROOT/work/shadow-portfolio
 #   RUNNER       default: scripts/phase2/shadow_portfolio_run.py
+#                (must be a Python script: it is executed as
+#                "$PYTHON_BIN" "$RUNNER" ...).
 #   MIN_FREE_GIB default: 100
 #   RSS_CAP_KIB  default: 4194304   (4 GiB address-space cap)
 #
@@ -94,6 +107,14 @@ log() {
     mkdir -p "$OUT_DIR" 2>/dev/null || true
     printf '%s\n' "$line" >>"$LOG_FILE" 2>/dev/null || true
 }
+
+# Fail fast on a misconfigured interpreter so a missing python is reported
+# as FAILED (exit 1) instead of being misdiagnosed as "seal not landed"
+# (exit 2).
+if [ ! -x "$PYTHON_BIN" ]; then
+    log "FAILED: python interpreter not found or not executable: $PYTHON_BIN (check PYTHON_BIN)"
+    exit 1
+fi
 
 # --- 1) disk-free guard (< MIN_FREE_GIB -> skip) -----------------------------
 # df -Pk on the volume holding REPO_ROOT; field 4 = 1K-blocks available.
@@ -140,7 +161,7 @@ if [ "$seal_ok" -eq 0 ] && [ -f "$SEAL_LOG" ] && \
     seal_ok=1
 fi
 if [ "$seal_ok" -eq 0 ]; then
-    log "DEFERRED: P4 ledger seal has not completed for $TODAY_UTC yet (no ledger_state/snapshot_ledger stamp); will retry on next launchd tick"
+    log "DEFERRED: P4 ledger seal has not completed for $TODAY_UTC yet (ledger=$LEDGER_DIR; no ledger_state/snapshot_ledger stamp); will retry on next launchd tick"
     exit 2
 fi
 
@@ -150,7 +171,7 @@ if [ -f "$DONE_MARKER" ]; then
     exit 0
 fi
 
-# --- 4) single-process RSS back-stop + run ----------------------------------
+# --- 4) single-process RSS back-stop ----------------------------------------
 # ulimit -v sets address-space cap (RLIMIT_AS) in KiB.
 # NOTE: Darwin (macOS) kernel does not support RLIMIT_AS (ulimit -v returns
 # 'invalid argument'), so this OS-level limit is best-effort / advisory.
@@ -160,33 +181,126 @@ fi
 ulimit -v "$RSS_CAP_KIB" 2>/dev/null || \
     log "NOTE: address-space cap ${RSS_CAP_KIB} KiB not supported by OS (macOS/Darwin); runner must self-monitor RSS <= 4 GiB"
 
-mkdir -p "$RUN_DIR"
+# --- 5) per-day mutual exclusion (at-most-once for overlapping ticks) ------
+# .done is written only AFTER a successful run, so it cannot serialize two
+# overlapping ticks. Claim the day with an atomic mkdir BEFORE touching
+# $RUN_DIR; a second overlapping tick finds the lock held and exits 0
+# without entering the runner. The lock is released (trap) on any failure
+# path so a later tick can retry; on success it is kept alongside .done.
+mkdir -p "$OUT_DIR" 2>/dev/null || true
+if [ ! -d "$OUT_DIR" ]; then
+    log "FAILED: cannot create output dir $OUT_DIR; not marking done"
+    exit 1
+fi
+LOCK_DIR="$OUT_DIR/.lock.$TODAY_UTC"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log "OK: shadow-portfolio run for $TODAY_UTC already in progress or finished (lock $LOCK_DIR held); overlapping tick skipped (at-most-once)"
+    exit 0
+fi
+release_lock() {
+    # Only the lock owner installs this trap (installed after mkdir won),
+    # and only a day WITHOUT .done releases it — a mid-run host crash
+    # leaves the lock behind, failing safe toward "no duplicate run".
+    if [ ! -f "$DONE_MARKER" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+}
+trap release_lock EXIT
+
+# --- 6) stage, run, verify fresh, publish atomically ------------------------
+# Never judge "freshness" by counting files in a possibly-stale $RUN_DIR.
+# The runner builds into a fresh per-attempt staging dir; only verified
+# THIS-run artifacts are atomically renamed into place. Residue from a
+# previous failed attempt can therefore never be mistaken for success.
+STAGE_DIR="$OUT_DIR/.stage.$TODAY_UTC.$$"
+rm -rf "$STAGE_DIR" 2>/dev/null || true
+if ! mkdir -p "$STAGE_DIR" 2>/dev/null; then
+    log "FAILED: cannot create staging dir $STAGE_DIR; not marking done"
+    exit 1
+fi
+# Freshness reference with an ancient mtime: every artifact genuinely written
+# by this run is newer; the check below is a secondary invariant (freshness
+# is guaranteed primarily by the empty staging dir).
+START_REF="$STAGE_DIR/.start-ref"
+touch -t 200001010000 "$START_REF" 2>/dev/null || touch "$START_REF"
+
 log "START: shadow-portfolio daily run for $TODAY_UTC (ledger=$LEDGER_DIR out=$RUN_DIR rss_cap=${RSS_CAP_KIB}KiB)"
 
 if [ ! -f "$RUNNER" ]; then
     log "FAILED: runner not found: $RUNNER (payload script missing; nothing scheduled)"
+    rm -rf "$STAGE_DIR" 2>/dev/null || true
     exit 1
 fi
 
 if env -u PYTHONPATH "$PYTHON_BIN" "$RUNNER" \
         --ledger-dir "$LEDGER_DIR" \
-        --out-dir "$RUN_DIR" \
+        --out-dir "$STAGE_DIR" \
         --as-of "$TODAY_UTC" \
         >>"$LOG_FILE" 2>&1; then
-    # Verify runner actually produced artifacts before marking done
-    artifact_count="$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | wc -l | tr -d ' ')"
+    # Count with safe capture (same pattern as the df guard): a find failure
+    # must degrade to FAILED-with-log, never to a silent errexit abort.
+    if ! artifact_count="$(find "$STAGE_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | wc -l | tr -d ' ')"; then
+        artifact_count="0"
+    fi
+    if ! fresh_count="$(find "$STAGE_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -newer "$START_REF" 2>/dev/null | wc -l | tr -d ' ')"; then
+        fresh_count="0"
+    fi
     if [ "${artifact_count:-0}" -eq 0 ]; then
-        log "FAILED: runner exited 0 but produced no artifacts in $RUN_DIR; not marking done"
+        log "FAILED: runner exited 0 but produced no artifacts in staging $STAGE_DIR (any stale $RUN_DIR residue ignored); not marking done"
+        rm -rf "$STAGE_DIR" 2>/dev/null || true
         exit 1
     fi
-    # Atomic write of .done marker via temporary file
+    if [ "${fresh_count:-0}" -ne "${artifact_count:-0}" ]; then
+        log "FAILED: runner artifacts failed freshness check in staging $STAGE_DIR (fresh=${fresh_count:-0} total=${artifact_count:-0}); not marking done"
+        rm -rf "$STAGE_DIR" 2>/dev/null || true
+        exit 1
+    fi
+    # Completion artifact per the runner contract: summary.json must exist
+    # and parse as JSON — a silent runner can no longer freeze the day.
+    if [ ! -s "$STAGE_DIR/summary.json" ]; then
+        log "FAILED: runner exited 0 but completion artifact summary.json missing/empty in staging $STAGE_DIR; not marking done"
+        rm -rf "$STAGE_DIR" 2>/dev/null || true
+        exit 1
+    fi
+    if ! "$PYTHON_BIN" -c 'import json,sys; json.load(open(sys.argv[1]))' "$STAGE_DIR/summary.json" 2>/dev/null; then
+        log "FAILED: runner summary.json is not valid JSON in staging $STAGE_DIR; not marking done"
+        rm -rf "$STAGE_DIR" 2>/dev/null || true
+        exit 1
+    fi
+    # Drop the internal freshness reference before publishing so the
+    # published date dir contains only runner artifacts + .done.
+    rm -f "$STAGE_DIR/.start-ref" 2>/dev/null || true
+    # Isolate any stale $RUN_DIR residue from a previous failed attempt,
+    # then publish the verified staging dir atomically (same-filesystem
+    # rename).
+    if [ -e "$RUN_DIR" ]; then
+        stale_backup="$OUT_DIR/.stale.${TODAY_UTC}.$(date +%H%M%S).$$"
+        if mv -f "$RUN_DIR" "$stale_backup" 2>/dev/null; then
+            log "NOTE: isolated stale output $RUN_DIR to $stale_backup before publishing fresh run"
+        else
+            log "FAILED: could not isolate stale $RUN_DIR; not marking done"
+            rm -rf "$STAGE_DIR" 2>/dev/null || true
+            exit 1
+        fi
+    fi
+    if ! mv -f "$STAGE_DIR" "$RUN_DIR" 2>/dev/null; then
+        log "FAILED: could not publish staging $STAGE_DIR to $RUN_DIR; not marking done"
+        rm -rf "$STAGE_DIR" 2>/dev/null || true
+        exit 1
+    fi
+    # Atomic write of .done marker via temporary file; mark done only on a
+    # clean, verified run so a crash never poisons the day.
     tmp_done="${DONE_MARKER}.tmp.$$"
-    printf '%s\n' "$STAMP" >"$tmp_done"
+    if ! printf '%s\n' "$STAMP" >"$tmp_done" 2>/dev/null; then
+        log "FAILED: could not write done marker for $TODAY_UTC; not marking done"
+        exit 1
+    fi
     mv -f "$tmp_done" "$DONE_MARKER"
-    log "DONE: shadow-portfolio run for $TODAY_UTC wrote $RUN_DIR (${artifact_count} artifact(s))"
+    log "DONE: shadow-portfolio run for $TODAY_UTC wrote $RUN_DIR (${artifact_count} artifact(s), all fresh)"
     exit 0
 else
     rc=$?
     log "FAILED: runner exited rc=$rc for $TODAY_UTC (see $LOG_FILE); not marking done"
+    rm -rf "$STAGE_DIR" 2>/dev/null || true
     exit 1
 fi

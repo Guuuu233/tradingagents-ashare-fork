@@ -16,6 +16,9 @@
   Pre-requisite: the directory `work/shadow-portfolio` MUST be created before
   bootstrapping, as launchd does not create intermediate directories for
   StandardOutPath / StandardErrorPath and will fail to redirect logs otherwise.
+  Pre-requisite: `LEDGER_DIR` below MUST match the seal job's ledger dir
+  (see EnvironmentVariables); the install card must verify with one manual
+  trigger that the log shows START:/DONE:, not a nightly DEFERRED:.
 
   Schedule: Mon–Fri 19:50 — i.e. AFTER the 19:45 P4 ledger seal
   (com.davidliu.ta-p4-ledger -> scripts/phase2/daily_snapshot_ledger.py run).
@@ -24,9 +27,10 @@
   so a late batch only postpones the shadow run — it never consumes an
   unsealed day. `StartCalendarInterval` Minute=50 Hour=19 is the primary
   trigger; the script's own seal-flag check is the correctness backstop.
-  If the 19:45 seal is deferred, the ops card may optionally configure
-  supplementary retry intervals (e.g. 20:20 / 20:50) where idempotence (.done)
-  ensures safe at-most-once execution.
+  If the 19:45 seal is deferred, the ops card may configure supplementary
+  retry intervals (e.g. 20:20 / 20:50): the wrapper's per-day mkdir lock
+  (.lock.<date>) plus .done jointly ensure safe at-most-once execution even
+  when retry ticks overlap.
 
   The wrapper enforces the card contract at the OS boundary:
     * skip + one log line when free disk < 100 GiB;
@@ -70,6 +74,11 @@
         <string>/Users/davidliu/Documents/TradingAgents-AShare</string>
         <key>PYTHON_BIN</key>
         <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
+        <!-- LEDGER_DIR MUST equal the seal job com.davidliu.ta-p4-ledger ledger
+             dir (production: /Users/davidliu/ta-p4-2e1e199f/work/phase2-ledger).
+             A mismatch here makes the seal gate DEFERRED every night (silent no-run). -->
+        <key>LEDGER_DIR</key>
+        <string>/Users/davidliu/ta-p4-2e1e199f/work/phase2-ledger</string>
         <key>MIN_FREE_GIB</key>
         <string>100</string>
         <key>RSS_CAP_KIB</key>
