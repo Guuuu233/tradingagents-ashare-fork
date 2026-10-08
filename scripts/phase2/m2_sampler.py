@@ -16,9 +16,10 @@ Builds the M2 前瞻模拟实验室 measurement-batch universe (plan v1.0 §5):
         (matches the V-03a / build_phase2_chunks entry-tradability caliber).
   - Sampling: SW2021 L1 industry-stratified random sample of N names.
     Per-stratum quota is proportional to stratum size (floor + largest-
-    remainder rounding). With a fixed seed and fixed inputs the output is
-    fully deterministic — a manifest hash of the eligible frame is reported
-    so a changed input can never be mistaken for the same draw.
+    remainder rounding; remainder ties broken by stratum code ascending).
+    With a fixed seed and fixed inputs the output is fully deterministic —
+    a manifest hash of the eligible frame is reported so a changed input
+    can never be mistaken for the same draw.
   - Output is a name list (JSON / CSV). No analysis, no model calls, no
     order intents — "只出名单，不触发任何分析".
 
@@ -215,7 +216,8 @@ def stratified_sample(g: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
     """SW-L1 proportional stratified sample (floor + largest remainder).
 
     Deterministic under a fixed seed: quotas are computed from stratum sizes
-    only, and each stratum draw uses a Generator seeded from (seed, stratum
+    only (floor + largest remainder, ties broken by stratum code ascending),
+    and each stratum draw uses a Generator seeded from (seed, stratum
     code) — independent of frame ordering and of the other strata.
     """
     if len(g) <= n:
@@ -224,9 +226,10 @@ def stratified_sample(g: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
     raw = counts / counts.sum() * n
     quota = raw.astype(int)
     leftover = int(n - quota.sum())
-    # largest-remainder, ties broken by stratum code (deterministic)
-    rem = (raw - quota).sort_values(ascending=False)
-    for code in rem.index[:leftover]:
+    # largest-remainder, ties broken by stratum code ascending (deterministic)
+    rem = (raw - quota).rename("remainder").reset_index()
+    rem = rem.sort_values(by=["remainder", "sw_l1_code"], ascending=[False, True])
+    for code in rem["sw_l1_code"].iloc[:leftover]:
         quota[code] += 1
     parts = []
     for code, k in quota.items():
