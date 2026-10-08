@@ -38,6 +38,7 @@ import bisect
 import logging
 import math
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -60,6 +61,9 @@ LIMIT_RATE_ST: float = 0.05
 # 涨跌停价推导的浮点容差（pre_close*rate 与行情 OHLC 均为 float64）
 LIMIT_EPS: float = 1e-6
 
+# 分位（0.01 元）——交易所口径四舍五入的量化单位
+_CENT = Decimal("0.01")
+
 _GEM_STAR_PREFIXES = ("300", "301", "302", "688", "689")
 
 
@@ -81,14 +85,31 @@ def limit_rate_for_day(symbol: str, is_st: bool) -> float:
     return board_limit_rate(symbol)
 
 
+def _round_half_up_to_cent(value: Decimal) -> float:
+    """分位四舍五入（交易所口径 ROUND_HALF_UP），返回 float。"""
+    return float(value.quantize(_CENT, rounding=ROUND_HALF_UP))
+
+
 def limit_prices(pre_close: Optional[float], rate: float) -> tuple[Optional[float], Optional[float]]:
     """由 pre_close 推导当日涨/跌停价；pre_close 非法时返回 (None, None)。
 
-    A 股涨跌停价为 pre_close*(1±rate) 四舍五入到分（0.01 元）。
+    A 股涨跌停价为 pre_close*(1±rate) 四舍五入到分（0.01 元），口径为
+    交易所 ROUND_HALF_UP（半分向上），而非 Python 内建 ``round()`` 的
+    银行家舍入（ROUND_HALF_EVEN）。如 ``pre_close=8.45, rate=10%``：
+    精确值 9.295 → 本口径 9.30，而 ``round()`` 得 9.29（差 1 分）。
+
+    为避开二进制浮点中介误差，乘法在 Decimal 域内完成（``str()`` 传入，
+    即按价格字面十进制精确计算）；rate 非有限值时同样返回 (None, None)。
     """
     if pre_close is None or not math.isfinite(pre_close) or pre_close <= 0:
         return None, None
-    return round(pre_close * (1.0 + rate), 2), round(pre_close * (1.0 - rate), 2)
+    if rate is None or not math.isfinite(rate):
+        return None, None
+    base = Decimal(str(pre_close))
+    factor = Decimal(str(rate))
+    up = _round_half_up_to_cent(base * (Decimal("1") + factor))
+    down = _round_half_up_to_cent(base * (Decimal("1") - factor))
+    return up, down
 
 
 # ---------------------------------------------------------------------------

@@ -186,6 +186,57 @@ class TestLimitRules:
         assert _detect_lock_with_rate(bar, 0.10) == OneWordLock.LIMIT_UP
 
 
+class TestLimitRoundingHalfUp:
+    """DAV-1700：涨跌停价须为交易所口径四舍五入（ROUND_HALF_UP）到分。
+
+    Python 内建 ``round()`` 为银行家舍入，且二进制浮点中介会把精确半分
+    值（如 9.295）存成 9.294999…，双重偏差导致大面积差 1 分。下述用例的
+    精确十进制值均恰为半分（第三位小数 == 5 且无后续位），旧口径全差 1 分。
+    """
+
+    def test_half_up_up_845_10pct(self):
+        # 复审主反例：8.45*1.1 = 9.295（精确）→ 9.30；round() 得 9.29
+        lup, ldown = limit_prices(8.45, 0.10)
+        assert lup == pytest.approx(9.30)
+        # 跌停侧：8.45*0.9 = 7.605（精确）→ 7.61；round() 得 7.60
+        assert ldown == pytest.approx(7.61)
+
+    def test_half_up_exact_half_cent_cases(self):
+        # 精确值恰为半分的临界值（各板块比率均覆盖）
+        cases = [
+            # (pre_close, rate, 方向, 精确值, 期望)
+            (1.15, 0.10, "up", "1.265", 1.27),
+            (1.15, 0.10, "down", "1.035", 1.04),
+            (1.25, 0.10, "down", "1.125", 1.13),
+            (1.10, 0.05, "down", "1.045", 1.05),
+            (1.15, 0.30, "up", "1.495", 1.50),
+            (1.15, 0.30, "down", "0.805", 0.81),
+        ]
+        for pre_close, rate, side, _exact, expect in cases:
+            lup, ldown = limit_prices(pre_close, rate)
+            got = lup if side == "up" else ldown
+            assert got == pytest.approx(expect), (pre_close, rate, side, got)
+            # 旧口径确与期望差 1 分（锚定用例有效性，非实现逻辑）
+            legacy = round(pre_close * (1.0 + rate if side == "up"
+                                        else 1.0 - rate), 2)
+            assert abs(legacy - expect) > 0.005, (pre_close, rate, side)
+
+    def test_gem_20pct_still_exact(self):
+        # 20% 从分位 pre_close 出发无精确半分情形，口径一致即可
+        lup, ldown = limit_prices(10.0, 0.20)
+        assert lup == pytest.approx(12.0) and ldown == pytest.approx(8.0)
+
+    def test_invalid_inputs_return_none_pair(self):
+        assert limit_prices(None, 0.10) == (None, None)
+        assert limit_prices(float("nan"), 0.10) == (None, None)
+        assert limit_prices(float("inf"), 0.10) == (None, None)
+        assert limit_prices(0.0, 0.10) == (None, None)
+        assert limit_prices(-5.0, 0.10) == (None, None)
+        # 上市首日等场景的非有限比率：不抛异常，返回空对
+        assert limit_prices(10.0, float("inf")) == (None, None)
+        assert limit_prices(10.0, float("nan")) == (None, None)
+
+
 # ---------------------------------------------------------------------------
 # R3 停牌顺延：无 bar / vol=0 / 价=0 顺延，超限归因 suspension vs data_missing
 # ---------------------------------------------------------------------------
