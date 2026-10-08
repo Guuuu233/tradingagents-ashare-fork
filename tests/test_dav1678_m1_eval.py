@@ -221,6 +221,108 @@ class TestInferenceAndGrade:
         v = mod.grade(mod.eval_days(one), {})
         assert v["valid_days"] == 35
 
+    def test_nan_version_failclose(self):
+        # DAV-1701: NaN version_key must count as a key of its own.
+        # NaN×15 + 'v2'×15 previously escaped fail-close (dropna hid the
+        # NaN group) and inflated n_t 15→30.
+        rows = _day("20260110", range(1, 16), np.linspace(0, 0.1, 15),
+                    vkey="v2")
+        for i in range(15):
+            rows.append({"signal_date": "20260110", "version_key": np.nan,
+                         "symbol": f"N{i:05d}", "q": 0.5, "r": 0.01,
+                         "timing_class": "F0", "input_pit_status": "VERIFIED"})
+        mv = pd.DataFrame(rows)
+        with pytest.raises(ValueError):
+            mod.select_version(mv)
+        # selecting v2 keeps exactly the 15 v2 rows (NaN rows stay out)
+        one = mod.select_version(mv, "v2")
+        days = mod.eval_days(one)
+        assert len(days) == 1 and days[0].n_t == 15
+
+    def test_nan_version_selectable(self):
+        # the NaN queue itself can be selected by its "<NaN>" display name
+        rows = _day("20260110", range(1, 16), np.linspace(0, 0.1, 15),
+                    vkey="v2")
+        for i in range(15):
+            rows.append({"signal_date": "20260110", "version_key": np.nan,
+                         "symbol": f"N{i:05d}", "q": 0.5, "r": 0.01,
+                         "timing_class": "F0", "input_pit_status": "VERIFIED"})
+        one = mod.select_version(pd.DataFrame(rows), "<NaN>")
+        days = mod.eval_days(one)
+        assert len(days) == 1 and days[0].n_t == 15
+
+    def test_all_excluded_empty_calendar_no_crash(self):
+        # DAV-1701: every row funnel-excluded + calendar provided → empty
+        # day list (grade-A empty report), not ValueError from min().
+        rows = _day("20260105", range(1, 15), np.linspace(0, 0.1, 14))
+        for r in rows:
+            r["input_pit_status"] = "FAILED"
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert len(d) == 0
+        cal = ["20260105", "20260106"]
+        days = mod.eval_days(d, calendar=cal)
+        assert days == []
+        v = mod.grade(days, fun)
+        assert v["grade"] == "A" and v["valid_days"] == 0
+
+    def test_dedup_earliest_created_wins_mixed_spelling(self):
+        # DAV-1701 🟡-1/🟡-3: contract is earliest-created wins, whatever
+        # the surviving 'completed' spelling. Mixed spellings (bool True
+        # vs str "yes") cross created_at here: the old 'completed'-desc
+        # key let spelling order override created_at and elected the
+        # LATER-created run (run 2) — this test FAILS on the parent code
+        # and PASSES on the fixed code (run 1).
+        rows = [
+            {"signal_date": "20260105", "version_key": "v1",
+             "symbol": "S001", "run_id": 1,
+             "created_at": "2026-01-05T09:00",
+             "q": 0.9, "r": 0.01, "timing_class": "F0",
+             "input_pit_status": "VERIFIED", "completed": True},
+            {"signal_date": "20260105", "version_key": "v1",
+             "symbol": "S001", "run_id": 2,
+             "created_at": "2026-01-05T09:30",
+             "q": 0.1, "r": 0.01, "timing_class": "F0",
+             "input_pit_status": "VERIFIED", "completed": "yes"},
+        ]
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert len(d) == 1 and d.iloc[0]["run_id"] == 1
+        assert fun["excl_dup_run"] == 1
+
+    def test_version_key_type_collision_failclose(self):
+        # DAV-1701 🟡-2: int 2 vs str "2" must fail closed —
+        # stringification must not silently merge them into one queue.
+        rows = _day("20260110", range(1, 16), np.linspace(0, 0.1, 15),
+                    vkey=2)
+        rows += _day("20260110", range(1, 16), np.linspace(0, 0.1, 15),
+                     vkey="2", start=50)
+        with pytest.raises(ValueError, match="collide"):
+            mod.select_version(pd.DataFrame(rows))
+
+    def test_empty_days_parquet_keeps_schema(self):
+        # DAV-1701 🟡-4: an empty day series must still carry the README
+        # columns when written via the run() path (no (0,0) schemaless
+        # frame). End-to-end through run() with an all-excluded input.
+        rows = _day("20260105", range(1, 15), np.linspace(0, 0.1, 14))
+        for r in rows:
+            r["input_pit_status"] = "FAILED"
+        inp = pd.DataFrame(rows)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            inp.to_csv(ip, index=False)
+            cp = td / "cal.csv"
+            cp.write_text("date\n20260105\n20260106\n")
+            out = td / "out"
+            res = mod.run(ip, out, calendar_path=cp)
+            assert res["days"] == []
+            assert res["verdict"]["grade"] == "A"
+            back = pd.read_parquet(out / "m1_day_series.parquet")
+            assert list(back.columns) == ["date", "n_t", "status", "ic",
+                                           "quintile_diff", "quintile_tied_n",
+                                           "brier"]
+            assert len(back) == 0
+
     def test_nw_gap_not_compressed(self):
         # two strongly-autocorrelated blocks separated by a wide NaN gap:
         # compressing the gap would let lag-1 pairs bridge block A→B and

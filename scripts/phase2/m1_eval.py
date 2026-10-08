@@ -344,10 +344,16 @@ def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     # earliest-created completed run wins; fixed ex ante ---
     d["_created_sort"] = pd.to_datetime(d["created_at"], errors="coerce")
     d["_seq"] = np.arange(len(d))
+    # No 'completed' key here by design (DAV-1701 🟡-1): the
+    # excl_not_completed filter already removed incomplete rows, but the
+    # surviving 'completed' values keep their original spellings
+    # (True/'true'/'1'/'completed'/... — all pass the filter). Sorting on
+    # them would NOT be constant: spelling order would override created_at
+    # and elect a later-created run. The contract is earliest-created
+    # wins, so created_at is the first tie-breaker, then input order.
     d = d.sort_values(
-        ["signal_date", "version_key", "symbol",
-         "completed", "_created_sort", "_seq"],
-        ascending=[True, True, True, False, True, True],
+        ["signal_date", "version_key", "symbol", "_created_sort", "_seq"],
+        ascending=[True, True, True, True, True],
         na_position="last",
     )
     before = len(d)
@@ -401,6 +407,11 @@ def eval_days(d: pd.DataFrame,
         by_day[day] = DayRow(day, n_t, "ok", ic, diff, tied, brier)
 
     if calendar:
+        if not by_day:
+            # every row was funnel-excluded: emit an empty day series rather
+            # than crashing on min()/max() of an empty dict — grade() then
+            # reports a grade-A empty report.
+            return []
         lo, hi = min(by_day), max(by_day)
         idx = [c for c in calendar if lo <= c <= hi]
         return [by_day.get(c, DayRow(c, 0, "no_data")) for c in idx]
@@ -503,7 +514,33 @@ def select_version(df: pd.DataFrame,
     would double-count valid_days and corrupt NW lags)."""
     if "version_key" not in df.columns:
         return df
-    keys = sorted(df["version_key"].dropna().unique().tolist())
+    # NaN counts as its own key — a NaN-version residue must not slip the
+    # multi-version fail-close (DAV-1692 🟢-1): dropna() would ignore it,
+    # letting 'NaN×15 + v2×15' pass as single-version and inflate n_t.
+    # Compare on a stringified key so typed (e.g. int) keys match the CLI
+    # string; missing keys map to a literal "<NaN>" display name that can
+    # be selected the same way (a real "<NaN>" string key is indistinct
+    # from missing by design — both mean 'no valid version').
+    raw = df["version_key"]
+    vk = raw.astype("string").fillna("<NaN>")
+    # Collision guard (DAV-1701 🟡-2): stringification must not merge
+    # distinct raw keys (e.g. int 2 vs str "2") — that would silently
+    # bypass fail-close. Any display key fed by >1 raw (type, value)
+    # identity fails closed before the single-key fast path below.
+    raw_id = raw.map(
+        lambda v: ("<NaN>", "") if pd.isna(v)
+        else (type(v).__name__, str(v)))
+    coll = pd.DataFrame({"vk": vk.tolist(), "raw": raw_id.tolist()})
+    ndistinct = coll.groupby("vk")["raw"].nunique()
+    bad = ndistinct[ndistinct > 1]
+    if len(bad):
+        detail = {k: sorted(set(coll.loc[coll["vk"] == k, "raw"]))
+                  for k in bad.index.tolist()}
+        raise ValueError(
+            f"version_key values collide after stringification {detail}; "
+            "refusing to merge distinct raw keys — normalise the input "
+            "column to a single dtype first")
+    keys = sorted(vk.unique().tolist())
     if len(keys) <= 1:
         return df
     if version_key is None:
@@ -515,7 +552,7 @@ def select_version(df: pd.DataFrame,
     if version_key not in keys:
         raise ValueError(
             f"--version-key {version_key!r} not in input {keys}")
-    return df[df["version_key"] == version_key].copy()
+    return df[vk == version_key].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +594,12 @@ def run(input_path: Path, out_dir: Path,
         out["repeat"] = repeat_from_pairs(pdf)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    days_df = pd.DataFrame([vars(x) for x in days])
+    # Explicit columns (DAV-1701 🟡-4): an empty day list must still yield
+    # a (0, 7) frame with the README schema, not a (0, 0) schemaless one.
+    days_df = pd.DataFrame(
+        [vars(x) for x in days],
+        columns=["date", "n_t", "status", "ic", "quintile_diff",
+                 "quintile_tied_n", "brier"])
     days_df.to_parquet(out_dir / "m1_day_series.parquet", index=False)
     pd.DataFrame(rel).to_json(out_dir / "m1_reliability.json",
                               orient="records", force_ascii=False, indent=2)
