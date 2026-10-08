@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DAV-1707 — M2-B 影子组合 daily schedule TEMPLATE (launchd LaunchAgent).
+
+  TEMPLATE ONLY — do NOT install / `launchctl bootstrap` during this card.
+  Installation is a later ops step after 总控 sign-off (D-033); install recipe
+  for that card (paths assume the repo checkout below):
+
+      cp scripts/phase2/com.davidliu.ta-shadow-portfolio.plist \
+         ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$UID \
+         ~/Library/LaunchAgents/com.davidliu.ta-shadow-portfolio.plist
+
+  Schedule: Mon–Fri 19:50 — i.e. AFTER the 19:45 P4 ledger seal
+  (com.davidliu.ta-p4-ledger -> scripts/phase2/daily_snapshot_ledger.py run).
+  The wrapper additionally gates on the seal's ledger_state.json /
+  snapshot_ledger.log stamp and exits 2 (deferred) if the seal hasn't landed,
+  so a late batch only postpones the shadow run — it never consumes an
+  unsealed day. `StartCalendarInterval` Minute=50 Hour=19 is the primary
+  trigger; the script's own seal-flag check is the correctness backstop.
+
+  The wrapper enforces the card contract at the OS boundary:
+    * skip + one log line when free disk < 100 GiB;
+    * same-day re-trigger is an idempotent no-op (work/shadow-portfolio/<d>/.done);
+    * single process, address-space cap 4 GiB (ulimit -v back-stop + the runner
+      reports measured peak_rss_gb);
+    * results persisted under work/shadow-portfolio/<YYYY-MM-DD>/ (gitignored).
+
+  ProgramArguments run the wrapper via the LOCKED project interpreter only to
+  satisfy launchd (the wrapper itself re-execs the payload with
+  `env -u PYTHONPATH .venv310/bin/python`); bash is the actual entrypoint.
+  WorkingDirectory points at the repo so the wrapper resolves paths relative
+  to it; NO_PROXY keeps any accidental localhost resolution off the Clash
+  7897 proxy, consistent with the other phase2 agents.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.davidliu.ta-shadow-portfolio</string>
+
+    <!-- interpreter + entrypoint: bash wrapper (it re-execs .venv310 python) -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/davidliu/Documents/TradingAgents-AShare/scripts/phase2/shadow_portfolio_daily.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_PROXY</key>
+        <string>127.0.0.1,localhost</string>
+        <key>no_proxy</key>
+        <string>127.0.0.1,localhost</string>
+        <!-- explicit overrides matching wrapper defaults; harmless but documents
+             the locked interpreter + paths the ops card can retarget. -->
+        <key>REPO_ROOT</key>
+        <string>/Users/davidliu/Documents/TradingAgents-AShare</string>
+        <key>PYTHON_BIN</key>
+        <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
+        <key>MIN_FREE_GIB</key>
+        <string>100</string>
+        <key>RSS_CAP_KIB</key>
+        <string>4194304</string>
+    </dict>
+
+    <!-- Mon-Fri 19:50, after the 19:45 P4 seal tick -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>19</integer><key>Minute</key><integer>50</integer></dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- never auto-restart a failed run; the next calendar tick retries -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/work/shadow-portfolio/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/work/shadow-portfolio/launchd.err.log</string>
+</dict>
+</plist>
