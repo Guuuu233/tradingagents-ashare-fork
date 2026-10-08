@@ -33,18 +33,21 @@ from __future__ import annotations
 import json
 import math
 import statistics
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+)
 
 from tradingagents.eval.trade_execution import (
     ExecutionEngine,
-    OrderSide,
     OrderStatus,
     TradingCalendar,
     calendar_position,
     ledger_direction,
+    next_trading_day,
 )
 
 # ---------------------------------------------------------------------------
@@ -52,9 +55,9 @@ from tradingagents.eval.trade_execution import (
 # ---------------------------------------------------------------------------
 
 
-def load_forward_ledger(path: Path | str) -> List[Dict[str, Any]]:
+def load_forward_ledger(path: Path | str) -> list[dict[str, Any]]:
     """读 forward_ledger.jsonl，兼容裸记录行与 {'record': {...}} 包装行。"""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -66,21 +69,21 @@ def load_forward_ledger(path: Path | str) -> List[Dict[str, Any]]:
     return out
 
 
-def _norm_action(raw: Any) -> Optional[str]:
+def _norm_action(raw: Any) -> str | None:
     if raw is None:
         return None
     s = str(raw).strip().upper()
     return s if s in ("BUY", "SELL", "HOLD", "WAIT", "NO_TRADE") else None
 
 
-def _norm_decision(raw: Any) -> Optional[str]:
+def _norm_decision(raw: Any) -> str | None:
     if raw is None:
         return None
     s = str(raw).strip().upper()
     return s if s in ("BUY", "SELL", "HOLD", "WAIT", "NO_TRADE") else None
 
 
-def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> Optional[float]:
+def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> float | None:
     hz = (record.get("horizons") or {}).get(horizon) or {}
     v = hz.get("confidence")
     if v is None:
@@ -91,7 +94,7 @@ def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> Opt
         return None
 
 
-def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> Optional[float]:
+def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> float | None:
     hz = (record.get("horizons") or {}).get(horizon) or {}
     v = hz.get("probability")
     if v is None:
@@ -103,7 +106,7 @@ def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> Op
     return f if math.isfinite(f) else None
 
 
-def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> Optional[str]:
+def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> str | None:
     hz = (record.get("horizons") or {}).get(horizon) or {}
     v = hz.get("risk_status")
     if v is None:
@@ -112,7 +115,7 @@ def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> Op
     return s or None
 
 
-def ledger_final_action(record: Mapping[str, Any], horizon: str = "medium") -> Optional[str]:
+def ledger_final_action(record: Mapping[str, Any], horizon: str = "medium") -> str | None:
     """风控后的最终动作：trade_action → decision → direction 映射。"""
     hz = (record.get("horizons") or {}).get(horizon) or {}
     act = _norm_action(hz.get("trade_action")) or _norm_action(record.get("trade_action_top"))
@@ -140,8 +143,8 @@ class RiskRules:
     - ``min_confidence``       : 信号入选最低 confidence（None = 不看 confidence）
     - ``require_risk_clear``   : True 要求 horizons.risk_status ∈ {OK, UNKNOWN, None}
                                  才允许开仓（BLOCKED/ELEVATED 抑制开仓）
-    - ``respect_blocked``      : True 时 risk_status==BLOCKED 抑制任何新动作
-                                 （含平仓信号同样放行——平仓不被风控阻断）
+    - ``respect_blocked``      : True 时 risk_status==BLOCKED 抑制新开仓
+                                 （仅拦 BUY；平仓信号不受影响——退出永远放行）
     - ``cooldown_per_symbol``  : 同标的相邻两次开仓的最小间隔交易日数（0=不限）
     """
 
@@ -149,7 +152,7 @@ class RiskRules:
     max_positions: int = 0
     max_new_per_day: int = 0
     position_weight: float = 0.10
-    min_confidence: Optional[float] = None
+    min_confidence: float | None = None
     require_risk_clear: bool = False
     respect_blocked: bool = True
     cooldown_per_symbol: int = 0
@@ -184,7 +187,7 @@ def risk_rules_v2() -> RiskRules:
     )
 
 
-RISK_RULES_VERSIONS: Dict[str, RiskRules] = {
+RISK_RULES_VERSIONS: dict[str, RiskRules] = {
     r.name: r for r in (risk_rules_v1(), risk_rules_v2())
 }
 
@@ -208,13 +211,13 @@ class SignalIntent:
     signal_date: str
     intent: Intent
     weight: float = 1.0         # 目标仓位权重（由策略设定，风控可再压缩）
-    confidence: Optional[float] = None
-    probability: Optional[float] = None
+    confidence: float | None = None
+    probability: float | None = None
     horizon: str = "medium"
     reason: str = ""
 
 
-def _weight_from_probability(prob: Optional[float]) -> float:
+def _weight_from_probability(prob: float | None) -> float:
     """概率 → 仓位权重：线性映射到 [0.05, 1.0]，缺概率给中性 0.5。"""
     if prob is None:
         return 0.5
@@ -223,7 +226,7 @@ def _weight_from_probability(prob: Optional[float]) -> float:
 
 
 def strategy_direction_intent(record: Mapping[str, Any],
-                              horizon: str = "medium") -> Optional[SignalIntent]:
+                              horizon: str = "medium") -> SignalIntent | None:
     """S1 方向/概率策略：只看 direction，不看风控输出。"""
     d = ledger_direction(record, horizon)
     if d is None:
@@ -244,7 +247,7 @@ def strategy_direction_intent(record: Mapping[str, Any],
 
 
 def strategy_risk_adjusted_intent(record: Mapping[str, Any],
-                                  horizon: str = "medium") -> Optional[SignalIntent]:
+                                  horizon: str = "medium") -> SignalIntent | None:
     """S2 风控后最终动作：trade_action/decision 为准。"""
     act = ledger_final_action(record, horizon)
     if act is None or act in ("WAIT", "NO_TRADE", "HOLD"):
@@ -269,7 +272,7 @@ def strategy_risk_adjusted_intent(record: Mapping[str, Any],
 def strategy_high_confidence_intent(
         record: Mapping[str, Any],
         horizon: str = "medium",
-        min_confidence: float = 70.0) -> Optional[SignalIntent]:
+        min_confidence: float = 70.0) -> SignalIntent | None:
     """S3 高置信精选：S1 信号 ∩ confidence ≥ 阈值。"""
     conf = ledger_confidence(record, horizon)
     if conf is None or conf < min_confidence:
@@ -285,9 +288,9 @@ def strategy_high_confidence_intent(
     )
 
 
-StrategyFn = Callable[[Mapping[str, Any]], Optional[SignalIntent]]
+StrategyFn = Callable[[Mapping[str, Any]], SignalIntent | None]
 
-STRATEGIES: Dict[str, StrategyFn] = {
+STRATEGIES: dict[str, StrategyFn] = {
     "direction": lambda r: strategy_direction_intent(r),
     "risk_adjusted": lambda r: strategy_risk_adjusted_intent(r),
     "high_confidence": lambda r: strategy_high_confidence_intent(r),
@@ -323,7 +326,7 @@ class HoldingState:
     shares: int
     entry_date: str
     entry_price_eff: float   # 买入有效价
-    last_price: Optional[float] = None   # 最近一个有效收盘（用于 mark）
+    last_price: float | None = None   # 最近一个有效收盘（用于 mark）
 
 
 @dataclass
@@ -335,10 +338,10 @@ class ShadowLedger:
     trading_calendar: TradingCalendar
 
     cash: float = field(init=False)
-    positions: Dict[str, HoldingState] = field(default_factory=dict, init=False)
-    entries: List[LedgerEntry] = field(default_factory=list, init=False)
+    positions: dict[str, HoldingState] = field(default_factory=dict, init=False)
+    entries: list[LedgerEntry] = field(default_factory=list, init=False)
     # 每信号日同标的上一次开仓日（冷却判定用）
-    _last_entry_pos: Dict[str, int] = field(default_factory=dict, init=False)
+    _last_entry_pos: dict[str, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.cash = float(self.initial_cash)
@@ -416,19 +419,25 @@ class PortfolioResult:
     strategy: str
     risk_rules: str
     initial_cash: float
-    entries: List[LedgerEntry]
-    nav_series: List[Tuple[str, float]]
+    entries: list[LedgerEntry]
+    nav_series: list[tuple[str, float]]
     n_records: int
     n_signals: int          # 产生意图的记录数
-    n_blocked: int          # 风控拦截的意图数
+    n_blocked: int          # 风控拦截的意图数（仅计 BUY 意图；SELL 意图不放行入此计数）
     n_filled_buys: int
     n_filled_sells: int
-    summary: Dict[str, Any]
+    summary: dict[str, Any]
 
 
-def _sort_key_record(r: Mapping[str, Any]) -> Tuple[str, str, str]:
+def _sort_key_record(r: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """同 record 集合排序键：按封存到达序执行，避免同日同标的方向仲裁为哈希序。
+
+    (signal_date, symbol, sealed_at, report_id)：sealed_at 为封存写入时间戳，
+    业务语义上等价于"信号到达账本先后"；report_id 仅作同刻稳定序的决胜键。
+    """
     return (str(r.get("signal_date") or ""),
             str(r.get("symbol") or ""),
+            str(r.get("sealed_at") or ""),
             str(r.get("report_id") or ""))
 
 
@@ -440,9 +449,9 @@ def run_shadow_portfolio(
         initial_cash: float = 1_000_000.0,
         horizon: str = "medium",
         strategy_name: str = "",
-        get_bar: Optional[Callable[[str, str], Any]] = None,
-        mark_start: Optional[str] = None,
-        mark_end: Optional[str] = None,
+        get_bar: Callable[[str, str], Any] | None = None,
+        mark_start: str | None = None,
+        mark_end: str | None = None,
 ) -> PortfolioResult:
     """在给定封存记录集合上运行一套策略，返回确定性账本结果。
 
@@ -455,7 +464,7 @@ def run_shadow_portfolio(
     cal = list(engine.trading_calendar)
 
     # 1) 逐条生成意图（确定性顺序）
-    intents: List[SignalIntent] = []
+    intents: list[SignalIntent] = []
     for rec in sorted(records, key=_sort_key_record):
         si = strategy_fn(rec)
         if si is None or not si.symbol or not si.signal_date:
@@ -463,7 +472,7 @@ def run_shadow_portfolio(
         intents.append(si)
 
     # 2) 按信号日分组 → 逐日应用风控 → 执行
-    by_day: Dict[str, List[SignalIntent]] = {}
+    by_day: dict[str, list[SignalIntent]] = {}
     for si in intents:
         by_day.setdefault(si.signal_date, []).append(si)
 
@@ -503,7 +512,11 @@ def run_shadow_portfolio(
                         continue
                 # 已有持仓 → 先平（新信号覆盖旧持仓）
                 if si.symbol in ledger.positions:
-                    ledger.try_sell(si.symbol, day, si.signal_date,
+                    t1 = next_trading_day(cal, si.signal_date, 1)
+                    if t1 is None:
+                        blocked += 1
+                        continue
+                    ledger.try_sell(si.symbol, si.signal_date, t1,
                                     reason="preempt_by_new_signal")
                     if si.symbol in ledger.positions:
                         blocked += 1
@@ -515,16 +528,23 @@ def run_shadow_portfolio(
                 e = ledger.try_buy(si, exec_cash)
                 if e is not None:
                     new_buys_today += 1
+                    # 冷却基准：实际成交日（买入发生日），而非信号日——同标的
+                    # 二次开仓间隔按「上一次成交日」起算更贴近业务语义。
                     ledger._last_entry_pos[si.symbol] = calendar_position(
                         cal, e.trade_date)
             else:  # SELL 意图：平仓信号，风控不拦截退出
                 if si.symbol in ledger.positions:
-                    ledger.try_sell(si.symbol, day, si.signal_date,
+                    # T+1 收盘卖出（对齐 R1 T+1 与 M2-A execute_sell 收盘价语义，
+                    # 避免同日收盘回填的前视偏差）
+                    t1 = next_trading_day(cal, si.signal_date, 1)
+                    if t1 is None:
+                        continue
+                    ledger.try_sell(si.symbol, si.signal_date, t1,
                                     reason=si.reason or "signal_sell")
 
     # 3) 逐日净值（mark-to-market）
     if not cal:
-        nav: List[Tuple[str, float]] = []
+        nav: list[tuple[str, float]] = []
     else:
         start = mark_start or cal[0]
         end = mark_end or cal[-1]
@@ -550,7 +570,7 @@ def run_shadow_portfolio(
 
 
 def summarize(ledger: ShadowLedger,
-              nav: Sequence[Tuple[str, float]]) -> Dict[str, Any]:
+              nav: Sequence[tuple[str, float]]) -> dict[str, Any]:
     final_nav = nav[-1][1] if nav else ledger.cash
     total_ret = final_nav / ledger.initial_cash - 1.0 if ledger.initial_cash else 0.0
 
@@ -592,7 +612,7 @@ def summarize(ledger: ShadowLedger,
     }
 
 
-def compare_strategies(results: Sequence[PortfolioResult]) -> Dict[str, Any]:
+def compare_strategies(results: Sequence[PortfolioResult]) -> dict[str, Any]:
     """多策略对比汇总表。"""
     return {
         r.strategy: {
