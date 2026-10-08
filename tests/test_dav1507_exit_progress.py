@@ -359,5 +359,143 @@ def test_cluster_type_observational_column():
     assert out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_mean_per_unit"]["bull"] == 3.0
 
 
+# ── DAV-1713: markdown render handles t5_gap_to_95=None without crash ────── #
+
+def test_render_markdown_t5_gap_none_no_mature_units():
+    """DAV-1713: when completion_rate_pct is present (e.g. 100%) but t5_rate_pct
+    and t5_gap_to_95 are None (no mature units), render_markdown must not crash
+    with TypeError (None.__format__) and output must contain completion rate
+    reading / gap and '—'."""
+    a4 = {
+        "threshold": "completed ≥ 95%；T+5 完整率 ≥ 95%（成熟档 = trade_date 距 as_of ≥ 5 交易日）",
+        "as_of": "2026-10-08",
+        "mature_cutoff": None,
+        "submitted": 1,
+        "completed": 1,
+        "failed": 0,
+        "completion_rate_pct": 100.0,
+        "completion_gap_to_95": 5.0,
+        "mature_units": 0,
+        "mature_reports": 0,
+        "t5_present": 0,
+        "t5_reports_present": 0,
+        "t5_rate_pct": None,
+        "t5_report_rate_pct": None,
+        "t5_gap_to_95": None,
+    }
+    summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": {"per_cohort": {}},
+        "A4": a4,
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None, "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    meta = {
+        "as_of": "2026-10-08", "start": "2026-10-08", "db": "dummy.db",
+        "reports": 1, "units": 1, "peak_mb": 1.0,
+    }
+    md = m.render_markdown(summary, meta)
+    assert "| A4 |" in md
+    assert "completed 100.0%" in md
+    assert "完成率 +5.00pp" in md
+    assert "—" in md
+    assert "T+5 —" in md
+
+
+def test_metric_a4_and_render_markdown_no_mature_units():
+    """DAV-1713 integration: metric_a4 output fed into render_markdown with start=as_of."""
+    reports_meta = [{"id": "r1", "status": "completed"}]
+    t5_rows = [{"report_id": "r1", "trade_date": "2026-10-08", "t5_status": None}]
+    trade_dates = ["2026-10-08"]
+    a4 = m.metric_a4(reports_meta, t5_rows, trade_dates, "2026-10-08")
+    assert a4["completion_rate_pct"] == 100.0
+    assert a4["completion_gap_to_95"] == 5.0
+    assert a4["t5_rate_pct"] is None
+    assert a4["t5_gap_to_95"] is None
+
+    summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": {"per_cohort": {}},
+        "A4": a4,
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None, "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    meta = {
+        "as_of": "2026-10-08", "start": "2026-10-08", "db": "dummy.db",
+        "reports": 1, "units": 1, "peak_mb": 1.0,
+    }
+    md = m.render_markdown(summary, meta)
+    assert "| A4 |" in md
+    assert "completed 100.0%" in md
+    assert "完成率 +5.00pp；T+5 —" in md
+    assert "T+5 —（0/0 成熟档）" in md
+
+
+def test_render_markdown_t5_with_mature_units():
+    """Mature units present: formatted with both completion and T+5 gaps."""
+    reports_meta = [{"id": "r1", "status": "completed"}]
+    t5_rows = [{"report_id": "r1", "trade_date": "2026-09-20", "t5_status": True}]
+    trade_dates = [
+        "2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23",
+        "2026-09-24", "2026-09-25", "2026-10-08",
+    ]
+    a4 = m.metric_a4(reports_meta, t5_rows, trade_dates, "2026-10-08")
+    assert a4["completion_rate_pct"] == 100.0
+    assert a4["t5_rate_pct"] == 100.0
+    assert a4["t5_gap_to_95"] == 5.0
+
+    summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": {"per_cohort": {}},
+        "A4": a4,
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None, "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    meta = {
+        "as_of": "2026-10-08", "start": "2026-10-08", "db": "dummy.db",
+        "reports": 1, "units": 1, "peak_mb": 1.0,
+    }
+    md = m.render_markdown(summary, meta)
+    assert "完成率 +5.00pp；T+5 +5.00pp" in md
+    assert "T+5 100.0%（1/1 成熟档）" in md
+
+
+def test_render_markdown_a4_no_samples():
+    """Zero samples: A4 displays 无样本 / — / N/A."""
+    a4 = {
+        "completion_rate_pct": None,
+        "completion_gap_to_95": None,
+        "t5_rate_pct": None,
+        "t5_gap_to_95": None,
+        "mature_cutoff": None,
+        "submitted": 0,
+        "completed": 0,
+        "failed": 0,
+        "mature_units": 0,
+        "t5_present": 0,
+    }
+    summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": {"per_cohort": {}},
+        "A4": a4,
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None, "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    meta = {
+        "as_of": "2026-10-08", "start": "2026-10-08", "db": "dummy.db",
+        "reports": 0, "units": 0, "peak_mb": 1.0,
+    }
+    md = m.render_markdown(summary, meta)
+    assert "| A4 | completed ≥95%；T+5 ≥95% | 无样本 | — | N/A |" in md
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
