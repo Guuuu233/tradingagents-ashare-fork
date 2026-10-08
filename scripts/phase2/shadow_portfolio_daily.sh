@@ -22,10 +22,12 @@
 #     heavy computation on a nearly-full disk).
 #   * Seal gate — run only after the 19:45 ledger seal has completed for
 #     TODAY. The seal stamps work/phase2-ledger/ledger_state.json
-#     (last_run_at, snapshot_date=UTC today) and snapshot_ledger.log. If the
-#     seal has not landed yet, log a DEFERRED line and exit 2 so launchd does
-#     not retry-storm; the next tick picks it up. (No silent "run anyway" —
-#     the shadow must consume only sealed signals, never a half-written day.)
+#     (last_run_at) and snapshot_ledger.log. If the seal has not landed
+#     yet, log a DEFERRED line and exit 2. The default plist template triggers
+#     once at 19:50 (matching com.davidliu.ta-p4-ledger's single-tick
+#     template); if deferred and no catchup tick is configured, the run is
+#     skipped until the next scheduled tick. (No silent "run anyway" — the
+#     shadow must consume only sealed signals, never a half-written day.)
 #   * Idempotent — a same-calendar-day re-trigger must not duplicate output.
 #     The run writes to
 #       work/shadow-portfolio/<UTC date>/...
@@ -33,13 +35,15 @@
 #     marker already exists for today the wrapper logs "already produced" and
 #     exits 0 without recomputing. Results are persisted to disk (长跑结果
 #     落盘) so a later re-read never re-runs the heavy step.
-#   * Single process, peak RSS <= 4 GiB. The wrapper sets an address-space
-#     soft cap (ulimit -v) as a back-stop so a runaway computation is killed
-#     by the OS rather than by luck; the python step additionally reports its
-#     measured peak_rss_gb on the summary line. 4 GiB = 4194304 KiB.
+#   * Single process, peak RSS <= 4 GiB. On systems supporting RLIMIT_AS
+#     (e.g. Linux), the wrapper sets an address-space cap (ulimit -v). On
+#     Darwin (macOS) where RLIMIT_AS is unsupported by the kernel, the
+#     wrapper logs a note and fails open; the runner contract mandates
+#     self-monitoring via resource.getrusage(RUSAGE_SELF).ru_maxrss <= 4 GiB.
 #   * Read-mostly: reads the ledger + market bars; writes ONLY under
-#     work/shadow-portfolio/ (gitignored scratch area). Never writes the
-#     production DB, never calls a model/provider, never touches the network.
+#     work/shadow-portfolio/ (local scratch area; recommended to add to
+#     .gitignore upon ops deployment). Never writes the production DB, never
+#     calls a model/provider, never touches the network.
 #
 # Exit codes:
 #   0  success (or already-done same day — idempotent no-op)
@@ -92,8 +96,11 @@ log() {
 }
 
 # --- 1) disk-free guard (< MIN_FREE_GIB -> skip) -----------------------------
-# df -k on the volume holding REPO_ROOT; field 4 = 1K-blocks available.
-avail_kib="$(df -k "$REPO_ROOT" 2>/dev/null | awk 'NR==2{print $4}')"
+# df -Pk on the volume holding REPO_ROOT; field 4 = 1K-blocks available.
+# Use safe capture so df failure does not trigger errexit without logging.
+if ! avail_kib="$(df -Pk "$REPO_ROOT" 2>/dev/null | awk 'NR==2{print $4}')"; then
+    avail_kib=""
+fi
 if [ -z "${avail_kib:-}" ]; then
     log "DEFERRED: cannot stat free space on $REPO_ROOT (df failed); skipping this run"
     exit 2
@@ -107,10 +114,8 @@ fi
 # --- 2) seal gate (19:45 P4 seal must have landed for today) ----------------
 seal_ok=0
 if [ -f "$STATE_FILE" ]; then
-    # ledger_state.json records last_run_at (UTC iso) + snapshot_date; the
-    # forward seal for "today" is present when snapshot_date == UTC today OR
-    # last_run_at's date == today (seal always runs shortly after 19:45 local
-    # = same UTC evening during the trading session window).
+    # ledger_state.json records last_run_at (UTC ISO string); the forward seal
+    # for "today" has landed and saved state when last_run_at's date == TODAY_UTC.
     if "$PYTHON_BIN" - "$STATE_FILE" "$TODAY_UTC" <<'PY' 2>/dev/null
 import json, sys
 try:
@@ -118,16 +123,20 @@ try:
 except Exception:
     sys.exit(1)
 today = sys.argv[2]
-snap = str(st.get("snapshot_date") or "")
 last = str(st.get("last_run_at") or "")
-sys.exit(0 if (snap == today or last[:10] == today) else 1)
+sys.exit(0 if last[:10] == today else 1)
 PY
     then
         seal_ok=1
     fi
 fi
-# Fallback: a same-day OK/append line in the seal log also proves the seal ran.
-if [ "$seal_ok" -eq 0 ] && [ -f "$SEAL_LOG" ] && grep -q "$TODAY_UTC" "$SEAL_LOG" 2>/dev/null; then
+# Fallback: when no new completed reports were present, daily_snapshot_ledger.py
+# returns 0 without updating ledger_state.json, but writes an "OK: ..." line to
+# snapshot_ledger.log. Match ONLY successful "OK:" lines for TODAY_UTC, filtering
+# out any "DEFERRED: ..." or "FAILED: ..." lines so a postponed or aborted seal
+# is never treated as sealed.
+if [ "$seal_ok" -eq 0 ] && [ -f "$SEAL_LOG" ] && \
+   grep -qE "^${TODAY_UTC}T[0-9:+-Zz]{6,} OK:" "$SEAL_LOG" 2>/dev/null; then
     seal_ok=1
 fi
 if [ "$seal_ok" -eq 0 ]; then
@@ -142,10 +151,14 @@ if [ -f "$DONE_MARKER" ]; then
 fi
 
 # --- 4) single-process RSS back-stop + run ----------------------------------
-# ulimit -v takes KiB; caps the *address space* of the python child so the
-# 4 GiB peak-footprint contract is enforced by the kernel, not by goodwill.
+# ulimit -v sets address-space cap (RLIMIT_AS) in KiB.
+# NOTE: Darwin (macOS) kernel does not support RLIMIT_AS (ulimit -v returns
+# 'invalid argument'), so this OS-level limit is best-effort / advisory.
+# On systems where RLIMIT_AS is unsupported, execution continues and the
+# Python runner must self-monitor peak RSS (via resource.getrusage(RUSAGE_SELF).ru_maxrss
+# <= 4 GiB) to satisfy the single-process footprint contract.
 ulimit -v "$RSS_CAP_KIB" 2>/dev/null || \
-    log "WARNING: could not set address-space cap ${RSS_CAP_KIB} KiB; continuing uncapped"
+    log "NOTE: address-space cap ${RSS_CAP_KIB} KiB not supported by OS (macOS/Darwin); runner must self-monitor RSS <= 4 GiB"
 
 mkdir -p "$RUN_DIR"
 log "START: shadow-portfolio daily run for $TODAY_UTC (ledger=$LEDGER_DIR out=$RUN_DIR rss_cap=${RSS_CAP_KIB}KiB)"
@@ -160,9 +173,17 @@ if env -u PYTHONPATH "$PYTHON_BIN" "$RUNNER" \
         --out-dir "$RUN_DIR" \
         --as-of "$TODAY_UTC" \
         >>"$LOG_FILE" 2>&1; then
-    # mark done only on a clean runner exit so a crash never poisons the day
-    printf '%s\n' "$STAMP" >"$DONE_MARKER"
-    log "DONE: shadow-portfolio run for $TODAY_UTC wrote $RUN_DIR"
+    # Verify runner actually produced artifacts before marking done
+    artifact_count="$(find "$RUN_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${artifact_count:-0}" -eq 0 ]; then
+        log "FAILED: runner exited 0 but produced no artifacts in $RUN_DIR; not marking done"
+        exit 1
+    fi
+    # Atomic write of .done marker via temporary file
+    tmp_done="${DONE_MARKER}.tmp.$$"
+    printf '%s\n' "$STAMP" >"$tmp_done"
+    mv -f "$tmp_done" "$DONE_MARKER"
+    log "DONE: shadow-portfolio run for $TODAY_UTC wrote $RUN_DIR (${artifact_count} artifact(s))"
     exit 0
 else
     rc=$?

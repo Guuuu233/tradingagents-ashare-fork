@@ -7,10 +7,15 @@
   Installation is a later ops step after 总控 sign-off (D-033); install recipe
   for that card (paths assume the repo checkout below):
 
+      mkdir -p /Users/davidliu/Documents/TradingAgents-AShare/work/shadow-portfolio
       cp scripts/phase2/com.davidliu.ta-shadow-portfolio.plist \
          ~/Library/LaunchAgents/
       launchctl bootstrap gui/$UID \
          ~/Library/LaunchAgents/com.davidliu.ta-shadow-portfolio.plist
+
+  Pre-requisite: the directory `work/shadow-portfolio` MUST be created before
+  bootstrapping, as launchd does not create intermediate directories for
+  StandardOutPath / StandardErrorPath and will fail to redirect logs otherwise.
 
   Schedule: Mon–Fri 19:50 — i.e. AFTER the 19:45 P4 ledger seal
   (com.davidliu.ta-p4-ledger -> scripts/phase2/daily_snapshot_ledger.py run).
@@ -19,13 +24,17 @@
   so a late batch only postpones the shadow run — it never consumes an
   unsealed day. `StartCalendarInterval` Minute=50 Hour=19 is the primary
   trigger; the script's own seal-flag check is the correctness backstop.
+  If the 19:45 seal is deferred, the ops card may optionally configure
+  supplementary retry intervals (e.g. 20:20 / 20:50) where idempotence (.done)
+  ensures safe at-most-once execution.
 
   The wrapper enforces the card contract at the OS boundary:
     * skip + one log line when free disk < 100 GiB;
     * same-day re-trigger is an idempotent no-op (work/shadow-portfolio/<d>/.done);
-    * single process, address-space cap 4 GiB (ulimit -v back-stop + the runner
-      reports measured peak_rss_gb);
-    * results persisted under work/shadow-portfolio/<YYYY-MM-DD>/ (gitignored).
+    * single process, peak RSS <= 4 GiB (ulimit -v advisory on supported OS;
+      runner self-monitors peak RSS via getrusage <= 4 GiB);
+    * results persisted under work/shadow-portfolio/<YYYY-MM-DD>/ (local
+      scratch area; recommended to add to .gitignore upon ops deployment).
 
   ProgramArguments run the wrapper via the LOCKED project interpreter only to
   satisfy launchd (the wrapper itself re-execs the payload with
