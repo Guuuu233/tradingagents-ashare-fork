@@ -139,6 +139,35 @@ def test_remainder_tie_breaking_mixed_remainders():
     assert counts == {"801010.SI": 2, "801020.SI": 1, "801030.SI": 1}
 
 
+def test_remainder_tie_breaking_exact_integer_boundary():
+    """Mathematically tied remainders must break by stratum code ascending.
+
+    Regression for the DAV-1717 float-noise boundary: with counts
+    {801001.SI: 53, 801002.SI: 8, 801003.SI: 15} and N=2, the exact
+    remainders of 801001.SI and 801003.SI are both 30/76 (tied), so the
+    single leftover quota must go to the smaller code 801001.SI, giving
+    it 2 quotas. A float-remainder implementation splits ~1e-16 apart
+    (0.39473684210526305 vs 0.39473684210526316) and misallocates the
+    leftover to 801003.SI — this test fails on that implementation.
+    """
+    rows = []
+    for i in range(53):
+        rows.append((f"A{i:04d}.SZ", "801001.SI", "S1"))
+    for i in range(8):
+        rows.append((f"B{i:04d}.SZ", "801002.SI", "S2"))
+    for i in range(15):
+        rows.append((f"C{i:04d}.SZ", "801003.SI", "S3"))
+    df = pd.DataFrame(rows, columns=["ts_code", "sw_l1_code", "sw_l1_name"])
+
+    out = ms.stratified_sample(df, 2, seed=42)
+    counts = out["sw_l1_code"].value_counts().to_dict()
+    assert counts == {"801001.SI": 2}
+
+    # Shuffled input yields identical output (ordering-independent).
+    out_shuffled = ms.stratified_sample(df.sample(frac=1, random_state=99), 2, seed=42)
+    assert out.equals(out_shuffled)
+
+
 def test_index_snapshot_pit(tmp_path):
     """Latest trade_date <= T wins; newer snapshot ignored."""
     w = pd.DataFrame([
