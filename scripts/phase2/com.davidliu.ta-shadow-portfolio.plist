@@ -29,7 +29,8 @@
   trigger; the script's own seal-flag check is the correctness backstop.
   If the 19:45 seal is deferred, the ops card may configure supplementary
   retry intervals (e.g. 20:20 / 20:50): the wrapper's per-day mkdir lock
-  (.lock.<date>) plus .done jointly ensure safe at-most-once execution even
+  (.lock.<date>, carrying the owner PID with liveness-checked stale
+  takeover) plus .done jointly ensure safe at-most-once execution even
   when retry ticks overlap.
 
   The wrapper enforces the card contract at the OS boundary:

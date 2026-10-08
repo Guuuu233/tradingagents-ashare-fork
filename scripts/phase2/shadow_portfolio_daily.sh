@@ -37,9 +37,12 @@
 #     marker already exists for today the wrapper logs "already produced" and
 #     exits 0 without recomputing. Overlapping ticks (back-to-back retry
 #     triggers) are serialized by an atomic per-day mkdir lock
-#     (work/shadow-portfolio/.lock.<UTC date>): a tick that finds the lock
-#     held exits 0 without entering the runner, so at most one runner enters
-#     per day even when ticks overlap. Results are persisted to disk (长跑结果
+#     (work/shadow-portfolio/.lock.<UTC date>) carrying the owner's PID:
+#     a tick finding a live owner's lock exits 0 without entering the
+#     runner; a lock whose owner is dead (SIGKILL/power loss, no trap ran)
+#     is atomically taken over after a liveness check, so a crashed day is
+#     retried instead of silently skipped. At most one runner enters per day
+#     even when ticks overlap. Results are persisted to disk (长跑结果
 #     落盘) so a later re-read never re-runs the heavy step.
 #   * Single process, peak RSS <= 4 GiB. On systems supporting RLIMIT_AS
 #     (e.g. Linux), the wrapper sets an address-space cap (ulimit -v). On
@@ -187,25 +190,70 @@ ulimit -v "$RSS_CAP_KIB" 2>/dev/null || \
 # $RUN_DIR; a second overlapping tick finds the lock held and exits 0
 # without entering the runner. The lock is released (trap) on any failure
 # path so a later tick can retry; on success it is kept alongside .done.
+# The lock carries the owner's PID: a holder killed by SIGKILL/power loss
+# never runs its trap, so a later tick checks owner liveness (kill -0) and
+# atomically takes a stale lock over — a crashed day is retried with a
+# distinct stale message instead of being silently skipped as "in progress".
 mkdir -p "$OUT_DIR" 2>/dev/null || true
 if [ ! -d "$OUT_DIR" ]; then
     log "FAILED: cannot create output dir $OUT_DIR; not marking done"
     exit 1
 fi
 LOCK_DIR="$OUT_DIR/.lock.$TODAY_UTC"
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    log "OK: shadow-portfolio run for $TODAY_UTC already in progress or finished (lock $LOCK_DIR held); overlapping tick skipped (at-most-once)"
-    exit 0
+LOCK_PID_FILE="$LOCK_DIR/pid"
+lock_takeover=""
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+    : # fresh claim — ownership recorded below
+elif [ ! -e "$LOCK_DIR" ]; then
+    # mkdir failed but no lock exists: this is NOT contention, it is an
+    # error (read-only OUT_DIR, I/O failure) previously masked by 2>/dev/null.
+    # Fail closed and loudly instead of exiting 0 as an "overlapping tick".
+    log "FAILED: cannot claim lock $LOCK_DIR (output dir not writable or I/O error); not marking done"
+    exit 1
+else
+    owner_pid="$(cat "$LOCK_PID_FILE" 2>/dev/null || true)"
+    case "$owner_pid" in
+        ''|*[!0-9]*|0)
+            # No usable owner record: cannot prove staleness, fail safe
+            # toward no-double-run.
+            log "OK: shadow-portfolio run for $TODAY_UTC already in progress or finished (lock $LOCK_DIR held, owner unknown); overlapping tick skipped (at-most-once)"
+            exit 0
+            ;;
+    esac
+    if [ "$owner_pid" = "$$" ] || kill -0 "$owner_pid" 2>/dev/null; then
+        log "OK: shadow-portfolio run for $TODAY_UTC already in progress (lock $LOCK_DIR held by live pid $owner_pid); overlapping tick skipped (at-most-once)"
+        exit 0
+    fi
+    # Owner is dead: move the stale lock aside (atomic same-dir rename) and
+    # re-claim. The second mkdir is the arbiter — at most one racing tick
+    # can win it, so no double-run window exists.
+    stale_lock="$LOCK_DIR.stale.$(date +%H%M%S).$$"
+    mv -f "$LOCK_DIR" "$stale_lock" 2>/dev/null || true
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        lock_takeover="pid $owner_pid (moved to $stale_lock)"
+    else
+        log "OK: shadow-portfolio run for $TODAY_UTC already in progress or finished (lock $LOCK_DIR re-claimed by another tick); overlapping tick skipped (at-most-once)"
+        exit 0
+    fi
+fi
+# We own the lock: record ownership so later ticks can judge staleness.
+if ! printf '%s\n' "$$" >"$LOCK_PID_FILE" 2>/dev/null; then
+    log "FAILED: cannot record lock ownership in $LOCK_PID_FILE; releasing lock, not marking done"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    exit 1
 fi
 release_lock() {
     # Only the lock owner installs this trap (installed after mkdir won),
-    # and only a day WITHOUT .done releases it — a mid-run host crash
-    # leaves the lock behind, failing safe toward "no duplicate run".
+    # and only a day WITHOUT .done releases it.
     if [ ! -f "$DONE_MARKER" ]; then
+        rm -f "$LOCK_PID_FILE" 2>/dev/null || true
         rmdir "$LOCK_DIR" 2>/dev/null || true
     fi
 }
 trap release_lock EXIT
+if [ -n "$lock_takeover" ]; then
+    log "NOTE: took over stale lock $LOCK_DIR (previous owner $lock_takeover not running); continuing run for $TODAY_UTC"
+fi
 
 # --- 6) stage, run, verify fresh, publish atomically ------------------------
 # Never judge "freshness" by counting files in a possibly-stale $RUN_DIR.
