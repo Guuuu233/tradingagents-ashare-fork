@@ -68,6 +68,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daily_snapshot_ledger as dsl  # noqa: E402
 
 PIPELINE_VERSION = "m2_periodic_report.v1"
+# Fixed P4 account (controller order 2026-10-09): single-sourced with the
+# ledger writer — readers filter to this user_id and count exclusions.
+DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
 
 DEFAULT_LEDGER = REPO_ROOT / "work" / "phase2-ledger" / "forward_ledger.jsonl"
 DEFAULT_LABELS = REPO_ROOT / "work" / "phase2-labels" / "labels_t40.jsonl"
@@ -214,6 +217,19 @@ def load_ledger(path: Path) -> list[dict[str, Any]]:
                                 str(r.get("sealed_at") or ""),
                                 str(r.get("report_id") or "")))
     return records
+
+
+def filter_by_user(records: list[dict[str, Any]],
+                   user_id: str = DEFAULT_USER_ID
+                   ) -> tuple[list[dict[str, Any]], int]:
+    """Keep only `user_id` records (DAV-1740 account hygiene).
+
+    Returns (kept, excluded_n). Records with a missing/mismatched user_id
+    are excluded — never silently mixed in."""
+    if not user_id:
+        return records, 0
+    kept = [r for r in records if str(r.get("user_id") or "") == str(user_id)]
+    return kept, len(records) - len(kept)
 
 
 def load_labels(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -438,7 +454,9 @@ def build_daily(records: list[dict[str, Any]], *,
                 bench_bars: Mapping[str, Mapping[str, Mapping[str, float]]],
                 bench_symbols: Sequence[str],
                 min_cross_n: int, min_total_n: int,
-                digest: str) -> str:
+                digest: str,
+                excluded_user_n: int = 0,
+                user_id: str = DEFAULT_USER_ID) -> str:
     """日报：封存/到期于上一交易日窗口的信号。"""
     env = _enrich(records, trade_dates, as_of)
     cohort = [r for r in env
@@ -460,6 +478,8 @@ def build_daily(records: list[dict[str, Any]], *,
                f"{sum(1 for r in env if r['_matured'])}；正式栏 "
                f"{sum(1 for r in env if r['_formal'])}（判定阈值 "
                f"{min_total_n}，P1 冻结前临时口径）")
+    out.append(f"- 账户过滤：仅保留 user_id={user_id}，"
+               f"排除 **{excluded_user_n}** 条（非固定账户）")
     out.append("")
 
     out.append("## D2. 方向分布（本窗口信号，按档位 × 版本队列）")
@@ -565,7 +585,9 @@ def build_monthly(records: list[dict[str, Any]], *,
                   bench_bars: Mapping[str, Mapping[str, Mapping[str, float]]],
                   bench_symbols: Sequence[str],
                   min_cross_n: int, min_total_n: int,
-                  digest: str) -> str:
+                  digest: str,
+                  excluded_user_n: int = 0,
+                  user_id: str = DEFAULT_USER_ID) -> str:
     """月报：信号日落入该自然月（交易日历口径）的全部封存记录。"""
     env = _enrich(records, trade_dates, as_of)
     cohort = [r for r in env
@@ -587,6 +609,8 @@ def build_monthly(records: list[dict[str, Any]], *,
                f"未到期：**{len(immature)}**")
     out.append(f"- 正式栏（F0+VERIFIED+非回填）：**{len(formal)}**；"
                f"判定阈值 min_total_n={min_total_n}（P1 冻结前临时口径）")
+    out.append(f"- 账户过滤：仅保留 user_id={user_id}，"
+               f"排除 **{excluded_user_n}** 条（非固定账户）")
     out.append("")
     if sufficient:
         out.append(f"> ✅ 正式样本 {len(formal)} ≥ {min_total_n}，"
@@ -781,6 +805,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     except (FileNotFoundError, ValueError) as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return 4
+    user_id = getattr(args, "user_id", None) or DEFAULT_USER_ID
+    _all_n = len(records)
+    records, excluded_user_n = filter_by_user(records, user_id)
+    if excluded_user_n:
+        print(f"SKIP: {excluded_user_n}/{_all_n} ledger record(s) filtered "
+              f"by user_id (kept user_id={user_id})")
 
     as_of = _parse_d(args.as_of) or date.today()
     labels = load_labels(Path(args.labels)) if args.labels else {}
@@ -803,7 +833,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             label_field=args.label_field, bench_bars=bench_bars,
             bench_symbols=args.benchmark_symbols,
             min_cross_n=args.min_cross_n, min_total_n=args.min_total_n,
-            digest=digest)
+            digest=digest, excluded_user_n=excluded_user_n,
+            user_id=user_id)
         p = Path(args.daily_out) if args.daily_out else (
             out_dir / f"m2_daily_{anchor.isoformat()}.md")
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -823,7 +854,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             label_field=args.label_field, bench_bars=bench_bars,
             bench_symbols=args.benchmark_symbols,
             min_cross_n=args.min_cross_n, min_total_n=args.min_total_n,
-            digest=digest)
+            digest=digest, excluded_user_n=excluded_user_n,
+            user_id=user_id)
         p = Path(args.monthly_out) if args.monthly_out else (
             out_dir / f"m2_monthly_{mon}.md")
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -862,6 +894,9 @@ def main() -> int:
                    help="日横截面最少样本（默认 10，DAV-1573 冻结口径②）")
     p.add_argument("--min-total-n", type=int, default=DEFAULT_MIN_TOTAL_N)
     p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    p.add_argument("--user-id", default=DEFAULT_USER_ID,
+                   help="仅统计该 user_id 的账本记录 "
+                        "(default: fixed P4 account)")
     p.add_argument("--daily-out", default=None)
     p.add_argument("--monthly-out", default=None)
     args = ap.parse_args()

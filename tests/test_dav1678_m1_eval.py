@@ -370,3 +370,41 @@ class TestRepeatMeasures:
         C, _, _ = mod.repeat_measures(q1, rng.permutation(q1))
         Csame, _, _ = mod.repeat_measures(q1, q1)
         assert C < Csame
+
+
+class TestUserFilter:
+    """DAV-1740: fixed-account filter counts into excl_wrong_user."""
+
+    def test_default_user_id_is_fixed_account(self):
+        assert mod.DEFAULT_USER_ID == "429163f7-50b6-4982-8bdf-96ae99506843"
+
+    def test_no_user_column_means_no_exclusion(self):
+        rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        _, fun = mod.admit(pd.DataFrame(rows))
+        assert fun["excl_wrong_user"] == 0
+
+    def test_wrong_user_excluded_and_counted(self):
+        fixed = "429163f7-50b6-4982-8bdf-96ae99506843"
+        rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        for r in rows:
+            r["user_id"] = fixed
+        for i in range(5):
+            rows.append({"signal_date": "20260105", "version_key": "v1",
+                         "symbol": f"X{i:05d}", "q": 0.5, "r": 0.01,
+                         "timing_class": "F0", "input_pit_status": "VERIFIED",
+                         "user_id": "local-default-user"})
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert fun["excl_wrong_user"] == 5
+        assert len(d) == 20
+        assert set(d["user_id"].unique().tolist()) == {fixed}
+
+    def test_custom_user_id_param_selects_other_account(self):
+        rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        for r in rows:
+            r["user_id"] = "local-default-user"
+        d, fun = mod.admit(pd.DataFrame(rows), user_id="local-default-user")
+        assert fun["excl_wrong_user"] == 0
+        assert len(d) == 20
+        d2, fun2 = mod.admit(pd.DataFrame(rows))
+        assert fun2["excl_wrong_user"] == 20
+        assert len(d2) == 0

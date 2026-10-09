@@ -49,6 +49,9 @@ DEFAULT_CACHE_DIR = Path(os.environ.get(
     "PHASE2_CACHE_DIR",
     "~/Documents/TradingAgents-AShare-cache/phase2")).expanduser()
 DEFAULT_OUT_DIR = REPO_ROOT / "work" / "analysis_runs" / "dav1705"
+# Fixed P4 account (controller order 2026-10-09): only this user_id enters
+# the trial; other accounts are counted as excluded_user_n.
+DEFAULT_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
 
 CUTOFF = "2026-09-01"
 
@@ -142,6 +145,19 @@ def load_records(ledger: Path) -> list[dict]:
             rec = obj.get("record") if isinstance(obj, dict) else None
             recs.append(rec if isinstance(rec, dict) else obj)
     return recs
+
+
+def filter_by_user(records: list[dict],
+                   user_id: str = DEFAULT_USER_ID
+                   ) -> tuple[list[dict], int]:
+    """Keep only `user_id` records (DAV-1740 account hygiene).
+
+    Returns (kept, excluded_n). Missing/mismatched user_id never enters."""
+    if not user_id:
+        return records, 0
+    kept = [r for r in records
+            if str(r.get("user_id") or "") == str(user_id)]
+    return kept, len(records) - len(kept)
 
 
 class PklBars:
@@ -309,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="产物目录（默认 gitignored 的 work/analysis_runs/dav1705）")
     ap.add_argument("--write-calendar", default=None,
                     help="将本次解析的日历另存为文件（供 m2 报告 --calendar 复用）")
+    ap.add_argument("--user-id", default=DEFAULT_USER_ID,
+                    help="仅统计该 user_id 的账本记录 "
+                         "(default: fixed P4 account)")
     args = ap.parse_args(argv)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -319,6 +338,12 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.write_calendar).write_text(
             "\n".join(cal) + "\n", encoding="utf-8")
     records = load_records(Path(args.ledger))
+    ledger_n = len(records)
+    user_id = getattr(args, "user_id", None) or DEFAULT_USER_ID
+    records, excluded_user_n = filter_by_user(records, user_id)
+    if excluded_user_n:
+        print(f"SKIP: {excluded_user_n}/{ledger_n} ledger record(s) "
+              f"filtered by user_id (kept user_id={user_id})")
     primary = [r for r in records
                if str(r.get("signal_date") or "") >= CUTOFF]
     src = PklBars(cache_dir / "daily_by_day")
@@ -331,7 +356,10 @@ def main(argv: list[str] | None = None) -> int:
         if "2026-03-01" <= str(r.get("signal_date") or "") < CUTOFF)
     payload = {
         "pipeline_trial_non_result": TAG,
-        "ledger_lines": len(records),
+        "ledger_lines": ledger_n,
+        "user_id": user_id,
+        "excluded_user_n": excluded_user_n,
+        "filtered_ledger_lines": len(records),
         "calendar_source": cal_source,
         "primary": out_primary,
         "output_inventory": ["primary", "synthetic_smoke", "synthetic_edge"],
@@ -351,7 +379,8 @@ def main(argv: list[str] | None = None) -> int:
     path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":"),
                                ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"OK: wrote {path} "
-          f"(primary={len(primary)}, non_task_excluded={non_task_n})")
+          f"(primary={len(primary)}, non_task_excluded={non_task_n}, "
+          f"excluded_user={excluded_user_n})")
     return 0
 
 

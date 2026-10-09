@@ -100,3 +100,61 @@ def test_resolve_calendar_all_missing_raises(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("expected FileNotFoundError")
+
+
+# ---------------------------------------------------------------------------
+# DAV-1740: fixed-account filter (read side)
+
+
+def test_shadow_default_user_id_is_fixed_account():
+    assert rst.DEFAULT_USER_ID == "429163f7-50b6-4982-8bdf-96ae99506843"
+
+
+def test_shadow_filter_by_user_keeps_fixed_only():
+    recs = [
+        {"report_id": "a", "user_id": rst.DEFAULT_USER_ID},
+        {"report_id": "b", "user_id": "local-default-user"},
+        {"report_id": "c"},
+    ]
+    kept, n = rst.filter_by_user(recs)
+    assert n == 2
+    assert [r["report_id"] for r in kept] == ["a"]
+
+
+def _shadow_rec(rid, sig, user_id=None):
+    return {
+        "record": {
+            "report_id": rid,
+            "user_id": user_id if user_id is not None else rst.DEFAULT_USER_ID,
+            "symbol": "600519.SH",
+            "signal_date": sig,
+            "horizons": {"medium": {"direction": "看多"}},
+        }
+    }
+
+
+def test_shadow_main_filters_by_user_and_counts(tmp_path):
+    """main() filters ledger by account before windowing; counts exposed."""
+    import json
+
+    led = tmp_path / "ledger.jsonl"
+    recs = [
+        _shadow_rec("keep1", "2026-09-30"),
+        _shadow_rec("keep2", "2026-09-30"),
+        _shadow_rec("skip1", "2026-09-30", user_id="local-default-user"),
+    ]
+    led.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n"
+                           for r in recs), encoding="utf-8")
+    cal = tmp_path / "cal.txt"
+    cal.write_text("20260930\n20261009\n20261012\n", encoding="utf-8")
+    out = tmp_path / "out"
+    rc = rst.main(["t1", "--ledger", str(led), "--calendar", str(cal),
+                   "--cache-dir", str(tmp_path / "cache"),
+                   "--out-dir", str(out)])
+    assert rc == 0
+    payload = json.loads((out / "shadow_trial-t1.json").read_text("utf-8"))
+    assert payload["ledger_lines"] == 3
+    assert payload["excluded_user_n"] == 1
+    assert payload["filtered_ledger_lines"] == 2
+    assert payload["user_id"] == rst.DEFAULT_USER_ID
+    assert payload["primary"]["n_records"] == 2
