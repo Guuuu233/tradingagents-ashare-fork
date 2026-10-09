@@ -838,7 +838,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_run = sub.add_parser("run", help="append today's new reports")
     common(p_run)
     p_run.add_argument("--date", default=None,
-                       help="snapshot_date label (default: today UTC)")
+                       help="snapshot_date label (default: 本地日 Asia/Shanghai)")
     p_run.add_argument("--force", action="store_true",
                        help="seal even if blocking statuses exist")
     p_run.add_argument("--user-id", default=DEFAULT_USER_ID,

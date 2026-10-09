@@ -44,6 +44,10 @@ import daily_snapshot_ledger as dsl  # noqa: E402  (scripts/phase2)
 from tradingagents.dataflows.trade_calendar import cn_today_str  # noqa: E402
 
 TAG = "管线试跑，非成绩"
+# Fixed P4 account (controller order 2026-10-09): only this user_id is
+# sealed; reports of other accounts are skipped and counted (history
+# append-only, never rewritten). Mirrors daily_snapshot_ledger.
+DEFAULT_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
 BATCH_GC_EVERY = 50
 
 COLS = ("id, user_id, symbol, industry, trade_date, status,"
@@ -76,13 +80,14 @@ def cmd_build(args: argparse.Namespace) -> int:
     ledger_path = ledger_dir / dsl.LEDGER_FILE
     snapshot_date = args.date or _default_snapshot_date()
     sealed_at = datetime.now(timezone.utc)
+    user_id = getattr(args, "user_id", None) or DEFAULT_USER_ID
 
     con = _connect_ro(Path(args.db))
     try:
         n_block = con.execute(
             f"SELECT COUNT(*) FROM reports WHERE status IN "
-            f"({','.join('?' * len(dsl.BLOCKING_STATUSES))})",
-            dsl.BLOCKING_STATUSES,
+            f"({','.join('?' * len(dsl.BLOCKING_STATUSES))}) AND user_id = ?",
+            (*dsl.BLOCKING_STATUSES, user_id),
         ).fetchone()[0]
         if n_block and not args.force:
             print(f"DEFERRED: {n_block} report(s) still in "
@@ -92,14 +97,25 @@ def cmd_build(args: argparse.Namespace) -> int:
         state = dsl._load_state(ledger_dir)
         sealed_ids = dsl._load_sealed_ids(ledger_dir, state)
 
-        # 只取 id + created_at 排序（KB 级），blob 逐行取。
+        # 只取 id + user_id + created_at 排序（KB 级），blob 逐行取。
         id_rows = con.execute(
-            "SELECT id, created_at FROM reports WHERE status='completed'"
-            " ORDER BY created_at").fetchall()
-        new_ids = [r["id"] for r in id_rows if r["id"] not in sealed_ids]
+            "SELECT id, user_id, created_at FROM reports"
+            " WHERE status='completed' ORDER BY created_at").fetchall()
+        cand = [r for r in id_rows if r["id"] not in sealed_ids]
         del id_rows
+        n_skip_user = 0
+        if user_id:
+            before = len(cand)
+            cand = [r for r in cand if r["user_id"] == user_id]
+            n_skip_user = before - len(cand)
+            if n_skip_user:
+                print(f"SKIP: {n_skip_user} report(s) filtered by user_id "
+                      f"(kept user_id={user_id})")
+        new_ids = [r["id"] for r in cand]
+        del cand
         if not new_ids:
-            print("OK: no new completed reports (all already sealed)")
+            print(f"OK: no new completed reports (all already sealed; "
+                  f"skipped_user={n_skip_user})")
             return 0
 
         try:
@@ -143,12 +159,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         state["sealed_report_ids"] = sorted(sealed_ids)
         state["last_run_at"] = sealed_at.isoformat()
         state["last_appended"] = appended
+        state["skipped_user_n"] = n_skip_user
         dsl._save_state(ledger_dir, state)
         dsl._write_head_anchor(ledger_dir, prev_hash,
                                dsl._count_ledger_lines(ledger_path),
                                bootstrapped=False, reason="chunked append")
         print(f"OK: appended {appended} record(s) [{TAG}]; "
-              f"ledger={ledger_path}")
+              f"skipped_user={n_skip_user}; ledger={ledger_path}")
         return 0
     finally:
         con.close()
@@ -160,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ledger-dir", required=True)
     ap.add_argument("--date", default=None)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--user-id", default=DEFAULT_USER_ID,
+                    help="only seal reports of this user_id "
+                         "(default: fixed P4 account)")
     return cmd_build(ap.parse_args(argv))
 
 
