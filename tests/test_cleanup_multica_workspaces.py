@@ -544,6 +544,20 @@ def test_cjk_ignored_filename_is_retained(tmp_path):
     assert "ignored-artifacts" in rec["reasons"]
 
 
+def test_arrow_filename_ignored_is_retained(tmp_path):
+    # DAV-1782 round 2: a literal " -> " inside an ignored filename must
+    # not be split as a rename arrow; the file counts and retains.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _make_repo_ignored(root, task, "*.log\n", {"a -> b.log": "x" * 50})
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["ignored_count"] == 1, rec
+    assert rec["ignored_total_bytes"] == 50, rec
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "ignored-artifacts" in rec["reasons"]
+
+
 def test_nested_checkout_unpushed_is_retained(tmp_path):
     # DAV-1782 yellow fix: a workdir/<sub>/<repo> checkout is discovered;
     # its unpushed commit retains the dir instead of being misread as
