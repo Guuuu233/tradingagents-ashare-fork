@@ -79,6 +79,9 @@ C_GRADE_MIN_DAYS = 60       # 签收 item 6
 RELIABILITY_BINS = [(1, 10), (11, 20), (21, 30), (31, 40), (41, 50),
                     (51, 60), (61, 70), (71, 80), (81, 90), (91, 99)]
 # fixed before any result is seen (签收 item 7); last bin is 91–99, p=100
+# Fixed P4 account (controller order 2026-10-09): ledger-derived frames are
+# filtered to this user_id; other accounts count into excl_wrong_user.
+DEFAULT_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
 
 
 def peak_rss_gb() -> float:
@@ -211,6 +214,7 @@ _COL_CANDIDATES = {
     "rel_return": ["r_rel", "rel_return", "r", "excess_return"],
     "completed": ["completed", "is_complete"],
     "status": ["status"],
+    "user_id": ["user_id", "user", "account"],
 }
 
 
@@ -302,7 +306,8 @@ def _ensure_defaults(df: pd.DataFrame) -> pd.DataFrame:
 # Formal-queue admission + primary-run dedup
 # ---------------------------------------------------------------------------
 
-def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+def admit(df: pd.DataFrame,
+          user_id: str | None = DEFAULT_USER_ID) -> tuple[pd.DataFrame, dict]:
     """Apply §2.3 rules in order; every exclusion increments a funnel count.
 
     Rows are filtered BEFORE dedup so a stray incomplete run can never leak
@@ -315,6 +320,14 @@ def admit(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     def _count(mask, key):
         funnel[key] = int(mask.sum())
         return d[~mask]
+
+    # DAV-1740: fixed-account filter first (ledger account hygiene).
+    # Frames without a user_id column predate the filter — no exclusion.
+    if "user_id" in d.columns and user_id:
+        m = d["user_id"].astype(str) != str(user_id)
+        d = _count(m, "excl_wrong_user")
+    else:
+        funnel["excl_wrong_user"] = 0
 
     # pit FAILED never enters (签收 §6: input_pit_status=FAILED 一律不进)
     m = d["input_pit_status"].astype(str).str.upper() == "FAILED"
@@ -575,12 +588,13 @@ def _load_calendar(path: Path | None) -> list[str] | None:
 def run(input_path: Path, out_dir: Path,
         pairs_path: Path | None = None,
         version_key: str | None = None,
-        calendar_path: Path | None = None) -> dict:
+        calendar_path: Path | None = None,
+        user_id: str | None = DEFAULT_USER_ID) -> dict:
     t0 = time.time()
     log(f"loading {input_path}")
     df = load_frame(input_path)
     df = select_version(df, version_key)          # fail-close multi-version
-    formal, funnel = admit(df)
+    formal, funnel = admit(df, user_id=user_id)
     funnel["version_key"] = version_key or \
         (str(df["version_key"].iloc[0])
          if "version_key" in df.columns and len(df) else "default")
@@ -616,6 +630,8 @@ def run(input_path: Path, out_dir: Path,
         "peak_rss_gb": round(peak_rss_gb(), 3),
         "input_rows": len(df), "formal_rows": len(formal),
         "version_key": funnel.get("version_key"),
+        "user_id": user_id,
+        "excl_wrong_user": funnel.get("excl_wrong_user", 0),
     }, indent=2))
     log(f"grade={verdict['grade']} valid_days={verdict['valid_days']} "
         f"mean_ic={verdict['mean_ic']} -> {out_dir}")
@@ -791,6 +807,10 @@ def main() -> int:
                          "line); days in the input's span with no signal "
                          "stay as no_data NaN slots instead of compressing")
     ap.add_argument("--out-dir", type=Path, default=OUT_DEFAULT)
+    ap.add_argument("--user-id", default=DEFAULT_USER_ID,
+                    help="only evaluate rows of this user_id "
+                         "(default: fixed P4 account; frames without a "
+                         "user_id column skip this filter)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -798,7 +818,8 @@ def main() -> int:
         return 0
     if a.input is None:
         ap.error("--input required (or --selftest)")
-    run(a.input, a.out_dir, a.pairs, a.version_key, a.calendar)
+    run(a.input, a.out_dir, a.pairs, a.version_key, a.calendar,
+        user_id=a.user_id)
     return 0
 
 

@@ -50,13 +50,15 @@ def _cal_file(tmp_path: Path) -> Path:
 
 def _rec(rid, sig, direction="看多", prob=None, timing="F0",
          pit="VERIFIED", backfilled=False, status="completed",
-         risk="OK", commit="abc123def456"):
+         risk="OK", commit="abc123def456",
+         user_id=m2.DEFAULT_USER_ID):
     hz = {"direction": direction}
     if prob is not None:
         hz["probability"] = prob
     return {
         "record": {
-            "report_id": rid, "symbol": "600519.SH", "signal_date": sig,
+            "report_id": rid, "user_id": user_id,
+            "symbol": "600519.SH", "signal_date": sig,
             "status": status, "sealed_at": f"{sig} 20:00:00",
             "created_at": f"{sig} 15:00:00", "updated_at": f"{sig} 20:00:00",
             "timing_class": timing, "input_pit_status": pit,
@@ -93,7 +95,8 @@ def _run(tmp_path, *extra, ledger=None, cal=None):
     for k, v in dict(period="both", ledger="", labels="", label_field="hs300_excess_pct",
                      benchmarks="", benchmark_symbols=["000300.SH"], calendar="",
                      as_of=None, min_cross_n=10, min_total_n=40,
-                     out_dir="", daily_out=None, monthly_out=None).items():
+                     out_dir="", daily_out=None, monthly_out=None,
+                     user_id=m2.DEFAULT_USER_ID).items():
         if k in ("benchmark_symbols",):
             p.add_argument("--benchmark-symbols", nargs="+", default=v)
         elif isinstance(v, int):
@@ -346,3 +349,57 @@ def test_empty_cohort_sections_render(tmp_path):
     body = (tmp_path / "out" / "m2_daily_2026-10-09.md").read_text()
     for sec in ("## D1.", "## D2.", "## D3.", "## D4.", "## D5."):
         assert sec in body
+
+
+# ---------------------------------------------------------------------------
+# DAV-1740: fixed-account filter (read side)
+
+
+def test_default_user_id_matches_ledger_writer():
+    import scripts.phase2.daily_snapshot_ledger as dsl
+    assert m2.DEFAULT_USER_ID == dsl.DEFAULT_USER_ID == \
+        "429163f7-50b6-4982-8bdf-96ae99506843"
+
+
+def test_filter_by_user_keeps_fixed_only():
+    recs = [
+        {"report_id": "a", "user_id": m2.DEFAULT_USER_ID},
+        {"report_id": "b", "user_id": "local-default-user"},
+        {"report_id": "c"},  # missing user_id -> excluded
+    ]
+    kept, n = m2.filter_by_user(recs)
+    assert n == 2
+    assert [r["report_id"] for r in kept] == ["a"]
+
+
+def test_daily_report_filters_other_accounts_and_counts(tmp_path):
+    """1 fixed + 2 other-account signals in window: only fixed counted."""
+    recs = [
+        _rec("keep1", "2026-10-08", direction="看多"),
+        _rec("skip1", "2026-10-08", direction="看多",
+             user_id="local-default-user"),
+        _rec("skip2", "2026-10-08", direction="看空",
+             user_id="e734d623-other"),
+    ]
+    led = _ledger_file(tmp_path, recs)
+    rc = _run(tmp_path, "--as-of", "2026-10-09", "--period", "daily",
+              ledger=led)
+    assert rc == 0
+    body = (tmp_path / "out" / "m2_daily_2026-10-09.md").read_text()
+    assert "窗口内封存信号：**1**" in body
+    assert "排除 **2** 条（非固定账户）" in body
+
+
+def test_monthly_report_counts_user_exclusion(tmp_path):
+    recs = [
+        _rec("keep1", "2026-10-08", direction="看多"),
+        _rec("skip1", "2026-10-08", direction="看多",
+             user_id="local-default-user"),
+    ]
+    led = _ledger_file(tmp_path, recs)
+    rc = _run(tmp_path, "--as-of", "2026-10-09", "--period", "monthly",
+              ledger=led)
+    assert rc == 0
+    body = (tmp_path / "out" / "m2_monthly_2026-10.md").read_text()
+    assert "本月封存信号：**1**" in body
+    assert "排除 **1** 条（非固定账户）" in body

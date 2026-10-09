@@ -357,7 +357,8 @@ def _make_db(path, rows):
     for r in rows:
         con.execute(
             "INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (r.get("id", "r1"), "u1", "600519.SH", "白酒", "2026-07-28",
+            (r.get("id", "r1"), r.get("user_id", mod.DEFAULT_USER_ID),
+             "600519.SH", "白酒", "2026-07-28",
              r.get("status", "completed"), "VALID", "BUY", "看多", 60,
              "BUY", "APPROVED", "ok",
              r.get("created_at", "2026-07-28 15:43:57.730577"),
@@ -439,3 +440,68 @@ def test_pit_as_of_datetime_compare():
     sp["news"]["provenance_status"] = "unverified"
     rec = mod.build_record(_row(), json.dumps(rd), SEALED, "2026-07-28", _cal())
     assert rec["input_pit_status"] == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# DAV-1740: fixed-account filter (seal side)
+
+
+def test_default_user_id_is_fixed_account():
+    assert mod.DEFAULT_USER_ID == "429163f7-50b6-4982-8bdf-96ae99506843"
+
+
+def test_run_skips_non_fixed_user_reports(tmp_path, monkeypatch):
+    """Non-fixed-account completed reports are never sealed."""
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [
+        {"id": "keep1", "user_id": mod.DEFAULT_USER_ID},
+        {"id": "skip1", "user_id": "local-default-user"},
+        {"id": "skip2", "user_id": "e734d623-other"},
+    ])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False)
+    assert mod.cmd_run(ns) == 0
+    lines = (ledger_dir / "forward_ledger.jsonl").read_text("utf-8").splitlines()
+    assert len(lines) == 1
+    obj = json.loads(lines[0])
+    assert obj["record"]["report_id"] == "keep1"
+    assert obj["record"]["user_id"] == mod.DEFAULT_USER_ID
+
+
+def test_run_blocking_check_ignores_other_accounts(tmp_path, monkeypatch):
+    """A running report of another account must not defer the fixed seal."""
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [
+        {"id": "keep1", "user_id": mod.DEFAULT_USER_ID, "status": "completed"},
+        {"id": "other1", "user_id": "local-default-user", "status": "running"},
+    ])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False)
+    assert mod.cmd_run(ns) == 0
+    lines = (ledger_dir / "forward_ledger.jsonl").read_text("utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["record"]["report_id"] == "keep1"
+
+
+def test_run_user_id_arg_overrides_default(tmp_path, monkeypatch):
+    """--user-id can select another account explicitly (tests/tooling)."""
+    monkeypatch.setattr(mod, "_load_trade_dates", lambda: _cal())
+    db = tmp_path / "t.db"
+    _make_db(db, [
+        {"id": "keep1", "user_id": mod.DEFAULT_USER_ID},
+        {"id": "other1", "user_id": "local-default-user"},
+    ])
+    ledger_dir = tmp_path / "led"
+    ledger_dir.mkdir()
+    ns = _ns(db=str(db), ledger_dir=str(ledger_dir), date="2026-08-01",
+             force=False, user_id="local-default-user")
+    assert mod.cmd_run(ns) == 0
+    lines = (ledger_dir / "forward_ledger.jsonl").read_text("utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["record"]["report_id"] == "other1"

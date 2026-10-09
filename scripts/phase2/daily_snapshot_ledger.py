@@ -80,6 +80,10 @@ LOG_FILE = "snapshot_ledger.log"
 BLOCKING_STATUSES = ("running", "pending", "queued")
 CHAIN_FIELD = "record_sha256"
 GENESIS_PREV = "GENESIS"
+# Fixed P4 account (controller order 2026-10-09): only this user_id is
+# sealed; reports of other accounts are skipped (history append-only,
+# never rewritten).
+DEFAULT_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
 # A seal this many days after report creation means the row was backfilled,
 # not a fresh forward observation — flagged so H records from the backfill
 # queue are not compared with future genuinely-forward H records.
@@ -607,12 +611,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     ledger_path = ledger_dir / LEDGER_FILE
     snapshot_date = args.date or date.today().isoformat()
     sealed_at = datetime.now(timezone.utc)
+    user_id = getattr(args, "user_id", None) or DEFAULT_USER_ID
 
     con = _connect_ro(Path(args.db))
     try:
         n_block = con.execute(
-            f"SELECT COUNT(*) FROM reports WHERE status IN ({','.join('?'*len(BLOCKING_STATUSES))})",
-            BLOCKING_STATUSES,
+            f"SELECT COUNT(*) FROM reports WHERE status IN ({','.join('?'*len(BLOCKING_STATUSES))}) AND user_id = ?",
+            (*BLOCKING_STATUSES, user_id),
         ).fetchone()[0]
         if n_block and not args.force:
             _log(ledger_dir,
@@ -633,6 +638,15 @@ def cmd_run(args: argparse.Namespace) -> int:
             "  FROM reports WHERE status='completed' ORDER BY created_at"
         ).fetchall()
         new_rows = [r for r in rows if r["id"] not in sealed_ids]
+        n_skip_user = 0
+        if user_id:
+            before = len(new_rows)
+            new_rows = [r for r in new_rows if r["user_id"] == user_id]
+            n_skip_user = before - len(new_rows)
+            if n_skip_user:
+                _log(ledger_dir,
+                     f"SKIP: {n_skip_user} report(s) filtered by user_id "
+                     f"(kept user_id={user_id})")
         if not new_rows:
             _log(ledger_dir, f"OK: no new completed reports ({len(rows)} total already sealed)")
             return 0
@@ -827,6 +841,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                        help="snapshot_date label (default: today UTC)")
     p_run.add_argument("--force", action="store_true",
                        help="seal even if blocking statuses exist")
+    p_run.add_argument("--user-id", default=DEFAULT_USER_ID,
+                       help="only seal reports of this user_id "
+                            "(default: fixed P4 account)")
     p_run.set_defaults(func=cmd_run)
 
     p_v = sub.add_parser("verify", help="verify hash chain integrity")
