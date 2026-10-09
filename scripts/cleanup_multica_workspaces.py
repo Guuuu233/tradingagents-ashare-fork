@@ -58,6 +58,10 @@ GC_META_FILENAME = ".gc_meta.json"
 _PRUNE_NAMES = {".git", "codex-home", "node_modules", "__pycache__",
                 ".venv310", ".venv"}
 
+# DAV-1782: checkout discovery descends this many levels below workdir, so
+# ``workdir/<sub>/<repo>`` layouts are found (depth 2) with headroom.
+_FIND_REPOS_MAX_DEPTH = 4
+
 # Cap on how many porcelain lines are kept per repo in the report.
 _DIRTY_SAMPLE_LINES = 5
 
@@ -197,21 +201,29 @@ def fetch_issue_status(issue_id: str, timeout: int = 60) -> Tuple[Optional[str],
 def find_git_repos(task_dir: str) -> List[str]:
     """Locate git checkouts belonging to a task directory.
 
-    Checks ``workdir`` itself plus its immediate subdirectories (the usual
-    ``workdir/<repo>`` checkout layout). Returns real paths of directories
-    that are git work trees.
+    Walks ``workdir`` (depth-limited) so nested ``workdir/<sub>/<repo>``
+    checkouts are found, not just the top level; ``_PRUNE_NAMES``
+    directories are skipped and checkouts are never descended into.
+    Also considers the task dir itself (some layouts keep a repo at top).
+    Returns real paths of directories that are git work trees.
     """
     candidates = []
     workdir = os.path.join(task_dir, "workdir")
     if os.path.isdir(workdir):
         candidates.append(workdir)
-        try:
-            with os.scandir(workdir) as entries:
-                for entry in entries:
-                    if entry.is_dir(follow_symlinks=False) and entry.name not in _PRUNE_NAMES:
-                        candidates.append(entry.path)
-        except OSError:
-            pass
+        for dirpath, dirnames, _filenames in os.walk(
+                workdir, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d not in _PRUNE_NAMES]
+            dotgit = os.path.join(dirpath, ".git")
+            if os.path.isdir(dotgit) or os.path.isfile(dotgit):
+                if dirpath != workdir:
+                    candidates.append(dirpath)
+                dirnames[:] = []  # never descend into a checkout
+                continue
+            rel = os.path.relpath(dirpath, workdir)
+            depth = 0 if rel == os.curdir else rel.count(os.sep) + 1
+            if depth >= _FIND_REPOS_MAX_DEPTH:
+                dirnames[:] = []
     # Also consider the task dir itself (some layouts keep a repo at top).
     candidates.append(task_dir)
     repos: List[str] = []
@@ -300,20 +312,29 @@ def git_ignored_artifacts(repo: str) -> Tuple[List[str], int, Optional[str]]:
     (sorted_absolute_paths, total_bytes, error).
     """
     try:
+        # DAV-1782: core.quotepath=false keeps non-ASCII paths as raw
+        # UTF-8 (otherwise C-style octal escapes leave a bogus literal
+        # path that lexists rejects, silently dropping the file); -z
+        # gives NUL-separated records so no unquoting is needed at all.
         proc = subprocess.run(
-            ["git", "-C", repo, "status", "--porcelain", "--ignored"],
+            ["git", "-C", repo, "-c", "core.quotepath=false",
+             "status", "--porcelain", "--ignored", "-z"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=60, check=False, text=True)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return [], 0, "ignored-check-unavailable"
     if proc.returncode != 0:
         return [], 0, "ignored-check-unavailable"
     rels: List[str] = []
-    for line in proc.stdout.splitlines():
-        if len(line) < 4 or not line.startswith("!!"):
+    for entry in proc.stdout.split("\0"):
+        if len(entry) < 4 or not entry.startswith("!!"):
             continue
-        # Quoted when the path holds spaces/escapes; simple unquote.
-        path = line[2:].strip().strip('"')
+        # "-z" layout is "XY <path>" with no quoting; rename arrows
+        # cannot occur for ignored entries but take the target defensively.
+        path = entry[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        path = path.strip()
         if path:
             rels.append(path)
     paths: List[str] = []

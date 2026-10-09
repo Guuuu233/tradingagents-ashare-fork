@@ -528,3 +528,32 @@ def test_mtime_window_boundary(tmp_path):
                             now=fixed_now)
     assert "recently-modified" not in rec["reasons"]
     assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec
+
+
+def test_cjk_ignored_filename_is_retained(tmp_path):
+    # DAV-1782 red fix: a non-ASCII ignored path must not be silently
+    # dropped (core.quotepath octal escapes); it retains the directory.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _make_repo_ignored(root, task, "*.log\n", {"\u65e5\u5fd7.log": "x" * 100})
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["ignored_count"] == 1, rec
+    assert rec["ignored_total_bytes"] == 100, rec
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "ignored-artifacts" in rec["reasons"]
+
+
+def test_nested_checkout_unpushed_is_retained(tmp_path):
+    # DAV-1782 yellow fix: a workdir/<sub>/<repo> checkout is discovered;
+    # its unpushed commit retains the dir instead of being misread as
+    # non-checkout bytes.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    repo = os.path.join(task, "workdir", "sub", "proj")
+    _init_repo(repo, with_commit=True)
+    _backdate_all(task)
+    assert repo in cmw.find_git_repos(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert any(r.startswith("unpushed-commits:") for r in rec["reasons"]), rec
