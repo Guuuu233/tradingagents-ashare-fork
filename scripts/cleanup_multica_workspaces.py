@@ -332,17 +332,34 @@ def delete_task_dir(path: str) -> Optional[str]:
         return "%s: %s" % (type(exc).__name__, exc)
 
 
-def format_human(records: List[Dict]) -> str:
-    """Render the three sections: deletable / dirty / retained."""
+def format_human(records: List[Dict],
+                 refused: Optional[List[str]] = None) -> str:
+    """Render the three sections: deletable / dirty / retained.
+
+    ``refused`` holds paths judged deletable but NOT deleted because the
+    safety guard rejected them (``--apply`` only); they are annotated in
+    place so the deletable section never implies they were removed.
+    Records with an unknown verdict are retained (fail-safe), never deleted.
+    """
+    refused_set = set(refused or [])
     by_verdict: Dict[str, List[Dict]] = {
         VERDICT_DELETABLE: [], VERDICT_DIRTY: [], VERDICT_RETAINED: []}
     for rec in records:
-        by_verdict.setdefault(rec["verdict"], by_verdict[VERDICT_RETAINED]).append(rec)
+        verdict = rec.get("verdict")
+        if verdict in by_verdict:
+            by_verdict[verdict].append(rec)
+        else:
+            # Fail-safe default: unknown verdicts are retained, never deleted.
+            by_verdict[VERDICT_RETAINED].append(rec)
     out: List[str] = []
     deletable = by_verdict[VERDICT_DELETABLE]
     out.append("=== deletable (%d) ===" % len(deletable))
     for rec in deletable:
-        out.append("  %s  [issue %s done]" % (rec["path"], rec["issue_id"]))
+        if rec["path"] in refused_set:
+            out.append("  %s  [issue %s done] [refused-by-guard: NOT deleted]"
+                       % (rec["path"], rec["issue_id"]))
+        else:
+            out.append("  %s  [issue %s done]" % (rec["path"], rec["issue_id"]))
     if not deletable:
         out.append("  (none)")
     dirty = by_verdict[VERDICT_DIRTY]
@@ -399,7 +416,17 @@ def main(argv: Optional[List[str]] = None,
     def default_factory(timeout: int) -> StatusFetcher:
         return lambda issue_id: fetch_issue_status(issue_id, timeout=timeout)
 
-    fetcher = (fetcher_factory or default_factory)(args.issue_timeout)
+    base_fetcher = (fetcher_factory or default_factory)(args.issue_timeout)
+    # Per-run cache (DAV-1758 review suggestion): several task dirs may belong
+    # to the same issue; one lookup per issue_id keeps long scans fast and the
+    # verdicts within a run consistent. Failures are cached as well so one bad
+    # issue cannot stall the run with a timeout per directory.
+    fetch_cache: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+
+    def fetcher(issue_id: str) -> Tuple[Optional[str], Optional[str]]:
+        if issue_id not in fetch_cache:
+            fetch_cache[issue_id] = base_fetcher(issue_id)
+        return fetch_cache[issue_id]
     task_dirs = discover_task_dirs(roots)
     records: List[Dict] = []
     for index, task_dir in enumerate(task_dirs, 1):
@@ -426,6 +453,11 @@ def main(argv: Optional[List[str]] = None,
         "dirty": sum(1 for r in records if r["verdict"] == VERDICT_DIRTY),
         "retained": sum(1 for r in records if r["verdict"] == VERDICT_RETAINED),
     }
+    fetch_failures = sum(
+        1 for r in records
+        if any(reason.startswith(("fetch-", "classify-"))
+               or reason == "multicaCLI-not-found"
+               for reason in r["reasons"]))
     deleted: List[str] = []
     delete_errors: List[str] = []
     refused: List[str] = []
@@ -450,6 +482,7 @@ def main(argv: Optional[List[str]] = None,
         "roots": roots,
         "apply": bool(args.apply),
         "summary": summary,
+        "fetch_failures": fetch_failures,
         "deleted": deleted,
         "delete_errors": delete_errors,
         "refused_by_guard": refused,
@@ -466,10 +499,14 @@ def main(argv: Optional[List[str]] = None,
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        sys.stdout.write(format_human(records))
+        sys.stdout.write(format_human(records, refused))
         sys.stdout.write("summary: %(deletable)d deletable, "
                          "%(dirty)d with uncommitted changes (never deleted), "
                          "%(retained)d retained\n" % summary)
+        if fetch_failures:
+            sys.stdout.write("fetch failures: %d "
+                             "(affected dirs retained, see reasons)\n"
+                             % fetch_failures)
         if args.apply:
             sys.stdout.write("deleted %d, errors %d, refused by guard %d\n"
                              % (len(deleted), len(delete_errors),
