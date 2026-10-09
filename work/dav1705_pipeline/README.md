@@ -52,13 +52,23 @@ $V scripts/phase2/m2_sampler.py --date 20251231 --n 20 --seed 42 \
 $V work/dav1705_pipeline/run_shadow_trial.py a --ledger $OUT/ledger/forward_ledger.jsonl \
     --out-dir $OUT --write-calendar $OUT/calendar.txt
 # 3) 日报/月报（主干生产脚本）+ 标注固化
+#    注意：--as-of 2026-09-30 要求日历覆盖 2026-09 窗口（Tushare 在线日历
+#    配 TUSHARE_TOKEN，或另备覆盖该窗口的 --calendar 文件）。离线/无 token 时
+#    --write-calendar 落盘的只是本机缓存覆盖（止于 2025-12-31），此时本步按
+#    设计返回 rc=3（FAILED: calendar does not cover ...，主干
+#    m2_periodic_report.py cmd_run 口径），属预期内阻断而非 bug；离线验证改用
+#    缓存覆盖内的 --as-of（如 2025-12-31，输出文件名随之改日期）走同套代码路径。
 $V scripts/phase2/m2_periodic_report.py run --period both --ledger $OUT/ledger/forward_ledger.jsonl \
     --calendar $OUT/calendar.txt --as-of 2026-09-30 \
     --daily-out $OUT/trial-nonresult_m2_daily_2026-09-30.md \
     --monthly-out $OUT/trial-nonresult_m2_monthly_2026-09.md
 $V work/dav1705_pipeline/finalize_trial.py $OUT/trial-nonresult_picks-20251231-a.json \
     $OUT/trial-nonresult_m2_daily_2026-09-30.md $OUT/trial-nonresult_m2_monthly_2026-09.md
-# 4) 逐字节复现：上式各跑两次（a/b），cmp 即证
+# 4) 逐字节复现：同一账本上上式各跑两次（a/b），cmp 即证。口径限定：逐字节
+#    相同仅在「同一账本」内成立；跨两次独立封存（ledger/ 重跑）报告首行注释中
+#    仅 inputs_sha256 一行随 sealed_at 变化（主干 m2_periodic_report.py
+#    _input_digest/_header 既有行为：digest 对含 sealed_at 的账本记录整体哈希），
+#    其余正文逐字节相同，属 by design。
 ```
 
 ## 已知数据侧阻断（非本卡可修，I-01/I-02）

@@ -42,15 +42,26 @@ def finalize_report(path: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    if not argv:
+        print(f"用法: finalize_trial.py <picks.json> <report.md>...",
+              file=sys.stderr)
+        return 2
     for arg in argv:
         p = Path(arg)
-        if p.suffix == ".json":
-            finalize_picks(p)
-        elif p.suffix == ".md":
-            finalize_report(p)
-        else:
+        if p.suffix not in (".json", ".md"):
             print(f"SKIP: {p} (unknown suffix)", file=sys.stderr)
             return 2
+        if not p.is_file():
+            print(f"FAILED: file not found: {p}", file=sys.stderr)
+            return 1
+        try:
+            if p.suffix == ".json":
+                finalize_picks(p)
+            else:
+                finalize_report(p)
+        except (OSError, ValueError) as exc:
+            print(f"FAILED: {p}: {exc}", file=sys.stderr)
+            return 1
         print(f"OK: labeled {p}")
     return 0
 
