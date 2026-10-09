@@ -558,6 +558,20 @@ def test_arrow_filename_ignored_is_retained(tmp_path):
     assert "ignored-artifacts" in rec["reasons"]
 
 
+def test_leading_space_ignored_filename_is_retained(tmp_path):
+    # DAV-1782 round 3: leading blanks belong to the filename and must
+    # not be stripped; the file counts and retains the directory.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _make_repo_ignored(root, task, "*.log\n", {"  lead.log": "x" * 60})
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["ignored_count"] == 1, rec
+    assert rec["ignored_total_bytes"] == 60, rec
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "ignored-artifacts" in rec["reasons"]
+
+
 def test_nested_checkout_unpushed_is_retained(tmp_path):
     # DAV-1782 yellow fix: a workdir/<sub>/<repo> checkout is discovered;
     # its unpushed commit retains the dir instead of being misread as

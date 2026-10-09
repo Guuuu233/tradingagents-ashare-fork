@@ -329,12 +329,14 @@ def git_ignored_artifacts(repo: str) -> Tuple[List[str], int, Optional[str]]:
     for entry in proc.stdout.split("\0"):
         if len(entry) < 4 or not entry.startswith("!!"):
             continue
-        # "-z" layout is "XY <path>" with no quoting and no rename
-        # arrows for ignored entries; DAV-1782 round 2: never split on
-        # " -> " here — a literal filename such as "a -> b.log" would
-        # be truncated to "b.log", lexists would miss it, and the file
-        # would be silently dropped from the retained count.
-        path = entry[3:].strip()
+        # "-z" layout is "XY<SP><path>" with no quoting and no rename
+        # arrows for ignored entries; entry[3:] is the full path verbatim.
+        # DAV-1782 round 2: never split on " -> " (a literal filename such
+        # as "a -> b.log" would be truncated). DAV-1782 round 3: never
+        # strip() either — leading/trailing blanks belong to the filename
+        # (e.g. "  lead.log"); stripping breaks lexists and silently
+        # drops the file. Empty records are still filtered by "if path".
+        path = entry[3:]
         if path:
             rels.append(path)
     paths: List[str] = []
