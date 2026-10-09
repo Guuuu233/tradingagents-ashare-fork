@@ -265,3 +265,83 @@ def test_report_contains_refused_by_guard(tmp_path):
         report = json.load(fh)
     assert report["refused_by_guard"] == []
     assert len(report["deleted"]) == 1
+
+
+def test_guard_refused_annotated_in_place_and_exit_nonzero(tmp_path, capsys):
+    # DAV-1758 review finding (yellow): a guard-refused dir must not look
+    # like an ordinary deletable entry, and the run must not exit 0.
+    root = str(tmp_path / "ws")
+    _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    rc = cmw.main(
+        ["--roots", root, "--apply"],
+        fetcher_factory=lambda timeout: _stub_fetcher({"issue-done": "done"}))
+    assert rc == 0  # nothing to refuse: real dir under scanned root
+    out = capsys.readouterr().out
+    assert "[refused-by-guard" not in out
+
+    # Force a refusal by making is_safe_to_delete say no.
+    def unsafe(path, roots):
+        return False
+
+    _make_task(root, "dav-9-zzz", issue_id="issue-done")
+    orig = cmw.is_safe_to_delete
+    cmw.is_safe_to_delete = unsafe
+    try:
+        rc = cmw.main(
+            ["--roots", root, "--apply"],
+            fetcher_factory=lambda timeout: _stub_fetcher(
+                {"issue-done": "done"}))
+    finally:
+        cmw.is_safe_to_delete = orig
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "[refused-by-guard: NOT deleted]" in out
+    assert "refused by guard 1" in out
+
+
+def test_fetch_failure_count_reported_and_dirs_retained(tmp_path, capsys):
+    # DAV-1758 review suggestion: fetch failures are counted in the report
+    # and every affected dir is retained.
+    root = str(tmp_path / "ws")
+    _make_task(root, "dav-1-aaa", issue_id="issue-X")
+    _make_task(root, "dav-2-bbb", issue_id="issue-Y")
+    report_path = str(tmp_path / "report.json")
+    rc = cmw.main(
+        ["--roots", root, "--report", report_path],
+        fetcher_factory=lambda timeout: _stub_fetcher({}))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "retained (2)" in out
+    assert "fetch failures: 2" in out
+    with open(report_path, encoding="utf-8") as fh:
+        report = json.load(fh)
+    assert report["fetch_failures"] == 2
+
+
+def test_same_issue_fetched_once_per_run(tmp_path):
+    # DAV-1758 review suggestion: shared issue lookups are cached.
+    root = str(tmp_path / "ws")
+    _make_task(root, "dav-1-aaa", issue_id="issue-same")
+    _make_task(root, "dav-2-bbb", issue_id="issue-same")
+    calls: list = []
+
+    def counting(issue_id: str):
+        calls.append(issue_id)
+        return "done", None
+
+    rc = cmw.main(
+        ["--roots", root],
+        fetcher_factory=lambda timeout: counting)
+    assert rc == 0
+    assert calls == ["issue-same"]
+
+
+def test_unknown_verdict_fails_safe_to_retained(capsys):
+    # DAV-1758 review suggestion: unknown verdicts must be retained,
+    # never deletable, even if a future verdict string appears.
+    recs = [{"path": "/tmp/x", "issue_id": "i",
+             "verdict": "mystery-future", "reasons": ["r"],
+             "dirty": []}]
+    out = cmw.format_human(recs)
+    assert "=== deletable (0) ===" in out
+    assert "=== retained (1) ===" in out
