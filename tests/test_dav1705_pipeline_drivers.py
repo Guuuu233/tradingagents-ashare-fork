@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "work" / "dav1705_pipeline"))
@@ -158,3 +158,73 @@ def test_shadow_main_filters_by_user_and_counts(tmp_path):
     assert payload["filtered_ledger_lines"] == 2
     assert payload["user_id"] == rst.DEFAULT_USER_ID
     assert payload["primary"]["n_records"] == 2
+
+
+# ---------------------------------------------------------------------------
+# DAV-1747: chunked builder fixed-account filter (seal side, mirrors DAV-1740)
+
+
+def _chunked_db(path, rows):
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE reports (id TEXT, user_id TEXT, symbol TEXT,"
+        " industry TEXT, trade_date TEXT, status TEXT, analysis_status TEXT,"
+        " decision TEXT, direction TEXT, probability REAL, trade_action TEXT,"
+        " risk_status TEXT, final_trade_decision TEXT, created_at TEXT,"
+        " updated_at TEXT, result_data TEXT)")
+    for r in rows:
+        con.execute(
+            "INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (r.get("id"), r.get("user_id", blc.DEFAULT_USER_ID),
+             "600519.SH", "白酒", "2026-07-28",
+             r.get("status", "completed"), "VALID", "BUY", "看多", 60,
+             "BUY", "APPROVED", "ok",
+             r.get("created_at", "2026-07-28 15:43:57"),
+             "2026-07-28 15:43:57", "{}"))
+    con.commit()
+    con.close()
+
+
+def _chunked_cal(start="2026-07-01", days=400):
+    out = []
+    d = date.fromisoformat(start)
+    while len(out) < days:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def test_chunked_build_filters_by_user_and_counts(tmp_path, monkeypatch,
+                                                  capsys):
+    """非固定账户 completed 报告不入账；过滤条数计入统计输出."""
+    import json
+
+    assert blc.DEFAULT_USER_ID == "429163f7-50b6-4982-8bdf-96ae99506843"
+    monkeypatch.setattr(blc.dsl, "_load_trade_dates", _chunked_cal)
+    db = tmp_path / "t.db"
+    _chunked_db(db, [
+        {"id": "keep1"},
+        {"id": "keep2"},
+        {"id": "skip1", "user_id": "local-default-user"},
+        # 他户 running 报告不得延期固定账户的封存（blocking 口径同生产）。
+        {"id": "other-run", "user_id": "local-default-user",
+         "status": "running", "created_at": "2026-07-29 10:00:00"},
+    ])
+    ledger_dir = tmp_path / "led"
+    ns = type("NS", (), {"db": str(db), "ledger_dir": str(ledger_dir),
+                         "date": "2026-08-01", "force": False})()
+    assert blc.cmd_build(ns) == 0
+    out = capsys.readouterr().out
+    assert "skipped_user=1" in out
+    lines = (ledger_dir / "forward_ledger.jsonl").read_text(
+        "utf-8").splitlines()
+    assert len(lines) == 2
+    recs = [json.loads(ln)["record"] for ln in lines]
+    assert {r["report_id"] for r in recs} == {"keep1", "keep2"}
+    assert {r["user_id"] for r in recs} == {blc.DEFAULT_USER_ID}
+    state = json.loads((ledger_dir / blc.dsl.STATE_FILE).read_text("utf-8"))
+    assert state["last_appended"] == 2
+    assert state["skipped_user_n"] == 1
