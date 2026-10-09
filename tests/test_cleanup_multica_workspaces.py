@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 
 import pytest
 
@@ -71,9 +72,40 @@ def _stub_fetcher(mapping: dict):
     return fetch
 
 
+def _backdate_all(path: str, days: float = 2) -> None:
+    """Set every file/dir mtime under path to ``days`` ago.
+
+    DAV-1775 fixtures need mtimes outside the 24h protection window to
+    reach a deletable verdict on the other conditions."""
+    old = time.time() - days * 86400
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+        for name in dirnames + filenames:
+            try:
+                os.utime(os.path.join(dirpath, name), (old, old),
+                         follow_symlinks=False)
+            except OSError:
+                pass
+    try:
+        os.utime(path, (old, old))
+    except OSError:
+        pass
+
+
+def _attach_pushed_remote(repo: str, root: str,
+                          name: str = "remote.git") -> None:
+    """Point repo at a bare remote holding its HEAD (nothing unpushed)."""
+    remote = os.path.join(root, name)
+    if not os.path.isdir(remote):
+        _run_git(root, "init", "--bare", "-q", remote)
+    _run_git(repo, "remote", "add", "origin", remote)
+    _run_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def test_done_clean_no_git_is_deletable(tmp_path):
     root = str(tmp_path / "ws")
     task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _backdate_all(task)
     rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
     assert rec["verdict"] == cmw.VERDICT_DELETABLE
     assert rec["issue_status"] == "done"
@@ -85,10 +117,8 @@ def test_done_clean_git_is_deletable(tmp_path):
     repo = os.path.join(task, "workdir", "proj")
     _init_repo(repo, with_commit=True)
     # Attach a remote tracking the commit so nothing is "unpushed".
-    _run_git(repo, "remote", "add", "origin", os.path.join(root, "remote.git"))
-    _run_git(root, "init", "--bare", "-q", os.path.join(root, "remote.git"))
-    _run_git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
-    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _attach_pushed_remote(repo, root)
+    _backdate_all(task)
     rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
     assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec
 
@@ -146,6 +176,7 @@ def test_gc_meta_issue_source_is_used(tmp_path):
     root = str(tmp_path / "ws")
     task = _make_task(root, "dav-6-fff", issue_id="issue-done",
                       via_gc_meta=True)
+    _backdate_all(task)
     rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
     assert rec["issue_source"] == "gc_meta"
     assert rec["verdict"] == cmw.VERDICT_DELETABLE
@@ -168,6 +199,7 @@ def test_apply_deletes_only_deletable(tmp_path):
     _init_repo(os.path.join(bad, "workdir", "proj"),
                with_commit=True, dirty=True)
     open_ = _make_task(root, "dav-3-ccc", issue_id="issue-open")
+    _backdate_all(good)  # DAV-1775: only old dirs pass the 24h guard
     report_path = str(tmp_path / "report.json")
     rc = cmw.main(
         ["--roots", root, "--apply", "--report", report_path],
@@ -255,7 +287,8 @@ def test_unexpected_classify_error_is_retained(tmp_path, monkeypatch, capsys):
 
 def test_report_contains_refused_by_guard(tmp_path):
     root = str(tmp_path / "ws")
-    _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _backdate_all(task)  # DAV-1775: only old dirs pass the 24h guard
     report_path = str(tmp_path / "report.json")
     rc = cmw.main(
         ["--roots", root, "--apply", "--report", report_path],
@@ -271,7 +304,8 @@ def test_guard_refused_annotated_in_place_and_exit_nonzero(tmp_path, capsys):
     # DAV-1758 review finding (yellow): a guard-refused dir must not look
     # like an ordinary deletable entry, and the run must not exit 0.
     root = str(tmp_path / "ws")
-    _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    t1 = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _backdate_all(t1)  # DAV-1775: only old dirs pass the 24h guard
     rc = cmw.main(
         ["--roots", root, "--apply"],
         fetcher_factory=lambda timeout: _stub_fetcher({"issue-done": "done"}))
@@ -283,7 +317,8 @@ def test_guard_refused_annotated_in_place_and_exit_nonzero(tmp_path, capsys):
     def unsafe(path, roots):
         return False
 
-    _make_task(root, "dav-9-zzz", issue_id="issue-done")
+    t2 = _make_task(root, "dav-9-zzz", issue_id="issue-done")
+    _backdate_all(t2)  # DAV-1775: must be deletable to reach the guard
     orig = cmw.is_safe_to_delete
     cmw.is_safe_to_delete = unsafe
     try:
@@ -345,3 +380,151 @@ def test_unknown_verdict_fails_safe_to_retained(capsys):
     out = cmw.format_human(recs)
     assert "=== deletable (0) ===" in out
     assert "=== retained (1) ===" in out
+
+
+# ---------- DAV-1775: ignored artefacts / non-checkout files / 24h guard ---
+
+def _make_repo_ignored(root: str, task: str, ignore_rules: str,
+                       ignored_files: dict) -> str:
+    """Init a pushed repo with a committed .gitignore + ignored files."""
+    repo = os.path.join(task, "workdir", "proj")
+    _init_repo(repo, with_commit=True)
+    with open(os.path.join(repo, ".gitignore"), "w",
+              encoding="utf-8") as fh:
+        fh.write(ignore_rules)
+    _run_git(repo, "add", ".gitignore")
+    _run_git(repo, "-c", "user.email=test@example.com",
+             "-c", "user.name=test", "commit", "-qm", "ignore rules")
+    for rel, content in ignored_files.items():
+        path = os.path.join(repo, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    _attach_pushed_remote(repo, root)
+    return repo
+
+
+def test_pure_cache_ignored_is_deletable(tmp_path):
+    # DAV-1775 boundary: only cache-like ignored files -> still deletable.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _make_repo_ignored(
+        root, task,
+        "__pycache__/\n.pytest_cache/\nnode_modules/\n.venv/\n*.egg-info\n"
+        ".mypy_cache/\n.ruff_cache/\n",
+        {"sub/__pycache__/a.pyc": "x",
+         "sub/.pytest_cache/CACHEDIR.TAG": "x",
+         "sub/node_modules/b.js": "x",
+         os.path.join(".venv", "lib", "c.py"): "x",
+         "pkg.egg-info/PKG-INFO": "x",
+         ".mypy_cache/d.json": "x",
+         ".ruff_cache/e": "x"})
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec
+    assert rec["ignored_count"] == 0
+
+
+def test_mixed_ignored_is_retained_with_top5(tmp_path, capsys):
+    # DAV-1775: one non-cache ignored file retains; output shows first 5
+    # paths plus the total size.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    repo = _make_repo_ignored(
+        root, task, "*.log\n__pycache__/\n",
+        {"sub/__pycache__/a.pyc": "cache\n",
+         **{"f%d.log" % i: "data-%d\n" % i for i in range(7)}})
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "ignored-artifacts" in rec["reasons"]
+    assert rec["ignored_count"] == 7
+    assert len(rec["ignored_sample"]) == 5
+    expected_total = sum(len("data-%d\n" % i) for i in range(7))
+    assert rec["ignored_total_bytes"] == expected_total
+    assert all(p.startswith(repo) for p in rec["ignored_sample"])
+    out = cmw.format_human([rec])
+    assert "ignored-artifacts: 7 files, %d bytes" % expected_total in out
+    assert "showing first 5" in out
+
+
+def test_non_repo_files_over_1MB_retained(tmp_path):
+    # DAV-1775: workdir files outside any checkout totalling >1MB retain.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    repo = os.path.join(task, "workdir", "proj")
+    _init_repo(repo, with_commit=True)
+    _attach_pushed_remote(repo, root)
+    with open(os.path.join(task, "workdir", "blob.bin"), "wb") as fh:
+        fh.write(b"\0" * (cmw.NON_REPO_SIZE_LIMIT_BYTES + 1))
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "non-repo-files>1MB" in rec["reasons"]
+    assert rec["non_repo_bytes"] == cmw.NON_REPO_SIZE_LIMIT_BYTES + 1
+
+
+def test_non_repo_files_at_or_under_1MB_deletable(tmp_path):
+    # DAV-1775 boundary: total <= 1MB (incl. exactly 1MB) stays deletable.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    repo = os.path.join(task, "workdir", "proj")
+    _init_repo(repo, with_commit=True)
+    _attach_pushed_remote(repo, root)
+    with open(os.path.join(task, "workdir", "blob.bin"), "wb") as fh:
+        fh.write(b"\0" * cmw.NON_REPO_SIZE_LIMIT_BYTES)
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec
+    assert "non-repo-files>1MB" not in rec["reasons"]
+
+
+def test_marker_only_shell_is_deletable(tmp_path):
+    # DAV-1775: a shell with only marker files counts no non-repo bytes.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    with open(os.path.join(task, ".task_owner"), "w",
+              encoding="utf-8") as fh:
+        fh.write("owner\n")
+    _backdate_all(task)
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["non_repo_bytes"] == 0
+    assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec
+
+
+def test_recent_mtime_is_retained(tmp_path):
+    # DAV-1775: a file touched right now retains the directory.
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    _backdate_all(task)
+    fresh = os.path.join(task, "workdir", "fresh.txt")
+    with open(fresh, "w", encoding="utf-8") as fh:
+        fh.write("new\n")
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}))
+    assert rec["verdict"] == cmw.VERDICT_RETAINED
+    assert "recently-modified" in rec["reasons"]
+    assert rec["recent_path"] == os.path.normpath(fresh)
+    out = cmw.format_human([rec])
+    assert "recently-modified: %s" % os.path.normpath(fresh) in out
+
+
+def test_mtime_window_boundary(tmp_path):
+    # DAV-1775 boundary: mtime exactly at the 24h cutoff is still recent;
+    # 5s older is not (injected clock, no flakiness).
+    root = str(tmp_path / "ws")
+    task = _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    target = os.path.join(task, "workdir", "edge.txt")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write("edge\n")
+    _backdate_all(task, days=3)
+    fixed_now = time.time()
+    window = cmw.RECENT_MTIME_WINDOW_SECONDS
+    os.utime(target, (fixed_now - window, fixed_now - window))
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}),
+                            now=fixed_now)
+    assert "recently-modified" in rec["reasons"]
+    os.utime(target, (fixed_now - window - 5, fixed_now - window - 5))
+    rec = cmw.classify_task(task, _stub_fetcher({"issue-done": "done"}),
+                            now=fixed_now)
+    assert "recently-modified" not in rec["reasons"]
+    assert rec["verdict"] == cmw.VERDICT_DELETABLE, rec

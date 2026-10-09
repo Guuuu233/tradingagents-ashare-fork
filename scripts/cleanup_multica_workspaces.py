@@ -8,6 +8,11 @@ are safe to delete. A directory is deletable only when ALL of these hold:
 2. every git checkout inside it is clean (``git status --porcelain`` empty,
    untracked files count as uncommitted changes);
 3. no checkout has unpushed commits (``git rev-list HEAD --not --remotes``).
+4. no checkout holds non-cache ignored files (``git status --porcelain
+   --ignored`` minus cache-like paths such as ``__pycache__``);
+5. files under the workdir that belong to no git checkout total at most
+   1 MiB (marker-only shells are fine);
+6. no file under the task directory was modified within the last 24 hours.
 
 Default behaviour is list-only: deletable / dirty / retained are printed in
 separate sections and nothing is removed. ``--apply`` deletes the deletable
@@ -31,6 +36,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -54,6 +60,22 @@ _PRUNE_NAMES = {".git", "codex-home", "node_modules", "__pycache__",
 
 # Cap on how many porcelain lines are kept per repo in the report.
 _DIRTY_SAMPLE_LINES = 5
+
+# DAV-1775: ignored paths whose every component matches one of these are
+# cache-like build artefacts and do NOT block deletion. ``.venv*`` and
+# ``*.egg-info`` are prefix/suffix matches, the rest are exact names.
+_CACHE_DIR_NAMES = {"__pycache__", ".pytest_cache", "node_modules",
+                    ".mypy_cache", ".ruff_cache"}
+
+# DAV-1775: cap on ignored / non-checkout sample paths kept per record.
+_SAMPLE_LINES = 5
+
+# DAV-1775: files under the workdir that belong to no git checkout retain
+# the directory once their total size strictly exceeds this (1 MiB).
+NON_REPO_SIZE_LIMIT_BYTES = 1024 * 1024
+
+# DAV-1775: any file modified within this window retains the directory.
+RECENT_MTIME_WINDOW_SECONDS = 24 * 3600
 
 StatusFetcher = Callable[[str], Tuple[Optional[str], Optional[str]]]
 # Returns (status, error). status is the raw ``status`` field of
@@ -255,9 +277,181 @@ def git_has_unpushed(repo: str) -> Tuple[bool, Optional[str]]:
         return True, "git-rev-list-unavailable"
 
 
+def _is_cache_ignored_path(rel_path: str) -> bool:
+    """Check whether an ignored path is a cache-like build artefact."""
+    for part in rel_path.replace("\\", "/").split("/"):
+        if not part:
+            continue
+        if part in _CACHE_DIR_NAMES:
+            return True
+        if part.startswith(".venv"):
+            return True
+        if part.endswith(".egg-info"):
+            return True
+    return False
+
+
+def git_ignored_artifacts(repo: str) -> Tuple[List[str], int, Optional[str]]:
+    """List non-cache ignored files under a repo.
+
+    Runs ``git status --porcelain --ignored`` and drops cache-like paths
+    (``__pycache__`` etc.). Ignored directories (``!! logs/``) are expanded
+    so every file is individually filtered and sized. Returns
+    (sorted_absolute_paths, total_bytes, error).
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo, "status", "--porcelain", "--ignored"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=60, check=False, text=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return [], 0, "ignored-check-unavailable"
+    if proc.returncode != 0:
+        return [], 0, "ignored-check-unavailable"
+    rels: List[str] = []
+    for line in proc.stdout.splitlines():
+        if len(line) < 4 or not line.startswith("!!"):
+            continue
+        # Quoted when the path holds spaces/escapes; simple unquote.
+        path = line[2:].strip().strip('"')
+        if path:
+            rels.append(path)
+    paths: List[str] = []
+    total = 0
+
+    def _add_file(abs_path: str) -> None:
+        nonlocal total
+        rel = os.path.relpath(abs_path, repo)
+        if _is_cache_ignored_path(rel):
+            return
+        paths.append(os.path.normpath(abs_path))
+        try:
+            total += os.path.getsize(abs_path)
+        except OSError:
+            pass
+
+    for rel in rels:
+        if _is_cache_ignored_path(rel):
+            continue
+        abs_path = os.path.join(repo, rel)
+        try:
+            if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+                for dirpath, _dirnames, filenames in os.walk(
+                        abs_path, followlinks=False):
+                    for name in filenames:
+                        _add_file(os.path.join(dirpath, name))
+            elif os.path.lexists(abs_path):
+                _add_file(abs_path)
+        except OSError:
+            continue
+    return sorted(paths), total, None
+
+
+def _inside_any_repo(path_real: str, repo_roots: List[str]) -> bool:
+    for root in repo_roots:
+        if path_real == root or path_real.startswith(root + os.sep):
+            return True
+    return False
+
+
+def non_repo_files(task_dir: str,
+                   repos: List[str]) -> Tuple[List[str], int, int]:
+    """Size up files that belong to no git checkout.
+
+    Scope is ``task_dir/workdir`` when present, else ``task_dir`` itself.
+    Task markers (``.task_owner`` etc.) and ``.multica`` control metadata
+    are shells, not user data, and never count. Returns
+    (sorted_sample_paths, total_bytes, file_count).
+    """
+    scope = os.path.join(task_dir, "workdir")
+    if not os.path.isdir(scope):
+        scope = task_dir
+    repo_roots = [os.path.realpath(r) for r in repos]
+    sample: List[str] = []
+    total = 0
+    count = 0
+    stack = [scope]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                children = list(entries)
+        except OSError:
+            continue
+        for entry in children:
+            try:
+                if entry.name == ".multica":
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if _inside_any_repo(os.path.realpath(entry.path),
+                                        repo_roots):
+                        continue
+                    stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    if entry.name in TASK_MARKER_FILES:
+                        continue
+                    if _inside_any_repo(os.path.realpath(entry.path),
+                                        repo_roots):
+                        continue
+                    count += 1
+                    try:
+                        total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        pass
+                    if len(sample) < _SAMPLE_LINES:
+                        sample.append(os.path.normpath(entry.path))
+            except OSError:
+                continue
+    return sorted(sample), total, count
+
+
+def find_recent_file(task_dir: str, now: float,
+                     window: int = RECENT_MTIME_WINDOW_SECONDS
+                     ) -> Optional[Tuple[str, float]]:
+    """Find a file modified within ``window`` seconds of ``now``.
+
+    Covers every file under the task directory (fail-safe: any recent
+    activity retains it), except ``.git/index``: read-only ``git status``
+    rewrites the index (stat refresh), so counting it would make the
+    guard self-trigger on every scan. Other ``.git`` internals (refs,
+    objects) are only written by real repo mutations and still count.
+    Returns (path, mtime) or None.
+    """
+    cutoff = now - window
+    stack = [task_dir]
+    while stack:
+        current = stack.pop()
+        in_git_dir = os.path.basename(current) == ".git"
+        try:
+            with os.scandir(current) as entries:
+                children = list(entries)
+        except OSError:
+            continue
+        for entry in children:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    if in_git_dir and entry.name == "index":
+                        continue
+                    try:
+                        mtime = entry.stat(
+                            follow_symlinks=False).st_mtime
+                    except OSError:
+                        continue
+                    if mtime >= cutoff:
+                        return os.path.normpath(entry.path), mtime
+            except OSError:
+                continue
+    return None
+
+
 def classify_task(task_dir: str,
-                  fetcher: StatusFetcher = fetch_issue_status) -> Dict:
+                  fetcher: StatusFetcher = fetch_issue_status,
+                  now: Optional[float] = None) -> Dict:
     """Classify one task directory into deletable / dirty / retained."""
+    if now is None:
+        now = time.time()
     record: Dict = {"path": task_dir, "issue_id": None,
                     "issue_source": "none", "issue_status": None,
                     "git_repos": [], "dirty": [],
@@ -296,6 +490,37 @@ def classify_task(task_dir: str,
             unpushed_hits.append("%s%s" % (repo, ("(%s)" % err) if err else ""))
     record["dirty"] = dirty_hits
     record["unpushed"] = unpushed_hits
+    # DAV-1775: ignored artefacts keep the directory, whatever else holds.
+    ignored_all: List[str] = []
+    ignored_total = 0
+    for repo in repos:
+        paths, size, err = git_ignored_artifacts(repo)
+        if err is not None:
+            # Fail-safe: an unreadable ignored-state retains the dir.
+            record["reasons"].append(err)
+        else:
+            ignored_all.extend(paths)
+            ignored_total += size
+    ignored_all.sort()
+    record["ignored_sample"] = ignored_all[:_SAMPLE_LINES]
+    record["ignored_count"] = len(ignored_all)
+    record["ignored_total_bytes"] = ignored_total
+    if ignored_all:
+        record["reasons"].append("ignored-artifacts")
+    # DAV-1775: files outside any checkout above 1 MiB keep the directory.
+    non_repo_sample, non_repo_bytes, non_repo_count = non_repo_files(
+        task_dir, repos)
+    record["non_repo_sample"] = non_repo_sample
+    record["non_repo_bytes"] = non_repo_bytes
+    record["non_repo_count"] = non_repo_count
+    if non_repo_bytes > NON_REPO_SIZE_LIMIT_BYTES:
+        record["reasons"].append("non-repo-files>1MB")
+    # DAV-1775: any file touched within 24h keeps the directory.
+    recent = find_recent_file(task_dir, now)
+    record["recent_path"] = recent[0] if recent else None
+    record["recent_mtime"] = recent[1] if recent else None
+    if recent is not None:
+        record["reasons"].append("recently-modified")
     if dirty_hits:
         record["verdict"] = VERDICT_DIRTY
         record["reasons"].append("uncommitted-changes")
@@ -374,6 +599,24 @@ def format_human(records: List[Dict],
     out.append("=== retained (%d) ===" % len(retained))
     for rec in retained:
         out.append("  %s  [reason: %s]" % (rec["path"], "; ".join(rec["reasons"])))
+        if rec.get("ignored_count"):
+            out.append("    ignored-artifacts: %d files, %d bytes; "
+                       "showing first %d" % (
+                           rec["ignored_count"],
+                           rec.get("ignored_total_bytes", 0),
+                           len(rec.get("ignored_sample", []))))
+            for path in rec.get("ignored_sample", []):
+                out.append("      %s" % path)
+        if any(r == "non-repo-files>1MB" for r in rec["reasons"]):
+            out.append("    non-repo-files: %d files, %d bytes (>1MB); "
+                       "showing first %d" % (
+                           rec.get("non_repo_count", 0),
+                           rec.get("non_repo_bytes", 0),
+                           len(rec.get("non_repo_sample", []))))
+            for path in rec.get("non_repo_sample", []):
+                out.append("      %s" % path)
+        if rec.get("recent_path"):
+            out.append("    recently-modified: %s" % rec["recent_path"])
     if not retained:
         out.append("  (none)")
     return "\n".join(out) + "\n"
