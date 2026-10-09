@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "work" / "dav1705_pipeline"))
 
 import build_ledger_chunked as blc
 import run_shadow_trial as rst

@@ -3,7 +3,7 @@
 > 管线试跑，非成绩 — 本目录只放可复现的驱动脚本与说明，**不放任何数据产物**。
 > 产物一律写到 gitignored 的本机目录（见下），不入库。
 
-## 文件清单（白名单，仅 5 文件）
+## 文件清单（白名单：`work/dav1705_pipeline/` 下 4 文件 + `tests/` 下 1 测试）
 
 - `build_ledger_chunked.py` — 分块流式账本封存（复用生产
   `scripts/phase2/daily_snapshot_ledger.py` 封存语义：`build_record`/hash 链/
@@ -13,7 +13,9 @@
   另含内存合成对照 `synthetic_smoke/synthetic_edge`）。
 - `finalize_trial.py` — 产物「非成绩」标注固化（picks JSON 顶层字段 + m2 报告
   首行抬头；固定字符串注入，不破坏逐字节复现）。
-- `test_build_ledger_chunked.py` — 口径测试（F-01 本地日边界 + 日历三级来源）。
+- `test_build_ledger_chunked.py` → 已移至 `tests/test_dav1705_pipeline_drivers.py`
+  （pytest `testpaths=["tests"]` 只收 `tests/`，放 `work/` 会被静默跳过；
+  内容不变，仅 `sys.path` 指向 `work/dav1705_pipeline` 取被测驱动）。
 - `README.md` — 本文件。
 
 ## 产物落点与 gitignore 依据
