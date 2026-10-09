@@ -269,13 +269,17 @@ def classify_task(task_dir: str,
     if issue_id is None:
         record["reasons"].append("issue-unknown")
     else:
-        status, error = fetcher(issue_id)
-        if error is not None:
-            record["reasons"].append(error)
+        try:
+            status, error = fetcher(issue_id)
+        except Exception as exc:  # fail-safe: one bad lookup retains the dir
+            record["reasons"].append("fetch-error:%s" % type(exc).__name__)
         else:
-            record["issue_status"] = status
-            if status != "done":
-                record["reasons"].append("not-done(%s)" % status)
+            if error is not None:
+                record["reasons"].append(error)
+            else:
+                record["issue_status"] = status
+                if status != "done":
+                    record["reasons"].append("not-done(%s)" % status)
 
     repos = find_git_repos(task_dir)
     record["git_repos"] = repos
@@ -403,7 +407,18 @@ def main(argv: Optional[List[str]] = None,
             continue
         print("  [%d/%d] %s" % (index, len(task_dirs), task_dir),
               file=sys.stderr, flush=True)
-        records.append(classify_task(task_dir, fetcher))
+        try:
+            records.append(classify_task(task_dir, fetcher))
+        except Exception as exc:  # fail-safe: single-dir failure retains it
+            print("  classify failed for %s (%s); retaining"
+                  % (task_dir, type(exc).__name__),
+                  file=sys.stderr, flush=True)
+            records.append({"path": task_dir, "issue_id": None,
+                            "issue_source": "none", "issue_status": None,
+                            "git_repos": [], "dirty": [],
+                            "unpushed": [], "verdict": VERDICT_RETAINED,
+                            "reasons": ["classify-error:%s"
+                                          % type(exc).__name__]})
     records.sort(key=lambda r: r["path"])
 
     summary = {
@@ -413,12 +428,15 @@ def main(argv: Optional[List[str]] = None,
     }
     deleted: List[str] = []
     delete_errors: List[str] = []
+    refused: List[str] = []
     if args.apply:
         for rec in records:
             if rec["verdict"] != VERDICT_DELETABLE:
                 continue
             if not is_safe_to_delete(rec["path"], roots):
-                delete_errors.append("%s: refused by safety guard" % rec["path"])
+                refused.append(rec["path"])
+                print("refused by safety guard %s" % rec["path"],
+                      file=sys.stderr, flush=True)
                 continue
             err = delete_task_dir(rec["path"])
             if err is None:
@@ -434,6 +452,7 @@ def main(argv: Optional[List[str]] = None,
         "summary": summary,
         "deleted": deleted,
         "delete_errors": delete_errors,
+        "refused_by_guard": refused,
         "results": records,
     }
     if args.report:
@@ -452,11 +471,15 @@ def main(argv: Optional[List[str]] = None,
                          "%(dirty)d with uncommitted changes (never deleted), "
                          "%(retained)d retained\n" % summary)
         if args.apply:
-            sys.stdout.write("deleted %d, errors %d\n"
-                             % (len(deleted), len(delete_errors)))
+            sys.stdout.write("deleted %d, errors %d, refused by guard %d\n"
+                             % (len(deleted), len(delete_errors),
+                                len(refused)))
             for err in delete_errors:
                 sys.stdout.write("  ERROR %s\n" % err)
-    return 0 if not delete_errors else 1
+            for path in refused:
+                sys.stdout.write("  REFUSED (still listed deletable, "
+                                 "not deleted) %s\n" % path)
+    return 0 if not (delete_errors or refused) else 1
 
 
 if __name__ == "__main__":

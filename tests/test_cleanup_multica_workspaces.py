@@ -215,3 +215,53 @@ def test_exclude_skips_task(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "deletable (0)" in out
+
+
+def test_raising_fetcher_retains_dirs_and_completes(tmp_path, capsys):
+    # DAV-1758 review finding (red): a raising fetcher must retain the dir,
+    # never abort the whole run.
+    root = str(tmp_path / "ws")
+    t1 = _make_task(root, "dav-1-aaa", issue_id="issue-X")
+    t2 = _make_task(root, "dav-2-bbb", issue_id="issue-Y")
+
+    def boom(issue_id: str):
+        raise RuntimeError("simulated fetch crash")
+
+    rc = cmw.main(["--roots", root],
+                  fetcher_factory=lambda timeout: boom)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "deletable (0)" in out
+    assert "retained (2)" in out
+    assert os.path.isdir(t1) and os.path.isdir(t2)
+
+
+def test_unexpected_classify_error_is_retained(tmp_path, monkeypatch, capsys):
+    # Belt-and-braces: even if classify_task itself raises, main retains it.
+    root = str(tmp_path / "ws")
+    t1 = _make_task(root, "dav-1-aaa", issue_id="issue-X")
+
+    def flaky(task_dir, fetcher):
+        raise RuntimeError("simulated classify crash")
+
+    monkeypatch.setattr(cmw, "classify_task", flaky)
+    rc = cmw.main(
+        ["--roots", root],
+        fetcher_factory=lambda timeout: _stub_fetcher({"issue-X": "done"}))
+    assert rc == 0
+    assert "retained (1)" in capsys.readouterr().out
+    assert os.path.isdir(t1)
+
+
+def test_report_contains_refused_by_guard(tmp_path):
+    root = str(tmp_path / "ws")
+    _make_task(root, "dav-1-aaa", issue_id="issue-done")
+    report_path = str(tmp_path / "report.json")
+    rc = cmw.main(
+        ["--roots", root, "--apply", "--report", report_path],
+        fetcher_factory=lambda timeout: _stub_fetcher({"issue-done": "done"}))
+    assert rc == 0
+    with open(report_path, encoding="utf-8") as fh:
+        report = json.load(fh)
+    assert report["refused_by_guard"] == []
+    assert len(report["deleted"]) == 1
