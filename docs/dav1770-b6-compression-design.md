@@ -28,7 +28,7 @@
 
 - 压缩帧内**不嵌自定义 magic/版本头**：zstd 帧本身有 magic `0x28B52FFD`，解码端用「`result_data_zst IS NOT NULL` → 解压」判定；版本演进靠列存在性 + `PRAGMA user_version`（见 §6）。
 - 旧列 `result_data`（`JSON`）**保留不删**，迁移期双列并存（见 §4）。
-- `result_data='null'`（4 B）行**不迁移**——压缩反而变大；统一由解码层把 `NULL/空` 视作无数据。
+- `result_data='null'`（4 B，实测 318 行）**不迁移**——压缩反而变大；统一由解码层把 `NULL/空` 视作无数据。**迁移/校验三处口径统一为可执行判据 `result_data IS NOT NULL AND result_data <> 'null' AND length(result_data) > 4`**（§4 P3 前置条件、§5 批次 WHERE、本排除规则同口径），否则这 318 行恒满足 `result_data IS NOT NULL AND result_data_zst IS NULL`、P3 前置条件永远不可满足。**语义等价性**：P3 后这 318 行经解码层按 `None` 处理——与现状 `json.loads('null') is None` 完全等价，不得写成 `{}`。
 
 ### 2.2 列表页直读列（`load_post_gate_fragments` 35 字段的物理化）
 
@@ -52,25 +52,25 @@
 | `pg_st_pre_gate_action` | `VARCHAR(32)` | `$.short_term.pre_gate_trade_action`                                                                                       | 标量                         |
 | `pg_st_manager_action`  | `VARCHAR(32)` | coalesce(`$.short_term.manager_verdict.trade_action`, `$.short_term.investment_debate_state.manager_verdict.trade_action`) | 写入时已解析的单一标量       |
 | `pg_mt_*`（同上 13 列） | 同上          | `$.medium_term.*` 同构                                                                                                     | 同上                         |
-| `pg_top_reason_codes`   | `JSON`        | coalesce(`$.decision_status.reason_codes`, `$.reason_codes`) 取先非空                                                      | json list                    |
+| `pg_top_reason_codes`   | `JSON`        | `$.decision_status.reason_codes` 与 `$.reason_codes` 两路径合并为一列承载（合并依据见设计说明第 2 条）                            | json list                    |
 | `pg_confidence`         | `INTEGER`     | `$.confidence`                                                                                                             | 标量                         |
 | `pg_probability`        | `FLOAT`       | `$.probability`                                                                                                            | 标量                         |
 | `pg_target_price`       | `FLOAT`       | `$.target_price`                                                                                                           | 标量                         |
 | `pg_stop_loss_price`    | `FLOAT`       | `$.stop_loss_price`                                                                                                        | 标量                         |
 
-合计 **31 列**（st 13 + mt 13 + top 5；`manager_action` 双侧已在写入时合并为单列，`top_reason_codes` 两个路径合并为单列——比逐路径 35 列少 4 列且语义等价，见下）。
+合计 **31 列**（st 13 + mt 13 + top 5；`manager_action` 双侧已在写入时合并为单列，`top_reason_codes` 两个路径合并为单列——比逐路径 35 列少 4 列；两组合并的等价性论证与重建规则见设计说明，manager_action 为 `or` 合并无损，top_reason_codes 为并列双槽写入、单列承载+双槽重建）。
 
 设计说明：
 
 - `_POST_GATE_FRAGMENT_PATHS` 里 `st_ids_manager_action` / `mt_ids_manager_action` 在 fragment 组装时本就 `or` 合并进 `manager_verdict.trade_action`（`report_service.py:3017-3020`），物化为单列无损。
-- `top_ds_reason_codes` / `top_reason_codes` 在 fragment 组装时也是「先非空胜出」（`:3062-3067`），单列 `pg_top_reason_codes` 等价。
-- 类型按现有列对齐：`confidence` 现列 `Integer`（`api/database.py:486`）、`probability/target/stop` `Float`；`decision_status`/`reason_codes` 在 `json_extract` 下本就返回 JSON 字符串、调用端 `_js()` 再 `json.loads`——物化列用 `JSON` 类型让 SQLAlchemy 直接给 dict/list，`_js()` 分支可删。
+- `top_ds_reason_codes` / `top_reason_codes` 两路径在 fragment 组装时**并列写入两个不同的输出槽**（`report_service.py:3062-3067`：`frag["decision_status"] = {"reason_codes": top_ds_rc}` 与 `frag["reason_codes"] = top_rc` 是两个并列 `if`，非 `or`/if-else 先非空胜出）。实测快照库两路径同时非空 893 行、值全等（diff=0），`ds_only`/`top_only` 各 0 行——**值层面单列可承载**。方案 A（本文档采用）：保留单列 `pg_top_reason_codes`，但重建规则必须逐字对齐现状——**对 `pg_top_reason_codes` 非空的行，同时填 `frag["decision_status"] = {"reason_codes": v}` 与 `frag["reason_codes"] = v` 两个槽**（见 §2.3）。不能只建一个槽，否则 frag 结构与现状分叉（下游 `apply_post_gate_read_fallback` `:2880-2883` 的 `or` 短路只是碰巧一致的实现细节，不是设计保证）。
+- 类型按现有列对齐：`confidence` 现列 `Integer`（`api/database.py:486`）、`probability/target/stop` `Float`；`decision_status`/`reason_codes` 在 `json_extract` 下本就返回 JSON 字符串、调用端 `_js()` 再 `json.loads`——物化列用 `JSON` 类型让 SQLAlchemy 直接给 dict/list，`_js()` 分支可删。**`_js()` 是 `load_post_gate_fragments` 内的嵌套函数，定义在 `report_service.py:3006`，调用点 `:3020`/`:3021`/`:3041`/`:3042` 共 4 处**——删除时连同这 5 处一并清理（JSON 列给出的 dict 再进 `_js` 不会报错，属静默绕弯残留，不易被发现）。
 - **写入点**：`create_report`（`report_service.py:2530+` 更新分支 `:2631` 新建分支 `:2783`）与 `update_report_partial`（`:2351+`）在 `db_report.result_data = canonical_result_data` 同一事务内，调用同一函数 `_populate_post_gate_columns(db_report, canonical_result_data)` 一次性赋值 31 列；`finalize_orphan_report`（`:2443`）不写 result_data，无需同步。
 - 历史存量行的物化列在迁移回填时一并补（见 §5）。
 
 ### 2.3 查询重写（列表页不解压）
 
-- `load_post_gate_fragments` 改为 `SELECT id, pg_st_*, pg_mt_*, pg_top_*, pg_confidence, ...` 直取 31 列，fragment 组装逻辑不变（列名→frag 键一一映射，去掉 `_js()`）。
+- `load_post_gate_fragments` 改为 `SELECT id, pg_st_*, pg_mt_*, pg_top_*, pg_confidence, ...` 直取 31 列，fragment 组装逻辑不变（列名→frag 键一一映射，`_js()` 定义 `report_service.py:3006` 及 4 处调用点 `:3020/:3021/:3041/:3042` 一并删除）。**重建规则（方案 A，逐字对齐 `:3062-3067` 现状）**：`pg_top_reason_codes` 非空的行须同时填 `frag["decision_status"] = {"reason_codes": v}` 与 `frag["reason_codes"] = v` 两槽——现状代码是两槽并列写入、非取其一，少建一槽即改变输出结构。
 - `get_reports_by_user` / `get_latest_reports_by_symbols` 不变——`REPORT_SUMMARY_COLUMNS`（`:33-57`）本就不含 `result_data`；`_report_matches_horizon`（`:3091`）在 `horizon` 过滤时才读整份 `result_data`，该路径走解码层（§3）不走进物化列。
 
 ### 2.4 `_ensure_report_schema` 挂载
@@ -84,20 +84,39 @@
 新建 `tradingagents/storage/compressed_json.py`：
 
 ```python
+import threading
+import zstandard
+
+_tls = threading.local()
+
+def _cctx() -> zstandard.ZstdCompressor:          # 每线程一个 compressor（创建成本 ≪ 压缩成本）
+    ctx = getattr(_tls, "cctx", None)
+    if ctx is None:
+        ctx = zstandard.ZstdCompressor(level=9)
+        _tls.cctx = ctx
+    return ctx
+
+def _dctx() -> zstandard.ZstdDecompressor:        # 每线程一个 decompressor
+    d = getattr(_tls, "dctx", None)
+    if d is None:
+        d = zstandard.ZstdDecompressor()
+        _tls.dctx = d
+    return d
+
 class ZstdJSON(TypeDecorator):
     impl = LargeBinary            # SQLite: BLOB
     cache_ok = True
-    _CTX = zstandard.ZstdCompressor(level=9)   # module-level, 复用
-    _DCTX = zstandard.ZstdDecompressor()
 
     def process_bind_param(self, value, dialect):   # dict -> bytes
         if value is None: return None
-        return self._CTX.compress(json.dumps(value).encode("utf-8"))   # 必须 ensure_ascii=True 默认参数——与 SQLite Column(JSON) 落库字节一致，否则 daily_snapshot_ledger 已封 sha256 全链失配
+        return _cctx().compress(json.dumps(value).encode("utf-8"))   # 必须 ensure_ascii=True 默认参数——与 SQLite Column(JSON) 落库字节一致，否则 daily_snapshot_ledger 已封 sha256 全链失配
 
     def process_result_value(self, value, dialect): # bytes -> dict
         if value is None: return None
-        return json.loads(self._DCTX.decompress(value, max_output_size=…))
+        return json.loads(_dctx().decompress(value, max_output_size=…))
 ```
+
+**线程安全（设计硬约束，DAV-1776 复审 🔴-1）**：`zstandard` 官方明确 `ZstdCompressor`/`ZstdDecompressor` 实例**非线程安全**（`backend_cffi.py:1776/3688`："assume instances are not thread safe unless stated otherwise"）。实测（锁定解释器，zstandard 0.23.0/cext）：8 线程×200 次共享 ctx **全部报错**（`Src size is incorrect`/`Destination buffer is too small`/静默 `MISMATCH`），重复运行出现 **`SIGSEGV`(139)/`Bus error`(138)**；改 `threading.local()` 后 8 线程×50 次 **0 错误**。服务是多线程的（`api/main.py` `ThreadPoolExecutor`/`run_in_executor`），报告读写会并发进入 `process_bind_param`/`process_result_value`——共享 ctx 轻则写事务回滚，重则解压**静默返回错误字节**落库造成数据污染，或直接进程崩溃。**因此压缩/解压上下文一律走模块级 `threading.local()` 每线程各持一份，严禁类级/模块级单例**；`_cctx()`/`_dctx()` 即唯一获取入口。
 
 - `ReportDB.result_data` 的列定义从 `Column(JSON)` 改为「绑定到物理列 `result_data_zst` 的 `ZstdJSON`」——**对外属性名 `result_data` 不变**，所有 ORM 读点（calibration×7、email×1、main.py:6181-6199、report_service get/update/finalize、backfill_report_industry:325-328）**零改动**，`db_report.result_data` 拿到的仍是 dict。SQLAlchemy 支持 `Column('物理名', type, key='属性名')`；明文 `result_data` 物理列同时保留为 `result_data_legacy` 只读影子（见 §4）。
 
@@ -116,7 +135,7 @@ scripts/* 原生 SQL                 统一加 decode helper (见 §3.3)
 
 ### 3.3 原生 SQL / json_extract 读点的处理
 
-`tradingagents/storage/compressed_json.py` 同时导出**模块级 helper**（同一 `.py`，同一 `_DCTX`）：
+`tradingagents/storage/compressed_json.py` 同时导出**模块级 helper**，内部使用 §3.1 的 `_dctx()`/`_cctx()` **同一组 thread-local 上下文**（**不得**另建模块级单例 `ZstdDecompressor`/`ZstdCompressor`——线程安全理由同 §3.1）：
 
 ```python
 def decode_result_data(raw: bytes | str | None) -> dict | None: ...
@@ -127,13 +146,13 @@ def encode_result_data(value: dict | None) -> bytes | None: ...
 
 | 文件                                                                                                                                                     | 现状                                                                           | 改造                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/backfill_tplus5_shadow.py`（533,555,666,842,861）                                                                                               | `SELECT result_data` 5 处                                                      | 换列名 + `decode_result_data()`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `scripts/backfill_tplus5_shadow.py`                                                                                                                                                      | `SELECT result_data` 5 处（**542, 564, 675, 851, 870**）+ `UPDATE reports SET result_data=?` 2 处（**563, 867**） | SELECT 换列名 + `decode_result_data()`；**两处 UPDATE 必须一并切到压缩列写 `result_data_zst=encode_result_data(...)` 或改走 ORM 属性赋值**——P3 后明文 UPDATE 对读路径不可见（影子写，静默失效）；`non_tplus5_bytes` 等校验函数输入改传解码后字节 |
 | `scripts/dav1312_pricegate_audit.py:297`                                                                                                                 | `select … result_data`                                                         | 同上                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `scripts/dav1507_exit_progress.py:121`                                                                                                                   | `json_valid(result_data)`                                                      | 压缩后无 SQL 层等价物；改拉 `result_data_zst` 后 `decode_result_data() is not None` 判定                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `scripts/phase2/daily_snapshot_ledger.py`（643 `SELECT result_data`、680 `build_record(row,row["result_data"])`、768 `SELECT result_data … WHERE id=?`） | 逐行 `json.loads(result_data_raw)` + `sha256(result_data_raw.encode("utf-8"))` | 换 `SELECT result_data_zst` + `decode_result_data()`。sha256 口径：`result_data_sha256_at_seal` 是对**解压后的 UTF-8 JSON 字节**取 hash——SQLite `Column(JSON)` 落库字节 = `json.dumps` 序列化文本，与 `encode_result_data` 内部 `json.dumps(value).encode()` **不是同一序列化路径**（ensure_ascii/separators 可能有差）。**设计规定 `encode_result_data` 必须与 SQLAlchemy JSON 序列化器逐字节一致**（用 `dialect.json_serializer` 同一参数：SQLite 默认 `json.dumps` 全默认参数、ensure_ascii=True、分隔符含空格），使「解压字节 == 原 result_data 文本字节」成立——已封账的 `result_data_sha256_at_seal` 与 `baseline` 校对在压缩切换后依然可核对，账目链不断。B-6b 必须以实测验证该等式（抽 ≥100 行断言 `decompress(zst)==SELECT result_data` 原字节） |
+| `scripts/phase2/daily_snapshot_ledger.py`（643 `SELECT result_data`、680 `build_record(row,row["result_data"])`、768 `SELECT result_data … WHERE id=?`、**对账点 773**） | 逐行 `json.loads(result_data_raw)` + `sha256(result_data_raw.encode("utf-8"))` | 换 `SELECT result_data_zst` + `decode_result_data()`；**对账点 `:773` 的 `_sha256_bytes(row[0].encode("utf-8"))` 同步改为对 `decode_result_data` 后再序列化（`json.dumps` 默认参数）的字节取 hash**，否则对账全红。sha256 口径：`result_data_sha256_at_seal` 是对**解压后的 UTF-8 JSON 字节**取 hash——SQLite `Column(JSON)` 落库字节 = `json.dumps` 序列化文本，与 `encode_result_data` 内部 `json.dumps(value).encode()` **不是同一序列化路径**（ensure_ascii/separators 可能有差）。**设计规定 `encode_result_data` 必须与 SQLAlchemy JSON 序列化器逐字节一致**（用 `dialect.json_serializer` 同一参数：SQLite 默认 `json.dumps` 全默认参数、ensure_ascii=True、分隔符含空格），使「解压字节 == 原 result_data 文本字节」成立——已封账的 `result_data_sha256_at_seal` 与 `baseline` 校对在压缩切换后依然可核对，账目链不断。B-6b 必须以实测验证该等式（抽 ≥100 行断言 `decompress(zst)==SELECT result_data` 原字节） |
 | `scripts/replay_dav1192_semantic_coverage.py`（41-51）                                                                                                   | `json_extract`×7                                                               | 改 `decode_result_data` + Python dict 路径                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `scripts/replay_dav1338/1343/1351`、`diagnose_h1b_v1_field_coverage.py`、`backfill_report_industry.py`（ORM 读写）、`tradingagents/eval/v03_return_measure.py:1934`（原生 `SELECT … result_data`）                                       | `SELECT result_data` / ORM                                                     | ORM 点零改；原生 SQL 换 decode helper                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `work/` ~25 个一次性脚本                                                                                                                                 | `SELECT result_data`                                                           | **不改**：压缩切换后这批脚本对明文库仍可用；在 README/脚本头标注「仅适配明文 result_data 库」；需要跑新库时补 decode（每个 <20 行机械替换）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `work/` 一次性脚本（口径说明：实测 `work/` 下含 `result_data` 的文件 **129 个，其中 `.py` 32 个**；本次修订前版本写「~25 个」是按「需改造的 .py 脚本」口径的约数，与 129 的总文件数口径不同，特此说明，不阻塞）                                                                                                                                 | `SELECT result_data`                                                           | **不改**：压缩切换后这批脚本对明文库仍可用；在 README/脚本头标注「仅适配明文 result_data 库」；需要跑新库时补 decode（每个 <20 行机械替换）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 `result_data`（明文）列在迁移期继续被 `load_post_gate_fragments` 之外的 legacy SQL 读——迁移完成后这些点已全部改走 decode helper，明文列只作回退保险。
 
@@ -151,12 +170,12 @@ def encode_result_data(value: dict | None) -> bytes | None: ...
 
 - **P1→P3 窗口**内读路径仍以明文为权威，压缩列只是「写上去但还没人读」——任何压缩 bug 在 P3 前都不会炸读面。
 - **P3 切读**是单点切换：`ZstdJSON` 绑定到 `result_data_zst` 的 migration 随 `_ensure_report_schema` 上线 + 一个 `REPORT_STORAGE_MODE` env（`plaintext|dual|compressed`）控制读哪列。env=plaintext 可瞬间回退。
-- **停写明文**（P4）在至少 7 天观察、且 `SELECT count(*) FROM reports WHERE result_data IS NOT NULL AND result_data_zst IS NULL = 0` 持续为 0 后才执行；执行后明文列数据**保留不删**（见 §6 回退）。
-- 读路径在 P3 后遇到「`result_data_zst IS NULL AND result_data IS NOT NULL`」的边缘行（P4 后新写不再出现；迁移期漏网）——TypeDecorator 的 `process_result_value` 只在绑定的压缩列上工作；这种行由迁移脚本兜底补压，或由 helper 提供 `SELECT COALESCE 明文` 的 fallback 查询，设计上规定：**P3 切换前必须把 `result_data IS NOT NULL AND result_data_zst IS NULL` 的行数降到 0**。
+- **停写明文**（P4）在至少 7 天观察、且 `SELECT count(*) FROM reports WHERE result_data IS NOT NULL AND result_data <> 'null' AND result_data_zst IS NULL = 0`（口径与 §2.1/§5 对齐，排除 318 行不迁移的 `'null'` 行）持续为 0 后才执行；执行后明文列数据**保留不删**（见 §6 回退）。
+- 读路径在 P3 后遇到「`result_data_zst IS NULL AND result_data IS NOT NULL AND result_data <> 'null'`」的边缘行（P4 后新写不再出现；迁移期漏网）——TypeDecorator 的 `process_result_value` 只在绑定的压缩列上工作；这种行由迁移脚本兜底补压，或由 helper 提供 `SELECT COALESCE 明文` 的 fallback 查询，设计上规定：**P3 切换前必须把 `result_data IS NOT NULL AND result_data <> 'null' AND result_data_zst IS NULL` 的行数降到 0**（`'null'` 行不计入——它们解码后语义即 `None`，见 §2.1）。
 
 ## 5. 迁移脚本要点（B-6c 输入）
 
-- 分批：`SELECT id, result_data FROM reports WHERE result_data_zst IS NULL AND result_data IS NOT NULL ORDER BY created_at LIMIT N`，每批 N=50 提交一次；对 1,625 行 ≈ 33 批。
+- 分批：`SELECT id, result_data FROM reports WHERE result_data_zst IS NULL AND result_data IS NOT NULL AND result_data <> 'null' ORDER BY created_at LIMIT N`（口径同 §2.1），每批 N=50 提交一次；对 1,625 行口径下实际待迁移 ~1,307 行 ≈ 27 批（318 行 `'null'` 不迁）。
 - 每行：`zst = encode_result_data(json.loads(result_data))` → `UPDATE reports SET result_data_zst=?, result_data_zst_len=?, <31 物化列>=… WHERE id=?`。物化列回填复用 §2.2 的 `_populate_post_gate_columns` 逻辑（同一函数，输入 dict 输出列值 dict）。
 - 校验：`decompress(zst)==原文 utf-8` 逐行比对后再 commit；失败行记入 `b6c_migration_failures` 台账，不阻塞批。
 - 内存口径：流式 LIMIT 分页 + 每行解压后即弃，峰值 = 单行 max 13 MiB 明文 + ~0.5 MiB 压缩 + interpreter ≪ 4 GiB。
@@ -196,7 +215,8 @@ def encode_result_data(value: dict | None) -> bytes | None: ...
 4. **`daily_snapshot_ledger` 的 sha256 口径**：`result_data_sha256_at_seal` 锁定的是「明文 JSON 字节」的 hash。`encode_result_data` 必须与 SQLAlchemy SQLite JSON 序列化器逐字节一致（`json.dumps` 默认参数），否则已封账 hash 全部失配——B-6b 交付时必须附 `decompress(zst)==原文` 抽样证据（见 §3.3 表内注）。
 5. **来源拆分精度**：`reports` 无 `request_source`/`job_id` 列，定时 vs 手动只能推断；若总控要求精确拆分，需要在 B-6b 顺带新增 `request_source VARCHAR(32)` 列（成本 ~10 行 schema + 2 写点），属本设计外增量，已在 §7 标注推断口径。
 
-6. **复审意见落实**（DAV-1774 ✅通过，🟢×5）：①§3.1 伪码 `ensure_ascii` 已改为默认参数（与 §3.3/§8.4 sha256 一致性要求对齐）；②`v03_return_measure.py:1934` 原生 `SELECT result_data` 已补入 §3.3 改造表；③`PRAGMA user_version` 降级为只读审计戳、列存在性仍以 `_ensure_report_schema` 现有 `insp.get_columns` 幂等路径为准（§6）；④`work/` 一次性脚本建议在 `work/README` 或脚本头统一加一行指向 `compressed_json.decode_result_data`（B-6b 顺手加，不阻塞）。
+6. **复审意见落实**（DAV-1774 ✅通过，🟢×5）：①§3.1 伪码 `ensure_ascii` 已改为默认参数（与 §3.3/§8.4 sha256 一致性要求对齐）；②`v03_return_measure.py:1934` 原生 `SELECT result_data` 已补入 §3.3 改造表；③`PRAGMA user_version` 降级为只读审计戳、列存在性仍以 `_ensure_report_schema` 现有 `insp.get_columns` 幂等路径为准（§6）；④`work/` 一次性脚本建议在 `work/README` 或脚本头统一加一行指向 `compressed_json.decode_result_data`（B-6b 顺手加，不阻塞）；⑤`_js()` 行号指引——定义 `report_service.py:3006`（`load_post_gate_fragments` 内嵌套函数）+ 4 处调用点 `:3020/:3021/:3041/:3042`，物化列切换后连同调用一并删除（JSON 列给 dict 再进 `_js` 不报错，属静默残留）。
+7. **zstd 上下文线程安全（DAV-1776 🔴-1，B-6b 交付门槛）**：`ZstdCompressor`/`ZstdDecompressor` 实例非线程安全，禁止类级/模块级单例，必须经 §3.1 `threading.local()` 的 `_cctx()`/`_dctx()` 每线程各持一份。**B-6b 交付时必须附「≥8 线程并发 round-trip 1000 次零错误（无异常、无静默字节 MISMATCH、无进程崩溃）」的实测证据**，缺失视为未完成。反例证据（复审实测）：共享 ctx 8×200 全报错，含 `SIGSEGV`(139)/`Bus error`(138) 与静默 MISMATCH。
 
 ## 9. 交付与衔接
 
