@@ -307,3 +307,10 @@ work/storage/
 # T+5 回填运行产物（回滚 journal + 独立前像导出，本机证据不入库；DAV-1544）
 work/tplus5-rollback/
 work/tplus5-pre-export/
+
+# B-6c 压缩迁移运行产物（单次生产跑 ≈ 前像 5.3 GiB + 备份 .db 6 GiB + .db.zst
+# 0.5 GiB；fork 为 public 仓库，git add -A 会误推；DAV-1772 / 复审 M7）
+work/dav1772-pre-export/
+work/dav1772-backups/
+work/dav1772-journal/
+work/dav1772-rehearsal/

@@ -49,6 +49,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import time
@@ -81,12 +82,8 @@ MAX_RESULT_DATA_BYTES = 64 * 1024 * 1024
 
 # 迁移/校验三处口径统一为可执行判据 (设计 §2.1/§4/§5):
 # result_data='null' (4B) 不迁移 —— 压缩反而变大, 解码层按 None 处理.
-CANDIDATE_WHERE = (
-    "result_data_zst IS NULL "
-    "AND result_data IS NOT NULL "
-    "AND result_data <> 'null'"
-)
-RESIDUAL_WHERE = CANDIDATE_WHERE  # P4/P5b 准入: 该计数降到 0 (严禁 IS NULL = 0 写法)
+# 判据唯一实现在各子命令的 SQL WHERE 里; 保留这两段字符串仅为文档/外部引用,
+# 任何口径变更必须同步改 SQL, 不允许两处分叉 (复审 🟢 死常量意见).
 
 _PRODUCTION_EARLIEST = date(2026, 10, 16)  # B-4 10-14 + 两个交易日, 见卡面
 
@@ -119,12 +116,22 @@ def compress_raw(data: bytes) -> bytes:
 
 
 def decompress_raw(blob: bytes) -> bytes:
-    """Decompress one one-shot frame; stream frames fall back to 64 MiB."""
+    """Decompress one one-shot frame.
+
+    `MAX_RESULT_DATA_BYTES` is a hard safety cap, not a frame-size oracle:
+    a frame without content size (no FCS) yields -1, and guessing 64 MiB
+    would either truncate a larger row or raise ZstdError with no diagnosis.
+    Such frames are rejected explicitly instead (复审 🟢 建议).
+    """
     if not blob:
         raise ValueError("empty zstd frame")
     size = zstandard.frame_content_size(blob)
     if size is None or size < 0 or size >= zstandard.CONTENTSIZE_ERROR:
-        size = MAX_RESULT_DATA_BYTES
+        raise ValueError("zstd frame carries no content size (FCS missing); "
+                         "refusing to guess decompressed length")
+    if size > MAX_RESULT_DATA_BYTES:
+        raise ValueError(f"zstd frame content size {size} exceeds cap "
+                         f"{MAX_RESULT_DATA_BYTES}")
     if size == 0:
         return b""
     return _dctx().decompress(blob, max_output_size=size)
@@ -220,10 +227,35 @@ def check_runtime_guard(db_path, health_url):
     return {"allowed": n == 0, "reason": "idle" if n == 0 else "busy", "running_count": n}
 
 
+def _is_lock_conflict(exc):
+    """True only for genuine SQLite lock contention.
+
+    `sqlite3.OperationalError` covers far more (readonly, no such table,
+    disk I/O, …). Classifying those as a concurrency conflict hides
+    configuration errors behind a retryable-looking counter (复审 M3).
+    """
+    message = str(exc).lower()
+    return "locked" in message or "busy" in message
+
+
 def _is_production(path):
+    """True when `path` IS the production library.
+
+    Compared by resolved path first, then by inode: a symlink/hardlink or a
+    differently-spelled path to the same file must still be recognised.
+    ``os.path.samefile`` raises OSError when either side is missing, which
+    must NOT be mistaken for "not production" (fail-closed, 复审 M5).
+    """
     production = Path("/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db")
-    return Path(path).resolve() == production.resolve() or \
-        (production.exists() and os.path.samefile(path, production))
+    try:
+        if Path(path).resolve() == production.resolve():
+            return True
+    except OSError:
+        pass
+    try:
+        return os.path.samefile(path, production)
+    except OSError:
+        return False
 
 
 def _refuse_production_unless_signed(db_path, production_authorized):
@@ -493,8 +525,20 @@ def _scan_pass(db_path, committed_ids, result, exceptions):
                 result["already_compressed"] += 1
                 continue
             try:
+                raw_bytes = raw.encode("utf-8")
+            except (AttributeError, UnicodeDecodeError, UnicodeEncodeError) as exc:
+                # BLOB / 非 UTF-8 的 result_data 是存储不可解码字节, 不属于
+                # JSON 结构问题。抛出会中止整轮 convert，一行都迁不了
+                # (复审 M2)；归桶后其余行照常迁, 由 exceptions 报告。
+                result["non_text_rows"] += 1
+                exceptions.append({"report_id": report_id,
+                                   "conflicts": [f"result_data is not decodable "
+                                                 f"text ({type(exc).__name__}); "
+                                                 f"left unmigrated"]})
+                continue
+            try:
                 value = json.loads(raw)
-                if json.dumps(value).encode("utf-8") != raw.encode("utf-8"):
+                if json.dumps(value).encode("utf-8") != raw_bytes:
                     result["reserialize_mismatch_rows"] += 1
                     if len(mismatch_samples) < 50:
                         mismatch_samples.append(report_id)
@@ -504,8 +548,8 @@ def _scan_pass(db_path, committed_ids, result, exceptions):
                                    "conflicts": ["result_data is not valid JSON "
                                                  "(migrated as raw bytes)"]})
             planned.append({"id": report_id,
-                            "sha256": _sha256_bytes(raw.encode("utf-8")),
-                            "bytes": len(raw.encode("utf-8"))})
+                            "sha256": _sha256_bytes(raw_bytes),
+                            "bytes": len(raw_bytes)})
             result["candidates"] += 1
     result["reserialize_mismatch_samples"] = mismatch_samples
     return planned
@@ -543,7 +587,8 @@ def run_convert(*, db_path, batch_size=50, batch_byte_limit=512 * 1024 * 1024,
     result = {"dry_run": dry_run, "scan_only": scan_only,
               "scanned": 0, "already_compressed": 0, "resumed_skipped": 0,
               "null_rows": 0, "null_literal_rows": 0, "candidates": 0,
-              "unparsable_rows": 0, "reserialize_mismatch_rows": 0,
+              "unparsable_rows": 0, "non_text_rows": 0,
+              "reserialize_mismatch_rows": 0,
               "reserialize_mismatch_samples": [],
               "converted_rows": 0, "pre_export_mismatch": 0,
               "verify_failures": 0, "missing": 0,
@@ -561,23 +606,32 @@ def run_convert(*, db_path, batch_size=50, batch_byte_limit=512 * 1024 * 1024,
     fd, scan_path = tempfile.mkstemp(
         prefix="dav1772-scan-", suffix=".json", dir=str(journal_path.parent))
     os.close(fd)
+    # committed id 走临时文件而非 argv: 40000 个 id 已超 macOS ARG_MAX,
+    # 内联拼接会让整轮 convert 直接 E2BIG 失败 (复审 M6).
+    fd, resume_path = tempfile.mkstemp(
+        prefix="dav1772-resume-", suffix=".json", dir=str(journal_path.parent))
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(sorted(committed_ids), handle)
     child_code = (
         "import json, sys\n"
         "sys.path.insert(0, %r)\n"
         "from scripts import b6c_compress_migration as mig\n"
         "result = {\"scanned\":0,\"already_compressed\":0,\"resumed_skipped\":0,"
         "\"null_rows\":0,\"null_literal_rows\":0,\"candidates\":0,"
-        "\"unparsable_rows\":0,\"reserialize_mismatch_rows\":0,"
+        "\"unparsable_rows\":0,\"non_text_rows\":0,"
+        "\"reserialize_mismatch_rows\":0,"
         "\"reserialize_mismatch_samples\":[]}\n"
         "exc = []\n"
-        "planned = mig._scan_pass(%r, set(%r), result, exc)\n"
+        "committed_ids = set(json.load(open(%r, encoding='utf-8')))\n"
+        "planned = mig._scan_pass(%r, committed_ids, result, exc)\n"
         "json.dump({\"result\":result,\"exceptions\":exc,\"planned\":planned},"
         " open(%r,'w'))\n"
-    ) % (str(ROOT), str(db_path), sorted(committed_ids), scan_path)
+    ) % (str(ROOT), resume_path, str(db_path), scan_path)
     proc = subprocess.run(
         [sys.executable, "-c", child_code],
         env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
         capture_output=True, text=True)
+    Path(resume_path).unlink(missing_ok=True)
     if proc.returncode != 0 or not Path(scan_path).exists() \
             or Path(scan_path).stat().st_size == 0:
         raise RuntimeError(
@@ -656,7 +710,9 @@ def run_convert(*, db_path, batch_size=50, batch_byte_limit=512 * 1024 * 1024,
                                               "report_id": item["id"],
                                               "error": str(exc)[:500]})
                         continue
-                    except sqlite3.OperationalError:
+                    except sqlite3.OperationalError as exc:
+                        if not _is_lock_conflict(exc):
+                            raise
                         result["write_conflicts"] += 1
                         continue
                     key = {"converted": "converted_rows",
@@ -708,6 +764,7 @@ def verify_compressed(db_path, *, require_complete=False):
     ensure_columns(db_path)
     result = {"scanned": 0, "verified_ok": 0, "mismatches": [],
               "unmigrated": 0, "cleared_ok": 0, "cleared_bad": [],
+              "lost_blobs": [],
               "null_rows": 0, "null_literal_rows": 0,
               "reserialize_mismatch_rows": 0, "unparsable_rows": 0}
     with closing(_open_db(db_path)) as conn:
@@ -718,7 +775,17 @@ def verify_compressed(db_path, *, require_complete=False):
             report_id, raw, zst, zlen = row["id"], row["result_data"], \
                 row["result_data_zst"], row["result_data_zst_len"]
             if raw is None and zst is None:
-                result["null_rows"] += 1
+                # P5b 之后压缩块是唯一副本。result_data_zst_len 只在 convert
+                # 写入, clear-plaintext 不会清它 —— 所以 zlen 非空而 zst 为空
+                # 只能是存储损坏/误 UPDATE/回退缺陷导致的数据丢失, 不是
+                # “本来就是 NULL 行”。计入 lost_blobs 并令 ok=False (复审 R2)。
+                if zlen is not None:
+                    result["lost_blobs"].append(
+                        {"report_id": report_id,
+                         "error": "明文已清且压缩块缺失 (result_data_zst_len="
+                                  f"{zlen}) —— 唯一副本丢失, 不可恢复"})
+                else:
+                    result["null_rows"] += 1
                 continue
             if raw == "null":
                 if zst is not None:
@@ -767,7 +834,9 @@ def verify_compressed(db_path, *, require_complete=False):
                 result["unparsable_rows"] += 1
     result["mismatch_count"] = len(result["mismatches"])
     result["cleared_bad_count"] = len(result["cleared_bad"])
+    result["lost_blob_count"] = len(result["lost_blobs"])
     result["ok"] = (not result["mismatches"] and not result["cleared_bad"]
+                    and not result["lost_blobs"]
                     and (not require_complete or result["unmigrated"] == 0))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
@@ -847,8 +916,10 @@ def rollback_from_export(db_path, export_file, *, sha256=None,
                     raise ValueError("post-rollback verification failed")
                 conn.commit()
                 result["rolled_back"] += 1
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
                 conn.rollback()
+                if not _is_lock_conflict(exc):
+                    raise
                 result["conflicts"] += 1
             except Exception:
                 conn.rollback()
@@ -935,6 +1006,17 @@ def _p5b_backup(db_path, backup_dir=None):
     zst_target = Path(str(db_target) + ".zst")
     if db_target.exists() or zst_target.exists():
         raise RuntimeError("backup target already exists; refusing to overwrite")
+    # 磁盘预检: .db 与 .db.zst 同时保留 (≈6.5 GiB), 静默写到一半 ENOSPC
+    # 会留下半个备份却已声明“备份完成”, 比拒绝执行更危险 (复审 🟢 建议).
+    try:
+        free = shutil.disk_usage(backup_dir).free
+    except OSError as exc:
+        raise RuntimeError(f"cannot stat free space on {backup_dir}") from exc
+    source_size = Path(db_path).stat().st_size
+    if free < source_size * 2:
+        raise RuntimeError(
+            f"insufficient free space for P5b backup: need >= 2x library size "
+            f"({source_size * 2} B), {free} B available on {backup_dir}")
     with closing(_open_db(db_path)) as src, \
             closing(sqlite3.connect(str(db_target))) as dst:
         src.backup(dst)
@@ -968,10 +1050,11 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
     """P5b: clear明文 for verified rows, then optionally VACUUM INTO.
 
     Gates (all must hold): --allow-clear flag; backup succeeds first;
-    every cleared row re-verifies decompress(zst) ==明文 inside its own
-    transaction (failures keep their明文 and abort the vacuum).明文 is
-    cleared ONLY for rows whose zst verifies — the failure path is never
-    a data-loss path.
+    every cleared row re-verifies decompress(zst) ==明文 AND
+    result_data_zst_len == len(明文) inside its own transaction (failures
+    keep their明文 and abort the vacuum).明文 is cleared ONLY for rows whose
+    zst verifies — the failure path is never a data-loss path. 准入判据
+    必须 ≥ 验收判据: verify 判红的行不得被 clear 抹掉明文 (复审 M1).
     """
     if not allow_clear:
         raise RuntimeError("clear-plaintext requires --allow-clear (P5b, 总控签字)")
@@ -987,9 +1070,6 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
             return result
     else:
         guard = {"allowed": True, "reason": "copy_rehearsal"}
-    backup = _p5b_backup(db_path, backup_dir=backup_dir)
-    result = {"cleared_rows": 0, "failed": 0, "failures": [],
-              "backup": backup, "guard": guard}
     conn = _open_db(db_path, writable=True)
     try:
         # 已校验行 = zst 存在且明文仍在 (先验后清, 见循环内逐行核对).
@@ -997,12 +1077,26 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
             "SELECT id FROM reports WHERE result_data_zst IS NOT NULL "
             "AND result_data IS NOT NULL AND result_data <> 'null' "
             "ORDER BY id").fetchall()]
+    finally:
+        conn.close()
+    if not ids:
+        # 0 待清行直接早退: 不做 6 GiB 备份, 不碰磁盘 (复审 🟢 建议).
+        result = {"cleared_rows": 0, "failed": 0, "failures": [],
+                  "backup": None, "guard": guard,
+                  "skipped": True, "reason": "no rows to clear"}
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return result
+    backup = _p5b_backup(db_path, backup_dir=backup_dir)
+    result = {"cleared_rows": 0, "failed": 0, "failures": [],
+              "backup": backup, "guard": guard}
+    conn = _open_db(db_path, writable=True)
+    try:
         for report_id in ids:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
-                    "SELECT result_data, result_data_zst FROM reports WHERE id=?",
-                    (report_id,)).fetchone()
+                    "SELECT result_data, result_data_zst, result_data_zst_len "
+                    "FROM reports WHERE id=?", (report_id,)).fetchone()
                 if row is None or row[0] is None or row[1] is None:
                     conn.rollback()
                     continue
@@ -1010,18 +1104,27 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
                 # 裁定①前提①: 逐行核对解压结果与原始字节相同 — 先验后清.
                 if decompress_raw(bytes(row[1])) != raw_bytes:
                     raise ValueError("decompress != stored bytes;明文 kept")
+                # M1: 与 verify 同口径 —— zst_len 漂移的行 verify 已判红,
+                # 不得再被 clear 当作合格行抹掉明文. result_data_zst_len 存
+                # 的是明文字节数 (不是 zst 字节数), 见模块常量注释.
+                if row[2] is not None and row[2] != len(raw_bytes):
+                    raise ValueError(
+                        f"zst_len drift ({row[2]} != {len(raw_bytes)});明文 kept")
                 conn.execute("UPDATE reports SET result_data=NULL WHERE id=?",
                              (report_id,))
                 stored = conn.execute(
-                    "SELECT result_data, result_data_zst FROM reports WHERE id=?",
-                    (report_id,)).fetchone()
+                    "SELECT result_data, result_data_zst, result_data_zst_len "
+                    "FROM reports WHERE id=?", (report_id,)).fetchone()
                 if stored[0] is not None or stored[1] is None \
+                        or stored[2] != len(raw_bytes) \
                         or decompress_raw(bytes(stored[1])) != raw_bytes:
                     raise ValueError("post-clear verification failed")
                 conn.commit()
                 result["cleared_rows"] += 1
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
                 conn.rollback()
+                if not _is_lock_conflict(exc):
+                    raise
                 result["failed"] += 1
                 result["failures"].append({"report_id": report_id, "error": "locked"})
             except Exception as exc:
@@ -1160,63 +1263,119 @@ def run_export_preimage(db_path, *, export_dir=None):
 # CLI
 
 
+# Options shared by every subcommand. Declared ONCE via this parent and
+# attached with parents=[common]: argparse copies each subparser's defaults
+# into the SAME namespace, so re-declaring an option at both the top level
+# and a subparser silently overwrites the already-parsed global value with
+# the subparser default (复审 R1: `--copy-rehearsal` → False,
+# `--vacuum-into` → None). Every default below is argparse.SUPPRESS so that
+# parse_args never injects a value; real defaults are applied once, after
+# merging, in _finalize_args. That also lets the SAME options be accepted
+# both before and after the subcommand without either placement being lost.
+def _build_common_parser():
+    """The single declaration site for every CLI option.
+
+    This one parent is attached to the top-level parser AND to every
+    subparser. Two properties make that safe and were both violated before
+    (复审 R1):
+
+    * one declaration site — argparse copies a subparser's defaults into the
+      SAME namespace, so an option declared at both levels had its
+      already-parsed global value silently overwritten by the subparser
+      default (`--copy-rehearsal` → False, `--vacuum-into` → None);
+    * every default is SUPPRESS — so neither level injects a value and an
+      option is honoured whether it appears BEFORE or AFTER the subcommand.
+      Real defaults are applied once, in _finalize_args.
+
+    Options that are not meaningful for a given subcommand are simply
+    ignored by that subcommand's dispatch branch; accepting them at both
+    positions is preferable to a flag whose meaning depends on where it sits.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--db-path", default=argparse.SUPPRESS)
+    common.add_argument("--health-url", default=argparse.SUPPRESS)
+    common.add_argument("--production-authorized", action="store_true",
+                        default=argparse.SUPPRESS,
+                        help="总控签字 + 发布卡; 生产路径写操作的必要条件之一")
+    common.add_argument("--copy-rehearsal", action="store_true",
+                        default=argparse.SUPPRESS,
+                        help="副本演练口径: 跳过运行时闸门 (仅限演练副本)")
+    common.add_argument("--vacuum-into", default=argparse.SUPPRESS,
+                        help="convert/rollback/clear-plaintext: VACUUM INTO 目标")
+    common.add_argument("--backup-dir", default=argparse.SUPPRESS)
+    common.add_argument("--pre-export-dir", default=argparse.SUPPRESS)
+    common.add_argument("--journal-path", default=argparse.SUPPRESS)
+    common.add_argument("--exceptions-path", default=argparse.SUPPRESS)
+    common.add_argument("--export-sha256", default=argparse.SUPPRESS)
+    common.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
+    common.add_argument("--batch-byte-limit", type=int,
+                        default=argparse.SUPPRESS)
+    common.add_argument("--require-complete", action="store_true",
+                        default=argparse.SUPPRESS,
+                        help="verify: also fail when unmigrated/lost rows remain")
+    common.add_argument("--allow-clear", action="store_true",
+                        default=argparse.SUPPRESS,
+                        help="explicit P5b acknowledgment (requires 总控签字)")
+    for name in ("dry-run", "scan-only"):
+        common.add_argument("--" + name, action="store_true",
+                            default=argparse.SUPPRESS)
+    return common
+
+
+_COMMON_DEFAULTS = {"health_url": "http://127.0.0.1:8000",
+                    "production_authorized": False,
+                    "copy_rehearsal": False}
+
+
+def _finalize_args(args):
+    """Apply real defaults to SUPPRESS-ed flags.
+
+    ``--db-path`` is intentionally not `required=True` in the parent: the same
+    parent is attached to the top-level parser, so requiring it there would
+    reject the legal ``… clear-plaintext --db-path X`` spelling before the
+    subparser ever runs. The check lives here instead.
+    """
+    if "db_path" not in args:
+        sys.stderr.write("b6c: error: the following arguments are required: "
+                         "--db-path\n")
+        raise SystemExit(2)
+    for key, value in _COMMON_DEFAULTS.items():
+        args.setdefault(key, value)
+    return args
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path")
-    parser.add_argument("--batch-size", type=int, default=50)
-    parser.add_argument("--batch-byte-limit", type=int, default=512 * 1024 * 1024)
-    parser.add_argument("--journal-path")
-    parser.add_argument("--exceptions-path")
-    parser.add_argument("--pre-export-dir")
-    parser.add_argument("--health-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--vacuum-into")
-    for name in ("dry-run", "scan-only", "production-authorized",
-                 "copy-rehearsal"):
-        parser.add_argument("--" + name, action="store_true")
+    common = _build_common_parser()
+    # Same parent on the top-level parser AND on every subparser: a flag may
+    # legally appear before or after the subcommand, and because every default
+    # is SUPPRESS neither level can clobber a value set by the other.
+    parser = argparse.ArgumentParser(description=__doc__, parents=[common])
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=False)
 
-    exp_parser = sub.add_parser("export-preimage",
+    sub.add_parser("export-preimage", parents=[common],
                                 help="export pre-images of candidate rows (no writes)")
-    exp_parser.add_argument("--db-path", required=True)
-    exp_parser.add_argument("--pre-export-dir")
 
-    verify_parser = sub.add_parser("verify",
-                                   help="per-row decode readback对照 (read-only)")
-    verify_parser.add_argument("--db-path", required=True)
-    verify_parser.add_argument("--require-complete", action="store_true",
-                               help="also fail when unmigrated rows remain")
+    sub.add_parser("verify", parents=[common],
+                   help="per-row decode readback对照 (read-only)")
 
-    rb_parser = sub.add_parser("rollback",
+    rb_parser = sub.add_parser("rollback", parents=[common],
                                help="restore pre-convert state from a pre-export file")
-    rb_parser.add_argument("--db-path", required=True)
     rb_parser.add_argument("--export-file", required=True)
-    rb_parser.add_argument("--export-sha256")
-    rb_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
-    rb_parser.add_argument("--production-authorized", action="store_true")
-    rb_parser.add_argument("--copy-rehearsal", action="store_true")
 
-    rp_parser = sub.add_parser("restore-plaintext",
-                               help="write decompressed bytes back to明文 (P5b reverse)")
-    rp_parser.add_argument("--db-path", required=True)
-    rp_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
-    rp_parser.add_argument("--production-authorized", action="store_true")
-    rp_parser.add_argument("--copy-rehearsal", action="store_true")
+    sub.add_parser("restore-plaintext", parents=[common],
+                   help="write decompressed bytes back to明文 (P5b reverse)")
 
-    clr_parser = sub.add_parser("clear-plaintext",
-                                help="P5b: backup, per-row verify, clear明文")
-    clr_parser.add_argument("--db-path", required=True)
-    clr_parser.add_argument("--backup-dir")
-    clr_parser.add_argument("--vacuum-into")
-    clr_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
-    clr_parser.add_argument("--production-authorized", action="store_true")
-    clr_parser.add_argument("--copy-rehearsal", action="store_true")
-    clr_parser.add_argument("--allow-clear", action="store_true",
-                            help="explicit P5b acknowledgment (requires 总控签字)")
+    sub.add_parser("clear-plaintext", parents=[common],
+                   help="P5b: backup, per-row verify, clear明文")
+
+    sub.add_parser("convert", parents=[common],
+                   help="batched compress + journal")
 
     args = vars(parser.parse_args())
     command = args.pop("command")
-    args.pop("verbose")
+    args.pop("verbose", None)
+    args = _finalize_args(args)
     try:
         if command == "export-preimage":
             run_export_preimage(args["db_path"],
@@ -1264,8 +1423,17 @@ def main():
                     or vac.get("old_rows") != vac.get("new_rows")):
                 return 1
             return 0
-        vacuum_target = args.pop("vacuum_into")
-        result = run_convert(**args)
+        # convert 的 kwargs 显式白名单: 公共 parent 里的选项 (--require-complete /
+        # --allow-clear / --backup-dir …) 与 convert 无关, 直接 **args 会把
+        # 它们传进 run_convert 并触发 TypeError。
+        vacuum_target = args.get("vacuum_into")
+        convert_kwargs = {key: args[key] for key in
+                          ("db_path", "batch_size", "batch_byte_limit",
+                           "journal_path", "exceptions_path", "pre_export_dir",
+                           "health_url", "dry_run", "scan_only",
+                           "production_authorized", "copy_rehearsal")
+                          if key in args}
+        result = run_convert(**convert_kwargs)
         if result.get("skipped"):
             return 0
         if vacuum_target:
@@ -1277,6 +1445,12 @@ def main():
                     or check["missing_in_new"] or check["old_rows"] != check["new_rows"]:
                 return 1
         if result.get("verify_failures") or result.get("write_conflicts"):
+            return 1
+        # M4: 部分行未迁成功也必须非零退出。发布脚本只看 exit code,
+        # 漂移跳过 (pre_export_mismatch) / 行消失 (missing) 静默 exit 0 会被
+        # 当成“迁移完成”。non_text_rows 同样代表未迁移行。
+        if (result.get("pre_export_mismatch") or result.get("missing")
+                or result.get("non_text_rows")):
             return 1
     except Exception as exc:
         print("B-6c refused: " + type(exc).__name__ + " " + str(exc), file=sys.stderr)

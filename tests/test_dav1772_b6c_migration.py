@@ -15,7 +15,10 @@ Covers the 卡面 contract:
 """
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from scripts import b6c_compress_migration as mig
 
@@ -373,3 +376,299 @@ def test_verify_cli_exit_codes(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv",
                           ["b6c", "verify", "--db-path", str(p), "--require-complete"])
     assert mig.main() == 0
+
+
+# ===========================================================================
+# 复审 DAV-1799 返修回归 (R1 / R2 / M1 / M2 / M3 / M4 / M5)
+# 全部走真实代码路径; CLI 用例走 main() 的真实 argparse 解析, 不只调函数。
+# ===========================================================================
+
+
+def _run_cli(monkeypatch, argv, capture):
+    """Invoke main() with a real argv, recording the kwargs each subcommand
+    receives so flag-placement regressions (R1) are observable."""
+    import sys
+    monkeypatch.setattr(sys, "argv", ["b6c"] + argv)
+    return mig.main()
+
+
+def test_cli_flags_before_subcommand_are_not_reset(tmp_path, monkeypatch):
+    """R1: argparse copied subparser defaults over the already-parsed global
+    value, silently turning --copy-rehearsal back into False and --vacuum-into
+    back into None. Exercise the real CLI parser in both flag positions."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}')])
+    seen = {}
+
+    def fake_clear(db_path, **kw):
+        seen.update(kw)
+        return {"cleared_rows": 1, "failed": 0, "failures": []}
+
+    monkeypatch.setattr(mig, "clear_plaintext", fake_clear)
+
+    # Flags BEFORE the subcommand (the reviewer's repro shape).
+    assert _run_cli(monkeypatch, [
+        "--copy-rehearsal", "--production-authorized",
+        "--vacuum-into", str(tmp_path / "v.db"),
+        "clear-plaintext", "--db-path", str(p), "--allow-clear",
+    ], None) == 0
+    assert seen["copy_rehearsal"] is True
+    assert seen["production_authorized"] is True
+    assert seen["vacuum_into_path"] == str(tmp_path / "v.db")
+    assert seen["allow_clear"] is True
+
+    # Flags AFTER the subcommand must keep working too.
+    seen.clear()
+    assert _run_cli(monkeypatch, [
+        "clear-plaintext", "--db-path", str(p), "--allow-clear",
+        "--copy-rehearsal", "--vacuum-into", str(tmp_path / "w.db"),
+    ], None) == 0
+    assert seen["copy_rehearsal"] is True
+    assert seen["vacuum_into_path"] == str(tmp_path / "w.db")
+
+
+def test_cli_production_authorized_flag_survives_subcommand(tmp_path, monkeypatch):
+    """R1 second half: the production write gate is the flag most dangerous to
+    lose, so pin it for rollback / restore-plaintext too."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}')])
+    seen = {}
+
+    monkeypatch.setattr(mig, "rollback_from_export",
+                        lambda db_path, export_file, **kw:
+                            seen.update(kw) or {"rolled_back": 1})
+    _run_cli(monkeypatch, ["--copy-rehearsal", "rollback", "--db-path", str(p),
+                           "--export-file", "x.jsonl"], None)
+    assert seen["copy_rehearsal"] is True
+    assert seen["production_authorized"] is False
+
+    monkeypatch.setattr(mig, "restore_plaintext",
+                        lambda db_path, **kw:
+                            seen.update(kw) or {"restored_rows": 0, "failed": 0})
+    _run_cli(monkeypatch, ["restore-plaintext", "--db-path", str(p),
+                           "--production-authorized"], None)
+    assert seen["production_authorized"] is True
+
+
+def test_cli_missing_db_path_exits_2(tmp_path, monkeypatch):
+    """--db-path is enforced after the merge (a required=True parent would
+    reject the legal post-subcommand spelling)."""
+    import pytest
+    with pytest.raises(SystemExit) as excinfo:
+        _run_cli(monkeypatch, ["clear-plaintext", "--allow-clear"], None)
+    assert excinfo.value.code == 2
+
+
+def test_verify_detects_lost_blob_after_plaintext_cleared(tmp_path, monkeypatch):
+    """R2: after P5b the zst blob is the only copy. A row whose blob vanished
+    must NOT be counted as a healthy NULL row — --require-complete used to
+    report ok=True on silent data loss."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}'), ("two", '{"b": 2}'),
+                           ("none", None)])
+    run_convert(p, tmp_path)
+    mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+                        backup_dir=str(tmp_path / "bk"))
+    # Simulate storage-layer corruption / a bad UPDATE: blob gone, zst_len kept.
+    conn = sqlite3.connect(p)
+    conn.execute("UPDATE reports SET result_data_zst=NULL WHERE id='one'")
+    conn.commit()
+    conn.close()
+    res = mig.verify_compressed(str(p), require_complete=True)
+    assert res["ok"] is False
+    assert res["lost_blob_count"] == 1
+    assert res["lost_blobs"][0]["report_id"] == "one"
+    assert res["null_rows"] == 1  # the genuinely NULL row is still a NULL row
+
+
+def test_clear_plaintext_keeps_plaintext_when_zst_len_drifted(tmp_path, monkeypatch):
+    """M1: clear is an irreversible delete of明文, so its admission check must
+    be at least as strict as verify's. verify flags zst_len drift as red;
+    clear must then keep the明文 instead of erasing it."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}'), ("two", '{"b": 2}')])
+    run_convert(p, tmp_path)
+    conn = sqlite3.connect(p)
+    conn.execute("UPDATE reports SET result_data_zst_len=999999 WHERE id='one'")
+    conn.commit()
+    conn.close()
+    assert mig.verify_compressed(str(p))["ok"] is False  # verify already red
+    res = mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+                              backup_dir=str(tmp_path / "bk"))
+    assert res["cleared_rows"] == 1        # only the healthy row
+    assert res["failed"] == 1
+    assert "zst_len drift" in res["failures"][0]["error"]
+    assert col(p, "one")[0] is not None    # 明文 of the drifted row preserved
+
+
+def test_clear_plaintext_early_returns_when_nothing_to_clear(tmp_path, monkeypatch):
+    """0 待清行 must not trigger a multi-GB backup (复审 🟢)."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("none", None)])
+    res = mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+                              backup_dir=str(tmp_path / "bk"))
+    assert res.get("skipped") is True and res["backup"] is None
+    assert not (tmp_path / "bk").exists() or not list((tmp_path / "bk").iterdir())
+
+
+def test_blob_row_is_bucketed_not_fatal(tmp_path, monkeypatch):
+    """M2: a BLOB result_data (storage-level undecodable bytes) must not abort
+    the entire convert round; other rows still migrate and the bad row stays
+    visible in the exceptions report."""
+    idle(monkeypatch)
+    p = tmp_path / "copy.db"
+    conn = sqlite3.connect(p)
+    conn.execute("CREATE TABLE reports(id TEXT PRIMARY KEY, symbol TEXT,"
+                 " trade_date TEXT, status TEXT, result_data TEXT, updated_at TEXT)")
+    conn.execute("INSERT INTO reports VALUES('good','SYM','2026-10-02','completed',?,'old')",
+                 (json.dumps({"a": 1}),))
+    conn.execute("INSERT INTO reports VALUES('blob','SYM','2026-10-02','completed',X'7D7B','old')")
+    conn.commit()
+    conn.close()
+    res = run_convert(p, tmp_path)
+    assert res["converted_rows"] == 1        # healthy row migrated
+    assert res["non_text_rows"] == 1         # BLOB row bucketed
+    assert mig.verify_compressed(str(p), require_complete=True)["unmigrated"] == 1
+
+
+def test_operational_error_classification_is_narrow():
+    """M3: only real lock contention may be classified as a concurrency
+    conflict; readonly/disk errors must not masquerade as retryable."""
+    import sqlite3
+    assert mig._is_lock_conflict(
+        sqlite3.OperationalError("database is locked")) is True
+    assert mig._is_lock_conflict(
+        sqlite3.OperationalError("database table is busy")) is True
+    assert mig._is_lock_conflict(
+        sqlite3.OperationalError("attempt to write a readonly database")) is False
+    assert mig._is_lock_conflict(
+        sqlite3.OperationalError("no such table: reports")) is False
+
+
+def test_convert_exit_code_nonzero_when_rows_not_migrated(tmp_path, monkeypatch):
+    """M4: release scripts read only the exit code; pre_export_mismatch /
+    missing / non_text rows must not exit 0 (复审 M4)."""
+    import sys
+    idle(monkeypatch)
+    p = tmp_path / "copy.db"
+    conn = sqlite3.connect(p)
+    conn.execute("CREATE TABLE reports(id TEXT PRIMARY KEY, symbol TEXT,"
+                 " trade_date TEXT, status TEXT, result_data TEXT, updated_at TEXT)")
+    conn.execute("INSERT INTO reports VALUES('blob','SYM','2026-10-02','completed',X'7D7B','old')")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(sys, "argv",
+                        ["b6c", "convert", "--db-path", str(p),
+                         "--copy-rehearsal",
+                         "--journal-path", str(tmp_path / "j.jsonl"),
+                         "--exceptions-path", str(tmp_path / "e.json"),
+                         "--pre-export-dir", str(tmp_path / "ex")])
+    assert mig.main() == 1  # the BLOB row stayed unmigrated
+
+
+def test_production_gate_blocks_unauthorized_and_pre_earliest(tmp_path, monkeypatch):
+    """M5: the production write double gate had zero assertions. B-4's twin
+    gate used `<=` where B-6c uses `<`; that boundary must be pinned or the
+    next script regresses to it."""
+    prod = tmp_path / "prod.db"
+    make_db(tmp_path, [("one", '{"a": 1}')], name="prod.db")
+    # Point _is_production at our fixture.
+    monkeypatch.setattr(mig, "_is_production", lambda path: Path(path) == prod)
+    # Not authorized -> refuse.
+    with pytest.raises(RuntimeError):
+        mig._refuse_production_unless_signed(str(prod), production_authorized=False)
+    # Authorized but before earliest -> refuse.
+    def fake_now_before():
+        return datetime(2026, 10, 15, 12, 0)
+    monkeypatch.setattr(mig, "now_cn", fake_now_before)
+    with pytest.raises(RuntimeError):
+        mig._refuse_production_unless_signed(str(prod), production_authorized=True)
+    # Authorized on the earliest date itself -> allowed (boundary is exclusive).
+    monkeypatch.setattr(mig, "now_cn", lambda: datetime(2026, 10, 16, 0, 0))
+    mig._refuse_production_unless_signed(str(prod), production_authorized=True)
+
+
+def test_is_production_recognises_same_file_and_never_raises(tmp_path, monkeypatch):
+    """M5: _is_production must recognise the production library through a
+    symlink/hardlink even when the canonical spelling is absent, and must not
+    propagate OSError from samefile when either side is missing."""
+    prod = tmp_path / "prod.db"
+    make_db(tmp_path, [("one", '{"a": 1}')], name="prod.db")
+    link = tmp_path / "link.db"
+    link.symlink_to(prod)
+
+    real = mig.Path("/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db")
+    monkeypatch.setattr(mig, "Path", lambda p: prod if p == str(real) else Path(p))
+    # Same file reached through a symlink is still production.
+    assert mig._is_production(str(link)) is True
+    # A genuinely unrelated file is not — and must not raise.
+    other = tmp_path / "other.db"
+    make_db(tmp_path, [("two", '{"a": 1}')], name="other.db")
+    assert mig._is_production(str(other)) is False
+    # Missing target: samefile raises OSError; must fail closed, not propagate.
+    assert mig._is_production(str(tmp_path / "does-not-exist.db")) is False
+
+
+def test_copy_rehearsal_never_relaxes_the_production_gate(tmp_path, monkeypatch):
+    """R1 collateral risk: --copy-rehearsal must only relax the runtime
+    (healthz / analysis-count) guard. The production authorization gate is
+    enforced unconditionally before it in every write subcommand, so a lost or
+    forged flag can never unlock a production write."""
+    idle_calls = []
+
+    def forbidden(*a, **kw):
+        raise RuntimeError("production B-6c write forbidden")
+
+    for fn in ("run_convert", "rollback_from_export",
+               "restore_plaintext", "clear_plaintext"):
+        monkeypatch.setattr(mig, "_refuse_production_unless_signed", forbidden)
+        monkeypatch.setattr(mig, "_is_production", lambda path: True)
+        monkeypatch.setattr(mig, "check_runtime_guard",
+                            lambda *a, **k: idle_calls.append(a) or
+                            {"allowed": True, "reason": "idle"})
+        p = make_db(tmp_path, [("one", '{"a": 1}')], name=f"{fn}.db")
+        kwargs = {"copy_rehearsal": True, "production_authorized": False}
+        args = (str(p),)
+        if fn == "rollback_from_export":
+            args = (str(p), "x.jsonl")
+        elif fn == "clear_plaintext":
+            kwargs["allow_clear"] = True
+        elif fn == "run_convert":
+            args = ()
+            kwargs["db_path"] = str(p)
+            kwargs["journal_path"] = str(tmp_path / f"{fn}-j.jsonl")
+        with pytest.raises(RuntimeError, match="production"):
+            getattr(mig, fn)(*args, **kwargs)
+    assert idle_calls == []  # the healthz guard was never reached
+
+
+def test_cli_convert_runs_end_to_end_without_unrelated_flags(tmp_path, monkeypatch):
+    """The shared option parent means `convert` also parses flags meant for
+    other subcommands. Dispatch must whitelist its own kwargs instead of
+    **args, or an unrelated flag crashes the run with TypeError/KeyError."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}'), ("null", "null")])
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["b6c", "--copy-rehearsal", "convert",
+                         "--db-path", str(p),
+                         "--journal-path", str(tmp_path / "j.jsonl"),
+                         "--exceptions-path", str(tmp_path / "e.json"),
+                         "--pre-export-dir", str(tmp_path / "ex"),
+                         "--batch-size", "10"])
+    assert mig.main() == 0
+    assert col(p, "one")[1] is not None            # compressed
+    assert col(p, "null")[1] is None                # 'null' never migrated
+
+
+def test_cli_convert_scan_only_returns_zero(tmp_path, monkeypatch):
+    """--scan-only parses on the convert path and reports without writing."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}')])
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["b6c", "convert", "--db-path", str(p),
+                         "--copy-rehearsal", "--scan-only",
+                         "--journal-path", str(tmp_path / "j.jsonl")])
+    assert mig.main() == 0
+    assert col(p, "one")[1] is None                 # nothing written
