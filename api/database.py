@@ -6,8 +6,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Generator, Optional
 
-from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, LargeBinary, UniqueConstraint, event, text
-from sqlalchemy.orm import declarative_base, deferred, sessionmaker, Session
+from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, LargeBinary, UniqueConstraint, event, func, text
+from sqlalchemy.orm import column_property, declarative_base, deferred, sessionmaker, Session
 
 from tradingagents.storage.compressed_json import (
     B6B_COLUMN_DDL,
@@ -153,11 +153,15 @@ def _ensure_report_schema(target_engine=None) -> None:
         # DAV-1770 B-6b: compressed-storage columns + materialized list-page
         # scalars. BLOB is dialect-specific (BYTEA / LONGBLOB); pg_* DDL is
         # shared from the design table (§2.2).
+        # NOTE (DAV-1792 🟡-2): production locks SQLite — the postgresql /
+        # mysql branches below are best-effort *untested* DDL kept for
+        # parity with the pre-existing _ensure_report_schema pattern; no
+        # cross-dialect integration test covers ZstdJSON on PG/MySQL.
         b6b = dict(B6B_COLUMN_DDL)
         if dialect in {"postgresql", "postgres"}:
-            b6b["result_data_zst"] = "BYTEA"
+            b6b["result_data_zst"] = "BYTEA"   # best-effort, untested
         elif dialect in {"mysql", "mariadb"}:
-            b6b["result_data_zst"] = "LONGBLOB"
+            b6b["result_data_zst"] = "LONGBLOB"  # best-effort, untested
         mapping.update(b6b)
         return mapping[name]
 
@@ -513,16 +517,28 @@ class ReportDB(Base):
     # Full analysis results stored as JSON
     # DAV-1770 B-6b: REPORT_STORAGE_MODE selects the physical column this
     # attribute binds at class-definition time. plaintext → result_data
-    # (JSON, legacy). compressed → result_data_zst (ZstdJSON BLOB).
-    # The non-read-side column is kept byte-identical by the flush-time
-    # shadow sync in compressed_json (dual write, §4 P1–P3).
+    # (JSON, legacy). compressed → a SQL-level COALESCE(result_data_zst,
+    # result_data) so every read (single row or bulk) resolves migrated
+    # and unmigrated rows in ONE query — no ORM load-event N+1 fallback
+    # (DAV-1792 🟡-1). The non-read-side column is kept byte-identical by
+    # the flush-time shadow sync (dual write, §4 P1–P3).
     if report_storage_mode() == "compressed":
-        result_data = Column("result_data_zst", ZstdJSON, key="result_data", nullable=True)
-        # Shadow plaintext column: deferred so no read path ever SELECTs
-        # the multi-MB plaintext unless explicitly undefer()ed.
+        # Physical write columns (deferred — never auto-SELECTed).
+        result_data_zst = deferred(
+            Column("result_data_zst", LargeBinary, key="result_data_zst", nullable=True)
+        )
         result_data_plaintext = deferred(
             Column("result_data", JSON, key="result_data_plaintext", nullable=True)
         )
+        # Read path: COALESCE emits both columns in a single SELECT;
+        # ZstdJSON decodes BLOB bytes or plaintext text transparently.
+        result_data = column_property(
+            func.coalesce(
+                result_data_zst.expression,
+                result_data_plaintext.expression,
+            ),
+        )
+        _B6B_NEEDS_ZST_TYPE_PATCH = True
     else:
         result_data = Column("result_data", JSON, key="result_data", nullable=True)
         # Shadow compressed column: deferred raw BLOB, written by the flush
@@ -636,6 +652,12 @@ class ReportDB(Base):
 # column) + 31 pg_* materialized columns on every result_data write.
 # Registered once, at class-definition; sync_report_storage_row decides
 # which direction to mirror based on REPORT_STORAGE_MODE.
+if getattr(ReportDB, "_B6B_NEEDS_ZST_TYPE_PATCH", False):
+    # column_property's coalesce column element defaults to the first
+    # operand's type (LargeBinary); re-type it so result_value goes
+    # through ZstdJSON (handles BLOB bytes AND plaintext text).
+    ReportDB.result_data.property.columns[0].type = ZstdJSON()
+
 @event.listens_for(ReportDB, "before_insert", propagate=True)
 def _b6b_sync_on_insert(mapper, connection, target):
     sync_report_storage_row(target, is_pending=True)
@@ -646,24 +668,10 @@ def _b6b_sync_on_update(mapper, connection, target):
     sync_report_storage_row(target, is_pending=False)
 
 
-# Load-time plaintext fallback for migration-window edge rows
-# (result_data_zst IS NULL AND result_data IS NOT NULL). Only wired in
-# compressed mode — in plaintext mode the attribute already IS plaintext.
-if report_storage_mode() == "compressed":
-    from sqlalchemy.orm.attributes import set_committed_value as _scv
-
-    @event.listens_for(ReportDB, "load", restore_load_context=True)
-    def _b6b_plaintext_fallback(target, context):
-        from tradingagents.storage.compressed_json import storage_fallback_enabled
-        if not storage_fallback_enabled():
-            return
-        if target.result_data is not None:
-            return
-        # Deferred attribute access emits a narrow SELECT for the plaintext
-        # column only — never part of any read path's column list.
-        val = target.result_data_plaintext
-        if val is not None:
-            _scv(target, "result_data", val)
+# Load-time plaintext fallback is handled at the SQL level by the
+# COALESCE in the column_property above — no per-row load event needed.
+# (DAV-1792 🟡-1: the previous ORM ``load`` listener emitted one extra
+# deferred-attr SELECT per unmigrated row.)
 
 
 class UserDB(Base):
