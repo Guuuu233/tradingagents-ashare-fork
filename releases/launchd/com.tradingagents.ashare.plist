@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TradingAgents-AShare 生产服务 launchd 模板（DAV-1790，总控 10-10 令：只交模板，不安装）
+
+  安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.ashare.plist
+  安装时间：10-12 窗口之后由总控另定；当前仅存档。
+
+  占位符：{{RELEASE_DIR}} = 当前生产 release 目录（本令时点 = 65988c79，
+  见 releases/RESTART.md）。切换 release 时同步改本文件与包装脚本指向。
+
+  重启节流（同一小时最多 3 次）由包装脚本 ta-launchd-wrapper.sh 内
+  滑动窗口计数实现——launchd 原生 ThrottleInterval 只能表达
+  「两次 respawn 至少间隔 N 秒」，无法表达「每小时至多 N 次」，
+  故限流逻辑放包装层，KeepAlive 只负责"意外退出即拉起"。
+-->
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>com.tradingagents.ashare</string>
+
+  <!-- 包装脚本：崩溃计数 + 环境固化 + 真正拉起 uvicorn（前台 exec） -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>{{RELEASE_DIR}}/releases/launchd/ta-launchd-wrapper.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{RELEASE_DIR}}</string>
+
+  <!-- 意外退出 → 自动拉起；主动 kickstart/bootout 不视为崩溃 -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key><true/>
+  </dict>
+  <key>RunAtLoad</key><false/>
+
+  <!-- 进程组整体交给 launchd；配合 wrapper 内 exec，stop 可干净 SIGTERM -->
+  <key>ProcessType</key><string>Interactive</string>
+  <key>ExitTimeOut</key><integer>20</integer>
+
+  <!-- 日志（与现行 releases/logs/uvicorn-<sha>.log 并列，轮换由外部处理） -->
+  <key>StandardOutPath</key>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stderr.log</string>
+</dict></plist>
