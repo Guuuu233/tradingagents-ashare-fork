@@ -1,4 +1,4 @@
-# 生产服务 launchd 托管模板（DAV-1790，DAV-1800 返修；总控 10-10 令：只交模板，不安装）
+# 生产服务 launchd 托管模板（DAV-1790，DAV-1800/DAV-1802 返修；总控 10-10 令：只交模板，不安装）
 
 本目录交付 `com.tradingagents.ashare.plist` 模板 + `ta-launchd-wrapper.sh` 包装脚本，
 用于把现行 `nohup … & disown` 拉起方式切到 launchd 托管。**本令只交模板、不安装**；
@@ -30,19 +30,28 @@
 - launchd 原生 `ThrottleInterval`（默认 10s）只能表达"两次 respawn 至少间隔 N 秒"，
   **无法表达"每小时至多 N 次"**，故限流放包装脚本：
   - 时间戳计数文件 `<RELEASES_ROOT>/logs/.launchd/restart-stamps`（绝对路径），
-    保留最近 3600s 内拉起时间；每次被 launchd 唤起先清窗口外戳、数剩余戳；
-  - **额度语义**：3 次额度计入**所有**唤起——含计划内首启动与人工 `kickstart`，
-    即首启动占 1 次、真实崩溃预算只剩 2 次；需人工拉起且不想占额度时用
-    `launchctl kickstart -e gui/$UID/com.tradingagents.ashare` 注入
-    `TA_SKIP_THROTTLE=1` 一次性旁路（wrapper 跳过计数直接拉起）；
+    保留最近 3600s 内拉起时间；**每次被 launchd 唤起先写戳再做任何断言**——
+    DAV-1802 🔴-1 修复：戳记录提前到所有前置断言之前，成功与失败路径同等计入，
+    确保 logs/ 不可写等早期 die 也占用额度、最多 3 次后 exit 0 停手；
+  - **logs/ 不可写兜底**：主戳目录不可建/不可写时退化 `/tmp/ta-launchd-die-stamps`
+    （DAV-1802 新增兜底目录），同窗口同上限；连兜底也不可得时 die 改 exit 0
+    （不再重拉，仅 StartInterval 探测），杜绝无界循环；
+  - **额度语义**：3 次额度计入**所有**唤起——含计划内首启动、KeepAlive 重拉与
+    人工 `kickstart`，即首启动占 1 次、真实崩溃预算只剩 2 次；
+  - **人工旁路（DAV-1802 🔴-2 修订）**：`launchctl kickstart` 无 `-e` 传 env 能力
+    （macOS 27.x `kickstart` 仅支持 `[-k] [-p] [-s]`，`-e` 静默 no-op），
+    故旁路改走**受控哨兵文件**——创建 `<LOG_DIR>/.launchd/manual-bypass` 后
+    `launchctl kickstart gui/$UID/com.tradingagents.ashare`，wrapper 检测到哨兵即
+    跳过计数与上限判定直接拉起（一次性，读取后删除）；注意对 running 实例
+    `kickstart` 是 no-op，须先 `bootout`/`kickstart -k` 或等其退出；
   - **超限行为**：达 3 次后 wrapper 打含恢复动作的诊断日志（fd2 + `wrapper-diagnostic.log`
     双写）并 **`exit 0` 快速停手**——exit 0 属"成功退出"，`SuccessfulExit=false` 不 respawn，
     不挂 `sleep`、job 不驻留 `running` 假象；
   - **自动恢复**：`StartInterval=600` 周期探测，窗口过期（最旧戳 >3600s）后
-    下一次唤起自然拉起，恢复粒度 ≤600s；人工随时可 `kickstart`；
-  - **fail-closed**：计数目录/文件不可写、写戳失败、原子锁 5s 拿不到，一律
-    错误日志 + `exit 1` 拒绝拉起（宁可停服也不无限重启；该 `exit 1` 会被
-    KeepAlive 重拉，由 `ThrottleInterval` 10s 兜底限速，诊断日志连刷即告警信号）；
+    下一次唤起自然拉起，恢复粒度 ≤600s；人工拉起须配合旁路哨兵（见上）；
+  - **fail-closed**：写戳失败、锁 5s 拿不到、release 目录/解释器缺失，一律
+    错误日志 + `exit 1` 拒绝拉起——因戳已先写，KeepAlive 重拉 ≤2 次后触顶
+    exit 0 停手，"同一小时最多 3 次"对失败路径同样成立；
   - **并发保护**：戳文件读-改-写在 `mkdir` 原子锁（macOS 无 `flock`）内进行，
     防 `kickstart` 与自动重拉并发双写丢戳；>60s 残留锁目录视为死锁自动清除；
   - 机器重启后戳文件可留存，窗口过期计数自然清零；但 3600s 内反复崩溃
@@ -55,6 +64,8 @@
 | `logs/uvicorn-<sha>.log` | wrapper `exec` 内 `>>` 追加（与现行一致） | 沿用宿主机现行外部轮转 |
 | `logs/wrapper-diagnostic.log` | wrapper 限流/前置断言/拉起记录（追加式） | 见下 |
 | `logs/launchd-stdout.log` / `logs/launchd-stderr.log` | plist Standard{Out,Error}Path（append，**无上限**） | 见下 |
+| `logs/.launchd/restart-stamps` | wrapper 唤起计数戳（logs/ 不可写时兜底 `/tmp/ta-launchd-die-stamps`） | 窗口滑动自清，无需轮转 |
+| `logs/.launchd/manual-bypass` | 人工旁路哨兵（DAV-1802 🔴-2） | 一次性，wrapper 读取后自删 |
 
 `launchd-*.log` 与 `wrapper-diagnostic.log` 均为 append 无内置上限，采用
 `newsyslog` 轮转（macOS 原生）。安装时在 `/etc/newsyslog.d/` 加一条（需 sudo，
@@ -68,7 +79,9 @@
 ```
 
 （>1MB 轮转、保留 5 代、gzip 压缩；未配置前文件随唤起线性增长，低频可接受，
-但**必须在切换文档中登记**，故入册。）
+但**必须在切换文档中登记**，故入册。已用 `newsyslog -vnrs -f` dry-run
+校验通过：`davidliu:staff` 属主解析正确、三条配置输出 `does not exist, skipped`
+即语法 OK； malformed 行会报 `bad permissions` rc=1，非静默。）
 
 ## nohup → launchd 切换步骤（待授权后执行）
 
@@ -108,8 +121,14 @@ plutil -lint ~/Library/LaunchAgents/com.tradingagents.ashare.plist   # OK
 
 # 3. 装载并启动
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.ashare.plist
-launchctl kickstart gui/$UID/com.tradingagents.ashare   # 首次运行（RunAtLoad=false）
-# 若不想首启动占限流额度：launchctl kickstart -e … 注入 TA_SKIP_THROTTLE=1
+# KeepAlive 隐含 RunAtLoad——bootstrap 即首启动（DAV-1802 🟡-1 订正），
+# 无需 kickstart；不带 -k 对 running 实例是 no-op（实测 starts 不变）。
+launchctl print gui/$UID/com.tradingagents.ashare | head -20   # state=running
+# 人工旁路（如需拉起且不占限流额度）：launchctl kickstart 无 -e 传 env
+# 能力（macOS 27.x 仅支持 [-k] [-p] [-s]，-e 静默 no-op），改走哨兵文件——
+#   mkdir -p <LOG_DIR>/.launchd && touch <LOG_DIR>/.launchd/manual-bypass
+#   launchctl kickstart gui/$UID/com.tradingagents.ashare   # 哨兵一次性消费
+# 注：kickstart 不能注入 env；对 running 实例需先 bootout 或 -k。
 
 # 4. 验证（同 RESTART.md"验证"节）
 sleep 25
@@ -149,6 +168,12 @@ sleep 25; curl -s http://127.0.0.1:8000/healthz
 ```bash
 plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
 bash -n releases/launchd/ta-launchd-wrapper.sh                  # 语法 OK
+newsyslog -vnrs -f /dev/stdin <<'EOF'   # dry-run 校验 newsyslog 配置语法
+/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stdout.log   davidliu:staff 644 5 1024 * Z
+/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stderr.log   davidliu:staff 644 5 1024 * Z
+/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/wrapper-diagnostic.log davidliu:staff 644 5 1024 * Z
+EOF
+# 预期输出：3 × "does not exist, skipped."（语法 OK；bad permissions 则配置有误）
 ```
 
 ## 注意
@@ -156,6 +181,9 @@ bash -n releases/launchd/ta-launchd-wrapper.sh                  # 语法 OK
 - 不要 `setsid`（macOS 无此命令）；launchd 本身就是会话外守护，无需 nohup/disown。
 - wrapper 里 `exec` 让 launchd 直管 uvicorn 进程本体（bash 被原地替换，已实测）；
   不要再去 `&` 后台。
+- `launchctl kickstart` 无 `-e` 传 env 能力（macOS 27.x 仅 `[-k] [-p] [-s]`，
+  `-e` 静默 no-op exit 0）；对 running 实例不带 `-k` 的 kickstart 是 no-op。
+  人工旁路改走哨兵文件 `<LOG_DIR>/.launchd/manual-bypass`（一次性，见上文）。
 - 守望清单新增：`kill -9`/OOM 虽会被 `SuccessfulExit=false` 覆盖重拉，仍须把
   `wrapper-diagnostic.log` 连刷「已达上限」/`FATAL` 列为巡检告警项；
   `launchctl print` 看到 `state = waiting` 且 8000 无监听时先查该日志。
