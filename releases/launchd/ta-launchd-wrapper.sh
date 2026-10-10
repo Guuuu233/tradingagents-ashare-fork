@@ -19,6 +19,8 @@
 #      ≠ 服务崩，让 launchd 重拉毫无意义且必然无界）；release 目录/解释器/
 #      日志目录缺失等 die 路径在写戳之后发生，KeepAlive 重拉 ≤2 次即触顶
 #      exit 0——"同一小时最多 3 次"对成功与失败路径同样成立。
+#   4. DAV-1809 四轮返修：旁路哨兵路径（skip_throttle=1）下 release_lock 的
+#      ${locked}/${lock_dir} 引用加 :- 兜底，修 set -u unbound variable 崩溃。
 #
 # 占位符（部署时改）：RELEASE_SHA / RELEASES_ROOT / VENV_PYTHON / LOG_DIR。
 # 说明：计数文件 <stamp_dir>/restart-stamps 只在本机运行期有效，
@@ -97,8 +99,12 @@ die() {
 
 # release_lock：锁目录唯一释放点（DAV-1806 🟢 收敛）。EXIT trap 与 exec 前
 # 显式释放共用；exec 路径 trap 不触发，故靠显式调用。
+# DAV-1809 🔴-1：旁路哨兵路径（skip_throttle=1）下计数段被跳过，locked/lock_dir
+# 从未赋值；release_lock 在 set -u 下对 ${locked} 求值即 unbound variable，exec 前
+# 即崩（实测哨兵消费后 rc=1、uvicorn 未拉起）。两处引用均加 :- 兜底——旁路路径
+# 本就无锁可释，兜底后函数安全空转。
 release_lock() {
-  [ "${locked}" = "1" ] && rmdir "${lock_dir}" 2>/dev/null; locked=0; true
+  [ "${locked:-0}" = "1" ] && rmdir "${lock_dir:-}" 2>/dev/null; locked=0; true
 }
 
 # ---- 唤起计数（DAV-1802 🔴-1：提前到一切前置断言之前，成功/失败路径同等生效）----
@@ -176,9 +182,12 @@ if [ -n "${stamp_dir}" ] && [ "${skip_throttle}" != "1" ]; then
   # 清窗口外戳（锁内单写者，读改写安全）。
   # DAV-1806 🟡-2：awk stderr 收进 diag() 统一格式（不再裸奔到
   # launchd-stderr.log 干扰巡检 grep），失败分支清理残留 .tmp。
+  # DAV-1809 🟢：重定向纳入 { } 命令块——.tmp 为目录等重定向失败原本由 bash
+  # 直接打 stderr、awk_err 捕获不到只能显示「未知」；现在连重定向错误也收进
+  # awk_err，诊断信息完整。
   if [ -f "${stamp_file}" ]; then
-    awk_err=$(awk -v c="${cutoff}" 'NF && $1 >= c' "${stamp_file}" \
-      > "${stamp_file}.tmp" 2>&1) \
+    awk_err=$({ awk -v c="${cutoff}" 'NF && $1 >= c' "${stamp_file}" \
+      > "${stamp_file}.tmp"; } 2>&1) \
       && mv "${stamp_file}.tmp" "${stamp_file}" \
       || { rm -f "${stamp_file}.tmp" 2>/dev/null; \
            fail_closed "清理/替换过期戳失败 ${stamp_file}（awk: ${awk_err:-未知}）"; }
