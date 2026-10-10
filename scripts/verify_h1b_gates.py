@@ -66,9 +66,13 @@ logger = logging.getLogger("verify_h1b_gates")
 #   cohort meta, model-isolation, report_result.
 #
 # Every function here is deterministic and side-effect free; the unit tests
-# cross-check this layer against the module implementation via a mirror
-# aggregator (identical staged traversal, full non-projected inputs) so the
-# 160-key output JSON and its verdict logic stay byte-identical.
+# (TestH1bVerifyGatesStreamingEquivalence / TestH1bVerifyGatesDavian1803Rework
+# in tests/test_h1b_gates.py) cross-check this layer against the module
+# implementation by staged ledger/matrix/isolation assertions on identical
+# inputs, so the output JSON and its verdict logic stay byte-identical (all
+# leaf keys except ``generated_at``; 154 leaves on the real-DB cohort config,
+# 158 on the --input-dir config — the card's historical "160 keys" was an
+# approximate wording, corrected here to the measured numbers).
 # ══════════════════════════════════════════════════════════════════════════
 
 H1B_VERIFY_SCHEMA_VERSION: str = H1B_SCHEMA_VERSION
@@ -166,6 +170,8 @@ _STREAM_MDC_KEYS = frozenset({
     "daily", "data_failure_ledger",
 })
 _STREAM_MDC_LINKAGE_KEYS = frozenset({"industry_name", "industry", "sector"})
+# Horizon slot names used by the DAV-1506 per-horizon mdc view ({h: mdc}).
+_HORIZON_SLOT_KEYS = frozenset({"short", "medium", "short_term", "medium_term", "primary"})
 _STREAM_MDC_PROVENANCE_KEYS = frozenset({"stock_data"})
 
 
@@ -219,64 +225,79 @@ def _stream_prune_verdict(obj: Any) -> Any:
     return out
 
 
-def _stream_prune_industry_probe(obj: Any) -> Any:
-    """Prune a provenance-style mapping to evaluation-consumed fields.
+def _stream_prune_market_data_context(obj: Any) -> Any:
+    """Prune a market_data_context (or per-horizon mdc map) by CONSUMPTION SURFACE.
 
-    market_data_context keeps the FULL Stage 3.5 + industry consumption
-    surface (DAV-1803 P0-1): ``daily`` / ``data_failure_ledger`` are the
-    structured inputs of ``is_daily_ohlcv_unavailable`` (hold_defensive
-    verdict) and MUST survive alongside ``source_provenance``(.stock_data)
-    and the ``industry_linkage`` / ``industry`` / ``sector`` probes. A
-    per-horizon mdc map (``{short: mdc, medium: mdc}``, DAV-1506 compat
-    view) is pruned per value. Other keys inside an mdc (fund_flow_evidence,
-    realtime, vpa_*, …) are unconsumed by the gate evaluation and dropped.
-    Other provenance-shaped blocks keep only their industry probes.
+    Keeps the FULL Stage 3.5 + industry surface (DAV-1803 P0-1):
+    ``daily`` / ``data_failure_ledger`` (inputs of
+    ``is_daily_ohlcv_unavailable`` → hold_defensive), ``source_provenance``
+    (.stock_data verbatim), ``industry_linkage`` / ``industry`` / ``sector``.
+    Everything else (fund_flow_evidence, realtime, vpa_*, …) is unconsumed by
+    the gate evaluation and dropped. A per-horizon mdc map
+    (``{short: mdc, medium: mdc}``, DAV-1506 compat view) is pruned per value.
     """
     if not isinstance(obj, Mapping):
         return obj
-    if "source_provenance" in obj or "industry_linkage" in obj or "daily" in obj or "data_failure_ledger" in obj:
-        # market_data_context-shaped
-        out: Dict[str, Any] = {}
-        for k, v in obj.items():
-            if v is None or k not in _STREAM_MDC_KEYS:
-                continue
-            if k in ("industry", "sector", "daily", "data_failure_ledger"):
-                out[k] = v
-            elif k == "industry_linkage" and isinstance(v, Mapping):
-                out[k] = {lk: v[lk] for lk in _STREAM_MDC_LINKAGE_KEYS if lk in v}
-            elif k == "source_provenance" and isinstance(v, Mapping):
-                prov_out: Dict[str, Any] = {}
-                for pk, pv in v.items():
-                    if pk == "stock_data":
-                        prov_out[pk] = pv  # small structured provenance record
-                    elif isinstance(pv, Mapping):
-                        # Non-stock provenance entries may nest an
-                        # industry_linkage probe (extract_report_industry
-                        # reads only mdc.industry_linkage, but keep the
-                        # per-entry industry probe defensively cheap).
-                        kept = {pk2: pv[pk2] for pk2 in ("industry", "sector") if pk2 in pv}
-                        if kept:
-                            prov_out[pk] = kept
-                out[k] = prov_out
-        return out
-    if obj and all(isinstance(v, Mapping) and ("daily" in v or "data_failure_ledger" in v or "source_provenance" in v) for v in obj.values()):
+    if obj and set(obj.keys()) <= _HORIZON_SLOT_KEYS and all(isinstance(v, Mapping) for v in obj.values()):
         # per-horizon mdc map ({short: mdc, medium: mdc}, DAV-1506 compat view)
-        return {h: _stream_prune_industry_probe(v) for h, v in obj.items()}
-    if "industry_linkage_raw" in obj or "industry_linkage" in obj or obj.keys() & {"stock_data"}:
-        # data_collection_provenance-shaped
-        out2: Dict[str, Any] = {}
-        for k, v in obj.items():
-            if k in ("industry_linkage_raw", "industry_linkage") and isinstance(v, Mapping):
-                out2[k] = {lk: v[lk] for lk in _STREAM_MDC_LINKAGE_KEYS if lk in v}
-        return out2
-    if "stock_data" in obj:
-        return {k: v for k, v in obj.items() if k == "stock_data"}
-    # generic probe: instrument_context / quadrant_1_protocol_metadata / metadata
-    out3: Dict[str, Any] = {}
+        return {h: _stream_prune_market_data_context(v) for h, v in obj.items()}
+    out: Dict[str, Any] = {}
+    for k, v in obj.items():
+        if v is None or k not in _STREAM_MDC_KEYS:
+            continue
+        if k in ("industry", "sector", "daily", "data_failure_ledger"):
+            out[k] = v
+        elif k == "industry_linkage" and isinstance(v, Mapping):
+            out[k] = {lk: v[lk] for lk in _STREAM_MDC_LINKAGE_KEYS if lk in v}
+        elif k == "source_provenance" and isinstance(v, Mapping):
+            prov_out: Dict[str, Any] = {}
+            for pk, pv in v.items():
+                if pk == "stock_data":
+                    prov_out[pk] = pv  # small structured provenance record
+                elif isinstance(pv, Mapping):
+                    # Non-stock provenance entries may nest an industry probe
+                    # (extract_report_industry reads only mdc.industry_linkage,
+                    # but keep the per-entry industry probe defensively cheap).
+                    kept = {pk2: pv[pk2] for pk2 in ("industry", "sector") if pk2 in pv}
+                    if kept:
+                        prov_out[pk] = kept
+            out[k] = prov_out
+    return out
+
+
+def _stream_prune_data_collection_provenance(obj: Any) -> Any:
+    """Prune a data_collection_provenance block (industry probes only).
+
+    Never shape-sniffs — the block's consumed keys are exactly
+    ``industry_linkage_raw`` / ``industry_linkage`` inner probes
+    (extract_report_industry step 5), regardless of any other keys it carries
+    (e.g. ``daily`` / ``data_failure_ledger``).
+    """
+    if not isinstance(obj, Mapping):
+        return obj
+    out: Dict[str, Any] = {}
+    for k, v in obj.items():
+        if k in ("industry_linkage_raw", "industry_linkage") and isinstance(v, Mapping):
+            out[k] = {lk: v[lk] for lk in _STREAM_MDC_LINKAGE_KEYS if lk in v}
+    return out
+
+
+def _stream_prune_misc_block(obj: Any) -> Any:
+    """Prune a misc mapping (instrument_context / quadrant_1_protocol_metadata /
+    metadata) to the consumed probe keys — never shape-sniffed into mdc.
+
+    ``metadata`` feeds extract_sample_cohort (triad + commit sha),
+    ``_is_contract_era_sample`` (price_ref_contract_version) and
+    extract_report_industry (industry probes), so its contract / cohort /
+    horizon keys must survive unconditionally (DAV-1811 M-1).
+    """
+    if not isinstance(obj, Mapping):
+        return obj
+    out: Dict[str, Any] = {}
     for k, v in obj.items():
         if k in _STREAM_MISC_KEYS and v is not None:
-            out3[k] = v
-    return out3
+            out[k] = v
+    return out
 
 
 def _stream_project_unit(unit: Mapping[str, Any]) -> Dict[str, Any]:
@@ -317,11 +338,21 @@ def _stream_project_unit(unit: Mapping[str, Any]) -> Dict[str, Any]:
             if isinstance(v, Mapping):
                 out[k] = _stream_prune_debate(v)
             continue
-        if k in ("market_data_context", "instrument_context",
-                 "data_collection_provenance", "quadrant_1_protocol_metadata",
-                 "metadata"):
+        # DAV-1811 M-1: dispatch per block by CONSUMPTION SURFACE — never a
+        # shared shape-sniffing function. market_data_context keeps the full
+        # Stage 3.5 surface; metadata keeps its contract/cohort/horizon keys
+        # even when it happens to carry daily / data_failure_ledger.
+        if k == "market_data_context":
             if isinstance(v, Mapping):
-                out[k] = _stream_prune_industry_probe(v)
+                out[k] = _stream_prune_market_data_context(v)
+            continue
+        if k == "data_collection_provenance":
+            if isinstance(v, Mapping):
+                out[k] = _stream_prune_data_collection_provenance(v)
+            continue
+        if k in ("instrument_context", "quadrant_1_protocol_metadata", "metadata"):
+            if isinstance(v, Mapping):
+                out[k] = _stream_prune_misc_block(v)
             continue
         out[k] = v
     # Claims inside the debate state are evidence values — keep their Mapping

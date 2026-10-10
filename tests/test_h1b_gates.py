@@ -2175,7 +2175,7 @@ class TestH1bVerifyGatesDavian1803Rework:
     def test_p01_prune_keeps_daily_and_ledger_surface(self):
         mod = self._import_script()
         mdc = self._production_daily_mdc()
-        pruned = mod._stream_prune_industry_probe(mdc)
+        pruned = mod._stream_prune_market_data_context(mdc)
         # full Stage 3.5 + industry surface survives
         assert pruned["daily"] == {"as_of": "2026-08-01", "completeness": "completed"}
         assert pruned["data_failure_ledger"] == []
@@ -2186,20 +2186,23 @@ class TestH1bVerifyGatesDavian1803Rework:
         assert "realtime" not in pruned
 
     def test_p01_daily_only_mdc_not_mistaken_for_other_blocks(self):
+        """DAV-1811 M-1: a lone ``daily`` key no longer classifies a block as
+        mdc (the dispatcher is gone; mdc pruning is only applied to the
+        ``market_data_context`` slot). The mdc pruner itself preserves daily."""
         mod = self._import_script()
-        # mdc with ONLY daily (no provenance/linkage) must hit the mdc branch
         mdc = {"daily": {"as_of": "2026-08-01", "completeness": "completed"}}
-        pruned = mod._stream_prune_industry_probe(mdc)
-        assert pruned == {"daily": {"as_of": "2026-08-01", "completeness": "completed"}}
-        # ledger-only mdc likewise
+        assert mod._stream_prune_market_data_context(mdc) == mdc
         mdc2 = {"data_failure_ledger": [{"source": "stock_data", "status": "available"}]}
-        assert mod._stream_prune_industry_probe(mdc2) == mdc2
+        assert mod._stream_prune_market_data_context(mdc2) == mdc2
+        # and the misc block pruner never routes such keys anywhere
+        md = {"daily": {"as_of": "x"}, "horizon": "short", "protocol_version": "v2"}
+        assert mod._stream_prune_misc_block(md) == {"horizon": "short", "protocol_version": "v2"}
 
     def test_p01_per_horizon_mdc_map_pruned_per_value(self):
         mod = self._import_script()
         prod = self._production_daily_mdc()
         per_hz = {"short": dict(prod), "medium": dict(prod)}
-        pruned = mod._stream_prune_industry_probe(per_hz)
+        pruned = mod._stream_prune_market_data_context(per_hz)
         assert set(pruned.keys()) == {"short", "medium"}
         assert pruned["short"]["daily"] == prod["daily"]
         assert "fund_flow_evidence" not in pruned["short"]
@@ -2444,3 +2447,225 @@ class TestH1bVerifyGatesDavian1803Rework:
         n1, n2 = leaves(strip(res1)), leaves(strip(res2))
         assert n1 == n2, "comparable key surface drifted between identical runs"
         assert json.dumps(strip(res1), sort_keys=True) == json.dumps(strip(res2), sort_keys=True)
+
+
+class TestH1bVerifyGatesDavian1811Rework:
+    """DAV-1811 M-1 guard: per-block prune dispatch (never shape-sniffed).
+
+    The 4-flag sniff introduced for P0-1 misclassified ``metadata`` /
+    ``data_collection_provenance`` / ``instrument_context`` blocks carrying
+    ``daily`` / ``data_failure_ledger`` as market_data_context, silently
+    dropping the cohort triad, price-basis contract markers and
+    ``industry_linkage_raw`` — turning isolated price-basis samples into
+    "clean" ones (price_basis_isolated 144→0 on a 72-row dual-horizon pool).
+    These tests pin the block-level consumption surfaces.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1811", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1811", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_m1_metadata_with_daily_keeps_contract_keys(self):
+        """metadata carrying daily/ledger must keep price_ref_contract_version
+        (price-basis contract fail-close) and horizon/cohort keys."""
+        from tradingagents.agents.utils.shadow_credit import (
+            classify_price_basis_exclusion,
+            extract_sample_cohort,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        md = {
+            "horizon": "short",
+            "price_ref_contract_version": "price_ref.v1",
+            "decision_model_version": "decision_model.v1",
+            "evidence_contract_version": "evidence_contract.v0",
+            "daily": {"as_of": "2026-08-01"},
+            "data_failure_ledger": [],
+        }
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "metadata": md,
+        }
+        row = {"id": "m1a", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        # module reference behaviour preserved
+        assert classify_price_basis_exclusion(mu) == "price_basis_contract_incomplete"
+        assert classify_price_basis_exclusion(su) == "price_basis_contract_incomplete"
+        # contract/cohort keys survive the projection
+        assert su["metadata"]["price_ref_contract_version"] == "price_ref.v1"
+        assert su["metadata"]["horizon"] == "short"
+        assert extract_sample_cohort(su)["decision_model_version"] == "decision_model.v1"
+
+    def test_m1_data_collection_provenance_with_daily_keeps_linkage_raw(self):
+        """data_collection_provenance carrying daily must keep industry_linkage_raw."""
+        from tradingagents.agents.utils.shadow_credit import (
+            extract_report_industry,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "data_collection_provenance": {
+                "daily": {"as_of": "x"},
+                "data_failure_ledger": [],
+                "industry_linkage_raw": {"industry_name": "电力设备"},
+            },
+        }
+        row = {"id": "m1b", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert extract_report_industry(mu) == "电力设备"
+        assert extract_report_industry(su) == "电力设备"
+        assert su["data_collection_provenance"]["industry_linkage_raw"] == {"industry_name": "电力设备"}
+
+    def test_m1_instrument_context_with_daily_keeps_industry(self):
+        mod = self._import_script()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "instrument_context": {"industry": "新能源", "daily": {"as_of": "x"},
+                                   "data_failure_ledger": []},
+        }
+        row = {"id": "m1c", "status": "completed", "result_data": {"short_term": inner}}
+        su = mod._stream_split_units(row)[0]
+        assert su["instrument_context"] == {"industry": "新能源"}
+
+    def test_m1_mdc_dispatch_still_keeps_stage35_surface(self):
+        """P0-1 must not regress: a real mdc (markers + daily + ledger) keeps
+        daily / data_failure_ledger / source_provenance / industry_linkage."""
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        ok_mdc = {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {"stock_data": {"status": "available", "as_of": "2026-08-01",
+                                                "provenance_status": "verified"}},
+            "industry_linkage": {"industry_name": "白酒"},
+            "fund_flow_evidence": {"records": ["x" * 64]},
+            "realtime": {"status": "unavailable"},
+        }
+        fail_mdc = {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {"stock_data": {"status": "unavailable",
+                                                "provenance_status": "refused",
+                                                "gap": "【数据获取失败】stock_data"}},
+            "fund_flow_evidence": {},
+        }
+        for idx, (mdc, expect) in enumerate(((ok_mdc, []), (fail_mdc, ["hold_defensive"]))):
+            inner = {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie"},
+                "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+                "market_data_context": mdc,
+            }
+            row = {"id": f"m1mdc-{idx}", "status": "completed", "result_data": {"short_term": inner}}
+            mu = split_report_into_units(row)[0]
+            su = mod._stream_split_units(row)[0]
+            assert collect_hold_semantic_reasons(mu) == expect
+            assert collect_hold_semantic_reasons(su) == expect
+        su = mod._stream_split_units({"id": "m1mdc-x", "status": "completed",
+                                      "result_data": {"short_term": dict(inner, market_data_context=ok_mdc)}})[0]
+        kept = su["market_data_context"]
+        assert kept["daily"] and kept["source_provenance"]["stock_data"]["status"] == "available"
+        assert "fund_flow_evidence" not in kept and "realtime" not in kept
+
+    def test_m1_per_horizon_mdc_map_still_pruned_per_value(self):
+        mod = self._import_script()
+        mdc = {"daily": {"as_of": "2026-08-01", "completeness": "completed"},
+               "data_failure_ledger": [], "source_provenance": {},
+               "industry_linkage": {"industry_name": "白酒"}, "realtime": {"status": "x"}}
+        per_hz = {"short": dict(mdc), "medium": dict(mdc)}
+        pruned = mod._stream_prune_market_data_context(per_hz)
+        assert set(pruned.keys()) == {"short", "medium"}
+        assert pruned["short"]["daily"] == mdc["daily"]
+        assert "realtime" not in pruned["short"]
+
+    def test_m1_72row_dual_horizon_price_basis_ledger_matches_module(self):
+        """The review's 72-row repro: price_basis_isolated must stay 144 (not 0).
+
+        Each row carries a contract-era metadata block with daily/ledger; the
+        module classifies every unit as price_basis_contract_incomplete.
+        Streaming aggregation must agree key-by-key on the ledger.
+        """
+        mod = self._import_script()
+        rows = []
+        for i in range(72):
+            inner = {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie", "direction": "中性"},
+                "claims": [{"claim_id": f"c{i}", "speaker": "Bull", "stance": "bullish",
+                            "status": "verified", "claim": f"claim_{i}"}],
+                "metadata": {
+                    "horizon": "short",
+                    "price_ref_contract_version": "price_ref.v1",
+                    "daily": {"as_of": "2026-08-01"},
+                    "data_failure_ledger": [],
+                },
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+            }
+            rows.append({
+                "id": f"pb-{i:03d}",
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+                "status": "completed",
+                "result_data": {
+                    "short_term": inner,
+                    "medium_term": dict(inner, horizon="medium"),
+                },
+            })
+
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        mod_reps, mod_exc, mod_led = filter_v2_completed_reports(rows, return_ledger=True)
+        # module truth: all 144 units contract-incomplete → isolated
+        assert mod_led["price_basis_isolated"] == 144
+        assert mod_led["price_basis_contract_incomplete"] == 144
+        assert mod_led["clean_count"] == 0
+
+        agg = mod._StreamAggregator()
+        for r in rows:
+            agg.feed(r)
+        led = agg.ledger()
+        for k in ("price_basis_isolated", "price_basis_contract_incomplete",
+                  "clean_count", "eligible_count", "hold_defensive",
+                  "hold_semantic_isolated", "prediction_eligible_count"):
+            assert led[k] == mod_led[k], f"ledger mismatch on {k}: {led[k]} != {mod_led[k]}"
+        assert len(agg.qualifying) == 0
