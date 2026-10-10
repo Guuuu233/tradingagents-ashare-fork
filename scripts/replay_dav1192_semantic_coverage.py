@@ -33,29 +33,42 @@ REPORT_FIELDS = [
 
 
 def main():
+    from tradingagents.storage.compressed_json import decode_result_data
     con = sqlite3.connect(DB, uri=True)
     cur = con.cursor()
+    # B-6b: json_extract paths resolve in Python after decode — compressed
+    # BLOBs can't be json_extract'ed in SQL. COALESCE keeps legacy plaintext
+    # rows working in the same query.
     rows = cur.execute(
         """
       SELECT id, symbol, trade_date, created_at,
-        json_extract(result_data,'$.generated_by_commit_sha'),
-        json_extract(result_data,'$.investment_debate_state.claims'),
-        json_extract(result_data,'$.manager_verdict.claim_evidence_summary'),
-        json_extract(result_data,'$.manager_verdict.adopted_claim_ids'),
-        json_extract(result_data,'$.market_data_context.source_provenance'),
-        json_extract(result_data,'$.decision_model_version'),
-        json_extract(result_data,'$.evidence_contract_version'),
+        COALESCE(result_data_zst, result_data) AS rd,
         market_report, sentiment_report, news_report, fundamentals_report,
         macro_report, smart_money_report, volume_price_report, game_theory_report
       FROM reports WHERE status='completed'
-        AND json_extract(result_data,'$.manager_verdict.claim_evidence_summary') IS NOT NULL
+        AND COALESCE(result_data_zst, result_data) IS NOT NULL
         """
     ).fetchall()
 
+    def _field(rd, *path):
+        cur = rd
+        for p in path:
+            if not isinstance(cur, dict):
+                return None
+            cur = cur.get(p)
+        return cur
+
     # B2/B3 冻结批识别（Phase A 同款：同 commit + 同分钟窗口 >=5 份）
     batches = defaultdict(list)
+    decoded = {}
     for r in rows:
-        batches[(r[4], (r[3] or "")[:16])].append(r[0])
+        d = decode_result_data(r[4])
+        if not isinstance(d, dict):
+            continue
+        if not _field(d, "manager_verdict", "claim_evidence_summary"):
+            continue
+        decoded[r[0]] = (r, d)
+        batches[(d.get("generated_by_commit_sha"), (r[3] or "")[:16])].append(r[0])
     frozen_rids = set()
     for (sha, minute), rids in batches.items():
         if sha and len(rids) >= 5 and minute >= "2026-09-20":
@@ -63,11 +76,15 @@ def main():
 
     out = []
     for r in rows:
-        rid, sym, td, created, sha = r[:5]
-        claims = json.loads(r[5] or "[]")
-        summ = json.loads(r[6] or "{}")
-        adopted = set(json.loads(r[7] or "[]"))
-        prov = json.loads(r[8] or "{}")
+        if r[0] not in decoded:
+            continue
+        r, d = decoded[r[0]]
+        rid, sym, td, created = r[0], r[1], r[2], r[3]
+        sha = d.get("generated_by_commit_sha")
+        claims = _field(d, "investment_debate_state", "claims") or []
+        summ = _field(d, "manager_verdict", "claim_evidence_summary") or {}
+        adopted = set(_field(d, "manager_verdict", "adopted_claim_ids") or [])
+        prov = _field(d, "market_data_context", "source_provenance") or {}
         blocked = {
             str(k) for k, v in (prov.items() if isinstance(prov, dict) else [])
             if isinstance(v, dict) and (
@@ -75,7 +92,7 @@ def main():
                 or str(v.get("status", "")).lower() in ("refused", "failed", "unavailable")
             )
         }
-        fields = dict(zip(REPORT_FIELDS, r[11:]))
+        fields = dict(zip(REPORT_FIELDS, r[5:]))
         fields = {k: v for k, v in fields.items() if v}
         cmap = {c.get("claim_id"): c for c in claims}
         for cid in adopted:
@@ -95,8 +112,8 @@ def main():
             out.append({
                 "report_id": rid, "symbol": sym, "claim_id": cid, "claim": text,
                 "stance": cs.get("stance"), "sha": sha,
-                "decision_model": r[9] or "unversioned",
-                "evidence_contract": r[10] or "unversioned",
+                "decision_model": d.get("decision_model_version") or "unversioned",
+                "evidence_contract": d.get("evidence_contract_version") or "unversioned",
                 "frozen_batch": rid in frozen_rids,
                 "semantic_coverage": audit["semantic_coverage"],
                 "preview": audit["semantic_decision_preview"],
