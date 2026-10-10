@@ -1682,3 +1682,393 @@ class TestH1bCohortIsolation:
         assert res["claim_weights"]["C1"] == 1.0
         assert res["global_fallback_shadow"] is True
 
+
+
+class TestH1bVerifyGatesStreamingEquivalence:
+    """DAV-1767: streaming read + projection equivalence guards for verify_h1b_gates.
+
+    The script's streaming pipeline (id-manifest read → per-row re-read →
+    horizon-unit split → whitelist projection → staged counting → streaming
+    gate/isolation evaluation) must produce output identical to the module
+    evaluation path. These tests cross-check every layer, including on
+    deliberately exotic payloads (oversized non-evaluated blobs, null lists,
+    top-level None placeholders, mixed cohort pools) so any whitelist drift
+    fails loudly instead of silently changing the 160-key comparison JSON.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1767", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1767", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _module_reference(mod, samples, cohort):
+        """Run the module evaluation path and return (gate, isolation, excluded, ledger)."""
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        reps, exc, led = mod._module_filter_v2_completed_reports(samples, return_ledger=True)
+        if cohort:
+            pool, meta = filter_reports_by_cohort(reps, cohort=cohort)
+        else:
+            pool = reps
+        gate = mod._module_evaluate_gate_thresholds(
+            pool,
+            as_of=None,
+            cohort=cohort,
+            excluded_counts=exc,
+            pipeline_ledger=led,
+        )
+        iso = mod._module_evaluate_model_bias_and_weights(pool, system_gate_passed=gate["passed"])
+        return gate, iso
+
+    @staticmethod
+    def _stream_reference(mod, samples, cohort):
+        """Run the script's streaming pipeline over the same samples."""
+        agg = mod._StreamAggregator()
+        if cohort:
+            from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+            pool, meta = filter_reports_by_cohort(samples, cohort=cohort)
+        else:
+            pool = samples
+        for r in pool:
+            agg.feed(r)
+        return agg
+
+    def test_module_filter_equivalence_on_qualifying_pool(self):
+        """Staged ledger/counters + qualified pool identical to module filter."""
+        mod = self._import_script()
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        samples = _build_qualifying_sample_pool(n=61)
+        # one HOLD-isolated and one WAIT sample for the exclusion paths
+        hold = _build_mock_debate_sample(symbol="600001.SH", winner="tie")
+        hold["trade_action"] = "HOLD"
+        wait = _build_mock_debate_sample(symbol="600002.SH", winner="bull")
+        wait["trade_action"] = "WAIT"
+        pool = samples + [hold, wait]
+
+        mod_reports, mod_excluded, mod_ledger = filter_v2_completed_reports(pool, return_ledger=True)
+        agg = self._stream_reference(mod, pool, cohort=None)
+        led = agg.ledger()
+
+        assert led["raw_count"] == mod_ledger["raw_count"]
+        assert led["unit_count"] == mod_ledger["unit_count"]
+        assert led["dual_horizon_split_reports"] == mod_ledger["dual_horizon_split_reports"]
+        assert led["qualifying_v2_count"] == mod_ledger["qualifying_v2_count"]
+        assert led["eligible_count"] == mod_ledger["eligible_count"]
+        assert led["non_v2_excluded"] == mod_ledger["non_v2_excluded"]
+        assert led["d009_excluded"] == mod_ledger["d009_excluded"]
+        assert led["clean_count"] == mod_ledger["clean_count"]
+        assert led["hold_semantic_isolated"] == mod_ledger["hold_semantic_isolated"]
+        assert led["price_basis_isolated"] == mod_ledger["price_basis_isolated"]
+        assert led["prediction_eligible_count"] == mod_ledger["prediction_eligible_count"]
+        assert agg.excluded() == mod_excluded
+        # Qualified sample ids identical (order: row → unit split order)
+        assert [s.get("id") for s in mod_reports] == [s.get("id") for s in agg.qualifying]
+
+    def test_stream_run_gate_eval_equivalence_matrix_and_isolation(self):
+        """Streaming gate evaluation == module evaluation on the qualifying pool."""
+        mod = self._import_script()
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        samples = _build_qualifying_sample_pool(n=64)
+        mod_reports, mod_excluded, mod_ledger = filter_v2_completed_reports(samples, return_ledger=True)
+        agg = self._stream_reference(mod, samples, cohort=None)
+        gate_stream = mod._stream_run_gate_eval(
+            agg.qualifying,
+            as_of=None,
+            cohort=None,
+            excluded_counts=agg.excluded(),
+            pipeline_ledger=agg.ledger(),
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        iso_stream = mod._stream_isolation_eval(agg.qualifying, system_gate_passed=gate_stream["passed"])
+        gate_mod, iso_mod = self._module_reference(mod, samples, cohort=None)
+
+        assert gate_stream["passed"] == gate_mod["passed"]
+        assert gate_stream["matrix"] == gate_mod["matrix"]
+        assert gate_stream["excluded_counts"] == gate_mod["excluded_counts"]
+        assert iso_stream == iso_mod
+
+    def test_projection_preserves_evaluation_payload_exactly(self):
+        """Projected unit keeps every consumed field; drops nothing the gate reads."""
+        mod = self._import_script()
+        sample = _build_mock_debate_sample(symbol="600519.SH", sample_idx=7)
+        sample["result_data"] = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": sample["investment_debate_state"]["manager_verdict"],
+            "investment_debate_state": sample["investment_debate_state"],
+            "shadow_credit_metrics": sample["shadow_credit_metrics"],
+        }
+        sample["market_data_context"] = {
+            "industry_linkage": {"industry_name": "白酒"},
+            "source_provenance": {"stock_data": {"status": "available", "as_of": "2026-08-01", "provenance_status": "verified"}},
+            "notes_blob": "x" * 512,
+        }
+
+        unit = mod._stream_split_units(sample)[0]
+        # consumed fields survive projection (top-level columns merge over
+        # result_data inside normalize/split, so merged-in keys surface on the
+        # unit only for fields the row itself carried at top level)
+        assert unit["analysis_status"] == "VALID"
+        assert unit["trade_action"] == "BUY"
+        inv = unit["investment_debate_state"]
+        assert inv["manager_verdict"]["winner"] == "bull"
+        assert inv["claims"][0]["claim"].startswith("多头看好逻辑")
+        assert unit["shadow_credit_metrics"]["bull_verified_rate"] == 1.0
+        assert unit["market_data_context"]["source_provenance"]["stock_data"]["status"] == "available"
+        # non-evaluated blob dropped
+        assert "notes_blob" not in unit["market_data_context"]
+        # gate evaluation on the projected unit matches the module on the raw row
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_v2_completed_reports,
+            is_qualifying_v2_report,
+        )
+
+        mod_reports, _, _ = filter_v2_completed_reports([sample], return_ledger=True)
+        assert len(mod_reports) == 1
+        agg = self._stream_reference(mod, [sample], cohort=None)
+        assert len(agg.qualifying) == 1
+        gate_a = mod._stream_run_gate_eval(
+            mod_reports, as_of=None, cohort=None, excluded_counts={}, pipeline_ledger=None,
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        gate_b = mod._stream_run_gate_eval(
+            agg.qualifying, as_of=None, cohort=None, excluded_counts={}, pipeline_ledger=None,
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        assert gate_a["matrix"] == gate_b["matrix"]
+        assert gate_a["passed"] == gate_b["passed"]
+
+    def test_oversized_non_evaluated_blob_projection_constant(self):
+        """3 MiB of non-evaluated payload is dropped by the projection (memory bound)."""
+        mod = self._import_lib_guard() if False else self._import_script()
+        sample = _build_mock_debate_sample(symbol="600519.SH")
+        sample["result_data"] = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": sample["investment_debate_state"]["manager_verdict"],
+            "investment_debate_state": sample["investment_debate_state"],
+            "shadow_credit_metrics": sample["shadow_credit_metrics"],
+            "unused_blob": "x" * (3 * 1024 * 1024),
+            "unused_array": list(range(100_000)),
+        }
+        unit = mod._stream_split_units(sample)[0]
+        import sys as _sys
+
+        assert _sys.getsizeof(unit.get("unused_blob", "")) < 4096
+        assert "unused_array" not in unit
+        agg = self._stream_reference(mod, [sample], cohort=None)
+        assert len(agg.qualifying) == 1
+
+    def test_db_read_path_to_dict_field_parity(self, tmp_path):
+        """Streaming DB read returns the same per-row keys as ReportDB.to_dict()."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "parity.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        row = ReportDB(
+            id="rep-parity-1",
+            symbol="600519.SH",
+            trade_date="2026-08-01",
+            status="completed",
+            analysis_status="VALID",
+            trade_action="BUY",
+            result_data={
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "industry": "白酒",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
+                "manager_verdict": {"winner": "bull", "direction": "看多"},
+            },
+            data_gaps=[{"gap": "x"}],
+            falsification_conditions=["f1"],
+        )
+        session.add(row)
+        session.commit()
+        # load_reports_from_db returns the module-filtered/normalized samples,
+        # so raw-row parity is asserted on the column list itself: the
+        # streaming read must cover exactly to_dict() minus the three
+        # non-evaluated structural list columns.
+        to_dict_keys = set(
+            session.query(ReportDB).filter(ReportDB.id == "rep-parity-1").first().to_dict().keys()
+        )
+        session.close()
+        engine.dispose()
+
+        expected_stream_cols = to_dict_keys - {"risk_items", "key_metrics", "analyst_traces"}
+        assert set(mod.STREAM_ROW_COLUMNS) == expected_stream_cols
+
+        reports = mod.load_reports_from_db(db_path=db_path)
+        assert len(reports) == 1
+        assert reports[0]["id"] == "rep-parity-1"
+        assert reports[0]["symbol"] == "600519.SH"
+        assert reports[0]["result_data"]["industry"] == "白酒"
+        assert reports[0]["data_gaps"] == [{"gap": "x"}]
+        assert reports[0]["falsification_conditions"] == ["f1"]
+        # datetime columns are ISO strings after the streaming read
+        assert isinstance(reports[0]["created_at"], str)
+
+    def test_row_count_consistency_db_vs_module_filter(self, tmp_path):
+        """Streaming DB read feeds the module filter with identical stage counts."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "counts.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        for i in range(3):
+            session.add(
+                ReportDB(
+                    id=f"rep-c{i}",
+                    symbol=f"60059{i}.SH",
+                    trade_date="2026-08-0%d" % (i + 1),
+                    status="completed",
+                    analysis_status="VALID",
+                    trade_action="BUY",
+                    result_data={
+                        "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                        "industry": "白酒",
+                        "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
+                        "manager_verdict": {"winner": "bull", "direction": "看多"},
+                    },
+                )
+            )
+        session.add(ReportDB(id="rep-cx", symbol="601398.SH", trade_date="2026-08-09", status="failed"))
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        reports = mod.load_reports_from_db(db_path=db_path, return_ledger=True)
+        assert isinstance(reports, tuple)
+        v2_reports, excluded, ledger = reports
+        assert ledger["raw_count"] == 3
+        assert ledger["clean_count"] == 3
+        assert len(v2_reports) == 3
+
+    def test_run_verify_script_level_equivalence_dual_horizon(self, tmp_path):
+        """End-to-end: run_verify(stream) vs module path on a dual-horizon DB."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "dual.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        def _legacy_unit(winner: str) -> dict:
+            u = _build_mock_debate_sample(symbol="600519.SH", winner=winner)
+            for k in ("decision_model_version", "evidence_contract_version",
+                      "price_basis_version", "generated_by_commit_sha"):
+                u.pop(k, None)
+            return u
+
+        short_unit = _legacy_unit("bull")
+        short_unit["horizon"] = "short"
+        medium_unit = _legacy_unit("bear")
+        medium_unit["horizon"] = "medium"
+        session.add(
+            ReportDB(
+                id="rep-dual-1",
+                symbol="600519.SH",
+                trade_date="2026-08-01",
+                status="completed",
+                analysis_status="VALID",
+                trade_action="BUY",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "白酒",
+                    "short_term": short_unit,
+                    "medium_term": medium_unit,
+                },
+            )
+        )
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        out_json = str(tmp_path / "dual_out.json")
+        res = mod.run_verify(db_path=db_path, cohort="legacy_unversioned:short", output_json=out_json)
+        assert res["sample_count"] == 1
+        assert res["pipeline_ledger"]["dual_horizon_split_reports"] == 1
+        assert res["pipeline_ledger"]["unit_count"] == 2
+        # only the short unit enters the short cohort
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bull_samples"] == 1
+        assert os.path.exists(out_json)
+
+        # module reference on the same DB rows (raw to_dict path)
+        from sqlalchemy import create_engine as ce2
+
+        engine2 = ce2(f"sqlite:///{db_path}")
+        from api.database import ReportDB as RDB2
+
+        Session2 = sessionmaker(bind=engine2)
+        s2 = Session2()
+        rows = [r.to_dict() for r in s2.query(RDB2).filter(RDB2.status == "completed").all()]
+        s2.close()
+        engine2.dispose()
+        reps, exc, led = mod._module_filter_v2_completed_reports(rows, return_ledger=True)
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        pool, _ = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        gate_mod = mod._module_evaluate_gate_thresholds(
+            pool, as_of=None, cohort="legacy_unversioned:short", excluded_counts=exc, pipeline_ledger=led
+        )
+        assert res["gate_evaluation"]["matrix"] == gate_mod["matrix"]
+
+    def test_run_verify_equivalence_exotic_payloads(self, tmp_path):
+        """Equivalence holds on null-lists, top-level Nones and mixed cohorts."""
+        mod = self._import_script()
+        s1 = _build_mock_debate_sample(symbol="600519.SH", sample_idx=1)
+        s1["claims"] = None
+        s1["market_regime"] = None
+        s1["t_plus_5_status"] = None
+        s2 = _build_mock_debate_sample(symbol="000858.SZ", sample_idx=2, winner="bear")
+        for s in (s1, s2):
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+        pool = [s1, s2]
+
+        gate_mod, iso_mod = self._module_reference(mod, pool, cohort="legacy_unversioned")
+        agg = self._stream_reference(mod, pool, cohort="legacy_unversioned")
+        gate_stream = mod._stream_run_gate_eval(
+            agg.qualifying,
+            as_of=None,
+            cohort="legacy_unversioned",
+            excluded_counts=agg.excluded(),
+            pipeline_ledger=agg.ledger(),
+            cohort_meta={"canonical_key": "legacy_unversioned", "commit_shas": []},
+        )
+        assert gate_stream["matrix"] == gate_mod["matrix"]
+        assert gate_stream["passed"] == gate_mod["passed"]
+        iso_stream = mod._stream_isolation_eval(agg.qualifying, system_gate_passed=gate_mod["passed"])
+        assert iso_stream == iso_mod
