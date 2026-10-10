@@ -162,6 +162,15 @@ _STREAM_MDC_LINKAGE_KEYS = frozenset({"industry_name", "industry", "sector"})
 _STREAM_MDC_PROVENANCE_KEYS = frozenset({"stock_data"})
 
 
+def _stream_project_eval_mapping(obj: Any) -> Dict[str, Any]:
+    """Recursively project a mapping to _STREAM_EVAL_RESULT_KEYS (shallow values
+    verbatim). Used for the nested ``result_data`` payload on the single-unit
+    fallback path, where the module merges result_data over the row."""
+    if not isinstance(obj, Mapping):
+        return {}
+    return {k: v for k, v in obj.items() if k in _STREAM_EVAL_RESULT_KEYS and v is not None}
+
+
 def _stream_prune_debate(obj: Any) -> Any:
     """Prune an investment_debate_state mapping to evaluation-consumed fields.
 
@@ -260,10 +269,18 @@ def _stream_project_unit(unit: Mapping[str, Any]) -> Dict[str, Any]:
       ``data_collection_provenance`` / ``quadrant_1_protocol_metadata`` /
       ``metadata``: pruned to industry probes / Stage 3.5 provenance
       (source_provenance.stock_data kept for hold_defensive);
-    - everything else on the whitelist is kept verbatim.
+    # Everything else on the whitelist is kept verbatim.
     """
     out: Dict[str, Any] = {}
     for k, v in unit.items():
+        if k == "result_data":
+            # The single-unit fallback path passes the raw row through; the
+            # nested result_data payload is the evaluation data itself (the
+            # module merges it over the row via normalize_report_for_evaluation
+            # / is_qualifying_v2_report lookups). Project it recursively and
+            # keep it under its original key.
+            out[k] = _stream_project_eval_mapping(v) if isinstance(v, Mapping) else v
+            continue
         if k not in _STREAM_EVAL_RESULT_KEYS or v is None:
             continue
         if k in _STREAM_MAP_ONLY_FIELDS:
@@ -362,6 +379,12 @@ class _StreamAggregator:
             "clean_count": 0,
         }
         self.qualifying: List[Dict[str, Any]] = []
+        # Cohort bookkeeping for the fully-streaming SQLite pipeline (DAV-1767):
+        # horizon/version keys live on units, so the cohort decision is made
+        # per-unit instead of via the module's post-filter over a row list.
+        self.cohort_shas: Set[str] = set()
+        self.cohort_keys: Set[str] = set()
+        self.cohort_homogeneous_key: Optional[str] = None
         # Mirror-aggregator cross-check hooks (test-only; see tests/test_h1b_gates.py)
         self.mirror: Optional[Any] = None
 
@@ -369,16 +392,29 @@ class _StreamAggregator:
         """Attach a mirror aggregator to verify identical row/unit traversal."""
         self.mirror = mirror
 
-    def feed(self, report: Mapping[str, Any]) -> None:
-        """Process one row through the staged pipeline (mirror of filter_v2_completed_reports)."""
+    def feed(self, report: Mapping[str, Any], cohort_spec: Optional[Mapping[str, Any]] = None) -> None:
+        """Process one row through the staged pipeline (mirror of filter_v2_completed_reports).
+
+        With ``cohort_spec`` (fully-streaming SQLite path), units outside the
+        cohort are skipped exactly like filter_reports_by_cohort would skip
+        them post-split; the ledger still counts every split unit (the module
+        path's ledger also counts pre-filter units), commit SHAs are
+        accumulated for surviving units.
+        """
         from tradingagents.agents.utils.shadow_credit import (
             classify_v2_report_d009_exclusion,
             classify_price_basis_exclusion,
             collect_hold_semantic_reasons,
             extract_report_id,
+            extract_sample_cohort,
+            is_legacy_unversioned_sample,
             normalize_horizon_label,
+            _cohort_canonical_key, _legacy_cohort_key,
+            COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY,
+            EVIDENCE_CONTRACT_V0, HORIZON_UNSPECIFIED, PRICE_BASIS_UNSPECIFIED,
             REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE,
         )
+        self._unit_is_eligible = False
 
         self.raw_count += 1
 
@@ -388,8 +424,52 @@ class _StreamAggregator:
         self.unit_count += len(units)
 
         for unit in units:
+            self._unit_is_eligible = False
             if self.mirror is not None:
                 self.mirror.observe_unit(unit, self)
+
+            if cohort_spec is not None:
+                # Per-unit cohort gate (module-equivalent, DAV-1322: the four
+                # cohort components incl. horizon live on the unit).
+                c_info = extract_sample_cohort(unit)
+                if cohort_spec["cohort_type"] == COHORT_LEGACY_UNVERSIONED:
+                    if not is_legacy_unversioned_sample(unit):
+                        continue
+                    if c_info["decision_model_version"] not in (None, "", COHORT_LEGACY_UNVERSIONED, DECISION_MODEL_LEGACY):
+                        continue
+                    if (c_info.get("horizon") or HORIZON_UNSPECIFIED) != (cohort_spec.get("horizon") or HORIZON_UNSPECIFIED):
+                        continue
+                else:
+                    if is_legacy_unversioned_sample(unit):
+                        continue
+                    if (
+                        c_info["decision_model_version"] != cohort_spec["decision_model_version"]
+                        or (c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0) != cohort_spec["evidence_contract_version"]
+                        or (c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED) != cohort_spec["price_basis_version"]
+                        or (c_info.get("horizon") or HORIZON_UNSPECIFIED) != (cohort_spec.get("horizon") or HORIZON_UNSPECIFIED)
+                    ):
+                        continue
+                sha = c_info["generated_by_commit_sha"]
+                if sha:
+                    self.cohort_shas.add(sha)
+            else:
+                c_info = extract_sample_cohort(unit)
+                sha = c_info["generated_by_commit_sha"]
+                if sha:
+                    self.cohort_shas.add(sha)
+                if self._unit_is_eligible:
+                    # Homogeneity is a property of the evaluation pool: only
+                    # D-009-eligible units contribute cohort keys (mirror of
+                    # the module path, which keys the post-filter sample pool).
+                    if is_legacy_unversioned_sample(unit):
+                        self.cohort_keys.add(_legacy_cohort_key(c_info.get("horizon")))
+                    else:
+                        self.cohort_keys.add(_cohort_canonical_key(
+                            c_info["decision_model_version"],
+                            c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0,
+                            c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED,
+                            c_info.get("horizon"),
+                        ))
 
             if not _module_is_qualifying_v2_report(unit):
                 self.non_v2_excluded += 1
@@ -404,6 +484,7 @@ class _StreamAggregator:
                 continue
 
             self.eligible_count += 1
+            self._unit_is_eligible = True
             hold_reasons = collect_hold_semantic_reasons(unit)
             pb_reason = classify_price_basis_exclusion(unit)
 
@@ -443,6 +524,14 @@ class _StreamAggregator:
         return self.eligible_count - self.ledger_rest["hold_semantic_isolated"]
 
     def ledger(self) -> Dict[str, int]:
+        if not self.cohort_homogeneous_key:
+            if len(self.cohort_keys) == 1:
+                self.cohort_homogeneous_key = next(iter(self.cohort_keys))
+            elif not self.cohort_keys:
+                self.cohort_homogeneous_key = None
+            # mixed keys stay None (homogeneity failed) — the gate evaluation
+            # reads it via cohort_meta["canonical_key"] == None and mirrors the
+            # module's is_cohort_homogeneous mixed-pool behavior.
         out: Dict[str, int] = {
             "raw_count": self.raw_count,
             "unit_count": self.unit_count,
@@ -462,6 +551,15 @@ class _StreamAggregator:
 
 # Alias kept for the test-suite import surface (DAV-1767).
 _STREAM_GROUP_KEY_NONE = object()
+
+# Writable handle for the fully-streaming SQLite pipeline: run_verify reads the
+# qualified sample pool from here instead of a returned list. Kept as a module
+# global because the pipeline function must stream rows without retaining them.
+_STREAM_LAST_QUALIFYING: Optional[List[Dict[str, Any]]] = None
+
+# excluded_counts of the most recent full-DB (cohort=None) streaming pass —
+# the module contract's JSON excluded_counts (pre-cohort).
+_FULL_EXCLUDED: Optional[Dict[str, int]] = None
 
 
 def _stream_run_gate_eval(
@@ -1007,6 +1105,118 @@ STREAM_ROW_COLUMNS: Tuple[str, ...] = tuple(
 )
 
 
+def _stream_run_sqlite_pipeline(
+    db_path: str,
+    *,
+    cohort: Optional[Union[str, Mapping[str, Any]]] = None,
+) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, Any]]:
+    """Fully-streaming SQLite pipeline (DAV-1767).
+
+    Streams completed rows one-by-one by primary key, projects and feeds each
+    row into the aggregator immediately; no full-residency load at any point.
+    Cohort filtering runs per-unit (equivalent to the module's post-filter on
+    the split-unit pool: horizon/version fields live on units). Returns
+    (excluded_counts, ledger, cohort_meta); the qualified pool is exposed via
+    ``_STREAM_LAST_QUALIFYING``.
+    """
+    global _STREAM_LAST_QUALIFYING
+    _STREAM_LAST_QUALIFYING = None
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from api.database import ReportDB, _ensure_report_schema
+
+    p = Path(db_path)
+    if not p.is_absolute():
+        if not p.exists():
+            p_root = Path(project_root) / p
+            if p_root.exists():
+                p = p_root
+    if not p.exists():
+        logger.error("指定的 SQLite 数据库路径不存在: %s", db_path)
+        raise FileNotFoundError(f"指定的 SQLite 数据库路径不存在: {db_path}")
+    abs_path = str(p.resolve())
+
+    spec_meta: Optional[Dict[str, Any]] = None
+    if cohort is not None and str(cohort).strip():
+        from tradingagents.agents.utils.shadow_credit import parse_cohort_spec
+
+        spec_meta = parse_cohort_spec(cohort)
+
+    agg = _StreamAggregator()
+    engine = create_engine(f"sqlite:///{abs_path}", connect_args={"check_same_thread": False})
+    try:
+        _ensure_report_schema(target_engine=engine)
+        SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        session = SessionCls()
+        try:
+            id_manifest: List[str] = [
+                rid
+                for (rid,) in session.query(ReportDB.id)
+                .filter(ReportDB.status == "completed")
+                .yield_per(500)
+            ]
+            logger.info(
+                "从 SQLite 数据库 %s 流式读取 %d 份 completed 报告（逐行主键回读，投影 %d 列）",
+                abs_path, len(id_manifest), len(STREAM_ROW_COLUMNS),
+            )
+            for rid in id_manifest:
+                row = (
+                    session.query(*[getattr(ReportDB, c) for c in STREAM_ROW_COLUMNS])
+                    .filter(ReportDB.id == rid)
+                    .first()
+                )
+                if row is None:
+                    continue
+                data: Dict[str, Any] = dict(zip(STREAM_ROW_COLUMNS, row))
+                if data.get("created_at") is not None:
+                    data["created_at"] = data["created_at"].isoformat()
+                if data.get("updated_at") is not None:
+                    data["updated_at"] = data["updated_at"].isoformat()
+                agg.feed(data, cohort_spec=spec_meta)
+                del row, data
+        finally:
+            session.close()
+    finally:
+        engine.dispose()
+
+    if spec_meta is not None:
+        # Cohort-filtered run: cohort_meta is the parsed spec's meta (identical
+        # shape to filter_reports_by_cohort's output, commit_shas accumulated
+        # during the streaming pass).
+        cohort_meta = dict(spec_meta)
+        cohort_meta["commit_shas"] = sorted(agg.cohort_shas)
+    else:
+        # Homogeneity over the qualified pool's cohort keys (collected during
+        # the streaming pass; the decision only needs the key set, not rows).
+        cohort_meta = {
+            "cohort_type": agg.cohort_homogeneous_key or "unspecified",
+            "canonical_key": agg.cohort_homogeneous_key or "unspecified",
+            "commit_shas": sorted(agg.cohort_shas),
+        }
+
+    global _FULL_EXCLUDED
+    _FULL_EXCLUDED = agg.excluded()
+    _STREAM_LAST_QUALIFYING = agg.qualifying
+    logger.info(
+        "【四段台账 (DAV-1322)】从指定数据库共检索到 %d 份原始报告，双档拆包后 %d 个评估单元 (双档报告 %d 份)，筛选出 %d 份结构化证据齐备单元 (不合格排除 %d 个)；贯彻 D-009 §5 筛选出 %d 份合格样本 (排除 %d 份: legacy_null=%d, abstain=%d, invalid_run=%d, data_error=%d, no_trade=%d, wait=%d)",
+        agg.raw_count,
+        agg.unit_count,
+        agg.dual_horizon_split_reports,
+        agg.qualifying_v2_count,
+        agg.non_v2_excluded,
+        agg.eligible_count,
+        agg.d009_excluded,
+        agg.excluded_counts.get("legacy_null", 0),
+        agg.excluded_counts.get("abstain", 0),
+        agg.excluded_counts.get("invalid_run", 0),
+        agg.excluded_counts.get("data_error", 0),
+        agg.excluded_counts.get("no_trade", 0),
+        agg.excluded_counts.get("wait", 0),
+    )
+    return agg.excluded(), agg.ledger(), cohort_meta
+
+
 def load_reports_from_db(
     db_path: Optional[str] = None,
     input_file: Optional[str] = None,
@@ -1359,42 +1569,60 @@ def run_verify(
     keys and verdict semantics are identical to the module evaluation path;
     equivalence is enforced by the mirror-aggregator tests.
     """
-    loaded_res = load_reports_from_db(
-        db_path=db_path,
-        input_file=input_file,
-        input_dir=input_dir,
-        return_ledger=True,
-    )
-    if isinstance(loaded_res, tuple) and len(loaded_res) == 3:
-        reports, initial_excluded, ledger = loaded_res
-    elif isinstance(loaded_res, tuple) and len(loaded_res) == 2:
-        reports, initial_excluded = loaded_res
-        ledger = {}
+    # DAV-1767: for the SQLite path the whole pipeline runs row-by-row (no
+    # full-residency load); file/dir inputs stay list-based (evaluation JSON).
+    if db_path and str(db_path).strip():
+        # Two-pass streaming (DAV-1767): pass 1 = full-DB pipeline for the
+        # FULL ledger + excluded_counts (identical to the module path's JSON
+        # accounting, which always reflects the whole DB regardless of
+        # cohort); pass 2 = cohort-scoped pipeline for the evaluation pool.
+        _, full_ledger, full_meta = _stream_run_sqlite_pipeline(db_path, cohort=None)
+        full_excluded = dict(_FULL_EXCLUDED or {})
+        _, _, cohort_meta = _stream_run_sqlite_pipeline(
+            db_path, cohort=cohort,
+        )
+        agg_qualifying_ref = _STREAM_LAST_QUALIFYING
+        samples = list(agg_qualifying_ref or [])
+        # Module contract (DAV-783/1322): excluded_counts in the JSON come from
+        # the FULL-DB module filter (pre-cohort); the cohort pass's D-009
+        # counters are diagnostic only.
+        initial_excluded, ledger = full_excluded, full_ledger
     else:
-        reports, initial_excluded, ledger = loaded_res, {}, {}
+        loaded_res = load_reports_from_db(
+            input_file=input_file,
+            input_dir=input_dir,
+            return_ledger=True,
+        )
+        if isinstance(loaded_res, tuple) and len(loaded_res) == 3:
+            reports, initial_excluded, ledger = loaded_res
+        elif isinstance(loaded_res, tuple) and len(loaded_res) == 2:
+            reports, initial_excluded = loaded_res
+            ledger = {}
+        else:
+            reports, initial_excluded, ledger = loaded_res, {}, {}
 
-    cohort_meta: Dict[str, Any] = {}
-    if cohort is not None and str(cohort).strip():
-        filtered_reports, cohort_meta = filter_reports_by_cohort(reports, cohort=cohort)
-        reports = filtered_reports
-    else:
-        # Check homogeneity if cohort not specified
-        is_homo, c_key = is_cohort_homogeneous(reports)
-        cohort_meta = {
-            "cohort_type": c_key or "unspecified",
-            "canonical_key": c_key or "unspecified",
-            "commit_shas": sorted({
-                extract_sample_cohort(r)["generated_by_commit_sha"]
-                for r in reports
-                if extract_sample_cohort(r)["generated_by_commit_sha"]
-            }),
-        }
+        cohort_meta = {}
+        if cohort is not None and str(cohort).strip():
+            filtered_reports, cohort_meta = filter_reports_by_cohort(reports, cohort=cohort)
+            reports = filtered_reports
+        else:
+            # Check homogeneity if cohort not specified
+            is_homo, c_key = is_cohort_homogeneous(reports)
+            cohort_meta = {
+                "cohort_type": c_key or "unspecified",
+                "canonical_key": c_key or "unspecified",
+                "commit_shas": sorted({
+                    extract_sample_cohort(r)["generated_by_commit_sha"]
+                    for r in reports
+                    if extract_sample_cohort(r)["generated_by_commit_sha"]
+                }),
+            }
 
-    # Streaming pipeline: one pass over the (cohort-filtered) reports.
-    agg = _StreamAggregator()
-    for r in reports:
-        agg.feed(r)
-    samples = agg.qualifying
+        # Streaming pipeline: one pass over the (cohort-filtered) reports.
+        agg = _StreamAggregator()
+        for r in reports:
+            agg.feed(r)
+        samples = agg.qualifying
 
     gate_eval = _stream_run_gate_eval(
         samples,
