@@ -306,6 +306,13 @@ def compute_system_completeness(reports: Sequence[Dict[str, Any]]) -> Dict[str, 
         if rd_raw:
             if isinstance(rd_raw, dict):
                 res_data = rd_raw
+            elif isinstance(rd_raw, (bytes, bytearray, memoryview)):
+                # B-6b: compressed rows arrive as BLOBs.
+                from tradingagents.storage.compressed_json import decode_result_data
+                try:
+                    res_data = decode_result_data(rd_raw) or {}
+                except Exception:
+                    pass
             elif isinstance(rd_raw, str):
                 try:
                     res_data = json.loads(rd_raw)
@@ -1919,6 +1926,7 @@ class V03ReturnMeasureEngine:
             has_user_id = "user_id" in cols
             has_status = "status" in cols
             has_trade_date = "trade_date" in cols
+            has_zst = "result_data_zst" in cols
 
             select_cols = [
                 "id",
@@ -1931,7 +1939,10 @@ class V03ReturnMeasureEngine:
                 "confidence",
                 "target_price",
                 "stop_loss_price",
-                "result_data",
+                # B-6b: COALESCE keeps compressed rows (zst) and legacy
+                # plaintext rows working in one query.
+                ("COALESCE(result_data_zst, result_data) AS result_data"
+                 if has_zst else "result_data"),
                 "created_at",
             ]
             query = f"SELECT {', '.join(select_cols)} FROM reports"
@@ -2061,7 +2072,14 @@ class V03ReturnMeasureEngine:
         res_data: Dict[str, Any] = {}
         res_data_raw = report.get("result_data")
         if res_data_raw:
-            if isinstance(res_data_raw, str):
+            if isinstance(res_data_raw, (bytes, bytearray, memoryview)):
+                # B-6b: compressed rows arrive as BLOBs.
+                from tradingagents.storage.compressed_json import decode_result_data
+                try:
+                    res_data = decode_result_data(res_data_raw) or {}
+                except Exception:
+                    res_data = {}
+            elif isinstance(res_data_raw, str):
                 try:
                     res_data = json.loads(res_data_raw)
                 except Exception:

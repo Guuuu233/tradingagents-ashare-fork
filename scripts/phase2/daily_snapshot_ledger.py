@@ -70,6 +70,23 @@ from typing import Any, Iterable, Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+from tradingagents.storage.compressed_json import (  # noqa: E402
+    decode_frame_bytes,
+    result_data_select_expr,
+)
+
+def _result_data_text(row_value) -> str:
+    """Normalize the physical result_data cell to its serialized JSON text.
+
+    Post-B-6b rows store compressed bytes in ``result_data_zst`` while the
+    plaintext ``result_data`` column may be NULL (P4). Reads here always
+    go through the compressed column when the row carries it, falling back
+    to the plaintext text for unmigrated/legacy rows (§3.3).
+    """
+    if isinstance(row_value, (bytes, bytearray, memoryview)):
+        return decode_frame_bytes(bytes(row_value)).decode("utf-8")
+    return row_value
+
 DEFAULT_DB = REPO_ROOT / "data" / "tradingagents.db"
 DEFAULT_LEDGER_DIR = REPO_ROOT / "work" / "phase2-ledger"
 LEDGER_FILE = "forward_ledger.jsonl"
@@ -636,11 +653,16 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         # New reports = completed since the latest sealed created_at we know,
         # or simply any completed id not yet sealed (robust to backfills).
+        # B-6b: read COALESCE(zst, plaintext) on migrated schemas —
+        # compressed rows decode to the same JSON text the plaintext column
+        # used to carry. On pre-migration schemas the expression degrades to
+        # plain ``result_data``.
         rows = con.execute(
             "SELECT id, user_id, symbol, industry, trade_date, status,"
             "       analysis_status, decision, direction, probability,"
             "       trade_action, risk_status, final_trade_decision,"
-            "       created_at, updated_at, result_data"
+            "       created_at, updated_at,"
+            f"       {result_data_select_expr(con)} AS result_data"
             "  FROM reports WHERE status='completed' ORDER BY created_at"
         ).fetchall()
         new_rows = [r for r in rows if r["id"] not in sealed_ids]
@@ -677,7 +699,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         appended = 0
         with open(ledger_path, "a", encoding="utf-8") as out:
             for row in new_rows:
-                rec = build_record(row, row["result_data"], sealed_at,
+                rec = build_record(row, _result_data_text(row["result_data"]), sealed_at,
                                    snapshot_date, trade_dates)
                 chain_hash = _sha256_bytes(
                     (prev_hash + rec[CHAIN_FIELD]).encode("utf-8"))
@@ -765,12 +787,14 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         for r in rows:
             rid = r.get("id") or r.get("report_id")
             want = r.get("result_data_sha256")
-            row = con.execute("SELECT result_data FROM reports WHERE id=?",
-                              (rid,)).fetchone()
+            row = con.execute(
+                f"SELECT {result_data_select_expr(con)} FROM reports WHERE id=?",
+                (rid,)).fetchone()
             if not row:
                 absent_in_db.append(rid)
                 continue
-            got = _sha256_bytes(row[0].encode("utf-8"))
+            raw_text = _result_data_text(row[0])
+            got = _sha256_bytes(raw_text.encode("utf-8"))
             if got == want:
                 matched += 1
             else:

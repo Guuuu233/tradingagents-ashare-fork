@@ -6,8 +6,17 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Generator, Optional
 
-from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, UniqueConstraint, event, text
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, LargeBinary, UniqueConstraint, event, text
+from sqlalchemy.orm import declarative_base, deferred, sessionmaker, Session
+
+from tradingagents.storage.compressed_json import (
+    B6B_COLUMN_DDL,
+    B6B_ORDERED_COLUMNS,
+    PG_COLUMN_DDL,
+    ZstdJSON,
+    report_storage_mode,
+    sync_report_storage_row,
+)
 
 # Database URL - default to SQLite for simplicity
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tradingagents.db")
@@ -141,6 +150,15 @@ def _ensure_report_schema(target_engine=None) -> None:
             "trade_action": "VARCHAR(32)",
             "risk_status": "VARCHAR(32)",
         }
+        # DAV-1770 B-6b: compressed-storage columns + materialized list-page
+        # scalars. BLOB is dialect-specific (BYTEA / LONGBLOB); pg_* DDL is
+        # shared from the design table (§2.2).
+        b6b = dict(B6B_COLUMN_DDL)
+        if dialect in {"postgresql", "postgres"}:
+            b6b["result_data_zst"] = "BYTEA"
+        elif dialect in {"mysql", "mariadb"}:
+            b6b["result_data_zst"] = "LONGBLOB"
+        mapping.update(b6b)
         return mapping[name]
 
     # Critical status columns first so a later DDL failure cannot skip them.
@@ -161,6 +179,8 @@ def _ensure_report_schema(target_engine=None) -> None:
         "smart_money_report",
         "game_theory_report",
         "volume_price_report",
+        # DAV-1770 B-6b: 2 compressed-storage cols + 31 materialized pg_* cols
+        *B6B_ORDERED_COLUMNS,
     ]
     critical = {"analysis_status", "trade_action", "risk_status", "industry"}
 
@@ -491,7 +511,61 @@ class ReportDB(Base):
     risk_status = Column(String(32), nullable=True)
     
     # Full analysis results stored as JSON
-    result_data = Column(JSON, nullable=True)
+    # DAV-1770 B-6b: REPORT_STORAGE_MODE selects the physical column this
+    # attribute binds at class-definition time. plaintext → result_data
+    # (JSON, legacy). compressed → result_data_zst (ZstdJSON BLOB).
+    # The non-read-side column is kept byte-identical by the flush-time
+    # shadow sync in compressed_json (dual write, §4 P1–P3).
+    if report_storage_mode() == "compressed":
+        result_data = Column("result_data_zst", ZstdJSON, key="result_data", nullable=True)
+        # Shadow plaintext column: deferred so no read path ever SELECTs
+        # the multi-MB plaintext unless explicitly undefer()ed.
+        result_data_plaintext = deferred(
+            Column("result_data", JSON, key="result_data_plaintext", nullable=True)
+        )
+    else:
+        result_data = Column("result_data", JSON, key="result_data", nullable=True)
+        # Shadow compressed column: deferred raw BLOB, written by the flush
+        # hook; never loaded by read paths.
+        result_data_zst = deferred(
+            Column("result_data_zst", LargeBinary,
+                   key="result_data_zst", nullable=True)
+        )
+    result_data_zst_len = Column(Integer, nullable=True)
+
+    # DAV-1770 B-6b §2.2: materialized list-page scalars (populated by
+    # sync_report_storage_row on every result_data write).
+    pg_st_trade_action = Column(String(32), nullable=True)
+    pg_st_analysis_status = Column(String(32), nullable=True)
+    pg_st_risk_status = Column(String(32), nullable=True)
+    pg_st_direction = Column(String(16), nullable=True)
+    pg_st_decision_status = Column(JSON, nullable=True)
+    pg_st_reason_codes = Column(JSON, nullable=True)
+    pg_st_gate_status = Column(String(32), nullable=True)
+    pg_st_status = Column(String(20), nullable=True)
+    pg_st_confidence = Column(Integer, nullable=True)
+    pg_st_target_price = Column(Float, nullable=True)
+    pg_st_stop_loss_price = Column(Float, nullable=True)
+    pg_st_pre_gate_action = Column(String(32), nullable=True)
+    pg_st_manager_action = Column(String(32), nullable=True)
+    pg_mt_trade_action = Column(String(32), nullable=True)
+    pg_mt_analysis_status = Column(String(32), nullable=True)
+    pg_mt_risk_status = Column(String(32), nullable=True)
+    pg_mt_direction = Column(String(16), nullable=True)
+    pg_mt_decision_status = Column(JSON, nullable=True)
+    pg_mt_reason_codes = Column(JSON, nullable=True)
+    pg_mt_gate_status = Column(String(32), nullable=True)
+    pg_mt_status = Column(String(20), nullable=True)
+    pg_mt_confidence = Column(Integer, nullable=True)
+    pg_mt_target_price = Column(Float, nullable=True)
+    pg_mt_stop_loss_price = Column(Float, nullable=True)
+    pg_mt_pre_gate_action = Column(String(32), nullable=True)
+    pg_mt_manager_action = Column(String(32), nullable=True)
+    pg_top_reason_codes = Column(JSON, nullable=True)
+    pg_confidence = Column(Integer, nullable=True)
+    pg_probability = Column(Float, nullable=True)
+    pg_target_price = Column(Float, nullable=True)
+    pg_stop_loss_price = Column(Float, nullable=True)
 
     # LLM-extracted structured data
     risk_items = Column(JSON, nullable=True)   # [{"name": "...", "level": "high|medium|low", "description": "..."}]
@@ -556,6 +630,40 @@ class ReportDB(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+# DAV-1770 B-6b: dual-write shadow sync (compressed column ↔ plaintext
+# column) + 31 pg_* materialized columns on every result_data write.
+# Registered once, at class-definition; sync_report_storage_row decides
+# which direction to mirror based on REPORT_STORAGE_MODE.
+@event.listens_for(ReportDB, "before_insert", propagate=True)
+def _b6b_sync_on_insert(mapper, connection, target):
+    sync_report_storage_row(target, is_pending=True)
+
+
+@event.listens_for(ReportDB, "before_update", propagate=True)
+def _b6b_sync_on_update(mapper, connection, target):
+    sync_report_storage_row(target, is_pending=False)
+
+
+# Load-time plaintext fallback for migration-window edge rows
+# (result_data_zst IS NULL AND result_data IS NOT NULL). Only wired in
+# compressed mode — in plaintext mode the attribute already IS plaintext.
+if report_storage_mode() == "compressed":
+    from sqlalchemy.orm.attributes import set_committed_value as _scv
+
+    @event.listens_for(ReportDB, "load", restore_load_context=True)
+    def _b6b_plaintext_fallback(target, context):
+        from tradingagents.storage.compressed_json import storage_fallback_enabled
+        if not storage_fallback_enabled():
+            return
+        if target.result_data is not None:
+            return
+        # Deferred attribute access emits a narrow SELECT for the plaintext
+        # column only — never part of any read path's column list.
+        val = target.result_data_plaintext
+        if val is not None:
+            _scv(target, "result_data", val)
 
 
 class UserDB(Base):

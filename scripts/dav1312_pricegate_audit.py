@@ -38,6 +38,15 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tradingagents.storage.compressed_json import decode_result_data  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # 人工判定表：ref_id -> (cls, subtype, note)
 # cls: a=正确拦截, b=抽取误报, c=前复权偏移(1309), d=其他
@@ -294,9 +303,9 @@ def main() -> None:
     for i, line in enumerate(rows):
         rid, horizon, src = line.split(":")
         sym, td, rd_raw = con.execute(
-            "select symbol, trade_date, result_data from reports where id=?", (rid,)
+            "select symbol, trade_date, COALESCE(result_data_zst, result_data) from reports where id=?", (rid,)
         ).fetchone()
-        rd = json.loads(rd_raw)
+        rd = decode_result_data(rd_raw) or {}
         hkey = "short_term" if horizon == "short_term" else "medium_term"
         h = rd.get(hkey) or {}
         gate = h.get("price_basis_gate") or {}

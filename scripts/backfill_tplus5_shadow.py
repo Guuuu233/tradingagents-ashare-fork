@@ -43,6 +43,44 @@ from tradingagents.agents.utils.shadow_credit import (
     is_qualifying_v2_report, detect_tplus5_suspension,
 )
 from tradingagents.dataflows.trade_calendar import now_cn, cn_market_phase, trading_days_forward
+from tradingagents.storage.compressed_json import (
+    compress_json_bytes,
+    decode_frame_bytes,
+    result_data_select_expr,
+)
+
+
+def _rd_text(raw):
+    """Normalize a result_data cell (bytes BLOB or text) to serialized JSON text.
+
+    Post-B-6b reads use the zst column when it exists; the BLOB decodes to
+    exactly the text the plaintext column carried. On pre-migration schemas
+    callers select plain ``result_data``.
+    """
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        return decode_frame_bytes(bytes(raw)).decode("utf-8")
+    return raw
+
+
+def _rd_col(conn) -> str:
+    """SELECT expression for the result_data JSON payload on this DB."""
+    return result_data_select_expr(conn)
+
+
+def _rd_update(conn, new_text, report_id):
+    """UPDATE result_data (+ shadow zst columns when the schema has them)."""
+    if _rd_col(conn) != "result_data":
+        zst = compress_json_bytes(new_text.encode("utf-8"))
+        conn.execute(
+            "UPDATE reports SET result_data=?, result_data_zst=?,"
+            " result_data_zst_len=? WHERE id=?",
+            (new_text, zst, len(new_text.encode("utf-8")), report_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE reports SET result_data=? WHERE id=?",
+            (new_text, report_id),
+        )
 
 MEASUREMENT_KEYS = frozenset({
     "t_plus_5_date", "t_plus_5_price", "t_plus_5_status", "is_t_plus_5_due",
@@ -441,7 +479,10 @@ def _iter_db(path):
             return
         last_id = row['id']
         result = dict(row)
-        result['result_data'] = json.loads(result['result_data'] or 'null')
+        # B-6b: prefer compressed bytes; fall back to plaintext column.
+        rd_raw = result.get('result_data_zst') if 'result_data_zst' in result else None
+        rd_raw = rd_raw or result.get('result_data')
+        result['result_data'] = json.loads(_rd_text(rd_raw) or 'null')
         yield result
 
 
@@ -463,8 +504,10 @@ def _iter_db_raw(path):
         last_id = row['id']
         result = dict(row)
         result["rowid"] = row["__rowid__"]
-        result["raw"] = result["result_data"]
-        result["result_data"] = json.loads(result["result_data"] or 'null')
+        rd_raw = result.get('result_data_zst') if 'result_data_zst' in result else None
+        rd_raw = rd_raw or result.get('result_data')
+        result["raw"] = _rd_text(rd_raw)
+        result["result_data"] = json.loads(result["raw"] or 'null')
         yield result
 
 
@@ -539,10 +582,10 @@ def _write_row(conn, report_id, delta, audit, exported_sha=None):
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = conn.execute("SELECT result_data FROM reports WHERE id=? AND status='completed'", (report_id,)).fetchone()
+        row = conn.execute(f"SELECT {_rd_col(conn)} FROM reports WHERE id=? AND status='completed'", (report_id,)).fetchone()
         if row is None:
             raise ValueError("row disappeared")
-        original = row[0]
+        original = _rd_text(row[0])
         if exported_sha is not None:
             current_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
             if current_sha != exported_sha:
@@ -560,8 +603,8 @@ def _write_row(conn, report_id, delta, audit, exported_sha=None):
                   "after_sha256": hashlib.sha256(updated.encode()).hexdigest()}
         audit.write(json.dumps(record, ensure_ascii=False) + "\n")
         audit.flush(); os.fsync(audit.fileno())
-        conn.execute("UPDATE reports SET result_data=? WHERE id=?", (updated, report_id))
-        stored = conn.execute("SELECT result_data FROM reports WHERE id=?", (report_id,)).fetchone()[0]
+        _rd_update(conn, updated, report_id)
+        stored = _rd_text(conn.execute(f"SELECT {_rd_col(conn)} FROM reports WHERE id=?", (report_id,)).fetchone()[0])
         if non_tplus5_bytes(original) != non_tplus5_bytes(stored):
             raise ValueError("non-T+5 post-write byte mismatch")
         conn.commit()
@@ -672,12 +715,12 @@ def export_pre_images(db_path, planned, *, export_dir=None):
             for item in planned:
                 report_id = item["id"]
                 row = conn.execute(
-                    "SELECT rowid AS __rowid__, result_data FROM reports WHERE id=?",
+                    f"SELECT rowid AS __rowid__, {_rd_col(conn)} AS result_data FROM reports WHERE id=?",
                     (report_id,)).fetchone()
                 if row is None:
                     raise RuntimeError(
                         f"planned row {report_id} vanished before pre-export")
-                raw_text = row["result_data"]
+                raw_text = _rd_text(row["result_data"])
                 raw_bytes = raw_text.encode("utf-8")
                 sha = hashlib.sha256(raw_bytes).hexdigest()
                 # 总控返修：导出原文必须与 planned 记录的第一遍读取原文一致，
@@ -848,13 +891,13 @@ def restore_from_export(db_path, export_file, *, sha256=None,
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 row = conn.execute(
-                    "SELECT result_data FROM reports WHERE id=? AND status='completed'",
+                    f"SELECT {_rd_col(conn)} FROM reports WHERE id=? AND status='completed'",
                     (report_id,)).fetchone()
                 if row is None:
                     conn.rollback()
                     result["missing"] += 1
                     continue
-                current = row[0]
+                current = _rd_text(row[0])
                 if current == record["result_data"]:
                     conn.rollback()
                     result["already_current"] += 1
@@ -864,10 +907,9 @@ def restore_from_export(db_path, export_file, *, sha256=None,
                     conn.rollback()
                     result["mismatched"] += 1
                     continue
-                conn.execute("UPDATE reports SET result_data=? WHERE id=?",
-                             (restored, report_id))
-                stored = conn.execute(
-                    "SELECT result_data FROM reports WHERE id=?", (report_id,)).fetchone()[0]
+                _rd_update(conn, restored, report_id)
+                stored = _rd_text(conn.execute(
+                    f"SELECT {_rd_col(conn)} FROM reports WHERE id=?", (report_id,)).fetchone()[0])
                 if stored != record["result_data"] or \
                         non_tplus5_bytes(current) != non_tplus5_bytes(stored):
                     raise ValueError("post-restore verification failed")

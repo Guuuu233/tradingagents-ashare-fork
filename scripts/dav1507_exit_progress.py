@@ -116,9 +116,14 @@ def open_ro(path: str) -> sqlite3.Connection:
 
 
 def iter_report_rows(con, account, start=None, end=None, ids=None):
-    """Yield (report_id, symbol, trade_date, status, created_at, result_data)."""
-    cols = "id, symbol, trade_date, status, created_at, result_data"
-    where, params = ["user_id=?", "json_valid(result_data)"], [account]
+    """Yield (report_id, symbol, trade_date, status, created_at, result_data).
+
+    B-6b: the result_data slot yields COALESCE(zst bytes, plaintext text);
+    ``json_valid(result_data)`` can't gate BLOBs, so validity is checked at
+    decode time in ``slim_report``.
+    """
+    cols = "id, symbol, trade_date, status, created_at, COALESCE(result_data_zst, result_data) AS result_data"
+    where, params = ["user_id=?", "result_data IS NOT NULL OR result_data_zst IS NOT NULL"], [account]
     if start:
         where.append("trade_date >= ?")
         params.append(start)
@@ -147,8 +152,9 @@ def slim_report(row):
     memory stays bounded on --all-history.
     """
     rid, sym, td, status, created, rd_raw = row
+    from tradingagents.storage.compressed_json import decode_result_data
     try:
-        rd = json.loads(rd_raw)
+        rd = decode_result_data(rd_raw)
     except Exception:
         return None
     slim = {

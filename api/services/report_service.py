@@ -22,6 +22,10 @@ from sqlalchemy.orm import Session, load_only
 
 from api.database import ReportDB
 from tradingagents.llm_clients.thinking_cleaner import clean_report_result_data
+from tradingagents.storage.compressed_json import (
+    PG_FRAGMENT_COLUMN_MAP,
+    report_storage_mode,
+)
 from tradingagents.storage.result_data_compat import (
     canonicalize_for_single_write,
     is_canonical_storage,
@@ -2977,41 +2981,67 @@ _POST_GATE_FRAGMENT_PATHS: Dict[str, str] = {
 }
 
 
+def _post_gate_frag_expressions():
+    """Fragment slot → query expression.
+
+    compressed mode: materialized ``pg_*`` columns (§2.2 — list page never
+    decompresses). plaintext mode: ``json_extract`` on the plaintext column
+    — required during P1–P2, when ``pg_*`` columns exist but hold no data
+    for pre-existing rows until the B-6c backfill lands (reading them early
+    would blank the post-gate display). Column-existence is guaranteed in
+    compressed mode because P3 cannot be entered before P2 backfill (§4).
+    """
+    if report_storage_mode() == "compressed":
+        return {
+            name: getattr(ReportDB, col_name)
+            for name, col_name in PG_FRAGMENT_COLUMN_MAP.items()
+        }
+    return {
+        name: func.json_extract(ReportDB.result_data, path)
+        for name, path in _POST_GATE_FRAGMENT_PATHS.items()
+    }
+
+
 def load_post_gate_fragments(
     db: Session,
     report_ids: List[str],
 ) -> Dict[str, Dict[str, Any]]:
-    """Fetch only the post-gate fields for the given reports via SQLite
-    ``json_extract`` — one query, scalar fields + small JSON fragments; the
-    multi-MB ``result_data`` column is never loaded or parsed wholesale.
-    Returns ``{report_id: result_data_fragment}`` suitable for
-    :func:`apply_post_gate_read_fallback`."""
+    """Fetch only the post-gate fields for the given reports — one query,
+    scalar fields + small JSON fragments; the multi-MB ``result_data``
+    column is never loaded or parsed wholesale. Returns
+    ``{report_id: result_data_fragment}`` suitable for
+    :func:`apply_post_gate_read_fallback`.
+
+    Source column set is mode-dependent (see
+    :func:`_post_gate_frag_expressions`); fragment assembly is identical
+    for both modes — the ``or`` merge of the two manager-verdict slots and
+    the dual-slot top reason_codes write are byte-for-byte aligned with
+    the pre-compression behaviour (§2.3)."""
     if not report_ids:
         return {}
-    from sqlalchemy import func
 
-    exprs = {
-        name: func.json_extract(ReportDB.result_data, path)
-        for name, path in _POST_GATE_FRAGMENT_PATHS.items()
-    }
+    exprs = _post_gate_frag_expressions()
     rows = (
         db.query(ReportDB.id, *exprs.values())
         .filter(ReportDB.id.in_(list(report_ids)))
         .all()
     )
+    # json_extract returns JSON scalars/objects as TEXT on SQLite — _js
+    # parses them. Materialized JSON columns already yield dict/list, so
+    # _js is a harmless pass-through there.
+    def _js(v: Any) -> Any:
+        if isinstance(v, str) and v[:1] in ("{", "["):
+            try:
+                return json.loads(v)
+            except (ValueError, TypeError):
+                return v
+        return v
+
     out: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         vals = dict(zip(exprs.keys(), row[1:]))
 
-        def _js(v: Any) -> Any:
-            if isinstance(v, str) and v[:1] in ("{", "["):
-                try:
-                    return json.loads(v)
-                except (ValueError, TypeError):
-                    return v
-            return v
-
-        frag: Dict[str, Any] = {
+        frag: Dict[str, Dict[str, Any]] = {
             "short_term": {
                 "trade_action": vals["st_trade_action"],
                 "analysis_status": vals["st_analysis_status"],
