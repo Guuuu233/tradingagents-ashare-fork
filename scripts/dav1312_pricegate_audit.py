@@ -45,7 +45,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tradingagents.storage.compressed_json import decode_result_data  # noqa: E402
+from tradingagents.storage.compressed_json import (  # noqa: E402
+    decode_result_data,
+    result_data_select_expr,
+)
 
 # ---------------------------------------------------------------------------
 # 人工判定表：ref_id -> (cls, subtype, note)
@@ -300,10 +303,11 @@ def main() -> None:
 
     rows = [l.strip() for l in open(args.corpus) if l.strip()]
     table: List[Dict[str, Any]] = []
+    rd_expr = result_data_select_expr(con)
     for i, line in enumerate(rows):
         rid, horizon, src = line.split(":")
         sym, td, rd_raw = con.execute(
-            "select symbol, trade_date, COALESCE(result_data_zst, result_data) from reports where id=?", (rid,)
+            f"select symbol, trade_date, {rd_expr} from reports where id=?", (rid,)
         ).fetchone()
         rd = decode_result_data(rd_raw) or {}
         hkey = "short_term" if horizon == "short_term" else "medium_term"

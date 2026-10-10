@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+
+# 【压缩存储前适用】(DAV-1773 B-6d)：本脚本直读 reports.result_data 明文列，
+# 仅适用于未启用压缩存储（REPORT_STORAGE_MODE=compressed）的数据库。
+# 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
+# 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
+# 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
 """Deterministic audit of persisted investment debates. No LLM calls."""
 from __future__ import annotations
 import argparse, json, re, sqlite3
