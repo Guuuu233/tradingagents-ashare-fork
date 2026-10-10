@@ -40,9 +40,9 @@
   <key>KeepAlive</key>
   <dict>
     <key>SuccessfulExit</key><false/>
+    <!-- RunAtLoad 键已删（DAV-1802 🟡-1）：KeepAlive 隐含 RunAtLoad=true，
+         显式写 false 不产生任何效果且误导阅读——bootstrap 即首启动。 -->
   </dict>
-  <!-- RunAtLoad 键已删（DAV-1802 🟡-1）：KeepAlive 隐含 RunAtLoad=true，
-       显式写 false 不产生任何效果且误导阅读——bootstrap 即首启动。 -->
 
   <!-- 限流停手（exit 0）后的周期探测：窗口过期即自动恢复，最长 600s 粒度。
        正常运行/崩溃重拉路径不受影响（KeepAlive 语义不变）。 -->
