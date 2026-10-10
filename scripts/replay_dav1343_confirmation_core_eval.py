@@ -24,6 +24,7 @@ import sys
 import copy
 
 sys.path.insert(0, ".")
+from tradingagents.storage.compressed_json import decode_result_data as _decode_rd  # noqa: E402
 from tradingagents.agents.managers.research_manager import (  # noqa: E402
     apply_manager_double_count_guard,
     validate_manager_expectation_revision_consumption,
@@ -59,8 +60,9 @@ def _mgr_bucket(cid, verdict):
 def main():
     con = sqlite3.connect(DB, uri=True)
     rows = con.execute(
-        "SELECT id, symbol, trade_date, created_at, result_data "
-        "FROM reports WHERE status='completed' AND result_data IS NOT NULL"
+        "SELECT id, symbol, trade_date, created_at, "
+        "COALESCE(result_data_zst, result_data) AS result_data "
+        "FROM reports WHERE status='completed' AND (result_data IS NOT NULL OR result_data_zst IS NOT NULL)"
     ).fetchall()
 
     out = sys.stdout
@@ -69,7 +71,7 @@ def main():
 
     for rid, sym, td, created, rd in rows:
         try:
-            d = json.loads(rd)
+            d = _decode_rd(rd)
         except Exception:
             continue
         if not isinstance(d, dict):

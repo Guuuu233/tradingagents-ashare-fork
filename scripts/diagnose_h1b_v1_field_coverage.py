@@ -73,14 +73,12 @@ def load_reports_ro(db_path: str, since: Optional[str] = None) -> List[Dict[str,
         con.close()
 
     reports: List[Dict[str, Any]] = []
+    from tradingagents.storage.compressed_json import decode_result_data
     for r in rows:
         d = dict(r)
-        rd = d.get("result_data")
-        if isinstance(rd, str):
-            try:
-                d["result_data"] = json.loads(rd)
-            except Exception:
-                d["result_data"] = None
+        # B-6b: prefer compressed column; fall back to plaintext.
+        rd = d.get("result_data_zst") or d.get("result_data")
+        d["result_data"] = decode_result_data(rd)
         reports.append(d)
     return reports
 
