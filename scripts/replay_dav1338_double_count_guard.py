@@ -74,11 +74,15 @@ def _same_dir_support(verdict, claims):
 
 
 def main():
+    from tradingagents.storage.compressed_json import result_data_select_expr
     con = sqlite3.connect(DB, uri=True)
+    rd_expr = result_data_select_expr(con)
     rows = con.execute(
-        "SELECT id, symbol, trade_date, created_at, "
-        "COALESCE(result_data_zst, result_data) AS result_data "
-        "FROM reports WHERE status='completed' AND (result_data IS NOT NULL OR result_data_zst IS NOT NULL)"
+        f"SELECT id, symbol, trade_date, created_at, "
+        f"{rd_expr} AS result_data "
+        "FROM reports WHERE status='completed' "
+        f"AND ({rd_expr} IS NOT NULL) "
+        "ORDER BY id"
     ).fetchall()
 
     dist_before, dist_after = Counter(), Counter()

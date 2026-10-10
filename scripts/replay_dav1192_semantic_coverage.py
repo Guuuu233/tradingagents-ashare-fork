@@ -16,6 +16,10 @@ import sys
 from collections import Counter, defaultdict
 
 sys.path.insert(0, ".")
+from tradingagents.storage.compressed_json import (  # noqa: E402
+    decode_result_data,
+    result_data_select_expr,
+)
 from tradingagents.agents.utils.evidence_verifier import (  # noqa: E402
     SEM_PREVIEW_ADOPT,
     SEM_PREVIEW_PARTIAL,
@@ -37,16 +41,18 @@ def main():
     con = sqlite3.connect(DB, uri=True)
     cur = con.cursor()
     # B-6b: json_extract paths resolve in Python after decode — compressed
-    # BLOBs can't be json_extract'ed in SQL. COALESCE keeps legacy plaintext
-    # rows working in the same query.
+    # BLOBs can't be json_extract'ed in SQL. result_data_select_expr keeps
+    # legacy plaintext-only schemas working in the same query (B-6d).
+    rd_expr = result_data_select_expr(con)
     rows = cur.execute(
-        """
+        f"""
       SELECT id, symbol, trade_date, created_at,
-        COALESCE(result_data_zst, result_data) AS rd,
+        {rd_expr} AS rd,
         market_report, sentiment_report, news_report, fundamentals_report,
         macro_report, smart_money_report, volume_price_report, game_theory_report
       FROM reports WHERE status='completed'
-        AND COALESCE(result_data_zst, result_data) IS NOT NULL
+        AND {rd_expr} IS NOT NULL
+        ORDER BY id
         """
     ).fetchall()
 
@@ -57,6 +63,15 @@ def main():
                 return None
             cur = cur.get(p)
         return cur
+
+    def _cdict(c):
+        """Deterministic Counter print: keys sorted (B-6d byte-equality gate).
+
+        ``dict(counter)`` iterates in insertion order, which follows the scan
+        order; sorted keys make the report byte-stable across storage
+        variants and across runs of the same DB.
+        """
+        return dict(sorted(c.items()))
 
     # B2/B3 冻结批识别（Phase A 同款：同 commit + 同分钟窗口 >=5 份）
     batches = defaultdict(list)
@@ -139,29 +154,29 @@ def main():
               f"bear {bs['bearish']}/{tot['bearish']} "
               f"({bs['bearish']/max(1,tot['bearish'])*100:.1f}%)")
         pv = Counter(r["preview"] for r in rs)
-        print(f"  preview: {dict(pv)}")
+        print(f"  preview: {_cdict(pv)}")
         # DAV-1193 B2 迁移矩阵：全部存量均为 legacy adopted，新 semantic
         # decision 分布即 adopt→X 迁移；按 cohort 与 stance/commit 分层
         mig = Counter(f"adopt->{r['preview']}" for r in rs)
-        print(f"  migration adopt->*: {dict(mig)}")
+        print(f"  migration adopt->*: {_cdict(mig)}")
         mig_stance = defaultdict(Counter)
         mig_sha = defaultdict(Counter)
         for r in rs:
             mig_stance[r["stance"]][r["preview"]] += 1
             mig_sha[(r["sha"] or "unknown")[:8]][r["preview"]] += 1
         for st, c in sorted(mig_stance.items()):
-            print(f"    stance={st}: {dict(c)}")
+            print(f"    stance={st}: {_cdict(c)}")
         for sha, c in sorted(mig_sha.items()):
-            print(f"    commit={sha}: {dict(c)}")
+            print(f"    commit={sha}: {_cdict(c)}")
         mig_model = defaultdict(Counter)
         mig_contract = defaultdict(Counter)
         for r in rs:
             mig_model[r["decision_model"]][r["preview"]] += 1
             mig_contract[r["evidence_contract"]][r["preview"]] += 1
         for m, c in sorted(mig_model.items()):
-            print(f"    model={m}: {dict(c)}")
+            print(f"    model={m}: {_cdict(c)}")
         for ec, c in sorted(mig_contract.items()):
-            print(f"    contract={ec}: {dict(c)}")
+            print(f"    contract={ec}: {_cdict(c)}")
         # 80% 阈值对比：coverage>=0.8 → adopt（检查与 100% 是否同判定）
         def gate80(r):
             cov = r["semantic_coverage"]
@@ -170,7 +185,7 @@ def main():
             return "adopt" if cov >= 0.8 else (
                 "partial" if cov >= 0.67 else "reject")
         g80 = Counter(gate80(r) for r in rs)
-        print(f"  thr=80% gate: {dict(g80)}")
+        print(f"  thr=80% gate: {_cdict(g80)}")
         # E-04 sensitive
         e4 = [r for r in rs if r["hard_guards"]]
         uniq = 0
@@ -181,8 +196,9 @@ def main():
                 uniq += 1
         print(f"  E-04-sensitive claims: {len(e4)} (unique-gap {uniq})")
 
-    # INV-2 锚点
-    for r in out:
+    # INV-2 锚点（B-6d: sort — `adopted` 是 set，跨进程哈希序随机，
+    # 不排序则同一库两次运行打印序也不同，逐字节验收无从判定）
+    for r in sorted(out, key=lambda x: (x["report_id"], x["claim_id"])):
         if r["report_id"].startswith("aa773648") or "已定价超6天" in r["claim"]:
             cov = r["semantic_coverage"]
             cov_txt = f"{cov:.0%}" if isinstance(cov, (int, float)) else "n/a"
