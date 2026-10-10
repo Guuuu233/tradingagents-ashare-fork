@@ -1,4 +1,4 @@
-# 生产服务 launchd 托管模板（DAV-1790，DAV-1800/DAV-1802 返修；总控 10-10 令：只交模板，不安装）
+# 生产服务 launchd 托管模板（DAV-1790，DAV-1800/DAV-1802/DAV-1806 返修；总控 10-10 令：只交模板，不安装）
 
 本目录交付 `com.tradingagents.ashare.plist` 模板 + `ta-launchd-wrapper.sh` 包装脚本，
 用于把现行 `nohup … & disown` 拉起方式切到 launchd 托管。**本令只交模板、不安装**；
@@ -33,11 +33,17 @@
     保留最近 3600s 内拉起时间；**每次被 launchd 唤起先写戳再做任何断言**——
     DAV-1802 🔴-1 修复：戳记录提前到所有前置断言之前，成功与失败路径同等计入，
     确保 logs/ 不可写等早期 die 也占用额度、最多 3 次后 exit 0 停手；
-  - **logs/ 不可写兜底**：主戳目录不可建/不可写时退化 `/tmp/ta-launchd-die-stamps`
-    （DAV-1802 新增兜底目录），同窗口同上限；连兜底也不可得时 die 改 exit 0
+    DAV-1806 🔴-1 收口：计数段内部的失败（戳文件不可读/不可写、清窗失败、
+    计数异常、写戳失败）一律 exit 0 停手——「任何 exit 1 之前戳必然已写」
+    不变量闭合，记账设施半坏不再造成无界重拉；戳文件不可读写但目录可写时
+    自动整体降级兜底目录继续计数；
+  - **logs/ 不可写兜底**：主戳目录不可建/不可写（或戳文件不可读写）时退化
+    `/tmp/ta-launchd-die-stamps-${UID}-<release-sha>`（DAV-1806 🟡-1 加实例
+    命名空间并拒绝符号链接），同窗口同上限；连兜底也不可得时 die 改 exit 0
     （不再重拉，仅 StartInterval 探测），杜绝无界循环；
-  - **额度语义**：3 次额度计入**所有**唤起——含计划内首启动、KeepAlive 重拉与
-    人工 `kickstart`，即首启动占 1 次、真实崩溃预算只剩 2 次；
+  - **额度语义**：3 次额度计入**所有**唤起——含计划内首启动、KeepAlive 重拉、
+    `StartInterval` 周期探测与人工 `kickstart`（探测与首启动各占 1 次、
+    真实崩溃预算只剩 2 次；哨兵旁路不占额度，见下）；
   - **人工旁路（DAV-1802 🔴-2 修订）**：`launchctl kickstart` 无 `-e` 传 env 能力
     （macOS 27.x `kickstart` 仅支持 `[-k] [-p] [-s]`，`-e` 静默 no-op），
     故旁路改走**受控哨兵文件**——创建 `<LOG_DIR>/.launchd/manual-bypass` 后
@@ -49,9 +55,12 @@
     不挂 `sleep`、job 不驻留 `running` 假象；
   - **自动恢复**：`StartInterval=600` 周期探测，窗口过期（最旧戳 >3600s）后
     下一次唤起自然拉起，恢复粒度 ≤600s；人工拉起须配合旁路哨兵（见上）；
-  - **fail-closed**：写戳失败、锁 5s 拿不到、release 目录/解释器缺失，一律
-    错误日志 + `exit 1` 拒绝拉起——因戳已先写，KeepAlive 重拉 ≤2 次后触顶
-    exit 0 停手，"同一小时最多 3 次"对失败路径同样成立；
+  - **fail-closed**：release 目录/解释器缺失、日志目录不可写、锁 5s 拿不到，
+    一律错误日志 + `exit 1` 拒绝拉起——因戳已先写，KeepAlive 重拉 ≤2 次后
+    触顶 exit 0 停手；而戳文件不可写、清窗失败、计数异常、写戳失败等
+    **计数设施自身故障**（发生在写戳之前，DAV-1806 🔴-1）一律 `exit 0`
+    停手——记账设施坏 ≠ 服务崩，让 launchd 重拉毫无意义且必然无界。
+    两类路径同样保证"同一小时最多 3 次"对失败路径成立；
   - **并发保护**：戳文件读-改-写在 `mkdir` 原子锁（macOS 无 `flock`）内进行，
     防 `kickstart` 与自动重拉并发双写丢戳；>60s 残留锁目录视为死锁自动清除；
   - 机器重启后戳文件可留存，窗口过期计数自然清零；但 3600s 内反复崩溃
@@ -64,7 +73,8 @@
 | `logs/uvicorn-<sha>.log` | wrapper `exec` 内 `>>` 追加（与现行一致） | 沿用宿主机现行外部轮转 |
 | `logs/wrapper-diagnostic.log` | wrapper 限流/前置断言/拉起记录（追加式） | 见下 |
 | `logs/launchd-stdout.log` / `logs/launchd-stderr.log` | plist Standard{Out,Error}Path（append，**无上限**） | 见下 |
-| `logs/.launchd/restart-stamps` | wrapper 唤起计数戳（logs/ 不可写时兜底 `/tmp/ta-launchd-die-stamps`） | 窗口滑动自清，无需轮转 |
+| `logs/.launchd/restart-stamps` | wrapper 唤起计数戳（logs/ 不可写或戳文件不可读写时兜底 `/tmp/ta-launchd-die-stamps-${UID}-<release-sha>`） | 窗口滑动自清，无需轮转 |
+| `logs/wrapper-diagnostic.log` 写不进时的兜底 | `${FALLBACK_STAMP_DIR}/diag-fallback.log`（DAV-1806 🟡-3：logs/ 不可写正是最需要留证场景） | 低频，随兜底戳目录清理 |
 | `logs/.launchd/manual-bypass` | 人工旁路哨兵（DAV-1802 🔴-2） | 一次性，wrapper 读取后自删 |
 
 `launchd-*.log` 与 `wrapper-diagnostic.log` 均为 append 无内置上限，采用
