@@ -1,3 +1,8 @@
+# 【压缩存储前适用】(DAV-1773 B-6d)：本脚本直读 reports.result_data 明文列，
+# 仅适用于未启用压缩存储（REPORT_STORAGE_MODE=compressed）的数据库。
+# 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
+# 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
+# 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
 """v2 打分（总控 2026-09-26，按 GPT 评审意见与项目 return_labels 契约修正）：
 - 入场 = T+1 开盘（前复权），出场 = T+N 收盘；基准沪深300同口径；
 - 只统计 gemini-3.8 样本（按 model_config_snapshot 分组）；
