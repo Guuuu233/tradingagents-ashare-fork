@@ -440,6 +440,8 @@ class _StreamAggregator:
         self.cohort_shas: Set[str] = set()
         self.cohort_keys: Set[str] = set()
         self.cohort_homogeneous_key: Optional[str] = None
+        # NOTE: cohort_shas / cohort_keys are populated at the D-009 clean-pool
+        # point inside feed() — see the sampling-surface comment there.
 
     def feed(self, report: Mapping[str, Any], cohort_spec: Optional[Mapping[str, Any]] = None) -> None:
         """Process one row through the staged pipeline (mirror of filter_v2_completed_reports).
@@ -447,8 +449,14 @@ class _StreamAggregator:
         With ``cohort_spec`` (fully-streaming SQLite path), units outside the
         cohort are skipped exactly like filter_reports_by_cohort would skip
         them post-split; the ledger still counts every split unit (the module
-        path's ledger also counts pre-filter units), commit SHAs are
-        accumulated for surviving units.
+        path's ledger also counts pre-filter units).
+
+        Cohort provenance (``commit_shas``) and the homogeneity key set are
+        sampled from the **D-009 clean pool** — the units that actually reach
+        the gate evaluation. The module path runs ``filter_reports_by_cohort``
+        / ``is_cohort_homogeneous`` on ``filter_v2_completed_reports`` output,
+        so SHAs of units that Stage 2/3/3.5/4 exclude never enter the metadata
+        (DAV-1816 root cause / DAV-1767 rework).
         """
         from tradingagents.agents.utils.shadow_credit import (
             classify_v2_report_d009_exclusion,
@@ -463,8 +471,6 @@ class _StreamAggregator:
             EVIDENCE_CONTRACT_V0, HORIZON_UNSPECIFIED, PRICE_BASIS_UNSPECIFIED,
             REASON_CONTAMINATED, REASON_PENDING_REVIEW, REASON_CONTRACT_INCOMPLETE,
         )
-        self._unit_is_eligible = False
-
         self.raw_count += 1
 
         units = _stream_split_units(report)
@@ -473,8 +479,6 @@ class _StreamAggregator:
         self.unit_count += len(units)
 
         for unit in units:
-            self._unit_is_eligible = False
-
             if cohort_spec is not None:
                 # Per-unit cohort gate (module-equivalent, DAV-1322: the four
                 # cohort components incl. horizon live on the unit).
@@ -496,27 +500,8 @@ class _StreamAggregator:
                         or (c_info.get("horizon") or HORIZON_UNSPECIFIED) != (cohort_spec.get("horizon") or HORIZON_UNSPECIFIED)
                     ):
                         continue
-                sha = c_info["generated_by_commit_sha"]
-                if sha:
-                    self.cohort_shas.add(sha)
             else:
                 c_info = extract_sample_cohort(unit)
-                sha = c_info["generated_by_commit_sha"]
-                if sha:
-                    self.cohort_shas.add(sha)
-                if self._unit_is_eligible:
-                    # Homogeneity is a property of the evaluation pool: only
-                    # D-009-eligible units contribute cohort keys (mirror of
-                    # the module path, which keys the post-filter sample pool).
-                    if is_legacy_unversioned_sample(unit):
-                        self.cohort_keys.add(_legacy_cohort_key(c_info.get("horizon")))
-                    else:
-                        self.cohort_keys.add(_cohort_canonical_key(
-                            c_info["decision_model_version"],
-                            c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0,
-                            c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED,
-                            c_info.get("horizon"),
-                        ))
 
             if not _module_is_qualifying_v2_report(unit):
                 self.non_v2_excluded += 1
@@ -531,7 +516,6 @@ class _StreamAggregator:
                 continue
 
             self.eligible_count += 1
-            self._unit_is_eligible = True
             hold_reasons = collect_hold_semantic_reasons(unit)
             pb_reason = classify_price_basis_exclusion(unit)
 
@@ -562,6 +546,30 @@ class _StreamAggregator:
                 # ledger carries the same counts. (Not part of output JSON.)
                 continue
 
+            # ── D-009 clean pool: the only sampling point for cohort
+            # provenance (module parity, DAV-1767 rework) ────────────────────
+            # The module collects commit_shas inside filter_reports_by_cohort,
+            # which runs on filter_v2_completed_reports output — i.e. units
+            # that survived Stage 2 (v2 evidence), Stage 3 (D-009 §5),
+            # Stage 3.5 (HOLD semantics) and Stage 4 (price basis). Sampling
+            # any earlier records SHAs of excluded units and diverges from
+            # trunk (DAV-1816: short 24 vs 11, medium 20 vs 8).
+            sha = c_info["generated_by_commit_sha"]
+            if sha:
+                self.cohort_shas.add(sha)
+            if cohort_spec is None:
+                # Homogeneity is a property of the evaluation pool: only clean
+                # units contribute cohort keys (mirror of the module path,
+                # which keys the post-filter sample pool).
+                if is_legacy_unversioned_sample(unit):
+                    self.cohort_keys.add(_legacy_cohort_key(c_info.get("horizon")))
+                else:
+                    self.cohort_keys.add(_cohort_canonical_key(
+                        c_info["decision_model_version"],
+                        c_info["evidence_contract_version"] or EVIDENCE_CONTRACT_V0,
+                        c_info["price_basis_version"] or PRICE_BASIS_UNSPECIFIED,
+                        c_info.get("horizon"),
+                    ))
             normalized = normalize_report_for_evaluation(unit)
             self.qualifying.append(normalized)
             self.ledger_rest["clean_count"] += 1

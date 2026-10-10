@@ -2669,3 +2669,262 @@ class TestH1bVerifyGatesDavian1811Rework:
                   "hold_semantic_isolated", "prediction_eligible_count"):
             assert led[k] == mod_led[k], f"ledger mismatch on {k}: {led[k]} != {mod_led[k]}"
         assert len(agg.qualifying) == 0
+
+
+class TestH1bVerifyGatesDavian1767Rework:
+    """DAV-1767 rework guard: cohort provenance (``commit_shas``) is sampled
+    from the D-009 clean pool, not from every cohort-matching unit.
+
+    DAV-1816 measured the divergence: the candidate collected SHAs right after
+    the cohort quad matched, so units later excluded by Stage 2/3/3.5/4 still
+    contributed (short 24 vs trunk 11, medium 20 vs 8). The module path runs
+    ``filter_reports_by_cohort`` on ``filter_v2_completed_reports`` output, so
+    only clean-pool SHAs may appear. These tests pin that sampling surface.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1767rework", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1767rework", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _d009_excluded_unit(sha: str) -> dict:
+        """A v2-qualifying unit that D-009 §5 excludes via ``trade_action=WAIT``.
+
+        Stage 2 (is_qualifying_v2_report) passes — evidence is present — but
+        Stage 3 classifies it as ``wait``. It therefore matches the cohort quad
+        yet never reaches the evaluation pool.
+        """
+        return {
+            "analysis_status": "VALID",
+            "trade_action": "WAIT",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": "c1", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            "generated_by_commit_sha": sha,
+        }
+
+    @staticmethod
+    def _clean_unit(sha: str, *, idx: int = 0) -> dict:
+        return {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": f"c{idx}", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": f"多头逻辑_{idx}"}],
+            "generated_by_commit_sha": sha,
+        }
+
+    @staticmethod
+    def _legacy_row(unit: dict, idx: int = 0) -> dict:
+        """Wrap a unit in a legacy_unversioned:short row (no triad fields)."""
+        return {
+            "id": f"row-{idx:03d}",
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+            "status": "completed",
+            "result_data": {
+                "short_term": dict(unit, horizon="short"),
+            },
+        }
+
+    def test_d009_excluded_unit_sha_absent_from_output(self):
+        """The card's explicit requirement: a unit excluded by D-009 must not
+        leak its version number into ``commit_shas`` — and a clean unit's SHA
+        must still appear."""
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_reports_by_cohort,
+            filter_v2_completed_reports,
+        )
+
+        mod = self._import_script()
+        clean_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        excluded_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        rows = [
+            self._legacy_row(self._clean_unit(clean_sha, idx=0), idx=0),
+            self._legacy_row(self._d009_excluded_unit(excluded_sha), idx=1),
+        ]
+
+        # module truth: WAIT is dropped before the cohort filter, so only the
+        # clean unit's SHA is visible to filter_reports_by_cohort.
+        reps, exc, led = filter_v2_completed_reports(rows, return_ledger=True)
+        assert led["d009_excluded"] == 1
+        assert exc["wait"] == 1
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        assert len(pool) == 1
+        assert meta["commit_shas"] == [clean_sha]
+
+        # streaming pipeline must agree
+        agg = mod._StreamAggregator()
+        from tradingagents.agents.utils.shadow_credit import parse_cohort_spec
+
+        spec = parse_cohort_spec("legacy_unversioned:short")
+        for r in rows:
+            agg.feed(r, cohort_spec=spec)
+        assert agg.cohort_shas == {clean_sha}, (
+            f"excluded unit SHA leaked: {sorted(agg.cohort_shas)}"
+        )
+        assert excluded_sha not in agg.cohort_shas
+        assert len(agg.qualifying) == 1
+
+    def test_run_verify_output_commit_shas_match_module_path(self, tmp_path):
+        """End-to-end on a real DB: run_verify's commit_shas must equal the
+        module path's, i.e. exclude SHAs of units dropped by Stage 3/3.5/4."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+        clean_sha = "cccccccccccccccccccccccccccccccccccccccc"
+        excluded_sha = "dddddddddddddddddddddddddddddddddddddddd"
+
+        db_path = str(tmp_path / "sha_surface.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        session.add_all([
+            ReportDB(
+                id="row-clean", symbol="600519.SH", trade_date="2026-08-01",
+                status="completed", analysis_status="VALID", trade_action="BUY",
+                result_data={
+                    "short_term": dict(self._clean_unit(clean_sha, idx=0), horizon="short"),
+                },
+            ),
+            ReportDB(
+                id="row-excluded", symbol="000858.SZ", trade_date="2026-08-02",
+                status="completed", analysis_status="VALID", trade_action="WAIT",
+                result_data={
+                    "short_term": dict(self._d009_excluded_unit(excluded_sha), horizon="short"),
+                },
+            ),
+        ])
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        out_json = str(tmp_path / "sha_surface_out.json")
+        res = mod.run_verify(
+            db_path=db_path, cohort="legacy_unversioned:short", output_json=out_json,
+        )
+
+        # module reference over the same rows (raw to_dict path)
+        engine2 = create_engine(f"sqlite:///{db_path}")
+        Session2 = sessionmaker(bind=engine2)
+        s2 = Session2()
+        rows = [r.to_dict() for r in s2.query(ReportDB).filter(ReportDB.status == "completed").all()]
+        s2.close()
+        engine2.dispose()
+        reps, exc, led = mod._module_filter_v2_completed_reports(rows, return_ledger=True)
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        assert meta["commit_shas"] == [clean_sha]
+
+        assert res["cohort_info"]["commit_shas"] == [clean_sha]
+        assert res["gate_evaluation"]["cohort_info"]["commit_shas"] == [clean_sha]
+        assert excluded_sha not in json.dumps(res, ensure_ascii=False)
+        assert res["sample_count"] == len(pool) == 1
+
+    def test_hold_and_price_basis_excluded_shas_absent(self):
+        """Stage 3.5 (HOLD) and Stage 4 (price basis) exclusions must also be
+        invisible to commit_shas — the sampling point is the clean pool, not
+        merely post-D-009."""
+        from tradingagents.agents.utils.shadow_credit import parse_cohort_spec
+
+        mod = self._import_script()
+        clean_sha = "1111111111111111111111111111111111111111"
+        hold_sha = "2222222222222222222222222222222222222222"
+        pb_sha = "3333333333333333333333333333333333333333"
+
+        hold_unit = {
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie", "direction": "中性",
+                                "ohlcv_gate_applied": True},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            # Stage 3.5 hold_defensive via the explicit OHLCV gate flag
+            "generated_by_commit_sha": hold_sha,
+        }
+        pb_unit = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            # contract-era marker without the price-ref contract → Stage 4 isolate
+            "evidence_contract_version": "evidence_contract.v2",
+            "price_basis_version": "price_basis.vendor_qfq",
+            "generated_by_commit_sha": pb_sha,
+        }
+        rows = [
+            self._legacy_row(self._clean_unit(clean_sha, idx=0), idx=0),
+            self._legacy_row(hold_unit, idx=1),
+            {
+                "id": "row-pb",
+                "symbol": "300750.SZ",
+                "trade_date": "2026-08-03",
+                "status": "completed",
+                "result_data": {"short_term": dict(pb_unit, horizon="short")},
+            },
+        ]
+
+        agg = mod._StreamAggregator()
+        spec = parse_cohort_spec("legacy_unversioned:short")
+        for r in rows:
+            agg.feed(r, cohort_spec=spec)
+        led = agg.ledger()
+        assert led["clean_count"] == 1, led
+        assert led["hold_semantic_isolated"] == 1, led
+        assert led["price_basis_isolated"] == 1, led
+        assert agg.cohort_shas == {clean_sha}, f"leaked: {sorted(agg.cohort_shas)}"
+        assert hold_sha not in agg.cohort_shas
+        assert pb_sha not in agg.cohort_shas
+
+    def test_homogeneity_keys_sampled_from_clean_pool_only(self):
+        """Cohort=None path: the homogeneity key set must mirror the module's
+        post-filter pool, so an excluded unit cannot manufacture a mixed-pool
+        verdict on its own."""
+        from tradingagents.agents.utils.shadow_credit import (
+            is_cohort_homogeneous,
+            filter_v2_completed_reports,
+        )
+
+        mod = self._import_script()
+        rows = [
+            self._legacy_row(self._clean_unit("aaaa", idx=0), idx=0),
+            # legacy_unversioned:medium unit that D-009 excludes (WAIT): it must
+            # not contribute a second cohort key.
+            {
+                "id": "row-wait-medium",
+                "symbol": "000858.SZ",
+                "trade_date": "2026-08-02",
+                "status": "completed",
+                "result_data": {"short_term": dict(self._d009_excluded_unit("bbbb"), horizon="medium")},
+            },
+        ]
+
+        reps, _exc, _led = filter_v2_completed_reports(rows, return_ledger=True)
+        is_homo, key = is_cohort_homogeneous(reps)
+        assert is_homo is True
+
+        agg = mod._StreamAggregator()
+        for r in rows:
+            agg.feed(r)
+        agg.ledger()
+        assert agg.cohort_homogeneous_key == key, (
+            f"stream {agg.cohort_homogeneous_key!r} != module {key!r}"
+        )
