@@ -51,6 +51,10 @@ from tradingagents.agents.utils.price_basis_gate import (
 )
 from tradingagents.agents.utils.price_ref_registry import attach_price_ref_source
 from .signal_processing import SignalProcessor
+from tradingagents.experiments.run_isolation import (
+    assert_experiment_thread_id,
+    checkpointer_identity,
+)
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
 from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
@@ -188,12 +192,22 @@ class TradingAgentsGraph:
         custom_prompt_placement: str = DEFAULT_PLACEMENT,
         strict_game_theory_wiring: Optional[bool] = None,
         graph_stage: str = "full",
+        checkpointer: Optional[Any] = None,
+        experiment_mode: bool = False,
     ):
         """Initialize the trading agents graph and components.
 
         ``graph_stage``（D-068）："full" 默认；"analysts" 只跑分析师+完整性门
         （双档共享阶段）；"downstream" 不跑分析师，从完整性门/辩论开始，须由
         调用方把共享阶段产出的报告字段注入初始状态。
+
+        ``checkpointer``（DAV-1477 / P3）：可选检查点存储注入。不传时维持
+        类级共享 ``MemorySaver``（生产 API 与 CLI 行为不变）；实验运行必须
+        经 ``tradingagents.experiments.run_isolation`` 注入独立实例。
+
+        ``experiment_mode``（DAV-1477 / P3）：实验模式守卫。开启后
+        ``propagate()`` 若未显式传 ``thread_id``、将走到生产默认线程名时
+        直接报错；生产路径不受影响。
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
@@ -213,11 +227,27 @@ class TradingAgentsGraph:
         # Update the interface's config
         set_config(self.config)
 
-        # Initialize persistence (Singleton Pattern for concurrency)
-        if TradingAgentsGraph._shared_checkpointer is None:
-            TradingAgentsGraph._shared_checkpointer = MemorySaver()
-        
-        self.checkpointer = TradingAgentsGraph._shared_checkpointer
+        # Initialize persistence (Singleton Pattern for concurrency).
+        # DAV-1477: an explicitly injected checkpointer (experiment path) bypasses
+        # the class-level shared MemorySaver; omitting it preserves production
+        # behaviour byte-for-byte.
+        # Experiment runs MUST inject a dedicated checkpointer — running in
+        # experiment_mode on the shared store would silently contaminate
+        # production checkpoint threads, which is exactly what P3 forbids.
+        if experiment_mode and checkpointer is None:
+            raise ValueError(
+                "experiment_mode=True requires an injected checkpointer "
+                "(see tradingagents.experiments.run_isolation.experiment_graph_kwargs)"
+            )
+        if checkpointer is not None:
+            self.checkpointer = checkpointer
+        else:
+            if TradingAgentsGraph._shared_checkpointer is None:
+                TradingAgentsGraph._shared_checkpointer = MemorySaver()
+            self.checkpointer = TradingAgentsGraph._shared_checkpointer
+
+        # DAV-1477: experiment-mode guard flag — see propagate().
+        self.experiment_mode = bool(experiment_mode)
 
         # Create necessary directories
         os.makedirs(
@@ -684,7 +714,12 @@ class TradingAgentsGraph:
 
         state_horizon = init_agent_state.get("horizon") or effective_horizon
 
-        # Use thread_id for checkpointer
+        # Use thread_id for checkpointer.
+        # DAV-1477 experiment-mode guard: an experiment run that reaches the
+        # production default thread name would silently share a checkpoint
+        # thread — fail closed instead of contaminating the store.
+        if getattr(self, "experiment_mode", False):
+            thread_id = assert_experiment_thread_id(thread_id)
         if thread_id:
             args["config"]["configurable"] = {"thread_id": thread_id}
         elif not args["config"].get("configurable"):
@@ -710,6 +745,25 @@ class TradingAgentsGraph:
                 final_state = self.graph.invoke(init_agent_state, **args)
 
         self._ensure_game_theory_state(final_state, horizon=effective_horizon)
+
+        # DAV-1477 (P3): experiment runs record their run identity (explicit
+        # thread id + dedicated checkpointer instance) on the returned state so
+        # downstream result_data packaging can carry it.  Production path never
+        # sets experiment_mode, so this key only exists on experiment results.
+        # DAV-1486: the key is deliberately named ``experiment_run_identity`` —
+        # a distinct name from the API-side ``result_data.run_identity`` code
+        # identity written by ``_attach_traceability_fields`` (DAV-1430), which
+        # unconditionally overwrites ``run_identity``.  Sharing the key was an
+        # implicit contract that only held because no API construction point
+        # passes experiment_mode; a downstream harness reusing the /v1/analyze
+        # save path would have silently clobbered the experiment identity.
+        if getattr(self, "experiment_mode", False):
+            final_state["experiment_run_identity"] = {
+                "thread_id": thread_id,
+                "checkpointer": checkpointer_identity(
+                    getattr(self, "checkpointer", None)
+                ),
+            }
 
         # Store current state for reflection
         self.curr_state = final_state
@@ -931,6 +985,17 @@ class TradingAgentsGraph:
             "price_ref_revision": final_state.get("price_ref_revision"),
             "price_ref_revision_version": "price_ref_revision.v1",
         }
+
+        # DAV-1477 (P3): propagate experiment run identity into the packaged
+        # result when present — absent on production runs, so production
+        # result_data shape is untouched.  DAV-1486: kept under the distinct
+        # ``experiment_run_identity`` key so API-side ``run_identity`` (code
+        # identity, unconditionally overwritten by _attach_traceability_fields)
+        # can never clobber it.
+        if final_state.get("experiment_run_identity") is not None:
+            result["experiment_run_identity"] = final_state[
+                "experiment_run_identity"
+            ]
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state
         meta = get_protocol_metadata(final_state)

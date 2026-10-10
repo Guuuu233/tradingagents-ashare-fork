@@ -56,6 +56,10 @@ REASON_SOCIAL_SCHEMA_MISMATCH = "social_schema_mismatch"
 REASON_SOCIAL_ARCHIVE_CORRUPT = "social_archive_corrupt"
 REASON_SOCIAL_INVALID_INGEST_RUN = "social_invalid_ingest_run"
 REASON_SOCIAL_ARCHIVE_LOCKED = "social_archive_locked"
+# DAV-1462 requirement 3: too many records in the window carry no author hash.
+# Without a per-author key the aggregator cannot apply the max_per_author cap
+# correctly, so the symbol's bundle is a data anomaly rather than a partial.
+REASON_SOCIAL_ANONYMOUS_AUTHOR_DOMINANT = "social_anonymous_author_dominant"
 REASON_OBSERVED_AFTER_CUTOFF_EXCLUDED = "observed_after_cutoff_excluded"
 
 
