@@ -26,6 +26,8 @@
 | `result_data_zst`     | `BLOB`（SQLite `LargeBinary`；PG `BYTEA`；MySQL `LONGBLOB`） | zstd-9 压缩后的 UTF-8 JSON 字节流，无字典、无外层信封 |
 | `result_data_zst_len` | `INTEGER`                                                    | 压缩前字节数（解压校验 + 审计用，可省一次解压）       |
 
+**方言口径（DAV-1792 🟡-2）**：生产锁定 **SQLite**；PG `BYTEA` / MySQL `LONGBLOB` 分支仅为与既有 `_ensure_report_schema` 结构对称的 best-effort DDL，**未做跨方言集成测试**，非 SQLite 部署需在启用前单独验证 `ZstdJSON` 行为。
+
 - 压缩帧内**不嵌自定义 magic/版本头**：zstd 帧本身有 magic `0x28B52FFD`，解码端用「`result_data_zst IS NOT NULL` → 解压」判定；版本演进靠列存在性 + `PRAGMA user_version`（见 §6）。
 - 旧列 `result_data`（`JSON`）**保留不删**，迁移期双列并存（见 §4）。
 - `result_data='null'`（4 B，实测 318 行）**不迁移**——压缩反而变大；统一由解码层把 `NULL/空` 视作无数据。**迁移/校验三处口径统一为可执行判据 `result_data IS NOT NULL AND result_data <> 'null'`**（§4 P3 前置条件、§5 批次 WHERE、本排除规则同口径——`<> 'null'` 精确等值排除已足够覆盖这 318 行，不再叠加 `length() > 4` 以免与两处 SQL 分叉），否则这 318 行恒满足 `result_data IS NOT NULL AND result_data_zst IS NULL`、P3 前置条件永远不可满足。**语义等价性**：P3 后这 318 行经解码层按 `None` 处理——与现状 `json.loads('null') is None` 完全等价，不得写成 `{}`。
@@ -63,7 +65,7 @@
 设计说明：
 
 - `_POST_GATE_FRAGMENT_PATHS` 里 `st_ids_manager_action` / `mt_ids_manager_action` 在 fragment 组装时本就 `or` 合并进 `manager_verdict.trade_action`（`report_service.py:3030-3033`（st）/`:3051-3054`（mt）），物化为单列无损。
-- `top_ds_reason_codes` / `top_reason_codes` 两路径在 fragment 组装时**并列写入两个不同的输出槽**（`report_service.py:3062-3067`：`frag["decision_status"] = {"reason_codes": top_ds_rc}` 与 `frag["reason_codes"] = top_rc` 是两个并列 `if`，非 `or`/if-else 先非空胜出）。实测快照库两路径同时非空 893 行、值全等（diff=0），`ds_only`/`top_only` 各 0 行——**值层面单列可承载**。方案 A（本文档采用）：保留单列 `pg_top_reason_codes`，但重建规则必须逐字对齐现状——**对 `pg_top_reason_codes` 非空的行，同时填 `frag["decision_status"] = {"reason_codes": v}` 与 `frag["reason_codes"] = v` 两个槽**（见 §2.3）。不能只建一个槽，否则 frag 结构与现状分叉（下游 `apply_post_gate_read_fallback` `:2880-2883` 的 `or` 短路只是碰巧一致的实现细节，不是设计保证）。
+- `top_ds_reason_codes` / `top_reason_codes` 两路径在 fragment 组装时**并列写入两个不同的输出槽**（`report_service.py:3062-3067`：`frag["decision_status"] = {"reason_codes": top_ds_rc}` 与 `frag["reason_codes"] = top_rc` 是两个并列 `if`，非 `or`/if-else 先非空胜出）。实测快照库两路径同时非空 893 行、值全等（diff=0），`ds_only`/`top_only` 各 0 行——**值层面单列可承载**。方案 A（本文档采用）：保留单列 `pg_top_reason_codes`，但重建规则必须逐字对齐现状——**对 `pg_top_reason_codes` 非空的行，同时填 `frag["decision_status"] = {"reason_codes": v}` 与 `frag["reason_codes"] = v` 两个槽**（见 §2.3）。不能只建一个槽，否则 frag 结构与现状分叉（下游 `apply_post_gate_read_fallback` `:2880-2883` 的 `or` 短路只是碰巧一致的实现细节，不是设计保证）。**写入侧合并顺序（DAV-1792 🟢-1）**：两路径不同时（理论边缘，实测 0 行）以 `$.decision_status.reason_codes` 为准——它是 post-gate 判定后的正式集合，`$.reason_codes` 是回落槽。
 - 类型按现有列对齐：`confidence` 现列 `Integer`（`api/database.py:486`）、`probability/target/stop` `Float`；`decision_status`/`reason_codes` 在 `json_extract` 下本就返回 JSON 字符串、调用端 `_js()` 再 `json.loads`——物化列用 `JSON` 类型让 SQLAlchemy 直接给 dict/list，`_js()` 分支可删。**`_js()` 是 `load_post_gate_fragments` 内的嵌套函数，定义在 `report_service.py:3006`，调用点共 6 处：`:3020`/`:3021`/`:3041`/`:3042`/`:3062`/`:3065`**——删除时连同定义共 7 处一并清理（JSON 列给出的 dict 再进 `_js` 不会报错，属静默绕弯残留，不易被发现）。
 - **写入点**：`create_report`（`report_service.py:2530+` 更新分支 `:2631` 新建分支 `:2783`）与 `update_report_partial`（`:2351+`）在 `db_report.result_data = canonical_result_data` 同一事务内，调用同一函数 `_populate_post_gate_columns(db_report, canonical_result_data)` 一次性赋值 31 列；`finalize_orphan_report`（`:2443`）不写 result_data，无需同步。
 - 历史存量行的物化列在迁移回填时一并补（见 §5）。

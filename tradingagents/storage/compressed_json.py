@@ -60,7 +60,6 @@ logger = logging.getLogger(__name__)
 
 _STORAGE_MODE_ENV = "REPORT_STORAGE_MODE"
 _WRITE_CONCURRENCY_ENV = "REPORT_ZSTD_WRITE_CONCURRENCY"
-_FALLBACK_ENV = "REPORT_STORAGE_FALLBACK"
 _VALID_MODES = {"plaintext", "dual", "compressed"}
 
 DEFAULT_WRITE_CONCURRENCY = 4
@@ -94,18 +93,6 @@ def report_storage_mode() -> str:
     return "compressed" if mode == "dual" else mode
 
 
-def storage_fallback_enabled() -> bool:
-    """Plaintext-fallback for edge rows in compressed mode (default on).
-
-    A migration-window row with ``result_data_zst IS NULL AND result_data
-    IS NOT NULL`` would decode to ``None`` while plaintext data exists;
-    the load-time fallback re-reads the deferred plaintext column for
-    those rows only (§4). Disable with ``REPORT_STORAGE_FALLBACK=0`` once
-    residual count is verified 0.
-    """
-    return os.getenv(_FALLBACK_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
-
-
 def _env_concurrency() -> int:
     raw = os.getenv(_WRITE_CONCURRENCY_ENV, "").strip()
     if not raw:
@@ -129,7 +116,12 @@ def write_concurrency_limit() -> int:
 
 
 def set_write_concurrency_limit(n: int) -> int:
-    """Test hook: rebuild the write semaphore at capacity ``n``."""
+    """@internal/test-only — rebuild the write semaphore at capacity ``n``.
+
+    Production code must use the ``REPORT_ZSTD_WRITE_CONCURRENCY`` env at
+    process start; this hook exists for tests asserting the cap. Not safe
+    to call while a compression is in-flight.
+    """
     global _write_semaphore
     n = max(1, int(n))
     _write_semaphore = threading.BoundedSemaphore(n)
@@ -409,6 +401,10 @@ def post_gate_column_values(result_data: Any) -> dict:
             _get_path(sl, "investment_debate_state", "manager_verdict", "trade_action"),
         )
 
+    # top-level reason_codes: two source json paths share one column.
+    # Merge order (DAV-1792 🟢-1): ``decision_status.reason_codes`` wins
+    # when both paths are non-empty — it is the post-gate adjudicated set;
+    # bare ``reason_codes`` is the fallback/legacy slot.
     out["pg_top_reason_codes"] = _first(
         _get_path(rd, "decision_status", "reason_codes"),
         rd.get("reason_codes"),
@@ -441,13 +437,13 @@ def _compressed_columns_present(report: Any) -> bool:
 
 
 def sync_report_storage_row(report: Any, *, is_pending: bool = False) -> None:
-    """Dual-write hook: populate the shadow storage column + pg_* columns.
+    """Dual-write hook: populate both storage columns + pg_* columns.
 
-    Called from ``before_insert``/``before_update`` mapper events. Only
-    touches the row when ``result_data`` changed this flush (or the row is
-    being inserted). In ``compressed`` mode the shadow column is the
-    deferred plaintext attribute; in ``plaintext`` mode it is the raw
-    ``result_data_zst`` BLOB column.
+    Called from ``before_insert``/``before_update`` mapper events. On
+    UPDATE it only acts when the ``result_data`` attribute history shows
+    changes — **the 31 ``pg_*`` materialized columns and ``zst_len`` are
+    refreshed exclusively on ``result_data`` writes**, never on unrelated
+    field updates (DAV-1792 🟢-3). On INSERT it always runs.
     """
     if not _compressed_columns_present(report):
         return
@@ -464,15 +460,15 @@ def sync_report_storage_row(report: Any, *, is_pending: bool = False) -> None:
     raw_bytes = result_data_plaintext_bytes(value)
     mode = report_storage_mode()
 
-    if mode == "compressed":
-        # zst column already bound by the ORM (attribute → BLOB). Mirror
-        # the dict into the deferred plaintext column as fallback
-        # insurance (identical json.dumps bytes → decompress(zst) ==
-        # stored plaintext).
-        if hasattr(type(report), "result_data_plaintext"):
-            report.result_data_plaintext = value
-    else:
-        # Plaintext column bound by the ORM; mirror compressed bytes.
+    # Both physical write columns are always populated on every
+    # result_data change — the read side never depends on which one it
+    # reads (coalesce / plaintext).
+    if hasattr(type(report), "result_data_plaintext"):
+        # Deferred JSON attr — accepts dict or text; writes identical
+        # json.dumps bytes → decompress(zst) == stored plaintext.
+        report.result_data_plaintext = value
+    if hasattr(type(report), "result_data_zst"):
+        # Deferred raw BLOB attr — stores compressed bytes directly.
         report.result_data_zst = (
             compress_json_bytes(raw_bytes) if raw_bytes is not None else None
         )
@@ -516,7 +512,6 @@ __all__ = [
     "result_data_plaintext_bytes",
     "result_data_select_expr",
     "set_write_concurrency_limit",
-    "storage_fallback_enabled",
     "sync_report_storage_row",
     "write_concurrency_limit",
     "B6B_COLUMN_DDL",

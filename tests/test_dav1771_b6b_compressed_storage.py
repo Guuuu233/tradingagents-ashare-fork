@@ -31,6 +31,15 @@ from api.database import Base, ReportDB
 from api.services import report_service
 from tradingagents.storage import compressed_json as cj
 
+# The ORM-bound physical column is chosen at api.database import time from
+# REPORT_STORAGE_MODE. ORM/write-path tests below require the default
+# plaintext mode; compressed-mode coverage lives in
+# test_dav1771_b6b_compressed_mode.py (run via a fresh subprocess).
+_PLAIN_ONLY = pytest.mark.skipif(
+    os.getenv("REPORT_STORAGE_MODE", "plaintext") != "plaintext",
+    reason="plaintext-mode suite (compressed covered in *_mode.py)",
+)
+
 
 def _proc_rss_bytes():
     """Current RSS in bytes — macOS (`ps` fallback) /Linux portable."""
@@ -209,6 +218,7 @@ def test_frame_without_fcs_uses_fallback_cap():
 # ── ORM write path (plaintext mode — default) ────────────────────────────────
 
 
+@_PLAIN_ONLY
 def test_plaintext_mode_dual_write_populates_all_columns(tmp_path):
     url = f"sqlite:///{tmp_path}/p.db"
     assert cj.report_storage_mode() == "plaintext"
@@ -237,6 +247,7 @@ def test_plaintext_mode_dual_write_populates_all_columns(tmp_path):
     assert row[7] == "HOLD"
 
 
+@_PLAIN_ONLY
 def test_plaintext_mode_update_syncs_shadow_and_pg(tmp_path):
     url = f"sqlite:///{tmp_path}/p.db"
     db, engine = _session(url)
@@ -257,6 +268,7 @@ def test_plaintext_mode_update_syncs_shadow_and_pg(tmp_path):
     assert row[2] == row[3]  # zst_len tracks plaintext byte length
 
 
+@_PLAIN_ONLY
 def test_plaintext_mode_flag_modified_in_place_update(tmp_path):
     from sqlalchemy.orm.attributes import flag_modified
     url = f"sqlite:///{tmp_path}/p.db"
@@ -279,6 +291,7 @@ def test_plaintext_mode_flag_modified_in_place_update(tmp_path):
 # ── load_post_gate_fragments: plaintext mode keeps json_extract path ─────────
 
 
+@_PLAIN_ONLY
 def test_load_post_gate_fragments_plaintext_mode(tmp_path):
     url = f"sqlite:///{tmp_path}/l.db"
     db, _ = _session(url)
@@ -369,6 +382,7 @@ def _bench_fragment_query(db, ids, use_pg_columns, rounds=9):
     return samples
 
 
+@_PLAIN_ONLY
 def test_list_page_50row_fragment_cost_pg_not_slower(tmp_path):
     """Card acceptance: 50-row list-page fragment fetch via pg_* columns is
     not slower than the json_extract status quo (median/p95)."""

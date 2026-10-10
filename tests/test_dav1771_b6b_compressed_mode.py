@@ -131,6 +131,41 @@ def test_compressed_mode_update_flag_modified(tmp_path):
     assert json.loads(plain)["a"] == 999  # shadow kept byte-identical
 
 
+def test_coalesce_read_is_single_select_for_mixed_rows(tmp_path):
+    """DAV-1792 🟡-1: bulk read of migrated + legacy rows emits exactly
+    ONE SELECT (coalesce at SQL level), not N+1 deferred-attr loads."""
+    from sqlalchemy import event
+    db, engine = _session(f"sqlite:///{tmp_path}/n.db")
+    db.add(ReportDB(id="m1", symbol="S", trade_date="2026-01-01",
+                    status="completed", result_data={"x": 1}))
+    db.commit()
+    with engine.connect() as c:
+        for i in range(3):
+            c.execute(text(
+                "INSERT INTO reports (id,symbol,trade_date,status,result_data)"
+                " VALUES (:i,'S','2026-01-01','completed',:j)"),
+                {"i": f"l{i}", "j": json.dumps({"x": i})})
+        c.commit()
+
+    selects = []
+    @event.listens_for(engine, "before_cursor_execute")
+    def probe(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    db2, _ = _session(f"sqlite:///{tmp_path}/n.db")
+    # reuse engine for probe: bind session to the SAME engine
+    from sqlalchemy.orm import sessionmaker as _sm
+    db2 = _sm(bind=engine)()
+    rows = db2.query(ReportDB).filter(
+        ReportDB.id.in_(["m1", "l0", "l1", "l2"])).all()
+    vals = {r.id: r.result_data for r in rows}
+    assert len(selects) == 1, f"expected 1 SELECT, got {len(selects)}: {selects}"
+    assert "coalesce" in selects[0].lower()
+    assert vals == {"m1": {"x": 1}, "l0": {"x": 0},
+                    "l1": {"x": 1}, "l2": {"x": 2}}
+
+
 def test_plaintext_fallback_edge_row(tmp_path):
     """Edge row (zst NULL, plaintext present) decodes via the deferred
     plaintext column — migration-window safety net."""
