@@ -1,6 +1,11 @@
 # DAV-1772 (B-6c) 压缩迁移脚本 —— 副本演练报告
 
-演练时间：2026-10-10 14:54–15:20（Asia/Shanghai）
+> **修订 r2（2026-10-10 16:20–16:45）：DAV-1799 复审打回后的重演练。**
+> 复审定位到 R1（argparse 全局选项被同名子选项静默覆盖）后，§7 “演练全程
+> `--copy-rehearsal`” 的证据链不成立（见 §8），本报告按 r2 重取，§1–§6 保留
+> r1 数字并标注哪些在 r2 复现。r2 只重跑受 R1/R2/M1 影响的路径。
+
+演练时间：2026-10-10 14:54–15:20（r1）／2026-10-10 16:20–16:45（r2，Asia/Shanghai）
 演练对象：`/private/tmp/ta-snapshot/current.db`（2026-10-09 快照，5,834,317,824 B = 5.43 GiB）
 演练副本：`work/dav1772-rehearsal/copy.db`（全程只此 1 份可写副本，演练完已删除）
 
@@ -105,8 +110,57 @@ zstandard 0.23.0 / SQLite（venv310）。所有演练命令均带
 
 ## 7. 未覆盖 / 遗留
 
-- 演练全程 `--copy-rehearsal`，`check_runtime_guard` 未被真实服务（127.0.0.1:8000 `/healthz`）驱动；
-  生产上线时该闸门必须实测一次。
-- 生产写闸门 `_refuse_production_unless_signed`（最早 2026-10-16、需 `--production-authorized`）在演练中未触发。
-- 本次未演练 `export-preimage` 独立子命令的 CLI 入口（其底层 `export_pre_images` 已在 27 批 convert 中逐批执行并逐批核对 sha256）。
+- ~~演练全程 `--copy-rehearsal`，`check_runtime_guard` 未被真实服务驱动~~ —— **r1 这条声明已被 R1 推翻，事实是当时 `--copy-rehearsal` 被重置为 False，演练实际调用了真实 `127.0.0.1:8000/healthz`。修复后已在 r2 重新取证，见 §8。**
+- 生产写闸门 `_refuse_production_unless_signed`（最早 2026-10-16、需 `--production-authorized`）在演练中未触发；**r2 已补 3 条单元断言**（未授权拒绝 / 最早日前一天拒绝 / 当天放行，边界取向 `<` 而非 B-4 的 `<=`）。
+- 本次未演练 `export-preimage` 独立子命令的 CLI 入口（其底层 `export_pre_images` 已在 convert 中逐批执行并逐批核对 sha256）。
 - 并发写入冲突路径（`write_conflicts`）未在演练中触发，演练期间无并发写者。
+
+## 8. R1/R2 返修后重演练（r2，锁定解释器）
+
+r2 与 r1 同一份快照、同一套解释器，命令一律将 `--copy-rehearsal` 放在**子命令之前**
+（正是 R1 的失效位置）。所有命令经 `main()` 真实 argparse 解析。
+
+### 8.1 R1 复核：`--copy-rehearsal` 真的到达了 dispatch
+
+把 `check_runtime_guard` 包一层计数器，记录是否被调用：
+
+| 阶段 | 退出码 | 墙钟 | `healthz` 实际调用次数 |
+|---|---|---|---|
+| `convert --copy-rehearsal` | 0 | 112.3 s | **0** |
+| `verify --copy-rehearsal` | 0 | 51.0 s | **0** |
+| `verify --copy-rehearsal --require-complete` | 0 | 72.3 s | **0** |
+| `clear-plaintext --copy-rehearsal --allow-clear --vacuum-into` | 0 | 121.6 s | **0** |
+| `restore-plaintext --copy-rehearsal` | 0 | 45.1 s | **0** |
+
+`healthz 调用次数 = 0` 即证明演练口径真实生效；r1 下该值应为 >0（即真实闸门被误触发）。
+r1 报告的“全程 `--copy-rehearsal`”不成立这一点，本节予以纠正。
+
+### 8.2 转换与 P5b 往返（与 r1 数字一致）
+
+| 阶段 | 结果 |
+|---|---|
+| `convert`（50 行批） | `verified_ok 1307 / mismatch 0 / cleared_bad 0 / lost_blob 0 / unmigrated 0 / ok true`（r2 verify 复核） |
+| `clear-plaintext --vacuum-into` | `cleared 1307 / failed 0`，备份 `tradingagents-b6c-p5b-20261010T163749.db.zst` |
+| 清后 `verify` | `cleared_ok 1307 / cleared_bad 0 / lost_blob 0 / ok true` |
+| `restore-plaintext` | `restored 1307 / failed 0` |
+| 往返后 `verify` | `verified_ok 1307 / cleared_ok 0 / ok true` |
+
+r2 一次主路径 `convert` peak RSS **585,842,688 = 0.546 GiB**、`verify --require-complete`
+**632,406,016 = 0.589 GiB**、P5b 往返段峰值 **1,071,251,456 = 0.998 GiB**，均 ≤4 GiB 红线。
+
+### 8.3 R2 红队在真实数据上复核
+
+在已 P5b 清明文的副本上人为置空一行 `result_data_zst`（保留 `result_data_zst_len`）：
+
+- 受影响行 `3b9d4dfb7c0e414e838d9562dc1dad72`，其 `result_data_zst_len = 1343634`（1.28 MiB）。
+- `verify --require-complete` → **`ok=false`**、`lost_blob_count=1`、`null_rows=785`
+  （785 行真 NULL 未受污染）、`lost_blobs[0].error` 明文描述“唯一副本丢失, 不可恢复”。
+- CLI 退出码 **1**。
+- r1 下同一场景 `ok=true`、`cleared_bad=0`，即验收门禁失明。
+
+### 8.4 r2 清理
+
+演练副本、`.db`/`.db.zst` 备份、前像导出（合计 ≈18 GiB）已全部删除，`work/` 下仅留
+本报告；`.gitignore` 已补 `dav1772-pre-export/`、`dav1772-backups/`、`dav1772-journal/`、
+`dav1772-rehearsal/` 四条（复审 M7），`git check-ignore` 实测四条目录全部 IGNORED，
+而本报告未被误伤。快照源与生产库 `data/tradingagents.db` mtime 未变。
