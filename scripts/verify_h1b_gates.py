@@ -156,8 +156,15 @@ _STREAM_MISC_KEYS = frozenset({
     "horizon", "protocol_version",
 })
 
-# market_data_context: industry probes + Stage 3.5 OHLCV provenance.
-_STREAM_MDC_KEYS = frozenset({"industry", "sector", "industry_linkage", "source_provenance"})
+# market_data_context / misc provenance blocks: industry probes + the FULL
+# Stage 3.5 OHLCV consumption surface (is_daily_ohlcv_unavailable reads
+# source_provenance(.stock_data), data_failure_ledger, daily —
+# evidence_verifier.py:6561; DAV-1803 P0-1). Everything else inside an mdc is
+# unconsumed by the evaluation and may be dropped.
+_STREAM_MDC_KEYS = frozenset({
+    "industry", "sector", "industry_linkage", "source_provenance",
+    "daily", "data_failure_ledger",
+})
 _STREAM_MDC_LINKAGE_KEYS = frozenset({"industry_name", "industry", "sector"})
 _STREAM_MDC_PROVENANCE_KEYS = frozenset({"stock_data"})
 
@@ -213,21 +220,27 @@ def _stream_prune_verdict(obj: Any) -> Any:
 
 
 def _stream_prune_industry_probe(obj: Any) -> Any:
-    """Prune a provenance-style mapping to industry/contract probe fields.
+    """Prune a provenance-style mapping to evaluation-consumed fields.
 
-    market_data_context additionally keeps source_provenance.stock_data —
-    the structured input of is_daily_ohlcv_unavailable (Stage 3.5
-    hold_defensive). All other branches keep only industry probe fields.
+    market_data_context keeps the FULL Stage 3.5 + industry consumption
+    surface (DAV-1803 P0-1): ``daily`` / ``data_failure_ledger`` are the
+    structured inputs of ``is_daily_ohlcv_unavailable`` (hold_defensive
+    verdict) and MUST survive alongside ``source_provenance``(.stock_data)
+    and the ``industry_linkage`` / ``industry`` / ``sector`` probes. A
+    per-horizon mdc map (``{short: mdc, medium: mdc}``, DAV-1506 compat
+    view) is pruned per value. Other keys inside an mdc (fund_flow_evidence,
+    realtime, vpa_*, …) are unconsumed by the gate evaluation and dropped.
+    Other provenance-shaped blocks keep only their industry probes.
     """
     if not isinstance(obj, Mapping):
         return obj
-    if "source_provenance" in obj or "industry_linkage" in obj:
+    if "source_provenance" in obj or "industry_linkage" in obj or "daily" in obj or "data_failure_ledger" in obj:
         # market_data_context-shaped
         out: Dict[str, Any] = {}
         for k, v in obj.items():
-            if v is None:
+            if v is None or k not in _STREAM_MDC_KEYS:
                 continue
-            if k in ("industry", "sector"):
+            if k in ("industry", "sector", "daily", "data_failure_ledger"):
                 out[k] = v
             elif k == "industry_linkage" and isinstance(v, Mapping):
                 out[k] = {lk: v[lk] for lk in _STREAM_MDC_LINKAGE_KEYS if lk in v}
@@ -236,8 +249,19 @@ def _stream_prune_industry_probe(obj: Any) -> Any:
                 for pk, pv in v.items():
                     if pk == "stock_data":
                         prov_out[pk] = pv  # small structured provenance record
+                    elif isinstance(pv, Mapping):
+                        # Non-stock provenance entries may nest an
+                        # industry_linkage probe (extract_report_industry
+                        # reads only mdc.industry_linkage, but keep the
+                        # per-entry industry probe defensively cheap).
+                        kept = {pk2: pv[pk2] for pk2 in ("industry", "sector") if pk2 in pv}
+                        if kept:
+                            prov_out[pk] = kept
                 out[k] = prov_out
         return out
+    if obj and all(isinstance(v, Mapping) and ("daily" in v or "data_failure_ledger" in v or "source_provenance" in v) for v in obj.values()):
+        # per-horizon mdc map ({short: mdc, medium: mdc}, DAV-1506 compat view)
+        return {h: _stream_prune_industry_probe(v) for h, v in obj.items()}
     if "industry_linkage_raw" in obj or "industry_linkage" in obj or obj.keys() & {"stock_data"}:
         # data_collection_provenance-shaped
         out2: Dict[str, Any] = {}
@@ -385,12 +409,6 @@ class _StreamAggregator:
         self.cohort_shas: Set[str] = set()
         self.cohort_keys: Set[str] = set()
         self.cohort_homogeneous_key: Optional[str] = None
-        # Mirror-aggregator cross-check hooks (test-only; see tests/test_h1b_gates.py)
-        self.mirror: Optional[Any] = None
-
-    def attach_mirror(self, mirror: Any) -> None:
-        """Attach a mirror aggregator to verify identical row/unit traversal."""
-        self.mirror = mirror
 
     def feed(self, report: Mapping[str, Any], cohort_spec: Optional[Mapping[str, Any]] = None) -> None:
         """Process one row through the staged pipeline (mirror of filter_v2_completed_reports).
@@ -425,8 +443,6 @@ class _StreamAggregator:
 
         for unit in units:
             self._unit_is_eligible = False
-            if self.mirror is not None:
-                self.mirror.observe_unit(unit, self)
 
             if cohort_spec is not None:
                 # Per-unit cohort gate (module-equivalent, DAV-1322: the four
@@ -548,9 +564,6 @@ class _StreamAggregator:
     def excluded(self) -> Dict[str, int]:
         return dict(self.excluded_counts)
 
-
-# Alias kept for the test-suite import surface (DAV-1767).
-_STREAM_GROUP_KEY_NONE = object()
 
 # Writable handle for the fully-streaming SQLite pipeline: run_verify reads the
 # qualified sample pool from here instead of a returned list. Kept as a module
@@ -1032,56 +1045,6 @@ def _stream_isolation_eval(
     }
 
 
-def _stream_sha256_norm(obj: Any) -> str:
-    """Deterministic hash of a JSON-serializable object (canonical form)."""
-    import hashlib
-
-    payload = json.dumps(
-        obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _stream_report_result(
-    agg: _StreamAggregator,
-    samples: List[Mapping[str, Any]],
-    *,
-    as_of: Optional[str],
-    cohort: Optional[str],
-    cohort_meta: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Assemble run_verify's report_result from the streaming pipeline."""
-    ledger = agg.ledger()
-    initial_excluded = agg.excluded()
-    gate_eval = _stream_run_gate_eval(
-        samples,
-        as_of=as_of,
-        cohort=cohort,
-        excluded_counts=initial_excluded,
-        pipeline_ledger=ledger,
-        cohort_meta=cohort_meta,
-    )
-    isolation_eval = _stream_isolation_eval(
-        samples,
-        system_gate_passed=gate_eval["passed"],
-    )
-    cohort_label = cohort_meta.get("canonical_key") or (str(cohort) if cohort else "unspecified")
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "task_id": "P3-H1b",
-        "cohort": cohort_label,
-        "cohort_info": cohort_meta,
-        "raw_sample_count": ledger.get("raw_count", len(samples)),
-        "qualifying_v2_count": ledger.get("qualifying_v2_count", len(samples)),
-        "sample_count": len(samples),
-        "excluded_counts": gate_eval.get("excluded_counts", initial_excluded),
-        "pipeline_ledger": ledger,
-        "gate_evaluation": gate_eval,
-        "model_isolation": isolation_eval,
-        "recommendation": gate_eval["recommendation"],
-    }
-
-
 # Full column list of api.database.ReportDB.to_dict() minus the whitelist
 # already projected by STREAM_ROW_COLUMNS — used by the streaming read path
 # only, as an ordering-independent field-presence witness (DAV-1767).
@@ -1230,10 +1193,12 @@ def load_reports_from_db(
 ]:
     """Load reports from SQLite database, input file/dir, or fallback paths, filtering strictly for completed v2 samples.
 
-    DAV-1767: the SQLite branch is STREAMING — a lightweight primary-key
-    manifest is pulled first, then each row is re-read one-by-one by id with
-    an explicit reduced-column projection. Only the id manifest persists in
-    memory; full rows and their result_data blobs are never resident together.
+    DAV-1767/DAV-1803: this helper is a LIST-BASED loader used by tests and
+    the file/dir fallback surface. The fully-streaming SQLite pipeline lives
+    in ``_stream_run_sqlite_pipeline`` (used by ``run_verify --db-path``);
+    the SQLite branch here shares the same per-row re-read pattern but
+    accumulates the reduced rows into ``raw_reports`` by contract (callers
+    need the materialized sample list).
     """
     raw_reports: List[Dict[str, Any]] = []
 
@@ -1262,10 +1227,10 @@ def load_reports_from_db(
                 SessionCls = sessionmaker(autocommit=False, autoflush=False, bind=engine)
                 session = SessionCls()
                 try:
-                    # DAV-1767 streaming read: pull the id manifest only, then
-                    # re-read each row one-by-one with an explicit reduced
-                    # column projection. At no point does the full row set or
-                    # the full result_data blob collection reside in memory.
+                    # DAV-1767/DAV-1803: per-row re-read with the explicit
+                    # reduced column projection (memory profile is bounded
+                    # per row; the reduced rows are accumulated here by
+                    # list-loader contract — see docstring).
                     id_manifest: List[str] = [
                         rid
                         for (rid,) in session.query(ReportDB.id)
@@ -1567,7 +1532,9 @@ def run_verify(
     DAV-1767: runs the streaming pipeline (row → horizon units → whitelist
     projection → staged counting → projected sample pool). Output structure,
     keys and verdict semantics are identical to the module evaluation path;
-    equivalence is enforced by the mirror-aggregator tests.
+    equivalence is enforced by TestH1bVerifyGatesStreamingEquivalence in
+    tests/test_h1b_gates.py (staged ledger/matrix/isolation assertions on
+    qualifying, exotic and dual-horizon pools, incl. the file/dir branch).
     """
     # DAV-1767: for the SQLite path the whole pipeline runs row-by-row (no
     # full-residency load); file/dir inputs stay list-based (evaluation JSON).

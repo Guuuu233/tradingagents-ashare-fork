@@ -2072,3 +2072,375 @@ class TestH1bVerifyGatesStreamingEquivalence:
         assert gate_stream["passed"] == gate_mod["passed"]
         iso_stream = mod._stream_isolation_eval(agg.qualifying, system_gate_passed=gate_mod["passed"])
         assert iso_stream == iso_mod
+
+
+class TestH1bVerifyGatesDavian1803Rework:
+    """DAV-1803 rework guards: production daily-shaped mdc must survive the
+    projection (P0-1), the file/dir branch of run_verify must stay equivalent
+    (P1-2), and the whitelist must structurally cover the module consumption
+    surface (P1-4).
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1803", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1803", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _production_daily_mdc() -> dict:
+        """mimic data_collector._build_daily_context + results['market_data_context'].
+
+        The production mdc carries ``daily`` (as_of/completeness) and
+        ``data_failure_ledger`` ALWAYS (data_collector.py:3147,3155); rows may
+        lack source_provenance.stock_data entirely, making these two the only
+        Stage 3.5 evidence available.
+        """
+        return {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {},
+            # big unconsumed blobs that the projection should still drop
+            "fund_flow_evidence": {"records": ["x" * 128], "summary": "y" * 512},
+            "realtime": {"status": "unavailable", "error": "z" * 256},
+        }
+
+    @classmethod
+    def _production_hold_row(cls, idx: int = 0, dual: bool = True) -> dict:
+        """HOLD unit with a production-shaped mdc; no source_provenance.stock_data."""
+        prod_mdc = cls._production_daily_mdc()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie", "direction": "中性"},
+            "market_data_context": prod_mdc,
+            "claims": [
+                {
+                    "claim_id": f"c{idx}",
+                    "speaker_key": "Bull",
+                    "speaker": "Bull Analyst",
+                    "stance": "bullish",
+                    "status": "verified",
+                    "claim": f"多头证据claim文本_{idx}",
+                    "evidence": ["多头证据1"],
+                }
+            ],
+            "challenges": [],
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+        }
+        if dual:
+            return {
+                "id": f"hold-{idx:03d}",
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+                "status": "completed",
+                "result_data": {
+                    "short_term": inner,
+                    "medium_term": dict(
+                        inner, horizon="medium", manager_verdict={"winner": "bull", "direction": "看多"}
+                    ),
+                },
+            }
+        return {
+            "id": f"hold-single-{idx:03d}",
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+            "status": "completed",
+            "result_data": {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie", "direction": "中性"},
+                "market_data_context": prod_mdc,
+                "claims": inner["claims"],
+                "challenges": [],
+            },
+        }
+
+    # ── P0-1: production daily-shaped mdc survives the projection ────────────
+
+    def test_p01_prune_keeps_daily_and_ledger_surface(self):
+        mod = self._import_script()
+        mdc = self._production_daily_mdc()
+        pruned = mod._stream_prune_industry_probe(mdc)
+        # full Stage 3.5 + industry surface survives
+        assert pruned["daily"] == {"as_of": "2026-08-01", "completeness": "completed"}
+        assert pruned["data_failure_ledger"] == []
+        assert pruned["source_provenance"] == {}
+        assert "industry_linkage" not in pruned  # absent stays absent
+        # unconsumed blobs still dropped
+        assert "fund_flow_evidence" not in pruned
+        assert "realtime" not in pruned
+
+    def test_p01_daily_only_mdc_not_mistaken_for_other_blocks(self):
+        mod = self._import_script()
+        # mdc with ONLY daily (no provenance/linkage) must hit the mdc branch
+        mdc = {"daily": {"as_of": "2026-08-01", "completeness": "completed"}}
+        pruned = mod._stream_prune_industry_probe(mdc)
+        assert pruned == {"daily": {"as_of": "2026-08-01", "completeness": "completed"}}
+        # ledger-only mdc likewise
+        mdc2 = {"data_failure_ledger": [{"source": "stock_data", "status": "available"}]}
+        assert mod._stream_prune_industry_probe(mdc2) == mdc2
+
+    def test_p01_per_horizon_mdc_map_pruned_per_value(self):
+        mod = self._import_script()
+        prod = self._production_daily_mdc()
+        per_hz = {"short": dict(prod), "medium": dict(prod)}
+        pruned = mod._stream_prune_industry_probe(per_hz)
+        assert set(pruned.keys()) == {"short", "medium"}
+        assert pruned["short"]["daily"] == prod["daily"]
+        assert "fund_flow_evidence" not in pruned["short"]
+
+    def test_p01_dual_unit_hold_reasons_match_module(self):
+        """The P0-1 CLI repro shape: dual-horizon HOLD with production daily mdc.
+
+        Module split → no hold reasons (daily available). The streamed unit
+        must reach the same verdict — not the fail-closed {} artifact.
+        """
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        row = self._production_hold_row(0, dual=True)
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == []
+        assert collect_hold_semantic_reasons(su) == []
+
+    def test_p01_single_fallback_hold_reasons_match_module(self):
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        row = self._production_hold_row(1, dual=False)
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == []
+        assert collect_hold_semantic_reasons(su) == []
+
+    def test_p01_unavailable_daily_still_flags_hold_defensive(self):
+        """The prune must not over-correct: genuinely unavailable daily (fail
+        data) must still produce hold_defensive exactly as the module does."""
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        fail_mdc = {
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "source_provenance": {
+                "stock_data": {
+                    "status": "unavailable",
+                    "provenance_status": "refused",
+                    "gap": "【数据获取失败】stock_data",
+                }
+            },
+            "data_failure_ledger": [],
+        }
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie"},
+            "market_data_context": fail_mdc,
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+        }
+        row = {"id": "hf", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == ["hold_defensive"]
+        assert collect_hold_semantic_reasons(su) == ["hold_defensive"]
+
+    # ── P1-2: run_verify file/dir branch equivalence (the P0-1 escape hatch) ──
+
+    def _write_repro_dir(self, tmp_path, n: int = 64) -> str:
+        d = tmp_path / "dav1803_repro"
+        d.mkdir(exist_ok=True)
+        for i in range(n):
+            (d / f"hold_{i:03d}.json").write_text(
+                json.dumps(self._production_hold_row(i, dual=True), ensure_ascii=False),
+                encoding="utf-8",
+            )
+        return str(d)
+
+    def test_run_verify_input_dir_matches_module_baseline(self, tmp_path):
+        """CLI repro (64 production-daily HOLD samples, --input-dir): the
+        candidate output must be byte-identical to the parent module path
+        (ex-generated_at) — sample_count 64, no false hold_defensive."""
+        import subprocess
+        import sys
+
+        mod = self._import_script()
+        repro_dir = self._write_repro_dir(tmp_path)
+
+        out_json = tmp_path / "cand.json"
+        proc = subprocess.run(
+            [sys.executable, mod.__file__, "--cohort", "legacy_unversioned:short",
+             "--input-dir", repro_dir, "--output-json", str(out_json)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr[-800:]
+        cand = json.loads(out_json.read_text(encoding="utf-8"))
+        assert cand["sample_count"] == 64
+        assert cand["pipeline_ledger"]["hold_defensive"] == 0
+        assert cand["pipeline_ledger"]["clean_count"] == 128
+        assert cand["pipeline_ledger"]["eligible_count"] == 128
+
+        # module baseline on the same rows (loaded raw, evaluated by the module)
+        rows = []
+        for i in range(64):
+            rows.append(self._production_hold_row(i, dual=True))
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_v2_completed_reports,
+            filter_reports_by_cohort,
+        )
+
+        reps, exc, led = filter_v2_completed_reports(rows, return_ledger=True)
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        gate_mod = mod._module_evaluate_gate_thresholds(
+            pool, as_of=None, cohort="legacy_unversioned:short",
+            excluded_counts=exc, pipeline_ledger=led,
+        )
+        assert cand["sample_count"] == len(pool) == 64
+        assert cand["gate_evaluation"]["matrix"] == gate_mod["matrix"]
+        assert cand["gate_evaluation"]["passed"] == gate_mod["passed"]
+
+    def test_run_verify_input_file_branch_equivalence(self, tmp_path):
+        """The --input-file branch must behave identically to --input-dir."""
+        mod = self._import_script()
+        samples = [self._production_hold_row(i, dual=False) for i in range(8)]
+        in_file = tmp_path / "samples.json"
+        in_file.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
+
+        out_file = tmp_path / "file_out.json"
+        res_file = mod.run_verify(
+            input_file=str(in_file), cohort="legacy_unversioned:short",
+            output_json=str(out_file),
+        )
+        res_dir = None
+        d = tmp_path / "as_dir"
+        d.mkdir()
+        for i, s in enumerate(samples):
+            (d / f"s{i}.json").write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
+        out_dir = tmp_path / "dir_out.json"
+        res_dir = mod.run_verify(
+            input_dir=str(d), cohort="legacy_unversioned:short",
+            output_json=str(out_dir),
+        )
+        for res in (res_file, res_dir):
+            assert res["sample_count"] == 8
+            assert res["pipeline_ledger"]["hold_defensive"] == 0
+        a = {k: v for k, v in res_file.items() if k != "generated_at"}
+        b = {k: v for k, v in res_dir.items() if k != "generated_at"}
+        assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    # ── P1-4: whitelist ⊇ module consumption surface (structural guard) ─────
+
+    def test_p14_mdc_whitelist_covers_stage35_consumption(self):
+        """is_daily_ohlcv_unavailable (Stage 3.5) + extract_report_industry
+        consume: source_provenance, data_failure_ledger, daily,
+        industry_linkage, industry, sector. The mdc whitelist must be a
+        superset — DAV-1803 P0-1 was exactly this superset breaking."""
+        import inspect
+
+        from tradingagents.agents.utils import evidence_verifier
+
+        mod = self._import_script()
+        src = inspect.getsource(evidence_verifier.is_daily_ohlcv_unavailable)
+        consumed = {
+            "source_provenance", "data_failure_ledger", "daily", "stock_data",
+        }
+        for key in ("source_provenance", "data_failure_ledger", "daily"):
+            assert f'.get("{key}")' in src or f'get("{key}")' in src, key
+        assert consumed - {"stock_data"} <= mod._STREAM_MDC_KEYS
+        assert "daily" in mod._STREAM_MDC_KEYS
+        assert "data_failure_ledger" in mod._STREAM_MDC_KEYS
+        assert "source_provenance" in mod._STREAM_MDC_KEYS
+        assert "industry_linkage" in mod._STREAM_MDC_KEYS
+        assert {"industry", "sector"} <= mod._STREAM_MDC_KEYS
+
+    def test_p14_stream_whitelists_superset_of_eval_keys(self):
+        """The unit projection whitelist must cover every key the streaming
+        evaluation reads from a sample (audit-backed superset assertion)."""
+        mod = self._import_script()
+        required = {
+            "analysis_status", "trade_action", "decision_status", "decision",
+            "direction", "status", "protocol_version", "protocol_stage",
+            "v2_debate_enabled", "feature_flags", "manager_verdict",
+            "debate_winner", "investment_debate_state", "claims", "challenges",
+            "shadow_credit_metrics",
+            "t_plus_5_status", "t_plus_5_date", "t_plus_5_price",
+            "t_plus_5_direction_hit", "t_plus_5_evaluated",
+            "is_suspended", "suspension", "is_in_flight", "is_t_plus_5_due",
+            "t_plus_1_open", "entry_price", "entry_price_source", "target_price",
+            "decision_model_version", "evidence_contract_version",
+            "price_basis_version", "price_ref_contract_version",
+            "generated_by_commit_sha", "commit_sha", "horizon",
+            "short_term", "medium_term", "industry", "sector",
+            "market_data_context", "market_regime", "regime",
+            "id", "report_id", "symbol", "trade_date", "date", "created_at",
+            "user_id", "model_id_by_stance",
+            "macro_report", "market_report", "sentiment_report", "news_report",
+            "fundamentals_report", "smart_money_report", "volume_price_report",
+            "instrument_context", "data_collection_provenance",
+            "quadrant_1_protocol_metadata", "metadata",
+        }
+        missing = required - mod._STREAM_EVAL_RESULT_KEYS
+        assert not missing, f"whitelist drift: missing {sorted(missing)}"
+        # debate/verdict sub-whitelists must cover their consumed keys
+        for key in ("winner", "direction", "claim_evidence_summary",
+                    "consistency_check_passed", "failed_checks",
+                    "adopted_challenge_ids", "ohlcv_gate_applied",
+                    "fund_flow_dispute_gate_applied", "entry"):
+            assert key in mod._STREAM_VERDICT_KEYS, key
+        for key in ("manager_verdict", "claims", "challenges", "round_messages",
+                    "claim_evidence_summary", "protocol_version"):
+            assert key in mod._STREAM_DEBATE_KEYS, key
+
+    # ── P1-1: leaf-key count documentation guard ─────────────────────────────
+
+    def test_p11_leaf_key_count_is_deterministic(self, tmp_path):
+        """The '160 keys' card wording: the comparable JSON surface is
+        (all leaf keys − generated_at) and must be identical between two runs
+        on the same config. Pin the actual number so future key additions are
+        a conscious decision, not silent drift."""
+        mod = self._import_script()
+        samples = [self._production_hold_row(i, dual=False) for i in range(3)]
+        in_file = tmp_path / "s.json"
+        in_file.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
+        res1 = mod.run_verify(input_file=str(in_file), cohort="legacy_unversioned:short")
+        res2 = mod.run_verify(input_file=str(in_file), cohort="legacy_unversioned:short")
+
+        def leaves(o) -> int:
+            if isinstance(o, dict):
+                return sum(leaves(v) for v in o.values())
+            if isinstance(o, list):
+                return sum(leaves(v) for v in o)
+            return 1
+
+        def strip(r):
+            r = json.loads(json.dumps(r, ensure_ascii=False))
+            r.pop("generated_at")
+            return r
+
+        n1, n2 = leaves(strip(res1)), leaves(strip(res2))
+        assert n1 == n2, "comparable key surface drifted between identical runs"
+        assert json.dumps(strip(res1), sort_keys=True) == json.dumps(strip(res2), sort_keys=True)
