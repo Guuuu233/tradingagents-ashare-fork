@@ -196,3 +196,125 @@ def test_graph_construction_init_count_does_not_grow_with_n(caplog):
         f"got {len(inits)}: {[r.getMessage() for r in inits]}"
     )
     assert pool_stats()["build"] == 2
+
+
+# ---------------------------------------------------------------------------
+# DAV-1842 MED-1: LRU cap + explicit close of evicted connections
+# ---------------------------------------------------------------------------
+
+
+def test_pool_is_lru_capped_and_closes_evicted_transports():
+    """Over the cap, the least-recently-*used* entry is dropped and closed."""
+    pool_max_size = pool_stats()["max_size"]
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_FakeLLM()))
+
+    llm0 = get_or_create_llm(factory, provider="openai", model="m0", base_url=None)
+    # Touch llm0 so it is no longer the LRU entry.
+    assert get_or_create_llm(factory, provider="openai", model="m0", base_url=None) is llm0
+
+    keys = []
+    for i in range(1, pool_max_size + 1):
+        keys.append(get_or_create_llm(factory, provider="openai", model=f"m{i}", base_url=None))
+
+    stats = pool_stats()
+    assert stats["size"] == pool_max_size, stats
+    assert stats["evicted"] == 1, stats
+    assert stats["closed"] == 1, stats
+    # Eviction must close the LRU instance's upstream transports.
+    assert llm0.root_client.close.call_count == 1
+    # LRU recency: the still-referenced llm0 was the one dropped, not the
+    # most recently built one.
+    assert keys[-1].root_client.close.call_count == 0
+    # A key built after eviction rebuilds from the factory.
+    factory.side_effect = None
+    factory.return_value = _FakeClient(_FakeLLM())
+    assert get_or_create_llm(factory, provider="openai", model="m0", base_url=None) is not llm0
+
+
+def test_lru_recency_prefers_reused_key_over_older_inserts():
+    pool_max_size = pool_stats()["max_size"]
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_FakeLLM()))
+    held = []
+    for i in range(pool_max_size):
+        held.append(get_or_create_llm(factory, provider="openai", model=f"m{i}", base_url=None))
+    # Re-hit the oldest key twice -> it becomes most-recently-used.
+    get_or_create_llm(factory, provider="openai", model="m0", base_url=None)
+    get_or_create_llm(factory, provider="openai", model="m0", base_url=None)
+    get_or_create_llm(factory, provider="openai", model="extra", base_url=None)
+
+    assert pool_stats()["evicted"] == 1
+    assert held[0].root_client.close.call_count == 0, "recently used entry was evicted"
+    assert held[1].root_client.close.call_count == 1, "true LRU entry was not evicted"
+
+
+def test_pool_max_size_env_override(monkeypatch):
+    monkeypatch.setenv("TA_LLM_POOL_MAX_SIZE", "3")
+    assert pool_stats()["max_size"] == 3
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_FakeLLM()))
+    for i in range(6):
+        get_or_create_llm(factory, provider="openai", model=f"m{i}", base_url=None)
+    assert pool_stats()["size"] == 3
+    # Invalid values fall back to the documented default.
+    monkeypatch.setenv("TA_LLM_POOL_MAX_SIZE", "0")
+    assert pool_stats()["max_size"] == 32
+    monkeypatch.setenv("TA_LLM_POOL_MAX_SIZE", "nonsense")
+    assert pool_stats()["max_size"] == 32
+
+
+# ---------------------------------------------------------------------------
+# DAV-1842 MED-2: async teardown awaits completion
+# ---------------------------------------------------------------------------
+
+
+def test_aclose_llm_pool_awaits_async_transport_close():
+    """No fire-and-forget: aclose_llm_pool returns only after aclose ran."""
+    closed_flags = []
+
+    class _SlowAsyncClient:
+        def __init__(self):
+            self.is_closed = False
+
+        async def close(self):
+            await asyncio.sleep(0.05)  # real await point
+            self.is_closed = True
+
+    class _SlowLLM(_FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self._async_sdk = _SlowAsyncClient()
+            self.root_async_client = self._async_sdk
+
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_SlowLLM()))
+    llm = get_or_create_llm(factory, provider="openai", model="slow", base_url=None)
+    sdk = llm.root_async_client
+
+    async def _run():
+        return await aclose_llm_pool()
+
+    instances, transports = asyncio.run(_run())
+    assert (instances, transports) == (1, 2), (instances, transports)
+    # The key MED-2 assertion: without an awaited close this is still False
+    # right after aclose_llm_pool() returns.
+    assert sdk.is_closed is True, "async transport close did not complete before return"
+
+
+def test_aclose_transport_awaits_injected_httpx_async_client():
+    class _HttpxAsync:
+        def __init__(self):
+            self.is_closed = False
+
+        async def aclose(self):
+            await asyncio.sleep(0.02)
+            self.is_closed = True
+
+    class _LLM(_FakeLLM):
+        def __init__(self):
+            super().__init__()
+            self.http_async_client = _HttpxAsync()
+
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_LLM()))
+    llm = get_or_create_llm(factory, provider="openai", model="inj", base_url=None)
+    httpx_client = llm.http_async_client
+
+    asyncio.run(aclose_llm_pool())
+    assert httpx_client.is_closed is True

@@ -30,15 +30,43 @@ can never be served a stale shared instance.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
+from collections import OrderedDict
 from typing import Any, Callable, Dict, Hashable, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
-_POOL: Dict[Hashable, Any] = {}
+
+# Insertion-ordered registry: re-inserted keys move to the end, so the first
+# item is always the least-recently-used entry. Bounded by _pool_max_size()
+# (DAV-1842 MED-1): without a cap, every historical (provider, model,
+# base_url, api_key, params) signature keeps its instance — and that
+# instance's httpx connection pool — alive for the whole process lifetime.
+_POOL: "OrderedDict[Hashable, Any]" = OrderedDict()
+
+# Default cap; overridable for tests / very wide role matrices via
+# TA_LLM_POOL_MAX_SIZE (must be >= 1).
+DEFAULT_POOL_MAX_SIZE = 32
+
+
+def _pool_max_size() -> int:
+    raw = (os.environ.get("TA_LLM_POOL_MAX_SIZE") or "").strip()
+    if not raw:
+        return DEFAULT_POOL_MAX_SIZE
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.warning("[LLMPool] invalid TA_LLM_POOL_MAX_SIZE=%r; using %s", raw, DEFAULT_POOL_MAX_SIZE)
+        return DEFAULT_POOL_MAX_SIZE
+    if value < 1:
+        _logger.warning("[LLMPool] TA_LLM_POOL_MAX_SIZE=%r < 1; using %s", value, DEFAULT_POOL_MAX_SIZE)
+        return DEFAULT_POOL_MAX_SIZE
+    return value
+
 
 # Observability counters (read by tests / health probes via pool_stats()).
 _COUNTS = {
@@ -47,6 +75,7 @@ _COUNTS = {
     "miss": 0,    # first requests for a key
     "bypass": 0,  # requests not poolable (unhashable/non-scalar kwargs)
     "closed": 0,  # instances explicitly closed
+    "evicted": 0,  # instances dropped by the LRU cap (DAV-1842 MED-1)
 }
 
 
@@ -121,8 +150,11 @@ def get_or_create_llm(
 
     ``factory`` is called with ``(provider=..., model=..., base_url=..., **kwargs)``
     on a miss only; it must return either a ``BaseLLMClient`` (``get_llm()``)
-    or a ready LLM instance. Results are cached indefinitely until the pool
-    is closed or invalidated.
+    or a ready LLM instance. Entries are kept least-recently-used last and the
+    registry is capped at :func:`_pool_max_size`; an evicted instance has its
+    upstream transports explicitly closed (DAV-1842 MED-1). The pool is
+    process-wide and lives until :func:`invalidate_llm_pool` /
+    :func:`aclose_llm_pool` — it is *not* released at the end of one run.
     """
     if _pool_disabled():
         _COUNTS["bypass"] += 1
@@ -140,6 +172,7 @@ def get_or_create_llm(
     with _LOCK:
         hit = _POOL.get(key)
         if hit is not None:
+            _POOL.move_to_end(key)
             _COUNTS["hit"] += 1
             return hit
 
@@ -149,27 +182,50 @@ def get_or_create_llm(
         factory(provider=provider, model=model, base_url=base_url, **kwargs)
     )
 
+    evicted: list = []
     with _LOCK:
         existing = _POOL.get(key)
         if existing is not None:
             # A racing builder won; drop ours (closing it below) and keep
             # theirs so pool identity stays unique per key.
+            _POOL.move_to_end(key)
             _close_llm_instance(built, async_close=False)
             _COUNTS["hit"] += 1
             return existing
         _POOL[key] = built
+        max_size = _pool_max_size()
+        while len(_POOL) > max_size:
+            evicted.append(_POOL.popitem(last=False))
         _COUNTS["miss"] += 1
         _COUNTS["build"] += 1
-        return built
+
+    # Eviction closes outside the lock: transport close can block, and a
+    # dropped entry must never be able to delay unrelated hits.
+    for old_key, old_llm in evicted:
+        try:
+            _close_llm_instance(old_llm, async_close=False)
+            _COUNTS["closed"] += 1
+            _COUNTS["evicted"] += 1
+            _logger.debug("[LLMPool] evicted LRU key %r (max_size=%s)", old_key, max_size)
+        except Exception as exc:
+            _logger.warning("[LLMPool] failed closing evicted llm %r: %r", old_key, exc)
+    return built
 
 
-def _close_transport(llm: Any, *, async_close: bool) -> int:
+def _close_transport(llm: Any, *, async_close: bool, skip_async: bool = False) -> int:
     """Close the httpx transports reachable from a LangChain LLM instance.
 
     Handles langchain-openai's ``root_client``/``root_async_client`` (each
     an openai SDK client whose ``._client`` is the httpx transport) and
     explicitly injected ``http_client``/``http_async_client``. Best-effort:
     never raises. Returns the number of SDK client / httpx closes issued.
+
+    ``async_close=True`` schedules async transport closes on the running
+    loop without awaiting them; use :func:`_aclose_transport` from coroutine
+    contexts (e.g. ``aclose_llm_pool``) so shutdown actually completes the
+    close before the loop closes (DAV-1842 MED-2). ``skip_async=True`` leaves
+    every async transport untouched (the awaited path closes them itself,
+    so this avoids double-closing the same SDK client).
     """
     closed = 0
     seen: set = set()
@@ -213,6 +269,8 @@ def _close_transport(llm: Any, *, async_close: bool) -> int:
 
     def _close_httpx_async(httpx_client: Any) -> None:
         nonlocal closed
+        if skip_async:
+            return
         if not _mark(httpx_client):
             return
         try:
@@ -234,28 +292,13 @@ def _close_transport(llm: Any, *, async_close: bool) -> int:
         except Exception as exc:
             _logger.debug("[LLMPool] httpx async client close failed: %r", exc)
 
-    async def _aclose_sdk_client(sdk_client: Any) -> None:
-        try:
-            is_closed = getattr(sdk_client, "is_closed", None)
-            if callable(is_closed) and is_closed():
-                return
-            close = getattr(sdk_client, "close", None)
-            if close is not None:
-                res = close()
-                import inspect
-
-                if inspect.isawaitable(res):
-                    await res
-        except Exception as exc:
-            _logger.debug("[LLMPool] async sdk client close failed: %r", exc)
-
     # langchain-openai: root_client (openai.OpenAI) / root_async_client
     # (openai.AsyncOpenAI). Closing the SDK client closes its httpx
     # transport (SyncAPIClient.close → self._client.close()).
     _close_sdk_client(getattr(llm, "root_client", None))
 
     root_async = getattr(llm, "root_async_client", None)
-    if root_async is not None and _mark(root_async):
+    if root_async is not None and not skip_async and _mark(root_async):
         try:
             is_closed = getattr(root_async, "is_closed", None)
             already = callable(is_closed) and is_closed()
@@ -292,6 +335,68 @@ def _close_transport(llm: Any, *, async_close: bool) -> int:
     return closed
 
 
+async def _aclose_sdk_client(sdk_client: Any) -> int:
+    """Await ``sdk_client.close()`` if it is awaitable, else close inline.
+
+    openai.AsyncOpenAI.close() is a coroutine; awaiting it (rather than
+    create_task) is what makes shutdown deterministic (DAV-1842 MED-2).
+    """
+    if sdk_client is None:
+        return 0
+    try:
+        is_closed = getattr(sdk_client, "is_closed", None)
+        if callable(is_closed) and is_closed():
+            return 0
+    except Exception:
+        pass
+    close = getattr(sdk_client, "close", None)
+    if not callable(close):
+        return 0
+    try:
+        res = close()
+        if inspect.isawaitable(res):
+            await res
+        return 1
+    except Exception as exc:
+        _logger.debug("[LLMPool] async sdk client close failed: %r", exc)
+        return 0
+
+
+async def _aclose_httpx_async(httpx_client: Any) -> int:
+    """Await ``httpx_client.aclose()`` (idempotent, never raises)."""
+    if httpx_client is None:
+        return 0
+    try:
+        if getattr(httpx_client, "is_closed", False):
+            return 0
+    except Exception:
+        pass
+    aclose = getattr(httpx_client, "aclose", None)
+    if not callable(aclose):
+        return 0
+    try:
+        res = aclose()
+        if inspect.isawaitable(res):
+            await res
+        return 1
+    except Exception as exc:
+        _logger.debug("[LLMPool] awaited httpx async close failed: %r", exc)
+        return 0
+
+
+async def _aclose_transport(llm: Any) -> int:
+    """Async teardown: every async transport is awaited to completion.
+
+    The sync transports (openai.OpenAI ``root_client``, injected httpx
+    ``http_client``) are closed inline — ``.close()`` on those is blocking
+    and already returns only once the transport is released.
+    """
+    closed = _close_transport(llm, async_close=False, skip_async=True)
+    closed += await _aclose_sdk_client(getattr(llm, "root_async_client", None))
+    closed += await _aclose_httpx_async(getattr(llm, "http_async_client", None))
+    return closed
+
+
 async def _await_and_forget(coro):
     try:
         await coro
@@ -301,6 +406,7 @@ async def _await_and_forget(coro):
 
 def _close_llm_instance(llm: Any, *, async_close: bool) -> int:
     return _close_transport(llm, async_close=async_close)
+
 
 
 def _pool_disabled() -> bool:
@@ -337,7 +443,7 @@ async def aclose_llm_pool() -> Tuple[int, int]:
     transports = 0
     for key, llm in items:
         try:
-            transports += _close_llm_instance(llm, async_close=True)
+            transports += await _aclose_transport(llm)
             _COUNTS["closed"] += 1
         except Exception as exc:
             _logger.warning("[LLMPool] failed closing pooled llm %r: %r", key, exc)
@@ -352,7 +458,7 @@ close_llm_pool = invalidate_llm_pool
 def pool_stats() -> Dict[str, int]:
     """Snapshot of pool counters (for tests, health probes, evidence)."""
     with _LOCK:
-        return {**_COUNTS, "size": len(_POOL)}
+        return {**_COUNTS, "size": len(_POOL), "max_size": _pool_max_size()}
 
 
 def reset_pool_stats() -> None:

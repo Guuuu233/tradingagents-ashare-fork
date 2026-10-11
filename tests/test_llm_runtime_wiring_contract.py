@@ -462,6 +462,11 @@ class TestRoleProviderAndBaseUrlInheritance:
             ("openai", "gpt-4o-mini", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         }
         assert expected_configs <= distinct_configs
+        # DAV-1842 LOW-1: also pin the other direction — pooling must not
+        # build anything outside the expected configs, and each distinct
+        # config must be built exactly once (not once per role).
+        assert distinct_configs == expected_configs
+        assert len(captured_calls) == len(expected_configs)
 
         # 1. Heterogeneous role 'market' (anthropic with no base_url) must NOT inherit OpenAI custom base_url
         market_calls = [c for c in captured_calls if c["provider"] == "anthropic" and c["model"] == "claude-3-5-haiku-20241022"]
