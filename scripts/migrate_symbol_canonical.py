@@ -31,6 +31,7 @@ from tradingagents.agents.utils.symbol_canonical import (
     find_symbol_collisions,
     process_symbols_dataset,
 )
+from tradingagents.storage.compressed_json import check_service_storage_guard
 
 DEFAULT_PROD_DB = "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db"
 DEFAULT_BACKUP_DB = str(PROJECT_ROOT / "work" / "tradingagents_symbol_canonical_backup.db")
@@ -69,8 +70,24 @@ def create_sqlite_backup(prod_db_path: str, backup_db_path: str) -> None:
 def run_migration_on_backup(
     backup_db_path: str,
     dry_run: bool = False,
+    health_url: str = "http://127.0.0.1:8000",
 ) -> Dict[str, Any]:
-    """Execute symbol canonicalization on the backup database copy."""
+    """Execute symbol canonicalization on the backup database copy.
+
+    DAV-1903: non-dry-run writes go through the shared
+    :func:`check_service_storage_guard` first — every script that writes
+    ``reports`` must prove service/script ``report_storage_mode`` agreement
+    and an idle runtime, not only backfill. ``health_url`` may point at any
+    service endpoint; the DB-side probe counts the *backup* DB's busy rows.
+    """
+    if not dry_run:
+        guard = check_service_storage_guard(backup_db_path, health_url)
+        if not guard["allowed"]:
+            print(f"      Write guard refused: {guard}")
+            return {"metadata": {"backup_db_path": str(Path(backup_db_path).resolve()),
+                                 "dry_run": dry_run,
+                                 "guard_refused": True},
+                    "skipped": True, "guard": guard}
     conn = sqlite3.connect(backup_db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -249,13 +266,16 @@ def main() -> int:
     parser.add_argument("--report-json", default=DEFAULT_REPORT_JSON, help="Output JSON report path")
     parser.add_argument("--report-md", default=DEFAULT_REPORT_MD, help="Output Markdown report path")
     parser.add_argument("--dry-run", action="store_true", help="Analyze without modifying backup DB")
+    parser.add_argument("--health-url", default="http://127.0.0.1:8000",
+                        help="Service /healthz base URL for the pre-write storage-mode/idle guard")
     args = parser.parse_args()
 
     # Step 1: Atomic backup
     create_sqlite_backup(args.prod_db, args.backup_db)
 
     # Step 2: Run migration on backup only
-    report = run_migration_on_backup(args.backup_db, dry_run=args.dry_run)
+    report = run_migration_on_backup(args.backup_db, dry_run=args.dry_run,
+                                     health_url=args.health_url)
 
     # Step 3: Save JSON report
     json_path = Path(args.report_json).resolve()
