@@ -15,15 +15,23 @@ Physical layout (design ``docs/dav1770-b6-compression-design.md`` §2/§3):
 * 31 ``pg_*`` columns            — materialized list-page scalars populated
   on every result_data write (§2.2).
 
-``REPORT_STORAGE_MODE`` (read selector, §4/§6 — restart-time switch):
+``REPORT_STORAGE_MODE`` (read/write selector, §4/§6 — restart-time switch):
 
 * ``plaintext``  (default): ``ReportDB.result_data`` maps the plaintext
   JSON column — byte-identical pre-compression behaviour (P0/P1).
-* ``compressed`` (P3): ``ReportDB.result_data`` maps the BLOB column via
-  :class:`ZstdJSON` (``Column('result_data_zst', ZstdJSON,
-  key='result_data')``). ``dual`` aliases to ``compressed``.
-* Instant rollback: set back to ``plaintext`` — the shadow write has kept
-  the plaintext column byte-identical to the decoded bytes on every write.
+* ``compressed`` (P3): ``ReportDB.result_data`` reads a SQL-level
+  ``COALESCE(result_data_zst, result_data)`` decoded by :class:`ZstdJSON`.
+  Both physical columns are written on every ``result_data`` change
+  (dual write — plaintext kept byte-identical as rollback insurance).
+  ``dual`` aliases to ``compressed``.
+* ``compressed_only`` (P4): same COALESCE read mapping as ``compressed``,
+  but the flush-time sync leaves the plaintext column ``NULL`` on new /
+  updated rows — only the compressed column and the 31 ``pg_*`` columns
+  are written (§4 P4 行: 只写压缩列和物化列，新写或更新行的明文列置
+  NULL). Switching back to ``compressed`` restores dual-write; rows
+  nulled during this window are refilled by B-6c ``restore-plaintext``.
+* Instant rollback: set back to ``plaintext`` — the dual-write shadow has
+  kept the plaintext column byte-identical on every write (P1–P3).
 
 Write path (all modes): a ``before_flush`` hook on the ``result_data``
 attribute history (:func:`sync_report_storage_row`) keeps the non-read-side
@@ -60,7 +68,7 @@ logger = logging.getLogger(__name__)
 
 _STORAGE_MODE_ENV = "REPORT_STORAGE_MODE"
 _WRITE_CONCURRENCY_ENV = "REPORT_ZSTD_WRITE_CONCURRENCY"
-_VALID_MODES = {"plaintext", "dual", "compressed"}
+_VALID_MODES = {"plaintext", "dual", "compressed", "compressed_only"}
 
 DEFAULT_WRITE_CONCURRENCY = 4
 # Output cap used ONLY for frames lacking a content-size header (streamed
@@ -77,11 +85,13 @@ ZSTD_LEVEL = 9
 
 
 def report_storage_mode() -> str:
-    """Read mode from ``REPORT_STORAGE_MODE`` (``dual`` → ``compressed``).
+    """Read/write mode from ``REPORT_STORAGE_MODE`` (``dual`` → ``compressed``).
 
     Evaluated once per process (env is a restart-time switch); the result
     decides which physical column the ``result_data`` ORM attribute binds
-    at class-definition time.
+    at class-definition time and whether the flush-time sync writes the
+    plaintext shadow (``compressed``/``dual``/``plaintext``) or leaves it
+    ``NULL`` (``compressed_only``).
     """
     mode = os.getenv(_STORAGE_MODE_ENV, "plaintext").strip().lower()
     if mode not in _VALID_MODES:
@@ -91,6 +101,16 @@ def report_storage_mode() -> str:
         )
         return "plaintext"
     return "compressed" if mode == "dual" else mode
+
+
+def writes_plaintext(mode: Optional[str] = None) -> bool:
+    """True when ``mode`` still writes the plaintext ``result_data`` column.
+
+    ``compressed_only`` (P4) is the only mode that leaves the plaintext
+    column ``NULL`` on new/updated rows; every other mode dual-writes or
+    writes plaintext as the read source.
+    """
+    return (mode or report_storage_mode()) != "compressed_only"
 
 
 def _env_concurrency() -> int:
@@ -460,13 +480,28 @@ def sync_report_storage_row(report: Any, *, is_pending: bool = False) -> None:
     raw_bytes = result_data_plaintext_bytes(value)
     mode = report_storage_mode()
 
-    # Both physical write columns are always populated on every
-    # result_data change — the read side never depends on which one it
-    # reads (coalesce / plaintext).
+    # The compressed column + zst_len + pg_* are written on every
+    # result_data change in every mode. The plaintext shadow column is
+    # also kept byte-identical on every write — EXCEPT in ``compressed_only``
+    # (P4), where it is forced to NULL so new/updated rows store only the
+    # compressed column (§4 P4 行; rollback = switch mode back to
+    # ``compressed`` to resume dual-write + B-6c ``restore-plaintext``
+    # refills the nulled rows).
+    plaintext_value = value if mode != "compressed_only" else None
     if hasattr(type(report), "result_data_plaintext"):
         # Deferred JSON attr — accepts dict or text; writes identical
-        # json.dumps bytes → decompress(zst) == stored plaintext.
-        report.result_data_plaintext = value
+        # json.dumps bytes → decompress(zst) == stored plaintext. In
+        # compressed_only a dict→None would serialize to the string 'null',
+        # not a real SQL NULL, so bind a SQL NULL literal explicitly.
+        if plaintext_value is None and mode == "compressed_only":
+            from sqlalchemy import null as _sa_null
+            report.result_data_plaintext = _sa_null()
+        else:
+            report.result_data_plaintext = plaintext_value
+    elif mode == "compressed_only":
+        # compressed_only only exists in the compressed-mapped branch
+        # (result_data_plaintext is present); this is a defensive no-op.
+        pass
     if hasattr(type(report), "result_data_zst"):
         # Deferred raw BLOB attr — stores compressed bytes directly.
         report.result_data_zst = (
@@ -514,6 +549,7 @@ __all__ = [
     "set_write_concurrency_limit",
     "sync_report_storage_row",
     "write_concurrency_limit",
+    "writes_plaintext",
     "B6B_COLUMN_DDL",
     "B6B_ORDERED_COLUMNS",
 ]

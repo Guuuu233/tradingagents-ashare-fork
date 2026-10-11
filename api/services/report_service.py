@@ -2985,14 +2985,15 @@ _POST_GATE_FRAGMENT_PATHS: Dict[str, str] = {
 def _post_gate_frag_expressions():
     """Fragment slot → query expression.
 
-    compressed mode: materialized ``pg_*`` columns (§2.2 — list page never
-    decompresses). plaintext mode: ``json_extract`` on the plaintext column
-    — required during P1–P2, when ``pg_*`` columns exist but hold no data
-    for pre-existing rows until the B-6c backfill lands (reading them early
-    would blank the post-gate display). Column-existence is guaranteed in
-    compressed mode because P3 cannot be entered before P2 backfill (§4).
+    compressed/compressed_only mode: materialized ``pg_*`` columns (§2.2 —
+    list page never decompresses). plaintext mode: ``json_extract`` on the
+    plaintext column — required during P1–P2, when ``pg_*`` columns exist
+    but hold no data for pre-existing rows until the B-6c backfill lands
+    (reading them early would blank the post-gate display). Column-existence
+    is guaranteed in compressed mode because P3 cannot be entered before P2
+    backfill (§4).
     """
-    if report_storage_mode() == "compressed":
+    if report_storage_mode() in ("compressed", "compressed_only"):
         return {
             name: getattr(ReportDB, col_name)
             for name, col_name in PG_FRAGMENT_COLUMN_MAP.items()
