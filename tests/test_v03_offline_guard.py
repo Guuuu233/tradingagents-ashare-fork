@@ -412,7 +412,7 @@ def test_rt5_online_mode_still_uses_vendor_provider():
     assert not isinstance(offline_provider, VendorPriceDataProvider)
 
 
-def test_rt5_cli_requires_offline_for_price_snapshot():
+def test_rt5_cli_requires_offline_for_price_snapshot(repo_script_env):
     """--price-snapshot without --offline must be rejected by argparse."""
     import subprocess
 
@@ -427,6 +427,8 @@ def test_rt5_cli_requires_offline_for_price_snapshot():
         capture_output=True,
         text=True,
         timeout=60,
+        env=repo_script_env,
+        cwd=str(PROJECT_ROOT),
     )
     assert proc.returncode != 0
     assert "--price-snapshot requires --offline" in (proc.stderr + proc.stdout)

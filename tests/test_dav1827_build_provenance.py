@@ -23,11 +23,12 @@ def test_script_sha256_matches_on_disk_file():
         script.read_bytes()).hexdigest()
 
 
-def test_git_sha_matches_repo_head_and_dirty_flag_is_bool():
+def test_git_sha_matches_repo_head_and_dirty_flag_is_bool(repo_script_env):
     prov = bc.build_provenance()
     head = subprocess.run(["git", "rev-parse", "HEAD"],
                           cwd=Path(bc.__file__).resolve().parents[2],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          env=repo_script_env)
     assert head.returncode == 0
     assert prov["git_sha"] == head.stdout.strip()
     assert re.fullmatch(r"[0-9a-f]{40}", prov["git_sha"])

@@ -18,6 +18,8 @@ import json
 import os
 import pytest
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 from tradingagents.agents.utils.agent_states import (
     DEFAULT_FEATURE_FLAGS,
     PROTOCOL_VERSION_V1_LEGACY,
@@ -1072,7 +1074,7 @@ class TestH1bVerifyGatesDbPath:
         assert res["gate_evaluation"]["matrix"]["dimension_n"]["details"]["sample_count"] == 0
         assert res["recommendation"] == "KEEP_FALSE"
 
-    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db, tmp_path):
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db, tmp_path, repo_script_env):
         """CLI invocation with --db-path exits with 0 and writes evaluation report."""
         import subprocess
         import sys
@@ -1087,6 +1089,8 @@ class TestH1bVerifyGatesDbPath:
             [sys.executable, script_path, "--cohort", "legacy_unversioned", "--db-path", custom_sqlite_db, "--output-json", out_json],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 0
         assert os.path.exists(out_json)
@@ -1425,7 +1429,7 @@ class TestH1bTPlus5DueInference:
         assert dim_t5["details"]["completed_count"] == 0
         assert dim_t5["details"]["completeness_rate"] == 0.0
 
-    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, tmp_path):
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, tmp_path, repo_script_env):
         """CLI invocation with bad --db-path exits with non-zero exit code and error logged."""
         import subprocess
         import sys
@@ -1441,6 +1445,8 @@ class TestH1bTPlus5DueInference:
             [sys.executable, script_path, "--db-path", fake_db, "--output-json", out_json],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode != 0
         assert not os.path.exists(out_json)
@@ -1449,21 +1455,30 @@ class TestH1bTPlus5DueInference:
 class TestH1bCohortIsolation:
     """Test suite for DAV-601: H1b cohort isolation (CLI + evaluation entry)."""
 
-    def test_cli_missing_cohort_fails_closed_nonzero_exit_and_no_pass_report(self, tmp_path):
+    def test_cli_missing_cohort_fails_closed_nonzero_exit_and_no_pass_report(self, tmp_path, repo_script_env):
         """1. 未传 --cohort: 必须非零退出，严禁输出 PASS 报告。"""
         import subprocess
         import sys
+
+        from sqlalchemy import create_engine
+        from api.database import Base
 
         script_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "scripts",
             "verify_h1b_gates.py",
         )
+        empty_db = str(tmp_path / "cohort_guard_empty.db")
+        engine = create_engine(f"sqlite:///{empty_db}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
         out_json = str(tmp_path / "cli_no_cohort.json")
         proc = subprocess.run(
-            [sys.executable, script_path, "--output-json", out_json],
+            [sys.executable, script_path, "--db-path", empty_db, "--output-json", out_json],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         # Must exit non-zero
         assert proc.returncode != 0
@@ -1473,21 +1488,30 @@ class TestH1bCohortIsolation:
                 data = json.load(f)
             assert data.get("gate_evaluation", {}).get("passed") is not True
 
-    def test_cli_empty_cohort_fails_closed_nonzero_exit(self, tmp_path):
+    def test_cli_empty_cohort_fails_closed_nonzero_exit(self, tmp_path, repo_script_env):
         """CLI with empty or whitespace --cohort must exit non-zero."""
         import subprocess
         import sys
+
+        from sqlalchemy import create_engine
+        from api.database import Base
 
         script_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "scripts",
             "verify_h1b_gates.py",
         )
+        empty_db = str(tmp_path / "cohort_guard_empty2.db")
+        engine = create_engine(f"sqlite:///{empty_db}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
         out_json = str(tmp_path / "cli_empty_cohort.json")
         proc = subprocess.run(
-            [sys.executable, script_path, "--cohort", "", "--output-json", out_json],
+            [sys.executable, script_path, "--cohort", "", "--db-path", empty_db, "--output-json", out_json],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode != 0
 
@@ -2370,7 +2394,7 @@ class TestH1bVerifyGatesDavian1803Rework:
         assert cand["gate_evaluation"]["matrix"] == gate_mod["matrix"]
         assert cand["gate_evaluation"]["passed"] == gate_mod["passed"]
 
-    def test_cli_input_dir_wiring(self, tmp_path):
+    def test_cli_input_dir_wiring(self, tmp_path, repo_script_env):
         """The raw CLI entry still wires ``--input-dir`` end to end:
         argparse -> ``run_verify`` -> output JSON -> exit 0.
 
@@ -2390,6 +2414,8 @@ class TestH1bVerifyGatesDavian1803Rework:
             [sys.executable, mod.__file__, "--cohort", "legacy_unversioned:short",
              "--input-dir", repro_dir, "--output-json", str(out_json)],
             capture_output=True, text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 0, proc.stderr[-800:]
         assert os.path.exists(out_json)

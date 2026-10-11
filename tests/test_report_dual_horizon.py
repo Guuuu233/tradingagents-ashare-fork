@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -24,10 +23,49 @@ def test_normalize_analysis_horizons_preserves_explicit_dual_and_infers_only_str
 
 
 def test_chat_extraction_contract_allows_explicit_dual_horizon():
-    source = inspect.getsource(main._ai_extract_symbol_and_date)
-    streaming_source = inspect.getsource(main._ai_extract_symbol_and_date_streaming)
-    assert "短线与中线" in source or "short and medium" in source
-    assert "短线与中线" in streaming_source or "short and medium" in streaming_source
+    """Both extraction entrypoints must teach the LLM the explicit dual-horizon form.
+
+    DAV-1905 (flaky rework): this used to sniff the implementation with
+    ``inspect.getsource(main._ai_extract_symbol_and_date)``. That form reads a
+    *line range* out of ``linecache`` — its extent depends on the function's
+    ``co_firstlineno`` and on the cache never having been invalidated for
+    ``api/main.py``. Any other test that reloads/monkeypatches the module, any
+    wrapper installed under the same name, or a mid-run edit of the file can
+    leave ``getsource`` returning a neighbouring block, and then the assertion
+    fails for a code reason that has nothing to do with the contract.
+
+    The contract is really "the prompt handed to the extractor mentions the
+    explicit dual-horizon trigger", so assert it structurally: parse
+    ``api/main.py`` once, pull the two ``FunctionDef`` nodes, and require the
+    trigger phrase in one of their string constants. This is independent of
+    line numbers, of import order, and of pytest-randomly's ordering.
+    """
+    import ast
+    from pathlib import Path
+
+    main_py = Path(main.__file__).resolve()
+    tree = ast.parse(main_py.read_text(encoding="utf-8"), filename=str(main_py))
+
+    wanted = {
+        "_ai_extract_symbol_and_date": None,
+        "_ai_extract_symbol_and_date_streaming": None,
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in wanted:
+            wanted[node.name] = node
+    missing = sorted(name for name, node in wanted.items() if node is None)
+    assert not missing, f"extraction entrypoint(s) not found in {main_py}: {missing}"
+
+    for name, node in wanted.items():
+        literals = [
+            n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        ]
+        blob = "\n".join(literals)
+        assert "短线与中线" in blob or "short and medium" in blob, (
+            f"{name} no longer tells the extractor that an explicit "
+            f'"短线与中线 / short and medium" request must yield ["short", "medium"]'
+        )
 
 
 class _FakePropagator:

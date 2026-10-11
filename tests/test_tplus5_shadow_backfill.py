@@ -37,6 +37,8 @@ from tradingagents.agents.utils.shadow_credit import (
 )
 from scripts.backfill_tplus5_shadow import load_raw_reports, run_backfill
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # 固定时钟：本文件内任何缺省 as_of/today 的路径一律锚定冻结交易日，
 # 消除随运行日期波动的失败（DAV-1293）。
 pytestmark = pytest.mark.usefixtures("frozen_trade_date", "offline_vendor_router")
@@ -716,7 +718,7 @@ class TestBackfillTplus5ShadowDbPath:
         assert "ix_reports_industry" not in indexes_after
         check_engine.dispose()
 
-    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db, repo_script_env):
         """CLI invocation with --db-path exits with 0."""
         import subprocess
         import sys
@@ -731,10 +733,12 @@ class TestBackfillTplus5ShadowDbPath:
              "--db-path", custom_sqlite_db, "--dry-run", "--as-of", "2026-08-15"],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 0
 
-    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self):
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, repo_script_env):
         """CLI invocation with non-existent --db-path exits with non-zero exit code."""
         import subprocess
         import sys
@@ -750,6 +754,8 @@ class TestBackfillTplus5ShadowDbPath:
              "--db-path", fake_db],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode != 0
 

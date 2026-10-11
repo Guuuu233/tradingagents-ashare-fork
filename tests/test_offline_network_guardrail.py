@@ -25,6 +25,7 @@ import time
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from tests.conftest import (
     OfflineTestGuardrailError,
@@ -802,7 +803,7 @@ class TestNetworkSwitchFailClosed:
             assert is_network_enabled() is False
             assert is_offline_network_guard_active() is True
 
-    def test_forgetting_switch_subprocess_fail_closed(self):
+    def test_forgetting_switch_subprocess_fail_closed(self, repo_script_env):
         """Dedicated subprocess test covering 'forgetting to set switch' path.
 
         Even when running pytest directly without RT_NETWORK_ENABLED, the process
@@ -821,14 +822,16 @@ except OfflineTestGuardrailError:
 finally:
     s.close()
 """
-        # Run in clean subprocess without RT_NETWORK_ENABLED
-        clean_env = os.environ.copy()
+        # Run in a hermetic child (no inherited PYTHONPATH / DATABASE_URL) that
+        # also lacks RT_NETWORK_ENABLED.
+        clean_env = dict(repo_script_env)
         clean_env.pop("RT_NETWORK_ENABLED", None)
         proc = subprocess.run(
             [sys.executable, "-c", code],
             env=clean_env,
             capture_output=True,
             text=True,
+            cwd=str(Path(__file__).resolve().parent.parent),
         )
         assert proc.returncode == 0, f"Subprocess did not fail-closed: returncode={proc.returncode}"
 

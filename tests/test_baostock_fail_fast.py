@@ -35,6 +35,8 @@ from tradingagents.dataflows.providers.cn_baostock_provider import (
     ensure_baostock_socket_hardening,
 )
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 @pytest.fixture(autouse=True)
 def reset_baostock_module_state():
@@ -688,7 +690,7 @@ class TestNetworkAccessDeniedPropagation:
 
         assert "baostock login failed: invalid user or password" in str(exc_info.value)
 
-    def test_e2e_guardrail_rejection_fast_timing_and_cleanup(self):
+    def test_e2e_guardrail_rejection_fast_timing_and_cleanup(self, repo_script_env):
         """End-to-end under real test guardrail with 5-second watchdog.
 
         Verifies:
@@ -735,7 +737,8 @@ except Exception as e:
     sys.exit(3)
 """,
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         elapsed = time.perf_counter() - t0
 
         # Diagnostic elapsed output (not used as pass/fail condition)
@@ -754,7 +757,7 @@ class TestScenarioIsolationCrossVerification:
        under explicit state resets never leaks or causes false greens.
     """
 
-    def test_scenario_s1_in_isolated_subprocess(self):
+    def test_scenario_s1_in_isolated_subprocess(self, repo_script_env):
         """Step 3.1: Scenario S1 executed in a completely fresh subprocess."""
         import subprocess
 
@@ -789,10 +792,11 @@ except OfflineTestGuardrailError as exc:
     print("S1_SUBPROCESS_OK")
 """,
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         assert "S1_SUBPROCESS_OK" in res.stdout
 
-    def test_scenario_s2_in_isolated_subprocess(self):
+    def test_scenario_s2_in_isolated_subprocess(self, repo_script_env):
         """Step 3.2: Scenario S2 executed in a completely fresh subprocess."""
         import subprocess
 
@@ -831,10 +835,11 @@ except RuntimeError as exc:
     print("S2_SUBPROCESS_OK")
 """,
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         assert "S2_SUBPROCESS_OK" in res.stdout
 
-    def test_bidirectional_order_isolation_s1_s2_s2_s1(self):
+    def test_bidirectional_order_isolation_s1_s2_s2_s1(self, repo_script_env):
         """Step 3.3: Order-reversal test (S1->S2->S2->S1) in same process under resets."""
         import subprocess
 
@@ -917,5 +922,6 @@ assert run_s1() is True
 print("BIDIRECTIONAL_ISOLATION_OK")
 """,
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         assert "BIDIRECTIONAL_ISOLATION_OK" in res.stdout

@@ -45,6 +45,8 @@ from scripts.backfill_report_industry import (
     run_industry_backfill,
 )
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 @pytest.fixture
 def sqlite_db_session():
@@ -645,7 +647,7 @@ class TestBackfillReportIndustryDbPath:
         assert stats["total_scanned"] == 0
         assert stats["backfilled_count"] == 0
 
-    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db):
+    def test_cli_subprocess_execution_with_db_path(self, custom_sqlite_db, repo_script_env):
         """CLI invocation with --db-path exits with 0."""
         import subprocess
         import sys
@@ -659,12 +661,14 @@ class TestBackfillReportIndustryDbPath:
             [sys.executable, script_path, "--db-path", custom_sqlite_db, "--dry-run"],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 0
         output = json.loads(proc.stdout)
         assert output["total_scanned"] == 6
 
-    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self):
+    def test_cli_subprocess_execution_with_bad_db_path_exits_nonzero(self, repo_script_env):
         """CLI invocation with non-existent --db-path exits with non-zero exit code."""
         import subprocess
         import sys
@@ -679,6 +683,8 @@ class TestBackfillReportIndustryDbPath:
             [sys.executable, script_path, "--db-path", fake_db],
             capture_output=True,
             text=True,
+            env=repo_script_env,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode != 0
 

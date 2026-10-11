@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = str(ROOT)
 SCRIPT = ROOT / "scripts" / "dav1507_exit_progress.py"
 
 sys.path.insert(0, str(ROOT))
@@ -84,25 +85,29 @@ def _summary_for(claims, decision="adopt"):
 
 # ── calendar fail-close ──────────────────────────────────────────────────── #
 
-def test_missing_calendar_exits_2(tmp_path):
+def test_missing_calendar_exits_2(tmp_path, repo_script_env):
     db = tmp_path / "x.db"
     db.write_bytes(b"")  # any readable file; calendar check happens before DB scan
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--db", str(db),
          "--calendar-json", str(tmp_path / "nonexistent_calendar.json")],
         capture_output=True, text=True,
+        env=repo_script_env,
+        cwd=REPO_ROOT,
     )
     assert proc.returncode == 2
     assert proc.stdout.strip() == ""
 
 
-def test_calendar_json_required_flag(tmp_path):
+def test_calendar_json_required_flag(tmp_path, repo_script_env):
     db = tmp_path / "x.db"
     db.write_bytes(b"")
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--db", str(db),
          "--calendar-json", str(tmp_path / "nope.json"), "--self-test"],
         capture_output=True, text=True,
+        env=repo_script_env,
+        cwd=REPO_ROOT,
     )
     # --self-test bypasses calendar; just ensure it doesn't crash-arg-error
     assert proc.returncode in (0, 2)

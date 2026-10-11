@@ -246,13 +246,14 @@ def _indep_counts(db: Path) -> dict:
 
 # ── 运行 ──────────────────────────────────────────────────────────────────── #
 
-def _run(db: Path, tmp_path: Path, tag: str):
+def _run(db: Path, tmp_path: Path, tag: str, env):
     out_json = tmp_path / f"{tag}.json"
     out_md = tmp_path / f"{tag}.md"
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--db", str(db),
          "--output-json", str(out_json), "--output-md", str(out_md)],
         capture_output=True, text=True, cwd=str(ROOT),
+        env=env,
     )
     assert proc.returncode == 0, f"{tag} failed:\n{proc.stdout}\n{proc.stderr}"
     stats = json.loads(out_json.read_text(encoding="utf-8"))
@@ -260,13 +261,13 @@ def _run(db: Path, tmp_path: Path, tag: str):
 
 
 @pytest.fixture(scope="module")
-def two_runs(tmp_path_factory):
+def two_runs(tmp_path_factory, repo_script_env):
     tmp_path = tmp_path_factory.mktemp("dav1846")
     out = {}
     for tag, spec in (("alpha", DB_ALPHA), ("beta", DB_BETA)):
         db = tmp_path / f"{tag}.db"
         _build(db, spec)
-        md, stats = _run(db, tmp_path, tag)
+        md, stats = _run(db, tmp_path, tag, env=repo_script_env)
         out[tag] = {"md": md, "stats": stats, "expected": _indep_counts(db)}
     return out
 

@@ -430,7 +430,7 @@ class TestWeeklyMetricsAggregationAndDashboard:
 class TestH2E2EGatesPipelineIntegration:
     """End-to-end: weekly recalc -> H1b gates -> layered isolation audit trail."""
 
-    def test_recalculate_weekly_metrics_cli_includes_isolation_banner(self, tmp_path):
+    def test_recalculate_weekly_metrics_cli_includes_isolation_banner(self, tmp_path, repo_script_env):
         script_path = Path(__file__).resolve().parents[1] / "scripts" / "recalculate_weekly_metrics.py"
         cmd = [
             sys.executable,
@@ -442,7 +442,9 @@ class TestH2E2EGatesPipelineIntegration:
             "--format",
             "text",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              env=repo_script_env,
+                              cwd=str(script_path.resolve().parents[1]))
         assert proc.returncode == 0
         assert "H1b 信用加权 7 维激活门槛离线复算结论" in proc.stdout
         assert "分层隔离" in proc.stdout

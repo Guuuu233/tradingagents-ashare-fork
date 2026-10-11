@@ -43,6 +43,8 @@ from tradingagents.agents.utils.target_pool import (
     verify_sample_fingerprint,
 )
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 class TestTargetPoolIndustryRotationAndDiversification:
     """Test Shenwan Level 1 industry coverage, rotation, and concentration constraints."""
@@ -257,7 +259,7 @@ class TestTargetPoolPydanticModelAndJsonExport:
 class TestTargetPoolCLIIntegration:
     """Test CLI command execution via subprocess."""
 
-    def test_cli_execution_table_output(self):
+    def test_cli_execution_table_output(self, repo_script_env):
         cmd = [
             sys.executable,
             "scripts/generate_weekly_target_pool.py",
@@ -269,13 +271,14 @@ class TestTargetPoolCLIIntegration:
             "--output",
             "table",
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         assert res.returncode == 0
         assert "每周自动化标的池筛选与防污染排重报告" in res.stdout
         assert "申万一级行业" in res.stdout
         assert "排重指纹" in res.stdout
 
-    def test_cli_execution_json_output(self):
+    def test_cli_execution_json_output(self, repo_script_env):
         cmd = [
             sys.executable,
             "scripts/generate_weekly_target_pool.py",
@@ -286,14 +289,15 @@ class TestTargetPoolCLIIntegration:
             "--output",
             "json",
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             env=repo_script_env, cwd=str(REPO_ROOT))
         assert res.returncode == 0
         data = json.loads(res.stdout)
         assert data["schema_version"] == "target_pool_v1"
         assert data["count"] == 8
         assert len(data["items"]) == 8
 
-    def test_cli_execution_with_historical_metrics_file(self):
+    def test_cli_execution_with_historical_metrics_file(self, repo_script_env):
         metrics_file = Path("work/evaluations/week_202634_metrics.json")
         if metrics_file.exists():
             cmd = [
@@ -308,7 +312,8 @@ class TestTargetPoolCLIIntegration:
                 "--output",
                 "json",
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = subprocess.run(cmd, capture_output=True, text=True,
+                                 env=repo_script_env, cwd=str(REPO_ROOT))
             assert res.returncode == 0
             data = json.loads(res.stdout)
             assert data["rebalance_audit"]["historical_bull_samples"] == 26

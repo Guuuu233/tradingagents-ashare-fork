@@ -12,9 +12,9 @@ Verifies:
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -316,18 +316,18 @@ class TestCalibrationThresholdConfigSafety:
             ("30", 30),
         ],
     )
-    def test_subprocess_import_with_env_values(self, env_val: str, expected_val: int):
+    def test_subprocess_import_with_env_values(self, env_val: str, expected_val: int, repo_script_env):
         cmd = [
             sys.executable,
             "-c",
             "import api.services.calibration_service as cal; print(cal.DEFAULT_MIN_CALIBRATION_SAMPLE_SIZE)",
         ]
-        env = dict(os.environ)
+        env = dict(repo_script_env)
         env["CALIBRATION_MIN_SAMPLE_SIZE"] = env_val
-        env.pop("PYTHONPATH", None)
         proc = subprocess.run(
             cmd,
             env=env,
+            cwd=str(Path(__file__).resolve().parent.parent),
             capture_output=True,
             text=True,
             check=False,
