@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """DAV-1261 — ABSTAIN 成因诊断与「可挽救上限」测算（只读，零 LLM，确定性重算）。
 
 一条命令复跑：
@@ -154,6 +159,7 @@ def build_record(source: str, group: str, rid: str, rd: Mapping[str, Any],
 
 def load_db_records(db: str, account: str, since: str, cutoff: str) -> list[dict]:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    _b6e_guard(con)
     rows = con.execute(
         "SELECT id, created_at, analysis_status, result_data FROM reports "
         "WHERE user_id=? AND status='completed' AND created_at>? ORDER BY created_at",

@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """Fill DAV-421 sample gap: run v2 analyses until completed v2 count >= 10.
 
 Uses request-level config_overrides only: v2_debate_enabled=true.
@@ -174,6 +179,7 @@ def main() -> int:
     assert_31(headers, "pre")
 
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n = v2_completed_count(con)
     inflight = find_inflight_job(con)
     skip = existing_v2_or_inflight_symbols(con)
@@ -185,6 +191,7 @@ def main() -> int:
         log(f"resume poll existing {symbol} job={job_id}")
         st = poll(headers, job_id, symbol)
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         row = con.execute(
             "select status, length(result_data), "
             "instr(coalesce(result_data,''), 'v2_structured_disagreement') "
@@ -197,6 +204,7 @@ def main() -> int:
 
     for symbol in QUEUE:
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         n = v2_completed_count(con)
         skip = existing_v2_or_inflight_symbols(con)
         con.close()
@@ -209,6 +217,7 @@ def main() -> int:
         job_id = submit(headers, symbol)
         st = poll(headers, job_id, symbol)
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         row = con.execute(
             "select status, length(result_data), "
             "instr(coalesce(result_data,''), 'v2_structured_disagreement') "
@@ -224,6 +233,7 @@ def main() -> int:
 
     assert_31(headers, "post")
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n = v2_completed_count(con)
     con.close()
     log(f"DONE v2_completed={n}")

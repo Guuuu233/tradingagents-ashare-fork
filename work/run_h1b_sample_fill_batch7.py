@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """H1b sample fill batch 7: fill free slots on proven bear-winner trade dates.
 
 Batch6 ran prior bear symbols on neutral late-Aug dates → mostly tie/bull,
@@ -78,6 +83,7 @@ def wait_until_idle(poll_s: int = 30, timeout_s: int = 86400) -> None:
     t0 = time.time()
     while time.time() - t0 < timeout_s:
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         row = con.execute(
             "select id, symbol, trade_date, status from reports "
             "where status in ('pending','running') order by created_at asc limit 1"
@@ -151,6 +157,7 @@ def wait_for_healthz(timeout_s: int = 120) -> dict:
 
 def _db_job_status(job_id: str) -> str | None:
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     row = con.execute("select status from reports where id=?", (job_id,)).fetchone()
     con.close()
     return row[0] if row else None
@@ -264,6 +271,7 @@ def main() -> int:
     assert_31(headers, "pre")
 
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n0 = v2_count(con)
     bull0, bear0, tie0 = count_winners(con)
     con.close()
@@ -273,6 +281,7 @@ def main() -> int:
     for symbol, industry, trade_date in QUEUE:
         pair = f"{symbol}|{trade_date}"
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         skip = skip_pairs(con)
         con.close()
         if submitted >= target:
@@ -285,6 +294,7 @@ def main() -> int:
         submitted += 1
         st = poll(headers, job_id, symbol)
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         n = v2_count(con)
         bull, bear, tie = count_winners(con)
         win = None
@@ -307,6 +317,7 @@ def main() -> int:
 
     assert_31(headers, "post")
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n = v2_count(con)
     bull, bear, tie = count_winners(con)
     con.close()

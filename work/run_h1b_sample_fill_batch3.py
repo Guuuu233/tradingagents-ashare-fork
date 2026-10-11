@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """H1b sample fill batch 3: retries + multi-date symbol spread.
 
 Goals:
@@ -197,6 +202,7 @@ def main() -> int:
     assert_31(headers, "pre")
 
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n0 = v2_count(con)
     inflight = find_inflight_job(con)
     skip = skip_pairs(con)
@@ -213,6 +219,7 @@ def main() -> int:
     for symbol, industry, trade_date in QUEUE:
         pair = f"{symbol}|{trade_date}"
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         skip = skip_pairs(con)
         con.close()
         if submitted >= TARGET_NEW:
@@ -225,6 +232,7 @@ def main() -> int:
         submitted += 1
         st = poll(headers, job_id, symbol)
         con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        _b6e_guard(con)
         n = v2_count(con)
         row = con.execute(
             "select status, length(result_data), "
@@ -240,6 +248,7 @@ def main() -> int:
 
     assert_31(headers, "post")
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     n = v2_count(con)
     con.close()
     log(f"done batch submitted={submitted} v2_total={n}")

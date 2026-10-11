@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """DAV-1705 管线试跑，非成绩 — 分块流式账本封存（M-05）.
 
 背景: 共享快照中 1600 个 completed 报告的 result_data 合计约 5.46GB
@@ -61,6 +66,7 @@ COLS = ("id, user_id, symbol, industry, trade_date, status,"
 def _connect_ro(db_path: Path) -> sqlite3.Connection:
     uri = f"file:{db_path}?mode=ro"
     con = sqlite3.connect(uri, uri=True)
+    _b6e_guard(con)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA mmap_size=0")
     con.execute("PRAGMA temp_store=MEMORY")

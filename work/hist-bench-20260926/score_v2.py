@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """v2 打分（总控 2026-09-26，按 GPT 评审意见与项目 return_labels 契约修正）：
 - 入场 = T+1 开盘（前复权），出场 = T+N 收盘；基准沪深300同口径；
 - 只统计 gemini-3.8 样本（按 model_config_snapshot 分组）；
@@ -13,6 +18,7 @@ from pathlib import Path
 import akshare as ak
 HERE = Path(__file__).resolve().parent
 con = sqlite3.connect(f"file:{HERE.parents[1]/'data'/'tradingagents.db'}?mode=ro", uri=True)
+_b6e_guard(con)
 OFF = {"short_term": 10, "medium_term": 40}
 jobs = [json.loads(l) for l in (HERE/"manifest.jsonl").read_text().splitlines()]
 jobs = {j["job_id"]: j for j in jobs if j["event"] == "finished" and j["status"] == "completed"}

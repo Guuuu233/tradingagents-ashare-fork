@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 # -*- coding: utf-8 -*-
 """157 条 manager_consistency_hard_gate ABSTAIN 的只读离线复放（trunk 3907c73 代码）。
 输入全部取自 result_data 冻结产物；不改库、不写文件到仓内。"""
@@ -57,6 +62,7 @@ def family(mv):
     return "other:" + fcs[0][:40]
 
 conn = sqlite3.connect(DB, uri=True)
+_b6e_guard(conn)
 conn.execute("PRAGMA query_only=ON")
 rows = conn.execute("""select id, symbol, trade_date, result_data from reports
   where status='completed' and analysis_status='ABSTAIN'
