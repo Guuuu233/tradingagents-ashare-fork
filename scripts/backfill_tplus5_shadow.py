@@ -44,6 +44,7 @@ from tradingagents.agents.utils.shadow_credit import (
 )
 from tradingagents.dataflows.trade_calendar import now_cn, cn_market_phase, trading_days_forward
 from tradingagents.storage.compressed_json import (
+    check_service_storage_guard,
     compress_json_bytes,
     decode_frame_bytes,
     report_storage_mode,
@@ -551,51 +552,15 @@ class _ReadOnlyContext:
 
 
 def check_runtime_guard(db_path, health_url):
-    """Fail closed on unknown runtime state. Never restart or wait for idle."""
-    import requests
-    session = requests.Session()
-    session.trust_env = False
-    try:
-        response = session.get(health_url.rstrip("/") + "/healthz", timeout=(2, 7))
-        payload = response.json()
-    except requests.Timeout:
-        return {"allowed": False, "reason": "health_busy_timeout"}
-    except (requests.RequestException, ValueError):
-        return {"allowed": False, "reason": "health_unavailable"}
-    finally:
-        session.close()
-    if response.status_code != 200 or payload.get("status") != "ok":
-        return {"allowed": False, "reason": "health_not_ok"}
-    # DAV-1885: refuse to write when the service's report-storage mode
-    # differs from this process's. healthz exposes `report_storage_mode`;
-    # a mode drift (service switched, script not redeployed / vice-versa)
-    # would otherwise dual-write a column layout the read side no longer
-    # expects. Mismatch → fail closed, not silent wrong-mode write.
-    service_mode = payload.get("report_storage_mode")
-    my_mode = report_storage_mode()
-    if service_mode is None:
-        return {"allowed": False, "reason": "report_storage_mode_unknown",
-                "service_mode": None, "script_mode": my_mode}
-    if service_mode != my_mode:
-        return {"allowed": False, "reason": "report_storage_mode_mismatch",
-                "service_mode": service_mode, "script_mode": my_mode}
-    # healthz currently does NOT expose the in-memory job store. Absence of DB
-    # rows is not proof of zero active jobs. An explicit zero runtime count is
-    # required; missing instrumentation must skip rather than race an analysis.
-    count = payload.get("active_analysis_count")
-    if type(count) is not int or count < 0:
-        return {"allowed": False, "reason": "active_analysis_count_unknown"}
-    if count:
-        return {"allowed": False, "reason": "busy", "running_count": count}
-    try:
-        with closing(_open_db(db_path)) as conn:
-            n = conn.execute("SELECT count(*) FROM reports WHERE status IN ('running','pending','queued')").fetchone()[0]
-            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if "scheduled_analyses" in tables:
-                n += conn.execute("SELECT count(*) FROM scheduled_analyses WHERE last_run_status IN ('running','pending','queued')").fetchone()[0]
-    except sqlite3.Error:
-        return {"allowed": False, "reason": "analysis_count_unavailable"}
-    return {"allowed": n == 0, "reason": "idle" if n == 0 else "busy", "running_count": n}
+    """Fail closed on unknown runtime state. Never restart or wait for idle.
+
+    DAV-1903 (Plan A): the implementation lives in
+    :func:`tradingagents.storage.compressed_json.check_service_storage_guard`
+    so every reports-write script shares it. This module-level alias stays
+    because tests and callers patch ``cli.check_runtime_guard`` / call it by
+    name; patching the alias intercepts both write paths below.
+    """
+    return check_service_storage_guard(db_path, health_url)
 
 
 def _write_row(conn, report_id, delta, audit, exported_sha=None):
@@ -973,12 +938,17 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         production = _is_production(db_path)
         if production and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):
             raise RuntimeError("production write forbidden before signed post-10-09 handoff")
-        if production or not copy_rehearsal:
-            guard = check_runtime_guard(db_path, health_url)
-            if not guard["allowed"]:
-                result = {'skipped': True, 'guard': guard, 'changed_rows': 0}
-                print(json.dumps(result, ensure_ascii=False))
-                return result
+        # DAV-1903 (🟡-1): the guard now runs on EVERY write path, including
+        # copy_rehearsal. health_url may point at any endpoint, so a rehearsal
+        # against a copy can (and must) still prove service/script
+        # report_storage_mode agreement; the DB-side idle probe then counts
+        # the rehearsal copy's own busy rows. The production gate above stays
+        # the only copy-vs-production discriminator.
+        guard = check_runtime_guard(db_path, health_url)
+        if not guard["allowed"]:
+            result = {'skipped': True, 'guard': guard, 'changed_rows': 0}
+            print(json.dumps(result, ensure_ascii=False))
+            return result
     calendar = load_calendar()
     result = {"dry_run": dry_run, "sample_count": 0, "qualifying_count": 0,
               "changed_rows": 0, "guard_mismatches": 0, "write_conflicts": 0,

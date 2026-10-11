@@ -223,9 +223,12 @@ def _stub_healthz(monkeypatch, payload):
 
 def test_storage_mode_mismatch_refuses_write(tmp_path, monkeypatch):
     """DAV-1885: service=plaintext, script=compressed_only → refuse write."""
+    from tradingagents.storage import compressed_json as cj
     p = make_db(tmp_path, report())
     _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="plaintext"))
-    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    # The shared guard resolves the script's mode via
+    # compressed_json.report_storage_mode — patch it there (DAV-1903).
+    monkeypatch.setattr(cj, "report_storage_mode", lambda: "compressed_only")
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard["allowed"] is False
     assert guard["reason"] == "report_storage_mode_mismatch"
@@ -235,9 +238,10 @@ def test_storage_mode_mismatch_refuses_write(tmp_path, monkeypatch):
 
 def test_storage_mode_match_allows_through(tmp_path, monkeypatch):
     """Matching modes pass the mode check (still gated by idle count)."""
+    from tradingagents.storage import compressed_json as cj
     p = make_db(tmp_path, report())
     _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="compressed_only"))
-    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    monkeypatch.setattr(cj, "report_storage_mode", lambda: "compressed_only")
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard["allowed"] is True
 
@@ -250,6 +254,34 @@ def test_storage_mode_missing_field_fails_closed(tmp_path, monkeypatch):
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard["allowed"] is False
     assert guard["reason"] == "report_storage_mode_unknown"
+
+
+def test_guard_impl_moved_to_compressed_json(tmp_path, monkeypatch):
+    """DAV-1903 Plan A: the guard is the shared compressed_json helper and
+    the module-level ``_guard_open_db`` hook exists for path-specific DB
+    openers. ``cli.check_runtime_guard`` stays the script's own (patchable)
+    entry, delegating nothing but sharing the contract."""
+    from tradingagents.storage import compressed_json as cj
+    p = make_db(tmp_path, report())
+    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="plaintext"))
+    # The shared function reaches the same verdict directly (no cli shim).
+    guard = cj.check_service_storage_guard(str(p), "http://127.0.0.1:8000")
+    assert guard == {"allowed": True, "reason": "idle", "running_count": 0}
+    assert cj._guard_open_db(str(p)).execute("SELECT count(*) FROM reports").fetchone() == (1,)
+
+
+def test_copy_rehearsal_now_runs_guard(tmp_path, monkeypatch):
+    """DAV-1903 🟡-1: copy_rehearsal is no longer a silent guard bypass —
+    the shared write guard must be consulted on every DB write path."""
+    p = make_db(tmp_path, report())
+    calls = []
+    monkeypatch.setattr(cli, "check_runtime_guard",
+                        lambda *a: calls.append(a) or {"allowed": False, "reason": "busy", "running_count": 1})
+    before = p.read_bytes()
+    result = cli.run_backfill(db_path=str(p), as_of="2026-08-15", copy_rehearsal=True)
+    assert calls, "copy_rehearsal path skipped the runtime guard"
+    assert result["skipped"] is True and result["changed_rows"] == 0
+    assert p.read_bytes() == before
 
 
 def test_export_failure_means_zero_writes(tmp_path, monkeypatch):

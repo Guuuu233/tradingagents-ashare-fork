@@ -113,6 +113,116 @@ def writes_plaintext(mode: Optional[str] = None) -> bool:
     return (mode or report_storage_mode()) != "compressed_only"
 
 
+# ── Runtime write guard (DAV-1903: commonized from backfill_tplus5_shadow) ──
+
+#: SQLite URI opener used by :func:`check_service_storage_guard`. Module-level
+#: so callers/tests can point the guard at connection factories with different
+#: flags; must return a read-only connection for the target reports DB.
+def _guard_open_db(path: str):
+    """Read-only sqlite3 connection for the guard's busy-row probe.
+
+    Deliberately NOT ``conn.row_factory = sqlite3.Row``: the guard only
+    reads ``fetchone()[0]`` from ``SELECT count(*)`` queries, and reusing a
+    caller-supplied Row tuple elsewhere has no benefit here.
+    """
+    import sqlite3
+    from pathlib import Path
+    from urllib.parse import quote
+
+    p = Path(path).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(path)
+    return sqlite3.connect(f"file:{quote(str(p))}?mode=ro", uri=True,
+                           timeout=0)
+
+
+def check_service_storage_guard(db_path, health_url):
+    """Pre-write runtime guard for every script that writes ``reports``.
+
+    Fail closed on unknown runtime state. Never restart or wait for idle.
+
+    Checks, in order (each refusal short-circuits):
+
+    * ``<health_url>/healthz`` reachable, HTTP 200 and ``status == "ok"``;
+    * DAV-1885 P4: ``payload.report_storage_mode`` present and equal to this
+      process's :func:`report_storage_mode` — a mode drift (service switched,
+      script not redeployed / vice-versa) would otherwise dual-write a column
+      layout the read side no longer expects. Mismatch → fail closed, not a
+      silent wrong-mode write;
+    * ``payload.active_analysis_count`` is an explicit non-negative int
+      (healthz does NOT expose the in-memory job store — absence of DB rows
+      is not proof of zero active jobs, so missing instrumentation must
+      refuse rather than race an analysis) and equals 0;
+    * the target DB has zero ``reports`` rows in
+      ``running``/``pending``/``queued`` (plus ``scheduled_analyses`` rows in
+      the same states when that table exists).
+
+    ``db_path`` is the database the caller intends to write — point it at a
+    rehearsal copy for rehearsals; the probe then counts that copy's busy
+    rows. ``requests`` and ``sqlite3`` are imported lazily so ORM-only
+    importers of this module never pay for them.
+
+    Returns ``{"allowed": bool, "reason": str, ...}``.
+    """
+    from contextlib import closing
+
+    import requests
+
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.get(health_url.rstrip("/") + "/healthz",
+                               timeout=(2, 7))
+        payload = response.json()
+    except requests.Timeout:
+        return {"allowed": False, "reason": "health_busy_timeout"}
+    except (requests.RequestException, ValueError):
+        return {"allowed": False, "reason": "health_unavailable"}
+    finally:
+        session.close()
+    if response.status_code != 200 or payload.get("status") != "ok":
+        return {"allowed": False, "reason": "health_not_ok"}
+    # DAV-1885: refuse to write when the service's report-storage mode
+    # differs from this process's. healthz exposes `report_storage_mode`;
+    # a mode drift (service switched, script not redeployed / vice-versa)
+    # would otherwise dual-write a column layout the read side no longer
+    # expects. Mismatch → fail closed, not silent wrong-mode write.
+    service_mode = payload.get("report_storage_mode")
+    my_mode = report_storage_mode()
+    if service_mode is None:
+        return {"allowed": False, "reason": "report_storage_mode_unknown",
+                "service_mode": None, "script_mode": my_mode}
+    if service_mode != my_mode:
+        return {"allowed": False, "reason": "report_storage_mode_mismatch",
+                "service_mode": service_mode, "script_mode": my_mode}
+    # healthz currently does NOT expose the in-memory job store. Absence of DB
+    # rows is not proof of zero active jobs. An explicit zero runtime count is
+    # required; missing instrumentation must skip rather than race an analysis.
+    count = payload.get("active_analysis_count")
+    if type(count) is not int or count < 0:
+        return {"allowed": False, "reason": "active_analysis_count_unknown"}
+    if count:
+        return {"allowed": False, "reason": "busy", "running_count": count}
+    import sqlite3
+    try:
+        with closing(_guard_open_db(db_path)) as conn:
+            n = conn.execute(
+                "SELECT count(*) FROM reports"
+                " WHERE status IN ('running','pending','queued')"
+            ).fetchone()[0]
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "scheduled_analyses" in tables:
+                n += conn.execute(
+                    "SELECT count(*) FROM scheduled_analyses"
+                    " WHERE last_run_status IN ('running','pending','queued')"
+                ).fetchone()[0]
+    except sqlite3.Error:
+        return {"allowed": False, "reason": "analysis_count_unavailable"}
+    return {"allowed": n == 0, "reason": "idle" if n == 0 else "busy",
+            "running_count": n}
+
+
 def _env_concurrency() -> int:
     raw = os.getenv(_WRITE_CONCURRENCY_ENV, "").strip()
     if not raw:
@@ -535,6 +645,7 @@ __all__ = [
     "ZSTD_LEVEL",
     "ZST_LEN_COL",
     "ZstdJSON",
+    "check_service_storage_guard",
     "compress_json_bytes",
     "decode_frame_bytes",
     "decode_result_data",

@@ -17,6 +17,9 @@ def test_multiple_rows_do_not_hold_a_read_lock_during_write(tmp_path, monkeypatc
     conn.commit();conn.close()
     monkeypatch.setattr(cli, 'fetch_price_series', lambda *a: series())
     monkeypatch.setattr(cli, 'load_calendar', lambda: CAL)
+    # DAV-1903: copy_rehearsal still runs the shared write guard (it must
+    # never be a silent bypass); stub the runtime evidence for this copy.
+    monkeypatch.setattr(cli, 'check_runtime_guard', lambda *a: {"allowed": True, "reason": "idle"})
     r = cli.run_backfill(db_path=str(p), as_of='2026-08-15', copy_rehearsal=True, audit_log=str(tmp_path/'journal'))
     assert r['changed_rows'] == 2
     assert r['write_conflicts'] == 0
@@ -30,6 +33,7 @@ def test_post_write_trigger_corruption_rolls_back_and_counts_mismatch(tmp_path, 
     conn.commit();conn.close()
     monkeypatch.setattr(cli, 'fetch_price_series', lambda *a: series())
     monkeypatch.setattr(cli, 'load_calendar', lambda: CAL)
+    monkeypatch.setattr(cli, 'check_runtime_guard', lambda *a: {"allowed": True, "reason": "idle"})
     r = cli.run_backfill(db_path=str(p), as_of='2026-08-15', copy_rehearsal=True, audit_log=str(tmp_path/'journal'))
     assert r['guard_mismatches'] == 1 and r['changed_rows'] == 0
     assert sqlite3.connect(p).execute('select result_data from reports').fetchone()[0] == original
@@ -39,6 +43,7 @@ def test_journal_has_absent_fields_for_reversible_delta(tmp_path, monkeypatch):
     p = make_db(tmp_path, report())
     monkeypatch.setattr(cli, 'fetch_price_series', lambda *a: series())
     monkeypatch.setattr(cli, 'load_calendar', lambda: CAL)
+    monkeypatch.setattr(cli, 'check_runtime_guard', lambda *a: {"allowed": True, "reason": "idle"})
     log = tmp_path/'journal'
     cli.run_backfill(db_path=str(p), as_of='2026-08-15', copy_rehearsal=True, audit_log=str(log))
     prepared = json.loads(log.read_text().splitlines()[0])
@@ -67,9 +72,28 @@ def test_guard_never_treats_health_without_runtime_count_as_idle(tmp_path, monke
     p = make_db(tmp_path, report())
     class Response:
         status_code = 200
-        def json(self):return {'status':'ok'}
+        def json(self):
+            # report_storage_mode included so the probe reaches the
+            # active_analysis_count clause under test (DAV-1885 mode check
+            # fires first on a bare {'status':'ok'} payload).
+            return {'status': 'ok',
+                    'report_storage_mode': cli.report_storage_mode()}
     monkeypatch.setattr(requests.Session,'get',lambda *a,**k: Response())
     assert cli.check_runtime_guard(str(p),'http://localhost')['reason'] == 'active_analysis_count_unknown'
+
+
+def test_guard_blocks_when_health_reports_no_storage_mode(tmp_path, monkeypatch):
+    """A healthz payload without report_storage_mode fails closed as
+    'report_storage_mode_unknown' — the mode drift guard never trusts a
+    service that cannot say which column layout it writes."""
+    import requests
+    p = make_db(tmp_path, report())
+    class Response:
+        status_code = 200
+        def json(self):
+            return {'status': 'ok', 'active_analysis_count': 0}
+    monkeypatch.setattr(requests.Session,'get',lambda *a,**k: Response())
+    assert cli.check_runtime_guard(str(p),'http://localhost')['reason'] == 'report_storage_mode_unknown'
 
 
 def test_guard_busy_runtime_count_blocks_even_when_report_not_saved(tmp_path, monkeypatch):
@@ -77,6 +101,8 @@ def test_guard_busy_runtime_count_blocks_even_when_report_not_saved(tmp_path, mo
     p = make_db(tmp_path, report())
     class Response:
         status_code = 200
-        def json(self):return {'status':'ok','active_analysis_count':1}
+        def json(self):
+            return {'status': 'ok', 'active_analysis_count': 1,
+                    'report_storage_mode': cli.report_storage_mode()}
     monkeypatch.setattr(requests.Session,'get',lambda *a,**k: Response())
     assert cli.check_runtime_guard(str(p),'http://localhost')['allowed'] is False
