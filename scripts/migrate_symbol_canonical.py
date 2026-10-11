@@ -84,6 +84,9 @@ def run_migration_on_backup(
         guard = check_service_storage_guard(backup_db_path, health_url)
         if not guard["allowed"]:
             print(f"      Write guard refused: {guard}")
+            # Guard-refused reports carry no statistics — main() exits 2 and
+            # generate_markdown_report emits a "guard refused" section
+            # (DAV-1911 🟡-1).
             return {"metadata": {"backup_db_path": str(Path(backup_db_path).resolve()),
                                  "dry_run": dry_run,
                                  "guard_refused": True},
@@ -195,7 +198,30 @@ def run_migration_on_backup(
 
 
 def generate_markdown_report(report: Dict[str, Any], output_path: str) -> None:
-    """Generate Markdown format report for audit and delivery."""
+    """Generate Markdown format report for audit and delivery.
+
+    A guard-refused report carries no statistics (DAV-1911 🟡-1): emit a
+    short "write guard refused" section instead of raising KeyError.
+    """
+    if report.get("skipped"):
+        guard = report.get("guard", {})
+        md = [
+            "# Canonical Symbol Normalization & Migration Report (DAV-800)",
+            "",
+            "## 守卫拒绝（未执行迁移）",
+            f"- **backup_db**: `{report.get('metadata', {}).get('backup_db_path', '')}`",
+            f"- **reason**: `{guard.get('reason')}`",
+            "",
+            "```json",
+            json.dumps(guard, indent=2, ensure_ascii=False),
+            "```",
+            "",
+        ]
+        out_path = Path(output_path).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("\n".join(md), encoding="utf-8")
+        print(f"[4/4] Generated Markdown report at: {out_path} (guard refused)")
+        return
     stats = report["statistics"]
     collisions = report["collisions_surfaced"]
     quarantine = report["quarantine_list"]
@@ -285,6 +311,13 @@ def main() -> int:
 
     # Step 4: Save Markdown report
     generate_markdown_report(report, args.report_md)
+
+    # DAV-1911 🟡-1: a guard refusal still produces the JSON+Markdown
+    # artifacts above, but must not exit 0 / print SUCCESS — the operator
+    # sees "write guard refused" and a non-zero exit code.
+    if report.get("skipped"):
+        print(f"\n[GUARD REFUSED] Write guard refused: {report.get('guard')}")
+        return 2
 
     print("\n[SUCCESS] Migration verification on backup copy completed successfully.")
     return 0

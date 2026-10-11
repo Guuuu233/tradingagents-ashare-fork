@@ -425,3 +425,47 @@ def test_full_reproduction_of_1408_reports_scenario():
     assert result.collisions["000001.SZ"]["raw_counts"] == {"000001": 2, "000001.SZ": 57}
     assert result.collisions["600519.SH"]["raw_counts"] == {"600519": 1, "600519.SH": 739}
     assert result.collisions["603259.SH"]["raw_counts"] == {"603259": 1, "603259.SH": 11}
+
+
+# ── DAV-1911 🟡-1: guard-refused path must not crash ─────────────────────
+
+def test_migrate_guard_refusal_returns_skipped_report(tmp_path, monkeypatch):
+    """DAV-1911 🟡-1: when the shared storage guard refuses, run_migration_on_backup
+    returns a skipped report (no KeyError downstream)."""
+    import sqlite3 as _s
+    from scripts import migrate_symbol_canonical as mig
+
+    db = tmp_path / "backup.db"
+    conn = _s.connect(db)
+    conn.execute("CREATE TABLE reports(id TEXT, symbol TEXT, trade_date TEXT, status TEXT, created_at TEXT)")
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(mig, "check_service_storage_guard",
+                        lambda *a, **k: {"allowed": False, "reason": "busy", "running_count": 1})
+    report = mig.run_migration_on_backup(str(db), dry_run=False)
+    assert report["skipped"] is True
+    assert report["metadata"]["guard_refused"] is True
+    assert report["guard"]["reason"] == "busy"
+    assert "statistics" not in report  # contract: no stats on refusal
+
+
+def test_migrate_guard_refusal_markdown_and_exit_code(tmp_path, monkeypatch):
+    """DAV-1911 🟡-1: guard refusal produces a Markdown section, exit code 2."""
+    import sqlite3 as _s
+    from scripts import migrate_symbol_canonical as mig
+
+    db = tmp_path / "backup.db"
+    conn = _s.connect(db)
+    conn.execute("CREATE TABLE reports(id TEXT, symbol TEXT, trade_date TEXT, status TEXT, created_at TEXT)")
+    conn.commit(); conn.close()
+
+    monkeypatch.setattr(mig, "check_service_storage_guard",
+                        lambda *a, **k: {"allowed": False, "reason": "health_unavailable"})
+    report = mig.run_migration_on_backup(str(db), dry_run=False)
+
+    md_path = tmp_path / "report.md"
+    mig.generate_markdown_report(report, str(md_path))
+    text = md_path.read_text(encoding="utf-8")
+    assert "守卫拒绝" in text
+    assert "health_unavailable" in text
+    # Never raises KeyError on the statistics-free report.
