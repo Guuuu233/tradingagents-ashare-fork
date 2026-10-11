@@ -442,9 +442,20 @@ def assert_no_compressed_result_data(path):
                 "PRAGMA table_info(reports)")}
             if COMPRESSED_RESULT_COLUMN not in columns:
                 return
+            # typeof() branch is mandatory. A single length(CAST(col AS BLOB)) > 0
+            # predicate would also block whitespace-only TEXT ("  "), which
+            # the guard must treat as "not yet live"; and the original
+            # length(trim(col)) > 0 predicate fail-OPEN on BLOB: SQLite
+            # coerced the binary to TEXT, a zstd frame of control bytes
+            # collapsed to '' and length() = 0, passing exactly the rows the
+            # guard exists to block. So: BLOB -> byte length; TEXT -> trim.
             count = conn.execute(
                 f"SELECT count(*) FROM reports WHERE {COMPRESSED_RESULT_COLUMN} "
-                "IS NOT NULL AND length(trim(" + COMPRESSED_RESULT_COLUMN + ")) > 0"
+                "IS NOT NULL AND ("
+                f"(typeof({COMPRESSED_RESULT_COLUMN}) = 'blob' "
+                f" AND length(CAST({COMPRESSED_RESULT_COLUMN} AS BLOB)) > 0) OR "
+                f"(typeof({COMPRESSED_RESULT_COLUMN}) <> 'blob' "
+                f" AND length(trim(CAST({COMPRESSED_RESULT_COLUMN} AS TEXT))) > 0))"
             ).fetchone()[0]
     except sqlite3.Error as exc:
         raise RuntimeError(
@@ -760,9 +771,15 @@ def _write_row(conn, report_id, audit, exported_sha=None):
 
 def restore_from_export(db_path, export_file, *, sha256=None,
                         health_url="http://127.0.0.1:8000",
-                        production_authorized=False):
+                        production_authorized=False,
+                        allow_post_b6_restore=False):
     """Rollback subcommand: write exported pre-images back, row-by-row verified."""
     _validate_db(db_path)
+    # Same fail-closed rule as the migrate path: restoring pre-B-6 plaintext
+    # while result_data_zst still holds bytes would leave reads serving the
+    # stale compressed copies. Opt out explicitly, accepting that limit.
+    if not allow_post_b6_restore:
+        assert_no_compressed_result_data(db_path)
     if _is_production(db_path) and (not production_authorized
                                     or now_cn().date() <= date(2026, 10, 9)):
         raise RuntimeError("production restore forbidden before signed post-10-09 handoff")
@@ -1160,6 +1177,10 @@ def main():
     restore_parser.add_argument("--export-sha256")
     restore_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
     restore_parser.add_argument("--production-authorized", action="store_true")
+    restore_parser.add_argument(
+        "--allow-post-b6-restore", action="store_true",
+        help="restore even though reports.result_data_zst has non-empty rows; "
+             "reads will still prefer the stale compressed bytes")
     verify_parser = sub.add_parser(
         "verify", help="verify a VACUUMed db against its source")
     verify_parser.add_argument("--old-path", required=True)
@@ -1172,7 +1193,8 @@ def main():
             result = restore_from_export(
                 args["db_path"], args["export_file"],
                 sha256=args.get("export_sha256"), health_url=args["health_url"],
-                production_authorized=args.get("production_authorized", False))
+                production_authorized=args.get("production_authorized", False),
+                allow_post_b6_restore=args.get("allow_post_b6_restore", False))
             if result.get("mismatched") or result.get("conflicts") or result.get("missing"):
                 return 1
             return 0
