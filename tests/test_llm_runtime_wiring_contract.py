@@ -8,25 +8,19 @@ Covers:
 5. Host proxy environment variable contamination and proxy routing guard.
 """
 
-from contextlib import ExitStack
-import os
 import tempfile
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
-from fastapi import HTTPException
 import httpx
 import pytest
-
 from api.main import _invoke_runtime_warmup, _probe_runtime_config
 from api.services import role_routing_service
+from fastapi import HTTPException
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.llm_clients import (
-    FailureCategory,
     LLMProxyRoutingError,
-    classify_llm_failure,
-    resolve_role_base_url,
 )
-from tradingagents.llm_clients.validators import _sanitize_error_detail
 
 
 @pytest.fixture(autouse=True)
@@ -575,7 +569,6 @@ class TestRoleProviderAndBaseUrlInheritance:
         - When ProviderDB has provider_type='anthropic' and base_url='https://shared.example/v1', preserved
         - When ProviderDB has provider_type='openai' and base_url=None, resolution.base_url inherits global
         """
-        from uuid import uuid4
         from api.database import ModelProfileDB, ProviderDB
         from api.services.role_routing_service import resolve_role_model_config
 
@@ -772,6 +765,7 @@ class TestHttpRuntimeWiringIntegration:
     def setup(self):
         from api.main import app
         from fastapi.testclient import TestClient
+
         from tests.test_api_smoke import _auth_unique
         self.client = TestClient(app, raise_server_exceptions=False)
         self.token = _auth_unique(self.client)

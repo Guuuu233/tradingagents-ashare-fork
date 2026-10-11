@@ -35,7 +35,8 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Hashable, Optional, Tuple
+from collections.abc import Callable, Hashable
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 
@@ -46,7 +47,9 @@ _LOCK = threading.RLock()
 # (DAV-1842 MED-1): without a cap, every historical (provider, model,
 # base_url, api_key, params) signature keeps its instance — and that
 # instance's httpx connection pool — alive for the whole process lifetime.
-_POOL: "OrderedDict[Hashable, Any]" = OrderedDict()
+# Eviction only detaches an entry; it never closes the instance, because
+# in-flight analyses still hold it (see get_or_create_llm).
+_POOL: OrderedDict[Hashable, Any] = OrderedDict()
 
 # Default cap; overridable for tests / very wide role matrices via
 # TA_LLM_POOL_MAX_SIZE (must be >= 1).
@@ -79,7 +82,7 @@ _COUNTS = {
 }
 
 
-def _hashable_value(value: Any) -> Optional[Hashable]:
+def _hashable_value(value: Any) -> Hashable | None:
     """Return a hashable, equality-stable representation of ``value`` or None.
 
     None → the value is not poolable and the caller must bypass the pool.
@@ -118,9 +121,9 @@ def _pool_key(
     factory: Callable[..., Any],
     provider: str,
     model: str,
-    base_url: Optional[str],
-    kwargs: Dict[str, Any],
-) -> Optional[Hashable]:
+    base_url: str | None,
+    kwargs: dict[str, Any],
+) -> Hashable | None:
     parts = []
     for name in sorted(kwargs):
         hv = _hashable_value(kwargs[name])
@@ -143,7 +146,7 @@ def get_or_create_llm(
     *,
     provider: str,
     model: str,
-    base_url: Optional[str] = None,
+    base_url: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Return the pooled LLM for this config signature, building once.
@@ -151,10 +154,14 @@ def get_or_create_llm(
     ``factory`` is called with ``(provider=..., model=..., base_url=..., **kwargs)``
     on a miss only; it must return either a ``BaseLLMClient`` (``get_llm()``)
     or a ready LLM instance. Entries are kept least-recently-used last and the
-    registry is capped at :func:`_pool_max_size`; an evicted instance has its
-    upstream transports explicitly closed (DAV-1842 MED-1). The pool is
-    process-wide and lives until :func:`invalidate_llm_pool` /
-    :func:`aclose_llm_pool` — it is *not* released at the end of one run.
+    registry is capped at :func:`_pool_max_size`; an evicted entry is only
+    *dropped from the registry* — it is deliberately NOT closed (DAV-1842
+    MED-1 rework): a graph holds its LLM instance for the whole analysis and
+    never touches the cache again, so closing on eviction would break
+    in-flight analyses with a "client closed" failure. An evicted instance is
+    reclaimed by GC / explicit shutdown close (:func:`invalidate_llm_pool` /
+    :func:`aclose_llm_pool`). The pool is process-wide and lives until those
+    shutdown calls — it is *not* released at the end of one run.
     """
     if _pool_disabled():
         _COUNTS["bypass"] += 1
@@ -199,16 +206,20 @@ def get_or_create_llm(
         _COUNTS["miss"] += 1
         _COUNTS["build"] += 1
 
-    # Eviction closes outside the lock: transport close can block, and a
-    # dropped entry must never be able to delay unrelated hits.
-    for old_key, old_llm in evicted:
-        try:
-            _close_llm_instance(old_llm, async_close=False)
-            _COUNTS["closed"] += 1
-            _COUNTS["evicted"] += 1
-            _logger.debug("[LLMPool] evicted LRU key %r (max_size=%s)", old_key, max_size)
-        except Exception as exc:
-            _logger.warning("[LLMPool] failed closing evicted llm %r: %r", old_key, exc)
+    # Eviction only detaches the entry from the registry — the instance stays
+    # fully usable because callers may still hold it for a whole analysis.
+    # Each eviction is logged so silent instance churn stays visible.
+    for old_key, _old_llm in evicted:
+        _COUNTS["evicted"] += 1
+        _logger.warning(
+            "[LLMPool] evicted LRU entry (max_size=%s) provider=%s model=%s "
+            "base_url=%s — instance left OPEN and still usable by in-flight "
+            "callers; reclaimed at pool shutdown or by GC",
+            max_size,
+            _safe_field(_key_field(old_key, 2)),
+            _safe_field(_key_field(old_key, 3)),
+            _safe_field(_key_field(old_key, 4)),
+        )
     return built
 
 
@@ -409,13 +420,34 @@ def _close_llm_instance(llm: Any, *, async_close: bool) -> int:
 
 
 
+def _safe_field(value: Any) -> Any:
+    """Render a pool-key field for logging; truncation guards log flooding.
+
+    Credentials never reach here: only provider / model / base_url positions of
+    the key are logged, and api_key (inside the kwargs tuple) is never read.
+    """
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) > 120:
+        text = text[:120] + "..."
+    return text
+
+
+def _key_field(key: Any, index: int) -> Any:
+    """Best-effort read of pool-key position ``index`` (unknown shape -> '?')."""
+    if isinstance(key, tuple) and len(key) > index:
+        return key[index]
+    return "?"
+
+
 def _pool_disabled() -> bool:
     """Opt-out switch (tests / emergency rollback): TA_LLM_POOL=0|off|disable."""
     raw = (os.environ.get("TA_LLM_POOL") or "").strip().lower()
     return raw in ("0", "off", "false", "disable", "disabled")
 
 
-def invalidate_llm_pool() -> Tuple[int, int]:
+def invalidate_llm_pool() -> tuple[int, int]:
     """Close every pooled instance and clear the registry.
 
     Returns ``(instances, transports)``. Safe to call at shutdown or when
@@ -435,7 +467,7 @@ def invalidate_llm_pool() -> Tuple[int, int]:
     return len(items), transports
 
 
-async def aclose_llm_pool() -> Tuple[int, int]:
+async def aclose_llm_pool() -> tuple[int, int]:
     """Async variant of :func:`invalidate_llm_pool` for lifespan shutdown."""
     with _LOCK:
         items = list(_POOL.items())
@@ -455,7 +487,7 @@ async def aclose_llm_pool() -> Tuple[int, int]:
 close_llm_pool = invalidate_llm_pool
 
 
-def pool_stats() -> Dict[str, int]:
+def pool_stats() -> dict[str, int]:
     """Snapshot of pool counters (for tests, health probes, evidence)."""
     with _LOCK:
         return {**_COUNTS, "size": len(_POOL), "max_size": _pool_max_size()}

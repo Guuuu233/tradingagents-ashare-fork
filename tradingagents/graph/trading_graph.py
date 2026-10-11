@@ -2,71 +2,68 @@
 
 import contextlib
 import copy
-import os
-import re
-from pathlib import Path
 import json
 import logging
-from typing import Dict, Any, List, Mapping, Optional, Union, TypedDict
+import os
+import re
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Optional, TypedDict
 
-
-from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
-
-from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
-from tradingagents.llm_clients.pool import get_or_create_llm
-
-from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.agents.utils.memory import FinancialSituationMemory
-from tradingagents.dataflows.config import set_config
-from tradingagents.agents.utils.prompt_injection import DEFAULT_PLACEMENT
+from langgraph.prebuilt import ToolNode
+from tradingagents.agents.utils.agent_states import get_protocol_metadata
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
-    get_stock_data,
-    get_indicators,
-    get_fundamentals,
     get_balance_sheet,
-    get_cashflow,
-    get_income_statement,
-    get_news,
-    get_insider_transactions,
-    get_global_news,
     get_board_fund_flow,
+    get_cashflow,
+    get_fundamentals,
+    get_global_news,
+    get_income_statement,
+    get_indicators,
     get_individual_fund_flow,
+    get_insider_transactions,
     get_lhb_detail,
+    get_news,
+    get_stock_data,
 )
-
-from .conditional_logic import ConditionalLogic
-from .data_collector import DataCollector
-from .intent_parser import parse_intent
-from .horizon_profile import HorizonResolution
-from .setup import GraphSetup
-from .propagation import Propagator
-from .reflection import Reflector
-from .report_quality_gate import apply_report_quality_gate
+from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
+from tradingagents.agents.utils.memory import FinancialSituationMemory
+from tradingagents.agents.utils.model_tier_warning import check_model_tier_warnings
 from tradingagents.agents.utils.price_basis_gate import (
     GATE_BLOCKED_GAP,
     PRICE_REF_CONTRACT_VERSION,
     finalize_price_ref_state,
 )
 from tradingagents.agents.utils.price_ref_registry import attach_price_ref_source
-from .signal_processing import SignalProcessor
+from tradingagents.agents.utils.prompt_injection import DEFAULT_PLACEMENT
+from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
+from tradingagents.dataflows.config import set_config
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.experiments.run_isolation import (
     assert_experiment_thread_id,
     checkpointer_identity,
 )
-from tradingagents.agents.utils.agent_states import get_protocol_metadata
-from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
-from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
-from tradingagents.agents.utils.model_tier_warning import check_model_tier_warnings
+from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
+from tradingagents.llm_clients.pool import get_or_create_llm
 
+from .conditional_logic import ConditionalLogic
+from .data_collector import DataCollector
+from .horizon_profile import HorizonResolution
+from .intent_parser import parse_intent
+from .propagation import Propagator
+from .reflection import Reflector
+from .report_quality_gate import apply_report_quality_gate
+from .setup import GraphSetup
+from .signal_processing import SignalProcessor
 
 _logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
-def _llm_usage_horizon(horizon: Optional[str]):
+def _llm_usage_horizon(horizon: str | None):
     """Tag LLM calls made during a graph run with the ledger horizon (DAV-1330).
 
     RunnableConfig metadata never reaches LLM calls inside graph nodes, so the
@@ -102,7 +99,7 @@ class GameTheoryUnavailable(TypedDict, total=False):
     status: str
     reason_code: str
     message: str
-    error_type: Optional[str]
+    error_type: str | None
     wired: bool
 
 
@@ -151,7 +148,7 @@ class _LogStatesDict(dict):
         return False
 
 
-def _summarize_social_context(ctx: Optional[Union[Dict[str, Any], Any]]) -> Dict[str, Any]:
+def _summarize_social_context(ctx: dict[str, Any] | Any | None) -> dict[str, Any]:
     """Summarize social_data_context into a privacy-safe structure for state logging (M4).
 
     Includes safe metadata: mode, status, requested_as_of, direction_allowed, reason counts and codes.
@@ -186,14 +183,14 @@ class TradingAgentsGraph:
         self,
         selected_analysts=["market", "social", "news", "fundamentals", "macro", "smart_money", "volume_price"],
         debug=False,
-        config: Dict[str, Any] = None,
-        callbacks: Optional[List] = None,
+        config: dict[str, Any] = None,
+        callbacks: list | None = None,
         data_collector: Optional["DataCollector"] = None,
-        custom_prompts: Optional[Dict[str, str]] = None,
+        custom_prompts: dict[str, str] | None = None,
         custom_prompt_placement: str = DEFAULT_PLACEMENT,
-        strict_game_theory_wiring: Optional[bool] = None,
+        strict_game_theory_wiring: bool | None = None,
         graph_stage: str = "full",
-        checkpointer: Optional[Any] = None,
+        checkpointer: Any | None = None,
         experiment_mode: bool = False,
     ):
         """Initialize the trading agents graph and components.
@@ -213,7 +210,7 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
-        self.custom_prompts: Dict[str, str] = custom_prompts if custom_prompts is not None else {}
+        self.custom_prompts: dict[str, str] = custom_prompts if custom_prompts is not None else {}
         self.custom_prompt_placement: str = custom_prompt_placement
 
         # Determine strict wiring mode: explicit arg takes precedence, then config flag (DAV-881 / P0-B)
@@ -223,7 +220,7 @@ class TradingAgentsGraph:
             self.strict_game_theory_wiring = bool(self.config.get("strict_game_theory_wiring", False))
 
         self.game_theory_wired: bool = False
-        self.game_theory_unavailable: Optional[Dict[str, Any]] = None
+        self.game_theory_unavailable: dict[str, Any] | None = None
 
         # Update the interface's config
         set_config(self.config)
@@ -466,7 +463,7 @@ class TradingAgentsGraph:
             return raw_graph
 
         try:
-            from .game_theory_node import wire_game_theory_node, NODE_NAME
+            from .game_theory_node import NODE_NAME, wire_game_theory_node
             builder.compiled = False
             wire_game_theory_node(
                 builder,
@@ -516,7 +513,7 @@ class TradingAgentsGraph:
                 ) from exc
             return raw_graph
 
-    def _ensure_game_theory_state(self, state: Dict[str, Any], horizon: str = "short") -> None:
+    def _ensure_game_theory_state(self, state: dict[str, Any], horizon: str = "short") -> None:
         """Enforce the Game Theory contract on final graph state (DAV-881 / P0-B).
 
         Guarantees:
@@ -590,7 +587,7 @@ class TradingAgentsGraph:
             if not any(isinstance(t, dict) and t.get("agent") == AGENT_NAME for t in traces):
                 traces.append(fail_trace)
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
+    def _get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
         kwargs = {}
         provider = self.config.get("llm_provider", "").lower()
@@ -618,7 +615,7 @@ class TradingAgentsGraph:
 
         return kwargs
 
-    def _create_tool_nodes(self) -> Dict[str, ToolNode]:
+    def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
             "market": ToolNode(
@@ -678,12 +675,12 @@ class TradingAgentsGraph:
         self,
         company_name,
         trade_date,
-        user_context: Optional[Dict[str, Any]] = None,
-        selected_analysts: Optional[List[str]] = None,
+        user_context: dict[str, Any] | None = None,
+        selected_analysts: list[str] | None = None,
         request_source: str = "api",
-        thread_id: Optional[str] = None,
-        horizon_resolution: Optional[Any] = None,
-        horizon: Optional[str] = None,
+        thread_id: str | None = None,
+        horizon_resolution: Any | None = None,
+        horizon: str | None = None,
     ):
         """Run the trading agents graph for a company on a specific date."""
 
@@ -805,8 +802,8 @@ class TradingAgentsGraph:
         self,
         company_name: str,
         trade_date: str,
-        query: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        query: str | None = None,
+    ) -> dict[str, Any]:
         """Run a single integrated analysis.
 
         Each analyst uses its own natural time window (technical/funds → short,
@@ -885,9 +882,9 @@ class TradingAgentsGraph:
     def _build_horizon_result(
         self,
         horizon: str,
-        final_state: Dict[str, Any],
-        market_source: Optional[Mapping[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        final_state: dict[str, Any],
+        market_source: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Extract a compact result dict from a completed graph state.
 
         ``market_source`` (DAV-1224 C5): the run's already-collected pool —
@@ -907,7 +904,7 @@ class TradingAgentsGraph:
         social_failure_ledger = social_data_context.get("data_failure_ledger", []) if isinstance(social_data_context, dict) else []
 
         valid_failure_statuses = {"failed", "timeout", "unavailable", "refused", "error"}
-        data_gaps: List[str] = []
+        data_gaps: list[str] = []
         for entry in failure_ledger:
             if isinstance(entry, dict) and entry.get("gap"):
                 status = entry.get("status")
@@ -1067,9 +1064,9 @@ class TradingAgentsGraph:
     def _log_state_dual(
         self,
         trade_date: str,
-        short_result: Dict[str, Any],
-        medium_result: Dict[str, Any],
-        user_intent: Dict[str, Any],
+        short_result: dict[str, Any],
+        medium_result: dict[str, Any],
+        user_intent: dict[str, Any],
     ) -> None:
         """Log dual-horizon results to a JSON file."""
         ticker = self._safe_ticker(
@@ -1209,9 +1206,9 @@ class TradingAgentsGraph:
         cls,
         ticker: str,
         trade_date: str,
-        horizon: Optional[str] = None,
-        results_dir: Optional[Union[str, Path]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        horizon: str | None = None,
+        results_dir: str | Path | None = None,
+    ) -> dict[str, Any] | None:
         """Read state log from disk for a ticker, trade_date, and horizon.
 
         Handles:
@@ -1254,8 +1251,8 @@ class TradingAgentsGraph:
         cls,
         data: Any,
         trade_date: str,
-        horizon: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        horizon: str | None = None,
+    ) -> dict[str, Any] | None:
         if not isinstance(data, dict):
             return None
         candidates = []
@@ -1273,7 +1270,7 @@ class TradingAgentsGraph:
         return None
 
     @classmethod
-    def _mark_legacy_state(cls, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def _mark_legacy_state(cls, entry: dict[str, Any]) -> dict[str, Any]:
         result = dict(entry)
         curr_h = result.get("horizon")
         if not curr_h or str(curr_h).lower() in ("unknown", "legacy", "none"):
@@ -1305,10 +1302,10 @@ class TradingAgentsGraph:
     def load_state_log(
         self,
         trade_date: str,
-        horizon: Optional[str] = None,
-        ticker: Optional[str] = None,
-        results_dir: Optional[Union[str, Path]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        horizon: str | None = None,
+        ticker: str | None = None,
+        results_dir: str | Path | None = None,
+    ) -> dict[str, Any] | None:
         """Instance helper to load state log from disk."""
         return self.read_state_log(
             ticker=ticker or self.ticker or "unknown",
