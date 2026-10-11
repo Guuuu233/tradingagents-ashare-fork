@@ -55,7 +55,7 @@ def _rd_text(raw):
 
     Post-B-6b reads use the zst column when it exists; the BLOB decodes to
     exactly the text the plaintext column carried. On pre-migration schemas
-    callers select plain ``result_data``.
+    callers read the plain ``result_data`` column directly.
     """
     if isinstance(raw, (bytes, bytearray, memoryview)):
         return decode_frame_bytes(bytes(raw)).decode("utf-8")
@@ -63,7 +63,7 @@ def _rd_text(raw):
 
 
 def _rd_col(conn) -> str:
-    """SELECT expression for the result_data JSON payload on this DB."""
+    """SQL expression yielding the result_data JSON payload on this DB."""
     return result_data_select_expr(conn)
 
 
@@ -715,7 +715,8 @@ def export_pre_images(db_path, planned, *, export_dir=None):
             for item in planned:
                 report_id = item["id"]
                 row = conn.execute(
-                    f"SELECT rowid AS __rowid__, {_rd_col(conn)} AS result_data FROM reports WHERE id=?",
+                    f"SELECT rowid AS __rowid__, {_rd_col(conn)} AS result_data "  # B6E-GATE-OK: via _rd_col decode layer
+                    "FROM reports WHERE id=?",
                     (report_id,)).fetchone()
                 if row is None:
                     raise RuntimeError(

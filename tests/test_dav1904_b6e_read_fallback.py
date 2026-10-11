@@ -4,9 +4,12 @@ Two parts:
 
 1. ORM read fallback — in ``REPORT_STORAGE_MODE=plaintext`` (default),
    a row whose plaintext ``result_data`` was cleared (P5b) still reads
-   back through ``db_report.result_data`` by lazy-loading the deferred
-   ``result_data_zst`` column and decoding it. Plaintext rows are
-   untouched, and a missing zst column never breaks reads.
+   back through ``db_report.result_data`` via the SQL-level
+   plaintext-first ``COALESCE(result_data, result_data_zst)`` bound
+   lazily on first connect (DAV-1909 🔴-2 rework: SQL-level, so list
+   queries stay at ONE SELECT and DAV-1283 D2 ``load_only`` exclusion
+   keeps working). Plaintext rows are untouched, and a missing zst
+   column never breaks reads (attribute stays a bare Column there).
 
 2. Static regression gate — every ``.py`` file under ``scripts/``,
    ``tradingagents/`` and ``api/`` is scanned for raw-SQL reads of the
@@ -82,7 +85,12 @@ with engine.connect() as c:
 
 @_PLAIN_ONLY
 def test_cleared_row_reads_through_zstd_fallback(tmp_path):
-    """P5b-cleared row (plaintext NULL, zst present) decodes via the ORM."""
+    """P5b-cleared row (plaintext NULL, zst present) decodes via the ORM.
+
+    The lazy COALESCE binding promotes ``result_data`` at first connect,
+    so ``cleared1`` resolves through zst inside the SAME SELECT — no
+    deferred N+1 — while ``plain1``/``nulllit`` read the plaintext column.
+    """
     db_file = _make_db(tmp_path)
     code = r"""
 import os, sys
@@ -187,16 +195,52 @@ def test_raw_sql_result_data_reads_go_through_decode_layer():
             src = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        if any(m in src for m in _DECODE_MARKERS):
-            continue
-        for lineno, line in enumerate(src.splitlines(), 1):
-            if _RAW_READ_RE.search(line):
-                offenders.append(f"{rel}:{lineno}: {line.strip()[:100]}")
+        # DAV-1909 🟡-2: line-level decode-marker exemption — a marker
+        # anywhere in the file no longer waives unrelated raw-read lines;
+        # a line may instead opt out with an inline ``B6E-GATE-OK`` note.
+        for lineno, line in _gate_offenders(src):
+            offenders.append(f"{rel}:{lineno}: {line.strip()[:100]}")
     assert not offenders, (
         "raw-SQL reads of plaintext result_data bypassing the decode "
-        "layer (add result_data_select_expr/decode_result_data or whitelist):\n"
+        "layer (use result_data_select_expr*/decode_result_data on the "
+        "same line, or whitelist the file):\n"
         + "\n".join(offenders)
     )
+
+
+_B6E_GATE_OK = "B6E-GATE-OK"  # inline opt-out for prose/comments
+
+
+def _gate_offenders(src: str):
+    """Lines the gate flags: raw result_data reads w/o a decode marker or
+    an explicit ``B6E-GATE-OK`` annotation on the same line."""
+    out = []
+    for lineno, line in enumerate(src.splitlines(), 1):
+        if not _RAW_READ_RE.search(line):
+            continue
+        if any(m in line for m in _DECODE_MARKERS):
+            continue
+        if _B6E_GATE_OK in line:
+            continue
+        out.append((lineno, line))
+    return out
+
+
+def test_raw_sql_gate_catches_undecoded_read():
+    """Negative self-test (DAV-1909 🟡-2): a fixture file containing a
+    bare ``SELECT … result_data`` line MUST be flagged by the same
+    predicate the gate uses — guards against the regex/exemption being
+    weakened until the gate silently passes everything."""
+    fixture = (
+        'cur.execute("SELECT id, result_data FROM reports '
+        'WHERE user_id=?", (uid,))\n'
+        'cur.execute("SELECT json_extract(result_data, \'$.a\') FROM reports")\n'
+        'cur.execute(f"SELECT {result_data_select_expr_plaintext(con)} FROM reports")\n'
+        '# prose: plain ``result_data`` column mention is NOT a read\n'
+        'cur.execute("SELECT result_data FROM reports")  # B6E-GATE-OK: test fixture\n'
+    )
+    hits = _gate_offenders(fixture)
+    assert len(hits) == 2, hits  # lines 1-2 flagged; decode/prose/opt-out exempt
 
 
 def test_work_guarded_scripts_still_annotated_or_guarded():
@@ -227,3 +271,26 @@ def test_work_guarded_scripts_still_annotated_or_guarded():
         "work/ scripts reading result_data raw without B-6d annotation, "
         "guard, or decode layer:\n" + "\n".join(bad)
     )
+
+
+# ── Part 3: work/ guard injection must never break syntax (DAV-1909 🔴-1) ────
+
+
+def test_work_scripts_remain_parseable():
+    """Every ``work/**/*.py`` must ``ast.parse`` cleanly — the B-6e guard
+    block must land AFTER ``from __future__ import annotations`` (its only
+    legal position is before any other statement), never before it. The
+    previous injection put imports ahead of ``__future__`` and turned 18
+    scripts into SyntaxErrors that broke pytest collection."""
+    import ast
+
+    work_dir = ROOT / "work"
+    if not work_dir.is_dir():
+        return
+    bad = []
+    for p in sorted(work_dir.rglob("*.py")):
+        try:
+            ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+        except SyntaxError as e:
+            bad.append(f"{p.relative_to(ROOT)}: {e}")
+    assert not bad, "work/ scripts with SyntaxError:\n" + "\n".join(bad)

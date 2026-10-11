@@ -243,9 +243,28 @@ def result_data_select_expr(con) -> str:
     Emits ``COALESCE(result_data_zst, result_data)`` when the zst column
     physically exists, else bare ``result_data`` — identical output on both
     schemas for raw-SQL callers.
+
+    Compressed-first ordering (DAV-1909 🟡-1): when both copies exist the
+    zst frame wins — the same order the ORM uses in ``compressed`` mode.
+    Rows diverged mid-migration therefore read identically here and under
+    ``REPORT_STORAGE_MODE=compressed``. For the plaintext-first order the
+    ORM uses in default mode, see :func:`result_data_select_expr_plaintext`.
     """
     if reports_has_compressed_columns(con):
         return f"COALESCE({COMPRESSED_COL}, {PLAINTEXT_COL})"
+    return PLAINTEXT_COL
+
+
+def result_data_select_expr_plaintext(con) -> str:
+    """Plaintext-first twin of :func:`result_data_select_expr`.
+
+    Emits ``COALESCE(result_data, result_data_zst)`` — same operand order
+    the ORM binds in ``plaintext`` mode (DAV-1904 B-6e). Bytes differ from
+    the compressed-first variant only on rows whose two copies diverged;
+    both decode identically through :func:`decode_result_data`.
+    """
+    if reports_has_compressed_columns(con):
+        return f"COALESCE({PLAINTEXT_COL}, {COMPRESSED_COL})"
     return PLAINTEXT_COL
 
 
@@ -511,6 +530,7 @@ __all__ = [
     "reports_has_compressed_columns",
     "result_data_plaintext_bytes",
     "result_data_select_expr",
+    "result_data_select_expr_plaintext",
     "set_write_concurrency_limit",
     "sync_report_storage_row",
     "write_concurrency_limit",
