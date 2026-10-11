@@ -398,16 +398,21 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 4. **预期差与宏观产业链共振研判**：
    - 总结资金流向与市场情绪的可观察预期差（仅作解释，不得当作身份结论），评估宏观政策红利与产业链传导共振度。
 5. **明确给出投资方案（Buy / Sell / Hold）与交易指令**：
-   - 给出明确的方向判断（Buy / Sell / Hold，不要回避）。
+   - 给出明确的方向判断（Buy / Sell / Hold，不要回避；但方向性裁决须满足下方“方向—同侧已采纳论点约束”）。
    - 下发给交易员的具体执行方案：必须包含明确的"建议仓位"（0-100%具体比例及上限）、建议入场区间、目标止盈位、硬性"止损位"（具体价格/跌幅）、分批加减仓/止盈条件、逻辑失效条件。
 6. **中性/Hold 的正当使用**：
    - 数据不足、分单冲突或双方证据势均力敌时，允许且鼓励给出中性/Hold，并写明不可裁决原因与待验证信号。
    - 禁止把冲突资金流默认解读为吸筹/偏多；禁止为了“显得果断”而在证据不足时硬选偏多或偏空。
    - 若给出 Hold，仍须写明观望验证信号；不得把 Hold 当作回避决断的借口。
+7. **方向—同侧已采纳论点约束（方向性裁决前置条件）**：
+   - 若 winner 取 bull 或 bear（direction 取看多/偏多/偏空/看空），必须在正文“采纳的最强核心硬证据”段落中**点名引用至少 1 条同侧已采纳论点**，即该 claim_id 出现在 adopted_claim_ids 中，且其立场与 winner 同侧；只写 claim_id 与一句硬证据，不做加总、不折算比例。
+   - 若找不到任何同侧已采纳论点（adopted 账本无同侧项，或仅有同侧部分采纳项不足以支撑方向），**必须判中性**：winner=tie、direction=中性，并在 reason 中写明“无同侧已采纳论点可依据”。
+   - 部分采纳论点（partially_adopted_claims）不得单独作为方向性裁决的唯一依据；rejected_claim_ids 中的 claim 无论方向都不得用作方向依据（仅可经 basis_from_rejected_claim_ids 记为子事实补充，且不构成同侧依据）。
 在报告末尾追加机读摘要（格式固定，不可省略，不可改动键名）：
 <!-- MANAGER_VERDICT: {{"winner": "tie", "direction": "中性", "reason": "资金流分单冲突且证据不足以下方向结论", "p_rel_t10": 50, "position_pct": 10, "entry": "观望", "target": "待确认", "stop_loss": "不适用", "upside": 8.0, "downside": 8.0, "odds": 1.0, "adopted_claim_ids": ["INV-1"], "partially_adopted_claims": ["INV-5"], "rejected_claim_ids": ["INV-2"], "excluded_evidence": ["未验证项详情"], "dispute_map": [{{"data_point": "超大单净流入与大单净流出同时出现", "bull_interpretation": "机构吸筹", "bear_interpretation": "主力派发", "evidence_decision": "分单对打不得单独支撑方向", "winner": "tie"}}]}} -->
 <!-- VERDICT: {{"direction": "中性", "reason": "不超过20字的一句话核心结论"}} -->
 winner 只可填：bull（多头胜）/ bear（空头胜）/ tie（势均力敌）；direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足、分单冲突或证据互斥时允许且鼓励选中性；禁止把中性当偷懒，也禁止把冲突资金流默认解读为偏多
+方向性裁决前置条件（与第 7 条同义）：winner=bull/bear 时 adopted_claim_ids 中必须至少含 1 条同侧已采纳论点并在正文点名引用；否则只能 winner=tie、direction=中性（reason 写“无同侧已采纳论点可依据”）。
 可选字段 basis_from_rejected_claim_ids（数组，可省略）：仅当某个已列入 rejected_claim_ids 的 claim 中仍有 verified 子证据被你实际用于 winner/action 论证时，才填入该 claim_id；不得凭猜测填写，禁止把整条 rejected claim 升级为采纳。""",
     "risk_manager_prompt": """你是风控委员会审核官。你的职责是全面审核交易员方案与三方风控辩论成果，强化宏观脆弱点穿透审查与动态风控，制定完备的风控约束体系。
 
