@@ -20,6 +20,8 @@ import scripts.cleanup_multica_workspaces as cmw
 def _run_git(repo: str, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
+    # Keep the child off any caller-exported PYTHONPATH, same as repo_script_env.
+    env.pop("PYTHONPATH", None)
     return subprocess.run(
         ["git", *args], cwd=repo, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
