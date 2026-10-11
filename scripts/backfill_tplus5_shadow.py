@@ -566,6 +566,19 @@ def check_runtime_guard(db_path, health_url):
         session.close()
     if response.status_code != 200 or payload.get("status") != "ok":
         return {"allowed": False, "reason": "health_not_ok"}
+    # DAV-1885: refuse to write when the service's report-storage mode
+    # differs from this process's. healthz exposes `report_storage_mode`;
+    # a mode drift (service switched, script not redeployed / vice-versa)
+    # would otherwise dual-write a column layout the read side no longer
+    # expects. Mismatch → fail closed, not silent wrong-mode write.
+    service_mode = payload.get("report_storage_mode")
+    my_mode = report_storage_mode()
+    if service_mode is None:
+        return {"allowed": False, "reason": "report_storage_mode_unknown",
+                "service_mode": None, "script_mode": my_mode}
+    if service_mode != my_mode:
+        return {"allowed": False, "reason": "report_storage_mode_mismatch",
+                "service_mode": service_mode, "script_mode": my_mode}
     # healthz currently does NOT expose the in-memory job store. Absence of DB
     # rows is not proof of zero active jobs. An explicit zero runtime count is
     # required; missing instrumentation must skip rather than race an analysis.
