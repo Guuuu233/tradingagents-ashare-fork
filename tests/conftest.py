@@ -746,6 +746,51 @@ def forbid_external_network():
     yield
 
 
+@pytest.fixture
+def offline_tushare_gateway_stub(monkeypatch):
+    """DAV-1818: stub the Tushare gateway seams so tests never fan out to them.
+
+    ``DataCollector`` fan-out reaches two Tushare gateways whenever the host
+    carries credentials (``.env`` / environment variables):
+
+    - ``tushare_global_news.TushareNewsClient`` — news pool: 7-day window x 4
+      sources, bisecting each unresponsive segment down to 30-minute slices and
+      retrying each request up to 5 times;
+    - ``industry_linkage_provider._query_tushare_api`` — financial statements
+      and global indices (imported *by value* into ``tushare_provider`` and
+      ``sw_industry``, so every holder is patched).
+
+    The offline guardrail normally denies those attempts, but a test that
+    replaces ``requests.post`` with a Mock defeats the socket layer and lets the
+    retry/bisection amplification run (measured before this fixture: 468 + 16
+    POSTs and ~180s, i.e. the ``test_zero_real_network_guard`` failure). This
+    fixture replaces both seams with an immediate denial, mirroring what the
+    real guardrail raises, so the collector is exercised with zero gateway
+    traffic. Denial is terminal: no retry, no bisection.
+
+    Opt-in (not autouse) because suites such as
+    ``test_industry_linkage_provider.py`` deliberately drive the real client
+    with ``patch("requests.post")`` and assert on call counts.
+    """
+    from tradingagents.dataflows import tushare_global_news as _tgn
+    from tradingagents.dataflows.providers import industry_linkage_provider as _ilp
+    from tradingagents.dataflows.providers import tushare_provider as _tp
+    from tradingagents.dataflows import sw_industry as _swi
+
+    def _deny(*_args, **_kwargs):
+        raise OfflineTestGuardrailError(
+            "OfflineTestGuardrail: Tushare gateway stubbed offline (DAV-1818). "
+            "Mark with @pytest.mark.network and run with RT_NETWORK_ENABLED=1, "
+            "or mock the provider."
+        )
+
+    monkeypatch.setattr(_tgn.TushareNewsClient, "_query_once", _deny)
+    monkeypatch.setattr(_ilp, "_query_tushare_api", _deny)
+    monkeypatch.setattr(_tp, "_query_tushare_api", _deny)
+    monkeypatch.setattr(_swi, "_query_tushare_api", _deny)
+    yield
+
+
 def pytest_addoption(parser):
     """Add dedicated network authorization flag to pytest CLI."""
     parser.addoption(
