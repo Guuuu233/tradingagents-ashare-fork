@@ -269,6 +269,10 @@ class TradingAgentsGraph:
         # callbacks, we keep them in the kwargs — a non-scalar value makes the
         # pool key unhashable, so that call bypasses pooling and behaves
         # exactly like the old per-graph construction.
+        # DAV-1842 MED-1: the pool is process-wide and LRU-capped (default 32,
+        # TA_LLM_POOL_MAX_SIZE), *not* released when one run ends; entries live
+        # until evicted, or until invalidate_llm_pool()/aclose_llm_pool() at
+        # process shutdown (api/main.py lifespan).
         llm_kwargs = self._get_provider_kwargs()
 
         # Add callbacks to kwargs if provided (passed to LLM constructor)
