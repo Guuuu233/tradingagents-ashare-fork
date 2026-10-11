@@ -211,7 +211,6 @@ def _is_local_or_loopback(target: Any, family: Optional[int] = None) -> bool:
 # So: destinations matching a proxy endpoint configured in the environment are
 # denied regardless of being loopback. Legitimate loopback traffic to any other
 # port is unaffected.
-
 _PROXY_ENV_VARS = (
     "http_proxy",
     "https_proxy",
@@ -222,8 +221,35 @@ _PROXY_ENV_VARS = (
 )
 
 
+_PROXY_ENV_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+)
+
+# Port to assume when a proxy value omits one (e.g. ``HTTP_PROXY=http://127.0.0.1``).
+# urllib3/requests dial the scheme's default port in that case, so resolving it
+# the same way keeps the denial aligned with what the transport would actually
+# connect to. Without this, a portless value matched *every* port on that host,
+# which denied the guardrail's own loopback sentinel and aborted the session
+# with INTERNALERROR before a single test ran.
+_PROXY_SCHEME_DEFAULT_PORT = {
+    "http": 80,
+    "https": 443,
+    "socks": 1080,
+    "socks4": 1080,
+    "socks4a": 1080,
+    "socks5": 1080,
+    "socks5h": 1080,
+}
+_PROXY_FALLBACK_PORT = 80
+
+
 def _proxy_endpoints() -> set:
-    """Return ``{(host, port_or_None)}`` for proxies configured in the environment.
+    """Return ``{(host, port)}`` for proxies configured in the environment.
 
     Read live on every call (no caching): tests legitimately set and clear these
     with ``monkeypatch.setenv``/``delenv`` mid-session, so a cached snapshot
@@ -243,8 +269,15 @@ def _proxy_endpoints() -> set:
         except ValueError:
             # Malformed value (e.g. out-of-range port) -- not a usable endpoint.
             continue
-        if host:
-            endpoints.add((str(host).strip().lower().strip("[]"), port))
+        if not host:
+            continue
+        if port is None:
+            # Portless config: resolve to the port the transport would dial,
+            # rather than treating it as "any port on this host".
+            port = _PROXY_SCHEME_DEFAULT_PORT.get(
+                (parsed.scheme or "").lower(), _PROXY_FALLBACK_PORT
+            )
+        endpoints.add((str(host).strip().lower().strip("[]"), port))
     return endpoints
 
 
@@ -274,8 +307,10 @@ def _is_proxy_endpoint(target: Any) -> bool:
     for proxy_host, proxy_port in _proxy_endpoints():
         if proxy_host != host_str:
             continue
-        # Proxy configured without an explicit port (e.g. "http://proxy") is
-        # treated as matching any port for that host.
+        # Only a genuinely unknown port (target given as a bare hostname, e.g.
+        # the audit hook's ``socket.gethostbyname`` argument) falls back to a
+        # host-only match. A portless *config* is already resolved to the
+        # scheme default above, so it cannot swallow unrelated local ports.
         if proxy_port is None or want_port is None or proxy_port == want_port:
             return True
     return False

@@ -53,6 +53,10 @@ AF_UNIX、用例自建的本地 TCP 服务）正常工作。但**前向代理是
 发往其它 loopback 端口的合法本地流量不受影响。代理命中时错误信息会追加
 `(forward proxy configured in env)` 以便归因。
 
+代理值**未写端口**时（如 `HTTP_PROXY=http://127.0.0.1`），按 scheme 默认端口解析
+（http→80 / https→443 / socks*→1080），与 urllib3 实际拨号一致；**不得**当成「该主机任意端口」，
+否则会连护栏自己的 loopback sentinel 一起拒掉，会话在跑第一个用例前就以 `INTERNALERROR` 终止。
+
 回归用例：`tests/test_tushare_gateway_denial_termination.py::TestForwardProxyCannotBypassGuardrail`
 （含 `HTTPS_PROXY` 下设代理时类别仍为 `network_denied`）。
 

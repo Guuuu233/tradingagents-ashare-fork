@@ -331,6 +331,62 @@ class TestGlobalNewsEntryDenialAndSingleFlight:
                     "2026-08-14", 7, 30, client=DenyingClient(), cache=cache
                 )
 
+    def test_concurrent_waiter_receives_the_denial_not_a_soft_timeout(self, tmp_path):
+        """A concurrent caller must see the denial, not "wait timed out".
+
+        Found in review of ``bc97a5b``: the owner released the single-flight slot
+        and re-raised, but the waiter only saw ``res is None`` and degraded to the
+        soft text ``"tushare single-flight 等待超时或主调用失败"`` -- which reads as
+        a timeout and hides that the run was refused by policy.
+        """
+        import threading
+        import time
+
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        class SlowDenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                time.sleep(1.0)  # hold the single-flight slot so the waiter joins
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        cache = tgn.TushareNewsCache(str(tmp_path))
+        results = {}
+
+        def _owner():
+            try:
+                tgn.get_global_news(
+                    "2026-08-14", 7, 30, client=SlowDenyingClient(), cache=cache
+                )
+                results["owner"] = "returned"
+            except OfflineTestGuardrailError:
+                results["owner"] = "denied"
+
+        def _waiter():
+            time.sleep(0.3)  # arrive while the owner holds the slot
+            try:
+                got = tgn.get_global_news(
+                    "2026-08-14", 7, 30, client=SlowDenyingClient(), cache=cache
+                )
+                results["waiter"] = f"returned {got!r}"
+            except OfflineTestGuardrailError:
+                results["waiter"] = "denied"
+
+        t_owner = threading.Thread(target=_owner, daemon=True)
+        t_waiter = threading.Thread(target=_waiter, daemon=True)
+        t_owner.start()
+        t_waiter.start()
+        t_owner.join(timeout=30)
+        t_waiter.join(timeout=30)
+
+        assert results.get("owner") == "denied"
+        assert results.get("waiter") == "denied", (
+            f"waiter did not receive the denial: {results.get('waiter')!r}"
+        )
+        assert tgn._CALL_INFLIGHT == {}
+
 
 # ==============================================================================
 # 6. A configured forward proxy must not defeat the offline guardrail
@@ -446,6 +502,87 @@ class TestForwardProxyCannotBypassGuardrail:
                 monkeypatch.delenv(other, raising=False)
             monkeypatch.setenv(var, self.PROXY)
             assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is True, var
+
+    def test_portless_proxy_does_not_deny_every_port_on_host(self, monkeypatch):
+        """A portless proxy value must not swallow unrelated local ports.
+
+        Regression (found in review of ``bc97a5b``): a value without an explicit
+        port (``HTTP_PROXY=http://127.0.0.1``) was matched against *any* port on
+        that host. Because the guardrail's own positive-control sentinel dials
+        loopback on an ephemeral port, that aborted the entire session with
+        ``INTERNALERROR`` before a single test ran -- while trunk, which has no
+        proxy check, passed. The port must resolve to the scheme default instead.
+        """
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1")
+
+        # Resolved to the scheme default, not "any port".
+        assert ct._proxy_endpoints() == {("127.0.0.1", 80)}
+        # The proxy's own port is still denied ...
+        assert ct._is_allowed_target(("127.0.0.1", 80)) is False
+        # ... while other local ports (sentinel, TestClient, local servers) work.
+        assert ct._is_allowed_target(("127.0.0.1", 9999)) is True
+        assert ct._is_allowed_target(("127.0.0.1", 50794)) is True
+
+    def test_portless_proxy_does_not_break_guardrail_sentinel(self, monkeypatch):
+        """The guardrail's own loopback sentinel must survive a portless proxy.
+
+        This is the exact end-to-end shape of the regression: with a portless
+        proxy configured, the sentinel's loopback dial must be admitted.
+        """
+        import socket
+
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1")
+
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        try:
+            # Mirrors run_guardrail_sentinel(): a real loopback connect must pass.
+            cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cli.connect(("127.0.0.1", port))
+            conn, _ = srv.accept()
+            conn.close()
+            cli.close()
+        finally:
+            srv.close()
+
+        assert ct._is_allowed_target(("127.0.0.1", port)) is True
+
+    def test_scheme_default_ports_for_portless_proxies(self, monkeypatch):
+        """Portless values resolve per scheme, matching what urllib3 would dial."""
+        import tests.conftest as ct
+
+        expectations = {
+            "http://127.0.0.1": 80,
+            "https://127.0.0.1": 443,
+            "socks5://127.0.0.1": 1080,
+            "127.0.0.1": 80,
+        }
+        for value, expected_port in expectations.items():
+            for other in ct._PROXY_ENV_VARS:
+                monkeypatch.delenv(other, raising=False)
+            monkeypatch.setenv("HTTP_PROXY", value)
+            assert ct._proxy_endpoints() == {("127.0.0.1", expected_port)}, value
+
+    def test_explicit_proxy_port_still_denied(self, monkeypatch):
+        """The normal (port-bearing) form keeps working after the portless fix."""
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7897")
+
+        assert ct._is_allowed_target(("127.0.0.1", 7897)) is False
+        assert ct._is_allowed_target(("127.0.0.1", 7898)) is True
 
     def test_non_proxy_loopback_services_still_allowed(self, monkeypatch):
         """Denying the proxy must not break legitimate local services."""
