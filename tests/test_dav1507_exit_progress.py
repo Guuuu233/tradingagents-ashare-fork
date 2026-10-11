@@ -356,7 +356,93 @@ def test_cluster_type_observational_column():
     out = m.metric_a3([dict(st, report_id="r", created_at="t", cohort="a:b:c:short")], lib)
     dist = out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_diversity"]
     assert dist["bull"] == {"fundamental": 2, "sentiment": 1}
-    assert out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_mean_per_unit"]["bull"] == 3.0
+    # DAV-1827: mean_per_unit = DISTINCT cluster_type count per unit
+    # (this unit has {fundamental, sentiment} = 2 types), not claims-per-unit.
+    assert out["per_cohort"]["a:b:c:short"]["observed_opening_cluster_type_mean_per_unit"]["bull"] == 2.0
+
+
+def test_cluster_type_mean_per_unit_is_distinct_type_count():
+    """DAV-1827: observed_opening_cluster_type_mean_per_unit averages the
+    per-unit DISTINCT cluster_type count over clean units — a unit with 3
+    claims of 1 type contributes 1, not 3."""
+    lib = _lib()
+
+    def mk_unit(types_by_side):
+        claims = []
+        for side, types in types_by_side.items():
+            speaker = "Bull" if side == "bull" else "Bear"
+            for i, ct in enumerate(types):
+                claims.append({
+                    "claim_id": f"{speaker}-{i}-{id(types)}",
+                    "speaker_key": speaker,
+                    "speaker": f"{speaker} Analyst",
+                    "stance": "bullish" if side == "bull" else "bearish",
+                    "stage": "opening", "battlefield": "capital_flow",
+                    "claim": "x", "cluster_type": ct,
+                })
+        return _unit(claims, _ev_for(claims), _summary_for(claims))
+
+    u1 = mk_unit({"bull": ["a", "a", "b"], "bear": ["x", "y", "z"]})
+    u2 = mk_unit({"bull": ["a"], "bear": []})
+    rows = []
+    for i, u in enumerate((u1, u2)):
+        st = m.a3_unit_stats(u, lib)
+        rows.append(dict(st, report_id=f"r{i}", created_at=f"t{i}",
+                         cohort="a:b:c:short"))
+    out = m.metric_a3(rows, lib)["per_cohort"]["a:b:c:short"]
+    # bull: unit1 {a,b}=2, unit2 {a}=1 -> mean 1.5
+    # bear: unit1 {x,y,z}=3, unit2 {}=0  -> mean 1.5
+    assert out["observed_opening_cluster_type_mean_per_unit"]["bull"] == 1.5
+    assert out["observed_opening_cluster_type_mean_per_unit"]["bear"] == 1.5
+    # diversity (cumulative multiset) unchanged: bull {a:3,b:1}, bear {x:1,y:1,z:1}
+    assert out["observed_opening_cluster_type_diversity"]["bull"] == {"a": 3, "b": 1}
+    assert out["observed_opening_cluster_type_diversity"]["bear"] == {"x": 1, "y": 1, "z": 1}
+
+
+def test_render_markdown_cluster_type_same_metric():
+    """DAV-1827: markdown row renders the same mean_per_unit values produced
+    by metric_a3 (same key, no recomputation)."""
+    a3 = {
+        "threshold": "t", "definition": "d",
+        "per_cohort": {
+            "a:b:c:short": {
+                "clean_units": 2,
+                "effective_sessions": {"bull": 1, "bear": 1,
+                                       "gap_to_25": {"bull": 24, "bear": 24}},
+                "verified_claims": {"bull": 1, "bear": 1,
+                                    "gap_to_100": {"bull": 99, "bear": 99},
+                                    "ref_loose_not_judged": {"bull": 0, "bear": 0}},
+                "last_50_window": {"n": 2, "partial_window": True,
+                                   "bull_sessions": 1, "bear_sessions": 1,
+                                   "bull_share_pct": 50.0,
+                                   "ratio_in_[40,60]": True},
+                "observed_abs_diff_cumulative": 0,
+                "observed_opening_cluster_type_diversity": {
+                    "bull": {"a": 3, "b": 1}, "bear": {}},
+                "observed_opening_cluster_type_mean_per_unit": {
+                    "bull": 1.5, "bear": 0.5},
+                "protocol_mix": {"v2_structured_disagreement": 2},
+                "data_health": {"opening_claims": 4,
+                                "opening_missing_or_invalid_battlefield": 0,
+                                "clean_units_with_missing_bf": 0},
+            }
+        },
+    }
+    summary = {
+        "A1": {"executable_units": 0, "audit_manifest": []},
+        "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+        "A3": a3,
+        "A4": {"completion_rate_pct": None, "mature_cutoff": None},
+        "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+        "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None,
+               "sample_gap_to_100": 100, "meets": None},
+        "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0},
+    }
+    meta = {"as_of": "2026-10-11", "start": "2026-10-11", "db": "d.db",
+            "reports": 0, "units": 0, "peak_mb": 1.0}
+    md = m.render_markdown(summary, meta)
+    assert "档均种类 1.5/0.5" in md
+    assert "均值" not in md.split("cluster_type")[1].split("）")[0]  # old label gone
 
 
 # ── DAV-1713: markdown render handles t5_gap_to_95=None without crash ────── #

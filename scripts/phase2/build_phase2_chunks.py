@@ -49,9 +49,11 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import os
 import resource
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -638,6 +640,40 @@ def write_partition(df: pd.DataFrame, year: int, month, args) -> dict:
 
 # ---------------------------------------------------------------------------
 
+def build_provenance() -> dict:
+    """Traceability block for stats.json (DAV-1827): git HEAD of the source
+    tree this script runs from + sha256 of the script file itself. Fields
+    degrade to None when the script runs outside a git checkout."""
+    script = Path(__file__).resolve()
+    repo = script.parents[2]  # scripts/phase2/build_phase2_chunks.py -> repo root
+    try:
+        script_sha = hashlib.sha256(script.read_bytes()).hexdigest()
+    except OSError:
+        script_sha = None
+    git_sha = git_dirty = None
+    try:
+        rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                             capture_output=True, text=True, timeout=10)
+        if rev.returncode == 0:
+            git_sha = rev.stdout.strip() or None
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo, capture_output=True, text=True, timeout=20)
+        if dirty.returncode == 0:
+            git_dirty = bool(dirty.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {
+        "script": "scripts/phase2/build_phase2_chunks.py",
+        "script_sha256": script_sha,
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
+        "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+
+# ---------------------------------------------------------------------------
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -694,6 +730,9 @@ def main() -> int:
         all_stats = {"partitions": [], "build_started": time.strftime("%Y-%m-%dT%H:%M:%S"),
                      "calendar_days": len(cal_days)}
     all_stats.setdefault("partitions", [])
+    # DAV-1827: stamp build provenance on every run (fresh and resumed) so
+    # stats.json always records which source revision produced it.
+    all_stats["build_provenance"] = build_provenance()
     done = {p["partition"] for p in all_stats["partitions"]}
     existing = {p["partition"] for p in all_stats["partitions"]}
 
