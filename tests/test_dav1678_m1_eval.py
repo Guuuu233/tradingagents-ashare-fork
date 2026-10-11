@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -238,6 +239,50 @@ class TestInferenceAndGrade:
         one = mod.select_version(mv, "v2")
         days = mod.eval_days(one)
         assert len(days) == 1 and days[0].n_t == 15
+
+    def test_single_version_typo_version_key_failclose(self):
+        # DAV-1716: single-version frame + typo'd --version-key used to slip
+        # the len(keys) <= 1 early return (all rows kept) and then be
+        # written into run.json as the provenance label. Must fail closed.
+        one = pd.DataFrame(_day("20260110", range(1, 21),
+                                np.linspace(0, 0.1, 20), vkey="v1"))
+        with pytest.raises(ValueError, match="not in input"):
+            mod.select_version(one, "TYPO_KEY")
+
+    def test_single_version_correct_version_key_ok(self):
+        # DAV-1716: the matching key still selects (and passes through
+        # unchanged) on a single-version frame.
+        one = pd.DataFrame(_day("20260110", range(1, 21),
+                                np.linspace(0, 0.1, 20), vkey="v1"))
+        out = mod.select_version(one, "v1")
+        assert len(out) == 20
+        days = mod.eval_days(out)
+        assert len(days) == 1 and days[0].n_t == 20
+
+    def test_single_version_nan_key_typo_failclose(self):
+        # DAV-1716: single all-NaN-version frame — "<NaN>" is selectable,
+        # anything else is a typo and must fail closed.
+        rows = _day("20260110", range(1, 16), np.linspace(0, 0.1, 15))
+        for r in rows:
+            r["version_key"] = np.nan
+        frame = pd.DataFrame(rows)
+        assert len(mod.select_version(frame, "<NaN>")) == 15
+        with pytest.raises(ValueError, match="not in input"):
+            mod.select_version(frame, "v1")
+
+    def test_single_version_typo_provenance_not_written(self):
+        # DAV-1716 end-to-end: a typo must abort run() before run.json can
+        # record the bogus version_key label.
+        rows = _day("20260105", range(1, 15), np.linspace(0, 0.1, 14),
+                    vkey="v1")
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            pd.DataFrame(rows).to_csv(ip, index=False)
+            out = td / "out"
+            with pytest.raises(ValueError, match="not in input"):
+                mod.run(ip, out, version_key="TYPO_KEY")
+            assert not (out / "run.json").exists()
 
     def test_nan_version_selectable(self):
         # the NaN queue itself can be selected by its "<NaN>" display name
