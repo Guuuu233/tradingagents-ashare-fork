@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+import zstandard
 
 from scripts import b6c_compress_migration as mig
 
@@ -218,7 +219,7 @@ def test_rollback_restores_p5b_cleared_plaintext(tmp_path, monkeypatch):
     run_convert(p, tmp_path, pre_export_dir=str(exp_dir))
     export_file = next(exp_dir.glob("*.jsonl.zst"))
     mig.clear_plaintext(str(p), backup_dir=str(tmp_path / "bk"),
-                        copy_rehearsal=True, allow_clear=True)
+                        copy_rehearsal=True, allow_clear=True, rehearsal_reason="pre-existing test: snapshot copy, no live readers")
     assert col(p, "one")[0] is None  # 明文 cleared
     res = mig.rollback_from_export(str(p), str(export_file), copy_rehearsal=True)
     assert res["restored_plaintext"] == 1
@@ -260,9 +261,12 @@ def test_restore_plaintext_round_trip(tmp_path, monkeypatch):
     p = make_db(tmp_path, list(raws.items()))
     run_convert(p, tmp_path)
     clr = mig.clear_plaintext(str(p), backup_dir=str(tmp_path / "bk"),
-                              copy_rehearsal=True, allow_clear=True)
+                              copy_rehearsal=True, allow_clear=True, rehearsal_reason="pre-existing test: snapshot copy, no live readers")
     assert clr["cleared_rows"] == 3
-    assert clr["backup"]["backup_db"] and Path(clr["backup"]["backup_db"]).is_file()
+    # 总控 10-12 补 1: 未压缩副本已删, 只留校验过的 .db.zst
+    assert clr["backup"]["backup_db"] is None
+    assert clr["backup"]["plain_backup_deleted"] is True
+    assert clr["backup"]["verification"]["stream_compare"] == "ok"
     assert Path(clr["backup"]["backup_zst"]).is_file()
     rp = mig.restore_plaintext(str(p), copy_rehearsal=True)
     assert rp["restored_rows"] == 3
@@ -278,7 +282,7 @@ def test_clear_plaintext_requires_allow_clear(tmp_path, monkeypatch):
     run_convert(p, tmp_path)
     try:
         mig.clear_plaintext(str(p), backup_dir=str(tmp_path / "bk"),
-                            copy_rehearsal=True)
+                            copy_rehearsal=True, rehearsal_reason="pre-existing test: snapshot copy, no live readers")
     except RuntimeError:
         pass
     else:
@@ -295,10 +299,14 @@ def test_clear_plaintext_keeps_plaintext_on_bad_zst(tmp_path, monkeypatch):
               (sqlite3.Binary(b"junk"),))
     c.commit()
     c.close()
-    res = mig.clear_plaintext(str(p), backup_dir=str(tmp_path / "bk"),
-                              copy_rehearsal=True, allow_clear=True)
-    assert res["cleared_rows"] == 0 and res["failed"] == 1
+    # 总控 10-12 补 3: 完整性门现在在备份与任何写入之前就拦下这一行
+    # (比旧的逐行 failed 计数更早、更强), 明文同样保住了。
+    with pytest.raises(RuntimeError, match="compression is not complete"):
+        mig.clear_plaintext(str(p), backup_dir=str(tmp_path / "bk"),
+                            copy_rehearsal=True, allow_clear=True,
+                            rehearsal_reason="corrupt zst row must not be cleared")
     assert col(p, "one")[0] == '{"a": 1}'  # 明文 kept — never a loss path
+    assert not (tmp_path / "bk").exists() or not list((tmp_path / "bk").iterdir())
 
 
 def test_p5b_backup_retention_prunes_old(tmp_path, monkeypatch):
@@ -316,7 +324,10 @@ def test_p5b_backup_retention_prunes_old(tmp_path, monkeypatch):
     mig.ensure_columns(str(p))
     out = mig._p5b_backup(str(p), backup_dir=bk)
     assert not old.exists() and out["pruned"] == [old.name]
-    assert Path(out["backup_db"]).is_file()
+    # 总控 10-12 补 1: 30 天保留只作用于 .db.zst; 未压缩 .db 校验后即删
+    assert out["backup_db"] is None
+    assert out["plain_backup_deleted"] is True
+    assert Path(out["backup_zst"]).is_file()
 
 
 def test_batch_splits_by_cumulative_bytes(tmp_path, monkeypatch):
@@ -467,7 +478,7 @@ def test_verify_detects_lost_blob_after_plaintext_cleared(tmp_path, monkeypatch)
     p = make_db(tmp_path, [("one", '{"a": 1}'), ("two", '{"b": 2}'),
                            ("none", None)])
     run_convert(p, tmp_path)
-    mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+    mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True, rehearsal_reason="pre-existing test: snapshot copy, no live readers",
                         backup_dir=str(tmp_path / "bk"))
     # Simulate storage-layer corruption / a bad UPDATE: blob gone, zst_len kept.
     conn = sqlite3.connect(p)
@@ -493,19 +504,21 @@ def test_clear_plaintext_keeps_plaintext_when_zst_len_drifted(tmp_path, monkeypa
     conn.commit()
     conn.close()
     assert mig.verify_compressed(str(p))["ok"] is False  # verify already red
-    res = mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
-                              backup_dir=str(tmp_path / "bk"))
-    assert res["cleared_rows"] == 1        # only the healthy row
-    assert res["failed"] == 1
-    assert "zst_len drift" in res["failures"][0]["error"]
+    # 总控 10-12 补 3: 完整性门在写入前就拒绝, 整轮不清 —— 旧的逐行语义是
+    # “只清健康行、漂移行 failed=1”, 新门更保守 (漂移行明文必然保住)。
+    with pytest.raises(RuntimeError, match="compression is not complete"):
+        mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+                            rehearsal_reason="zst_len drift must not be cleared",
+                            backup_dir=str(tmp_path / "bk"))
     assert col(p, "one")[0] is not None    # 明文 of the drifted row preserved
+    assert col(p, "two")[0] is not None    # healthy row also untouched (整轮拒绝)
 
 
 def test_clear_plaintext_early_returns_when_nothing_to_clear(tmp_path, monkeypatch):
     """0 待清行 must not trigger a multi-GB backup (复审 🟢)."""
     idle(monkeypatch)
     p = make_db(tmp_path, [("none", None)])
-    res = mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True,
+    res = mig.clear_plaintext(str(p), allow_clear=True, copy_rehearsal=True, rehearsal_reason="pre-existing test: snapshot copy, no live readers",
                               backup_dir=str(tmp_path / "bk"))
     assert res.get("skipped") is True and res["backup"] is None
     assert not (tmp_path / "bk").exists() or not list((tmp_path / "bk").iterdir())
@@ -672,3 +685,241 @@ def test_cli_convert_scan_only_returns_zero(tmp_path, monkeypatch):
                          "--journal-path", str(tmp_path / "j.jsonl")])
     assert mig.main() == 0
     assert col(p, "one")[1] is None                 # nothing written
+
+
+# ==== 总控 10-12 裁定: P5b 补三处 (DAV-1772) ==============================
+# 补1 _p5b_backup  : zstd 校验 -> 删除未压缩 .db -> 只留 .db.zst 30 天
+# 补2 模式门       : /healthz report_storage_mode 必须 compressed_only
+# 补3 完整性门     : 残留未迁移行 = 0 且 verify 不一致行数 = 0
+
+
+def migrated_db(tmp_path, name="p5b.db"):
+    """DB whose rows are migrated + verified, so gates 2 and 3 pass."""
+    p = make_db(tmp_path, [("one", '{"a": 1}'), ("two", '{"b": 2}')], name=name)
+    run_convert(p, tmp_path)
+    return p
+
+
+def _stub_mode(monkeypatch, value):
+    monkeypatch.setattr(mig, "_fetch_storage_mode", lambda *a, **k: value)
+
+
+# --- 补 1: archive verification + drop the plain .db -----------------------
+
+
+def test_backup_verifies_archive_then_deletes_plain_db(tmp_path):
+    """补1: zstd 校验通过后删除未压缩 .db, 只留 .db.zst (D-073)."""
+    p = migrated_db(tmp_path, name="bk1.db")
+    info = mig._p5b_backup(str(p), backup_dir=str(tmp_path / "bk"))
+    assert info["plain_backup_deleted"] is True
+    assert info["backup_db"] is None
+    assert info["verification"]["stream_compare"] == "ok"
+    assert info["verification"]["restored_bytes"] > 0
+    zst = Path(info["backup_zst"])
+    assert zst.is_file() and zst.name.endswith(".db.zst")
+    assert list(zst.parent.glob("*.db")) == []          # no plain .db left
+    # the archive really restores a full SQLite library
+    with zst.open("rb") as fh:
+        restored = zstandard.ZstdDecompressor().stream_reader(fh).read()
+    probe = tmp_path / "restored.db"
+    probe.write_bytes(restored)
+    conn = sqlite3.connect(probe)
+    assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert conn.execute("SELECT count(*) FROM reports").fetchone()[0] == 2
+    conn.close()
+
+
+def test_backup_runs_zstd_t_when_binary_present(tmp_path, monkeypatch):
+    """补1: 卡面点名 zstd -t; 有二进制时必须真的调用它."""
+    import shutil as _shutil
+    p = migrated_db(tmp_path, name="bk2.db")
+    called = []
+    real_which = _shutil.which
+
+    def spy(name):
+        if name == "zstd":
+            called.append(name)
+            return real_which("zstd")
+        return real_which(name)
+
+    monkeypatch.setattr(mig.shutil, "which", spy)
+    info = mig._p5b_backup(str(p), backup_dir=str(tmp_path / "bk"))
+    if real_which("zstd"):
+        assert called, "zstd -t must be invoked when the binary exists"
+        assert info["verification"]["zstd_t"] == "ok"
+    else:
+        assert info["verification"]["zstd_t"].startswith("skipped")
+
+
+def test_backup_rejects_corrupt_archive_and_keeps_plain_db(tmp_path, monkeypatch):
+    """补1: 校验失败必须抛错且保留未压缩 .db 以便人工排查."""
+    p = migrated_db(tmp_path, name="bk3.db")
+
+    def bad(_zst, _db):
+        raise RuntimeError("archive does not restore byte-for-byte")
+
+    monkeypatch.setattr(mig, "_verify_backup_archive", bad)
+    with pytest.raises(RuntimeError, match="byte-for-byte"):
+        mig._p5b_backup(str(p), backup_dir=str(tmp_path / "bk"))
+    assert list((tmp_path / "bk").glob("*.db"))   # plain .db survived
+
+
+def test_backup_headroom_is_library_plus_estimate(tmp_path, monkeypatch):
+    """补1: 预检 = 1x 库大小 + 压缩包预估 (不再要求 2x 库大小)."""
+    p = migrated_db(tmp_path, name="bk4.db")
+    src = p.stat().st_size
+    need = src + int(src * mig.BACKUP_ZST_ESTIMATE_RATIO)
+
+    class Usage:
+        free = 0
+        total = 0
+        used = 0
+
+    monkeypatch.setattr(mig.shutil, "disk_usage", lambda _p: Usage)
+    Usage.free = need + 4096
+    mig._p5b_backup(str(p), backup_dir=str(tmp_path / "a"))   # fits
+    Usage.free = need - 1
+    with pytest.raises(RuntimeError, match="insufficient free space"):
+        mig._p5b_backup(str(p), backup_dir=str(tmp_path / "b"))
+    # 2x library would be strictly more than the new rule asks for
+    assert need < src * 2
+
+
+# --- 补 2: storage-mode gate ----------------------------------------------
+
+
+def test_mode_gate_rejects_non_compressed_only(tmp_path, monkeypatch):
+    """补2: 非 compressed_only 一律拒绝 (老读者会拿到 NULL)."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="md1.db")
+    _stub_mode(monkeypatch, "plaintext")
+    with pytest.raises(RuntimeError, match="report_storage_mode"):
+        mig.clear_plaintext(str(p), copy_rehearsal=False, allow_clear=True,
+                            backup_dir=str(tmp_path / "bk"))
+
+
+def test_mode_gate_rejects_absent_field(tmp_path, monkeypatch):
+    """补2: healthz 无该字段 => 视为不兼容 (fail-closed)."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="md2.db")
+    _stub_mode(monkeypatch, mig.STORAGE_MODE_ABSENT)
+    with pytest.raises(RuntimeError, match="report_storage_mode"):
+        mig.clear_plaintext(str(p), copy_rehearsal=False, allow_clear=True,
+                            backup_dir=str(tmp_path / "bk"))
+
+
+def test_mode_gate_accepts_compressed_only(tmp_path, monkeypatch):
+    """补2: compressed_only 放行, 明文确实被清."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="md3.db")
+    _stub_mode(monkeypatch, "compressed_only")
+    res = mig.clear_plaintext(str(p), copy_rehearsal=False, allow_clear=True,
+                              backup_dir=str(tmp_path / "bk"))
+    assert res["storage_mode_gate"]["enforced"] is True
+    assert res["cleared_rows"] == 2 and res["failed"] == 0
+    assert col(p, "one")[0] is None
+
+
+def test_mode_gate_rehearsal_needs_explicit_reason(tmp_path, monkeypatch):
+    """补2: 演练必须显式传 --rehearsal-reason; copy-rehearsal 不放宽生产门."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="md4.db")
+    with pytest.raises(RuntimeError, match="rehearsal-reason"):
+        mig.clear_plaintext(str(p), copy_rehearsal=True, allow_clear=True,
+                            backup_dir=str(tmp_path / "bk"))
+    # with a reason it proceeds (and records it)
+    _stub_mode(monkeypatch, mig.STORAGE_MODE_ABSENT)  # production gate irrelevant here
+    res = mig.clear_plaintext(str(p), copy_rehearsal=True, allow_clear=True,
+                              backup_dir=str(tmp_path / "bk"),
+                              rehearsal_reason="snapshot copy, no live readers")
+    assert res["storage_mode_gate"]["mode"] == "rehearsal"
+    assert res["storage_mode_gate"]["enforced"] is False
+    assert res["storage_mode_gate"]["reason"]
+
+
+# --- 补 3: completeness gate ---------------------------------------------
+
+
+def test_completeness_gate_blocks_residual_rows(tmp_path, monkeypatch):
+    """补3: 存在未迁移残留行 => 拒绝并报计数."""
+    idle(monkeypatch)
+    p = make_db(tmp_path, [("one", '{"a": 1}')], name="cp1.db")   # never migrated
+    mig.ensure_columns(p)
+    with pytest.raises(RuntimeError, match="residual_unmigrated_rows=1"):
+        mig.clear_plaintext(str(p), copy_rehearsal=True, allow_clear=True,
+                            backup_dir=str(tmp_path / "bk"),
+                            rehearsal_reason="residual row must block")
+
+
+def test_completeness_gate_blocks_on_mismatch(tmp_path, monkeypatch):
+    """补3: verify 不一致行数 > 0 => 拒绝并报 mismatch_count."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="cp2.db")
+    conn = sqlite3.connect(p)
+    conn.execute("UPDATE reports SET result_data_zst=? WHERE id='one'",
+                 (sqlite3.Binary(mig.compress_raw(b'{"other": 1}')),))
+    conn.commit()
+    conn.close()
+    with pytest.raises(RuntimeError, match="mismatch_count"):
+        mig.clear_plaintext(str(p), copy_rehearsal=True, allow_clear=True,
+                            backup_dir=str(tmp_path / "bk"),
+                            rehearsal_reason="mismatch must block")
+
+
+def test_residual_count_never_uses_is_null_equals_zero(tmp_path, monkeypatch):
+    """补3: `IS NULL = 0` 不得用于残留判定.
+
+    The card's constraint is "IS NULL 不得与 = 0 连用". SQLite parses
+    ``z IS NULL = 0`` as ``ISNULL(z) = 0``, i.e. it counts rows whose zst is
+    NOT null -- the exact complement of the residual set. On this DB that is
+    2 (both migrated rows) while the true residual count is 1, so the gate
+    would pass a library that still has unmigrated rows. The real predicate
+    must count rows NOT matching it instead.
+    """
+    p = migrated_db(tmp_path, name="cp3.db")
+    conn = sqlite3.connect(p)
+    conn.execute("INSERT INTO reports(id,symbol,trade_date,status,result_data,"
+                 "updated_at) VALUES('resid','S','2026-10-02','completed',?,'x')",
+                 ('{"resid": 1}',))
+    conn.commit()
+    conn.close()
+    # 反例: 与残留集互补的写法 => 数出 2, 而真实残留是 1
+    conn = sqlite3.connect(p)
+    bogus = conn.execute(
+        "SELECT count(*) FROM reports WHERE result_data_zst IS NULL = 0"
+    ).fetchone()[0]
+    real = conn.execute(
+        "SELECT count(*) FROM reports WHERE result_data_zst IS NULL "
+        "AND result_data IS NOT NULL AND result_data <> 'null'").fetchone()[0]
+    conn.close()
+    assert real == 1
+    assert bogus == 2 and bogus != real    # 门若用该写法会把残留 1 的库放过
+    # 正例: 完整性门数出真实残留并拒绝
+    with pytest.raises(RuntimeError, match="residual_unmigrated_rows=1"):
+        mig._check_compression_completeness(p)
+
+
+def test_completeness_gate_passes_and_reports_zero_counts(tmp_path, monkeypatch):
+    """补3: 完全迁移且一致 => 放行, 计数全 0."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="cp4.db")
+    report = mig._check_compression_completeness(p)
+    assert report["residual_unmigrated_rows"] == 0
+    assert report["unmigrated"] == 0
+    assert report["mismatch_count"] == 0
+    assert report["ok"] is True
+
+
+def test_all_three_gates_then_backup_before_any_write(tmp_path, monkeypatch):
+    """补1+2+3 串跑: 三门过后 备份已校验、plain 已删, 明文才被清."""
+    idle(monkeypatch)
+    p = migrated_db(tmp_path, name="chain.db")
+    _stub_mode(monkeypatch, "compressed_only")
+    res = mig.clear_plaintext(str(p), copy_rehearsal=False, allow_clear=True,
+                              backup_dir=str(tmp_path / "bk"))
+    assert res["cleared_rows"] == 2 and res["failed"] == 0
+    assert res["completeness_gate"]["ok"] is True
+    assert res["storage_mode_gate"]["report_storage_mode"] == "compressed_only"
+    assert res["backup"]["plain_backup_deleted"] is True
+    assert res["backup"]["verification"]["stream_compare"] == "ok"
+    assert col(p, "one")[0] is None and col(p, "one")[1] is not None
