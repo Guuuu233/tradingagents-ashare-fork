@@ -74,7 +74,7 @@ BACKUP_DIR = ROOT / "work/dav1772-backups"
 BACKUP_PREFIX = "tradingagents-b6c-p5b-"
 BACKUP_RETENTION_DAYS = 30
 
-from tradingagents.dataflows.trade_calendar import now_cn  # noqa: E402
+from tradingagents.dataflows.trade_calendar import now_cn
 
 COMPRESSION_LEVEL = 9
 # Fallback cap for stream frames without content size (设计 §3.1: > p100
@@ -107,7 +107,7 @@ STORAGE_MODE_ABSENT = "absent"
 
 
 def _cctx() -> zstandard.ZstdCompressor:
-    global _CCTX  # noqa: PLW0603
+    global _CCTX
     try:
         return _CCTX
     except NameError:
@@ -116,7 +116,7 @@ def _cctx() -> zstandard.ZstdCompressor:
 
 
 def _dctx() -> zstandard.ZstdDecompressor:
-    global _DCTX  # noqa: PLW0603
+    global _DCTX
     try:
         return _DCTX
     except NameError:
@@ -1127,11 +1127,19 @@ def _fetch_storage_mode(health_url):
     try:
         response = session.get(health_url.rstrip("/") + "/healthz", timeout=(2, 7))
         payload = response.json()
-    except Exception:
+    except Exception as exc:
+        # 复审 DAV-1908 🟢1: keep the exception type so "unreachable" and
+        # "returned non-JSON" stay distinguishable when debugging.
+        print(f"[b6c] /healthz storage-mode probe failed "
+              f"({type(exc).__name__}: {exc}); treating as {STORAGE_MODE_ABSENT}",
+              file=sys.stderr)
         return STORAGE_MODE_ABSENT
     finally:
         session.close()
     if response.status_code != 200 or not isinstance(payload, dict):
+        print(f"[b6c] /healthz storage-mode probe unusable "
+              f"(status={response.status_code}, json={type(payload).__name__}); "
+              f"treating as {STORAGE_MODE_ABSENT}", file=sys.stderr)
         return STORAGE_MODE_ABSENT
     mode = payload.get("report_storage_mode")
     if not isinstance(mode, str) or not mode:
@@ -1147,12 +1155,16 @@ def _check_storage_mode(health_url, *, copy_rehearsal, rehearsal_reason=None):
     production path never relaxes this gate.
     """
     if copy_rehearsal:
-        if not rehearsal_reason:
+        # 复审 DAV-1908 🟢2: strip() before the emptiness test, otherwise a
+        # CLI slip like --rehearsal-reason " " satisfies a bare truthiness
+        # check and the gate degrades to a rubber stamp.
+        reason = (rehearsal_reason or "").strip()
+        if not reason:
             raise RuntimeError(
-                "rehearsal mode requires an explicit --rehearsal-reason "
-                "(P5b mode gate, 总控 10-12 补 2)")
+                "rehearsal mode requires an explicit, non-blank "
+                "--rehearsal-reason (P5b mode gate, 总控 10-12 补 2)")
         return {"mode": "rehearsal", "report_storage_mode": None,
-                "reason": rehearsal_reason, "enforced": False}
+                "reason": reason, "enforced": False}
     mode = _fetch_storage_mode(health_url)
     if mode != REQUIRED_STORAGE_MODE:
         raise RuntimeError(
