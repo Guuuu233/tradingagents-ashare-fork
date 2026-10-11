@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 import zstandard
-
 from scripts import b6c_compress_migration as mig
 
 
@@ -310,7 +309,6 @@ def test_clear_plaintext_keeps_plaintext_on_bad_zst(tmp_path, monkeypatch):
 
 
 def test_p5b_backup_retention_prunes_old(tmp_path, monkeypatch):
-    import time
     idle(monkeypatch)
     bk = tmp_path / "bk"
     bk.mkdir()
@@ -923,3 +921,36 @@ def test_all_three_gates_then_backup_before_any_write(tmp_path, monkeypatch):
     assert res["backup"]["plain_backup_deleted"] is True
     assert res["backup"]["verification"]["stream_compare"] == "ok"
     assert col(p, "one")[0] is None and col(p, "one")[1] is not None
+
+
+def test_backup_verification_catches_a_truncated_archive(tmp_path):
+    """复审 DAV-1908 🟢3: 真实损坏路径（而非 monkeypatch 调用点）也要覆盖。
+
+    截断 .db.zst 后, _verify_backup_archive 的逐块比对必须报错, 而不是
+    悄悄把不完整的备份当成通过。
+    """
+    p = migrated_db(tmp_path, name="trunc.db")
+    zst = Path(mig._p5b_backup(str(p), backup_dir=str(tmp_path / "bk"))["backup_zst"])
+    plain = tmp_path / "plain.db"
+    plain.write_bytes(b"x" * 4096)
+    blob = bytearray(zst.read_bytes())
+    del blob[len(blob) // 2:]          # 砍掉后半截
+    broken = tmp_path / "broken.db.zst"
+    broken.write_bytes(bytes(blob))
+    # 截断在两层里先被哪一层拦住都算过 —— zstd -t (CRC/premature end)
+    # 或流式逐块比对。关键是不得把不完整备份当成通过。
+    with pytest.raises(RuntimeError,
+                       match="byte-for-byte|content size|restore|zstd -t"):
+        mig._verify_backup_archive(broken, plain)
+
+
+def test_rehearsal_reason_must_not_be_blank(tmp_path):
+    """复审 DAV-1908 🟢2: 纯空格理由不得通过模式门."""
+    idle_m = mig
+    with pytest.raises(RuntimeError, match="non-blank"):
+        mig._check_storage_mode("http://127.0.0.1:8000", copy_rehearsal=True,
+                                rehearsal_reason="   ")
+    gate = mig._check_storage_mode("http://127.0.0.1:8000", copy_rehearsal=True,
+                                   rehearsal_reason="  snapshot copy  ")
+    assert gate["reason"] == "snapshot copy"   # strip 归一
+    assert idle_m is mig
