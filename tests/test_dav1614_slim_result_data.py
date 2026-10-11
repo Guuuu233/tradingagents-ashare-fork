@@ -408,3 +408,53 @@ def test_real_journal_feeds_load_committed_ids(tmp_path, monkeypatch):
     assert res["converted_rows"] == 3
     committed = slim.load_committed_ids(journal)
     assert committed == {"r0", "r1", "r2"}
+
+
+# --- DAV-1886: compressed-column guard ------------------------------------
+
+
+def add_zst_column(path, values):
+    """Add the B-6 ``result_data_zst`` column with per-id values."""
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE reports ADD COLUMN result_data_zst TEXT")
+    for report_id, blob in values:
+        conn.execute("UPDATE reports SET result_data_zst=? WHERE id=?",
+                     (blob, report_id))
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_guard_refuses_when_compressed_column_has_nonempty_rows(tmp_path, monkeypatch):
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw), ("two", raw)])
+    add_zst_column(p, [("one", "x" * 32), ("two", None)])
+    with pytest.raises(RuntimeError) as exc:
+        slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                      journal_path=str(tmp_path / "j.jsonl"),
+                      exceptions_path=str(tmp_path / "e.json"),
+                      pre_export_dir=str(tmp_path / "exports"))
+    assert "result_data_zst" in str(exc.value)
+    # refused before any write: plaintext bytes untouched
+    assert db_text(p, "one") == raw
+
+
+def test_guard_allows_column_present_but_all_empty(tmp_path, monkeypatch):
+    """Column exists but is empty/null everywhere -> B-6 not live yet."""
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw)])
+    add_zst_column(p, [("one", None)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 1
+
+
+def test_guard_allows_pre_b6_schema_without_column(tmp_path, monkeypatch):
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw)])
+    slim.assert_no_compressed_result_data(str(p))  # no raise

@@ -36,6 +36,10 @@ Safety (DAV-1544 mechanism, reused):
   matches its exported pre-image is skipped and counted, never forced.
 * ``restore`` subcommand writes the exported bytes back row-by-row with
   the same before/after verification.
+* DAV-1886: refuses to run at all once ``reports.result_data_zst`` exists
+  with non-empty rows — this script only rewrites the plaintext column, so
+  re-running it post-B-6 would make reads fall back to stale compressed
+  bytes. See ``assert_no_compressed_result_data``.
 * Batch commits (--batch-size, default 200) + journal.jsonl: every
   committed report_id is journaled, so an interrupted run resumes by
   skipping already-committed ids.
@@ -416,6 +420,41 @@ def _open_db(path, writable=False):
         # 重型只读纪律: never spill temp b-trees onto the live disk.
         conn.execute("PRAGMA temp_store=MEMORY")
     return conn
+
+
+COMPRESSED_RESULT_COLUMN = "result_data_zst"
+
+
+def assert_no_compressed_result_data(path):
+    """DAV-1886 guard: refuse to run once the B-6 compressed column is live.
+
+    This migration only rewrites the *plaintext* ``result_data`` column.
+    Once B-6 is deployed, the read path falls back to ``result_data_zst``
+    whenever the plaintext column is absent, so re-running this script
+    would leave reads serving the stale compressed copies instead of the
+    bytes this script just wrote. Fail closed: any non-empty
+    ``result_data_zst`` value (on any row, not just completed ones) blocks
+    the run. Read-only — never writes.
+    """
+    try:
+        with closing(_open_db(path)) as conn:
+            columns = {row[1] for row in conn.execute(
+                "PRAGMA table_info(reports)")}
+            if COMPRESSED_RESULT_COLUMN not in columns:
+                return
+            count = conn.execute(
+                f"SELECT count(*) FROM reports WHERE {COMPRESSED_RESULT_COLUMN} "
+                "IS NOT NULL AND length(trim(" + COMPRESSED_RESULT_COLUMN + ")) > 0"
+            ).fetchone()[0]
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "cannot inspect the reports compressed column; refusing to run") from exc
+    if count:
+        raise RuntimeError(
+            f"reports.{COMPRESSED_RESULT_COLUMN} exists with {count} non-empty "
+            "row(s): B-6 compressed storage is live, so rewriting plaintext "
+            "result_data would leave reads serving stale compressed bytes; "
+            "this migration is a one-shot pre-B-6 step — refusing to run")
 
 
 def _validate_db(path):
@@ -866,6 +905,7 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
     any point leaves a consistent DB; re-running skips committed ids.
     """
     _validate_db(db_path)
+    assert_no_compressed_result_data(db_path)
     production = _is_production(db_path)
     if production and (not production_authorized
                        or now_cn().date() <= date(2026, 10, 9)):
