@@ -458,3 +458,83 @@ def test_guard_allows_pre_b6_schema_without_column(tmp_path, monkeypatch):
     raw = json.dumps(legacy_dual(), ensure_ascii=False)
     p = make_db(tmp_path, [("one", raw)])
     slim.assert_no_compressed_result_data(str(p))  # no raise
+
+
+# --- DAV-1894: guard must survive real BLOB payloads ------------------------
+
+ZSTD_BLOB = (sqlite3.Binary(b"\x00\x1f\x8b\x08\x00\x00\x00\x00\x00"
+                            b"\x28\xb5\x2f\xfd\x00\x00\x01\x00"))
+
+
+def _zst_blob_column(path, pairs):
+    """Add ``result_data_zst`` as a real BLOB column and set values."""
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE reports ADD COLUMN result_data_zst BLOB")
+    for report_id, value in pairs:
+        conn.execute("UPDATE reports SET result_data_zst=? WHERE id=?",
+                     (value, report_id))
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_guard_refuses_when_compressed_column_holds_real_blob(tmp_path, monkeypatch):
+    """A zstd BLOB must block the run.
+
+    The previous predicate used ``length(trim(col))``: SQLite converted the
+    BLOB to TEXT, the control bytes vanished, trim() yielded '' and the guard
+    fail-opened — the exact opposite of its purpose.
+    """
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw), ("two", raw)])
+    _zst_blob_column(p, [("one", ZSTD_BLOB), ("two", None)])
+    # Sanity: the blob is really there and really invisible to trim().
+    conn = sqlite3.connect(p)
+    assert conn.execute(
+        "SELECT length(trim(result_data_zst)) FROM reports WHERE id='one'"
+    ).fetchone()[0] == 0
+    conn.close()
+    with pytest.raises(RuntimeError, match="result_data_zst"):
+        slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                      journal_path=str(tmp_path / "j.jsonl"),
+                      exceptions_path=str(tmp_path / "e.json"),
+                      pre_export_dir=str(tmp_path / "exports"))
+    # refused before any write: plaintext bytes untouched
+    assert db_text(p, "one") == raw
+
+
+def test_guard_allows_blob_column_with_only_null_and_empty_values(tmp_path,
+                                                                  monkeypatch):
+    """NULL / b"" / "" / "  " are all still 'B-6 not live' -> allow."""
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw), ("two", raw), ("three", raw),
+                           ("four", raw)])
+    _zst_blob_column(p, [("one", None), ("two", sqlite3.Binary(b"")),
+                         ("three", ""), ("four", "  ")])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 4
+
+
+def test_restore_refuses_when_compressed_column_holds_real_blob(tmp_path,
+                                                                monkeypatch):
+    """restore is a second plaintext-rewrite path and must fail closed too."""
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False, indent=2)
+    p = make_db(tmp_path, [("one", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    export = res["pre_export_files"][0]
+    _zst_blob_column(p, [("one", ZSTD_BLOB)])
+    with pytest.raises(RuntimeError, match="result_data_zst"):
+        slim.restore_from_export(str(p), export["path"], sha256=export["sha256"])
+    # explicit opt-out is the documented escape hatch
+    slim.restore_from_export(str(p), export["path"], sha256=export["sha256"],
+                             allow_post_b6_restore=True)
+    assert db_text(p, "one") == raw
