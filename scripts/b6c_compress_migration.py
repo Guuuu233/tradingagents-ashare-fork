@@ -51,6 +51,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from contextlib import closing
@@ -86,6 +87,19 @@ MAX_RESULT_DATA_BYTES = 64 * 1024 * 1024
 # 任何口径变更必须同步改 SQL, 不允许两处分叉 (复审 🟢 死常量意见).
 
 _PRODUCTION_EARLIEST = date(2026, 10, 16)  # B-4 10-14 + 两个交易日, 见卡面
+
+# P5b backup staging (总控 10-12 补 1): the plain .db exists only while the
+# archive is written and verified, then is unlinked — D-073 keeps no
+# uncompressed whole-library copies on the machine.
+BACKUP_CHUNK_BYTES = 64 * 1024 * 1024
+# Measured library compression is ~9%; 3x headroom on top keeps the
+# headroom check honest without pretending to predict zstd exactly.
+BACKUP_ZST_ESTIMATE_RATIO = 0.30
+
+# Storage mode readers must already be in before明文 may be dropped: a reader
+# that still SELECTs result_data sees NULLs once明文 is cleared.
+REQUIRED_STORAGE_MODE = "compressed_only"
+STORAGE_MODE_ABSENT = "absent"
 
 
 # ---------------------------------------------------------------------------
@@ -992,12 +1006,60 @@ def restore_plaintext(db_path, *, health_url="http://127.0.0.1:8000",
 # clear-plaintext (P5b 瘦身档): backup -> per-row verify -> clear明文
 
 
-def _p5b_backup(db_path, backup_dir=None):
-    """裁定①前提②: sqlite .backup() + zstd 整库备份, 保留 30 天.
+def _verify_backup_archive(zst_path, db_path):
+    """Prove the compressed backup restores byte-identically before we drop
+    the plain .db (总控 10-12 P5b 补 1).
 
-    Returns {"backup_db", "backup_zst", "pruned"}. Both artifacts are
-    written before any明文 is touched; files older than 30 days with our
-    prefix are pruned from the same directory.
+    Two independent checks, both required:
+      1. ``zstd -t`` (when a zstd binary is available) validates the frame
+         CRC — this is what the card asks for by name.
+      2. A streaming decompress that compares the restored bytes against the
+         plain backup block by block, so a *passing* CRC alone is never the
+         only evidence. Streams in 64 MiB chunks: restoring 6 GiB in one go
+         would blow the 4 GiB footprint red line.
+    """
+    result = {"zstd_t": None, "stream_compare": None, "restored_bytes": 0}
+    zstd_bin = shutil.which("zstd")
+    if zstd_bin:
+        proc = subprocess.run([zstd_bin, "-t", str(zst_path)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"zstd -t rejected the backup archive {zst_path}: "
+                f"{(proc.stderr or '').strip()[:300]}")
+        result["zstd_t"] = "ok"
+    else:
+        result["zstd_t"] = "skipped: zstd binary not on PATH"
+    dctx = zstandard.ZstdDecompressor()
+    restored = 0
+    with open(db_path, "rb") as fin, open(zst_path, "rb") as archive:
+        with dctx.stream_reader(archive) as reader:
+            while True:
+                plain_chunk = fin.read(BACKUP_CHUNK_BYTES)
+                out_chunk = reader.read(BACKUP_CHUNK_BYTES)
+                if plain_chunk != out_chunk:
+                    raise RuntimeError(
+                        f"backup archive {zst_path} does not restore the plain "
+                        f".db byte-for-byte at offset {restored}")
+                if not plain_chunk:
+                    break
+                restored += len(plain_chunk)
+    if restored != Path(db_path).stat().st_size:
+        raise RuntimeError(
+            f"backup archive restores {restored} B but the plain backup is "
+            f"{Path(db_path).stat().st_size} B")
+    result["stream_compare"] = "ok"
+    result["restored_bytes"] = restored
+    return result
+
+
+def _p5b_backup(db_path, backup_dir=None):
+    """裁定①前提② + 总控 10-12 补 1: .backup() -> zstd -> 校验 -> 只留 .zst.
+
+    The plain ``.db`` is a *staging* artifact, never a deliverable: D-073
+    caps uncompressed whole-library copies machine-wide. It is verified
+    (``zstd -t`` plus a block-by-block restore comparison) and only then
+    unlinked, so 30-day retention applies to the ``.db.zst`` alone.
     """
     backup_dir = Path(backup_dir or BACKUP_DIR)
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -1006,17 +1068,20 @@ def _p5b_backup(db_path, backup_dir=None):
     zst_target = Path(str(db_target) + ".zst")
     if db_target.exists() or zst_target.exists():
         raise RuntimeError("backup target already exists; refusing to overwrite")
-    # 磁盘预检: .db 与 .db.zst 同时保留 (≈6.5 GiB), 静默写到一半 ENOSPC
-    # 会留下半个备份却已声明“备份完成”, 比拒绝执行更危险 (复审 🟢 建议).
+    # 磁盘预检: 备份期同时存在 .db + .db.zst, 因此下限仍是 1x 库大小;
+    # 压缩包预估按本库实测压缩率 (~9%) 之上再留 3x 余量 (总控 10-12 补 1).
     try:
         free = shutil.disk_usage(backup_dir).free
     except OSError as exc:
         raise RuntimeError(f"cannot stat free space on {backup_dir}") from exc
     source_size = Path(db_path).stat().st_size
-    if free < source_size * 2:
+    estimated_archive = int(source_size * BACKUP_ZST_ESTIMATE_RATIO)
+    required = source_size + estimated_archive
+    if free < required:
         raise RuntimeError(
-            f"insufficient free space for P5b backup: need >= 2x library size "
-            f"({source_size * 2} B), {free} B available on {backup_dir}")
+            f"insufficient free space for P5b backup: need >= library size "
+            f"+ estimated archive ({required} B), {free} B available on "
+            f"{backup_dir}")
     with closing(_open_db(db_path)) as src, \
             closing(sqlite3.connect(str(db_target))) as dst:
         src.backup(dst)
@@ -1026,10 +1091,13 @@ def _p5b_backup(db_path, backup_dir=None):
     with open(db_target, "rb") as fin, open(zst_target, "wb") as fout:
         with cctx.stream_writer(fout, closefd=False) as streamer:
             while True:
-                chunk = fin.read(64 * 1024 * 1024)
+                chunk = fin.read(BACKUP_CHUNK_BYTES)
                 if not chunk:
                     break
                 streamer.write(chunk)
+    verification = _verify_backup_archive(zst_target, db_target)
+    # 只有校验通过才删未压缩副本; 失败时保留 .db 以便人工排查。
+    db_target.unlink()
     pruned = []
     cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
     for candidate in backup_dir.glob(BACKUP_PREFIX + "*"):
@@ -1039,22 +1107,125 @@ def _p5b_backup(db_path, backup_dir=None):
                 pruned.append(candidate.name)
         except OSError:
             pass
-    return {"backup_db": str(db_target), "backup_zst": str(zst_target),
-            "pruned": pruned}
+    return {"backup_db": None, "backup_zst": str(zst_target),
+            "plain_backup_deleted": True,
+            "verification": verification, "pruned": pruned}
+
+
+def _fetch_storage_mode(health_url):
+    """Read ``report_storage_mode`` from /healthz (总控 10-12 补 2).
+
+    Returns the raw mode string, or ``STORAGE_MODE_ABSENT`` when the field is
+    missing/unreadable. The caller must treat "absent" as NOT compressed_only:
+    clearing明文 while readers still run the plaintext path would hand them
+    NULLs. Fail-closed is the whole point of the gate, so an unknown answer is
+    never rounded up to "compatible".
+    """
+    import requests
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.get(health_url.rstrip("/") + "/healthz", timeout=(2, 7))
+        payload = response.json()
+    except Exception:
+        return STORAGE_MODE_ABSENT
+    finally:
+        session.close()
+    if response.status_code != 200 or not isinstance(payload, dict):
+        return STORAGE_MODE_ABSENT
+    mode = payload.get("report_storage_mode")
+    if not isinstance(mode, str) or not mode:
+        return STORAGE_MODE_ABSENT
+    return mode
+
+
+def _check_storage_mode(health_url, *, copy_rehearsal, rehearsal_reason=None):
+    """Gate 2: every reader must already be in compressed_only mode.
+
+    Rehearsal must be declared explicitly (``--copy-rehearsal`` plus a written
+    reason) because a rehearsal copy has no live readers attached to it; the
+    production path never relaxes this gate.
+    """
+    if copy_rehearsal:
+        if not rehearsal_reason:
+            raise RuntimeError(
+                "rehearsal mode requires an explicit --rehearsal-reason "
+                "(P5b mode gate, 总控 10-12 补 2)")
+        return {"mode": "rehearsal", "report_storage_mode": None,
+                "reason": rehearsal_reason, "enforced": False}
+    mode = _fetch_storage_mode(health_url)
+    if mode != REQUIRED_STORAGE_MODE:
+        raise RuntimeError(
+            f"refusing to clear明文: /healthz report_storage_mode={mode!r}, "
+            f"required {REQUIRED_STORAGE_MODE!r} (readers still on the "
+            f"plaintext path would receive NULL results)")
+    return {"mode": "production", "report_storage_mode": mode, "enforced": True}
+
+
+def _check_compression_completeness(db_path):
+    """Gate 3: migration must be complete before any明文 is dropped.
+
+    Two counts, both required to be 0 (总控 10-12 补 3):
+      * residual unmigrated rows, and
+      * decode mismatches from ``verify_compressed(require_complete=True)``.
+
+    Design constraint honoured here: ``IS NULL`` must never be combined with
+    ``= 0``. SQLite parses ``z IS NULL = 0`` as ``ISNULL(z) = 0`` — it counts
+    the rows whose zst is NOT null, i.e. the exact *complement* of the
+    residual set. Written that way the gate would report 2 on a library with
+    1 unmigrated row and wave it through. The residual count is therefore
+    computed by counting rows matching the predicate directly, never by
+    negating an IS NULL test.
+    """
+    with closing(_open_db(db_path)) as conn:
+        residual = conn.execute(
+            "SELECT count(*) FROM reports WHERE result_data_zst IS NULL "
+            "AND result_data IS NOT NULL AND result_data <> 'null'").fetchone()[0]
+    verify_result = verify_compressed(db_path, require_complete=True)
+    report = {
+        "residual_unmigrated_rows": residual,
+        "unmigrated": verify_result["unmigrated"],
+        "mismatch_count": verify_result["mismatch_count"],
+        "cleared_bad_count": verify_result["cleared_bad_count"],
+        "lost_blob_count": verify_result.get("lost_blob_count", 0),
+        "verify_ok": verify_result["ok"],
+    }
+    report["ok"] = (residual == 0 and verify_result["mismatch_count"] == 0
+                    and verify_result["cleared_bad_count"] == 0
+                    and verify_result.get("lost_blob_count", 0) == 0
+                    and verify_result["unmigrated"] == 0
+                    and verify_result["ok"])
+    if not report["ok"]:
+        raise RuntimeError(
+            "refusing to clear明文: compression is not complete ("
+            f"residual_unmigrated_rows={report['residual_unmigrated_rows']}, "
+            f"unmigrated={report['unmigrated']}, "
+            f"mismatch_count={report['mismatch_count']}, "
+            f"cleared_bad_count={report['cleared_bad_count']}, "
+            f"lost_blob_count={report['lost_blob_count']})")
+    return report
 
 
 def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
                     health_url="http://127.0.0.1:8000",
                     production_authorized=False, copy_rehearsal=False,
-                    allow_clear=False):
+                    allow_clear=False, rehearsal_reason=None):
     """P5b: clear明文 for verified rows, then optionally VACUUM INTO.
 
-    Gates (all must hold): --allow-clear flag; backup succeeds first;
-    every cleared row re-verifies decompress(zst) ==明文 AND
-    result_data_zst_len == len(明文) inside its own transaction (failures
-    keep their明文 and abort the vacuum).明文 is cleared ONLY for rows whose
-    zst verifies — the failure path is never a data-loss path. 准入判据
-    必须 ≥ 验收判据: verify 判红的行不得被 clear 抹掉明文 (复审 M1).
+    Gates (all must hold, in this order):
+      * ``--allow-clear`` (explicit P5b acknowledgment);
+      * production write authorization / date gate;
+      * runtime idle guard (except in a declared rehearsal);
+      * storage-mode gate: readers must already be in ``compressed_only``;
+      * completeness gate: zero residual unmigrated rows and a clean
+        ``verify_compressed(require_complete=True)``;
+      * verified archive backup (.backup() -> zstd -> verify -> drop plain).
+
+    Every cleared row re-verifies ``decompress(zst) == 明文`` AND
+    ``result_data_zst_len == len(明文)`` inside its own transaction; failures
+    keep their明文 and abort the vacuum.明文 is cleared ONLY for rows whose
+    zst verifies — the failure path is never a data-loss path. 准入判据 must be
+    ≥ 验收判据 (复审 M1).
     """
     if not allow_clear:
         raise RuntimeError("clear-plaintext requires --allow-clear (P5b, 总控签字)")
@@ -1070,6 +1241,10 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
             return result
     else:
         guard = {"allowed": True, "reason": "copy_rehearsal"}
+    # 总控 10-12 补 2/3: 模式门 + 完整性门, 都在备份与任何写入之前。
+    mode_gate = _check_storage_mode(health_url, copy_rehearsal=copy_rehearsal,
+                                    rehearsal_reason=rehearsal_reason)
+    completeness = _check_compression_completeness(db_path)
     conn = _open_db(db_path, writable=True)
     try:
         # 已校验行 = zst 存在且明文仍在 (先验后清, 见循环内逐行核对).
@@ -1083,12 +1258,16 @@ def clear_plaintext(db_path, *, backup_dir=None, vacuum_into_path=None,
         # 0 待清行直接早退: 不做 6 GiB 备份, 不碰磁盘 (复审 🟢 建议).
         result = {"cleared_rows": 0, "failed": 0, "failures": [],
                   "backup": None, "guard": guard,
+                  "storage_mode_gate": mode_gate,
+                  "completeness_gate": completeness,
                   "skipped": True, "reason": "no rows to clear"}
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return result
     backup = _p5b_backup(db_path, backup_dir=backup_dir)
     result = {"cleared_rows": 0, "failed": 0, "failures": [],
-              "backup": backup, "guard": guard}
+              "backup": backup, "guard": guard,
+              "storage_mode_gate": mode_gate,
+              "completeness_gate": completeness}
     conn = _open_db(db_path, writable=True)
     try:
         for report_id in ids:
@@ -1316,6 +1495,10 @@ def _build_common_parser():
     common.add_argument("--allow-clear", action="store_true",
                         default=argparse.SUPPRESS,
                         help="explicit P5b acknowledgment (requires 总控签字)")
+    common.add_argument("--rehearsal-reason", default=argparse.SUPPRESS,
+                        help="clear-plaintext rehearsal only: the written reason "
+                             "this copy is not serving live readers "
+                             "(P5b mode gate, required with --copy-rehearsal)")
     for name in ("dry-run", "scan-only"):
         common.add_argument("--" + name, action="store_true",
                             default=argparse.SUPPRESS)
@@ -1324,7 +1507,8 @@ def _build_common_parser():
 
 _COMMON_DEFAULTS = {"health_url": "http://127.0.0.1:8000",
                     "production_authorized": False,
-                    "copy_rehearsal": False}
+                    "copy_rehearsal": False,
+                    "rehearsal_reason": None}
 
 
 def _finalize_args(args):
@@ -1411,7 +1595,8 @@ def main():
                 health_url=args["health_url"],
                 production_authorized=args.get("production_authorized", False),
                 copy_rehearsal=args.get("copy_rehearsal", False),
-                allow_clear=args.get("allow_clear", False))
+                allow_clear=args.get("allow_clear", False),
+                rehearsal_reason=args.get("rehearsal_reason"))
             if result.get("skipped"):
                 return 0
             if result.get("failed"):
