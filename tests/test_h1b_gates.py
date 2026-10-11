@@ -2977,13 +2977,17 @@ class TestH1bVerifyGatesDavian1767Rework:
         rows = [
             self._legacy_row(self._clean_unit("aaaa", idx=0), idx=0),
             # legacy_unversioned:medium unit that D-009 excludes (WAIT): it must
-            # not contribute a second cohort key.
+            # not contribute a second cohort key. Placed in its own
+            # ``medium_term`` slot (DAV-1825 🟢-3): a medium unit in the short
+            # slot makes the splitter emit a "slot key wins" WARNING, which
+            # would turn a future WARNING-semantics change into a false
+            # regression signal. The assertion contract is unchanged.
             {
                 "id": "row-wait-medium",
                 "symbol": "000858.SZ",
                 "trade_date": "2026-08-02",
                 "status": "completed",
-                "result_data": {"short_term": dict(self._d009_excluded_unit("bbbb"), horizon="medium")},
+                "result_data": {"medium_term": dict(self._d009_excluded_unit("bbbb"), horizon="medium")},
             },
         ]
 

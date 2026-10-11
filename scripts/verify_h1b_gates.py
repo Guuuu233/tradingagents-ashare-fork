@@ -1183,9 +1183,10 @@ def _stream_run_sqlite_pipeline(
         engine.dispose()
 
     if spec_meta is not None:
-        # Cohort-filtered run: cohort_meta is the parsed spec's meta (identical
-        # shape to filter_reports_by_cohort's output, commit_shas accumulated
-        # during the streaming pass).
+        # Cohort-filtered run: cohort_meta is the parsed spec's meta. Key set and
+        # shape match filter_reports_by_cohort's output with one deliberate
+        # difference: ``commit_shas`` values are filled by the streaming
+        # aggregator at the clean-pool exit, not by the module helper.
         cohort_meta = dict(spec_meta)
         cohort_meta["commit_shas"] = sorted(agg.cohort_shas)
     else:
@@ -1607,6 +1608,11 @@ def run_verify(
         else:
             reports, initial_excluded, ledger = loaded_res, {}, {}
 
+        # File/dir branch: cohort provenance is computed here by the module
+        # helpers, independently of the SQLite path's streaming sampling point.
+        # Both agree today; any change to the sampling surface must be applied in
+        # BOTH places. Registered as known debt in docs/KNOWN_ISSUES.md
+        # ("verify_h1b_gates: dual commit_shas sampling implementation").
         cohort_meta = {}
         if cohort is not None and str(cohort).strip():
             filtered_reports, cohort_meta = filter_reports_by_cohort(reports, cohort=cohort)
