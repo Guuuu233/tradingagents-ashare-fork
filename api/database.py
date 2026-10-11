@@ -525,12 +525,14 @@ class ReportDB(Base):
     # Full analysis results stored as JSON
     # DAV-1770 B-6b: REPORT_STORAGE_MODE selects the physical column this
     # attribute binds at class-definition time. plaintext → result_data
-    # (JSON, legacy). compressed → a SQL-level COALESCE(result_data_zst,
-    # result_data) so every read (single row or bulk) resolves migrated
-    # and unmigrated rows in ONE query — no ORM load-event N+1 fallback
-    # (DAV-1792 🟡-1). The non-read-side column is kept byte-identical by
-    # the flush-time shadow sync (dual write, §4 P1–P3).
-    if report_storage_mode() == "compressed":
+    # (JSON, legacy). compressed/compressed_only → a SQL-level
+    # COALESCE(result_data_zst, result_data) so every read (single row or
+    # bulk) resolves migrated and unmigrated rows in ONE query — no ORM
+    # load-event N+1 fallback (DAV-1792 🟡-1). The non-read-side column is
+    # kept byte-identical by the flush-time shadow sync (dual write,
+    # §4 P1–P3) — except in compressed_only (P4), where the sync leaves it
+    # NULL on new/updated rows.
+    if report_storage_mode() in ("compressed", "compressed_only"):
         # Physical write columns (deferred — never auto-SELECTed).
         result_data_zst = deferred(
             Column("result_data_zst", LargeBinary, key="result_data_zst", nullable=True)
