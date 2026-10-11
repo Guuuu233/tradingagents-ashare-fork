@@ -271,7 +271,7 @@ class TestCliIntegrationAndSubprocess:
         assert (tmp_path / "week_202634_summary.md").exists()
         assert (tmp_path / "latest_metrics.json").exists()
 
-    def test_cli_subprocess_run(self, tmp_path: Path):
+    def test_cli_subprocess_run(self, tmp_path: Path, repo_script_env):
         script_path = Path(project_root) / "scripts" / "recalculate_weekly_metrics.py"
         cmd = [
             sys.executable,
@@ -284,14 +284,15 @@ class TestCliIntegrationAndSubprocess:
             "--format",
             "text",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              env=repo_script_env, cwd=str(project_root))
         assert proc.returncode == 0
         assert "周度离线复算看板与指标聚合报告" in proc.stdout
         assert (tmp_path / "week_202634_metrics.json").exists()
         assert (tmp_path / "week_202634_summary.md").exists()
         assert (tmp_path / "latest_metrics.json").exists()
 
-    def test_cli_subprocess_format_json(self, tmp_path: Path):
+    def test_cli_subprocess_format_json(self, tmp_path: Path, repo_script_env):
         script_path = Path(project_root) / "scripts" / "recalculate_weekly_metrics.py"
         cmd = [
             sys.executable,
@@ -303,7 +304,8 @@ class TestCliIntegrationAndSubprocess:
             "--format",
             "json",
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              env=repo_script_env, cwd=str(project_root))
         assert proc.returncode == 0
         # Parse JSON output from stdout (filter out any log lines)
         stdout_lines = proc.stdout.strip().split("\n")

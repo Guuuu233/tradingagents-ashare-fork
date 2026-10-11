@@ -1019,6 +1019,52 @@ def frozen_trade_date(monkeypatch):
     return FROZEN_TRADE_DATE
 
 
+@pytest.fixture(scope="session")
+def repo_script_env():
+    """Explicit, hermetic environment for child processes that run repo scripts (DAV-1905).
+
+    Tests that shell out to ``scripts/*.py`` used to inherit whatever the parent
+    shell happened to export. Three of those variables silently changed results:
+
+    - ``PYTHONPATH``: the caller's interpreter may inject a foreign
+      ``site-packages`` shadow, so the child can import a different dependency
+      set than the test process (pandas 3.x vs 2.x, numpy 2.5 vs 2.2, ...).
+      ``scripts/slim_result_data_storage.py`` already strips it for its own
+      child; every other fork site must do the same.
+    - ``DATABASE_URL``: without this, ``api.database`` would default to the real
+      checkout DB (``data/tradingagents.db``). Root ``conftest.py`` already
+      points it at a per-session temp SQLite file, so we pass the live value
+      through unchanged — the child then resolves exactly the same isolated DB
+      the test process uses. A caller-supplied isolated URL is preserved.
+
+    ``cwd`` is set to the repository root because scripts resolve relative paths
+    (``data/``, ``scripts/``) against the process cwd.
+
+    Session-scoped: it derives a dict from ``os.environ`` and has no per-test
+    state, and a module-scoped fixture (e.g. the dav1846 ``two_runs``) must be
+    able to consume it.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    db_url = env.get("DATABASE_URL", "")
+    if not db_url:
+        # Fail closed: never let a child fall back to the checkout DB.
+        raise AssertionError(
+            "repo_script_env requires an isolated DATABASE_URL; the root "
+            "conftest sets it before collection, so reaching this point means "
+            "the test was run outside the project's conftest chain"
+        )
+    if not db_url.startswith("sqlite:///"):
+        raise AssertionError(
+            f"repo_script_env only forwards isolated SQLite URLs, got {db_url!r}"
+        )
+    env.setdefault("REPORT_STORAGE_MODE", "dual")
+    # The offline guardrail is fail-closed by default; a child must not be
+    # handed a stale switch value from the parent shell.
+    env.pop("RT_NETWORK_ENABLED", None)
+    return env
+
+
 @pytest.fixture
 def offline_vendor_router(monkeypatch):
     """Deterministic offline vendor router for tests that must not depend on
