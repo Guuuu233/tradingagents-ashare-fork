@@ -205,6 +205,53 @@ def test_health_timeout_is_busy_not_dead(tmp_path, monkeypatch):
     assert guard == {"allowed": False, "reason": "health_busy_timeout"}
 
 
+def _healthz_payload(**over):
+    base = {"status": "ok", "active_analysis_count": 0,
+            "report_storage_mode": "plaintext"}
+    base.update(over)
+    return base
+
+
+def _stub_healthz(monkeypatch, payload):
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return payload
+    import requests
+    monkeypatch.setattr(requests.Session, "get", lambda *a, **k: _Resp())
+
+
+def test_storage_mode_mismatch_refuses_write(tmp_path, monkeypatch):
+    """DAV-1885: service=plaintext, script=compressed_only → refuse write."""
+    p = make_db(tmp_path, report())
+    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="plaintext"))
+    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
+    assert guard["allowed"] is False
+    assert guard["reason"] == "report_storage_mode_mismatch"
+    assert guard["service_mode"] == "plaintext"
+    assert guard["script_mode"] == "compressed_only"
+
+
+def test_storage_mode_match_allows_through(tmp_path, monkeypatch):
+    """Matching modes pass the mode check (still gated by idle count)."""
+    p = make_db(tmp_path, report())
+    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="compressed_only"))
+    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
+    assert guard["allowed"] is True
+
+
+def test_storage_mode_missing_field_fails_closed(tmp_path, monkeypatch):
+    """A healthz that doesn't expose report_storage_mode → refuse (fail closed)."""
+    p = make_db(tmp_path, report())
+    _stub_healthz(monkeypatch, _healthz_payload())
+    _stub_healthz(monkeypatch, {"status": "ok", "active_analysis_count": 0})
+    guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
+    assert guard["allowed"] is False
+    assert guard["reason"] == "report_storage_mode_unknown"
+
+
 def test_export_failure_means_zero_writes(tmp_path, monkeypatch):
     """DAV-1544: if the independent pre-export fails, no UPDATE may run."""
     p = make_db(tmp_path, report())
