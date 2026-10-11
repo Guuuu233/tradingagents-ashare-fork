@@ -16,8 +16,8 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "phase2"))
-import p_rel_t10_baseline_eval as m  # noqa: E402
-import expiry_label_pipeline as elp  # noqa: E402
+import expiry_label_pipeline as elp
+import p_rel_t10_baseline_eval as m
 
 FIXED = m.DEFAULT_USER_ID
 
@@ -28,14 +28,12 @@ def _rec(rid, sym, day, p, **kw):
 
 def _write_ledger(path, recs):
     with open(path, "w") as fh:
-        for r in recs:
-            fh.write(json.dumps(r) + "\n")
+        fh.writelines(json.dumps(r) + "\n" for r in recs)
 
 
 def _write_labels(path, labs):
     with open(path, "w") as fh:
-        for l in labs:
-            fh.write(json.dumps(l) + "\n")
+        fh.writelines(json.dumps(l) + "\n" for l in labs)
 
 
 class TestReadNode:
@@ -45,12 +43,22 @@ class TestReadNode:
         rec = _rec("r1", "000001.SZ", "2026-01-05", 63)
         assert m._p_rel_t10(rec) == (63, "valid")
 
-    @pytest.mark.parametrize("p", [0, 100, "60", 60.5, None])
+    @pytest.mark.parametrize("p", [0, 100, "60", 60.5, None, True])
     def test_invalid(self, p):
         rec = _rec("r1", "000001.SZ", "2026-01-05", 60)
         rec["horizons"]["short"]["forecast"] = {"status": "malformed",
                                                 "p_rel_t10": p}
         assert m._p_rel_t10(rec)[1] == "malformed"
+
+    @pytest.mark.parametrize("p", [0, 100, -5, 60.5, "60", True])
+    def test_valid_status_still_enforces_contract(self, p):
+        # DAV-1890 🔴-1: a "valid" status with an out-of-contract value must
+        # be re-typed malformed, never coerced into the formal queue.
+        rec = _rec("r1", "000001.SZ", "2026-01-05", 60)
+        rec["horizons"]["short"]["forecast"] = {"status": "valid",
+                                                "p_rel_t10": p}
+        assert m._p_rel_t10(rec)[1] == "malformed"
+        assert m._p_rel_t10(rec)[0] is None
 
     def test_node_failed(self):
         rec = _rec("r1", "000001.SZ", "2026-01-05", None)
@@ -128,6 +136,21 @@ class TestFunnel:
         assert len(formal) == 1
         assert formal.iloc[0]["run_id"] == "early"
         assert fun["excl_dup_run"] == 1
+
+    @pytest.mark.parametrize("bad_p", [100, 60.5])
+    def test_valid_status_out_of_contract_funnels_bad_prob(self, tmp_path, bad_p):
+        # DAV-1890 必补两用例: forecast.status=="valid" but p out of contract
+        # -> excl_bad_prob +1, never enters the formal queue.
+        rec = _rec("bad", "S1", "2026-01-05", 60)
+        rec["horizons"]["short"]["forecast"] = {"status": "valid",
+                                                "p_rel_t10": bad_p}
+        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 5.0)}
+        ledger = tmp_path / "l.jsonl"
+        _write_ledger(ledger, [rec])
+        df = m.load_ledger_signals(ledger, labels, FIXED)
+        formal, fun = m.m1.admit(df, user_id=FIXED)
+        assert len(formal) == 0
+        assert fun["excl_bad_prob"] == 1
 
 
 class TestIncrement:

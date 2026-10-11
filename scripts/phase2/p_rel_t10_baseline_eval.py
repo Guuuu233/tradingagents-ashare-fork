@@ -72,8 +72,9 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -84,10 +85,10 @@ sys.path.insert(0, str(REPO_ROOT))
 # engine single-sourced with their production modules (DAV-1480 / 1677 /
 # 1678 / 1875).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import daily_snapshot_ledger as dsl          # noqa: E402  (DAV-1480)
-import expiry_label_pipeline as elp          # noqa: E402  (DAV-1875)
-import m1_eval as m1                         # noqa: E402  (DAV-1678)
-from m1_base_rate import build_pit_base_rates  # noqa: E402 (DAV-1677)
+import daily_snapshot_ledger as dsl
+import expiry_label_pipeline as elp
+import m1_eval as m1
+from m1_base_rate import build_pit_base_rates
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
 DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
@@ -107,7 +108,7 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _parse_d(raw: Any) -> Optional[str]:
+def _parse_d(raw: Any) -> str | None:
     return elp._parse_signal_date(raw)
 
 
@@ -142,7 +143,7 @@ def _record_version_key(record: Mapping[str, Any]) -> str:
     return f"{base}:{cv}"
 
 
-def _p_rel_t10(record: Mapping[str, Any]) -> tuple[Optional[int], str]:
+def _p_rel_t10(record: Mapping[str, Any]) -> tuple[int | None, str]:
     """Read node: horizons.short.forecast.p_rel_t10 (M1 签收 item 2).
 
     Returns (p_int, status) where status mirrors parse_horizon_forecast:
@@ -153,8 +154,15 @@ def _p_rel_t10(record: Mapping[str, Any]) -> tuple[Optional[int], str]:
     if isinstance(fc, dict):
         status = str(fc.get("status") or "")
         p = fc.get("p_rel_t10")
-        if status == "valid" and isinstance(p, (int, float)) \
-                and not isinstance(p, bool):
+        # Enforce the same 1–99 contract as parse_horizon_forecast — never
+        # trust a "valid" status blindly: a 0/100/60.5/"60"/True must be
+        # re-typed malformed and funnel out, not coerced into the queue.
+        if status == "valid":
+            if (isinstance(p, bool)
+                    or not isinstance(p, (int, float))
+                    or not 1 <= p <= 99
+                    or (isinstance(p, float) and not p.is_integer())):
+                return None, "malformed"
             return int(p), "valid"
         return None, status or "missing"
     # Fallback: the same slice's manager_verdict.forecast_input (the read
@@ -364,8 +372,8 @@ def paired_increment(formal: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 def run(ledger_path: Path, labels_path: Path, out_dir: Path,
-        *, version_key: Optional[str] = None,
-        calendar_path: Optional[Path] = None,
+        *, version_key: str | None = None,
+        calendar_path: Path | None = None,
         user_id: str = DEFAULT_USER_ID) -> dict:
     t0 = time.time()
     log(f"loading labels {labels_path}")
@@ -460,7 +468,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 # selftest
 # ---------------------------------------------------------------------------
 
-def _ledger_rec(rid: str, symbol: str, day: str, p: Optional[int],
+def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
                 *, user: str = DEFAULT_USER_ID, tc: str = "F0",
                 pit: str = "VERIFIED", created: str = "2026-01-05T09:00",
                 commit: str = "abc123def456") -> dict:
@@ -490,7 +498,6 @@ def _label(sym: str, day: str, r_pct: float, l1: str = "801010.SI") -> dict:
 
 
 def selftest(tmp: Path) -> dict:
-    import tempfile
     rng = np.random.default_rng(7)
     checks: dict[str, Any] = {}
 
@@ -516,8 +523,7 @@ def selftest(tmp: Path) -> dict:
         for r in recs:
             fh.write(json.dumps(r) + "\n")
     with open(lab_f, "w") as fh:
-        for l in labs:
-            fh.write(json.dumps(l) + "\n")
+        fh.writelines(json.dumps(l) + "\n" for l in labs)
     cal = tmp / "cal.txt"
     cal.write_text("\n".join(days) + "\n")
 
@@ -546,7 +552,7 @@ def selftest(tmp: Path) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command")
     r = sub.add_parser("run", help="evaluate the p_rel_t10 ranking baseline")
