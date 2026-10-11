@@ -24,6 +24,23 @@ from dataclasses import dataclass
 from typing import Any, Tuple
 
 
+class NetworkAccessDeniedError(RuntimeError):
+    """Raised when network access is denied by policy, offline guardrail, or operational refusal.
+
+    Contract:
+    - Lightweight, production-side definition of explicit network denial.
+    - Immediately propagates upward without retry and without vendor fallback.
+
+    Defined in this leaf module (no internal imports) rather than in
+    ``interface``: ``interface`` imports ``.providers`` at module load, and
+    provider modules must be able to import this class while ``interface`` is
+    still initialising. ``interface`` re-exports it, so
+    ``tradingagents.dataflows.interface.NetworkAccessDeniedError`` remains the
+    canonical spelling.
+    """
+    __slots__ = ()
+
+
 @dataclass(frozen=True)
 class VendorResult:
     """Base marker for all typed vendor outcomes."""

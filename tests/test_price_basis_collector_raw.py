@@ -525,8 +525,16 @@ class TestAnalysisEntryContract:
             assert res["price_basis"] == PRICE_BASIS_VENDOR_QFQ
             assert res["price_basis"] != PRICE_BASIS_RAW
 
-    def test_zero_real_network_guard(self):
-        """测试套件执行期间拦截真实 requests.post，防误发外部网关流量。"""
+    def test_zero_real_network_guard(self, offline_tushare_gateway_stub):
+        """测试套件执行期间拦截真实 requests.post，防误发外部网关流量。
+
+        DAV-1818：本机带 Tushare 凭据时，``collect()`` 的 fan-out 会经
+        ``tushare_global_news``（7 天 × 4 源，段级二分 + 5 次重试）与
+        ``industry_linkage_provider`` 两个网关外发。该用例自身把
+        ``requests.post`` 换成 Mock（socket 层护栏因此被绕过），修复前实测
+        484 次调用（468 + 16）并耗时 ~180s。``offline_tushare_gateway_stub``
+        把两个网关接缝直接替换为拒绝，使断言在不依赖宿主凭据的情况下成立。
+        """
         collector = DataCollector()
         mock_raw_provider = _make_mock_raw_provider()
 

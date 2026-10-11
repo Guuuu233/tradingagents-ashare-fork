@@ -17,6 +17,7 @@ from .trade_calendar import (
 )
 from .utils import income_statement_text_caliber_notes
 from .vendor_result import (
+    NetworkAccessDeniedError,
     VendorEmpty,
     VendorFail,
     VendorOk,
@@ -26,15 +27,10 @@ from .vendor_result import (
 
 _logger = logging.getLogger(__name__)
 
-
-class NetworkAccessDeniedError(RuntimeError):
-    """Raised when network access is denied by policy, offline guardrail, or operational refusal.
-
-    Contract:
-    - Lightweight, production-side definition of explicit network denial.
-    - Immediately propagates upward without retry and without vendor fallback.
-    """
-    __slots__ = ()
+# ``NetworkAccessDeniedError`` is imported from the leaf module
+# ``vendor_result`` and re-exported here, so both
+# ``tradingagents.dataflows.interface.NetworkAccessDeniedError`` and the
+# provider-side spelling refer to the same class object.
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
