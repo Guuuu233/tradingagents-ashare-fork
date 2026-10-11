@@ -571,7 +571,12 @@ class TestBackfillTplus5ShadowDbPath:
             status_code = 200
 
             def json(self):
-                return {"status": "ok"}
+                # report_storage_mode present so the probe reaches the
+                # active_analysis_count clause under test (DAV-1885's mode
+                # check fires first on a payload that lacks it).
+                from tradingagents.storage.compressed_json import report_storage_mode
+                return {"status": "ok",
+                        "report_storage_mode": report_storage_mode()}
 
         monkeypatch.setattr(requests.Session, "get", lambda *args, **kwargs: HealthyWithoutActivityCount())
         before = Path(custom_sqlite_db).read_bytes()
