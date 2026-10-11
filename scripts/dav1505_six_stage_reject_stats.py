@@ -62,7 +62,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from tradingagents.storage.compressed_json import (  # noqa: E402
     decode_result_data,
-    result_data_select_expr,
+    result_data_select_expr_plaintext,
 )
 
 FIXED_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
@@ -432,11 +432,14 @@ def main() -> int:
     no_slot_report_ids: List[str] = []  # short/medium 均为 NULL 的原始报告
     no_slot_report_baseline_month: Counter = Counter()
 
-    # B-6e: the result_data slot selects COALESCE(zst bytes, plaintext
-    # text) via result_data_select_expr; json_extract can't operate on
-    # compressed BLOBs, so version/baseline extraction happens in Python
-    # after decode_result_data.
-    rd_expr = result_data_select_expr(con)
+    # B-6e (DAV-1909 🟡-1): the result_data slot selects the JSON payload
+    # via result_data_select_expr_plaintext — COALESCE(result_data,
+    # result_data_zst), the *plaintext-first* order, matching the ORM's
+    # plaintext-mode binding (this script is statistics for the default
+    # deployment mode). json_extract can't operate on compressed BLOBs,
+    # so version/baseline extraction happens in Python after
+    # decode_result_data.
+    rd_expr = result_data_select_expr_plaintext(con)
 
     cur.execute(
         "SELECT id, symbol, trade_date, created_at, "

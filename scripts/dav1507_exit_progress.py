@@ -119,8 +119,8 @@ def iter_report_rows(con, account, start=None, end=None, ids=None):
     """Yield (report_id, symbol, trade_date, status, created_at, result_data).
 
     B-6b: the result_data slot yields COALESCE(zst bytes, plaintext text);
-    ``json_valid(result_data)`` can't gate BLOBs, so validity is checked at
-    decode time in ``slim_report``.
+    a ``json_valid(...)`` predicate can't gate BLOBs, so validity is
+    checked at decode time in ``slim_report``.
     """
     from tradingagents.storage.compressed_json import result_data_select_expr
 

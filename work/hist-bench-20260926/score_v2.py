@@ -4,9 +4,8 @@
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
 # (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
-import sys as _b6e_sys
-from pathlib import Path as _b6e_Path
-_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+import work._guard as _b6e_guard_mod
+_b6e_guard_mod.bootstrap()
 from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """v2 打分（总控 2026-09-26，按 GPT 评审意见与项目 return_labels 契约修正）：
 - 入场 = T+1 开盘（前复权），出场 = T+N 收盘；基准沪深300同口径；

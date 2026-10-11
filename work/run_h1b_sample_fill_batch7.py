@@ -5,11 +5,6 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
-# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
-import sys as _b6e_sys
-from pathlib import Path as _b6e_Path
-_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
-from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """H1b sample fill batch 7: fill free slots on proven bear-winner trade dates.
 
 Batch6 ran prior bear symbols on neutral late-Aug dates → mostly tie/bull,
@@ -19,6 +14,11 @@ multiple bear winners (esp. 2026-08-24), with unused liquid symbols.
 Request-level only: v2_debate_enabled=true. No credit_weighting. Keep 3/1.
 """
 from __future__ import annotations
+
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import work._guard as _b6e_guard_mod
+_b6e_guard_mod.bootstrap()
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 
 import json
 import sqlite3
