@@ -260,6 +260,71 @@ def test_backfill_then_restore_is_byte_identical(tmp_path, monkeypatch):
     assert res3["already_current"] == 1 and res3["restored_rows"] == 0
 
 
+def test_restore_removes_backfill_created_metrics_container_byte_exact(tmp_path, monkeypatch):
+    """DAV-1873: a row whose pre-image has NO shadow_credit_metrics container
+    restores byte-exact — the container the backfill added is dropped.
+
+    This is the 1854 rehearsal failure shape: the pre-image slice carries only
+    non-measurement keys, so restore must remove the whole
+    ``shadow_credit_metrics`` member, not just its T+5 leaves."""
+    rep = report()
+    for u in (rep["result_data"]["short_term"],
+              rep["result_data"]["medium_term"],
+              rep["result_data"]["horizons"]["short"],
+              rep["result_data"]["horizons"]["medium"]):
+        u.pop("shadow_credit_metrics", None)
+        st = u.get("investment_debate_state")
+        if isinstance(st, dict):
+            st.pop("shadow_credit_metrics", None)
+    p = make_db(tmp_path, rep)
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
+    before_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+
+    res = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                           pre_export_dir=str(tmp_path / "exports"))
+    assert res["changed_rows"] == 1
+    export = res["pre_export"]
+
+    # Sanity: backfill DID create a fresh shadow_credit_metrics container.
+    backfilled = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    assert backfilled != before_row
+    stamped = json.loads(backfilled)["short_term"]["shadow_credit_metrics"]
+    assert stamped and set(stamped) <= cli.MEASUREMENT_KEYS
+
+    res2 = cli.restore_from_export(str(p), export["path"], sha256=export["sha256"])
+    assert res2["restored_rows"] == 1 and res2["mismatched"] == 0
+    restored_row = sqlite3.connect(p).execute(
+        "SELECT result_data FROM reports WHERE id='one'").fetchone()[0]
+    # Byte-exact equality with the pre-image — no container left behind.
+    assert restored_row == before_row
+
+
+def test_restore_rejects_metrics_container_with_nonmeasurement_key():
+    """DAV-1873: removal relaxation is NOT widened — a stored
+    shadow_credit_metrics carrying a non-measurement key must still refuse
+    deletion (it is real cohort data, not a backfill byproduct)."""
+    pre_image = json.dumps({"opaque": 1, "short_term": {"cohort": "x"}}, ensure_ascii=False)
+    current = json.dumps({
+        "opaque": 1,
+        "short_term": {
+            "cohort": "x",
+            "shadow_credit_metrics": {
+                "t_plus_5_status": "due_and_evaluated",
+                "other": "real-cohort-data",
+            },
+        },
+    }, ensure_ascii=False)
+    record = {"report_id": "r", "result_data_sha256":
+              __import__("hashlib").sha256(pre_image.encode()).hexdigest(),
+              "result_data": pre_image}
+    with pytest.raises(ValueError, match="non.T\+5"):
+        cli._restore_pre_image(current, record)
+
+
 def test_corrupt_export_file_refuses_restore(tmp_path, monkeypatch):
     """A tampered pre-export file (sha mismatch) must refuse to restore."""
     p = make_db(tmp_path, report())
