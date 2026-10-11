@@ -24,6 +24,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Optional, Tuple
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -195,6 +196,128 @@ def _is_local_or_loopback(target: Any, family: Optional[int] = None) -> bool:
 
 
 # --------------------------------------------------------------------------
+# DAV-1818: a configured forward proxy is an egress channel, not a local peer
+# --------------------------------------------------------------------------
+# The loopback allow-list above is required for genuine local services (the
+# guardrail sentinel, FastAPI TestClient, AF_UNIX IPC, test-local TCP servers).
+# But a *forward proxy* listening on 127.0.0.1 is a different thing: with
+# HTTP(S)_PROXY set, ``requests``/urllib3 rewrite the destination to that
+# loopback endpoint, so the guardrail sees a "local" peer and admits traffic
+# that then really leaves the machine. The denial never fires, and callers
+# classify whatever the proxy answered instead of a denial -- measured as
+# ``'403' == 'network_denied'`` (proxy answered 403) or ``'network_error'``
+# (proxy refused). That is how a proxy defeats the offline guardrail.
+#
+# So: destinations matching a proxy endpoint configured in the environment are
+# denied regardless of being loopback. Legitimate loopback traffic to any other
+# port is unaffected.
+_PROXY_ENV_VARS = (
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+)
+
+# Port to assume when a proxy value omits one (e.g. ``HTTP_PROXY=http://127.0.0.1``).
+# urllib3/requests dial the scheme's default port in that case, so resolving it
+# the same way keeps the denial aligned with what the transport would actually
+# connect to. Without this, a portless value matched *every* port on that host,
+# which denied the guardrail's own loopback sentinel and aborted the session
+# with INTERNALERROR before a single test ran.
+_PROXY_SCHEME_DEFAULT_PORT = {
+    "http": 80,
+    "https": 443,
+    "socks": 1080,
+    "socks4": 1080,
+    "socks4a": 1080,
+    "socks5": 1080,
+    "socks5h": 1080,
+}
+_PROXY_FALLBACK_PORT = 80
+
+
+def _proxy_endpoints() -> set:
+    """Return ``{(host, port)}`` for proxies configured in the environment.
+
+    Read live on every call (no caching): tests legitimately set and clear these
+    with ``monkeypatch.setenv``/``delenv`` mid-session, so a cached snapshot
+    would both miss newly configured proxies and deny a proxy that a test has
+    since removed.
+    """
+    endpoints = set()
+    for var in _PROXY_ENV_VARS:
+        raw = (os.environ.get(var) or "").strip()
+        if not raw:
+            continue
+        try:
+            # urlparse needs a scheme to populate .hostname for bare host:port.
+            parsed = urlparse(raw if "://" in raw else f"//{raw}")
+            host = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            # Malformed value (e.g. out-of-range port) -- not a usable endpoint.
+            continue
+        if not host:
+            continue
+        if port is None:
+            # Portless config: resolve to the port the transport would dial,
+            # rather than treating it as "any port on this host".
+            port = _PROXY_SCHEME_DEFAULT_PORT.get(
+                (parsed.scheme or "").lower(), _PROXY_FALLBACK_PORT
+            )
+        endpoints.add((str(host).strip().lower().strip("[]"), port))
+    return endpoints
+
+
+def _is_proxy_endpoint(target: Any) -> bool:
+    """True if ``target`` addresses a proxy endpoint configured in the environment."""
+    if isinstance(target, (tuple, list)):
+        if not target:
+            return False
+        host = target[0]
+        port = target[1] if len(target) >= 2 else None
+    else:
+        host, port = target, None
+    if host is None:
+        return False
+    if isinstance(host, bytes):
+        try:
+            host = host.decode("utf-8", errors="replace")
+        except Exception:
+            return False
+    host_str = str(host).strip().lower().strip("[]")
+    if not host_str:
+        return False
+    try:
+        want_port = int(port) if port is not None else None
+    except (TypeError, ValueError):
+        want_port = None
+    for proxy_host, proxy_port in _proxy_endpoints():
+        if proxy_host != host_str:
+            continue
+        # Only a genuinely unknown port (target given as a bare hostname, e.g.
+        # the audit hook's ``socket.gethostbyname`` argument) falls back to a
+        # host-only match. A portless *config* is already resolved to the
+        # scheme default above, so it cannot swallow unrelated local ports.
+        if proxy_port is None or want_port is None or proxy_port == want_port:
+            return True
+    return False
+
+
+def _is_allowed_target(target: Any, family: Optional[int] = None) -> bool:
+    """True only for targets the offline guardrail may admit.
+
+    Single source of truth for both the interception hook and the socket-patch
+    layer, so the two layers cannot drift apart.
+    """
+    if _is_proxy_endpoint(target):
+        return False
+    return _is_local_or_loopback(target, family)
+
+
+# --------------------------------------------------------------------------
 # Layer 1: socket-patch interception (composable + tamper-attributable)
 # --------------------------------------------------------------------------
 
@@ -213,12 +336,13 @@ _guard_active_depth = 0
 
 def _assert_network_allowed(address, family=None):
     """Enforce offline isolation rule; raise OfflineTestGuardrailError if external."""
-    if not _is_local_or_loopback(address, family):
+    if not _is_allowed_target(address, family):
         dest = _format_address(address)
         nodeid = _current_nodeid or "INIT"
         phase = _current_phase or "init"
+        via = " (forward proxy configured in env)" if _is_proxy_endpoint(address) else ""
         raise OfflineTestGuardrailError(
-            f"OfflineTestGuardrail: outbound network connection to {dest} is disallowed in offline test suite. "
+            f"OfflineTestGuardrail: outbound network connection to {dest} is disallowed in offline test suite{via}. "
             "Mark with @pytest.mark.network and run with RT_NETWORK_ENABLED=1, or mock the provider. "
             f"[nodeid={nodeid}, phase={phase}]"
         )
@@ -457,7 +581,7 @@ def _observation_hook(event: str, args: tuple) -> None:
         if event not in _COVERED_AUDIT_EVENTS:
             return
         target, family = _extract_target_and_family(event, args)
-        is_local = _is_local_or_loopback(target, family=family)
+        is_local = _is_allowed_target(target, family=family)
         _log_observation(event, target, is_local)
     except Exception:
         pass
@@ -470,13 +594,14 @@ def _interception_hook(event: str, args: tuple) -> None:
     if is_network_enabled():
         return
     target, family = _extract_target_and_family(event, args)
-    if not _is_local_or_loopback(target, family=family):
+    if not _is_allowed_target(target, family=family):
         _log_deny(event, target)
         nodeid = _current_nodeid or "INIT"
         phase = _current_phase or "init"
         target_str = _format_target(target)
+        via = " (forward proxy configured in env)" if _is_proxy_endpoint(target) else ""
         raise OfflineTestGuardrailError(
-            f"OfflineTestGuardrail: outbound network connection to {target_str} is disallowed in offline test suite. "
+            f"OfflineTestGuardrail: outbound network connection to {target_str} is disallowed in offline test suite{via}. "
             f"Mark with @pytest.mark.network and run with RT_NETWORK_ENABLED=1, or mock the provider. "
             f"[nodeid={nodeid}, phase={phase}]"
         )
@@ -743,6 +868,51 @@ def forbid_external_network():
             "OfflineTestGuardrail: forbid_external_network requested but the "
             "unified offline guardrail is not enforcing."
         )
+    yield
+
+
+@pytest.fixture
+def offline_tushare_gateway_stub(monkeypatch):
+    """DAV-1818: stub the Tushare gateway seams so tests never fan out to them.
+
+    ``DataCollector`` fan-out reaches two Tushare gateways whenever the host
+    carries credentials (``.env`` / environment variables):
+
+    - ``tushare_global_news.TushareNewsClient`` — news pool: 7-day window x 4
+      sources, bisecting each unresponsive segment down to 30-minute slices and
+      retrying each request up to 5 times;
+    - ``industry_linkage_provider._query_tushare_api`` — financial statements
+      and global indices (imported *by value* into ``tushare_provider`` and
+      ``sw_industry``, so every holder is patched).
+
+    The offline guardrail normally denies those attempts, but a test that
+    replaces ``requests.post`` with a Mock defeats the socket layer and lets the
+    retry/bisection amplification run (measured before this fixture: 468 + 16
+    POSTs and ~180s, i.e. the ``test_zero_real_network_guard`` failure). This
+    fixture replaces both seams with an immediate denial, mirroring what the
+    real guardrail raises, so the collector is exercised with zero gateway
+    traffic. Denial is terminal: no retry, no bisection.
+
+    Opt-in (not autouse) because suites such as
+    ``test_industry_linkage_provider.py`` deliberately drive the real client
+    with ``patch("requests.post")`` and assert on call counts.
+    """
+    from tradingagents.dataflows import tushare_global_news as _tgn
+    from tradingagents.dataflows.providers import industry_linkage_provider as _ilp
+    from tradingagents.dataflows.providers import tushare_provider as _tp
+    from tradingagents.dataflows import sw_industry as _swi
+
+    def _deny(*_args, **_kwargs):
+        raise OfflineTestGuardrailError(
+            "OfflineTestGuardrail: Tushare gateway stubbed offline (DAV-1818). "
+            "Mark with @pytest.mark.network and run with RT_NETWORK_ENABLED=1, "
+            "or mock the provider."
+        )
+
+    monkeypatch.setattr(_tgn.TushareNewsClient, "_query_once", _deny)
+    monkeypatch.setattr(_ilp, "_query_tushare_api", _deny)
+    monkeypatch.setattr(_tp, "_query_tushare_api", _deny)
+    monkeypatch.setattr(_swi, "_query_tushare_api", _deny)
     yield
 
 

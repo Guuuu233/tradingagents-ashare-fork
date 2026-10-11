@@ -35,6 +35,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from .vendor_result import NetworkAccessDeniedError
 from .config import get_config
 from .trade_calendar import cn_today_str
 
@@ -168,6 +169,11 @@ class TushareNewsClient:
                 json=payload,
                 timeout=req_timeout if req_timeout is not None else self._timeout,
             )
+        except NetworkAccessDeniedError:
+            # 离线护栏/网络策略拒绝不是瞬时故障：立即上抛，绝不计入可重试分类。
+            # 该分支必须先于 except Exception，否则拒绝会被降级成 network_error，
+            # 触发 _RETRY_ATTEMPTS=5 重试 × 二分细分（DAV-1818 的 468 次外连放大）。
+            raise
         except requests.Timeout as e:
             return None, "timeout", f"Tushare 新闻请求超时: {type(e).__name__}"
         except requests.RequestException as e:
@@ -1600,6 +1606,11 @@ def get_global_news(
     if not owner:
         # 并发调用方：等待主调用结果（含主调用失败场景，均回落）
         ent["event"].wait(_GLOBAL_NEWS_BUDGET_S + 20)  # ≤外层 registry 210s
+        denial = ent.get("denial")
+        if denial is not None:
+            # 主调用因护栏/策略拒绝而终止：等待者同样上抛，保持拒绝语义一致
+            # （而不是回落成"等待超时"软文案，那会让调用方以为只是超时）。
+            raise denial
         res = ent.get("res")
         if res is None:
             return None, "tushare single-flight 等待超时或主调用失败"
@@ -1608,6 +1619,15 @@ def get_global_news(
         res = _get_global_news_impl(
             curr_date, eff_days, limit, client, cache,
         )
+    except NetworkAccessDeniedError as denial:
+        # 拒绝语义与 route_to_vendor 一致：立即上抛，不降级为软失败文本。
+        # 必须清理 single-flight 并唤醒等待者，否则并发调用方会白等 200s；
+        # 并把拒绝本身交给等待者，让并发调用方拿到同一语义。
+        with _CALL_INFLIGHT_LOCK:
+            ent["denial"] = denial
+            _CALL_INFLIGHT.pop(key, None)
+        ent["event"].set()
+        raise
     except BaseException as e:
         res = (None, f"tushare get_global_news 内部异常: {type(e).__name__}")
     with _CALL_INFLIGHT_LOCK:

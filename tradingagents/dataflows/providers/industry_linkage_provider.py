@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import requests
 
+from tradingagents.dataflows.vendor_result import NetworkAccessDeniedError
 from tradingagents.dataflows.industry_linkage import (
     IndustryLinkage,
     IndustryLinkageIndicator,
@@ -188,6 +189,13 @@ def _query_tushare_api(
             json=payload,
             timeout=_TUSHARE_TIMEOUT if timeout is None else timeout,
         )
+    except NetworkAccessDeniedError as e:
+        # 离线护栏/网络策略拒绝不是瞬时故障：返回专用分类，使调用方的重试循环
+        # （_query_financial_api 的 _FINANCIAL_MAX_ATTEMPTS）立即终止而不是
+        # 把拒绝当成 network_error 重试（DAV-1818）。
+        # 仍按本函数契约返回三元组而非抛出：逐指标降级为 typed gap 是产业链
+        # 快照的既有语义，不得因单指标被拒而让整行业失败。
+        return None, "network_denied", f"Tushare 请求被网络策略拒绝: {type(e).__name__}"
     except requests.Timeout as e:
         return None, "timeout", f"Tushare 请求超时: {e}"
     except requests.RequestException as e:
@@ -478,6 +486,7 @@ class IndustryLinkageProvider:
                 "empty_rows": "低（数据源为空）",
                 "timeout": "低（网络超时）",
                 "network_error": "低（接口异常）",
+                "network_denied": "低（网络策略拒绝）",
                 "http_error": "低（接口异常）",
                 "api_error": "低（接口异常）",
                 "parse_error": "低（接口异常）",
