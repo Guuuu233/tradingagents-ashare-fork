@@ -269,6 +269,57 @@ def result_data_select_expr(con) -> str:
     return PLAINTEXT_COL
 
 
+# ── Service-mode write guard (DAV-1885 / DAV-1903) ───────────────────────────
+
+
+def check_service_storage_mode(health_url: str) -> dict:
+    """Refuse writes when the running service's storage mode differs.
+
+    Fetches ``<health_url>/healthz`` and compares its ``report_storage_mode``
+    field with this process's own :func:`report_storage_mode`. Any script
+    that writes the ``reports`` table and chooses its column layout by mode
+    should call this at its entry point so a service/script mode drift
+    (one switched, the other not) fails closed instead of dual-writing the
+    wrong column layout. ``requests`` is imported lazily — it is a
+    script-side dependency, not required by the ORM path.
+
+    Returns a dict: ``{"allowed": bool, "reason": str, ...}``; ``allowed``
+    is True only when the service is reachable, healthy, and reports the
+    same mode. Fail-closed on every failure mode. On success the raw
+    ``healthz`` payload is included under ``"payload"`` so callers can run
+    additional checks (e.g. busy/idle) without a second request.
+    """
+    import requests  # noqa: PLC0415  (script-side only; keep ORM import light)
+    session = requests.Session()
+    session.trust_env = False
+    my_mode = report_storage_mode()
+    try:
+        response = session.get(health_url.rstrip("/") + "/healthz",
+                               timeout=(2, 7))
+        payload = response.json()
+    except requests.Timeout:
+        return {"allowed": False, "reason": "health_busy_timeout",
+                "script_mode": my_mode}
+    except (requests.RequestException, ValueError):
+        return {"allowed": False, "reason": "health_unavailable",
+                "script_mode": my_mode}
+    finally:
+        session.close()
+    if response.status_code != 200 or payload.get("status") != "ok":
+        return {"allowed": False, "reason": "health_not_ok",
+                "script_mode": my_mode}
+    service_mode = payload.get("report_storage_mode")
+    if service_mode is None:
+        return {"allowed": False, "reason": "report_storage_mode_unknown",
+                "service_mode": None, "script_mode": my_mode}
+    if service_mode != my_mode:
+        return {"allowed": False, "reason": "report_storage_mode_mismatch",
+                "service_mode": service_mode, "script_mode": my_mode}
+    return {"allowed": True, "reason": "mode_match",
+            "service_mode": service_mode, "script_mode": my_mode,
+            "payload": payload}
+
+
 # ── SQLAlchemy type ──────────────────────────────────────────────────────────
 
 
@@ -535,6 +586,7 @@ __all__ = [
     "ZSTD_LEVEL",
     "ZST_LEN_COL",
     "ZstdJSON",
+    "check_service_storage_mode",
     "compress_json_bytes",
     "decode_frame_bytes",
     "decode_result_data",

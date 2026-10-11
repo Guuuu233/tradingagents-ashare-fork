@@ -15,17 +15,17 @@ from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import closing
-from datetime import date, datetime
 import hashlib
 import io
 import json
 import math
 import os
-from pathlib import Path
 import sqlite3
 import sys
 import time
+from contextlib import closing
+from datetime import date, datetime
+from pathlib import Path
 from urllib.parse import quote
 
 import zstandard
@@ -40,10 +40,16 @@ if str(ROOT) not in sys.path:
 PRE_EXPORT_DIR = ROOT / "work/tplus5-pre-export"
 
 from tradingagents.agents.utils.shadow_credit import (
-    is_qualifying_v2_report, detect_tplus5_suspension,
+    detect_tplus5_suspension,
+    is_qualifying_v2_report,
 )
-from tradingagents.dataflows.trade_calendar import now_cn, cn_market_phase, trading_days_forward
+from tradingagents.dataflows.trade_calendar import (
+    cn_market_phase,
+    now_cn,
+    trading_days_forward,
+)
 from tradingagents.storage.compressed_json import (
+    check_service_storage_mode,
     compress_json_bytes,
     decode_frame_bytes,
     report_storage_mode,
@@ -551,38 +557,21 @@ class _ReadOnlyContext:
 
 
 def check_runtime_guard(db_path, health_url):
-    """Fail closed on unknown runtime state. Never restart or wait for idle."""
-    import requests
-    session = requests.Session()
-    session.trust_env = False
-    try:
-        response = session.get(health_url.rstrip("/") + "/healthz", timeout=(2, 7))
-        payload = response.json()
-    except requests.Timeout:
-        return {"allowed": False, "reason": "health_busy_timeout"}
-    except (requests.RequestException, ValueError):
-        return {"allowed": False, "reason": "health_unavailable"}
-    finally:
-        session.close()
-    if response.status_code != 200 or payload.get("status") != "ok":
-        return {"allowed": False, "reason": "health_not_ok"}
-    # DAV-1885: refuse to write when the service's report-storage mode
-    # differs from this process's. healthz exposes `report_storage_mode`;
-    # a mode drift (service switched, script not redeployed / vice-versa)
-    # would otherwise dual-write a column layout the read side no longer
-    # expects. Mismatch → fail closed, not silent wrong-mode write.
-    service_mode = payload.get("report_storage_mode")
-    my_mode = report_storage_mode()
-    if service_mode is None:
-        return {"allowed": False, "reason": "report_storage_mode_unknown",
-                "service_mode": None, "script_mode": my_mode}
-    if service_mode != my_mode:
-        return {"allowed": False, "reason": "report_storage_mode_mismatch",
-                "service_mode": service_mode, "script_mode": my_mode}
+    """Fail closed on unknown runtime state. Never restart or wait for idle.
+
+    Delegates the storage-mode + health check to the shared
+    :func:`compressed_json.check_service_storage_mode` (DAV-1903 🔴-1) so the
+    same mode-mismatch defence is importable by any reports-table writer;
+    this wrapper then adds the backfill-specific busy/idle checks on the same
+    healthz payload (single request).
+    """
+    mode_guard = check_service_storage_mode(health_url)
+    if not mode_guard["allowed"]:
+        return mode_guard
     # healthz currently does NOT expose the in-memory job store. Absence of DB
     # rows is not proof of zero active jobs. An explicit zero runtime count is
     # required; missing instrumentation must skip rather than race an analysis.
-    count = payload.get("active_analysis_count")
+    count = mode_guard["payload"].get("active_analysis_count")
     if type(count) is not int or count < 0:
         return {"allowed": False, "reason": "active_analysis_count_unknown"}
     if count:
@@ -898,7 +887,7 @@ def _restore_pre_image(original, record):
 
 def restore_from_export(db_path, export_file, *, sha256=None,
                         health_url="http://127.0.0.1:8000",
-                        production_authorized=False):
+                        production_authorized=False, copy_rehearsal=False):
     """Rollback subcommand: write exported pre-images back, row-by-row verified.
 
     Every row is compared before and after: the stored current bytes must still
@@ -909,11 +898,17 @@ def restore_from_export(db_path, export_file, *, sha256=None,
     if _is_production(db_path) and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):
         raise RuntimeError("production restore forbidden before signed post-10-09 handoff")
     export = _load_pre_export(export_file, expected_sha256=sha256)
-    guard = check_runtime_guard(db_path, health_url)
-    if not guard["allowed"]:
-        result = {"skipped": True, "guard": guard, "restored_rows": 0}
-        print(json.dumps(result, ensure_ascii=False))
-        return result
+    # Guard exemption matches run_backfill (🟡-1): a copy rehearsal writes a
+    # scratch copy, not the live DB, so it may skip the runtime guard — but
+    # production always runs it.
+    if _is_production(db_path) or not copy_rehearsal:
+        guard = check_runtime_guard(db_path, health_url)
+        if not guard["allowed"]:
+            result = {"skipped": True, "guard": guard, "restored_rows": 0}
+            print(json.dumps(result, ensure_ascii=False))
+            return result
+    else:
+        guard = {"allowed": True, "reason": "copy_rehearsal_exempt"}
     result = {"restored_rows": 0, "already_current": 0, "missing": 0,
               "mismatched": 0, "conflicts": 0, "guard": guard}
     conn = _open_db(db_path, writable=True)
@@ -1068,7 +1063,9 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         result["audit_log"] = str(journal_path)
     if verify_gates:
         from tradingagents.agents.utils.shadow_credit import (
-            evaluate_h1b_system_gates, filter_v2_completed_reports, extract_sample_cohort,
+            evaluate_h1b_system_gates,
+            extract_sample_cohort,
+            filter_v2_completed_reports,
         )
         units = filter_v2_completed_reports(saved)
         cohorts = {}
@@ -1104,6 +1101,7 @@ def main():
     restore_parser.add_argument("--export-sha256")
     restore_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
     restore_parser.add_argument("--production-authorized", action="store_true")
+    restore_parser.add_argument("--copy-rehearsal", action="store_true")
     args = vars(parser.parse_args())
     command = args.pop("command")
     args.pop("verbose")
@@ -1117,7 +1115,8 @@ def main():
             result = restore_from_export(
                 args["db_path"], args["export_file"],
                 sha256=args.get("export_sha256"), health_url=args["health_url"],
-                production_authorized=args.get("production_authorized", False))
+                production_authorized=args.get("production_authorized", False),
+                copy_rehearsal=args.get("copy_rehearsal", False))
             if result.get("mismatched") or result.get("conflicts") or result.get("missing"):
                 return 1
             return 0

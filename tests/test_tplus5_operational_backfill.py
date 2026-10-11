@@ -7,8 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
-
 from scripts import backfill_tplus5_shadow as cli
+from tradingagents.storage import compressed_json as cj
 
 CAL = [date(2026, 8, 3) + timedelta(days=i) for i in range(12)
        if (date(2026, 8, 3) + timedelta(days=i)).weekday() < 5]
@@ -143,7 +143,7 @@ def test_byte_guard_rejects_non_measurement_changes_and_preserves_whitespace():
     assert '"opaque" : 1e+02' in after
     assert cli.non_tplus5_bytes(before) == cli.non_tplus5_bytes(after)
     obj["opaque"] = 99
-    with pytest.raises(ValueError, match="non.T\+5"):
+    with pytest.raises(ValueError, match=r"non.T\+5"):
         cli.patch_tplus5_json(before, obj)
 
 
@@ -202,7 +202,8 @@ def test_health_timeout_is_busy_not_dead(tmp_path, monkeypatch):
     p = make_db(tmp_path, report())
     monkeypatch.setattr(requests.Session, "get", lambda *a, **k: (_ for _ in ()).throw(requests.Timeout()))
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
-    assert guard == {"allowed": False, "reason": "health_busy_timeout"}
+    assert guard["allowed"] is False
+    assert guard["reason"] == "health_busy_timeout"
 
 
 def _healthz_payload(**over):
@@ -225,7 +226,7 @@ def test_storage_mode_mismatch_refuses_write(tmp_path, monkeypatch):
     """DAV-1885: service=plaintext, script=compressed_only → refuse write."""
     p = make_db(tmp_path, report())
     _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="plaintext"))
-    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    monkeypatch.setattr(cj, "report_storage_mode", lambda: "compressed_only")
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard["allowed"] is False
     assert guard["reason"] == "report_storage_mode_mismatch"
@@ -237,7 +238,7 @@ def test_storage_mode_match_allows_through(tmp_path, monkeypatch):
     """Matching modes pass the mode check (still gated by idle count)."""
     p = make_db(tmp_path, report())
     _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="compressed_only"))
-    monkeypatch.setattr(cli, "report_storage_mode", lambda: "compressed_only")
+    monkeypatch.setattr(cj, "report_storage_mode", lambda: "compressed_only")
     guard = cli.check_runtime_guard(str(p), "http://127.0.0.1:8000")
     assert guard["allowed"] is True
 
