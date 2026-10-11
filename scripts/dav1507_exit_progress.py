@@ -459,14 +459,20 @@ def metric_a3(clean_unit_stats, lib):
         ne = sum(1 for i in tail if i["eff"]["bear"])
         denom = nb + ne
         share = (nb / denom * 100) if denom else None
-        # observational: cluster_type diversity on each side's opening claims
+        # observational: cluster_type diversity on each side's opening claims.
+        # mean_per_unit = mean over clean units of the number of DISTINCT
+        # cluster_types in that unit's opening claims (not claims per unit).
         ct_dist, ct_mean = {}, {}
         for s in ("bull", "bear"):
             counts = Counter()
+            per_unit_distinct = []
             for i in items:
-                counts.update(i.get("opening_cluster_types", {}).get(s) or [])
+                types = i.get("opening_cluster_types", {}).get(s) or []
+                counts.update(types)
+                per_unit_distinct.append(len(set(types)))
             ct_dist[s] = dict(counts)
-            ct_mean[s] = round(sum(counts.values()) / len(items), 2) if items else 0
+            ct_mean[s] = (round(sum(per_unit_distinct) / len(per_unit_distinct), 2)
+                          if per_unit_distinct else 0)
         per_cohort[cohort] = {
             "clean_units": len(items),
             "effective_sessions": {"bull": bull_sessions, "bear": bear_sessions,
@@ -661,7 +667,7 @@ def render_markdown(summary, meta):
                 f"窗口比 {ratio_str}（{w['n']} 场）；"
                 f"开场 cluster_type 种类 多{len(c['observed_opening_cluster_type_diversity']['bull'])}/"
                 f"空{len(c['observed_opening_cluster_type_diversity']['bear'])}"
-                f"（均值 {c['observed_opening_cluster_type_mean_per_unit']['bull']}/"
+                f"（档均种类 {c['observed_opening_cluster_type_mean_per_unit']['bull']}/"
                 f"{c['observed_opening_cluster_type_mean_per_unit']['bear']}）",
                 f"场次差 {c['effective_sessions']['gap_to_25']}；论点差 {c['verified_claims']['gap_to_100']}",
                 "✅/❌ 见读数")
