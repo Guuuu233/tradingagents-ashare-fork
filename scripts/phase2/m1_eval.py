@@ -530,7 +530,12 @@ def select_version(df: pd.DataFrame,
     queue. If the frame holds several `version_key` values the caller MUST
     name one via --version-key; otherwise this fails closed instead of
     silently mixing cross-sections across versions into one series (which
-    would double-count valid_days and corrupt NW lags)."""
+    would double-count valid_days and corrupt NW lags).
+
+    DAV-1716: an explicitly passed --version-key is validated against the
+    frame's key list even when the frame is single-version — a typo used to
+    be silently accepted (returning every row) and then written back into
+    run.json as the provenance label."""
     if "version_key" not in df.columns:
         return df
     # NaN counts as its own key — a NaN-version residue must not slip the
@@ -560,6 +565,13 @@ def select_version(df: pd.DataFrame,
             "refusing to merge distinct raw keys — normalise the input "
             "column to a single dtype first")
     keys = sorted(vk.unique().tolist())
+    # Membership check BEFORE the single-key fast path (DAV-1716): on a
+    # single-version frame a typo'd --version-key previously fell through
+    # the `len(keys) <= 1` early return, got accepted, and then landed in
+    # run.json's version_key as a false provenance label. Fail closed.
+    if version_key is not None and version_key not in keys:
+        raise ValueError(
+            f"--version-key {version_key!r} not in input {keys}")
     if len(keys) <= 1:
         return df
     if version_key is None:
@@ -568,9 +580,6 @@ def select_version(df: pd.DataFrame,
             "the main day series is single-version — pass --version-key "
             "to select one (cross-version comparison belongs to the "
             "paired channel, never the same IC series)")
-    if version_key not in keys:
-        raise ValueError(
-            f"--version-key {version_key!r} not in input {keys}")
     return df[vk == version_key].copy()
 
 
