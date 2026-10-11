@@ -263,11 +263,28 @@ def test_guard_impl_moved_to_compressed_json(tmp_path, monkeypatch):
     entry, delegating nothing but sharing the contract."""
     from tradingagents.storage import compressed_json as cj
     p = make_db(tmp_path, report())
-    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode="plaintext"))
+    # Advertise THIS process's mode so the contract holds under any
+    # REPORT_STORAGE_MODE (hardcoding "plaintext" refuses under
+    # compressed_only — DAV-1911 🔴-1).
+    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode=cj.report_storage_mode()))
     # The shared function reaches the same verdict directly (no cli shim).
     guard = cj.check_service_storage_guard(str(p), "http://127.0.0.1:8000")
     assert guard == {"allowed": True, "reason": "idle", "running_count": 0}
     assert cj._guard_open_db(str(p)).execute("SELECT count(*) FROM reports").fetchone() == (1,)
+
+
+def test_guard_impl_mismatch_fails_closed(tmp_path, monkeypatch):
+    """DAV-1911 🔴-1 companion: an explicit service/script mode mismatch is
+    refused by the shared guard in every REPORT_STORAGE_MODE."""
+    from tradingagents.storage import compressed_json as cj
+    p = make_db(tmp_path, report())
+    advertised = "compressed_only" if cj.report_storage_mode() != "compressed_only" else "plaintext"
+    _stub_healthz(monkeypatch, _healthz_payload(report_storage_mode=advertised))
+    guard = cj.check_service_storage_guard(str(p), "http://127.0.0.1:8000")
+    assert guard["allowed"] is False
+    assert guard["reason"] == "report_storage_mode_mismatch"
+    assert guard["service_mode"] == advertised
+    assert guard["script_mode"] == cj.report_storage_mode()
 
 
 def test_copy_rehearsal_now_runs_guard(tmp_path, monkeypatch):
