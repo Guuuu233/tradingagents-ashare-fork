@@ -5,6 +5,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """Deterministic audit of persisted investment debates. No LLM calls."""
 from __future__ import annotations
 import argparse, json, re, sqlite3
@@ -98,7 +103,7 @@ def audit(report: sqlite3.Row) -> dict:
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("report_ids",nargs="+"); ap.add_argument("--db",default="data/tradingagents.db")
-    a=ap.parse_args(); c=sqlite3.connect(f"file:{a.db}?mode=ro",uri=True); c.row_factory=sqlite3.Row
+    a=ap.parse_args(); c=sqlite3.connect(f"file:{a.db}?mode=ro",uri=True); c.row_factory=sqlite3.Row; _b6e_guard(c)
     out=[]
     for rid in a.report_ids:
         r=c.execute("select id,symbol,status,result_data from reports where id=?",(rid,)).fetchone()

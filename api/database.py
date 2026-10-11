@@ -524,14 +524,25 @@ class ReportDB(Base):
     
     # Full analysis results stored as JSON
     # DAV-1770 B-6b: REPORT_STORAGE_MODE selects the physical column this
-    # attribute binds at class-definition time. plaintext → result_data
-    # (JSON, legacy). compressed/compressed_only → a SQL-level
-    # COALESCE(result_data_zst, result_data) so every read (single row or
-    # bulk) resolves migrated and unmigrated rows in ONE query — no ORM
-    # load-event N+1 fallback (DAV-1792 🟡-1). The non-read-side column is
-    # kept byte-identical by the flush-time shadow sync (dual write,
-    # §4 P1–P3) — except in compressed_only (P4), where the sync leaves it
-    # NULL on new/updated rows.
+    # attribute binds at class-definition time.
+    #
+    # compressed/compressed_only → a SQL-level
+    #   COALESCE(result_data_zst, result_data) (compressed-first:
+    #   authoritative column, plaintext legacy fallback) so every read
+    #   (single row or bulk) resolves migrated and unmigrated rows in ONE
+    #   query — no ORM load-event N+1 fallback (DAV-1792 🟡-1). The
+    #   non-read-side column is kept byte-identical by the flush-time
+    #   shadow sync (dual write, §4 P1–P3) — except in compressed_only
+    #   (P4), where the sync leaves it NULL on new/updated rows.
+    # plaintext (default, DAV-1904 B-6e) → ``result_data`` stays the plain
+    #   JSON column; cleared rows (result_data IS NULL AND
+    #   result_data_zst IS NOT NULL, the P5b end-state) are recovered by
+    #   the load listener below, which lazy-SELECTs only the deferred
+    #   zst column for those rows and decodes via ZstdJSON. This mirrors
+    #   the plaintext-first COALESCE semantics — plaintext always wins
+    #   when present — but degrades gracefully on pre-B-6b schemas that
+    #   lack the zst column, where a SQL-level COALESCE would fail every
+    #   read outright.
     if report_storage_mode() in ("compressed", "compressed_only"):
         # Physical write columns (deferred — never auto-SELECTed).
         result_data_zst = deferred(
@@ -552,7 +563,9 @@ class ReportDB(Base):
     else:
         result_data = Column("result_data", JSON, key="result_data", nullable=True)
         # Shadow compressed column: deferred raw BLOB, written by the flush
-        # hook; never loaded by read paths.
+        # hook; never loaded by read paths directly — the plaintext-first
+        # fallback load-listener below may still yield its bytes for
+        # cleared rows (DAV-1904 B-6e).
         result_data_zst = deferred(
             Column("result_data_zst", LargeBinary,
                    key="result_data_zst", nullable=True)
@@ -679,9 +692,38 @@ def _b6b_sync_on_update(mapper, connection, target):
 
 
 # Load-time plaintext fallback is handled at the SQL level by the
-# COALESCE in the column_property above — no per-row load event needed.
-# (DAV-1792 🟡-1: the previous ORM ``load`` listener emitted one extra
-# deferred-attr SELECT per unmigrated row.)
+# COALESCE in the column_property above (compressed mode) — no per-row
+# load event needed. (DAV-1792 🟡-1: the previous ORM ``load`` listener
+# emitted one extra deferred-attr SELECT per unmigrated row.)
+#
+# DAV-1904 B-6e plaintext-mode fallback: ``result_data`` stays the plain
+# JSON column (zero behavioural change on live rows). After P5b clears
+# plaintext, rows come back ``result_data IS NULL AND result_data_zst
+# IS NOT NULL`` — the listener below lazy-loads only the deferred zst
+# column for those rows and decodes it via the shared ZstdJSON path.
+# Deferred-attr access emits one narrow SELECT per affected row; live
+# rows short-circuit on ``result_data is not None`` at zero cost.
+if report_storage_mode() != "compressed":
+    from sqlalchemy.orm.attributes import set_committed_value as _scv
+    from sqlalchemy.exc import OperationalError as _OpErr
+
+    _B6E_ZST_UNAVAILABLE = {"v": False}
+
+    @event.listens_for(ReportDB, "load", restore_load_context=True)
+    def _b6e_zst_fallback(target, context):
+        if _B6E_ZST_UNAVAILABLE["v"]:
+            return
+        if target.result_data is not None:
+            return
+        try:
+            raw = target.result_data_zst  # narrow deferred SELECT
+        except _OpErr:
+            # pre-B-6b schema (no zst column) — disable for the process.
+            _B6E_ZST_UNAVAILABLE["v"] = True
+            return
+        if raw is not None:
+            from tradingagents.storage.compressed_json import decode_result_data
+            _scv(target, "result_data", decode_result_data(raw))
 
 
 class UserDB(Base):

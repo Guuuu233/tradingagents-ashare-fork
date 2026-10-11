@@ -53,7 +53,17 @@ import resource
 import sqlite3
 import sys
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from tradingagents.storage.compressed_json import (  # noqa: E402
+    decode_result_data,
+    result_data_select_expr,
+)
 
 FIXED_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
 DECISION_MODEL_V1 = "decision_model.v1"
@@ -422,26 +432,33 @@ def main() -> int:
     no_slot_report_ids: List[str] = []  # short/medium 均为 NULL 的原始报告
     no_slot_report_baseline_month: Counter = Counter()
 
+    # B-6e: the result_data slot selects COALESCE(zst bytes, plaintext
+    # text) via result_data_select_expr; json_extract can't operate on
+    # compressed BLOBs, so version/baseline extraction happens in Python
+    # after decode_result_data.
+    rd_expr = result_data_select_expr(con)
+
     cur.execute(
         "SELECT id, symbol, trade_date, created_at, "
-        "COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date), "
-        "result_data FROM reports "
-        "WHERE json_extract(result_data,'$.decision_model_version')=? AND user_id=?",
-        (DECISION_MODEL_V1, FIXED_USER_ID),
+        f"{rd_expr} FROM reports WHERE user_id=? AND {rd_expr} IS NOT NULL",
+        (FIXED_USER_ID,),
     )
-    for rid, sym, td, ca, bd, rdj in cur:
+    for rid, sym, td, ca, rdj in cur:
+        try:
+            rd = decode_result_data(rdj)
+        except Exception:
+            rd = None
+        if not isinstance(rd, dict):
+            continue
+        if rd.get("decision_model_version") != DECISION_MODEL_V1:
+            continue
         v1_report_ids.add(rid)
+        bd = rd.get("analysis_baseline_date") or td
         bdm = month_key(bd)
         if ca:
             v1_raw_report_run_month[ca[:7]] += 1
         if bdm:
             v1_raw_report_baseline_month[bdm] += 1
-        try:
-            rd = json.loads(rdj)
-        except Exception:
-            rd = None
-        if not isinstance(rd, dict):
-            continue
         slots_found = False
         for hz in HORIZONS:
             sl = rd.get(hz)
@@ -497,10 +514,20 @@ def main() -> int:
         "excluded_nonfixed_v1_reports": 0,  # filled below
         "side_conflicts": dict(conflicts),
     }
-    out["corpus"]["excluded_nonfixed_v1_reports"] = cur.execute(
-        "SELECT COUNT(*) FROM reports WHERE json_extract(result_data,'$.decision_model_version')=? AND user_id!=?",
-        (DECISION_MODEL_V1, FIXED_USER_ID),
-    ).fetchone()[0]
+    # B-6e: non-fixed-account v1 count via the same decoded stream
+    # (json_extract over COALESCE'd BLOB can't filter in SQL).
+    _nf_v1 = 0
+    for (nf_rdj,) in cur.execute(
+        f"SELECT {rd_expr} FROM reports WHERE user_id!=? AND {rd_expr} IS NOT NULL",
+        (FIXED_USER_ID,),
+    ):
+        try:
+            _nf_rd = decode_result_data(nf_rdj)
+        except Exception:
+            _nf_rd = None
+        if isinstance(_nf_rd, dict) and _nf_rd.get("decision_model_version") == DECISION_MODEL_V1:
+            _nf_v1 += 1
+    out["corpus"]["excluded_nonfixed_v1_reports"] = _nf_v1
 
     def hz_units(hz):
         return [u for u in units if u["horizon"] == hz]
@@ -1167,28 +1194,42 @@ def main() -> int:
     out["asymmetry_examples"] = ex
 
     # ── 「未标版本」背景桶（版本内去重 + 分层，逐行流式） ──────────────────
-    v1_min_ca = cur.execute(
-        "SELECT MIN(created_at) FROM reports WHERE json_extract(result_data,'$.decision_model_version')=?",
-        (DECISION_MODEL_V1,)).fetchone()[0]
+    # B-6e: v1_min_ca anchor = earliest created_at among decoded v1 rows
+    # across ALL accounts (json_extract can't filter compressed BLOBs in
+    # SQL). Streamed scan, decodes and discards.
+    v1_min_ca = None
+    for ca2, rdj2 in cur.execute(
+        f"SELECT created_at, {rd_expr} FROM reports WHERE {rd_expr} IS NOT NULL"
+    ):
+        try:
+            _rd2 = decode_result_data(rdj2)
+        except Exception:
+            _rd2 = None
+        if (isinstance(_rd2, dict)
+                and _rd2.get("decision_model_version") == DECISION_MODEL_V1):
+            if ca2 and (v1_min_ca is None or ca2 < v1_min_ca):
+                v1_min_ca = ca2
     # dedup NULL bucket per (symbol, bd, hz) — same rule as v1；只保留每个报告
     # 去重胜出后的最小必要字段，result_data 逐行即用即弃。
     nbest: Dict[Tuple[str, str, str], Tuple[str, str]] = {}
     nraw_reports = 0
     nmeta: Dict[str, Dict[str, Any]] = {}  # rid -> {sym, bd, ca, st_dir}
     cur.execute(
-        "SELECT id, symbol, COALESCE(json_extract(result_data,'$.analysis_baseline_date'), trade_date), "
-        "created_at, result_data FROM reports "
-        "WHERE result_data IS NOT NULL AND json_extract(result_data,'$.decision_model_version') IS NULL AND user_id=?",
+        f"SELECT id, symbol, trade_date, created_at, {rd_expr} FROM reports "
+        f"WHERE user_id=? AND {rd_expr} IS NOT NULL",
         (FIXED_USER_ID,),
     )
-    for rid, sym, bd, ca, rdj in cur:
-        nraw_reports += 1
+    for rid, sym, td2, ca, rdj in cur:
         try:
-            rd = json.loads(rdj)
+            rd = decode_result_data(rdj)
         except Exception:
             rd = None
         if not isinstance(rd, dict):
             continue
+        if rd.get("decision_model_version") is not None:
+            continue
+        nraw_reports += 1
+        bd = rd.get("analysis_baseline_date") or td2
         st_dir = "none"
         st = rd.get("short_term")
         if isinstance(st, dict):

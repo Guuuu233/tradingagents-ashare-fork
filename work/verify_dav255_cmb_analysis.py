@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 import requests
 import json
 import time
@@ -114,6 +119,7 @@ else:
     print("\n[Step 6] Asserting newly created report in DB...")
     time.sleep(1.0)
     conn = sqlite3.connect(DB_PATH)
+    _b6e_guard(conn)
     cursor = conn.cursor()
     cursor.execute("SELECT id, user_id, symbol, status, created_at FROM reports WHERE id=?", (job_id,))
     report_row = cursor.fetchone()
@@ -123,6 +129,7 @@ else:
         print(f"WARNING: Report with id {job_id} not yet in DB, waiting another second...")
         time.sleep(2.0)
         conn = sqlite3.connect(DB_PATH)
+        _b6e_guard(conn)
         cursor = conn.cursor()
         cursor.execute("SELECT id, user_id, symbol, status, created_at FROM reports WHERE id=?", (job_id,))
         report_row = cursor.fetchone()
@@ -163,6 +170,7 @@ else:
 # 8. Fetch report and audit result_data
 print("\n[Step 8] Fetching completed report from DB...")
 conn = sqlite3.connect(DB_PATH)
+_b6e_guard(conn)
 cursor = conn.cursor()
 cursor.execute("SELECT id, user_id, symbol, status, created_at, final_trade_decision, result_data, error FROM reports WHERE id=?", (job_id,))
 final_row = cursor.fetchone()

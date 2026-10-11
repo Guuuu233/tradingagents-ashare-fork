@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 import sqlite3, json, sys
 sys.path.insert(0,"/Users/davidliu/Documents/TradingAgents-AShare")
 from tradingagents.agents.utils.evidence_verifier import (
@@ -10,6 +15,7 @@ from tradingagents.agents.utils.evidence_verifier import (
     _extract_metric_keywords, extract_bound_numbers, _METRIC_CANONICAL_MAP,
 )
 c=sqlite3.connect("file:data/tradingagents.db?mode=ro",uri=True); c.execute("PRAGMA query_only=ON")
+_b6e_guard(c)
 cols=[d[1] for d in c.execute("pragma table_info(reports)")]
 row=dict(zip(cols,c.execute("select * from reports where id='9e2dd38b79a04819ae619f0078cefbf5'").fetchone()))
 seven={k:(row.get(k) or "") for k in SEVEN_REPORT_KEYS}

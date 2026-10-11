@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[1]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """Read-only, zero-model replay of every report/horizon carrying claim_evidence_summary.
 
 Run from repository root with the locked Python 3.10 interpreter. Reads live SQLite
@@ -30,6 +35,7 @@ old_status = old_module.status_from_manager_verdict
 
 DB = Path('/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db')
 con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+_b6e_guard(con)
 count = con.execute("SELECT count(*) FROM reports").fetchone()[0]
 counts = collections.Counter()
 bases = collections.Counter()

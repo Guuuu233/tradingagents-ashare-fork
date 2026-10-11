@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """DAV-1346 零 LLM 重放：R2 整段连坐收窄（raw 侧坐标触发词）的验收重放。
 
 语料（验收 1）：
@@ -147,6 +152,7 @@ def main() -> None:
     os.makedirs(OUT, exist_ok=True)
 
     con = sqlite3.connect(f"file:{PROD_DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     con.execute("PRAGMA query_only=ON")
 
     runs: Dict[str, Any] = {}

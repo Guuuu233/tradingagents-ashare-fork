@@ -3,6 +3,11 @@
 # 压缩库请改用 tradingagents.storage.compressed_json.decode_result_data，
 # 或在 SQL 中取 COALESCE(result_data_zst, result_data) 后交给它解码；
 # 参考实现：scripts/backfill_tplus5_shadow.py 的 _rd_text/_rd_col 模式。
+# (DAV-1904 B-6e) 启动时守卫：库内若存在明文已清空行则报错退出。
+import sys as _b6e_sys
+from pathlib import Path as _b6e_Path
+_b6e_sys.path.insert(0, str(_b6e_Path(__file__).resolve().parents[2]))
+from work._guard import require_plaintext_complete as _b6e_guard  # noqa: E402
 """DAV-1235 零 LLM 重算：a181e4a 基线 vs 候选（price-ref 精度收紧）。
 
 用法（仓库根目录，锁定解释器）：
@@ -186,6 +191,7 @@ def build_pool_4390(impl):
 
 def load_prod_report(report_id: str) -> Dict[str, Any]:
     con = sqlite3.connect(f"file:{PROD_DB}?mode=ro", uri=True)
+    _b6e_guard(con)
     row = con.execute("select result_data from reports where id=?",
                       (report_id,)).fetchone()
     con.close()
