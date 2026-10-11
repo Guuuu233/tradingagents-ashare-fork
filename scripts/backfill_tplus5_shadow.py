@@ -953,6 +953,16 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         # report_storage_mode agreement; the DB-side idle probe then counts
         # the rehearsal copy's own busy rows. The production gate above stays
         # the only copy-vs-production discriminator.
+        #
+        # Documented contract (DAV-1911 🟡-2, deliberate — no bypass flag):
+        # a copy rehearsal requires the service to be REACHABLE (any healthy
+        # endpoint via --health-url) and in the same REPORT_STORAGE_MODE; a
+        # stopped/unreachable service makes every DB write path skip with
+        # {skipped: true}. Rationale: a guard that can be switched off for
+        # rehearsals drifts from the production contract it exists to
+        # protect, and rehearsals are exactly where guard behaviour should
+        # be exercised. Operators wanting pure function tests use --dry-run
+        # (which never consults the guard) or pass a stub --health-url.
         guard = check_runtime_guard(db_path, health_url)
         if not guard["allowed"]:
             result = {'skipped': True, 'guard': guard, 'changed_rows': 0}
