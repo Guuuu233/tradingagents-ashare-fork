@@ -5145,8 +5145,13 @@ async def healthz():
     to_thread 的接口静默挂起，前端表现为 Cloudflare 524）。
     """
     identity = _get_runtime_identity()
+    # DAV-1885: surface the effective report-storage mode so write scripts
+    # can refuse to run against a service whose mode differs (atomic
+    # REPORT_STORAGE_MODE roll-out — see card).
+    from tradingagents.storage.compressed_json import report_storage_mode
     payload: Dict[str, Any] = {
         "status": "ok",
+        "report_storage_mode": report_storage_mode(),
         **identity.public_payload(),
     }
     if _default_executor is not None:
