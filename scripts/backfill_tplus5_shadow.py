@@ -46,6 +46,7 @@ from tradingagents.dataflows.trade_calendar import now_cn, cn_market_phase, trad
 from tradingagents.storage.compressed_json import (
     compress_json_bytes,
     decode_frame_bytes,
+    report_storage_mode,
     result_data_select_expr,
 )
 
@@ -67,15 +68,53 @@ def _rd_col(conn) -> str:
     return result_data_select_expr(conn)
 
 
-def _rd_update(conn, new_text, report_id):
-    """UPDATE result_data (+ shadow zst columns when the schema has them)."""
+def _row_plaintext_cleared(conn, report_id) -> bool:
+    """True when this row's plaintext ``result_data`` column is NULL/empty
+    but a compressed copy exists — i.e. the DB already has
+    plaintext-cleared rows (§4 P4 / P5b window)."""
+    try:
+        row = conn.execute(
+            "SELECT result_data, result_data_zst FROM reports WHERE id=?",
+            (report_id,)).fetchone()
+    except Exception:
+        return False
+    if row is None:
+        return False
+    plain, zst = row[0], row[1]
+    return (plain is None or plain == "") and zst is not None
+
+
+def _rd_update(conn, new_text, report_id, *, plaintext=True):
+    """UPDATE result_data (+ shadow zst columns when the schema has them).
+
+    ``plaintext=True`` (restore path): write the plaintext column back
+    unconditionally — this is the rollback / refill path that must work in
+    every mode, including ``compressed_only`` and on already-cleared rows.
+    ``plaintext=False`` (normal measurement writes): in ``compressed_only``
+    or when the row's plaintext is already cleared, write ONLY the
+    compressed column and leave the plaintext NULL (§4 P4); otherwise
+    dual-write (default mode behaviour)."""
     if _rd_col(conn) != "result_data":
         zst = compress_json_bytes(new_text.encode("utf-8"))
-        conn.execute(
-            "UPDATE reports SET result_data=?, result_data_zst=?,"
-            " result_data_zst_len=? WHERE id=?",
-            (new_text, zst, len(new_text.encode("utf-8")), report_id),
+        write_plain = (
+            plaintext
+            or (
+                report_storage_mode() != "compressed_only"
+                and not _row_plaintext_cleared(conn, report_id)
+            )
         )
+        if write_plain:
+            conn.execute(
+                "UPDATE reports SET result_data=?, result_data_zst=?,"
+                " result_data_zst_len=? WHERE id=?",
+                (new_text, zst, len(new_text.encode("utf-8")), report_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE reports SET result_data=NULL, result_data_zst=?,"
+                " result_data_zst_len=? WHERE id=?",
+                (zst, len(new_text.encode("utf-8")), report_id),
+            )
     else:
         conn.execute(
             "UPDATE reports SET result_data=? WHERE id=?",
@@ -907,7 +946,7 @@ def restore_from_export(db_path, export_file, *, sha256=None,
                     conn.rollback()
                     result["mismatched"] += 1
                     continue
-                _rd_update(conn, restored, report_id)
+                _rd_update(conn, restored, report_id, plaintext=True)
                 stored = _rd_text(conn.execute(
                     f"SELECT {_rd_col(conn)} FROM reports WHERE id=?", (report_id,)).fetchone()[0])
                 if stored != record["result_data"] or \
