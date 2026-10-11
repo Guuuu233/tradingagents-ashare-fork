@@ -220,16 +220,6 @@ _PROXY_ENV_VARS = (
     "ALL_PROXY",
 )
 
-
-_PROXY_ENV_VARS = (
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-)
-
 # Port to assume when a proxy value omits one (e.g. ``HTTP_PROXY=http://127.0.0.1``).
 # urllib3/requests dial the scheme's default port in that case, so resolving it
 # the same way keeps the denial aligned with what the transport would actually

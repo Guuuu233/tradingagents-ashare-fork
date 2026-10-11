@@ -561,17 +561,35 @@ class TestForwardProxyCannotBypassGuardrail:
         """Portless values resolve per scheme, matching what urllib3 would dial."""
         import tests.conftest as ct
 
+        # Each entry is (value, expected_port, exercised_path):
+        #   "scheme"   -> looked up in _PROXY_SCHEME_DEFAULT_PORT
+        #   "fallback" -> no scheme at all, so _PROXY_FALLBACK_PORT applies
         expectations = {
-            "http://127.0.0.1": 80,
-            "https://127.0.0.1": 443,
-            "socks5://127.0.0.1": 1080,
-            "127.0.0.1": 80,
+            "http://127.0.0.1": (80, "scheme"),
+            "https://127.0.0.1": (443, "scheme"),
+            "socks5://127.0.0.1": (1080, "scheme"),
+            # Bare ``host:port``/host has no scheme, so this one asserts the
+            # fallback path specifically -- not the scheme table.
+            "127.0.0.1": (ct._PROXY_FALLBACK_PORT, "fallback"),
         }
-        for value, expected_port in expectations.items():
+        for value, (expected_port, path) in expectations.items():
             for other in ct._PROXY_ENV_VARS:
                 monkeypatch.delenv(other, raising=False)
             monkeypatch.setenv("HTTP_PROXY", value)
-            assert ct._proxy_endpoints() == {("127.0.0.1", expected_port)}, value
+            assert ct._proxy_endpoints() == {("127.0.0.1", expected_port)}, (
+                f"{value} ({path} path)"
+            )
+
+    def test_unknown_scheme_uses_fallback_port(self, monkeypatch):
+        """A scheme absent from the table must fall back, not crash or skip."""
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "weird-scheme://127.0.0.1")
+
+        assert ct._proxy_endpoints() == {("127.0.0.1", ct._PROXY_FALLBACK_PORT)}
+        assert ct._is_allowed_target(("127.0.0.1", ct._PROXY_FALLBACK_PORT)) is False
 
     def test_explicit_proxy_port_still_denied(self, monkeypatch):
         """The normal (port-bearing) form keeps working after the portless fix."""
