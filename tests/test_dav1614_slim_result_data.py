@@ -458,3 +458,68 @@ def test_guard_allows_pre_b6_schema_without_column(tmp_path, monkeypatch):
     raw = json.dumps(legacy_dual(), ensure_ascii=False)
     p = make_db(tmp_path, [("one", raw)])
     slim.assert_no_compressed_result_data(str(p))  # no raise
+
+
+def add_zst_blob_column(path, values):
+    """Add the B-6 column with BLOB storage class (what B-6 actually writes)."""
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE reports ADD COLUMN result_data_zst BLOB")
+    for report_id, blob in values:
+        conn.execute("UPDATE reports SET result_data_zst=? WHERE id=?",
+                     (blob, report_id))
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_guard_refuses_on_real_blob_value(tmp_path, monkeypatch):
+    """A live B-6 BLOB must block the run — trim() used to fail open here."""
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw), ("two", raw)])
+    blob = sqlite3.Binary(b"\x28\xb5\x2f\xfd\x00\x00\x00" + b"\x00" * 16)
+    add_zst_blob_column(p, [("one", blob), ("two", None)])
+    with pytest.raises(RuntimeError) as exc:
+        slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                      journal_path=str(tmp_path / "j.jsonl"),
+                      exceptions_path=str(tmp_path / "e.json"),
+                      pre_export_dir=str(tmp_path / "exports"))
+    assert "result_data_zst" in str(exc.value)
+    assert db_text(p, "one") == raw
+
+
+def test_guard_allows_all_empty_blob_column(tmp_path, monkeypatch):
+    """NULL / empty BLOB / empty+blank TEXT rows are not live B-6 storage."""
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False)
+    p = make_db(tmp_path, [("one", raw), ("two", raw), ("three", raw)])
+    add_zst_blob_column(p, [("one", None), ("two", sqlite3.Binary(b"")),
+                            ("three", "  ")])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 3
+
+
+def test_restore_refuses_when_b6_blob_live_unless_overridden(tmp_path, monkeypatch):
+    idle_guard(monkeypatch)
+    raw = json.dumps(legacy_dual(), ensure_ascii=False, indent=2)
+    p = make_db(tmp_path, [("one", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    export = res["pre_export_files"][0]
+    slimmed = db_text(p, "one")
+    assert slimmed != raw
+    add_zst_blob_column(p, [("one", sqlite3.Binary(b"\x28\xb5\x2f\xfd\x00\x01"))])
+    with pytest.raises(RuntimeError, match="result_data_zst"):
+        slim.restore_from_export(str(p), export["path"], sha256=export["sha256"])
+    assert db_text(p, "one") == slimmed  # refused before any write
+    # explicit operator override works
+    res2 = slim.restore_from_export(str(p), export["path"],
+                                     sha256=export["sha256"],
+                                     allow_post_b6_restore=True)
+    assert res2["restored_rows"] == 1
+    assert db_text(p, "one") == raw

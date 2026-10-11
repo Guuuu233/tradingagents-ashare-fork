@@ -442,9 +442,15 @@ def assert_no_compressed_result_data(path):
                 "PRAGMA table_info(reports)")}
             if COMPRESSED_RESULT_COLUMN not in columns:
                 return
+            # B-6 writes real BLOBs.  A BLOB must be measured by its raw byte
+            # length: trim()/CAST(... AS TEXT) collapse NUL-containing binary
+            # to '' and would fail open.  Non-BLOB (legacy text) values keep
+            # the whitespace-insensitive trim() semantics.
             count = conn.execute(
                 f"SELECT count(*) FROM reports WHERE {COMPRESSED_RESULT_COLUMN} "
-                "IS NOT NULL AND length(trim(" + COMPRESSED_RESULT_COLUMN + ")) > 0"
+                "IS NOT NULL AND (CASE typeof(" + COMPRESSED_RESULT_COLUMN + ") "
+                f"WHEN 'blob' THEN length({COMPRESSED_RESULT_COLUMN}) "
+                "ELSE length(trim(" + COMPRESSED_RESULT_COLUMN + ")) END) > 0"
             ).fetchone()[0]
     except sqlite3.Error as exc:
         raise RuntimeError(
@@ -760,9 +766,15 @@ def _write_row(conn, report_id, audit, exported_sha=None):
 
 def restore_from_export(db_path, export_file, *, sha256=None,
                         health_url="http://127.0.0.1:8000",
-                        production_authorized=False):
+                        production_authorized=False,
+                        allow_post_b6_restore=False):
     """Rollback subcommand: write exported pre-images back, row-by-row verified."""
     _validate_db(db_path)
+    # Same hazard as the slim itself: after B-6 goes live the read path prefers
+    # result_data_zst, so writing pre-B-6 plaintext back would serve stale
+    # compressed bytes.  Fail closed unless the operator explicitly overrides.
+    if not allow_post_b6_restore:
+        assert_no_compressed_result_data(db_path)
     if _is_production(db_path) and (not production_authorized
                                     or now_cn().date() <= date(2026, 10, 9)):
         raise RuntimeError("production restore forbidden before signed post-10-09 handoff")
@@ -1160,6 +1172,11 @@ def main():
     restore_parser.add_argument("--export-sha256")
     restore_parser.add_argument("--health-url", default="http://127.0.0.1:8000")
     restore_parser.add_argument("--production-authorized", action="store_true")
+    restore_parser.add_argument(
+        "--allow-post-b6-restore", action="store_true",
+        help="override the B-6 guard: restore pre-B-6 plaintext even though "
+             "result_data_zst is non-empty (leaves stale compressed rows "
+             "readable — operator must re-slim or clear them afterwards)")
     verify_parser = sub.add_parser(
         "verify", help="verify a VACUUMed db against its source")
     verify_parser.add_argument("--old-path", required=True)
@@ -1172,7 +1189,8 @@ def main():
             result = restore_from_export(
                 args["db_path"], args["export_file"],
                 sha256=args.get("export_sha256"), health_url=args["health_url"],
-                production_authorized=args.get("production_authorized", False))
+                production_authorized=args.get("production_authorized", False),
+                allow_post_b6_restore=args.get("allow_post_b6_restore", False))
             if result.get("mismatched") or result.get("conflicts") or result.get("missing"):
                 return 1
             return 0
