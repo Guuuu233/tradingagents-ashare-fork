@@ -7,6 +7,7 @@ import pytest
 
 from scripts import backfill_tplus5_shadow as cli
 from tests.test_tplus5_operational_backfill import report, series, make_db, CAL
+from tradingagents.storage import compressed_json as cj
 
 
 def test_multiple_rows_do_not_hold_a_read_lock_during_write(tmp_path, monkeypatch):
@@ -67,7 +68,9 @@ def test_guard_never_treats_health_without_runtime_count_as_idle(tmp_path, monke
     p = make_db(tmp_path, report())
     class Response:
         status_code = 200
-        def json(self):return {'status':'ok'}
+        # report_storage_mode present (so the mode gate passes) but no
+        # active_analysis_count — must still fail closed on missing count.
+        def json(self):return {'status':'ok','report_storage_mode': cj.report_storage_mode()}
     monkeypatch.setattr(requests.Session,'get',lambda *a,**k: Response())
     assert cli.check_runtime_guard(str(p),'http://localhost')['reason'] == 'active_analysis_count_unknown'
 

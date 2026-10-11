@@ -571,7 +571,11 @@ class TestBackfillTplus5ShadowDbPath:
             status_code = 200
 
             def json(self):
-                return {"status": "ok"}
+                # mode present so the mode gate passes; missing
+                # active_analysis_count must still fail closed.
+                from tradingagents.storage import compressed_json as cj
+                return {"status": "ok",
+                        "report_storage_mode": cj.report_storage_mode()}
 
         monkeypatch.setattr(requests.Session, "get", lambda *args, **kwargs: HealthyWithoutActivityCount())
         before = Path(custom_sqlite_db).read_bytes()
