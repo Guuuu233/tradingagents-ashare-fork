@@ -42,6 +42,7 @@ from tradingagents.graph.data_collector import (
     default_market_data_context,
 )
 from tradingagents.llm_clients.thinking_cleaner import clean_report_result_data
+from tradingagents.storage.compressed_json import writes_plaintext
 from tests.test_research_manager_seven_reports_and_verdict_gate import _make_seven_reports_state
 
 
@@ -354,8 +355,20 @@ class TestFundFlowScalePersistenceAndReadback:
         read_medium_sel = fetched.result_data["medium_term"]["market_data_context"]["fund_flow_evidence"]["selection"]
         assert read_medium_sel["selected_algorithm_group"] == "medium_algo_group"
 
+    @pytest.mark.skipif(
+        not writes_plaintext(),
+        reason="明文模式专用：压缩专用(compressed_only)下 result_data 明文列写 NULL，"
+               "原生 json_extract 无对象可查（该模式经解压层回读的等价契约由 "
+               "tests/test_dav1885_p4_compressed_only.py 覆盖）",
+    )
     def test_sqlite_json_bind_processor_and_native_json_extract(self, sqlite_session):
-        """证明 SQLAlchemy SQLite JSON bind processor 和原生 SQLite json_extract 对 scale_metrics 完全绑定。"""
+        """证明 SQLAlchemy SQLite JSON bind processor 和原生 SQLite json_extract 对 scale_metrics 完全绑定。
+
+        模式语义：``json_extract(result_data, ...)`` 只对**物理明文列**有意义。
+        ``compressed_only``(P4) 下该列写 ``NULL``（见 ``compressed_json.writes_plaintext``），
+        断言必然全为 ``None`` —— 这不是绑定缺陷，而是用例-模式缺口，故按明文模式守卫。
+        同文件其余用例走 ``report_service.get_report`` 解压回读层，在三种模式下均有效。
+        """
         scale_metrics = _build_sample_scale_metrics(
             ts_code="600519.SH",
             trade_date="2026-08-14",
