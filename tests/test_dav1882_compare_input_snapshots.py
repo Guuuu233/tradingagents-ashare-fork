@@ -1,9 +1,18 @@
-"""DAV-1882 两臂输入快照逐字段比对工具的测试。"""
+"""DAV-1882 两臂输入快照比对工具的测试（总控 10-12 晚 v0.3 §3 口径）。
+
+关键性质：
+- **默认不剔除任何字段**（空白名单），任意差异都判不一致；
+- 规范化只认显式逐路径白名单，禁子串/通配；
+- 白名单 sha256 落进结果；
+- 原始/规范化结果分别给出；
+- valid / provider / evidence_* 等语义字段不得被误剔除。
+"""
 
 from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,73 +23,167 @@ sys.path.insert(0, str(ROOT / "scripts" / "phase2"))
 import compare_input_snapshots as cis  # noqa: E402
 
 
-def _snap(hash_, *, collected_at, report_id, bull):
-    return {
-        "input_snapshot": {
-            "algo": "sha256", "hash": hash_, "bytes": len(bull),
-            "collected_at": collected_at, "report_id": report_id,
-            "prompts": {"zh": {"bull": bull}},
-        }
+def _snap(hash_, *, collected_at, report_id, bull="A", extra=None):
+    d = {
+        "algo": "sha256", "hash": hash_, "bytes": 100,
+        "collected_at": collected_at, "report_id": report_id,
+        "prompts": {"zh": {"bull": bull}},
     }
+    if extra:
+        d.update(extra)
+    return {"input_snapshot": d}
+
+
+def _w(obj) -> str:
+    p = Path(tempfile.mkdtemp()) / "s.json"
+    p.write_text(json.dumps(obj), encoding="utf-8")
+    return str(p)
+
+
+# ---------------------------------------------------------------------------
+# 默认口径：不剔除任何字段
+# ---------------------------------------------------------------------------
 
 
 def test_flatten_keeps_nested_keys():
     flat = cis.flatten({"a": {"b": 1}, "c": [1, 2]})
     assert flat["a.b"] == 1
-    assert flat["c"] == "<list len=2>"
     assert flat["c[0]"] == 1
 
 
-def test_diff_separates_volatile_from_real_changes():
-    a = _snap("aaa", collected_at="2026-10-13T09:00:00", report_id="r1", bull="A")
-    b = _snap("bbb", collected_at="2026-10-13T09:00:07", report_id="r2", bull="B")
-    rows = cis.diff_snapshots(a["input_snapshot"], b["input_snapshot"])
-    kinds = {r["field"]: r["kind"] for r in rows}
-    assert kinds["collected_at"] == "volatile"
-    assert kinds["report_id"] == "volatile"
-    assert kinds["prompts.zh.bull"] == "other"   # 真正的自变量差异
+def test_empty_whitelist_flags_any_difference_as_inconsistent():
+    a = _snap("aaa", collected_at="t1", report_id="r1")
+    b = _snap("bbb", collected_at="t1", report_id="r1")   # 仅 hash 不同
+    rep = cis.compare(a["input_snapshot"], b["input_snapshot"])
+    assert rep["normalized"]["consistent"] is False
+    assert rep["normalized"]["whitelist_paths"] == []
+    assert rep["normalized"]["whitelist_sha256"] is None
+    assert rep["normalized"]["diff_count"] >= 1
 
 
-def test_identical_snapshots_report_no_diff():
-    s = _snap("aaa", collected_at="t", report_id="r", bull="A")["input_snapshot"]
-    assert cis.diff_snapshots(s, json.loads(json.dumps(s))) == []
+def test_identical_snapshots_are_consistent():
+    s = _snap("aaa", collected_at="t", report_id="r")
+    rep = cis.compare(s["input_snapshot"], json.loads(json.dumps(s["input_snapshot"])))
+    assert rep["raw"]["consistent"] is True
+    assert rep["normalized"]["consistent"] is True
+    assert rep["raw"]["hash_equal"] is True
 
 
-def test_same_arm_rerun_isolates_volatile_fields(tmp_path):
-    """同臂重跑只有 volatile 差异 → 两臂 hash 差异可归因到真实改动。"""
-    o1 = _snap("aaa", collected_at="09:00:00", report_id="r1", bull="A")
-    o2 = _snap("ccc", collected_at="10:00:00", report_id="r9", bull="A")
-    n1 = _snap("bbb", collected_at="09:00:07", report_id="r2", bull="B")
+def test_semantic_fields_are_not_auto_excluded():
+    """valid / provider / evidence_* 等不得因为名字像 volatile 就被抹掉。"""
+    a = {"hash": "a", "valid": True, "provider": "p1",
+         "evidence": "e1", "evidence_count": 3, "candidate_id": "c1",
+         "debate": {"insight_id": "bull-1"}}
+    b = {"hash": "b", "valid": False, "provider": "p2",
+         "evidence": "e2", "evidence_count": 4, "candidate_id": "c2",
+         "debate": {"insight_id": "bull-9"}}
+    rep = cis.compare(a, b)
+    paths = {r["path"] for r in rep["normalized"]["diffs"]}
+    assert "valid" in paths
+    assert "provider" in paths
+    assert "evidence" in paths
+    assert "evidence_count" in paths
+    assert "candidate_id" in paths
+    assert "debate.insight_id" in paths
+    assert rep["normalized"]["consistent"] is False
+    assert rep["normalized"]["excluded_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 白名单：显式逐路径、禁通配、sha256 留档
+# ---------------------------------------------------------------------------
+
+
+def test_whitelist_excludes_only_listed_exact_paths():
+    a = _snap("aaa", collected_at="t1", report_id="r1", extra={"valid": True})
+    b = _snap("bbb", collected_at="t2", report_id="r2", extra={"valid": False})
+    wl = ["collected_at", "report_id"]
+    rep = cis.compare(a["input_snapshot"], b["input_snapshot"],
+                      whitelist=wl, whitelist_sha256="deadbeef")
+    assert rep["raw"]["consistent"] is False
+    assert rep["raw"]["diff_count"] > rep["normalized"]["diff_count"]
+    paths = {r["path"] for r in rep["normalized"]["diffs"]}
+    assert "valid" in paths and "hash" in paths
+    assert "collected_at" not in paths and "report_id" not in paths
+    assert rep["normalized"]["whitelist_sha256"] == "deadbeef"
+    assert rep["normalized"]["whitelist_paths"] == sorted(wl)
+
+
+def test_whitelist_is_not_substring_matching():
+    """白名单写 collected_at 不得连带剔除 collected_at_ms_x 这类别的路径。"""
+    a = {"collected_at": "t1", "collected_at_ms_x": "1"}
+    b = {"collected_at": "t2", "collected_at_ms_x": "2"}
+    rep = cis.compare(a, b, whitelist=["collected_at"])
+    paths = {r["path"] for r in rep["normalized"]["diffs"]}
+    assert paths == {"collected_at_ms_x", "hash"} or "collected_at_ms_x" in paths
+
+
+def test_load_whitelist_empty_by_default():
+    paths, sha = cis.load_whitelist(None)
+    assert paths == [] and sha is None
+
+
+def test_load_whitelist_records_sha256(tmp_path):
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps({"paths": ["collected_at"]}), encoding="utf-8")
+    paths, sha = cis.load_whitelist(str(f))
+    assert paths == ["collected_at"]
+    assert isinstance(sha, str) and len(sha) == 64
+
+
+@pytest.mark.parametrize("entry", ["prompts.*", "debate.insight_*", "a[0]", "p%", "x?"])
+def test_whitelist_rejects_wildcards(tmp_path, entry):
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps({"paths": [entry]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="精确 JSON 路径"):
+        cis.load_whitelist(str(f))
+
+
+def test_whitelist_accepts_bare_array(tmp_path):
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps(["collected_at", "report_id"]), encoding="utf-8")
+    assert cis.load_whitelist(str(f))[0] == ["collected_at", "report_id"]
+
+
+def test_whitelist_rejects_non_string_entry(tmp_path):
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps({"paths": [123]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="非空字符串"):
+        cis.load_whitelist(str(f))
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_reports_raw_and_normalized_separately(tmp_path):
+    a = _snap("aaa", collected_at="t1", report_id="r1")
+    b = _snap("bbb", collected_at="t2", report_id="r2")
     out = tmp_path / "r.json"
-    rc = cis.main([str(_w(o1)), str(_w(n1)), "--rerun-A", str(_w(o2)), "--out", str(out)])
+    wl = tmp_path / "wl.json"
+    wl.write_text(json.dumps({"paths": ["collected_at"]}), encoding="utf-8")
+    rc = cis.main([_w(a), _w(b), "--whitelist", str(wl), "--out", str(out)])
     assert rc == 0
-    report = json.loads(out.read_text(encoding="utf-8"))
-    assert report["A_hash"] == "aaa" and report["B_hash"] == "bbb"
-    assert report["identical"] is False
-    assert set(report["volatile_fields"]) == {"collected_at", "report_id"}
-    # 同臂重跑：除 volatile 外无差异
-    assert report["same_arm_rerun"]["identical"] is False
-    assert set(report["same_arm_rerun"]["volatile_fields"]) == {"collected_at", "report_id"}
-    assert "prompts.zh.bull" not in report["same_arm_rerun"]["volatile_fields"]
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert "raw" in rep and "normalized" in rep
+    assert rep["raw"]["A_hash"] == "aaa" and rep["raw"]["B_hash"] == "bbb"
+    assert rep["normalized"]["whitelist_sha256"]
+    assert rep["inputs"]["whitelist_file"] == str(wl)
 
 
-def _w(d):
-    import tempfile
-
-    p = Path(tempfile.mkdtemp()) / "s.json"
-    p.write_text(json.dumps(d), encoding="utf-8")
-    return p
-
-
-def test_cli_accepts_bare_snapshot_or_wrapped_result(tmp_path):
+def test_cli_accepts_wrapped_and_bare_forms(tmp_path):
     bare = {"hash": "x", "collected_at": "t"}
     wrapped = {"result": {"input_snapshot": bare}}
-    a = tmp_path / "a.json"; a.write_text(json.dumps(bare), encoding="utf-8")
-    b = tmp_path / "b.json"; b.write_text(json.dumps(wrapped), encoding="utf-8")
-    assert cis.main([str(a), str(b)]) == 0
+    assert cis.main([_w(bare), _w(wrapped)]) == 0
 
 
-@pytest.mark.parametrize("key", ["collected_at", "elapsed_seconds", "report_id",
-                                 "job_id", "run_id", "generated_at", "cache_hit"])
-def test_volatile_hints_cover_common_mandatory_churn(key):
-    assert cis._is_volatile(key)
+def test_cli_without_whitelist_reports_no_exclusions(tmp_path):
+    a = _snap("aaa", collected_at="t1", report_id="r1")
+    b = _snap("bbb", collected_at="t2", report_id="r2")
+    out = tmp_path / "r.json"
+    cis.main([_w(a), _w(b), "--out", str(out)])
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rep["normalized"]["whitelist_paths"] == []
+    assert rep["normalized"]["excluded_count"] == 0
+    assert rep["normalized"]["whitelist_sha256"] is None
