@@ -194,6 +194,32 @@ class TestSealGate:
         df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
         assert gate["excl_seal_late"] == 1 and len(df) == 0
 
+    def test_utc_semantics_mandated_cases(self):
+        # 总控口径: sealed_at 是无时区标记 UTC → 转 Asia/Shanghai → 比 T+1 09:30。
+        cal = ["2026-10-08", "2026-10-09", "2026-10-10"]
+        # case 1: signal 10-08, sealed 10-09 02:09 UTC (北京 10-09 10:09)
+        #         -> after T+1(10-09) 09:30 CN -> 晚封存/诊断 only
+        late = _rec("late", "S1", "2026-10-08", 60,
+                    sealed_at="2026-10-09 02:09:00")
+        df, gate = m.apply_seal_gate(self._frame([late]), cal)
+        assert len(df) == 0 and gate["excl_seal_late"] == 1
+        # case 2: sealed 10-08 11:45 UTC (北京 10-08 19:45)
+        #         -> before T+1(10-09) 09:30 CN -> admitted
+        ontime = _rec("ontime", "S1", "2026-10-08", 60,
+                      sealed_at="2026-10-08 11:45:00")
+        df, gate = m.apply_seal_gate(self._frame([ontime]), cal)
+        assert len(df) == 1 and gate["excl_seal_late"] == 0
+
+    def test_utc_not_local(self):
+        # naive local interpretation would misjudge: 02:09 treated as local
+        # CN time would be *after* 09:30 only if same-day — but the correct
+        # UTC read makes it clearly late (10:09 CN on T+1).
+        cal = ["2026-10-08", "2026-10-09"]
+        dt = m._sealed_at_utc("2026-10-09 02:09:00")
+        assert dt is not None and dt.tzinfo is not None
+        assert dt.hour == 2          # held as UTC, not 10:09 local
+        assert dt.astimezone(m._CN_TZ).hour == 10
+
     def test_seal_gate_counts_in_run_funnel(self, tmp_path):
         days = ["2026-01-05", "2026-01-06", "2026-01-07"]
         recs = []
