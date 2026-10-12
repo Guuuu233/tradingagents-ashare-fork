@@ -115,6 +115,83 @@ DEFAULT_HOLD_DAYS = 5
 DEFAULT_CALIBRATION_MIN_SAMPLE_SIZE_CONSTANT = 30
 
 
+DEFAULT_CALIBRATION_SINGLE_FLIGHT_WAITS = 3
+DEFAULT_CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS = 30.0
+
+
+def _parse_bounded_int_env(
+    name: str, *, default: int, low: int, high: int, env_val: Optional[str] = None
+) -> int:
+    """Parse an integer env var fail-closed, mirroring _parse_min_sample_size_env.
+
+    Malformed or out-of-range values fall back to ``default`` with a warning so a
+    typo can never turn into an unhandled import exception (or an unsafe 0/negative
+    limit).
+    """
+    if env_val is None:
+        env_val = os.getenv(name)
+    if env_val is None:
+        return default
+    raw = env_val.strip() if isinstance(env_val, str) else ""
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid %s=%r (expected integer); falling back to safe default %d",
+            name,
+            env_val,
+            default,
+        )
+        return default
+    if low <= val <= high:
+        return val
+    logger.warning(
+        "%s=%r out of valid range [%d, %d]; falling back to safe default %d",
+        name,
+        env_val,
+        low,
+        high,
+        default,
+    )
+    return default
+
+
+def _parse_bounded_float_env(
+    name: str, *, default: float, low: float, high: float, env_val: Optional[str] = None
+) -> float:
+    """Float counterpart of _parse_bounded_int_env (same fail-closed contract)."""
+    if env_val is None:
+        env_val = os.getenv(name)
+    if env_val is None:
+        return default
+    raw = env_val.strip() if isinstance(env_val, str) else ""
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid %s=%r (expected number); falling back to safe default %s",
+            name,
+            env_val,
+            default,
+        )
+        return default
+    if low <= val <= high:
+        return val
+    logger.warning(
+        "%s=%r out of valid range [%s, %s]; falling back to safe default %s",
+        name,
+        env_val,
+        low,
+        high,
+        default,
+    )
+    return default
+
+
 def _parse_min_sample_size_env(env_val: Optional[str] = None) -> int:
     """Safely parse CALIBRATION_MIN_SAMPLE_SIZE from environment.
 
@@ -174,8 +251,20 @@ _inflight_lock = threading.Lock()
 # Upper bound on how many single-flight waits one caller performs before
 # falling back to the normal slot path (protects against an endlessly
 # re-computed key).
-MAX_CALIBRATION_SINGLE_FLIGHT_WAITS = int(
-    os.getenv("CALIBRATION_SINGLE_FLIGHT_WAITS", "3")
+MAX_CALIBRATION_SINGLE_FLIGHT_WAITS = _parse_bounded_int_env(
+    "CALIBRATION_SINGLE_FLIGHT_WAITS",
+    default=DEFAULT_CALIBRATION_SINGLE_FLIGHT_WAITS,
+    low=1,
+    high=1000,
+)
+# Wall-clock budget (seconds) for waiting on an in-flight duplicate.  Bounding
+# only the attempt count leaves every wait unbounded, so a slow owner would pin
+# the waiting caller's request thread and DB session for an arbitrary time.
+CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS = _parse_bounded_float_env(
+    "CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS",
+    default=DEFAULT_CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS,
+    low=0.1,
+    high=300.0,
 )
 
 
@@ -1094,11 +1183,10 @@ def _compute_calibration_unlocked(
             continue
         classified.append((report, is_winner_only, probability, winner))
 
-    has_evaluable_samples = bool(classified)
-    # Only when there is nothing at all to resolve (no calibratable report AND no
-    # WAIT row) can the whole computation be skipped; otherwise the WAIT
-    # directional diagnostic still legitimately needs its outcome resolution.
-    wait_rows_to_resolve = wait_rows if has_evaluable_samples else []
+    # WAIT rows are resolved independently of the calibration pool: the WAIT
+    # directional diagnostic is a separate statistic and its outcome must never
+    # be silently zeroed out just because no calibratable report was admitted.
+    wait_rows_to_resolve = wait_rows
 
     for report, is_winner_only, probability, winner in classified:
 
@@ -1446,12 +1534,23 @@ def compute_calibration(
         # Single-flight: only the first caller for this exact key occupies a
         # concurrency slot; duplicates wait for that result instead of burning a
         # second slot (and instead of failing as "繁忙").
+        #
+        # The wait is bounded by wall-clock budget (not just attempt count): if
+        # the owner is still running when the budget expires, fall through to the
+        # normal slot path rather than pinning this request's thread and DB
+        # session for an unbounded time.
+        wait_deadline = time.monotonic() + CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS
         for _ in range(max(1, MAX_CALIBRATION_SINGLE_FLIGHT_WAITS)):
             event, is_owner = _claim_inflight(key)
             if is_owner:
                 owns_inflight = True
                 break
-            event.wait()
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0 or not event.wait(remaining):
+                # Wait budget exhausted (or the owner vanished without setting
+                # the event): give up on the duplicate result and fall back to
+                # the normal concurrency-slot path.
+                break
             cached = _cache_get(key)
             if cached is not None:
                 return cached
