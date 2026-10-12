@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, time as dt_time, timedelta, timezone
@@ -72,6 +73,12 @@ BLACKOUT_START = dt_time(16, 0)
 BLACKOUT_END = dt_time(19, 50)
 # 作废对允许的补跑次数
 DEFAULT_PAIR_RETRIES = 1
+
+# 前瞻取样的种子基数：种子 = SAMPLER_SEED_BASE + 批号，保证可复现
+SAMPLER_SEED_BASE = 20261010
+# 前瞻取样脚本（主干 m2_sampler：沪深300+中证500 当时成分，剔除 ST / 上市
+# 不足 1 年 / 停牌，按申万一级分层）
+SAMPLER_SCRIPT = "scripts/phase2/m2_sampler.py"
 
 # 失败率的分母下限：完成 1 对即开始判定（0/1 = 0% 不停批）
 MIN_FAIL_RATE_SAMPLES = 1
@@ -97,7 +104,6 @@ STOP_NON_FROZEN_MODEL = "non_frozen_model"
 STOP_FAIL_RATE = "batch_fail_rate"
 STOP_BUDGET = "batch_or_total_budget"
 STOP_BLACKOUT = "trading_day_blackout"
-STOP_MAX_RETRIES = "pair_max_retries"
 
 
 # ---------------------------------------------------------------------------
@@ -141,22 +147,30 @@ class Manifest:
                 return p
         raise KeyError(pair_id)
 
+    def unlisted_pairs(self) -> List[PairSpec]:
+        """批序里没列、但清单里有的对（加载时报错，不静默改写批序）。"""
+        seen = {pid for batch in self.batches for pid in batch}
+        return [p for p in self.pairs if p.pair_id not in seen]
+
     def ordered_batches(self) -> List[List[PairSpec]]:
+        """按**冻结的批序**分批。
+
+        批序里有、清单里没有的 pair_id 直接报错；反过来清单里有、批序没列的
+        对**不并进任何既有批**——把 leftovers 塞进最后一批会悄悄改写那一批的
+        失败率分母与批预算，与「批序冻结」的实验设计初衷冲突。这两种不一致都
+        必须由人显式改正清单，而不是由执行器替它猜。
+        """
         if not self.batches:
             return [list(self.pairs)]
-        seen = set()
         out: List[List[PairSpec]] = []
         for bid_batch in self.batches:
-            batch = [self.pair_by_id(pid) for pid in bid_batch]
-            seen.update(pid for pid in bid_batch)
-            out.append(batch)
-        # 清单里有、但批序没列的对不会被静默丢弃——按清单顺序补到最后一批。
-        leftovers = [p for p in self.pairs if p.pair_id not in seen]
+            out.append([self.pair_by_id(pid) for pid in bid_batch])
+        leftovers = self.unlisted_pairs()
         if leftovers:
-            if out:
-                out[-1] = out[-1] + leftovers
-            else:
-                out.append(leftovers)
+            raise ValueError(
+                "批序未覆盖这些对，拒绝执行（避免悄悄改写批序）："
+                + ", ".join(p.pair_id for p in leftovers)
+            )
         return out
 
     @classmethod
@@ -186,6 +200,107 @@ class Manifest:
 
 
 # ---------------------------------------------------------------------------
+# 前瞻取样：每批现取对名单（总控 10-12 令）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BatchSpec:
+    """一批的取样口径。"""
+
+    batch_index: int
+    date: str                       # YYYYMMDD，交给 m2_sampler 的信号日
+    n: int                          # 该批抽多少个标的
+    seed: int = SAMPLER_SEED_BASE
+
+    @property
+    def sampler_seed(self) -> int:
+        """种子 = 20261010 + 批号，可复现。"""
+        return SAMPLER_SEED_BASE + self.batch_index
+
+
+def load_batch_specs(path: Path) -> List[BatchSpec]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    specs = []
+    for item in payload.get("batches") or []:
+        specs.append(BatchSpec(
+            batch_index=int(item["batch_index"]),
+            date=str(item["date"]),
+            n=int(item["n"]),
+            seed=int(item.get("seed", SAMPLER_SEED_BASE)),
+        ))
+    if not specs:
+        raise ValueError(f"{path}: batches 为空")
+    return specs
+
+
+def fetch_batch_pairs(
+    spec: BatchSpec,
+    *,
+    instances: Sequence[str],
+    expected_model: Optional[str],
+    horizons: Sequence[str] = ("short",),
+    runner: Callable[..., Dict[str, Any]] = None,
+) -> Tuple[List[PairSpec], Dict[str, Any]]:
+    """调用主干 m2_sampler 取该批对名单。
+
+    返回 ``(pairs, sampler_result)``；``sampler_result`` 原样保留（含
+    ``eligible_digest``），便于复现时核对同一份输入。
+    """
+    if runner is None:
+        runner = _run_sampler_subprocess
+    result = runner(spec)
+    picks = result.get("picks") or []
+    if not picks:
+        raise ValueError(
+            f"批 {spec.batch_index}@{spec.date} 取样为空（n={spec.n}），拒绝执行空批"
+        )
+    pairs = []
+    for row in picks:
+        raw = row.get("ts_code") if isinstance(row, dict) else None
+        if raw is None and isinstance(row, dict):
+            raw = row.get("symbol")
+        symbol = str(raw or "").strip()
+        if not symbol:
+            raise ValueError(f"批 {spec.batch_index} 取样行缺 ts_code：{row!r}")
+        pairs.append(PairSpec(
+            pair_id=f"b{spec.batch_index:02d}-{symbol}",
+            symbol=symbol,
+            trade_date=result.get("trade_date") or spec.date,
+            instances=tuple(instances),
+            expected_model=expected_model,
+            horizons=tuple(horizons),
+        ))
+    return pairs, result
+
+
+def _run_sampler_subprocess(spec: BatchSpec) -> Dict[str, Any]:
+    """以子进程跑 m2_sampler（它要 pandas/numpy + phase2 缓存）。"""
+    import subprocess
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cmd = [
+        _locked_python(), str(repo_root / SAMPLER_SCRIPT),
+        "--date", spec.date, "--n", str(spec.n), "--seed", str(spec.sampler_seed),
+    ]
+    env = dict(os.environ)
+    env["DATABASE_URL"] = env.get("DATABASE_URL", "")  # 取样不碰生产库
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(repo_root))
+    if proc.returncode != 0:
+        raise RuntimeError(f"m2_sampler 失败 rc={proc.returncode}: {proc.stderr[-500:]}")
+    return json.loads(proc.stdout)
+
+
+def _locked_python() -> str:
+    """锁定解释器优先，避免拿系统 python3 跑取样。"""
+    override = os.environ.get("DAV1882_PYTHON")
+    if override:
+        return override
+    candidate = Path.home() / "Documents/TradingAgents-AShare/.venv310/bin/python"
+    return str(candidate) if candidate.exists() else "python3"
+
+
+# ---------------------------------------------------------------------------
 # 记账
 # ---------------------------------------------------------------------------
 
@@ -210,6 +325,8 @@ class AttemptRecord:
     served_models: List[str] = field(default_factory=list)
     served_model_missing: int = 0
     error: Optional[str] = None
+    # 结构化失败分类，停批判定读它而不是 reason 的字符串前缀
+    error_bucket: str = "none"
     outcome: str = "unknown"  # ok / voided / failed
     void_reason: Optional[str] = None
 
@@ -388,14 +505,20 @@ def flatten_served_models(result: Optional[Dict[str, Any]]) -> Tuple[List[str], 
     return models, missing_n
 
 
-def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tuple[str, Optional[str], List[str]]:
-    """核对一对。返回 ``(outcome, reason, 观测到的模型列表)``。
+def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tuple[
+    str, Optional[str], List[str], str
+]:
+    """核对一对。返回 ``(outcome, reason, 观测到的模型列表, error_bucket)``。
 
     ``outcome`` ∈ ``ok`` / ``voided`` / ``failed``：
 
     * ``ok``：每个实例都跑成、served model 齐全、对内一致且等于冻结值；
     * ``voided``：请求都成功了但核对不过（对内不一致 / 非冻结模型 / 缺失）；
     * ``failed``：有实例请求本身失败（含配额类）。
+
+    ``error_bucket`` 是**结构化**的失败分类（``none`` / ``quota_or_rate_limit`` /
+    ``server_error`` / ``client_error`` / ``timeout`` / ``error``）。停批判定读它，
+    不读 ``reason`` 的字符串前缀——否则改动 reason 文案就会静默漏掉配额停批。
     """
     observed: List[str] = []
     request_failures: List[str] = []
@@ -425,18 +548,29 @@ def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tupl
     # 请求本身失败（超时、5xx、配额……）优先于核对结论：补跑也不会变好。
     if request_failures:
         kind = "quota_or_rate_limit" if quota else "request_failed"
-        return "failed", f"{kind}:{';'.join(request_failures)}", observed
+        return "failed", f"{kind}:{';'.join(request_failures)}", observed, (
+            "quota_or_rate_limit" if quota else _dominant_bucket(per_instance, pair.instances)
+        )
 
     # 核对不通过：作废，给补跑 1 次机会。
     if unverified:
-        return "voided", f"model_unverifiable:{';'.join(unverified)}", observed
+        return "voided", f"model_unverifiable:{';'.join(unverified)}", observed, "none"
     if len(observed) != 1:
-        return "voided", f"model_mismatch_across_pair:{observed}", observed
+        return "voided", f"model_mismatch_across_pair:{observed}", observed, "none"
 
     only = observed[0]
     if pair.expected_model is not None and only != pair.expected_model:
-        return "voided", f"model_not_frozen:{only}!={pair.expected_model}", observed
-    return "ok", None, observed
+        return "voided", f"model_not_frozen:{only}!={pair.expected_model}", observed, "none"
+    return "ok", None, observed, "none"
+
+
+def _dominant_bucket(per_instance: Dict[str, Dict[str, Any]], instances) -> str:
+    """取实例里第一个真实错误桶，供记账与停批判定使用。"""
+    for name in instances:
+        bucket = (per_instance.get(name) or {}).get("error_bucket") or "none"
+        if bucket != "none":
+            return bucket
+    return "error"
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +719,7 @@ class ExperimentExecutor:
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     # -- 窗口 ---------------------------------------------------------------
-    def wait_out_blackout(self, report: RunReport) -> bool:
+    def wait_out_blackout(self) -> bool:
         """返回 True 表示因窗口停下（stop 策略）。"""
         if not blackout_active(self.now()):
             return False
@@ -668,8 +802,20 @@ class ExperimentExecutor:
                 info["error_bucket"] = classify_error(job)
                 info["status"] = "status_failed"
                 return info
-                info["error"] = str(job)
-                info["error_bucket"] = classify_error(info["error"], code)
+            # 非 200（含 404/401/5xx）必须立刻按错误处理：否则 job.get("status")
+            # 取不到终态，循环只会挂到 job_timeout（默认 7200s）才记 timeout，
+            # 把一次瞬时 5xx 误记成超时，且停批四条件迟迟判不了。
+            if code != 200 or not isinstance(job, dict):
+                detail = job.get("detail") if isinstance(job, dict) else job
+                info["error"] = str(detail if detail is not None else job)
+                # 200 但响应体不是 dict（代理层畸形响应）没有可归类的错误，
+                # 显式记成 malformed_response，不能落到 "none"——否则这一对
+                # 会被当成「请求成功但无法核对」而误判成作废。
+                info["error_bucket"] = (
+                    classify_error(info["error"], code)
+                    if code != 200
+                    else "malformed_response"
+                )
                 info["status"] = "status_failed"
                 return info
             status = job.get("status")
@@ -740,9 +886,10 @@ class ExperimentExecutor:
             record.completion_tokens += info.get("completion_tokens", 0)
             record.total_tokens += info.get("total_tokens", 0)
 
-        outcome, reason, observed = verify_pair(pair, per_instance)
+        outcome, reason, observed, error_bucket = verify_pair(pair, per_instance)
         record.outcome = outcome
         record.void_reason = reason
+        record.error_bucket = error_bucket
         record.served_models = observed
         record.served_model_missing = sum(
             info.get("model_missing", 0) for info in per_instance.values()
@@ -772,7 +919,7 @@ class ExperimentExecutor:
     def check_stop(self, outcomes: Sequence[str], batch_requests: int,
                    batch_touched: bool = False) -> Optional[Tuple[str, str]]:
         for rec in self._last_batch_records:
-            if rec.void_reason and rec.void_reason.startswith("quota_or_rate_limit"):
+            if rec.error_bucket == "quota_or_rate_limit":
                 return STOP_QUOTA, f"{rec.pair_id} {rec.void_reason}"
         if self._non_frozen_seen:
             return STOP_NON_FROZEN_MODEL, f"{self._non_frozen_seen[0][0]} {self._non_frozen_seen[0][1]}"
@@ -816,7 +963,7 @@ class ExperimentExecutor:
                 if self.ledger.is_terminal(pair.pair_id):
                     report.pairs_skipped_done += 1
                     continue
-                if self.wait_out_blackout(report):
+                if self.wait_out_blackout():
                     break
                 batch_touched = True
                 record = self.run_pair(pair, bi)
@@ -887,8 +1034,32 @@ class ExperimentExecutor:
             elif expected is not None and model == expected and frozen and model not in frozen:
                 self._non_frozen_seen.append((pair.pair_id, f"{model} not in frozen set"))
 
-    _last_batch_records: List[AttemptRecord] = []
-    _non_frozen_seen: List[Tuple[str, str]] = []
+
+def build_forward_manifest(
+    specs: List[BatchSpec],
+    *,
+    instances: Sequence[str],
+    expected_model: Optional[str],
+) -> Manifest:
+    """按前瞻口径把各批对名单汇成一份可续跑的清单。
+
+    注意：前瞻取样是**每批执行前现取**，因此本函数只用于离线预览与核对；
+    真正的批内名单以 ``plan``/执行时落盘的 ``batches[].pairs`` 为准。
+    """
+    pairs: List[PairSpec] = []
+    batch_ids: List[List[str]] = []
+    for spec in specs:
+        batch_pairs, _ = fetch_batch_pairs(
+            spec, instances=instances, expected_model=expected_model
+        )
+        pairs.extend(batch_pairs)
+        batch_ids.append([p.pair_id for p in batch_pairs])
+    return Manifest(
+        name="forward-looking",
+        pairs=tuple(pairs),
+        batches=tuple(tuple(b) for b in batch_ids),
+    )
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -900,7 +1071,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     run = sub.add_parser("run", help="按清单执行")
-    run.add_argument("--manifest", required=True)
+    run.add_argument("--manifest")
+    run.add_argument("--batch-spec", help="前瞻取样口径 JSON（与 --manifest 二选一）")
+    run.add_argument("--expected-model", help="冻结身份：该批所有对的期望 message.model")
+    run.add_argument("--sampler-seed-base", type=int, default=SAMPLER_SEED_BASE)
     run.add_argument("--instance", action="append", default=[],
                      help="实例名=基址，如 O=http://127.0.0.1:8021（可重复）")
     run.add_argument("--state-dir", required=True)
@@ -913,6 +1087,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--blackout-policy", choices=["wait", "stop"], default="wait")
     run.add_argument("--poll-interval", type=float, default=5.0)
     run.add_argument("--job-timeout", type=float, default=7200.0)
+
+    plan = sub.add_parser("plan", help="只按前瞻口径取样并落盘对名单，不发起任何分析")
+    plan.add_argument("--batch-spec", required=True)
+    plan.add_argument("--instance", action="append", default=[])
+    plan.add_argument("--expected-model", required=True)
+    plan.add_argument("--out", required=True)
 
     st = sub.add_parser("status", help="只看当前记账与停批原因")
     st.add_argument("--state-dir", required=True)
@@ -940,6 +1120,33 @@ def _tokens_from_args(pairs: Iterable[str]) -> Dict[str, str]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.cmd == "plan":
+        specs = load_batch_specs(Path(args.batch_spec))
+        order = [n for n in _instances_from_args(args.instance)] or ["O", "N"]
+        out_batches = []
+        for spec in specs:
+            pairs, sampler = fetch_batch_pairs(
+                spec, instances=order, expected_model=args.expected_model
+            )
+            out_batches.append({
+                "batch_index": spec.batch_index,
+                "date": spec.date,
+                "n": spec.n,
+                "sampler_seed": spec.sampler_seed,
+                "eligible_digest": sampler.get("eligible_digest"),
+                "n_picked": sampler.get("n_picked"),
+                "pairs": [asdict(p) for p in pairs],
+            })
+            print(f"[plan] 批{spec.batch_index} date={spec.date} seed={spec.sampler_seed} "
+                  f"picked={len(pairs)} digest={str(sampler.get('eligible_digest'))[:12]}",
+                  file=sys.stderr)
+        Path(args.out).write_text(
+            json.dumps({"batches": out_batches}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return 0
+
     state_dir = Path(args.state_dir)
 
     if args.cmd == "status":
@@ -953,8 +1160,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     instances = _instances_from_args(args.instance)
+
     tokens = _tokens_from_args(args.token)
-    manifest = Manifest.load(Path(args.manifest))
+    if args.batch_spec:
+        manifest = build_forward_manifest(
+            load_batch_specs(Path(args.batch_spec)),
+            instances=[n for n in instances] or ["O", "N"],
+            expected_model=args.expected_model,
+        )
+    elif args.manifest:
+        manifest = Manifest.load(Path(args.manifest))
+    else:
+        raise SystemExit("必须给 --manifest 或 --batch-spec 之一")
     ledger = Ledger(state_dir)
     executor = ExperimentExecutor(
         instances=instances,
