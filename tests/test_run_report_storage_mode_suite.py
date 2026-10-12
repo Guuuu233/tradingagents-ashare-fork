@@ -99,3 +99,24 @@ def test_summary_parser_flags_forbidden_outcomes(mode):
     assert "skipped" in runner.FORBIDDEN and "failed" in runner.FORBIDDEN
     counts = {k: int(n) for n, k in runner.SUMMARY_RE.findall("2 passed, 1 skipped in 1s")}
     assert counts.get("skipped") == 1
+
+
+@pytest.mark.parametrize("mode", sorted(runner.MODE_FILES))
+def test_run_mode_drives_every_mode_specific_case_without_skipping(mode):
+    """Actually drive the entry point: each mode's own cases must run, not skip.
+
+    Without this, the standard regression (which runs in ``plaintext`` mode) keeps
+    skipping every mode-gated case and nothing here would notice — the assertions
+    above only inspect static grouping. The mode binds the ORM column at import
+    time, so the only way to cover these cases is exactly what the runner does:
+    spawn a fresh ``python -m pytest`` with the mode pinned.
+    """
+    result = runner.run_mode(mode, env_variant="B", timeout=900)
+    assert result["ok"], (
+        f"mode={mode} rc={result['returncode']} counts={result['counts']} "
+        f"forbidden={result['forbidden']}\n{result['stdout'][-4000:]}\n{result['stderr'][-2000:]}"
+    )
+    assert result["forbidden"] == {}
+    # A mode whose cases were all skipped would report no passes at all; the
+    # point of this suite is that they actually execute.
+    assert result["counts"].get("passed", 0) > 0
