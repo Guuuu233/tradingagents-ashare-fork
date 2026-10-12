@@ -164,8 +164,14 @@ class TestSealGate:
     def _frame(self, recs):
         labels = {}
         ledger_rows = recs
+        def _sd(r):
+            # load_ledger_signals 对缺失 signal_date 产出 nan (NaT→strftime),
+            # 而非 None — fixture 要与真实管线同一表示, 否则门判空分支漏测。
+            if r.get("signal_date") is None:
+                return float("nan")
+            return pd.to_datetime(r["signal_date"]).strftime("%Y%m%d")
         df = pd.DataFrame([
-            {"signal_date": pd.to_datetime(r["signal_date"]).strftime("%Y%m%d"),
+            {"signal_date": _sd(r),
              "symbol": r["symbol"], "run_id": r["report_id"],
              "sealed_at": r.get("sealed_at"), "timing_class": r["timing_class"],
              "input_pit_status": r["input_pit_status"], "completed": True,
@@ -250,6 +256,20 @@ class TestSealGate:
         assert len(df) == 0
         assert gate["excl_seal_late"] == 0
         assert gate["excl_seal_unresolvable"] == 1
+
+    def test_signal_date_unparseable_unresolvable(self):
+        # DAV-2003 🟡 M-2 固化: signal_date 缺失/不可解析 (NaT) →
+        # 门口径不可判定 → excl_seal_unresolvable, 不裸抛 TypeError。
+        # 账本允许 trade_date/signal_date 缺失的记录走 UNCLASSIFIED 封存,
+        # load_ledger_signals 原样透传 None → NaT。
+        rec = _rec("nosig", "S1", "2026-01-05", 60,
+                   sealed_at="2026-01-05 08:00:00.000000")
+        rec["signal_date"] = None
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 0
+        assert gate["excl_seal_unresolvable"] == 1
+        assert gate["seal_unresolvable_ids"] == ["nosig"]
 
     def test_gate_artifact_fields(self):
         # M-1: 门口径 + 门前/门后行数可自证 — gate dict 必须携带落盘字段。

@@ -288,9 +288,12 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
 
     判定顺序(总控口径): sealed_at 是 naive-UTC → 先按 UTC 解析 → 转
     Asia/Shanghai → 与「T+1 交易日 09:30 Asia/Shanghai」比较; 不把裸时间当
-    本地时间。晚封/补录行计入 ``excl_seal_late``; signal_date 非交易日或
-    T+1 不可解析、sealed_at 缺失/不可解析的行单列
-    ``excl_seal_unresolvable``（不混进"晚封"标签, L-5）。两桶的 run_id 分
+    本地时间。晚封/补录行计入 ``excl_seal_late``; signal_date 缺失/不可
+    解析、非交易日或 T+1 不可解析、sealed_at 缺失/不可解析的行单列
+    ``excl_seal_unresolvable``（不混进"晚封"标签, L-5; signal_date
+    判空补 DAV-2003 🟡 M-2——账本允许 signal_date 缺失的记录,
+    load_ledger_signals 原样透传为 None → pd.to_datetime 得 NaT →
+    strftime 后 float nan, 不设防会裸抛 TypeError 整跑崩)。两桶的 run_id 分
     列 ``seal_late_ids`` / ``seal_unresolvable_ids``, 落盘供事后复核
     (DAV-1993 🟡 M-1)。
     Returns (kept_df, gate_dict)。
@@ -299,11 +302,19 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
     late_ids: list = []
     unresolvable_ids: list = []
     kept_mask = []
-    sig_iso = pd.to_datetime(df["signal_date"]).dt.strftime("%Y-%m-%d")
+    sig_iso = pd.to_datetime(
+        df["signal_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     sealed_utc = [_sealed_at_utc(v) for v in df["sealed_at"]]
     for i, (sd, sa) in enumerate(zip(sig_iso, sealed_utc)):
+        if sd is None or (isinstance(sd, float) and pd.isna(sd)) or sa is None:
+            # signal_date missing/unparseable (NaT -> nan) or sealed_at
+            # missing/unparseable -> gate cannot be satisfied; route to
+            # excl_seal_unresolvable, never formal (DAV-2003 🟡 M-2).
+            unresolvable_ids.append(df["run_id"].iloc[i])
+            kept_mask.append(False)
+            continue
         idx = bisect.bisect_right(cal, sd) - 1
-        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal) or sa is None:
+        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
             # signal not a trading day / T+1 unresolved / sealed_at missing
             # or unparseable -> gate cannot be satisfied; diagnostics only,
             # never formal (separate label from 晚封, L-5).
@@ -526,11 +537,15 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # 门后行数由 seal_gate.input_rows 承载 — funnel 守恒在产物内闭合:
     # seal_gate.input_rows = post_gate_rows + excl_seal_late
     #                      + excl_seal_unresolvable
+    # L-6: 版本选择分流行数也落盘 — ledger_rows(载入全量) 与
+    # seal_gate.input_rows(版本选择后) 之间的差值在 funnel 内闭合,
+    # 审计者无需外部数据即可对账。
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
+    post_version_rows = len(df)
 
     # 总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 的账本记录;
     # 晚封/补录行分流诊断、在 funnel 单列 excl_seal_late（在 admit 前）。
@@ -541,6 +556,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     formal, funnel = m1.admit(df, user_id=user_id)
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
     funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
+    funnel["excl_version"] = int(ledger_rows_input - post_version_rows)
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
@@ -797,6 +813,9 @@ def selftest(tmp: Path) -> dict:
     assert np.isfinite(checks["inc_diff_mean"])
     assert checks["mean_ic"] > checks["base_ic_mean"]
     assert checks["paired_days"] <= checks["valid_days"]
+    # L-8: valid_days 钉死 — 合成日历末日 T+1 不可解析被 seal_gate 分流,
+    # 上游统计量若漂移此处必须红(复审 10-12 实测 79; 该值非本轮改动)。
+    assert checks["valid_days"] == 79, checks
     assert checks["base_kind"] == "p1_t10_partitions"
     print(f"[selftest] PASS {checks}", flush=True)
     return checks
