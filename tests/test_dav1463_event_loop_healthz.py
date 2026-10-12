@@ -465,20 +465,17 @@ def test_chat_completions_source_has_no_inline_db_write():
         if node.name != "chat_completions":
             continue
 
-        # Names of nested sync helpers defined inside this async function.
-        nested_sync = {
-            n.name for n in ast.walk(node) if isinstance(n, ast.FunctionDef)
-        }
-
-        # Walk only the async function's own statements. Nested ``def`` /
-        # ``async def`` bodies are skipped wholesale: a DB session opened
-        # inside a plain sync helper is fine when that helper is dispatched
-        # with ``asyncio.to_thread`` (the codebase already does this for the
-        # two ``_load_user_context*`` helpers).
+        # A DB session opened inside a plain sync helper is fine when that
+        # helper is dispatched with ``asyncio.to_thread`` (the codebase already
+        # does this for the two ``_load_user_context*`` helpers). A nested
+        # ``async def`` is different: its body also runs on the event loop, so
+        # it must be walked rather than skipped wholesale (DAV-1976).
         def walk_stmt(stmts):
             for st in stmts:
-                if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                   ast.Lambda)):
+                if isinstance(st, ast.FunctionDef) or isinstance(st, ast.Lambda):
+                    continue
+                if isinstance(st, ast.AsyncFunctionDef):
+                    walk_stmt(st.body)
                     continue
                 if isinstance(st, ast.With):
                     for item in st.items:

@@ -188,7 +188,7 @@ class TestHealthzActiveAnalysisCount:
         assert r.status_code == 200
         assert r.json()["active_analysis_count"] == 3
 
-    def test_healthz_503_branch_still_carries_field(self):
+    def test_healthz_503_branch_still_carries_field(self, monkeypatch):
         from api import main as main_mod
         from api.main import get_job_store
 
@@ -199,16 +199,12 @@ class TestHealthzActiveAnalysisCount:
         # time out the count and lose the field this test asserts. Starve only
         # the saturation probe by shrinking its budget instead, which keeps the
         # real (fast, in-memory) count on the happy path.
-        real_timeout = main_mod._HEALTHZ_PROBE_TIMEOUT_S
+        monkeypatch.setattr(main_mod, "_HEALTHZ_PROBE_TIMEOUT_S", 0.0)
+        client = _get_client()
         try:
-            main_mod._HEALTHZ_PROBE_TIMEOUT_S = 0.0
-            client = _get_client()
-            try:
-                r = client.get("/healthz")
-            finally:
-                client.close()
+            r = client.get("/healthz")
         finally:
-            main_mod._HEALTHZ_PROBE_TIMEOUT_S = real_timeout
+            client.close()
         assert r.status_code == 503
         body = r.json()
         assert body["status"] == "thread_pool_starved"
