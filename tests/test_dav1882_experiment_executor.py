@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +38,8 @@ from scripts.phase2.experiment_executor import (  # noqa: E402
 
 EXPECTED_MODEL = "deepseek-v3.2-exp-frozen"
 FROZEN = (EXPECTED_MODEL,)
+
+EXECUTOR_PATH = ROOT / "scripts" / "phase2" / "experiment_executor.py"
 
 
 # ---------------------------------------------------------------------------
@@ -1165,3 +1170,232 @@ def test_same_seed_same_list_different_seed_different_list():
     assert names(other) == names(
         BatchSpec(batch_index=0, date="20261013", n=5, seed_base=777)
     )
+
+# ---------------------------------------------------------------------------
+# 11. 复审 DAV-1964 返修
+# ---------------------------------------------------------------------------
+
+def test_batch_spec_has_no_dead_seed_field():
+    """with_seed_base 零调用且漏传 seed_base 会静默重置种子：直接删掉。"""
+    import scripts.phase2.experiment_executor as mod
+    assert not hasattr(BatchSpec, "with_seed_base")
+
+def test_window_stop_reason_is_not_persisted(tmp_path):
+    """🟡a：窗口类停批原因不进 state.json（它只是当时时刻的快照）。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, daily_gate_policy="stop")
+    ex.now = lambda: datetime(2026, 10, 13, 19, 0, tzinfo=CN_TZ)
+    report = ex.run(_manifest([_pair("p1", date="2026-10-13")]))
+    assert report.stop_reason == "daily_batch_gate_not_open"
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["stop_reason"] is None
+    assert state["stop_detail"] is None
+    # 审计口径不受影响：内存里的停批原因仍然供 RunReport / run_report.json 落盘
+    assert ex.ledger.stop_reason == "daily_batch_gate_not_open"
+
+def test_duplicate_base_day_resume_continues_next_day(tmp_path):
+    """🟡a：duplicate_base_day 不落 state.json，隔天续跑不再死锁。
+
+    口径：当天两批共一个基准日必须只跑一批（``stop_detail`` 里的同基准日第二批
+    仍留在 state 里供人核对），第二天的批仍然出现在冻结批序里，所以当天调用就会
+    停住并把原因留在内存/落盘；跨日续跑读到的是清空的 stop_reason，于是继续跑。
+    """
+    manifest = Manifest.from_dict({
+        "pairs": [_pair("a", date="2026-10-13"), _pair("b", date="2026-10-13"),
+                  _pair("c", date="2026-10-14")],
+        "batches": [["a"], ["b"], ["c"]],
+    })
+    next_day = Manifest.from_dict({
+        "pairs": [_pair("c", date="2026-10-14")],
+        "batches": [["c"]],
+    })
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.now = lambda: datetime(2026, 10, 13, 20, 0, tzinfo=CN_TZ)
+    report = ex.run(manifest)
+    assert report.stop_reason == "duplicate_base_day"
+    assert report.pairs_ok == 1                 # a 跑完，b 当天被闸住
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["stop_reason"] is None         # 关键：不落盘
+
+    # 不做任何人工清理，隔天续跑应当真的跑得动下一基准日（只需人重排被闸住的
+    # 同日第二批，那是口径问题；不该再要求人去改 state.json 才能解锁）
+    servers2 = _two_servers()
+    ex2 = _executor(tmp_path, servers2)
+    ex2.now = lambda: datetime(2026, 10, 14, 20, 0, tzinfo=CN_TZ)
+    assert ex2.ledger.stop_reason is None       # 旧版会在这里读到 duplicate_base_day
+    report2 = ex2.run(next_day)
+    assert report2.pairs_run == 1
+    assert ex2.ledger.pair_state("c").status == "ok"
+    assert ex2.ledger.pair_state("a").status == "ok"
+    # 同一份冻结批序再续跑：能进主循环（skipped_done=1），而不是开头就 break
+    ex3 = _executor(tmp_path, _two_servers())
+    ex3.now = lambda: datetime(2026, 10, 14, 20, 0, tzinfo=CN_TZ)
+    report3 = ex3.run(manifest)
+    assert report3.pairs_skipped_done == 1
+
+def test_persistent_stop_reason_survives_resume(tmp_path):
+    """反例：需人工确认的停批原因仍必须粘住，不能一起被清掉。"""
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "429 rate_limit"}}})
+    ex = _executor(tmp_path, servers, pair_retries=0)
+    ex.run(_manifest([_pair("p1"), _pair("p2")]))
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["stop_reason"] == "quota_or_rate_limit"
+
+    servers2 = _two_servers()
+    ex2 = _executor(tmp_path, servers2)
+    report = ex2.run(_manifest([_pair("p1"), _pair("p2")]))
+    assert report.stop_reason == "quota_or_rate_limit"
+    assert report.pairs_run == 0
+
+def test_legacy_window_stop_reason_in_state_is_dropped_on_load(tmp_path):
+    """旧候选落盘的窗口类 stop_reason 不得继续卡死续跑。"""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text(json.dumps({
+        "attempt_seq": 1,
+        "totals": {"analysis_requests": 2},
+        "stop_reason": "duplicate_base_day",
+        "stop_detail": "基准日 2026-10-13 已跑过一批",
+        "pairs": [{"pair_id": "a", "status": "ok", "attempts": 1}],
+    }, ensure_ascii=False), encoding="utf-8")
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    assert ex.ledger.stop_reason is None
+    report = ex.run(_manifest([_pair("a"), _pair("b", symbol="600520.SH")]))
+    assert report.pairs_run == 1               # b 真的跑了
+    assert report.stop_reason != "duplicate_base_day"
+
+def test_daily_gate_policy_is_a_real_cli_switch(tmp_path):
+    """🟡b：声明了的开关必须真的存在并真的接进 StopConfig。"""
+    import scripts.phase2.experiment_executor as mod
+
+    args = mod.build_parser().parse_args([
+        "run", "--manifest", "m.json", "--state-dir", str(tmp_path),
+        "--expected-model", EXPECTED_MODEL, "--daily-gate-policy", "stop",
+    ])
+    assert args.daily_gate_policy == "stop"
+    assert mod.build_parser().parse_args([
+        "run", "--manifest", "m.json", "--state-dir", str(tmp_path),
+        "--expected-model", EXPECTED_MODEL,
+    ]).daily_gate_policy == "wait"
+
+    seen = {}
+    class _Recorder(mod.ExperimentExecutor):
+        def __init__(self, *a, **kw):
+            seen["config"] = kw["config"]
+            seen["instances"] = kw["instances"]
+
+        def run(self, manifest):
+            return mod.RunReport(manifest=manifest.name, started_at="now")
+
+    man = tmp_path / "m.json"
+    man.write_text(json.dumps({
+        "name": "stub", "frozen_models": list(FROZEN),
+        "pairs": [_pair("p1")], "batches": [],
+    }, ensure_ascii=False), encoding="utf-8")
+    real = mod.ExperimentExecutor
+    mod.ExperimentExecutor = _Recorder
+    try:
+        rc = mod.main([
+            "run", "--manifest", str(man), "--state-dir", str(tmp_path / "st"),
+            "--instance", "O=http://127.0.0.1:8021", "--instance", "N=http://127.0.0.1:8022",
+            "--expected-model", EXPECTED_MODEL, "--daily-gate-policy", "stop",
+            "--blackout-policy", "stop",
+        ])
+    finally:
+        mod.ExperimentExecutor = real
+    assert rc == 0
+    assert seen["config"].daily_gate_policy == "stop"
+    assert seen["config"].blackout_policy == "stop"
+
+def test_daily_gate_policy_stop_produces_gate_stop_reason(tmp_path):
+    """开关端到端生效：CLI 层的 stop 策略确实让 run() 停在闸前。"""
+    import scripts.phase2.experiment_executor as mod
+    args = mod.build_parser().parse_args([
+        "run", "--manifest", "m.json", "--state-dir", str(tmp_path),
+        "--expected-model", EXPECTED_MODEL, "--daily-gate-policy", "stop",
+    ])
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, daily_gate_policy=args.daily_gate_policy)
+    ex.now = lambda: datetime(2026, 10, 13, 19, 0, tzinfo=CN_TZ)
+    report = ex.run(_manifest([_pair("p1", date="2026-10-13")]))
+    assert report.stop_reason == "daily_batch_gate_not_open"
+    assert servers["O"].calls == []
+
+# ---------------------------------------------------------------------------
+# 12. 真实 CLI 路径（不注入 sys.path）——复审 🔴1
+# ---------------------------------------------------------------------------
+
+def _cli_env() -> dict:
+    """子进程环境：剥掉 PYTHONPATH（否则会把宿主解释器的路径泄进子进程）。"""
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env.pop("DAV1882_PYTHON", None)
+    return env
+
+def _write_cli_manifest(tmp_path: Path) -> Path:
+    man = tmp_path / "manifest.json"
+    man.write_text(json.dumps({
+        "name": "cli-stub",
+        "frozen_models": [EXPECTED_MODEL],
+        "pairs": [_pair("p1", date="2026-10-13")],
+        "batches": [["p1"]],
+    }, ensure_ascii=False), encoding="utf-8")
+    return man
+
+@pytest.mark.skipif(not sys.executable, reason="需要可执行的解释器")
+def test_real_cli_snapshot_whitelist_survives_script_path(tmp_path):
+    """🔴1：真实 CLI（sys.path[0]=scripts/phase2，无仓库根）下 --snapshot-whitelist 可用。
+
+    实例地址指向 127.0.0.1:9（必 ECONNREFUSED），因此不可能真跑；两个 stop 策略
+    加上「每日一批闸」的互补性保证运行不会 sleep。断言的是：进程正常退出、
+    状态里落下白名单 sha256。
+    """
+    wl = tmp_path / "wl.json"
+    wl.write_text(json.dumps({"paths": ["collected_at"]}), encoding="utf-8")
+    expected_sha = hashlib.sha256(wl.read_bytes()).hexdigest()
+    man = _write_cli_manifest(tmp_path)
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTOR_PATH), "run",
+         "--manifest", str(man),
+         "--instance", "O=http://127.0.0.1:9", "--instance", "N=http://127.0.0.1:9",
+         "--state-dir", str(tmp_path / "state"),
+         "--expected-model", EXPECTED_MODEL,
+         "--daily-gate-policy", "stop", "--blackout-policy", "stop",
+         "--snapshot-whitelist", str(wl),
+         "--poll-interval", "0", "--job-timeout", "1"],
+        cwd=str(tmp_path), env=_cli_env(), capture_output=True, text=True, timeout=120,
+    )
+    assert "ModuleNotFoundError" not in proc.stderr, proc.stderr[-2000:]
+    assert proc.returncode == 0, f"rc={proc.returncode}\n{proc.stderr[-2000:]}"
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["snapshot_whitelist_sha256"] == expected_sha
+    report = json.loads(proc.stdout)
+    assert report["snapshot_whitelist_sha256"] == expected_sha
+
+@pytest.mark.skipif(not sys.executable, reason="需要可执行的解释器")
+def test_real_cli_rejects_bad_snapshot_whitelist(tmp_path):
+    """白名单不可用时必须报错退出，而不是带着空 sha 静默跑下去。"""
+    man = _write_cli_manifest(tmp_path)
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTOR_PATH), "run",
+         "--manifest", str(man),
+         "--instance", "O=http://127.0.0.1:9",
+         "--state-dir", str(tmp_path / "state"),
+         "--expected-model", EXPECTED_MODEL,
+         "--snapshot-whitelist", str(tmp_path / "nope.json")],
+        cwd=str(tmp_path), env=_cli_env(), capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode != 0
+    assert "snapshot-whitelist" in proc.stderr
+
+@pytest.mark.skipif(not sys.executable, reason="需要可执行的解释器")
+def test_real_cli_status_subcommand_works(tmp_path):
+    """CLI 的另一个子命令也要能在真实脚本路径下 import/执行。"""
+    proc = subprocess.run(
+        [sys.executable, str(EXECUTOR_PATH), "status", "--state-dir", str(tmp_path / "st")],
+        cwd=str(tmp_path), env=_cli_env(), capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert json.loads(proc.stdout)["stop_reason"] is None
