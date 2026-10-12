@@ -23,9 +23,11 @@ non-streaming responses. Missing usage → NULL columns, never an error.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -388,13 +390,78 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
     }
 
 
+# ── ledger row writer (DAV-1362 ③) ────────────────────────────────────
+#
+# ``log_llm_call`` is a *synchronous* SQLite commit, not an async write.
+# DAV-1362 sets ``run_inline = True`` on the handler so that
+# ``on_chat_model_start`` runs in the caller's context (the gate's
+# per-run binding has to reach the acquire). A side effect is that on the
+# async dispatch path the whole hook — commit included — now executes on
+# the event-loop thread, which it did not before 1362 (the baseline ran
+# the hook in a ``run_in_executor`` worker; measured on the locked
+# interpreter: baseline write thread ≠ loop thread, candidate write thread
+# == loop thread).
+#
+# Writing inline on the loop costs ~0.7ms per LLM call (measured mean 0.693
+# ms / p99 0.931 ms / max 7.311 ms over 300 writes, isolated SQLite), but
+# it is I/O on the loop for no good reason, so rows are handed to a
+# single-thread executor whenever a loop is running:
+#
+# - single thread ⇒ strict FIFO, ledger row order is preserved;
+# - no loop is running (sync paths: ``asyncio.to_thread`` workers, CLI,
+#   tests) ⇒ the row is written inline, so sync behaviour is unchanged
+#   and callers can read their own row back immediately;
+# - ``flush_usage_writes()`` drains the queue (a sentinel on the same FIFO
+#   thread completes only after every earlier row).
+_USAGE_WRITE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="llm-usage-write"
+)
+
+
+def _write_ledger_row_now(row: Dict[str, Any]) -> None:
+    """Blocking write of one ledger row. Never raises."""
+    try:
+        from api.database import log_llm_call
+
+        log_llm_call(**row)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("LLMUsageLogger ledger write failed (non-fatal): %r", exc)
+
+
+def _submit_ledger_row(row: Dict[str, Any]) -> None:
+    """Write the ledger row, off the event loop when one is running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        _write_ledger_row_now(row)
+        return
+    try:
+        _USAGE_WRITE_EXECUTOR.submit(_write_ledger_row_now, row)
+    except Exception as exc:  # pragma: no cover - interpreter shutdown
+        logger.debug("ledger row offload failed; writing inline: %r", exc)
+        _write_ledger_row_now(row)
+
+
+def flush_usage_writes(timeout: float = 10.0) -> None:
+    """Block until every queued ledger row has been written.
+
+    Called by ``build_llm_usage_summary`` so a per-report summary can
+    never miss the report's last call, and by tests that read rows back.
+    """
+    try:
+        _USAGE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=timeout)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("flush_usage_writes timed out", exc_info=True)
+
+
 class LLMUsageLogger(BaseCallbackHandler):
     """Log every completed LLM call to ``llm_call_logs``.
 
     Attached once per ``UnifiedChatOpenAI`` instance (constructor-level
     callback ⇒ inherited by all invoke/stream/astream runs on that model).
-    Fire-and-forget: ``log_llm_call`` swallows its own errors, and this
-    handler never raises.
+    Never raises: ``log_llm_call`` swallows its own errors, and the row is
+    written by ``_submit_ledger_row`` (inline when no loop is running,
+    off-loop on a single-thread writer otherwise).
     """
 
     # Never let bookkeeping break an analysis run.
@@ -409,8 +476,9 @@ class LLMUsageLogger(BaseCallbackHandler):
     # reads). With run_inline=True the start hook runs in the caller's
     # own context, so the binding propagates into every copied context
     # the acquire can run in (async dispatch task, to_thread worker).
-    # The hooks only touch a lock-guarded dict and one fire-and-forget
-    # DB write, so running inline is safe.
+    # The hooks only touch a lock-guarded dict plus one ledger row that
+    # ``_submit_ledger_row`` keeps off the loop, so running inline is
+    # safe.
     run_inline = True
 
     def __init__(self) -> None:
@@ -606,31 +674,29 @@ class LLMUsageLogger(BaseCallbackHandler):
                     max(0.0, time.monotonic() - run["t0"] - queue_wait), 2
                 )
 
-            from api.database import log_llm_call
-
-            log_llm_call(
-                agent_name=agent_name,
-                model_name=extracted["model_name"],
-                finish_reason=extracted["finish_reason"],
-                prompt_tokens=extracted["input_tokens"],
-                completion_tokens=extracted["output_tokens"],
-                total_tokens=extracted["total_tokens"],
-                cached_prompt_tokens=extracted["cached_prompt_tokens"],
-                reasoning_tokens=extracted["reasoning_tokens"],
-                elapsed_seconds=elapsed,
-                response_chars=extracted["response_chars"],
+            _submit_ledger_row({
+                "agent_name": agent_name,
+                "model_name": extracted["model_name"],
+                "finish_reason": extracted["finish_reason"],
+                "prompt_tokens": extracted["input_tokens"],
+                "completion_tokens": extracted["output_tokens"],
+                "total_tokens": extracted["total_tokens"],
+                "cached_prompt_tokens": extracted["cached_prompt_tokens"],
+                "reasoning_tokens": extracted["reasoning_tokens"],
+                "elapsed_seconds": elapsed,
+                "response_chars": extracted["response_chars"],
                 # degraded 判定依赖调用方对流式全文的业务检查（本项不可用），
                 # 回调层拿不到该语义，统一记 False；列保留兼容旧数据。
-                degraded=False,
-                report_id=report_id,
-                horizon=metadata.get("horizon") or current_llm_horizon.get(),
-                retried=bool(run.get("retried")),
-                queue_seconds=queue_seconds,
-                requested_model=run.get("requested_model"),
-                served_model=extracted["served_model"],
-                system_fingerprint=extracted["system_fingerprint"],
-                usage_unreliable=extracted["usage_unreliable"],
-            )
+                "degraded": False,
+                "report_id": report_id,
+                "horizon": metadata.get("horizon") or current_llm_horizon.get(),
+                "retried": bool(run.get("retried")),
+                "queue_seconds": queue_seconds,
+                "requested_model": run.get("requested_model"),
+                "served_model": extracted["served_model"],
+                "system_fingerprint": extracted["system_fingerprint"],
+                "usage_unreliable": extracted.get("usage_unreliable"),
+            })
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("LLMUsageLogger.on_llm_end failed (non-fatal): %s", exc)
 
@@ -644,6 +710,10 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
     """
     if not report_id:
         return None
+    # DAV-1362 ③: the last call's row may still be queued on the writer
+    # thread (async dispatch offloads the commit). Drain before reading so
+    # the summary cannot silently miss a report's final LLM call.
+    flush_usage_writes()
     try:
         from api.database import LLMCallLogDB, get_db_ctx
 
@@ -753,6 +823,9 @@ def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, 
     """
     if not report_id:
         return None
+    # DAV-1362 ③: same drain as build_llm_usage_summary — a row still
+    # queued on the writer thread must not be missing from the summary.
+    flush_usage_writes()
     try:
         from api.database import LLMCallLogDB, get_db_ctx
 

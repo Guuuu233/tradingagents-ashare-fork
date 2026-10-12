@@ -61,58 +61,11 @@ _held_prefixes: ContextVar[FrozenSet[str]] = ContextVar(
 # callback that reads it after the fact cannot tell whether the value
 # belongs to the run it is closing or was left over by an earlier call in
 # this context (DAV-1362). The authoritative hand-off to the usage ledger
-# is the per-run stamp below (``_queue_wait_by_run``), captured at the
+# is the per-run dict below (``_run_queue_waits``), captured at the
 # innermost site where gate and run_id share one context.
 llm_queue_wait_seconds: ContextVar[float] = ContextVar(
     "llm_queue_wait_seconds", default=0.0
 )
-
-# run_id (str) -> monotonic timestamp of the last run-stamp emitted in this
-# context. Written by ``_stamp_queue_wait`` at run start (pre-gate) and
-# again at run end so a retry inside one run_id also rotates the stamp.
-_run_stamp_last: ContextVar[Optional[float]] = ContextVar(
-    "llm_queue_run_stamp", default=None
-)
-
-
-@contextlib.contextmanager
-def stamp_queue_wait_run(run_id: object) -> Iterator[None]:
-    """Rotate the run stamp so the wait recorded inside belongs to this run.
-
-    Must wrap the whole call (start -> gate -> end) in the context where
-    the gate acquires: ``UnifiedChatOpenAI._generate/_agenerate/_stream/
-    _astream`` do this at their outer boundary, before
-    ``acquire_llm_slot[_async]`` sets ``llm_queue_wait_seconds``.
-
-    Nested stamps are supported (each gets its own token); a non-None
-    run_id is required to stamp — callers with no run_id skip stamping,
-    which leaves the ledger's contextvar fallback in place.
-    """
-    if run_id is None:
-        yield
-        return
-    token = _run_stamp_last.set(time.monotonic())
-    try:
-        yield
-    finally:
-        _run_stamp_last.reset(token)
-
-
-def queue_wait_snapshot() -> Optional[float]:
-    """Return the queue wait attributed to the CURRENT run stamp.
-
-    ``None`` means "no wait was recorded under the active stamp" (ungated
-    call, or the stamp rotated after the gate wrote). The usage ledger
-    prefers this over the raw contextvar because it cannot inherit another
-    call's wait: the stamp is set at the same context boundary where the
-    gate writes, so the values can never come from different runs.
-    """
-    stamp = _run_stamp_last.get()
-    if stamp is None:
-        return None
-    # The gate sets llm_queue_wait_seconds only on acquire; a nonzero
-    # value under this stamp is this run's own wait.
-    return llm_queue_wait_seconds.get()
 
 
 _semaphore_lock = threading.Lock()
@@ -307,6 +260,17 @@ _current_queue_run: ContextVar[Optional[str]] = ContextVar(
 _run_queue_waits: Dict[str, float] = {}
 _run_queue_waits_lock = threading.Lock()
 
+# DAV-1362 ②: hard cap on open run records. begin_queue_wait opens one per
+# LangChain run and only on_llm_end / on_llm_error close it; a run whose
+# two terminal callbacks never fire (abandoned stream generator, a
+# non-LLM exception between start and end, a cancelled task LangChain does
+# not report) would otherwise leave its entry in this module-level dict for
+# the process lifetime. The cap makes such a leak self-healing: past the
+# limit the oldest open record is dropped (its wait is lost — the run
+# never got a ledger row anyway) and the drop is counted.
+_MAX_RUN_QUEUE_WAIT_ENTRIES = 1024
+_evicted_run_queue_waits = 0
+
 
 def begin_queue_wait(run_id: Optional[UUID]) -> None:
     """Bind this context to ``run_id`` and open its wait record at 0.
@@ -316,12 +280,25 @@ def begin_queue_wait(run_id: Optional[UUID]) -> None:
     in this context is a leftover from an earlier call; it is cleared
     here so neither this run nor a later one inherits it.
     """
+    global _evicted_run_queue_waits
     if run_id is None:
         return
+    key = str(run_id)
     llm_queue_wait_seconds.set(0.0)
-    _current_queue_run.set(str(run_id))
+    _current_queue_run.set(key)
     with _run_queue_waits_lock:
-        _run_queue_waits[str(run_id)] = 0.0
+        _run_queue_waits[key] = 0.0
+        while len(_run_queue_waits) > _MAX_RUN_QUEUE_WAIT_ENTRIES:
+            oldest = next(iter(_run_queue_waits))
+            del _run_queue_waits[oldest]
+            _evicted_run_queue_waits += 1
+            if _evicted_run_queue_waits in (1, 1000, 10_000, 100_000):
+                _logger.warning(
+                    "[LLM Gate] run queue-wait records hit the %d-entry cap; "
+                    "evicted oldest (total evictions=%d) — a run is not "
+                    "closing its ledger record (start without end/error)",
+                    _MAX_RUN_QUEUE_WAIT_ENTRIES, _evicted_run_queue_waits,
+                )
 
 
 def _record_queue_wait(waited: float) -> None:
@@ -333,13 +310,20 @@ def _record_queue_wait(waited: float) -> None:
     NULL for uncontended calls, matching the pre-DAV-1362 convention and
     keeping elapsed_seconds honest). The raw contextvar is updated for
     any code still reading it.
+
+    The write is skipped when no record is open for the bound run: that
+    can only mean the binding is stale (the run it names was already
+    closed, or no handler opened one), and writing would create an
+    orphan entry that nothing ever pops.
     """
     llm_queue_wait_seconds.set(waited)
     if waited < _QUEUE_LOG_THRESHOLD_S:
         return
     run_key = _current_queue_run.get()
-    if run_key is not None:
-        with _run_queue_waits_lock:
+    if run_key is None:
+        return
+    with _run_queue_waits_lock:
+        if run_key in _run_queue_waits:
             _run_queue_waits[run_key] = waited
 
 
