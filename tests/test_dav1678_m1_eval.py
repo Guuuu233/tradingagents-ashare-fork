@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -615,6 +616,58 @@ class TestSealTimeGate:
         d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
         assert fun["excl_late_seal"] == 0 and len(d) == 20
 
+    def test_signal_before_first_calendar_day_is_t1_unresolved(self):
+        # DAV-2004 / DAV-1999 review 🟡 M-1: a signal day earlier than the
+        # calendar's FIRST day is the same unresolvable-T+1 case as a calendar
+        # that ends first — daily_snapshot_ledger._t_plus_n's ``idx < 0`` makes
+        # it None and _classify_timing then reports F0 (income formal queue).
+        # Returning calendar[0] here would hand the gate a deadline derived
+        # from the wrong trading day and drop every row the ledger keeps
+        # (conservative over-exclusion, but it still changes the row set and
+        # hence the IC). Reached when a calendar file is truncated, a signal
+        # day falls outside it, or the frame carries dirty dates.
+        cal = ["20260105", "20260106", "20260107", "20260108"]
+        rows = _sealed("20260102", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 10:00:00.000000")
+        # the failure mode pinned directly: with calendar[0] returned as
+        # "T+1" (deadline 20260105 09:30 CST) this row would be judged late
+        assert mod._next_trading_day(cal, "20260102") is None
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
+        assert fun["seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+
+    def test_non_ledger_shaped_sealed_at_fails_closed(self):
+        # DAV-2004 / DAV-1999 review 🟢 S-3: format="mixed" would guess
+        # "20260106" / "01/06/2026" / "2026-1-6" into a UTC-midnight instant
+        # and admit a row whose seal time was never established. The ledger's
+        # _parse_dt only accepts a leading YYYY-MM-DD, so these must land in
+        # seal_unparseable and be excluded.
+        for bad in ("20260106", "2026/01/06", "01/06/2026", "2026-1-6"):
+            rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                           bad)
+            d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+            assert fun["seal_unparseable"] == 20, bad
+            assert fun["excl_late_seal"] == 20 and len(d) == 0, bad
+
+    def test_datetime_typed_signal_date_resolves_same_t1_day(self):
+        # DAV-2004 / DAV-1999 review 🟢 S-4: admit() is public and tests hand
+        # it raw frames, so signal_date need not be the canonical YYYYMMDD
+        # string load_frame produces. A datetime column astype(str)s to
+        # "2026-01-05 00:00:00", which sorts before every calendar day: before
+        # M-1 the whole batch silently snapped onto the calendar's first day,
+        # after M-1 every row would become t1-unresolved. Re-normalising keeps
+        # the answer identical to the string form (T+1 = 20260106).
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        as_str, fun_str = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun_str["excl_late_seal"] == 0 and len(as_str) == 20
+        for r in rows:
+            r["signal_date"] = datetime(2026, 1, 5)
+        as_dt, fun_dt = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun_dt["seal_t1_unresolved"] == 0
+        assert fun_dt["excl_late_seal"] == 0 and len(as_dt) == 20
+        assert sorted(as_dt["symbol"]) == sorted(as_str["symbol"])
+
     def test_frame_without_sealed_at_predates_gate(self):
         # no sealed_at column → gate off, no calendar needed, no exclusion
         rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
@@ -707,6 +760,13 @@ class TestSealTimeGate:
             runj = json.loads((out / "run.json").read_text())
             assert runj["seal_gate_applied"] is True
             assert runj["excl_late_seal"] == 20
+            # DAV-2004 / DAV-1999 review 🟢 S-1: run.json is the artefact ops
+            # reads first, so the gate's "cannot prove forward sealing"
+            # counters travel with it (they used to live only in
+            # verdict.funnel, so a run whose T+1 resolution failed wholesale
+            # looked clean here).
+            assert runj["seal_unparseable"] == fun["seal_unparseable"] == 0
+            assert runj["seal_t1_unresolved"] == fun["seal_t1_unresolved"] == 0
             days = pd.read_parquet(out / "m1_day_series.parquet")
             assert list(days["date"]) == ["20260105"]
 

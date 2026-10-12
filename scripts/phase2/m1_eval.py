@@ -38,6 +38,17 @@ dedup to the primary run happens inside, per签收 item 4):
                                fallback is refused); frames without a
                                sealed_at column predate the gate and are
                                reported as seal_gate_applied=false.
+                               Shape (DAV-2004 / DAV-1999 review 🟢 S-3):
+                               only the forms daily_snapshot_ledger._parse_dt
+                               accepts (leading YYYY-MM-DD) are read; anything
+                               else counts as seal_unparseable and fails
+                               closed rather than being guessed into a
+                               UTC-midnight instant. A signal day that the
+                               calendar cannot resolve a T+1 for — the
+                               calendar ends first, OR the signal day precedes
+                               the calendar's first day — is admitted and
+                               counted as seal_t1_unresolved, matching
+                               _classify_timing's F0 for the same case.
   p_rel_t40 / prob / q       : model probability, int 1–99 (or float 0–1 /
                                0–100; normalised to q in [0,1])
   r_rel / rel_return / r     : realised stock-minus-SW-index return over the
@@ -85,9 +96,11 @@ import argparse
 import bisect
 import json
 import math
+import re
 import resource
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -263,9 +276,48 @@ def _next_trading_day(calendar: list[str], after: str) -> str | None:
     that is not itself in the calendar snaps to the first calendar day after
     it (e.g. a weekend signal date resolves to Monday). None when the
     calendar ends before ``after`` — the T+1 entry day is then unresolvable.
+
+    DAV-2004 (DAV-1999 review 🟡 M-1): ``bisect_right == 0`` — the signal date
+    falls BEFORE the calendar's first day — also returns None, so the T+1 day
+    is reported unresolvable rather than snapped onto ``calendar[0]``. This
+    mirrors scripts/phase2/daily_snapshot_ledger.py::_t_plus_n, whose
+    ``idx = bisect_right(dates, base) - 1; if idx < 0 …: return None`` makes
+    the same case unresolvable and whose _classify_timing then classifies the
+    record F0 (``entry_trading_day=None`` → F0 → income formal queue).
+    trade_execution.py has no such guard, hence the difference: there the
+    first calendar entry is the right answer, here it would hand the gate a
+    real deadline derived from the wrong trading day and silently drop rows
+    the ledger counts as F0 (a conservative over-exclusion, not a leak, but
+    it still changes the formal-queue row set and hence the IC).
     """
     idx = bisect.bisect_right(calendar, str(after))
+    if idx == 0:
+        return None
     return calendar[idx] if idx < len(calendar) else None
+
+
+# DAV-2004 (DAV-1999 review 🟢 S-3): ``format="mixed"`` guesses per element
+# and would happily read "01/06/2026", "20260106" or a bare date as a UTC
+# midnight instant, so a stamp that cannot prove a seal time could enter the
+# formal queue. daily_snapshot_ledger.py::_parse_dt is narrower — it only
+# accepts a value whose first ten characters are YYYY-MM-DD (naive
+# "YYYY-MM-DD HH:MM:SS[.ffffff]" read as UTC, or ISO-8601 with T / numeric
+# offset / Z). Apply the same shape whitelist here and leave everything else
+# NaT, so it lands in ``seal_unparseable`` and fails closed like any other
+# unparseable seal time.
+_SEAL_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _sealed_at_sh(s: pd.Series) -> pd.Series:
+    """Parse a ``sealed_at`` column into tz-aware Asia/Shanghai instants.
+
+    NaT for missing values, for values the ledger's _parse_dt would not
+    accept, and for anything else unparseable — all of which the gate treats
+    as "cannot prove forward sealing" (fail closed).
+    """
+    shape_ok = s.astype(str).str.match(_SEAL_SHAPE_RE) | s.isna()
+    return pd.to_datetime(s.where(shape_ok), format="mixed",
+                          errors="coerce", utc=True).dt.tz_convert(SH_TZ)
 
 
 def _seal_deadline_cn(signal_dates: pd.Series,
@@ -277,8 +329,19 @@ def _seal_deadline_cn(signal_dates: pd.Series,
     总控 10-13 令时区口径: the deadline lives in Asia/Shanghai and the
     record's seal time is converted into the same zone before comparing, so
     the gate can never compare against a local-time misreading of the stamp.
+
+    DAV-2004 (DAV-1999 review 🟢 S-4): ``admit()`` is a public entry point
+    (the tests call it directly), so ``signal_date`` is not guaranteed to be
+    the canonical YYYYMMDD string ``load_frame`` produces. A datetime-typed
+    column ``astype(str)``s to "2026-01-05 00:00:00", which sorts before every
+    calendar day: before M-1 that silently snapped the whole batch onto the
+    calendar's first day, and after M-1 it would make every row
+    ``seal_t1_unresolved``. Re-normalise through the same
+    ``to_datetime(...).dt.strftime("%Y%m%d")`` step ``load_frame`` uses, so
+    the gate reads the same day key as the day series.
     """
-    as_str = signal_dates.astype(str)
+    as_str = pd.to_datetime(signal_dates.astype(str), format="mixed",
+                            errors="coerce").dt.strftime("%Y%m%d")
     day_of = {s: _next_trading_day(calendar, s) for s in as_str.unique()}
     days = pd.to_datetime(as_str.map(day_of), format="%Y%m%d",
                           errors="coerce")
@@ -443,9 +506,10 @@ def admit(df: pd.DataFrame,
         # format="mixed": the ledger writes "YYYY-MM-DD HH:MM:SS.ffffff" (UTC,
         # naive) while explicit-offset ISO strings also occur — parse per
         # element, coerce the unparseable to NaT, and read naive strings as
-        # UTC (utc=True) before converting them to Asia/Shanghai.
-        sealed = pd.to_datetime(d["sealed_at"], format="mixed",
-                                errors="coerce", utc=True).dt.tz_convert(SH_TZ)
+        # UTC (utc=True) before converting them to Asia/Shanghai. The shape
+        # whitelist keeps the guesser from inventing an instant out of a
+        # non-ledger form (DAV-1999 🟢 S-3, see _sealed_at_sh).
+        sealed = _sealed_at_sh(d["sealed_at"])
         entry = _seal_deadline_cn(d["signal_date"], calendar)
         funnel["seal_unparseable"] = int(sealed.isna().sum())
         funnel["seal_t1_unresolved"] = int(entry.isna().sum())
@@ -765,6 +829,13 @@ def run(input_path: Path, out_dir: Path,
         "version_key": funnel.get("version_key"),
         "user_id": user_id,
         "seal_gate_applied": funnel.get("seal_gate_applied", False),
+        # DAV-2004 (DAV-1999 review 🟢 S-1): run.json is the artefact ops
+        # reads first, so the gate's two "cannot prove forward sealing"
+        # counters travel here too. Without them a run whose gate is on but
+        # whose T+1 resolution or seal-stamp parsing failed wholesale would
+        # look perfectly clean (they used to live only in verdict.funnel).
+        "seal_unparseable": funnel.get("seal_unparseable", 0),
+        "seal_t1_unresolved": funnel.get("seal_t1_unresolved", 0),
         "excl_late_seal": funnel.get("excl_late_seal", 0),
         "excl_wrong_user": funnel.get("excl_wrong_user", 0),
     }, indent=2))
@@ -954,6 +1025,45 @@ def selftest() -> dict:
     assert checks["seal_gate_needs_calendar"]
     checks["seal_gate_late_excluded"] = fun["excl_late_seal"]
 
+    # 15) DAV-2004 — the DAV-1999 review's M-1 / S-3 / S-4 follow-ups on the
+    # same gate (all "when the inputs cannot be resolved, say so" discipline):
+    #   M-1  a signal day EARLIER than the calendar's first day is the same
+    #        unresolvable-T+1 case as a calendar that ends first — 账本
+    #        _t_plus_n's ``idx < 0`` → _classify_timing F0 → income formal
+    #        queue. Snapping it onto calendar[0] would invent a deadline from
+    #        the wrong trading day and drop rows the ledger keeps.
+    #   S-3  a sealed_at the ledger's _parse_dt would not accept cannot prove
+    #        a seal time → seal_unparseable → excluded, never guessed into a
+    #        UTC-midnight instant by format="mixed".
+    #   S-4  a datetime-typed signal_date resolves the same T+1 day as the
+    #        YYYYMMDD string form instead of silently snapping to calendar[0].
+    early_cal = ["20260105", "20260106", "20260107", "20260108"]
+    rows = _mk_day("20260102", range(1, 21), np.linspace(0, 0.1, 20))
+    for r in rows:
+        r["sealed_at"] = "2026-01-02 09:00:00.000000"
+    d, fun = admit(pd.DataFrame(rows), calendar=early_cal)
+    assert fun["seal_t1_unresolved"] == 20, fun
+    assert fun["excl_late_seal"] == 0 and len(d) == 20, fun
+    checks["seal_t1_before_first_calendar_day"] = fun["seal_t1_unresolved"]
+
+    for bad in ("20260106", "2026/01/06", "01/06/2026", "2026-1-6"):
+        rows = _mk_day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        for r in rows:
+            r["sealed_at"] = bad
+        d, fun = admit(pd.DataFrame(rows), calendar=early_cal)
+        assert fun["seal_unparseable"] == 20, (bad, fun)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0, (bad, fun)
+    checks["seal_shape_whitelist"] = True
+
+    rows = _mk_day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+    for r in rows:
+        r["sealed_at"] = "2026-01-06 01:00:00.000000"   # 09:00 CST → forward
+        r["signal_date"] = datetime(2026, 1, 5)
+    d, fun = admit(pd.DataFrame(rows), calendar=early_cal)
+    assert fun["seal_t1_unresolved"] == 0, fun
+    assert fun["excl_late_seal"] == 0 and len(d) == 20, fun
+    checks["seal_datetime_signal_date_normalised"] = True
+
     log("selftest PASS: " + json.dumps(checks, default=str))
     return checks
 
@@ -967,9 +1077,15 @@ def main() -> int:
                     help="version queue to evaluate; required when the input "
                          "frame holds more than one version_key")
     ap.add_argument("--calendar", type=Path, default=None,
-                    help="optional trading-calendar file (one YYYYMMDD per "
-                         "line); days in the input's span with no signal "
-                         "stay as no_data NaN slots instead of compressing")
+                    help="trading-calendar file (one YYYYMMDD per line); "
+                         "days in the input's span with no signal stay as "
+                         "no_data NaN slots instead of compressing. "
+                         "REQUIRED when the input frame carries a "
+                         "sealed_at column: the DAV-1991 seal-time gate "
+                         "must resolve the T+1 trading day and fails "
+                         "closed without a calendar rather than "
+                         "approximating it with a weekday fallback "
+                         "(DAV-1999 review 🟢 S-2)")
     ap.add_argument("--out-dir", type=Path, default=OUT_DEFAULT)
     ap.add_argument("--user-id", default=DEFAULT_USER_ID,
                     help="only evaluate rows of this user_id "
