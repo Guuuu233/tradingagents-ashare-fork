@@ -122,8 +122,16 @@ def iter_report_rows(con, account, start=None, end=None, ids=None):
     ``json_valid(result_data)`` can't gate BLOBs, so validity is checked at
     decode time in ``slim_report``.
     """
-    cols = "id, symbol, trade_date, status, created_at, COALESCE(result_data_zst, result_data) AS result_data"
-    where, params = ["user_id=?", "result_data IS NOT NULL OR result_data_zst IS NOT NULL"], [account]
+    from tradingagents.storage.compressed_json import result_data_select_expr
+
+    cols = ("id, symbol, trade_date, status, created_at, "
+            + result_data_select_expr(con) + " AS result_data")
+    # B-6d: the NULL-filter must reference the same schema-aware expression
+    # as the select — a bare OR over both physical columns both breaks on
+    # pre-migration schemas and (unparenthesized) leaks out of the account
+    # filter. ``COALESCE(...) IS NOT NULL`` ⇔ either column non-NULL.
+    rd_expr = result_data_select_expr(con)
+    where, params = ["user_id=?", f"({rd_expr} IS NOT NULL)"], [account]
     if start:
         where.append("trade_date >= ?")
         params.append(start)
