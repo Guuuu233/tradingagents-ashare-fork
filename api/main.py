@@ -275,25 +275,33 @@ async def _run_manual_trigger(
     try:
         actual_trade_date = _resolve_scheduled_trade_date(requested_trade_date)
         _log(f"[Manual Trigger] {symbol} trade_date={actual_trade_date} (requested={requested_trade_date})")
-        with get_db_ctx() as db:
-            scheduled_user_context = task.get("manual_user_context") or _build_imported_user_context(
-                db, user_id, symbol
-            )
-            req = _build_scheduled_analyze_request(
-                db=db,
-                user_id=user_id,
-                symbol=symbol,
-                horizon=horizon,
-                trade_date=actual_trade_date,
-                scheduled_user_context=scheduled_user_context,
-            )
+        def _build_request_sync():
+            with get_db_ctx() as db:
+                scheduled_user_context = task.get("manual_user_context") or _build_imported_user_context(
+                    db, user_id, symbol
+                )
+                return _build_scheduled_analyze_request(
+                    db=db,
+                    user_id=user_id,
+                    symbol=symbol,
+                    horizon=horizon,
+                    trade_date=actual_trade_date,
+                    scheduled_user_context=scheduled_user_context,
+                )
+
+        # DAV-1463: same read + the two result writes below are synchronous
+        # SQLite; keep them off the event loop.
+        req = await asyncio.to_thread(_build_request_sync)
 
         await _run_job(job_id, req, False, True, user_id, "scheduled_manual")
         job_state = _get_job(job_id)
         if job_state.get("status") == "failed":
             raise RuntimeError(job_state.get("error") or f"manual trigger job {job_id} failed")
-        with get_db_ctx() as db:
-            scheduled_service.record_manual_test_result(db, task_id, "success", report_id=job_id)
+        def _record_manual_success():
+            with get_db_ctx() as db:
+                scheduled_service.record_manual_test_result(db, task_id, "success", report_id=job_id)
+
+        await asyncio.to_thread(_record_manual_success)
         _log(f"[Manual Trigger] Completed {symbol}")
     except Exception as e:
         error_text = f"{type(e).__name__}: {e}"
@@ -307,8 +315,16 @@ async def _run_manual_trigger(
             overtime_at=None,
         )
         _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": error_text})
-        with get_db_ctx() as db:
-            scheduled_service.record_manual_test_result(db, task_id, "failed")
+
+        def _record_manual_failure():
+            with get_db_ctx() as db:
+                scheduled_service.record_manual_test_result(db, task_id, "failed")
+
+        # DAV-1463: off-loop (a failure write is exactly when the DB is busiest).
+        try:
+            await asyncio.to_thread(_record_manual_failure)
+        except Exception as db_exc:
+            logger.error(f"Failed to record manual trigger result in DB: {db_exc}")
 
 
 @asynccontextmanager
@@ -2515,6 +2531,21 @@ def _generate_tool_description(tool_name: str, tool_args: Dict[str, Any]) -> str
     return f"调用 {tool_name}"
 
 
+async def _resolve_graph_decision(graph, decision_text: str) -> str:
+    """Resolve a trade decision without blocking the event loop (DAV-1463).
+
+    ``TradingAgentsGraph.process_signal`` may fall through to a synchronous
+    LLM call, which would freeze the loop for the duration of a model
+    round-trip. Prefer the graph's async twin when it is available; otherwise
+    dispatch the sync method to a worker thread so test doubles and any
+    duck-typed graph keep working unchanged.
+    """
+    aprocess = getattr(graph, "aprocess_signal", None)
+    if callable(aprocess):
+        return await aprocess(decision_text)
+    return await asyncio.to_thread(graph.process_signal, decision_text)
+
+
 async def _run_job(
     job_id: str,
     request: AnalyzeRequest,
@@ -2596,12 +2627,20 @@ async def _run_job(
                     overtime_at=None,
                     finished_at=_utcnow_iso(),
                 )
-                try:
+                # DAV-1463: keep the synchronous SQLite write + job-store update
+                # off the event loop. The identical block in _run_job_inner's
+                # failure path is already wrapped in to_thread; this hard-timeout
+                # branch was the outlier and ran on the loop, so a WAL
+                # write-writer collision stalled every in-flight HTTP request
+                # (symptom: /healthz unresponsive while the process stays up).
+                def _record_hard_timeout_failure():
                     with get_db_ctx() as db:
                         report_service.mark_report_failed(db, job_id, err_msg)
                         failed_result = _build_b1_unrun_result(request)
                         report_service.update_report_partial(db, job_id, result_data=failed_result)
                         _set_job(job_id, result=failed_result)
+                try:
+                    await asyncio.to_thread(_record_hard_timeout_failure)
                 except Exception:
                     pass
                 _emit_job_event(
@@ -2635,12 +2674,16 @@ async def _run_job(
             overtime_at=None,
             finished_at=_utcnow_iso(),
         )
-        try:
+        def _record_task_failure():
             with get_db_ctx() as db:
                 report_service.mark_report_failed(db, job_id, err_msg)
                 failed_result = _build_b1_unrun_result(request)
                 report_service.update_report_partial(db, job_id, result_data=failed_result)
                 _set_job(job_id, result=failed_result)
+        try:
+            # DAV-1463: off-loop, matching the hard-timeout branch above and
+            # _run_job_inner's failure recorder.
+            await asyncio.to_thread(_record_task_failure)
         except Exception:
             pass
         _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": err_msg})
@@ -3910,8 +3953,8 @@ async def _run_job_inner(
                             target_price_override=structured.target_price if structured else None,
                             stop_loss_override=structured.stop_loss_price if structured else None,
                         )
-                        graph_decision = graph.process_signal(
-                            horizon_result.get("final_trade_decision", "")
+                        graph_decision = await _resolve_graph_decision(
+                            graph, horizon_result.get("final_trade_decision", "")
                         )
                         decision = _apply_structured_report_fields(
                             horizon_result,
@@ -4222,7 +4265,9 @@ async def _run_job_inner(
             short_r = graph._build_horizon_result("short", horizon_states.get("short") or {}, collected_pool)
             medium_r = graph._build_horizon_result("medium", horizon_states.get("medium") or {}, collected_pool)
             primary_r = short_r if horizon_states.get("short") else medium_r
-            graph_decision = graph.process_signal(primary_r.get("final_trade_decision", ""))
+            graph_decision = await _resolve_graph_decision(
+                graph, primary_r.get("final_trade_decision", "")
+            )
             model_snapshot = {
                 role: {
                     "provider_type": cfg.get("provider_type"),
@@ -4706,7 +4751,7 @@ async def _run_job_inner(
         if not final_state:
             raise RuntimeError("graph returned empty final state")
 
-        graph_decision = graph.process_signal(final_state["final_trade_decision"])
+        graph_decision = await _resolve_graph_decision(graph, final_state["final_trade_decision"])
         if (
             (final_state.get("price_basis_gate") or {}).get("status") == "blocked"
             and graph_decision in ("BUY", "SELL")
@@ -5227,7 +5272,13 @@ async def healthz():
         payload["executor_queued"] = _default_executor._work_queue.qsize()
         payload["executor_threads"] = len(_default_executor._threads)
     try:
-        payload["active_analysis_count"] = get_job_store().active_job_count()
+        # DAV-1463: the Redis-backed store enumerates every job key with a
+        # synchronous SCAN + pipelined HGET (no timeout). Running that on the
+        # loop meant one /healthz could stall the whole server. The
+        # InMemory store returns instantly, so this is a no-op there.
+        payload["active_analysis_count"] = await asyncio.to_thread(
+            get_job_store().active_job_count
+        )
     except Exception as exc:
         # A counting failure must never break the liveness probe; report the
         # error alongside a null count instead.
