@@ -256,9 +256,25 @@ def test_list_horizon_decisions_uses_json_extract_only():
             stripped = re.sub(r"json_extract\(\s*reports\.result_data\s*,", "", stmt)
             return "result_data" in stripped
 
+        from tradingagents.storage.compressed_json import report_storage_mode
+
+        _mode = report_storage_mode()
+        _compressed = _mode in ("compressed", "compressed_only")
+
         offenders = [s for s in statements if _has_bare_result_data(s)]
         assert not offenders, f"list endpoint loaded full result_data: {offenders[:1]}"
-        assert any("json_extract" in s for s in statements)
+        if _compressed:
+            # §2.2 列表页不解压：compressed/compressed_only 直读 pg_* 物化列，
+            # 不得出现 json_extract，也不得读 result_data_zst 压缩列。
+            assert any("pg_" in s for s in statements), \
+                "compressed mode list must read pg_* materialized columns"
+            assert not any("json_extract" in s for s in statements), \
+                "compressed mode list must not use json_extract"
+            assert not any("result_data_zst" in s for s in statements), \
+                "compressed mode list must not read result_data_zst"
+        else:
+            # plaintext 模式：post-gate fallback 走 json_extract 窄读。
+            assert any("json_extract" in s for s in statements)
     finally:
         client.close()
 
