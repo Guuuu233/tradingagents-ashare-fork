@@ -23,6 +23,9 @@ FIXED = m.DEFAULT_USER_ID
 
 
 def _rec(rid, sym, day, p, **kw):
+    # sealed_at defaults to the signal day's own 08:00 UTC -> always before
+    # the next-trading-day 09:30 Asia/Shanghai seal gate for these fixtures.
+    kw.setdefault("sealed_at", f"{day} 08:00:00.000000")
     return m._ledger_rec(rid, sym, day, p, **kw)
 
 
@@ -153,6 +156,68 @@ class TestFunnel:
         assert fun["excl_bad_prob"] == 1
 
 
+class TestSealGate:
+    """总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 (Asia/Shanghai)."""
+
+    CAL = ["2026-01-05", "2026-01-06", "2026-01-07"]
+
+    def _frame(self, recs):
+        labels = {}
+        ledger_rows = recs
+        df = pd.DataFrame([
+            {"signal_date": pd.to_datetime(r["signal_date"]).strftime("%Y%m%d"),
+             "symbol": r["symbol"], "run_id": r["report_id"],
+             "sealed_at": r.get("sealed_at"), "timing_class": r["timing_class"],
+             "input_pit_status": r["input_pit_status"], "completed": True,
+             "user_id": r["user_id"], "version_key": "v",
+             "p_rel_t10": r["horizons"]["short"]["forecast"]["p_rel_t10"],
+             "prob": r["horizons"]["short"]["forecast"]["p_rel_t10"],
+             "r": 0.01}
+            for r in ledger_rows])
+        return df
+
+    def test_sealed_before_entry_open_admitted(self):
+        # sealed 2026-01-05 16:00 CN = before T+1(2026-01-06) 09:30 CN
+        rec = _rec("a", "S1", "2026-01-05", 60, sealed_at="2026-01-05 08:00:00.000000")
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert gate["excl_seal_late"] == 0 and len(df) == 1
+
+    def test_sealed_after_entry_open_diverted(self):
+        # sealed 2026-01-06 10:00 CN (> T+1 09:30 CN) -> diagnostics only
+        rec = _rec("b", "S1", "2026-01-05", 60, sealed_at="2026-01-06 02:00:00.000000")
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert gate["excl_seal_late"] == 1 and len(df) == 0
+        assert gate["seal_late_ids"] == ["b"]
+
+    def test_missing_sealed_at_diverted(self):
+        rec = _rec("c", "S1", "2026-01-05", 60, sealed_at=None)
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert gate["excl_seal_late"] == 1 and len(df) == 0
+
+    def test_seal_gate_counts_in_run_funnel(self, tmp_path):
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        recs = []
+        labs = []
+        # 12 on-time seals on 01-05, 12 late seals on 01-05
+        for i in range(12):
+            recs.append(_rec(f"on{i}", f"A{i:02d}", "2026-01-05", 30 + i,
+                             sealed_at="2026-01-05 08:00:00.000000"))
+            labs.append(m._label(f"A{i:02d}", "2026-01-05", 0.1 * i))
+            recs.append(_rec(f"late{i}", f"B{i:02d}", "2026-01-05", 30 + i,
+                             sealed_at="2026-01-06 03:00:00.000000"))
+            labs.append(m._label(f"B{i:02d}", "2026-01-05", 0.1 * i))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
+        prows = [m._p1_row("M", "20260105", "801010.SI", y, exit_date="20260105")
+                 for y in [1.0]*20 + [0.0]*20]
+        chunks = tmp_path / "chunks"; m._write_p1_chunks(chunks, prows)
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
+                    base_chunks=chunks)
+        assert out["verdict"]["funnel"]["excl_seal_late"] == 12
+        assert out["verdict"]["funnel"]["formal_rows"] == 12
+
+
 class TestIncrement:
     def test_flat_base_is_degenerate(self, tmp_path):
         # a (day,l1) cell with a 50/50 win mix -> p_m200 ~= 0.5 constant
@@ -271,7 +336,9 @@ class TestEndToEnd:
         chunks = tmp_path / "chunks"
         m._write_p1_chunks(chunks, prows)
         cal = tmp_path / "c.txt"
-        cal.write_text("\n".join(days) + "\n")
+        # calendar extends past the last signal so its T+1 entry day exists
+        cal_days = pd.bdate_range("2026-02-02", periods=40).strftime("%Y-%m-%d")
+        cal.write_text("\n".join(cal_days) + "\n")
         out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
                     base_chunks=chunks)
         assert out["verdict"]["valid_days"] == 25
