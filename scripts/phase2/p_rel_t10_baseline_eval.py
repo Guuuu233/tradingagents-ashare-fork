@@ -69,10 +69,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
+import hashlib
 import json
 import sys
 import time
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -233,8 +236,6 @@ def load_ledger_signals(
 # 2b. seal-time gate (总控追加: 正式只收 T+1 09:30 前封存)
 # ---------------------------------------------------------------------------
 
-from datetime import datetime, timedelta, timezone
-
 UTC = timezone.utc
 
 
@@ -287,33 +288,51 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
 
     判定顺序(总控口径): sealed_at 是 naive-UTC → 先按 UTC 解析 → 转
     Asia/Shanghai → 与「T+1 交易日 09:30 Asia/Shanghai」比较; 不把裸时间当
-    本地时间。晚封/补录/T+1 不可解析/sealed_at 缺失的行分流诊断，在 funnel
-    里单列 ``excl_seal_late``，不进正式队列。
-    Returns (kept_df, {"excl_seal_late": n, "seal_late_ids": [...]}).
+    本地时间。晚封/补录行计入 ``excl_seal_late``; signal_date 非交易日或
+    T+1 不可解析、sealed_at 缺失/不可解析的行单列
+    ``excl_seal_unresolvable``（不混进"晚封"标签, L-5）。两桶的 run_id 分
+    列 ``seal_late_ids`` / ``seal_unresolvable_ids``, 落盘供事后复核
+    (DAV-1993 🟡 M-1)。
+    Returns (kept_df, gate_dict)。
     """
-    import bisect
     cal = sorted(calendar_iso)
     late_ids: list = []
+    unresolvable_ids: list = []
     kept_mask = []
     sig_iso = pd.to_datetime(df["signal_date"]).dt.strftime("%Y-%m-%d")
     sealed_utc = [_sealed_at_utc(v) for v in df["sealed_at"]]
     for i, (sd, sa) in enumerate(zip(sig_iso, sealed_utc)):
         idx = bisect.bisect_right(cal, sd) - 1
-        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
-            # signal not a trading day or T+1 unresolved -> seal gate cannot
-            # be satisfied; send to diagnostics, never formal.
-            late_ids.append(df["run_id"].iloc[i])
+        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal) or sa is None:
+            # signal not a trading day / T+1 unresolved / sealed_at missing
+            # or unparseable -> gate cannot be satisfied; diagnostics only,
+            # never formal (separate label from 晚封, L-5).
+            unresolvable_ids.append(df["run_id"].iloc[i])
             kept_mask.append(False)
             continue
         # compare in Asia/Shanghai: entry open = T+1 09:30 CN; the aware-UTC
         # comparison is equivalent (sa.astimezone(_CN_TZ) < 09:30 CN). We do
         # the UTC-side compare to mirror _classify_timing.
         entry_open = _cn_entry_open_utc(cal[idx + 1])
-        ok = (sa is not None) and sa < entry_open
+        ok = sa < entry_open
         if not ok:
             late_ids.append(df["run_id"].iloc[i])
         kept_mask.append(ok)
-    gate = {"excl_seal_late": len(late_ids), "seal_late_ids": late_ids}
+    gate = {
+        "field": "sealed_at",
+        "field_equivalence_note":
+            "sealed_at == seal_basis_at 于本账本实测同值；"
+            "seal_basis_at = max(created_at, sealed_at)，补录行可能不等，"
+            "本实现取 sealed_at",
+        "threshold":
+            "signal_date 次一交易日 09:30 Asia/Shanghai"
+            "（严格小于，sa < entry_open）",
+        "input_rows": int(len(df)),
+        "excl_seal_late": len(late_ids),
+        "seal_late_ids": late_ids,
+        "excl_seal_unresolvable": len(unresolvable_ids),
+        "seal_unresolvable_ids": unresolvable_ids,
+    }
     return df.loc[kept_mask].reset_index(drop=True), gate
 
 
@@ -376,7 +395,6 @@ def _chunks_manifest_sha(chunks_dir: Path) -> str | None:
         p = Path(chunks_dir) / "stats.json"
     if not p.exists():
         return None
-    import hashlib
     h = hashlib.sha256()
     h.update(p.read_bytes())
     return h.hexdigest()
@@ -504,7 +522,12 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     labels = load_labels(labels_path)
     log(f"{len(labels)} matured short labels")
     df = load_ledger_signals(ledger_path, labels, user_id)
-    log(f"ledger rows {len(df)}")
+    # 门前全量行数 (DAV-1993 🟡 M-1): ledger_rows 恢复为进门前的行数,
+    # 门后行数由 seal_gate.input_rows 承载 — funnel 守恒在产物内闭合:
+    # seal_gate.input_rows = post_gate_rows + excl_seal_late
+    #                      + excl_seal_unresolvable
+    ledger_rows_input = len(df)
+    log(f"ledger rows {ledger_rows_input}")
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
@@ -517,16 +540,24 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 
     formal, funnel = m1.admit(df, user_id=user_id)
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
+    funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
-    log(f"formal rows {len(formal)} / {len(df)} "
-        f"(seal_late={seal_gate['excl_seal_late']})")
+    log(f"formal rows {len(formal)} / {seal_gate['input_rows']} "
+        f"(seal_late={seal_gate['excl_seal_late']} "
+        f"seal_unresolvable={seal_gate['excl_seal_unresolvable']})")
+
+    # DAV-1993 🟡 M-1: 封存门口径 + 被分流 run_id 落盘 — 同一 dict 写进
+    # run.json 顶层并透传进 verdict.json 的 model 块, 产物内自证守恒。
+    seal_gate_block = dict(seal_gate)
+    seal_gate_block["post_gate_rows"] = int(len(df))
 
     cal_ymd = [d.replace("-", "") for d in calendar]
     days = m1.eval_days(formal, calendar=cal_ymd)
     rel = m1.reliability_table(formal) if len(formal) else []
     verdict = m1.grade(days, funnel)
+    verdict["seal_gate"] = seal_gate_block
 
     # D-075: paired increment vs the WHOLE-MARKET m200/W0 base rate.
     # The base panel comes from P1 T+10 partitions (--base-chunks /
@@ -600,7 +631,9 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "pipeline": PIPELINE_VERSION,
         "elapsed_s": round(time.time() - t0, 2),
         "peak_rss_gb": round(m1.peak_rss_gb(), 3),
-        "ledger_rows": len(df), "formal_rows": len(formal),
+        "ledger_rows": ledger_rows_input,
+        "formal_rows": len(formal),
+        "seal_gate": seal_gate_block,
         "labels": len(labels), "version_key": funnel["version_key"],
         "user_id": user_id,
         "base_source_kind": base_source.get("kind"),

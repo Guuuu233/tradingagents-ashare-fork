@@ -190,9 +190,14 @@ class TestSealGate:
         assert gate["seal_late_ids"] == ["b"]
 
     def test_missing_sealed_at_diverted(self):
+        # sealed_at 缺失 → 门口径不可判定 → 单列 excl_seal_unresolvable
+        # (L-5 分流, 不混进"晚封"标签), 不进 formal。
         rec = _rec("c", "S1", "2026-01-05", 60, sealed_at=None)
         df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert gate["excl_seal_late"] == 1 and len(df) == 0
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 0
+        assert gate["excl_seal_unresolvable"] == 1
+        assert gate["seal_unresolvable_ids"] == ["c"]
 
     def test_utc_semantics_mandated_cases(self):
         # 总控口径: sealed_at 是无时区标记 UTC → 转 Asia/Shanghai → 比 T+1 09:30。
@@ -209,6 +214,51 @@ class TestSealGate:
                       sealed_at="2026-10-08 11:45:00")
         df, gate = m.apply_seal_gate(self._frame([ontime]), cal)
         assert len(df) == 1 and gate["excl_seal_late"] == 0
+
+    def test_boundary_equal_excluded(self):
+        # L-1 固化: sealed_at 恰为 T+1 09:30:00.000000 Asia/Shanghai 应排除
+        # (口径为严格小于 sa < entry_open)。T+1(01-06) 09:30 CN = 01-06
+        # 01:30:00.000000 UTC —— 恰在阈值的记录不进 formal。
+        rec = _rec("edge", "S1", "2026-01-05", 60,
+                   sealed_at="2026-01-06 01:30:00.000000")
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 1
+        assert gate["seal_late_ids"] == ["edge"]
+        # 亚毫秒前一条仍进 formal。
+        rec2 = _rec("edgeok", "S1", "2026-01-05", 60,
+                    sealed_at="2026-01-06 01:29:59.999999")
+        df2, gate2 = m.apply_seal_gate(self._frame([rec2]), self.CAL)
+        assert len(df2) == 1 and gate2["excl_seal_late"] == 0
+
+    def test_signal_not_trading_day_unresolvable(self):
+        # L-2 固化: signal_date 非交易日 → 门口径不可解析 →
+        # excl_seal_unresolvable, 不进 formal (此前只靠 selftest 隐含)。
+        rec = _rec("we", "S1", "2026-01-04", 60,      # Sunday
+                   sealed_at="2026-01-04 08:00:00.000000")
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 0
+        assert gate["excl_seal_unresolvable"] == 1
+        assert gate["seal_unresolvable_ids"] == ["we"]
+
+    def test_t1_unresolvable_at_calendar_end(self):
+        # L-2 固化: signal 为日历末日 → T+1 不可解析 → unresolvable。
+        rec = _rec("last", "S1", "2026-01-07", 60,
+                   sealed_at="2026-01-07 08:00:00.000000")
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 0
+        assert gate["excl_seal_unresolvable"] == 1
+
+    def test_gate_artifact_fields(self):
+        # M-1: 门口径 + 门前/门后行数可自证 — gate dict 必须携带落盘字段。
+        rec = _rec("g", "S1", "2026-01-05", 60)
+        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
+        assert gate["field"] == "sealed_at"
+        assert "严格小于" in gate["threshold"]
+        assert gate["input_rows"] == 1
+        assert gate["seal_late_ids"] == [] and gate["seal_unresolvable_ids"] == []
 
     def test_utc_not_local(self):
         # naive local interpretation would misjudge: 02:09 treated as local
@@ -242,6 +292,22 @@ class TestSealGate:
                     base_chunks=chunks)
         assert out["verdict"]["funnel"]["excl_seal_late"] == 12
         assert out["verdict"]["funnel"]["formal_rows"] == 12
+
+        # M-1: 封存门口径与被分流 run_id 落盘 — verdict.model 与 run.json
+        # 顶层各一份同值 seal_gate 块, funnel 守恒在产物内闭合。
+        sg = out["verdict"]["seal_gate"]
+        assert sg["field"] == "sealed_at"
+        assert sg["excl_seal_late"] == 12
+        assert len(sg["seal_late_ids"]) == 12
+        assert set(sg["seal_late_ids"]) == {f"late{i}" for i in range(12)}
+        assert sg["excl_seal_unresolvable"] == 0
+        assert sg["input_rows"] == 24 and sg["post_gate_rows"] == 12
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["seal_gate"] == sg
+        assert runj["ledger_rows"] == 24          # 门前全量
+        assert runj["seal_gate"]["input_rows"] == 24
+        vj = json.loads((tmp_path / "o" / "verdict.json").read_text())
+        assert vj["model"]["seal_gate"] == sg    # 透传进 verdict.json
 
 
 class TestIncrement:
