@@ -1,56 +1,73 @@
 #!/usr/bin/env python3
-"""DAV-1882 — 两臂输入快照逐字段比对（总控 10-12 令：查清是否含必然变化字段）。
+"""DAV-1882 — 两臂输入快照比对（总控 10-12 晚 v0.3 §3 口径重定义）。
 
-`input_snapshot.hash` 是「把整个输入池做 canonical JSON 再 sha256」（DAV-1430
-`_compute_input_snapshot`）。它对任何逐次变化的字段都敏感——时间戳、耗时、
-请求 ID、报告 ID 这类。因此两臂 hash 不同**本身不说明问题**：要么是处理臂
-真的改了提示词，要么只是采集侧的时间戳抖动。
+口径要点（与旧版**不兼容**，按新令执行）：
 
-本脚本对两份快照做**逐字段 diff**，把差异分成三类：
-
-* `prompt` —— 提示词/输入文本类差异，这才是实验自变量的证据；
-* `volatile` —— 时间戳、耗时、报告/请求 ID 等每次运行必然不同的字段
-  （登记在 `VOLATILE_KEY_HINTS`），差异可由「同臂重跑两次」对照排除；
-* `other` —— 其余未分类差异，需要人判断。
+1. **默认不做任何字段剔除**。`input_snapshot.hash` 是整池 canonical sha256
+   （DAV-1430 `_compute_input_snapshot`），对任何逐次变化字段都敏感。默认判定
+   就是拿原始 hash 比：不等即"不一致"，不靠猜哪些字段"每次必然不同"。
+   （旧版用 `VOLATILE_KEY_HINTS` 子串推断 volatile，已按新令删除。）
+2. **规范化只认显式逐路径白名单文件**：精确 JSON 路径，**禁子串、禁通配符**。
+   默认为空 = 不剔除任何字段。白名单内容须由总控在 5 对试跑后确认才填。
+3. **所用白名单的 sha256 必须落进运行记录**，否则事后无法判断某次结论用的是
+   哪份白名单。
+4. **原始结果与规范化结果分别记录、分别报告**，不合并成一个结论。
 
 用法::
 
     python scripts/phase2/compare_input_snapshots.py O.json N.json
-    python scripts/phase2/compare_input_snapshots.py O.json N.json \\
-        --rerun-O O2.json          # 提供同臂重跑对照，佐证 volatile
+    python scripts/phase2/compare_input_snapshots.py O.json N.json \
+        --whitelist whitelist.json          # 显式逐路径白名单
+    python scripts/phase2/compare_input_snapshots.py O.json N.json --out r.json
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
-
-# 每次运行必然不同（或高概率不同）的字段名片段
-VOLATILE_KEY_HINTS: Tuple[str, ...] = (
-    "timestamp", "time", "_at", "date_retrieved", "retrieved", "fetched",
-    "elapsed", "duration", "latency", "report_id", "job_id", "run_id",
-    "request_id", "created", "updated", "generated", "now", "uuid", "id",
-    "cache", "ttl", "expires", "latency_ms", "epoch",
-)
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
-def _is_volatile(key: str) -> bool:
-    k = key.lower()
-    return any(h in k for h in VOLATILE_KEY_HINTS)
+def load_whitelist(path: Optional[str]) -> Tuple[List[str], Optional[str]]:
+    """读显式逐路径白名单。返回 ``(paths, sha256)``。
+
+    * ``path`` 为空 → 白名单为空、sha256 为 None（默认不剔除任何字段）。
+    * 白名单内容必须是**精确 JSON 路径**；出现 ``*`` / ``%`` 等通配符直接报错，
+      避免"看起来是白名单、实际在做子串匹配"的静默放宽。
+    """
+    if not path:
+        return [], None
+    raw = Path(path).read_bytes()
+    payload = json.loads(raw.decode("utf-8"))
+    if isinstance(payload, dict):
+        entries = payload.get("paths") or []
+    elif isinstance(payload, list):
+        entries = payload
+    else:
+        raise ValueError(f"{path}: 白名单必须是 JSON 数组或含 paths 的对象")
+    paths: List[str] = []
+    for item in entries:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{path}: 白名单条目必须是非空字符串，收到 {item!r}")
+        entry = item.strip()
+        if any(ch in entry for ch in "*?%[]"):
+            raise ValueError(
+                f"{path}: 白名单只接受精确 JSON 路径，禁止通配符/下标通配：{entry!r}"
+            )
+        paths.append(entry)
+    return paths, hashlib.sha256(raw).hexdigest()
 
 
 def flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
-    """把嵌套结构拍平成 ``a.b.c`` -> value，便于逐字段比对。"""
+    """嵌套结构拍平成 ``a.b`` / ``a[0]`` → value，用于逐字段比对。"""
     out: Dict[str, Any] = {}
     if isinstance(obj, dict):
         # 必须收集递归结果：丢弃它会让嵌套字段凭空消失、diff 恒为空。
         for k, v in obj.items():
             out.update(flatten(v, f"{prefix}.{k}" if prefix else str(k)))
     elif isinstance(obj, list):
-        out[prefix] = f"<list len={len(obj)}>"
         for i, v in enumerate(obj):
             out.update(flatten(v, f"{prefix}[{i}]"))
     else:
@@ -58,7 +75,8 @@ def flatten(obj: Any, prefix: str = "") -> Dict[str, Any]:
     return out
 
 
-def diff_snapshots(a: Any, b: Any) -> List[Dict[str, Any]]:
+def diff_paths(a: Any, b: Any) -> List[Dict[str, Any]]:
+    """逐字段差异。**不做任何剔除或分类**——全量列出。"""
     fa, fb = flatten(a or {}), flatten(b or {})
     rows = []
     for key in sorted(set(fa) | set(fb)):
@@ -66,56 +84,67 @@ def diff_snapshots(a: Any, b: Any) -> List[Dict[str, Any]]:
         if va == vb:
             continue
         rows.append({
-            "field": key,
+            "path": key,
             "A": va if not isinstance(va, (dict, list)) else json.dumps(va, ensure_ascii=False),
             "B": vb if not isinstance(vb, (dict, list)) else json.dumps(vb, ensure_ascii=False),
-            "kind": "volatile" if _is_volatile(key) else "other",
         })
     return rows
 
 
-def classify(rows: Iterable[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    out: Dict[str, List[Dict[str, Any]]] = {"volatile": [], "other": []}
-    for r in rows:
-        out[r["kind"]].append(r)
-    return out
+def compare(
+    a: Any,
+    b: Any,
+    *,
+    whitelist: Sequence[str] = (),
+    whitelist_sha256: Optional[str] = None,
+) -> Dict[str, Any]:
+    """原始与规范化两组结果，分别给出。"""
+    rows = diff_paths(a, b)
+    wl = set(whitelist or ())
+    normalized_rows = [r for r in rows if r["path"] not in wl]
+    return {
+        "raw": {
+            "A_hash": (a or {}).get("hash"),
+            "B_hash": (b or {}).get("hash"),
+            "hash_equal": (a or {}).get("hash") == (b or {}).get("hash"),
+            "consistent": not rows,
+            "diff_count": len(rows),
+            "diffs": rows,
+        },
+        "normalized": {
+            "whitelist_paths": sorted(wl),
+            "whitelist_sha256": whitelist_sha256,
+            "consistent": not normalized_rows,
+            "diff_count": len(normalized_rows),
+            "excluded_count": len(rows) - len(normalized_rows),
+            "diffs": normalized_rows,
+        },
+    }
 
 
 def main(argv: List[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="两臂输入快照逐字段比对")
+    ap = argparse.ArgumentParser(description="两臂输入快照比对（原始/规范化分别报告）")
     ap.add_argument("A", help="臂 A 的 result_data.input_snapshot（或整个 result）JSON")
     ap.add_argument("B")
-    ap.add_argument("--rerun-A", help="同臂重跑的快照，用于佐证 volatile 字段")
+    ap.add_argument("--whitelist", help="显式逐路径白名单 JSON（精确路径，默认空=不剔除）")
     ap.add_argument("--out")
     args = ap.parse_args(argv)
 
     def load(p: str) -> Any:
         data = json.loads(Path(p).read_text(encoding="utf-8"))
-        # 允许直接喂整个 result 或 result_data
-        return data.get("input_snapshot", data)
+        # 允许直接喂整个 result / result_data / 裸快照
+        if isinstance(data, dict) and "input_snapshot" in data:
+            return data["input_snapshot"]
+        if isinstance(data, dict) and isinstance(data.get("result"), dict):
+            inner = data["result"]
+            return inner.get("input_snapshot", inner)
+        return data
 
-    a, b = load(args.A), load(args.B)
-    rows = diff_snapshots(a, b)
-    buckets = classify(rows)
-
-    report = {
-        "A_hash": (a or {}).get("hash"),
-        "B_hash": (b or {}).get("hash"),
-        "identical": not rows,
-        "volatile_diff_count": len(buckets["volatile"]),
-        "other_diff_count": len(buckets["other"]),
-        "volatile_fields": [r["field"] for r in buckets["volatile"]],
-        "other_fields": [r["field"] for r in buckets["other"]],
-        "diffs": rows,
-    }
-    if args.rerun_A:
-        rr = diff_snapshots(a, load(args.rerun_A))
-        rr_buckets = classify(rr)
-        report["same_arm_rerun"] = {
-            "identical": not rr,
-            "volatile_diff_count": len(rr_buckets["volatile"]),
-            "volatile_fields": [r["field"] for r in rr_buckets["volatile"]],
-        }
+    wl_paths, wl_sha = load_whitelist(args.whitelist)
+    report = compare(load(args.A), load(args.B),
+                     whitelist=wl_paths, whitelist_sha256=wl_sha)
+    report["inputs"] = {"A": str(args.A), "B": str(args.B),
+                        "whitelist_file": args.whitelist or None}
 
     payload = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:

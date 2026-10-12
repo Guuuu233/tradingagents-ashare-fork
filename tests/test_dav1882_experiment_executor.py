@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 from scripts.phase2.experiment_executor import (  # noqa: E402
     CN_TZ,
     BatchSpec,
+    daily_batch_gate_open,
     fetch_batch_pairs,
     load_batch_specs,
     ExperimentExecutor,
@@ -909,3 +910,258 @@ def test_load_batch_specs_and_plan_cli(tmp_path, capsys):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert [b["sampler_seed"] for b in payload["batches"]] == [20261010, 20261011]
     assert payload["batches"][0]["pairs"][0]["expected_model"] == EXPECTED_MODEL
+
+
+# ---------------------------------------------------------------------------
+# 9. 🟡1（DAV-1941）：seed_base 必须真实贯通，不得是静默无效的假开关
+# ---------------------------------------------------------------------------
+
+
+def test_seed_base_actually_changes_the_sampler_seed():
+    """硬口径只是默认值：换基数必须真的改变抽样种子。"""
+    default = BatchSpec(batch_index=0, date="20261013", n=5)
+    custom = BatchSpec(batch_index=0, date="20261013", n=5, seed_base=777)
+    assert default.sampler_seed == 20261010
+    assert custom.sampler_seed == 777          # 传入的 777 必须生效
+    assert custom.sampler_seed != default.sampler_seed
+
+
+def test_seed_base_is_threaded_into_actual_sampler_invocation(tmp_path):
+    """不只看属性：桩 runner 收到的 spec 必须带着非默认 seed_base。"""
+    seen = []
+
+    def runner(spec):
+        seen.append(spec)
+        return {
+            "trade_date": "2026-10-13", "n_picked": 1,
+            "eligible_digest": "d", "picks": [{"ts_code": "600519.SH"}],
+        }
+
+    spec = BatchSpec(batch_index=3, date="20261013", n=1, seed_base=4242)
+    fetch_batch_pairs(spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+                      runner=runner)
+    assert seen[0].sampler_seed == 4242 + 3
+
+
+def test_load_batch_specs_honours_seed_base_argument(tmp_path):
+    f = tmp_path / "b.json"
+    f.write_text(json.dumps({"batches": [{"batch_index": 2, "date": "20261013", "n": 5}]}),
+                 encoding="utf-8")
+    specs = load_batch_specs(f, seed_base=999)
+    assert specs[0].seed_base == 999
+    assert specs[0].sampler_seed == 999 + 2
+    # 默认仍是硬口径
+    assert load_batch_specs(f)[0].sampler_seed == 20261010 + 2
+
+
+def test_load_batch_specs_rejects_conflicting_seed_base(tmp_path):
+    f = tmp_path / "b.json"
+    f.write_text(json.dumps({"batches": [
+        {"batch_index": 0, "date": "20261013", "n": 5, "seed_base": 111}
+    ]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="冲突"):
+        load_batch_specs(f, seed_base=222)
+
+
+def test_batch_spec_has_no_dead_seed_field():
+    """旧的 seed 字段必须消失，杜绝「加载即弃」的静默失效入口。"""
+    assert not hasattr(BatchSpec(0, "20261013", 1), "seed")
+
+
+def test_plan_cli_sampler_seed_base_switch_is_wired(tmp_path, capsys):
+    """CLI 开关必须真正影响落盘的 sampler_seed（DAV-1941 实测该处引用数为 0）。"""
+    import scripts.phase2.experiment_executor as mod
+    spec_file = tmp_path / "b.json"
+    spec_file.write_text(json.dumps({"batches": [
+        {"batch_index": 0, "date": "20261013", "n": 1},
+        {"batch_index": 1, "date": "20261014", "n": 1},
+    ]}), encoding="utf-8")
+    out = tmp_path / "planned.json"
+
+    def _stub_fetch(spec, *, instances, expected_model, **kw):
+        pairs, _ = fetch_batch_pairs(spec, instances=instances,
+                                     expected_model=expected_model,
+                                     runner=_fake_sampler(["600519.SH"]))
+        return pairs, {"eligible_digest": "d", "n_picked": 1, "trade_date": "2026-10-13"}
+
+    real = mod.fetch_batch_pairs
+    mod.fetch_batch_pairs = _stub_fetch
+    try:
+        rc = mod.main(["plan", "--batch-spec", str(spec_file), "--instance", "O=http://x",
+                       "--expected-model", EXPECTED_MODEL,
+                       "--sampler-seed-base", "777", "--out", str(out)])
+    finally:
+        mod.fetch_batch_pairs = real
+    assert rc == 0
+    seeds = [b["sampler_seed"] for b in json.loads(out.read_text(encoding="utf-8"))["batches"]]
+    assert seeds == [777, 778]          # 777 + 批号，CLI 开关真实生效
+
+
+def test_run_batch_spec_requires_expected_model(tmp_path):
+    """🟢 落实：缺 --expected-model 会让所有对冻结身份为 None，静默丧失核对。"""
+    import scripts.phase2.experiment_executor as mod
+    spec_file = tmp_path / "b.json"
+    spec_file.write_text(json.dumps({"batches": [{"batch_index": 0, "date": "20261013", "n": 1}]}),
+                         encoding="utf-8")
+    with pytest.raises(SystemExit):
+        mod.main(["run", "--batch-spec", str(spec_file), "--instance", "O=http://x",
+                  "--state-dir", str(tmp_path / "st")])
+
+
+# ---------------------------------------------------------------------------
+# 10. 总控 10-12 晚裁定：批与基准日分离（每日一批、每批一个基准日、每基准日≤5 对）
+# ---------------------------------------------------------------------------
+
+
+def test_daily_gate_opens_only_after_1950_on_trading_day():
+    at = lambda h, m: datetime(2026, 10, 13, h, m, tzinfo=CN_TZ)   # 周二
+    assert daily_batch_gate_open(at(19, 49)) is False
+    assert daily_batch_gate_open(at(19, 50)) is True
+    assert daily_batch_gate_open(at(23, 30)) is True
+    assert daily_batch_gate_open(at(9, 0)) is False
+
+
+def test_daily_gate_closed_on_weekend():
+    assert daily_batch_gate_open(datetime(2026, 10, 10, 20, 0, tzinfo=CN_TZ)) is False
+
+
+def test_batch_spec_exposes_single_base_day():
+    spec = BatchSpec(batch_index=0, date="20261013", n=5)
+    assert spec.base_day == "2026-10-13"
+
+
+def test_sampling_refuses_more_than_five_pairs(tmp_path):
+    """每基准日最多 5 对：超了显式报错，不靠事后截断。"""
+    spec = BatchSpec(batch_index=0, date="20261013", n=20)
+    with pytest.raises(ValueError, match="超过每基准日上限"):
+        fetch_batch_pairs(spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+                          runner=_fake_sampler([f"6005{i:02d}.SH" for i in range(6)]))
+
+
+def test_sampling_allows_exactly_five_pairs():
+    spec = BatchSpec(batch_index=0, date="20261013", n=5)
+    pairs, _ = fetch_batch_pairs(spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+                                 runner=_fake_sampler([f"6005{i:02d}.SH" for i in range(5)]))
+    assert len(pairs) == 5
+
+
+def test_batch_may_not_span_two_base_days(tmp_path):
+    """一批只对应当天一个基准日 T。"""
+    man = Manifest.from_dict({
+        "pairs": [_pair("a", date="2026-10-13"), _pair("b", date="2026-10-14")],
+        "batches": [["a", "b"]],
+    })
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.now = lambda: datetime(2026, 10, 13, 20, 0, tzinfo=CN_TZ)
+    with pytest.raises(ValueError, match="一个基准日"):
+        ex.run(man)
+    assert servers["O"].calls == []      # 发现问题前一个请求都没发
+
+
+def test_at_most_one_batch_per_base_day(tmp_path):
+    """同一基准日的第二批直接停（每日一批）。"""
+    man = Manifest.from_dict({
+        "pairs": [_pair("a", date="2026-10-13"), _pair("b", date="2026-10-13"),
+                  _pair("c", date="2026-10-14")],
+        "batches": [["a"], ["b"], ["c"]],
+    })
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.now = lambda: datetime(2026, 10, 13, 20, 0, tzinfo=CN_TZ)
+    report = ex.run(man)
+    assert report.stop_reason == "duplicate_base_day"
+    assert ex.ledger.pair_state("a").status == "ok"
+    assert ex.ledger.pair_state("b").status == "pending"
+
+
+def test_run_before_1950_waits_for_gate(tmp_path):
+    """19:50 前不跑：wait 策略睡到开闸。"""
+    slept = []
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    clock = {"now": datetime(2026, 10, 13, 19, 40, tzinfo=CN_TZ)}
+    ex.now = lambda: clock["now"]
+
+    def _sleep(s):
+        slept.append(s)
+        clock["now"] = clock["now"] + timedelta(seconds=s)
+
+    ex.sleep = _sleep
+    report = ex.run(_manifest([_pair("p1", date="2026-10-13")]))
+    assert slept and 590 <= slept[0] <= 700      # 19:40 → 19:50 = 600s
+    assert report.pairs_ok == 1
+
+
+def test_run_before_1950_stop_policy_stops(tmp_path):
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, daily_gate_policy="stop")
+    ex.now = lambda: datetime(2026, 10, 13, 19, 0, tzinfo=CN_TZ)
+    report = ex.run(_manifest([_pair("p1", date="2026-10-13")]))
+    assert report.stop_reason == "daily_batch_gate_not_open"
+    assert report.pairs_run == 0
+    assert servers["O"].calls == []
+
+
+def test_weekend_run_is_skipped(tmp_path):
+    """周末不跑。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.now = lambda: datetime(2026, 10, 10, 20, 0, tzinfo=CN_TZ)   # 周六
+    report = ex.run(_manifest([_pair("p1", date="2026-10-09")]))
+    assert report.stop_reason == "non_trading_day"
+    assert report.pairs_run == 0
+    assert servers["O"].calls == []
+
+
+def test_run_record_carries_snapshot_whitelist_sha256(tmp_path):
+    """总控 §3-3：运行记录必须留下所用白名单的 sha256，否则事后无法复核口径。"""
+    wl = tmp_path / "wl.json"
+    wl.write_text(json.dumps({"paths": ["collected_at"]}), encoding="utf-8")
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.now = lambda: datetime(2026, 10, 13, 20, 0, tzinfo=CN_TZ)
+    report = ex.run(_manifest([_pair("p1", date="2026-10-13")]))
+    assert report.snapshot_whitelist_sha256 is None      # 未提供 → None
+
+    from scripts.phase2.compare_input_snapshots import load_whitelist
+    _, sha = load_whitelist(str(wl))
+    ex.ledger.snapshot_whitelist_sha256 = sha
+    report2 = ex.run(_manifest([_pair("p2", symbol="600520.SH", date="2026-10-14")]))
+    assert report2.snapshot_whitelist_sha256 == sha
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["snapshot_whitelist_sha256"] == sha
+
+
+def test_same_seed_same_list_different_seed_different_list():
+    """总控 10-12 晚：换种子 → 名单变；同种子 → 名单同（端到端到取样结果）。
+
+    桩 runner 按 ``spec.sampler_seed`` 做确定性置换，行为对齐 m2_sampler
+    「同种子同名单、异种子换名单」的可复现契约。
+    """
+    pool = [f"6005{i:02d}.SH" for i in range(10)]
+
+    def seeded_runner(spec):
+        import random
+        rng = random.Random(spec.sampler_seed)
+        picked = rng.sample(pool, 5)
+        return {
+            "trade_date": "2026-10-13", "n_picked": 5,
+            "eligible_digest": f"d{spec.sampler_seed}",
+            "picks": [{"ts_code": s} for s in picked],
+        }
+
+    def names(spec):
+        pairs, _ = fetch_batch_pairs(spec, instances=("O", "N"),
+                                     expected_model=EXPECTED_MODEL, runner=seeded_runner)
+        return [p.symbol for p in pairs]
+
+    base = BatchSpec(batch_index=0, date="20261013", n=5)
+    again = BatchSpec(batch_index=0, date="20261013", n=5)
+    other = BatchSpec(batch_index=0, date="20261013", n=5, seed_base=777)
+
+    assert names(base) == names(again)          # 同种子 → 同名单
+    assert names(base) != names(other)          # 换种子 → 名单变
+    assert names(other) == names(
+        BatchSpec(batch_index=0, date="20261013", n=5, seed_base=777)
+    )

@@ -80,6 +80,14 @@ SAMPLER_SEED_BASE = 20261010
 # 不足 1 年 / 停牌，按申万一级分层）
 SAMPLER_SCRIPT = "scripts/phase2/m2_sampler.py"
 
+# 总控 10-12 晚裁定：批与基准日分离
+#   * 每个交易日 19:50 后最多跑一批
+#   * 一批只对应当天**一个**基准日 T
+#   * 每个基准日最多 5 对（目标 40 基准日 × 5 对）
+PAIRS_PER_BASE_DAY = 5
+# 一天最多一批的执行闸：只允许在 19:50（静默窗口结束）之后起跑
+DAILY_BATCH_AFTER = dt_time(19, 50)
+
 # 失败率的分母下限：完成 1 对即开始判定（0/1 = 0% 不停批）
 MIN_FAIL_RATE_SAMPLES = 1
 
@@ -104,6 +112,9 @@ STOP_NON_FROZEN_MODEL = "non_frozen_model"
 STOP_FAIL_RATE = "batch_fail_rate"
 STOP_BUDGET = "batch_or_total_budget"
 STOP_BLACKOUT = "trading_day_blackout"
+STOP_DAILY_GATE = "daily_batch_gate_not_open"
+STOP_WEEKEND = "non_trading_day"
+STOP_DUPLICATE_BASE_DAY = "duplicate_base_day"
 
 
 # ---------------------------------------------------------------------------
@@ -206,28 +217,60 @@ class Manifest:
 
 @dataclass(frozen=True)
 class BatchSpec:
-    """一批的取样口径。"""
+    """一批的取样口径。
+
+    ``seed_base`` 是抽样种子基数，实际种子 = ``seed_base + batch_index``。
+    默认 20261010（总控 10-12 令的硬口径），但它**真实生效**——传别的值就
+    会改变取样，不得留下「声明可调、实际被忽略」的假开关。
+    """
 
     batch_index: int
     date: str                       # YYYYMMDD，交给 m2_sampler 的信号日
     n: int                          # 该批抽多少个标的
-    seed: int = SAMPLER_SEED_BASE
+    seed_base: int = SAMPLER_SEED_BASE
 
     @property
     def sampler_seed(self) -> int:
-        """种子 = 20261010 + 批号，可复现。"""
-        return SAMPLER_SEED_BASE + self.batch_index
+        """种子 = seed_base + 批号，可复现。"""
+        return self.seed_base + self.batch_index
+
+    @property
+    def base_day(self) -> str:
+        """该批对应的基准日 T（YYYY-MM-DD）。一批只对应一个基准日。"""
+        d = str(self.date)
+        if len(d) == 8 and d.isdigit():
+            return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        return d
+
+    def with_seed_base(self, seed_base: Optional[int]) -> "BatchSpec":
+        if seed_base is None or seed_base == self.seed_base:
+            return self
+        return BatchSpec(
+            batch_index=self.batch_index, date=self.date, n=self.n, seed_base=int(seed_base)
+        )
 
 
-def load_batch_specs(path: Path) -> List[BatchSpec]:
+def load_batch_specs(path: Path, *, seed_base: Optional[int] = None) -> List[BatchSpec]:
+    """读批序口径。
+
+    ``seed_base`` 参数与命令行 ``--sampler-seed-base`` 优先于文件里的值；
+    文件里若显式给了 ``seed_base`` 而与参数冲突，直接报错而不是静默取一个。
+    """
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     specs = []
     for item in payload.get("batches") or []:
+        file_base = item.get("seed_base")
+        if seed_base is not None and file_base is not None and int(file_base) != int(seed_base):
+            raise ValueError(
+                f"批 {item.get('batch_index')}：文件 seed_base={file_base} 与传入的 "
+                f"seed_base={seed_base} 冲突，拒绝静默取其一"
+            )
+        effective = seed_base if seed_base is not None else file_base
         specs.append(BatchSpec(
             batch_index=int(item["batch_index"]),
             date=str(item["date"]),
             n=int(item["n"]),
-            seed=int(item.get("seed", SAMPLER_SEED_BASE)),
+            seed_base=int(effective) if effective is not None else SAMPLER_SEED_BASE,
         ))
     if not specs:
         raise ValueError(f"{path}: batches 为空")
@@ -254,6 +297,13 @@ def fetch_batch_pairs(
     if not picks:
         raise ValueError(
             f"批 {spec.batch_index}@{spec.date} 取样为空（n={spec.n}），拒绝执行空批"
+        )
+    # 总控 10-12 晚裁定：每个基准日最多 5 对。取回来超了要显式报错，
+    # 不能靠事后截断——那会让抽样结果与落盘名单对不上。
+    if len(picks) > spec.n or len(picks) > PAIRS_PER_BASE_DAY:
+        raise ValueError(
+            f"批 {spec.batch_index}@{spec.base_day} 取样 {len(picks)} 对，"
+            f"超过每基准日上限 {min(spec.n, PAIRS_PER_BASE_DAY)} 对，拒绝执行"
         )
     pairs = []
     for row in picks:
@@ -365,6 +415,7 @@ class Ledger:
         }
         self.stop_reason: Optional[str] = None
         self.stop_detail: Optional[str] = None
+        self.snapshot_whitelist_sha256: Optional[str] = None
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -379,6 +430,7 @@ class Ledger:
         self.totals.update(payload.get("totals") or {})
         self.stop_reason = payload.get("stop_reason")
         self.stop_detail = payload.get("stop_detail")
+        self.snapshot_whitelist_sha256 = payload.get("snapshot_whitelist_sha256")
         for item in payload.get("pairs") or []:
             self.pairs[item["pair_id"]] = PairState(
                 pair_id=item["pair_id"],
@@ -395,6 +447,7 @@ class Ledger:
             "totals": self.totals,
             "stop_reason": self.stop_reason,
             "stop_detail": self.stop_detail,
+            "snapshot_whitelist_sha256": self.snapshot_whitelist_sha256,
             "updated_at": self.now().isoformat(timespec="seconds"),
             "pairs": [asdict(p) for p in self.pairs.values()],
         }
@@ -611,6 +664,32 @@ def blackout_active(now: datetime) -> bool:
     return in_blackout(now)
 
 
+def daily_batch_gate_open(now: datetime) -> bool:
+    """「每日一批」闸：只在交易日 19:50 之后开闸，周末不开闸。
+
+    总控 10-12 晚裁定把批与基准日绑定：**每个交易日 19:50 后最多跑一批**，
+    一批只对应当天一个基准日 T。因此运行窗口必须落在静默窗口结束后。
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CN_TZ)
+    else:
+        now = now.astimezone(CN_TZ)
+    if not is_trading_day(now.date().isoformat()):
+        return False
+    return now.time() >= DAILY_BATCH_AFTER
+
+
+def seconds_until_daily_gate(now: datetime) -> float:
+    """距今日开闸（19:50）的秒数；当天已开闸返回 0。"""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CN_TZ)
+    else:
+        now = now.astimezone(CN_TZ)
+    gate = now.replace(hour=DAILY_BATCH_AFTER.hour, minute=DAILY_BATCH_AFTER.minute,
+                       second=0, microsecond=0)
+    return max(0.0, (gate - now).total_seconds())
+
+
 def seconds_to_blackout_end(now: datetime) -> float:
     if now.tzinfo is None:
         now = now.replace(tzinfo=CN_TZ)
@@ -654,6 +733,8 @@ class StopConfig:
     min_fail_rate_samples: int = MIN_FAIL_RATE_SAMPLES
     pair_retries: int = DEFAULT_PAIR_RETRIES
     blackout_policy: str = "wait"  # wait / stop
+    # 每日一批闸：wait = 等到 19:50 再跑；stop = 不在窗口则直接停
+    daily_gate_policy: str = "wait"
 
 
 @dataclass
@@ -672,6 +753,9 @@ class RunReport:
     stop_detail: Optional[str] = None
     totals: Dict[str, Any] = field(default_factory=dict)
     batches: List[Dict[str, Any]] = field(default_factory=list)
+    # 两臂输入快照比对所用白名单的 sha256（总控 10-12 晚 §3-3）：事后据此判断
+    # 某次结论用的是哪份白名单。为 None 表示未提供白名单（不剔除任何字段）。
+    snapshot_whitelist_sha256: Optional[str] = None
 
     def to_json(self) -> Dict[str, Any]:
         return asdict(self)
@@ -719,6 +803,29 @@ class ExperimentExecutor:
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     # -- 窗口 ---------------------------------------------------------------
+    def wait_for_daily_gate(self) -> bool:
+        """每日一批闸。返回 True 表示因闸未开而停下（stop 策略）。
+
+        已开闸返回 False；wait 策略下未开闸则睡到 19:50 再继续；周末/非交易日
+        直接停（周末不跑）。
+        """
+        now = self.now()
+        if daily_batch_gate_open(now):
+            return False
+        if not is_trading_day(now.astimezone(CN_TZ).date().isoformat()):
+            # 周末/非交易日不跑（总控 10-12 晚裁定）
+            self.ledger.stop_reason = STOP_WEEKEND
+            self.ledger.stop_detail = f"{now.date().isoformat()} 非交易日，不跑"
+            return True
+        if self.config.daily_gate_policy == "stop":
+            self.ledger.stop_reason = STOP_DAILY_GATE
+            self.ledger.stop_detail = (
+                f"未到每日开闸时间 {DAILY_BATCH_AFTER.isoformat()}（每个交易日 19:50 后最多一批）"
+            )
+            return True
+        self.sleep(seconds_until_daily_gate(now))
+        return False
+
     def wait_out_blackout(self) -> bool:
         """返回 True 表示因窗口停下（stop 策略）。"""
         if not blackout_active(self.now()):
@@ -951,8 +1058,24 @@ class ExperimentExecutor:
             pairs_planned=len(manifest.pairs),
         )
         batches = manifest.ordered_batches()
+        seen_base_days: set = set()
         for bi, batch in enumerate(batches):
             if self.ledger.stop_reason:
+                break
+            # 总控 10-12 晚裁定：每个交易日 19:50 后最多跑一批 → 一批一个基准日。
+            base_days = {p.trade_date for p in batch}
+            if len(base_days) > 1:
+                raise ValueError(
+                    f"一批只允许对应一个基准日，实际出现 {sorted(base_days)}"
+                )
+            base_day = next(iter(base_days)) if base_days else None
+            if base_day is not None and base_day in seen_base_days:
+                self.ledger.stop_reason = STOP_DUPLICATE_BASE_DAY
+                self.ledger.stop_detail = f"基准日 {base_day} 已跑过一批，每日一批上限"
+                break
+            if base_day is not None:
+                seen_base_days.add(base_day)
+            if self.wait_for_daily_gate():
                 break
             outcomes: List[str] = []
             batch_requests = 0
@@ -1017,6 +1140,7 @@ class ExperimentExecutor:
             })
         report.stop_reason = self.ledger.stop_reason
         report.stop_detail = self.ledger.stop_detail
+        report.snapshot_whitelist_sha256 = self.ledger.snapshot_whitelist_sha256
         report.totals = dict(self.ledger.totals)
         report.finished_at = self.now().isoformat(timespec="seconds")
         self.ledger.flush()
@@ -1073,8 +1197,10 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="按清单执行")
     run.add_argument("--manifest")
     run.add_argument("--batch-spec", help="前瞻取样口径 JSON（与 --manifest 二选一）")
-    run.add_argument("--expected-model", help="冻结身份：该批所有对的期望 message.model")
-    run.add_argument("--sampler-seed-base", type=int, default=SAMPLER_SEED_BASE)
+    run.add_argument("--expected-model", required=True,
+                     help="冻结身份：该批所有对的期望 message.model（必填，否则核对会失效）")
+    run.add_argument("--sampler-seed-base", type=int, default=SAMPLER_SEED_BASE,
+                     help=f"抽样种子基数，实际种子 = base + 批号（默认 {SAMPLER_SEED_BASE}）")
     run.add_argument("--instance", action="append", default=[],
                      help="实例名=基址，如 O=http://127.0.0.1:8021（可重复）")
     run.add_argument("--state-dir", required=True)
@@ -1087,11 +1213,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--blackout-policy", choices=["wait", "stop"], default="wait")
     run.add_argument("--poll-interval", type=float, default=5.0)
     run.add_argument("--job-timeout", type=float, default=7200.0)
+    run.add_argument("--snapshot-whitelist", default=None,
+                     help="输入快照比对白名单文件（精确 JSON 路径，默认空=不剔除）")
 
     plan = sub.add_parser("plan", help="只按前瞻口径取样并落盘对名单，不发起任何分析")
     plan.add_argument("--batch-spec", required=True)
     plan.add_argument("--instance", action="append", default=[])
     plan.add_argument("--expected-model", required=True)
+    plan.add_argument("--sampler-seed-base", type=int, default=SAMPLER_SEED_BASE)
     plan.add_argument("--out", required=True)
 
     st = sub.add_parser("status", help="只看当前记账与停批原因")
@@ -1122,7 +1251,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.cmd == "plan":
-        specs = load_batch_specs(Path(args.batch_spec))
+        specs = load_batch_specs(Path(args.batch_spec), seed_base=args.sampler_seed_base)
         order = [n for n in _instances_from_args(args.instance)] or ["O", "N"]
         out_batches = []
         for spec in specs:
@@ -1164,7 +1293,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tokens = _tokens_from_args(args.token)
     if args.batch_spec:
         manifest = build_forward_manifest(
-            load_batch_specs(Path(args.batch_spec)),
+            load_batch_specs(Path(args.batch_spec), seed_base=args.sampler_seed_base),
             instances=[n for n in instances] or ["O", "N"],
             expected_model=args.expected_model,
         )
@@ -1173,6 +1302,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         raise SystemExit("必须给 --manifest 或 --batch-spec 之一")
     ledger = Ledger(state_dir)
+    if getattr(args, "snapshot_whitelist", None):
+        from scripts.phase2.compare_input_snapshots import load_whitelist
+
+        _, wl_sha = load_whitelist(args.snapshot_whitelist)
+        ledger.snapshot_whitelist_sha256 = wl_sha
     executor = ExperimentExecutor(
         instances=instances,
         ledger=ledger,
