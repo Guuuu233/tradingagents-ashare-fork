@@ -29,6 +29,11 @@ def _ensure_tables():
 
 
 def _rows_for(report_id):
+    # DAV-1362 ③: async dispatch offloads the ledger commit to a writer
+    # thread, so drain the queue before reading rows back.
+    from api.usage_logging import flush_usage_writes
+
+    flush_usage_writes()
     with get_db_ctx() as db:
         return (
             db.query(LLMCallLogDB)
