@@ -10,7 +10,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
+import threading
+import time
 import uuid
 
 import httpx
@@ -1087,25 +1090,231 @@ class TestReview1925Cleanup:
 
     def test_summary_flushes_pending_rows(self):
         """build_llm_usage_summary must never miss a report's last call
-        whose row is still queued on the writer thread."""
+        whose row is still queued on the writer thread.
+
+        Deterministic (DAV-1958): the writer thread is stalled inside
+        ``log_llm_call`` for 300 ms, so without the drain the read-back
+        provably sees 0 rows (summary is None) and with the drain it
+        waits for the write and sees 1 row.
+        """
+        import api.database as db
+
         report_id = uuid.uuid4().hex
         handler = LLMUsageLogger()
         run_id = uuid.uuid4()
+        entered = threading.Event()
+        real_log = db.log_llm_call
 
-        async def _call():
-            # Inside a running loop ⇒ the row is queued on the writer
-            # thread, not written yet.
-            handler.on_chat_model_start(
-                {}, [], run_id=run_id,
-                metadata={"report_id": report_id, "llm_role": "Trader"})
-            handler.on_llm_end(_llm_result(usage=_usage_metadata()),
-                               run_id=run_id)
+        def _slow_log(**kwargs):
+            entered.set()
+            time.sleep(0.3)
+            real_log(**kwargs)
 
-        asyncio.run(_call())
-        # No explicit flush here: the summary drains the queue itself.
-        summary = build_llm_usage_summary(report_id)
-        assert summary is not None
+        db.log_llm_call = _slow_log
+        try:
+            async def _call():
+                # Inside a running loop ⇒ the row is queued on the writer
+                # thread, not written yet.
+                handler.on_chat_model_start(
+                    {}, [], run_id=run_id,
+                    metadata={"report_id": report_id, "llm_role": "Trader"})
+                handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                                   run_id=run_id)
+
+            asyncio.run(_call())
+            assert entered.wait(timeout=5), (
+                "writer thread never picked the row up — the off-loop "
+                "write path is broken"
+            )
+            # No explicit flush here: the summary drains the queue itself.
+            summary = build_llm_usage_summary(report_id)
+        finally:
+            from api.usage_logging import flush_usage_writes
+
+            flush_usage_writes()
+            db.log_llm_call = real_log
+
+        assert summary is not None, (
+            "summary read back before the queued row was written — the "
+            "drain inside build_llm_usage_summary is missing"
+        )
         assert summary["call_count"] == 1
+
+    def test_flush_timeout_warns_with_queued_rows(self, caplog):
+        """DAV-1958: a drain timeout must warn with the queued-row count
+        (it used to be logger.debug), because a silent timeout persists a
+        short usage_summary / served_models."""
+        import api.database as db
+        from api.usage_logging import flush_usage_writes
+
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+        release = threading.Event()
+        entered = threading.Event()
+        real_log = db.log_llm_call
+
+        def _stalled_log(**kwargs):
+            entered.set()
+            release.wait(timeout=10)
+            real_log(**kwargs)
+
+        db.log_llm_call = _stalled_log
+        try:
+            async def _call():
+                handler.on_chat_model_start(
+                    {}, [], run_id=run_id,
+                    metadata={"report_id": report_id, "llm_role": "Trader"})
+                handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                                   run_id=run_id)
+
+            asyncio.run(_call())
+            assert entered.wait(timeout=5)
+            with caplog.at_level(logging.WARNING, logger="api.usage_logging"):
+                flush_usage_writes(timeout=0.05)
+        finally:
+            release.set()
+            flush_usage_writes()
+            db.log_llm_call = real_log
+
+        messages = [rec.getMessage() for rec in caplog.records]
+        assert any("timed out" in m and "ledger row" in m for m in messages), (
+            "drain timeout was not reported as a warning with the queued "
+            "row count: %r" % messages
+        )
+
+    def test_summary_warns_when_rows_still_queued(self, monkeypatch, caplog):
+        """DAV-1958: rows still queued after the drain must produce a
+        warning naming the missing count — the short summary would
+        otherwise be persisted into result_data silently."""
+        import api.database as db
+        from api.usage_logging import flush_usage_writes as _real_flush
+
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+        release = threading.Event()
+        entered = threading.Event()
+        real_log = db.log_llm_call
+
+        def _stalled_log(**kwargs):
+            entered.set()
+            release.wait(timeout=10)
+            real_log(**kwargs)
+
+        db.log_llm_call = _stalled_log
+        try:
+            async def _call():
+                handler.on_chat_model_start(
+                    {}, [], run_id=run_id,
+                    metadata={"report_id": report_id, "llm_role": "Trader"})
+                handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                                   run_id=run_id)
+
+            asyncio.run(_call())
+            assert entered.wait(timeout=5)
+            # Short drain timeout so the summary hits the still-queued
+            # branch without waiting out the real 10 s default.
+            monkeypatch.setattr(
+                "api.usage_logging.flush_usage_writes",
+                lambda timeout=10.0: _real_flush(timeout=0.05),
+            )
+            with caplog.at_level(logging.WARNING, logger="api.usage_logging"):
+                summary = build_llm_usage_summary(report_id)
+        finally:
+            release.set()
+            from api.usage_logging import flush_usage_writes
+
+            flush_usage_writes()
+            db.log_llm_call = real_log
+
+        assert summary is None  # nothing readable yet — the warning is the contract
+        messages = [rec.getMessage() for rec in caplog.records]
+        assert any("still queued" in m and "undercounts" in m for m in messages), (
+            "missing-rows warning not emitted: %r" % messages
+        )
+
+    def test_attach_off_loop_keeps_the_loop_live(self):
+        """DAV-1958: the production attach point runs in a worker thread
+        (asyncio.to_thread in _run_job_inner), so a stalled ledger writer
+        must not stall the event loop."""
+        import api.database as db
+        from api.main import _attach_traceability_fields
+
+        class _G:
+            role_resolved_configs = {}
+
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+        release = threading.Event()
+        entered = threading.Event()
+        real_log = db.log_llm_call
+        ticks = []
+        result = {}
+
+        def _stalled_log(**kwargs):
+            entered.set()
+            release.wait(timeout=10)
+            real_log(**kwargs)
+
+        db.log_llm_call = _stalled_log
+        try:
+            async def _produce():
+                handler.on_chat_model_start(
+                    {}, [], run_id=run_id,
+                    metadata={"report_id": report_id, "llm_role": "Trader"})
+                handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                                   run_id=run_id)
+
+            async def _ticker():
+                while True:
+                    ticks.append(1)
+                    await asyncio.sleep(0.01)
+
+            async def _release_later():
+                await asyncio.sleep(0.3)
+                release.set()
+
+            async def _main():
+                await _produce()
+                assert entered.wait(timeout=5)
+                ticker = asyncio.create_task(_ticker())
+                releaser = asyncio.create_task(_release_later())
+                # production pattern: the attach (ledger drain included)
+                # runs off the event loop
+                await asyncio.to_thread(
+                    _attach_traceability_fields,
+                    result,
+                    pool=None,
+                    graph=_G(),
+                    prompt_snapshot={"roles": {}},
+                    report_id=report_id,
+                )
+                ticker.cancel()
+                try:
+                    await ticker
+                except asyncio.CancelledError:
+                    pass
+                await releaser  # fired while the drain was waiting
+
+            asyncio.run(_main())
+        finally:
+            release.set()
+            from api.usage_logging import flush_usage_writes
+
+            flush_usage_writes()
+            db.log_llm_call = real_log
+
+        # The drain waited ~0.3 s for the stalled writer; the loop must have
+        # kept ticking throughout (10 ms cadence).
+        assert len(ticks) >= 20, (
+            "event loop was stalled while the ledger drain waited: %d ticks"
+            % len(ticks)
+        )
+        assert result["served_models"]["by_role"] == {
+            "Trader": ["gpt-6-luna"]
+        }
 
     def test_flush_usage_writes_is_public_and_idempotent(self):
         from api.usage_logging import flush_usage_writes
