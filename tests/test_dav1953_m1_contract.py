@@ -929,3 +929,66 @@ class TestThreeReadingsWiring:
         args = type("A", (), {"ledger_dir": str(tmp_path), "db": str(db),
                               "check_three_readings": True})()
         assert dsl.cmd_verify(args) == 1
+
+    def test_check_three_readings_mixed_v1_v2_ledger(
+            self, tmp_path, capsys):
+        """DAV-1969 🟡：混合 v1+v2 账本 — 预契约 v1 行不计 attempted /
+        completed / three_way_consistent，仅披露 pre_contract_not_sealed。"""
+        import sqlite3
+        # v1 report row: legacy horizons.medium layout, no b2 keys.
+        rd_v1 = json.dumps({
+            "horizons": {"medium": {"direction": "看多",
+                                    "probability": 55}},
+            "market_data_context": {}}, ensure_ascii=False)
+        # v2 report row: canonical medium_term slice with b2 contract.
+        rd_v2_db = json.dumps({"medium_term": B2_MEDIUM,
+                               "market_data_context": {}},
+                              ensure_ascii=False)
+        db = tmp_path / "t.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, "
+                    "user_id TEXT, symbol TEXT, industry TEXT, "
+                    "trade_date TEXT, status TEXT, analysis_status TEXT, "
+                    "decision TEXT, direction TEXT, probability REAL, "
+                    "trade_action TEXT, risk_status TEXT, "
+                    "final_trade_decision TEXT, created_at TEXT, "
+                    "updated_at TEXT, result_data TEXT)")
+        for rid, rd in (("r_v1", rd_v1), ("r_v2", rd_v2_db)):
+            con.execute(
+                "INSERT INTO reports VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (rid, "u1", "600519.SH", "白酒", "2026-07-28",
+                 "completed", "VALID", "BUY", "看多", 60, "BUY",
+                 "APPROVED", "ok", "2026-07-28 15:43:57.730577",
+                 "2026-07-28 15:43:57.730577", rd))
+        con.commit(); con.close()
+        sealed = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+        ledger = tmp_path / "forward_ledger.jsonl"
+        prev = "GENESIS"
+        with open(ledger, "w") as fh:
+            for rid, rd in (("r_v1", rd_v1), ("r_v2", _rd_v2())):
+                rec = dsl.build_record(_row(id=rid), rd, sealed,
+                                       "2026-07-29", _cal())
+                ch = hashlib.sha256(
+                    (prev + rec["record_sha256"]).encode()).hexdigest()
+                fh.write(json.dumps(
+                    {"record": rec, "prev_hash": prev, "chain_hash": ch}
+                ) + "\n")
+                prev = ch
+        args = type("A", (), {"ledger_dir": str(tmp_path), "db": str(db),
+                              "check_three_readings": True})()
+        assert dsl.cmd_verify(args) == 0
+        out = capsys.readouterr().out
+        # stdout = "OK: … chain intact" line, then the JSON report block,
+        # then the "OK: three-way readings …" line — parse the middle.
+        dec = json.JSONDecoder()
+        report, _ = dec.raw_decode(out[out.index("{"):])
+        counters = report["counters_40x2"]
+        assert counters["planned_units"] == 1
+        assert counters["attempted"] == 1
+        assert counters["completed_units"] == 1
+        assert counters["valid"] == 1
+        assert counters["pre_contract_not_sealed"] == 1
+        assert counters["three_way_consistent"] == 1
+        tw = report["three_way_check"]
+        assert tw["checked"] == 1 and tw["consistent"] == 1

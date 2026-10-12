@@ -902,7 +902,12 @@ def _check_three_readings(records: list[dict],
 
     Emits the spec §3 40×2 counter block (``parse_counters`` over the
     p_rel_t40 statuses read back from the ledger) plus a
-    ``three_way_consistent`` tally. Never touches prompt/model paths.
+    ``three_way_consistent`` tally. Pre-contract v1 ledger rows carry no
+    b2 keys at all — they are diverted before both the counters and the
+    three-way comparison, and disclosed under
+    ``pre_contract_not_sealed`` so neither the acceptance denominator
+    nor the consistency tally counts a row nothing was compared on.
+    Never touches prompt/model paths.
     """
     from tradingagents.eval.b2_contract import (
         medium_contract_fields,
@@ -913,15 +918,19 @@ def _check_three_readings(records: list[dict],
     db_path = Path(getattr(args, "db", None) or DEFAULT_DB)
     con = _connect_ro(db_path)
     checked = consistent = skipped = 0
+    pre_contract = 0
     mismatches: list[dict] = []
     evals: list[dict] = []
     try:
         for rec in records:
             rid = rec.get("report_id")
             med_status = medium_contract_fields(rec)["p_rel_t40_status"]
-            evals.append({"p_rel_t40_status":
-                          med_status if med_status != "not_sealed"
-                          else "not_sealed"})
+            if med_status == "not_sealed":
+                # 预契约 v1 行：无 b2 键可比对，既不计 attempted 也不计
+                # consistent，只在 pre_contract_not_sealed 披露
+                pre_contract += 1
+                continue
+            evals.append({"p_rel_t40_status": med_status})
             row = con.execute(
                 f"SELECT {result_data_select_expr(con)} FROM reports"
                 " WHERE id=?", (rid,)).fetchone()
@@ -961,10 +970,11 @@ def _check_three_readings(records: list[dict],
         three_way_consistent=consistent,
     )
     # v1 rows are pre-contract — they are neither "missing" nor
-    # "malformed" model outputs; surface them as their own counter so the
-    # acceptance denominator (attempted/completed) stays b2-honest.
-    counters["pre_contract_not_sealed"] = sum(
-        1 for e in evals if e["p_rel_t40_status"] == "not_sealed")
+    # "malformed" model outputs; they were diverted above before the
+    # counters so the acceptance denominator (attempted/completed) and
+    # the three_way_consistent tally stay b2-honest, and are disclosed
+    # here as their own counter.
+    counters["pre_contract_not_sealed"] = pre_contract
     report = {
         "three_way_check": {
             "checked": checked,
