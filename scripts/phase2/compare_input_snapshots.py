@@ -9,6 +9,9 @@
    （旧版用 `VOLATILE_KEY_HINTS` 子串推断 volatile，已按新令删除。）
 2. **规范化只认显式逐路径白名单文件**：精确 JSON 路径，**禁子串、禁通配符**。
    默认为空 = 不剔除任何字段。白名单内容须由总控在 5 对试跑后确认才填。
+   **判定口径本身的字段（``hash`` / ``algo`` / ``keys`` / ``bytes``）不得进白名单**：
+   命中即报错退出（``ValueError``），否则一条 ``paths: ["hash"]`` 就能把两份
+   不同的输入判成「一致」，等于自毁口径。
 3. **所用白名单的 sha256 必须落进运行记录**，否则事后无法判断某次结论用的是
    哪份白名单。
 4. **原始结果与规范化结果分别记录、分别报告**，不合并成一个结论。
@@ -26,8 +29,26 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+
+# 用于**判定比对口径**的字段：白名单不得剔除它们，否则结论不可复核。
+# 命中即报错退出，不静默忽略。
+PROTECTED_FIELDS = frozenset({"hash", "algo", "keys", "bytes"})
+
+_SEGMENT_RE = re.compile(r"[^.\[\]]+")
+
+
+def _segments(path: str) -> List[str]:
+    """把 ``a.b[0].hash`` 拆成 ``["a", "b", "0", "hash"]``。"""
+    return [s.strip().lower() for s in _SEGMENT_RE.findall(path)]
+
+
+def protected_paths(paths: Sequence[str]) -> List[str]:
+    """返回 ``paths`` 里命中的受保护路径（任一层段名在 PROTECTED_FIELDS 内）。"""
+    return [p for p in paths if PROTECTED_FIELDS.intersection(_segments(p))]
 
 
 def load_whitelist(path: Optional[str]) -> Tuple[List[str], Optional[str]]:
@@ -36,6 +57,8 @@ def load_whitelist(path: Optional[str]) -> Tuple[List[str], Optional[str]]:
     * ``path`` 为空 → 白名单为空、sha256 为 None（默认不剔除任何字段）。
     * 白名单内容必须是**精确 JSON 路径**；出现 ``*`` / ``%`` 等通配符直接报错，
       避免"看起来是白名单、实际在做子串匹配"的静默放宽。
+    * 白名单命中受保护字段（``hash`` / ``algo`` / ``keys`` / ``bytes``）直接报错
+      ——那些字段就是比对口径本身，剔除它们等于把判定变成永真。
     """
     if not path:
         return [], None
@@ -57,6 +80,12 @@ def load_whitelist(path: Optional[str]) -> Tuple[List[str], Optional[str]]:
                 f"{path}: 白名单只接受精确 JSON 路径，禁止通配符/下标通配：{entry!r}"
             )
         paths.append(entry)
+    bad = protected_paths(paths)
+    if bad:
+        raise ValueError(
+            f"{path}: 白名单不得包含用于判定比对口径的字段"
+            f"{sorted(PROTECTED_FIELDS)}，命中：{bad}"
+        )
     return paths, hashlib.sha256(raw).hexdigest()
 
 
@@ -98,9 +127,16 @@ def compare(
     whitelist: Sequence[str] = (),
     whitelist_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """原始与规范化两组结果，分别给出。"""
+    """原始与规范化两组结果，分别给出。
+
+    直接调用本函数（而不是走 ``load_whitelist``）时，白名单里的受保护字段不会
+    报错，但**同样不生效**：它们从剔除集里剔除，并列进 ``ignored_protected_paths``，
+    调用方一眼能看出自己写的路径没被采纳。
+    """
     rows = diff_paths(a, b)
-    wl = set(whitelist or ())
+    requested = list(whitelist or ())
+    ignored = sorted(set(protected_paths(requested)))
+    wl = set(requested) - set(ignored)
     normalized_rows = [r for r in rows if r["path"] not in wl]
     return {
         "raw": {
@@ -114,6 +150,7 @@ def compare(
         "normalized": {
             "whitelist_paths": sorted(wl),
             "whitelist_sha256": whitelist_sha256,
+            "ignored_protected_paths": ignored,
             "consistent": not normalized_rows,
             "diff_count": len(normalized_rows),
             "excluded_count": len(rows) - len(normalized_rows),
@@ -140,7 +177,10 @@ def main(argv: List[str] | None = None) -> int:
             return inner.get("input_snapshot", inner)
         return data
 
-    wl_paths, wl_sha = load_whitelist(args.whitelist)
+    try:
+        wl_paths, wl_sha = load_whitelist(args.whitelist)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"白名单不可用：{exc}") from exc
     report = compare(load(args.A), load(args.B),
                      whitelist=wl_paths, whitelist_sha256=wl_sha)
     report["inputs"] = {"A": str(args.A), "B": str(args.B),

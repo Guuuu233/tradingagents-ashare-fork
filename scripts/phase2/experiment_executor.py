@@ -28,8 +28,10 @@
 续跑：``state.json`` 记录每个「对」的终态（``ok`` / ``voided`` / ``failed``，
 以及用掉几次补跑）。再次启动时已完成的对一律不重跑，只补没跑过的。
 
-交易日 16:00–19:50（Asia/Shanghai）自动不跑：默认等���窗口结束再继续
+交易日 16:00–19:50（Asia/Shanghai）自动不跑：默认等到静默窗口结束再继续
 （``--blackout-policy stop`` 则原地停下，下次续跑接着走）。
+每个交易日 19:50 后最多跑一批（总控 10-12 晚裁定）；未开闸时同样默认等
+到开闸，``--daily-gate-policy stop`` 则原地停下，下次续跑接着走。
 
 用法（真实实例）::
 
@@ -37,7 +39,9 @@
         --manifest work/exp-1789/manifest.json \
         --instance O=http://127.0.0.1:8021 \
         --instance N=http://127.0.0.1:8022 \
-        --state-dir work/exp-1789/state
+        --state-dir work/exp-1789/state \
+        --daily-gate-policy stop \
+        --snapshot-whitelist work/exp-1789/whitelist.json
 
 ``--total-request-cap`` 默认 20328，与总控 10-11 令一致。
 
@@ -115,6 +119,15 @@ STOP_BLACKOUT = "trading_day_blackout"
 STOP_DAILY_GATE = "daily_batch_gate_not_open"
 STOP_WEEKEND = "non_trading_day"
 STOP_DUPLICATE_BASE_DAY = "duplicate_base_day"
+
+# 只有「需人工确认才能解除」的停批原因才写进 ``state.json``；窗口类原因
+# （每日一批闸 / 静默窗口 / 周末 / 同基准日第二批）只是**本次进程所处时刻的
+# 快照**，换个时刻续跑本就该继续。把它们持久化，续跑读到旧 state 时就会在
+# ``run()`` 开头直接 break（``if self.ledger.stop_reason: break``），于是隔天
+# 再来永远跑不动——必须有人手工改 state.json 才能解除的死锁。
+PERSISTENT_STOP_REASONS = frozenset({
+    STOP_QUOTA, STOP_NON_FROZEN_MODEL, STOP_FAIL_RATE, STOP_BUDGET,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -242,13 +255,6 @@ class BatchSpec:
             return f"{d[:4]}-{d[4:6]}-{d[6:]}"
         return d
 
-    def with_seed_base(self, seed_base: Optional[int]) -> "BatchSpec":
-        if seed_base is None or seed_base == self.seed_base:
-            return self
-        return BatchSpec(
-            batch_index=self.batch_index, date=self.date, n=self.n, seed_base=int(seed_base)
-        )
-
 
 def load_batch_specs(path: Path, *, seed_base: Optional[int] = None) -> List[BatchSpec]:
     """读批序口径。
@@ -289,6 +295,11 @@ def fetch_batch_pairs(
 
     返回 ``(pairs, sampler_result)``；``sampler_result`` 原样保留（含
     ``eligible_digest``），便于复现时核对同一份输入。
+
+    已知局限（不在本轮修）：``pair_id`` 只由批号与标的构成，不含基准日与种子，
+    同一标的两批重复命中时两次运行 pair_id 相同，续跑会把后一批误判成「已完成」。
+    改它会作废已落盘 ``state.json`` / ``ledger.jsonl`` 里的既有 pair_id，与
+    「续跑不得重跑已完成的对」冲突，需与总控确认口径后单独处理。
     """
     if runner is None:
         runner = _run_sampler_subprocess
@@ -428,8 +439,13 @@ class Ledger:
             return
         self.attempt_seq = int(payload.get("attempt_seq") or 0)
         self.totals.update(payload.get("totals") or {})
-        self.stop_reason = payload.get("stop_reason")
-        self.stop_detail = payload.get("stop_detail")
+        # 只认需人工确认才能解除的停批原因：旧版把窗口类原因也写了进来，在这里
+        # 一并丢弃，否则被污染的 state.json 会让此后每次续跑都直接退出。
+        raw_stop = payload.get("stop_reason")
+        if raw_stop not in PERSISTENT_STOP_REASONS:
+            raw_stop = None
+        self.stop_reason = raw_stop
+        self.stop_detail = payload.get("stop_detail") if raw_stop else None
         self.snapshot_whitelist_sha256 = payload.get("snapshot_whitelist_sha256")
         for item in payload.get("pairs") or []:
             self.pairs[item["pair_id"]] = PairState(
@@ -442,11 +458,14 @@ class Ledger:
             )
 
     def flush(self) -> None:
+        # 窗口类停批原因只留在内存：本次运行的 RunReport / run_report.json 仍照实
+        # 记录（可事后审计），但不写回 state.json，理由见 PERSISTENT_STOP_REASONS。
+        persistent = self.stop_reason in PERSISTENT_STOP_REASONS
         payload = {
             "attempt_seq": self.attempt_seq,
             "totals": self.totals,
-            "stop_reason": self.stop_reason,
-            "stop_detail": self.stop_detail,
+            "stop_reason": self.stop_reason if persistent else None,
+            "stop_detail": self.stop_detail if persistent else None,
             "snapshot_whitelist_sha256": self.snapshot_whitelist_sha256,
             "updated_at": self.now().isoformat(timespec="seconds"),
             "pairs": [asdict(p) for p in self.pairs.values()],
@@ -1211,6 +1230,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--fail-rate-threshold", type=float, default=DEFAULT_FAIL_RATE_THRESHOLD)
     run.add_argument("--pair-retries", type=int, default=DEFAULT_PAIR_RETRIES)
     run.add_argument("--blackout-policy", choices=["wait", "stop"], default="wait")
+    run.add_argument("--daily-gate-policy", choices=["wait", "stop"], default="wait",
+                     help="每日一批闸（交易日 19:50 后）未开时的行为：wait=睡到开闸，"
+                          "stop=原地停下、下次续跑接着走（默认 wait）")
     run.add_argument("--poll-interval", type=float, default=5.0)
     run.add_argument("--job-timeout", type=float, default=7200.0)
     run.add_argument("--snapshot-whitelist", default=None,
@@ -1226,6 +1248,32 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("status", help="只看当前记账与停批原因")
     st.add_argument("--state-dir", required=True)
     return p
+
+
+_COMPARE_INPUT_SNAPSHOTS: Any = None
+
+
+def _load_compare_input_snapshots() -> Any:
+    """按**文件路径**加载同目录的 ``compare_input_snapshots``。
+
+    直接以脚本方式运行时 ``sys.path[0]`` 是 ``scripts/phase2``——既没有仓库根，
+    也没有 ``scripts/__init__.py``，任何 ``from scripts.phase2.x import y`` 都会
+    ``ModuleNotFoundError``。改用绝对路径加载后既不依赖 cwd 也不依赖包结构，
+    且整个进程只执行一次（缓存）。别名加 ``_dav1882_`` 前缀，避免撞上该模块
+    自己 ``if __name__ == "__main__"`` 的命令行分支。
+    """
+    global _COMPARE_INPUT_SNAPSHOTS
+    if _COMPARE_INPUT_SNAPSHOTS is None:
+        import importlib.util
+
+        path = Path(__file__).resolve().with_name("compare_input_snapshots.py")
+        spec = importlib.util.spec_from_file_location("_dav1882_compare_input_snapshots", path)
+        if spec is None or spec.loader is None:      # pragma: no cover - 安装损坏
+            raise SystemExit(f"无法加载 {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _COMPARE_INPUT_SNAPSHOTS = module
+    return _COMPARE_INPUT_SNAPSHOTS
 
 
 def _instances_from_args(pairs: Iterable[str]) -> Dict[str, str]:
@@ -1303,9 +1351,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit("必须给 --manifest 或 --batch-spec 之一")
     ledger = Ledger(state_dir)
     if getattr(args, "snapshot_whitelist", None):
-        from scripts.phase2.compare_input_snapshots import load_whitelist
-
-        _, wl_sha = load_whitelist(args.snapshot_whitelist)
+        load_whitelist = _load_compare_input_snapshots().load_whitelist
+        try:
+            _, wl_sha = load_whitelist(args.snapshot_whitelist)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"--snapshot-whitelist 读取失败：{exc}") from exc
         ledger.snapshot_whitelist_sha256 = wl_sha
     executor = ExperimentExecutor(
         instances=instances,
@@ -1317,6 +1367,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             fail_rate_threshold=args.fail_rate_threshold,
             pair_retries=args.pair_retries,
             blackout_policy=args.blackout_policy,
+            daily_gate_policy=args.daily_gate_policy,
         ),
         poll_interval=args.poll_interval,
         job_timeout=args.job_timeout,

@@ -5,7 +5,8 @@
 - 规范化只认显式逐路径白名单，禁子串/通配；
 - 白名单 sha256 落进结果；
 - 原始/规范化结果分别给出；
-- valid / provider / evidence_* 等语义字段不得被误剔除。
+- valid / provider / evidence_* 等语义字段不得被误剔除；
+- **判定口径本身的字段（hash / algo / keys / bytes）不得被白名单剔除**。
 """
 
 from __future__ import annotations
@@ -150,6 +151,54 @@ def test_whitelist_rejects_non_string_entry(tmp_path):
     f.write_text(json.dumps({"paths": [123]}), encoding="utf-8")
     with pytest.raises(ValueError, match="非空字符串"):
         cis.load_whitelist(str(f))
+
+# ---------------------------------------------------------------------------
+# 受保护字段（总控追加·升为必修）：白名单不得剔除判定口径本身
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("entry", [
+    "hash", "algo", "keys", "bytes",
+    "input_snapshot.hash", "input_snapshot.algo",
+    "meta.keys", "nested.hash",
+])
+def test_whitelist_rejects_protected_verdict_fields(tmp_path, entry):
+    """白名单命中 hash/algo/keys/bytes → 报错退出，不静默放行。"""
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps({"paths": [entry]}), encoding="utf-8")
+    with pytest.raises(ValueError) as exc:
+        cis.load_whitelist(str(f))
+    assert "不得包含用于判定比对口径的字段" in str(exc.value)
+    assert entry in str(exc.value)
+
+def test_whitelist_rejects_protected_field_among_valid_entries(tmp_path):
+    f = tmp_path / "wl.json"
+    f.write_text(json.dumps({"paths": ["collected_at", "hash"]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="hash"):
+        cis.load_whitelist(str(f))
+
+def test_protected_paths_detects_nested_index_segments():
+    assert cis.protected_paths(["a[0].hash", "b.keys"]) == ["a[0].hash", "b.keys"]
+    assert cis.protected_paths(["collected_at", "report_id"]) == []
+
+def test_hash_cannot_be_knocked_out_by_whitelist_at_compare_time():
+    """直接调用 compare() 时受保护路径同样不生效，并被显式列出来。"""
+    a = _snap("aaa", collected_at="t1", report_id="r1")
+    b = _snap("bbb", collected_at="t2", report_id="r2")
+    rep = cis.compare(a["input_snapshot"], b["input_snapshot"],
+                      whitelist=["hash", "collected_at"])
+    assert rep["normalized"]["whitelist_paths"] == ["collected_at"]
+    assert rep["normalized"]["ignored_protected_paths"] == ["hash"]
+    paths = {r["path"] for r in rep["normalized"]["diffs"]}
+    assert "hash" in paths
+    assert rep["normalized"]["consistent"] is False
+
+def test_cli_exits_nonzero_on_protected_whitelist(tmp_path, capsys):
+    a = _snap("aaa", collected_at="t1", report_id="r1")
+    b = _snap("bbb", collected_at="t1", report_id="r1")
+    wl = tmp_path / "wl.json"
+    wl.write_text(json.dumps({"paths": ["hash"]}), encoding="utf-8")
+    with pytest.raises(SystemExit):
+        cis.main([_w(a), _w(b), "--whitelist", str(wl)])
 
 
 # ---------------------------------------------------------------------------
