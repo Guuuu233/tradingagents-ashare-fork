@@ -363,6 +363,316 @@ def test_aprocess_signal_matches_process_signal_results(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# DAV-1957 🟡3: chat_completions failure branch writes SQLite off-loop
+# ---------------------------------------------------------------------------
+
+def test_chat_completions_failure_write_is_off_loop(monkeypatch):
+    """The chat failure branch must not write SQLite on the event loop thread.
+
+    Drives the real ``chat_completions`` endpoint (SSE mode) with a failing
+    analysis entry point and asserts the resulting ``mark_report_failed`` write
+    lands on a worker thread.
+    """
+    import api.main as m
+
+    slow = _SlowCall(None)
+    monkeypatch.setattr(m.report_service, "mark_report_failed", slow.slow_db)
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("synthetic chat failure")
+
+    monkeypatch.setattr(m, "_run_job", _boom)
+    monkeypatch.setattr(m, "_emit_job_event", lambda *_a, **_k: None)
+    monkeypatch.setattr(m, "_set_job", lambda *_a, **_k: None)
+
+    async def _stream(_job_id):
+        if False:  # pragma: no cover - generator stand-in
+            yield ""
+
+    monkeypatch.setattr(m, "_stream_job_events", _stream)
+
+    captured: dict = {}
+
+    class _StreamingResponse:
+        def __init__(self, content=None, **kwargs) -> None:
+            captured["content"] = content
+
+    monkeypatch.setattr(m, "StreamingResponse", _StreamingResponse)
+
+    async def main() -> None:
+        # Enter the endpoint and let its tracked task run to the failure branch.
+        await m.chat_completions(_chat_request(), _fake_user())
+        for _ in range(300):
+            if slow.started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert slow.started.is_set(), "mark_report_failed was never called"
+        slow.release.set()
+        for _ in range(300):
+            if not [t for t in list(m._background_tasks) if not t.done()]:
+                break
+            await asyncio.sleep(0.01)
+        for t in list(m._background_tasks):
+            t.cancel()
+        m._background_tasks.clear()
+
+    asyncio.run(main())
+    assert threading.current_thread().name not in slow.thread_names, (
+        f"the chat failure write ran on the event loop thread "
+        f"({slow.thread_names})"
+    )
+
+
+def _chat_request():
+    """A real ``ChatCompletionRequest`` so model_fields_set behaves normally."""
+    import api.main as m
+
+    return m.ChatCompletionRequest(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "分析一下 600000.SH"}],
+    )
+
+
+def _fake_user():
+    class _U:
+        id = "u-test"
+        is_active = True
+        email = "test@example.com"
+
+    return _U()
+
+
+def test_chat_completions_source_has_no_inline_db_write():
+    """Static guard: no DB session may be opened *directly* on the loop.
+
+    A ``with get_db_ctx()`` nested inside a plain ``def`` helper is fine as
+    long as that helper is invoked through ``asyncio.to_thread`` (the codebase
+    already does this for the two ``_load_user_context*`` helpers). What must
+    never happen is opening the session directly in the ``async def`` body.
+    """
+    import ast
+    import inspect
+
+    import api.main as m
+
+    src = inspect.getsource(m)
+    tree = ast.parse(src)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        if node.name != "chat_completions":
+            continue
+
+        # Names of nested sync helpers defined inside this async function.
+        nested_sync = {
+            n.name for n in ast.walk(node) if isinstance(n, ast.FunctionDef)
+        }
+
+        # Walk only the async function's own statements. Nested ``def`` /
+        # ``async def`` bodies are skipped wholesale: a DB session opened
+        # inside a plain sync helper is fine when that helper is dispatched
+        # with ``asyncio.to_thread`` (the codebase already does this for the
+        # two ``_load_user_context*`` helpers).
+        def walk_stmt(stmts):
+            for st in stmts:
+                if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                   ast.Lambda)):
+                    continue
+                if isinstance(st, ast.With):
+                    for item in st.items:
+                        call = item.context_expr
+                        if isinstance(call, ast.Call):
+                            fn = call.func
+                            name = (
+                                fn.attr if isinstance(fn, ast.Attribute)
+                                else getattr(fn, "id", "")
+                            )
+                            if name == "get_db_ctx":
+                                offenders.append(call.lineno)
+                    for body in st.body:
+                        walk_stmt([body])
+                    continue
+                if isinstance(st, (ast.For, ast.While, ast.If, ast.Try,
+                                   ast.With, ast.AsyncFor)):
+                    walk_stmt(st.body)
+                    walk_stmt(getattr(st, "orelse", []) or [])
+                    walk_stmt(getattr(st, "finalbody", []) or [])
+                    for h in getattr(st, "handlers", []) or []:
+                        walk_stmt(h.body)
+                    continue
+                for child in ast.iter_child_nodes(st):
+                    if isinstance(child, ast.stmt):
+                        walk_stmt([child])
+
+        walk_stmt(node.body)
+
+    assert not offenders, (
+        f"chat_completions opens a synchronous DB session inline on the event "
+        f"loop at line(s) {offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DAV-1957 🟡1: twin detection must require a real coroutine function
+# ---------------------------------------------------------------------------
+
+def test_yellow1_bare_magicmock_falls_back_to_sync_stub():
+    """A bare MagicMock auto-creates any attribute; it must not be awaited.
+
+    With a ``callable()`` check the branch took the "twin" path and raised
+    ``TypeError: object MagicMock can't be used in 'await' expression``,
+    turning a duck-typed graph into a failed analysis.
+    """
+    import api.main as m
+    from unittest.mock import MagicMock
+
+    graph = MagicMock()
+    graph.process_signal.return_value = "BUY"
+
+    result = asyncio.run(m._resolve_graph_decision(graph, "最终建议：买入"))
+
+    assert result == "BUY", f"expected the sync stub's value, got {result!r}"
+    assert graph.process_signal.called, "the sync stub was bypassed"
+
+
+def test_yellow1_specced_magicmock_uses_async_twin_deliberately():
+    """``MagicMock(spec=TradingAgentsGraph)`` builds a genuine ``AsyncMock`` twin.
+
+    ``asyncio.iscoroutinefunction`` therefore returns True and the async path
+    is taken on purpose: the spec says this graph has an async twin, so
+    honouring it is correct. What the spec'd mock must never do is return a
+    *bare* Mock in place of a decision string, so assert the value the twin
+    was told to return.
+    """
+    import api.main as m
+    from unittest.mock import MagicMock
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    graph = MagicMock(spec=TradingAgentsGraph)
+    graph.aprocess_signal.return_value = "SELL"
+    graph.process_signal.return_value = "BUY"
+
+    result = asyncio.run(m._resolve_graph_decision(graph, "最终建议：卖出"))
+
+    assert result == "SELL", f"expected the twin's value, got {result!r}"
+    assert not graph.process_signal.called, (
+        "the sync stub should not run when a real async twin is present"
+    )
+
+
+def test_yellow1_sync_method_only_object_uses_sync_stub():
+    """A graph exposing only the sync method must use it, off-loop."""
+    import api.main as m
+
+    class _SyncOnly:
+        def __init__(self) -> None:
+            import threading
+
+            self.threads: list[str] = []
+
+        def process_signal(self, text):
+            import threading
+
+            self.threads.append(threading.current_thread().name)
+            return "HOLD"
+
+    graph = _SyncOnly()
+    result = asyncio.run(m._resolve_graph_decision(graph, "x"))
+    import threading
+
+    assert result == "HOLD"
+    assert threading.current_thread().name not in graph.threads, (
+        f"process_signal ran on the event loop thread ({graph.threads})"
+    )
+
+
+def test_yellow1_real_graph_uses_async_twin():
+    """The production graph genuinely has an async twin; it must be used."""
+    import api.main as m
+
+    calls: list[str] = []
+
+    class _RealishGraph:
+        async def aprocess_signal(self, text):
+            calls.append("async")
+            return "HOLD"
+
+        def process_signal(self, text):  # pragma: no cover - must not be used
+            calls.append("sync")
+            return "BUY"
+
+    result = asyncio.run(m._resolve_graph_decision(_RealishGraph(), "x"))
+    assert result == "HOLD"
+    assert calls == ["async"]
+
+
+# ---------------------------------------------------------------------------
+# DAV-1957 🟡2: the count must time out so the saturation probe stays reachable
+# ---------------------------------------------------------------------------
+
+def test_healthz_job_count_timeout_keeps_probe_reachable(monkeypatch):
+    """A hung active_job_count must degrade, not hang /healthz.
+
+    Without the timeout the await parks forever on a saturated executor and the
+    DAV-1885 ``thread_pool_starved`` probe below it can never run — the probe
+    this change was meant to keep diagnostic.
+    """
+    import api.main as m
+    from api.job_store import InMemoryJobStore
+
+    store = InMemoryJobStore()
+    release = threading.Event()
+
+    def _hung_count():
+        release.wait(timeout=30)
+        return 1
+
+    monkeypatch.setattr(store, "active_job_count", _hung_count)
+    monkeypatch.setattr(m, "get_job_store", lambda: store)
+    monkeypatch.setattr(m, "_HEALTHZ_JOB_COUNT_TIMEOUT_S", 0.5)
+
+    async def main() -> None:
+        transport = httpx.ASGITransport(app=m.app)
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://probe") as client:
+            t0 = time.perf_counter()
+            resp = await client.get("/healthz")
+            elapsed = time.perf_counter() - t0
+        release.set()
+        return resp, elapsed
+
+    resp, elapsed = asyncio.run(main())
+
+    print(
+        f"\n[DAV-1957/🟡2] /healthz answered in {elapsed*1000:.1f}ms with a hung "
+        f"active_job_count (timeout 500ms)"
+    )
+    assert elapsed < 2.0, (
+        f"/healthz took {elapsed:.3f}s with a hung job-store count — the "
+        f"timeout is not applied"
+    )
+    body = resp.json()
+    assert body["active_analysis_count"] is None
+    assert "active_analysis_count_error" in body, (
+        "a timed-out count must surface as an error field, not vanish"
+    )
+    # The probe must still have run and answered normally.
+    assert resp.status_code in (200, 503)
+
+
+def test_healthz_job_count_timeout_is_below_saturation_probe(monkeypatch):
+    """The count timeout must leave room for the 5s saturation probe."""
+    import api.main as m
+
+    assert 0 < m._HEALTHZ_JOB_COUNT_TIMEOUT_S < 5, (
+        f"count timeout {m._HEALTHZ_JOB_COUNT_TIMEOUT_S}s must be below the 5s "
+        f"thread-pool saturation probe"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 3. /healthz's own job-store count must not run on the loop
 # ---------------------------------------------------------------------------
 
