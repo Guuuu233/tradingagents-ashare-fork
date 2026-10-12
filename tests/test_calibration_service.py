@@ -810,6 +810,106 @@ class TestApiParamsAndResourceGuard:
         assert len(cal._calibration_cache) == 1
 
 
+class TestDAV1391DuplicateSlotAndEmptyPoolShortCircuit:
+    """DAV-1391: identical in-flight requests must not burn a second slot, and an
+    empty probability pool must return before any price lookup."""
+
+    def test_concurrent_identical_request_does_not_raise_busy(self):
+        import threading
+        import time
+
+        user_id, _ = _user_token()
+        _seed_report(symbol="600519.SH", trade_date="2024-01-02", probability=0.6, user_id=user_id)
+        _seed_report(symbol="600519.SH", trade_date="2024-01-03", probability=0.8, user_id=user_id)
+
+        release = threading.Event()
+        calls = []
+        original = cal._compute_calibration_unlocked
+
+        def _slow(*args, **kwargs):
+            calls.append(1)
+            release.wait(5)
+            return original(*args, **kwargs)
+
+        results = []
+        errors = []
+
+        def _worker():
+            try:
+                with get_db_ctx() as db:
+                    results.append(cal.compute_calibration(db, user_id=user_id, hold_days=5))
+            except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+                errors.append(exc)
+
+        with patch.object(cal, "_compute_calibration_unlocked", side_effect=_slow):
+            t1 = threading.Thread(target=_worker)
+            t1.start()
+            deadline = time.monotonic() + 5
+            while not calls and time.monotonic() < deadline:
+                time.sleep(0.01)
+            t2 = threading.Thread(target=_worker)
+            t2.start()
+            # Let the duplicate arrive while the first computation is in flight.
+            time.sleep(0.3)
+            release.set()
+            t1.join(10)
+            t2.join(10)
+
+        assert not [e for e in errors if isinstance(e, cal.CalibrationBusyError)], errors
+        assert len(results) == 2, errors
+        assert results[0] == results[1]
+        # Only ONE real computation ran; the duplicate reused the first result.
+        assert len(calls) == 1
+
+    def test_empty_pool_skips_price_lookup(self, monkeypatch):
+        user_id, _ = _user_token()
+        # No report at all: the calibration pool is empty.
+        init_db()
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("price lookup must not run for an empty pool")
+
+        monkeypatch.setattr(cal, "_get_price_on", _boom)
+        monkeypatch.setattr(cal, "_get_price_after_strict", _boom)
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(db, user_id=user_id, hold_days=5)
+
+        assert result["probability_sample_size"] == 0
+        assert result["sample_sufficient"] is False
+        assert result["brier_score"] is None
+        assert "暂无带概率的历史报告" in result["insufficient_reason"]
+
+    def test_non_admissible_reports_also_skip_price_lookup(self, monkeypatch):
+        user_id, _ = _user_token()
+        # A completed legacy report with neither probability nor qualifying
+        # winner: excluded by admission, so no price work is warranted.
+        init_db()
+        with get_db_ctx() as db:
+            report_service.create_report(
+                db=db,
+                symbol="600519.SH",
+                trade_date="2024-03-01",
+                decision="BUY",
+                probability=None,
+                result_data={"status": "completed", "protocol_version": "v1_legacy"},
+                user_id=user_id,
+                report_id=str(uuid4()),
+            )
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("price lookup must not run when nothing is admissible")
+
+        monkeypatch.setattr(cal, "_get_price_on", _boom)
+        monkeypatch.setattr(cal, "_get_price_after_strict", _boom)
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(db, user_id=user_id, hold_days=5)
+
+        assert result["sample_size"] == 0
+        assert "暂无带概率的历史报告" in result["insufficient_reason"]
+
+
 class TestV2WinnerOnlyCalibration:
     def test_v2_winner_only_reports_admitted_with_sample_size_greater_than_zero(self):
         """Track A8: completed v2 reports with winner in {bull, bear} and probability=NULL are admitted."""

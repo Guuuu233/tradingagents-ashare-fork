@@ -511,3 +511,70 @@ describe('api.updateScheduledBatch horizon contract (H-03c)', () => {
         ).rejects.toThrow('定时分析暂不支持多周期/双档，仅支持单周期 (short 或 medium)')
     })
 })
+
+describe('api.getCalibration in-flight de-duplication (DAV-1391)', () => {
+    let originalFetch: typeof globalThis.fetch
+
+    beforeEach(() => {
+        originalFetch = globalThis.fetch
+        api.calibrationInflight.clear()
+    })
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch
+        vi.restoreAllMocks()
+    })
+
+    it('issues one HTTP call for concurrent identical filter sets', async () => {
+        let resolveFn: (() => void) | null = null
+        const payload = { sample_size: 0, probability_sample_size: 0 }
+        const fetchMock = vi.fn().mockImplementation(async () => {
+            await new Promise<void>(resolve => { resolveFn = resolve })
+            return new Response(JSON.stringify(payload), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        })
+        globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+
+        const first = api.getCalibration({ hold_days: 5 })
+        const second = api.getCalibration({ hold_days: 5 })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        resolveFn?.()
+        await expect(first).resolves.toEqual(payload)
+        await expect(second).resolves.toEqual(payload)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+
+        // The registry is cleared after completion: a later call re-fetches.
+        const third = api.getCalibration({ hold_days: 5 })
+        expect(api.calibrationInflight.size).toBe(1)
+        resolveFn?.()
+        await third
+    })
+
+    it('does not de-duplicate different filter sets', async () => {
+        const payload = { sample_size: 0 }
+        const fetchMock = vi.fn().mockImplementation(async () => new Response(
+            JSON.stringify(payload),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ))
+        globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+
+        await Promise.all([
+            api.getCalibration({ hold_days: 5 }),
+            api.getCalibration({ hold_days: 10 }),
+        ])
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('clears the in-flight entry when the request fails', async () => {
+        const fetchMock = vi.fn().mockImplementation(async () => new Response(
+            JSON.stringify({ detail: '校准度计算繁忙，请稍后重试' }),
+            { status: 429, headers: { 'Content-Type': 'application/json' } },
+        ))
+        globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+
+        await expect(api.getCalibration({ hold_days: 5 })).rejects.toThrow('繁忙')
+        expect(api.calibrationInflight.size).toBe(0)
+    })
+})

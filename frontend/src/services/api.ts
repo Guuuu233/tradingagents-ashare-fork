@@ -38,6 +38,11 @@ export function isNotFoundError(error: unknown): boolean {
 }
 
 class ApiService {
+    // Shared in-flight registry for GET /v1/calibration, keyed by full query
+    // string.  Concurrent identical requests (StrictMode double mount, multiple
+    // pages mounting the panel) reuse one HTTP call.
+    calibrationInflight = new Map<string, Promise<CalibrationResponse>>()
+
     private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
         const url = `${getBaseUrl()}${endpoint}`
         const token = getAuthToken()
@@ -289,7 +294,17 @@ class ApiService {
         if (params?.hold_days != null) search.append('hold_days', String(params.hold_days))
         if (params?.limit != null) search.append('limit', String(params.limit))
         const qs = search.toString()
-        return this.request<CalibrationResponse>(`/v1/calibration${qs ? `?${qs}` : ''}`)
+        const url = `/v1/calibration${qs ? `?${qs}` : ''}`
+        // In-flight de-duplication: identical filter sets (e.g. React StrictMode
+        // double mount, or Dashboard + Reports rendering together) must share one
+        // HTTP request instead of occupying two backend concurrency slots.
+        const pending = api.calibrationInflight.get(url)
+        if (pending) return pending
+        const promise = this.request<CalibrationResponse>(url).finally(() => {
+            api.calibrationInflight.delete(url)
+        })
+        api.calibrationInflight.set(url, promise)
+        return promise
     }
 
     // Stock Search
