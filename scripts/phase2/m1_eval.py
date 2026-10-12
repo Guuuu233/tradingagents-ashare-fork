@@ -22,6 +22,22 @@ dedup to the primary run happens inside, per签收 item 4):
                                to first-seen order.
   timing_class               : 'F0' required for the formal queue
   input_pit_status           : 'VERIFIED' required; 'FAILED' never enters
+  sealed_at                  : seal timestamp — the DAV-1991 封存时点门 field.
+                               The formal queue only takes rows sealed
+                               STRICTLY before the signal day's next trading
+                               day 09:30 Asia/Shanghai; late-sealed /
+                               backfilled rows are counted as excl_late_seal
+                               and stay in the funnel diagnostics only.
+                               Time-zone口径 (总控 10-13 令): sealed_at /
+                               seal_basis_at / created_at are timezone-NAIVE
+                               UTC (ledger tail "2026-10-12 11:45:05" =
+                               Beijing 19:45) — parsed as UTC, converted to
+                               Asia/Shanghai, compared with T+1 09:30 in
+                               that zone; never read as local time.
+                               Needs --calendar to resolve T+1 (a weekday
+                               fallback is refused); frames without a
+                               sealed_at column predate the gate and are
+                               reported as seal_gate_applied=false.
   p_rel_t40 / prob / q       : model probability, int 1–99 (or float 0–1 /
                                0–100; normalised to q in [0,1])
   r_rel / rel_return / r     : realised stock-minus-SW-index return over the
@@ -31,6 +47,13 @@ dedup to the primary run happens inside, per签收 item 4):
 Every row failing a formal-queue rule is counted in the funnel report with
 its exclusion reason — nothing is silently dropped (spec §2.3: report the
 denominator before AND after exclusions).
+
+封存时点门 (DAV-1991, 总控 10-13 令): the formal queue re-derives the timing
+rule from the record's own `sealed_at` instead of trusting the frame's
+`timing_class` label — the label is ledger-produced data that may be absent
+(the default is F0) or stale, and a mislabeled F0 row is exactly the
+look-ahead leak the order closes. `sealed_at` must be strictly earlier than
+the T+1 trading-day open 09:30 (Asia/Shanghai).
 
 Deliverables (spec §3–§4):
   * Daily Spearman rank IC  — average-rank ties, equal-weight day summary,
@@ -59,6 +82,7 @@ mixed into the same IC series.
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import resource
@@ -82,6 +106,12 @@ RELIABILITY_BINS = [(1, 10), (11, 20), (21, 30), (31, 40), (41, 50),
 # Fixed P4 account (controller order 2026-10-09): ledger-derived frames are
 # filtered to this user_id; other accounts count into excl_wrong_user.
 DEFAULT_USER_ID = "429163f7-50b6-4982-8bdf-96ae99506843"
+# DAV-1991 封存时点门 (总控 10-13 令): the formal queue only takes records
+# sealed strictly before the T+1 trading-day open 09:30 (Asia/Shanghai).
+SEAL_DEADLINE_HHMM = "09:30"   # T+1 trading-day open, same value as the ledger's
+                               # MARKET_OPEN_HHMM in daily_snapshot_ledger.py
+SH_TZ = "Asia/Shanghai"        # 总控口径: sealed_at/seal_basis_at/created_at 都是
+                               # 无时区标记的 UTC，按 UTC 解析后转本时区比较
 
 
 def peak_rss_gb() -> float:
@@ -225,6 +255,37 @@ def _pick(df: pd.DataFrame, canon: str) -> str | None:
     return None
 
 
+def _next_trading_day(calendar: list[str], after: str) -> str | None:
+    """First calendar trading day strictly after ``after`` (both YYYYMMDD).
+
+    Same strict-index rule as
+    tradingagents/eval/trade_execution.py::next_trading_day: a signal date
+    that is not itself in the calendar snaps to the first calendar day after
+    it (e.g. a weekend signal date resolves to Monday). None when the
+    calendar ends before ``after`` — the T+1 entry day is then unresolvable.
+    """
+    idx = bisect.bisect_right(calendar, str(after))
+    return calendar[idx] if idx < len(calendar) else None
+
+
+def _seal_deadline_cn(signal_dates: pd.Series,
+                       calendar: list[str]) -> pd.Series:
+    """Per-row seal deadline: the T+1 trading day at 09:30 Asia/Shanghai as
+    a tz-aware Asia/Shanghai instant. NaT where the calendar cannot resolve
+    the T+1 trading day.
+
+    总控 10-13 令时区口径: the deadline lives in Asia/Shanghai and the
+    record's seal time is converted into the same zone before comparing, so
+    the gate can never compare against a local-time misreading of the stamp.
+    """
+    as_str = signal_dates.astype(str)
+    day_of = {s: _next_trading_day(calendar, s) for s in as_str.unique()}
+    days = pd.to_datetime(as_str.map(day_of), format="%Y%m%d",
+                          errors="coerce")
+    hh, mm = int(SEAL_DEADLINE_HHMM[:2]), int(SEAL_DEADLINE_HHMM[3:])
+    return days.dt.tz_localize(SH_TZ) + pd.Timedelta(hours=hh, minutes=mm)
+
+
 def _norm_prob_col(s: pd.Series) -> pd.Series:
     """Normalise a probability column to q∈[0,1], column-level: per-value
     scaling is wrong because p=1 is legal on BOTH the 1–99 contract scale
@@ -256,12 +317,22 @@ def load_frame(path: Path) -> pd.DataFrame:
     else:
         raise ValueError(f"unsupported input format: {path.suffix}")
 
+    # DAV-1991: `sealed_at` is the gate's seal-time field and is also a
+    # created_at alias, so a frame carrying ONLY sealed_at would have it
+    # renamed onto created_at below and lose the column the gate reads.
+    # Keep a copy under its own name. 口径 note: on the 1651-row production
+    # ledger sealed_at == seal_basis_at for every row, so the two are
+    # equivalent and sealed_at is the one carried into the eval frame.
+    seal_alias_only = ("sealed_at" in df.columns
+                       and "created_at" not in df.columns)
     ren = {}
     for canon in _COL_CANDIDATES:
         src = _pick(df, canon)
         if src is not None and src != canon:
             ren[src] = canon
     df = df.rename(columns=ren)
+    if seal_alias_only:
+        df["sealed_at"] = df["created_at"]
 
     # required fields
     for req in ("signal_date", "symbol", "prob", "rel_return"):
@@ -307,12 +378,18 @@ def _ensure_defaults(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def admit(df: pd.DataFrame,
-          user_id: str | None = DEFAULT_USER_ID) -> tuple[pd.DataFrame, dict]:
+          user_id: str | None = DEFAULT_USER_ID,
+          calendar: list[str] | None = None) -> tuple[pd.DataFrame, dict]:
     """Apply §2.3 rules in order; every exclusion increments a funnel count.
 
     Rows are filtered BEFORE dedup so a stray incomplete run can never leak
     into the formal queue (review DAV-1682 🟡-2): `completed=False` is an
-    explicit funnel exclusion, not merely a sort-after in dedup."""
+    explicit funnel exclusion, not merely a sort-after in dedup.
+
+    `calendar` (sorted YYYYMMDD list) feeds the DAV-1991 封存时点门: when the
+    frame carries a `sealed_at` column the formal queue additionally requires
+    sealed_at < T+1 trading-day 09:30 (Asia/Shanghai), and the run fails
+    closed without a calendar rather than approximating the T+1 day."""
     df = _ensure_defaults(df)
     funnel = {"input_rows": len(df)}
     d = df.copy()
@@ -337,6 +414,51 @@ def admit(df: pd.DataFrame,
     d = _count(m, "excl_non_f0")
     m = d["input_pit_status"].astype(str).str.upper() != "VERIFIED"
     d = _count(m, "excl_unverified")
+    # --- 封存时点门 (DAV-1991, 总控 10-13 令) ---
+    # Re-derive the timing rule from the record's own seal timestamp rather
+    # than trusting the timing_class label above: the label may be absent
+    # (_ensure_defaults defaults it to F0) or stale, and a mislabeled F0 row
+    # is exactly the look-ahead leak the 10-13 令 closes. Rule: sealed_at is
+    # STRICTLY before the T+1 trading-day open 09:30 Asia/Shanghai. 口径:
+    # sealed_at is the ledger's seal timestamp written as UTC (the _fmt_dt
+    # convention); on the 1651-row production ledger sealed_at ==
+    # seal_basis_at for every row, so the two are equivalent and sealed_at is
+    # the field carried into the eval frame. Late-sealed / backfilled records
+    # are counted here and stay in diagnostics only.
+    #
+    # 总控时区口径: sealed_at / seal_basis_at / created_at are all
+    # timezone-NAIVE UTC (the ledger tail line "2026-10-12 11:45:05" is
+    # Beijing 19:45). Parse them as UTC, convert to Asia/Shanghai, and
+    # compare with the T+1 trading-day 09:30 in the SAME zone — the stamp is
+    # never read as local time.
+    gate_on = "sealed_at" in d.columns
+    funnel["seal_gate_applied"] = bool(gate_on)
+    if gate_on:
+        if not calendar:
+            raise ValueError(
+                "input carries a sealed_at column but no trading calendar was "
+                "provided; the DAV-1991 seal-time gate must resolve the T+1 "
+                "trading day and refuses a weekday fallback — pass --calendar "
+                "(one YYYYMMDD per line)")
+        # format="mixed": the ledger writes "YYYY-MM-DD HH:MM:SS.ffffff" (UTC,
+        # naive) while explicit-offset ISO strings also occur — parse per
+        # element, coerce the unparseable to NaT, and read naive strings as
+        # UTC (utc=True) before converting them to Asia/Shanghai.
+        sealed = pd.to_datetime(d["sealed_at"], format="mixed",
+                                errors="coerce", utc=True).dt.tz_convert(SH_TZ)
+        entry = _seal_deadline_cn(d["signal_date"], calendar)
+        funnel["seal_unparseable"] = int(sealed.isna().sum())
+        funnel["seal_t1_unresolved"] = int(entry.isna().sum())
+        # An unparseable seal time cannot prove forward sealing → fail closed
+        # and count it with the gate's exclusions. An unresolvable T+1 day is
+        # admitted and counted separately (daily_snapshot_ledger
+        # ._classify_timing calls the same case F0 for the same reason).
+        late = sealed.notna() & entry.notna() & (sealed >= entry)
+        d = _count(late | sealed.isna(), "excl_late_seal")
+    else:
+        funnel["seal_unparseable"] = 0
+        funnel["seal_t1_unresolved"] = 0
+        funnel["excl_late_seal"] = 0
     # incomplete runs never reach dedup (review 🟡-2). None/NaN = flag absent
     # → treated complete; only an explicit False/'false'/'0' marks incomplete.
     comp = d["completed"]
@@ -603,12 +725,14 @@ def run(input_path: Path, out_dir: Path,
     log(f"loading {input_path}")
     df = load_frame(input_path)
     df = select_version(df, version_key)          # fail-close multi-version
-    formal, funnel = admit(df, user_id=user_id)
+    # loaded once: the DAV-1991 gate and the day-slot calendar share it
+    calendar = _load_calendar(calendar_path)
+    formal, funnel = admit(df, user_id=user_id, calendar=calendar)
     funnel["version_key"] = version_key or \
         (str(df["version_key"].iloc[0])
          if "version_key" in df.columns and len(df) else "default")
     log(f"formal rows {len(formal)} / input {len(df)}")
-    days = eval_days(formal, calendar=_load_calendar(calendar_path))
+    days = eval_days(formal, calendar=calendar)
     rel = reliability_table(formal) if len(formal) else []
     verdict = grade(days, funnel)
     out = {
@@ -640,6 +764,8 @@ def run(input_path: Path, out_dir: Path,
         "input_rows": len(df), "formal_rows": len(formal),
         "version_key": funnel.get("version_key"),
         "user_id": user_id,
+        "seal_gate_applied": funnel.get("seal_gate_applied", False),
+        "excl_late_seal": funnel.get("excl_late_seal", 0),
         "excl_wrong_user": funnel.get("excl_wrong_user", 0),
     }, indent=2))
     log(f"grade={verdict['grade']} valid_days={verdict['valid_days']} "
@@ -798,6 +924,35 @@ def selftest() -> dict:
     assert [x.status for x in days] == ["ok", "no_data", "no_data",
                                         "no_data", "ok"]
     checks["calendar_slots"] = len(days)
+
+    # 14) DAV-1991 封存时点门 (总控 10-13 令): a row sealed strictly before
+    # the T+1 trading-day open 09:30 Asia/Shanghai stays in the formal
+    # queue; sealed at/after that instant (incl. backfills) only reaches the
+    # funnel, and the gate fails closed without a calendar.
+    cal = ["20260105", "20260106", "20260107", "20260108"]
+    rows = _mk_day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+    for r in rows:
+        r["sealed_at"] = "2026-01-06 01:29:59.999999"   # 09:29:59.999999 CST
+    d, fun = admit(pd.DataFrame(rows), calendar=cal)
+    assert len(d) == 20 and fun["excl_late_seal"] == 0, fun
+    rows.append({"signal_date": "20260105", "version_key": "v1",
+                 "symbol": "LATE_AT_OPEN", "q": 0.5, "r": 0.01,
+                 "timing_class": "F0", "input_pit_status": "VERIFIED",
+                 "sealed_at": "2026-01-06 01:30:00.000000"})   # exactly open
+    rows.append({"signal_date": "20260105", "version_key": "v1",
+                 "symbol": "BACKFILL", "q": 0.5, "r": 0.01,
+                 "timing_class": "F0", "input_pit_status": "VERIFIED",
+                 "created_at": "2026-01-05 08:00:00.000000",
+                 "sealed_at": "2026-01-08 10:00:00.000000"})
+    d, fun = admit(pd.DataFrame(rows), calendar=cal)
+    assert len(d) == 20 and fun["excl_late_seal"] == 2, fun
+    try:
+        admit(pd.DataFrame(rows), calendar=None)
+        checks["seal_gate_needs_calendar"] = False
+    except ValueError:
+        checks["seal_gate_needs_calendar"] = True
+    assert checks["seal_gate_needs_calendar"]
+    checks["seal_gate_late_excluded"] = fun["excl_late_seal"]
 
     log("selftest PASS: " + json.dumps(checks, default=str))
     return checks
