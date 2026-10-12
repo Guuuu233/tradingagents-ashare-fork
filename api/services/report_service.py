@@ -2124,6 +2124,15 @@ def parse_horizon_forecast(slice_: Dict[str, Any]) -> Dict[str, Any]:
     if captured.get("probability_contract_version") or "p_rel_t40" in captured:
         p40 = captured.get("p_rel_t40")
         p40_status = captured.get("p_rel_t40_status")
+        if p40_status is None:
+            # DAV-1960 🟢-3: value present but status absent → recompute
+            # through the contract classifier rather than defaulting to
+            # malformed (a valid integer stays valid; absent → missing).
+            from tradingagents.eval.b2_contract import (
+                classify_p_rel_t40, _ABSENT,
+            )
+            p40_status, _rec_codes = classify_p_rel_t40(
+                p40 if p40 is not None else _ABSENT)
         # trust the node-side classification written by b2_contract; re-verify
         # the integer range here so a hand-edited slice can't pass.
         if p40_status == "valid" and not (type(p40) is int and 1 <= p40 <= 99):
@@ -2139,6 +2148,21 @@ def parse_horizon_forecast(slice_: Dict[str, Any]) -> Dict[str, Any]:
             "probability_contract_version": captured.get(
                 "probability_contract_version"),
         })
+    elif ((slice_.get("status") == "failed" or captured.get("node_ran") is not True)
+          and ((slice_.get("horizon") or "") == "medium"
+               or slice_.get("research_horizon") == "medium")):
+        # DAV-1960 🟡-2: b2 分支镜像 b1 节点状态判定——节点已进入后失败
+        # → node_failed；horizon 请求了但节点未进入 → not_run（归属口径
+        # 同 b1：slice.status=failed ⇒ 已进入；captured.node_ran is not
+        # True ⇒ 未进入）。失败档显式落 b2 键，账本侧因此封 v2 而非 v1。
+        if slice_.get("status") == "failed":
+            out.update({"p_rel_t40": None, "p_rel_t40_status": "node_failed",
+                        "p_rel_t40_error_codes": ["node_exception"],
+                        "probability_contract_version": "b2.v1"})
+        else:
+            out.update({"p_rel_t40": None, "p_rel_t40_status": "not_run",
+                        "p_rel_t40_error_codes": ["node_not_run"],
+                        "probability_contract_version": "b2.v1"})
     elif (slice_.get("horizon") or "") == "medium":
         # b2-era medium slice without contract keys → honest "not_sealed".
         out.update({"p_rel_t40": None, "p_rel_t40_status": "not_sealed",

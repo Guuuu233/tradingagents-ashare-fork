@@ -22,8 +22,12 @@ injectable callable so callers decide where the PIT history comes from.
 
 Ruling details honoured here:
 
-* the canonical block is the LAST successfully parsed MANAGER_VERDICT
-  block — the same seam ``capture_manager_forecast_input`` reads;
+* the canonical block is the FIRST successfully parsed MANAGER_VERDICT
+  block under the same loose seam ``capture_manager_forecast_input`` /
+  ``extract_tagged_json`` adopts (DAV-1960 🟡-3, option a); a second
+  MANAGER_VERDICT block or duplicate JSON keys inside it stay strict
+  rejections (``duplicate_block`` / ``duplicate_key``) — never a value
+  that hides ambiguity;
 * ``not_run`` only when the medium node was planned but never entered;
   ``node_failed`` when the node was entered but produced no successful
   final output; ``missing``/``malformed`` are only classified after the
@@ -144,27 +148,61 @@ _ABSENT = _Absent()
 def _manager_verdict_block_status(text: Any) -> tuple[Optional[dict], str, list[str]]:
     """Locate the canonical adopted MANAGER_VERDICT block.
 
+    Reads the SAME loose seam the production adoption path uses
+    (``extract_tagged_json`` — first ``<!-- MANAGER_VERDICT: {...} -->``
+    non-greedy match), then applies the contract's strict rejections on
+    top (DAV-1960 🟡-3, 裁定口径 a：与采纳接缝一致 + 显式去重):
+
+    * trailing prose after the block is NOT a rejection — it is exactly
+      what ``capture_manager_forecast_input`` adopted;
+    * a second MANAGER_VERDICT block anywhere in the output → invalid
+      (``duplicate_block``), never silently picking one;
+    * duplicate JSON keys inside the accepted block → invalid
+      (``duplicate_key``), handled by ``_block_has_duplicate_key``.
+
     Returns ``(payload_or_None, shape, error_codes)``:
 
     * ``shape == "ok"``      → payload is the parsed dict;
     * ``"absent"``           → no MANAGER_VERDICT marker at all;
     * ``"invalid"``          → marker present but no acceptable block
                                (truncated / unparseable / non-dict /
-                               duplicate / trailing prose).
+                               duplicate block).
     """
+    if not isinstance(text, str):
+        return None, "absent", ["missing_block"]
+    import re as _re
     from tradingagents.agents.utils.debate_utils import (
-        _get_marker_parse_status,
+        _tagged_occurrences,
     )
 
-    payload, status = _get_marker_parse_status(text, MANAGER_BLOCK_TAG, warn=False)
-    if status == "valid" and isinstance(payload, dict):
-        return payload, "ok", []
-    import re as _re
     has_marker = bool(
-        _re.search(r"<!--\s*" + MANAGER_BLOCK_TAG + r"\b", text or "",
+        _re.search(r"<!--\s*" + MANAGER_BLOCK_TAG + r"\b", text,
                    flags=_re.DOTALL))
     if not has_marker:
         return None, "absent", ["missing_block"]
+    if len(_tagged_occurrences(text, MANAGER_BLOCK_TAG)) > 1:
+        # Same strict rejection as before: two blocks = ambiguity a
+        # non-greedy first-match would silently hide.
+        return None, "invalid", ["duplicate_block"]
+    # The exact adoption-seam pattern used by extract_tagged_json: first
+    # non-greedy ``{...}`` after ``<!-- MANAGER_VERDICT:``. An empty dict
+    # is a legal parse (→ missing_field downstream), never malformed.
+    m = _re.search(
+        r"<!--\s*" + MANAGER_BLOCK_TAG + r":\s*(\{.*?\})\s*-->",
+        text, flags=_re.DOTALL)
+    if m is not None:
+        try:
+            payload = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            return payload, "ok", []
+        return None, "invalid", ["invalid_json"]
+    # Marker present but the loose seam cannot parse it (truncated or
+    # non-dict payload): distinguish truncated (no closing -->) from
+    # malformed JSON for honest error codes.
+    if text.find("-->") < 0:
+        return None, "invalid", ["truncated_block"]
     return None, "invalid", ["invalid_json"]
 
 
@@ -474,8 +512,8 @@ def medium_contract_fields(record: Any) -> dict[str, Any]:
     hz = rec.get("horizons")
     medium = hz.get("medium") if isinstance(hz, Mapping) else None
     medium = medium if isinstance(medium, Mapping) else {}
-    sealed = ledger_record_version(rec) >= 2 and P_REL_T40_FIELD in medium \
-        or "p_rel_t40_status" in medium
+    sealed = ((ledger_record_version(rec) >= 2 and P_REL_T40_FIELD in medium)
+              or "p_rel_t40_status" in medium)
     out = {k: medium.get(k) for k in LEDGER_MEDIUM_CONTRACT_KEYS}
     if not sealed:
         out["p_rel_t40_status"] = "not_sealed"
@@ -504,8 +542,11 @@ def verify_three_readings(
 
     * node   — ``investment_debate_state.manager_verdict.forecast_input``
                (or a medium slice's ``manager_verdict.forecast_input``);
-    * report — ``result_data.medium_term.manager_verdict`` (the persisted
-               mirror; its ``forecast_input`` is also accepted);
+    * report — the persisted medium-term SLICE (``result_data.medium_term``
+               or ``horizons.medium``); its ``manager_verdict`` mirror keys
+               are read first, ``manager_verdict.forecast_input`` as
+               fallback (passing the bare ``manager_verdict`` sub-dict also
+               works — its ``forecast_input`` is picked up the same way);
     * ledger — a v1/v2 sealed record (``record.horizons.medium``).
 
     Returns ``{"consistent": bool, "mismatches": [...], "readings": {...}}``.
@@ -518,9 +559,21 @@ def verify_three_readings(
         fi = fi if isinstance(fi, Mapping) else {}
         return {k: fi.get(k) for k in _CONTRACT_VALUE_KEYS}
 
+    def _surface_present(reading: Mapping[str, Any]) -> bool:
+        """A surface "carries" the contract when ANY contract key is
+        non-None — an absent/None surface is skipped in comparison (it is
+        reported under ``readings`` as absent, never silently equal to a
+        real reading). The medium-term slice carries NO top-level keys of
+        its own, so presence is judged purely by the values read."""
+        return any(v is not None for v in reading.values())
+
     def _from_report(slice_: Any) -> dict:
         mv = (slice_ or {}).get("manager_verdict") \
             if isinstance(slice_, Mapping) else None
+        if not isinstance(mv, Mapping) and isinstance(slice_, Mapping) \
+                and ("forecast_input" in slice_ or P_REL_T40_FIELD in slice_):
+            # caller passed the bare manager_verdict sub-dict
+            mv = slice_
         mv = mv if isinstance(mv, Mapping) else {}
         fi = mv.get("forecast_input") if isinstance(
             mv.get("forecast_input"), Mapping) else {}
@@ -533,16 +586,19 @@ def verify_three_readings(
         "report": _from_report(report_medium_slice),
         "ledger": medium_contract_fields(ledger_record),
     }
+    present = {src: _surface_present(r) for src, r in readings.items()}
     mismatches: list[str] = []
     for k in _CONTRACT_VALUE_KEYS:
-        vals = {src: readings[src].get(k) for src in readings}
+        vals = {src: readings[src].get(k)
+                for src in readings if present[src]}
         if len({json.dumps(v, sort_keys=True, default=str) for v in
                 vals.values()}) > 1:
             mismatches.append(
-                f"{k}: node={vals['node']!r} report={vals['report']!r} "
-                f"ledger={vals['ledger']!r}")
+                f"{k}: " + " ".join(
+                    f"{src}={vals[src]!r}" for src in vals))
     return {"consistent": not mismatches,
             "mismatches": mismatches,
+            "surfaces_present": present,
             "readings": readings}
 
 

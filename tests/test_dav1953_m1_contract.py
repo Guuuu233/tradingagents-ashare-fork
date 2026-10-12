@@ -107,10 +107,11 @@ class TestFailureClasses:
     def test_duplicate_key_is_malformed(self):
         ev = b2.evaluate_p_rel_t40(
             '<!-- MANAGER_VERDICT: {"p_rel_t40": 60, "p_rel_t40": 80} -->')
-        # json.loads keeps last — the block-level validator must still
-        # refuse a value that hides ambiguity. Either malformed (preferred)
-        # or the *sole* surviving 80 — never a silently-merged first value.
-        assert ev["p_rel_t40_status"] == "malformed" or ev["p_rel_t40"] == 80
+        # json.loads keeps last — the block-level duplicate-key validator
+        # must refuse a value that hides ambiguity, never a merged value.
+        assert ev["p_rel_t40_status"] == "malformed"
+        assert ev["p_rel_t40"] is None
+        assert "duplicate_key" in ev["p_rel_t40_error_codes"]
 
     def test_node_failed(self):
         ev = b2.evaluate_p_rel_t40("partial response",
@@ -620,3 +621,311 @@ class TestParseCounters:
         evs.append(b2.evaluate_p_rel_t40('<!-- MANAGER_VERDICT: {} -->'))
         c = b2.parse_counters(evs, planned=40)
         assert c["attempted"] == 40 and c["parse_invalid"] == 1
+
+
+# ---------------------------------------------------------------------------
+# DAV-1960 返修 — 🟡-3 采纳接缝一致性 + 🟡-2 节点态读端 + 🟡-6 周报/月报 v2 覆盖
+# ---------------------------------------------------------------------------
+
+class TestAdoptionSeamParity:
+    """🟡-3 裁定 (a): evaluate_p_rel_t40 与生产采纳接缝（extract_tagged_json
+    宽松正则）同一份输出必须同结论；重复块/重复键仍为严格拒收。"""
+
+    def test_trailing_prose_now_valid(self):
+        ev = b2.evaluate_p_rel_t40(
+            '<!-- MANAGER_VERDICT: {"p_rel_t40": 55} -->\n'
+            '另外补充一句正文解释。')
+        assert ev["p_rel_t40_status"] == "valid"
+        assert ev["p_rel_t40"] == 55
+
+    def test_prose_between_mv_and_verdict_valid(self):
+        ev = b2.evaluate_p_rel_t40(
+            '<!-- MANAGER_VERDICT: {"p_rel_t40": 62} -->\n'
+            '中间夹一句正文\n'
+            '<!-- VERDICT: {"direction": "中性"} -->')
+        assert ev["p_rel_t40_status"] == "valid"
+        assert ev["p_rel_t40"] == 62
+
+    def test_duplicate_block_still_rejected(self):
+        ev = b2.evaluate_p_rel_t40(
+            '<!-- MANAGER_VERDICT: {"p_rel_t40": 60} -->\n'
+            '<!-- MANAGER_VERDICT: {"p_rel_t40": 40} -->')
+        assert ev["p_rel_t40_status"] == "malformed"
+        assert "duplicate_block" in ev["p_rel_t40_error_codes"]
+
+    def test_truncated_block_code(self):
+        ev = b2.evaluate_p_rel_t40(
+            '<!-- MANAGER_VERDICT: {"p_rel_t40": 60')
+        assert ev["p_rel_t40_status"] == "malformed"
+        assert "truncated_block" in ev["p_rel_t40_error_codes"]
+
+    def test_empty_block_is_missing_not_malformed(self):
+        ev = b2.evaluate_p_rel_t40('<!-- MANAGER_VERDICT: {} -->')
+        assert ev["p_rel_t40_status"] == "missing"
+        assert "missing_field" in ev["p_rel_t40_error_codes"]
+
+    def test_capture_and_eval_agree_on_trailing_prose(self):
+        """同一份输出：capture_manager_forecast_input（宽松接缝）与
+        evaluate_p_rel_t40 现在必须同值。"""
+        text = '<!-- MANAGER_VERDICT: {"p_rel_t40": 55, "p_rel_t10": 50} -->\n正文。'
+        fi = capture_manager_forecast_input(text, research_horizon="medium")
+        ev = b2.evaluate_p_rel_t40(text)
+        assert fi["p_rel_t40_status"] == ev["p_rel_t40_status"] == "valid"
+        assert fi["p_rel_t40"] == ev["p_rel_t40"] == 55
+
+
+class TestReportReaderNodeStates:
+    """🟡-2: b2 分支镜像 b1 节点状态 — node_failed / not_run 可从报告读出。"""
+
+    def test_failed_medium_slice_is_node_failed(self):
+        from api.services import report_service
+        f = report_service.parse_horizon_forecast(
+            {"horizon": "medium", "status": "failed"})
+        assert f["p_rel_t40_status"] == "node_failed"
+        assert f["p_rel_t40_error_codes"] == ["node_exception"]
+        assert f["probability_contract_version"] == "b2.v1"
+
+    def test_node_not_ran_is_not_run(self):
+        from api.services import report_service
+        f = report_service.parse_horizon_forecast(
+            {"horizon": "medium",
+             "manager_verdict": {"forecast_input": {"node_ran": False}}})
+        assert f["p_rel_t40_status"] == "not_run"
+        assert f["p_rel_t40_error_codes"] == ["node_not_run"]
+
+    def test_failed_slice_seals_v2_on_ledger(self):
+        """🟡-2 账本侧：失败档 slice 的 b2 键经 forecast 持久化 → v2。"""
+        rd = json.dumps({"horizons": {"medium": {
+            "horizon": "medium", "status": "failed",
+            "forecast": {
+                "p_rel_t40": None, "p_rel_t40_status": "node_failed",
+                "p_rel_t40_error_codes": ["node_exception"],
+                "probability_contract_version": "b2.v1"}}},
+            "market_data_context": {}})
+        sealed = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+        rec = dsl.build_record(_row(), rd, sealed, "2026-07-29", _cal())
+        assert rec["ledger_version"] == 2
+        assert rec["horizons"]["medium"]["p_rel_t40_status"] == "node_failed"
+
+    def test_missing_status_recomputed(self):
+        from api.services import report_service
+        f = report_service.parse_horizon_forecast(
+            {"horizon": "medium",
+             "manager_verdict": {"forecast_input": {
+                 "node_ran": True, "p_rel_t40": 55,
+                 "probability_contract_version": "b2.v1"}}})
+        assert f["p_rel_t40_status"] == "valid"
+        assert f["p_rel_t40"] == 55
+
+
+# ---------------------------------------------------------------------------
+# 🟡-6: weekly_report / m2_periodic_report v2 封存分支覆盖
+# ---------------------------------------------------------------------------
+
+def _wr_mod():
+    return _load("weekly_report_mod", "scripts/phase2/weekly_report.py")
+
+
+def _m2_mod():
+    import scripts.phase2.m2_periodic_report as m2
+    return m2
+
+
+def _v2_rec(rid: str, sig: str, status: str, p40=None,
+            legacy_prob: float = 55.0):
+    """v2-sealed medium record (ledger shape)."""
+    med = {"direction": "看多", "p_rel_t40": p40,
+           "p_rel_t40_status": status, "p_rel_t40_error_codes": [],
+           "probability_contract_version": "b2.v1",
+           "raw_output_sha256": "ab" * 32,
+           "p_base_rel_t40": None, "p_base_rel_t40_status": "valid",
+           "p_base_rel_t40_meta": {"m": 200, "W": 0}}
+    if legacy_prob is not None:
+        med["probability"] = legacy_prob
+    return {"report_id": rid, "symbol": "600519.SH", "signal_date": sig,
+            "timing_class": "F0", "input_pit_status": "VERIFIED",
+            "backfilled": False, "ledger_version": 2,
+            "horizons": {"medium": med, "short": {"direction": "中性"}},
+            "versions": {"generated_by_commit_sha": "abc123def456"},
+            "risk_status_top": "APPROVED"}
+
+
+def _weekly_labels_for(sig: str):
+    return [("600519.SH", sig, {"symbol": "600519.SH", "signal_date": sig,
+                                 "hs300_excess_pct": 1.0})]
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return path
+
+
+def _weekly_run(mod, monkeypatch, tmp_path, records, labels, as_of="2027-01-01",
+                min_cross_n=1):
+    tmp_path = Path(tmp_path)
+    ledger = _write_jsonl(
+        tmp_path / "forward_ledger.jsonl",
+        [{"record": r, "prev_hash": "GENESIS" if i == 0 else "x" * 64,
+          "chain_hash": "y" * 64} for i, r in enumerate(records)])
+    lab = _write_jsonl(tmp_path / "labels.jsonl",
+                       [{"symbol": s, "signal_date": d, **rest}
+                        for s, d, rest in labels])
+    bench = _write_jsonl(tmp_path / "bench.jsonl", [])
+    db = tmp_path / "t.db"
+    import sqlite3
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, "
+                "risk_status TEXT, secret_text TEXT)")
+    con.commit(); con.close()
+    monkeypatch.setattr(mod.dsl, "_load_trade_dates", lambda: _cal())
+    out = tmp_path / "report.md"
+    args = type("A", (), {
+        "out_dir": str(tmp_path / "out"), "as_of": as_of,
+        "ledger": str(ledger), "db": str(db), "labels": str(lab),
+        "relative_caliber": "hs300", "label_fields": None,
+        "benchmarks": str(bench), "benchmarks_dir": str(tmp_path),
+        "benchmark_symbols": ["000300.SH"], "fetch_benchmarks": False,
+        "min_cross_n": min_cross_n, "min_total_n": 40, "out": str(out),
+    })()
+    code = mod.cmd_run(args)
+    return code, (out.read_text("utf-8") if out.exists() else "")
+
+
+class TestWeeklyB2SealedBranches:
+    def test_v2_valid_uses_p_rel_t40(self, tmp_path, monkeypatch):
+        mod = _wr_mod()
+        rec = _v2_rec("r1", "2026-07-28", "valid", p40=70, legacy_prob=11)
+        # label so the row reaches the cross-section if prob read correctly
+        code, body = _weekly_run(mod, monkeypatch, tmp_path, [rec],
+                                 _weekly_labels_for("2026-07-28"))
+        assert code == 0
+        assert "p_rel_t40=1" in body          # 来源计数
+        assert "旧 probability=0" in body or "probability=0" in body
+        assert "valid=1" in body               # 状态分布计数
+        # 横截面进入样本（min_cross_n=1 → 1 天有效列；标签返回值 1.0）
+        assert "无数值=0" in body
+
+    def test_v2_malformed_no_fallback(self, tmp_path, monkeypatch):
+        mod = _wr_mod()
+        rec = _v2_rec("r1", "2026-07-28", "malformed", p40=None,
+                      legacy_prob=55)
+        code, body = _weekly_run(mod, monkeypatch, tmp_path, [rec],
+                                 _weekly_labels_for("2026-07-28"))
+        assert code == 0
+        assert "malformed=1" in body
+        # 🟡-1: 不回退旧 probability — 无数值计数=1
+        assert "无数值=1" in body
+
+    def test_v2_node_failed_and_not_run_counted(self, tmp_path, monkeypatch):
+        mod = _wr_mod()
+        recs = [_v2_rec("r1", "2026-07-28", "node_failed", legacy_prob=88),
+                _v2_rec("r2", "2026-07-28", "not_run", legacy_prob=77),
+                _v2_rec("r3", "2026-07-28", "valid", p40=66,
+                        legacy_prob=None)]
+        code, body = _weekly_run(mod, monkeypatch, tmp_path, recs,
+                                 _weekly_labels_for("2026-07-28"))
+        assert code == 0
+        assert "node_failed=1" in body and "not_run=1" in body
+        assert "valid=1" in body
+        # 仅 1 条有契约概率（valid r3）；r1/r2 不回退旧值
+        assert "无数值=2" in body
+
+    def test_v1_legacy_probability_still_read(self, tmp_path, monkeypatch):
+        mod = _wr_mod()
+        rec = {"report_id": "r1", "symbol": "600519.SH",
+               "signal_date": "2026-07-28", "timing_class": "F0",
+               "input_pit_status": "VERIFIED", "backfilled": False,
+               "horizons": {"medium": {"direction": "看多",
+                                       "probability": 55},
+                            "short": {"direction": "中性"}},
+               "versions": {"generated_by_commit_sha": "abc123def456"},
+               "risk_status_top": "APPROVED"}
+        code, body = _weekly_run(mod, monkeypatch, tmp_path, [rec],
+                                 _weekly_labels_for("2026-07-28"))
+        assert code == 0
+        assert "not_sealed=1" in body
+        assert "probability=1" in body   # 旧口径照样读
+
+    def test_m2_d3_m4_consistent_with_weekly(self, tmp_path):
+        """🟡-6 路径一致性：同一批 v2 行，m2 的 D3/M4 与周报取同一概率集。"""
+        m2 = _m2_mod()
+        recs = [_v2_rec("r1", "2026-09-30", "valid", p40=70),
+                _v2_rec("r2", "2026-09-30", "malformed", legacy_prob=55)]
+        probs = [m2._b2_medium_prob(r) for r in recs]
+        assert probs[0] == (70.0, "p_rel_t40")
+        assert probs[1][0] is None            # 不回退
+        assert probs[1][1] == "b2:malformed"
+
+
+class TestThreeReadingsWiring:
+    """🟡-4: verify --check-three-readings 端到端（合成账本 + sqlite）。"""
+
+    def test_check_three_readings_consistent(self, tmp_path, monkeypatch):
+        import sqlite3
+        # 1) report row with a b2 medium slice (canonical storage: medium_term)
+        rd = json.dumps({"medium_term": B2_MEDIUM,
+                         "market_data_context": {}}, ensure_ascii=False)
+        db = tmp_path / "t.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, "
+                    "user_id TEXT, symbol TEXT, industry TEXT, "
+                    "trade_date TEXT, status TEXT, analysis_status TEXT, "
+                    "decision TEXT, direction TEXT, probability REAL, "
+                    "trade_action TEXT, risk_status TEXT, "
+                    "final_trade_decision TEXT, created_at TEXT, "
+                    "updated_at TEXT, result_data TEXT)")
+        con.execute(
+            "INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("r1", "u1", "600519.SH", "白酒", "2026-07-28", "completed",
+             "VALID", "BUY", "看多", 60, "BUY", "APPROVED", "ok",
+             "2026-07-28 15:43:57.730577", "2026-07-28 15:43:57.730577", rd))
+        con.commit(); con.close()
+        # 2) ledger sealed from the same rd
+        sealed = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+        rec = dsl.build_record(_row(), rd, sealed, "2026-07-29", _cal())
+        ledger = tmp_path / "forward_ledger.jsonl"
+        prev = "GENESIS"
+        ch = hashlib.sha256((prev + rec["record_sha256"]).encode()).hexdigest()
+        ledger.write_text(json.dumps(
+            {"record": rec, "prev_hash": prev, "chain_hash": ch}) + "\n")
+        args = type("A", (), {"ledger_dir": str(tmp_path), "db": str(db),
+                              "check_three_readings": True})()
+        assert dsl.cmd_verify(args) == 0
+
+    def test_check_three_readings_flags_drift(self, tmp_path):
+        import sqlite3
+        rd_db = json.dumps({"medium_term": dict(B2_MEDIUM, manager_verdict={
+            **B2_MEDIUM["manager_verdict"],
+            "p_rel_t40": 71,   # tampered after seal
+            "forecast_input": {**B2_MEDIUM["manager_verdict"]["forecast_input"],
+                               "p_rel_t40": 71}}),
+            "market_data_context": {}}, ensure_ascii=False)
+        db = tmp_path / "t.db"
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, "
+                    "user_id TEXT, symbol TEXT, industry TEXT, "
+                    "trade_date TEXT, status TEXT, analysis_status TEXT, "
+                    "decision TEXT, direction TEXT, probability REAL, "
+                    "trade_action TEXT, risk_status TEXT, "
+                    "final_trade_decision TEXT, created_at TEXT, "
+                    "updated_at TEXT, result_data TEXT)")
+        con.execute(
+            "INSERT INTO reports VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("r1", "u1", "600519.SH", "白酒", "2026-07-28", "completed",
+             "VALID", "BUY", "看多", 60, "BUY", "APPROVED", "ok",
+             "2026-07-28 15:43:57.730577", "2026-07-28 15:43:57.730577",
+             rd_db))
+        con.commit(); con.close()
+        sealed = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
+        rec = dsl.build_record(_row(), _rd_v2(), sealed, "2026-07-29", _cal())
+        ledger = tmp_path / "forward_ledger.jsonl"
+        prev = "GENESIS"
+        ch = hashlib.sha256((prev + rec["record_sha256"]).encode()).hexdigest()
+        ledger.write_text(json.dumps(
+            {"record": rec, "prev_hash": prev, "chain_hash": ch}) + "\n")
+        args = type("A", (), {"ledger_dir": str(tmp_path), "db": str(db),
+                              "check_three_readings": True})()
+        assert dsl.cmd_verify(args) == 1

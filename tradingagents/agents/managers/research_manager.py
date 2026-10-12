@@ -2650,16 +2650,35 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
                 default_pit_lookup,
             )
 
+            # DAV-1960 🟡-5: as_of 必须带真实时点分量（本次运行开始
+            # 时间），否则裸日期恒判 00:00 < T 15:00 → 截止恒为 T−1，
+            # 裁定的「≥T 15:00 → T」分支在生产不可达。取序：daily.retrieved_at
+            # / realtime.retrieved_at（数据拉取时点）→ 上下文 retrieved_at →
+            # 当前运行时点（带 Asia/Shanghai 时区）。PIT 语义：本次分析
+            # 决策时点可知的标签才计入基率；meta.as_of 与
+            # meta.maturity_cutoff_date 已落账可审计。生产实测（晚间批）
+            # 因此取得 T 分支而非恒 T−1。
+            _mdc = effective_market_data_context if isinstance(
+                effective_market_data_context, dict) else {}
+            _daily_ctx = _mdc.get("daily") if isinstance(
+                _mdc.get("daily"), dict) else {}
+            _rt_ctx = _mdc.get("realtime") if isinstance(
+                _mdc.get("realtime"), dict) else {}
+            _as_of_raw = (
+                _daily_ctx.get("retrieved_at")
+                or _rt_ctx.get("retrieved_at")
+                or _daily_ctx.get("as_of_ts")
+                or _mdc.get("retrieved_at")
+            )
+            if _as_of_raw is None:
+                from datetime import datetime as _dt, timezone as _tz, \
+                    timedelta as _td
+                _as_of_raw = _dt.now(_tz(_td(hours=8)))  # Asia/Shanghai
             manager_base_rate = build_base_rate_payload(
                 lookup=default_pit_lookup(),
                 signal_date=_parse_signal_date(analysis_baseline_date),
                 industry_code=(benchmark or {}).get("code"),
-                as_of=parse_analysis_cutoff(
-                    (effective_market_data_context.get("daily") or {}).get("as_of")
-                    or effective_market_data_context.get("data_as_of")
-                    or effective_market_data_context.get("analysis_baseline_date")
-                    or analysis_baseline_date
-                ),
+                as_of=parse_analysis_cutoff(_as_of_raw),
             )
 
         base_prompt = prompt_template.format(

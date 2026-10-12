@@ -115,6 +115,9 @@ import daily_snapshot_ledger as dsl  # noqa: E402
 from tradingagents.storage.result_data_compat import (  # noqa: E402
     result_data_compat_view,
 )
+from tradingagents.eval.b2_contract import (  # noqa: E402
+    medium_contract_fields as b2_medium_fields,
+)
 
 PIPELINE_VERSION = "weekly_report.v1"
 DEFAULT_DB = REPO_ROOT / "data" / "tradingagents.db"
@@ -436,27 +439,6 @@ def _benchmark_return(bars: Mapping[str, Mapping[str, float]],
 # classification helpers
 
 
-def b2_medium_fields(rec: Mapping[str, Any]) -> dict[str, Any]:
-    """b2.v1 contract keys of ``horizons.medium`` on v1/v2 records.
-
-    Shared contract: every key defaults to None / [] / ``not_sealed`` on
-    legacy v1 rows — the reader never KeyErrors and never fabricates a
-    model ``missing`` for records that predate the contract.
-    """
-    hz = rec.get("horizons")
-    medium = hz.get("medium") if isinstance(hz, Mapping) else None
-    medium = medium if isinstance(medium, Mapping) else {}
-    sealed = "p_rel_t40" in medium or "p_rel_t40_status" in medium
-    keys = ("p_rel_t40", "p_rel_t40_status", "p_rel_t40_error_codes",
-            "probability_contract_version", "raw_output_sha256",
-            "p_base_rel_t40", "p_base_rel_t40_status", "p_base_rel_t40_meta")
-    out = {k: medium.get(k) for k in keys}
-    if not sealed:
-        out["p_rel_t40_status"] = "not_sealed"
-        out["p_rel_t40_error_codes"] = []
-    return out
-
-
 def _version_key(rec: Mapping[str, Any]) -> str:
     v = rec.get("versions") or {}
     commit = v.get("generated_by_commit_sha")
@@ -566,6 +548,14 @@ def build_report(
                 p40, (int, float)) and not isinstance(p40, bool):
             r["_m_prob"] = float(p40)
             r["_m_prob_src"] = "p_rel_t40"
+        elif b2["p_rel_t40_status"] != "not_sealed":
+            # DAV-1960 🟡-1: a b2-sealed medium row whose status is not
+            # ``valid`` has NO contract probability — the legacy
+            # ``probability`` key is the pre-M1 T+10 caliber and must not
+            # substitute (m2 ``b2:<status>`` / shadow ``None`` parity).
+            # The row is still counted in the sealed-status disclosure.
+            r["_m_prob"] = None
+            r["_m_prob_src"] = None
         else:
             prob = j.get("probability")
             r["_m_prob"] = (float(prob)

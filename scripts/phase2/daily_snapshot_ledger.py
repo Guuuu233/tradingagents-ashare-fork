@@ -410,19 +410,26 @@ def _b2_medium_contract(sub: dict[str, Any]) -> dict[str, Any]:
     """Explicit b2.v1 extraction from a medium horizon slice.
 
     Source precedence inside the slice: ``manager_verdict`` first, then its
-    ``forecast_input`` (the node writes both — §2.2 mirror). Keys are only
-    emitted when present in the source — a pre-b2 report yields ``{}`` so
-    readers can distinguish "sealed with contract, value null" from
-    "contract not in this report" instead of fabricating a ``missing``.
+    ``forecast_input`` (the node writes both — §2.2 mirror), then the
+    persisted ``forecast`` block (DAV-1960 🟡-2: a node-failed / not-run
+    medium slice has no ``manager_verdict`` — its b2 status lives in the
+    ``forecast`` dict written by ``parse_horizon_forecast``; reading it
+    lets the ledger seal v2 + node_failed/not_run instead of degrading
+    the row to v1/not_sealed). Keys are only emitted when present in a
+    source — a pre-b2 report yields ``{}`` so readers can distinguish
+    "sealed with contract, value null" from "contract not in this
+    report" instead of fabricating a ``missing``.
     """
     mv = sub.get("manager_verdict") if isinstance(sub, dict) else None
     fi = mv.get("forecast_input") if isinstance(mv, dict) else None
+    fc = sub.get("forecast") if isinstance(sub, dict) else None
+    sources = [s for s in (mv, fi, fc) if isinstance(s, dict)]
     out: dict[str, Any] = {}
     for k in _B2_MEDIUM_KEYS:
-        if isinstance(mv, dict) and k in mv:
-            out[k] = mv[k]
-        elif isinstance(fi, dict) and k in fi:
-            out[k] = fi[k]
+        for src in sources:
+            if k in src:
+                out[k] = src[k]
+                break
     return out
 
 
@@ -809,6 +816,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     prev = GENESIS_PREV
     n = 0
     bad = []
+    records: list[dict] = []
     with open(ledger_path, "r", encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, 1):
             if not line.strip():
@@ -834,6 +842,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 (prev + (stored or "")).encode("utf-8"))
             if obj.get("chain_hash") != expect_chain:
                 bad.append((lineno, "chain_hash mismatch"))
+            records.append(rec)
             prev = obj.get("chain_hash", prev)
     if bad:
         print(f"FAIL: {len(bad)} problem(s) in {n} line(s)")
@@ -844,7 +853,135 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # The chain alone cannot detect tail truncation — compare the terminal
     # chain_hash against the external head anchor (bootstraps on first use).
     tail_hash = prev if n else None
-    return _check_head_anchor(ledger_path, tail_hash, n)
+    rc = _check_head_anchor(ledger_path, tail_hash, n)
+    if rc != 0:
+        return rc
+    if getattr(args, "check_three_readings", False):
+        return _check_three_readings(records, args)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# spec §4 三处读数核对 — report 持久化镜像 ↔ 账本封存行（DAV-1960 🟡-4）
+
+
+def _report_medium_slice(result_data: Any, report_row: Any) -> Optional[dict]:
+    """Rebuild the persisted medium slice a ledger row was sealed from.
+
+    Handles both storage layouts: canonical ``*_term`` slices (preferred)
+    and the legacy ``horizons.medium`` alias rebuilt by the compat view.
+    Returns None when the report row / slice cannot be found — reported
+    as a missing surface, never silently consistent.
+    """
+    if not isinstance(result_data, dict):
+        return None
+    from tradingagents.storage.result_data_compat import (
+        result_data_compat_view,
+    )
+    rd = result_data_compat_view(result_data)
+    hz = rd.get("horizons") if isinstance(rd, dict) else None
+    sub = hz.get("medium") if isinstance(hz, dict) else None
+    if isinstance(sub, dict) and sub:
+        return sub
+    sub = rd.get("medium_term") if isinstance(rd, dict) else None
+    return sub if isinstance(sub, dict) and sub else None
+
+
+def _check_three_readings(records: list[dict],
+                          args: argparse.Namespace) -> int:
+    """Compare report-persistence ↔ sealed-ledger readings (spec §4).
+
+    For every ledger record the report's own medium slice is re-read from
+    the DB (mode=ro, same SELECT contract as the sealer) and compared
+    against ``record.horizons.medium`` via
+    ``b2_contract.verify_three_readings``. The report slice covers BOTH
+    the node-side surface and its persisted mirror — the node writes its
+    reading into ``forecast_input``, and the report mirror IS the
+    persisted copy of that same dict — so a mismatch here means drift
+    between what was captured and what was sealed.
+
+    Emits the spec §3 40×2 counter block (``parse_counters`` over the
+    p_rel_t40 statuses read back from the ledger) plus a
+    ``three_way_consistent`` tally. Never touches prompt/model paths.
+    """
+    from tradingagents.eval.b2_contract import (
+        medium_contract_fields,
+        parse_counters,
+        verify_three_readings,
+    )
+
+    db_path = Path(getattr(args, "db", None) or DEFAULT_DB)
+    con = _connect_ro(db_path)
+    checked = consistent = skipped = 0
+    mismatches: list[dict] = []
+    evals: list[dict] = []
+    try:
+        for rec in records:
+            rid = rec.get("report_id")
+            med_status = medium_contract_fields(rec)["p_rel_t40_status"]
+            evals.append({"p_rel_t40_status":
+                          med_status if med_status != "not_sealed"
+                          else "not_sealed"})
+            row = con.execute(
+                f"SELECT {result_data_select_expr(con)} FROM reports"
+                " WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                skipped += 1
+                mismatches.append({"report_id": rid,
+                                   "problem": "report row absent in db"})
+                continue
+            try:
+                rd = json.loads(_result_data_text(row[0]))
+            except Exception:
+                rd = None
+            slice_ = _report_medium_slice(rd, row)
+            if slice_ is None:
+                skipped += 1
+                mismatches.append({"report_id": rid,
+                                   "problem": "medium slice absent in "
+                                              "persisted result_data"})
+                continue
+            res = verify_three_readings(
+                node_forecast_input=None,
+                report_medium_slice=slice_,
+                ledger_record=rec,
+            )
+            checked += 1
+            if res["consistent"]:
+                consistent += 1
+            else:
+                mismatches.append({"report_id": rid,
+                                   "problem": "; ".join(res["mismatches"])})
+    finally:
+        con.close()
+
+    counters = parse_counters(
+        [e for e in evals],
+        planned=len(evals),
+        three_way_consistent=consistent,
+    )
+    # v1 rows are pre-contract — they are neither "missing" nor
+    # "malformed" model outputs; surface them as their own counter so the
+    # acceptance denominator (attempted/completed) stays b2-honest.
+    counters["pre_contract_not_sealed"] = sum(
+        1 for e in evals if e["p_rel_t40_status"] == "not_sealed")
+    report = {
+        "three_way_check": {
+            "checked": checked,
+            "consistent": consistent,
+            "inconsistent": checked - consistent,
+            "report_absent": skipped,
+            "mismatches": mismatches[:20],
+        },
+        "counters_40x2": counters,
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+    if mismatches:
+        print(f"FAIL: {len(mismatches)} three-reading problem(s)",
+              file=sys.stderr)
+        return 1
+    print(f"OK: three-way readings consistent on {checked} record(s)")
+    return 0
 
 
 def cmd_baseline(args: argparse.Namespace) -> int:
@@ -954,6 +1091,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     p_v = sub.add_parser("verify", help="verify hash chain integrity")
     common(p_v)
+    p_v.add_argument("--check-three-readings", action="store_true",
+                     help="after the hash-chain check, re-read every sealed "
+                          "record's report medium slice (mode=ro) and run "
+                          "the spec §4 three-way comparison plus the 40×2 "
+                          "status counters")
     p_v.set_defaults(func=cmd_verify)
 
     p_b = sub.add_parser("baseline", help="reconcile a prior snapshot JSONL")
