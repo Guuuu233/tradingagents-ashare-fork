@@ -18,6 +18,9 @@ if str(ROOT) not in sys.path:
 
 from scripts.phase2.experiment_executor import (  # noqa: E402
     CN_TZ,
+    BatchSpec,
+    fetch_batch_pairs,
+    load_batch_specs,
     ExperimentExecutor,
     HttpTransport,
     Ledger,
@@ -315,17 +318,34 @@ def test_missing_model_field_fails_pair(tmp_path):
 
 def test_verify_pair_unit():
     pair = Manifest.from_dict({"pairs": [_pair("p")]}).pair_by_id("p")
-    ok, reason, models = verify_pair(pair, {
+    ok, reason, models, bucket = verify_pair(pair, {
         "O": {"error_bucket": "none", "models": [EXPECTED_MODEL], "model_missing": 0},
         "N": {"error_bucket": "none", "models": [EXPECTED_MODEL], "model_missing": 0},
     })
     assert ok == "ok" and reason is None and models == [EXPECTED_MODEL]
+    assert bucket == "none"
 
-    ok, reason, _ = verify_pair(pair, {
+    ok, reason, _, bucket = verify_pair(pair, {
         "O": {"error_bucket": "none", "models": ["x"], "model_missing": 0},
         "N": {"error_bucket": "none", "models": ["y"], "model_missing": 0},
     })
     assert ok == "voided" and reason.startswith("model_mismatch_across_pair")
+    assert bucket == "none"
+
+    # 配额错误：结构化 bucket 供停批判定，不依赖 reason 前缀
+    ok, reason, _, bucket = verify_pair(pair, {
+        "O": {"error_bucket": "quota_or_rate_limit", "models": [], "model_missing": 0},
+        "N": {"error_bucket": "none", "models": [EXPECTED_MODEL], "model_missing": 0},
+    })
+    assert ok == "failed"
+    assert reason.startswith("quota_or_rate_limit")
+    assert bucket == "quota_or_rate_limit"
+
+    ok, _, _, bucket = verify_pair(pair, {
+        "O": {"error_bucket": "server_error", "models": [], "model_missing": 0},
+        "N": {"error_bucket": "none", "models": [EXPECTED_MODEL], "model_missing": 0},
+    })
+    assert ok == "failed" and bucket == "server_error"
 
 
 def test_flatten_served_models_handles_missing_shape():
@@ -583,13 +603,31 @@ def test_state_file_records_pair_terminal_states(tmp_path):
     assert payload["totals"]["analysis_requests"] == 4
 
 
-def test_manifest_batches_order_and_leftovers(tmp_path):
+def test_manifest_batches_follow_frozen_order():
+    man = Manifest.from_dict({
+        "pairs": [_pair("a"), _pair("b")],
+        "batches": [["a", "b"]],
+    })
+    assert [[p.pair_id for p in b] for b in man.ordered_batches()] == [["a", "b"]]
+    assert man.unlisted_pairs() == []
+
+
+def test_manifest_rejects_pairs_missing_from_batch_order(tmp_path):
+    """🟡#4：批序未覆盖的对**不并进既有批**（那会改写该批失败率分母与预算），
+    直接报错逼人改正清单。"""
     man = Manifest.from_dict({
         "pairs": [_pair("a"), _pair("b"), _pair("c")],
         "batches": [["a", "c"]],
     })
-    batches = man.ordered_batches()
-    assert [p.pair_id for p in batches[0]] == ["a", "c", "b"]
+    assert [p.pair_id for p in man.unlisted_pairs()] == ["b"]
+    with pytest.raises(ValueError, match="批序未覆盖"):
+        man.ordered_batches()
+
+
+def test_manifest_rejects_unknown_pair_in_batch_order():
+    man = Manifest.from_dict({"pairs": [_pair("a")], "batches": [["a", "ghost"]]})
+    with pytest.raises(KeyError):
+        man.ordered_batches()
 
 
 def test_config_overrides_are_identical_across_instances(tmp_path):
@@ -646,3 +684,228 @@ def test_cli_status_prints_ledger(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["pairs"][0]["pair_id"] == "p1"
     assert payload["totals"]["analysis_requests"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 7. 🔴 DAV-1889#1 回归：轮询收到非 200 必须立刻按错误处理，不得死等到超时
+# ---------------------------------------------------------------------------
+
+
+class _PollStatusTransport(HttpTransport):
+    """提交成功，轮询固定返回给定 HTTP 状态。"""
+
+    def __init__(self, status: int, body=None):
+        super().__init__(session=None)
+        self.status = status
+        self.body = body if body is not None else {"detail": "boom"}
+        self.polls = 0
+
+    def request(self, method, url, *, headers=None, json_body=None):
+        from urllib.parse import urlparse
+
+        path = urlparse(url).path
+        if path == "/v1/analyze":
+            return 200, {"job_id": "j1", "status": "pending"}
+        if path.endswith("/result"):
+            return 200, {"result": {}}
+        self.polls += 1
+        return self.status, self.body
+
+
+def _executor_with_transport(tmp_path, transports, **cfg):
+    ledger = Ledger(tmp_path / "state")
+    cfg.setdefault("pair_retries", 0)
+    ex = ExperimentExecutor(
+        instances={name: f"http://stub:{i}" for i, name in enumerate(transports)},
+        ledger=ledger,
+        transport_factory=lambda name, url: transports[name],
+        config=StopConfig(**cfg),
+        now=lambda: datetime(2026, 10, 13, 9, 0, tzinfo=CN_TZ),
+        sleep=lambda _s: None,
+        poll_interval=0,
+        job_timeout=7200.0,   # 若死等分支被触发，测试会被拖满 2 小时
+    )
+    return ex, ledger
+
+
+@pytest.mark.parametrize("status,expected_bucket", [
+    (404, "client_error"),
+    (401, "client_error"),
+    (500, "server_error"),
+    (503, "server_error"),
+])
+def test_non_200_poll_fails_fast_instead_of_waiting_for_timeout(tmp_path, status, expected_bucket):
+    """🔴#1 回归：轮询 4xx/5xx → 立即 status_failed，error_bucket 正确，
+    不进入挂到 job_timeout(7200s) 的死等分支。"""
+    ex, ledger = _executor_with_transport(tmp_path, {"O": _PollStatusTransport(status)})
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+
+    assert record.outcome == "failed"
+    run = record.runs[0]
+    assert run["status"] == "status_failed"
+    assert run["error_bucket"] == expected_bucket
+    assert "boom" in run["error"]
+    # 只轮询一次就退出，没有反复重试直到超时
+    assert ex.transport("O").polls == 1
+
+
+def test_poll_200_with_non_dict_body_fails_fast(tmp_path):
+    """200 但响应体不是 dict（代理层畸形响应）→ 同样立即 status_failed，
+    不能拿它去 .get("status") 然后挂到超时。"""
+    ex, _ = _executor_with_transport(tmp_path, {"O": _PollStatusTransport(200, body=["oops"])})
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+    run = record.runs[0]
+    assert run["status"] == "status_failed"
+    assert run["error_bucket"] == "malformed_response"
+    assert record.outcome == "failed"   # 请求本身没成 → failed，不是 voided
+    assert ex.transport("O").polls == 1
+
+
+def test_poll_still_waits_while_job_is_running(tmp_path):
+    """守住修复的另一侧：正常 pending/running 依旧轮询到终态。"""
+    class _Running(StubServer):
+        def handle(self, instance, method, path, body):
+            if path == "/v1/analyze":
+                self._store["O-job-1"] = {"status": "completed", "model": EXPECTED_MODEL}
+                self._store_meta["O-job-1"] = {"symbol": "600519.SH"}
+                return 200, {"job_id": "O-job-1", "status": "pending"}
+            return super().handle(instance, method, path, body)
+
+    StubServer._store = {}
+    StubServer._store_meta = {}
+    server = _Running("http://stub:8021", {}, name="O")
+    ex, _ = _executor_with_transport(
+        tmp_path, {"O": server.transport()}, pair_retries=0
+    )
+    ex.sleep = lambda _s: None
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+    assert record.outcome == "ok"
+    assert record.runs[0]["status"] == "completed"
+    assert record.served_models == [EXPECTED_MODEL]
+
+
+def test_quota_stop_uses_structured_bucket_not_reason_prefix(tmp_path):
+    """🟡#2：配额停批读结构化 error_bucket；reason 文案改了也不漏判。"""
+    StubServer._store = {}
+    StubServer._store_meta = {}
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "upstream busy"}}})
+    transports = {name: srv.transport() for name, srv in servers.items()}
+    ex, _ = _executor_with_transport(tmp_path, transports, pair_retries=0)
+    ex.sleep = lambda _s: None
+    ex.run(_manifest([_pair("p1")]))
+    assert ex.ledger.totals["analysis_requests"] == 2
+    rec = json.loads((tmp_path / "state" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    # "upstream busy" 无状态码 → 归到通用 error；结构化字段照实写进记账
+    assert rec["error_bucket"] == "error"
+    assert rec["void_reason"].startswith("request_failed")
+
+
+def test_executor_has_no_class_level_mutable_batch_state():
+    """🟡#3：批次状态不得再有类级可变默认（会跨实例串状态）。"""
+    assert "_last_batch_records" not in vars(ExperimentExecutor)
+    assert "_non_frozen_seen" not in vars(ExperimentExecutor)
+
+
+# ---------------------------------------------------------------------------
+# 8. 总控 10-12 追加：前瞻现取名单（种子 = 20261010 + 批号）
+# ---------------------------------------------------------------------------
+
+
+def _fake_sampler(rows, *, digest="deadbeef"):
+    """rows 可以是代码字符串，也可以是原始取样行 dict（原样透传）。"""
+    def runner(spec):
+        picks = [
+            {"ts_code": r, "sw_l1": "银行"} if isinstance(r, str) else r
+            for r in rows
+        ]
+        return {
+            "trade_date": f"{spec.date[:4]}-{spec.date[4:6]}-{spec.date[6:]}",
+            "n_picked": len(picks),
+            "eligible_digest": digest,
+            "picks": picks,
+            "_spec": spec,
+        }
+    return runner
+
+
+def test_batch_seed_is_reproducible_base_plus_index():
+    specs = [BatchSpec(batch_index=i, date="20261013", n=5) for i in range(3)]
+    assert [s.sampler_seed for s in specs] == [20261010, 20261011, 20261012]
+    assert BatchSpec(batch_index=0, date="20261013", n=5).sampler_seed == 20261010
+
+
+def test_forward_sampling_builds_pairs_with_frozen_identity():
+    spec = BatchSpec(batch_index=0, date="20261013", n=2)
+    pairs, sampler = fetch_batch_pairs(
+        spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+        runner=_fake_sampler(["600519.SH", "000001.SZ"]),
+    )
+    assert [p.symbol for p in pairs] == ["600519.SH", "000001.SZ"]
+    assert all(p.trade_date == "2026-10-13" for p in pairs)
+    assert all(p.expected_model == EXPECTED_MODEL for p in pairs)
+    assert all(p.instances == ("O", "N") for p in pairs)
+    # pair_id 含批号，跨批不撞名
+    assert pairs[0].pair_id == "b00-600519.SH"
+    assert sampler["eligible_digest"] == "deadbeef"   # 输入指纹留档可复现
+
+
+def test_forward_sampling_refuses_empty_batch():
+    spec = BatchSpec(batch_index=0, date="20261013", n=2)
+    with pytest.raises(ValueError, match="取样为空"):
+        fetch_batch_pairs(spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+                          runner=_fake_sampler([]))
+
+
+def test_forward_sampling_refuses_row_without_symbol():
+    spec = BatchSpec(batch_index=0, date="20261013", n=1)
+    with pytest.raises(ValueError, match="缺 ts_code"):
+        fetch_batch_pairs(spec, instances=("O", "N"), expected_model=EXPECTED_MODEL,
+                          runner=_fake_sampler([{"ts_code": "  ", "sw_l1": "银行"}]))
+
+
+def test_forward_sampled_pairs_run_through_executor(tmp_path):
+    """前瞻名单直接进执行器：同样的核对/记账/停批口径。"""
+    spec = BatchSpec(batch_index=0, date="20261013", n=2)
+    pairs, _ = fetch_batch_pairs(spec, instances=("O", "N"),
+                                 expected_model=EXPECTED_MODEL,
+                                 runner=_fake_sampler(["600519.SH", "000001.SZ"]))
+    man = Manifest(name="forward", pairs=tuple(pairs), frozen_models=FROZEN)
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    report = ex.run(man)
+    assert report.pairs_ok == 2
+    assert ex.ledger.total_analysis_requests() == 4
+
+
+def test_load_batch_specs_and_plan_cli(tmp_path, capsys):
+    spec_file = tmp_path / "batches.json"
+    spec_file.write_text(json.dumps({"batches": [
+        {"batch_index": 0, "date": "20261013", "n": 2},
+        {"batch_index": 1, "date": "20261014", "n": 1},
+    ]}), encoding="utf-8")
+    specs = load_batch_specs(spec_file)
+    assert [(s.batch_index, s.date, s.n) for s in specs] == [(0, "20261013", 2), (1, "20261014", 1)]
+
+    import scripts.phase2.experiment_executor as mod
+    out = tmp_path / "planned.json"
+    real = mod.fetch_batch_pairs
+    def _stub_fetch(spec, *, instances, expected_model, **kw):
+        pairs, _ = fetch_batch_pairs(spec, instances=instances,
+                                     expected_model=expected_model,
+                                     runner=_fake_sampler(["600519.SH"]))
+        return pairs, {"eligible_digest": "d1", "n_picked": 1, "trade_date": "2026-10-13"}
+
+    mod.fetch_batch_pairs = _stub_fetch
+    try:
+        rc = mod.main(["plan", "--batch-spec", str(spec_file), "--instance", "O=http://x",
+                       "--instance", "N=http://y", "--expected-model", EXPECTED_MODEL,
+                       "--out", str(out)])
+    finally:
+        mod.fetch_batch_pairs = real
+    assert rc == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert [b["sampler_seed"] for b in payload["batches"]] == [20261010, 20261011]
+    assert payload["batches"][0]["pairs"][0]["expected_model"] == EXPECTED_MODEL
