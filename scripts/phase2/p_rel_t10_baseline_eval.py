@@ -74,7 +74,7 @@ import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -235,31 +235,69 @@ def load_ledger_signals(
 
 from datetime import datetime, timedelta, timezone
 
+UTC = timezone.utc
+
 
 def _cn_entry_open_utc(entry_day_iso: str) -> datetime:
     """Asia/Shanghai 09:30 -> aware UTC datetime (mirror of the ledger's
     _classify_timing cn_dt)."""
     d = datetime.fromisoformat(entry_day_iso)
     return datetime(d.year, d.month, d.day, 9, 30,
-                    tzinfo=timezone.utc) - timedelta(hours=8)
+                    tzinfo=UTC) - timedelta(hours=8)
+
+
+# 总控追加: ledger sealed_at/seal_basis_at/created_at 是「无时区标记的 UTC
+# 时间」——判定顺序为先按 UTC 解析 → 转 Asia/Shanghai → 与「信号日次一交易日
+# 09:30」比较; 不把裸时间当本地时间。
+_CN_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _sealed_at_utc(raw) -> Optional[datetime]:
+    """Parse a ledger ``sealed_at`` as naive-UTC, return an aware UTC instant.
+
+    None / unparseable -> None (callers route to diagnostics, never guess).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        # ISO-8601 (with T or offset) -> honour the embedded zone then move
+        # to UTC; bare "YYYY-MM-DD HH:MM:SS[.f]" is the ledger's naive-UTC.
+        if "T" in s or "+" in s[10:] or s.endswith("Z"):
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
+    except ValueError:
+        try:
+            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+        except ValueError:
+            try:
+                return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=UTC)
+            except ValueError:
+                return None
 
 
 def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataFrame, dict]:
-    """总控追加封存时点门: formal 只收 sealed_at < 信号日次一交易日 09:30
+    """总控追加封存时点门: formal 只收 sealed_at(UTC) < 信号日次一交易日 09:30
     (Asia/Shanghai) 的账本记录。
 
-    封存时间字段 = 账本记录 ``sealed_at``（与 ``seal_basis_at`` 同值，任选
-    其一——口径注明）; 晚封/补录 (sealed >= T+1 open 或 T+1 不可解析) 的行
-    分流进诊断，在 funnel 里单列 ``excl_seal_late``，不进正式队列。
+    判定顺序(总控口径): sealed_at 是 naive-UTC → 先按 UTC 解析 → 转
+    Asia/Shanghai → 与「T+1 交易日 09:30 Asia/Shanghai」比较; 不把裸时间当
+    本地时间。晚封/补录/T+1 不可解析/sealed_at 缺失的行分流诊断，在 funnel
+    里单列 ``excl_seal_late``，不进正式队列。
     Returns (kept_df, {"excl_seal_late": n, "seal_late_ids": [...]}).
     """
     import bisect
     cal = sorted(calendar_iso)
     late_ids: list = []
     kept_mask = []
-    sealed = pd.to_datetime(df["sealed_at"], utc=True, errors="coerce")
     sig_iso = pd.to_datetime(df["signal_date"]).dt.strftime("%Y-%m-%d")
-    for i, (sd, sa) in enumerate(zip(sig_iso, sealed)):
+    sealed_utc = [_sealed_at_utc(v) for v in df["sealed_at"]]
+    for i, (sd, sa) in enumerate(zip(sig_iso, sealed_utc)):
         idx = bisect.bisect_right(cal, sd) - 1
         if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
             # signal not a trading day or T+1 unresolved -> seal gate cannot
@@ -267,12 +305,15 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
             late_ids.append(df["run_id"].iloc[i])
             kept_mask.append(False)
             continue
+        # compare in Asia/Shanghai: entry open = T+1 09:30 CN; the aware-UTC
+        # comparison is equivalent (sa.astimezone(_CN_TZ) < 09:30 CN). We do
+        # the UTC-side compare to mirror _classify_timing.
         entry_open = _cn_entry_open_utc(cal[idx + 1])
-        ok = (not pd.isna(sa)) and sa < entry_open
+        ok = (sa is not None) and sa < entry_open
         if not ok:
             late_ids.append(df["run_id"].iloc[i])
         kept_mask.append(ok)
-    gate = {"excl_seal_late": int(len(late_ids)), "seal_late_ids": late_ids}
+    gate = {"excl_seal_late": len(late_ids), "seal_late_ids": late_ids}
     return df.loc[kept_mask].reset_index(drop=True), gate
 
 
