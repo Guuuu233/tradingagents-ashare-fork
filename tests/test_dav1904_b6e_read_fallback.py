@@ -5,11 +5,12 @@ Two parts:
 1. ORM read fallback — in ``REPORT_STORAGE_MODE=plaintext`` (default),
    a row whose plaintext ``result_data`` was cleared (P5b) still reads
    back through ``db_report.result_data`` via the SQL-level
-   plaintext-first ``COALESCE(result_data, result_data_zst)`` bound
-   lazily on first connect (DAV-1909 🔴-2 rework: SQL-level, so list
-   queries stay at ONE SELECT and DAV-1283 D2 ``load_only`` exclusion
-   keeps working). Plaintext rows are untouched, and a missing zst
-   column never breaks reads (attribute stays a bare Column there).
+   plaintext-first ``COALESCE(result_data, result_data_zst)`` bound ONCE
+   at class definition (DAV-1985: the previous lazy first-connect rebind
+   via ``add_mapped_attribute`` tripped ``SADeprecationWarning``; the
+   declared-once column_property keeps list queries at ONE SELECT and
+   DAV-1283 D2 ``load_only`` exclusion keeps working). Plaintext rows
+   are untouched.
 
 2. Static regression gate — every ``.py`` file under ``scripts/``,
    ``tradingagents/`` and ``api/`` is scanned for raw-SQL reads of the
@@ -87,9 +88,10 @@ with engine.connect() as c:
 def test_cleared_row_reads_through_zstd_fallback(tmp_path):
     """P5b-cleared row (plaintext NULL, zst present) decodes via the ORM.
 
-    The lazy COALESCE binding promotes ``result_data`` at first connect,
-    so ``cleared1`` resolves through zst inside the SAME SELECT — no
-    deferred N+1 — while ``plain1``/``nulllit`` read the plaintext column.
+    The class-time COALESCE binding promotes ``result_data`` at mapper
+    definition, so ``cleared1`` resolves through zst inside the SAME
+    SELECT — no deferred N+1 — while ``plain1``/``nulllit`` read the
+    plaintext column.
     """
     db_file = _make_db(tmp_path)
     code = r"""
@@ -123,6 +125,37 @@ print("OK")
     env.pop("REPORT_STORAGE_MODE", None)
     env["DATABASE_URL"] = f"sqlite:///{db_file}"
     env["ROOT"] = str(ROOT)
+    env["PYTHONPATH"] = str(ROOT)
+    out = subprocess.run([sys.executable, "-c", code], env=env,
+                         capture_output=True, text=True, cwd=ROOT)
+    assert out.returncode == 0, out.stderr + out.stdout
+    assert "OK" in out.stdout
+
+
+def test_no_sadeprecation_warning_on_import_or_first_query(tmp_path):
+    """DAV-1985 regression: ``SADeprecationWarning`` (the 'User-placed
+    attribute … replacing an existing ORM-mapped attribute' fired by the
+    removed first-connect ``add_mapped_attribute`` rebind) must never be
+    raised — importing ``api.database``, running ``init_db()`` and
+    executing the first ORM query all stay warning-free under an
+    ``error`` filter."""
+    code = r"""
+import warnings
+import sqlalchemy.exc
+warnings.simplefilter("error", sqlalchemy.exc.SADeprecationWarning)
+import api.database as d
+d.init_db()
+s = d.SessionLocal()
+s.add(d.ReportDB(id="w1", symbol="S", trade_date="2026-01-01",
+                 status="completed", result_data={"ok": True}))
+s.commit()
+assert s.get(d.ReportDB, "w1").result_data == {"ok": True}
+print("OK")
+"""
+    db_file = tmp_path / "warn.db"
+    env = dict(os.environ)
+    env.pop("REPORT_STORAGE_MODE", None)
+    env["DATABASE_URL"] = f"sqlite:///{db_file}"
     env["PYTHONPATH"] = str(ROOT)
     out = subprocess.run([sys.executable, "-c", code], env=env,
                          capture_output=True, text=True, cwd=ROOT)

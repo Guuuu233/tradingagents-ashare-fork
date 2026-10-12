@@ -528,21 +528,23 @@ class ReportDB(Base):
     #
     # compressed/compressed_only → a SQL-level
     #   COALESCE(result_data_zst, result_data) (compressed-first:
-    #   authoritative column, plaintext legacy fallback) so every read
-    #   (single row or bulk) resolves migrated and unmigrated rows in ONE
-    #   query — no ORM load-event N+1 fallback (DAV-1792 🟡-1). The
-    #   non-read-side column is kept byte-identical by the flush-time
-    #   shadow sync (dual write, §4 P1–P3) — except in compressed_only
-    #   (P4), where the sync leaves it NULL on new/updated rows.
-    # plaintext (default, DAV-1904 B-6e) → ``result_data`` stays the plain
-    #   JSON column; cleared rows (result_data IS NULL AND
-    #   result_data_zst IS NOT NULL, the P5b end-state) are recovered by
-    #   the load listener below, which lazy-SELECTs only the deferred
-    #   zst column for those rows and decodes via ZstdJSON. This mirrors
-    #   the plaintext-first COALESCE semantics — plaintext always wins
-    #   when present — but degrades gracefully on pre-B-6b schemas that
-    #   lack the zst column, where a SQL-level COALESCE would fail every
-    #   read outright.
+    #   authoritative column, plaintext legacy fallback); plaintext
+    #   (default, DAV-1904 B-6e) → the SAME column_property shape with the
+    #   operands flipped: COALESCE(result_data, result_data_zst)
+    #   (plaintext-first: live column wins when present, P5b-cleared rows
+    #   decode the compressed shadow). Both modes resolve every read
+    #   (single row or bulk) in ONE query — no ORM load-event N+1 fallback
+    #   (DAV-1792 🟡-1, DAV-1909 🔴-2). The non-read-side column is kept
+    #   byte-identical by the flush-time shadow sync (dual write, §4
+    #   P1–P3) — except in compressed_only (P4), where the sync leaves it
+    #   NULL on new/updated rows.
+    #
+    # DAV-1985: the coalesce is bound ONCE here at class definition in
+    #   every mode. The previous lazy rebind (add_mapped_attribute on
+    #   first connect) emitted SADeprecationWarning and is gone; the
+    #   mapping below assumes the migrated schema — every ORM entry point
+    #   runs init_db()/_ensure_report_schema() first, which ALTERs the
+    #   zst/pg_* columns in before any ReportDB query executes.
     if report_storage_mode() in ("compressed", "compressed_only"):
         # Physical write columns (deferred — never auto-SELECTed).
         result_data_zst = deferred(
@@ -559,27 +561,31 @@ class ReportDB(Base):
                 result_data_plaintext.expression,
             ),
         )
-        _B6B_NEEDS_ZST_TYPE_PATCH = True
     else:
-        # DAV-1904 B-6e plaintext mode: ``result_data`` is bound lazily at
-        # the first engine connect (see ``_b6e_maybe_upgrade_result_data``)
-        # to a SQL-level ``COALESCE(result_data, result_data_zst)`` —
-        # plaintext-first: the live column wins when present, cleared rows
-        # (P5b end-state) fall back to the compressed copy, decoded by the
-        # ZstdJSON result type patched in below at class level. SQL-level
-        # COALESCE keeps list queries at ONE SELECT (the DAV-1909 🔴-2
-        # load-listener emitted a deferred SELECT per row and broke the
-        # DAV-1283 D2 rule), and the lazy bind keeps pre-B-6b schemas (no
-        # zst column) on the bare plaintext column — an eager class-level
-        # COALESCE would fail every read there outright.
-        result_data = Column("result_data", JSON, key="result_data", nullable=True)
-        # Shadow compressed column: deferred raw BLOB, written by the flush
-        # hook; never selected by any read path directly — cleared rows
-        # read through the COALESCE above once bound (DAV-1904 B-6e).
+        # DAV-1904 B-6e plaintext mode — same three-attribute shape as the
+        # compressed branch, operand order flipped (plaintext wins).
+        result_data_plaintext = deferred(
+            Column("result_data", JSON, key="result_data_plaintext", nullable=True)
+        )
+        # Shadow compressed column: deferred raw BLOB, written by the
+        # flush hook; never selected by any read path directly.
         result_data_zst = deferred(
             Column("result_data_zst", LargeBinary,
                    key="result_data_zst", nullable=True)
         )
+        result_data = column_property(
+            func.coalesce(
+                result_data_plaintext.expression,
+                result_data_zst.expression,
+            ),
+        )
+    # column_property's coalesce column element defaults to the first
+    # operand's type; re-type it so result_value goes through ZstdJSON —
+    # decodes the BLOB for cleared rows AND json.loads plaintext for live
+    # rows in either mode. (Set at class definition on the not-yet-bound
+    # MappedSQLExpression — the DAV-1985 fix removed the post-mapping
+    # add_mapped_attribute rebind that tripped SADeprecationWarning.)
+    result_data.columns[0].type = ZstdJSON()
     result_data_zst_len = Column(Integer, nullable=True)
 
     # DAV-1770 B-6b §2.2: materialized list-page scalars (populated by
@@ -685,112 +691,9 @@ class ReportDB(Base):
 # column) + 31 pg_* materialized columns on every result_data write.
 # Registered once, at class-definition; sync_report_storage_row decides
 # which direction to mirror based on REPORT_STORAGE_MODE.
-if getattr(ReportDB, "_B6B_NEEDS_ZST_TYPE_PATCH", False):
-    # column_property's coalesce column element defaults to the first
-    # operand's type (LargeBinary); re-type it so result_value goes
-    # through ZstdJSON (handles BLOB bytes AND plaintext text).
-    ReportDB.result_data.property.columns[0].type = ZstdJSON()
+# (DAV-1985: the ZstdJSON re-type moved up next to the column_property
+# declaration — it now applies in both storage modes.)
 
-
-# ── DAV-1904 B-6e / DAV-1909 🔴-2: lazy plaintext-first COALESCE ─────────────
-#
-# In plaintext mode ``ReportDB.result_data`` starts as a bare Column. At the
-# first engine connect we inspect the live schema: when ``result_data_zst``
-# exists, the attribute is REBOUND to ``column_property(COALESCE(result_data,
-# result_data_zst))`` typed ZstdJSON — one SELECT, plaintext wins when present,
-# cleared rows decode the compressed copy. When the column is absent (pre-B-6b
-# schema) the attribute stays a bare Column and nothing changes.
-#
-# Seeding uses a direct DBAPI connection (bypasses the pool, never races
-# app traffic) at module import, plus a per-connect re-check for fresh
-# databases — e.g. sqlite:///:memory: engines where each pooled connection
-# is a new, schema-less DB populated by create_all() after the seed ran.
-_B6E_URLS_BOUND: set = set()  # URLs already promoted (or verified legacy)
-
-
-def _b6e_maybe_upgrade_result_data(url, connection=None) -> None:
-    """Promote ``ReportDB.result_data`` to COALESCE when the zst column exists.
-
-    ``connection`` may be a raw DBAPI connection (``connect`` event) or a
-    SQLAlchemy ``Session``/``Connection`` — its ``execute`` is called with
-    plain SQL strings for the read-only probe. A URL whose ``reports``
-    table is not yet created is left unbound and re-probed at the next
-    call site; a bound verdict is stable for the process.
-    """
-    key = str(url)
-    if key in _B6E_URLS_BOUND:
-        return
-    if report_storage_mode() in ("compressed", "compressed_only"):
-        _B6E_URLS_BOUND.add(key)
-        return
-    if connection is None:
-        return
-    # DBAPI connections take plain strings; SQLAlchemy connections need text().
-    from sqlalchemy.engine import Connection as _SAConn
-    _exec = (
-        (lambda sql: connection.execute(text(sql)))
-        if isinstance(connection, _SAConn)
-        else connection.execute
-    )
-    try:
-        cur = _exec(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='reports'"
-        )
-        row = cur.fetchone()
-        if row is None:
-            return  # table not created yet — probe again at next site
-        cur = _exec("PRAGMA table_info(reports)")
-        cols = {r[1] for r in cur.fetchall()}
-    except Exception as e:  # inspection must never break startup
-        logger.warning("B-6e result_data probe failed; keeping bare column: %s", e)
-        _B6E_URLS_BOUND.add(key)
-        return
-    _B6E_URLS_BOUND.add(key)  # schema verdict is stable for the process
-    if "result_data_zst" not in cols or "result_data" not in cols:
-        return  # pre-B-6b (no zst) or headless (no plaintext) schema
-
-    from sqlalchemy.orm import add_mapped_attribute
-
-    prop = column_property(
-        func.coalesce(
-            ReportDB.__table__.c.result_data,
-            ReportDB.__table__.c.result_data_zst,
-        )
-    )
-    # coalesce element defaults to the first operand's type (JSON → returns
-    # str); re-type BEFORE the property is bound so the result value goes
-    # through ZstdJSON — decodes the BLOB for cleared rows AND json.loads
-    # plaintext for live rows.
-    prop.columns[0].type = ZstdJSON()
-    # add_mapped_attribute is the 2.0-supported way to re-map an existing
-    # key (plain attribute assignment trips SADeprecationWarning).
-    add_mapped_attribute(ReportDB, "result_data", prop)
-    logger.info("B-6e: ReportDB.result_data bound to plaintext-first COALESCE")
-
-
-if report_storage_mode() != "compressed" and DATABASE_URL.startswith("sqlite"):
-    @event.listens_for(engine, "connect")
-    def _b6e_engine_connect_probe(dbapi_connection, connection_record):
-        _b6e_maybe_upgrade_result_data(engine.url, dbapi_connection)
-
-    # QueuePool recycles a single physical connection, so ``connect``
-    # events do NOT fire again after init_db() consumed the first one.
-    # Hook init_db() itself: after create_all/_ensure_* finish, the URL
-    # is still unbound only when the table was just created — probe then
-    # on a fresh short-lived connection (file DBs share the file across
-    # connections; :memory: engines legitimately keep re-probing since
-    # each pooled conn is a distinct DB whose schema may appear later).
-    _b6e_orig_init_db = init_db
-
-    def init_db(*a, **kw):  # noqa: F811 — wraps _b6e_orig_init_db
-        _b6e_orig_init_db(*a, **kw)
-        if str(engine.url) not in _B6E_URLS_BOUND:
-            try:
-                with engine.connect() as _c:
-                    _b6e_maybe_upgrade_result_data(engine.url, _c)
-            except Exception:
-                pass  # bare-column fallback stays; never break startup
-    init_db.__wrapped__ = _b6e_orig_init_db  # keep introspection sane
 
 @event.listens_for(ReportDB, "before_insert", propagate=True)
 def _b6b_sync_on_insert(mapper, connection, target):
@@ -802,12 +705,13 @@ def _b6b_sync_on_update(mapper, connection, target):
     sync_report_storage_row(target, is_pending=False)
 
 
-# Load-time plaintext fallback is handled at the SQL level by
-# COALESCE-based column_property in BOTH storage modes — compressed binds
-# eagerly at class level; plaintext binds lazily on first connect via
-# ``_b6e_maybe_upgrade_result_data`` above (DAV-1904 B-6e, reworked after
-# DAV-1909 🔴-2: an ORM ``load`` listener emitting deferred-attr SELECTs
-# per row regressed list endpoints to N+1 and broke DAV-1283 D2).
+# Load-time plaintext/compressed fallback is handled at the SQL level by
+# the COALESCE-based column_property bound at class definition in BOTH
+# storage modes (DAV-1985: plaintext used to rebind lazily on first
+# connect via add_mapped_attribute → SADeprecationWarning; now declared
+# once alongside the columns). One SELECT per row set — the DAV-1909 🔴-2
+# ORM ``load`` listener emitted a deferred SELECT per row and regressed
+# list endpoints to N+1 (broke DAV-1283 D2).
 
 
 class UserDB(Base):

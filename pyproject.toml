@@ -72,5 +72,12 @@ norecursedirs = [
 markers = [
     "network: tests that require real network access (run with: pytest -m network)",
 ]
+# DAV-1985: B-6e's post-mapping attribute rebind (add_mapped_attribute on
+# first connect) emitted SADeprecationWarning. The mapping is now declared
+# once at class-definition; promote the warning to an error so any future
+# re-introduction fails the suite loudly instead of logging silently.
+filterwarnings = [
+    "error::sqlalchemy.exc.SADeprecationWarning",
+]
 addopts = "-m 'not network'"
 

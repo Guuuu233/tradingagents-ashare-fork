@@ -2993,22 +2993,20 @@ def _post_gate_frag_expressions():
     is guaranteed in compressed mode because P3 cannot be entered before P2
     backfill (§4).
 
-    DAV-1904 B-6e note: in plaintext mode the bound ``result_data``
-    attribute is the plaintext-first ``COALESCE(result_data,
-    result_data_zst)`` — emitting ``json_extract`` on it would wrap the
-    physical column inside ``coalesce(...)``, which the DAV-1283 D2 gate
-    counts as a bare-column read. The fragments therefore extract from
-    ``ReportDB.__table__.c.result_data`` (the physical plaintext column)
-    explicitly. Cleared rows (plaintext NULL) yield NULL fragment fields
-    — display then degrades to column-level values, the same end state
-    compressed mode exhibits once ``pg_*`` backfill is pending.
+    DAV-1985: plaintext mode binds ``result_data`` to a class-time
+    ``column_property`` COALESCE — the physical plaintext column is the
+    deferred ``result_data_plaintext`` attribute (its ``.expression``
+    emits the bare column, never the coalesce wrapper the DAV-1283 D2
+    gate rejects). Cleared rows (plaintext NULL) yield NULL fragment
+    fields — display then degrades to column-level values, the same end
+    state compressed mode exhibits once ``pg_*`` backfill is pending.
     """
     if report_storage_mode() in ("compressed", "compressed_only"):
         return {
             name: getattr(ReportDB, col_name)
             for name, col_name in PG_FRAGMENT_COLUMN_MAP.items()
         }
-    _plain = ReportDB.__table__.c.result_data
+    _plain = ReportDB.result_data_plaintext.expression
     return {
         name: func.json_extract(_plain, path)
         for name, path in _POST_GATE_FRAGMENT_PATHS.items()
