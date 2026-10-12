@@ -2,6 +2,7 @@
 
 import re
 import json
+import asyncio
 
 from langchain_openai import ChatOpenAI
 from tradingagents.dataflows.config import get_config
@@ -41,6 +42,36 @@ class SignalProcessor:
         ]
 
         response = str(self.quick_thinking_llm.invoke(messages).content).strip().upper()
+        if response in {"BUY", "SELL", "HOLD"}:
+            return response
+        return "HOLD"
+
+    async def aprocess_signal(self, full_signal: str) -> str:
+        """Async twin of :meth:`process_signal` for event-loop callers.
+
+        Identical rule-based fast path and identical LLM fallback prompt; the
+        only difference is that the blocking ``invoke`` runs in a worker
+        thread. DAV-1463: the sync form was called from ``_run_job_inner``
+        after the graph finished, so one HTTP round-trip to the model froze
+        every other request on the loop (/healthz included).
+        """
+        if not full_signal:
+            return "HOLD"
+
+        decision = _extract_decision_keyword(full_signal)
+        if decision:
+            return decision
+
+        messages = [
+            (
+                "system",
+                get_prompt("signal_extractor_system", config=get_config()),
+            ),
+            ("human", full_signal),
+        ]
+
+        res = await asyncio.to_thread(self.quick_thinking_llm.invoke, messages)
+        response = str(res.content).strip().upper()
         if response in {"BUY", "SELL", "HOLD"}:
             return response
         return "HOLD"

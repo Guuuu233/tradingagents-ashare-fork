@@ -1324,3 +1324,12 @@ class TradingAgentsGraph:
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""
         return self.signal_processor.process_signal(full_signal)
+
+    async def aprocess_signal(self, full_signal):
+        """Event-loop-safe twin of :meth:`process_signal` (DAV-1463).
+
+        Same keyword-first logic and same LLM fallback; the fallback invoke is
+        moved to a worker thread. Callers already running inside
+        ``asyncio.to_thread`` (e.g. ``propagate``) keep using the sync form.
+        """
+        return await self.signal_processor.aprocess_signal(full_signal)
