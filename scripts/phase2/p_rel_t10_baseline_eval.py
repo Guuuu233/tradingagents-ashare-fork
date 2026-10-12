@@ -234,8 +234,19 @@ def load_ledger_signals(
 # ---------------------------------------------------------------------------
 
 from datetime import datetime, timedelta, timezone
+import logging
+import re
 
 UTC = timezone.utc
+
+_LOG = logging.getLogger(__name__)
+
+# ISO-8601 offset tail: "+08:00" / "+0800" / "-05:00" / "-0500". Matched only
+# after position 10 so the date's own hyphens are not taken for a sign.
+_ISO_OFFSET_TAIL = re.compile(r"[+-]\d{2}:?\d{2}$")
+# Fractional seconds with more than 6 digits — datetime.fromisoformat (3.10)
+# rejects them; we truncate to microseconds rather than lose the whole value.
+_OVERLONG_FRACTION = re.compile(r"(\.\d{7,})(?!\d)")
 
 
 def _cn_entry_open_utc(entry_day_iso: str) -> datetime:
@@ -252,33 +263,65 @@ def _cn_entry_open_utc(entry_day_iso: str) -> datetime:
 _CN_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 
-def _sealed_at_utc(raw) -> Optional[datetime]:
+def _parse_iso_sealed(s: str) -> Optional[datetime]:
+    """ISO-8601 with an explicit zone (T / Z / +hh:mm / -hh:mm) -> aware UTC.
+
+    Falls back to truncating over-long fractional seconds (>6 digits) before
+    giving up; a zone-bearing string must never degrade to a date-only read.
+    """
+    for cand in (s, _OVERLONG_FRACTION.sub(lambda m: m.group(1)[:7], s)):
+        try:
+            dt = datetime.fromisoformat(cand.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    return None
+
+
+def _sealed_at_utc(raw, notes: Optional[dict] = None) -> Optional[datetime]:
     """Parse a ledger ``sealed_at`` as naive-UTC, return an aware UTC instant.
 
     None / unparseable -> None (callers route to diagnostics, never guess).
+
+    ``notes`` (optional out-param) collects the date-only fallback count so the
+    run funnel can report it: the ledger's ``_fmt_dt`` only ever writes
+    ``YYYY-MM-DD HH:MM:SS.ffffff``, so a date-only read is a malformed input
+    that must not be silently treated as an on-time 00:00 UTC seal.
     """
     if raw is None:
         return None
     s = str(raw).strip()
     if not s:
         return None
-    try:
-        # ISO-8601 (with T or offset) -> honour the embedded zone then move
-        # to UTC; bare "YYYY-MM-DD HH:MM:SS[.f]" is the ledger's naive-UTC.
-        if "T" in s or "+" in s[10:] or s.endswith("Z"):
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            return dt.astimezone(UTC)
-        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=UTC)
-    except ValueError:
+    # ISO branch: explicit zone, positive OR negative offset (DAV-2000).
+    if "T" in s or s.endswith("Z") or _ISO_OFFSET_TAIL.search(s[10:]):
+        dt = _parse_iso_sealed(s)
+        if dt is None:
+            _LOG.warning(
+                "sealed_at carries an ISO zone but is unparseable; routing to "
+                "diagnostics instead of a date-only read: %r", s)
+            return None
+        return dt
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            return datetime.strptime(s, fmt).replace(tzinfo=UTC)
         except ValueError:
-            try:
-                return datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=UTC)
-            except ValueError:
-                return None
+            continue
+    try:
+        # Date-only: trail it — silently reading it as 00:00 UTC would let a
+        # malformed seal masquerade as an on-time one.
+        dt = datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    if notes is not None:
+        notes["seal_dateonly_fallback"] = (
+            notes.get("seal_dateonly_fallback", 0) + 1)
+    _LOG.warning(
+        "sealed_at is date-only (%r); read as 00:00 UTC — malformed input, "
+        "reported in the funnel as seal_dateonly_fallback", s)
+    return dt
 
 
 def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataFrame, dict]:
@@ -294,9 +337,10 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
     import bisect
     cal = sorted(calendar_iso)
     late_ids: list = []
-    kept_mask = []
+    kept_mask: list = []
+    notes: dict = {}
     sig_iso = pd.to_datetime(df["signal_date"]).dt.strftime("%Y-%m-%d")
-    sealed_utc = [_sealed_at_utc(v) for v in df["sealed_at"]]
+    sealed_utc = [_sealed_at_utc(v, notes) for v in df["sealed_at"]]
     for i, (sd, sa) in enumerate(zip(sig_iso, sealed_utc)):
         idx = bisect.bisect_right(cal, sd) - 1
         if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
@@ -313,7 +357,8 @@ def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataF
         if not ok:
             late_ids.append(df["run_id"].iloc[i])
         kept_mask.append(ok)
-    gate = {"excl_seal_late": len(late_ids), "seal_late_ids": late_ids}
+    gate = {"excl_seal_late": len(late_ids), "seal_late_ids": late_ids,
+            "seal_dateonly_fallback": notes.get("seal_dateonly_fallback", 0)}
     return df.loc[kept_mask].reset_index(drop=True), gate
 
 
@@ -517,6 +562,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 
     formal, funnel = m1.admit(df, user_id=user_id)
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
+    funnel["seal_dateonly_fallback"] = seal_gate["seal_dateonly_fallback"]
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
