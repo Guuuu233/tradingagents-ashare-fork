@@ -760,6 +760,45 @@ def test_determinism_from_scratch_byte_identical(tmp_path):
 # typed statuses / exclusions
 
 
+def test_typed_status_symbol_excluded_bse(tmp_path):
+    """DAV-1880 M-1: 北交所 .BJ 标的必须走 typed 分支，绝不产出 evaluated_ok。
+
+    股票池规则（V-03/DAV-800 口径）排除北交所；canonicalize_symbol 对
+    8xx/4xx/920 返回 EXCLUDED_BSE（带 canonical_symbol）——若只挡
+    unmappable，BJ 标的会正常取行情并污染 T+10/T+40 统计口径。
+    """
+    cal = _weekday_calendar("2026-03-02", 60)
+    bj_suffixed = _record("bj1", "830001.BJ", cal[2])
+    bj_bare = _record("bj2", "830001", cal[2])
+    sh_normal = _record("sh1", "600519.SH", cal[2])
+    stock_rows = (
+        _stock_series("830001.BJ", cal)
+        + _stock_series("600519.SH", cal, base=50.0))
+    inputs = _offline_inputs(
+        tmp_path, cal, stock_rows=stock_rows,
+        industry_map={"830001.BJ": {"code": "801010.SI", "name": "银行"},
+                      "600519.SH": {"code": "801120.SI", "name": "食品饮料"}})
+    rc, state, out = _run(
+        tmp_path, cal, [bj_suffixed, bj_bare, sh_normal], inputs=inputs,
+        as_of=cal[-1], extra=["--horizons", "short"])
+    assert rc == 0
+    rows = {r["report_id"]: r for r in _read_labels(out, "short")}
+    # 北交所（带后缀与裸代码两种写法）-> typed status，无收益
+    for rid in ("bj1", "bj2"):
+        row = rows[rid]
+        assert row["outcome_status"] == elp.STATUS_SYMBOL_EXCLUDED_BSE
+        assert row["symbol"] is None
+        assert row["symbol_raw"] in ("830001.BJ", "830001")
+        assert row["return_pct"] is None
+        assert row["entry_price"] is None
+        assert row["input_sha256"] is None
+    # 同批沪深标的照常评估：排除是定向的，不是一刀切回归
+    assert rows["sh1"]["outcome_status"] == OutcomeStatus.EVALUATED_OK.value
+    assert rows["sh1"]["return_pct"] is not None
+    assert state["counts"]["typed_status"] == 2
+    assert state["counts"]["labeled"] == 1
+
+
 def test_typed_status_symbol_unmappable(tmp_path):
     cal = _weekday_calendar("2026-03-02", 60)
     rec = _record("r1", "AGENT", cal[2])
