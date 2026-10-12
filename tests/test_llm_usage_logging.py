@@ -8,20 +8,20 @@ and the per-role usage_summary written at report finalize.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import uuid
 
 import httpx
-from langchain_core.messages import AIMessage
-from langchain_core.outputs import ChatGeneration, LLMResult
-
 from api.database import LLMCallLogDB, get_db_ctx, log_llm_call
 from api.usage_logging import (
     LLMUsageLogger,
     _extract_llm_result,
     build_llm_usage_summary,
 )
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, LLMResult
 
 
 def _usage_metadata(**over):
@@ -46,6 +46,11 @@ def _llm_result(*, usage=None, content="你好", finish="stop", model="gpt-6-lun
 
 
 def _rows_for(report_id):
+    # DAV-1362 ③: async dispatch offloads the ledger commit to a writer
+    # thread, so drain the queue before reading rows back.
+    from api.usage_logging import flush_usage_writes
+
+    flush_usage_writes()
     with get_db_ctx() as db:
         return (
             db.query(LLMCallLogDB)
@@ -423,9 +428,8 @@ class TestUsageSummary:
 
 class TestSchemaEnsure:
     def test_new_columns_added_to_legacy_table(self):
-        from sqlalchemy import text as sa_text
-
         from api.database import _ensure_llm_call_log_schema, engine
+        from sqlalchemy import text as sa_text
 
         with engine.begin() as conn:
             cols = {row[1] for row in conn.execute(
@@ -443,7 +447,6 @@ class TestQueueSeconds:
 
     def _run_call(self, report_id, queue_wait=None):
         from tradingagents.llm_clients.concurrency_gate import (
-            begin_queue_wait,
             _record_queue_wait,
         )
 
@@ -818,12 +821,14 @@ class TestQueueWaitAcrossCallPaths:
     """
 
     def _devin_llm(self, requests_log):
+        import json
+
+        import httpx
         from api.usage_logging import LLM_USAGE_LOGGER
         from tradingagents.llm_clients import concurrency_gate as cg
         from tradingagents.llm_clients.openai_client import (
             UnifiedChatOpenAI,
         )
-        import httpx, json
 
         def _handle(request):
             requests_log.append(json.loads(request.content.decode()))
@@ -946,3 +951,197 @@ class TestQueueWaitAcrossCallPaths:
         assert abs(r.queue_seconds - 0.3) < 0.15, r.queue_seconds
         assert r.elapsed_seconds is not None
         assert r.elapsed_seconds < 1.5
+
+
+class TestReview1925Cleanup:
+    """DAV-1362 review DAV-1925 post-verdict cleanup (3 🟡 items).
+
+    ① dead code / ghost-symbol comments removed from concurrency_gate,
+    ② `_run_queue_waits` leak path bounded,
+    ③ the run_inline sync SQLite write no longer executes on the loop.
+    """
+
+    # ── ① dead code + ghost symbol comments ───────────────────────────
+
+    def test_abandoned_scaffolding_removed(self):
+        """The two-design leftover (run-stamp contextvar + stamp/snapshot
+        helpers) must be gone — it had no callers and its docstring
+        described wiring openai_client never had."""
+        from tradingagents.llm_clients import concurrency_gate as cg
+
+        for gone in ("_run_stamp_last", "stamp_queue_wait_run",
+                     "queue_wait_snapshot"):
+            assert not hasattr(cg, gone), f"{gone} still present"
+        src = inspect.getsource(cg)
+        assert "_queue_wait_by_run" not in src, "ghost symbol in comment"
+
+    def test_live_api_intact(self):
+        """The three functions the fix actually uses must remain."""
+        from tradingagents.llm_clients import concurrency_gate as cg
+
+        for live in ("begin_queue_wait", "_record_queue_wait",
+                     "pop_queue_wait"):
+            assert callable(getattr(cg, live)), f"{live} missing"
+
+    # ── ② leak path bounded ───────────────────────────────────────────
+
+    def test_run_records_are_capped(self):
+        """Runs that never fire on_llm_end/on_llm_error must not grow the
+        module dict without bound: past the cap the oldest is evicted."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        ids = [uuid.uuid4() for _ in range(cg._MAX_RUN_QUEUE_WAIT_ENTRIES + 5)]
+        for rid in ids:
+            cg.begin_queue_wait(rid)
+        leftovers = cg._pop_queue_waits_for_tests()
+        assert len(leftovers) == cg._MAX_RUN_QUEUE_WAIT_ENTRIES
+        # Oldest evicted, newest retained.
+        assert str(ids[0]) not in leftovers
+        assert str(ids[-1]) in leftovers
+        assert cg._evicted_run_queue_waits >= 5
+
+    def test_stale_binding_creates_no_orphan(self):
+        """A binding left over from an already-closed run must not
+        resurrect that run's record (the orphan-leak path)."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        closed = uuid.uuid4()
+        cg.begin_queue_wait(closed)
+        assert cg.pop_queue_wait(closed) == 0.0  # run closed normally
+        # Simulate a later acquire in a context still bound to `closed`.
+        cg._current_queue_run.set(str(closed))
+        cg._record_queue_wait(1.0)
+        assert str(closed) not in cg._pop_queue_waits_for_tests()
+
+    def test_open_run_still_records_its_wait(self):
+        """The cap/orphan guard must not break the normal path."""
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        rid = uuid.uuid4()
+        cg.begin_queue_wait(rid)
+        cg._record_queue_wait(1.0)
+        assert cg.pop_queue_wait(rid) == 1.0
+        assert cg._pop_queue_waits_for_tests() == {}
+
+    # ── ③ sync SQLite write must not run on the event loop ────────────
+
+    def test_async_dispatch_writes_off_the_loop(self):
+        """run_inline=True puts the sync hooks on the caller's context,
+        which for async dispatch is the loop thread — so the ledger
+        commit must be handed to the writer thread instead of blocking
+        the loop. Asserts the commit thread ≠ loop thread AND the row
+        still lands."""
+        import api.database as db
+        import threading
+
+        import tradingagents.llm_clients.concurrency_gate as cg
+
+        loop_idents = []
+        write_idents = []
+        real_log = db.log_llm_call
+
+        def _spy(**kwargs):
+            write_idents.append(threading.get_ident())
+
+        db.log_llm_call = _spy
+        try:
+            llm = self._devin_llm([])
+            report_id = uuid.uuid4().hex
+
+            async def _run():
+                loop_idents.append(threading.get_ident())
+                await llm.ainvoke(
+                    "hi", config={"metadata": {"report_id": report_id}})
+
+            asyncio.run(_run())
+            cg._reset_gates_for_tests()
+            # Drain while the spy is still installed: the writer thread
+            # imports log_llm_call when it runs, so restoring first would
+            # let the real writer through and race the assertion.
+            from api.usage_logging import flush_usage_writes
+
+            flush_usage_writes()
+        finally:
+            db.log_llm_call = real_log
+
+        assert len(write_idents) == 1, "ledger row was not submitted"
+        assert write_idents[0] != loop_idents[0], (
+            "ledger commit ran on the event-loop thread"
+        )
+
+    def test_sync_dispatch_writes_inline(self):
+        """With no loop running the row is written inline, so a sync
+        caller can read its own row back without flushing."""
+        from api.database import LLMCallLogDB
+
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+        handler.on_chat_model_start(
+            {}, [], run_id=run_id, metadata={"report_id": report_id})
+        handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                           run_id=run_id)
+        with get_db_ctx() as db:  # no flush: must already be there
+            assert db.query(LLMCallLogDB).filter(
+                LLMCallLogDB.report_id == report_id).count() == 1
+
+    def test_summary_flushes_pending_rows(self):
+        """build_llm_usage_summary must never miss a report's last call
+        whose row is still queued on the writer thread."""
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+
+        async def _call():
+            # Inside a running loop ⇒ the row is queued on the writer
+            # thread, not written yet.
+            handler.on_chat_model_start(
+                {}, [], run_id=run_id,
+                metadata={"report_id": report_id, "llm_role": "Trader"})
+            handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                               run_id=run_id)
+
+        asyncio.run(_call())
+        # No explicit flush here: the summary drains the queue itself.
+        summary = build_llm_usage_summary(report_id)
+        assert summary is not None
+        assert summary["call_count"] == 1
+
+    def test_flush_usage_writes_is_public_and_idempotent(self):
+        from api.usage_logging import flush_usage_writes
+
+        flush_usage_writes()
+        flush_usage_writes()  # empty queue must be a no-op, not an error
+
+    def _devin_llm(self, requests_log):
+        from tradingagents.llm_clients import concurrency_gate as cg
+        from tradingagents.llm_clients.openai_client import (
+            UnifiedChatOpenAI,
+        )
+
+        def _handle(request):
+            requests_log.append(json.loads(request.content.decode()))
+            if request.url.path.endswith("/chat/completions"):
+                body = json.loads(request.content.decode())
+                if body.get("stream"):
+                    return httpx.Response(
+                        200, text=_sse_body(usage=_USAGE_PAYLOAD),
+                        headers={"content-type": "text/event-stream"})
+                return httpx.Response(200, json={
+                    "id": "r1", "object": "chat.completion",
+                    "created": 1, "model": "devin/swe-2",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant",
+                                             "content": "ok"}}],
+                    "usage": _USAGE_PAYLOAD,
+                })
+            return httpx.Response(404, text="nope")
+
+        cg._reset_gates_for_tests()
+        return UnifiedChatOpenAI(
+            model="devin/swe-2", base_url="http://test.invalid/v1",
+            api_key="sk-test",
+            http_client=httpx.Client(transport=httpx.MockTransport(_handle)),
+            http_async_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(_handle)),
+        )
