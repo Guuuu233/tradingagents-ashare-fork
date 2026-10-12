@@ -83,6 +83,10 @@ export default function CalibrationPanel({ compact = false, initialData = null }
     useEffect(() => {
         if (initialData) return
         let cancelled = false
+        // In StrictMode the effect runs twice on mount.  De-duplication happens
+        // in api.getCalibration (identical in-flight query shares one HTTP
+        // call), so the panel must NOT abort here: an abort would kill the
+        // shared request that the second mount is waiting on.
         fetchCalibration()
             .then(res => {
                 if (cancelled) return
@@ -203,6 +207,12 @@ export default function CalibrationPanel({ compact = false, initialData = null }
             {error && (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300">
                     {error}
+                </div>
+            )}
+
+            {data && !isSufficient && data.insufficient_reason && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                    {data.insufficient_reason}
                 </div>
             )}
 

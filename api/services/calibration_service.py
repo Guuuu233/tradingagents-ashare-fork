@@ -165,6 +165,18 @@ _calibration_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
 _active_calibrations = 0
 _guard_lock = threading.Lock()
+# Single-flight registry: key -> Event of the in-flight computation for that
+# exact filter key.  A duplicate request for the same key waits on the event
+# instead of taking a second concurrency slot (which used to exhaust the two
+# slots and surface a spurious "计算繁忙").
+_inflight_events: Dict[str, threading.Event] = {}
+_inflight_lock = threading.Lock()
+# Upper bound on how many single-flight waits one caller performs before
+# falling back to the normal slot path (protects against an endlessly
+# re-computed key).
+MAX_CALIBRATION_SINGLE_FLIGHT_WAITS = int(
+    os.getenv("CALIBRATION_SINGLE_FLIGHT_WAITS", "3")
+)
 
 
 def _cache_key(
@@ -232,6 +244,30 @@ def _release_slot() -> None:
     global _active_calibrations
     with _guard_lock:
         _active_calibrations = max(0, _active_calibrations - 1)
+
+
+def _claim_inflight(key: str) -> Tuple[threading.Event, bool]:
+    """Claim the single-flight slot for ``key``.
+
+    Returns ``(event, is_owner)``: the first caller is the owner and must
+    compute and then call ``_release_inflight``; every later caller for the
+    same key gets ``is_owner=False`` and waits on the shared event.
+    """
+    with _inflight_lock:
+        existing = _inflight_events.get(key)
+        if existing is not None:
+            return existing, False
+        event = threading.Event()
+        _inflight_events[key] = event
+        return event, True
+
+
+def _release_inflight(key: str, event: threading.Event) -> None:
+    """Publish completion for waiters (who then read the cache) and free the key."""
+    with _inflight_lock:
+        if _inflight_events.get(key) is event:
+            _inflight_events.pop(key, None)
+    event.set()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1045,12 +1081,26 @@ def _compute_calibration_unlocked(
     skipped_no_outcome = skipped_incomplete
     resolve = outcome_resolver or (lambda row: _resolve_outcome(row, hold_days))
 
+    # Classify first (pure metadata, no I/O).  When the filter yields no
+    # calibratable report at all, no price lookup is spent on the (empty)
+    # calibration sample, so the caller gets the existing "暂无带概率的历史报告"
+    # insufficient result immediately instead of paying for price resolution.
+    classified: List[Tuple[ReportDB, bool, Optional[float], Optional[str]]] = []
     for report in reports:
         is_admissible, is_winner_only, probability, winner = _is_admissible_calibration_report(
             report, target_horizon=horizon
         )
         if not is_admissible:
             continue
+        classified.append((report, is_winner_only, probability, winner))
+
+    has_evaluable_samples = bool(classified)
+    # Only when there is nothing at all to resolve (no calibratable report AND no
+    # WAIT row) can the whole computation be skipped; otherwise the WAIT
+    # directional diagnostic still legitimately needs its outcome resolution.
+    wait_rows_to_resolve = wait_rows if has_evaluable_samples else []
+
+    for report, is_winner_only, probability, winner in classified:
 
         outcome = resolve(report)
         if outcome is None:
@@ -1213,7 +1263,7 @@ def _compute_calibration_unlocked(
     wait_bear_lean = 0
     wait_bear_hits = 0
 
-    for w_rep in wait_rows:
+    for w_rep in wait_rows_to_resolve:
         w_outcome = resolve(w_rep)
         if w_outcome is None:
             continue
@@ -1387,12 +1437,29 @@ def compute_calibration(
         effective_horizon,
         effective_profile_id,
     )
+    owns_inflight = False
     if outcome_resolver is None:
         cached = _cache_get(key)
         if cached is not None:
             return cached
 
+        # Single-flight: only the first caller for this exact key occupies a
+        # concurrency slot; duplicates wait for that result instead of burning a
+        # second slot (and instead of failing as "繁忙").
+        for _ in range(max(1, MAX_CALIBRATION_SINGLE_FLIGHT_WAITS)):
+            event, is_owner = _claim_inflight(key)
+            if is_owner:
+                owns_inflight = True
+                break
+            event.wait()
+            cached = _cache_get(key)
+            if cached is not None:
+                return cached
+            # Owner gave up (busy) or its entry was evicted: try claiming again.
+
     if not _acquire_slot():
+        if owns_inflight:
+            _release_inflight(key, event)
         raise CalibrationBusyError("校准度计算繁忙，请稍后重试")
 
     try:
@@ -1411,11 +1478,17 @@ def compute_calibration(
             horizon=effective_horizon,
             profile_id=effective_profile_id,
         )
+    except BaseException:
+        if owns_inflight:
+            _release_inflight(key, event)
+        raise
     finally:
         _release_slot()
 
     if outcome_resolver is None:
         _cache_put(key, result)
+        if owns_inflight:
+            _release_inflight(key, event)
     return result
 
 
