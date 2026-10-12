@@ -137,7 +137,7 @@
 - **内容**：
   - 图可注入检查点存储，实验运行一律注入独立实例；
   - 实验 harness 强制显式线程编号 `{sample_id}:{system_version}:{arm}:{replicate}:{uuid}`，实验模式下若走到默认线程名即报错；
-  - 在 `run_identity` 记录线程编号；断言实验路径不写记忆。
+  - 在 `experiment_run_identity` 记录线程编号；断言实验路径不写记忆。（DAV-1486：实验身份改用独立键名，不再复用 API 侧 `run_identity`，避免被 `_attach_traceability_fields` 无条件覆盖）
 - **验收**：同进程、同股同日同档连续两次实验运行无串扰（旧路径红、新路径绿）；生产 API 路径行为与 RT-FULL 不变。
 - **定位**：作为 DAV-1450 A/B 与 DAV-1455 的共同前置，可在 10-09 前完成。
 

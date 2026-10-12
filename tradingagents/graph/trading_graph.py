@@ -14,8 +14,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
 from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
+from tradingagents.llm_clients.pool import get_or_create_llm
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, _default_data_cache_dir
 from tradingagents.agents.utils.memory import FinancialSituationMemory
 from tradingagents.dataflows.config import set_config
 from tradingagents.agents.utils.prompt_injection import DEFAULT_PLACEMENT
@@ -51,6 +52,10 @@ from tradingagents.agents.utils.price_basis_gate import (
 )
 from tradingagents.agents.utils.price_ref_registry import attach_price_ref_source
 from .signal_processing import SignalProcessor
+from tradingagents.experiments.run_isolation import (
+    assert_experiment_thread_id,
+    checkpointer_identity,
+)
 from tradingagents.agents.utils.agent_states import get_protocol_metadata
 from tradingagents.agents.utils.debate_metrics import calculate_all_debate_metrics
 from tradingagents.agents.utils.shadow_credit import calculate_shadow_credit_metrics
@@ -188,12 +193,22 @@ class TradingAgentsGraph:
         custom_prompt_placement: str = DEFAULT_PLACEMENT,
         strict_game_theory_wiring: Optional[bool] = None,
         graph_stage: str = "full",
+        checkpointer: Optional[Any] = None,
+        experiment_mode: bool = False,
     ):
         """Initialize the trading agents graph and components.
 
         ``graph_stage``（D-068）："full" 默认；"analysts" 只跑分析师+完整性门
         （双档共享阶段）；"downstream" 不跑分析师，从完整性门/辩论开始，须由
         调用方把共享阶段产出的报告字段注入初始状态。
+
+        ``checkpointer``（DAV-1477 / P3）：可选检查点存储注入。不传时维持
+        类级共享 ``MemorySaver``（生产 API 与 CLI 行为不变）；实验运行必须
+        经 ``tradingagents.experiments.run_isolation`` 注入独立实例。
+
+        ``experiment_mode``（DAV-1477 / P3）：实验模式守卫。开启后
+        ``propagate()`` 若未显式传 ``thread_id``、将走到生产默认线程名时
+        直接报错；生产路径不受影响。
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
@@ -213,19 +228,51 @@ class TradingAgentsGraph:
         # Update the interface's config
         set_config(self.config)
 
-        # Initialize persistence (Singleton Pattern for concurrency)
-        if TradingAgentsGraph._shared_checkpointer is None:
-            TradingAgentsGraph._shared_checkpointer = MemorySaver()
-        
-        self.checkpointer = TradingAgentsGraph._shared_checkpointer
+        # Initialize persistence (Singleton Pattern for concurrency).
+        # DAV-1477: an explicitly injected checkpointer (experiment path) bypasses
+        # the class-level shared MemorySaver; omitting it preserves production
+        # behaviour byte-for-byte.
+        # Experiment runs MUST inject a dedicated checkpointer — running in
+        # experiment_mode on the shared store would silently contaminate
+        # production checkpoint threads, which is exactly what P3 forbids.
+        if experiment_mode and checkpointer is None:
+            raise ValueError(
+                "experiment_mode=True requires an injected checkpointer "
+                "(see tradingagents.experiments.run_isolation.experiment_graph_kwargs)"
+            )
+        if checkpointer is not None:
+            self.checkpointer = checkpointer
+        else:
+            if TradingAgentsGraph._shared_checkpointer is None:
+                TradingAgentsGraph._shared_checkpointer = MemorySaver()
+            self.checkpointer = TradingAgentsGraph._shared_checkpointer
 
-        # Create necessary directories
+        # DAV-1477: experiment-mode guard flag — see propagate().
+        self.experiment_mode = bool(experiment_mode)
+
+        # Create necessary directories：数据缓存目录默认在发布目录之外的
+        # 稳定状态路径（default_config._default_data_cache_dir），部署不再清零。
+        # config 可能为部分覆盖 dict（测试/调用方未给全量键），缺省回退默认。
         os.makedirs(
-            os.path.join(self.config["project_dir"], "dataflows/data_cache"),
+            self.config.get(
+                "data_cache_dir", _default_data_cache_dir()
+            ),
             exist_ok=True,
         )
 
-        # Initialize LLMs with provider-specific thinking configuration
+        # Initialize LLMs with provider-specific thinking configuration.
+        # DAV-1571: llm instances are pooled process-wide by effective config
+        # signature (provider/model/base_url/params) via get_or_create_llm, so
+        # repeated graph constructions with identical role/global configs reuse
+        # one ChatOpenAI + httpx pool instead of rebuilding per job (DAV-1537
+        # showed ~69 client builds per analysis). When callers pass per-run
+        # callbacks, we keep them in the kwargs — a non-scalar value makes the
+        # pool key unhashable, so that call bypasses pooling and behaves
+        # exactly like the old per-graph construction.
+        # DAV-1842 MED-1: the pool is process-wide and LRU-capped (default 32,
+        # TA_LLM_POOL_MAX_SIZE), *not* released when one run ends; entries live
+        # until evicted, or until invalidate_llm_pool()/aclose_llm_pool() at
+        # process shutdown (api/main.py lifespan).
         llm_kwargs = self._get_provider_kwargs()
 
         # Add callbacks to kwargs if provided (passed to LLM constructor)
@@ -272,29 +319,35 @@ class TradingAgentsGraph:
             if a_key:
                 r_kwargs["api_key"] = a_key
 
-            role_client = create_llm_client(
+            self.role_llms[role_key] = get_or_create_llm(
+                create_llm_client,
                 provider=p_type,
                 model=m_name,
                 base_url=b_url,
                 **r_kwargs,
             )
-            self.role_llms[role_key] = role_client.get_llm()
 
-        deep_client = create_llm_client(
-            provider=self.config.get("llm_provider", "openai"),
-            model=self.config.get("deep_think_llm", "gpt-4o"),
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-        quick_client = create_llm_client(
-            provider=self.config.get("llm_provider", "openai"),
-            model=self.config.get("quick_think_llm", "gpt-4o-mini"),
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-
-        self.deep_thinking_llm = self.role_llms.get("research_manager", deep_client.get_llm())
-        self.quick_thinking_llm = self.role_llms.get("market", quick_client.get_llm())
+        # DAV-1571: pooled by effective config signature; identical role/global
+        # configs share one ChatOpenAI + httpx pool instead of rebuilding per graph.
+        # Defaults are built lazily (dict.get would evaluate them eagerly).
+        self.deep_thinking_llm = self.role_llms.get("research_manager")
+        if self.deep_thinking_llm is None:
+            self.deep_thinking_llm = get_or_create_llm(
+                create_llm_client,
+                provider=self.config.get("llm_provider", "openai"),
+                model=self.config.get("deep_think_llm", "gpt-4o"),
+                base_url=self.config.get("backend_url"),
+                **llm_kwargs,
+            )
+        self.quick_thinking_llm = self.role_llms.get("market")
+        if self.quick_thinking_llm is None:
+            self.quick_thinking_llm = get_or_create_llm(
+                create_llm_client,
+                provider=self.config.get("llm_provider", "openai"),
+                model=self.config.get("quick_think_llm", "gpt-4o-mini"),
+                base_url=self.config.get("backend_url"),
+                **llm_kwargs,
+            )
         
         # Initialize memories
         self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
@@ -684,7 +737,12 @@ class TradingAgentsGraph:
 
         state_horizon = init_agent_state.get("horizon") or effective_horizon
 
-        # Use thread_id for checkpointer
+        # Use thread_id for checkpointer.
+        # DAV-1477 experiment-mode guard: an experiment run that reaches the
+        # production default thread name would silently share a checkpoint
+        # thread — fail closed instead of contaminating the store.
+        if getattr(self, "experiment_mode", False):
+            thread_id = assert_experiment_thread_id(thread_id)
         if thread_id:
             args["config"]["configurable"] = {"thread_id": thread_id}
         elif not args["config"].get("configurable"):
@@ -710,6 +768,25 @@ class TradingAgentsGraph:
                 final_state = self.graph.invoke(init_agent_state, **args)
 
         self._ensure_game_theory_state(final_state, horizon=effective_horizon)
+
+        # DAV-1477 (P3): experiment runs record their run identity (explicit
+        # thread id + dedicated checkpointer instance) on the returned state so
+        # downstream result_data packaging can carry it.  Production path never
+        # sets experiment_mode, so this key only exists on experiment results.
+        # DAV-1486: the key is deliberately named ``experiment_run_identity`` —
+        # a distinct name from the API-side ``result_data.run_identity`` code
+        # identity written by ``_attach_traceability_fields`` (DAV-1430), which
+        # unconditionally overwrites ``run_identity``.  Sharing the key was an
+        # implicit contract that only held because no API construction point
+        # passes experiment_mode; a downstream harness reusing the /v1/analyze
+        # save path would have silently clobbered the experiment identity.
+        if getattr(self, "experiment_mode", False):
+            final_state["experiment_run_identity"] = {
+                "thread_id": thread_id,
+                "checkpointer": checkpointer_identity(
+                    getattr(self, "checkpointer", None)
+                ),
+            }
 
         # Store current state for reflection
         self.curr_state = final_state
@@ -931,6 +1008,17 @@ class TradingAgentsGraph:
             "price_ref_revision": final_state.get("price_ref_revision"),
             "price_ref_revision_version": "price_ref_revision.v1",
         }
+
+        # DAV-1477 (P3): propagate experiment run identity into the packaged
+        # result when present — absent on production runs, so production
+        # result_data shape is untouched.  DAV-1486: kept under the distinct
+        # ``experiment_run_identity`` key so API-side ``run_identity`` (code
+        # identity, unconditionally overwritten by _attach_traceability_fields)
+        # can never clobber it.
+        if final_state.get("experiment_run_identity") is not None:
+            result["experiment_run_identity"] = final_state[
+                "experiment_run_identity"
+            ]
 
         # Normalize protocol metadata and compute debate metrics without mutating final_state
         meta = get_protocol_metadata(final_state)

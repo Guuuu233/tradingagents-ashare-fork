@@ -1,0 +1,670 @@
+"""DAV-1818: Tushare gateway denial must be terminal — no retry, no bisection.
+
+Background (DAV-1812 diagnosis): with Tushare credentials present on the host,
+``DataCollector.collect()`` fans out to two gateways and, before this fix,
+amplified a single denial into **484 real POST attempts** (468 news + 16
+industry-linkage) plus ~180s of budget-bound spinning:
+
+- ``tushare_global_news.TushareNewsClient`` — a 7-day window x 4 sources,
+  each unresponsive segment bisected down to 30-minute slices
+  (``_fetch_segment``) with ``_RETRY_ATTEMPTS = 5`` per request;
+- ``industry_linkage_provider._query_tushare_api`` — financial statements
+  (``_query_financial_api`` retries twice) and global indices, consumed by
+  ``tushare_provider`` and ``sw_industry`` via by-value imports.
+
+Contracts verified here (all offline, zero real traffic):
+
+1. ``TushareNewsClient.query`` — a guardrail denial is terminal: exactly one
+   POST attempt, not five.
+2. ``_fetch_segment`` — denial aborts the bisection immediately instead of
+   fanning out into 2**depth sub-segments.
+3. ``_query_tushare_api`` — denial is categorised ``network_denied``, which is
+   deliberately **not** a member of the retryable set, so downstream retry
+   loops terminate on the first attempt.
+4. ``_query_financial_api`` — denial must not consume its retry budget
+   (``_FINANCIAL_MAX_ATTEMPTS = 2``).
+5. ``get_global_news`` — denial propagates and releases the call-level
+   single-flight slot so concurrent callers fail fast instead of waiting ~200s.
+6. **A configured forward proxy must not defeat the guardrail.** A proxy on
+   loopback (the usual Clash/mihomo setup) is an egress channel, not a local
+   peer: with ``HTTPS_PROXY`` set, ``requests`` rewrites the destination to that
+   loopback endpoint, so the guardrail used to admit it and the request really
+   left the machine. The denial then never fired and callers reported the
+   proxy's own answer (``'403' == 'network_denied'``). Fixed in
+   ``tests/conftest.py`` (see ``_is_proxy_endpoint``); tests 6.x pin it.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from unittest.mock import patch
+
+import pytest
+
+from tests.conftest import OfflineTestGuardrailError
+
+
+# TEST-NET-1 (RFC 5737): guaranteed non-routable, and non-local so the offline
+# guardrail denies it at the socket/audit layer (repo convention).
+EXTERNAL_TEST_URL = "http://192.0.2.1:80/"
+
+
+def _counting_post(module, counter):
+    """Wrap ``module.requests.post`` so attempts are counted before denial."""
+    real_post = module.requests.post
+
+    def _post(*args, **kwargs):
+        counter["n"] += 1
+        return real_post(*args, **kwargs)
+
+    return _post
+
+
+def tp_retryable_categories():
+    """Retryable transport categories of the financial-report retry loop."""
+    from tradingagents.dataflows.providers import tushare_provider as tp
+
+    return tp._FINANCIAL_RETRYABLE_ERRORS
+
+
+# ==============================================================================
+# 1. News gateway: denial is terminal (no 5x retry)
+# ==============================================================================
+
+class TestNewsClientDenialIsTerminal:
+    """``TushareNewsClient.query`` must not burn its retry budget on a denial."""
+
+    def test_query_attempts_once_on_guardrail_denial(self):
+        """Real guardrail denial → exactly 1 POST attempt (pre-fix: 5)."""
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        assert tgn.TushareNewsClient._RETRY_ATTEMPTS == 5, "contract drift"
+
+        counter = {"n": 0}
+        client = tgn.TushareNewsClient(
+            api_url=EXTERNAL_TEST_URL, token="synthetic-token"
+        )
+
+        with patch.object(tgn.requests, "post", _counting_post(tgn, counter)):
+            with pytest.raises(OfflineTestGuardrailError):
+                client.query(
+                    "news",
+                    {"src": "cls", "limit": 800},
+                    "datetime,title,channels",
+                )
+
+        assert counter["n"] == 1, (
+            f"denial must be terminal, but {counter['n']} POST attempts were made"
+        )
+
+    def test_query_once_reraises_denial_instead_of_categorising_it(self):
+        """``_query_once`` must re-raise rather than return a retryable category."""
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        client = tgn.TushareNewsClient(
+            api_url=EXTERNAL_TEST_URL, token="synthetic-token"
+        )
+
+        def _deny(*_args, **_kwargs):
+            raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        with patch.object(tgn.requests, "post", _deny):
+            with pytest.raises(OfflineTestGuardrailError):
+                client._query_once("news", {"src": "cls"}, "datetime")
+
+
+# ==============================================================================
+# 2. News gateway: denial aborts segment bisection
+# ==============================================================================
+
+class TestSegmentBisectionTerminatesOnDenial:
+    """``_fetch_segment`` must not subdivide after a denial."""
+
+    def test_denial_aborts_bisection_after_single_query(self):
+        """One denial stops the recursion; no 30-minute slice fan-out."""
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        spec = next(s for s in tgn._NEWS_SOURCE_SPECS if s["key"] == "news:cls")
+        calls = {"n": 0}
+
+        class DenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                calls["n"] += 1
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        reports = []
+        with pytest.raises(OfflineTestGuardrailError):
+            tgn._fetch_segment(
+                DenyingClient(),
+                spec,
+                datetime(2026, 8, 14, 0, 0, 0),
+                datetime(2026, 8, 14, 23, 59, 59),
+                reports,
+            )
+
+        assert calls["n"] == 1, (
+            f"bisection must stop at the first denial, got {calls['n']} queries"
+        )
+        # Only the root segment was opened; no child segments were created.
+        assert len(reports) == 1
+
+    def test_fetch_news_pool_propagates_denial(self):
+        """``fetch_news_pool`` must surface the denial, not a truncated-pool error."""
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        class DenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        with pytest.raises(OfflineTestGuardrailError):
+            tgn.fetch_news_pool(
+                DenyingClient(), date(2026, 8, 14), date(2026, 8, 14)
+            )
+
+
+# ==============================================================================
+# 3. Shared Tushare gateway client: denial is not downgraded
+# ==============================================================================
+
+class TestSharedGatewayDenialIsNotDowngraded:
+    """``_query_tushare_api`` denial must be non-retryable and clearly categorised.
+
+    The function keeps its documented ``(df, category, note)`` return contract
+    (raising here would turn one denied indicator into a whole-industry
+    failure), but the category must NOT be one of the retryable transport
+    classes, or callers such as ``_query_financial_api`` retry it.
+    """
+
+    def test_denial_returns_non_retryable_category(self, monkeypatch):
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+
+        def _deny(*_args, **_kwargs):
+            raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        with patch.object(ilp.requests, "post", _deny):
+            df, category, note = ilp._query_tushare_api(
+                api_name="index_global", ts_code="SPX", as_of="2026-08-14"
+            )
+
+        assert df is None
+        assert category == "network_denied"
+        assert category not in tp_retryable_categories()
+        assert "denied by offline guardrail" not in note, "must not echo internals"
+
+    def test_denial_category_is_not_network_error(self, monkeypatch):
+        """Regression guard: the pre-fix code returned the retryable ``network_error``."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+
+        def _deny(*_args, **_kwargs):
+            raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        with patch.object(ilp.requests, "post", _deny):
+            _df, category, _note = ilp._query_tushare_api(
+                api_name="index_global", ts_code="SPX", as_of="2026-08-14"
+            )
+
+        assert category != "network_error", (
+            "denial downgraded to a retryable category → retry amplification"
+        )
+        assert category != "timeout"
+
+    def test_denied_indicator_degrades_to_typed_gap(self, monkeypatch):
+        """A denied indicator stays a typed per-indicator gap (no industry failure)."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+
+        def _deny(*_args, **_kwargs):
+            raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        provider = ilp.IndustryLinkageProvider()
+        indicator = ilp.IndustryLinkageIndicator(
+            name="标普500指数", source="tushare", symbol="SPX"
+        )
+
+        # Deny at the transport, so the categorisation in ``_query_tushare_api``
+        # is what the provider actually observes.
+        with patch.object(ilp.requests, "post", _deny):
+            result = provider._fetch_indicator(indicator, as_of="2026-08-14")
+
+        # Contract preserved: one denied indicator is a typed gap, not a crash.
+        assert result["status"] == "unavailable"
+        assert result["category"] == "network_denied"
+        assert result["confidence"] == "低（网络策略拒绝）"
+        assert result["current_value"] is None
+
+
+# ==============================================================================
+# 4. Denial must not consume a retry budget
+# ==============================================================================
+
+class TestDenialDoesNotConsumeRetryBudget:
+    """Retry loops must observe the terminal denial, not a retryable category."""
+
+    def test_financial_api_does_not_retry_denial(self, monkeypatch):
+        """``_query_financial_api`` retries transient errors; denial must skip it."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+        from tradingagents.dataflows.providers import tushare_provider as tp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+        assert tp._FINANCIAL_MAX_ATTEMPTS == 2, "contract drift"
+        assert "network_denied" not in tp._FINANCIAL_RETRYABLE_ERRORS, "contract drift"
+        counter = {"n": 0}
+
+        with patch.object(ilp.requests, "post", _counting_post(ilp, counter)):
+            _df, category, _note = tp._query_financial_api("income", "600519.SH")
+
+        assert category == "network_denied"
+        assert counter["n"] == 1, (
+            f"denial must not consume the retry budget, got {counter['n']} attempts"
+        )
+
+    def test_denial_is_terminal_at_the_shared_gateway(self, monkeypatch):
+        """The single attempt happens in ``_query_tushare_api``; category is final."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+        counter = {"n": 0}
+
+        with patch.object(ilp.requests, "post", _counting_post(ilp, counter)):
+            _df, category, _note = ilp._query_tushare_api(
+                api_name="index_global", ts_code="SPX", as_of="2026-08-14"
+            )
+
+        assert counter["n"] == 1, f"expected 1 HTTP attempt, got {counter['n']}"
+        assert category == "network_denied"
+
+
+# ==============================================================================
+# 5. Entry point: denial propagates and releases the single-flight slot
+# ==============================================================================
+
+class TestGlobalNewsEntryDenialAndSingleFlight:
+    """``get_global_news`` must fail fast and never strand concurrent callers."""
+
+    def test_denial_propagates_and_releases_inflight_slot(self, tmp_path):
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        class DenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        cache = tgn.TushareNewsCache(str(tmp_path))
+        with pytest.raises(OfflineTestGuardrailError):
+            tgn.get_global_news(
+                "2026-08-14", 7, 30, client=DenyingClient(), cache=cache
+            )
+
+        # The single-flight entry must be released, otherwise a later call for
+        # the same key would wait ~200s and return a soft timeout error.
+        assert tgn._CALL_INFLIGHT == {}, (
+            f"single-flight slot leaked: {tgn._CALL_INFLIGHT!r}"
+        )
+
+    def test_second_call_after_denial_is_not_blocked_by_stale_inflight(self, tmp_path):
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        class DenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        cache = tgn.TushareNewsCache(str(tmp_path))
+        for _ in range(2):
+            with pytest.raises(OfflineTestGuardrailError):
+                tgn.get_global_news(
+                    "2026-08-14", 7, 30, client=DenyingClient(), cache=cache
+                )
+
+    def test_concurrent_waiter_receives_the_denial_not_a_soft_timeout(self, tmp_path):
+        """A concurrent caller must see the denial, not "wait timed out".
+
+        Found in review of ``bc97a5b``: the owner released the single-flight slot
+        and re-raised, but the waiter only saw ``res is None`` and degraded to the
+        soft text ``"tushare single-flight 等待超时或主调用失败"`` -- which reads as
+        a timeout and hides that the run was refused by policy.
+        """
+        import threading
+        import time
+
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        class SlowDenyingClient(tgn.TushareNewsClient):
+            def __init__(self):
+                super().__init__(api_url=EXTERNAL_TEST_URL, token="synthetic-token")
+
+            def query(self, api_name, params=None, fields=None, deadline=None):
+                time.sleep(1.0)  # hold the single-flight slot so the waiter joins
+                raise OfflineTestGuardrailError("denied by offline guardrail")
+
+        cache = tgn.TushareNewsCache(str(tmp_path))
+        results = {}
+
+        def _owner():
+            try:
+                tgn.get_global_news(
+                    "2026-08-14", 7, 30, client=SlowDenyingClient(), cache=cache
+                )
+                results["owner"] = "returned"
+            except OfflineTestGuardrailError:
+                results["owner"] = "denied"
+
+        def _waiter():
+            time.sleep(0.3)  # arrive while the owner holds the slot
+            try:
+                got = tgn.get_global_news(
+                    "2026-08-14", 7, 30, client=SlowDenyingClient(), cache=cache
+                )
+                results["waiter"] = f"returned {got!r}"
+            except OfflineTestGuardrailError:
+                results["waiter"] = "denied"
+
+        t_owner = threading.Thread(target=_owner, daemon=True)
+        t_waiter = threading.Thread(target=_waiter, daemon=True)
+        t_owner.start()
+        t_waiter.start()
+        t_owner.join(timeout=30)
+        t_waiter.join(timeout=30)
+
+        assert results.get("owner") == "denied"
+        assert results.get("waiter") == "denied", (
+            f"waiter did not receive the denial: {results.get('waiter')!r}"
+        )
+        assert tgn._CALL_INFLIGHT == {}
+
+
+# ==============================================================================
+# 6. A configured forward proxy must not defeat the offline guardrail
+# ==============================================================================
+
+class TestForwardProxyCannotBypassGuardrail:
+    """DAV-1818 rework: ``HTTPS_PROXY`` must not turn a denial into a data error.
+
+    Regression context: with a proxy configured, ``requests`` routes the request
+    to the proxy endpoint. When that endpoint is on loopback (the usual
+    Clash/mihomo setup) the old guardrail classified it as a local peer and let
+    it through, so the request actually egressed and the caller reported the
+    proxy's own response (measured: ``'403' == 'network_denied'``). These tests
+    pin the denial so the category is ``network_denied`` either way.
+    """
+
+    PROXY = "http://127.0.0.1:18080"
+
+    def test_denial_category_is_network_denied_with_https_proxy(self, monkeypatch):
+        """With ``HTTPS_PROXY`` set, the category must still be ``network_denied``."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+        monkeypatch.setenv("https_proxy", self.PROXY)
+        counter = {"n": 0}
+
+        with patch.object(ilp.requests, "post", _counting_post(ilp, counter)):
+            _df, category, _note = ilp._query_tushare_api(
+                api_name="index_global", ts_code="SPX", as_of="2026-08-14"
+            )
+
+        assert category == "network_denied", (
+            f"proxy defeated the guardrail: category={category!r} (expected denial)"
+        )
+        assert counter["n"] == 1
+
+    def test_financial_retry_budget_not_consumed_with_https_proxy(self, monkeypatch):
+        """``_query_financial_api`` must still stop after one attempt under a proxy."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+        from tradingagents.dataflows.providers import tushare_provider as tp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+        monkeypatch.setenv("https_proxy", self.PROXY)
+        counter = {"n": 0}
+
+        with patch.object(ilp.requests, "post", _counting_post(ilp, counter)):
+            _df, category, _note = tp._query_financial_api("income", "600519.SH")
+
+        assert category == "network_denied"
+        assert counter["n"] == 1, (
+            f"proxy path retried: {counter['n']} attempts (expected 1)"
+        )
+
+    def test_denied_indicator_degrades_to_typed_gap_with_https_proxy(self, monkeypatch):
+        """The typed-gap contract must hold under a proxy too."""
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        monkeypatch.setenv("TUSHARE_TOKEN", "synthetic-token")
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+        monkeypatch.setenv("https_proxy", self.PROXY)
+
+        provider = ilp.IndustryLinkageProvider()
+        indicator = ilp.IndustryLinkageIndicator(
+            name="标普500指数", source="tushare", symbol="SPX"
+        )
+
+        with patch.object(ilp.requests, "post", _counting_post(ilp, {"n": 0})):
+            result = provider._fetch_indicator(indicator, as_of="2026-08-14")
+
+        assert result["status"] == "unavailable"
+        assert result["category"] == "network_denied"
+
+    def test_guardrail_denies_proxy_endpoint_on_loopback(self, monkeypatch):
+        """Unit-level: the configured proxy endpoint itself is not an allowed target."""
+        import tests.conftest as ct
+
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+        # A plain loopback address is still allowed ...
+        assert ct._is_allowed_target(("127.0.0.1", 12345)) is True
+        # ... but the proxy endpoint is not, even though it is on loopback.
+        assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is True
+        assert ct._is_allowed_target(("127.0.0.1", 18080)) is False
+
+    def test_proxy_detection_reads_env_live(self, monkeypatch):
+        """Proxy detection must not cache: env changes mid-session must be seen."""
+        import tests.conftest as ct
+
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.delenv("https_proxy", raising=False)
+        assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is False
+
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+        assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is True
+
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is False
+
+    def test_proxy_detection_covers_all_env_spellings(self, monkeypatch):
+        """Every proxy env spelling (upper/lower, http/https/all) is honoured."""
+        import tests.conftest as ct
+
+        for var in (
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+        ):
+            for other in ct._PROXY_ENV_VARS:
+                monkeypatch.delenv(other, raising=False)
+            monkeypatch.setenv(var, self.PROXY)
+            assert ct._is_proxy_endpoint(("127.0.0.1", 18080)) is True, var
+
+    def test_portless_proxy_does_not_deny_every_port_on_host(self, monkeypatch):
+        """A portless proxy value must not swallow unrelated local ports.
+
+        Regression (found in review of ``bc97a5b``): a value without an explicit
+        port (``HTTP_PROXY=http://127.0.0.1``) was matched against *any* port on
+        that host. Because the guardrail's own positive-control sentinel dials
+        loopback on an ephemeral port, that aborted the entire session with
+        ``INTERNALERROR`` before a single test ran -- while trunk, which has no
+        proxy check, passed. The port must resolve to the scheme default instead.
+        """
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1")
+
+        # Resolved to the scheme default, not "any port".
+        assert ct._proxy_endpoints() == {("127.0.0.1", 80)}
+        # The proxy's own port is still denied ...
+        assert ct._is_allowed_target(("127.0.0.1", 80)) is False
+        # ... while other local ports (sentinel, TestClient, local servers) work.
+        assert ct._is_allowed_target(("127.0.0.1", 9999)) is True
+        assert ct._is_allowed_target(("127.0.0.1", 50794)) is True
+
+    def test_portless_proxy_does_not_break_guardrail_sentinel(self, monkeypatch):
+        """The guardrail's own loopback sentinel must survive a portless proxy.
+
+        This is the exact end-to-end shape of the regression: with a portless
+        proxy configured, the sentinel's loopback dial must be admitted.
+        """
+        import socket
+
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1")
+
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        try:
+            # Mirrors run_guardrail_sentinel(): a real loopback connect must pass.
+            cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cli.connect(("127.0.0.1", port))
+            conn, _ = srv.accept()
+            conn.close()
+            cli.close()
+        finally:
+            srv.close()
+
+        assert ct._is_allowed_target(("127.0.0.1", port)) is True
+
+    def test_scheme_default_ports_for_portless_proxies(self, monkeypatch):
+        """Portless values resolve per scheme, matching what urllib3 would dial."""
+        import tests.conftest as ct
+
+        # Each entry is (value, expected_port, exercised_path):
+        #   "scheme"   -> looked up in _PROXY_SCHEME_DEFAULT_PORT
+        #   "fallback" -> no scheme at all, so _PROXY_FALLBACK_PORT applies
+        expectations = {
+            "http://127.0.0.1": (80, "scheme"),
+            "https://127.0.0.1": (443, "scheme"),
+            "socks5://127.0.0.1": (1080, "scheme"),
+            # Bare ``host:port``/host has no scheme, so this one asserts the
+            # fallback path specifically -- not the scheme table.
+            "127.0.0.1": (ct._PROXY_FALLBACK_PORT, "fallback"),
+        }
+        for value, (expected_port, path) in expectations.items():
+            for other in ct._PROXY_ENV_VARS:
+                monkeypatch.delenv(other, raising=False)
+            monkeypatch.setenv("HTTP_PROXY", value)
+            assert ct._proxy_endpoints() == {("127.0.0.1", expected_port)}, (
+                f"{value} ({path} path)"
+            )
+
+    def test_unknown_scheme_uses_fallback_port(self, monkeypatch):
+        """A scheme absent from the table must fall back, not crash or skip."""
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "weird-scheme://127.0.0.1")
+
+        assert ct._proxy_endpoints() == {("127.0.0.1", ct._PROXY_FALLBACK_PORT)}
+        assert ct._is_allowed_target(("127.0.0.1", ct._PROXY_FALLBACK_PORT)) is False
+
+    def test_explicit_proxy_port_still_denied(self, monkeypatch):
+        """The normal (port-bearing) form keeps working after the portless fix."""
+        import tests.conftest as ct
+
+        for other in ct._PROXY_ENV_VARS:
+            monkeypatch.delenv(other, raising=False)
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7897")
+
+        assert ct._is_allowed_target(("127.0.0.1", 7897)) is False
+        assert ct._is_allowed_target(("127.0.0.1", 7898)) is True
+
+    def test_non_proxy_loopback_services_still_allowed(self, monkeypatch):
+        """Denying the proxy must not break legitimate local services."""
+        import socket
+        import threading
+
+        import tests.conftest as ct
+
+        monkeypatch.setenv("HTTPS_PROXY", self.PROXY)
+
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def _serve():
+            conn, _ = server.accept()
+            conn.sendall(b"pong")
+            conn.close()
+
+        th = threading.Thread(target=_serve, daemon=True)
+        th.start()
+        client = socket.create_connection(("127.0.0.1", port))
+        assert client.recv(16) == b"pong"
+        client.close()
+        th.join(timeout=2)
+        server.close()
+
+        assert ct._is_allowed_target(("127.0.0.1", port)) is True
+
+
+# ==============================================================================
+# 7. The opt-in stub fixture denies both gateway seams
+# ==============================================================================
+
+class TestOfflineTushareGatewayStubFixture:
+    """``offline_tushare_gateway_stub`` must close both gateway seams."""
+
+    def test_stub_denies_news_client(self, offline_tushare_gateway_stub):
+        from tradingagents.dataflows import tushare_global_news as tgn
+
+        client = tgn.TushareNewsClient(
+            api_url=EXTERNAL_TEST_URL, token="synthetic-token"
+        )
+        with pytest.raises(OfflineTestGuardrailError):
+            client.query("news", {"src": "cls"}, "datetime")
+
+    def test_stub_denies_industry_linkage_gateway(self, offline_tushare_gateway_stub):
+        from tradingagents.dataflows.providers import industry_linkage_provider as ilp
+
+        with pytest.raises(OfflineTestGuardrailError):
+            ilp._query_tushare_api(api_name="shibor", as_of="2026-08-14")
+
+    def test_stub_denies_tushare_provider_and_sw_industry_holders(
+        self, offline_tushare_gateway_stub
+    ):
+        """Both modules import ``_query_tushare_api`` by value; each must be patched."""
+        from tradingagents.dataflows.providers import tushare_provider as tp
+        from tradingagents.dataflows import sw_industry as swi
+
+        with pytest.raises(OfflineTestGuardrailError):
+            tp._query_tushare_api(api_name="index_global", ts_code="SPX")
+
+        with pytest.raises(OfflineTestGuardrailError):
+            swi._query_tushare_api(
+                "index_classify", fields="index_code,industry_name,level"
+            )

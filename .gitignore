@@ -314,3 +314,6 @@ work/dav1772-pre-export/
 work/dav1772-backups/
 work/dav1772-journal/
 work/dav1772-rehearsal/
+# V-03b 测量副本与逐样本原始输出行（行情原始数据 D-040，本机留证不入库）
+work/v03b-1479/
+work/v03b_replica.db

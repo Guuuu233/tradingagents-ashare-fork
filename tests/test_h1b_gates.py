@@ -1682,3 +1682,1323 @@ class TestH1bCohortIsolation:
         assert res["claim_weights"]["C1"] == 1.0
         assert res["global_fallback_shadow"] is True
 
+
+
+class TestH1bVerifyGatesStreamingEquivalence:
+    """DAV-1767: streaming read + projection equivalence guards for verify_h1b_gates.
+
+    The script's streaming pipeline (id-manifest read → per-row re-read →
+    horizon-unit split → whitelist projection → staged counting → streaming
+    gate/isolation evaluation) must produce output identical to the module
+    evaluation path. These tests cross-check every layer, including on
+    deliberately exotic payloads (oversized non-evaluated blobs, null lists,
+    top-level None placeholders, mixed cohort pools) so any whitelist drift
+    fails loudly instead of silently changing the 160-key comparison JSON.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1767", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1767", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _module_reference(mod, samples, cohort):
+        """Run the module evaluation path and return (gate, isolation, excluded, ledger)."""
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        reps, exc, led = mod._module_filter_v2_completed_reports(samples, return_ledger=True)
+        if cohort:
+            pool, meta = filter_reports_by_cohort(reps, cohort=cohort)
+        else:
+            pool = reps
+        gate = mod._module_evaluate_gate_thresholds(
+            pool,
+            as_of=None,
+            cohort=cohort,
+            excluded_counts=exc,
+            pipeline_ledger=led,
+        )
+        iso = mod._module_evaluate_model_bias_and_weights(pool, system_gate_passed=gate["passed"])
+        return gate, iso
+
+    @staticmethod
+    def _stream_reference(mod, samples, cohort):
+        """Run the script's streaming pipeline over the same samples."""
+        agg = mod._StreamAggregator()
+        if cohort:
+            from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+            pool, meta = filter_reports_by_cohort(samples, cohort=cohort)
+        else:
+            pool = samples
+        for r in pool:
+            agg.feed(r)
+        return agg
+
+    def test_module_filter_equivalence_on_qualifying_pool(self):
+        """Staged ledger/counters + qualified pool identical to module filter."""
+        mod = self._import_script()
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        samples = _build_qualifying_sample_pool(n=61)
+        # one HOLD-isolated and one WAIT sample for the exclusion paths
+        hold = _build_mock_debate_sample(symbol="600001.SH", winner="tie")
+        hold["trade_action"] = "HOLD"
+        wait = _build_mock_debate_sample(symbol="600002.SH", winner="bull")
+        wait["trade_action"] = "WAIT"
+        pool = samples + [hold, wait]
+
+        mod_reports, mod_excluded, mod_ledger = filter_v2_completed_reports(pool, return_ledger=True)
+        agg = self._stream_reference(mod, pool, cohort=None)
+        led = agg.ledger()
+
+        assert led["raw_count"] == mod_ledger["raw_count"]
+        assert led["unit_count"] == mod_ledger["unit_count"]
+        assert led["dual_horizon_split_reports"] == mod_ledger["dual_horizon_split_reports"]
+        assert led["qualifying_v2_count"] == mod_ledger["qualifying_v2_count"]
+        assert led["eligible_count"] == mod_ledger["eligible_count"]
+        assert led["non_v2_excluded"] == mod_ledger["non_v2_excluded"]
+        assert led["d009_excluded"] == mod_ledger["d009_excluded"]
+        assert led["clean_count"] == mod_ledger["clean_count"]
+        assert led["hold_semantic_isolated"] == mod_ledger["hold_semantic_isolated"]
+        assert led["price_basis_isolated"] == mod_ledger["price_basis_isolated"]
+        assert led["prediction_eligible_count"] == mod_ledger["prediction_eligible_count"]
+        assert agg.excluded() == mod_excluded
+        # Qualified sample ids identical (order: row → unit split order)
+        assert [s.get("id") for s in mod_reports] == [s.get("id") for s in agg.qualifying]
+
+    def test_stream_run_gate_eval_equivalence_matrix_and_isolation(self):
+        """Streaming gate evaluation == module evaluation on the qualifying pool."""
+        mod = self._import_script()
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        samples = _build_qualifying_sample_pool(n=64)
+        mod_reports, mod_excluded, mod_ledger = filter_v2_completed_reports(samples, return_ledger=True)
+        agg = self._stream_reference(mod, samples, cohort=None)
+        gate_stream = mod._stream_run_gate_eval(
+            agg.qualifying,
+            as_of=None,
+            cohort=None,
+            excluded_counts=agg.excluded(),
+            pipeline_ledger=agg.ledger(),
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        iso_stream = mod._stream_isolation_eval(agg.qualifying, system_gate_passed=gate_stream["passed"])
+        gate_mod, iso_mod = self._module_reference(mod, samples, cohort=None)
+
+        assert gate_stream["passed"] == gate_mod["passed"]
+        assert gate_stream["matrix"] == gate_mod["matrix"]
+        assert gate_stream["excluded_counts"] == gate_mod["excluded_counts"]
+        assert iso_stream == iso_mod
+
+    def test_projection_preserves_evaluation_payload_exactly(self):
+        """Projected unit keeps every consumed field; drops nothing the gate reads."""
+        mod = self._import_script()
+        sample = _build_mock_debate_sample(symbol="600519.SH", sample_idx=7)
+        sample["result_data"] = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": sample["investment_debate_state"]["manager_verdict"],
+            "investment_debate_state": sample["investment_debate_state"],
+            "shadow_credit_metrics": sample["shadow_credit_metrics"],
+        }
+        sample["market_data_context"] = {
+            "industry_linkage": {"industry_name": "白酒"},
+            "source_provenance": {"stock_data": {"status": "available", "as_of": "2026-08-01", "provenance_status": "verified"}},
+            "notes_blob": "x" * 512,
+        }
+
+        unit = mod._stream_split_units(sample)[0]
+        # consumed fields survive projection (top-level columns merge over
+        # result_data inside normalize/split, so merged-in keys surface on the
+        # unit only for fields the row itself carried at top level)
+        assert unit["analysis_status"] == "VALID"
+        assert unit["trade_action"] == "BUY"
+        inv = unit["investment_debate_state"]
+        assert inv["manager_verdict"]["winner"] == "bull"
+        assert inv["claims"][0]["claim"].startswith("多头看好逻辑")
+        assert unit["shadow_credit_metrics"]["bull_verified_rate"] == 1.0
+        assert unit["market_data_context"]["source_provenance"]["stock_data"]["status"] == "available"
+        # non-evaluated blob dropped
+        assert "notes_blob" not in unit["market_data_context"]
+        # gate evaluation on the projected unit matches the module on the raw row
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_v2_completed_reports,
+            is_qualifying_v2_report,
+        )
+
+        mod_reports, _, _ = filter_v2_completed_reports([sample], return_ledger=True)
+        assert len(mod_reports) == 1
+        agg = self._stream_reference(mod, [sample], cohort=None)
+        assert len(agg.qualifying) == 1
+        gate_a = mod._stream_run_gate_eval(
+            mod_reports, as_of=None, cohort=None, excluded_counts={}, pipeline_ledger=None,
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        gate_b = mod._stream_run_gate_eval(
+            agg.qualifying, as_of=None, cohort=None, excluded_counts={}, pipeline_ledger=None,
+            cohort_meta={"canonical_key": None, "commit_shas": []},
+        )
+        assert gate_a["matrix"] == gate_b["matrix"]
+        assert gate_a["passed"] == gate_b["passed"]
+
+    def test_oversized_non_evaluated_blob_projection_constant(self):
+        """3 MiB of non-evaluated payload is dropped by the projection (memory bound)."""
+        mod = self._import_lib_guard() if False else self._import_script()
+        sample = _build_mock_debate_sample(symbol="600519.SH")
+        sample["result_data"] = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": sample["investment_debate_state"]["manager_verdict"],
+            "investment_debate_state": sample["investment_debate_state"],
+            "shadow_credit_metrics": sample["shadow_credit_metrics"],
+            "unused_blob": "x" * (3 * 1024 * 1024),
+            "unused_array": list(range(100_000)),
+        }
+        unit = mod._stream_split_units(sample)[0]
+        import sys as _sys
+
+        assert _sys.getsizeof(unit.get("unused_blob", "")) < 4096
+        assert "unused_array" not in unit
+        agg = self._stream_reference(mod, [sample], cohort=None)
+        assert len(agg.qualifying) == 1
+
+    def test_db_read_path_to_dict_field_parity(self, tmp_path):
+        """Streaming DB read returns the same per-row keys as ReportDB.to_dict()."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "parity.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        row = ReportDB(
+            id="rep-parity-1",
+            symbol="600519.SH",
+            trade_date="2026-08-01",
+            status="completed",
+            analysis_status="VALID",
+            trade_action="BUY",
+            result_data={
+                "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                "industry": "白酒",
+                "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
+                "manager_verdict": {"winner": "bull", "direction": "看多"},
+            },
+            data_gaps=[{"gap": "x"}],
+            falsification_conditions=["f1"],
+        )
+        session.add(row)
+        session.commit()
+        # load_reports_from_db returns the module-filtered/normalized samples,
+        # so raw-row parity is asserted on the column list itself: the
+        # streaming read must cover exactly to_dict() minus the three
+        # non-evaluated structural list columns.
+        to_dict_keys = set(
+            session.query(ReportDB).filter(ReportDB.id == "rep-parity-1").first().to_dict().keys()
+        )
+        session.close()
+        engine.dispose()
+
+        expected_stream_cols = to_dict_keys - {"risk_items", "key_metrics", "analyst_traces"}
+        assert set(mod.STREAM_ROW_COLUMNS) == expected_stream_cols
+
+        reports = mod.load_reports_from_db(db_path=db_path)
+        assert len(reports) == 1
+        assert reports[0]["id"] == "rep-parity-1"
+        assert reports[0]["symbol"] == "600519.SH"
+        assert reports[0]["result_data"]["industry"] == "白酒"
+        assert reports[0]["data_gaps"] == [{"gap": "x"}]
+        assert reports[0]["falsification_conditions"] == ["f1"]
+        # datetime columns are ISO strings after the streaming read
+        assert isinstance(reports[0]["created_at"], str)
+
+    def test_row_count_consistency_db_vs_module_filter(self, tmp_path):
+        """Streaming DB read feeds the module filter with identical stage counts."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "counts.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        for i in range(3):
+            session.add(
+                ReportDB(
+                    id=f"rep-c{i}",
+                    symbol=f"60059{i}.SH",
+                    trade_date="2026-08-0%d" % (i + 1),
+                    status="completed",
+                    analysis_status="VALID",
+                    trade_action="BUY",
+                    result_data={
+                        "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                        "industry": "白酒",
+                        "claims": [{"claim_id": "c1", "speaker_key": "Bull", "stance": "bullish"}],
+                        "manager_verdict": {"winner": "bull", "direction": "看多"},
+                    },
+                )
+            )
+        session.add(ReportDB(id="rep-cx", symbol="601398.SH", trade_date="2026-08-09", status="failed"))
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        reports = mod.load_reports_from_db(db_path=db_path, return_ledger=True)
+        assert isinstance(reports, tuple)
+        v2_reports, excluded, ledger = reports
+        assert ledger["raw_count"] == 3
+        assert ledger["clean_count"] == 3
+        assert len(v2_reports) == 3
+
+    def test_run_verify_script_level_equivalence_dual_horizon(self, tmp_path):
+        """End-to-end: run_verify(stream) vs module path on a dual-horizon DB."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+
+        db_path = str(tmp_path / "dual.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        def _legacy_unit(winner: str) -> dict:
+            u = _build_mock_debate_sample(symbol="600519.SH", winner=winner)
+            for k in ("decision_model_version", "evidence_contract_version",
+                      "price_basis_version", "generated_by_commit_sha"):
+                u.pop(k, None)
+            return u
+
+        short_unit = _legacy_unit("bull")
+        short_unit["horizon"] = "short"
+        medium_unit = _legacy_unit("bear")
+        medium_unit["horizon"] = "medium"
+        session.add(
+            ReportDB(
+                id="rep-dual-1",
+                symbol="600519.SH",
+                trade_date="2026-08-01",
+                status="completed",
+                analysis_status="VALID",
+                trade_action="BUY",
+                result_data={
+                    "protocol_version": PROTOCOL_VERSION_V2_STRUCTURED,
+                    "industry": "白酒",
+                    "short_term": short_unit,
+                    "medium_term": medium_unit,
+                },
+            )
+        )
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        out_json = str(tmp_path / "dual_out.json")
+        res = mod.run_verify(db_path=db_path, cohort="legacy_unversioned:short", output_json=out_json)
+        assert res["sample_count"] == 1
+        assert res["pipeline_ledger"]["dual_horizon_split_reports"] == 1
+        assert res["pipeline_ledger"]["unit_count"] == 2
+        # only the short unit enters the short cohort
+        assert res["gate_evaluation"]["matrix"]["dimension_side"]["details"]["bull_samples"] == 1
+        assert os.path.exists(out_json)
+
+        # module reference on the same DB rows (raw to_dict path)
+        from sqlalchemy import create_engine as ce2
+
+        engine2 = ce2(f"sqlite:///{db_path}")
+        from api.database import ReportDB as RDB2
+
+        Session2 = sessionmaker(bind=engine2)
+        s2 = Session2()
+        rows = [r.to_dict() for r in s2.query(RDB2).filter(RDB2.status == "completed").all()]
+        s2.close()
+        engine2.dispose()
+        reps, exc, led = mod._module_filter_v2_completed_reports(rows, return_ledger=True)
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        pool, _ = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        gate_mod = mod._module_evaluate_gate_thresholds(
+            pool, as_of=None, cohort="legacy_unversioned:short", excluded_counts=exc, pipeline_ledger=led
+        )
+        assert res["gate_evaluation"]["matrix"] == gate_mod["matrix"]
+
+    def test_run_verify_equivalence_exotic_payloads(self, tmp_path):
+        """Equivalence holds on null-lists, top-level Nones and mixed cohorts."""
+        mod = self._import_script()
+        s1 = _build_mock_debate_sample(symbol="600519.SH", sample_idx=1)
+        s1["claims"] = None
+        s1["market_regime"] = None
+        s1["t_plus_5_status"] = None
+        s2 = _build_mock_debate_sample(symbol="000858.SZ", sample_idx=2, winner="bear")
+        for s in (s1, s2):
+            s.pop("decision_model_version", None)
+            s.pop("evidence_contract_version", None)
+            s.pop("price_basis_version", None)
+            s.pop("generated_by_commit_sha", None)
+        pool = [s1, s2]
+
+        gate_mod, iso_mod = self._module_reference(mod, pool, cohort="legacy_unversioned")
+        agg = self._stream_reference(mod, pool, cohort="legacy_unversioned")
+        gate_stream = mod._stream_run_gate_eval(
+            agg.qualifying,
+            as_of=None,
+            cohort="legacy_unversioned",
+            excluded_counts=agg.excluded(),
+            pipeline_ledger=agg.ledger(),
+            cohort_meta={"canonical_key": "legacy_unversioned", "commit_shas": []},
+        )
+        assert gate_stream["matrix"] == gate_mod["matrix"]
+        assert gate_stream["passed"] == gate_mod["passed"]
+        iso_stream = mod._stream_isolation_eval(agg.qualifying, system_gate_passed=gate_mod["passed"])
+        assert iso_stream == iso_mod
+
+
+class TestH1bVerifyGatesDavian1803Rework:
+    """DAV-1803 rework guards: production daily-shaped mdc must survive the
+    projection (P0-1), the file/dir branch of run_verify must stay equivalent
+    (P1-2), and the whitelist must structurally cover the module consumption
+    surface (P1-4).
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1803", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1803", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _production_daily_mdc() -> dict:
+        """mimic data_collector._build_daily_context + results['market_data_context'].
+
+        The production mdc carries ``daily`` (as_of/completeness) and
+        ``data_failure_ledger`` ALWAYS (data_collector.py:3147,3155); rows may
+        lack source_provenance.stock_data entirely, making these two the only
+        Stage 3.5 evidence available.
+        """
+        return {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {},
+            # big unconsumed blobs that the projection should still drop
+            "fund_flow_evidence": {"records": ["x" * 128], "summary": "y" * 512},
+            "realtime": {"status": "unavailable", "error": "z" * 256},
+        }
+
+    @classmethod
+    def _production_hold_row(cls, idx: int = 0, dual: bool = True, t_plus_5_date: str | None = None) -> dict:
+        """HOLD unit with a production-shaped mdc; no source_provenance.stock_data.
+
+        ``t_plus_5_date`` (DAV-1767 rework): when given, it is stamped onto the
+        unit so Dimension 4 resolves the due date from the sample itself
+        instead of calling ``calculate_t_plus_5_date`` — see the hermeticity
+        note on ``test_run_verify_input_dir_matches_module_baseline``.
+        """
+        prod_mdc = cls._production_daily_mdc()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie", "direction": "中性"},
+            "market_data_context": prod_mdc,
+            "claims": [
+                {
+                    "claim_id": f"c{idx}",
+                    "speaker_key": "Bull",
+                    "speaker": "Bull Analyst",
+                    "stance": "bullish",
+                    "status": "verified",
+                    "claim": f"多头证据claim文本_{idx}",
+                    "evidence": ["多头证据1"],
+                }
+            ],
+            "challenges": [],
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+        }
+        if t_plus_5_date is not None:
+            inner["t_plus_5_date"] = t_plus_5_date
+        if dual:
+            return {
+                "id": f"hold-{idx:03d}",
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+                "status": "completed",
+                "result_data": {
+                    "short_term": inner,
+                    "medium_term": dict(
+                        inner, horizon="medium", manager_verdict={"winner": "bull", "direction": "看多"}
+                    ),
+                },
+            }
+        return {
+            "id": f"hold-single-{idx:03d}",
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+            "status": "completed",
+            "result_data": {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie", "direction": "中性"},
+                "market_data_context": prod_mdc,
+                "claims": inner["claims"],
+                "challenges": [],
+            },
+        }
+
+    # ── P0-1: production daily-shaped mdc survives the projection ────────────
+
+    def test_p01_prune_keeps_daily_and_ledger_surface(self):
+        mod = self._import_script()
+        mdc = self._production_daily_mdc()
+        pruned = mod._stream_prune_market_data_context(mdc)
+        # full Stage 3.5 + industry surface survives
+        assert pruned["daily"] == {"as_of": "2026-08-01", "completeness": "completed"}
+        assert pruned["data_failure_ledger"] == []
+        assert pruned["source_provenance"] == {}
+        assert "industry_linkage" not in pruned  # absent stays absent
+        # unconsumed blobs still dropped
+        assert "fund_flow_evidence" not in pruned
+        assert "realtime" not in pruned
+
+    def test_p01_daily_only_mdc_not_mistaken_for_other_blocks(self):
+        """DAV-1811 M-1: a lone ``daily`` key no longer classifies a block as
+        mdc (the dispatcher is gone; mdc pruning is only applied to the
+        ``market_data_context`` slot). The mdc pruner itself preserves daily."""
+        mod = self._import_script()
+        mdc = {"daily": {"as_of": "2026-08-01", "completeness": "completed"}}
+        assert mod._stream_prune_market_data_context(mdc) == mdc
+        mdc2 = {"data_failure_ledger": [{"source": "stock_data", "status": "available"}]}
+        assert mod._stream_prune_market_data_context(mdc2) == mdc2
+        # and the misc block pruner never routes such keys anywhere
+        md = {"daily": {"as_of": "x"}, "horizon": "short", "protocol_version": "v2"}
+        assert mod._stream_prune_misc_block(md) == {"horizon": "short", "protocol_version": "v2"}
+
+    def test_p01_per_horizon_mdc_map_pruned_per_value(self):
+        mod = self._import_script()
+        prod = self._production_daily_mdc()
+        per_hz = {"short": dict(prod), "medium": dict(prod)}
+        pruned = mod._stream_prune_market_data_context(per_hz)
+        assert set(pruned.keys()) == {"short", "medium"}
+        assert pruned["short"]["daily"] == prod["daily"]
+        assert "fund_flow_evidence" not in pruned["short"]
+
+    def test_p01_dual_unit_hold_reasons_match_module(self):
+        """The P0-1 CLI repro shape: dual-horizon HOLD with production daily mdc.
+
+        Module split → no hold reasons (daily available). The streamed unit
+        must reach the same verdict — not the fail-closed {} artifact.
+        """
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        row = self._production_hold_row(0, dual=True)
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == []
+        assert collect_hold_semantic_reasons(su) == []
+
+    def test_p01_single_fallback_hold_reasons_match_module(self):
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        row = self._production_hold_row(1, dual=False)
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == []
+        assert collect_hold_semantic_reasons(su) == []
+
+    def test_p01_unavailable_daily_still_flags_hold_defensive(self):
+        """The prune must not over-correct: genuinely unavailable daily (fail
+        data) must still produce hold_defensive exactly as the module does."""
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        fail_mdc = {
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "source_provenance": {
+                "stock_data": {
+                    "status": "unavailable",
+                    "provenance_status": "refused",
+                    "gap": "【数据获取失败】stock_data",
+                }
+            },
+            "data_failure_ledger": [],
+        }
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie"},
+            "market_data_context": fail_mdc,
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+        }
+        row = {"id": "hf", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert collect_hold_semantic_reasons(mu) == ["hold_defensive"]
+        assert collect_hold_semantic_reasons(su) == ["hold_defensive"]
+
+    # ── P1-2: run_verify file/dir branch equivalence (the P0-1 escape hatch) ──
+
+    def _write_repro_dir(self, tmp_path, n: int = 64) -> str:
+        d = tmp_path / "dav1803_repro"
+        d.mkdir(exist_ok=True)
+        for i in range(n):
+            (d / f"hold_{i:03d}.json").write_text(
+                json.dumps(self._production_hold_row(i, dual=True, t_plus_5_date="2026-08-08"), ensure_ascii=False),
+                encoding="utf-8",
+            )
+        return str(d)
+
+    def test_run_verify_input_dir_matches_module_baseline(self, tmp_path, monkeypatch):
+        """In-process ``--input-dir`` repro (64 production-daily HOLD samples):
+        the ``run_verify`` output must match the module path
+        (ex-generated_at) — sample_count 64, no false hold_defensive.
+
+        Hermeticity (DAV-1767 rework): this assertion used to be reachable only
+        with a live trading calendar. It originally shelled out to the CLI via
+        ``subprocess``, so the child inherited neither conftest's
+        ``_offline_trade_calendar`` stub nor the offline socket guardrail —
+        ``calculate_t_plus_5_date`` then fail-closed every sample to
+        ``is_due=False`` and ``due_count`` came out 0 against the module
+        path's 64. Calling ``run_verify`` in-process fixed the process
+        boundary, but the due date was still resolved through the shared
+        ``trade_calendar`` global cache and the wall clock (``as_of=None``),
+        so the case stayed sensitive to cache state and machine time.
+
+        The test now removes both inputs instead of depending on them:
+        ``as_of`` is pinned, and every sample carries its own
+        ``t_plus_5_date`` — Dimension 4 then compares that field against
+        ``as_of`` and never consults a calendar. The calendar entry points are
+        spied to fail if touched, so reintroducing the dependency breaks
+        loudly rather than silently. Calendar-resolution behaviour keeps its
+        own coverage in ``TestH1bTPlus5DueInference``.
+        """
+        mod = self._import_script()
+        repro_dir = self._write_repro_dir(tmp_path)
+
+        # Hermeticity guard: no calendar resolution may happen on either side.
+        def _calendar_forbidden(*args, **kwargs):  # pragma: no cover - guard
+            raise AssertionError(
+                "T+5 due date must come from the sample's t_plus_5_date; "
+                "a trading-calendar lookup makes this test non-hermetic"
+            )
+
+        import tradingagents.dataflows.trade_calendar as _tc
+        import tradingagents.agents.utils.shadow_credit as _sc
+
+        monkeypatch.setattr(_tc, "calculate_t_plus_5_date", _calendar_forbidden)
+        monkeypatch.setattr(_sc, "calculate_t_plus_5_date", _calendar_forbidden)
+
+        as_of = "2026-09-02"
+        out_json = tmp_path / "cand.json"
+        cand = mod.run_verify(
+            input_dir=repro_dir,
+            cohort="legacy_unversioned:short",
+            as_of=as_of,
+            output_json=str(out_json),
+        )
+        assert os.path.exists(out_json)
+        assert cand["sample_count"] == 64
+        assert cand["pipeline_ledger"]["hold_defensive"] == 0
+        assert cand["pipeline_ledger"]["clean_count"] == 128
+        assert cand["pipeline_ledger"]["eligible_count"] == 128
+
+        # module baseline on the same rows (loaded raw, evaluated by the module)
+        rows = []
+        for i in range(64):
+            rows.append(self._production_hold_row(i, dual=True, t_plus_5_date="2026-08-08"))
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_v2_completed_reports,
+            filter_reports_by_cohort,
+        )
+
+        reps, exc, led = filter_v2_completed_reports(rows, return_ledger=True)
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        gate_mod = mod._module_evaluate_gate_thresholds(
+            pool, as_of=as_of, cohort="legacy_unversioned:short",
+            excluded_counts=exc, pipeline_ledger=led,
+        )
+        assert cand["sample_count"] == len(pool) == 64
+        # Guard against a vacuous pass: were the due date ever resolved to
+        # "not due" on both sides, ``matrix == matrix`` would compare equal
+        # while proving nothing. Pin the expected value on both sides.
+        assert gate_mod["matrix"]["dimension_t5"]["details"]["due_count"] == 64
+        assert cand["gate_evaluation"]["matrix"]["dimension_t5"]["details"]["due_count"] == 64
+        assert cand["gate_evaluation"]["matrix"] == gate_mod["matrix"]
+        assert cand["gate_evaluation"]["passed"] == gate_mod["passed"]
+
+    def test_cli_input_dir_wiring(self, tmp_path):
+        """The raw CLI entry still wires ``--input-dir`` end to end:
+        argparse -> ``run_verify`` -> output JSON -> exit 0.
+
+        The hermetic case above deliberately asserts semantics in-process, so
+        the argument wiring and exit-code path need their own check (DAV-1841
+        🟢-1: the previous rework left only ``--db-path`` CLI coverage).
+        Rows carry ``t_plus_5_date`` and no matrix comparison is made, so this
+        stays independent of any trading calendar.
+        """
+        import subprocess
+        import sys
+
+        mod = self._import_script()
+        repro_dir = self._write_repro_dir(tmp_path)
+        out_json = tmp_path / "cli_dir_out.json"
+        proc = subprocess.run(
+            [sys.executable, mod.__file__, "--cohort", "legacy_unversioned:short",
+             "--input-dir", repro_dir, "--output-json", str(out_json)],
+            capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stderr[-800:]
+        assert os.path.exists(out_json)
+        payload = json.loads(out_json.read_text(encoding="utf-8"))
+        assert payload["sample_count"] == 64
+
+    def test_run_verify_input_file_branch_equivalence(self, tmp_path):
+        """The --input-file branch must behave identically to --input-dir."""
+        mod = self._import_script()
+        samples = [self._production_hold_row(i, dual=False) for i in range(8)]
+        in_file = tmp_path / "samples.json"
+        in_file.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
+
+        out_file = tmp_path / "file_out.json"
+        res_file = mod.run_verify(
+            input_file=str(in_file), cohort="legacy_unversioned:short",
+            output_json=str(out_file),
+        )
+        res_dir = None
+        d = tmp_path / "as_dir"
+        d.mkdir()
+        for i, s in enumerate(samples):
+            (d / f"s{i}.json").write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
+        out_dir = tmp_path / "dir_out.json"
+        res_dir = mod.run_verify(
+            input_dir=str(d), cohort="legacy_unversioned:short",
+            output_json=str(out_dir),
+        )
+        for res in (res_file, res_dir):
+            assert res["sample_count"] == 8
+            assert res["pipeline_ledger"]["hold_defensive"] == 0
+        a = {k: v for k, v in res_file.items() if k != "generated_at"}
+        b = {k: v for k, v in res_dir.items() if k != "generated_at"}
+        assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    # ── P1-4: whitelist ⊇ module consumption surface (structural guard) ─────
+
+    def test_p14_mdc_whitelist_covers_stage35_consumption(self):
+        """is_daily_ohlcv_unavailable (Stage 3.5) + extract_report_industry
+        consume: source_provenance, data_failure_ledger, daily,
+        industry_linkage, industry, sector. The mdc whitelist must be a
+        superset — DAV-1803 P0-1 was exactly this superset breaking."""
+        import inspect
+
+        from tradingagents.agents.utils import evidence_verifier
+
+        mod = self._import_script()
+        src = inspect.getsource(evidence_verifier.is_daily_ohlcv_unavailable)
+        consumed = {
+            "source_provenance", "data_failure_ledger", "daily", "stock_data",
+        }
+        for key in ("source_provenance", "data_failure_ledger", "daily"):
+            assert f'.get("{key}")' in src or f'get("{key}")' in src, key
+        assert consumed - {"stock_data"} <= mod._STREAM_MDC_KEYS
+        assert "daily" in mod._STREAM_MDC_KEYS
+        assert "data_failure_ledger" in mod._STREAM_MDC_KEYS
+        assert "source_provenance" in mod._STREAM_MDC_KEYS
+        assert "industry_linkage" in mod._STREAM_MDC_KEYS
+        assert {"industry", "sector"} <= mod._STREAM_MDC_KEYS
+
+    def test_p14_stream_whitelists_superset_of_eval_keys(self):
+        """The unit projection whitelist must cover every key the streaming
+        evaluation reads from a sample (audit-backed superset assertion)."""
+        mod = self._import_script()
+        required = {
+            "analysis_status", "trade_action", "decision_status", "decision",
+            "direction", "status", "protocol_version", "protocol_stage",
+            "v2_debate_enabled", "feature_flags", "manager_verdict",
+            "debate_winner", "investment_debate_state", "claims", "challenges",
+            "shadow_credit_metrics",
+            "t_plus_5_status", "t_plus_5_date", "t_plus_5_price",
+            "t_plus_5_direction_hit", "t_plus_5_evaluated",
+            "is_suspended", "suspension", "is_in_flight", "is_t_plus_5_due",
+            "t_plus_1_open", "entry_price", "entry_price_source", "target_price",
+            "decision_model_version", "evidence_contract_version",
+            "price_basis_version", "price_ref_contract_version",
+            "generated_by_commit_sha", "commit_sha", "horizon",
+            "short_term", "medium_term", "industry", "sector",
+            "market_data_context", "market_regime", "regime",
+            "id", "report_id", "symbol", "trade_date", "date", "created_at",
+            "user_id", "model_id_by_stance",
+            "macro_report", "market_report", "sentiment_report", "news_report",
+            "fundamentals_report", "smart_money_report", "volume_price_report",
+            "instrument_context", "data_collection_provenance",
+            "quadrant_1_protocol_metadata", "metadata",
+        }
+        missing = required - mod._STREAM_EVAL_RESULT_KEYS
+        assert not missing, f"whitelist drift: missing {sorted(missing)}"
+        # debate/verdict sub-whitelists must cover their consumed keys
+        for key in ("winner", "direction", "claim_evidence_summary",
+                    "consistency_check_passed", "failed_checks",
+                    "adopted_challenge_ids", "ohlcv_gate_applied",
+                    "fund_flow_dispute_gate_applied", "entry"):
+            assert key in mod._STREAM_VERDICT_KEYS, key
+        for key in ("manager_verdict", "claims", "challenges", "round_messages",
+                    "claim_evidence_summary", "protocol_version"):
+            assert key in mod._STREAM_DEBATE_KEYS, key
+
+    # ── P1-1: leaf-key count documentation guard ─────────────────────────────
+
+    def test_p11_leaf_key_count_is_deterministic(self, tmp_path):
+        """The '160 keys' card wording: the comparable JSON surface is
+        (all leaf keys − generated_at) and must be identical between two runs
+        on the same config. Pin the actual number so future key additions are
+        a conscious decision, not silent drift."""
+        mod = self._import_script()
+        samples = [self._production_hold_row(i, dual=False) for i in range(3)]
+        in_file = tmp_path / "s.json"
+        in_file.write_text(json.dumps(samples, ensure_ascii=False), encoding="utf-8")
+        res1 = mod.run_verify(input_file=str(in_file), cohort="legacy_unversioned:short")
+        res2 = mod.run_verify(input_file=str(in_file), cohort="legacy_unversioned:short")
+
+        def leaves(o) -> int:
+            if isinstance(o, dict):
+                return sum(leaves(v) for v in o.values())
+            if isinstance(o, list):
+                return sum(leaves(v) for v in o)
+            return 1
+
+        def strip(r):
+            r = json.loads(json.dumps(r, ensure_ascii=False))
+            r.pop("generated_at")
+            return r
+
+        n1, n2 = leaves(strip(res1)), leaves(strip(res2))
+        assert n1 == n2, "comparable key surface drifted between identical runs"
+        assert json.dumps(strip(res1), sort_keys=True) == json.dumps(strip(res2), sort_keys=True)
+
+
+class TestH1bVerifyGatesDavian1811Rework:
+    """DAV-1811 M-1 guard: per-block prune dispatch (never shape-sniffed).
+
+    The 4-flag sniff introduced for P0-1 misclassified ``metadata`` /
+    ``data_collection_provenance`` / ``instrument_context`` blocks carrying
+    ``daily`` / ``data_failure_ledger`` as market_data_context, silently
+    dropping the cohort triad, price-basis contract markers and
+    ``industry_linkage_raw`` — turning isolated price-basis samples into
+    "clean" ones (price_basis_isolated 144→0 on a 72-row dual-horizon pool).
+    These tests pin the block-level consumption surfaces.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1811", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1811", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_m1_metadata_with_daily_keeps_contract_keys(self):
+        """metadata carrying daily/ledger must keep price_ref_contract_version
+        (price-basis contract fail-close) and horizon/cohort keys."""
+        from tradingagents.agents.utils.shadow_credit import (
+            classify_price_basis_exclusion,
+            extract_sample_cohort,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        md = {
+            "horizon": "short",
+            "price_ref_contract_version": "price_ref.v1",
+            "decision_model_version": "decision_model.v1",
+            "evidence_contract_version": "evidence_contract.v0",
+            "daily": {"as_of": "2026-08-01"},
+            "data_failure_ledger": [],
+        }
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "metadata": md,
+        }
+        row = {"id": "m1a", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        # module reference behaviour preserved
+        assert classify_price_basis_exclusion(mu) == "price_basis_contract_incomplete"
+        assert classify_price_basis_exclusion(su) == "price_basis_contract_incomplete"
+        # contract/cohort keys survive the projection
+        assert su["metadata"]["price_ref_contract_version"] == "price_ref.v1"
+        assert su["metadata"]["horizon"] == "short"
+        assert extract_sample_cohort(su)["decision_model_version"] == "decision_model.v1"
+
+    def test_m1_data_collection_provenance_with_daily_keeps_linkage_raw(self):
+        """data_collection_provenance carrying daily must keep industry_linkage_raw."""
+        from tradingagents.agents.utils.shadow_credit import (
+            extract_report_industry,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "data_collection_provenance": {
+                "daily": {"as_of": "x"},
+                "data_failure_ledger": [],
+                "industry_linkage_raw": {"industry_name": "电力设备"},
+            },
+        }
+        row = {"id": "m1b", "status": "completed", "result_data": {"short_term": inner}}
+        mu = split_report_into_units(row)[0]
+        su = mod._stream_split_units(row)[0]
+        assert extract_report_industry(mu) == "电力设备"
+        assert extract_report_industry(su) == "电力设备"
+        assert su["data_collection_provenance"]["industry_linkage_raw"] == {"industry_name": "电力设备"}
+
+    def test_m1_instrument_context_with_daily_keeps_industry(self):
+        mod = self._import_script()
+        inner = {
+            "horizon": "short",
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+            "instrument_context": {"industry": "新能源", "daily": {"as_of": "x"},
+                                   "data_failure_ledger": []},
+        }
+        row = {"id": "m1c", "status": "completed", "result_data": {"short_term": inner}}
+        su = mod._stream_split_units(row)[0]
+        assert su["instrument_context"] == {"industry": "新能源"}
+
+    def test_m1_mdc_dispatch_still_keeps_stage35_surface(self):
+        """P0-1 must not regress: a real mdc (markers + daily + ledger) keeps
+        daily / data_failure_ledger / source_provenance / industry_linkage."""
+        from tradingagents.agents.utils.shadow_credit import (
+            collect_hold_semantic_reasons,
+            split_report_into_units,
+        )
+
+        mod = self._import_script()
+        ok_mdc = {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {"stock_data": {"status": "available", "as_of": "2026-08-01",
+                                                "provenance_status": "verified"}},
+            "industry_linkage": {"industry_name": "白酒"},
+            "fund_flow_evidence": {"records": ["x" * 64]},
+            "realtime": {"status": "unavailable"},
+        }
+        fail_mdc = {
+            "analysis_baseline_date": "2026-08-01",
+            "daily": {"as_of": "2026-08-01", "completeness": "completed"},
+            "data_failure_ledger": [],
+            "source_provenance": {"stock_data": {"status": "unavailable",
+                                                "provenance_status": "refused",
+                                                "gap": "【数据获取失败】stock_data"}},
+            "fund_flow_evidence": {},
+        }
+        for idx, (mdc, expect) in enumerate(((ok_mdc, []), (fail_mdc, ["hold_defensive"]))):
+            inner = {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie"},
+                "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish"}],
+                "market_data_context": mdc,
+            }
+            row = {"id": f"m1mdc-{idx}", "status": "completed", "result_data": {"short_term": inner}}
+            mu = split_report_into_units(row)[0]
+            su = mod._stream_split_units(row)[0]
+            assert collect_hold_semantic_reasons(mu) == expect
+            assert collect_hold_semantic_reasons(su) == expect
+        su = mod._stream_split_units({"id": "m1mdc-x", "status": "completed",
+                                      "result_data": {"short_term": dict(inner, market_data_context=ok_mdc)}})[0]
+        kept = su["market_data_context"]
+        assert kept["daily"] and kept["source_provenance"]["stock_data"]["status"] == "available"
+        assert "fund_flow_evidence" not in kept and "realtime" not in kept
+
+    def test_m1_per_horizon_mdc_map_still_pruned_per_value(self):
+        mod = self._import_script()
+        mdc = {"daily": {"as_of": "2026-08-01", "completeness": "completed"},
+               "data_failure_ledger": [], "source_provenance": {},
+               "industry_linkage": {"industry_name": "白酒"}, "realtime": {"status": "x"}}
+        per_hz = {"short": dict(mdc), "medium": dict(mdc)}
+        pruned = mod._stream_prune_market_data_context(per_hz)
+        assert set(pruned.keys()) == {"short", "medium"}
+        assert pruned["short"]["daily"] == mdc["daily"]
+        assert "realtime" not in pruned["short"]
+
+    def test_m1_72row_dual_horizon_price_basis_ledger_matches_module(self):
+        """The review's 72-row repro: price_basis_isolated must stay 144 (not 0).
+
+        Each row carries a contract-era metadata block with daily/ledger; the
+        module classifies every unit as price_basis_contract_incomplete.
+        Streaming aggregation must agree key-by-key on the ledger.
+        """
+        mod = self._import_script()
+        rows = []
+        for i in range(72):
+            inner = {
+                "horizon": "short",
+                "analysis_status": "VALID",
+                "trade_action": "HOLD",
+                "manager_verdict": {"winner": "tie", "direction": "中性"},
+                "claims": [{"claim_id": f"c{i}", "speaker": "Bull", "stance": "bullish",
+                            "status": "verified", "claim": f"claim_{i}"}],
+                "metadata": {
+                    "horizon": "short",
+                    "price_ref_contract_version": "price_ref.v1",
+                    "daily": {"as_of": "2026-08-01"},
+                    "data_failure_ledger": [],
+                },
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+            }
+            rows.append({
+                "id": f"pb-{i:03d}",
+                "symbol": "600519.SH",
+                "trade_date": "2026-08-01",
+                "status": "completed",
+                "result_data": {
+                    "short_term": inner,
+                    "medium_term": dict(inner, horizon="medium"),
+                },
+            })
+
+        from tradingagents.agents.utils.shadow_credit import filter_v2_completed_reports
+
+        mod_reps, mod_exc, mod_led = filter_v2_completed_reports(rows, return_ledger=True)
+        # module truth: all 144 units contract-incomplete → isolated
+        assert mod_led["price_basis_isolated"] == 144
+        assert mod_led["price_basis_contract_incomplete"] == 144
+        assert mod_led["clean_count"] == 0
+
+        agg = mod._StreamAggregator()
+        for r in rows:
+            agg.feed(r)
+        led = agg.ledger()
+        for k in ("price_basis_isolated", "price_basis_contract_incomplete",
+                  "clean_count", "eligible_count", "hold_defensive",
+                  "hold_semantic_isolated", "prediction_eligible_count"):
+            assert led[k] == mod_led[k], f"ledger mismatch on {k}: {led[k]} != {mod_led[k]}"
+        assert len(agg.qualifying) == 0
+
+
+class TestH1bVerifyGatesDavian1767Rework:
+    """DAV-1767 rework guard: cohort provenance (``commit_shas``) is sampled
+    from the D-009 clean pool, not from every cohort-matching unit.
+
+    DAV-1816 measured the divergence: the candidate collected SHAs right after
+    the cohort quad matched, so units later excluded by Stage 2/3/3.5/4 still
+    contributed (short 24 vs trunk 11, medium 20 vs 8). The module path runs
+    ``filter_reports_by_cohort`` on ``filter_v2_completed_reports`` output, so
+    only clean-pool SHAs may appear. These tests pin that sampling surface.
+    """
+
+    @staticmethod
+    def _import_script():
+        import importlib.util
+        import sys
+
+        script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "scripts",
+            "verify_h1b_gates.py",
+        )
+        spec = importlib.util.spec_from_file_location("verify_h1b_gates_dav1767rework", script_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules.setdefault("verify_h1b_gates_dav1767rework", mod)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @staticmethod
+    def _d009_excluded_unit(sha: str) -> dict:
+        """A v2-qualifying unit that D-009 §5 excludes via ``trade_action=WAIT``.
+
+        Stage 2 (is_qualifying_v2_report) passes — evidence is present — but
+        Stage 3 classifies it as ``wait``. It therefore matches the cohort quad
+        yet never reaches the evaluation pool.
+        """
+        return {
+            "analysis_status": "VALID",
+            "trade_action": "WAIT",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": "c1", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            "generated_by_commit_sha": sha,
+        }
+
+    @staticmethod
+    def _clean_unit(sha: str, *, idx: int = 0) -> dict:
+        return {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": f"c{idx}", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": f"多头逻辑_{idx}"}],
+            "generated_by_commit_sha": sha,
+        }
+
+    @staticmethod
+    def _legacy_row(unit: dict, idx: int = 0) -> dict:
+        """Wrap a unit in a legacy_unversioned:short row (no triad fields)."""
+        return {
+            "id": f"row-{idx:03d}",
+            "symbol": "600519.SH",
+            "trade_date": "2026-08-01",
+            "status": "completed",
+            "result_data": {
+                "short_term": dict(unit, horizon="short"),
+            },
+        }
+
+    def test_d009_excluded_unit_sha_absent_from_output(self):
+        """The card's explicit requirement: a unit excluded by D-009 must not
+        leak its version number into ``commit_shas`` — and a clean unit's SHA
+        must still appear."""
+        from tradingagents.agents.utils.shadow_credit import (
+            filter_reports_by_cohort,
+            filter_v2_completed_reports,
+        )
+
+        mod = self._import_script()
+        clean_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        excluded_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+        rows = [
+            self._legacy_row(self._clean_unit(clean_sha, idx=0), idx=0),
+            self._legacy_row(self._d009_excluded_unit(excluded_sha), idx=1),
+        ]
+
+        # module truth: WAIT is dropped before the cohort filter, so only the
+        # clean unit's SHA is visible to filter_reports_by_cohort.
+        reps, exc, led = filter_v2_completed_reports(rows, return_ledger=True)
+        assert led["d009_excluded"] == 1
+        assert exc["wait"] == 1
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        assert len(pool) == 1
+        assert meta["commit_shas"] == [clean_sha]
+
+        # streaming pipeline must agree
+        agg = mod._StreamAggregator()
+        from tradingagents.agents.utils.shadow_credit import parse_cohort_spec
+
+        spec = parse_cohort_spec("legacy_unversioned:short")
+        for r in rows:
+            agg.feed(r, cohort_spec=spec)
+        assert agg.cohort_shas == {clean_sha}, (
+            f"excluded unit SHA leaked: {sorted(agg.cohort_shas)}"
+        )
+        assert excluded_sha not in agg.cohort_shas
+        assert len(agg.qualifying) == 1
+
+    def test_run_verify_output_commit_shas_match_module_path(self, tmp_path):
+        """End-to-end on a real DB: run_verify's commit_shas must equal the
+        module path's, i.e. exclude SHAs of units dropped by Stage 3/3.5/4."""
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from api.database import Base, ReportDB
+
+        mod = self._import_script()
+        clean_sha = "cccccccccccccccccccccccccccccccccccccccc"
+        excluded_sha = "dddddddddddddddddddddddddddddddddddddddd"
+
+        db_path = str(tmp_path / "sha_surface.db")
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        session.add_all([
+            ReportDB(
+                id="row-clean", symbol="600519.SH", trade_date="2026-08-01",
+                status="completed", analysis_status="VALID", trade_action="BUY",
+                result_data={
+                    "short_term": dict(self._clean_unit(clean_sha, idx=0), horizon="short"),
+                },
+            ),
+            ReportDB(
+                id="row-excluded", symbol="000858.SZ", trade_date="2026-08-02",
+                status="completed", analysis_status="VALID", trade_action="WAIT",
+                result_data={
+                    "short_term": dict(self._d009_excluded_unit(excluded_sha), horizon="short"),
+                },
+            ),
+        ])
+        session.commit()
+        session.close()
+        engine.dispose()
+
+        out_json = str(tmp_path / "sha_surface_out.json")
+        res = mod.run_verify(
+            db_path=db_path, cohort="legacy_unversioned:short", output_json=out_json,
+        )
+
+        # module reference over the same rows (raw to_dict path)
+        engine2 = create_engine(f"sqlite:///{db_path}")
+        Session2 = sessionmaker(bind=engine2)
+        s2 = Session2()
+        rows = [r.to_dict() for r in s2.query(ReportDB).filter(ReportDB.status == "completed").all()]
+        s2.close()
+        engine2.dispose()
+        reps, exc, led = mod._module_filter_v2_completed_reports(rows, return_ledger=True)
+        from tradingagents.agents.utils.shadow_credit import filter_reports_by_cohort
+
+        pool, meta = filter_reports_by_cohort(reps, cohort="legacy_unversioned:short")
+        assert meta["commit_shas"] == [clean_sha]
+
+        assert res["cohort_info"]["commit_shas"] == [clean_sha]
+        assert res["gate_evaluation"]["cohort_info"]["commit_shas"] == [clean_sha]
+        assert excluded_sha not in json.dumps(res, ensure_ascii=False)
+        assert res["sample_count"] == len(pool) == 1
+
+    def test_hold_and_price_basis_excluded_shas_absent(self):
+        """Stage 3.5 (HOLD) and Stage 4 (price basis) exclusions must also be
+        invisible to commit_shas — the sampling point is the clean pool, not
+        merely post-D-009."""
+        from tradingagents.agents.utils.shadow_credit import parse_cohort_spec
+
+        mod = self._import_script()
+        clean_sha = "1111111111111111111111111111111111111111"
+        hold_sha = "2222222222222222222222222222222222222222"
+        pb_sha = "3333333333333333333333333333333333333333"
+
+        hold_unit = {
+            "analysis_status": "VALID",
+            "trade_action": "HOLD",
+            "manager_verdict": {"winner": "tie", "direction": "中性",
+                                "ohlcv_gate_applied": True},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            # Stage 3.5 hold_defensive via the explicit OHLCV gate flag
+            "generated_by_commit_sha": hold_sha,
+        }
+        pb_unit = {
+            "analysis_status": "VALID",
+            "trade_action": "BUY",
+            "manager_verdict": {"winner": "bull", "direction": "看多"},
+            "claims": [{"claim_id": "c", "speaker": "Bull", "stance": "bullish",
+                        "status": "verified", "claim": "多头逻辑"}],
+            # contract-era marker without the price-ref contract → Stage 4 isolate
+            "evidence_contract_version": "evidence_contract.v2",
+            "price_basis_version": "price_basis.vendor_qfq",
+            "generated_by_commit_sha": pb_sha,
+        }
+        rows = [
+            self._legacy_row(self._clean_unit(clean_sha, idx=0), idx=0),
+            self._legacy_row(hold_unit, idx=1),
+            {
+                "id": "row-pb",
+                "symbol": "300750.SZ",
+                "trade_date": "2026-08-03",
+                "status": "completed",
+                "result_data": {"short_term": dict(pb_unit, horizon="short")},
+            },
+        ]
+
+        agg = mod._StreamAggregator()
+        spec = parse_cohort_spec("legacy_unversioned:short")
+        for r in rows:
+            agg.feed(r, cohort_spec=spec)
+        led = agg.ledger()
+        assert led["clean_count"] == 1, led
+        assert led["hold_semantic_isolated"] == 1, led
+        assert led["price_basis_isolated"] == 1, led
+        assert agg.cohort_shas == {clean_sha}, f"leaked: {sorted(agg.cohort_shas)}"
+        assert hold_sha not in agg.cohort_shas
+        assert pb_sha not in agg.cohort_shas
+
+    def test_homogeneity_keys_sampled_from_clean_pool_only(self):
+        """Cohort=None path: the homogeneity key set must mirror the module's
+        post-filter pool, so an excluded unit cannot manufacture a mixed-pool
+        verdict on its own."""
+        from tradingagents.agents.utils.shadow_credit import (
+            is_cohort_homogeneous,
+            filter_v2_completed_reports,
+        )
+
+        mod = self._import_script()
+        rows = [
+            self._legacy_row(self._clean_unit("aaaa", idx=0), idx=0),
+            # legacy_unversioned:medium unit that D-009 excludes (WAIT): it must
+            # not contribute a second cohort key. Placed in its own
+            # ``medium_term`` slot (DAV-1825 🟢-3): a medium unit in the short
+            # slot makes the splitter emit a "slot key wins" WARNING, which
+            # would turn a future WARNING-semantics change into a false
+            # regression signal. The assertion contract is unchanged.
+            {
+                "id": "row-wait-medium",
+                "symbol": "000858.SZ",
+                "trade_date": "2026-08-02",
+                "status": "completed",
+                "result_data": {"medium_term": dict(self._d009_excluded_unit("bbbb"), horizon="medium")},
+            },
+        ]
+
+        reps, _exc, _led = filter_v2_completed_reports(rows, return_ledger=True)
+        is_homo, key = is_cohort_homogeneous(reps)
+        assert is_homo is True
+
+        agg = mod._StreamAggregator()
+        for r in rows:
+            agg.feed(r)
+        agg.ledger()
+        assert agg.cohort_homogeneous_key == key, (
+            f"stream {agg.cohort_homogeneous_key!r} != module {key!r}"
+        )

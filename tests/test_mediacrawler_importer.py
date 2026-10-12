@@ -28,6 +28,9 @@ from tradingagents.dataflows.social.mediacrawler_importer import (
 from tests.social_fixtures import (
     init_mediacrawler_db,
     populate_sample_mediacrawler_data,
+    populate_creator_hash_blank_rows,
+    init_anonymized_mediacrawler_db,
+    populate_sample_anonymized_mediacrawler_data,
     MEDIACRAWLER_XHS_NOTE_SCHEMA,
     MEDIACRAWLER_XHS_NOTE_COMMENT_SCHEMA,
     MEDIACRAWLER_DOUYIN_AWEME_SCHEMA,
@@ -498,3 +501,168 @@ def test_missing_crawler_commit_rejected_explicitly():
     with pytest.raises(ValueError, match="crawler_commit"):
         MediaCrawlerImporter(archive_db=archive_conn)
 
+
+
+# ============================================================================
+# DAV-1462 requirement 1: author column mapping + schema guard
+# ============================================================================
+
+def test_resolve_source_author_id_priority_order():
+    """sec_uid beats user_id beats creator_hash; blank values are skipped."""
+    from tradingagents.dataflows.social.mediacrawler_importer import (
+        resolve_source_author_id,
+    )
+
+    assert resolve_source_author_id(
+        {"sec_uid": "S1", "user_id": "U1", "creator_hash": "C1"}, "douyin_aweme"
+    ) == "S1"
+    assert resolve_source_author_id({"user_id": "U1", "creator_hash": "C1"}, "douyin_aweme") == "U1"
+    assert resolve_source_author_id({"creator_hash": "C1"}, "douyin_aweme") == "C1"
+    # Blank / whitespace values must fall through to the next candidate.
+    assert resolve_source_author_id(
+        {"sec_uid": "  ", "user_id": "U1"}, "douyin_aweme"
+    ) == "U1"
+    assert resolve_source_author_id({"user_id": None, "creator_hash": " C1 "}, "douyin_aweme") == "C1"
+    # xhs has no sec_uid in either build.
+    assert resolve_source_author_id({"user_id": "U1", "creator_hash": "C1"}, "xhs_note") == "U1"
+    assert resolve_source_author_id({"creator_hash": "C1"}, "xhs_note") == "C1"
+    assert resolve_source_author_id({}, "xhs_note") is None
+    assert resolve_source_author_id({"user_id": "   "}, "xhs_note") is None
+
+
+def test_creator_hash_mapping_writes_non_null_author_hashes_both_platforms():
+    """Anonymized schema (creator_hash only) -> 100% non-NULL author_id_hash.
+
+    Reproduces the DAV-1460 blocking A failure shape: with user_id/sec_uid only,
+    every row landed with author_id_hash = NULL.
+    """
+    source_conn = sqlite3.connect(":memory:")
+    init_anonymized_mediacrawler_db(source_conn)
+    populate_sample_anonymized_mediacrawler_data(source_conn)
+
+    archive_conn = sqlite3.connect(":memory:")
+    init_archive_db(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
+    result = importer.import_from_db(source_conn)
+
+    assert result["status"] == "completed"
+    assert result["rows_inserted"] == 5
+
+    cur = archive_conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM social_record_snapshots")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM social_record_snapshots WHERE author_id_hash IS NULL")
+    nulls = cur.fetchone()[0]
+    assert total == 5
+    assert nulls == 0, "creator_hash mapping failed: silent NULL regression"
+
+    # The stored value is the one-way digest, never the raw source hash.
+    cur.execute("SELECT DISTINCT author_id_hash FROM social_record_snapshots")
+    stored = {r[0] for r in cur.fetchall()}
+    assert len(stored) == 5, "each creator_hash must map to its own author bucket"
+    assert all(h.startswith("sha256:") and len(h) == 71 for h in stored), stored
+    assert not any("a1b2c3d4e5f60718" in h for h in stored), "raw creator_hash leaked"
+
+    # Re-computation is deterministic and equals the source mapping.
+    for raw, expected in [
+        ("a1b2c3d4e5f60718", "xhs:post:anon_note_01"),
+        ("d4e5f60718293041", "dy:post:anon_aweme_01"),
+    ]:
+        cur.execute(
+            "SELECT author_id_hash FROM social_record_snapshots WHERE record_id = ?",
+            (expected,),
+        )
+        assert cur.fetchone()[0] == compute_author_id_hash(raw)
+
+
+def test_upstream_user_id_schema_still_maps_user_id_first():
+    """The upstream (user_id / sec_uid) shape keeps its original precedence."""
+    source_conn = sqlite3.connect(":memory:")
+    init_mediacrawler_db(source_conn)
+    populate_sample_mediacrawler_data(source_conn)
+
+    archive_conn = sqlite3.connect(":memory:")
+    init_archive_db(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
+    result = importer.import_from_db(source_conn)
+    assert result["status"] == "completed"
+
+    cur = archive_conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM social_record_snapshots WHERE author_id_hash IS NULL")
+    assert cur.fetchone()[0] == 0
+    cur.execute(
+        "SELECT author_id_hash FROM social_record_snapshots WHERE record_id = 'dy:post:aweme_789001'"
+    )
+    assert cur.fetchone()[0] == compute_author_id_hash("MS4wLjABAAAA_sec123")
+
+
+def test_missing_author_column_rejects_whole_batch():
+    """No user_id / sec_uid / creator_hash at all -> whole batch refused, NULL never written."""
+    for table, ddl in [
+        ("xhs_note", """
+            CREATE TABLE xhs_note (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id TEXT NOT NULL, type TEXT, title TEXT, desc TEXT,
+                time INTEGER, last_update_time INTEGER, liked_count TEXT,
+                collected_count TEXT, comment_count TEXT, share_count TEXT,
+                note_url TEXT, source_keyword TEXT, add_ts INTEGER, last_modify_ts INTEGER
+            )
+        """),
+        ("douyin_aweme", """
+            CREATE TABLE douyin_aweme (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                aweme_id TEXT NOT NULL, title TEXT, desc TEXT, create_time INTEGER,
+                liked_count TEXT, comment_count TEXT, share_count TEXT,
+                collected_count TEXT, aweme_url TEXT, source_keyword TEXT,
+                add_ts INTEGER, last_modify_ts INTEGER
+            )
+        """),
+    ]:
+        source_conn = sqlite3.connect(":memory:")
+        source_conn.execute(ddl)
+        native_id_col = "note_id" if table == "xhs_note" else "aweme_id"
+        source_conn.execute(
+            f"INSERT INTO {table} ({native_id_col}, add_ts, last_modify_ts) "
+            f"VALUES ('no_author_row', 1787716802000, 1787724600000)"
+        )
+        source_conn.commit()
+
+        archive_conn = sqlite3.connect(":memory:")
+        init_archive_db(archive_conn)
+        importer = MediaCrawlerImporter(
+            archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092"
+        )
+        result = importer.import_from_db(source_conn)
+
+        assert result["status"] == "failed", table
+        assert result["error_code"] == "social_schema_mismatch", table
+        assert result["rows_inserted"] == 0, table
+        assert "no author column" in result["error_detail"], result["error_detail"]
+        assert table in result["error_detail"]
+
+        cur = archive_conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM social_record_snapshots")
+        assert cur.fetchone()[0] == 0, f"{table} must not write rows at all"
+        # The failed run is auditable.
+        cur.execute(
+            "SELECT status, error_code FROM social_ingest_runs WHERE run_id = ?",
+            (result["run_id"],),
+        )
+        assert cur.fetchone() == ("failed", "social_schema_mismatch")
+
+
+def test_blank_creator_hash_row_yields_null_author_hash():
+    """Column present but value blank -> NULL author_id_hash (documented residual)."""
+    source_conn = sqlite3.connect(":memory:")
+    init_anonymized_mediacrawler_db(source_conn)
+    populate_creator_hash_blank_rows(source_conn)
+
+    archive_conn = sqlite3.connect(":memory:")
+    init_archive_db(archive_conn)
+    importer = MediaCrawlerImporter(archive_conn, crawler_commit="d6f7c5bb906b6dac40ddf343ef9e26438a3de092")
+    result = importer.import_from_db(source_conn, platforms=["xhs"])
+
+    assert result["status"] == "completed"
+    cur = archive_conn.cursor()
+    cur.execute("SELECT author_id_hash FROM social_record_snapshots")
+    assert cur.fetchone()[0] is None

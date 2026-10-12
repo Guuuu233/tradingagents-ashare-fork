@@ -458,6 +458,17 @@ async def lifespan(app: FastAPI):
         _default_executor = _prev_module_executor
         _log("Executor shutdown complete.")
 
+        # DAV-1571: explicit upstream-connection management — close every
+        # pooled LLM's httpx transports instead of leaving CLOSE_WAIT sockets
+        # to GC __del__.
+        try:
+            from tradingagents.llm_clients.pool import aclose_llm_pool
+
+            instances, transports = await aclose_llm_pool()
+            _log(f"LLM pool closed: instances={instances} transports_closed={transports}.")
+        except Exception as exc:
+            _log(f"Could not close LLM pool: {exc}")
+
 
 _is_prod = os.getenv("ENV", "").lower() == "prod"
 
@@ -2744,7 +2755,13 @@ def _attach_traceability_fields(
     report_id: Optional[str],
 ) -> Dict[str, Any]:
     """DAV-1430 (D-066 B3): one attach point for input_snapshot / run_identity
-    / served_models on every save path — same rules everywhere."""
+    / served_models on every save path — same rules everywhere.
+
+    DAV-1486: ``run_identity`` is unconditionally overwritten with the API
+    code/prompt/model identity.  Experiment-path identity lives under the
+    distinct ``experiment_run_identity`` key (DAV-1477 P3), so an experiment
+    result routed through this attach point keeps its thread/checkpointer
+    identity instead of being silently clobbered."""
     result["input_snapshot"] = _compute_input_snapshot(pool)
     result["run_identity"] = _build_run_identity(graph, prompt_snapshot)
     try:
@@ -3263,6 +3280,46 @@ async def _run_job_inner(
     tracker = AgentProgressTracker(request.selected_analysts, job_id)
     _emit_job_event(job_id, "agent.snapshot", tracker.snapshot())
 
+    # DAV-1535: LangGraph checkpointer thread cleanup (生产内存泄漏修复).
+    # 每个按 job_id 命名的检查点线程（单档 job_id、双档 job_id_{h}、共享阶段
+    # job_id_dual、propagate 传入 job_id）只在本任务生命周期内写入；全仓库无
+    # get_state/恢复/追问读取（已 grep 验证）。任务无论成功/失败/取消，都要在
+    # finally 中把本次登记过的线程从共享 MemorySaver 删掉，否则 storage/blobs
+    # 随任务数线性增长。清理失败只记日志，绝不影响任务结果与报告保存。
+    _job_checkpointer_threads: List[str] = []
+    _job_graph_instances: List[Any] = []
+
+    def _cleanup_checkpointer_threads() -> None:
+        """Delete every checkpoint thread this job registered.
+
+        Each thread is deleted from every distinct checkpointer store seen on
+        the graphs this job created (the production shared MemorySaver plus
+        any injected store).  All failures are logged and swallowed so a bad
+        cleanup never alters the job outcome or report persistence.
+        """
+        if not _job_checkpointer_threads:
+            return
+        seen_stores: List[Any] = []
+        for g in _job_graph_instances:
+            for store in (
+                getattr(g, "checkpointer", None),
+                getattr(getattr(g, "graph", None), "checkpointer", None),
+            ):
+                if store is not None and all(store is not s for s in seen_stores):
+                    seen_stores.append(store)
+        for store in seen_stores:
+            delete_thread = getattr(store, "delete_thread", None)
+            if not callable(delete_thread):
+                continue
+            for tid in _job_checkpointer_threads:
+                try:
+                    delete_thread(tid)
+                except Exception as exc:
+                    _log(
+                        f"[Job {job_id}] checkpointer cleanup failed for "
+                        f"thread {tid!r}: {exc!r}"
+                    )
+
     try:
         # D-015 Contract 3 & 5: Check if E-02 prompt guard intercepted any role at launch freeze
         prompt_guard_violation = next(
@@ -3325,6 +3382,7 @@ async def _run_job_inner(
             custom_prompts=_custom_prompts_for_graph,
             custom_prompt_placement=_PROMPT_PLACEMENT,
         )
+        _job_graph_instances.append(graph)
         final_state: Optional[Dict[str, Any]] = None
         # DAV-1430: bound by whichever branch collected the pool; the
         # propagate() path leaves it None and the snapshot falls back to the
@@ -3473,6 +3531,8 @@ async def _run_job_inner(
                 if "config" not in s_args:
                     s_args["config"] = {}
                 s_args["config"]["configurable"] = {"thread_id": f"{job_id}_dual"}
+                _job_checkpointer_threads.append(f"{job_id}_dual")
+                _job_graph_instances.append(analyst_graph)
                 s_args["config"]["metadata"] = {
                     **(s_args["config"].get("metadata") or {}),
                     "report_id": job_id,
@@ -3577,6 +3637,8 @@ async def _run_job_inner(
                 if "config" not in h_args:
                     h_args["config"] = {}
                 h_args["config"]["configurable"] = {"thread_id": f"{job_id}_{horizon}"}
+                _job_checkpointer_threads.append(f"{job_id}_{horizon}")
+                _job_graph_instances.append(horizon_graph)
                 # DAV-1314: 用量回调从 run metadata 取 report_id/档位；
                 # 角色名由 LangGraph 注入的 langgraph_node 提供。
                 h_args["config"]["metadata"] = {
@@ -4400,6 +4462,7 @@ async def _run_job_inner(
             if "config" not in args:
                 args["config"] = {}
             args["config"]["configurable"] = {"thread_id": job_id}
+            _job_checkpointer_threads.append(job_id)
             # DAV-1314: 用量回调 metadata（report_id/档位）
             args["config"]["metadata"] = {
                 **(args["config"].get("metadata") or {}),
@@ -4576,6 +4639,7 @@ async def _run_job_inner(
                     thread_id=job_id,
                     horizon_resolution=horizon_resolution,
                 )
+                _job_checkpointer_threads.append(job_id)
             else:
                 # TradingAgentsGraph.propagate historically defaults the
                 # propagator state to short.  Keep the API-only medium path
@@ -4616,6 +4680,7 @@ async def _run_job_inner(
                 if "config" not in args:
                     args["config"] = {}
                 args["config"]["configurable"] = {"thread_id": job_id}
+                _job_checkpointer_threads.append(job_id)
                 # DAV-1314: 用量回调 metadata（report_id/档位）
                 args["config"]["metadata"] = {
                     **(args["config"].get("metadata") or {}),
@@ -4802,6 +4867,10 @@ async def _run_job_inner(
             {"job_id": job_id, "error": err_msg},
         )
     finally:
+        try:
+            _cleanup_checkpointer_threads()
+        except Exception as cleanup_exc:
+            _log(f"[Job {job_id}] checkpointer cleanup error: {cleanup_exc!r}")
         _shared_data_collector.evict(request.symbol, request.trade_date)
 
 
@@ -5495,12 +5564,74 @@ async def analyze(
 
 def _require_job_owner(job_id: str, current_user: UserDB) -> Dict[str, Any]:
     job = _get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="job not found")
-    owner_id = job.get("user_id")
-    if owner_id and owner_id != current_user.id:
-        raise HTTPException(status_code=404, detail="job not found")
-    return job
+    if job:
+        owner_id = job.get("user_id")
+        if owner_id and owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="job not found")
+        return job
+    return _terminal_job_from_report(job_id, current_user)
+
+
+def _terminal_job_from_report(job_id: str, current_user: UserDB) -> Dict[str, Any]:
+    """DAV-1427: synthesize a terminal job dict from the reports row (report.id == job_id).
+
+    Job store entries expire after the terminal TTL; the persisted report row is
+    the source of truth for a completed/failed job's terminal state. Orphaned
+    pending/running rows (job store entry already gone) are finalized to failed.
+    Raises 404 when neither the store nor the reports table knows the id, or the
+    row belongs to another user.
+    """
+    try:
+        with get_db_ctx() as db:
+            report = report_service.get_report(db, job_id, user_id=current_user.id)
+            if report is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            if str(report.status or "") in report_service.ACTIVE_REPORT_STATUSES:
+                # Job store entry is gone but the row never reached a terminal
+                # state — the run was interrupted; finalize like
+                # /v1/reports/{id} does instead of reporting a phantom active job.
+                report = report_service.finalize_orphan_report(db, report)
+            # Snapshot the finalized fields inside the session so expired ORM
+            # attributes are not re-fetched after the context closes.
+            snap = {
+                "status": report.status or "failed",
+                "created_at": report.created_at,
+                "updated_at": report.updated_at,
+                "symbol": report.symbol,
+                "trade_date": report.trade_date,
+                "error": report.error,
+                "decision": report.decision,
+                "result_data": report.result_data,
+                "user_id": report.user_id,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:  # DB unavailable — preserve 404 semantics
+        logger.warning("_terminal_job_from_report(%s) fallback query failed: %s", job_id, exc)
+        raise HTTPException(status_code=404, detail="job not found") from exc
+
+    def _iso(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
+    return {
+        "job_id": job_id,
+        "user_id": snap["user_id"],
+        "status": snap["status"],
+        "created_at": _iso(snap["created_at"]) or _utcnow_iso(),
+        "started_at": None,
+        "finished_at": _iso(snap["updated_at"]),
+        "symbol": snap["symbol"],
+        "trade_date": snap["trade_date"],
+        "error": snap["error"],
+        "decision": snap["decision"],
+        "result": snap["result_data"],
+        "overtime": False,
+        "overtime_at": None,
+    }
 
 
 @app.get("/v1/jobs/{job_id}", response_model=JobStatusResponse)
@@ -5555,6 +5686,7 @@ async def _ai_extract_symbol_and_date_streaming(
     Emits agent.token events so the frontend can show streaming output during extraction.
     """
     from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients.pool import get_or_create_llm
     import json as _json
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5570,7 +5702,8 @@ async def _ai_extract_symbol_and_date_streaming(
     llm_user_context: Dict[str, Any] = {}
 
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=config.get("llm_provider", "openai"),
             model=config.get("quick_think_llm"),
             base_url=config.get("backend_url"),
@@ -5600,7 +5733,6 @@ async def _ai_extract_symbol_and_date_streaming(
 
 用户消息："{extraction_text}"
 """
-        llm = client.get_llm()
         _log(f"[LLM Debug] Streaming StockExtract with model: {getattr(llm, 'model_name', 'unknown')}")
 
         full_content = ""
@@ -5678,6 +5810,7 @@ def _ai_extract_symbol_and_date(
     Returns (symbol, date, horizons, focus_areas, specific_questions, inferred_user_context).
     """
     from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.llm_clients.pool import get_or_create_llm
     import json as _json
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5693,7 +5826,8 @@ def _ai_extract_symbol_and_date(
     llm_specific_questions: List[str] = []
     llm_user_context: Dict[str, Any] = {}
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=config.get("llm_provider", "openai"),
             model=config.get("quick_think_llm"),
             base_url=config.get("backend_url"),
@@ -5723,7 +5857,6 @@ def _ai_extract_symbol_and_date(
 
 用户消息："{extraction_text}"
 """
-        llm = client.get_llm()
         
         # 调试日志：打印请求参数
         target_url = getattr(llm, 'openai_api_base', 'default')
@@ -6523,6 +6656,7 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
         classify_llm_failure,
         create_llm_client,
     )
+    from tradingagents.llm_clients.pool import get_or_create_llm
 
     provider = str(config.get("llm_provider") or "openai")
     base_url = config.get("backend_url")
@@ -6533,7 +6667,8 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
         return {"status": "skipped", "reason": "missing_model_or_key"}
 
     try:
-        client = create_llm_client(
+        llm = get_or_create_llm(
+            create_llm_client,
             provider=provider,
             model=model,
             base_url=base_url,
@@ -6541,7 +6676,6 @@ def _probe_runtime_config(config: Dict[str, Any]) -> Dict[str, str]:
             timeout=_CONFIG_PROBE_TIMEOUT_SECONDS,
             max_retries=0,
         )
-        llm = client.get_llm()
         _role_tok = current_llm_role.set("config_probe")  # DAV-1314
         try:
             response = llm.invoke(_CONFIG_PROBE_PROMPT)
@@ -6584,6 +6718,7 @@ def _invoke_runtime_warmup(
         create_llm_client,
         resolve_role_base_url,
     )
+    from tradingagents.llm_clients.pool import get_or_create_llm
     from tradingagents.llm_clients.validators import _sanitize_error_detail
 
     provider = str(config.get("llm_provider") or "openai")
@@ -6634,7 +6769,8 @@ def _invoke_runtime_warmup(
     errors: List[str] = []
     for prov, model, b_url, a_key, labels in targets:
         try:
-            client = create_llm_client(
+            llm = get_or_create_llm(
+                create_llm_client,
                 provider=prov,
                 model=model,
                 base_url=b_url,
@@ -6642,7 +6778,6 @@ def _invoke_runtime_warmup(
                 timeout=timeout,
                 max_retries=0,
             )
-            llm = client.get_llm()
             _role_tok = current_llm_role.set("llm_warmup")  # DAV-1314
             try:
                 response = llm.invoke(prompt)

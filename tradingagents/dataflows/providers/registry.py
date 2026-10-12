@@ -52,9 +52,9 @@ DEFAULT_PROVIDER_RESOURCE_POLICIES: Dict[str, ProviderResourcePolicy] = {
         max_concurrency=4,
     ),
     "tushare": ProviderResourcePolicy(
-        # get_global_news 大 lookback（图内用 90 天）冷启需拉取多源多日段
-        # （实测 ~350s），原始池/筛选结果缓存后秒回；各方法内部仍有自己的
-        # 预算/超时护栏，此处为上限兜底。
+        # get_global_news 冷启动需拉取多源多日段（d17b0fe5 上线核对实测
+        # 单次冷启动 131s，其中 enrich 回补 86–110s），原始池/筛选结果缓存
+        # 后秒回；各方法内部仍有自己的预算/超时护栏，此处为上限兜底。
         timeout_seconds=210.0,  # v4：窗口封顶7天+内部180s预算；外层>180s兜底
         max_retries=1,
         max_concurrency=4,

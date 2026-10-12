@@ -813,14 +813,23 @@ def _plan_restore_patch(text, node, desired, edits):
                 edits.append((child["start"], child["end"], json.dumps(value, ensure_ascii=False, allow_nan=False)))
         else:
             _plan_restore_patch(text, child, value, edits)
-    # Removals: only T+5 measurement members may disappear (backfill-added).
+    # Removals: only T+5 measurement members may disappear (backfill-added),
+    # plus a backfill-created ``shadow_credit_metrics`` container — the
+    # mirror-image of the write-side rule that permits *adding* such a
+    # container: it may be dropped only when absent from the exported
+    # pre-image AND its remaining value holds only measurement keys.
+    # All other removals still raise (其余校验不放宽).
     # Desired-key iteration order decides which comma to delete: a removed
     # member takes its following comma only when a *surviving* member comes
     # after it; otherwise it takes the preceding comma (trailing-member case).
     order = list(members)
     removed = [k for k in order if k not in desired]
     for key in removed:
-        if key not in MEASUREMENT_KEYS:
+        if key not in MEASUREMENT_KEYS and not (
+            key == "shadow_credit_metrics"
+            and isinstance(members[key][1]["value"], dict)
+            and set(members[key][1]["value"]) <= MEASUREMENT_KEYS
+        ):
             raise ValueError("non-T+5 field removed")
     removed_set = set(removed)
     for key in removed:

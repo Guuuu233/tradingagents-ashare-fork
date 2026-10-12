@@ -505,3 +505,17 @@ def test_run_user_id_arg_overrides_default(tmp_path, monkeypatch):
     lines = (ledger_dir / "forward_ledger.jsonl").read_text("utf-8").splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["record"]["report_id"] == "other1"
+
+
+# ---------------------------------------------------------------------------
+# DAV-1747: --date help text matches date.today() behaviour (text only)
+
+
+def test_run_date_help_says_local_day(capsys):
+    """--date 默认是本地日 Asia/Shanghai，帮助文字须与实现一致."""
+    with pytest.raises(SystemExit) as exc:
+        mod.main(["run", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "Asia/Shanghai" in out
+    assert "today UTC" not in out

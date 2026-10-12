@@ -274,3 +274,39 @@ site, or the two implementations will drift.
 - 交易日历 fallback 依赖 `FUYAO_API_KEY`；近一年窗口不足以覆盖更早历史查询。
 - 涨跌停/龙虎榜备用链依赖 `cn_akshare.get_zt_pool` / `get_lhb_detail` 在东财失败时返回
   `VendorFail`（已改为显式 VendorFail），否则纯字符串会截断 vendor 链。
+
+---
+
+## verify_h1b_gates: dual `commit_shas` sampling implementation
+
+**Status:** Registered debt (DAV-1857, from DAV-1825 review 🟢-2). No defect today — both paths agree.
+**Discovered:** 2026-10-10 during the DAV-1825 rework review
+
+### Symptom
+
+`scripts/verify_h1b_gates.py` computes cohort provenance (`commit_shas`) in two
+places, one per input path:
+
+- **SQLite (`--db-path`)**: `_StreamAggregator.feed()` samples the version at the
+  D-009 clean-pool exit (`scripts/verify_h1b_gates.py:549-572`, after Stage 2/3/3.5/4
+  have all passed), and `run_verify` reads it back at
+  `scripts/verify_h1b_gates.py:1185-1198`.
+- **File / directory (`--input-file`, `--input-dir`)**: the module helpers do it
+  directly — `filter_reports_by_cohort` for a cohort-filtered run, or
+  `is_cohort_homogeneous` + an inline comprehension for `cohort=None`
+  (`scripts/verify_h1b_gates.py:1610-1625`).
+
+The two surfaces are byte-identical on the four pinned configurations, the
+`cohort=None` path, the five exclusion tiers and the `--input-dir` fixture
+(DAV-1825 review §4), so this is a drift hazard rather than a live bug: the
+sampling point is a contract (DAV-1816 measured short 24 vs trunk 11, medium
+20 vs 8 when it was wrong), and a future change applied to only one path would
+silently diverge by input source.
+
+### Suggested fix
+
+Any change to the `commit_shas` sampling surface must be made in both places,
+and the guard test `tests/test_h1b_gates.py::TestH1bVerifyGatesDavian1767Rework`
+(4 cases) plus the streaming-equivalence suite must be re-run. A longer-term
+option is to route the file/dir branch through `_StreamAggregator` as well, so a
+single implementation serves all input paths.

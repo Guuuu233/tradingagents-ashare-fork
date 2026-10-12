@@ -34,6 +34,9 @@ from tradingagents.eval.v03_return_measure import (
 )
 
 FWD_END = "2026-09-18"
+# V-03b roll-capable bound: T+N target plus max-roll coverage must sit inside
+# the snapshot calendar (return_labels fail-closes on insufficient coverage).
+FWD_END_WITH_ROLL = "2026-09-22"
 
 SNAP_TRADE_DATES = [
     "2026-09-09",
@@ -45,6 +48,9 @@ SNAP_TRADE_DATES = [
     "2026-09-17",
     "2026-09-18",
 ]
+# Roll-candidate trading days after the T+5 target (09-18): needed so that the
+# calendar covers T+N+max_roll under the V-03b unified settlement contract.
+SNAP_ROLL_DATES = ["2026-09-21", "2026-09-22"]
 
 
 def _bar(date: str, open_: float = 100.0, close: float = 105.0, symbol: str = "600519.SH"):
@@ -65,9 +71,15 @@ def _write_snapshot(tmp_path: Path, payload: dict, name: str = "snap.json") -> P
     return p
 
 
-def _full_snapshot(tmp_path: Path) -> Path:
-    """Valid snapshot covering T=2026-09-10 -> T+1 entry 09-11 -> T+5 exit 09-18."""
-    bars = [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES]
+def _full_snapshot(tmp_path: Path, include_roll_dates: bool = False) -> Path:
+    """Valid snapshot covering T=2026-09-10 -> T+1 entry 09-11 -> T+5 exit 09-18.
+
+    ``include_roll_dates=True`` extends the trade calendar (and stock bars) by
+    SNAP_ROLL_DATES so V-03b roll coverage (T+N+max_roll) is satisfied; callers
+    must then also use forward_oos_end_date >= the last roll date.
+    """
+    dates = SNAP_TRADE_DATES + (SNAP_ROLL_DATES if include_roll_dates else [])
+    bars = [_bar(d, symbol="600519.SH") for d in dates]
     bars += [
         {
             "symbol": "000300.SH",
@@ -78,12 +90,12 @@ def _full_snapshot(tmp_path: Path) -> Path:
             "close": 4050.0,
             "volume": 1.0,
         }
-        for d in SNAP_TRADE_DATES
+        for d in dates
     ]
     return _write_snapshot(
         tmp_path,
         {
-            "trade_dates": SNAP_TRADE_DATES,
+            "trade_dates": dates,
             "bars": bars,
             "metadata": {
                 "600519.SH": {
@@ -154,11 +166,11 @@ def test_rt1_offline_no_vendor_or_network_calls(monkeypatch, tmp_path):
 
     # With a snapshot the measurement also completes fully offline.
     provider2 = OfflineSnapshotPriceDataProvider(
-        snapshot_path=str(_full_snapshot(tmp_path)),
-        forward_oos_end_date=FWD_END,
+        snapshot_path=str(_full_snapshot(tmp_path, include_roll_dates=True)),
+        forward_oos_end_date=FWD_END_WITH_ROLL,
     )
     engine2 = V03ReturnMeasureEngine(
-        price_provider=provider2, hold_days=5, forward_oos_end_date=FWD_END
+        price_provider=provider2, hold_days=5, forward_oos_end_date=FWD_END_WITH_ROLL
     )
     res2 = engine2.measure_dataset([_buy_report()])
     assert res2.all_metrics.evaluated_count == 1
@@ -235,12 +247,12 @@ def test_rt2_snapshot_with_metadata_but_no_bars_gives_traceable_gap(tmp_path):
 
 
 def test_rt3_snapshot_t1_open_t5_close_evaluated(tmp_path):
-    snap = _full_snapshot(tmp_path)
+    snap = _full_snapshot(tmp_path, include_roll_dates=True)
     provider = OfflineSnapshotPriceDataProvider(
-        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END_WITH_ROLL
     )
     engine = V03ReturnMeasureEngine(
-        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END_WITH_ROLL
     )
     res = engine.measure_dataset([_buy_report()])
     rec = res.records[0]
@@ -490,17 +502,17 @@ def test_dav1052_explicit_st_false_still_evaluated(tmp_path):
     snap = _write_snapshot(
         tmp_path,
         {
-            "trade_dates": SNAP_TRADE_DATES,
-            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES],
+            "trade_dates": SNAP_TRADE_DATES + SNAP_ROLL_DATES,
+            "bars": [_bar(d, symbol="600519.SH") for d in SNAP_TRADE_DATES + SNAP_ROLL_DATES],
             "metadata": {"600519.SH": {"list_date": "2001-08-27", "st": False}},
         },
     )
     provider = OfflineSnapshotPriceDataProvider(
-        snapshot_path=str(snap), forward_oos_end_date=FWD_END
+        snapshot_path=str(snap), forward_oos_end_date=FWD_END_WITH_ROLL
     )
     assert provider.is_st("600519.SH", "2026-09-10") is False
     engine = V03ReturnMeasureEngine(
-        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END_WITH_ROLL
     )
     res = engine.measure_dataset([_buy_report()])
     rec = res.records[0]
@@ -599,10 +611,11 @@ def test_dav1052_invalid_st_dates_rejected(tmp_path, bad_date):
 def test_dav1052_legal_dates_still_measure_t1_t5(tmp_path):
     """合法日期快照不受影响: T+1 open 入场 / T+5 close 出场测量正常."""
     provider = OfflineSnapshotPriceDataProvider(
-        snapshot_path=str(_full_snapshot(tmp_path)), forward_oos_end_date=FWD_END
+        snapshot_path=str(_full_snapshot(tmp_path, include_roll_dates=True)),
+        forward_oos_end_date=FWD_END_WITH_ROLL,
     )
     engine = V03ReturnMeasureEngine(
-        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END
+        price_provider=provider, hold_days=5, forward_oos_end_date=FWD_END_WITH_ROLL
     )
     res = engine.measure_dataset([_buy_report()])
     rec = res.records[0]
@@ -648,3 +661,100 @@ def test_dav1054_bar_dates_reject_time_suffix(tmp_path, suffixed):
         OfflineSnapshotPriceDataProvider(
             snapshot_path=str(snap), forward_oos_end_date=FWD_END
         )
+
+
+# ---------------------------------------------------------------------------
+# DAV-1493: bounded _SW_DAILY_MEMO LRU cap + bare-run legacy deprecation label
+# ---------------------------------------------------------------------------
+
+
+def test_dav1493_sw_daily_memo_lru_eviction_still_correct(monkeypatch):
+    """After _SW_DAILY_MEMO exceeds its cap, least-recently-used entries are
+    evicted and re-fetched — values stay correct and fail-close paths are
+    unchanged."""
+    import pandas as pd
+    import tradingagents.dataflows.sw_benchmark as sw_mod
+    from tradingagents.dataflows.sw_benchmark import (
+        _SW_DAILY_MEMO,
+        _SW_DAILY_MEMO_MAX_ENTRIES,
+        default_sw_daily_fetcher,
+    )
+
+    _SW_DAILY_MEMO.clear()
+    calls: list = []
+
+    def fake_query(api, **kwargs):
+        calls.append((api, kwargs["params"]["start_date"]))
+        df = pd.DataFrame([
+            {
+                "ts_code": kwargs["ts_code"],
+                "trade_date": kwargs["params"]["start_date"],
+                "open": 1.0,
+                "high": 1.1,
+                "low": 0.9,
+                "close": 1.05,
+            }
+        ])
+        return df, None, None
+
+    monkeypatch.setattr(sw_mod, "_query_tushare_api", fake_query)
+    try:
+        # Fill the memo past its cap with distinct keys.
+        total = _SW_DAILY_MEMO_MAX_ENTRIES + 5
+        for i in range(total):
+            default_sw_daily_fetcher(f"8{i:05d}.SI", "2026-03-05", "2026-03-12")
+        assert len(_SW_DAILY_MEMO) == _SW_DAILY_MEMO_MAX_ENTRIES
+
+        # An evicted key is re-fetched and still returns the correct frame.
+        _SW_DAILY_MEMO.clear()
+        calls.clear()
+        first = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert first["2026-03-05"]["open"] == 1.0
+        hits_after_first = len(calls)
+        cached = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert cached == first
+        assert len(calls) == hits_after_first  # served from memo, no refetch
+
+        # Eviction path: overflow once more and confirm the oldest entry is
+        # gone while a freshly re-fetched value is still correct.
+        for i in range(total):
+            default_sw_daily_fetcher(f"9{i:05d}.SI", "2026-03-05", "2026-03-12")
+        assert len(_SW_DAILY_MEMO) == _SW_DAILY_MEMO_MAX_ENTRIES
+        calls.clear()
+        refetched = default_sw_daily_fetcher("801010.SI", "2026-03-05", "2026-03-12")
+        assert refetched == first  # evicted -> refetched -> identical result
+        assert len(calls) == 1
+    finally:
+        _SW_DAILY_MEMO.clear()
+
+
+def test_dav1493_bare_run_marks_legacy_and_warns(capsys):
+    """总控裁定 first step: a bare run (no --horizon-key/--eval-offset) still
+    defaults to 'legacy' (non-breaking) but emits a loud deprecation warning,
+    and the resolved label is what gets written into the output manifest."""
+    import argparse
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "run_v03_return_measure",
+        PROJECT_ROOT / "scripts" / "run_v03_return_measure.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    args = argparse.Namespace(
+        horizon_key=None, eval_offset_from_signal=None, hold_days=None
+    )
+    horizon_key, eval_offset = mod.resolve_horizon_from_args(args)
+    assert horizon_key == "legacy"
+    assert eval_offset == 6
+    err = capsys.readouterr().err
+    assert "DEPRECATED" in err and "legacy" in err
+
+    # Explicit flags do not warn.
+    args2 = argparse.Namespace(
+        horizon_key="medium", eval_offset_from_signal=None, hold_days=None
+    )
+    horizon_key2, eval_offset2 = mod.resolve_horizon_from_args(args2)
+    assert (horizon_key2, eval_offset2) == ("medium", 40)
+    assert capsys.readouterr().err == ""

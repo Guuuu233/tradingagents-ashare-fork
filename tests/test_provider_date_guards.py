@@ -297,10 +297,15 @@ def test_two_historical_dates_yield_different_upper_bounds(monkeypatch):
     # be after announce; we check effective visibility via membership above).
 
 
+@pytest.mark.network
 def test_two_historical_collects_differ_in_date_upper_bound():
     """Live e2e: full collect on two analysis days must not share the same max date.
 
-    Opt-in: set RUN_LIVE_DATA_TESTS=1 (hits akshare / network).
+    Real-network e2e: ``_fetch_all`` hits live vendor endpoints and can block up
+    to FETCH_ALL_TIMEOUT per source (DAV-1768 network isolation).
+    Opt-in: run the online regression suite (``pytest -m network --allow-network``)
+    AND set RUN_LIVE_DATA_TESTS=1 (hits akshare / network); both gates are
+    required, the test skips otherwise.
     """
     import os
     if os.getenv("RUN_LIVE_DATA_TESTS") != "1":

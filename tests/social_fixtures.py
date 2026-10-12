@@ -242,3 +242,213 @@ def populate_sample_mediacrawler_data(conn: sqlite3.Connection) -> None:
     )
 
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Anonymized MediaCrawler schema (DAV-1462 requirement 1)
+#
+# Mirrors the local sandbox pin d6f7c5bb (mediacrawler/database/models.py:38,60,
+# 76,90,113,129): the teaching/privacy build carries `creator_hash` and has NO
+# `user_id` / `sec_uid` anywhere. The fixture reproduces exactly that column set
+# so the importer's author-column mapping and its schema guard are exercised
+# against the real production shape, not the upstream one.
+# ---------------------------------------------------------------------------
+
+MEDIACRAWLER_ANON_XHS_NOTE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS xhs_note (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_hash TEXT,
+    nickname TEXT,
+    add_ts INTEGER,
+    last_modify_ts INTEGER,
+    note_id TEXT NOT NULL,
+    type TEXT,
+    title TEXT,
+    desc TEXT,
+    time INTEGER,
+    last_update_time INTEGER,
+    liked_count TEXT,
+    collected_count TEXT,
+    comment_count TEXT,
+    share_count TEXT,
+    note_url TEXT,
+    source_keyword TEXT,
+    xsec_token TEXT
+);
+"""
+
+MEDIACRAWLER_ANON_XHS_NOTE_COMMENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS xhs_note_comment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_hash TEXT,
+    nickname TEXT,
+    add_ts INTEGER,
+    last_modify_ts INTEGER,
+    comment_id TEXT NOT NULL,
+    create_time INTEGER,
+    note_id TEXT NOT NULL,
+    content TEXT,
+    sub_comment_count TEXT,
+    parent_comment_id TEXT,
+    like_count TEXT
+);
+"""
+
+MEDIACRAWLER_ANON_DOUYIN_AWEME_SCHEMA = """
+CREATE TABLE IF NOT EXISTS douyin_aweme (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_hash TEXT,
+    nickname TEXT,
+    add_ts INTEGER,
+    last_modify_ts INTEGER,
+    aweme_id TEXT NOT NULL,
+    title TEXT,
+    desc TEXT,
+    create_time INTEGER,
+    liked_count TEXT,
+    comment_count TEXT,
+    share_count TEXT,
+    collected_count TEXT,
+    aweme_url TEXT,
+    source_keyword TEXT
+);
+"""
+
+MEDIACRAWLER_ANON_DOUYIN_AWEME_COMMENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS douyin_aweme_comment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    creator_hash TEXT,
+    nickname TEXT,
+    add_ts INTEGER,
+    last_modify_ts INTEGER,
+    comment_id TEXT NOT NULL,
+    create_time INTEGER,
+    aweme_id TEXT NOT NULL,
+    content TEXT,
+    sub_comment_count TEXT,
+    parent_comment_id TEXT,
+    like_count TEXT
+);
+"""
+
+MEDIACRAWLER_ANON_SCHEMAS = (
+    MEDIACRAWLER_ANON_XHS_NOTE_SCHEMA
+    + MEDIACRAWLER_ANON_XHS_NOTE_COMMENT_SCHEMA
+    + MEDIACRAWLER_ANON_DOUYIN_AWEME_SCHEMA
+    + MEDIACRAWLER_ANON_DOUYIN_AWEME_COMMENT_SCHEMA
+)
+
+
+def init_anonymized_mediacrawler_db(db: Union[sqlite3.Connection, str]) -> sqlite3.Connection:
+    """Initialize a mock anonymized (creator_hash-only) MediaCrawler database."""
+    if isinstance(db, str):
+        conn = sqlite3.connect(db)
+    else:
+        conn = db
+    conn.executescript(MEDIACRAWLER_ANON_SCHEMAS)
+    conn.commit()
+    return conn
+
+
+def populate_sample_anonymized_mediacrawler_data(conn: sqlite3.Connection) -> None:
+    """Populate the anonymized schema with rows carrying only creator_hash."""
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO xhs_note (
+            creator_hash, nickname, note_id, type, title, desc,
+            time, last_update_time, liked_count, collected_count,
+            comment_count, share_count, note_url, source_keyword,
+            add_ts, last_modify_ts
+        ) VALUES (
+            'a1b2c3d4e5f60718', '匿***星', 'anon_note_01', 'normal',
+            '阳光电源今日大涨', '光伏板块情绪回暖，阳光电源逆变器出货超预期。',
+            1787713931000, 1787715600000, '88', '12', '9', '3',
+            'https://www.xiaohongshu.com/explore/anon_note_01',
+            '阳光电源', 1787716802000, 1787724600000
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO xhs_note (
+            creator_hash, nickname, note_id, type, title, desc,
+            time, last_update_time, liked_count, collected_count,
+            comment_count, share_count, note_url, source_keyword,
+            add_ts, last_modify_ts
+        ) VALUES (
+            'b2c3d4e5f6071829', '热***友', 'anon_note_02', 'normal',
+            '中国移动分红', '中国移动公告年度分红方案。',
+            1787714000000, 0, '10', '2', '1', '0',
+            'https://www.xiaohongshu.com/explore/anon_note_02',
+            '中国移动', 1787716805000, 1787724610000
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO xhs_note_comment (
+            creator_hash, nickname, add_ts, comment_id, create_time, note_id, content,
+            sub_comment_count, parent_comment_id, like_count, last_modify_ts
+        ) VALUES (
+            'c3d4e5f607182930', '股***吧', 1787717000, 'anon_comment_01', 1787714500,
+            'anon_note_01', '跟一手，突破确认了。',
+            '0', NULL, '15', 1787724700
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO douyin_aweme (
+            creator_hash, nickname, aweme_id, title, desc, create_time,
+            liked_count, comment_count, share_count, collected_count,
+            aweme_url, source_keyword, add_ts, last_modify_ts
+        ) VALUES (
+            'd4e5f60718293041', '短***评', 'anon_aweme_01', '煤炭板块复盘',
+            '陕西煤业今日动力煤价格企稳。',
+            1787713900, '500', '88', '30', '120',
+            'https://www.douyin.com/video/anon_aweme_01',
+            '陕西煤业', 1787716800, 1787724600
+        )
+        """
+    )
+    cursor.execute(
+        """
+        INSERT INTO douyin_aweme_comment (
+            creator_hash, nickname, add_ts, comment_id, create_time, aweme_id, content,
+            sub_comment_count, parent_comment_id, like_count, last_modify_ts
+        ) VALUES (
+            'e5f6071829304152', '抖***民', 1787716900, 'anon_comment_02', 1787714200,
+            'anon_aweme_01', '高股息防守品种，跌不动。',
+            '0', NULL, '25', 1787724650
+        )
+        """
+    )
+    conn.commit()
+
+
+def populate_creator_hash_blank_rows(conn: sqlite3.Connection) -> None:
+    """Populate rows whose creator_hash is present but empty/blank.
+
+    The schema guard passes (the column exists), so this exercises the per-row
+    path: no author value available -> no author_id_hash.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO xhs_note (
+            creator_hash, nickname, note_id, type, title, desc,
+            time, last_update_time, liked_count, collected_count,
+            comment_count, share_count, note_url, source_keyword,
+            add_ts, last_modify_ts
+        ) VALUES (
+            '   ', '空***名', 'anon_note_blank', 'normal',
+            '无作者行', '正文内容存在但作者列是空白。',
+            1787713931000, 0, '5', '1', '0', '0',
+            'https://www.xiaohongshu.com/explore/anon_note_blank',
+            '', 1787716802000, 1787724600000
+        )
+        """
+    )
+    conn.commit()

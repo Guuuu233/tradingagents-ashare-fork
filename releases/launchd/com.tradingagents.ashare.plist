@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TradingAgents-AShare 生产服务 launchd 模板（DAV-1790，DAV-1800 返修；总控 10-10 令：只交模板，不安装）
+
+  安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.ashare.plist
+  安装时间：10-12 窗口之后由总控另定；当前仅存档。
+
+  占位符：{{RELEASE_DIR}} = 当前生产 release 目录（本令时点 = 65988c79，
+  见 releases/RESTART.md——宿主机侧文件，未入库，同步口径见 LAUNCHD_SWITCH.md）。
+  安装前必须把 {{RELEASE_DIR}} 全量替换为实际路径并校验残留占位符为 0，
+  切换 release 时同步改本文件与包装脚本指向。
+
+  重启节流（同一小时最多 3 次）由包装脚本 ta-launchd-wrapper.sh 内
+  滑动窗口计数实现——launchd 原生 ThrottleInterval 只能表达
+  「两次 respawn 至少间隔 N 秒」，无法表达「每小时至多 N 次」，
+  故限流逻辑放包装层。KeepAlive={"SuccessfulExit":false} 负责
+  「非零退出与信号退出（含 SIGKILL/OOM）重拉」；wrapper 限流超限走
+  exit 0（视为成功退出）不再 respawn，等 StartInterval 周期探测在
+  窗口过期后自动恢复，或人工旁路（创建哨兵文件后 kickstart，
+  见 LAUNCHD_SWITCH.md——launchctl kickstart 无 -e 传 env 能力，
+  旁路改走受控哨兵文件）。
+  KeepAlive 语义隐含 RunAtLoad（man launchd.plist），bootstrap 即首启动。
+-->
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>com.tradingagents.ashare</string>
+
+  <!-- 包装脚本：崩溃计数 + 环境固化 + 真正拉起 uvicorn（前台 exec） -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>{{RELEASE_DIR}}/releases/launchd/ta-launchd-wrapper.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{RELEASE_DIR}}</string>
+
+  <!-- 非零退出与信号退出（SIGKILL/OOM 覆盖在内）都重拉；wrapper 限流超限
+       走 exit 0，视为"成功退出"不 respawn——两者配合实现"崩溃重拉+限流停手" -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+    <!-- RunAtLoad 键已删（DAV-1802 🟡-1）：KeepAlive 隐含 RunAtLoad=true，
+         显式写 false 不产生任何效果且误导阅读——bootstrap 即首启动。 -->
+  </dict>
+
+  <!-- 限流停手（exit 0）后的周期探测：窗口过期即自动恢复，最长 600s 粒度。
+       正常运行/崩溃重拉路径不受影响（KeepAlive 语义不变）。 -->
+  <key>StartInterval</key><integer>600</integer>
+
+  <!-- Interactive = 不施加资源限制（man launchd.plist："same resource
+       limitations as apps, that is to say, none"），避免长驻服务被 throttled。
+       launchd 直管 uvicorn 进程本体靠的是 wrapper 里 exec（bash 被原地替换，
+       已实测），与 ProcessType 无关。 -->
+  <key>ProcessType</key><string>Interactive</string>
+  <key>ExitTimeOut</key><integer>20</integer>
+
+  <!-- 日志：uvicorn 本体输出由 wrapper 追加到 logs/uvicorn-<sha>.log；
+       wrapper 的诊断日志双写到 fd2（本文件 StandardErrorPath）与
+       logs/wrapper-diagnostic.log。两个 launchd-*.log 为 append 无上限，
+       轮转策略见 LAUNCHD_SWITCH.md"日志与轮转"。 -->
+  <key>StandardOutPath</key>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stderr.log</string>
+</dict></plist>
