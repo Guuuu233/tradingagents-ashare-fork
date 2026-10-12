@@ -88,7 +88,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daily_snapshot_ledger as dsl
 import expiry_label_pipeline as elp
 import m1_eval as m1
-from m1_base_rate import build_pit_base_rates
+from m1_base_rate import build_pit_base_rates, load_panel
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
 DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
@@ -255,33 +255,67 @@ def load_labels(path: Path) -> dict[tuple[str, str], Mapping[str, Any]]:
     return out
 
 
-def build_base_panel(labels: Mapping[tuple[str, str], Mapping[str, Any]]
-                     ) -> pd.DataFrame:
-    """PIT base-rate panel from matured T+10 labels (DAV-1677 engine input).
+def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
+    """PIT base-rate panel from the P1 all-market T+10 partitions.
 
-    Columns: signal_date (T), mat (label maturity = target_date), l1 (SW
-    index code at T), y (y_rel_prediction). Only evaluated prediction legs
-    with a non-null y and a readable industry code feed the panel — the
-    rest stay out of the base rate the same way they stay out of the
-    formal queue.
+    D-075/DAV-1890 fix: the comparison baseline is the WHOLE-MARKET history
+    (P1 分区, matured rows only), not the P4 ledger's own ~24/day labels.
+    Reuses m1_base_rate.load_panel — same column contract and the same
+    matured filter (outcome_status==evaluated_ok & universe_ok & y_rel
+    non-null & actual_exit_date present, i.e. actual_exit_date <= T).
+    Columns: signal_date (T), mat (label maturity = actual_exit_date),
+    l1 (SW index code at T), y.
     """
-    rows = []
-    for (sym, sig), lab in labels.items():
-        if (lab.get("prediction") or {}).get("status") != "evaluated":
-            continue
-        y = lab.get("y_rel_prediction")
-        l1 = ((lab.get("sw") or {}).get("index_code")) or ""
-        mat = _parse_d(lab.get("target_date"))
-        if y is None or not l1 or mat is None:
-            continue
-        rows.append({"signal_date": sig, "mat": mat, "l1": str(l1),
-                     "y": float(bool(y))})
-    return pd.DataFrame(rows, columns=["signal_date", "mat", "l1", "y"])
+    panel = load_panel(Path(chunks_dir))
+    # load_panel keeps signal_date as the partition's YYYYMMDD string; the
+    # label map / paired join keys are ISO YYYY-MM-DD — normalise once here.
+    if not panel.empty:
+        sd = panel["signal_date"].astype(str).str.replace("-", "", regex=False)
+        panel["signal_date"] = (sd.str[:4] + "-" + sd.str[4:6]
+                                + "-" + sd.str[6:8])
+        md = panel["mat"].astype(str).str.replace("-", "", regex=False)
+        panel["mat"] = (md.str[:4] + "-" + md.str[4:6] + "-" + md.str[6:8])
+    return panel
 
 
-def base_q_map(labels, m: int = BASE_M, W: int = BASE_W) -> dict:
+def _chunks_manifest_sha(chunks_dir: Path) -> str | None:
+    """sha256 of the partition set manifest (stats.json) when present — the
+    report's 基率来源 fingerprint."""
+    p = Path(chunks_dir).parent / "stats.json"
+    if not p.exists():
+        # tolerate being pointed at the parent dir that already holds stats.json
+        p = Path(chunks_dir) / "stats.json"
+    if not p.exists():
+        return None
+    import hashlib
+    h = hashlib.sha256()
+    h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def _panel_n_distribution(panel: pd.DataFrame) -> dict:
+    """Per-industry per-day matured-count distribution (report's 面板规模)."""
+    if panel.empty:
+        return {"industries": 0, "signal_days": 0}
+    grp = panel.groupby(["signal_date", "l1"]).size()
+    per_l1 = grp.groupby("l1").agg(["mean", "min", "max", "count"])
+    return {
+        "industries": int(panel["l1"].nunique()),
+        "signal_days": int(panel["signal_date"].nunique()),
+        "matured_labels": int(len(panel)),
+        "n_per_cell_mean": float(grp.mean()),
+        "n_per_cell_min": int(grp.min()),
+        "n_per_cell_max": int(grp.max()),
+        "per_industry": {
+            str(l1): {"mean_n": float(r["mean"]), "min_n": int(r["min"]),
+                      "max_n": int(r["max"]), "days": int(r["count"])}
+            for l1, r in per_l1.iterrows()
+        },
+    }
+
+
+def base_q_map(panel: pd.DataFrame, m: int = BASE_M, W: int = BASE_W) -> dict:
     """(signal_date, l1) -> shrunken base rate p_m{m} for the T+10 panel."""
-    panel = build_base_panel(labels)
     if panel.empty:
         return {}
     base, _summary = build_pit_base_rates(
@@ -374,6 +408,7 @@ def paired_increment(formal: pd.DataFrame,
 def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         *, version_key: str | None = None,
         calendar_path: Path | None = None,
+        base_chunks: Path | None = None,
         user_id: str = DEFAULT_USER_ID) -> dict:
     t0 = time.time()
     log(f"loading labels {labels_path}")
@@ -397,15 +432,29 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     rel = m1.reliability_table(formal) if len(formal) else []
     verdict = m1.grade(days, funnel)
 
-    # D-075: paired increment vs m200/W0 base rate
-    qmap = base_q_map(labels, m=BASE_M, W=BASE_W)
+    # D-075: paired increment vs the WHOLE-MARKET m200/W0 base rate.
+    # The base panel comes from P1 T+10 partitions (--base-chunks /
+    # build-base), never from the P4 ledger's own labels (DAV-1890 fix).
+    base_source: dict = {}
+    if base_chunks is not None:
+        panel = build_base_panel(Path(base_chunks))
+        base_source = {
+            "kind": "p1_t10_partitions",
+            "chunks_dir": str(base_chunks),
+            "manifest_sha256": _chunks_manifest_sha(Path(base_chunks)),
+            "panel": _panel_n_distribution(panel),
+        }
+    else:
+        panel = pd.DataFrame(columns=["signal_date", "mat", "l1", "y"])
+        base_source = {"kind": "none", "note":
+                       "no --base-chunks given — D-075 增量不可判定"}
+    qmap = base_q_map(panel, m=BASE_M, W=BASE_W)
     days_index = [vars(x)["date"] for x in days]
     increment = paired_increment(formal, labels, qmap, days_index)
 
-    # sensitivity grid (other (m, W) cells; descriptive only, never a
-    # substitute for the fixed m200/W0 primary baseline)
+    # sensitivity grid (other (m, W) cells on the SAME all-market panel;
+    # descriptive only, never a substitute for the fixed m200/W0 primary)
     sensitivity = {}
-    panel = build_base_panel(labels)
     if not panel.empty:
         base, _ = build_pit_base_rates(
             panel, shrink_ms=SENSITIVITY_MS,
@@ -431,6 +480,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     out = {
         "pipeline": PIPELINE_VERSION,
         "input": {"ledger": str(ledger_path), "labels": str(labels_path)},
+        "base_source": base_source,
         "days": [vars(x) for x in days],
         "reliability": rel,
         "verdict": verdict,
@@ -445,6 +495,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     days_df.to_parquet(out_dir / "day_series.parquet", index=False)
     (out_dir / "verdict.json").write_text(
         json.dumps({"model": verdict, "increment_m200_W0": increment,
+                    "base_source": base_source,
                     "sensitivity": sensitivity},
                    ensure_ascii=False, indent=2))
     (out_dir / "reliability.json").write_text(
@@ -456,6 +507,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "ledger_rows": len(df), "formal_rows": len(formal),
         "labels": len(labels), "version_key": funnel["version_key"],
         "user_id": user_id,
+        "base_source_kind": base_source.get("kind"),
         "funnel": funnel,
     }, ensure_ascii=False, indent=2))
     log(f"grade={verdict['grade']} valid_days={verdict['valid_days']} "
@@ -486,6 +538,45 @@ def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
     return rec
 
 
+# ---------------------------------------------------------------------------
+# P1 all-market T+10 partition builder (DAV-1883 rework: D-075 全市场基率)
+# ---------------------------------------------------------------------------
+
+def build_base_t10(out_dir: Path, *, years: str = "", months: str = "",
+                   max_rows: int = 1_500_000, max_rss_gb: float = 6.0,
+                   force: bool = False) -> int:
+    """Build P1 T+10 partitions reusing the DAV-1547 pipeline semantics.
+
+    Same caliber as build_phase2_chunks.py (vendor_qfq, T+1 open entry,
+    SW2021-L1 same-window leg, suspension/one-word-limit roll, matured
+    actual_exit_date<=T) but the SHORT horizon profile: EVAL_OFFSET=10,
+    MAX_ROLL=2 (HORIZON_PROFILE_V1["short"]). The production script reads
+    both as module globals, so we import it and override — the whitelisted
+    file itself is never edited. Writes the same year=/month= layout plus a
+    stats.json manifest under --out-dir.
+
+    Peak memory is bounded by the parent's --max-rss-gb guard (default
+    6 GiB build budget). Resumable + --force like the parent.
+    """
+    import build_phase2_chunks as b1547
+    from tradingagents.dataflows.return_labels import HORIZON_MAX_ROLL_DAYS
+    from tradingagents.graph.horizon_profile import HORIZON_PROFILE_V1
+
+    b1547.EVAL_OFFSET = int(HORIZON_PROFILE_V1["short"]["primary_eval_offset"])
+    b1547.MAX_ROLL = int(HORIZON_MAX_ROLL_DAYS["short"])
+    import sys as _s
+    _s.argv = ["build_phase2_chunks.py", "--out-dir", str(out_dir)]
+    if years:
+        _s.argv += ["--years", str(years)]
+    if months:
+        _s.argv += ["--months", str(months)]
+    _s.argv += ["--max-rows-per-partition", str(max_rows)]
+    _s.argv += ["--max-rss-gb", str(max_rss_gb)]
+    if force:
+        _s.argv += ["--force"]
+    return b1547.main()
+
+
 def _label(sym: str, day: str, r_pct: float, l1: str = "801010.SI") -> dict:
     return {"horizon": "short", "symbol": sym, "signal_date": day,
             "target_date": day,
@@ -497,18 +588,40 @@ def _label(sym: str, day: str, r_pct: float, l1: str = "801010.SI") -> dict:
             "y_rel_prediction": bool(r_pct > 0)}
 
 
+def _write_p1_chunks(chunks_dir: Path, panel_rows: list[dict]) -> None:
+    """Write synthetic P1 partitions (year=YYYY/data.parquet) carrying the
+    six columns m1_base_rate.load_panel reads."""
+    df = pd.DataFrame(panel_rows)
+    df["year"] = df["signal_date"].astype(str).str[:4]
+    for year, g in df.groupby("year"):
+        d = Path(chunks_dir) / f"year={year}"
+        d.mkdir(parents=True, exist_ok=True)
+        g.drop(columns="year").to_parquet(d / "data.parquet", index=False)
+
+
+def _p1_row(ts_code: str, signal_date: str, l1: str, y: float,
+            exit_date: str | None = None) -> dict:
+    """One matured P1 T+10 label row (load_panel column contract)."""
+    return {"signal_date": signal_date, "sw_l1_code": l1,
+            "actual_exit_date": exit_date or signal_date,
+            "outcome_status": "evaluated_ok", "universe_ok": True,
+            "y_rel": y}
+
+
 def selftest(tmp: Path) -> dict:
     rng = np.random.default_rng(7)
     checks: dict[str, Any] = {}
 
     # 80 days x 20 stocks in 4 industries: q monotone in r -> IC≈1.
-    # Industry base rates drift over time so the base IC is non-degenerate
-    # and the paired increment is computable (not the flat-0.5 degenerate).
+    # The all-market T+10 base-rate panel is built from synthetic P1
+    # partitions (industry win-rates drift over time so the base IC is
+    # non-degenerate) — NOT from the P4 ledger's own labels.
     ledger = tmp / "forward_ledger.jsonl"
     lab_f = tmp / "labels_t10.jsonl"
+    chunks = tmp / "chunks"
     days = pd.bdate_range("2026-01-05", periods=80).strftime("%Y-%m-%d")
     l1s = ["801010.SI", "801020.SI", "801030.SI", "801040.SI"]
-    recs, labs = [], []
+    recs, labs, panel_rows = [], [], []
     for di, day in enumerate(days):
         drift = 0.02 * np.sin(di / 9.0)          # industry win-rate drifts
         for i in range(20):
@@ -519,15 +632,25 @@ def selftest(tmp: Path) -> dict:
             recs.append(_ledger_rec(f"r{di}_{i}", f"S{i:03d}", day, q,
                                     created=f"{day}T09:00"))
             labs.append(_label(f"S{i:03d}", day, r, l1=l1))
+    # all-market panel: many more rows per (day, industry) than the
+            # 20-symbol ledger sample — base must come from THIS, not ledger
+            ymd = day.replace("-", "")
+            for k in range(60):
+                yr = 1.0 if rng.random() < (0.5 + drift * (1 + i % 4)) else 0.0
+                panel_rows.append(_p1_row(f"M{k:04d}", ymd,
+                                          l1, yr, exit_date=ymd))
     with open(ledger, "w") as fh:
         for r in recs:
             fh.write(json.dumps(r) + "\n")
     with open(lab_f, "w") as fh:
         fh.writelines(json.dumps(l) + "\n" for l in labs)
+    _write_p1_chunks(chunks, panel_rows)
+    (chunks / "stats.json").write_text(json.dumps({"partitions": "synthetic"}))
     cal = tmp / "cal.txt"
     cal.write_text("\n".join(days) + "\n")
 
-    out = run(ledger, lab_f, tmp / "out", calendar_path=cal)
+    out = run(ledger, lab_f, tmp / "out", calendar_path=cal,
+              base_chunks=chunks)
     checks["grade"] = out["verdict"]["grade"]
     checks["inc_verdict"] = out["increment_m200_W0"]["verdict"]
     checks["inc_diff_mean"] = out["increment_m200_W0"]["diff_mean"]
@@ -535,15 +658,14 @@ def selftest(tmp: Path) -> dict:
     checks["mean_ic"] = out["verdict"]["mean_ic"]
     checks["paired_days"] = out["increment_m200_W0"]["paired_days"]
     checks["base_ic_mean"] = out["increment_m200_W0"]["base_ic_mean"]
+    checks["base_kind"] = out["base_source"]["kind"]
     assert checks["grade"] in ("B", "C"), checks
     assert checks["mean_ic"] > 0.9, checks
-    # base rate now varies per (day, industry): paired days must be >0 and
-    # the diff series finite; model IC (monotone) should exceed the base's
-    # industry-mean IC on the same cross-sections.
     assert checks["paired_days"] > 0
     assert np.isfinite(checks["inc_diff_mean"])
     assert checks["mean_ic"] > checks["base_ic_mean"]
     assert checks["paired_days"] <= checks["valid_days"]
+    assert checks["base_kind"] == "p1_t10_partitions"
     print(f"[selftest] PASS {checks}", flush=True)
     return checks
 
@@ -562,7 +684,19 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--version-key", default=None)
     r.add_argument("--calendar-file", default=None,
                    help="trading calendar (one date per line); default live")
+    r.add_argument("--base-chunks", type=Path, default=None,
+                   help="P1 all-market T+10 partition dir (year=*/data.parquet); "
+                        "omit -> D-075 增量不可判定 (base_source=none)")
     r.add_argument("--user-id", default=DEFAULT_USER_ID)
+    b = sub.add_parser("build-base",
+                       help="build P1 all-market T+10 partitions (1547 caliber, "
+                            "offset=10 roll=2) into --out-dir/chunks_t10")
+    b.add_argument("--out-dir", type=Path, default=Path("data/phase2_t10"))
+    b.add_argument("--years", default="", help="comma list; default all")
+    b.add_argument("--months", default="", help="comma list")
+    b.add_argument("--max-rows-per-partition", type=int, default=1_500_000)
+    b.add_argument("--max-rss-gb", type=float, default=6.0)
+    b.add_argument("--force", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args(argv)
 
@@ -574,11 +708,17 @@ def main(argv: list[str] | None = None) -> int:
         try:
             run(a.ledger, a.labels, a.out_dir,
                 version_key=a.version_key,
-                calendar_path=a.calendar_file, user_id=a.user_id)
+                calendar_path=a.calendar_file,
+                base_chunks=a.base_chunks, user_id=a.user_id)
             return 0
         except elp.PipelineError as exc:
             print(f"FAIL-CLOSE: {exc}", file=sys.stderr)
             return 2
+    if a.command == "build-base":
+        return build_base_t10(a.out_dir, years=a.years,
+                              months=a.months,
+                              max_rows=a.max_rows_per_partition,
+                              max_rss_gb=a.max_rss_gb, force=a.force)
     ap.print_help()
     return 2
 

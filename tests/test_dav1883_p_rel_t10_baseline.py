@@ -154,12 +154,74 @@ class TestFunnel:
 
 
 class TestIncrement:
-    def test_flat_base_is_degenerate(self):
-        # base constant 0.5 -> rank-degenerate -> increment A, paired_days 0
-        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 5.0),
-                  ("S2", "2026-01-05"): m._label("S2", "2026-01-05", -1.0)}
-        qmap = m.base_q_map(labels)
+    def test_flat_base_is_degenerate(self, tmp_path):
+        # a (day,l1) cell with a 50/50 win mix -> p_m200 ~= 0.5 constant
+        # across the day -> rank-degenerate base -> increment A.
+        rows = [m._p1_row(f"M{k}", "20260105", "801010.SI", y,
+                          exit_date="20260105")
+                for k, y in enumerate([1.0] * 20 + [0.0] * 20)]
+        chunks = tmp_path / "chunks"
+        m._write_p1_chunks(chunks, rows)
+        qmap = m.base_q_map(m.build_base_panel(chunks))
         assert qmap == {("2026-01-05", "801010.SI"): pytest.approx(0.5, abs=0.01)}
+
+
+class TestAllMarketBase:
+    """DAV-1883 rework (总控 10-12): base rate must come from the P1
+    all-market partitions, NOT the P4 ledger's own label sample."""
+
+    def _panel(self, tmp_path, n_per_cell=40):
+        days = pd.bdate_range("2026-01-05", periods=5).strftime("%Y-%m-%d")
+        rng = np.random.default_rng(3)
+        rows = []
+        for di, d in enumerate(days):
+            for li, l1 in enumerate(("801010.SI", "801020.SI", "801030.SI")):
+                wr = 0.30 + 0.10 * li + 0.02 * di
+                for k in range(n_per_cell):
+                    rows.append(m._p1_row(
+                        f"M{li}_{k}", d.replace("-", ""), l1,
+                        1.0 if rng.random() < wr else 0.0,
+                        exit_date=d.replace("-", "")))
+        chunks = tmp_path / "chunks"
+        m._write_p1_chunks(chunks, rows)
+        return chunks
+
+    def test_base_uses_all_market_not_ledger(self, tmp_path):
+        chunks = self._panel(tmp_path)
+        panel = m.build_base_panel(chunks)
+        assert not panel.empty
+        # ~120 matured rows/cell from the all-market panel; a P4-ledger-only
+        # build would see ~24/day total across 31 industries.
+        grp = panel.groupby(["signal_date", "l1"]).size()
+        assert grp.min() >= 30
+        qmap = m.base_q_map(panel)
+        assert qmap and all(0 < v < 1 for v in qmap.values())
+        # mutating the ledger labels must NOT change the base rate — the
+        # panel is sourced from the partitions only.
+        crazy = {("x", "2026-01-05"): {"prediction": {"status": "evaluated"},
+                                       "y_rel_prediction": True,
+                                       "sw": {"index_code": "801010.SI"},
+                                       "target_date": "2026-01-05"}}
+        qmap2 = m.base_q_map(panel)   # ledger labels never enter here
+        assert qmap == qmap2
+
+    def test_no_base_chunks_marks_indeterminate(self, tmp_path):
+        days = pd.bdate_range("2026-01-05", periods=3).strftime("%Y-%m-%d")
+        recs, labs = [], []
+        for di, d in enumerate(days):
+            for i in range(12):
+                recs.append(_rec(f"{di}_{i}", f"S{i:02d}", d, 30 + i,
+                                 created=f"{d}T09:00"))
+                labs.append(m._label(f"S{i:02d}", d, 0.2 * i))
+        ledger = tmp_path / "l.jsonl"
+        _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"
+        _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"
+        cal.write_text("\n".join(days) + "\n")
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        assert out["base_source"]["kind"] == "none"
+        assert out["increment_m200_W0"]["paired_days"] == 0
 
 
 class TestFailClose:
@@ -197,12 +259,25 @@ class TestEndToEnd:
         _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"
         _write_labels(lab, labs)
+        # all-market T+10 panel as partitions (base must come from here)
+        prows = []
+        for di, d in enumerate(days):
+            for li, l1 in enumerate(l1s):
+                for k in range(30):
+                    prows.append(m._p1_row(
+                        f"M{li}{k}", d.replace("-", ""), l1,
+                        1.0 if rng.random() < 0.4 + 0.1 * li else 0.0,
+                        exit_date=d.replace("-", "")))
+        chunks = tmp_path / "chunks"
+        m._write_p1_chunks(chunks, prows)
         cal = tmp_path / "c.txt"
         cal.write_text("\n".join(days) + "\n")
-        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
+                    base_chunks=chunks)
         assert out["verdict"]["valid_days"] == 25
         assert out["verdict"]["grade"] == "B"   # <60 days -> never C
         assert out["increment_m200_W0"]["paired_days"] == 25
+        assert out["base_source"]["kind"] == "p1_t10_partitions"
         assert (tmp_path / "o" / "day_series.parquet").exists()
         assert (tmp_path / "o" / "verdict.json").exists()
         assert (tmp_path / "o" / "run.json").exists()
