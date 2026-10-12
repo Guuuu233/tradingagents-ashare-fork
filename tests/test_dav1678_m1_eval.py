@@ -9,6 +9,7 @@ inference and the A–D grade gate.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -31,6 +32,14 @@ def _day(day, qs, rs, vkey="v1", start=0):
              "symbol": f"S{start + i:05d}", "q": q, "r": r,
              "timing_class": "F0", "input_pit_status": "VERIFIED"}
             for i, (q, r) in enumerate(zip(qs, rs))]
+
+
+def _sealed(day, qs, rs, sealed_at, **kw):
+    """_day() rows stamped with one seal timestamp (UTC-naive ledger form)."""
+    rows = _day(day, qs, rs, **kw)
+    for r in rows:
+        r["sealed_at"] = sealed_at
+    return rows
 
 
 class TestDailyIC:
@@ -453,3 +462,262 @@ class TestUserFilter:
         d2, fun2 = mod.admit(pd.DataFrame(rows))
         assert fun2["excl_wrong_user"] == 20
         assert len(d2) == 0
+
+
+class TestSealTimeGate:
+    """DAV-1991 封存时点门 (总控 10-13 令).
+
+    The formal queue only takes records sealed STRICTLY before the signal
+    day's next trading day 09:30 (Asia/Shanghai). The rule is re-derived
+    from `sealed_at` rather than trusted from the `timing_class` label, so a
+    mislabeled F0 row (or a frame with no label at all — the default is F0)
+    is still caught.
+
+    总控时区口径: sealed_at / seal_basis_at / created_at are timezone-NAIVE
+    UTC (the ledger tail line "2026-10-12 11:45:05" is Beijing 19:45). They
+    are parsed as UTC, converted to Asia/Shanghai, and compared with the T+1
+    trading-day 09:30 in that zone — never read as local time. A seal stamp
+    of "2026-10-09 02:09:00" is Beijing 10:09, i.e. AFTER the open.
+    """
+
+    CAL = ["20260105", "20260106", "20260107", "20260108", "20260109",
+           "20260112", "20260113"]
+    # 总控点名的 10 月用例日历：10-08 → T+1 = 10-09；10-09（周五）→ T+1 = 10-12
+    OCT_CAL = ["20261008", "20261009", "20261012", "20261013"]
+
+    def test_controller_tz_case_late_seal_excluded(self):
+        # 总控时区口径用例①: 信号日 2026-10-08, T+1 = 2026-10-09。
+        # sealed_at "2026-10-09 02:09:00" 是无时区标记的 UTC（=北京 10-09
+        # 10:09），晚于 T+1 开盘 09:30 → 只进诊断。若把该串误当北京时间
+        # （02:09 < 09:30）就会错放进正式队列——本用例专门钉死这个误读。
+        rows = _sealed("20261008", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-10-09 02:09:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.OCT_CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_controller_tz_case_forward_seal_admitted(self):
+        # 总控时区口径用例②: sealed_at "2026-10-08 11:45:00"（UTC = 北京
+        # 10-08 19:45）严格早于 T+1 开盘 → 进正式队列。
+        rows = _sealed("20261008", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-10-08 11:45:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.OCT_CAL)
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+
+    def test_ledger_tail_style_seal_excluded(self):
+        # 账本末行式: 信号日 2026-10-09（周五）→ T+1 = 2026-10-12（周一）。
+        # 次日快照运行在 2026-10-12 11:45:05 UTC（=北京 19:45）才封存，晚于
+        # 当日 09:30 开盘 → 排除（对应总控所述"晚于信号日封存"的那批记录）。
+        rows = _sealed("20261009", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-10-12 11:45:05.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.OCT_CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_utc_stamp_between_open_and_local_open_is_late(self):
+        # 判别带: T+1 当日 UTC 01:30–09:30 之间的封存串——按 UTC 读是盘后
+        # （晚），按本地读是盘前（前瞻）。口径要求按 UTC → 必须判晚。
+        rows = _sealed("20261008", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-10-09 09:00:00.000000")   # = 北京 17:00
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.OCT_CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_forward_sealed_row_admitted(self):
+        # T+1 = 20260106; deadline 01:30 UTC; sealed 01:20 UTC → forward
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:20:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["seal_gate_applied"] is True
+        assert fun["excl_late_seal"] == 0
+        assert len(d) == 20
+
+    def test_sealed_one_microsecond_before_open_admitted(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:29:59.999999")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+
+    def test_sealed_exactly_at_open_excluded(self):
+        # strict <: sealed exactly at the T+1 open is NOT forward-sealed
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:30:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+        assert mod.eval_days(d) == []
+
+    def test_late_seal_excluded_and_counted(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-08 10:00:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_backfilled_record_excluded(self):
+        # created on the signal day, sealed two days later (a backfill)
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-07 10:00:00.000000")
+        for r in rows:
+            r["created_at"] = "2026-01-05 08:00:00.000000"
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_tz_aware_iso_sealed_at(self):
+        # explicit +08:00 offsets: 09:20 CST is before the open, 09:40 after
+        early = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                        "2026-01-06T09:20:00+08:00")
+        d, fun = mod.admit(pd.DataFrame(early), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+        late = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06T09:40:00+08:00")
+        d2, fun2 = mod.admit(pd.DataFrame(late), calendar=self.CAL)
+        assert fun2["excl_late_seal"] == 20 and len(d2) == 0
+
+    def test_mixed_batch_counts_late_only(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        for i in range(5):
+            rows.append({"signal_date": "20260105", "version_key": "v1",
+                         "symbol": f"L{i:05d}", "q": 0.5, "r": 0.01,
+                         "timing_class": "F0", "input_pit_status": "VERIFIED",
+                         "sealed_at": "2026-01-07 03:00:00.000000"})
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 5 and len(d) == 20
+
+    def test_unparseable_sealed_at_fails_closed(self):
+        # a seal time that cannot be parsed cannot prove forward sealing
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "not-a-timestamp")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["seal_unparseable"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_missing_sealed_at_value_excluded(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        rows[0]["sealed_at"] = None
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["seal_unparseable"] == 1 and fun["excl_late_seal"] == 1
+        assert len(d) == 19
+
+    def test_t1_unresolved_admitted_and_counted(self):
+        # calendar ends before the signal's T+1 → unresolvable; the ledger's
+        # _classify_timing calls the same case F0, so admit and count it
+        cal = ["20260104", "20260105"]
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-09 23:00:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
+        assert fun["seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+
+    def test_weekend_signal_snaps_to_monday(self):
+        # signal on Saturday 20260110 (not a calendar day) → T+1 = Monday
+        # 20260112; sealed before Monday 01:30 UTC still counts as forward
+        cal = ["20260109", "20260112"]
+        rows = _sealed("20260110", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-12 01:00:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
+        assert fun["excl_late_seal"] == 0 and len(d) == 20
+
+    def test_frame_without_sealed_at_predates_gate(self):
+        # no sealed_at column → gate off, no calendar needed, no exclusion
+        rows = _day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
+        d, fun = mod.admit(pd.DataFrame(rows))
+        assert fun["seal_gate_applied"] is False
+        assert fun["excl_late_seal"] == 0
+        assert fun["seal_unparseable"] == 0
+        assert fun["seal_t1_unresolved"] == 0
+        assert len(d) == 20
+
+    def test_sealed_at_without_calendar_fails_closed(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        with pytest.raises(ValueError, match="sealed_at"):
+            mod.admit(pd.DataFrame(rows))
+
+    def test_mislabeled_f0_late_seal_excluded(self):
+        # label says F0 but the record was sealed after the open: the gate
+        # re-derives the rule from sealed_at and drops it
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 02:00:00.000000")
+        assert all(r["timing_class"] == "F0" for r in rows)
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_missing_timing_label_late_seal_excluded(self):
+        # no timing_class column at all → default F0; the gate is then the
+        # only timing protection left in the formal queue
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 02:00:00.000000")
+        for r in rows:
+            del r["timing_class"]
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_late_duplicate_never_wins_dedup(self):
+        rows = []
+        for rid, sealed in [(1, "2026-01-06 01:00:00.000000"),   # forward
+                            (2, "2026-01-08 10:00:00.000000")]:  # late
+            rows.append({"signal_date": "20260105", "version_key": "v1",
+                         "symbol": "S001", "run_id": rid,
+                         "created_at": "2026-01-05 09:00:00.000000",
+                         "sealed_at": sealed, "q": 0.5, "r": 0.01,
+                         "timing_class": "F0", "input_pit_status": "VERIFIED",
+                         "completed": True})
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        # the late run is gone before dedup, so it cannot be elected there
+        assert fun["excl_late_seal"] == 1
+        assert fun["excl_dup_run"] == 0
+        assert len(d) == 1 and d.iloc[0]["run_id"] == 1
+
+    def test_load_frame_keeps_sealed_at_only_column(self):
+        # a frame carrying ONLY sealed_at must not lose it to the created_at
+        # alias rename; dedup still works and the gate applies
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            pd.DataFrame([
+                {"signal_date": "20260105", "symbol": "S1", "prob": 50,
+                 "rel_return": 0.01,
+                 "sealed_at": "2026-01-06 01:00:00.000000"},
+                {"signal_date": "20260105", "symbol": "S2", "prob": 60,
+                 "rel_return": 0.02,
+                 "sealed_at": "2026-01-07 10:00:00.000000"},
+            ]).to_csv(ip, index=False)
+            df = mod.load_frame(ip)
+            assert "sealed_at" in df.columns
+            assert str(df.iloc[0]["created_at"]) == \
+                "2026-01-06 01:00:00.000000"
+            d, fun = mod.admit(df, calendar=self.CAL)
+            assert fun["excl_late_seal"] == 1 and len(d) == 1
+
+    def test_run_reports_gate_in_funnel_and_run_json(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        rows += _sealed("20260106", range(1, 21), np.linspace(0, 0.1, 20),
+                        "2026-01-08 10:00:00.000000", start=30)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            pd.DataFrame(rows).to_csv(ip, index=False)
+            cp = td / "cal.csv"
+            cp.write_text("date\n" + "\n".join(self.CAL) + "\n")
+            out = td / "out"
+            res = mod.run(ip, out, calendar_path=cp)
+            fun = res["verdict"]["funnel"]
+            assert fun["seal_gate_applied"] is True
+            assert fun["excl_late_seal"] == 20
+            assert fun["formal_rows"] == 20
+            runj = json.loads((out / "run.json").read_text())
+            assert runj["seal_gate_applied"] is True
+            assert runj["excl_late_seal"] == 20
+            days = pd.read_parquet(out / "m1_day_series.parquet")
+            assert list(days["date"]) == ["20260105"]
+
+    def test_run_without_calendar_on_sealed_frame_aborts_before_writing(self):
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            pd.DataFrame(rows).to_csv(ip, index=False)
+            out = td / "out"
+            with pytest.raises(ValueError, match="sealed_at"):
+                mod.run(ip, out)
+            assert not (out / "run.json").exists()

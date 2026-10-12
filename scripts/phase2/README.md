@@ -165,6 +165,14 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 - `--calendar`：交易日历文件（一行一个 YYYYMMDD）。给出后，输入 min..max 跨段内
   每个日历日都建槽——无信号日记 `no_data` NaN 槽，NW lag 不跨越缺口（签收③ +
   DAV-1682 🟡-1）；不给则以观测到的信号日为槽（输入须覆盖全部应计日期）。
+- **封存时点门（DAV-1991，总控 10-13 令）**：输入帧带 `sealed_at` 列时，正式
+  队列另加一门——封存时间必须**严格早于**信号日次一交易日 09:30（Asia/Shanghai），
+  晚封存/补录记录只进漏斗计数 `excl_late_seal`，不进正式队列。时区口径：
+  `sealed_at` 为**无时区标记的 UTC**（末行 2026-10-12 11:45:05=北京 19:45），
+  按 UTC 解析后转 Asia/Shanghai 比较，绝不当本地时间。
+  该门需要 `--calendar` 解析 T+1，缺日历时 **fail-close 报错**（与账本
+  `daily_snapshot_ledger.py` 同一纪律：不做工作日回退近似）；无 `sealed_at` 列的
+  帧早于该门，`funnel.seal_gate_applied=false` 记明。
 
 ## 输入契约（每行一条候选信号，主运行去重在内部完成）
 
@@ -176,11 +184,22 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 | `run_id` + `created_at` | 主运行去重：同股同日同版本取 `created_at` 最早的已完成运行（签收④，事前固定） |
 | `timing_class` | 正式队列只收 `F0` |
 | `input_pit_status` | 只收 `VERIFIED`；`FAILED` 一律不进 |
+| `sealed_at` | 封存时点门（DAV-1991）：只收**严格早于**信号日次一交易日 09:30
+（Asia/Shanghai）的记录；晚封存/补录记 `excl_late_seal` 只进漏斗。口径：
+`sealed_at`/`seal_basis_at`/`created_at` 均为**无时区标记的 UTC**（末行
+"2026-10-12 11:45:05"=北京 19:45），按 UTC 解析→转 Asia/Shanghai→与 T+1 09:30
+比较，绝不当本地时间；生产账本 1651 行 `sealed_at` 与 `seal_basis_at` 同值，
+二者等价，取 `sealed_at` |
 | `p_rel_t40`/`prob`/`q` | 整数 1–99（或 0–1），列级归一到 q∈[0,1] |
 | `r_rel`/`rel_return`/`r` | T+1 开盘→T+40 收盘的股票−申万一级指数收益（小数） |
 
 不满足正式队列规则的行按原因逐项计入 `funnel` 报告（签收 §2.3：排除前后
 分母都要报），不静默丢弃。
+
+封存时点门（DAV-1991）新增三个诊断计数：`excl_late_seal`（晚于 T+1 开盘封存，
+含补录，被门排除）、`seal_unparseable`（封存时间无法解析——无法证明前瞻封存，
+一并计入 `excl_late_seal` 排除）、`seal_t1_unresolved`（日历解析不到 T+1，按账本
+`_classify_timing` 同案按 F0 收入并单列）。门是否生效见 `seal_gate_applied`。
 
 ## 实现口径（对照 DAV-1573 九项签收）
 
@@ -190,6 +209,9 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 | ③等权汇总、缺日不压缩、秩退化单列 | `grade` 用含 NaN 槽位的日序列入 NW；`insufficient`/`rank_degenerate` 单列不记 0 |
 | ③五分位边界并列按 §3.2 分数权重 | `quintile_weights` 严格按 `w=min(max(h−L,0),E)/E` |
 | ④主运行去重 | `admit` 取同股同日同版本 `created_at` 最早的完成运行 |
+| 封存时点门（DAV-1991，总控 10-13 令） | `admit` 由 `sealed_at` 重新推导时序规则
+（不信 `timing_class` 标签）：`sealed_at <` T+1 交易日 09:30 Asia/Shanghai 才进
+正式队列，晚封存/补录记 `excl_late_seal` |
 | ⑤NW60 主 / NW120 稳健、95% 双侧 | `newey_west_ci`（缺口不压缩） |
 | ⑥C 档门槛 | `grade`：`valid_days>=60` 且 `nw60_lo>0` 且 `nw120_lo>0`；否则 A/B |
 | ⑦可靠性固定 10 箱 [1–10]…[91–99] | `reliability_table`；`RELIABILITY_BINS` 结果前冻结 |
