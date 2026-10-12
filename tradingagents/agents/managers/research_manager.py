@@ -1852,6 +1852,22 @@ def apply_manager_double_count_guard(
     return metrics, manager_verdict, []
 
 
+def _parse_signal_date(value: Any) -> "date | None":
+    """Best-effort YYYY-MM-DD/YYYYMMDD → date for the base-rate maturity
+    cutoff (DAV-1953); never raises — unparseable → None → pit_unverified."""
+    from datetime import date as _date, datetime as _dt
+
+    if isinstance(value, _date) and not isinstance(value, _dt):
+        return value
+    s = str(value or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return _dt.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _resolve_research_horizon(state: dict | None) -> str:
     """Resolve the active research horizon for the current run.
 
@@ -1954,6 +1970,30 @@ def _blocked_manager_payload(
     # DAV-1111 B1: fallback tie 裁决同样落 direction_basis/warnings 字段，
     # 保证消费端 schema 一致（tie → not_applicable，零告警）。
     refresh_direction_basis(manager_verdict, claims=investment_debate_state.get("claims"))
+    # DAV-1953 (b2.v1): 中线守卫拦截属「已进入节点但未获得成功的最终
+    # 输出」→ node_failed（节点未进入才归 not_run，由运行层标）。
+    if research_horizon == "medium":
+        from tradingagents.eval.b2_contract import (
+            evaluate_p_rel_t40, PROB_CONTRACT_VERSION,
+        )
+        ev = evaluate_p_rel_t40(None, node_ran=True, node_succeeded=False)
+        fi = {
+            "node_ran": True,
+            "p_rel_t10": None,
+            "benchmark": None,
+            "data_gap": None,
+            "p_rel_t40": None,
+            "p_rel_t40_status": ev["p_rel_t40_status"],
+            "p_rel_t40_error_codes": ev["p_rel_t40_error_codes"],
+            "probability_contract_version": PROB_CONTRACT_VERSION,
+            "raw_output_sha256": None,
+        }
+        manager_verdict["forecast_input"] = fi
+        manager_verdict["p_rel_t10"] = None
+        manager_verdict["p_rel_t40"] = None
+        for _b2k in ("p_rel_t40_status", "p_rel_t40_error_codes",
+                     "probability_contract_version"):
+            manager_verdict[_b2k] = fi[_b2k]
     # DAV-1111 B2: 同步落 evidence_basis（空账本投影为空 items，零告警）。
     refresh_evidence_basis(manager_verdict)
     payload = {
@@ -1991,21 +2031,66 @@ def _blocked_manager_payload(
     return payload
 
 
-def capture_manager_forecast_input(text: str, benchmark: dict | None = None) -> dict:
+def capture_manager_forecast_input(
+    text: str,
+    benchmark: dict | None = None,
+    *,
+    research_horizon: str = "short",
+    node_ran: bool = True,
+    node_succeeded: bool = True,
+    base_rate: dict | None = None,
+    prompt_sha256: str | None = None,
+) -> dict:
     """Use the SAME canonical block parser as the adopted manager verdict.
 
     Called only after the existing revision seam has selected its final text.
     No VERDICT/body fallback, format retry, extraction model or value coercion.
+
+    DAV-1953 (b2.v1): on the ``medium`` research horizon the captured input
+    additionally carries the M1 contract fields — strict ``p_rel_t40``
+    classification (valid/missing/malformed/node_failed/not_run), the
+    ``b2.v1`` contract version, per-enum error codes, a raw-output audit
+    hash and the code-side ``p_base_rel_t40`` payload (``base_rate`` is the
+    prebuilt triplet from ``tradingagents.eval.b2_contract``; None when no
+    lookup is configured). Short horizon keeps the b1.v1 shape untouched.
     """
     from tradingagents.agents.utils.debate_utils import extract_tagged_json
 
     block = extract_tagged_json(text, "MANAGER_VERDICT")
-    return {
+    out = {
         "node_ran": True,
         "p_rel_t10": block.get("p_rel_t10") if isinstance(block, dict) else None,
         "benchmark": dict(benchmark) if isinstance(benchmark, dict) else None,
         "data_gap": None,
     }
+    if research_horizon == "medium":
+        from tradingagents.eval.b2_contract import (
+            evaluate_p_rel_t40,
+            PROB_CONTRACT_VERSION,
+        )
+
+        ev = evaluate_p_rel_t40(
+            text,
+            node_ran=node_ran,
+            node_succeeded=node_succeeded,
+        )
+        out.update({
+            "node_ran": ev["node_ran"],
+            "p_rel_t40": ev["p_rel_t40"],
+            "p_rel_t40_status": ev["p_rel_t40_status"],
+            "p_rel_t40_error_codes": ev["p_rel_t40_error_codes"],
+            "probability_contract_version": PROB_CONTRACT_VERSION,
+            "raw_output_sha256": ev["raw_output_sha256"],
+        })
+        if isinstance(base_rate, dict):
+            out.update({
+                "p_base_rel_t40": base_rate.get("p_base_rel_t40"),
+                "p_base_rel_t40_status": base_rate.get("p_base_rel_t40_status"),
+                "p_base_rel_t40_meta": base_rate.get("p_base_rel_t40_meta"),
+            })
+        if prompt_sha256:
+            out["manager_prompt_sha256"] = prompt_sha256
+    return out
 
 
 def create_research_manager(llm, memory, custom_prompt: str = "", placement: Placement = DEFAULT_PLACEMENT):
@@ -2552,6 +2637,31 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             )
         else:
             benchmark_line = "行业基准：获取失败" if prompt_language == "zh" else "Industry benchmark: retrieval failed"
+
+        # DAV-1953 (b2.v1): 代码侧基率在三处读数中落位。基率不给模型看，
+        # 不进提示词、不进模型输入快照；按 as_of 时点裁定计算 PIT 截止。
+        manager_base_rate: dict | None = None
+        if research_horizon == "medium":
+            from tradingagents.eval.b2_contract import (
+                build_base_rate_payload,
+                parse_analysis_cutoff,
+            )
+            from tradingagents.eval.b2_base_rate_provider import (
+                default_pit_lookup,
+            )
+
+            manager_base_rate = build_base_rate_payload(
+                lookup=default_pit_lookup(),
+                signal_date=_parse_signal_date(analysis_baseline_date),
+                industry_code=(benchmark or {}).get("code"),
+                as_of=parse_analysis_cutoff(
+                    (effective_market_data_context.get("daily") or {}).get("as_of")
+                    or effective_market_data_context.get("data_as_of")
+                    or effective_market_data_context.get("analysis_baseline_date")
+                    or analysis_baseline_date
+                ),
+            )
+
         base_prompt = prompt_template.format(
             past_memory_str=past_memory_str,
             provenance_context=provenance_context,
@@ -2770,10 +2880,28 @@ def create_research_manager(llm, memory, custom_prompt: str = "", placement: Pla
             market_data_context=effective_market_data_context,
             seven_reports=seven_reports,
         )
-        forecast_input = capture_manager_forecast_input(full_content, benchmark)
+        forecast_input = capture_manager_forecast_input(
+            full_content, benchmark,
+            research_horizon=research_horizon,
+            base_rate=manager_base_rate,
+            prompt_sha256=(hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                           if research_horizon == "medium" else None),
+        )
         forecast_input["data_gap"] = benchmark_gap
         manager_verdict["forecast_input"] = forecast_input
         manager_verdict["p_rel_t10"] = forecast_input["p_rel_t10"]
+        if research_horizon == "medium":
+            # b2.v1 报告落位：概率、状态、错误码、契约版本、原始输出审计
+            # 哈希与代码基率一并写到 medium_term.manager_verdict（§2.2/§4）。
+            manager_verdict["p_rel_t40"] = forecast_input["p_rel_t40"]
+            for _b2k in (
+                "p_rel_t40_status", "p_rel_t40_error_codes",
+                "probability_contract_version", "raw_output_sha256",
+                "p_base_rel_t40", "p_base_rel_t40_status",
+                "p_base_rel_t40_meta",
+            ):
+                if _b2k in forecast_input:
+                    manager_verdict[_b2k] = forecast_input[_b2k]
         manager_verdict["claim_evidence_summary"] = claim_evidence_summary
         manager_verdict["horizon"] = research_horizon
         manager_verdict["research_horizon"] = research_horizon

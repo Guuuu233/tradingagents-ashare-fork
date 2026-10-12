@@ -246,13 +246,73 @@ def _norm_prob_col(s: pd.Series) -> pd.Series:
     return out, n_bad + int(out.isna().sum() - raw.isna().sum())
 
 
+def _unwrap_ledger_line(obj: dict) -> dict:
+    """Flatten one ledger JSONL line ``{record, prev_hash, chain_hash}`` to
+    an evaluation row for BOTH ledger_version 1 and 2 (DAV-1953).
+
+    v1 rows: ``signal_date``/``symbol``/``user_id``/``timing_class``/
+    ``input_pit_status``/``created_at`` are top-level on the record.
+    v2 additionally seals the b2 contract keys under
+    ``record.horizons.medium`` — ``p_rel_t40`` feeds the prob column only
+    when ``p_rel_t40_status == 'valid'``; every other status maps to a NaN
+    prob so it is counted by the funnel (excl_bad_prob) rather than
+    silently dropped. Legacy ``probability`` is never used as the model
+    prob on a b2-sealed record (caliber differs).
+    """
+    rec = obj.get("record")
+    if not isinstance(rec, dict):
+        return obj
+    hz = rec.get("horizons") or {}
+    med = hz.get("medium") or {}
+    row = {
+        "signal_date": rec.get("signal_date"),
+        "symbol": rec.get("symbol"),
+        "run_id": rec.get("report_id"),
+        "created_at": rec.get("created_at"),
+        "timing_class": rec.get("timing_class"),
+        "input_pit_status": rec.get("input_pit_status"),
+        "user_id": rec.get("user_id"),
+        "completed": True,
+        "status": rec.get("status"),
+    }
+    versions = rec.get("versions") or {}
+    row["version_key"] = (
+        versions.get("generated_by_commit_sha")
+        or versions.get("input_snapshot_hash")
+        or "unversioned")
+    sealed = "p_rel_t40" in med or "p_rel_t40_status" in med
+    if sealed:
+        row["prob"] = (med.get("p_rel_t40")
+                       if med.get("p_rel_t40_status") == "valid" else None)
+        row["p_rel_t40_status"] = med.get("p_rel_t40_status")
+        # D-075 增量评价：代码基率（百分点 0–100）→ q_base（0–1）；只在
+        # 基率 status=valid 时成对，其他状态进入排除计数而非静默丢弃。
+        p_base = med.get("p_base_rel_t40")
+        if med.get("p_base_rel_t40_status") == "valid" and isinstance(
+                p_base, (int, float)) and not isinstance(p_base, bool) \
+                and 0.0 <= float(p_base) <= 100.0:
+            row["q_base"] = float(p_base) / 100.0
+        else:
+            row["q_base"] = np.nan
+    else:
+        row["prob"] = med.get("probability")
+    return row
+
+
 def load_frame(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in (".parquet", ".pq"):
         df = pd.read_parquet(path)
     elif path.suffix.lower() == ".csv":
         df = pd.read_csv(path, dtype=str)
     elif path.suffix.lower() == ".jsonl":
-        df = pd.read_json(path, lines=True)
+        # DAV-1953: transparently accept a P4 ledger JSONL (wrapped
+        # ``{record,...}`` lines, v1+v2 mixed) as well as flat rows.
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = [json.loads(line) for line in fh if line.strip()]
+        if raw and all(isinstance(o, dict) and "record" in o for o in raw):
+            df = pd.DataFrame([_unwrap_ledger_line(o) for o in raw])
+        else:
+            df = pd.DataFrame(raw)
     else:
         raise ValueError(f"unsupported input format: {path.suffix}")
 
@@ -263,11 +323,15 @@ def load_frame(path: Path) -> pd.DataFrame:
             ren[src] = canon
     df = df.rename(columns=ren)
 
-    # required fields
-    for req in ("signal_date", "symbol", "prob", "rel_return"):
+    # required fields — rel_return may be absent on a raw P4 ledger (the
+    # label join happens downstream): synthesize NaN so those rows funnel
+    # as excl_immature_label instead of hard-failing the load.
+    for req in ("signal_date", "symbol", "prob"):
         if req not in df.columns:
             raise ValueError(f"input missing required column for '{req}' "
                              f"(aliases: {_COL_CANDIDATES[req]})")
+    if "rel_return" not in df.columns and "r" not in df.columns:
+        df["rel_return"] = np.nan
 
     df["signal_date"] = pd.to_datetime(df["signal_date"]).dt.strftime("%Y%m%d")
     df["q"], df["_n_bad_prob"] = _norm_prob_col(df["prob"])
@@ -470,6 +534,74 @@ def reliability_table(d: pd.DataFrame) -> list[dict]:
     return rows
 
 
+def paired_base_eval(d: pd.DataFrame,
+                     calendar: list[str] | None = None) -> dict:
+    """D-075 相对基率增量：同股同信号日的模型/基率配对 IC 差。
+
+    Paired intersection only — a day contributes when BOTH q (model) and
+    q_base are present on the same rows; the model IC series is never
+    diluted by base-only rows (签收口径:不得以不同样本集合的 IC 差替代).
+    ``d`` is the post-admit formal frame; days with paired n_t<MIN_DAILY_N
+    are ``insufficient`` (NaN slot kept, never compressed); rank-degenerate
+    sides are listed separately, never filled with 0.
+
+    Returns the per-day paired table plus the NW60/NW120 intervals on the
+    diff series; a positive conclusion requires BOTH lower bounds > 0 and
+    >= C_GRADE_MIN_DAYS valid paired days.
+    """
+    if "q_base" not in d.columns:
+        return {"paired": False, "reason": "no q_base column"}
+    dd = d.dropna(subset=["q_base"]).copy()
+    if dd.empty:
+        return {"paired": False, "reason": "no rows with q_base"}
+
+    rows: list[dict] = []
+    for day, g in dd.groupby("signal_date", sort=True):
+        n_t = len(g)
+        entry = {"date": day, "n_t": n_t, "status": "ok",
+                 "ic_model": np.nan, "ic_base": np.nan, "ic_diff": np.nan}
+        if n_t < MIN_DAILY_N:
+            entry["status"] = "insufficient"
+            rows.append(entry)
+            continue
+        icm, deg_m = spearman_ic(g["q"].to_numpy(float),
+                                 g["r"].to_numpy(float))
+        icb, deg_b = spearman_ic(g["q_base"].to_numpy(float),
+                                 g["r"].to_numpy(float))
+        if deg_m or deg_b:
+            entry["status"] = ("rank_degenerate_model" if deg_m
+                               else "rank_degenerate_base")
+            rows.append(entry)
+            continue
+        entry.update(ic_model=icm, ic_base=icb, ic_diff=icm - icb)
+        rows.append(entry)
+
+    if calendar and rows:
+        covered = {e["date"] for e in rows}
+        lo, hi = min(covered), max(covered)
+        extra = [{"date": c, "n_t": 0, "status": "no_data",
+                  "ic_model": np.nan, "ic_base": np.nan,
+                  "ic_diff": np.nan}
+                 for c in calendar if lo <= c <= hi and c not in covered]
+        rows = sorted(rows + extra, key=lambda e: e["date"])
+
+    diff = np.array([e["ic_diff"] for e in rows])
+    m60, lo60, hi60, _n60 = newey_west_ci(diff, NW_PRIMARY)
+    _, lo120, _, _ = newey_west_ci(diff, NW_ROBUST)
+    valid_days = sum(1 for e in rows if e["status"] == "ok")
+    return {
+        "paired": True,
+        "paired_rows": int(len(dd)),
+        "valid_days": valid_days,
+        "mean_ic_diff": m60,
+        "nw60": {"lo": lo60, "hi": hi60},
+        "nw120_lo": lo120,
+        "increment_claimable": bool(
+            valid_days >= C_GRADE_MIN_DAYS and lo60 > 0 and lo120 > 0),
+        "days": rows,
+    }
+
+
 def repeat_from_pairs(df_pairs: pd.DataFrame) -> dict:
     """df_pairs must carry pair_id, q1, q2 (m independent frozen-input pairs)."""
     q1 = df_pairs["q1"].to_numpy(float)
@@ -617,6 +749,9 @@ def run(input_path: Path, out_dir: Path,
         "reliability": rel,
         "verdict": verdict,
     }
+    if "q_base" in formal.columns and formal["q_base"].notna().any():
+        out["base_increment"] = paired_base_eval(
+            formal, calendar=_load_calendar(calendar_path))
     if pairs_path is not None:
         pdf = pd.read_csv(pairs_path) if pairs_path.suffix == ".csv" \
             else pd.read_parquet(pairs_path)

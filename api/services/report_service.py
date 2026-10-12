@@ -2084,7 +2084,14 @@ _B1_SELL_LABELS = {
 
 
 def parse_horizon_forecast(slice_: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse only the input captured from the adopted manager machine block."""
+    """Parse only the input captured from the adopted manager machine block.
+
+    b1.v1 (short) contract: p_rel_t10. DAV-1953 b2.v1 (medium): also
+    validates ``p_rel_t40`` against the strict-integer contract and emits
+    its status/error codes; a medium slice lacking the b2 keys keeps them
+    null with status ``not_sealed`` rather than fabricating a model
+    ``missing`` (the report slice predates the contract).
+    """
     manager = slice_.get("manager_verdict")
     if not isinstance(manager, dict):
         debate = slice_.get("investment_debate_state") or {}
@@ -2110,8 +2117,34 @@ def parse_horizon_forecast(slice_: Dict[str, Any]) -> Dict[str, Any]:
         status = "malformed"
     else:
         status, parsed = "valid", int(value)
-    return {"contract": B1_CONTRACT, "p_rel_t10": parsed, "status": status,
-            "benchmark": benchmark, "node": "research_manager"}
+    out = {"contract": B1_CONTRACT, "p_rel_t10": parsed, "status": status,
+           "benchmark": benchmark, "node": "research_manager"}
+    # DAV-1953: b2.v1 mirror — strict validation on the same captured input,
+    # no borrowing across horizons and no default fill.
+    if captured.get("probability_contract_version") or "p_rel_t40" in captured:
+        p40 = captured.get("p_rel_t40")
+        p40_status = captured.get("p_rel_t40_status")
+        # trust the node-side classification written by b2_contract; re-verify
+        # the integer range here so a hand-edited slice can't pass.
+        if p40_status == "valid" and not (type(p40) is int and 1 <= p40 <= 99):
+            p40_status, p40 = "malformed", None
+        if p40_status not in {"valid", "missing", "malformed", "node_failed",
+                              "not_run"}:
+            p40_status, p40 = "malformed", None
+        out.update({
+            "p_rel_t40": p40 if p40_status == "valid" else None,
+            "p_rel_t40_status": p40_status,
+            "p_rel_t40_error_codes": list(
+                captured.get("p_rel_t40_error_codes") or []),
+            "probability_contract_version": captured.get(
+                "probability_contract_version"),
+        })
+    elif (slice_.get("horizon") or "") == "medium":
+        # b2-era medium slice without contract keys → honest "not_sealed".
+        out.update({"p_rel_t40": None, "p_rel_t40_status": "not_sealed",
+                    "p_rel_t40_error_codes": [],
+                    "probability_contract_version": None})
+    return out
 
 
 def _b1_positive_price(value: Any) -> Optional[float]:

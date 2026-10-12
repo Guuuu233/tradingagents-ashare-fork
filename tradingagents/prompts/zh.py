@@ -15,6 +15,12 @@ p_rel_t10 是预测，非交易信号；不得与 confidence 或既有绝对上�
 
 """
 
+_MANAGER_MEDIUM_PROBABILITY_CONTRACT = """【M1 中线行业相对预测】仅当中线为本次研究档时，MANAGER_VERDICT 另需新增唯一键 p_rel_t40，整数百分点 1–99，不使用百分号或字符串，不输出 0/100；短线档不输出该键。
+语义：本股从 T+1 开盘到 T+40 收盘的收益减去同窗口所属申万 2021 版一级行业指数收益后大于零的概率，条件为截止分析日的合法信息；方向与概率相互独立，同一方向可给不同概率，不得由方向反推概率。
+p_rel_t40 是预测，非交易信号；不得与 confidence、probability 或 p_rel_t10 混用；行业基准获取失败时明确缺口但照常预测，不做格式补齐重试。
+
+"""
+
 PROMPTS = {
     "market_system_message": """你是市场技术分析师，负责通过多周期价格形态、经典技术指标体系、量价波动与市场结构，运用 What/Why/SoWhat/WhatNext 分析框架与大盘/行业共振思维，为给定标的输出严谨可执行的技术分析结论。
 
@@ -351,7 +357,7 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 - 报告级 confidence（如需给出）只能是 0–100 的整数；claim confidence 只能是有限的 0.00–1.00 数值，二者不得与 probability 混用。
 - probability 只表示在明确的主分析周期、明确的基准价下，周期结束时价格高于该基准价的上涨概率；缺少任一条件时写 null，不要猜测。
 - Bear 与 Bull 共同遵守同一 probability 口径：Bear 的 probability 不得改成下跌概率，不得反转，不做 1-p。
-- 只保留既有 VERDICT 边界和键名；唯一新增机读键是 MANAGER_VERDICT.p_rel_t10，不增加其他正文级 canonical 字段或研究员机读键。
+- 只保留既有 VERDICT 边界和键名；短线档唯一新增机读键是 MANAGER_VERDICT.p_rel_t10，中线档再新增 MANAGER_VERDICT.p_rel_t40；不增加其他正文级 canonical 字段或研究员机读键。
 - 【E-04 预期修正分栏审查纪律】：投研经理只能消费分析师提供的结构化 expectation_revision 栏位，严禁从自由文本补造数值，严禁将未知状态（unknown/gap）擅自改成事实；若分析师已将某事件计入预测或事件栏位，防重复计入（double_count_guard）阻止再次计入；若无法判断是否计入，必须保持 unknown，不得作为额外支持依据；“已定价”在无回溯证据时保持 unknown，不得采纳为事实依据；“超预期/不及预期”仅在可比基线真实存在时方可成立。
 - 【价格坐标契约 price_ref.v1】技术执行坐标（现价/收盘/均线/支撑/压力/入场/目标价/止损/止盈）一律使用前复权（vendor_qfq）口径；大宗交易、龙虎榜、增持/减持/回购、定增/发行等披露价为 raw/pit_raw 坐标，严禁直接充当 qfq 支撑/目标/止损，严禁与 qfq 现价直接计算折价率、距离或赔率。跨坐标比较只有两条合法路径：raw↔raw 同口径重新取价，或写明复权因子与因子日期（不得晚于分析截止日）的显式换算后再统一坐标。raw 与 qfq 可同屏双列展示，但必须显式标注“不可直接比较”，严禁“共振支撑”式跨坐标推理。所有目标价/止损/入场价等可执行数值必须为前复权口径或写明完整换算来源；无法归因坐标的价格只能作未对齐披露展示，禁止进入任何比较与计算。以上规则由确定性校验器硬执行，违规将被 fail-close。
 
@@ -838,4 +844,4 @@ direction 只可填：看多 / 偏多 / 中性 / 偏空 / 看空。数据不足�
 
 for _role in ("research_manager_prompt", "trader_system_prompt", "risk_manager_prompt"):
     PROMPTS[_role] = _LONG_ONLY_PRICE_CONTRACT + PROMPTS[_role]
-PROMPTS["research_manager_prompt"] = _MANAGER_RELATIVE_PROBABILITY_CONTRACT + PROMPTS["research_manager_prompt"]
+PROMPTS["research_manager_prompt"] = _MANAGER_MEDIUM_PROBABILITY_CONTRACT + _MANAGER_RELATIVE_PROBABILITY_CONTRACT + PROMPTS["research_manager_prompt"]

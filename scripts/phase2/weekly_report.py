@@ -436,6 +436,27 @@ def _benchmark_return(bars: Mapping[str, Mapping[str, float]],
 # classification helpers
 
 
+def b2_medium_fields(rec: Mapping[str, Any]) -> dict[str, Any]:
+    """b2.v1 contract keys of ``horizons.medium`` on v1/v2 records.
+
+    Shared contract: every key defaults to None / [] / ``not_sealed`` on
+    legacy v1 rows — the reader never KeyErrors and never fabricates a
+    model ``missing`` for records that predate the contract.
+    """
+    hz = rec.get("horizons")
+    medium = hz.get("medium") if isinstance(hz, Mapping) else None
+    medium = medium if isinstance(medium, Mapping) else {}
+    sealed = "p_rel_t40" in medium or "p_rel_t40_status" in medium
+    keys = ("p_rel_t40", "p_rel_t40_status", "p_rel_t40_error_codes",
+            "probability_contract_version", "raw_output_sha256",
+            "p_base_rel_t40", "p_base_rel_t40_status", "p_base_rel_t40_meta")
+    out = {k: medium.get(k) for k in keys}
+    if not sealed:
+        out["p_rel_t40_status"] = "not_sealed"
+        out["p_rel_t40_error_codes"] = []
+    return out
+
+
 def _version_key(rec: Mapping[str, Any]) -> str:
     v = rec.get("versions") or {}
     commit = v.get("generated_by_commit_sha")
@@ -534,8 +555,24 @@ def build_report(
         if not isinstance(j, dict):
             continue
         r["_m_dir"] = _direction_bucket(j.get("direction"))
-        prob = j.get("probability")
-        r["_m_prob"] = float(prob) if isinstance(prob, (int, float)) else None
+        # DAV-1953: prefer the b2.v1 contract key when the record seals one
+        # (ledger_version=2); legacy probability is the pre-M1 field —
+        # mixing them would silently compare different calibers. Status is
+        # kept for the coverage disclosure below.
+        b2 = b2_medium_fields(r)
+        r["_m_b2_status"] = b2["p_rel_t40_status"]
+        p40 = b2["p_rel_t40"]
+        if b2["p_rel_t40_status"] == "valid" and isinstance(
+                p40, (int, float)) and not isinstance(p40, bool):
+            r["_m_prob"] = float(p40)
+            r["_m_prob_src"] = "p_rel_t40"
+        else:
+            prob = j.get("probability")
+            r["_m_prob"] = (float(prob)
+                            if isinstance(prob, (int, float))
+                            and not isinstance(prob, bool) else None)
+            r["_m_prob_src"] = ("probability" if r["_m_prob"] is not None
+                                else None)
         r["_sig"] = _parse_d(r.get("signal_date"))
         r["_outcome_day"] = _record_matured_outcome_day(r, trade_dates)
         r["_matured"] = (r["_outcome_day"] is not None
@@ -595,7 +632,9 @@ def build_report(
     daily: dict[date, list[tuple[float, float]]] = {}
     label_missing = 0          # matured 记录缺标签行或缺指定字段
     prob_missing = 0           # matured 记录无中线概率
+    b2_status_counter: Counter = Counter()
     for r in matured:
+        b2_status_counter[r.get("_m_b2_status") or "not_sealed"] += 1
         sig = r.get("_sig")
         if sig is None or r["_m_prob"] is None:
             prob_missing += 1
@@ -707,6 +746,16 @@ def build_report(
     out.append("## 0. 样本量与结论判定")
     out.append("")
     out.append(f"- 中线账本记录总数：**{len(medium)}**")
+    # DAV-1953: b2.v1 coverage disclosure — 概率来源与状态分布逐条披露，
+    # 不把 v1 历史档记作模型 missing。
+    _src_counts = Counter(r.get("_m_prob_src") or "none" for r in medium)
+    out.append(f"- 中线概率来源：p_rel_t40={_src_counts.get('p_rel_t40', 0)}；"
+               f"旧 probability={_src_counts.get('probability', 0)}；"
+               f"无数值={_src_counts.get('none', 0)}")
+    if b2_status_counter:
+        out.append("- b2.v1 封存状态分布（成熟样本）：" +
+                   "；".join(f"{k}={v}" for k, v in
+                             sorted(b2_status_counter.items())))
     out.append(f"- 已到期（T+40 结果可知日 < as_of）样本：**{len(matured)}**")
     out.append(f"- 未到期：**{len(immature)}**")
     out.append(f"- 正式栏样本（到期 + 封存时 F0 + VERIFIED + 非回填）："

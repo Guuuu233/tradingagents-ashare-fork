@@ -15,6 +15,12 @@ p_rel_t10 is a forecast, not a trading signal; do not substitute confidence or t
 
 """
 
+_MANAGER_MEDIUM_PROBABILITY_CONTRACT = """[M1 medium-term industry-relative forecast] Only when this run's research horizon is medium must MANAGER_VERDICT also add the single key p_rel_t40: integer percentage points 1–99, never a percentage string or 0/100; short runs must not emit it.
+Meaning: P(stock return from T+1 open to T+40 close minus same-window SW2021 L1 industry index return > 0 | lawful information available by the analysis cutoff). Direction and probability are independent: the same direction may carry different probabilities; never derive one from the other.
+p_rel_t40 is a forecast, not a trading signal; do not conflate it with confidence, probability, or p_rel_t10; on industry-benchmark failure state the gap but still forecast — no format-repair retry.
+
+"""
+
 PROMPTS = {
     "market_system_message": """You are a trading assistant tasked with analyzing financial markets. Your role is to select the most relevant indicators for a given market condition or trading strategy from the allowed list. Choose up to 8 indicators that provide complementary insights without redundancy.
 
@@ -200,7 +206,7 @@ Last round summary:
 - If report-level confidence is requested, it must be an integer in the range 0-100; claim confidence is a finite number in the range 0.00-1.00, not a percentage.
 - Probability has a separate meaning. When provided, it is the probability of a higher end price than the explicitly stated benchmark price at the end of the explicitly stated primary horizon (the upside probability). If either the primary horizon or benchmark price is missing, use null instead of guessing.
 - Bull and Bear use the same probability semantics: Bear probability is not a downside probability; do not invert it and do not use 1-p.
-- Keep the existing VERDICT boundary and keys; the only new machine key is MANAGER_VERDICT.p_rel_t10. Do not add other canonical body fields or researcher machine keys.
+- Keep the existing VERDICT boundary and keys; on short runs the only new machine key is MANAGER_VERDICT.p_rel_t10, on medium runs additionally MANAGER_VERDICT.p_rel_t40. Do not add other canonical body fields or researcher machine keys.
 - [E-04 Expectation Revision Review Discipline]: The portfolio manager must only consume structured expectation_revision fields provided by analysts; never synthesize numbers from unstructured text, and never convert unknown/gap states into facts. When an analyst has already incorporated an event into forecasts or event columns, double_count_guard blocks duplicate addition; if unjudgeable, it must remain unknown and cannot serve as extra support. 'Priced in' must remain unknown without traceable evidence and cannot be treated as factual. 'Above/below expectations' holds only when a genuine comparable baseline exists.
 Output:
 1) Tally independent evidence clusters (deduplicating claims by cluster_id) and compute cluster-based directional weight; analyst list serves as explanatory context only (analyst_count must not be used directly as independent voting weight).
@@ -577,4 +583,4 @@ direction must be one of: BULLISH / LEAN_BULLISH / NEUTRAL / LEAN_BEARISH / BEAR
 
 for _role in ("research_manager_prompt", "trader_system_prompt", "risk_manager_prompt"):
     PROMPTS[_role] = _LONG_ONLY_PRICE_CONTRACT + PROMPTS[_role]
-PROMPTS["research_manager_prompt"] = _MANAGER_RELATIVE_PROBABILITY_CONTRACT + PROMPTS["research_manager_prompt"]
+PROMPTS["research_manager_prompt"] = _MANAGER_MEDIUM_PROBABILITY_CONTRACT + _MANAGER_RELATIVE_PROBABILITY_CONTRACT + PROMPTS["research_manager_prompt"]

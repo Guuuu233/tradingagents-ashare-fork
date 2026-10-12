@@ -362,6 +362,30 @@ def _outcome_day(rec: Mapping[str, Any],
     return trade_dates[t_i] if t_i < len(trade_dates) else None
 
 
+def _b2_medium_prob(rec: Mapping[str, Any]) -> tuple[Optional[float], str]:
+    """(prob, source) for the medium horizon of a v1/v2 record.
+
+    b2.v1 sealed records carry ``p_rel_t40``; legacy rows keep the
+    pre-contract ``probability``. A b2 row whose status is not ``valid``
+    never falls back to the legacy key (caliber differs), it simply has
+    no contract probability. Returns (None, reason) on absence.
+    """
+    j = (rec.get("horizons") or {}).get("medium") or {}
+    if not isinstance(j, Mapping):
+        return None, "no_medium"
+    sealed = "p_rel_t40" in j or "p_rel_t40_status" in j
+    if sealed:
+        p = j.get("p_rel_t40")
+        if j.get("p_rel_t40_status") == "valid" and isinstance(
+                p, (int, float)) and not isinstance(p, bool):
+            return float(p), "p_rel_t40"
+        return None, f"b2:{j.get('p_rel_t40_status') or 'unknown'}"
+    p = j.get("probability")
+    if isinstance(p, (int, float)) and not isinstance(p, bool):
+        return float(p), "probability"
+    return None, "no_prob"
+
+
 def _enrich(records: list[dict[str, Any]],
             trade_dates: list[date],
             as_of: date) -> list[dict[str, Any]]:
@@ -516,10 +540,8 @@ def build_daily(records: list[dict[str, Any]], *,
         rows = []
         for d in sorted(by_day):
             rs = by_day[d]
-            probs = [((r.get("horizons") or {}).get("medium") or {})
-                     .get("probability") for r in rs]
-            probs = [float(p) for p in probs
-                     if isinstance(p, (int, float)) and not isinstance(p, bool)]
+            b2_probs = [_b2_medium_prob(r) for r in rs]
+            probs = [p for p, _src in b2_probs if p is not None]
             n_prob = len(probs)
             n_lab = sum(1 for r in rs
                         if _label_for(r, labels, label_field) is not None)
@@ -531,15 +553,8 @@ def build_daily(records: list[dict[str, Any]], *,
                 note = "insufficient"
             else:
                 pairs = [(p, _label_for(r, labels, label_field))
-                         for r, p in
-                         zip([r for r in rs
-                              if isinstance(
-                                  ((r.get("horizons") or {}).get("medium") or {})
-                                  .get("probability"), (int, float))
-                              and not isinstance(
-                                  ((r.get("horizons") or {}).get("medium") or {})
-                                  .get("probability"), bool)],
-                             probs)]
+                         for r, (p, _src) in zip(rs, b2_probs)
+                         if p is not None]
                 pairs = [(p, v) for p, v in pairs if v is not None]
                 if len(pairs) < min_cross_n:
                     note = "insufficient_labels"
@@ -669,9 +684,8 @@ def build_monthly(records: list[dict[str, Any]], *,
     daily: dict[date, list[tuple[float, float]]] = {}
     missing_lab = miss_prob = 0
     for r in matured:
-        j = (r.get("horizons") or {}).get("medium") or {}
-        prob = j.get("probability")
-        if not isinstance(prob, (int, float)) or isinstance(prob, bool):
+        prob, _src = _b2_medium_prob(r)
+        if prob is None:
             miss_prob += 1
             continue
         v = _label_for(r, labels, label_field)

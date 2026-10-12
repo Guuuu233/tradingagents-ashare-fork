@@ -97,6 +97,18 @@ def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> flo
 def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> float | None:
     hz = (record.get("horizons") or {}).get(horizon) or {}
     v = hz.get("probability")
+    if horizon == "medium":
+        # DAV-1953 b2.v1/v2 compat: a medium record sealed under the M1
+        # contract carries ``p_rel_t40`` (valid only when status=valid);
+        # the legacy ``probability`` key is the pre-M1 T+10-caliber value
+        # and must not substitute a sealed-but-invalid contract prob.
+        sealed = "p_rel_t40" in hz or "p_rel_t40_status" in hz
+        if sealed:
+            p40 = hz.get("p_rel_t40")
+            if hz.get("p_rel_t40_status") == "valid" and isinstance(
+                    p40, (int, float)) and not isinstance(p40, bool):
+                return float(p40)
+            return None
     if v is None:
         v = record.get("probability_top")
     try:

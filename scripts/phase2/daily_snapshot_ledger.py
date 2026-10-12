@@ -238,6 +238,35 @@ def _classify_timing(
     return "H", evidence
 
 
+def _add_b2_version_fields(versions: dict[str, Any],
+                             result_data: dict[str, Any]) -> None:
+    """DAV-1953: ``versions.manager_prompt_sha256_by_horizon.medium`` and
+    ``versions.probability_contract_version_by_horizon.medium``.
+
+    The prompt hash is computed from the exact medium-horizon prompt the
+    node rendered — carried on ``manager_verdict.forecast_input`` by the
+    manager node (single write point). The contract version is read from
+    the same canonical slot; absent → version fields stay absent
+    (never fabricated).
+    """
+    for hz, term_key in (("medium", "medium_term"),):
+        sub = result_data.get(term_key)
+        if not isinstance(sub, dict):
+            horizons_map = result_data.get("horizons")
+            sub = horizons_map.get(hz) if isinstance(horizons_map, dict) else None
+        if not isinstance(sub, dict):
+            continue
+        mv = sub.get("manager_verdict")
+        fi = mv.get("forecast_input") if isinstance(mv, dict) else None
+        fi = fi if isinstance(fi, dict) else {}
+        p_sha = fi.get("manager_prompt_sha256")
+        p_cv = fi.get("probability_contract_version")
+        if p_sha:
+            versions.setdefault("manager_prompt_sha256_by_horizon", {})[hz] = p_sha
+        if p_cv:
+            versions.setdefault("probability_contract_version_by_horizon", {})[hz] = p_cv
+
+
 # ---------------------------------------------------------------------------
 # input_pit_status
 
@@ -361,6 +390,41 @@ _JUDGEMENT_FIELDS = (
     "decision_status", "extraction_warning",
 )
 
+# DAV-1953 (b2.v1 / ledger_version=2): the M1 medium contract keys sealed
+# under ``record.horizons.medium``. They are extracted ONLY from the
+# canonical medium slice's ``manager_verdict`` / ``forecast_input`` — never
+# borrowed from the short horizon or top-level fields (spec §4).
+_B2_MEDIUM_KEYS = (
+    "p_rel_t40", "p_rel_t40_status", "p_rel_t40_error_codes",
+    "probability_contract_version", "raw_output_sha256",
+    "p_base_rel_t40", "p_base_rel_t40_status", "p_base_rel_t40_meta",
+)
+
+#: ledger record format emitted by THIS sealer. History stays version 1
+#: untouched; mixed v1+v2 ledgers must verify on the hash chain
+#: (controller ruling #1 supplement).
+CURRENT_LEDGER_VERSION = 2
+
+
+def _b2_medium_contract(sub: dict[str, Any]) -> dict[str, Any]:
+    """Explicit b2.v1 extraction from a medium horizon slice.
+
+    Source precedence inside the slice: ``manager_verdict`` first, then its
+    ``forecast_input`` (the node writes both — §2.2 mirror). Keys are only
+    emitted when present in the source — a pre-b2 report yields ``{}`` so
+    readers can distinguish "sealed with contract, value null" from
+    "contract not in this report" instead of fabricating a ``missing``.
+    """
+    mv = sub.get("manager_verdict") if isinstance(sub, dict) else None
+    fi = mv.get("forecast_input") if isinstance(mv, dict) else None
+    out: dict[str, Any] = {}
+    for k in _B2_MEDIUM_KEYS:
+        if isinstance(mv, dict) and k in mv:
+            out[k] = mv[k]
+        elif isinstance(fi, dict) and k in fi:
+            out[k] = fi[k]
+    return out
+
 
 def _horizon_judgement(result_data: dict[str, Any], hz: str) -> dict[str, Any]:
     sub = (result_data.get("horizons") or {}).get(hz)
@@ -373,6 +437,11 @@ def _horizon_judgement(result_data: dict[str, Any], hz: str) -> dict[str, Any]:
                   "probability", "confidence", "final_trade_decision", "forecast"):
             if k in result_data:
                 out[k] = result_data.get(k)
+    if hz == "medium":
+        # DAV-1953: explicit b2.v1 contract extraction — canonical
+        # medium-term slice keys only; v1 rows produce no such keys and
+        # stay version 1 (no fabrication).
+        out.update(_b2_medium_contract(sub))
     return out
 
 
@@ -430,9 +499,16 @@ def build_record(
 
     horizons = {hz: _horizon_judgement(result_data, hz) for hz in HORIZONS}
     versions = _version_fields(result_data)
+    _add_b2_version_fields(versions, result_data)
+
+    medium_hz = horizons.get("medium") or {}
+    ledger_version = (CURRENT_LEDGER_VERSION
+                      if _B2_MEDIUM_KEYS[0] in medium_hz
+                      or "p_rel_t40_status" in medium_hz
+                      else 1)
 
     record = {
-        "ledger_version": 1,
+        "ledger_version": ledger_version,
         "snapshot_date": snapshot_date,
         "sealed_at": _fmt_dt(sealed_at),
         "seal_basis_at": _fmt_dt(seal_basis),
