@@ -28,6 +28,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -407,25 +408,73 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
 # it is I/O on the loop for no good reason, so rows are handed to a
 # single-thread executor whenever a loop is running:
 #
-# - single thread ⇒ strict FIFO, ledger row order is preserved;
+# - rows queued on the single-thread executor are strictly FIFO, so the
+#   ledger row order of queued rows is preserved;
 # - no loop is running (sync paths: ``asyncio.to_thread`` workers, CLI,
 #   tests) ⇒ the row is written inline, so sync behaviour is unchanged
 #   and callers can read their own row back immediately;
+# - a synchronous inline write and a queued row have NO ordering guarantee
+#   between them (the inline write commits immediately, the queued row
+#   whenever the writer thread picks it up), so relative row order across
+#   the two paths must not be relied on;
 # - ``flush_usage_writes()`` drains the queue (a sentinel on the same FIFO
 #   thread completes only after every earlier row).
 _USAGE_WRITE_EXECUTOR = ThreadPoolExecutor(
     max_workers=1, thread_name_prefix="llm-usage-write"
 )
 
+# DAV-1958: ledger rows handed to the writer thread but not yet committed,
+# per report. A drain that times out (writer busy / wedged) used to be
+# invisible (logger.debug), so the read-back paths could persist a
+# usage_summary / served_models that silently undercounts; the pending
+# count makes the shortfall measurable and warnable.
+_PENDING_LOCK = threading.Lock()
+_PENDING_ROWS: Dict[Optional[str], int] = {}
 
-def _write_ledger_row_now(row: Dict[str, Any]) -> None:
-    """Blocking write of one ledger row. Never raises."""
+
+def _register_pending_row(report_id: Optional[str]) -> None:
+    with _PENDING_LOCK:
+        _PENDING_ROWS[report_id] = _PENDING_ROWS.get(report_id, 0) + 1
+
+
+def _settle_pending_row(report_id: Optional[str]) -> None:
+    with _PENDING_LOCK:
+        left = _PENDING_ROWS.get(report_id, 0) - 1
+        if left > 0:
+            _PENDING_ROWS[report_id] = left
+        else:
+            _PENDING_ROWS.pop(report_id, None)
+
+
+def _pending_rows(report_id: Optional[str] = None) -> int:
+    """Queued-but-unwritten ledger rows (one report, or all reports)."""
+    with _PENDING_LOCK:
+        if report_id is None:
+            return sum(_PENDING_ROWS.values())
+        return _PENDING_ROWS.get(report_id, 0)
+
+
+def _pending_reports() -> int:
+    with _PENDING_LOCK:
+        return len(_PENDING_ROWS)
+
+
+def _write_ledger_row_now(row: Dict[str, Any], *, tracked: bool = False) -> None:
+    """Blocking write of one ledger row. Never raises.
+
+    ``tracked`` rows were counted by ``_register_pending_row`` and are
+    settled here whatever the write outcome, so the pending count can
+    never leak.
+    """
     try:
         from api.database import log_llm_call
 
         log_llm_call(**row)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("LLMUsageLogger ledger write failed (non-fatal): %r", exc)
+    finally:
+        if tracked:
+            _settle_pending_row(row.get("report_id"))
 
 
 def _submit_ledger_row(row: Dict[str, Any]) -> None:
@@ -433,25 +482,48 @@ def _submit_ledger_row(row: Dict[str, Any]) -> None:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        # Inline write: the row is committed before this returns, so no
+        # read-back can observe it as pending — nothing to track.
         _write_ledger_row_now(row)
         return
+    _register_pending_row(row.get("report_id"))
     try:
-        _USAGE_WRITE_EXECUTOR.submit(_write_ledger_row_now, row)
+        _USAGE_WRITE_EXECUTOR.submit(_write_ledger_row_now, row, tracked=True)
     except Exception as exc:  # pragma: no cover - interpreter shutdown
         logger.debug("ledger row offload failed; writing inline: %r", exc)
-        _write_ledger_row_now(row)
+        _write_ledger_row_now(row, tracked=True)
 
 
 def flush_usage_writes(timeout: float = 10.0) -> None:
     """Block until every queued ledger row has been written.
 
-    Called by ``build_llm_usage_summary`` so a per-report summary can
-    never miss the report's last call, and by tests that read rows back.
+    Called by ``build_llm_usage_summary`` / ``build_served_models_summary``
+    so a per-report summary can never miss the report's last call, and by
+    tests that read rows back. No-op when nothing is queued.
+
+    DAV-1958: a timeout now warns with the still-queued row count (it used
+    to be ``logger.debug``) — a silent timeout means a persisted summary
+    that undercounts.
     """
+    if _pending_rows() == 0:
+        return
     try:
-        _USAGE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=timeout)
+        future = _USAGE_WRITE_EXECUTOR.submit(lambda: None)
+    except Exception:  # pragma: no cover - interpreter shutdown
+        logger.debug("flush_usage_writes could not queue the drain sentinel",
+                     exc_info=True)
+        return
+    try:
+        future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        logger.warning(
+            "flush_usage_writes timed out after %.1fs: %d ledger row(s) still "
+            "queued across %d report(s) (writer busy or wedged) — "
+            "usage_summary / served_models read-backs may undercount",
+            timeout, _pending_rows(), _pending_reports(),
+        )
     except Exception:  # pragma: no cover - defensive
-        logger.debug("flush_usage_writes timed out", exc_info=True)
+        logger.debug("flush_usage_writes failed", exc_info=True)
 
 
 class LLMUsageLogger(BaseCallbackHandler):
@@ -723,6 +795,18 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
                 .filter(LLMCallLogDB.report_id == report_id)
                 .all()
             )
+            # DAV-1958: compare against the expected count. Rows still
+            # queued after the drain mean this summary undercounts and the
+            # short value gets persisted into result_data — warn instead of
+            # failing silently.
+            missing = _pending_rows(report_id)
+            if missing:
+                logger.warning(
+                    "build_llm_usage_summary: %d ledger row(s) for report %s "
+                    "are still queued after the drain (drain timed out or "
+                    "writer stuck); usage_summary undercounts (%d row(s) read)",
+                    missing, report_id, len(rows),
+                )
         if not rows:
             return None
 
@@ -834,6 +918,16 @@ def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, 
                 db.query(LLMCallLogDB)
                 .filter(LLMCallLogDB.report_id == report_id)
                 .all()
+            )
+        # DAV-1958: same row-count check as build_llm_usage_summary — rows
+        # still queued after the drain mean served_models undercounts.
+        missing = _pending_rows(report_id)
+        if missing:
+            logger.warning(
+                "build_served_models_summary: %d ledger row(s) for report %s "
+                "are still queued after the drain (drain timed out or writer "
+                "stuck); served_models undercounts (%d row(s) read)",
+                missing, report_id, len(rows),
             )
         if not rows:
             return None
