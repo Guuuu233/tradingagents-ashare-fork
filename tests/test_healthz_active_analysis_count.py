@@ -189,19 +189,26 @@ class TestHealthzActiveAnalysisCount:
         assert r.json()["active_analysis_count"] == 3
 
     def test_healthz_503_branch_still_carries_field(self):
+        from api import main as main_mod
         from api.main import get_job_store
 
         _seed(get_job_store(), ["running"])
 
-        async def _starve(coro, timeout):
-            raise asyncio.TimeoutError()
-
-        with patch("api.main.asyncio.wait_for", side_effect=_starve):
+        # DAV-1463: the job-store count now runs under its own
+        # ``asyncio.wait_for`` timeout, so starving every wait_for would also
+        # time out the count and lose the field this test asserts. Starve only
+        # the saturation probe by shrinking its budget instead, which keeps the
+        # real (fast, in-memory) count on the happy path.
+        real_timeout = main_mod._HEALTHZ_PROBE_TIMEOUT_S
+        try:
+            main_mod._HEALTHZ_PROBE_TIMEOUT_S = 0.0
             client = _get_client()
             try:
                 r = client.get("/healthz")
             finally:
                 client.close()
+        finally:
+            main_mod._HEALTHZ_PROBE_TIMEOUT_S = real_timeout
         assert r.status_code == 503
         body = r.json()
         assert body["status"] == "thread_pool_starved"

@@ -649,6 +649,18 @@ _executor = ThreadPoolExecutor(max_workers=int(os.getenv("TA_MAX_WORKERS", "2"))
 # lifespan 中创建的 asyncio 默认 executor，healthz 探针用它报告饱和度
 _default_executor: Optional[ThreadPoolExecutor] = None
 
+# DAV-1463 / DAV-1957 🟡2: how long /healthz waits for the job-store count.
+# Must stay well below the 5s saturation probe further down so a starved
+# executor is reported as thread_pool_starved (503) rather than hanging it.
+_HEALTHZ_JOB_COUNT_TIMEOUT_S = float(
+    os.getenv("TA_HEALTHZ_JOB_COUNT_TIMEOUT_S", "2")
+)
+
+# DAV-1463 / DAV-1957 🟡2: budget for the default-executor saturation probe.
+# Kept as a named constant so the two timeouts can be ordered explicitly and
+# so tests can exercise the 503 branch without patching asyncio internals.
+_HEALTHZ_PROBE_TIMEOUT_S = float(os.getenv("TA_HEALTHZ_PROBE_TIMEOUT_S", "5"))
+
 # ── Singleton job store (in-memory or Redis depending on REDIS_URL) ─────────
 _job_store_instance: Optional[Any] = None
 
@@ -2536,12 +2548,19 @@ async def _resolve_graph_decision(graph, decision_text: str) -> str:
 
     ``TradingAgentsGraph.process_signal`` may fall through to a synchronous
     LLM call, which would freeze the loop for the duration of a model
-    round-trip. Prefer the graph's async twin when it is available; otherwise
-    dispatch the sync method to a worker thread so test doubles and any
-    duck-typed graph keep working unchanged.
+    round-trip. Prefer the graph's async twin when it is a real coroutine
+    function; otherwise dispatch the sync method to a worker thread so test
+    doubles and any duck-typed graph keep working unchanged.
+
+    The twin is detected with ``asyncio.iscoroutinefunction`` rather than a
+    bare ``callable`` check (DAV-1957 🟡1): a ``MagicMock`` auto-creates any
+    attribute, so ``callable()`` matched a plain mock and then ``await``ed a
+    non-awaitable (TypeError), while a spec'd mock handed back a mock object
+    instead of the sync stub's value. ``iscoroutinefunction`` requires an
+    actual ``async def`` twin.
     """
     aprocess = getattr(graph, "aprocess_signal", None)
-    if callable(aprocess):
+    if aprocess is not None and asyncio.iscoroutinefunction(aprocess):
         return await aprocess(decision_text)
     return await asyncio.to_thread(graph.process_signal, decision_text)
 
@@ -5276,8 +5295,15 @@ async def healthz():
         # synchronous SCAN + pipelined HGET (no timeout). Running that on the
         # loop meant one /healthz could stall the whole server. The
         # InMemory store returns instantly, so this is a no-op there.
-        payload["active_analysis_count"] = await asyncio.to_thread(
-            get_job_store().active_job_count
+        #
+        # DAV-1957 🟡2: the timeout is what keeps the DAV-1885 saturation probe
+        # reachable. Without it, a saturated default executor would park this
+        # await indefinitely and /healthz would hang instead of reporting
+        # thread_pool_starved. On timeout we fall through to the existing
+        # degradation branch, which reports a null count plus an error field.
+        payload["active_analysis_count"] = await asyncio.wait_for(
+            asyncio.to_thread(get_job_store().active_job_count),
+            timeout=_HEALTHZ_JOB_COUNT_TIMEOUT_S,
         )
     except Exception as exc:
         # A counting failure must never break the liveness probe; report the
@@ -5287,7 +5313,9 @@ async def healthz():
         _log(f"[healthz] active_analysis_count failed: {type(exc).__name__}: {exc}")
     try:
         loop = asyncio.get_running_loop()
-        await asyncio.wait_for(loop.run_in_executor(None, int), timeout=5)
+        await asyncio.wait_for(
+            loop.run_in_executor(None, int), timeout=_HEALTHZ_PROBE_TIMEOUT_S
+        )
     except asyncio.TimeoutError:
         payload["status"] = "thread_pool_starved"
         return JSONResponse(status_code=503, content=payload)
@@ -6121,9 +6149,14 @@ async def chat_completions(
                     overtime=False,
                     overtime_at=None,
                 )
-                try:
+                def _mark_chat_job_failed():
                     with get_db_ctx() as db:
                         report_service.mark_report_failed(db, job_id, err_msg)
+
+                # DAV-1463 / DAV-1957 🟡3: sibling of the _run_job failure
+                # paths — a synchronous SQLite write on the loop thread.
+                try:
+                    await asyncio.to_thread(_mark_chat_job_failed)
                 except Exception:
                     pass
                 _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": err_msg})
