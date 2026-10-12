@@ -279,6 +279,57 @@ class TestSealGate:
         assert "严格小于" in gate["threshold"]
         assert gate["input_rows"] == 1
         assert gate["seal_late_ids"] == [] and gate["seal_unresolvable_ids"] == []
+        assert gate["seal_dateonly_fallback"] == 0
+
+    def test_negative_offset_seal_is_late_not_on_time(self):
+        # DAV-2000: "2026-10-09 01:00:00-05:00" is UTC 10-09 06:00 = CN
+        # 14:00 -> after T+1 09:30 CN -> late. Before the fix the ISO branch
+        # missed the negative offset and the s[:10] date-only fallback read it
+        # as 10-09 00:00 UTC (CN 08:00) -> silently admitted (look-ahead leak).
+        cal = ["2026-10-08", "2026-10-09"]
+        notes: dict = {}
+        dt = m._sealed_at_utc("2026-10-09 01:00:00-05:00", notes)
+        assert dt is not None
+        assert dt.astimezone(m._CN_TZ).strftime("%Y-%m-%d %H:%M") == \
+            "2026-10-09 14:00"
+        assert notes.get("seal_dateonly_fallback", 0) == 0
+        rec = _rec("neg", "S1", "2026-10-08", 60,
+                   sealed_at="2026-10-09 01:00:00-05:00")
+        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
+        assert len(df) == 0
+        assert gate["excl_seal_late"] == 1 and gate["seal_late_ids"] == ["neg"]
+        assert gate["seal_dateonly_fallback"] == 0
+
+    def test_negative_offset_before_entry_open_admitted(self):
+        # Sanity on the other side: an early CN-morning seal expressed in a
+        # negative offset must still be admitted (no blanket rejection).
+        cal = ["2026-10-08", "2026-10-09"]
+        rec = _rec("neg_ok", "S1", "2026-10-08", 60,
+                   sealed_at="2026-10-08 18:00:00-05:00")  # UTC 10-08 23:00
+        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
+        assert len(df) == 1 and gate["excl_seal_late"] == 0
+
+    def test_overlong_fraction_with_offset_not_date_only(self):
+        # >6 fractional digits + offset: 3.10 fromisoformat rejects it; the
+        # fallback must not degrade it to the same day's 00:00 UTC.
+        cal = ["2026-10-08", "2026-10-09"]
+        dt = m._sealed_at_utc("2026-10-09 02:09:00.123456789+08:00")
+        assert dt is not None
+        assert dt.strftime("%Y-%m-%d %H:%M:%S%z") == "2026-10-08 18:09:00+0000"
+        assert dt.astimezone(m._CN_TZ).strftime("%Y-%m-%d %H:%M") == \
+            "2026-10-09 02:09"
+        rec = _rec("frac", "S1", "2026-10-08", 60,
+                   sealed_at="2026-10-09 02:09:00.123456789+08:00")
+        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
+        assert len(df) == 1 and gate["seal_dateonly_fallback"] == 0
+
+    def test_dateonly_seal_is_traced_in_funnel(self):
+        # Malformed date-only sealed_at must be visible in the funnel rather
+        # than silently passed off as an on-time 00:00 UTC seal.
+        cal = ["2026-10-08", "2026-10-09"]
+        rec = _rec("donly", "S1", "2026-10-08", 60, sealed_at="2026-10-08")
+        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
+        assert gate["seal_dateonly_fallback"] == 1
 
     def test_utc_not_local(self):
         # naive local interpretation would misjudge: 02:09 treated as local
