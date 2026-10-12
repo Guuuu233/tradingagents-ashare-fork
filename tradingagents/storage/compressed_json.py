@@ -17,8 +17,12 @@ Physical layout (design ``docs/dav1770-b6-compression-design.md`` §2/§3):
 
 ``REPORT_STORAGE_MODE`` (read/write selector, §4/§6 — restart-time switch):
 
-* ``plaintext``  (default): ``ReportDB.result_data`` maps the plaintext
-  JSON column — byte-identical pre-compression behaviour (P0/P1).
+* ``plaintext``  (default): ``ReportDB.result_data`` reads a SQL-level
+  ``COALESCE(result_data, result_data_zst)`` decoded by :class:`ZstdJSON`
+  — the plaintext-first twin of the compressed mapping, declared once at
+  class definition (DAV-1985 replaced the lazy ``add_mapped_attribute``
+  rebind that tripped ``SADeprecationWarning``). Both physical columns
+  are written on every ``result_data`` change (dual write).
 * ``compressed`` (P3): ``ReportDB.result_data`` reads a SQL-level
   ``COALESCE(result_data_zst, result_data)`` decoded by :class:`ZstdJSON`.
   Both physical columns are written on every ``result_data`` change
