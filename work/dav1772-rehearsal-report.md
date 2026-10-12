@@ -164,3 +164,44 @@ r2 一次主路径 `convert` peak RSS **585,842,688 = 0.546 GiB**、`verify --re
 本报告；`.gitignore` 已补 `dav1772-pre-export/`、`dav1772-backups/`、`dav1772-journal/`、
 `dav1772-rehearsal/` 四条（复审 M7），`git check-ignore` 实测四条目录全部 IGNORED，
 而本报告未被误伤。快照源与生产库 `data/tradingagents.db` mtime 未变。
+
+## 9. r3：P5b 补三处演练（总控 10-12 裁定后）
+
+同一份快照（`/private/tmp/ta-snapshot/current.db`）、同一锁定解释器，演练 `b31fd85a`。
+
+### 9.1 三个门的实测
+
+| 门 | 场景 | 结果 |
+|---|---|---|
+| 补 3 完整性门 | 人为注入 3 条未迁移残留行 | **拒绝并报计数、CLI exit 1**；修复后 `verify: verified_ok 1307 / unmigrated 0 / ok true` |
+| 补 2 模式门 | 真实服务 `/healthz`（字段尚未部署） | 返回 `absent`、拒绝生效（fail-closed） |
+| 补 2 模式门 | 演练模式未给 `--rehearsal-reason` | 拒绝；给出理由后放行并记录 `mode=rehearsal / enforced=false` |
+| 三门全过 | `clear-plaintext --vacuum-into` | `cleared 1307 / failed 0`；`completeness_gate` 六项计数全 0 |
+
+### 9.2 补 1：备份校验与 plain 副本删除
+
+- `zstd_t: ok`（本机 `/opt/homebrew/bin/zstd` v1.5.7 实调用）、`stream_compare: ok`、
+  `restored_bytes 5993734144`、`plain_backup_deleted: true`
+- 备份目录**未压缩 `.db` 计数 0**（D-073：本地不留未压缩整库备份）
+- 独立复验：另跑 `zstd -t` PASS；仅从 `.db.zst` 还原得 5,993,734,144 B，
+  `PRAGMA quick_check ok`、reports 2410 行（临时还原件已删）
+- `VACUUM INTO` pairwise：`2410=2410 / view_mismatches 0 / missing_in_new 0 / integrity ok`
+- 清后 `verify: cleared_ok 1307 / cleared_bad 0 / ok true`；`restore-plaintext`
+  往返 `restored_rows 1307 / failed 0`
+
+### 9.3 peak 口径说明（复审 DAV-1913 🟢3 要求澄清）
+
+两个数字口径不同，**并非矛盾**，此前未写在一起容易被误读：
+
+| 轮次 | 覆盖范围 | peak（`/usr/bin/time -l`） |
+|---|---|---|
+| r1 / r2（§2、§8） | **六个子命令**全跑通，峰值出现在 `rollback --export-file` | **1.483 GiB**（RSS 1,592,688,640） |
+| r3（本节） | **仅 P5b 补三处路径**（convert + 三门 + clear + vacuum + restore） | **1.389 GiB**（peak memory footprint 1,491,633,928） |
+
+即 r3 的 1.389 GiB < r1/r2 的 1.483 GiB，是因为 r3 未执行峰值最高的 `rollback` 批。
+两者均为直接 exec 口径，全部 ≤4 GiB 红线。全流程最高值以 **1.483 GiB** 为准。
+
+### 9.4 r3 清理
+
+演练副本、备份、前像导出（合计 ≈6.7 GiB）已全部删除（现存 0 份）；
+生产库 `data/tradingagents.db` mtime 未变，快照源未触碰。
