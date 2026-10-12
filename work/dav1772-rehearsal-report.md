@@ -196,12 +196,28 @@ r2 一次主路径 `convert` peak RSS **585,842,688 = 0.546 GiB**、`verify --re
 | 轮次 | 覆盖范围 | peak（`/usr/bin/time -l`） |
 |---|---|---|
 | r1 / r2（§2、§8） | **六个子命令**全跑通，峰值出现在 `rollback --export-file` | **1.483 GiB**（RSS 1,592,688,640） |
-| r3（本节） | **仅 P5b 补三处路径**（convert + 三门 + clear + vacuum + restore） | **1.389 GiB**（peak memory footprint 1,491,633,928） |
+| r3（本节） | **仅 P5b 补三处路径**（convert + 三门 + clear + vacuum + restore） | **1.389 GiB**（*peak memory footprint* 1,491,633,928） |
 
 即 r3 的 1.389 GiB < r1/r2 的 1.483 GiB，是因为 r3 未执行峰值最高的 `rollback` 批。
 两者均为直接 exec 口径，全部 ≤4 GiB 红线。全流程最高值以 **1.483 GiB** 为准。
+
+⚠️ **口径提醒（复审 DAV-1917 🟢）**：上表两列取自 `/usr/bin/time -l` 的**不同字段** ——
+r1/r2 的 1.483 GiB 取自 *maximum resident set size*（peak RSS），r3 的 1.389 GiB 取自
+*peak memory footprint*。二者不是同一指标，不可直接相减比较；上表的「高低」结论只用于说明
+r3 未覆盖 rollback 批这一事实。生产实跑时应**统一用同一字段重采一次**，再据以判定红线余量。
 
 ### 9.4 r3 清理
 
 演练副本、备份、前像导出（合计 ≈6.7 GiB）已全部删除（现存 0 份）；
 生产库 `data/tradingagents.db` mtime 未变，快照源未触碰。
+
+### 9.5 勘误：noqa 删除的归属（复审 DAV-1917 指出，复核属实）
+
+复审指出「delta 顺带删除 3 处 `# noqa`」的叙述与实码对不上。复核确认复审是对的：
+
+- `b2634a99` 与 `94cc782e` 两个版本的 `scripts/b6c_compress_migration.py` /
+  `tests/test_dav1772_b6c_migration.py` 中 **noqa 命中数均为 0**；
+- 实际删除发生在 **`b31fd85a`（P5b 补三处那一轮）**，而非 🟢 采纳轮次的附带效果。
+
+本报告此前把该删除记在错误轮次，现更正。结论不变：本仓无 ruff 配置、CI 不跑 ruff，
+不构成门禁破坏；若后续引入 ruff，需与项目统一风格一并处理。
