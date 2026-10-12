@@ -101,13 +101,16 @@ def _mk_db(path: Path, rows: list[tuple[str, str]]) -> Path:
 
 def _run(monkeypatch, tmp_path, records, labels=None, bench=None,
          db_rows=None, as_of="2026-12-01", caliber="hs300",
-         label_fields=None):
+         label_fields=None, no_bench_file=False):
     """Invoke cmd_run with synthetic inputs; returns (exit_code, out_text)."""
     tmp_path = Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
     ledger = _write_ledger(tmp_path / "forward_ledger.jsonl", records)
     lab = _write_labels(tmp_path / "labels.jsonl", labels or [])
-    bench_f = _write_bench(tmp_path / "bench.jsonl", bench or {})
+    if no_bench_file:
+        bench_f = tmp_path / "bench_absent.jsonl"  # never written
+    else:
+        bench_f = _write_bench(tmp_path / "bench.jsonl", bench or {})
     db = _mk_db(tmp_path / "t.db", db_rows or [])
     out = tmp_path / "report.md"
 
@@ -515,3 +518,47 @@ def test_benchmark_return_signal_before_calendar_is_missing():
     bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
             for i, d in enumerate(cal)}
     assert mod._benchmark_return(bars, cal, date(2020, 1, 1), 40) is None
+
+
+# ---------------------------------------------------------------------------
+# DAV-1504 non-blocking cleanups: --fetch-benchmarks help wording +
+# 基准缺失 n 标注全量缺失情形（叠在已合入 1481/1651 的主干之上）
+
+
+def test_fetch_benchmarks_help_mentions_ohlc_not_closes():
+    """DAV-1504 项 ①：help 文案必须写 OHLC/日线口径并注明行格式，
+    不得再写 'fetch index closes'。"""
+    src = SCRIPT.read_text("utf-8")
+    assert "fetch index closes via akshare" not in src
+    assert "fetch index daily OHLC via akshare" in src
+    assert "{symbol,date,open,close} JSONL rows" in src
+
+
+def test_bench_missing_no_file_notes_total(tmp_path, monkeypatch):
+    """DAV-1504 项 ②a：基准文件完全缺失时，基准缺失列注明 n = 全部成熟
+    样本数，读者不会误以为是部分样本窗口缺 open/close。"""
+    recs = [_rec("r1", "600519.SH", "2026-07-28"),
+            _rec("r2", "600520.SH", "2026-07-28")]
+    code, text = _run(monkeypatch, tmp_path, recs, no_bench_file=True)
+    assert code == 0
+    assert "基准缺失 n（基准文件缺失/无可用行情：n = 全部成熟样本数）" \
+        in text
+    # 计数口径不变：全体缺失仍计 2（fail-close，无回落价）
+    assert "| 成熟样本 | 2 | 0 |" in text
+
+
+def test_bench_missing_partial_windows_no_note(tmp_path, monkeypatch):
+    """DAV-1504 项 ②b：基准文件存在但部分样本窗口缺 open/close 时，列头
+    不得带「全部成熟样本数」注记——区分部分缺失与全量缺失。"""
+    cal = _cal("2026-07-01", 300)
+    bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+            for i, d in enumerate(cal)}
+    # strip the entry-day open for the 2026-07-28 signal window only
+    idx = cal.index(date.fromisoformat("2026-07-28"))
+    del bars[cal[idx + 1].isoformat()]["open"]
+    recs = [_rec("r1", "600519.SH", "2026-07-28")]
+    code, text = _run(monkeypatch, tmp_path, recs, bench=bars)
+    assert code == 0
+    assert "基准缺失 n（" not in text
+    # partial missing still counted: bench leg n=0, missing=1
+    assert "| 成熟样本 | 1 | 0 | — | 1 | 0 | — | 1 |" in text
