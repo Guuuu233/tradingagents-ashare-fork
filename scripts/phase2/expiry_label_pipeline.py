@@ -46,7 +46,7 @@ rewritten).
 Typed statuses beyond the return_labels OutcomeStatus vocabulary appear only
 for pre-settlement failures: ``signal_date_not_in_calendar``,
 ``calendar_insufficient_coverage``, ``symbol_unmappable``,
-``stock_bars_unavailable``, ``label_resolution_failed``.
+``symbol_excluded_bse``, ``stock_bars_unavailable``, ``label_resolution_failed``.
 
 Determinism: the label file is a pure function of (ledger, market inputs,
 calendar, as_of, config) — no timestamps inside rows, ledger-order append.
@@ -130,6 +130,10 @@ _DIRECTION_KEYS = (
 STATUS_SIGNAL_DATE_NOT_IN_CALENDAR = "signal_date_not_in_calendar"
 STATUS_CALENDAR_INSUFFICIENT = "calendar_insufficient_coverage"
 STATUS_SYMBOL_UNMAPPABLE = "symbol_unmappable"
+# 北交所 .BJ: canonicalize_symbol 带 canonical_symbol 但状态为 excluded_bse ——
+# 股票池规则（V-03/DAV-800）明确排除北交所，与 unmappable 一样必须走 typed
+# 分支，绝不出 evaluated_ok 标签污染 T+10/T+40 统计口径（DAV-1880 复审 M-1）。
+STATUS_SYMBOL_EXCLUDED_BSE = "symbol_excluded_bse"
 STATUS_STOCK_BARS_UNAVAILABLE = "stock_bars_unavailable"
 STATUS_LABEL_RESOLUTION_FAILED = "label_resolution_failed"
 
@@ -581,7 +585,15 @@ def _settle_prediction_leg(
     entry_date: str,
     target_date: str,
 ) -> dict:
-    """P2 prediction basis: T+1 open -> target close, NO roll (V-03b logic)."""
+    """P2 prediction basis: T+1 open -> target close, NO roll (V-03b logic).
+
+    The ``status`` strings below (``entry_bar_missing`` / ``unexecutable_entry``
+    / ``target_bar_missing`` / ``target_suspended`` / ``evaluated``) are the
+    V-03b prediction-basis sub-field vocabulary, single-sourced with
+    ``v03_return_measure.py``; they live in the ``prediction`` sub-field only.
+    The row-level ``outcome_status`` always stays the 7-state OutcomeStatus
+    vocabulary (DAV-1880 S-1).
+    """
     entry_bar = window_bars.get(entry_date)
     if entry_bar is None:
         return {"status": "entry_bar_missing"}
@@ -778,6 +790,12 @@ def compute_label_row(
     canon = canonicalize_symbol(raw_symbol)
     if canon.status.value == "unmappable":
         return _typed_row(record, horizon, STATUS_SYMBOL_UNMAPPABLE,
+                          signal_date=signal_date, window=window,
+                          symbol_raw=raw_symbol)
+    if canon.status.value == "excluded_bse":
+        # BSE codes are excluded by the project stock-pool rule: typed
+        # status only, never an evaluated label.
+        return _typed_row(record, horizon, STATUS_SYMBOL_EXCLUDED_BSE,
                           signal_date=signal_date, window=window,
                           symbol_raw=raw_symbol)
     symbol = canon.canonical_symbol or str(raw_symbol)
