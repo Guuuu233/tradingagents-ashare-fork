@@ -210,6 +210,7 @@ def load_ledger_signals(
             "symbol": str(sym) if sym is not None else None,
             "run_id": rec.get("report_id"),
             "created_at": rec.get("created_at") or rec.get("sealed_at"),
+            "sealed_at": rec.get("sealed_at") or rec.get("seal_basis_at"),
             "timing_class": rec.get("timing_class"),
             "input_pit_status": rec.get("input_pit_status"),
             "completed": rec.get("status") == "completed",
@@ -226,6 +227,53 @@ def load_ledger_signals(
         # canonical names m1_eval.admit() expects: `prob` -> q, `r` already set
         df["prob"] = df["p_rel_t10"]
     return df
+
+
+# ---------------------------------------------------------------------------
+# 2b. seal-time gate (总控追加: 正式只收 T+1 09:30 前封存)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+
+
+def _cn_entry_open_utc(entry_day_iso: str) -> datetime:
+    """Asia/Shanghai 09:30 -> aware UTC datetime (mirror of the ledger's
+    _classify_timing cn_dt)."""
+    d = datetime.fromisoformat(entry_day_iso)
+    return datetime(d.year, d.month, d.day, 9, 30,
+                    tzinfo=timezone.utc) - timedelta(hours=8)
+
+
+def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataFrame, dict]:
+    """总控追加封存时点门: formal 只收 sealed_at < 信号日次一交易日 09:30
+    (Asia/Shanghai) 的账本记录。
+
+    封存时间字段 = 账本记录 ``sealed_at``（与 ``seal_basis_at`` 同值，任选
+    其一——口径注明）; 晚封/补录 (sealed >= T+1 open 或 T+1 不可解析) 的行
+    分流进诊断，在 funnel 里单列 ``excl_seal_late``，不进正式队列。
+    Returns (kept_df, {"excl_seal_late": n, "seal_late_ids": [...]}).
+    """
+    import bisect
+    cal = sorted(calendar_iso)
+    late_ids: list = []
+    kept_mask = []
+    sealed = pd.to_datetime(df["sealed_at"], utc=True, errors="coerce")
+    sig_iso = pd.to_datetime(df["signal_date"]).dt.strftime("%Y-%m-%d")
+    for i, (sd, sa) in enumerate(zip(sig_iso, sealed)):
+        idx = bisect.bisect_right(cal, sd) - 1
+        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
+            # signal not a trading day or T+1 unresolved -> seal gate cannot
+            # be satisfied; send to diagnostics, never formal.
+            late_ids.append(df["run_id"].iloc[i])
+            kept_mask.append(False)
+            continue
+        entry_open = _cn_entry_open_utc(cal[idx + 1])
+        ok = (not pd.isna(sa)) and sa < entry_open
+        if not ok:
+            late_ids.append(df["run_id"].iloc[i])
+        kept_mask.append(ok)
+    gate = {"excl_seal_late": int(len(late_ids)), "seal_late_ids": late_ids}
+    return df.loc[kept_mask].reset_index(drop=True), gate
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +350,7 @@ def _panel_n_distribution(panel: pd.DataFrame) -> dict:
     return {
         "industries": int(panel["l1"].nunique()),
         "signal_days": int(panel["signal_date"].nunique()),
-        "matured_labels": int(len(panel)),
+        "matured_labels": len(panel),
         "n_per_cell_mean": float(grp.mean()),
         "n_per_cell_min": int(grp.min()),
         "n_per_cell_max": int(grp.max()),
@@ -419,14 +467,21 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
+
+    # 总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 的账本记录;
+    # 晚封/补录行分流诊断、在 funnel 单列 excl_seal_late（在 admit 前）。
+    calendar = elp._load_calendar(
+        Path(calendar_path) if calendar_path else None)
+    df, seal_gate = apply_seal_gate(df, calendar)
+
     formal, funnel = m1.admit(df, user_id=user_id)
+    funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
-    log(f"formal rows {len(formal)} / {len(df)}")
+    log(f"formal rows {len(formal)} / {len(df)} "
+        f"(seal_late={seal_gate['excl_seal_late']})")
 
-    calendar = elp._load_calendar(
-        Path(calendar_path) if calendar_path else None)
     cal_ymd = [d.replace("-", "") for d in calendar]
     days = m1.eval_days(formal, calendar=cal_ymd)
     rel = m1.reliability_table(formal) if len(formal) else []
@@ -523,10 +578,12 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
                 *, user: str = DEFAULT_USER_ID, tc: str = "F0",
                 pit: str = "VERIFIED", created: str = "2026-01-05T09:00",
+                sealed_at: str | None = None,
                 commit: str = "abc123def456") -> dict:
     rec = {
         "ledger_version": 1, "report_id": rid, "user_id": user,
         "symbol": symbol, "signal_date": day, "created_at": created,
+        "sealed_at": sealed_at,
         "status": "completed", "timing_class": tc,
         "input_pit_status": pit, "backfilled": False,
         "versions": {"generated_by_commit_sha": commit,
@@ -630,7 +687,8 @@ def selftest(tmp: Path) -> dict:
             # r monotone in q plus an industry drift common to that l1 cell
             r = 0.5 * i - 5.0 + drift * 10 + float(rng.normal(0, 0.3))
             recs.append(_ledger_rec(f"r{di}_{i}", f"S{i:03d}", day, q,
-                                    created=f"{day}T09:00"))
+                                    created=f"{day}T09:00",
+                                    sealed_at=f"{day} 08:00:00.000000"))
             labs.append(_label(f"S{i:03d}", day, r, l1=l1))
     # all-market panel: many more rows per (day, industry) than the
             # 20-symbol ledger sample — base must come from THIS, not ledger
