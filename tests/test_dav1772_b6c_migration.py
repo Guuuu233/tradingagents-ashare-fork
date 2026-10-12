@@ -939,18 +939,18 @@ def test_backup_verification_catches_a_truncated_archive(tmp_path):
     broken.write_bytes(bytes(blob))
     # 截断在两层里先被哪一层拦住都算过 —— zstd -t (CRC/premature end)
     # 或流式逐块比对。关键是不得把不完整备份当成通过。
+    # 匹配锚定两条实际报错文本（复审 DAV-1913 🟢2: 不用宽泛关键词,
+    # 否则将来任何含 "restore" 的报错都会让本用例假绿）。
     with pytest.raises(RuntimeError,
-                       match="byte-for-byte|content size|restore|zstd -t"):
+                       match="premature end|does not restore the plain"):
         mig._verify_backup_archive(broken, plain)
 
 
-def test_rehearsal_reason_must_not_be_blank(tmp_path):
+def test_rehearsal_reason_must_not_be_blank():
     """复审 DAV-1908 🟢2: 纯空格理由不得通过模式门."""
-    idle_m = mig
     with pytest.raises(RuntimeError, match="non-blank"):
         mig._check_storage_mode("http://127.0.0.1:8000", copy_rehearsal=True,
                                 rehearsal_reason="   ")
     gate = mig._check_storage_mode("http://127.0.0.1:8000", copy_rehearsal=True,
                                    rehearsal_reason="  snapshot copy  ")
     assert gate["reason"] == "snapshot copy"   # strip 归一
-    assert idle_m is mig
