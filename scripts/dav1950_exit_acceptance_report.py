@@ -23,7 +23,7 @@ Exit codes: 0 ok；2 输入缺失（db/calendar/args，与上游同口径上抛�
 
 示例：
   python scripts/dav1950_exit_acceptance_report.py \
-      --db /private/tmp/ta-snapshot/current.db --as-of 2026-10-12 \
+      --db ~/ta-snapshot/current.db --as-of 2026-10-12 \
       --out work/dav1950/acceptance-2026-10-12.md
 """
 from __future__ import annotations
@@ -43,7 +43,11 @@ for _p in (str(_PROJECT_ROOT), str(_PROJECT_ROOT / "scripts")):
         sys.path.insert(0, _p)
 
 GENERATOR_VERSION = "dav1950_exit_acceptance_report.v1"
-DEFAULT_DB = "/private/tmp/ta-snapshot/current.db"
+# DAV-2033: shared snapshot moved out of /tmp to ~/ta-snapshot (2026-10-13),
+# see docs/ta-snapshot-usage.md. Expanded at import so the value recorded in
+# the report and forwarded to upstream ``open_ro`` is a real absolute path
+# (``Path.resolve()`` upstream does not expand ``~``).
+DEFAULT_DB = str(Path("~/ta-snapshot/current.db").expanduser())
 _SNAPSHOT_RE = re.compile(r"^tradingagents-(\d{4}-\d{2}-\d{2})\.db\.zst$")
 
 
