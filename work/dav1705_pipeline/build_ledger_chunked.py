@@ -27,9 +27,12 @@
   1. blob 逐行获取、每行处理完即 del + 定期 gc；
   2. 连接执行 `PRAGMA mmap_size=0`（快照本就 mmap=0，显式锁定防回退）。
 
+只读连接（DAV-2033）：`file:{db}?mode=ro&immutable=1`——快照是静态文件，
+`immutable=1` 不在库旁生成 `-wal`/`-shm`（`mode=ro` 单独使用会建）。
+
 用法:
     python work/dav1705_pipeline/build_ledger_chunked.py \
-        --db /private/tmp/ta-snapshot/current.db \
+        --db ~/ta-snapshot/current.db \
         --ledger-dir work/dav1705_pipeline/ledger --force
 """
 
@@ -67,8 +70,36 @@ COLS = ("id, user_id, symbol, industry, trade_date, status,"
         " created_at, updated_at, result_data")
 
 
+def _reject_unmerged_wal(db_path: Path) -> None:
+    """DAV-2033: fail closed when the target still carries WAL frames.
+
+    ``immutable=1`` (see ``_connect_ro``) makes SQLite skip the WAL entirely,
+    so a non-empty ``<db>-wal`` would mean sealing a ledger built from a
+    partial view of the database. A shared snapshot never has one (refreshed
+    by decompress + quick_check + atomic swap); the live production database
+    does. Refuse loudly instead of producing a wrong chain.
+    """
+    wal = Path(str(db_path) + "-wal")
+    try:
+        size = wal.stat().st_size
+    except OSError:
+        return  # no sidecar at all: checkpointed by definition
+    if size > 0:
+        sys.stderr.write(
+            f"[DAV-2033] {db_path} carries a non-empty WAL ({size} B); "
+            "opening it with immutable=1 would skip those frames and seal an "
+            "incomplete ledger. Checkpoint it first (sqlite3 <db> "
+            "'PRAGMA wal_checkpoint(TRUNCATE);') or pass a checkpointed "
+            "copy/snapshot.\n")
+        sys.exit(2)
+
+
 def _connect_ro(db_path: Path) -> sqlite3.Connection:
-    uri = f"file:{db_path}?mode=ro"
+    _reject_unmerged_wal(db_path)
+    # DAV-2033: the snapshot is a static file, so immutable=1 — plain mode=ro
+    # would leave a -wal/-shm pair beside the shared current.db. Correct only
+    # because no writer holds the snapshot; never use this on a live database.
+    uri = f"file:{db_path}?mode=ro&immutable=1"
     con = sqlite3.connect(uri, uri=True)
     _b6e_guard(con)
     con.row_factory = sqlite3.Row

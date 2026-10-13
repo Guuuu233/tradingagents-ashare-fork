@@ -102,11 +102,42 @@ def _project_imports():
 # DB streaming                                                                 #
 # --------------------------------------------------------------------------- #
 
+def _reject_unmerged_wal(db: Path) -> None:
+    """Fail closed when the target still carries unmerged WAL frames.
+
+    DAV-2033: ``immutable=1`` (see ``open_ro``) makes SQLite skip the WAL
+    entirely, so a non-empty ``<db>-wal`` would mean silently dropping
+    committed frames. A shared snapshot never has one — it is refreshed by
+    decompress + quick_check + atomic swap — but the live production
+    ``data/tradingagents.db`` routinely does (MBs of uncheckpointed WAL).
+    Refuse rather than emit readings computed from a stale view.
+    """
+    wal = Path(str(db) + "-wal")
+    try:
+        size = wal.stat().st_size
+    except OSError:
+        return  # no sidecar at all: the file is checkpointed by definition
+    if size > 0:
+        raise SystemExit(
+            f"[exit 2] {db} carries a non-empty WAL ({size} B); opening it with "
+            "immutable=1 would skip those frames. Checkpoint it first "
+            "(sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE);') or pass a "
+            "checkpointed copy/snapshot.")
+
+
 def open_ro(path: str) -> sqlite3.Connection:
     db = Path(path).resolve()
     if not db.is_file():
         raise SystemExit(f"[exit 2] database does not exist: {db}")
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    _reject_unmerged_wal(db)
+    # DAV-2033: shared snapshots (docs/ta-snapshot-usage.md) are static,
+    # fully checkpointed files. ``mode=ro`` alone still opens the WAL and
+    # creates ``-wal``/``-shm`` sidecars beside the file — that is where the
+    # stray ``~/ta-snapshot/current.db-shm`` came from. ``immutable=1``
+    # disables locking/change detection so nothing is written next to it, and
+    # it also skips the WAL entirely, so it is only correct for a file no
+    # writer touches. Never use this URI on a live database.
+    con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
     con.execute("PRAGMA query_only=ON")
     # Bound SQLite's page cache so phys_footprint stays well under the 4 GB
     # envelope (default cache on a 5 GB file can balloon the measured peak).
