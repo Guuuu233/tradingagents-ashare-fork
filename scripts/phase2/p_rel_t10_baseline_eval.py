@@ -206,7 +206,11 @@ def load_ledger_signals(
         p, p_status = _p_rel_t10(rec)
         lab = labels.get((str(sym), sig)) if (sym is not None and sig) else None
         r = None
-        if lab is not None and lab.get("prediction", {}).get("status") == "evaluated":
+        # DAV-2025 🟡-2: `.get(key, {})` returns None (not {}) when the key
+        # exists with an explicit JSON null — guard with `or {}` so a
+        # `prediction: null` label row routes to excl_immature_label instead
+        # of crashing the run with AttributeError.
+        if lab is not None and (lab.get("prediction") or {}).get("status") == "evaluated":
             v = lab.get("sw_excess_pct_prediction")
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 r = float(v) / 100.0
@@ -500,9 +504,13 @@ def paired_increment(formal: pd.DataFrame,
     """Daily IC_model − IC_base on the same cross-sections + NW60/120 CI.
 
     The paired set per day = formal rows whose (signal_date, l1) cell has a
-    computable base rate. Days failing the n>=10 / non-degenerate rules on
-    EITHER side stay NaN in the diff series (real gaps kept — never
-    compressed, 签收 item 3).
+    computable base rate — BOTH legs are computed on that identical subset
+    (DAV-2025 🟡-1: before this fix the model leg used the day's full
+    cross-section while the base leg used only the cell-covered subset, so
+    `diff` mixed two samples and the "same cross-sections" contract did not
+    hold whenever some rows had no base rate). Days failing the n>=10 /
+    non-degenerate rules on EITHER side stay NaN in the diff series (real
+    gaps kept — never compressed, 签收 item 3).
     """
     d = formal.copy()
     d["_ymd"] = pd.to_datetime(d["signal_date"]).dt.strftime("%Y-%m-%d")
@@ -511,8 +519,11 @@ def paired_increment(formal: pd.DataFrame,
     def _iso(ymd: str) -> str:
         s = str(ymd)
         return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if "-" not in s else s
+    # DAV-2025 🟡-2: explicit JSON null on `sw` (`"sw": null`) must degrade
+    # to l1="" (no base rate found -> NaN q_base -> dropped from the paired
+    # subset), not AttributeError out of `.get("index_code")`.
     key = list(zip(d["_ymd"],
-                   [(labels.get((s, t)) or {}).get("sw", {}).get("index_code") or ""
+                   [((labels.get((s, t)) or {}).get("sw") or {}).get("index_code") or ""
                     for s, t in zip(d["symbol"], d["_ymd"])]))
     d["q_base"] = [qmap.get(k, np.nan) for k in key]
 
@@ -520,16 +531,16 @@ def paired_increment(formal: pd.DataFrame,
     ic_base: dict[str, float] = {}
     for day, g in d.groupby("_ymd", sort=True):
         ok = g.dropna(subset=["q", "r"])
-        if len(ok) < m1.MIN_DAILY_N:
+        # DAV-2025 🟡-1: same-sample contract — restrict to the rows whose
+        # (signal_date, l1) cell carries a base rate FIRST, then compute
+        # BOTH legs on that identical cross-section.
+        paired = ok.dropna(subset=["q_base"])
+        if len(paired) < m1.MIN_DAILY_N:
             continue
-        ic_m, dm = m1.spearman_ic(ok["q"].to_numpy(float),
-                                  ok["r"].to_numpy(float))
-        base_ok = ok.dropna(subset=["q_base"])
-        ic_b = np.nan
-        db = True
-        if len(base_ok) >= m1.MIN_DAILY_N:
-            ic_b, db = m1.spearman_ic(base_ok["q_base"].to_numpy(float),
-                                      base_ok["r"].to_numpy(float))
+        ic_m, dm = m1.spearman_ic(paired["q"].to_numpy(float),
+                                  paired["r"].to_numpy(float))
+        ic_b, db = m1.spearman_ic(paired["q_base"].to_numpy(float),
+                                  paired["r"].to_numpy(float))
         if not dm:
             ic_model[day] = ic_m
         if not db:

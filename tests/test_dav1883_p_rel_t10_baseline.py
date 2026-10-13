@@ -381,7 +381,126 @@ class TestSealGate:
         assert vj["model"]["seal_gate"] == sg    # 透传进 verdict.json
 
 
+class TestNullDefense:
+    """DAV-2025 🟡-2: explicit JSON nulls on label sub-dicts must degrade
+    gracefully — never AttributeError out of `.get(...)`."""
+
+    def test_prediction_null_routes_immature_not_crash(self, tmp_path):
+        rec = _rec("np", "S1", "2026-01-05", 60)
+        lab = m._label("S1", "2026-01-05", 5.0)
+        lab["prediction"] = None
+        labels = {("S1", "2026-01-05"): lab}
+        ledger = tmp_path / "l.jsonl"
+        _write_ledger(ledger, [rec])
+        # must not raise AttributeError on `None.get("status")`
+        df = m.load_ledger_signals(ledger, labels, FIXED)
+        assert len(df) == 1
+        assert df.iloc[0]["r"] is None or pd.isna(df.iloc[0]["r"])
+        formal, fun = m.m1.admit(df, user_id=FIXED)
+        assert len(formal) == 0
+        assert fun["excl_immature_label"] == 1
+
+    def test_prediction_null_cli_fails_clean_or_excludes(self, tmp_path):
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        recs = [_rec("ok", "S1", "2026-01-05", 60)]
+        lab = m._label("S1", "2026-01-05", 5.0)
+        lab["prediction"] = None
+        labs = [lab]
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        labf = tmp_path / "lab.jsonl"; _write_labels(labf, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days) + "\n")
+        # Either a clean run that funnel-excludes the row, or a PipelineError
+        # exit 2 — never a bare AttributeError traceback.
+        rc = m.main(["run", "--ledger", str(ledger), "--labels", str(labf),
+                     "--calendar-file", str(cal),
+                     "--out-dir", str(tmp_path / "o")])
+        assert rc in (0, 2)
+
+    def test_sw_null_qbase_nan_not_crash(self, tmp_path):
+        # sw: null inside the labels map must yield l1="" -> q_base NaN ->
+        # row dropped from the paired subset, not AttributeError.
+        formal = pd.DataFrame({
+            "signal_date": ["2026-01-05"] * 12,
+            "symbol": [f"S{i}" for i in range(12)],
+            "q": np.linspace(0.1, 0.9, 12),
+            "r": np.linspace(-1, 1, 12),
+        })
+        labels = {}
+        for i in range(12):
+            lab = m._label(f"S{i}", "2026-01-05", 1.0)
+            lab["sw"] = None
+            labels[(f"S{i}", "2026-01-05")] = lab
+        inc = m.paired_increment(formal, labels,
+                                 {("2026-01-05", "801010.SI"): 0.6},
+                                 ["20260105"])
+        # every paired leg dropped -> 0 paired days, diff series empty
+        assert inc["paired_days"] == 0
+
+
 class TestIncrement:
+    def test_same_sample_contract(self):
+        """DAV-2025 🟡-1: both legs of a paired day must be computed on the
+        IDENTICAL cross-section — rows without a (day,l1) base rate are
+        excluded from BOTH IC_model and IC_base.
+
+        Probe design (3 paired days, NW mean needs n>=3): each day has 12
+        formal rows; row 11 of every day sits in a membership-gap cell
+        (sw.index_code="" -> q_base NaN) and is the q-max with r=-999 — the
+        strongest IC-breaker in the sample:
+        - OLD code: ic_model over all 12 rows -> IC << 1, mixes samples;
+        - FIXED code: both legs over the same 11 covered rows -> IC=1 each
+          -> diff == 0.
+        """
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days_index = [d.replace("-", "") for d in days]
+        n = 12
+        formal, labels, qmap = [], {}, {}
+        for day in days:
+            iso = day
+            for i in range(n):
+                sym = f"{day[-2:]}S{i}"
+                r = float(i) if i < n - 1 else -999.0   # S11 = IC breaker
+                formal.append({"signal_date": day, "symbol": sym,
+                               "q": float(i), "r": r})
+                l1 = "" if i == n - 1 else f"L{i}"
+                if l1:
+                    # one cell per row, base rate monotone in i -> base
+                    # IC == 1 on the paired 11-row subset
+                    qmap[(iso, l1)] = 0.5 + 0.02 * i
+                labels[(sym, iso)] = m._label(sym, day, 1.0, l1=l1)
+        dfr = pd.DataFrame(formal)
+        inc = m.paired_increment(dfr, labels, qmap, days_index)
+        assert inc["paired_days"] == 3
+        # model leg on the paired 11 rows/day: q 0..10 monotone in r 0..10.
+        assert inc["model_ic_mean"] == pytest.approx(1.0)
+        # base leg on the SAME rows: q_base monotone in r by construction.
+        assert inc["base_ic_mean"] == pytest.approx(1.0)
+        # identical cross-section -> diff collapses to 0; the old mixed-
+        # sample code would report model IC over all 12 rows (<1).
+        assert inc["diff_mean"] == pytest.approx(0.0)
+
+    def test_gap_row_drops_day_from_pairing(self):
+        """Same-sample corollary: if the uncovered rows are what kept the
+        day at/above MIN_DAILY_N, the whole day leaves the paired set."""
+        n = m.m1.MIN_DAILY_N            # exactly at the threshold
+        formal = pd.DataFrame({
+            "signal_date": ["2026-01-05"] * n,
+            "symbol": [f"S{i}" for i in range(n)],
+            "q": np.arange(n, dtype=float),
+            "r": np.arange(n, dtype=float),
+        })
+        labels = {}
+        qmap = {}
+        for i in range(n):
+            l1 = "" if i == n - 1 else f"L{i}"
+            if l1:
+                qmap[("2026-01-05", l1)] = 0.5 + 0.01 * i
+            labels[(f"S{i}", "2026-01-05")] = m._label(
+                f"S{i}", "2026-01-05", 1.0, l1=l1)
+        inc = m.paired_increment(formal, labels, qmap, ["20260105"])
+        # paired subset = 9 < MIN_DAILY_N -> the day never pairs.
+        assert inc["paired_days"] == 0
+
     def test_flat_base_is_degenerate(self, tmp_path):
         # a (day,l1) cell with a 50/50 win mix -> p_m200 ~= 0.5 constant
         # across the day -> rank-degenerate base -> increment A.
@@ -392,6 +511,30 @@ class TestIncrement:
         m._write_p1_chunks(chunks, rows)
         qmap = m.base_q_map(m.build_base_panel(chunks))
         assert qmap == {("2026-01-05", "801010.SI"): pytest.approx(0.5, abs=0.01)}
+
+    def test_paired_diff_zero_when_legs_identical(self):
+        """When q == q_base on the same paired subset, diff must be exactly
+        0 — guards the same-sample wiring end to end (3 days so the NW mean
+        is defined)."""
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days_index = [d.replace("-", "") for d in days]
+        n = 12
+        q = np.linspace(0.05, 0.95, n)
+        formal, labels, qmap = [], {}, {}
+        for day in days:
+            for i in range(n):
+                sym = f"{day[-2:]}S{i}"
+                formal.append({"signal_date": day, "symbol": sym,
+                               "q": float(q[i]), "r": float(i)})
+                l1 = f"L{i}"          # own cell -> per-row q_base == q
+                qmap[(day, l1)] = float(q[i])
+                labels[(sym, day)] = m._label(sym, day, 1.0, l1=l1)
+        inc = m.paired_increment(pd.DataFrame(formal), labels, qmap,
+                                 days_index)
+        assert inc["paired_days"] == 3
+        assert inc["model_ic_mean"] == pytest.approx(1.0)
+        assert inc["base_ic_mean"] == pytest.approx(1.0)
+        assert inc["diff_mean"] == pytest.approx(0.0)
 
 
 class TestAllMarketBase:
