@@ -1,7 +1,7 @@
 # 共享只读快照使用说明（DAV-1528，v2）
 
 每个交易日批后由 `scripts/ta_snapshot.py` 生成一份压缩的生产库快照，
-固定位置 `/private/tmp/ta-snapshot/`：
+固定位置 **`~/ta-snapshot/`**（2026-10-13 迁出 /tmp：macOS 会清理 /tmp 下长期未访问文件）：
 
 - `tradingagents-YYYY-MM-DD.db.zst` — 按交易日的压缩快照，**只保留最近 3 份**，
   超出的旧 `.zst` 由脚本自动删除（删除记入运行 JSON）。
@@ -15,13 +15,17 @@
 
 **直接用 `current.db`，不要复制、不要解压 `.zst`。**
 
+**读快照一律用 `file:…?mode=ro&immutable=1` 的 URI 方式打开**（总控 10-13 令；
+static 文件用 immutable=1 最快且不建 WAL 侧文件——普通方式打开会在快照旁留下
+`current.db-shm`/`-wal` 附属文件）：
+
 ```bash
-# 只读打开共享快照（static 文件，immutable=1 最快且不建 WAL 侧文件）
-sqlite3 "file:/private/tmp/ta-snapshot/current.db?mode=ro&immutable=1" \
+# 只读打开共享快照（URI 方式，必须）
+sqlite3 "file:$HOME/ta-snapshot/current.db?mode=ro&immutable=1" \
   "select count(*) from reports;"
 
 # 项目 Python 同样方式（不要指到活库 data/tradingagents.db）
-DATABASE_URL="sqlite:////private/tmp/ta-snapshot/current.db" ...
+DATABASE_URL="sqlite:////Users/davidliu/ta-snapshot/current.db" ...
 ```
 
 **不得复制 `current.db`**——它本身就是给全机共享的那份整库；
@@ -35,7 +39,7 @@ DATABASE_URL="sqlite:////private/tmp/ta-snapshot/current.db" ...
 ```bash
 WORK=/private/tmp/ta-work-<卡号>
 mkdir -p "$WORK"
-zstd -d -f /private/tmp/ta-snapshot/tradingagents-<YYYY-MM-DD>.db.zst \
+zstd -d -f ~/ta-snapshot/tradingagents-<YYYY-MM-DD>.db.zst \
   -o "$WORK/tradingagents.db"
 # ...用完...
 rm -f "$WORK/tradingagents.db"   # 确切路径，不进废纸篓
