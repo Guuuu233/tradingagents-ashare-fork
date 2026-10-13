@@ -142,6 +142,49 @@ class PipelineError(RuntimeError):
     """Fail-closed pipeline error (calendar / ledger / input integrity)."""
 
 
+# SW leg silent-degradation observability (DAV-2041): a launchd run without
+# TUSHARE_TOKEN labels every row with sw.membership_status=\"gap\" yet still
+# exits 0 — the daily timer would show green while the industry leg is
+# permanently missing. The counters below let ``run`` log the gap
+# concentration and ``verify`` fail-loud on the file.
+
+
+def _sw_leg_missing(token: Optional[str] = None) -> bool:
+    """True when the ONLINE SW leg cannot possibly be resolved: no Tushare
+    token (``resolve_sw_l1_benchmark`` membership + ``sw_daily`` bars both
+    come from Tushare). Token presence is necessary, not sufficient — a bad
+    token still degrades per-row and is caught by the verify gap-ratio
+    check. In offline mode (file inputs) the SW leg needs no token and this
+    check is skipped by the caller."""
+    tok = os.getenv("TUSHARE_TOKEN", "").strip() if token is None else token
+    return not tok
+
+
+def _row_sw_gap(row: Mapping[str, Any]) -> bool:
+    """True when the row's SW industry leg degraded to membership gap."""
+    sw = row.get("sw")
+    return isinstance(sw, Mapping) and sw.get("membership_status") == "gap"
+
+
+def _sw_gap_counts(path: Path) -> "tuple[int, int]":
+    """(sw-gap rows, total rows) in one label file; unreadable lines ignored
+    — cmd_verify already fails on them separately."""
+    gaps = total = 0
+    if not path.exists():
+        return gaps, total
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                if _row_sw_gap(json.loads(line)):
+                    gaps += 1
+            except json.JSONDecodeError:
+                continue
+    return gaps, total
+
+
 # ---------------------------------------------------------------------------
 # small utils
 
@@ -1073,6 +1116,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     _log(out_dir, f"run start pipeline={PIPELINE_VERSION} ledger={ledger_path}")
 
+    offline_mode = bool(args.bars_file or args.hs300_file
+                        or args.sw_daily_file or args.sw_industry_map)
+    sw_expected_off = _sw_leg_missing() and not offline_mode
+    if sw_expected_off:
+        # Not fatal in-process: the wrapper treats TUSHARE_TOKEN absence as a
+        # precondition alert before run, and verify now fail-louds on an
+        # all-gap file — but log it so the file itself records WHY every row
+        # is membership gap instead of looking like a market-data accident.
+        _log(out_dir, "WARN sw leg unavailable: TUSHARE_TOKEN missing — "
+                      "every evaluated row will have membership_status=gap")
+
     calendar = _load_calendar(Path(args.calendar_file) if args.calendar_file else None)
     as_of = _resolve_as_of(args)
     as_of_closed = not bool(args.as_of_market_open)
@@ -1114,6 +1168,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     }
     per_horizon_appended: Dict[str, int] = {h: 0 for h in horizons}
     per_horizon_status: Dict[str, Dict[str, int]] = {h: {} for h in horizons}
+    per_horizon_sw_gap: Dict[str, int] = {h: 0 for h in horizons}
 
     for lineno, record in _iter_ledger_records(ledger_path):
         counts["ledger_lines"] += 1
@@ -1150,6 +1205,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             status = str(row.get("outcome_status"))
             per_horizon_status[horizon][status] = (
                 per_horizon_status[horizon].get(status, 0) + 1)
+            if _row_sw_gap(row):
+                per_horizon_sw_gap[horizon] += 1
             n = _append_rows(out_dir / LABEL_FILE_NAMES[horizon], (row,))
             per_horizon_appended[horizon] += n
             existing[horizon].add(key)
@@ -1158,12 +1215,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     file_digests = {
         LABEL_FILE_NAMES[h]: {
             "appended": per_horizon_appended[h],
+            "sw_gap_appended": per_horizon_sw_gap[h],
             "sha256": (_sha256_file(out_dir / LABEL_FILE_NAMES[h])
                        if (out_dir / LABEL_FILE_NAMES[h]).exists() else None),
             "status_counts": per_horizon_status[h],
         }
         for h in horizons
     }
+    sw_gap_note = "; ".join(
+        f"{LABEL_FILE_NAMES[h]} sw_gap={per_horizon_sw_gap[h]}/"
+        f"{per_horizon_appended[h]}" for h in horizons)
+    if any(per_horizon_sw_gap[h] == per_horizon_appended[h] > 0
+           for h in horizons):
+        # fail-loud in the log + state, even though run exits 0: verify's
+        # gap-ratio check is the gate that turns this into a timer alert.
+        _log(out_dir, f"WARN all appended rows have sw membership gap "
+                      f"({sw_gap_note}) — verify will fail on this file")
     state = {
         "pipeline": PIPELINE_VERSION,
         "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1178,6 +1245,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "price_basis": args.price_basis,
         "return_type": args.return_type,
         "offline": market.offline,
+        "sw_leg_missing": sw_expected_off,
         "counts": counts,
         "files": file_digests,
     }
@@ -1205,6 +1273,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             continue
         keys: Dict[Tuple[Any, str], int] = {}
         statuses: Dict[str, int] = {}
+        sw_gaps = 0
         n = 0
         with open(path, "r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -1222,14 +1291,36 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 keys[key] = keys.get(key, 0) + 1
                 statuses[str(obj.get("outcome_status"))] = (
                     statuses.get(str(obj.get("outcome_status")), 0) + 1)
+                if _row_sw_gap(obj):
+                    sw_gaps += 1
         dupes = {k: c for k, c in keys.items() if c > 1}
         if dupes:
             print(f"FAIL: {path.name} has duplicate keys: {dupes}",
                   file=sys.stderr)
             ok = False
+        if n > 0 and sw_gaps == n:
+            # DAV-2041 🟡-1: an all-gap SW leg means the Tushare route was
+            # dead for the whole run (missing token or equivalent) — those
+            # keys are append-only and can never be re-labelled, so the
+            # timer MUST fail loud here instead of staying green.
+            print(f"FAIL: {path.name} all {n} rows have "
+                  f"sw.membership_status=gap — SW industry leg degraded "
+                  f"(TUSHARE_TOKEN missing or tushare route down?); "
+                  f"labels are append-only and will never be rewritten",
+                  file=sys.stderr)
+            ok = False
+        elif n > 0 and sw_gaps / n >= 0.9:
+            print(f"FAIL: {path.name} {sw_gaps}/{n} rows have "
+                  f"sw.membership_status=gap (>=90%) — SW industry leg "
+                  f"degraded; labels are append-only and will never be "
+                  f"rewritten", file=sys.stderr)
+            ok = False
+        elif sw_gaps:
+            print(f"WARN: {path.name} {sw_gaps}/{n} rows have "
+                  f"sw.membership_status=gap")
         digest = _sha256_file(path)
         print(f"{'OK' if ok else 'FAIL'}: {path.name} lines={n} "
-              f"unique_keys={len(keys)} sha256={digest}")
+              f"unique_keys={len(keys)} sw_gaps={sw_gaps} sha256={digest}")
         print(f"  status_counts={json.dumps(statuses, ensure_ascii=False)}")
     state_path = out_dir / STATE_FILE_NAME
     if state_path.exists():

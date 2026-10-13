@@ -1,28 +1,52 @@
 #!/usr/bin/env bash
 # DAV-2034 — daily expiry-label timer wrapper (launchd).
+# DAV-2041 — env injection + token precondition (打回自 DAV-2038 🔴-1).
 #
 # Semantics (总控 10-13 令):
 #   * runs `expiry_label_pipeline.py run` + `verify` for the fixed P4 account,
 #     every CN trading day at 20:10 (after the 19:45 ledger seal);
 #   * output dir is append-only: work/phase2-labels/ in the ledger worktree;
 #   * reads the LIVE forward ledger + market data — never the snapshot DB;
-#     expiry_label_pipeline itself only touches SQLite through the ledger
-#     writer's read-only URI (file:...?mode=ro&immutable=1) and this wrapper
-#     passes no --db at all;
+#     this wrapper passes no --db at all and the pipeline never opens the
+#     ledger DB (the ro/immutable URI convention only applies to snapshot
+#     readers, which this timer is not);
 #   * fail-close everywhere: trading-calendar unavailable / run non-zero /
-#     verify non-zero -> write alert file + non-zero exit, NO retry;
+#     verify non-zero / SW-leg credential missing -> write alert file +
+#     non-zero exit, NO retry;
 #   * launchd still fires on Mon-Fri holidays; a non-trading day exits 0 with
 #     a log line only (calendar was loaded to decide that, so an unloaded
 #     calendar still alerts rather than skipping silently).
 #
+# Credentials (DAV-2041 🔴-1): launchd hands us a sparse env — no
+# TUSHARE_TOKEN means the SW industry leg silently degrades to
+# membership_status="gap" on EVERY row while run/verify still exit 0, and
+# the appended (report_id,horizon) keys are skipped forever. So this wrapper
+# sources the single credential source ~/Documents/TradingAgents-AShare/.env
+# (export-all around source; KEY=VALUE lines only — no secrets are written
+# to the plist, the alert file, or the log) and then pre-probes the keys
+# the pipeline actually consumes:
+#   TUSHARE_TOKEN      — SW2021 membership + sw_daily bars (industry leg)
+#   FUYAO_API_KEY      — trade-calendar fallback when akshare is down
+#   INVESTODAY_API_KEY — vendor route credential (kept consistent with .env)
+# Missing TUSHARE_TOKEN -> alert + exit 13 (BEFORE touching the ledger, so a
+# degraded night cannot mint permanent gap labels). FUYAO/INVESTODAY missing
+# is a warning in the log only — the calendar can still come from akshare
+# and a missing fallback is not worth paging at 20:10.
+#
 # Install (template only — do NOT install before the 10-18 release card):
 #   cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
 #   launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+#
+# Exit codes: 0 ok/skip, 10 python missing, 11 pipeline missing,
+#             12 ledger missing, 13 calendar unavailable OR required
+#             credential missing, 14 run failed, 15 verify failed,
+#             16 .env unreadable, 17 post-run all-gap SW-leg guard.
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
 # --- fixed paths (same layout as the installed 19:45 ledger timer) ---------
 PYTHON="/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python"
+ENV_FILE="/Users/davidliu/Documents/TradingAgents-AShare/.env"
 CODE_DIR="/Users/davidliu/ta-p4-ef8aa9d9"
 PIPELINE="${CODE_DIR}/scripts/phase2/expiry_label_pipeline.py"
 WORK_ROOT="/Users/davidliu/ta-p4-2e1e199f/work"
@@ -51,6 +75,7 @@ alert() {
     # Write/overwrite the alert file then exit non-zero. One file, not a
     # growing series — launchd surfaces the exit code and the file content is
     # the current failure, not a log of every failure since install.
+    # NEVER log or alert credential values — names only.
     local msg="$1" code="$2"
     mkdir -p "${OUT_DIR}"
     {
@@ -68,10 +93,32 @@ alert() {
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
 
+# --- credential injection (DAV-2041) ---------------------------------------
+# .env is the single credential source; values stay in the process env, they
+# are never echoed. `set -a` exports every assignment `source` evaluates.
+if [ -f "${ENV_FILE}" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "${ENV_FILE}"
+    set +a
+else
+    alert "credential file unreadable: ${ENV_FILE} — cannot inject TUSHARE_TOKEN/FUYAO_API_KEY/INVESTODAY_API_KEY" 16
+fi
+
 # --- preconditions ---------------------------------------------------------
 [ -x "${PYTHON}" ]    || alert "python interpreter missing: ${PYTHON}" 10
 [ -f "${PIPELINE}" ]  || alert "pipeline script missing: ${PIPELINE} (code worktree not upgraded to a trunk with DAV-1875 yet?)" 11
 [ -f "${LEDGER}" ]    || alert "forward ledger missing: ${LEDGER} (19:45 seal timer has not produced it)" 12
+
+# SW-leg credential probe: without TUSHARE_TOKEN every row lands as
+# membership_status=gap AND (report_id,horizon) is permanently skipped —
+# fail BEFORE the run mints irreversible gap labels.
+if [ -z "${TUSHARE_TOKEN:-}" ]; then
+    alert "TUSHARE_TOKEN missing after sourcing ${ENV_FILE} — SW industry leg would silently degrade to gap for every row" 13
+fi
+# Fallback/secondary credentials: warn-only (calendar still has akshare).
+[ -n "${FUYAO_API_KEY:-}" ]      || log "WARN FUYAO_API_KEY missing — trade-calendar fallback unavailable (akshare only)"
+[ -n "${INVESTODAY_API_KEY:-}" ] || log "WARN INVESTODAY_API_KEY missing — vendor investoday route unavailable"
 
 # --- trading-day gate ------------------------------------------------------
 # is_cn_trading_day() raises TradeCalendarUnavailableError when the calendar
@@ -103,6 +150,53 @@ fi
 RUN_RC=$?
 if [ "${RUN_RC}" -ne 0 ]; then
     alert "expiry_label_pipeline run exited ${RUN_RC} (see ${LOG_FILE} tail)" 14
+fi
+
+# --- post-run SW-leg guard (DAV-2041 🟡-1) ----------------------------------
+# run exits 0 even when every appended row is a gap (typed status, not a
+# failure). Detect the all-gap regression here so the timer pages instead of
+# reporting green; verify would also catch it, but alerting first keeps the
+# exit code specific (17 = data degradation, not file corruption).
+GAP_CHECK="$("${PYTHON}" - "${OUT_DIR}" <<'PY' 2>&1
+import json, sys
+from pathlib import Path
+out = Path(sys.argv[1])
+report = []
+worst = 0
+for name in ("labels_t10.jsonl", "labels_t40.jsonl"):
+    p = out / name
+    if not p.exists():
+        continue
+    total = gaps = 0
+    for line in p.read_text("utf-8").splitlines():
+        if not line.strip():
+            continue
+        total += 1
+        try:
+            sw = json.loads(line).get("sw") or {}
+        except json.JSONDecodeError:
+            continue
+        if sw.get("membership_status") == "gap":
+            gaps += 1
+    if total:
+        report.append(f"{name}: gap {gaps}/{total}")
+        if gaps == total:
+            worst = max(worst, 2)
+        elif gaps / total >= 0.9:
+            worst = max(worst, 1)
+print(f"{worst} {'; '.join(report)}")
+PY
+)"
+GAP_RC=$?
+if [ "${GAP_RC}" -ne 0 ]; then
+    alert "sw-gap post-check itself failed: ${GAP_CHECK}" 17
+fi
+GAP_LEVEL="${GAP_CHECK%% *}"
+if [ "${GAP_LEVEL}" = "2" ]; then
+    alert "SW industry leg fully degraded — ${GAP_CHECK#* } (labels are append-only; rows already written can never be re-labelled)" 17
+fi
+if [ "${GAP_LEVEL}" = "1" ]; then
+    log "WARN ${GAP_CHECK#* } — partial SW gap >=90%, verify will flag"
 fi
 
 # --- verify ----------------------------------------------------------------

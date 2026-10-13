@@ -953,3 +953,120 @@ def test_cli_subprocess_exit_codes(tmp_path):
         capture_output=True, text=True)
     assert proc.returncode == 2
     assert "FAIL-CLOSE" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# DAV-2041 — SW-leg degradation observability (no silent all-green gap runs)
+
+
+def _run_online_sw_stub(tmp_path: Path, cal: list[str], records: list[dict],
+                        monkeypatch, *, sw_member: dict | None,
+                        as_of: str, out_name: str = "out") -> tuple[int, Path]:
+    """Drive `run` through the ONLINE code path (no --*-file args) with all
+    market access stubbed: vendor bars synthetic, SW membership/sw_daily
+    stubbed to `sw_member` (None => the TUSHARE_TOKEN-missing gap path)."""
+    ledger = tmp_path / "forward_ledger.jsonl"
+    cal_file = tmp_path / "calendar.txt"
+    out_dir = tmp_path / out_name
+    if records:
+        _write_ledger(ledger, records)
+    cal_file.write_text("\n".join(cal) + "\n", "utf-8")
+
+    stock = {r["date"]: r for r in _stock_series("000001.SZ", cal)}
+    hs300 = {r["date"]: r for r in _stock_series("000300.SH", cal, base=4000.0)}
+
+    class _Bar:
+        def __init__(self, d):
+            self.open = d["open"]; self.high = d["high"]
+            self.low = d["low"]; self.close = d["close"]
+            self.volume = d["volume"]; self.is_suspended = d["is_suspended"]
+
+    class _StubProvider:
+        def get_bar(self, symbol, d):
+            src = hs300 if symbol == "000300.SH" else stock
+            row = src.get(d)
+            return _Bar(row) if row else None
+
+    monkeypatch.setattr(
+        "tradingagents.eval.v03_return_measure.VendorPriceDataProvider",
+        lambda *a, **k: _StubProvider())
+    monkeypatch.setattr(
+        "tradingagents.dataflows.sw_benchmark.default_sw_daily_fetcher",
+        lambda code, s, e: {d: {"open": 1.0, "high": 1.0, "low": 1.0,
+                                "close": 1.0} for d in cal if s <= d <= e})
+    monkeypatch.setattr(
+        "tradingagents.dataflows.sw_industry.resolve_sw_l1_benchmark",
+        lambda symbol, analysis_date: (
+            (sw_member, None) if sw_member is not None
+            else (None, "【数据获取失败】申万一级行业基准：index_classify_unavailable")))
+
+    rc = elp.main([
+        "run", "--ledger", str(ledger), "--out-dir", str(out_dir),
+        "--calendar-file", str(cal_file), "--as-of", as_of,
+        "--horizons", "short",
+    ])
+    return rc, out_dir
+
+
+def test_sw_gap_fail_loud_when_token_missing(tmp_path, monkeypatch, capsys):
+    """DAV-2041 🟡-1: online run with every SW leg landing membership=gap ->
+    run still exits 0 (typed-status semantics) but `verify` MUST fail loud
+    instead of letting the timer report all-green."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    cal = _weekday_calendar("2026-03-02", 60)
+    recs = [_record(f"r{i}", "000001.SZ", cal[2 + i]) for i in range(3)]
+    rc, out = _run_online_sw_stub(tmp_path, cal, recs, monkeypatch,
+                                  sw_member=None, as_of=cal[20])
+    assert rc == 0
+    rows = _read_labels(out, "short")
+    assert len(rows) == 3
+    assert all(r["sw"]["membership_status"] == "gap" for r in rows)
+
+    capsys.readouterr()  # drain run output
+    assert elp.main(["verify", "--out-dir", str(out)]) == elp.EXIT_VERIFY_FAIL
+    err = capsys.readouterr().err
+    assert "membership_status=gap" in err
+
+
+def test_sw_gap_warn_only_when_minority(tmp_path, monkeypatch, capsys):
+    """Mixed file (some resolved, some gap) stays OK on verify — the
+    fail-loud gate is all-gap (or >=90%), not any-gap."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    cal = _weekday_calendar("2026-03-02", 60)
+    member = {"src": "SW2021", "level": "L1", "code": "801010.SI", "name": "银行"}
+    # 1 resolved row first...
+    rc, out = _run_online_sw_stub(tmp_path, cal, [_record("r0", "000001.SZ", cal[2])],
+                                  monkeypatch, sw_member=member, as_of=cal[20])
+    assert rc == 0
+    # ...then run again against the SAME out dir with the ledger now
+    # carrying r1 — this time the membership resolver degrades to gap
+    rec2 = _record("r1", "000001.SZ", cal[3])
+    ledger = tmp_path / "forward_ledger.jsonl"
+    with open(ledger, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec2, ensure_ascii=False) + "\n")
+    rc, out = _run_online_sw_stub(tmp_path, cal, [], monkeypatch,
+                                  sw_member=None, as_of=cal[20], out_name="out")
+    assert rc == 0
+    rows = _read_labels(out, "short")
+    assert len(rows) == 2
+    assert [r["sw"]["membership_status"] for r in rows].count("gap") == 1
+
+    capsys.readouterr()
+    assert elp.main(["verify", "--out-dir", str(out)]) == elp.EXIT_OK
+    assert "WARN" in capsys.readouterr().out
+
+
+def test_sw_leg_missing_flag_in_run_state(tmp_path, monkeypatch, capsys):
+    """run state records sw_leg_missing + per-file sw_gap_appended so the
+    degradation is visible in the artefact itself, not only the log."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    cal = _weekday_calendar("2026-03-02", 60)
+    rec = _record("r1", "000001.SZ", cal[2])
+    rc, out = _run_online_sw_stub(tmp_path, cal, [rec], monkeypatch,
+                                  sw_member=None, as_of=cal[20])
+    assert rc == 0
+    state = json.loads((out / elp.STATE_FILE_NAME).read_text("utf-8"))
+    assert state["sw_leg_missing"] is True
+    assert state["files"][elp.LABEL_FILE_NAMES["short"]]["sw_gap_appended"] == 1
+    assert "all appended rows have sw membership gap" in \
+        (out / "label_pipeline.log").read_text("utf-8")
