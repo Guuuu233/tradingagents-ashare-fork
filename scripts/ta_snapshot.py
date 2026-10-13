@@ -17,8 +17,10 @@ Discipline (D-073 / rework order):
   files; older matching files are deleted automatically and every deletion is
   recorded in the output JSON.
 - After each snapshot the script refreshes ``<out_dir>/current.db``: writes a
-  temp file, verifies ``PRAGMA quick_check``, then atomically renames it into
-  place with mode ``0444``. ``current.db`` counts toward the D-073 limit of 3
+  temp file, verifies ``PRAGMA quick_check``, deletes any stale
+  ``current.db-wal``/``current.db-shm`` sidecars left by readers that opened
+  the old file without ``immutable=1``, then atomically renames it into place
+  with mode ``0444``. ``current.db`` counts toward the D-073 limit of 3
   uncompressed full-DB copies on the machine.
 - The last snapshot of each trading week doubles as the weekly baseline that
   DAV-1508 uploads to Quark (2 remote copies kept there); DAV-1508 no longer
@@ -151,6 +153,13 @@ def refresh_current_db(out_dir: str) -> dict:
         if result is None or result[0] != "ok":
             raise RuntimeError(f"quick_check failed on decompressed {newest}: {result}")
         os.chmod(tmp, 0o444)
+        # 总控 10-13 令: remove stale WAL sidecars BEFORE the swap. A reader
+        # that opened the old current.db without immutable=1 leaves behind
+        # current.db-wal/-shm; carried over the rename they would make the new
+        # file look like it has a WAL and could mislead ro readers.
+        for side in (final + "-wal", final + "-shm"):
+            if os.path.exists(side):
+                os.remove(side)
         os.replace(tmp, final)   # atomic swap; readers never see a partial file
     except Exception:
         if os.path.exists(tmp):
