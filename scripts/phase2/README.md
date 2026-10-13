@@ -162,7 +162,7 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 - `--version-key`：主日序列是**单一版本队列**（签收④ + DAV-1682 🔴）。输入帧含
   多个 `version_key` 时必须显式指定其一，否则 **fail-close 报错**；跨版本比较
   只走配对通道（M3），绝不混入主 IC 序列。
-- `--calendar`：交易日历文件（一行一个 YYYYMMDD）。给出后，输入 min..max 跨段内
+- `--calendar`：交易日历文件（一行一个 YYYYMMDD；可选首行带 `date` 表头，仓库测试即按此写法）。给出后，输入 min..max 跨段内
   每个日历日都建槽——无信号日记 `no_data` NaN 槽，NW lag 不跨越缺口（签收③ +
   DAV-1682 🟡-1）；不给则以观测到的信号日为槽（输入须覆盖全部应计日期）。
   **输入帧带 `sealed_at` 列时为必填**：封存时点门要靠它解析 T+1，缺日历直接
