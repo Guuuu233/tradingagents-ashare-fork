@@ -510,7 +510,10 @@ def paired_increment(formal: pd.DataFrame,
     `diff` mixed two samples and the "same cross-sections" contract did not
     hold whenever some rows had no base rate). Days failing the n>=10 /
     non-degenerate rules on EITHER side stay NaN in the diff series (real
-    gaps kept — never compressed, 签收 item 3).
+    gaps kept — never compressed, 签收 item 3). Rows with q & r but no
+    q_base are dropped from BOTH legs and reported separately in
+    ``no_base_rows`` (总控 10-13 漏斗单列); ``paired_day_n`` records the
+    shared cross-section size of each paired day.
     """
     d = formal.copy()
     d["_ymd"] = pd.to_datetime(d["signal_date"]).dt.strftime("%Y-%m-%d")
@@ -529,14 +532,22 @@ def paired_increment(formal: pd.DataFrame,
 
     ic_model: dict[str, float] = {}
     ic_base: dict[str, float] = {}
+    paired_n: dict[str, int] = {}          # per-day paired cross-section size
+    total_model_rows = 0                   # 总控 10-13: rows with q & r
+    total_paired_rows = 0                  # 总控 10-13: rows also with q_base
     for day, g in d.groupby("_ymd", sort=True):
         ok = g.dropna(subset=["q", "r"])
-        # DAV-2025 🟡-1: same-sample contract — restrict to the rows whose
-        # (signal_date, l1) cell carries a base rate FIRST, then compute
-        # BOTH legs on that identical cross-section.
+        total_model_rows += int(len(ok))
+        # DAV-2025 🟡-1 / 总控 10-13 按交易日配对: only records carrying BOTH
+        # p_rel_t10 (q) and a cell base rate (q_base) enter the day's cross-
+        # section; BOTH IC legs are computed on that identical subset, and
+        # a day whose paired subset falls under MIN_DAILY_N never counts as
+        # a valid paired day (缺基率的记录两侧都不用).
         paired = ok.dropna(subset=["q_base"])
+        total_paired_rows += int(len(paired))
         if len(paired) < m1.MIN_DAILY_N:
             continue
+        paired_n[day] = int(len(paired))
         ic_m, dm = m1.spearman_ic(paired["q"].to_numpy(float),
                                   paired["r"].to_numpy(float))
         ic_b, db = m1.spearman_ic(paired["q_base"].to_numpy(float),
@@ -560,6 +571,16 @@ def paired_increment(formal: pd.DataFrame,
 
     return {
         "paired_days": len(paired_valid),
+        # 总控 10-13 funnel 单列: 缺基率的记录两侧都不用, 行数单列计数。
+        # model_rows = 同时有 q & r 的记录数; paired_rows = 再叠加有基率
+        # (q_base) 的记录数; no_base_rows = 两者之差 (membership gap /
+        # sw.index_code 空 / 该日该行业 P1 面板无成熟标签)。
+        "model_rows": total_model_rows,
+        "paired_rows": total_paired_rows,
+        "no_base_rows": int(total_model_rows - total_paired_rows),
+        # 每个配对日两腿共用的横截面大小 (same-sample 自证: 两侧 n 相等).
+        "paired_day_n": {day: paired_n[day] for day in paired_valid},
+        "min_paired_n": (min(paired_n.values()) if paired_n else 0),
         "model_ic_mean": float(np.nanmean(list(ic_model.values())))
         if ic_model else np.nan,
         "base_ic_mean": float(np.nanmean(list(ic_base.values())))
@@ -651,6 +672,9 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     qmap = base_q_map(panel, m=BASE_M, W=BASE_W)
     days_index = [vars(x)["date"] for x in days]
     increment = paired_increment(formal, labels, qmap, days_index)
+    # 总控 10-13: 缺基率记录两侧都不用、漏斗单列 — 同步进主 funnel 落盘，
+    # 使 run.json 顶层即可对账，不依赖 increment 块。
+    funnel["paired_no_base_rows"] = increment["no_base_rows"]
 
     # sensitivity grid (other (m, W) cells on the SAME all-market panel;
     # descriptive only, never a substitute for the fixed m200/W0 primary)

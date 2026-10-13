@@ -439,9 +439,9 @@ class TestNullDefense:
 
 class TestIncrement:
     def test_same_sample_contract(self):
-        """DAV-2025 🟡-1: both legs of a paired day must be computed on the
-        IDENTICAL cross-section — rows without a (day,l1) base rate are
-        excluded from BOTH IC_model and IC_base.
+        """DAV-2025 🟡-1 / 总控 10-13: both legs of a paired day must be
+        computed on the IDENTICAL cross-section — rows without a (day,l1)
+        base rate are excluded from BOTH IC_model and IC_base.
 
         Probe design (3 paired days, NW mean needs n>=3): each day has 12
         formal rows; row 11 of every day sits in a membership-gap cell
@@ -471,6 +471,11 @@ class TestIncrement:
         dfr = pd.DataFrame(formal)
         inc = m.paired_increment(dfr, labels, qmap, days_index)
         assert inc["paired_days"] == 3
+        # 总控 10-13 漏斗单列: 3 天 x 1 条 gap = 3 行缺基率两侧都不用。
+        assert inc["model_rows"] == 36
+        assert inc["paired_rows"] == 33
+        assert inc["no_base_rows"] == 3
+        assert inc["paired_day_n"] == {d: 11 for d in days}
         # model leg on the paired 11 rows/day: q 0..10 monotone in r 0..10.
         assert inc["model_ic_mean"] == pytest.approx(1.0)
         # base leg on the SAME rows: q_base monotone in r by construction.
@@ -478,6 +483,35 @@ class TestIncrement:
         # identical cross-section -> diff collapses to 0; the old mixed-
         # sample code would report model IC over all 12 rows (<1).
         assert inc["diff_mean"] == pytest.approx(0.0)
+
+    def test_paired_36_model_24_base(self):
+        """总控 10-13 固化用例: one day with 36 rows carrying p_rel_t10
+        but only 24 carrying a base rate -> BOTH legs must be computed on
+        the SAME 24-row cross-section.
+        """
+        day = "2026-01-05"
+        formal, labels, qmap = [], {}, {}
+        for i in range(36):
+            sym = f"S{i:02d}"
+            formal.append({"signal_date": day, "symbol": sym,
+                           "q": float(i), "r": float(i)})
+            if i < 24:
+                l1 = f"L{i}"
+                qmap[(day, l1)] = 0.4 + 0.01 * i   # monotone -> base IC 1
+            else:
+                l1 = ""                            # no base rate
+            labels[(sym, day)] = m._label(sym, day, 1.0, l1=l1)
+        inc = m.paired_increment(pd.DataFrame(formal), labels, qmap,
+                                 ["20260105"])
+        assert inc["model_rows"] == 36
+        assert inc["paired_rows"] == 24
+        assert inc["no_base_rows"] == 12
+        assert inc["paired_days"] == 1
+        # 两侧都只用 24 条 — paired_day_n 记录两腿共用横截面大小。
+        assert inc["paired_day_n"] == {day: 24}
+        # q 0..23 monotone in r 0..23 on the shared 24 -> both IC = 1.
+        assert inc["model_ic_mean"] == pytest.approx(1.0)
+        assert inc["base_ic_mean"] == pytest.approx(1.0)
 
     def test_gap_row_drops_day_from_pairing(self):
         """Same-sample corollary: if the uncovered rows are what kept the
