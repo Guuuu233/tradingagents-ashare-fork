@@ -781,3 +781,116 @@ class TestSealTimeGate:
             with pytest.raises(ValueError, match="sealed_at"):
                 mod.run(ip, out)
             assert not (out / "run.json").exists()
+
+
+class TestCalendarFileLoad:
+    """DAV-2011 (DAV-2007 review 🟡 M-2): the --calendar file is documented
+    as one YYYYMMDD per line (m1_eval --help / scripts/phase2/README.md), so
+    a headerless file must load EVERY day. The pre-fix read
+    (``pd.read_csv(path, dtype=str).iloc[:, 0]`` with default header=0)
+    consumed the first line as a column name and silently dropped the
+    calendar's first day — which changes the T+1 resolution and the formal
+    queue for boundary signal days. Repo tests all wrote a ``date`` header,
+    so the bug was invisible on the test path."""
+
+    CAL = ["20260105", "20260106", "20260107", "20260108"]
+
+    def _cal(self, td: Path, text: str) -> Path:
+        cp = td / "cal.txt"
+        cp.write_text(text)
+        return cp
+
+    def test_no_calendar_returns_none(self):
+        assert mod._load_calendar(None) is None
+
+    def test_headerless_calendar_loads_every_day(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "\n".join(self.CAL) + "\n")
+            assert mod._load_calendar(cp) == self.CAL
+
+    def test_headerless_calendar_without_trailing_newline(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "\n".join(self.CAL))
+            assert mod._load_calendar(cp) == self.CAL
+
+    def test_headerless_single_day_calendar(self):
+        # the pre-fix read turned a one-line calendar into an empty list
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "20260105\n")
+            assert mod._load_calendar(cp) == ["20260105"]
+
+    def test_date_header_calendar_loads_every_day(self):
+        # the repo test convention ("date\n…"): explicit single-header
+        # support, not silent header guessing
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "date\n" + "\n".join(self.CAL) + "\n")
+            assert mod._load_calendar(cp) == self.CAL
+
+    def test_blank_lines_are_cosmetic(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "\n20260105\n\n20260106\n\n")
+            assert mod._load_calendar(cp) == ["20260105", "20260106"]
+
+    def test_unsorted_calendar_comes_back_sorted(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td),
+                           "20260108\n20260105\n20260107\n20260106\n")
+            assert mod._load_calendar(cp) == self.CAL
+
+    def test_empty_calendar_file_raises_clean_value_error(self):
+        # pre-fix: uncaught pandas.errors.EmptyDataError
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "")
+            with pytest.raises(ValueError, match="no YYYYMMDD"):
+                mod._load_calendar(cp)
+
+    def test_header_only_calendar_raises_clean_value_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "date\n")
+            with pytest.raises(ValueError, match="no YYYYMMDD"):
+                mod._load_calendar(cp)
+
+    def test_non_date_line_fails_closed(self):
+        # a calendar day is never silently dropped: fail closed instead
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "date\n20260105\nnot-a-date\n")
+            with pytest.raises(ValueError, match="not YYYYMMDD"):
+                mod._load_calendar(cp)
+
+    def test_eight_digit_non_date_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            cp = self._cal(Path(td), "20260230\n")
+            with pytest.raises(ValueError):
+                mod._load_calendar(cp)
+
+    def test_run_headerless_calendar_resolves_first_day_t1(self):
+        # End-to-end M-2 impact: with a headerless calendar the FIRST day is
+        # the boundary the DAV-1991 seal gate resolves T+1 against. Pre-fix
+        # the day was eaten, _next_trading_day hit bisect_right == 0 (signal
+        # day precedes the calendar) and every row landed in
+        # seal_t1_unresolved instead of being judged against the 20260106
+        # 09:30 Asia/Shanghai deadline — a different formal queue.
+        cal = ["20260105", "20260106"]
+        rows = [
+            # sealed 2026-01-06 01:00 UTC = 09:00 CST → before the open
+            {"signal_date": "20260105", "symbol": "S1", "prob": 50,
+             "rel_return": 0.01,
+             "sealed_at": "2026-01-06 01:00:00.000000"},
+            # sealed 2026-01-06 02:00 UTC = 10:00 CST → after the open
+            {"signal_date": "20260105", "symbol": "S2", "prob": 60,
+             "rel_return": 0.02,
+             "sealed_at": "2026-01-06 02:00:00.000000"},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            ip = td / "in.csv"
+            pd.DataFrame(rows).to_csv(ip, index=False)
+            cp = td / "cal.txt"
+            cp.write_text("\n".join(cal) + "\n")
+            out = td / "out"
+            res = mod.run(ip, out, calendar_path=cp)
+            fun = res["verdict"]["funnel"]
+            assert fun["seal_gate_applied"] is True
+            assert fun["seal_t1_unresolved"] == 0
+            assert fun["excl_late_seal"] == 1
+            assert fun["formal_rows"] == 1

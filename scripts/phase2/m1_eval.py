@@ -312,8 +312,11 @@ def _sealed_at_sh(s: pd.Series) -> pd.Series:
     """Parse a ``sealed_at`` column into tz-aware Asia/Shanghai instants.
 
     NaT for missing values, for values the ledger's _parse_dt would not
-    accept, and for anything else unparseable — all of which the gate treats
-    as "cannot prove forward sealing" (fail closed).
+    accept (the whitelist above is a conservative subset of _parse_dt:
+    it additionally rejects leading whitespace and non-zero-padded dates
+    like "2026-1-6", whose strptime _parse_dt still reads), and for
+    anything else unparseable — all of which the gate treats as "cannot
+    prove forward sealing" (fail closed).
     """
     shape_ok = s.astype(str).str.match(_SEAL_SHAPE_RE) | s.isna()
     return pd.to_datetime(s.where(shape_ok), format="mixed",
@@ -773,11 +776,42 @@ def select_version(df: pd.DataFrame,
 # Driver
 # ---------------------------------------------------------------------------
 
+# DAV-2011 (DAV-2007 review 🟡 M-2): the calendar file is documented as one
+# YYYYMMDD per line (the ``--calendar`` help and scripts/phase2/README.md),
+# but ``pd.read_csv``'s default ``header=0`` consumed the first line of a
+# headerless file as a column name — a 4-day headerless calendar loaded as
+# 3 days, and the lost first day changes the T+1 resolution (hence the
+# formal queue and the IC) for boundary signal days. Read raw lines
+# instead: blank lines are cosmetic, one leading ``date`` header (the repo
+# test convention) is recognised explicitly, and any other non-YYYYMMDD
+# line fails closed rather than being silently dropped — the calendar
+# feeds the DAV-1991 seal gate, so a dropped day is a wrong deadline.
+_DAY_TOKEN_RE = re.compile(r"^\d{8}$")
+
+
 def _load_calendar(path: Path | None) -> list[str] | None:
     if path is None:
         return None
-    cal = pd.read_csv(path, dtype=str).iloc[:, 0]
-    return sorted(pd.to_datetime(cal).dt.strftime("%Y%m%d").tolist())
+    days = [ln.strip()
+            for ln in path.read_text(encoding="utf-8-sig").splitlines()]
+    days = [ln for ln in days if ln]
+    if not days:
+        raise ValueError(f"calendar file {path} carries no YYYYMMDD line")
+    if days[0].lower() == "date":
+        days = days[1:]
+        if not days:
+            raise ValueError(
+                f"calendar file {path} carries no YYYYMMDD line")
+    bad = [d for d in days if not _DAY_TOKEN_RE.match(d)]
+    if bad:
+        raise ValueError(
+            f"calendar file {path} holds {len(bad)} line(s) that are not "
+            f"YYYYMMDD (first: {bad[0]!r}); the calendar is one YYYYMMDD "
+            "per line, optionally preceded by a single 'date' header")
+    # keep the pre-fix to_datetime round-trip so an 8-digit token that is
+    # not a real date (e.g. 20260230) still fails closed
+    parsed = pd.to_datetime(days, format="%Y%m%d")
+    return sorted(parsed.strftime("%Y%m%d").tolist())
 
 
 def run(input_path: Path, out_dir: Path,
@@ -1077,7 +1111,8 @@ def main() -> int:
                     help="version queue to evaluate; required when the input "
                          "frame holds more than one version_key")
     ap.add_argument("--calendar", type=Path, default=None,
-                    help="trading-calendar file (one YYYYMMDD per line); "
+                    help="trading-calendar file (one YYYYMMDD per line, "
+                         "optionally preceded by a single 'date' header); "
                          "days in the input's span with no signal stay as "
                          "no_data NaN slots instead of compressing. "
                          "REQUIRED when the input frame carries a "
