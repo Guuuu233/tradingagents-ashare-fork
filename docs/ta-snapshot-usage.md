@@ -24,8 +24,8 @@ static 文件用 immutable=1 最快且不建 WAL 侧文件——普通方式打�
 sqlite3 "file:$HOME/ta-snapshot/current.db?mode=ro&immutable=1" \
   "select count(*) from reports;"
 
-# 项目 Python 同样方式（不要指到活库 data/tradingagents.db）
-DATABASE_URL="sqlite:////Users/davidliu/ta-snapshot/current.db" ...
+# 项目 Python 用只读 URI（已实测：可读、不生成 -wal/-shm；不要指到活库 data/tradingagents.db）
+DATABASE_URL="sqlite:///file:/Users/davidliu/ta-snapshot/current.db?mode=ro&immutable=1&uri=true" ...
 ```
 
 **不得复制 `current.db`**——它本身就是给全机共享的那份整库；
@@ -34,10 +34,10 @@ DATABASE_URL="sqlite:////Users/davidliu/ta-snapshot/current.db" ...
 ### 需要写入的演练/测试卡
 
 只有必须对库**写**（迁移演练、写路径测试）的卡才单独解压，且必须
-解压到自己卡的临时路径、用完即删：
+解压到自己卡的路径（**`~/ta-work/<卡号>/`**；`/tmp` 只放短时临时文件）、用完即删：
 
 ```bash
-WORK=/private/tmp/ta-work-<卡号>
+WORK=~/ta-work/<卡号>
 mkdir -p "$WORK"
 zstd -d -f ~/ta-snapshot/tradingagents-<YYYY-MM-DD>.db.zst \
   -o "$WORK/tradingagents.db"
