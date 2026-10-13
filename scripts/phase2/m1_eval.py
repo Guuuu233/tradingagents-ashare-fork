@@ -46,9 +46,14 @@ dedup to the primary run happens inside, per签收 item 4):
                                UTC-midnight instant. A signal day that the
                                calendar cannot resolve a T+1 for — the
                                calendar ends first, OR the signal day precedes
-                               the calendar's first day — is admitted and
-                               counted as seal_t1_unresolved, matching
-                               _classify_timing's F0 for the same case.
+                               the calendar's first day — is EXCLUDED from the
+                               formal queue and counted as
+                               excl_seal_t1_unresolved (DAV-2007 review M-2 /
+                               总控 10-13 令 rework): _classify_timing's F0
+                               for the same case is the ledger's classification
+                               口径, not the formal score's admission rule —
+                               a record whose T+1 entry open cannot be
+                               resolved cannot prove it was sealed before it.
   p_rel_t40 / prob / q       : model probability, int 1–99 (or float 0–1 /
                                0–100; normalised to q in [0,1])
   r_rel / rel_return / r     : realised stock-minus-SW-index return over the
@@ -282,13 +287,16 @@ def _next_trading_day(calendar: list[str], after: str) -> str | None:
     is reported unresolvable rather than snapped onto ``calendar[0]``. This
     mirrors scripts/phase2/daily_snapshot_ledger.py::_t_plus_n, whose
     ``idx = bisect_right(dates, base) - 1; if idx < 0 …: return None`` makes
-    the same case unresolvable and whose _classify_timing then classifies the
-    record F0 (``entry_trading_day=None`` → F0 → income formal queue).
-    trade_execution.py has no such guard, hence the difference: there the
-    first calendar entry is the right answer, here it would hand the gate a
-    real deadline derived from the wrong trading day and silently drop rows
-    the ledger counts as F0 (a conservative over-exclusion, not a leak, but
-    it still changes the formal-queue row set and hence the IC).
+    the same case unresolvable. trade_execution.py has no such guard, hence
+    the difference: there the first calendar entry is the right answer, here
+    it would hand the gate a real deadline derived from the wrong trading day.
+
+    DAV-2007 review M-2 (总控 10-13 令 rework): a None from either branch is
+    an EXCLUSION, not an admission. The ledger's _classify_timing classifies
+    the same record F0 because its job is to label what the ledger saw; the
+    formal score's job is to admit only what can be PROVEN forward-sealed. A
+    record whose T+1 entry open is unresolvable cannot be proven sealed
+    before it, so admit() drops it (``excl_seal_t1_unresolved``).
     """
     idx = bisect.bisect_right(calendar, str(after))
     if idx == 0:
@@ -339,8 +347,9 @@ def _seal_deadline_cn(signal_dates: pd.Series,
     column ``astype(str)``s to "2026-01-05 00:00:00", which sorts before every
     calendar day: before M-1 that silently snapped the whole batch onto the
     calendar's first day, and after M-1 it would make every row
-    ``seal_t1_unresolved``. Re-normalise through the same
-    ``to_datetime(...).dt.strftime("%Y%m%d")`` step ``load_frame`` uses, so
+    ``excl_seal_t1_unresolved`` and drop them all.
+    Re-normalise through the same ``to_datetime(...).dt.strftime("%Y%m%d")``
+    step ``load_frame`` uses, so
     the gate reads the same day key as the day series.
     """
     as_str = pd.to_datetime(signal_dates.astype(str), format="mixed",
@@ -515,16 +524,24 @@ def admit(df: pd.DataFrame,
         sealed = _sealed_at_sh(d["sealed_at"])
         entry = _seal_deadline_cn(d["signal_date"], calendar)
         funnel["seal_unparseable"] = int(sealed.isna().sum())
-        funnel["seal_t1_unresolved"] = int(entry.isna().sum())
-        # An unparseable seal time cannot prove forward sealing → fail closed
-        # and count it with the gate's exclusions. An unresolvable T+1 day is
-        # admitted and counted separately (daily_snapshot_ledger
-        # ._classify_timing calls the same case F0 for the same reason).
+        # DAV-2007 review M-2 / 总控 10-13 令 rework: a row whose T+1
+        # deadline cannot be resolved is EXCLUDED, not admitted.
+        # _classify_timing's F0 for this case is the ledger's classification
+        # 口径, NOT the formal score's admission rule: the ledger may label a
+        # record F0 because it cannot see the calendar, while the formal
+        # score must not take a record it cannot prove was sealed before its
+        # entry open. Admitting them is a look-ahead leak in exactly the
+        # population the gate exists for — a late-July signal sealed in the
+        # 10-04 backfill while the calendar does not cover July has no
+        # deadline, no proof, and used to sail into the formal queue.
+        funnel["excl_seal_t1_unresolved"] = int(entry.isna().sum())
+        # An unparseable seal time cannot prove forward sealing either → fail
+        # closed and count it with the gate's exclusions.
         late = sealed.notna() & entry.notna() & (sealed >= entry)
-        d = _count(late | sealed.isna(), "excl_late_seal")
+        d = _count(late | sealed.isna() | entry.isna(), "excl_late_seal")
     else:
         funnel["seal_unparseable"] = 0
-        funnel["seal_t1_unresolved"] = 0
+        funnel["excl_seal_t1_unresolved"] = 0
         funnel["excl_late_seal"] = 0
     # incomplete runs never reach dedup (review 🟡-2). None/NaN = flag absent
     # → treated complete; only an explicit False/'false'/'0' marks incomplete.
@@ -868,8 +885,11 @@ def run(input_path: Path, out_dir: Path,
         # counters travel here too. Without them a run whose gate is on but
         # whose T+1 resolution or seal-stamp parsing failed wholesale would
         # look perfectly clean (they used to live only in verdict.funnel).
+        # DAV-2007 review M-2: T+1-unresolvable rows are now EXCLUDED, so the
+        # counter is named excl_seal_t1_unresolved like the other exclusion
+        # counters it feeds.
         "seal_unparseable": funnel.get("seal_unparseable", 0),
-        "seal_t1_unresolved": funnel.get("seal_t1_unresolved", 0),
+        "excl_seal_t1_unresolved": funnel.get("excl_seal_t1_unresolved", 0),
         "excl_late_seal": funnel.get("excl_late_seal", 0),
         "excl_wrong_user": funnel.get("excl_wrong_user", 0),
     }, indent=2))
@@ -1063,9 +1083,11 @@ def selftest() -> dict:
     # same gate (all "when the inputs cannot be resolved, say so" discipline):
     #   M-1  a signal day EARLIER than the calendar's first day is the same
     #        unresolvable-T+1 case as a calendar that ends first — 账本
-    #        _t_plus_n's ``idx < 0`` → _classify_timing F0 → income formal
-    #        queue. Snapping it onto calendar[0] would invent a deadline from
-    #        the wrong trading day and drop rows the ledger keeps.
+    #        _t_plus_n's ``idx < 0`` makes it None and _classify_timing labels
+    #        the record F0, but the formal score EXCLUDES it (DAV-2007 review
+    #        M-2: a record with no resolvable T+1 open cannot be proven
+    #        forward-sealed). Snapping it onto calendar[0] would invent a
+    #        deadline from the wrong trading day.
     #   S-3  a sealed_at the ledger's _parse_dt would not accept cannot prove
     #        a seal time → seal_unparseable → excluded, never guessed into a
     #        UTC-midnight instant by format="mixed".
@@ -1076,9 +1098,10 @@ def selftest() -> dict:
     for r in rows:
         r["sealed_at"] = "2026-01-02 09:00:00.000000"
     d, fun = admit(pd.DataFrame(rows), calendar=early_cal)
-    assert fun["seal_t1_unresolved"] == 20, fun
-    assert fun["excl_late_seal"] == 0 and len(d) == 20, fun
-    checks["seal_t1_before_first_calendar_day"] = fun["seal_t1_unresolved"]
+    assert fun["excl_seal_t1_unresolved"] == 20, fun
+    assert fun["excl_late_seal"] == 20 and len(d) == 0, fun
+    checks["seal_t1_before_first_calendar_day_excluded"] = \
+        fun["excl_seal_t1_unresolved"]
 
     for bad in ("20260106", "2026/01/06", "01/06/2026", "2026-1-6"):
         rows = _mk_day("20260105", range(1, 21), np.linspace(0, 0.1, 20))
@@ -1094,7 +1117,7 @@ def selftest() -> dict:
         r["sealed_at"] = "2026-01-06 01:00:00.000000"   # 09:00 CST → forward
         r["signal_date"] = datetime(2026, 1, 5)
     d, fun = admit(pd.DataFrame(rows), calendar=early_cal)
-    assert fun["seal_t1_unresolved"] == 0, fun
+    assert fun["excl_seal_t1_unresolved"] == 0, fun
     assert fun["excl_late_seal"] == 0 and len(d) == 20, fun
     checks["seal_datetime_signal_date_normalised"] = True
 
