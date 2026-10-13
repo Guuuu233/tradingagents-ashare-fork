@@ -13,6 +13,10 @@ criterion for task 3:
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -20,39 +24,121 @@ from uuid import uuid4
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from api.database import Base, ReportDB, ScheduledAnalysisDB
 from scheduler import main as scheduler_main
 
 
+# ── Heartbeat worker-thread join (DAV-1934) ─────────────────────────────────
+#
+# ``_run_job_heartbeat`` writes from ``asyncio.to_thread`` worker threads.
+# Cancelling the heartbeat task makes ``await hb`` return as soon as the task
+# observes the cancellation, while the worker thread is still inside its DB
+# write; ``asyncio.run`` only joins the default executor *after* the coroutine
+# (and therefore the DB session) is gone.  The heartbeat tests therefore join
+# the in-flight heartbeat writes explicitly, so the shutdown order is
+# cancel -> join -> close the session.  Without the join, the worker's COMMIT
+# and the session close's ROLLBACK interleaved on one shared DBAPI connection
+# (``sqlite3.OperationalError: cannot rollback - no transaction is active``).
+
+_heartbeat_writes_lock = threading.Lock()
+_heartbeat_writes_inflight = 0
+_heartbeat_writes_idle = threading.Event()
+_heartbeat_writes_idle.set()
+
+
+def _heartbeat_write_started() -> None:
+    """Record a heartbeat DB write entering the isolated DB from a worker thread."""
+    global _heartbeat_writes_inflight
+    with _heartbeat_writes_lock:
+        _heartbeat_writes_inflight += 1
+        _heartbeat_writes_idle.clear()
+
+
+def _heartbeat_write_finished() -> None:
+    global _heartbeat_writes_inflight
+    with _heartbeat_writes_lock:
+        _heartbeat_writes_inflight = max(_heartbeat_writes_inflight - 1, 0)
+        if _heartbeat_writes_inflight == 0:
+            _heartbeat_writes_idle.set()
+
+
+def _reset_heartbeat_write_tracking() -> None:
+    """Start every isolated DB from a clean idle state."""
+    global _heartbeat_writes_inflight
+    with _heartbeat_writes_lock:
+        _heartbeat_writes_inflight = 0
+        _heartbeat_writes_idle.set()
+
+
+def join_heartbeat_writes(timeout: float = 10.0) -> None:
+    """Block until no heartbeat DB write is in flight (DAV-1934).
+
+    Called right after the heartbeat task is cancelled so the test session is
+    closed only once the worker thread's write has finished.  The worker's
+    last DB action is the session close at the end of ``_touch``, so waiting
+    for the write to drain is the join point that removes the interleave.
+    """
+    if not _heartbeat_writes_idle.wait(timeout=timeout):
+        with _heartbeat_writes_lock:
+            inflight = _heartbeat_writes_inflight
+        raise AssertionError(
+            f"heartbeat DB writes still in flight after {timeout}s (inflight={inflight})"
+        )
+
+
 @contextmanager
 def _isolated_db():
-    """Yield a session on an isolated in-memory SQLite DB, with
+    """Yield a session on an isolated per-test SQLite DB file, with
     ``scheduler.main.get_db_ctx`` patched to open sessions on the same engine.
 
     Keeps scheduler persistence tests from seeing rows other tests created in
     the shared conftest database.
+
+    The DB is a file behind the default connection pool — one DBAPI connection
+    per checkout — instead of an in-memory DB behind ``StaticPool``, which
+    handed the *same* connection to every session.  The heartbeat under test
+    writes from ``asyncio.to_thread`` worker threads, and that single shared
+    connection let the worker's COMMIT interleave with the test session's
+    ROLLBACK (``sqlite3.OperationalError: cannot rollback - no transaction is
+    active``, DAV-1934).  ``check_same_thread`` stays off, as in
+    ``api/database.py``, so a pooled connection may be reused by a later
+    worker thread.
     """
+    _reset_heartbeat_write_tracking()
+    db_dir = tempfile.mkdtemp(prefix="ta-sched-test-")
+    db_path = os.path.join(db_dir, "scheduler.db")
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
     )
-    Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
 
     class _Ctx:
         def __enter__(self):
             self._session = Session()
+            if self is not outer:
+                _heartbeat_write_started()
             return self._session
 
         def __exit__(self, exc_type, exc_val, exc_tb):
+            if self is not outer:
+                _heartbeat_write_finished()
+            if self is outer:
+                # Join any in-flight heartbeat write before closing the session.
+                join_heartbeat_writes()
             if exc_type is not None:
                 self._session.rollback()
             self._session.close()
 
-    with patch("scheduler.main.get_db_ctx", _Ctx):
-        with _Ctx() as session:
-            yield session
+    outer = _Ctx()
+    try:
+        Base.metadata.create_all(engine)
+        with patch("scheduler.main.get_db_ctx", _Ctx):
+            with outer as session:
+                yield session
+    finally:
+        engine.dispose()
+        shutil.rmtree(db_dir, ignore_errors=True)
 
 
 def _add_scheduled(
@@ -298,6 +384,10 @@ def test_heartbeat_writes_last_job_heartbeat_at():
                     await hb
                 except asyncio.CancelledError:
                     pass
+                # DAV-1934: ``await hb`` returns while the worker thread may
+                # still be inside the heartbeat write; join it before the
+                # session below is closed.
+                join_heartbeat_writes()
             finally:
                 scheduler_main.SCHEDULER_HEARTBEAT_SECONDS = saved_interval
 
@@ -326,6 +416,9 @@ def test_heartbeat_skips_when_job_no_longer_matches():
                     await hb
                 except asyncio.CancelledError:
                     pass
+                # DAV-1934: join the in-flight heartbeat write before closing
+                # the session below.
+                join_heartbeat_writes()
             finally:
                 scheduler_main.SCHEDULER_HEARTBEAT_SECONDS = saved_interval
 
