@@ -597,15 +597,52 @@ class TestSealTimeGate:
         assert fun["seal_unparseable"] == 1 and fun["excl_late_seal"] == 1
         assert len(d) == 19
 
-    def test_t1_unresolved_admitted_and_counted(self):
-        # calendar ends before the signal's T+1 → unresolvable; the ledger's
-        # _classify_timing calls the same case F0, so admit and count it
+    def test_t1_unresolved_excluded_and_counted(self):
+        # 总控 10-13 令 rework (DAV-2007 review M-2): a calendar that ends
+        # before the signal's T+1 leaves the deadline unresolvable, and the
+        # row is EXCLUDED — _classify_timing's F0 is the ledger's
+        # classification口径, not the formal score's admission rule.
         cal = ["20260104", "20260105"]
         rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
                        "2026-01-09 23:00:00.000000")
         d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
-        assert fun["seal_t1_unresolved"] == 20
-        assert fun["excl_late_seal"] == 0 and len(d) == 20
+        assert fun["excl_seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_controller_case_late_july_backfill_without_july_calendar(self):
+        # 总控点名的泄漏场景①: a late-July signal sealed in the 10-04
+        # backfill, with a calendar that starts 20260901 — the signal day
+        # precedes the calendar's first day, so no T+1 entry open can be
+        # resolved and the record cannot be proven forward-sealed. It must
+        # be excluded (it used to be admitted: entry NaT → late False).
+        cal = ["20260901", "20260902", "20260903", "20260904"]
+        rows = _sealed("20260728", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-10-04 03:00:00.000000")   # 10-04 补录封存
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
+        assert fun["excl_seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+        assert mod.eval_days(d) == []
+
+    def test_calendar_ends_before_signal_day_excluded(self):
+        # 总控点名的泄漏场景②: the calendar stops before the signal day, so
+        # T+1 is unresolvable → excluded, never admitted.
+        cal = ["20260105", "20260106"]
+        rows = _sealed("20260112", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-13 10:00:00.000000")
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
+        assert fun["excl_seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
+
+    def test_unparseable_signal_date_excluded_via_t1_unresolved(self):
+        # a garbage signal_date cannot be resolved to a T+1 either → the
+        # same exclusion path, counted with the gate's T+1 failures.
+        rows = _sealed("20260105", range(1, 21), np.linspace(0, 0.1, 20),
+                       "2026-01-06 01:00:00.000000")
+        for r in rows:
+            r["signal_date"] = "not-a-date"
+        d, fun = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
+        assert fun["excl_seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
 
     def test_weekend_signal_snaps_to_monday(self):
         # signal on Saturday 20260110 (not a calendar day) → T+1 = Monday
@@ -619,13 +656,10 @@ class TestSealTimeGate:
     def test_signal_before_first_calendar_day_is_t1_unresolved(self):
         # DAV-2004 / DAV-1999 review 🟡 M-1: a signal day earlier than the
         # calendar's FIRST day is the same unresolvable-T+1 case as a calendar
-        # that ends first — daily_snapshot_ledger._t_plus_n's ``idx < 0`` makes
-        # it None and _classify_timing then reports F0 (income formal queue).
-        # Returning calendar[0] here would hand the gate a deadline derived
-        # from the wrong trading day and drop every row the ledger keeps
-        # (conservative over-exclusion, but it still changes the row set and
-        # hence the IC). Reached when a calendar file is truncated, a signal
-        # day falls outside it, or the frame carries dirty dates.
+        # that ends first — daily_snapshot_ledger._t_plus_n's ``idx < 0``
+        # makes it None. Returning calendar[0] here would hand the gate a
+        # deadline derived from the wrong trading day; with the DAV-2007 M-2
+        # rework the rows are excluded instead of admitted.
         cal = ["20260105", "20260106", "20260107", "20260108"]
         rows = _sealed("20260102", range(1, 21), np.linspace(0, 0.1, 20),
                        "2026-01-06 10:00:00.000000")
@@ -633,8 +667,8 @@ class TestSealTimeGate:
         # "T+1" (deadline 20260105 09:30 CST) this row would be judged late
         assert mod._next_trading_day(cal, "20260102") is None
         d, fun = mod.admit(pd.DataFrame(rows), calendar=cal)
-        assert fun["seal_t1_unresolved"] == 20
-        assert fun["excl_late_seal"] == 0 and len(d) == 20
+        assert fun["excl_seal_t1_unresolved"] == 20
+        assert fun["excl_late_seal"] == 20 and len(d) == 0
 
     def test_non_ledger_shaped_sealed_at_fails_closed(self):
         # DAV-2004 / DAV-1999 review 🟢 S-3: format="mixed" would guess
@@ -664,7 +698,7 @@ class TestSealTimeGate:
         for r in rows:
             r["signal_date"] = datetime(2026, 1, 5)
         as_dt, fun_dt = mod.admit(pd.DataFrame(rows), calendar=self.CAL)
-        assert fun_dt["seal_t1_unresolved"] == 0
+        assert fun_dt["excl_seal_t1_unresolved"] == 0
         assert fun_dt["excl_late_seal"] == 0 and len(as_dt) == 20
         assert sorted(as_dt["symbol"]) == sorted(as_str["symbol"])
 
@@ -675,7 +709,7 @@ class TestSealTimeGate:
         assert fun["seal_gate_applied"] is False
         assert fun["excl_late_seal"] == 0
         assert fun["seal_unparseable"] == 0
-        assert fun["seal_t1_unresolved"] == 0
+        assert fun["excl_seal_t1_unresolved"] == 0
         assert len(d) == 20
 
     def test_sealed_at_without_calendar_fails_closed(self):
@@ -766,7 +800,8 @@ class TestSealTimeGate:
             # verdict.funnel, so a run whose T+1 resolution failed wholesale
             # looked clean here).
             assert runj["seal_unparseable"] == fun["seal_unparseable"] == 0
-            assert runj["seal_t1_unresolved"] == fun["seal_t1_unresolved"] == 0
+            assert runj["excl_seal_t1_unresolved"] == \
+                fun["excl_seal_t1_unresolved"] == 0
             days = pd.read_parquet(out / "m1_day_series.parquet")
             assert list(days["date"]) == ["20260105"]
 
@@ -868,8 +903,9 @@ class TestCalendarFileLoad:
         # the boundary the DAV-1991 seal gate resolves T+1 against. Pre-fix
         # the day was eaten, _next_trading_day hit bisect_right == 0 (signal
         # day precedes the calendar) and every row landed in
-        # seal_t1_unresolved instead of being judged against the 20260106
-        # 09:30 Asia/Shanghai deadline — a different formal queue.
+        # excl_seal_t1_unresolved and was excluded instead of being judged
+        # against the 20260106 09:30 Asia/Shanghai deadline — a different
+        # formal queue.
         cal = ["20260105", "20260106"]
         rows = [
             # sealed 2026-01-06 01:00 UTC = 09:00 CST → before the open
@@ -891,6 +927,6 @@ class TestCalendarFileLoad:
             res = mod.run(ip, out, calendar_path=cp)
             fun = res["verdict"]["funnel"]
             assert fun["seal_gate_applied"] is True
-            assert fun["seal_t1_unresolved"] == 0
+            assert fun["excl_seal_t1_unresolved"] == 0
             assert fun["excl_late_seal"] == 1
             assert fun["formal_rows"] == 1

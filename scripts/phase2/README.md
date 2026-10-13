@@ -175,10 +175,14 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
   该门需要 `--calendar` 解析 T+1，缺日历时 **fail-close 报错**（与账本
   `daily_snapshot_ledger.py` 同一纪律：不做工作日回退近似）；无 `sealed_at` 列的
   帧早于该门，`funnel.seal_gate_applied=false` 记明。
-  解析不到 T+1 的两种情形都如实记 `seal_t1_unresolved` 并按 F0 收入：日历末端
-  在 T+1 之前结束，**以及信号日早于日历首日**（DAV-2004 修 DAV-1999 复审 🟡
-  M-1：与账本 `_t_plus_n` 的 `idx<0` 同案——不得回退成日历首日，否则会拿错的
-  交易日推出一个真实 deadline 把账本计为 F0 的行误排）。
+  解析不到 T+1 的两种情形一律**排除出正式队列**，单列 `excl_seal_t1_unresolved`
+  （DAV-2007 复审 M-2 / 总控 10-13 令返修）：日历末端在 T+1 之前结束，**以及信号
+  日早于日历首日**（DAV-2004 修 DAV-1999 复审 🟡 M-1：与账本 `_t_plus_n` 的
+  `idx<0` 同案——不得回退成日历首日，否则会拿错的交易日推出一个真实 deadline）。
+  判排除而非放行的理由：`_classify_timing` 的 F0 是**账本的分类口径**（账本看不到
+  日历时就标 F0），不是正式成绩的准入口径——T+1 开盘时刻解析不出来的记录，无法
+  证明它在开盘前封存，收入正式队列即前视泄漏（如 7 月底信号在 10-04 补录封存、
+  日历又不覆盖 7 月的那批）。
   `sealed_at` 的取值形态与账本 `_parse_dt` 对齐（DAV-1999 复审 🟢 S-3）：只认以
   `YYYY-MM-DD` 开头的值（无时区 UTC 串，或带 T/偏移/Z 的 ISO），`"20260106"`、
   `"01/06/2026"` 这类形态一律记 `seal_unparseable` 一并排除，不被 `format="mixed"`
@@ -209,11 +213,12 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 
 封存时点门（DAV-1991）新增三个诊断计数：`excl_late_seal`（晚于 T+1 开盘封存，
 含补录，被门排除）、`seal_unparseable`（封存时间无法解析——无法证明前瞻封存，
-一并计入 `excl_late_seal` 排除）、`seal_t1_unresolved`（日历解析不到 T+1——日历
-末端早于 T+1，或信号日早于日历首日（DAV-2004 / DAV-1999 🟡 M-1）——按账本
-`_classify_timing` 同案按 F0 收入并单列）。门是否生效见 `seal_gate_applied`。
+一并计入 `excl_late_seal` 排除）、`excl_seal_t1_unresolved`（日历解析不到 T+1——
+日历末端早于 T+1，或信号日早于日历首日（DAV-2004 / DAV-1999 🟡 M-1），或
+`signal_date` 本身不可解析——**一律排除**，DAV-2007 复审 M-2 返修；此前按账本
+`_classify_timing` 同案按 F0 收入，属放行缺陷）。门是否生效见 `seal_gate_applied`。
 四个计数在 `m1_verdict.json → verdict.funnel` 落盘，其中 `seal_gate_applied` /
-`seal_unparseable` / `seal_t1_unresolved` / `excl_late_seal` 同时写进 `run.json`
+`seal_unparseable` / `excl_seal_t1_unresolved` / `excl_late_seal` 同时写进 `run.json`
 （DAV-2004 / DAV-1999 🟢 S-1：`run.json` 是运维第一眼看的产物，门生效但 T+1 或
 封存串大面积解析不到这类静默降级不能只藏在 funnel 里）。
 
@@ -230,10 +235,14 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 正式队列，晚封存/补录记 `excl_late_seal` |
 | 封存时点门 T+1/串解析（DAV-2004，DAV-1999 复审返修） | `_next_trading_day` 在
 `bisect_right==0`（信号日早于日历首日）返 `None`，与账本 `_t_plus_n` 的 `idx<0`
-同案记 `seal_t1_unresolved` 按 F0 收入，不回退成日历首日；`_seal_deadline_cn` 先把
+同案，不回退成日历首日；`_seal_deadline_cn` 先把
 `signal_date` 归一为 YYYYMMDD（公开入口 `admit` 可能收到 datetime 型，`astype(str)`
 会让整批错落日历首日）；`sealed_at` 过 `_parse_dt` 同形白名单，非 `YYYY-MM-DD`
 开头的值记 `seal_unparseable` |
+| 封存时点门 T+1 不可解析排除（DAV-2007 复审 M-2 / 总控 10-13 令返修） | `entry`
+为 NaT 的行（日历末端早于 T+1 / 信号日早于日历首日 / `signal_date` 不可解析）**一律
+排除**出正式队列并计入 `excl_late_seal`，单列 `excl_seal_t1_unresolved`；账本
+`_classify_timing` 的 F0 是分类口径、不适用于正式成绩准入 |
 | ⑤NW60 主 / NW120 稳健、95% 双侧 | `newey_west_ci`（缺口不压缩） |
 | ⑥C 档门槛 | `grade`：`valid_days>=60` 且 `nw60_lo>0` 且 `nw120_lo>0`；否则 A/B |
 | ⑦可靠性固定 10 箱 [1–10]…[91–99] | `reliability_table`；`RELIABILITY_BINS` 结果前冻结 |
