@@ -17,11 +17,15 @@ Discipline (D-073 / rework order):
   files; older matching files are deleted automatically and every deletion is
   recorded in the output JSON.
 - After each snapshot the script refreshes ``<out_dir>/current.db``: writes a
-  temp file, verifies ``PRAGMA quick_check``, deletes any stale
+  temp file, normalizes its journal mode to ``DELETE`` (``Connection.backup``
+  produces a WAL-mode file whose 0444 sidecars a plain ``mode=ro`` reader
+  would recreate — and stale sidecars carried over the rename are silently
+  honored as a hot WAL), verifies ``PRAGMA quick_check`` on the very file
+  being swapped in, chmods it ``0444``, deletes any stale
   ``current.db-wal``/``current.db-shm`` sidecars left by readers that opened
-  the old file without ``immutable=1``, then atomically renames it into place
-  with mode ``0444``. ``current.db`` counts toward the D-073 limit of 3
-  uncompressed full-DB copies on the machine.
+  the old file without ``immutable=1``, then atomically renames it into
+  place. ``current.db`` counts toward the D-073 limit of 3 uncompressed
+  full-DB copies on the machine.
 - The last snapshot of each trading week doubles as the weekly baseline that
   DAV-1508 uploads to Quark (2 remote copies kept there); DAV-1508 no longer
   makes its own full-DB backup.
@@ -123,9 +127,17 @@ def make_snapshot(db_path: str, out_dir: str, day: date) -> dict:
 def refresh_current_db(out_dir: str) -> dict:
     """Decompress the newest ``tradingagents-*.db.zst`` into ``current.db``.
 
-    Writes to a temp file, verifies ``PRAGMA quick_check``, then atomically
-    renames over ``current.db`` and chmods it ``0444`` so readers cannot
-    accidentally mutate the shared artifact.
+    Writes to a temp file, normalizes its journal mode to ``DELETE`` (the
+    backup-restored file is WAL-mode; left as WAL a 0444 file still makes a
+    plain ``mode=ro`` reader recreate ``-wal``/``-shm`` sidecars, and stale
+    sidecars carried across the swap are silently honored as a hot WAL so
+    readers see the OLD database), verifies ``PRAGMA quick_check`` on the
+    normalized file, chmods it ``0444``, removes stale
+    ``current.db-wal``/``current.db-shm`` sidecars left by readers that
+    opened the old file without ``immutable=1`` (fail-closed: an
+    un-removable sidecar aborts the refresh rather than swapping a new db
+    in beside a stale WAL), then atomically renames into place so readers
+    cannot accidentally mutate the shared artifact.
     """
     snaps = sorted(
         f for f in os.listdir(out_dir)
@@ -143,8 +155,16 @@ def refresh_current_db(out_dir: str) -> dict:
             [_find_zstd(), "-d", "-f", newest, "-o", tmp],
             check=True, capture_output=True, text=True,
         )
-        # Static decompressed file -> immutable=1 (project rule: no WAL
-        # sidecars; mode=ro would create stray -shm/-wal on the temp file).
+        # journal-mode normalize BEFORE chmod: backup-restored files are WAL
+        # (header write_ver=2); a 0444 WAL file reopened with plain mode=ro
+        # recreates -wal/-shm, and stale sidecars carried over the rename are
+        # silently honored as a hot WAL -> readers see the old database.
+        conn = sqlite3.connect(tmp)
+        try:
+            conn.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            conn.close()
+        # quick_check the exact bytes that will be swapped in.
         conn = sqlite3.connect(f"file:{tmp}?immutable=1", uri=True)
         try:
             result = conn.execute("PRAGMA quick_check").fetchone()
@@ -157,9 +177,19 @@ def refresh_current_db(out_dir: str) -> dict:
         # that opened the old current.db without immutable=1 leaves behind
         # current.db-wal/-shm; carried over the rename they would make the new
         # file look like it has a WAL and could mislead ro readers.
+        # Idempotent: FileNotFoundError = already gone (a concurrent ro reader
+        # may delete its own -shm) -> fine. A real OSError is fail-closed:
+        # better to fail the refresh than to swap a new db in beside a stale
+        # WAL that readers would silently trust.
         for side in (final + "-wal", final + "-shm"):
-            if os.path.exists(side):
+            try:
                 os.remove(side)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise RuntimeError(
+                    f"cannot remove stale sidecar {side}: {exc}"
+                ) from exc
         os.replace(tmp, final)   # atomic swap; readers never see a partial file
     except Exception:
         if os.path.exists(tmp):
