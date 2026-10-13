@@ -200,3 +200,60 @@ EOF
 - 切换 release 时同步改 plist 的 `{{RELEASE_DIR}}` 与 wrapper 的 `RELEASE_SHA`，
   并 `launchctl kickstart -k gui/$UID/com.tradingagents.ashare` 重启到新版。
 - 安装时间 10-12 窗口之后由总控另定；本令只交模板，不碰生产、不动现有实例。
+
+---
+
+# 每日进度表 + 1950 验收报告（DAV-2035，20:30；总控 10-13 令：只交模板，不安装）
+
+同一目录下另有 `com.davidliu.ta-daily-reports.plist` + `ta-daily-reports-wrapper.sh`，
+与上面的生产服务托管**完全独立**：Mon–Fri **20:30**（排在 19:30 tplus5-shadow 与
+19:45 phase2 ledger 之后）跑一次，产出当日**进度表**（`dav1507_exit_progress.py --json`）
+与**1950 验收报告**（`dav1950_exit_acceptance_report.py --json`）。安装时间同令：
+**10-18 部署后、与定时任务检出升级同发布卡**。
+
+| 项 | 口径 |
+|---|---|
+| 输入 | `~/ta-snapshot/current.db`，**只读**；读取的 `file:…?mode=ro&immutable=1` URI 口径由 **DAV-2033** 在 `open_ro`/`_connect_ro` 内部统一，本 wrapper 只传 `--db`，不自己拼 URI、不复制快照 |
+| 输出 | `~/ta-work/reports/YYYY-MM-DD/`：`exit-progress-<date>.json`、`acceptance-<date>.json`、`run-status-<ts>.txt`（成功标记），失败时额外 `ALERT-<ts>.log` |
+| 保留 | **30 天**（`TA_RETENTION_DAYS`）。清理只删名字形如 `YYYY-MM-DD` 的目录，`_logs/` 等不匹配目录一律跳过 |
+| 失败 | 任一脚本非零退出或产出空文件 → 写 `ALERT-<ts>.log` + `run-status` FAILED + **wrapper exit 1**，不静默 |
+| 无 KeepAlive | 失败的报表运行**不重拉**：重拉只会重复撞同一个 bug；告警留证，下一交易日自然再跑 |
+| 日志 | `~/ta-work/reports/_logs/{exit-progress,acceptance}-<date>.log` + launchd 自己的 `launchd.{out,err}.log` |
+
+环境（plist `EnvironmentVariables`，均可覆盖）：`TA_PYTHON_BIN`（生产固定
+`.venv310`）、`TA_PROJECT_ROOT`、`TA_SNAPSHOT_DB`、`TA_REPORTS_ROOT`、
+`TA_RETENTION_DAYS`。wrapper 内部对每次子进程 `env -u PYTHONPATH` 并 unset 代理
+（venv310 门禁铁律 + 脚本零出网）。
+
+## 安装 / 回退（待 10-18 授权后执行）
+
+```bash
+D=/Users/davidliu/Documents/TradingAgents-AShare
+mkdir -p "$D/releases/launchd"
+cp releases/launchd/ta-daily-reports-wrapper.sh "$D/releases/launchd/"
+chmod +x "$D/releases/launchd/ta-daily-reports-wrapper.sh"
+
+mkdir -p ~/Library/LaunchAgents
+sed "s|{{RELEASE_DIR}}|${D}|g" \
+    releases/launchd/com.davidliu.ta-daily-reports.plist \
+    > ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
+grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist   # 必须为 0
+plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist  # OK
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
+
+# 回退
+launchctl bootout gui/$UID/com.davidliu.ta-daily-reports
+rm -f ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
+```
+
+## 本地验证（安装前，已实测）
+
+```bash
+bash -n releases/launchd/ta-daily-reports-wrapper.sh     # 语法 OK
+plutil -lint releases/launchd/com.davidliu.ta-daily-reports.plist   # OK
+env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python \
+  -m pytest tests/test_ta_daily_reports_launchd.py -q -p no:randomly    # 7 passed
+```
+
+该测试用**桩解释器** + 临时目录跑全链路（成功路径双 JSON、30 天清理、上游失败
+告警非零、快照缺失 fail-closed），不碰生产库、不装 launchd。
