@@ -132,7 +132,8 @@ def _make_project(tmp_path, progress_rc=0, accept_rc=0, progress_body=None,
             ["git", "-C", str(proj), "fetch", "-q", str(ROOT), TRUNK_REF],
             capture_output=True, text=True)
         if fetch.returncode != 0:
-            pytest.fail(f"cannot fetch {TRUNK_REF} from {ROOT}: {fetch.stderr}")
+            pytest.fail(f"cannot fetch {TRUNK_REF} from {ROOT}: {fetch.stderr} "
+                         f"(the fixture needs origin's trunk tracking ref)")
         reach = subprocess.run(
             ["git", "-C", str(proj), "merge-base", "--is-ancestor", anchor,
              "FETCH_HEAD"], capture_output=True, text=True)

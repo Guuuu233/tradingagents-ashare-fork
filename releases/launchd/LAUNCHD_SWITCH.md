@@ -262,7 +262,7 @@ rm -f ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
 bash -n releases/launchd/ta-daily-reports-wrapper.sh     # 语法 OK
 plutil -lint releases/launchd/com.davidliu.ta-daily-reports.plist   # OK
 env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python \
-  -m pytest tests/test_ta_daily_reports_launchd.py -q -p no:randomly    # 12 passed
+  -m pytest tests/test_ta_daily_reports_launchd.py -q -p no:randomly    # 13 passed
 ```
 
 该测试用**桩解释器** + 临时目录跑全链路（成功路径双 JSON、30 天清理、上游失败
