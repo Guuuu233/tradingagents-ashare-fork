@@ -23,7 +23,7 @@ Exit codes: 0 ok；2 输入缺失（db/calendar/args，与上游同口径上抛�
 
 示例：
   python scripts/dav1950_exit_acceptance_report.py \
-      --db /private/tmp/ta-snapshot/current.db --as-of 2026-10-12 \
+      --db ~/ta-snapshot/current.db --as-of 2026-10-12 \
       --out work/dav1950/acceptance-2026-10-12.md
 """
 from __future__ import annotations
@@ -33,6 +33,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -43,7 +44,10 @@ for _p in (str(_PROJECT_ROOT), str(_PROJECT_ROOT / "scripts")):
         sys.path.insert(0, _p)
 
 GENERATOR_VERSION = "dav1950_exit_acceptance_report.v1"
-DEFAULT_DB = "/private/tmp/ta-snapshot/current.db"
+# DAV-2033/DAV-2019: shared snapshot moved out of /tmp to ~/ta-snapshot
+# (2026-10-13). ``~`` is expanded at the argparse default below so the value
+# reaching ``Path.resolve()`` is already absolute (resolve() does not expand ~).
+DEFAULT_DB = "~/ta-snapshot/current.db"
 _SNAPSHOT_RE = re.compile(r"^tradingagents-(\d{4}-\d{2}-\d{2})\.db\.zst$")
 
 
@@ -424,7 +428,7 @@ def main():
     if args.self_test:
         return _self_test()
 
-    db = Path(args.db).resolve()
+    db = Path(os.path.expanduser(args.db)).resolve()
     if not db.is_file():
         sys.stderr.write(f"[exit 2] database does not exist: {db}\n")
         return 2

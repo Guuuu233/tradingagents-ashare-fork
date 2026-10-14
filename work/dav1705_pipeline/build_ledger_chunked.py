@@ -29,7 +29,7 @@
 
 用法:
     python work/dav1705_pipeline/build_ledger_chunked.py \
-        --db /private/tmp/ta-snapshot/current.db \
+        --db ~/ta-snapshot/current.db \
         --ledger-dir work/dav1705_pipeline/ledger --force
 """
 

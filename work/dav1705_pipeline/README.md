@@ -43,7 +43,7 @@ OUT=work/analysis_runs/dav1705
 # 0) 账本封存（分块流式；ledger/ 为单次快照：sealed_at 取运行时钟，
 #    两次封存 chain_hash 必然不同，属 by design；下游为账本纯函数）
 $V work/dav1705_pipeline/build_ledger_chunked.py \
-    --db /private/tmp/ta-snapshot/current.db --ledger-dir $OUT/ledger --force
+    --db ~/ta-snapshot/current.db --ledger-dir $OUT/ledger --force
 $V scripts/phase2/daily_snapshot_ledger.py verify --ledger-dir $OUT/ledger
 # 1) 名单（m2_sampler 为主干生产脚本，不在本目录）
 $V scripts/phase2/m2_sampler.py --date 20251231 --n 20 --seed 42 \
