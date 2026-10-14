@@ -329,12 +329,129 @@ class TestSealGate:
         assert set(sg["seal_late_ids"]) == {f"late{i}" for i in range(12)}
         assert sg["excl_seal_unresolvable"] == 0
         assert sg["input_rows"] == 24 and sg["post_gate_rows"] == 12
+        # DAV-2052 🟡-1: input_rows = 进入封存门的行数，守恒式只加门后桶
+        # （门前桶已在 input_rows 之前分流）；excl_late_seal 已含不可判定
+        # 子集不再另加。
+        fun = out["verdict"]["funnel"]
+        assert sg["input_rows"] == sg["post_gate_rows"] + sum(
+            fun[k] for k in ("excl_late_seal", "excl_not_completed",
+                             "excl_bad_prob", "excl_immature_label",
+                             "excl_dup_run"))
+        # admit 入口行数守恒: admit_input_rows = post_gate + 全部 9 桶。
+        assert sg["admit_input_rows"] == sg["post_gate_rows"] + sum(
+            fun[k] for k in ("excl_wrong_user", "excl_pit_failed",
+                             "excl_non_f0", "excl_unverified",
+                             "excl_late_seal", "excl_not_completed",
+                             "excl_bad_prob", "excl_immature_label",
+                             "excl_dup_run"))
+        assert sg["excl_seal_late_includes_unresolvable"] is True
         runj = json.loads((tmp_path / "o" / "run.json").read_text())
         assert runj["seal_gate"] == sg
         assert runj["ledger_rows"] == 24          # 门前全量
         assert runj["seal_gate"]["input_rows"] == 24
         vj = json.loads((tmp_path / "o" / "verdict.json").read_text())
         assert vj["model"]["seal_gate"] == sg    # 透传进 verdict.json
+
+    def test_seal_gate_conservation_with_dirty_buckets(self, tmp_path):
+        """DAV-2052 🟡-1 脏样本: 旧等式 input_rows = post_gate_rows +
+        excl_seal_late + excl_seal_unresolvable 在任一非封存桶非零时即破
+        ——这里混入 wrong_user / not_completed / bad_prob / dup_run 各一
+        条，守恒式必须按真等式闭合。"""
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        recs, labs = [], []
+        for i in range(4):
+            recs.append(_rec(f"ok{i}", f"A{i}", "2026-01-05", 30 + i,
+                             sealed_at="2026-01-05 08:00:00.000000"))
+            labs.append(m._label(f"A{i}", "2026-01-05", 0.1 * i))
+        recs.append(_rec("wu", "W1", "2026-01-05", 50, user="other"))
+        recs.append(_rec("nc", "W2", "2026-01-05", 50,
+                         sealed_at="2026-01-05 08:00:00.000000"))
+        recs[-1]["status"] = "running"            # not completed
+        recs.append(_rec("bp", "W3", "2026-01-05", None,
+                         sealed_at="2026-01-05 08:00:00.000000"))
+        # dup: same symbol+day, later created -> excl_dup_run
+        recs.append(_rec("ok0dup", "A0", "2026-01-05", 70,
+                         created="2026-01-05T10:00",
+                         sealed_at="2026-01-05 08:00:00.000000"))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        sg, fun = out["verdict"]["seal_gate"], out["verdict"]["funnel"]
+        # 4 ok + 1 late-dup gone: wu/nc/bp/dup 各 1 排除, formal = 4
+        assert fun["excl_wrong_user"] == 1
+        assert fun["excl_not_completed"] == 1
+        assert fun["excl_bad_prob"] == 1
+        assert fun["excl_dup_run"] == 1
+        assert sg["post_gate_rows"] == 4
+        # input_rows 是进封存门的行数（user/pit/non_f0/unverified 之后）:
+        # 8 - 1(wu) = 7 = 4 formal + nc + bp + dup (无封存桶排除)。
+        assert sg["input_rows"] == 7
+        assert sg["input_rows"] == sg["post_gate_rows"] + sum(
+            fun[k] for k in ("excl_late_seal", "excl_not_completed",
+                             "excl_bad_prob", "excl_immature_label",
+                             "excl_dup_run"))
+        # admit 入口守恒: 8 = 4 + wu + nc + bp + dup (excl_late_seal=0)。
+        assert sg["admit_input_rows"] == 8
+        assert sg["admit_input_rows"] == sg["post_gate_rows"] + sum(
+            fun[k] for k in ("excl_wrong_user", "excl_pit_failed",
+                             "excl_non_f0", "excl_unverified",
+                             "excl_late_seal", "excl_not_completed",
+                             "excl_bad_prob", "excl_immature_label",
+                             "excl_dup_run"))
+        # 旧等式在脏样本上必破: post_gate + excl_seal_late +
+        # excl_seal_unresolvable = 4 + 0 + 0 = 4 ≠ 7。
+        assert (sg["post_gate_rows"] + sg["excl_seal_late"]
+                + sg["excl_seal_unresolvable"]) != sg["input_rows"]
+        # ledger_rows = excl_version + admit_input_rows 两侧闭合。
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["ledger_rows"] == fun["excl_version"] + sg["admit_input_rows"]
+        assert sg["admit_excluded_ids"] == sorted(
+            {"wu", "nc", "bp", "ok0dup"})
+
+    def test_none_run_id_sorted_no_crash(self, tmp_path):
+        """DAV-2052 🟡-2: 账本行 report_id=null 且被排除时，sorted() 必须
+        不抛 TypeError —— rc in (0,2)，不走 traceback。"""
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        ok = _rec("ok1", "A1", "2026-01-05", 50,
+                  sealed_at="2026-01-05 08:00:00.000000")
+        labs = [m._label("A1", "2026-01-05", 1.0)]
+        noid = _rec(None, "W9", "2026-01-05", 50, user="other")
+        noid["report_id"] = None
+        late = _rec(None, "A1", "2026-01-05", 60,
+                    sealed_at="2026-01-06 03:00:00.000000")
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, [ok, noid, late])
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
+        rc = m.main(["run", "--ledger", str(ledger), "--labels", str(lab),
+                     "--calendar-file", str(cal),
+                     "--out-dir", str(tmp_path / "o")])
+        assert rc in (0, 2)
+        if rc == 0:
+            sg = json.loads((tmp_path / "o" / "run.json")
+                            .read_text())["seal_gate"]
+            # None 被 str() 化后确定性落盘 — 不 crash 且列表有序。
+            assert "None" in sg["admit_excluded_ids"]
+
+    def test_dateonly_seal_disclosed_in_funnel(self, tmp_path):
+        """DAV-2052 🟡-3: date-only sealed_at 由 m1 读成 00:00 UTC 准入
+        （行为与旧实现一致），但产物必须如实计数，不再是硬编码 0。"""
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        recs = [_rec("d1", "A1", "2026-01-05", 50, sealed_at="2026-01-05"),
+                _rec("d2", "A2", "2026-01-05", 55,
+                     sealed_at="2026-01-05 08:00:00.000000")]
+        labs = [m._label("A1", "2026-01-05", 1.0),
+                m._label("A2", "2026-01-05", 2.0)]
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        fun = out["verdict"]["funnel"]
+        assert fun["seal_dateonly_fallback"] == 1
+        sg = out["verdict"]["seal_gate"]
+        assert sg["seal_dateonly_fallback"] == 1
+        # date-only 行被准入 formal（m1 现行口径），计数仍如实。
+        assert sg["post_gate_rows"] == 2
 
 
 class TestNullDefense:

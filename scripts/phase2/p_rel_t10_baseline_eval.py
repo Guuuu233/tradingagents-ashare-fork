@@ -72,10 +72,10 @@ import argparse
 import bisect
 import hashlib
 import json
+import re
 import sys
 import time
 from collections.abc import Mapping
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -94,6 +94,15 @@ import m1_eval as m1
 from m1_base_rate import build_pit_base_rates, load_panel
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
+
+# DAV-2052 🟡-3: date-only sealed_at ("YYYY-MM-DD", no time part). m1_eval's
+# _sealed_at_sh reads it as 00:00 UTC — admitted like any on-time seal — so
+# this is a funnel DISCLOSURE count only, kept in sync with the pre-33b1f5b
+# implementation's seal_dateonly_fallback key (production _fmt_dt always
+# writes full timestamps, making it unreachable in production). The correct
+# admit semantics for date-only stamps is an m1_eval caliber decision
+# tracked on the DAV-1991 line — NOT changed here.
+_DATEONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
 DEFAULT_LEDGER = dsl.DEFAULT_LEDGER_DIR / dsl.LEDGER_FILE
 DEFAULT_LABELS = elp.DEFAULT_OUT_DIR / elp.LABEL_FILE_NAMES["short"]
@@ -457,13 +466,6 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     labels = load_labels(labels_path)
     log(f"{len(labels)} matured short labels")
     df = load_ledger_signals(ledger_path, labels, user_id)
-    # 门前全量行数 (DAV-1993 🟡 M-1): ledger_rows 恢复为进门前的行数,
-    # 门后行数由 seal_gate.input_rows 承载 — funnel 守恒在产物内闭合:
-    # seal_gate.input_rows = post_gate_rows + excl_seal_late
-    #                      + excl_seal_unresolvable
-    # L-6: 版本选择分流行数也落盘 — ledger_rows(载入全量) 与
-    # seal_gate.input_rows(版本选择后) 之间的差值在 funnel 内闭合,
-    # 审计者无需外部数据即可对账。
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
@@ -475,6 +477,20 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # 自养一套 _sealed_at_utc/apply_seal_gate，改为把交易日历传进
     # m1.admit(calendar=...) 由它判 sealed_at < T+1 09:30 Asia/Shanghai。
     # 门前的 select_version 分流仍在 funnel 里单列 excl_version。
+    #
+    # DAV-2052 🟡-1 产物内守恒式（审计对账无需外部数据）:
+    #   ledger_rows         = excl_version + admit_input_rows
+    #   admit_input_rows    = post_gate_rows(=funnel.formal_rows)
+    #       + excl_wrong_user + excl_pit_failed + excl_non_f0
+    #       + excl_unverified + excl_late_seal + excl_not_completed
+    #       + excl_bad_prob + excl_immature_label + excl_dup_run
+    #   seal_gate.input_rows（进入封存门的行数）= post_gate_rows
+    #       + excl_late_seal + excl_not_completed + excl_bad_prob
+    #       + excl_immature_label + excl_dup_run
+    # 注意: m1 把「晚封 | sealed 解析失败 | T+1 截止不可解析」单掩码全计入
+    # excl_late_seal — excl_seal_t1_unresolved / seal_unparseable /
+    # excl_seal_unresolvable 都是它的子集披露，绝不再相加（相加即重复
+    # 计数，旧守恒式的 bug）。
     calendar_iso = elp._load_calendar(
         Path(calendar_path) if calendar_path else None)
     cal_ymd = [d.replace("-", "") for d in calendar_iso]
@@ -493,7 +509,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # 兼容口径别名：excl_seal_late(=excl_late_seal 总桶) /
     #   excl_seal_unresolvable(=t1_unresolved+unparseable，不可判定子集)。
     post_admit_ids = set(formal["run_id"]) if "run_id" in formal.columns else set()
-    excluded_ids = sorted(pre_admit_ids - post_admit_ids)
+    # DAV-2052 🟡-2: run_id 可含 None（账本行缺 report_id）——裸 sorted()
+    # 对 str/None 混排直接 TypeError，uncaught 崩出而不走 fail-close。
+    # 与 select_version 的 <NaN> 处理同族：先 str() 再排，保证落盘确定性。
+    admit_excluded_ids = sorted(str(x) for x in pre_admit_ids - post_admit_ids)
     # 分桶 run_id（产物用，供事后复核）：重放 m1.admit 门内判定——先按
     # admit 顺序剔除 seal 门之前已被排除的行（wrong_user / pit_failed /
     # non_f0 / unverified），剩余行中 sealed>=entry → 晚封桶；sealed/entry
@@ -509,9 +528,17 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     sealed_sh = m1._sealed_at_sh(d0["sealed_at"]) if "sealed_at" in d0.columns \
         else pd.Series(pd.NaT, index=d0.index)
     entry_cn = m1._seal_deadline_cn(d0["signal_date"], cal_ymd)
-    late_ids = [r for r, m in zip(rid, sealed_sh.notna() & entry_cn.notna()
-                                & (sealed_sh >= entry_cn)) if m]
-    unres_ids = [r for r, m in zip(rid, sealed_sh.isna() | entry_cn.isna()) if m]
+    late_ids = sorted(str(r) for r, m in zip(rid, sealed_sh.notna()
+                        & entry_cn.notna() & (sealed_sh >= entry_cn)) if m)
+    unres_ids = sorted(str(r) for r, m in zip(
+        rid, sealed_sh.isna() | entry_cn.isna()) if m)
+    # DAV-2052 🟡-3: 披露回填 — m1 的 _sealed_at_sh 把裸 "YYYY-MM-DD" 读成
+    # 00:00 UTC（按准点收），与 33b1f5b 前自养实现的准入行为一致；此键仅
+    # 记数不改判，入 seal_gate 块与 funnel 两处（date-only 戳该排除还是
+    # 读成午夜属 m1_eval 口径决策，DAV-1991 线裁定，本卡不擅动）。
+    n_dateonly = int(d0["sealed_at"].astype(str).str.strip()
+                     .str.match(_DATEONLY_RE).sum()) \
+        if "sealed_at" in d0.columns else 0
     seal_gate = {
         "field": "sealed_at",
         "field_equivalence_note":
@@ -522,20 +549,30 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
             "signal_date 次一交易日 09:30 Asia/Shanghai"
             "（严格小于，sealed < entry_open；实现=m1_eval DAV-1991 门）",
         "impl": "m1_eval.admit(calendar=cal_ymd)",
-        "input_rows": int(post_version_rows),
+        # DAV-2052 🟡-1: input_rows 恢复为「进入封存门的行数」——通过
+        # 门前四桶（wrong_user/pit_failed/non_f0/unverified）后由封存门
+        # 判别的行数 len(d0)；admit_input_rows 另列 admit 入口行数
+        # (=post_version_rows) 供全链路对账。守恒式见上方块注释。
+        "input_rows": int(len(d0)),
+        "admit_input_rows": int(post_version_rows),
         "excl_seal_late": int(funnel["excl_late_seal"]),
-        "seal_late_ids": sorted(late_ids),
+        "seal_late_ids": late_ids,
+        # excl_late_seal 总桶已含不可判定子集（m1 单掩码）— 自证标记。
+        "excl_seal_late_includes_unresolvable": True,
         "excl_seal_unresolvable": int(
             funnel["excl_seal_t1_unresolved"] + funnel["seal_unparseable"]),
-        "seal_unresolvable_ids": sorted(unres_ids),
+        "seal_unresolvable_ids": unres_ids,
         "seal_unparseable": int(funnel["seal_unparseable"]),
         "excl_seal_t1_unresolved": int(funnel["excl_seal_t1_unresolved"]),
-        "excluded_ids": excluded_ids,
+        "seal_dateonly_fallback": n_dateonly,
+        # DAV-2052 🟡-1/🟢-1: admit 全量排除集（含封存门前后所有桶），非
+        # 仅封存门分流 — 命名写清口径。
+        "admit_excluded_ids": admit_excluded_ids,
     }
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
     funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
     funnel["excl_version"] = int(ledger_rows_input - post_version_rows)
-    funnel["seal_dateonly_fallback"] = 0
+    funnel["seal_dateonly_fallback"] = n_dateonly
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
