@@ -168,3 +168,90 @@ def test_authorized_run_with_token_is_unchanged(tmp_path, monkeypatch):
                          production_authorized=True,
                          audit_log=str(tmp_path / "journal"))
     assert r["changed_rows"] == 1 and r["guard_mismatches"] == 0
+
+
+# ---------------------------------------------------------------------------
+# DAV-2047 rework: the gate covered only run_backfill(production_authorized=True)
+# while restore_from_export and the main() dispatch path stayed open. The gate
+# now covers EVERY authorized entry point, while non-authorized runs are
+# deliberately left untouched (offline tooling must work without a token).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("token", [None, "", "   "])
+def test_authorized_restore_without_tushare_token_fails_closed(tmp_path, monkeypatch, token):
+    """DAV-2047: restore_from_export(production_authorized=True) without a
+    token dies BEFORE the export file is read and BEFORE the DB is opened
+    writable — 0 rows written, 0 bytes of the export consumed."""
+    p = make_db(tmp_path, report())
+    before = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    export_file = tmp_path / "export.jsonl.zst"
+    if token is None:
+        monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("TUSHARE_TOKEN", token)
+    monkeypatch.setattr(cli, "_load_pre_export", _must_not_be_called)
+    monkeypatch.setattr(cli, "check_runtime_guard", _must_not_be_called)
+    monkeypatch.setattr(cli, "_open_db", _must_not_be_called)
+    with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
+        cli.restore_from_export(str(p), str(export_file),
+                                production_authorized=True)
+    assert sqlite3.connect(p).execute("SELECT * FROM reports").fetchall() == before
+
+
+def test_authorized_restore_cli_without_token_exits_nonzero_and_writes_nothing(tmp_path, monkeypatch):
+    """DAV-2047: `main()` refuses before subcommand dispatch — an
+    authorized `restore` CLI call exits 1 without ever opening the export
+    file or the DB writable."""
+    p = make_db(tmp_path, report())
+    before = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    import dotenv
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setattr(cli, "_load_pre_export", _must_not_be_called)
+    monkeypatch.setattr(cli, "check_runtime_guard", _must_not_be_called)
+    monkeypatch.setattr(cli, "_open_db", _must_not_be_called)
+    monkeypatch.setattr(sys, "argv", [
+        "backfill_tplus5_shadow", "restore",
+        "--db-path", str(p), "--export-file", str(tmp_path / "export.jsonl.zst"),
+        "--production-authorized"])
+    assert cli.main() == 1
+    assert sqlite3.connect(p).execute("SELECT * FROM reports").fetchall() == before
+
+
+@pytest.mark.parametrize("entry", ["run_backfill", "restore_from_export"])
+def test_non_authorized_entry_points_without_token_still_reach_their_stage(tmp_path, monkeypatch, entry):
+    """DAV-2047 scope: the token gate binds ONLY --production-authorized.
+    Non-authorized calls must still get PAST the credential check (they
+    may then be stopped by their own later guards, not by the token gate).
+    This pins the review's scope boundary: no token => refused applies to
+    authorized paths only."""
+    p = make_db(tmp_path, report())
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    if entry == "run_backfill":
+        monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+        monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+        monkeypatch.setattr(cli, "check_runtime_guard",
+                            lambda *args: {"allowed": True, "reason": "idle"})
+        # Reaches the write stage and completes without a token gate error.
+        r = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                             audit_log=str(tmp_path / "journal"))
+        assert r["changed_rows"] == 1
+    else:
+        monkeypatch.setattr(cli, "_load_pre_export", _must_not_be_called)
+        # No RuntimeError from the token gate — the failure happens later
+        # inside _load_pre_export (which we make fail with AssertionError).
+        with pytest.raises(AssertionError):
+            cli.restore_from_export(str(p), str(tmp_path / "missing.zst"))
+
+
+def test_authorized_restore_with_token_proceeds_past_the_gate(tmp_path, monkeypatch):
+    """Authorized restore WITH a token is not blocked by the new check —
+    it proceeds to read the export file (the next stage, which we stub to
+    prove the gate was passed)."""
+    p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_token_value")
+    monkeypatch.setattr(cli, "_load_pre_export", _must_not_be_called)
+    with pytest.raises(AssertionError):
+        cli.restore_from_export(str(p), str(tmp_path / "export.jsonl.zst"),
+                                production_authorized=True)
