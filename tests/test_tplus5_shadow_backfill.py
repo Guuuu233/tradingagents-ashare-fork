@@ -411,8 +411,11 @@ class TestBatchBackfillAndSystemGatesIntegration:
 class TestBackfillCLIAndPersistence:
     """Test suite for backfill CLI execution and disk / dry-run safety."""
 
-    def test_run_backfill_dry_run_does_not_mutate_file(self, tmp_path):
+    def test_run_backfill_dry_run_does_not_mutate_file(self, tmp_path, monkeypatch):
         """--dry-run mode leaves input file unchanged and does not write output."""
+        # DAV-2045: run_backfill 进入计算前要求 TUSHARE_TOKEN（本测试拉数据
+        # 链走 fetch stub，仅需凭据存在）。
+        monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
         sample_file = tmp_path / "samples.json"
         rep = _build_v2_report_fixture(winner="bull", trade_date="2026-08-03")
         with open(sample_file, "w", encoding="utf-8") as f:
@@ -435,6 +438,7 @@ class TestBackfillCLIAndPersistence:
     def test_run_backfill_active_writes_output_file(self, tmp_path, monkeypatch):
         """DAV-1458 第1步裁定/第2步授权：来源不全的存量价不得复用。"""
         from scripts import backfill_tplus5_shadow as cli
+        monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
         monkeypatch.setattr(cli, "fetch_price_series", lambda *args: {
             "bars": {}, "missing_reason": "provenance_incomplete",
         })
@@ -568,6 +572,7 @@ class TestBackfillTplus5ShadowDbPath:
         """DAV-1458 第1步裁定/第2步授权：无完整运行守卫证据不写库。"""
         import requests
         from scripts import backfill_tplus5_shadow as cli
+        monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
 
         class HealthyWithoutActivityCount:
             status_code = 200
@@ -590,8 +595,10 @@ class TestBackfillTplus5ShadowDbPath:
         # Positive guarded/copy write and hit determination stay covered by
         # test_tplus5_operational_backfill.py's real SQLite persistence test.
 
-    def test_run_backfill_dry_run_does_not_modify_sqlite_db(self, custom_sqlite_db):
+    def test_run_backfill_dry_run_does_not_modify_sqlite_db(self, custom_sqlite_db, monkeypatch):
         """--dry-run mode computes statistics but leaves SQLite DB completely unchanged."""
+        # DAV-2045: dry-run 也走计算路径，需凭据才能到达。
+        monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
         res = run_backfill(db_path=custom_sqlite_db, as_of="2026-08-15", dry_run=True)
         assert res["dry_run"] is True
         assert res["sample_count"] == 4
@@ -738,7 +745,7 @@ class TestBackfillTplus5ShadowDbPath:
              "--db-path", custom_sqlite_db, "--dry-run", "--as-of", "2026-08-15"],
             capture_output=True,
             text=True,
-            env=repo_script_env,
+            env={**repo_script_env, "TUSHARE_TOKEN": "test_stub"},
             cwd=REPO_ROOT,
         )
         assert proc.returncode == 0

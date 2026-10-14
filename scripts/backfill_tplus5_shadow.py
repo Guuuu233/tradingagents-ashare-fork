@@ -652,24 +652,18 @@ def _is_production(path):
     return Path(path).resolve() == production.resolve() or (production.exists() and os.path.samefile(path, production))
 
 
-def _require_tushare_token_for_authorized_run():
-    """DAV-2045/2047 fail-close: --production-authorized with an empty
-    TUSHARE_TOKEN aborts BEFORE any price fetch, computation or write.
+def _require_tushare_token():
+    """DAV-2045 fail-close: any T+5 backfill run — authorized or not — with an
+    empty TUSHARE_TOKEN aborts BEFORE the source iteration/fetch/write stage.
 
-    DAV-1853 run 1 launched authorized without credentials: every provider
-    call degraded to ``credentials_missing`` inside the fetcher yet the run
-    still wrote, stamping ``data_missing`` on 1011 rows.
-
-    DAV-2047: the gate is enforced at EVERY authorized entry point — in
-    ``main()`` right after the privileged .env load and before subcommand
-    dispatch, inside ``run_backfill`` before the calendar/fetch/write path,
-    and inside ``restore_from_export`` before the export file is even
-    opened. Non-authorized invocations (rehearsals, dry-runs, copy
-    restores) are intentionally NOT gated: they are offline tooling and
-    must stay usable on machines without a token."""
+    The gate deliberately does NOT live in ``main()``: ``restore`` and other
+    no-fetch subcommands must keep working without credentials, and the JSON
+    ``dry_run``/``verify_gates`` file paths never touch Tushare, so the
+    check sits immediately before the (fetch-capable) compute pass inside
+    ``run_backfill`` instead of being keyed on the flag alone."""
     if not os.getenv("TUSHARE_TOKEN", "").strip():
         raise RuntimeError(
-            "TUSHARE_TOKEN missing or empty: refusing --production-authorized run")
+            "TUSHARE_TOKEN missing or empty: refusing T+5 compute/fetch run")
 
 
 # ---------------------------------------------------------------------------
@@ -900,11 +894,6 @@ def restore_from_export(db_path, export_file, *, sha256=None,
     differ from (or already equal) the export, the rewritten bytes must be
     byte-identical to the export, and non-T+5 bytes must be unchanged.
     """
-    # DAV-2047: same fail-close as run_backfill — an authorized restore
-    # opens the DB writable and rewrites rows, so it must die before even
-    # reading the export file when no token is present.
-    if production_authorized:
-        _require_tushare_token_for_authorized_run()
     _validate_db(db_path)
     if _is_production(db_path) and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):
         raise RuntimeError("production restore forbidden before signed post-10-09 handoff")
@@ -965,16 +954,15 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                  copy_rehearsal=False, pre_export_dir=None):
     if verify_gates and db_path:
         raise RuntimeError('DB gate verification requires scripts/verify_h1b_gates.py with an explicit cohort')
-    if production_authorized:
-        # DAV-2045/2047: credential check is the very first gate — a signed
-        # production launch without a token must die before it can fetch,
-        # compute or write anything. (main() also enforces this before
-        # subcommand dispatch; this stays for direct API callers.)
-        _require_tushare_token_for_authorized_run()
     as_of = as_of or now_cn().date().isoformat()
     date.fromisoformat(as_of)
     if db_path:
         _validate_db(db_path)
+    # DAV-2045 返修（总控范围裁定）：凭据门在“进入计算前”对所有拉行情/
+    # 计算 T+5 的运行生效——授权与非授权、dry-run 与 JSON 文件路径同样拦截；
+    # restore/verify 等不拉行情的子命令不经过 run_backfill（豁免），门也不在
+    # main() 入口。置于写守卫之前：无凭据运行连 guard 探测都不该发生。
+    _require_tushare_token()
     if db_path and not dry_run:
         production = _is_production(db_path)
         if production and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):
@@ -1134,14 +1122,6 @@ def main():
         from dotenv import load_dotenv
         load_dotenv(ROOT / '.env', override=False)
     try:
-        # DAV-2047: process-level fail-close. Any authorized invocation —
-        # the default backfill or the restore subcommand — dies here, right
-        # after the .env load and before a single byte of the DB or the
-        # export file is read, when TUSHARE_TOKEN is missing/empty. The
-        # per-function gates below remain as defence-in-depth for direct
-        # API callers that bypass main().
-        if args.get('production_authorized'):
-            _require_tushare_token_for_authorized_run()
         if command == "restore":
             result = restore_from_export(
                 args["db_path"], args["export_file"],
