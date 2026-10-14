@@ -1240,11 +1240,41 @@ def test_env_gate_rejects_metachar_injection_variants(tmp_path):
         assert not pwned.exists(), frag
 
 
+def test_env_gate_rejects_dquoted_substitution_payloads(tmp_path):
+    """DAV-2072 🟡-1: the previous double-quoted alternative excluded only
+    `"` and `\\`, so `K="$(touch ...)"` and K="`touch ...`" passed the gate
+    and `source` then EXECUTED the substitution (sandbox-verified: the
+    sentinel file was created). With $/`/\\ excluded a double-quoted value
+    is literal text only — each payload must exit 16 and leave no file."""
+    frags = ('"$(touch {p})"', '"`touch {p}`"',
+             '"${{BASH_ENV:-$(touch {p})}}"', '"x\\;touch {p}"')
+    for i, frag in enumerate(frags):
+        sub = tmp_path / f"dq{i}"
+        pwned = sub / "PWNED_dq"
+        proc, _, alert = _wrapper_harness(
+            sub, ['K=' + frag.format(p=pwned), 'TUSHARE_TOKEN=fake'])
+        assert proc.returncode == 16, (frag, proc.returncode, alert)
+        assert not pwned.exists(), frag
+
+
+def test_env_gate_rejects_dquoted_variable_expansion(tmp_path):
+    """DAV-2072 🟡-1 companion: `K="${HOME}/x"` needs no command
+    substitution to be dangerous — a sourced variable expansion can
+    retarget paths (e.g. shadow HOME) and re-opens the dollar door. Any
+    `$` inside double quotes is rejected, even without a payload."""
+    for i, line in enumerate(('K="${HOME}/x"', 'K="$HOME/x"',
+                              'K="a${B}b"')):
+        proc, _, _ = _wrapper_harness(tmp_path / f"dv{i}", [line])
+        assert proc.returncode == 16, (line, proc.returncode)
+
+
 def test_env_gate_accepts_production_shaped_env(tmp_path):
     """The production .env (28 lines: comments, blanks, plain KEY=value,
     no spaces around =, bare alnum/punct values incl. . : / -) must still pass — the
-    tighter pattern must not kill the legitimate credential file. Gate
-    pass => wrapper proceeds to the trading-day check => our stub says
+    tighter pattern must not kill the legitimate credential file. Also
+    covers benign quoted values (literal double-quoted token without
+    $/`/\\, and a space-carrying single-quoted value). Gate pass =>
+    wrapper proceeds to the trading-day check => our stub says
     non-trading => exit 0."""
     proc, _, _ = _wrapper_harness(
         tmp_path,
@@ -1255,6 +1285,8 @@ def test_env_gate_accepts_production_shaped_env(tmp_path):
          'MODEL_URL=https://api.example.com/v1',
          'LIST=a,b,c:d/e.f-g',
          'AKSHARE_TIMEOUT=30',
+         'QUOTED_DQ="abc-123_XYZ"',
+         "QUOTED_SQ='abc 123'",
          'export EXTRA_FLAG=1'])
     assert proc.returncode == 0, (proc.returncode, proc.stderr)
 

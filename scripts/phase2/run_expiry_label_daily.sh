@@ -111,15 +111,21 @@ log "timer start label=com.davidliu.ta-p4-expiry-labels"
 # `KEY=value touch /tmp/x` passed the gate and `source` then ran `touch`.
 # The value side is now a whitelist — a "safe bare value" contains only
 # [A-Za-z0-9_+,.:/@%^?=!~*()[]-] (no space, ; | & ` $ < > { } ' " \),
-# a "-quoted value may contain anything except " or \, and a '-quoted
-# value anything except '. `FOO =bar`, `KEY=v;cmd`, `KEY=v>file`,
-# `KEY=v`cmd``, `KEY=$(cmd)` and `KEY='x' y` are all rejected: grep may
-# pass them but bash would run a command or redirect. Any other line
-# makes the file untrusted: alert + exit, never source it.
+# a "-quoted value may contain anything except " \ $ or `, and a
+# '-quoted value anything except '. `FOO =bar`, `KEY=v;cmd`,
+# `KEY=v>file`, `KEY=v`cmd``, `KEY=$(cmd)` and `KEY='x' y` are all
+# rejected: grep may pass them but bash would run a command or
+# redirect. Any other line makes the file untrusted: alert + exit,
+# never source it.
+# DAV-2072 🟡-1: the "-quoted alternative previously excluded only " and
+# \, so `K="$(touch /tmp/PWNED)"` and K="`touch /tmp/PWNED`" passed the
+# gate and `source` executed the substitution (sandbox-verified PWNED
+# created); `K="${HOME}..."` also expands with side effects. $ and ` are
+# now excluded too — a double-quoted value is literal text only.
 if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # exit 0 = a bad line was FOUND (grep -vE prints lines that are NOT
     # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source.
-    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}"; then
+    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\$`]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}"; then
         alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16
     fi
     set -a
