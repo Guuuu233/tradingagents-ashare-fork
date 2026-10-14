@@ -18,8 +18,8 @@
 #   PROJECT_ROOT 专用发布检出（如 ~/ta-reports-<sha>，由 plist 显式提供；
 #                无默认值，主检出 ~/Documents/TradingAgents-AShare 明确拒收）。
 #                启动时 git -C "$PROJECT_ROOT" merge-base --is-ancestor
-#                cac73667 HEAD 核对该检出包含 DAV-2033，不满足即 fail_alert。
-#   REQUIRED_DAV2033_COMMIT 上述核对的锚定提交（默认 cac73667，可覆盖）
+#                8571c80b HEAD 核对该检出包含 DAV-2033，不满足即 fail_alert。
+#   REQUIRED_DAV2033_COMMIT 上述核对的锚定提交（默认 8571c80b，可覆盖）
 #   SNAPSHOT_DB  只读快照整库
 #   OUT_ROOT     报告输出根目录
 #   RETENTION_DAYS 保留天数（默认 30）
@@ -35,7 +35,10 @@ PYTHON_BIN="${TA_PYTHON_BIN:-/Users/davidliu/Documents/TradingAgents-AShare/.ven
 # （如 ~/ta-reports-<sha>），绝不再回落到主检出。
 PROJECT_ROOT="${TA_PROJECT_ROOT:-}"
 MAIN_CHECKOUT="/Users/davidliu/Documents/TradingAgents-AShare"
-REQUIRED_DAV2033_COMMIT="${TA_REQUIRED_DAV2033_COMMIT:-cac73667b65f44dfa7c7df1423a302a52f813b01}"
+# DAV-2033 主干合入提交（codex/dav-4-p2a-trunk 上的 8571c80b）。
+# 早前用的 cac73667 未被主干包含，文档化安装步骤产出的检出会被这里拒收，
+# 故默认锚点只接受主干可达的 SHA。
+REQUIRED_DAV2033_COMMIT="${TA_REQUIRED_DAV2033_COMMIT:-8571c80b3578c7ea40e3bdf6eed2ad7646415db9}"
 SNAPSHOT_DB="${TA_SNAPSHOT_DB:-/Users/davidliu/ta-snapshot/current.db}"
 OUT_ROOT="${TA_REPORTS_ROOT:-/Users/davidliu/ta-work/reports}"
 RETENTION_DAYS="${TA_RETENTION_DAYS:-30}"
@@ -86,8 +89,13 @@ fail_alert() {
 
 # ---- 前置断言（fail-closed） -------------------------------------------------
 [ -n "${PROJECT_ROOT}" ] || fail_alert "TA_PROJECT_ROOT unset — plist must point at the dedicated reports checkout (e.g. ~/ta-reports-<sha>)"
-[ "${PROJECT_ROOT%/}" != "${MAIN_CHECKOUT}" ] \
-  || fail_alert "PROJECT_ROOT is the main checkout ${MAIN_CHECKOUT} — forbidden; use a dedicated ~/ta-reports-<sha>"
+# 主检出比对前做 pwd -P 规范化，避免 // 或符号链接绕过字符串拒收。
+PROJECT_ROOT_RESOLVED="${PROJECT_ROOT}"
+if [ -d "${PROJECT_ROOT}" ]; then
+  PROJECT_ROOT_RESOLVED="$(cd "${PROJECT_ROOT}" && pwd -P)"
+fi
+[ "${PROJECT_ROOT_RESOLVED}" != "${MAIN_CHECKOUT}" ] \
+  || fail_alert "PROJECT_ROOT is the main checkout ${MAIN_CHECKOUT} (resolved: ${PROJECT_ROOT_RESOLVED}) — forbidden; use a dedicated ~/ta-reports-<sha>"
 git -C "${PROJECT_ROOT}" merge-base --is-ancestor "${REQUIRED_DAV2033_COMMIT}" HEAD 2>/dev/null \
   || fail_alert "PROJECT_ROOT ${PROJECT_ROOT} is not a checkout containing DAV-2033 (${REQUIRED_DAV2033_COMMIT})"
 [ -x "${PYTHON_BIN}" ] || fail_alert "interpreter not executable: ${PYTHON_BIN}"

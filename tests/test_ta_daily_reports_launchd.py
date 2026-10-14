@@ -52,6 +52,10 @@ def test_plist_is_valid_and_scheduled_2030_weekdays():
     assert "<key>RunAtLoad</key>\n    <false/>" in text
     # Placeholders documented for install-time substitution.
     assert "{{RELEASE_DIR}}" in text
+    # DAV-2056 review: the anchor must be wired explicitly, and must be the
+    # same trunk-reachable SHA the wrapper defaults to.
+    anchor = _dav2033_anchor()
+    assert f"<key>TA_REQUIRED_DAV2033_COMMIT</key>\n        <string>{anchor}</string>" in text
 
 
 def test_plist_placeholder_substitution_lints(tmp_path):
@@ -72,17 +76,47 @@ def test_plist_placeholder_substitution_lints(tmp_path):
 # Wrapper end-to-end with a stub interpreter                                   #
 # --------------------------------------------------------------------------- #
 
+DAV2033_ANCHOR_RE = re.compile(
+    r'^REQUIRED_DAV2033_COMMIT="\$\{TA_REQUIRED_DAV2033_COMMIT:-([0-9a-f]{40})\}"$',
+    re.M)
+# 主干 ref（而非裸 SHA）用于 fixture fetch；裸 SHA 在浅克隆/非 origin 克隆里可能
+# 不可达，那正是 DAV-2056 复审打回的静默 skip 根因。
+TRUNK_REF = "refs/remotes/origin/codex/dav-4-p2a-trunk"
+
+
+def _dav2033_anchor():
+    """The wrapper's default DAV-2033 anchor, parsed from the wrapper itself so
+    the tests can never drift from the shipped default."""
+    m = DAV2033_ANCHOR_RE.search(WRAPPER.read_text())
+    assert m, "REQUIRED_DAV2033_COMMIT default not found in wrapper"
+    return m.group(1)
+
+
+def test_dav2033_anchor_is_reachable_from_trunk():
+    """The default anchor must be an ancestor of the trunk tip, otherwise the
+    documented install steps produce a checkout the wrapper rejects (DAV-2056)."""
+    anchor = _dav2033_anchor()
+    ls = subprocess.run(
+        ["git", "-C", str(ROOT), "branch", "-r", "--contains", anchor],
+        capture_output=True, text=True)
+    assert ls.returncode == 0, ls.stderr
+    assert TRUNK_REF.removeprefix("refs/remotes/") in ls.stdout, (
+        f"anchor {anchor} is not contained in {TRUNK_REF}; contained refs:\n"
+        f"{ls.stdout or '(none)'}")
+
+
 def _make_project(tmp_path, progress_rc=0, accept_rc=0, progress_body=None,
                   contains_dav2033=True):
     """A fake PROJECT_ROOT: scripts/ populated + a git repo whose HEAD either
-    contains the pinned DAV-2033 commit (cac73667) or doesn't.
+    contains the pinned DAV-2033 commit or doesn't.
 
-    The wrapper now requires ``git -C $PROJECT_ROOT merge-base --is-ancestor
-    cac73667 HEAD`` to succeed, so the fixture grafts the real commit object
-    (fetched from the candidate clone) underneath a fresh init commit when
-    ``contains_dav2033`` is set, and leaves an unrelated single-commit history
-    otherwise.
+    The wrapper requires ``git -C $PROJECT_ROOT merge-base --is-ancestor
+    <anchor> HEAD`` to succeed, so the fixture grafts the real commit object
+    (fetched by trunk ref from the candidate clone) underneath a fresh init
+    commit when ``contains_dav2033`` is set, and leaves an unrelated
+    single-commit history otherwise.
     """
+    anchor = _dav2033_anchor()
     proj = tmp_path / ("ta-reports-abcdef12" if contains_dav2033
                        else "ta-reports-stale")
     (proj / "scripts").mkdir(parents=True)
@@ -91,30 +125,36 @@ def _make_project(tmp_path, progress_rc=0, accept_rc=0, progress_body=None,
         (proj / "scripts" / name).write_text("# placeholder\n")
     subprocess.run(["git", "init", "-q", str(proj)], check=True)
     if contains_dav2033:
-        # Fetch the real DAV-2033 commit into the fixture repo so merge-base
-        # can find it as an ancestor of HEAD.
+        # Fetch the trunk branch ref (not a bare SHA) so merge-base can find the
+        # anchor as an ancestor. Failure here is a hard error: a silently skipped
+        # fixture would let a broken anchor ship.
         fetch = subprocess.run(
-            ["git", "-C", str(proj), "fetch", "-q", str(ROOT),
-             "cac73667b65f44dfa7c7df1423a302a52f813b01"],
+            ["git", "-C", str(proj), "fetch", "-q", str(ROOT), TRUNK_REF],
             capture_output=True, text=True)
         if fetch.returncode != 0:
-            pytest.skip(f"cac73667 not fetchable from candidate clone: {fetch.stderr}")
-        base = "FETCH_HEAD"
+            pytest.fail(f"cannot fetch {TRUNK_REF} from {ROOT}: {fetch.stderr}")
+        reach = subprocess.run(
+            ["git", "-C", str(proj), "merge-base", "--is-ancestor", anchor,
+             "FETCH_HEAD"], capture_output=True, text=True)
+        if reach.returncode != 0:
+            pytest.fail(
+                f"DAV-2033 anchor {anchor} is not reachable from {TRUNK_REF} in "
+                f"{ROOT} — the wrapper would reject every checkout produced by "
+                "the documented install steps (DAV-2056 review finding)")
     else:
         # An empty unrelated history — merge-base finds no common ancestor.
         subprocess.run(["git", "-C", str(proj), "commit", "-qm", "init",
                         "--allow-empty"],
                        check=True, env=_git_env())
-        base = None
     subprocess.run(["git", "-C", str(proj), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(proj), "commit", "-qm", "scripts",
                     "--allow-empty"], check=True, env=_git_env())
-    if base:
-        # Re-root the just-created commit on top of cac73667 so that
-        # merge-base --is-ancestor cac73667 HEAD succeeds.
+    if contains_dav2033:
+        # Re-root the just-created commit on top of the DAV-2033 anchor so that
+        # merge-base --is-ancestor <anchor> HEAD succeeds.
         new_head = subprocess.run(
             ["git", "-C", str(proj), "commit-tree", "HEAD^{tree}", "-p",
-             "cac73667b65f44dfa7c7df1423a302a52f813b01", "-m", "rerooted"],
+             anchor, "-m", "rerooted"],
             check=True, capture_output=True, text=True, env=_git_env()).stdout.strip()
         subprocess.run(["git", "-C", str(proj), "reset", "--hard", "-q",
                         new_head], check=True)
@@ -291,8 +331,24 @@ def test_wrapper_fails_closed_when_project_root_is_main_checkout(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_wrapper_fails_closed_when_project_root_is_main_checkout_double_slash(tmp_path):
+    """A `//`-prefixed path is the same directory; string compare alone let it through."""
+    stub = _make_stub_python(tmp_path)
+    env, out_root, args_log = _env_for(
+        tmp_path, stub,
+        Path("/Users/davidliu//Documents/TradingAgents-AShare"))
+    r = _run_wrapper_env(tmp_path, env)
+    assert r.returncode != 0
+    day = out_root / date.today().isoformat()
+    alerts = list(day.glob("ALERT-*.log"))
+    assert alerts, f"no ALERT file; stderr={r.stderr!r}"
+    assert "main checkout" in alerts[0].read_text()
+    assert not args_log.exists()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 def test_wrapper_fails_closed_when_checkout_lacks_dav2033(tmp_path):
-    """A PROJECT_ROOT whose history does not contain cac73667 must fail_alert."""
+    """A PROJECT_ROOT whose history does not contain the DAV-2033 anchor."""
     stub = _make_stub_python(tmp_path)
     stale = _make_project(tmp_path, contains_dav2033=False)
     env, out_root, args_log = _env_for(tmp_path, stub, stale)
@@ -301,7 +357,7 @@ def test_wrapper_fails_closed_when_checkout_lacks_dav2033(tmp_path):
     day = out_root / date.today().isoformat()
     alerts = list(day.glob("ALERT-*.log"))
     assert alerts, f"no ALERT file; stderr={r.stderr!r}"
-    assert "cac73667" in alerts[0].read_text()
+    assert _dav2033_anchor()[:7] in alerts[0].read_text()
     assert not args_log.exists()
 
 

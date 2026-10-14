@@ -217,7 +217,7 @@ EOF
 | 输出 | `~/ta-work/reports/YYYY-MM-DD/`：`exit-progress-<date>.json`、`acceptance-<date>.json`、`run-status-<ts>.txt`（成功标记），失败时额外 `ALERT-<ts>.log` |
 | 保留 | **30 天**（`TA_RETENTION_DAYS`）。清理只删名字形如 `YYYY-MM-DD` 的目录，`_logs/` 等不匹配目录一律跳过 |
 | 失败 | 任一脚本非零退出或产出空文件 → 写 `ALERT-<ts>.log` + `run-status` FAILED + **wrapper exit 1**，不静默 |
-| PROJECT_ROOT | **总控 10-14 令**：`TA_PROJECT_ROOT` 无默认值——plist 必须显式指向一个**专用检出**（如 `~/ta-reports-<sha>`），**禁止主检出** `~/Documents/TradingAgents-AShare`。wrapper 启动时用 `git -C "$PROJECT_ROOT" merge-base --is-ancestor cac73667 HEAD` 核对该检出包含 DAV-2033，不满足即 `fail_alert` |
+| PROJECT_ROOT | **总控 10-14 令**：`TA_PROJECT_ROOT` 无默认值——plist 必须显式指向一个**专用检出**（如 `~/ta-reports-<sha>`），**禁止主检出** `~/Documents/TradingAgents-AShare`。wrapper 启动时用 `git -C "$PROJECT_ROOT" merge-base --is-ancestor 8571c80b HEAD` 核对该检出包含 DAV-2033，不满足即 `fail_alert`。锚点默认值为 `8571c80b3578c7ea40e3bdf6eed2ad7646415db9`（DAV-2033 在 `codex/dav-4-p2a-trunk` 上的合入提交），plist 以 `TA_REQUIRED_DAV2033_COMMIT` 显式接线；主检出比对前先 `pwd -P` 规范化 |
 | 交易日历 | **总控 10-14 令**：`TA_CALENDAR_JSON` 指向的日历文件不存在时直接 `fail_alert`，不再 WARN 放行 |
 | 无 KeepAlive | 失败的报表运行**不重拉**：重拉只会重复撞同一个 bug；告警留证，下一交易日自然再跑 |
 | 日志 | `~/ta-work/reports/_logs/{exit-progress,acceptance}-<date>.log` + launchd 自己的 `launchd.{out,err}.log` |
@@ -236,7 +236,7 @@ RELEASE_SHA=<主干发布 SHA>
 REPORTS_DIR=/Users/davidliu/ta-reports-${RELEASE_SHA:0:8}
 git clone /Users/davidliu/Documents/TradingAgents-AShare "${REPORTS_DIR}"
 git -C "${REPORTS_DIR}" checkout "${RELEASE_SHA}"
-git -C "${REPORTS_DIR}" merge-base --is-ancestor cac73667 HEAD   # 必须 exit 0
+git -C "${REPORTS_DIR}" merge-base --is-ancestor 8571c80b HEAD   # 必须 exit 0
 
 mkdir -p "${REPORTS_DIR}/releases/launchd"
 cp releases/launchd/ta-daily-reports-wrapper.sh "${REPORTS_DIR}/releases/launchd/"
@@ -262,10 +262,11 @@ rm -f ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
 bash -n releases/launchd/ta-daily-reports-wrapper.sh     # 语法 OK
 plutil -lint releases/launchd/com.davidliu.ta-daily-reports.plist   # OK
 env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python \
-  -m pytest tests/test_ta_daily_reports_launchd.py -q -p no:randomly    # 11 passed
+  -m pytest tests/test_ta_daily_reports_launchd.py -q -p no:randomly    # 12 passed
 ```
 
 该测试用**桩解释器** + 临时目录跑全链路（成功路径双 JSON、30 天清理、上游失败
 告警非零、快照缺失 fail-closed），并为 10-14 令新增四个用例：`TA_PROJECT_ROOT`
-未设 fail_alert、PROJECT_ROOT=主检出 fail_alert、检出不含 cac73667 fail_alert、
+未设 fail_alert、PROJECT_ROOT=主检出 fail_alert（含 `//` 变体，pwd -P 规范化）、
+检出不含 DAV-2033 锚点 fail_alert、
 交易日历缺失 fail_alert。不碰生产库、不装 launchd。
