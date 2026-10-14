@@ -11,7 +11,8 @@ PY_BIN="${PY_BIN:-$(command -v python3)}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
-WATCH="${TMP}/ta-watch"
+WATCH="${TMP}/ta-watch-1-ok"          # 每个情形独立 WATCH_DIR，state 不互相污染
+watch_reset() { WATCH="${TMP}/ta-watch-$1"; rm -rf "${WATCH}"; mkdir -p "${WATCH}"; }
 STUB_LOG="${TMP}/stub.log"
 STUB_PID=""
 EXPECT_SHA="deadbeefcafe1234"
@@ -80,6 +81,7 @@ alert_files()  { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-[0-9]' || true
 recovered_files() { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-recovered-' || true; }
 
 echo "== 情形 1：healthz 通（sha 匹配）→ 无告警 =="
+watch_reset 1-ok
 start_stub ok || exit 1
 out=$(run_sentinel); rc=$?
 [ "${rc}" = "0" ] && ok "exit 0" || bad "exit ${rc}"
@@ -88,6 +90,7 @@ out=$(run_sentinel); rc=$?
 echo "${out}" | grep -q 'ok' && ok "输出 ok" || bad "输出异常: ${out}"
 
 echo "== 情形 2：healthz 不通 → 第一次不告警，第二次才告警 =="
+watch_reset 2-unreachable
 stop_stub
 PORT=1   # 无监听端口，必然连接失败
 out1=$(run_sentinel); n1=$(alert_files)
@@ -99,7 +102,8 @@ echo "${out1}" | grep -q '1/2' && ok "第 1 次计入 1/2" || bad "第 1 次未�
 f=$(ls "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
 grep -q 'reason=unreachable' "${WATCH}/${f}" && ok "告警原因为 unreachable" || bad "原因字段不对"
 
-echo "== 情形 3：commit_sha 与期望不符 → 立即告警 =="
+echo "== 情形 3：commit_sha 与期望不符 → 立即告警（独立全新 state）=="
+watch_reset 3-sha   # 不复用情形 2 的 state，fresh 下单次命中即验证
 start_stub bad_sha || exit 1
 n_before=$(alert_files)
 run_sentinel >/dev/null
@@ -109,7 +113,7 @@ f=$(ls -t "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
 grep -q 'reason=sha_mismatch' "${WATCH}/${f}" && ok "原因为 sha_mismatch" || bad "原因字段不对"
 grep -q "observed_commit_sha=$(printf '0%.0s' {1..16})" "${WATCH}/${f}" && ok "记录了观测 sha" || bad "未记录观测 sha"
 
-echo "== 情形 4：恢复 → 写恢复记录 =="
+echo "== 情形 4：恢复 → 写恢复记录（沿用情形 3 的告警状态）=="
 n_recovered_before=$(recovered_files)
 stop_stub; start_stub ok || exit 1
 run_sentinel >/dev/null
@@ -121,12 +125,15 @@ run_sentinel >/dev/null
 [ "$(recovered_files)" = "$((n_recovered_before + 1))" ] && ok "持续健康不重复写恢复记录" || bad "重复写恢复记录"
 
 echo "== 附加：非 2xx / 垃圾响应 / 并发锁 =="
+watch_reset 4-extra
 start_stub http500 || exit 1
-run_sentinel >/dev/null
-[ "$(alert_files)" -ge 2 ] && ok "HTTP 500 计为不通" || bad "HTTP 500 未告警"
+run_sentinel >/dev/null; run_sentinel >/dev/null   # 非 2xx 也走去抖，需两次
+[ "$(alert_files)" = "1" ] && ok "HTTP 500 计为不通（两次后告警）" || bad "HTTP 500 未告警"
+f=$(ls "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
+grep -q 'reason=unreachable' "${WATCH}/${f}" && ok "非 2xx 原因为 unreachable" || bad "原因字段不对"
 stop_stub; start_stub garbage || exit 1
-n=$(alert_files); run_sentinel >/dev/null
-[ "$(alert_files)" -ge 3 ] && ok "2xx 但响应体不可解析计为不通" || bad "垃圾响应未告警"
+n=$(alert_files); run_sentinel >/dev/null; run_sentinel >/dev/null
+[ "$(alert_files)" -gt "${n}" ] && ok "2xx 但响应体不可解析计为不通" || bad "垃圾响应未告警"
 
 mkdir -p "${WATCH}/.sentinel/check.lock"
 out=$(run_sentinel)

@@ -185,18 +185,26 @@ if [ -z "${observed_error}" ]; then
   if [ "${alerting}" = "1" ]; then
     record_recovery "${last_reason:-unknown}"
   fi
-  write_state "ok" 0 0 "" || echo "sentinel: state write failed" >&2
+  write_state "ok" 0 0 "" \
+    || echo "sentinel: state write failed（${STATE_FILE}，下次运行将按未知前序判定）" >&2
   echo "sentinel: ok (commit_sha=${observed_sha:-<unset-check-skipped>})"
   exit 0
 fi
 
 consec_fail=$((consec_fail + 1))
-if [ "${consec_fail}" -ge "${FAIL_THRESHOLD}" ]; then
+if [ "${probe_reason}" = "sha_mismatch" ]; then
+  # 版本漂移不去抖：单次命中即告警（否则长时间跑错 release 而无人知）
   raise_alert "${probe_reason}" "${observed_error}"
-  write_state "${probe_reason}" "${consec_fail}" 1 "${probe_reason}" || true
+  write_state "${probe_reason}" "${consec_fail}" 1 "${probe_reason}" \
+    || echo "sentinel: state write failed（${STATE_FILE}）" >&2
+elif [ "${consec_fail}" -ge "${FAIL_THRESHOLD}" ]; then
+  raise_alert "${probe_reason}" "${observed_error}"
+  write_state "${probe_reason}" "${consec_fail}" 1 "${probe_reason}" \
+    || echo "sentinel: state write failed（${STATE_FILE}）" >&2
 else
   # 未达门槛：只记状态，不告警（第一次失败静默，避免瞬时抖动刷屏）
-  write_state "degraded" "${consec_fail}" 0 "unreachable:${observed_error}" || true
+  write_state "degraded" "${consec_fail}" 0 "${probe_reason}:${observed_error}" \
+    || echo "sentinel: state write failed（${STATE_FILE}）" >&2
   echo "sentinel: failure ${consec_fail}/${FAIL_THRESHOLD}（未达门槛，不告警）: ${observed_error}"
 fi
 exit 0
