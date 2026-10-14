@@ -12,7 +12,11 @@
 #     readers, which this timer is not);
 #   * fail-close everywhere: trading-calendar unavailable / run non-zero /
 #     verify non-zero / SW-leg credential missing -> write alert file +
-#     non-zero exit, NO retry;
+#     non-zero exit, NO retry. Credential gating is double-layered since
+#     DAV-2034 总控 10-14 令: this wrapper pre-probes TUSHARE_TOKEN before
+#     run (exit 13, below), AND expiry_label_pipeline itself fail-closes
+#     (exit 2, zero rows) on an online run without the token — so a manual
+#     `run` that bypasses the wrapper cannot mint permanent gap rows either;
 #   * launchd still fires on Mon-Fri holidays; a non-trading day exits 0 with
 #     a log line only (calendar was loaded to decide that, so an unloaded
 #     calendar still alerts rather than skipping silently).
@@ -39,8 +43,10 @@
 #
 # Exit codes: 0 ok/skip, 10 python missing, 11 pipeline missing,
 #             12 ledger missing, 13 calendar unavailable OR required
-#             credential missing, 14 run failed, 15 verify failed,
-#             16 .env unreadable, 17 post-run all-gap SW-leg guard.
+#             credential missing, 14 run failed (incl. the pipeline's own
+#             no-token fail-close, exit 2), 15 verify failed,
+#             16 .env unreadable OR contains non KEY=VALUE lines,
+#             17 post-run all-gap SW-leg guard.
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
@@ -96,7 +102,19 @@ log "timer start label=com.davidliu.ta-p4-expiry-labels"
 # --- credential injection (DAV-2041) ---------------------------------------
 # .env is the single credential source; values stay in the process env, they
 # are never echoed. `set -a` exports every assignment `source` evaluates.
-if [ -f "${ENV_FILE}" ]; then
+# DAV-2043 🟡: `source` would execute ANY malformed line as a command (a
+# corrupted .env silently runs arbitrary code and still exits 0), so we
+# validate first — every non-empty non-comment line must be KEY=VALUE with
+# NO whitespace around '=' (shell-parsable assignment only; `export` prefix
+# allowed). A line like `FOO =bar` is deliberately rejected: grep accepts
+# it but bash would run FOO as a command. Any other line makes the file
+# untrusted: alert + exit, never source it.
+if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
+    # exit 0 = a bad line was FOUND (grep -vE prints lines that are NOT
+    # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source.
+    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}"; then
+        alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16
+    fi
     set -a
     # shellcheck disable=SC1090
     . "${ENV_FILE}"

@@ -142,11 +142,16 @@ class PipelineError(RuntimeError):
     """Fail-closed pipeline error (calendar / ledger / input integrity)."""
 
 
-# SW leg silent-degradation observability (DAV-2041): a launchd run without
-# TUSHARE_TOKEN labels every row with sw.membership_status=\"gap\" yet still
-# exits 0 — the daily timer would show green while the industry leg is
-# permanently missing. The counters below let ``run`` log the gap
-# concentration and ``verify`` fail-loud on the file.
+# SW leg silent-degradation observability (DAV-2041) hardened to
+# fail-close (DAV-2034 总控 10-14 令): an ONLINE run without TUSHARE_TOKEN
+# labels every row with sw.membership_status=\"gap\" yet still exits 0 — the
+# keys are append-only, so one unauthenticated night mints permanent gap
+# rows that can never be re-labelled. ``run`` therefore hard-fails
+# (PipelineError -> exit 2, zero rows appended) when the online SW leg
+# cannot possibly be resolved. The verify-side gap-ratio check below stays
+# as the second gate for a token that exists but is rejected by Tushare
+# (degradation discovered per-row instead of at startup). Offline mode
+# (file inputs) needs no token and skips the check entirely.
 
 
 def _sw_leg_missing(token: Optional[str] = None) -> bool:
@@ -166,23 +171,20 @@ def _row_sw_gap(row: Mapping[str, Any]) -> bool:
     return isinstance(sw, Mapping) and sw.get("membership_status") == "gap"
 
 
-def _sw_gap_counts(path: Path) -> "tuple[int, int]":
-    """(sw-gap rows, total rows) in one label file; unreadable lines ignored
-    — cmd_verify already fails on them separately."""
-    gaps = total = 0
-    if not path.exists():
-        return gaps, total
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            total += 1
-            try:
-                if _row_sw_gap(json.loads(line)):
-                    gaps += 1
-            except json.JSONDecodeError:
-                continue
-    return gaps, total
+# Typed statuses whose ``_typed_row`` short-circuits BEFORE the SW leg is
+# resolved — such rows are structurally membership_status=\"gap\" and would
+# otherwise inflate the verify gap-ratio denominator into a false-positive
+# SW-degradation alarm (DAV-2043 🟡: 9 BSE-excluded rows + 1 evaluated row
+# produced a verify FAIL on a perfectly healthy Tushare route). Keep this
+# set in sync with every ``_typed_row(...)`` call in ``compute_label_row``.
+_PRE_SW_TYPED_STATUSES = frozenset({
+    STATUS_SIGNAL_DATE_NOT_IN_CALENDAR,
+    STATUS_CALENDAR_INSUFFICIENT,
+    STATUS_SYMBOL_UNMAPPABLE,
+    STATUS_SYMBOL_EXCLUDED_BSE,
+    STATUS_STOCK_BARS_UNAVAILABLE,
+    STATUS_LABEL_RESOLUTION_FAILED,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -1118,14 +1120,19 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     offline_mode = bool(args.bars_file or args.hs300_file
                         or args.sw_daily_file or args.sw_industry_map)
-    sw_expected_off = _sw_leg_missing() and not offline_mode
-    if sw_expected_off:
-        # Not fatal in-process: the wrapper treats TUSHARE_TOKEN absence as a
-        # precondition alert before run, and verify now fail-louds on an
-        # all-gap file — but log it so the file itself records WHY every row
-        # is membership gap instead of looking like a market-data accident.
-        _log(out_dir, "WARN sw leg unavailable: TUSHARE_TOKEN missing — "
-                      "every evaluated row will have membership_status=gap")
+    if _sw_leg_missing() and not offline_mode:
+        # DAV-2034 总控 10-14 令: online run with no TUSHARE_TOKEN can only
+        # produce membership_status=gap rows, and label keys are append-only
+        # — one unauthenticated run permanently mints gap rows. Fail close
+        # BEFORE the ledger pass so zero rows are appended (exit 2). The
+        # wrapper's own pre-probe (exit 13) still fires first under launchd;
+        # this check is the same gate inside the pipeline for direct/manual
+        # invocations that bypass the wrapper.
+        raise PipelineError(
+            "在线模式缺 TUSHARE_TOKEN：SW 行业腿必然整体降级为 gap，"
+            "标签只追加不改写 — 为防永久 gap 行，报错退出、0 行写入 "
+            "(offline --*-file 模式不需 token)")
+    sw_expected_off = False
 
     calendar = _load_calendar(Path(args.calendar_file) if args.calendar_file else None)
     as_of = _resolve_as_of(args)
@@ -1274,6 +1281,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         keys: Dict[Tuple[Any, str], int] = {}
         statuses: Dict[str, int] = {}
         sw_gaps = 0
+        # DAV-2043 🟡: the gap-ratio denominator counts only rows that
+        # actually went through SW-leg resolution (evaluated rows + typed
+        # rows from mid-pipeline). Pre-SW typed rows are structurally gap
+        # and would otherwise false-positive a dead-Tushare alarm on a
+        # BSE/suspension-dense night.
+        sw_eligible = 0
         n = 0
         with open(path, "r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -1289,38 +1302,41 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     continue
                 key = _label_key(obj)
                 keys[key] = keys.get(key, 0) + 1
-                statuses[str(obj.get("outcome_status"))] = (
-                    statuses.get(str(obj.get("outcome_status")), 0) + 1)
-                if _row_sw_gap(obj):
-                    sw_gaps += 1
+                status = str(obj.get("outcome_status"))
+                statuses[status] = statuses.get(status, 0) + 1
+                if status not in _PRE_SW_TYPED_STATUSES:
+                    sw_eligible += 1
+                    if _row_sw_gap(obj):
+                        sw_gaps += 1
         dupes = {k: c for k, c in keys.items() if c > 1}
         if dupes:
             print(f"FAIL: {path.name} has duplicate keys: {dupes}",
                   file=sys.stderr)
             ok = False
-        if n > 0 and sw_gaps == n:
+        if sw_eligible > 0 and sw_gaps == sw_eligible:
             # DAV-2041 🟡-1: an all-gap SW leg means the Tushare route was
-            # dead for the whole run (missing token or equivalent) — those
+            # dead for the whole run (bad token or equivalent) — those
             # keys are append-only and can never be re-labelled, so the
             # timer MUST fail loud here instead of staying green.
-            print(f"FAIL: {path.name} all {n} rows have "
+            print(f"FAIL: {path.name} all {sw_gaps} sw-eligible rows have "
                   f"sw.membership_status=gap — SW industry leg degraded "
-                  f"(TUSHARE_TOKEN missing or tushare route down?); "
+                  f"(bad TUSHARE_TOKEN or tushare route down?); "
                   f"labels are append-only and will never be rewritten",
                   file=sys.stderr)
             ok = False
-        elif n > 0 and sw_gaps / n >= 0.9:
-            print(f"FAIL: {path.name} {sw_gaps}/{n} rows have "
-                  f"sw.membership_status=gap (>=90%) — SW industry leg "
+        elif sw_eligible > 0 and sw_gaps / sw_eligible >= 0.9:
+            print(f"FAIL: {path.name} {sw_gaps}/{sw_eligible} sw-eligible rows "
+                  f"have sw.membership_status=gap (>=90%) — SW industry leg "
                   f"degraded; labels are append-only and will never be "
                   f"rewritten", file=sys.stderr)
             ok = False
         elif sw_gaps:
-            print(f"WARN: {path.name} {sw_gaps}/{n} rows have "
-                  f"sw.membership_status=gap")
+            print(f"WARN: {path.name} {sw_gaps}/{sw_eligible} sw-eligible "
+                  f"rows have sw.membership_status=gap")
         digest = _sha256_file(path)
         print(f"{'OK' if ok else 'FAIL'}: {path.name} lines={n} "
-              f"unique_keys={len(keys)} sw_gaps={sw_gaps} sha256={digest}")
+              f"unique_keys={len(keys)} sw_gaps={sw_gaps}/"
+              f"{sw_eligible} sha256={digest}")
         print(f"  status_counts={json.dumps(statuses, ensure_ascii=False)}")
     state_path = out_dir / STATE_FILE_NAME
     if state_path.exists():
