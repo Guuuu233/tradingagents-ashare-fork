@@ -1,6 +1,6 @@
 # DAV-1770 B-6a：`reports.result_data` 压缩存储设计（方案甲：压缩列 + 统一解码层）
 
-口径声明：本文档只做设计，不改代码。测量与清点基于 `/private/tmp/ta-snapshot/current.db`（2026-10-09 快照，5,834,317,824 B）与主干 `codex/dav-4-p2a-trunk`@`082be04`。解释器 `/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python`（Python 3.10.20，zstandard 0.23.0，`env -u PYTHONPATH`）。内存口径 ≤4 GiB。
+口径声明：本文档只做设计，不改代码。测量与清点基于 `~/ta-snapshot/current.db`（2026-10-09 快照，5,834,317,824 B）与主干 `codex/dav-4-p2a-trunk`@`082be04`。解释器 `/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python`（Python 3.10.20，zstandard 0.23.0，`env -u PYTHONPATH`）。内存口径 ≤4 GiB。
 
 上游事实（DAV-1769 评估，全文复述要点）：
 

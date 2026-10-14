@@ -2,7 +2,7 @@
 """DAV-1528 (rework v2): daily post-batch compressed snapshot of the production SQLite DB.
 
 Creates one zstd-compressed snapshot per CN trading day under a fixed
-directory (default ``/private/tmp/ta-snapshot/``). Intended to run once per
+directory (default ``~/ta-snapshot/``). Intended to run once per
 trading day after the analysis batch finishes; non-trading days exit early
 without writing anything.
 
@@ -34,7 +34,7 @@ Discipline (D-073 / rework order):
 
 Usage:
     python scripts/ta_snapshot.py [--db data/tradingagents.db]
-                                  [--out-dir /private/tmp/ta-snapshot]
+                                  [--out-dir ~/ta-snapshot]
                                   [--date YYYY-MM-DD]   # override, testing
                                   [--force-weekday]     # skip calendar check
 """
@@ -54,7 +54,10 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-DEFAULT_OUT_DIR = "/private/tmp/ta-snapshot"
+# 2026-10-13: shared snapshot dir moved out of /tmp (macOS reaps long-unread
+# /tmp files). ``os.path.expanduser`` is applied where the value is consumed so
+# ``~`` stored here stays a real path on disk; explicit ``--out-dir`` still wins.
+DEFAULT_OUT_DIR = "~/ta-snapshot"
 CURRENT_DB_NAME = "current.db"
 ZSTD_LEVEL = 19  # max regular level; ~5 GB live DB compresses well below 1 GB
 # Keep the newest 3 dated snapshots; older tradingagents-*.db.zst files in
@@ -239,11 +242,12 @@ def main() -> int:
                           "action": "no_snapshot"}))
         return 0
 
-    info = make_snapshot(args.db, args.out_dir, day)
-    current = refresh_current_db(args.out_dir)
-    deleted = apply_retention(args.out_dir)
+    out_dir = os.path.expanduser(args.out_dir)
+    info = make_snapshot(args.db, out_dir, day)
+    current = refresh_current_db(out_dir)
+    deleted = apply_retention(out_dir)
     remaining = sorted(
-        f for f in os.listdir(args.out_dir)
+        f for f in os.listdir(out_dir)
         if f.startswith("tradingagents-") and f.endswith(".db.zst")
     )
     report = {
