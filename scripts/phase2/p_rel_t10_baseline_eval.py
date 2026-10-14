@@ -72,12 +72,10 @@ import argparse
 import bisect
 import hashlib
 import json
-import logging
-import re
 import sys
 import time
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -239,161 +237,10 @@ def load_ledger_signals(
 
 
 # ---------------------------------------------------------------------------
-# 2b. seal-time gate (总控追加: 正式只收 T+1 09:30 前封存)
+# 2b. seal-time gate —— 统一走 m1_eval 的 DAV-1991 实现（总控 10-14 令）。
+# 本文件不再自养解析/判门：m1.admit(calendar=...) 内置 sealed_at < 信号日
+# 次一交易日 09:30 Asia/Shanghai 的封存时点门，时区口径与解析细节以它为准。
 # ---------------------------------------------------------------------------
-
-UTC = timezone.utc
-
-_LOG = logging.getLogger(__name__)
-
-# ISO-8601 offset tail: "+08:00" / "+0800" / "-05:00" / "-0500". Matched only
-# after position 10 so the date's own hyphens are not taken for a sign.
-_ISO_OFFSET_TAIL = re.compile(r"[+-]\d{2}:?\d{2}$")
-# Fractional seconds with more than 6 digits — datetime.fromisoformat (3.10)
-# rejects them; we truncate to microseconds rather than lose the whole value.
-_OVERLONG_FRACTION = re.compile(r"(\.\d{7,})(?!\d)")
-
-
-def _cn_entry_open_utc(entry_day_iso: str) -> datetime:
-    """Asia/Shanghai 09:30 -> aware UTC datetime (mirror of the ledger's
-    _classify_timing cn_dt)."""
-    d = datetime.fromisoformat(entry_day_iso)
-    return datetime(d.year, d.month, d.day, 9, 30,
-                    tzinfo=UTC) - timedelta(hours=8)
-
-
-# 总控追加: ledger sealed_at/seal_basis_at/created_at 是「无时区标记的 UTC
-# 时间」——判定顺序为先按 UTC 解析 → 转 Asia/Shanghai → 与「信号日次一交易日
-# 09:30」比较; 不把裸时间当本地时间。
-_CN_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
-
-
-def _parse_iso_sealed(s: str) -> Optional[datetime]:
-    """ISO-8601 with an explicit zone (T / Z / +hh:mm / -hh:mm) -> aware UTC.
-
-    Falls back to truncating over-long fractional seconds (>6 digits) before
-    giving up; a zone-bearing string must never degrade to a date-only read.
-    """
-    for cand in (s, _OVERLONG_FRACTION.sub(lambda m: m.group(1)[:7], s)):
-        try:
-            dt = datetime.fromisoformat(cand.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
-    return None
-
-
-def _sealed_at_utc(raw, notes: Optional[dict] = None) -> Optional[datetime]:
-    """Parse a ledger ``sealed_at`` as naive-UTC, return an aware UTC instant.
-
-    None / unparseable -> None (callers route to diagnostics, never guess).
-
-    ``notes`` (optional out-param) collects the date-only fallback count so the
-    run funnel can report it: the ledger's ``_fmt_dt`` only ever writes
-    ``YYYY-MM-DD HH:MM:SS.ffffff``, so a date-only read is a malformed input
-    that must not be silently treated as an on-time 00:00 UTC seal.
-    """
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    # ISO branch: explicit zone, positive OR negative offset (DAV-2000).
-    if "T" in s or s.endswith("Z") or _ISO_OFFSET_TAIL.search(s[10:]):
-        dt = _parse_iso_sealed(s)
-        if dt is None:
-            _LOG.warning(
-                "sealed_at carries an ISO zone but is unparseable; routing to "
-                "diagnostics instead of a date-only read: %r", s)
-            return None
-        return dt
-    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-    try:
-        # Date-only: trail it — silently reading it as 00:00 UTC would let a
-        # malformed seal masquerade as an on-time one.
-        dt = datetime.strptime(s[:10], "%Y-%m-%d").replace(tzinfo=UTC)
-    except ValueError:
-        return None
-    if notes is not None:
-        notes["seal_dateonly_fallback"] = (
-            notes.get("seal_dateonly_fallback", 0) + 1)
-    _LOG.warning(
-        "sealed_at is date-only (%r); read as 00:00 UTC — malformed input, "
-        "reported in the funnel as seal_dateonly_fallback", s)
-    return dt
-
-
-def apply_seal_gate(df: pd.DataFrame, calendar_iso: list[str]) -> tuple[pd.DataFrame, dict]:
-    """总控追加封存时点门: formal 只收 sealed_at(UTC) < 信号日次一交易日 09:30
-    (Asia/Shanghai) 的账本记录。
-
-    判定顺序(总控口径): sealed_at 是 naive-UTC → 先按 UTC 解析 → 转
-    Asia/Shanghai → 与「T+1 交易日 09:30 Asia/Shanghai」比较; 不把裸时间当
-    本地时间。晚封/补录行计入 ``excl_seal_late``; signal_date 缺失/不可
-    解析、非交易日或 T+1 不可解析、sealed_at 缺失/不可解析的行单列
-    ``excl_seal_unresolvable``（不混进"晚封"标签, L-5; signal_date
-    判空补 DAV-2003 🟡 M-2——账本允许 signal_date 缺失的记录,
-    load_ledger_signals 原样透传为 None → pd.to_datetime 得 NaT →
-    strftime 后 float nan, 不设防会裸抛 TypeError 整跑崩)。两桶的 run_id 分
-    列 ``seal_late_ids`` / ``seal_unresolvable_ids``, 落盘供事后复核
-    (DAV-1993 🟡 M-1)。
-    Returns (kept_df, gate_dict)。
-    """
-    cal = sorted(calendar_iso)
-    late_ids: list = []
-    unresolvable_ids: list = []
-    kept_mask: list = []
-    notes: dict = {}
-    sig_iso = pd.to_datetime(
-        df["signal_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    sealed_utc = [_sealed_at_utc(v, notes) for v in df["sealed_at"]]
-    for i, (sd, sa) in enumerate(zip(sig_iso, sealed_utc)):
-        if sd is None or (isinstance(sd, float) and pd.isna(sd)) or sa is None:
-            # signal_date missing/unparseable (NaT -> nan) or sealed_at
-            # missing/unparseable -> gate cannot be satisfied; route to
-            # excl_seal_unresolvable, never formal (DAV-2003 🟡 M-2).
-            unresolvable_ids.append(df["run_id"].iloc[i])
-            kept_mask.append(False)
-            continue
-        idx = bisect.bisect_right(cal, sd) - 1
-        if idx < 0 or cal[idx] != sd or idx + 1 >= len(cal):
-            # signal not a trading day / T+1 unresolved / sealed_at missing
-            # or unparseable -> gate cannot be satisfied; diagnostics only,
-            # never formal (separate label from 晚封, L-5).
-            unresolvable_ids.append(df["run_id"].iloc[i])
-            kept_mask.append(False)
-            continue
-        # compare in Asia/Shanghai: entry open = T+1 09:30 CN; the aware-UTC
-        # comparison is equivalent (sa.astimezone(_CN_TZ) < 09:30 CN). We do
-        # the UTC-side compare to mirror _classify_timing.
-        entry_open = _cn_entry_open_utc(cal[idx + 1])
-        ok = sa < entry_open
-        if not ok:
-            late_ids.append(df["run_id"].iloc[i])
-        kept_mask.append(ok)
-    gate = {
-        "field": "sealed_at",
-        "field_equivalence_note":
-            "sealed_at == seal_basis_at 于本账本实测同值；"
-            "seal_basis_at = max(created_at, sealed_at)，补录行可能不等，"
-            "本实现取 sealed_at",
-        "threshold":
-            "signal_date 次一交易日 09:30 Asia/Shanghai"
-            "（严格小于，sa < entry_open）",
-        "input_rows": int(len(df)),
-        "excl_seal_late": len(late_ids),
-        "seal_late_ids": late_ids,
-        "excl_seal_unresolvable": len(unresolvable_ids),
-        "seal_unresolvable_ids": unresolvable_ids,
-        "seal_dateonly_fallback": notes.get("seal_dateonly_fallback", 0),
-    }
-    return df.loc[kept_mask].reset_index(drop=True), gate
 
 
 # ---------------------------------------------------------------------------
@@ -624,17 +471,71 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     df = m1.select_version(df, version_key)
     post_version_rows = len(df)
 
-    # 总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 的账本记录;
-    # 晚封/补录行分流诊断、在 funnel 单列 excl_seal_late（在 admit 前）。
-    calendar = elp._load_calendar(
+    # 封存时点门统一为 m1_eval 的 DAV-1991 实现（总控 10-14 令）——本卡不再
+    # 自养一套 _sealed_at_utc/apply_seal_gate，改为把交易日历传进
+    # m1.admit(calendar=...) 由它判 sealed_at < T+1 09:30 Asia/Shanghai。
+    # 门前的 select_version 分流仍在 funnel 里单列 excl_version。
+    calendar_iso = elp._load_calendar(
         Path(calendar_path) if calendar_path else None)
-    df, seal_gate = apply_seal_gate(df, calendar)
+    cal_ymd = [d.replace("-", "") for d in calendar_iso]
+    pre_admit_ids = set(df["run_id"]) if "run_id" in df.columns else set()
 
-    formal, funnel = m1.admit(df, user_id=user_id)
+    formal, funnel = m1.admit(df, user_id=user_id, calendar=cal_ymd)
+
+    # seal_gate 块（DAV-1993 🟡 M-1）: 口径 + 被分流 run_id 落盘，verdict.model
+    # 与 run.json 顶层各一份同值。计数取自 m1.admit 的 funnel：
+    #   excl_late_seal          = 晚封 + 不可判定（seal/signal 解析失败或
+    #                           T+1 不可解析）合计 — m1 将它们都 fail-closed
+    #                           排进该桶；
+    #   excl_seal_t1_unresolved = T+1 截止无法解析的子集（signal 非交易日 /
+    #                           早于日历首日 / 日历先尽）；
+    #   seal_unparseable        = sealed_at 解析失败的子集。
+    # 兼容口径别名：excl_seal_late(=excl_late_seal 总桶) /
+    #   excl_seal_unresolvable(=t1_unresolved+unparseable，不可判定子集)。
+    post_admit_ids = set(formal["run_id"]) if "run_id" in formal.columns else set()
+    excluded_ids = sorted(pre_admit_ids - post_admit_ids)
+    # 分桶 run_id（产物用，供事后复核）：重放 m1.admit 门内判定——先按
+    # admit 顺序剔除 seal 门之前已被排除的行（wrong_user / pit_failed /
+    # non_f0 / unverified），剩余行中 sealed>=entry → 晚封桶；sealed/entry
+    # NaT → 不可判定桶。复用 m1 的 _sealed_at_sh/_seal_deadline_cn，不自养
+    # 解析口径。
+    d0 = df.copy()
+    if "user_id" in d0.columns and user_id:
+        d0 = d0[d0["user_id"].astype(str) == str(user_id)]
+    d0 = d0[d0["input_pit_status"].astype(str).str.upper() != "FAILED"]
+    d0 = d0[d0["timing_class"].astype(str).str.upper() == "F0"]
+    d0 = d0[d0["input_pit_status"].astype(str).str.upper() == "VERIFIED"]
+    rid = d0["run_id"] if "run_id" in d0.columns else pd.Series([], dtype=str)
+    sealed_sh = m1._sealed_at_sh(d0["sealed_at"]) if "sealed_at" in d0.columns \
+        else pd.Series(pd.NaT, index=d0.index)
+    entry_cn = m1._seal_deadline_cn(d0["signal_date"], cal_ymd)
+    late_ids = [r for r, m in zip(rid, sealed_sh.notna() & entry_cn.notna()
+                                & (sealed_sh >= entry_cn)) if m]
+    unres_ids = [r for r, m in zip(rid, sealed_sh.isna() | entry_cn.isna()) if m]
+    seal_gate = {
+        "field": "sealed_at",
+        "field_equivalence_note":
+            "sealed_at == seal_basis_at 于本账本实测同值；"
+            "seal_basis_at = max(created_at, sealed_at)，补录行可能不等，"
+            "本实现取 sealed_at",
+        "threshold":
+            "signal_date 次一交易日 09:30 Asia/Shanghai"
+            "（严格小于，sealed < entry_open；实现=m1_eval DAV-1991 门）",
+        "impl": "m1_eval.admit(calendar=cal_ymd)",
+        "input_rows": int(post_version_rows),
+        "excl_seal_late": int(funnel["excl_late_seal"]),
+        "seal_late_ids": sorted(late_ids),
+        "excl_seal_unresolvable": int(
+            funnel["excl_seal_t1_unresolved"] + funnel["seal_unparseable"]),
+        "seal_unresolvable_ids": sorted(unres_ids),
+        "seal_unparseable": int(funnel["seal_unparseable"]),
+        "excl_seal_t1_unresolved": int(funnel["excl_seal_t1_unresolved"]),
+        "excluded_ids": excluded_ids,
+    }
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
     funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
     funnel["excl_version"] = int(ledger_rows_input - post_version_rows)
-    funnel["seal_dateonly_fallback"] = seal_gate["seal_dateonly_fallback"]
+    funnel["seal_dateonly_fallback"] = 0
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
@@ -642,12 +543,9 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         f"(seal_late={seal_gate['excl_seal_late']} "
         f"seal_unresolvable={seal_gate['excl_seal_unresolvable']})")
 
-    # DAV-1993 🟡 M-1: 封存门口径 + 被分流 run_id 落盘 — 同一 dict 写进
-    # run.json 顶层并透传进 verdict.json 的 model 块, 产物内自证守恒。
     seal_gate_block = dict(seal_gate)
-    seal_gate_block["post_gate_rows"] = int(len(df))
+    seal_gate_block["post_gate_rows"] = int(len(formal))
 
-    cal_ymd = [d.replace("-", "") for d in calendar]
     days = m1.eval_days(formal, calendar=cal_ymd)
     rel = m1.reliability_table(formal) if len(formal) else []
     verdict = m1.grade(days, funnel)

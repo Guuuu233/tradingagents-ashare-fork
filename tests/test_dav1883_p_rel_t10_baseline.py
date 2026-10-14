@@ -115,7 +115,9 @@ class TestFunnel:
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         df = m.load_ledger_signals(ledger, labels, FIXED)
-        formal, fun = m.m1.admit(df, user_id=FIXED)
+        formal, fun = m.m1.admit(
+            df.drop(columns=["sealed_at"], errors="ignore"),
+            user_id=FIXED)
         # S1 (valid p, VERIFIED F0, matured label) and S7 (valid p, VERIFIED
         # F0, matured label) both survive; everything else funnel-excluded.
         assert len(formal) == 2
@@ -135,7 +137,9 @@ class TestFunnel:
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         df = m.load_ledger_signals(ledger, labels, FIXED)
-        formal, fun = m.m1.admit(df, user_id=FIXED)
+        formal, fun = m.m1.admit(
+            df.drop(columns=["sealed_at"], errors="ignore"),
+            user_id=FIXED)
         assert len(formal) == 1
         assert formal.iloc[0]["run_id"] == "early"
         assert fun["excl_dup_run"] == 1
@@ -151,22 +155,24 @@ class TestFunnel:
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, [rec])
         df = m.load_ledger_signals(ledger, labels, FIXED)
-        formal, fun = m.m1.admit(df, user_id=FIXED)
+        formal, fun = m.m1.admit(
+            df.drop(columns=["sealed_at"], errors="ignore"),
+            user_id=FIXED)
         assert len(formal) == 0
         assert fun["excl_bad_prob"] == 1
 
 
 class TestSealGate:
-    """总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 (Asia/Shanghai)."""
+    """总控追加封存时点门: formal 只收 sealed_at < T+1 09:30 (Asia/Shanghai)。
+    统一实现 = m1_eval 的 DAV-1991 门（总控 10-14 令）：1883 不再自养
+    apply_seal_gate，用例直接调 m.m1.admit(calendar=...)/m.run()。"""
 
-    CAL = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    CAL = ["20260105", "20260106", "20260107"]
 
     def _frame(self, recs):
-        labels = {}
-        ledger_rows = recs
         def _sd(r):
             # load_ledger_signals 对缺失 signal_date 产出 nan (NaT→strftime),
-            # 而非 None — fixture 要与真实管线同一表示, 否则门判空分支漏测。
+            # 而非 None — fixture 要与真实管线同一表示。
             if r.get("signal_date") is None:
                 return float("nan")
             return pd.to_datetime(r["signal_date"]).strftime("%Y%m%d")
@@ -176,170 +182,120 @@ class TestSealGate:
              "sealed_at": r.get("sealed_at"), "timing_class": r["timing_class"],
              "input_pit_status": r["input_pit_status"], "completed": True,
              "user_id": r["user_id"], "version_key": "v",
-             "p_rel_t10": r["horizons"]["short"]["forecast"]["p_rel_t10"],
              "prob": r["horizons"]["short"]["forecast"]["p_rel_t10"],
-             "r": 0.01}
-            for r in ledger_rows])
+             "rel_return": 0.01}
+            for r in recs])
         return df
+
+    def _admit(self, recs, cal=None):
+        return m.m1.admit(self._frame(recs), user_id=FIXED,
+                          calendar=cal or self.CAL)
 
     def test_sealed_before_entry_open_admitted(self):
         # sealed 2026-01-05 16:00 CN = before T+1(2026-01-06) 09:30 CN
         rec = _rec("a", "S1", "2026-01-05", 60, sealed_at="2026-01-05 08:00:00.000000")
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert gate["excl_seal_late"] == 0 and len(df) == 1
+        formal, fun = self._admit([rec])
+        assert fun["excl_late_seal"] == 0 and len(formal) == 1
 
     def test_sealed_after_entry_open_diverted(self):
         # sealed 2026-01-06 10:00 CN (> T+1 09:30 CN) -> diagnostics only
         rec = _rec("b", "S1", "2026-01-05", 60, sealed_at="2026-01-06 02:00:00.000000")
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert gate["excl_seal_late"] == 1 and len(df) == 0
-        assert gate["seal_late_ids"] == ["b"]
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0 and fun["excl_late_seal"] == 1
 
     def test_missing_sealed_at_diverted(self):
-        # sealed_at 缺失 → 门口径不可判定 → 单列 excl_seal_unresolvable
-        # (L-5 分流, 不混进"晚封"标签), 不进 formal。
+        # sealed_at 缺失 → sealed NaT → fail-closed 计入 excl_late_seal /
+        # seal_unparseable, 不进 formal。
         rec = _rec("c", "S1", "2026-01-05", 60, sealed_at=None)
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 0
-        assert gate["excl_seal_unresolvable"] == 1
-        assert gate["seal_unresolvable_ids"] == ["c"]
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0
+        assert fun["excl_late_seal"] == 1
+        assert fun["seal_unparseable"] == 1
 
     def test_utc_semantics_mandated_cases(self):
         # 总控口径: sealed_at 是无时区标记 UTC → 转 Asia/Shanghai → 比 T+1 09:30。
-        cal = ["2026-10-08", "2026-10-09", "2026-10-10"]
+        cal = ["20261008", "20261009", "20261010"]
         # case 1: signal 10-08, sealed 10-09 02:09 UTC (北京 10-09 10:09)
         #         -> after T+1(10-09) 09:30 CN -> 晚封存/诊断 only
         late = _rec("late", "S1", "2026-10-08", 60,
                     sealed_at="2026-10-09 02:09:00")
-        df, gate = m.apply_seal_gate(self._frame([late]), cal)
-        assert len(df) == 0 and gate["excl_seal_late"] == 1
+        formal, fun = self._admit([late], cal)
+        assert len(formal) == 0 and fun["excl_late_seal"] == 1
         # case 2: sealed 10-08 11:45 UTC (北京 10-08 19:45)
         #         -> before T+1(10-09) 09:30 CN -> admitted
         ontime = _rec("ontime", "S1", "2026-10-08", 60,
                       sealed_at="2026-10-08 11:45:00")
-        df, gate = m.apply_seal_gate(self._frame([ontime]), cal)
-        assert len(df) == 1 and gate["excl_seal_late"] == 0
+        formal, fun = self._admit([ontime], cal)
+        assert len(formal) == 1 and fun["excl_late_seal"] == 0
 
     def test_boundary_equal_excluded(self):
-        # L-1 固化: sealed_at 恰为 T+1 09:30:00.000000 Asia/Shanghai 应排除
-        # (口径为严格小于 sa < entry_open)。T+1(01-06) 09:30 CN = 01-06
+        # sealed_at 恰为 T+1 09:30:00.000000 Asia/Shanghai 应排除
+        # (口径为严格小于 sealed < entry_open)。T+1(01-06) 09:30 CN = 01-06
         # 01:30:00.000000 UTC —— 恰在阈值的记录不进 formal。
         rec = _rec("edge", "S1", "2026-01-05", 60,
                    sealed_at="2026-01-06 01:30:00.000000")
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 1
-        assert gate["seal_late_ids"] == ["edge"]
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0 and fun["excl_late_seal"] == 1
         # 亚毫秒前一条仍进 formal。
         rec2 = _rec("edgeok", "S1", "2026-01-05", 60,
                     sealed_at="2026-01-06 01:29:59.999999")
-        df2, gate2 = m.apply_seal_gate(self._frame([rec2]), self.CAL)
-        assert len(df2) == 1 and gate2["excl_seal_late"] == 0
+        formal2, fun2 = self._admit([rec2])
+        assert len(formal2) == 1 and fun2["excl_late_seal"] == 0
 
     def test_signal_not_trading_day_unresolvable(self):
-        # L-2 固化: signal_date 非交易日 → 门口径不可解析 →
-        # excl_seal_unresolvable, 不进 formal (此前只靠 selftest 隐含)。
+        # signal_date 非交易日 → T+1 截止无法解析 → fail-closed 排除
+        # (m1 口径: entry NaT → excl_late_seal + excl_seal_t1_unresolved)。
         rec = _rec("we", "S1", "2026-01-04", 60,      # Sunday
                    sealed_at="2026-01-04 08:00:00.000000")
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 0
-        assert gate["excl_seal_unresolvable"] == 1
-        assert gate["seal_unresolvable_ids"] == ["we"]
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0
+        assert fun["excl_late_seal"] == 1
+        assert fun["excl_seal_t1_unresolved"] == 1
 
     def test_t1_unresolvable_at_calendar_end(self):
-        # L-2 固化: signal 为日历末日 → T+1 不可解析 → unresolvable。
+        # signal 为日历末日 → T+1 不可解析 → fail-closed 排除。
         rec = _rec("last", "S1", "2026-01-07", 60,
                    sealed_at="2026-01-07 08:00:00.000000")
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 0
-        assert gate["excl_seal_unresolvable"] == 1
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0
+        assert fun["excl_late_seal"] == 1
+        assert fun["excl_seal_t1_unresolved"] == 1
 
     def test_signal_date_unparseable_unresolvable(self):
-        # DAV-2003 🟡 M-2 固化: signal_date 缺失/不可解析 (NaT) →
-        # 门口径不可判定 → excl_seal_unresolvable, 不裸抛 TypeError。
-        # 账本允许 trade_date/signal_date 缺失的记录走 UNCLASSIFIED 封存,
-        # load_ledger_signals 原样透传 None → NaT。
+        # signal_date 缺失/不可解析 (NaT) → T+1 无法解析 → fail-closed 排除。
         rec = _rec("nosig", "S1", "2026-01-05", 60,
                    sealed_at="2026-01-05 08:00:00.000000")
         rec["signal_date"] = None
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 0
-        assert gate["excl_seal_unresolvable"] == 1
-        assert gate["seal_unresolvable_ids"] == ["nosig"]
-
-    def test_gate_artifact_fields(self):
-        # M-1: 门口径 + 门前/门后行数可自证 — gate dict 必须携带落盘字段。
-        rec = _rec("g", "S1", "2026-01-05", 60)
-        df, gate = m.apply_seal_gate(self._frame([rec]), self.CAL)
-        assert gate["field"] == "sealed_at"
-        assert "严格小于" in gate["threshold"]
-        assert gate["input_rows"] == 1
-        assert gate["seal_late_ids"] == [] and gate["seal_unresolvable_ids"] == []
-        assert gate["seal_dateonly_fallback"] == 0
+        formal, fun = self._admit([rec])
+        assert len(formal) == 0
+        assert fun["excl_late_seal"] == 1
+        assert fun["excl_seal_t1_unresolved"] == 1
 
     def test_negative_offset_seal_is_late_not_on_time(self):
         # DAV-2000: "2026-10-09 01:00:00-05:00" is UTC 10-09 06:00 = CN
-        # 14:00 -> after T+1 09:30 CN -> late. Before the fix the ISO branch
-        # missed the negative offset and the s[:10] date-only fallback read it
-        # as 10-09 00:00 UTC (CN 08:00) -> silently admitted (look-ahead leak).
-        cal = ["2026-10-08", "2026-10-09"]
-        notes: dict = {}
-        dt = m._sealed_at_utc("2026-10-09 01:00:00-05:00", notes)
-        assert dt is not None
-        assert dt.astimezone(m._CN_TZ).strftime("%Y-%m-%d %H:%M") == \
-            "2026-10-09 14:00"
-        assert notes.get("seal_dateonly_fallback", 0) == 0
+        # 14:00 -> after T+1 09:30 CN -> late (look-ahead leak if misread).
+        cal = ["20261008", "20261009"]
         rec = _rec("neg", "S1", "2026-10-08", 60,
                    sealed_at="2026-10-09 01:00:00-05:00")
-        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
-        assert len(df) == 0
-        assert gate["excl_seal_late"] == 1 and gate["seal_late_ids"] == ["neg"]
-        assert gate["seal_dateonly_fallback"] == 0
+        formal, fun = self._admit([rec], cal)
+        assert len(formal) == 0 and fun["excl_late_seal"] == 1
 
     def test_negative_offset_before_entry_open_admitted(self):
         # Sanity on the other side: an early CN-morning seal expressed in a
         # negative offset must still be admitted (no blanket rejection).
-        cal = ["2026-10-08", "2026-10-09"]
+        cal = ["20261008", "20261009"]
         rec = _rec("neg_ok", "S1", "2026-10-08", 60,
                    sealed_at="2026-10-08 18:00:00-05:00")  # UTC 10-08 23:00
-        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
-        assert len(df) == 1 and gate["excl_seal_late"] == 0
+        formal, fun = self._admit([rec], cal)
+        assert len(formal) == 1 and fun["excl_late_seal"] == 0
 
     def test_overlong_fraction_with_offset_not_date_only(self):
-        # >6 fractional digits + offset: 3.10 fromisoformat rejects it; the
-        # fallback must not degrade it to the same day's 00:00 UTC.
-        cal = ["2026-10-08", "2026-10-09"]
-        dt = m._sealed_at_utc("2026-10-09 02:09:00.123456789+08:00")
-        assert dt is not None
-        assert dt.strftime("%Y-%m-%d %H:%M:%S%z") == "2026-10-08 18:09:00+0000"
-        assert dt.astimezone(m._CN_TZ).strftime("%Y-%m-%d %H:%M") == \
-            "2026-10-09 02:09"
+        # >6 fractional digits + offset: must not degrade to 00:00 UTC.
+        cal = ["20261008", "20261009"]
         rec = _rec("frac", "S1", "2026-10-08", 60,
                    sealed_at="2026-10-09 02:09:00.123456789+08:00")
-        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
-        assert len(df) == 1 and gate["seal_dateonly_fallback"] == 0
-
-    def test_dateonly_seal_is_traced_in_funnel(self):
-        # Malformed date-only sealed_at must be visible in the funnel rather
-        # than silently passed off as an on-time 00:00 UTC seal.
-        cal = ["2026-10-08", "2026-10-09"]
-        rec = _rec("donly", "S1", "2026-10-08", 60, sealed_at="2026-10-08")
-        df, gate = m.apply_seal_gate(self._frame([rec]), cal)
-        assert gate["seal_dateonly_fallback"] == 1
-
-    def test_utc_not_local(self):
-        # naive local interpretation would misjudge: 02:09 treated as local
-        # CN time would be *after* 09:30 only if same-day — but the correct
-        # UTC read makes it clearly late (10:09 CN on T+1).
-        cal = ["2026-10-08", "2026-10-09"]
-        dt = m._sealed_at_utc("2026-10-09 02:09:00")
-        assert dt is not None and dt.tzinfo is not None
-        assert dt.hour == 2          # held as UTC, not 10:09 local
-        assert dt.astimezone(m._CN_TZ).hour == 10
+        formal, fun = self._admit([rec], cal)
+        assert len(formal) == 1 and fun["excl_late_seal"] == 0
 
     def test_seal_gate_counts_in_run_funnel(self, tmp_path):
         days = ["2026-01-05", "2026-01-06", "2026-01-07"]
@@ -396,7 +352,9 @@ class TestNullDefense:
         df = m.load_ledger_signals(ledger, labels, FIXED)
         assert len(df) == 1
         assert df.iloc[0]["r"] is None or pd.isna(df.iloc[0]["r"])
-        formal, fun = m.m1.admit(df, user_id=FIXED)
+        formal, fun = m.m1.admit(
+            df.drop(columns=["sealed_at"], errors="ignore"),
+            user_id=FIXED)
         assert len(formal) == 0
         assert fun["excl_immature_label"] == 1
 
