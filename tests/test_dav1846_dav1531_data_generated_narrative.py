@@ -369,12 +369,14 @@ def test_no_stale_snapshot_literals_survive(two_runs):
         # stats.json 的 "db" 键回显输入库的绝对路径；在 pytest 下该路径位于
         # 编号临时目录（pytest-<N>），目录名里的数字可能与某个陈旧字面量
         # 数字重合（如 "1108"）。这是环境路径巧合，不是产物叙述、也不是
-        # 构造计数——构造计数为确定值（alpha 10 档/40 claims、beta 24 档/
-        # 96 claims），与 1108 无任何数据通路。扫描前把该路径回显替换为
-        # 占位符；陈旧字面量集合与检查强度不变，report.md 侧无需处理。
-        stats_text = json.dumps(run["stats"], ensure_ascii=False).replace(
-            run["stats"]["db"], "<db>"
-        )
+        # 构造计数——计数由构造库 spec 决定，与 STALE_LITERALS 中的 1108
+        # 无数据通路。扫描前把 db 键的值脱敏为占位符（按键精确替换，
+        # 不做整串文本 replace——basetemp 数字若恰好等于其他陈旧字面量，
+        # 整串替换会把该字面量在 stats.json 侧一并静音）；陈旧字面量集合
+        # 与检查强度不变，report.md 侧无需处理。
+        stats = run["stats"]
+        masked = {k: ("<db>" if k == "db" else v) for k, v in stats.items()}
+        stats_text = json.dumps(masked, ensure_ascii=False)
         haystacks = {
             "report.md": run["md"],
             "stats.json": stats_text,
