@@ -15,7 +15,11 @@
 #
 # 占位符/可调项（部署时按需改，全部可用环境变量覆盖，见下方 "部署" 节）：
 #   PYTHON_BIN   解释器（生产固定 .venv310）
-#   PROJECT_ROOT 仓库/发布目录（脚本相对定位用）
+#   PROJECT_ROOT 专用发布检出（如 ~/ta-reports-<sha>，由 plist 显式提供；
+#                无默认值，主检出 ~/Documents/TradingAgents-AShare 明确拒收）。
+#                启动时 git -C "$PROJECT_ROOT" merge-base --is-ancestor
+#                cac73667 HEAD 核对该检出包含 DAV-2033，不满足即 fail_alert。
+#   REQUIRED_DAV2033_COMMIT 上述核对的锚定提交（默认 cac73667，可覆盖）
 #   SNAPSHOT_DB  只读快照整库
 #   OUT_ROOT     报告输出根目录
 #   RETENTION_DAYS 保留天数（默认 30）
@@ -27,12 +31,16 @@ set -u
 
 # ---- 部署时可改（缺省值即总控令口径） ----------------------------------------
 PYTHON_BIN="${TA_PYTHON_BIN:-/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python}"
-PROJECT_ROOT="${TA_PROJECT_ROOT:-/Users/davidliu/Documents/TradingAgents-AShare}"
+# 总控 10-14 令：PROJECT_ROOT 无默认值——必须由 plist/环境显式给一个专用检出
+# （如 ~/ta-reports-<sha>），绝不再回落到主检出。
+PROJECT_ROOT="${TA_PROJECT_ROOT:-}"
+MAIN_CHECKOUT="/Users/davidliu/Documents/TradingAgents-AShare"
+REQUIRED_DAV2033_COMMIT="${TA_REQUIRED_DAV2033_COMMIT:-cac73667b65f44dfa7c7df1423a302a52f813b01}"
 SNAPSHOT_DB="${TA_SNAPSHOT_DB:-/Users/davidliu/ta-snapshot/current.db}"
 OUT_ROOT="${TA_REPORTS_ROOT:-/Users/davidliu/ta-work/reports}"
 RETENTION_DAYS="${TA_RETENTION_DAYS:-30}"
 # 交易日历显式传入，避免依赖 1507 内部对 ~/Documents 路径的猜测；
-# 文件不存在时留空，由 1507 自己的 fail-close（exit 2）处理。
+# 总控 10-14 令：文件不存在时直接 fail_alert，不再 WARN 放行。
 CALENDAR_JSON="${TA_CALENDAR_JSON:-${PYTHON_BIN%/bin/python}/lib/python3.10/site-packages/akshare/file_fold/calendar.json}"
 LOG_DIR="${TA_REPORTS_LOG_DIR:-${OUT_ROOT}/_logs}"
 
@@ -77,6 +85,11 @@ fail_alert() {
 }
 
 # ---- 前置断言（fail-closed） -------------------------------------------------
+[ -n "${PROJECT_ROOT}" ] || fail_alert "TA_PROJECT_ROOT unset — plist must point at the dedicated reports checkout (e.g. ~/ta-reports-<sha>)"
+[ "${PROJECT_ROOT%/}" != "${MAIN_CHECKOUT}" ] \
+  || fail_alert "PROJECT_ROOT is the main checkout ${MAIN_CHECKOUT} — forbidden; use a dedicated ~/ta-reports-<sha>"
+git -C "${PROJECT_ROOT}" merge-base --is-ancestor "${REQUIRED_DAV2033_COMMIT}" HEAD 2>/dev/null \
+  || fail_alert "PROJECT_ROOT ${PROJECT_ROOT} is not a checkout containing DAV-2033 (${REQUIRED_DAV2033_COMMIT})"
 [ -x "${PYTHON_BIN}" ] || fail_alert "interpreter not executable: ${PYTHON_BIN}"
 [ -f "${PROGRESS_SCRIPT}" ] || fail_alert "missing script: ${PROGRESS_SCRIPT}"
 [ -f "${ACCEPT_SCRIPT}" ] || fail_alert "missing script: ${ACCEPT_SCRIPT}"
@@ -85,14 +98,9 @@ fail_alert() {
 mkdir -p "${DAY_DIR}" "${LOG_DIR}" 2>/dev/null || fail_alert "cannot create ${DAY_DIR} / ${LOG_DIR}"
 [ -w "${DAY_DIR}" ] || fail_alert "output dir not writable: ${DAY_DIR}"
 
-# 交易日历（缺失即非致命：留空交给脚本自己的 exit 2 路径，
-# 但那样会触发 fail_alert，所以这里显式记录一句再放行）。
-cal_arg=()
-if [ -f "${CALENDAR_JSON}" ]; then
-  cal_arg=(--calendar-json "${CALENDAR_JSON}")
-else
-  echo "[$(ts)] WARN: calendar not found at ${CALENDAR_JSON}; scripts will fall back to bundled/guess path"
-fi
+# 交易日历：10-14 令——缺失即 fail_alert（不再 WARN 放行）。
+[ -f "${CALENDAR_JSON}" ] || fail_alert "trading calendar not found: ${CALENDAR_JSON} (set TA_CALENDAR_JSON)"
+cal_arg=(--calendar-json "${CALENDAR_JSON}")
 
 # 统一子进程前缀：env -u PYTHONPATH 剥离宿主 PYTHONPATH（venv310 门禁铁律），
 # unset 代理（脚本零出网），stdout/stderr 各自落当日日志便于事后取证。

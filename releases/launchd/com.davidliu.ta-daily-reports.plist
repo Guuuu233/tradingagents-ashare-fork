@@ -9,13 +9,26 @@
      writes ~/ta-work/reports/YYYY-MM-DD/, prunes beyond 30 days, and exits
      non-zero + writes an ALERT file on any failure (never silent).
 
+     总控 10-14 令：TA_PROJECT_ROOT must be a DEDICATED checkout of this repo
+     (e.g. /Users/davidliu/ta-reports-<sha>) that contains DAV-2033 (commit
+     cac73667) — never the main checkout ~/Documents/TradingAgents-AShare.
+     The wrapper refuses to run otherwise (merge-base --is-ancestor check).
+
+     Provision the dedicated checkout at install time:
+       RELEASE_SHA=<the release SHA on codex/dav-4-p2a-trunk>
+       REPORTS_DIR=/Users/davidliu/ta-reports-${RELEASE_SHA:0:8}
+       git clone /Users/davidliu/Documents/TradingAgents-AShare "${REPORTS_DIR}"
+       git -C "${REPORTS_DIR}" checkout "${RELEASE_SHA}"
+       git -C "${REPORTS_DIR}" merge-base --is-ancestor cac73667 HEAD  # must exit 0
+
      Install (after 总控 sign-off):
        cp releases/launchd/ta-daily-reports-wrapper.sh \
-          "{{RELEASE_DIR}}/releases/launchd/ta-daily-reports-wrapper.sh"
-       chmod +x "{{RELEASE_DIR}}/releases/launchd/ta-daily-reports-wrapper.sh"
-       sed "s|{{RELEASE_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare|g" \
-          releases/launchd/com.davidliu.ta-daily-reports.plist \
-          > ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
+          "${REPORTS_DIR}/releases/launchd/ta-daily-reports-wrapper.sh"
+       chmod +x "${REPORTS_DIR}/releases/launchd/ta-daily-reports-wrapper.sh"
+       sed -e "s|{{RELEASE_DIR}}|${REPORTS_DIR}|g" \
+           -e "s|{{RELEASE_SHA}}|${RELEASE_SHA:0:8}|g" \
+           releases/launchd/com.davidliu.ta-daily-reports.plist \
+           > ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
        grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist  # must be 0
        plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-daily-reports.plist
        launchctl bootstrap gui/$UID \
@@ -40,7 +53,7 @@
         <key>TA_PYTHON_BIN</key>
         <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
         <key>TA_PROJECT_ROOT</key>
-        <string>{{RELEASE_DIR}}</string>
+        <string>/Users/davidliu/ta-reports-{{RELEASE_SHA}}</string>
         <key>TA_SNAPSHOT_DB</key>
         <string>/Users/davidliu/ta-snapshot/current.db</string>
         <key>TA_REPORTS_ROOT</key>
