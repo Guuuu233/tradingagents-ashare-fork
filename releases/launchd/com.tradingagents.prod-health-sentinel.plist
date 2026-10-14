@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TradingAgents-AShare 生产健康哨兵 launchd 模板
+  （DAV-2063；总控 10-15 令：只交模板，不安装；10-17 与 DAV-1852 一起安装）
+
+  与 com.tradingagents.ashare 的分工：
+    - com.tradingagents.ashare（DAV-1790 体系 wrapper）：拉起 / 崩溃重拉；
+    - com.tradingagents.prod-health-sentinel（本模板）：**只观测与告警**，
+      不做任何自动重启。两者互补，缺一不可（10-14 重启后生产停服 7.5h
+      无人发现，正是因为观测依赖人工会话）。
+
+  安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.prod-health-sentinel.plist
+
+  占位符（安装时必须替换并校验残留为 0）：
+    {{RELEASE_DIR}}      = 当前生产 release 目录（脚本路径以它为前缀）
+    {{EXPECT_PROD_SHA}}  = 期望 commit_sha（与 releases/RESTART.md 基线一致；
+                           切换 release 时本键必须同步改，否则哨兵立刻报
+                           sha_mismatch——这是有意为之的漂移检测）
+
+  环境注入说明（man launchd.plist：EnvironmentVariables 为 launchd 1.11+
+  支持的键；macOS 自带 launchd 支持，无需 -i 清理继承环境）：
+    NO_PROXY/no_proxy 覆盖 127.0.0.1，避免本机 Clash（7897）代理把
+    healthz 请求劫走导致误报；
+    TA_WATCH_NOTIFY=1 允许 osascript 系统通知（脚本内已做「通知失败不影响
+    判定」的兜底）；
+    PYTHON_BIN 指向生产锁定解释器（.venv310），仅用于解析 healthz JSON；
+    留空则脚本退化到 /usr/bin/python3，再不行用 grep 兜底。
+-->
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>com.tradingagents.prod-health-sentinel</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>{{RELEASE_DIR}}/releases/launchd/ta-prod-health-sentinel.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{RELEASE_DIR}}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HEALTH_BASE_URL</key><string>http://127.0.0.1:8000</string>
+    <key>EXPECT_PROD_SHA</key><string>{{EXPECT_PROD_SHA}}</string>
+    <key>WATCH_DIR</key><string>{{WATCH_DIR}}</string>
+    <key>FAIL_THRESHOLD</key><string>2</string>
+    <key>HTTP_TIMEOUT</key><string>10</string>
+    <key>TA_WATCH_NOTIFY</key><string>1</string>
+    <key>PYTHON_BIN</key><string>{{VENV_PYTHON}}</string>
+    <key>NO_PROXY</key><string>localhost,127.0.0.1</string>
+    <key>no_proxy</key><string>localhost,127.0.0.1</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- bootstrap/load 即立刻探一次：装完当场就知道哨兵是否工作 -->
+  <key>RunAtLoad</key><true/>
+
+  <!-- 每 5 分钟一次；KeepAlive 有意不设，哨兵是一次性短任务，
+       靠 StartInterval 周期唤起，探测失败不应让 launchd 无界重跑。 -->
+  <key>StartInterval</key><integer>300</integer>
+
+  <!-- 脚本内含 mkdir 原子锁，kickstart 与定时唤起并发时后者直接退出；
+       ProcessType=Background 避免与交互进程抢 QoS。 -->
+  <key>ProcessType</key><string>Background</string>
+  <key>ExitTimeOut</key><integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>{{WATCH_DIR}}/launchd-sentinel-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{WATCH_DIR}}/launchd-sentinel-stderr.log</string>
+</dict></plist>
