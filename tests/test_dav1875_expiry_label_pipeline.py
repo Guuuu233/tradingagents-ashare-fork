@@ -1131,3 +1131,197 @@ def test_sw_leg_missing_flag_in_run_state(tmp_path, monkeypatch, capsys):
     assert state["files"][elp.LABEL_FILE_NAMES["short"]]["sw_gap_appended"] == 1
     assert "all appended rows have sw membership gap" in \
         (out / "label_pipeline.log").read_text("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# DAV-2058 打回复修 — wrapper shell gates (run_expiry_label_daily.sh)
+#
+# These tests exercise the REAL wrapper script as a subprocess (it is the
+# code that launchd runs; the .env gate only exists in shell). The wrapper's
+# fixed paths are shadowed by PATH stubs so no real credential file, ledger
+# or python interpreter is touched.
+
+
+WRAPPER = REPO / "scripts" / "phase2" / "run_expiry_label_daily.sh"
+
+
+def _wrapper_harness(tmp_path: Path, env_lines: list[str]):
+    """Run the REAL wrapper script under a shadowed runtime and return
+    (proc, sandbox_dir, alert_text). Only the path constants in the copied
+    script are rewritten; a stub interpreter makes the trading-day check
+    answer "non-trading day" so the wrapper exits 0 immediately AFTER the
+    .env gate — meaning: rc==16 => the gate rejected the file (the real
+    assertion of every evil-line test), and rc==0 => the gate accepted it
+    (non-trading-day skip path). A rejected .env is never sourced, so an
+    evil line's payload can be checked for non-execution via an untouched
+    sentinel file."""
+    import re as _re
+    import shutil
+    import stat
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    sandbox = tmp_path / "wrapper_sandbox"
+    bin_dir = sandbox / "bin"
+    work_root = sandbox / "work"
+    code_dir = sandbox / "code"
+    for d in (bin_dir, work_root / "phase2-labels",
+              work_root / "phase2-ledger",
+              code_dir / "scripts" / "phase2"):
+        d.mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger" / "forward_ledger.jsonl").write_text(
+        "", "utf-8")
+
+    env_file = sandbox / "test.env"
+    env_file.write_text("\n".join(env_lines) + "\n", "utf-8")
+
+    # stub for the fixed PYTHON path: the trading-day check is the only
+    # invocation we let through; it answers NON-trading day so the wrapper
+    # takes the early `exit 0` skip and never reaches run/gap/verify.
+    stub = """#!/usr/bin/env bash
+input="$(cat 2>/dev/null)"
+case "$input" in
+    *is_cn_trading_day*) echo "2026-10-14 False"; exit 0 ;;
+esac
+exit 0
+"""
+    stub_path = bin_dir / "python_stub"
+    stub_path.write_text(stub, "utf-8")
+    stub_path.chmod(stub_path.stat().st_mode | stat.S_IXUSR
+                    | stat.S_IXGRP | stat.S_IXOTH)
+
+    src = WRAPPER.read_text("utf-8")
+    src = _re.sub(r'^PYTHON=.*$', f'PYTHON="{stub_path}"', src, flags=_re.M)
+    src = _re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{env_file}"', src,
+                  flags=_re.M)
+    src = _re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src,
+                  flags=_re.M)
+    src = _re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src,
+                  flags=_re.M)
+    shutil.copy(REPO / "scripts" / "phase2" / "expiry_label_pipeline.py",
+                code_dir / "scripts" / "phase2" / "expiry_label_pipeline.py")
+    wrapper_copy = sandbox / "wrapper.sh"
+    wrapper_copy.write_text(src, "utf-8")
+
+    proc = subprocess.run(
+        ["/bin/bash", str(wrapper_copy)],
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
+    alert = work_root / "phase2-labels" / "ALERT.launchd"
+    return (proc, sandbox,
+            alert.read_text("utf-8") if alert.exists() else "")
+
+
+def test_env_gate_rejects_assignment_prefixed_command(tmp_path):
+    """DAV-2058 🟡-1: `KEY=value touch <file>` passed the OLD head-anchored
+    regex and `source` then executed `touch`. The tightened value-whitelist
+    + line-end anchor must reject it at exit 16 — and the sentinel file
+    must NOT exist afterwards (proves the line was never sourced)."""
+    pwned = tmp_path / "PWNED_env_cmd"
+    proc, _, alert = _wrapper_harness(
+        tmp_path,
+        [f'EVIL=harmless touch {pwned}',
+         'TUSHARE_TOKEN=fake'])
+    assert proc.returncode == 16, (proc.returncode, proc.stderr, alert)
+    assert not pwned.exists()
+    assert "non KEY=VALUE lines" in alert
+
+
+def test_env_gate_rejects_metachar_injection_variants(tmp_path):
+    """Same threat class, different spellings — every line carries a valid
+    `KEY=value` prefix followed by a command or redirection; all must
+    exit 16 and none may have been sourced."""
+    shapes = (';touch {p}', ' touch {p}', '|tee {p}', '`touch {p}`',
+              '$(touch {p})', '>{p}', '>>{p}', '{{1,2}}id {p}')
+    for i, frag in enumerate(shapes):
+        sub = tmp_path / f"h{i}"
+        pwned = sub / "PWNED_meta"
+        proc, _, _ = _wrapper_harness(sub, ['K=v' + frag.format(p=pwned)])
+        assert proc.returncode == 16, (frag, proc.returncode)
+        assert not pwned.exists(), frag
+
+
+def test_env_gate_accepts_production_shaped_env(tmp_path):
+    """The production .env (28 lines: comments, blanks, plain KEY=value,
+    no spaces around =, bare alnum/punct values incl. . : / -) must still pass — the
+    tighter pattern must not kill the legitimate credential file. Gate
+    pass => wrapper proceeds to the trading-day check => our stub says
+    non-trading => exit 0."""
+    proc, _, _ = _wrapper_harness(
+        tmp_path,
+        ['# comment line', '',
+         'TUSHARE_TOKEN=abc123',
+         'FUYAO_API_KEY=xyz-987',
+         'INVESTODAY_API_KEY=q1w2e3',
+         'MODEL_URL=https://api.example.com/v1',
+         'LIST=a,b,c:d/e.f-g',
+         'AKSHARE_TIMEOUT=30',
+         'export EXTRA_FLAG=1'])
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+
+
+def test_env_gate_rejects_space_around_equals(tmp_path):
+    """`FOO =bar` / `FOO= bar` are not assignments to bash (FOO becomes a
+    command); the gate must keep rejecting them."""
+    for i, line in enumerate(('FOO =bar', 'FOO= bar', 'FOO = bar')):
+        proc, _, _ = _wrapper_harness(tmp_path / f"s{i}", [line])
+        assert proc.returncode == 16, (line, proc.returncode)
+
+
+def _wrapper_gap_guard_python() -> str:
+    """Extract the embedded Python the wrapper pipes to $PYTHON for its
+    post-run gap guard (the `<<'PY' ... PY` heredoc body) so the tests run
+    the SAME code the timer runs — not a paraphrased copy."""
+    script = WRAPPER.read_text("utf-8")
+    # second <<'PY' heredoc — the first is the trading-day check
+    marker = "<<'PY' 2>&1"
+    body = script.split(marker, 2)[2]
+    return body.split("\nPY\n", 1)[0]
+
+
+def test_wrapper_gap_guard_uses_sw_eligible_denominator(tmp_path):
+    """DAV-2058 🟡-2: an all-pre-SW-typed night (every row a typed
+    pre-resolution status like BSE-excluded) is structurally gap but NOT a
+    Tushare degradation — the guard must not exit 17. verify's
+    sw_eligible denominator is the contract; the wrapper now mirrors it."""
+    rows = [{"report_id": f"r{i}", "horizon": "t10",
+             "outcome_status": "symbol_excluded_bse",
+             "sw": {"membership_status": "gap"}}
+            for i in range(9)]
+    # stub reports worst=0 would be wrong — we want the REAL guard python
+    # to run on these rows. Re-run the embedded snippet directly instead:
+    # extract + exec via the real interpreter? Simpler: drive the real
+    # guard logic through the stubbed wrapper is impossible (stub prints a
+    # canned verdict). So this test executes the SAME python the wrapper
+    # embeds, extracted from the script, against a real out dir.
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open(out_dir / "labels_t10.jsonl", "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+    proc = subprocess.run(
+        [sys.executable, "-", str(out_dir)],
+        input=_wrapper_gap_guard_python(), capture_output=True, text=True)
+    assert proc.returncode == 0
+    worst = int(proc.stdout.split()[0])
+    assert worst == 0, proc.stdout  # eligible=0 -> no all-gap alarm
+
+
+def test_wrapper_gap_guard_still_catches_real_all_gap(tmp_path):
+    """Same guard, opposite case: all rows are sw-ELIGIBLE (evaluated) and
+    every one is gap -> worst=2 (real degradation, exit 17)."""
+    rows = [{"report_id": f"r{i}", "horizon": "t10",
+             "outcome_status": "evaluated_ok",
+             "sw": {"membership_status": "gap"}}
+            for i in range(9)]
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open(out_dir / "labels_t10.jsonl", "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    proc = subprocess.run(
+        [sys.executable, "-", str(out_dir)],
+        input=_wrapper_gap_guard_python(), capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert int(proc.stdout.split()[0]) == 2
+    assert "sw-eligible" in proc.stdout

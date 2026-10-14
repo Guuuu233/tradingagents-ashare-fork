@@ -104,15 +104,22 @@ log "timer start label=com.davidliu.ta-p4-expiry-labels"
 # are never echoed. `set -a` exports every assignment `source` evaluates.
 # DAV-2043 🟡: `source` would execute ANY malformed line as a command (a
 # corrupted .env silently runs arbitrary code and still exits 0), so we
-# validate first — every non-empty non-comment line must be KEY=VALUE with
-# NO whitespace around '=' (shell-parsable assignment only; `export` prefix
-# allowed). A line like `FOO =bar` is deliberately rejected: grep accepts
-# it but bash would run FOO as a command. Any other line makes the file
-# untrusted: alert + exit, never source it.
+# validate first — every non-empty non-comment line must be a bare
+# KEY=VALUE (optional `export` prefix) with NO whitespace anywhere except
+# inside a quoted value, and the line must END right after the value.
+# DAV-2058 🟡-1: the previous pattern only anchored the line START, so
+# `KEY=value touch /tmp/x` passed the gate and `source` then ran `touch`.
+# The value side is now a whitelist — a "safe bare value" contains only
+# [A-Za-z0-9_+,.:/@%^?=!~*()[]-] (no space, ; | & ` $ < > { } ' " \),
+# a "-quoted value may contain anything except " or \, and a '-quoted
+# value anything except '. `FOO =bar`, `KEY=v;cmd`, `KEY=v>file`,
+# `KEY=v`cmd``, `KEY=$(cmd)` and `KEY='x' y` are all rejected: grep may
+# pass them but bash would run a command or redirect. Any other line
+# makes the file untrusted: alert + exit, never source it.
 if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # exit 0 = a bad line was FOUND (grep -vE prints lines that are NOT
     # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source.
-    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "${ENV_FILE}"; then
+    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}"; then
         alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16
     fi
     set -a
@@ -175,9 +182,24 @@ fi
 # failure). Detect the all-gap regression here so the timer pages instead of
 # reporting green; verify would also catch it, but alerting first keeps the
 # exit code specific (17 = data degradation, not file corruption).
+# DAV-2058 🟡-2: same sw_eligible denominator as verify — rows whose
+# typed status short-circuits before SW resolution (_PRE_SW_TYPED_STATUSES
+# in expiry_label_pipeline.py: the 6 pre-SW typed statuses) are
+# structurally membership=gap and must not trip the all-gap alarm on a
+# BSE/suspension-dense night. Mirrors verify's semantics so the two
+# gates agree.
 GAP_CHECK="$("${PYTHON}" - "${OUT_DIR}" <<'PY' 2>&1
 import json, sys
 from pathlib import Path
+# keep in sync with expiry_label_pipeline._PRE_SW_TYPED_STATUSES
+PRE_SW_TYPED = frozenset({
+    "signal_date_not_in_calendar",
+    "calendar_insufficient_coverage",
+    "symbol_unmappable",
+    "symbol_excluded_bse",
+    "stock_bars_unavailable",
+    "label_resolution_failed",
+})
 out = Path(sys.argv[1])
 report = []
 worst = 0
@@ -185,22 +207,25 @@ for name in ("labels_t10.jsonl", "labels_t40.jsonl"):
     p = out / name
     if not p.exists():
         continue
-    total = gaps = 0
+    eligible = gaps = 0
     for line in p.read_text("utf-8").splitlines():
         if not line.strip():
             continue
-        total += 1
         try:
-            sw = json.loads(line).get("sw") or {}
+            obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if str(obj.get("outcome_status")) in PRE_SW_TYPED:
+            continue
+        eligible += 1
+        sw = obj.get("sw") or {}
         if sw.get("membership_status") == "gap":
             gaps += 1
-    if total:
-        report.append(f"{name}: gap {gaps}/{total}")
-        if gaps == total:
+    if eligible:
+        report.append(f"{name}: gap {gaps}/{eligible} sw-eligible")
+        if gaps == eligible:
             worst = max(worst, 2)
-        elif gaps / total >= 0.9:
+        elif gaps / eligible >= 0.9:
             worst = max(worst, 1)
 print(f"{worst} {'; '.join(report)}")
 PY

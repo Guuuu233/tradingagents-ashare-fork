@@ -1129,9 +1129,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         # this check is the same gate inside the pipeline for direct/manual
         # invocations that bypass the wrapper.
         raise PipelineError(
-            "在线模式缺 TUSHARE_TOKEN：SW 行业腿必然整体降级为 gap，"
-            "标签只追加不改写 — 为防永久 gap 行，报错退出、0 行写入 "
-            "(offline --*-file 模式不需 token)")
+            "online mode missing TUSHARE_TOKEN: the SW industry leg "
+            "degrades to gap for every row and label keys are append-only "
+            "— fail closed, 0 rows written, to prevent permanent gap rows "
+            "(offline --*-file mode needs no token)")
+    # DAV-2058 🟢-1: after the fail-close gate above, an online run without
+    # a token can never reach this point and offline runs never needed one,
+    # so ``sw_expected_off`` is now always False. The ``sw_leg_missing``
+    # state field is kept (constant False) so dashboards/state consumers
+    # keep the observability slot; it no longer flips at runtime.
     sw_expected_off = False
 
     calendar = _load_calendar(Path(args.calendar_file) if args.calendar_file else None)
