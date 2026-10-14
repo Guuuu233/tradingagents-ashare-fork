@@ -652,6 +652,18 @@ def _is_production(path):
     return Path(path).resolve() == production.resolve() or (production.exists() and os.path.samefile(path, production))
 
 
+def _require_tushare_token_for_authorized_run():
+    """DAV-2045 fail-close: --production-authorized with an empty TUSHARE_TOKEN
+    aborts BEFORE any price fetch, computation or write.
+
+    DAV-1853 run 1 launched authorized without credentials: every provider
+    call degraded to ``credentials_missing`` inside the fetcher yet the run
+    still wrote, stamping ``data_missing`` on 1011 rows."""
+    if not os.getenv("TUSHARE_TOKEN", "").strip():
+        raise RuntimeError(
+            "TUSHARE_TOKEN missing or empty: refusing --production-authorized run")
+
+
 # ---------------------------------------------------------------------------
 # Independent pre-image export (DAV-1544)
 # ---------------------------------------------------------------------------
@@ -940,6 +952,11 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                  copy_rehearsal=False, pre_export_dir=None):
     if verify_gates and db_path:
         raise RuntimeError('DB gate verification requires scripts/verify_h1b_gates.py with an explicit cohort')
+    if production_authorized:
+        # DAV-2045: credential check is the very first gate — a signed
+        # production launch without a token must die before it can fetch,
+        # compute or write anything.
+        _require_tushare_token_for_authorized_run()
     as_of = as_of or now_cn().date().isoformat()
     date.fromisoformat(as_of)
     if db_path:

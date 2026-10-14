@@ -2,6 +2,7 @@
 import copy
 import json
 import sqlite3
+import sys
 
 import pytest
 
@@ -106,3 +107,64 @@ def test_guard_busy_runtime_count_blocks_even_when_report_not_saved(tmp_path, mo
                     'report_storage_mode': cli.report_storage_mode()}
     monkeypatch.setattr(requests.Session,'get',lambda *a,**k: Response())
     assert cli.check_runtime_guard(str(p),'http://localhost')['allowed'] is False
+
+
+def _must_not_be_called(*args, **kwargs):
+    raise AssertionError("authorized run reached a fetch/compute/write stage")
+
+
+@pytest.mark.parametrize("token", [None, "", "   "])
+def test_authorized_run_without_tushare_token_fails_closed(tmp_path, monkeypatch, token):
+    """DAV-2045: --production-authorized with a missing/empty TUSHARE_TOKEN
+    refuses BEFORE any fetch, computation or write. The DAV-1853 first run
+    had exactly this shape and still stamped ``data_missing`` on 1011 rows."""
+    p = make_db(tmp_path, report())
+    before = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    if token is None:
+        monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("TUSHARE_TOKEN", token)
+    # Any stage past the credential gate fails loudly.
+    monkeypatch.setattr(cli, "fetch_price_series", _must_not_be_called)
+    monkeypatch.setattr(cli, "load_calendar", _must_not_be_called)
+    monkeypatch.setattr(cli, "check_runtime_guard", _must_not_be_called)
+    with pytest.raises(RuntimeError, match="TUSHARE_TOKEN"):
+        cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                         production_authorized=True,
+                         audit_log=str(tmp_path / "journal"))
+    # 0 rows written: the table is byte-identical.
+    assert sqlite3.connect(p).execute("SELECT * FROM reports").fetchall() == before
+
+
+def test_authorized_cli_without_token_exits_nonzero_and_writes_nothing(tmp_path, monkeypatch):
+    """CLI path: main() surfaces the refusal as a non-zero exit and the
+    database stays byte-identical (DAV-2045 acceptance shape)."""
+    p = make_db(tmp_path, report())
+    before = sqlite3.connect(p).execute("SELECT * FROM reports").fetchall()
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    # Keep the test hermetic: a real repo-root .env must not re-seed a token.
+    import dotenv
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setattr(cli, "fetch_price_series", _must_not_be_called)
+    monkeypatch.setattr(cli, "load_calendar", _must_not_be_called)
+    monkeypatch.setattr(cli, "check_runtime_guard", _must_not_be_called)
+    monkeypatch.setattr(sys, "argv", [
+        "backfill_tplus5_shadow", "--production-authorized",
+        "--db-path", str(p), "--as-of", "2026-08-15",
+        "--audit-log", str(tmp_path / "journal")])
+    assert cli.main() == 1
+    assert sqlite3.connect(p).execute("SELECT * FROM reports").fetchall() == before
+
+
+def test_authorized_run_with_token_is_unchanged(tmp_path, monkeypatch):
+    """The credentialed authorized path is unaffected by the new gate."""
+    p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_token_value")
+    monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
+    monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
+    monkeypatch.setattr(cli, "check_runtime_guard",
+                        lambda *args: {"allowed": True, "reason": "idle"})
+    r = cli.run_backfill(db_path=str(p), as_of="2026-08-15",
+                         production_authorized=True,
+                         audit_log=str(tmp_path / "journal"))
+    assert r["changed_rows"] == 1 and r["guard_mismatches"] == 0
