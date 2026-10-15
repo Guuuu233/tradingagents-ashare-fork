@@ -10,6 +10,15 @@ and establishes a two-layer offline network guardrail:
    (logs every audited network event) + interception hook (denies non-local
    events), deny/observation log pairing, positive-control sentinels, and a
    curl_cffi C-level guard for calls that bypass Python socket callables.
+3. Production-port guard (DAV-2118): the loopback allow-list required for
+   TestClient/test-local listeners also admitted the real production API on
+   127.0.0.1:8000 — a stub test reached it and triggered two real full
+   analyses (DAV-2111). tests/production_port_guard.py wraps the pristine
+   socket callables BEFORE this conftest captures them, so connections to
+   127.0.0.1:8000 / localhost:8000 fail the test even when the offline
+   guard is bypassed (RT_NETWORK_ENABLED=1 / @pytest.mark.network). Child
+   processes are covered via tests' sitecustomize.py audit hook, armed by
+   TA_TEST_PORT_GUARD=1 exported through repo_script_env.
 """
 from __future__ import annotations
 
@@ -31,7 +40,24 @@ import pytest
 
 from tradingagents.dataflows.interface import NetworkAccessDeniedError
 
+from tests.production_port_guard import (
+    ENV_FLAG as _PPG_ENV_FLAG,
+    install_inprocess_guard as _install_production_port_guard,
+)
+
 logger = logging.getLogger(__name__)
+
+# Arm the production-port guard for every child of this suite. Children
+# spawned with env=repo_script_env (the DAV-1905 hermetic env) carry it
+# through; children spawned with a bare inherited os.environ get it here.
+# PYTHONPATH is pointed at the repo root so the child's ``site`` machinery
+# imports this checkout's sitecustomize.py at startup — cwd alone does not
+# reach sys.path early enough for sitecustomize. This mirrors what cwd
+# already exposes at runtime and is the only way the audit hook reaches a
+# child that never imports conftest.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.environ[_PPG_ENV_FLAG] = "1"
+os.environ["PYTHONPATH"] = _REPO_ROOT
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -320,6 +346,13 @@ def _is_allowed_target(target: Any, family: Optional[int] = None) -> bool:
 # --------------------------------------------------------------------------
 # Layer 1: socket-patch interception (composable + tamper-attributable)
 # --------------------------------------------------------------------------
+
+# DAV-2118: wrap the pristine socket callables with the production-port
+# (127.0.0.1:8000 / localhost:8000) denial BEFORE they are captured below.
+# The offline guard then composes on top: its disable/restore paths hand
+# back the production-guard callables, so port 8000 stays denied even with
+# RT_NETWORK_ENABLED=1 or under @pytest.mark.network.
+_install_production_port_guard()
 
 # Preserve pristine genuine socket callables at conftest import time
 _ORIG_SOCKET_CONNECT = socket.socket.connect
@@ -1045,7 +1078,11 @@ def repo_script_env():
     able to consume it.
     """
     env = dict(os.environ)
-    env.pop("PYTHONPATH", None)
+    # DAV-1905: never forward a foreign PYTHONPATH shadow. DAV-2118: instead
+    # of dropping it entirely, pin it to THIS checkout so the child's site
+    # machinery imports our sitecustomize.py (production-port audit hook) —
+    # the same repo root cwd already exposes at runtime.
+    env["PYTHONPATH"] = _REPO_ROOT
     db_url = env.get("DATABASE_URL", "")
     if not db_url:
         # Fail closed: never let a child fall back to the checkout DB.
@@ -1062,6 +1099,10 @@ def repo_script_env():
     # The offline guardrail is fail-closed by default; a child must not be
     # handed a stale switch value from the parent shell.
     env.pop("RT_NETWORK_ENABLED", None)
+    # DAV-2118: arm the child-side audit hook (tests' sitecustomize.py at
+    # repo root) so a subprocess that never imports conftest still cannot
+    # dial the production API listener on 127.0.0.1:8000/localhost:8000.
+    env[_PPG_ENV_FLAG] = "1"
     return env
 
 
