@@ -91,6 +91,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daily_snapshot_ledger as dsl
 import expiry_label_pipeline as elp
 import m1_eval as m1
+import pit_reattest
 from m1_base_rate import build_pit_base_rates, load_panel
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
@@ -199,12 +200,18 @@ def load_ledger_signals(
     ledger_path: Path,
     labels: Mapping[tuple[str, str], Mapping[str, Any]],
     user_id: str,
+    reattest_index: Optional[Mapping[str, dict]] = None,
 ) -> pd.DataFrame:
     """Stream the ledger; one signal row per P4-account ledger line.
 
     Only short-horizon matured labels supply `r`; every ledger line still
     lands in the frame so the funnel counts the honest denominator
     (无标签 / 未到期 = excl_immature_label downstream).
+
+    ``reattest_index`` (DAV-2097③, 总控取值顺序): ledger VERIFIED/FAILED
+    stand; UNVERIFIED consults the pit_reattest.jsonl index
+    (report_id -> adjudicated verdict). The ledger's own status is kept
+    in ``_ledger_input_pit_status`` for disclosure.
     """
     rows: list[dict[str, Any]] = []
     for _lineno, rec in elp._iter_ledger_records(ledger_path):
@@ -221,6 +228,9 @@ def load_ledger_signals(
             v = lab.get("sw_excess_pct_prediction")
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 r = float(v) / 100.0
+        pit = rec.get("input_pit_status")
+        eff_pit = pit_reattest.resolve_effective_pit(
+            pit, rec.get("report_id"), reattest_index)
         rows.append({
             "signal_date": sig,
             "symbol": str(sym) if sym is not None else None,
@@ -228,7 +238,8 @@ def load_ledger_signals(
             "created_at": rec.get("created_at") or rec.get("sealed_at"),
             "sealed_at": rec.get("sealed_at") or rec.get("seal_basis_at"),
             "timing_class": rec.get("timing_class"),
-            "input_pit_status": rec.get("input_pit_status"),
+            "input_pit_status": eff_pit,
+            "_ledger_input_pit_status": pit,
             "completed": rec.get("status") == "completed",
             "user_id": rec.get("user_id"),
             "version_key": _record_version_key(rec),
@@ -460,12 +471,21 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         *, version_key: str | None = None,
         calendar_path: Path | None = None,
         base_chunks: Path | None = None,
-        user_id: str = DEFAULT_USER_ID) -> dict:
+        user_id: str = DEFAULT_USER_ID,
+        reattest_path: Path | None = None) -> dict:
     t0 = time.time()
     log(f"loading labels {labels_path}")
     labels = load_labels(labels_path)
     log(f"{len(labels)} matured short labels")
-    df = load_ledger_signals(ledger_path, labels, user_id)
+    reattest_index = None
+    if reattest_path is not None:
+        rp = Path(reattest_path)
+        if not rp.exists():
+            raise elp.PipelineError(f"reattest file not found: {rp}")
+        reattest_index = pit_reattest.load_reattest_index(rp)
+        log(f"reattest index: {len(reattest_index)} adjudicated line(s)")
+    df = load_ledger_signals(ledger_path, labels, user_id,
+                             reattest_index=reattest_index)
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
@@ -855,6 +875,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="P1 all-market T+10 partition dir (year=*/data.parquet); "
                         "omit -> D-075 增量不可判定 (base_source=none)")
     r.add_argument("--user-id", default=DEFAULT_USER_ID)
+    r.add_argument("--pit-reattest", type=Path, default=None,
+                   help="optional pit_reattest.jsonl (DAV-2097③): ledger "
+                        "input_pit_status=UNVERIFIED rows take the sidecar's "
+                        "adjudicated verdict; VERIFIED/FAILED stay ledger-final")
     b = sub.add_parser("build-base",
                        help="build P1 all-market T+10 partitions (1547 caliber, "
                             "offset=10 roll=2) into --out-dir/chunks_t10")
@@ -876,7 +900,8 @@ def main(argv: list[str] | None = None) -> int:
             run(a.ledger, a.labels, a.out_dir,
                 version_key=a.version_key,
                 calendar_path=a.calendar_file,
-                base_chunks=a.base_chunks, user_id=a.user_id)
+                base_chunks=a.base_chunks, user_id=a.user_id,
+                reattest_path=a.pit_reattest)
             return 0
         except elp.PipelineError as exc:
             print(f"FAIL-CLOSE: {exc}", file=sys.stderr)
