@@ -652,6 +652,20 @@ def _is_production(path):
     return Path(path).resolve() == production.resolve() or (production.exists() and os.path.samefile(path, production))
 
 
+def _require_tushare_token():
+    """DAV-2045 fail-close: any T+5 backfill run — authorized or not — with an
+    empty TUSHARE_TOKEN aborts BEFORE the source iteration/fetch/write stage.
+
+    The gate deliberately does NOT live in ``main()``: ``restore`` and other
+    no-fetch subcommands must keep working without credentials, and the JSON
+    ``dry_run``/``verify_gates`` file paths never touch Tushare, so the
+    check sits immediately before the (fetch-capable) compute pass inside
+    ``run_backfill`` instead of being keyed on the flag alone."""
+    if not os.getenv("TUSHARE_TOKEN", "").strip():
+        raise RuntimeError(
+            "TUSHARE_TOKEN missing or empty: refusing T+5 compute/fetch run")
+
+
 # ---------------------------------------------------------------------------
 # Independent pre-image export (DAV-1544)
 # ---------------------------------------------------------------------------
@@ -944,6 +958,11 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
     date.fromisoformat(as_of)
     if db_path:
         _validate_db(db_path)
+    # DAV-2045 返修（总控范围裁定）：凭据门在“进入计算前”对所有拉行情/
+    # 计算 T+5 的运行生效——授权与非授权、dry-run 与 JSON 文件路径同样拦截；
+    # restore/verify 等不拉行情的子命令不经过 run_backfill（豁免），门也不在
+    # main() 入口。置于写守卫之前：无凭据运行连 guard 探测都不该发生。
+    _require_tushare_token()
     if db_path and not dry_run:
         production = _is_production(db_path)
         if production and (not production_authorized or now_cn().date() <= date(2026, 10, 9)):

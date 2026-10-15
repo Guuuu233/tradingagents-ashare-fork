@@ -149,6 +149,7 @@ def test_byte_guard_rejects_non_measurement_changes_and_preserves_whitespace():
 
 def test_writer_only_changes_measurements_and_is_idempotent(tmp_path, monkeypatch):
     p = make_db(tmp_path, report()); log = tmp_path / "rollback.jsonl"
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *args: {"allowed": True,"reason": "idle"})
@@ -173,6 +174,7 @@ def test_writer_only_changes_measurements_and_is_idempotent(tmp_path, monkeypatc
 def test_persisted_row_keeps_legacy_alias_byte_exact_under_write(tmp_path, monkeypatch):
     """B-3 存量兼容证据：legacy 双别名行写入后 horizons 物理字节逐字保留。"""
     p = make_db(tmp_path, report()); log = tmp_path / "rollback.jsonl"
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *args: {"allowed": True,"reason": "idle"})
@@ -190,6 +192,7 @@ def test_persisted_row_keeps_legacy_alias_byte_exact_under_write(tmp_path, monke
 
 def test_busy_guard_prevents_all_writes_and_fetches(tmp_path, monkeypatch):
     p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *args: {"allowed":False,"reason":"busy","running_count":1})
     before = p.read_bytes()
     result = cli.run_backfill(db_path=str(p), as_of="2026-08-15")
@@ -291,6 +294,7 @@ def test_copy_rehearsal_now_runs_guard(tmp_path, monkeypatch):
     """DAV-1903 🟡-1: copy_rehearsal is no longer a silent guard bypass —
     the shared write guard must be consulted on every DB write path."""
     p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     calls = []
     monkeypatch.setattr(cli, "check_runtime_guard",
                         lambda *a: calls.append(a) or {"allowed": False, "reason": "busy", "running_count": 1})
@@ -304,6 +308,7 @@ def test_copy_rehearsal_now_runs_guard(tmp_path, monkeypatch):
 def test_export_failure_means_zero_writes(tmp_path, monkeypatch):
     """DAV-1544: if the independent pre-export fails, no UPDATE may run."""
     p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
@@ -326,6 +331,7 @@ def test_backfill_then_restore_is_byte_identical(tmp_path, monkeypatch):
     """DAV-1544: restore subcommand returns involved rows to pre-backfill bytes."""
     import hashlib
     p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
@@ -373,6 +379,7 @@ def test_restore_removes_backfill_created_metrics_container_byte_exact(tmp_path,
         if isinstance(st, dict):
             st.pop("shadow_credit_metrics", None)
     p = make_db(tmp_path, rep)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
@@ -438,6 +445,7 @@ def test_corrupt_export_file_refuses_restore(tmp_path, monkeypatch):
 def test_restore_subcommand_argparse_wiring(tmp_path, monkeypatch, capsys):
     """DAV-1544: `main()` must route the restore subcommand correctly."""
     p = make_db(tmp_path, report())
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
@@ -478,6 +486,7 @@ def test_row_changed_between_export_and_write_is_skipped(tmp_path, monkeypatch):
     """DAV-1544 返修：导出后写入前某行被改动 → 该行 pre_export_mismatch 不写，其余正常写。"""
     r1 = report(); r2 = report(); r2["id"] = "two"; r2["symbol"] = "600276.SH"
     p = make_db_multi(tmp_path, [r1, r2])
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})
@@ -521,6 +530,7 @@ def test_pre_export_does_not_fetch_or_recompute(tmp_path, monkeypatch):
     """DAV-1544 返修：export_pre_images 执行期间不得调用 backfill_report / 拉行情。"""
     r = report()
     p = make_db(tmp_path, r)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard", lambda *a: {"allowed": True, "reason": "idle"})

@@ -89,6 +89,7 @@ def test_compressed_only_default_write_clears_plaintext(tmp_path, monkeypatch):
     column under compressed_only (previously it always dual-wrote)."""
     rep = _report()
     p = _make_db(tmp_path, rep)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: _series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard",
@@ -118,6 +119,7 @@ def test_compressed_only_restore_refills_plaintext(tmp_path, monkeypatch):
     under compressed_only (P4→P3 rollback must refill cleared rows)."""
     rep = _report()
     p = _make_db(tmp_path, rep)
+    monkeypatch.setenv("TUSHARE_TOKEN", "test_stub")
     monkeypatch.setattr(cli, "fetch_price_series", lambda *args: _series())
     monkeypatch.setattr(cli, "load_calendar", lambda: CAL)
     monkeypatch.setattr(cli, "check_runtime_guard",
