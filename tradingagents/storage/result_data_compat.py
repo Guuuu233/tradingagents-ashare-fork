@@ -268,11 +268,231 @@ def _top_mdc_shape(
 
 
 # ---------------------------------------------------------------------------
+# DAV-2124: narrow fail-close relaxation for the T+5 backfill fork
+#
+# ``detect_alias_conflicts`` above is deliberately strict: ANY disagreement
+# between a physical ``horizons.<h>`` alias and its authoritative
+# ``<h>_term`` twin blocks conversion (裁定 §3). Measured against production
+# (DAV-2124 diagnosis), that strictness blocks 579 real rows whose *only*
+# difference is that the authoritative ``<h>_term`` slice carries the T+5
+# evaluation stamps that the legacy alias physically never carried — the
+# backfill writes only ``<h>_term`` (``backfill_tplus5_shadow``) and never
+# mirrors back. 10-12 deploy backup evidence: those rows were key-identical
+# before the backfill (2292/2292 slice pairs), so the alias is a strictly
+# *stale* copy, not a contradictory one.
+#
+# This module implements a deliberately NARROW allowlist. It does not relax
+# ``detect_alias_conflicts`` (that safety net is untouched and still guards
+# every other path, including ``expand_compat_view``). It only classifies
+# whether a conflicting row may be converted; anything not matching the four
+# conditions below is still rejected and still counted in ``conflicts``.
+
+# The two field families the ruling names as the sole permissible divergence
+# location. ``investment_debate_state`` may only differ through a nested
+# ``shadow_credit_metrics``; the nested mirror inherits the same rule.
+_SCM_KEY = "shadow_credit_metrics"
+_DEBATE_KEY = "investment_debate_state"
+_ALLOWED_TOP_FIELDS = frozenset({_SCM_KEY, _DEBATE_KEY})
+
+
+def _is_t5_key(key) -> bool:
+    """True for the T+5 stamp keys the backfill writes (DAV-2124)."""
+    return isinstance(key, str) and (
+        key == "is_t_plus_5_due" or key.startswith("t_plus_5"))
+
+
+class AliasForkRejected(Exception):
+    """A conflicting row does not satisfy the DAV-2124 allowlist.
+
+    Carries the human-readable reason plus the machine-readable ``category``,
+    so callers can journal the rejection class and count.
+    """
+
+    def __init__(self, reason: str, category: str):
+        super().__init__(reason)
+        self.reason = reason
+        self.category = category
+
+
+def _allowlist_null_only(av, bv, path: str) -> None:
+    """Assert a single difference is "alias null, term has a value"."""
+    if _values_equal(av, bv):
+        return
+    if av is None:
+        return
+    raise AliasForkRejected(
+        f"{path}: genuine contradiction (alias={av!r}, term={bv!r})",
+        "contradiction")
+
+
+def _allowlist_diff(a: Any, b: Any, path: str) -> None:
+    """Assert the only ``a`` vs ``b`` differences are "alias null, term set".
+
+    Raises :class:`AliasForkRejected` on any other difference, at any depth:
+
+    * a key present only in the alias ``a`` (would be lost by conversion);
+    * a common key where both sides are non-null and unequal (a genuine
+      contradiction — no amount of "term wins" can reconcile it);
+    * a type mismatch (``True`` vs ``1``, dict vs scalar, ...).
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        if not _values_equal(a, b):
+            raise AliasForkRejected(
+                f"{path}: non-object alias/term mismatch "
+                f"({type(a).__name__} vs {type(b).__name__})",
+                "type_mismatch")
+        return
+    for key in sorted(set(a) - set(b)):
+        raise AliasForkRejected(
+            f"{path}.{key}: exists only in horizons alias",
+            "alias_only_key")
+    for key in sorted(set(a) & set(b)):
+        av, bv = a[key], b[key]
+        if isinstance(av, dict) and isinstance(bv, dict):
+            _allowlist_diff(av, bv, f"{path}.{key}")
+            continue
+        if _values_equal(av, bv):
+            continue
+        # The single permitted shape: the alias simply has no value yet.
+        if av is None:
+            continue
+        raise AliasForkRejected(
+            f"{path}.{key}: genuine contradiction "
+            f"(alias={av!r}, term={bv!r})",
+            "contradiction")
+
+
+def classify_alias_fork(result_data: Any) -> Optional[Dict[str, Any]]:
+    """Return a positive allowlist verdict, or ``None`` if the row must stay
+    a hard conflict.
+
+    ``None`` means: do NOT relax anything, keep counting it in ``conflicts``.
+    A dict means: this row satisfies all four ruling conditions and may be
+    converted. The returned dict carries ``category`` and ``fields`` so the
+    caller can journal the放行 category and count.
+
+    A rejection takes one of two shapes, and callers must treat both the same
+    (row stays in ``conflicts``): a *silent* one (``None`` — this is not even
+    a T+5 fork shape), or a *classified* one (:class:`AliasForkRejected`,
+    carrying the rule that caught it, for the journal's reject-category
+    counts).
+
+    Conditions (all required, per the 10-16 ruling):
+
+    ① every common-key difference is "alias null, term has a value";
+    ② the alias has no key the term side lacks;
+    ③ no contradiction at any depth;
+    ④ differences are confined to ``shadow_credit_metrics`` and the
+       ``shadow_credit_metrics`` nested inside ``investment_debate_state``.
+    """
+    if not isinstance(result_data, dict):
+        return None
+    horizons = result_data.get("horizons")
+    if not isinstance(horizons, dict) or not horizons:
+        # Nothing to compare; not a conflict row in the first place.
+        return None
+
+    differ_fields: set = set()
+    for horizon, alias_slice in horizons.items():
+        if not isinstance(alias_slice, dict):
+            # non-dict slot / missing twin: leave the strict detector's
+            # verdict in place (not a T+5 null-fork shape).
+            return None
+        term_key = _term_key_for(horizon)
+        term = result_data.get(term_key)
+        if not isinstance(term, dict):
+            return None
+
+        # Outside the two allowed fields the alias and the term slice must
+        # agree on every key the alias has. Term-side-only keys are the
+        # documented term-only stamps (decision_model_version,
+        # generated_by_commit_sha, instrument_context) that the alias
+        # deliberately never carried — they are the preservation model's
+        # whole point, so they are expected here. An alias-side-only key is
+        # NOT: that value would be lost by removing the alias.
+        for key in set(alias_slice) - set(term):
+            return None
+        for key in set(alias_slice) & set(term):
+            if key in _ALLOWED_TOP_FIELDS or key == "market_data_context":
+                # mdc is handled by its own reconstruction contract.
+                continue
+            if not _values_equal(alias_slice[key], term[key]):
+                return None
+
+        for field in _ALLOWED_TOP_FIELDS:
+            a = alias_slice.get(field)
+            b = term.get(field)
+            if a is None and b is None:
+                continue
+            if a is None or b is None:
+                # One side simply lacks the whole field; that is not the
+                # T+5 null-fork signature (and would mean a real loss).
+                return None
+            if not isinstance(a, dict) or not isinstance(b, dict):
+                return None
+            if field == _DEBATE_KEY:
+                # ④ investment_debate_state may only differ via T+5 stamps:
+                # either its own top-level ``t_plus_5_*`` / ``is_t_plus_5_due``
+                # keys or the ``shadow_credit_metrics`` mirror nested inside
+                # it. Any other nested divergence is out of scope.
+                for dk in (set(a) | set(b)) - {_SCM_KEY}:
+                    if not _is_t5_key(dk):
+                        if not _values_equal(a.get(dk), b.get(dk)):
+                            return None
+                        continue
+                    if not _values_equal(a.get(dk), b.get(dk)):
+                        try:
+                            _allowlist_null_only(a.get(dk), b.get(dk),
+                                                 f"{_DEBATE_KEY}.{dk}")
+                        except AliasForkRejected:
+                            raise
+                        differ_fields.add(f"{_DEBATE_KEY}.{dk}")
+                a_nested, b_nested = a.get(_SCM_KEY), b.get(_SCM_KEY)
+                if (a_nested is None) != (b_nested is None):
+                    return None
+                if isinstance(a_nested, dict):
+                    try:
+                        _allowlist_diff(a_nested, b_nested,
+                                        f"{_DEBATE_KEY}.{_SCM_KEY}")
+                    except AliasForkRejected:
+                        raise
+                    if a_nested != b_nested:
+                        differ_fields.add(f"{_DEBATE_KEY}.{_SCM_KEY}")
+            else:
+                try:
+                    _allowlist_diff(a, b, _SCM_KEY)
+                except AliasForkRejected:
+                    raise
+                if a != b:
+                    differ_fields.add(_SCM_KEY)
+
+    if not differ_fields:
+        # No difference at all in the allowed fields -> this row was not a
+        # T+5 fork; leave it to the strict path (no benefit to relaxing).
+        return None
+    return {
+        "category": "t5_null_alias_fork",
+        "fields": sorted(differ_fields),
+    }
+
+
+def assert_alias_fork_allowlisted(result_data: Any) -> Dict[str, Any]:
+    """Positive allowlist gate. Raises :class:`AliasForkRejected` on failure."""
+    verdict = classify_alias_fork(result_data)
+    if verdict is None:
+        raise AliasForkRejected(
+            "row does not satisfy the DAV-2124 null-alias-fork allowlist",
+            "not_allowlisted")
+    return verdict
+
+
+# ---------------------------------------------------------------------------
 # encode: legacy -> canonical (offline transform; used by B-3 migration and by
 # tests to build canonical fixtures)
 
 
-def encode_canonical(result_data: Any) -> Dict[str, Any]:
+def encode_canonical(result_data: Any,
+                     allow_null_alias_fork: bool = False) -> Dict[str, Any]:
     """Return the canonical (single-write) form of a legacy ``result_data``.
 
     * Removes the physical ``horizons`` map and the top-level
@@ -283,6 +503,15 @@ def encode_canonical(result_data: Any) -> Dict[str, Any]:
       canonicalization is claimed for single-horizon rows).
     * Any alias conflict raises :class:`StorageCompatConflict` — the report
       must keep its stored form and go to the exception list (裁定 §3).
+
+    ``allow_null_alias_fork`` (DAV-2124) is a narrow, opt-in relaxation used
+    only by the B-4 offline migration: it permits the specific case where the
+    strict detector fires because the legacy ``horizons.<h>`` alias is a
+    strictly stale copy of the authoritative ``<h>_term`` slice (it holds
+    ``null`` where the term slice holds the T+5 stamps the backfill wrote).
+    See :func:`classify_alias_fork` for the four required conditions. The
+    resulting canonical form is identical to the conflict-free form; every
+    other conflict class still raises.
     """
     if not isinstance(result_data, dict):
         return result_data
@@ -294,8 +523,19 @@ def encode_canonical(result_data: Any) -> Dict[str, Any]:
         return result_data
 
     conflicts = detect_alias_conflicts(result_data)
-    if conflicts:
+    if conflicts and not allow_null_alias_fork:
         raise StorageCompatConflict(conflicts)
+    if allow_null_alias_fork:
+        # Positive gate (DAV-2124). Reached only when the strict detector
+        # did fire, so a conflict-free row is unaffected by this check.
+        # A rejection keeps this function's own contract (StorageCompatConflict)
+        # so every caller keeps failing closed the way it already does.
+        try:
+            assert_alias_fork_allowlisted(result_data)
+        except AliasForkRejected as rej:
+            raise StorageCompatConflict(
+                [f"DAV-2124 allowlist rejected ({rej.category}): {rej.reason}"]
+            ) from rej
 
     canonical = dict(result_data)
     compat: Dict[str, Any] = {

@@ -90,7 +90,10 @@ from tradingagents.storage.result_data_compat import (
     STORAGE_COMPAT_KEY,
     STORAGE_SCHEMA_KEY,
     STORAGE_SCHEMA_VERSION,
+    AliasForkRejected,
     StorageCompatConflict,
+    assert_alias_fork_allowlisted,
+    classify_alias_fork,
     encode_canonical,
     expand_compat_view,
     is_canonical_storage,
@@ -110,7 +113,7 @@ MARKER_KEYS = (STORAGE_COMPAT_KEY, STORAGE_SCHEMA_KEY)
 # are deliberately out of scope.
 
 
-def canonicalize_for_slim(result_data):
+def canonicalize_for_slim(result_data, allow_null_alias_fork=False):
     """B-4 offline canonicalization — delegates to B-1's
     ``encode_canonical`` for the rows this migration owns.
 
@@ -129,6 +132,20 @@ def canonicalize_for_slim(result_data):
         return result_data
     if is_canonical_storage(result_data):
         return strip_compat_view_for_persist(result_data)
+    if allow_null_alias_fork:
+        # DAV-2124: positive allowlist gate. encode_canonical re-verifies it
+        # under the flag, so nothing here is taken on trust — the canonical
+        # shape produced is the same one a conflict-free row of this form
+        # would get. A rejection is reported through this function's normal
+        # fail-close channel (StorageCompatConflict) so every caller keeps
+        # its existing contract; the category rides along for the journal.
+        try:
+            assert_alias_fork_allowlisted(result_data)
+        except AliasForkRejected as rej:
+            raise StorageCompatConflict(
+                [f"DAV-2124 allowlist rejected ({rej.category}): {rej.reason}"]
+            ) from rej
+        return encode_canonical(result_data, allow_null_alias_fork=True)
     return encode_canonical(result_data)
 
 
@@ -302,19 +319,35 @@ def _view_bytes(text):
 # conversion
 
 
-def convert_legacy_text(raw):
+def convert_legacy_text(raw, allow_null_alias_fork=False):
     """Convert a legacy-format result_data JSON *string* to canonical text.
 
     Returns the new JSON text. Raises StorageCompatConflict (fail-close)
     or ValueError when the row cannot be converted without changing the
     compat-layer read output.
+
+    When ``allow_null_alias_fork`` is True (DAV-2124), a row that the strict
+    ``detect_alias_conflicts`` rejects is still converted IF and only if it
+    satisfies the narrow null-alias-fork allowlist: the alias is a strictly
+    stale copy of the authoritative ``<h>_term`` slice, differing only by
+    keys the alias has as ``null`` (the T+5 backfill never mirrors back).
+
+    KNOWN LIMITATION (measured on production, DAV-2124): no row yet
+    survives this flag, because ``storage_compat.horizon_key_masks`` records
+    only TOP-LEVEL key names and cannot record "this sub-key of
+    ``shadow_credit_metrics`` was null in the alias". Rebuilding the
+    compat view from ``<h>_term`` therefore serves the term value where the
+    legacy row served ``null``, and the byte-identical-view contract below
+    rejects the row. The gate is implemented, classified and counted so the
+    remaining work is a mask-format change rather than a new migration.
     """
     node = _json_node(raw)
     if "members" not in node:
         raise StorageCompatConflict(["result_data is not a JSON object"])
     value = node["value"]
 
-    canonical = canonicalize_for_slim(value)
+    canonical = canonicalize_for_slim(
+        value, allow_null_alias_fork=allow_null_alias_fork)
     if not is_canonical_storage(canonical):
         raise StorageCompatConflict(
             ["canonicalize_for_slim did not produce a v1 row"])
@@ -717,7 +750,8 @@ def _load_pre_export(path, expected_sha256=None):
 # write + restore
 
 
-def _write_row(conn, report_id, audit, exported_sha=None):
+def _write_row(conn, report_id, audit, exported_sha=None,
+               allow_null_alias_fork=False):
     """Convert one row inside its own transaction.
 
     exported_sha (sha256 of the pre-exported result_data) is the drift
@@ -741,14 +775,17 @@ def _write_row(conn, report_id, audit, exported_sha=None):
             if current_sha != exported_sha:
                 conn.rollback()
                 return "pre_export_mismatch"
-        new_text = convert_legacy_text(original)
+        new_text = convert_legacy_text(
+            original, allow_null_alias_fork=allow_null_alias_fork)
         if original == new_text:
             conn.rollback()
             return "unchanged"
         before_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
         after_sha = hashlib.sha256(new_text.encode("utf-8")).hexdigest()
         _journal_emit(audit, {"phase": "prepared", "report_id": report_id,
-                              "before_sha256": before_sha, "after_sha256": after_sha})
+                              "before_sha256": before_sha, "after_sha256": after_sha,
+                              "alias_fork": "t5_null_alias_fork"
+                              if allow_null_alias_fork else None})
         conn.execute("UPDATE reports SET result_data=? WHERE id=?",
                      (new_text, report_id))
         stored = conn.execute(
@@ -762,7 +799,9 @@ def _write_row(conn, report_id, audit, exported_sha=None):
             raise ValueError("post-write non-alias byte mismatch")
         conn.commit()
         _journal_emit(audit, {"phase": "committed", "report_id": report_id,
-                              "after_sha256": after_sha})
+                              "after_sha256": after_sha,
+                              "alias_fork": "t5_null_alias_fork"
+                              if allow_null_alias_fork else None})
         return "converted"
     except Exception:
         conn.rollback()
@@ -974,7 +1013,8 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
         "from scripts import slim_result_data_storage as slim\n"
         "result = {\"scanned\":0,\"already_canonical\":0,\"resumed_skipped\":0,"
         "\"non_dict\":0,\"no_alias_content\":0,\"candidates\":0,\"conflicts\":0,"
-        "\"top_mdc_sole_copy\":0,\"top_mdc_rebuildable\":0}\n"
+        "\"top_mdc_sole_copy\":0,\"top_mdc_rebuildable\":0,"
+        "\"alias_fork_allowed\":0,\"by_category\":{}}\n"
         "exc = []\n"
         "planned = slim._scan_pass(%r, set(%r), result, exc)\n"
         "json.dump({\"result\":result,\"exceptions\":exc,\"planned\":planned},"
@@ -1039,7 +1079,9 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
                     try:
                         outcome = _write_row(
                             conn, item["id"], audit,
-                            exported_sha=pre_export["records"].get(item["id"]))
+                            exported_sha=pre_export["records"].get(item["id"]),
+                            allow_null_alias_fork=bool(
+                                item.get("alias_fork")))
                     except (StorageCompatConflict, ValueError) as exc:
                         result["verify_failures"] += 1
                         exceptions.append(
@@ -1057,7 +1099,8 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
                            "pre_export_mismatch": "pre_export_mismatch",
                            "missing": "missing"}[outcome]
                     result[key] += 1
-                    _journal_emit(audit, {"event": outcome, "report_id": item["id"]})
+                    _journal_emit(audit, {"event": outcome, "report_id": item["id"],
+                                          "alias_fork": item.get("alias_fork")})
             finally:
                 conn.close()
             result["batches"] += 1
@@ -1084,6 +1127,18 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
+
+
+def _bump(result, key, category=None):
+    """Increment a counter in the scan result, keeping a per-category split.
+
+    The ruling requires the journal to record the放行 category AND count, so
+    every allowlist decision is tallied under both its action and its class.
+    """
+    result[key] = result.get(key, 0) + 1
+    if category is not None:
+        sub = result.setdefault("by_category", {})
+        sub[category] = sub.get(category, 0) + 1
 
 
 def _scan_pass(db_path, committed_ids, result, exceptions):
@@ -1144,9 +1199,49 @@ def _scan_pass(db_path, committed_ids, result, exceptions):
         try:
             convert_legacy_text(raw)
         except (StorageCompatConflict, ValueError) as exc:
-            result["conflicts"] += 1
-            exceptions.append({"report_id": report_id,
-                               "conflicts": getattr(exc, "conflicts", [str(exc)])})
+            # DAV-2124 (总控 10-16 裁定): narrow allowlist. The row keeps
+            # counting as a hard conflict UNLESS every one of the four
+            # conditions holds (alias-null/term-set differences only, no
+            # alias-only key, no contradiction at any depth, confined to
+            # shadow_credit_metrics and the copy nested inside
+            # investment_debate_state). detect_alias_conflicts itself is
+            # NOT relaxed and still guards expand_compat_view.
+            try:
+                verdict = assert_alias_fork_allowlisted(value)
+            except AliasForkRejected as rej:
+                result["conflicts"] += 1
+                _bump(result, "conflict_rejected", rej.category)
+                exceptions.append({
+                    "report_id": report_id,
+                    "conflicts": getattr(exc, "conflicts", [str(exc)]),
+                    "reject_category": rej.category,
+                })
+                continue
+            # Allowlisted: re-run the full conversion. Every downstream
+            # post-condition still applies (canonical v1, byte-identical
+            # compat view, non-alias witness unchanged) — the allowlist
+            # only removes the false conflict, it does not relax any
+            # storage contract.
+            try:
+                convert_legacy_text(raw, allow_null_alias_fork=True)
+            except (StorageCompatConflict, ValueError) as exc2:
+                result["conflicts"] += 1
+                _bump(result, "conflict_rejected", "second_pass_failed")
+                exceptions.append({
+                    "report_id": report_id,
+                    "conflicts": getattr(exc2, "conflicts", [str(exc2)]),
+                    "reject_category": "second_pass_failed",
+                })
+                continue
+            result["alias_fork_allowed"] = result.get("alias_fork_allowed", 0) + 1
+            _bump(result, "alias_fork_allowed", verdict["category"])
+            _bump(result, "alias_fork_field:" + "+".join(verdict["fields"]),
+                  verdict["category"])
+            planned.append({"id": report_id,
+                            "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                            "bytes": len(raw.encode("utf-8")),
+                            "alias_fork": verdict["category"]})
+            result["candidates"] += 1
             continue
         planned.append({"id": report_id,
                         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
