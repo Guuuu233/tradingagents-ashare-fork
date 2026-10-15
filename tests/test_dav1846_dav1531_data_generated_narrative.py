@@ -366,9 +366,20 @@ def test_no_stale_snapshot_literals_survive(two_runs):
     """DAV-1846 要根除的写死数字在两份产物（含 stats.json）里都不出现。"""
     for tag in ("alpha", "beta"):
         run = two_runs[tag]
+        # stats.json 的 "db" 键回显输入库的绝对路径；在 pytest 下该路径位于
+        # 编号临时目录（pytest-<N>），目录名里的数字可能与某个陈旧字面量
+        # 数字重合（如 "1108"）。这是环境路径巧合，不是产物叙述、也不是
+        # 构造计数——计数由构造库 spec 决定，与 STALE_LITERALS 中的 1108
+        # 无数据通路。扫描前把 db 键的值脱敏为占位符（按键精确替换，
+        # 不做整串文本 replace——basetemp 数字若恰好等于其他陈旧字面量，
+        # 整串替换会把该字面量在 stats.json 侧一并静音）；陈旧字面量集合
+        # 与检查强度不变，report.md 侧无需处理。
+        stats = run["stats"]
+        masked = {k: ("<db>" if k == "db" else v) for k, v in stats.items()}
+        stats_text = json.dumps(masked, ensure_ascii=False)
         haystacks = {
             "report.md": run["md"],
-            "stats.json": json.dumps(run["stats"], ensure_ascii=False),
+            "stats.json": stats_text,
         }
         for where, text in haystacks.items():
             for lit in STALE_LITERALS:
