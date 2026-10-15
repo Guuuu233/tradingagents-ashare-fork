@@ -341,12 +341,25 @@ def test_m2_enrich_reattest_order():
          "backfilled": False, "horizons": {}},
     ]
     idx = {"u1": {"input_pit_status": "VERIFIED"}}
-    env = m2._enrich(recs, [], __import__("datetime").date(2026, 3, 1),
+    # trade_dates covering T+40 after 2026-01-05 so both records mature
+    # before as_of=2026-03-01.
+    import datetime as _dt
+    tds = []
+    d = _dt.date(2026, 1, 5)
+    while len(tds) < 41:
+        if d.weekday() < 5:
+            tds.append(d)
+        d += _dt.timedelta(days=1)
+    env = m2._enrich(recs, tds, _dt.date(2026, 3, 10),
                      reattest_index=idx)
     assert env[0]["input_pit_status"] == "VERIFIED"
     assert env[0]["_ledger_input_pit_status"] == "UNVERIFIED"
     assert env[1]["input_pit_status"] == "VERIFIED"
     assert "_ledger_input_pit_status" not in env[1]
+    # DAV-2102 regression: _formal must use the overlayed status — u1 is
+    # ledger UNVERIFIED but reattested VERIFIED, matured F0 → formal.
+    assert env[0]["_matured"] and env[0]["_formal"] is True
+    assert env[1]["_formal"] is True
 
 
 def test_prel_load_reattest_order(tmp_path):

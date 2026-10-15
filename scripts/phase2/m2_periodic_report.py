@@ -396,7 +396,7 @@ def _enrich(records: list[dict[str, Any]],
         e["_formal"] = bool(
             e["_matured"]
             and r.get("timing_class") == "F0"
-            and r.get("input_pit_status") == "VERIFIED"
+            and e["input_pit_status"] == "VERIFIED"
             and not r.get("backfilled"))
         e["_ver"] = _version_key(r)
         e["_risk"] = _risk_bucket(r.get("risk_status_top"))

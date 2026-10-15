@@ -135,9 +135,10 @@ def resolve_effective_pit(ledger_status: Any,
 
     * ledger VERIFIED / FAILED → returned as-is (账本为准, reattest
       ignored even if present);
-    * ledger UNVERIFIED (or missing/other) → the reattest file's
-      adjudicated verdict when one exists for ``report_id``; otherwise
-      the ledger status (UNVERIFIED) stands.
+    * ledger UNVERIFIED (or missing/other — 非终态一律按 UNVERIFIED
+      口径查补判) → the reattest file's adjudicated verdict when one
+      exists for ``report_id``; otherwise the ledger status
+      (UNVERIFIED) stands.
     """
     ls = str(ledger_status or "").upper()
     if ls in _LEDGER_FINAL:

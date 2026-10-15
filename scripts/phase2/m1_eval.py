@@ -507,7 +507,8 @@ def admit(df: pd.DataFrame,
         orig = d["input_pit_status"].astype(str).str.upper()
         need = ~orig.isin(["VERIFIED", "FAILED"])
         resolved = d["run_id"].map(
-            lambda rid: (reattest_index.get(str(rid)) or {}).get(
+            lambda rid: None if pd.isna(rid) else (
+                reattest_index.get(str(rid)) or {}).get(
                 "input_pit_status"))
         overlay = resolved.fillna("").astype(str).str.upper()
         apply_mask = need & overlay.isin(["VERIFIED", "FAILED", "UNVERIFIED"])
