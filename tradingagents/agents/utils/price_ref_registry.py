@@ -9,6 +9,13 @@ provenance, and emits side-channel fields on the final state:
 - ``state["price_basis_gaps"]``     — missing basis / missing as_of / basis mismatch gaps
 - ``state["price_basis_validation"]``— preview-only validation verdict (never fail-closed)
 
+DAV-1308 as_of vs window_end 分流：句内日期晚于 run cutoff 的不是价格的
+as_of（如「未来 1-3 个交易日（至 X 前）观察 Y 元」中 X 是前瞻观察窗
+截止日，Y 是分析日算出的中轨；「2026-10-08 解禁」「股权登记日」亦为
+未来事件日）。此类日期一律记 ``window_end`` 并在 ``flags`` 打
+``as_of_after_cutoff`` 异常标记，``as_of`` 走既有的 cutoff 兜底/披露
+证据路径——不新增 price_basis_gate 违规类型、不改变 pass/blocked 边界。
+
 Contract rules (DAV-1142):
 
 - basis reuses the existing canonical short labels (``vendor_qfq`` / ``raw`` /
@@ -1847,6 +1854,26 @@ def _is_conversion_sentence(ctx: str) -> bool:
     )
 
 
+AS_OF_AFTER_CUTOFF_FLAG = "as_of_after_cutoff"
+
+
+def _price_as_of_window_end(
+    dates: List[str], cutoff_norm: Optional[str]
+) -> Tuple[Optional[str], Optional[str]]:
+    """[DAV-1308] 句内首个日期分流为 (as_of, window_end)。
+
+    dates[0] ≤ cutoff（或无 cutoff 可比）→ 视作价格对应日期，作 as_of；
+    dates[0] > cutoff → 前瞻观察窗口截止日/未来事件日，不作 as_of，
+    改记 window_end。调用方负责在 ref 上落 ``window_end`` 字段并打
+    ``as_of_after_cutoff`` 标记。"""
+    if not dates:
+        return None, None
+    first = dates[0]
+    if cutoff_norm and first > cutoff_norm:
+        return None, first
+    return first, None
+
+
 def build_price_ref_registry(
     reports: Mapping[str, Any],
     *,
@@ -1916,6 +1943,12 @@ def build_price_ref_registry(
             derived = _has_derived_keyword(sentence)
             sentence_dates = _extract_dates(sentence)
             sentence_as_of = sentence_dates[0] if sentence_dates else None
+            # [DAV-1308] 句内晚于 cutoff 的日期不是价格的 as_of：改写进
+            # window_end 并打 as_of_after_cutoff 异常标记；as_of 走
+            # cutoff 兜底 / 披露证据路径。
+            sentence_price_as_of, sentence_window_end = _price_as_of_window_end(
+                sentence_dates, cutoff_norm
+            )
 
             sentence_ref_ids: List[Tuple[str, float, str]] = []
             for value, pos, pend in mentions:
@@ -1951,12 +1984,15 @@ def build_price_ref_registry(
                     "basis": PRICE_BASIS_UNSPECIFIED,
                     "source": report_name,
                     "provenance": "model_text",
-                    "as_of": sentence_as_of,
+                    "as_of": sentence_price_as_of,
                     "context": sentence[:120],
                     # DAV-1249: 返修/审计需要完整原句（context 截断 120 字
                     # 可能丢失价格本身）；仅追溯用，不参与判定。
                     "sentence": sentence,
                 }
+                if sentence_window_end is not None:
+                    ref["window_end"] = sentence_window_end
+                    ref["flags"] = [AS_OF_AFTER_CUTOFF_FLAG]
                 if dtype is not None:
                     ref["basis"] = DISCLOSURE_TYPE_BASIS[dtype]
                     ref["provenance"] = f"typed_disclosure:{dtype}"
@@ -1977,9 +2013,20 @@ def build_price_ref_registry(
                 if dtype is not None and ref["as_of"] is None:
                     # Dated evidence for this precise value is an attribution,
                     # not the run cutoff (which cannot date a raw disclosure).
+                    # [DAV-1308] 证据句内晚于 cutoff 的日期同样不作 as_of，
+                    # 改记 window_end + as_of_after_cutoff 标记。
                     for evidence in sentences:
                         if _dated_disclosure_evidence(evidence, dtype, value):
-                            ref["as_of"] = _extract_dates(evidence)[0]
+                            ev_as_of, ev_window_end = _price_as_of_window_end(
+                                _extract_dates(evidence), cutoff_norm
+                            )
+                            if ev_as_of is not None:
+                                ref["as_of"] = ev_as_of
+                            elif ev_window_end is not None:
+                                ref.setdefault("window_end", ev_window_end)
+                                flags = ref.setdefault("flags", [])
+                                if AS_OF_AFTER_CUTOFF_FLAG not in flags:
+                                    flags.append(AS_OF_AFTER_CUTOFF_FLAG)
                             break
                 if derived:
                     ref["provenance"] = "derived:" + ref["provenance"]
