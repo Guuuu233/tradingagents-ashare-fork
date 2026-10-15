@@ -221,12 +221,14 @@ export function isReportDualHorizon(report: AnalysisReport): boolean {
 
     if (report.mode === 'dual_horizon') {
         if (
-            (statusMap && Object.keys(statusMap).length > 0)
-            || (falsificationMap && Object.keys(falsificationMap).length > 0)
-            || (notApplicableMap && Object.keys(notApplicableMap).length > 0)
+            (statusMap && Object.keys(statusMap).length > 1)
+            || (falsificationMap && Object.keys(falsificationMap).length > 1)
+            || (notApplicableMap && Object.keys(notApplicableMap).length > 1)
         ) {
             return true
         }
+        // A single keyed horizon map is not evidence that two horizons ran;
+        // fall through to the regular observed-statuses criterion.
         return statuses.length > 0
     }
 

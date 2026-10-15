@@ -30,7 +30,7 @@ describe('DAV-1444 N1: mode is not evidence of two horizons', () => {
         [{ mode: 'dual_horizon' }, false],
         [{ requested_horizons: ['short', 'medium'] }, true],
         [{ horizon_status: { short: 'completed', medium: 'failed' } }, true],
-        [{ falsification_conditions_by_horizon: { short: [] } }, true],
+        [{ falsification_conditions_by_horizon: { short: [], medium: [] } }, true],
         [{ not_applicable_by_horizon: { medium: false } }, true],
         [{ short_term: { status: 'completed' }, medium_term: { status: 'completed' } }, true],
         [{ mode: 'single_horizon', requested_horizons: ['short', 'medium'] }, false],
@@ -70,6 +70,57 @@ describe('DAV-1444 N1: mode is not evidence of two horizons', () => {
 
     it('reopens a legacy top-level medium report', () => {
         expect(resolveCollaborationHorizonKey({ report: report({ horizon: 'medium' }) })).toBe('medium')
+    })
+})
+
+describe('DAV-1452: a single-key horizon map is not evidence of two horizons', () => {
+    // Single-key maps that carry no observed status no longer flip the
+    // dual_horizon branch on their own; statuses stays empty → single.
+    it.each([
+        [{ mode: 'dual_horizon', falsification_conditions_by_horizon: { short: [] } }],
+        [{ mode: 'dual_horizon', not_applicable_by_horizon: { medium: null } }],
+    ] as const)('keeps %j single', fields => {
+        const stored = report(fields)
+        expect(getDualHorizonSummary(stored)).toBeNull()
+        expect(isDualHorizonReport(stored)).toBe(false)
+        useAnalysisStore.getState().setReport(stored)
+        expect(useAnalysisStore.getState().isDualHorizon).toBe(false)
+        expect(resolveCollaborationHorizonKey({ report: stored })).not.toBe('dual')
+    })
+
+    it('single-key horizon_status still feeds the statuses fallback (existing dual_horizon semantics)', () => {
+        // { short: 'completed' } produces one observed status; the dual_horizon
+        // branch no longer counts the map itself, but statuses.length > 0 still
+        // judges the report as dual — same as a mode-only report with one
+        // observed horizon. Single-key metadata alone is no longer the reason.
+        const stored = report({ mode: 'dual_horizon', horizon_status: { short: 'completed' } })
+        expect(isDualHorizonReport(stored)).toBe(true)
+        expect(Boolean(getDualHorizonSummary(stored))).toBe(true)
+    })
+
+    it.each([
+        [{ mode: 'dual_horizon', horizon_status: { short: 'completed', medium: 'pending' } }, true],
+        [{ mode: 'dual_horizon', falsification_conditions_by_horizon: { short: [], medium: ['x'] } }, true],
+        [{ mode: 'dual_horizon', not_applicable_by_horizon: { short: false, medium: null } }, true],
+    ] as const)('still treats two-key maps as dual for %j', (fields, expected) => {
+        const stored = report(fields)
+        expect(Boolean(getDualHorizonSummary(stored))).toBe(expected)
+        expect(isDualHorizonReport(stored)).toBe(expected)
+        useAnalysisStore.getState().setReport(stored)
+        expect(useAnalysisStore.getState().isDualHorizon).toBe(expected)
+        expect(resolveCollaborationHorizonKey({ report: stored })).toBe('dual')
+    })
+
+    it('falls through to observed statuses when the single key still proves a run happened', () => {
+        // Single-key falsification map plus an observed short status:
+        // dual_horizon mode falls back to the statuses.length > 0 criterion.
+        const stored = report({
+            mode: 'dual_horizon',
+            falsification_conditions_by_horizon: { medium: [] },
+            short_term: { status: 'completed' },
+        })
+        expect(isDualHorizonReport(stored)).toBe(true)
+        expect(Boolean(getDualHorizonSummary(stored))).toBe(true)
     })
 })
 
