@@ -29,6 +29,10 @@ from tradingagents.agents.utils.price_ref_registry import (  # noqa: E402
 from tradingagents.agents.utils.price_basis_gate import (  # noqa: E402
     enforce_price_basis_gate,
 )
+from tradingagents.storage.compressed_json import (  # noqa: E402
+    decode_result_data,
+    result_data_select_expr_plaintext,
+)
 
 SNAPSHOT_DB = "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db"
 TRADE_DATES = ("2026-10-14", "2026-10-13", "2026-10-12", "2026-10-09", "2026-10-08")
@@ -67,9 +71,13 @@ def main() -> int:
     )
     cur = conn.cursor()
     placeholders = ",".join("?" for _ in TRADE_DATES)
+    # B-6e 门禁：明文列直读必须走解码层——select 表达式按 schema 自适应
+    # （存在 result_data_zst 时 COALESCE 明文优先，与 ORM plaintext 模式同序），
+    # 取回的字节/字符串再经 decode_result_data 解出 dict，避免压缩行被当成明文。
+    rd_expr = result_data_select_expr_plaintext(conn)
     cur.execute(
-        f"SELECT id, symbol, trade_date, result_data FROM reports "
-        f"WHERE trade_date IN ({placeholders}) AND result_data IS NOT NULL "
+        f"SELECT id, symbol, trade_date, {rd_expr} FROM reports "
+        f"WHERE trade_date IN ({placeholders}) AND {rd_expr} IS NOT NULL "
         f"ORDER BY trade_date DESC, symbol",
         TRADE_DATES,
     )
@@ -80,7 +88,7 @@ def main() -> int:
     diffs: list[dict] = []
     for rid, symbol, tdate, rdata in rows:
         try:
-            report = json.loads(rdata) if isinstance(rdata, str) else rdata
+            report = decode_result_data(rdata)
         except Exception:
             continue
         if not isinstance(report, dict):
