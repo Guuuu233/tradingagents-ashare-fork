@@ -103,10 +103,15 @@ import json
 import math
 import re
 import resource
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+# Sibling module for the DAV-2097③ pit_reattest lookup contract.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pit_reattest  # noqa: E402
 
 import numpy as np
 import pandas as pd
@@ -361,6 +366,20 @@ def _seal_deadline_cn(signal_dates: pd.Series,
     return days.dt.tz_localize(SH_TZ) + pd.Timedelta(hours=hh, minutes=mm)
 
 
+def _load_reattest_index(path: Path | None) -> dict | None:
+    """report_id -> adjudicated verdict from pit_reattest.jsonl (DAV-2097③).
+
+    ``None`` in → ``None`` out (no sidecar configured). A configured but
+    unreadable file fails closed — a half-trusted re-attestation index is
+    worse than none.
+    """
+    if path is None:
+        return None
+    if not Path(path).exists():
+        raise ValueError(f"reattest file not found: {path}")
+    return pit_reattest.load_reattest_index(Path(path))
+
+
 def _norm_prob_col(s: pd.Series) -> pd.Series:
     """Normalise a probability column to q∈[0,1], column-level: per-value
     scaling is wrong because p=1 is legal on BOTH the 1–99 contract scale
@@ -454,7 +473,8 @@ def _ensure_defaults(df: pd.DataFrame) -> pd.DataFrame:
 
 def admit(df: pd.DataFrame,
           user_id: str | None = DEFAULT_USER_ID,
-          calendar: list[str] | None = None) -> tuple[pd.DataFrame, dict]:
+          calendar: list[str] | None = None,
+          reattest_index: dict | None = None) -> tuple[pd.DataFrame, dict]:
     """Apply §2.3 rules in order; every exclusion increments a funnel count.
 
     Rows are filtered BEFORE dedup so a stray incomplete run can never leak
@@ -464,10 +484,37 @@ def admit(df: pd.DataFrame,
     `calendar` (sorted YYYYMMDD list) feeds the DAV-1991 封存时点门: when the
     frame carries a `sealed_at` column the formal queue additionally requires
     sealed_at < T+1 trading-day 09:30 (Asia/Shanghai), and the run fails
-    closed without a calendar rather than approximating the T+1 day."""
+    closed without a calendar rather than approximating the T+1 day.
+
+    `reattest_index` (DAV-2097③, 总控 10-15 令): when given, the effective
+    input_pit_status is resolved per row BEFORE the FAILED/VERIFIED gates —
+    ledger VERIFIED/FAILED stand as-is; ledger UNVERIFIED consults the
+    pit_reattest.jsonl index (report_id -> adjudicated verdict). The
+    overlay is counted in ``funnel["pit_reattest_applied"]`` and the
+    original column is preserved as ``_ledger_input_pit_status`` on the
+    working copy (never mutates the caller's frame)."""
     df = _ensure_defaults(df)
     funnel = {"input_rows": len(df)}
     d = df.copy()
+
+    # --- pit_reattest overlay (DAV-2097③) -------------------------------
+    # Resolve the effective pit status once, before the FAILED/VERIFIED
+    # gates: VERIFIED/FAILED are ledger-final (the sealed record was
+    # classified under rules that already had verdicts worth trusting);
+    # UNVERIFIED rows may have been re-adjudicated by the sidecar file.
+    funnel["pit_reattest_applied"] = 0
+    if reattest_index is not None and "run_id" in d.columns:
+        orig = d["input_pit_status"].astype(str).str.upper()
+        need = ~orig.isin(["VERIFIED", "FAILED"])
+        resolved = d["run_id"].map(
+            lambda rid: (reattest_index.get(str(rid)) or {}).get(
+                "input_pit_status"))
+        overlay = resolved.fillna("").astype(str).str.upper()
+        apply_mask = need & overlay.isin(["VERIFIED", "FAILED", "UNVERIFIED"])
+        if apply_mask.any():
+            d["_ledger_input_pit_status"] = d["input_pit_status"]
+            d.loc[apply_mask, "input_pit_status"] = overlay[apply_mask]
+            funnel["pit_reattest_applied"] = int(apply_mask.sum())
 
     def _count(mask, key):
         funnel[key] = int(mask.sum())
@@ -835,14 +882,19 @@ def run(input_path: Path, out_dir: Path,
         pairs_path: Path | None = None,
         version_key: str | None = None,
         calendar_path: Path | None = None,
-        user_id: str | None = DEFAULT_USER_ID) -> dict:
+        user_id: str | None = DEFAULT_USER_ID,
+        reattest_path: Path | None = None) -> dict:
     t0 = time.time()
     log(f"loading {input_path}")
     df = load_frame(input_path)
     df = select_version(df, version_key)          # fail-close multi-version
     # loaded once: the DAV-1991 gate and the day-slot calendar share it
     calendar = _load_calendar(calendar_path)
-    formal, funnel = admit(df, user_id=user_id, calendar=calendar)
+    # DAV-2097③: optional pit_reattest.jsonl sidecar (总控取值顺序:
+    # 账本 VERIFIED/FAILED 为准, UNVERIFIED 查补判文件).
+    reattest_index = _load_reattest_index(reattest_path)
+    formal, funnel = admit(df, user_id=user_id, calendar=calendar,
+                           reattest_index=reattest_index)
     funnel["version_key"] = version_key or \
         (str(df["version_key"].iloc[0])
          if "version_key" in df.columns and len(df) else "default")
@@ -1149,6 +1201,11 @@ def main() -> int:
                     help="only evaluate rows of this user_id "
                          "(default: fixed P4 account; frames without a "
                          "user_id column skip this filter)")
+    ap.add_argument("--pit-reattest", type=Path, default=None,
+                    help="optional pit_reattest.jsonl (DAV-2097③): rows "
+                         "whose ledger input_pit_status is UNVERIFIED take "
+                         "the sidecar's adjudicated verdict; VERIFIED/FAILED "
+                         "stay ledger-final. File must exist when given.")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -1157,7 +1214,7 @@ def main() -> int:
     if a.input is None:
         ap.error("--input required (or --selftest)")
     run(a.input, a.out_dir, a.pairs, a.version_key, a.calendar,
-        user_id=a.user_id)
+        user_id=a.user_id, reattest_path=a.pit_reattest)
     return 0
 
 
