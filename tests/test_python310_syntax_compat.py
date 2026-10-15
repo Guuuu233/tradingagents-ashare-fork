@@ -24,8 +24,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Python 3.11+/3.12+ stdlib names with no 3.10 equivalent.
@@ -44,14 +42,14 @@ BANNED_FROM_IMPORTS = {
         "assert_never": "3.11",
         "dataclass_transform": "3.11",
         "TypeVarTuple": "3.11",
-        "Unpack": "3.12",
+        "Unpack": "3.11",
         "get_overloads": "3.11",
         "clear_overloads": "3.11",
     },
     "itertools": {"batched": "3.12"},
     "asyncio": {"timeout": "3.11", "TaskGroup": "3.11"},
     "contextlib": {"chdir": "3.11"},
-    "inspect": {"getasyncgenstate": "3.11", "getasyncgenlocals": "3.11"},
+    "inspect": {"getasyncgenstate": "3.12", "getasyncgenlocals": "3.12"},
     "operator": {"call": "3.11"},
     "re": {"NOFLAG": "3.11"},
 }
@@ -63,28 +61,17 @@ BANNED_MODULES = {
     "tomllib": "3.11",
 }
 
-# Attribute access bans: ``<obj>.<attr>`` where attr is a banned name.
-# Keyed by the attribute name; checked against any Attribute node whose attr
-# matches — the common offender is ``datetime.UTC`` where ``datetime`` is the
-# module. To keep this precise we key on (receiver_name, attr) pairs instead.
+# Attribute access bans: ``<receiver>.<attr>`` where ``<attr>`` is a banned
+# name of the module ``<receiver>`` resolves to. Derived mechanically from
+# BANNED_FROM_IMPORTS so the two tables can never drift apart, and keyed by
+# *module* name (not source-level receiver identifier) so that module aliases
+# (``import datetime as dt`` then ``dt.UTC``) are caught too: _scan_file maps
+# each imported module to every bound name/alias, then resolves receivers
+# through that map.
 BANNED_ATTRS = {
-    # (receiver, attribute) -> introduced_in
-    ("datetime", "UTC"): "3.11",
-    ("asyncio", "TaskGroup"): "3.11",
-    ("asyncio", "timeout"): "3.11",
-    ("enum", "StrEnum"): "3.11",
-    ("enum", "ReprEnum"): "3.11",
-    ("enum", "EnumCheck"): "3.11",
-    ("itertools", "batched"): "3.12",
-    ("typing", "Self"): "3.11",
-    ("typing", "LiteralString"): "3.11",
-    ("typing", "Never"): "3.11",
-    ("typing", "NotRequired"): "3.11",
-    ("typing", "TypeVarTuple"): "3.11",
-    ("typing", "Unpack"): "3.12",
-    ("typing", "assert_never"): "3.11",
-    ("typing", "dataclass_transform"): "3.11",
-    ("contextlib", "chdir"): "3.11",
+    (mod, name): introduced
+    for mod, names in BANNED_FROM_IMPORTS.items()
+    for name, introduced in names.items()
 }
 
 
@@ -99,6 +86,9 @@ def _tracked_py_files() -> list[Path]:
     return sorted(REPO_ROOT / line for line in out.splitlines() if line.strip())
 
 
+_GUARD_EXCEPTIONS = {"ImportError", "ModuleNotFoundError"}
+
+
 def _is_import_guarded(tree: ast.Module, node: ast.stmt) -> bool:
     """Return True if ``node`` sits inside a ``try`` body whose handler is
     ``except ImportError`` (i.e. the ``import tomllib`` / ``except ImportError:
@@ -108,8 +98,16 @@ def _is_import_guarded(tree: ast.Module, node: ast.stmt) -> bool:
             continue
         if node in parent.body and any(
             h.type is not None
-            and isinstance(h.type, ast.Name)
-            and h.type.id in {"ImportError", "ModuleNotFoundError"}
+            and (
+                (isinstance(h.type, ast.Name) and h.type.id in _GUARD_EXCEPTIONS)
+                or (
+                    isinstance(h.type, ast.Tuple)
+                    and any(
+                        isinstance(elt, ast.Name) and elt.id in _GUARD_EXCEPTIONS
+                        for elt in h.type.elts
+                    )
+                )
+            )
             for h in parent.handlers
         ):
             return True
@@ -123,6 +121,19 @@ def _scan_file(path: Path) -> list[str]:
     findings: list[str] = []
 
     tree = ast.parse(source, filename=str(rel))
+
+    # Map every bound top-level name that refers to a banned-import module,
+    # including aliases: ``import datetime as dt`` -> {"dt": "datetime"},
+    # ``import datetime`` -> {"datetime": "datetime"}. (``from X import Y``
+    # binds Y, not X, so those are intentionally not mapped; banned Y names
+    # are already reported at the import site.)
+    module_alias_map: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in BANNED_FROM_IMPORTS:
+                    bound = alias.asname if alias.asname else alias.name
+                    module_alias_map[bound] = alias.name
 
     for node in ast.walk(tree):
         # --- banned module imports (tomllib etc.) unless ImportError-guarded
@@ -153,16 +164,18 @@ def _scan_file(path: Path) -> list[str]:
                             f"Python {banned_names[alias.name]}+"
                         )
 
-        # --- banned attribute access: datetime.UTC etc.
+        # --- banned attribute access: datetime.UTC, dt.UTC (alias) etc.
         if isinstance(node, ast.Attribute):
             recv = node.value
             recv_name = recv.id if isinstance(recv, ast.Name) else None
             if recv_name is not None:
-                key = (recv_name, node.attr)
-                if key in BANNED_ATTRS:
+                module = module_alias_map.get(recv_name)
+                key = (module, node.attr) if module is not None else None
+                if key is not None and key in BANNED_ATTRS:
                     findings.append(
-                        f"{rel}:{node.lineno}: `{recv_name}.{node.attr}` only "
-                        f"exists on Python {BANNED_ATTRS[key]}+"
+                        f"{rel}:{node.lineno}: `{recv_name}.{node.attr}` "
+                        f"(`{module}.{node.attr}`) only exists on "
+                        f"Python {BANNED_ATTRS[key]}+"
                     )
 
     return findings
@@ -170,6 +183,11 @@ def _scan_file(path: Path) -> list[str]:
 
 def test_all_tracked_py_files_compile_under_current_interpreter():
     """compile() every git-tracked .py file; production interpreter is 3.10."""
+    # This guard pins production's interpreter: on any other version the
+    # banned-name table below would silently stop matching reality.
+    assert sys.version_info[:2] == (3, 10), (
+        f"Py3.10 guard must run under Python 3.10, got {sys.version.split()[0]}"
+    )
     files = _tracked_py_files()
     assert files, "git ls-files returned no .py files"
 
