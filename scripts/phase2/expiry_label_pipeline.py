@@ -142,6 +142,51 @@ class PipelineError(RuntimeError):
     """Fail-closed pipeline error (calendar / ledger / input integrity)."""
 
 
+# SW leg silent-degradation observability (DAV-2041) hardened to
+# fail-close (DAV-2034 总控 10-14 令): an ONLINE run without TUSHARE_TOKEN
+# labels every row with sw.membership_status=\"gap\" yet still exits 0 — the
+# keys are append-only, so one unauthenticated night mints permanent gap
+# rows that can never be re-labelled. ``run`` therefore hard-fails
+# (PipelineError -> exit 2, zero rows appended) when the online SW leg
+# cannot possibly be resolved. The verify-side gap-ratio check below stays
+# as the second gate for a token that exists but is rejected by Tushare
+# (degradation discovered per-row instead of at startup). Offline mode
+# (file inputs) needs no token and skips the check entirely.
+
+
+def _sw_leg_missing(token: Optional[str] = None) -> bool:
+    """True when the ONLINE SW leg cannot possibly be resolved: no Tushare
+    token (``resolve_sw_l1_benchmark`` membership + ``sw_daily`` bars both
+    come from Tushare). Token presence is necessary, not sufficient — a bad
+    token still degrades per-row and is caught by the verify gap-ratio
+    check. In offline mode (file inputs) the SW leg needs no token and this
+    check is skipped by the caller."""
+    tok = os.getenv("TUSHARE_TOKEN", "").strip() if token is None else token
+    return not tok
+
+
+def _row_sw_gap(row: Mapping[str, Any]) -> bool:
+    """True when the row's SW industry leg degraded to membership gap."""
+    sw = row.get("sw")
+    return isinstance(sw, Mapping) and sw.get("membership_status") == "gap"
+
+
+# Typed statuses whose ``_typed_row`` short-circuits BEFORE the SW leg is
+# resolved — such rows are structurally membership_status=\"gap\" and would
+# otherwise inflate the verify gap-ratio denominator into a false-positive
+# SW-degradation alarm (DAV-2043 🟡: 9 BSE-excluded rows + 1 evaluated row
+# produced a verify FAIL on a perfectly healthy Tushare route). Keep this
+# set in sync with every ``_typed_row(...)`` call in ``compute_label_row``.
+_PRE_SW_TYPED_STATUSES = frozenset({
+    STATUS_SIGNAL_DATE_NOT_IN_CALENDAR,
+    STATUS_CALENDAR_INSUFFICIENT,
+    STATUS_SYMBOL_UNMAPPABLE,
+    STATUS_SYMBOL_EXCLUDED_BSE,
+    STATUS_STOCK_BARS_UNAVAILABLE,
+    STATUS_LABEL_RESOLUTION_FAILED,
+})
+
+
 # ---------------------------------------------------------------------------
 # small utils
 
@@ -1073,6 +1118,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     _log(out_dir, f"run start pipeline={PIPELINE_VERSION} ledger={ledger_path}")
 
+    offline_mode = bool(args.bars_file or args.hs300_file
+                        or args.sw_daily_file or args.sw_industry_map)
+    if _sw_leg_missing() and not offline_mode:
+        # DAV-2034 总控 10-14 令: online run with no TUSHARE_TOKEN can only
+        # produce membership_status=gap rows, and label keys are append-only
+        # — one unauthenticated run permanently mints gap rows. Fail close
+        # BEFORE the ledger pass so zero rows are appended (exit 2). The
+        # wrapper's own pre-probe (exit 13) still fires first under launchd;
+        # this check is the same gate inside the pipeline for direct/manual
+        # invocations that bypass the wrapper.
+        raise PipelineError(
+            "online mode missing TUSHARE_TOKEN: the SW industry leg "
+            "degrades to gap for every row and label keys are append-only "
+            "— fail closed, 0 rows written, to prevent permanent gap rows "
+            "(offline --*-file mode needs no token)")
+    # DAV-2058 🟢-1: after the fail-close gate above, an online run without
+    # a token can never reach this point and offline runs never needed one,
+    # so ``sw_expected_off`` is now always False. The ``sw_leg_missing``
+    # state field is kept (constant False) so dashboards/state consumers
+    # keep the observability slot; it no longer flips at runtime.
+    sw_expected_off = False
+
     calendar = _load_calendar(Path(args.calendar_file) if args.calendar_file else None)
     as_of = _resolve_as_of(args)
     as_of_closed = not bool(args.as_of_market_open)
@@ -1114,6 +1181,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     }
     per_horizon_appended: Dict[str, int] = {h: 0 for h in horizons}
     per_horizon_status: Dict[str, Dict[str, int]] = {h: {} for h in horizons}
+    per_horizon_sw_gap: Dict[str, int] = {h: 0 for h in horizons}
 
     for lineno, record in _iter_ledger_records(ledger_path):
         counts["ledger_lines"] += 1
@@ -1150,6 +1218,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             status = str(row.get("outcome_status"))
             per_horizon_status[horizon][status] = (
                 per_horizon_status[horizon].get(status, 0) + 1)
+            if _row_sw_gap(row):
+                per_horizon_sw_gap[horizon] += 1
             n = _append_rows(out_dir / LABEL_FILE_NAMES[horizon], (row,))
             per_horizon_appended[horizon] += n
             existing[horizon].add(key)
@@ -1158,12 +1228,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     file_digests = {
         LABEL_FILE_NAMES[h]: {
             "appended": per_horizon_appended[h],
+            "sw_gap_appended": per_horizon_sw_gap[h],
             "sha256": (_sha256_file(out_dir / LABEL_FILE_NAMES[h])
                        if (out_dir / LABEL_FILE_NAMES[h]).exists() else None),
             "status_counts": per_horizon_status[h],
         }
         for h in horizons
     }
+    sw_gap_note = "; ".join(
+        f"{LABEL_FILE_NAMES[h]} sw_gap={per_horizon_sw_gap[h]}/"
+        f"{per_horizon_appended[h]}" for h in horizons)
+    if any(per_horizon_sw_gap[h] == per_horizon_appended[h] > 0
+           for h in horizons):
+        # fail-loud in the log + state, even though run exits 0: verify's
+        # gap-ratio check is the gate that turns this into a timer alert.
+        _log(out_dir, f"WARN all appended rows have sw membership gap "
+                      f"({sw_gap_note}) — verify will fail on this file")
     state = {
         "pipeline": PIPELINE_VERSION,
         "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1178,6 +1258,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "price_basis": args.price_basis,
         "return_type": args.return_type,
         "offline": market.offline,
+        "sw_leg_missing": sw_expected_off,
         "counts": counts,
         "files": file_digests,
     }
@@ -1205,6 +1286,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
             continue
         keys: Dict[Tuple[Any, str], int] = {}
         statuses: Dict[str, int] = {}
+        sw_gaps = 0
+        # DAV-2043 🟡: the gap-ratio denominator counts only rows that
+        # actually went through SW-leg resolution (evaluated rows + typed
+        # rows from mid-pipeline). Pre-SW typed rows are structurally gap
+        # and would otherwise false-positive a dead-Tushare alarm on a
+        # BSE/suspension-dense night.
+        sw_eligible = 0
         n = 0
         with open(path, "r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, 1):
@@ -1220,16 +1308,41 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     continue
                 key = _label_key(obj)
                 keys[key] = keys.get(key, 0) + 1
-                statuses[str(obj.get("outcome_status"))] = (
-                    statuses.get(str(obj.get("outcome_status")), 0) + 1)
+                status = str(obj.get("outcome_status"))
+                statuses[status] = statuses.get(status, 0) + 1
+                if status not in _PRE_SW_TYPED_STATUSES:
+                    sw_eligible += 1
+                    if _row_sw_gap(obj):
+                        sw_gaps += 1
         dupes = {k: c for k, c in keys.items() if c > 1}
         if dupes:
             print(f"FAIL: {path.name} has duplicate keys: {dupes}",
                   file=sys.stderr)
             ok = False
+        if sw_eligible > 0 and sw_gaps == sw_eligible:
+            # DAV-2041 🟡-1: an all-gap SW leg means the Tushare route was
+            # dead for the whole run (bad token or equivalent) — those
+            # keys are append-only and can never be re-labelled, so the
+            # timer MUST fail loud here instead of staying green.
+            print(f"FAIL: {path.name} all {sw_gaps} sw-eligible rows have "
+                  f"sw.membership_status=gap — SW industry leg degraded "
+                  f"(bad TUSHARE_TOKEN or tushare route down?); "
+                  f"labels are append-only and will never be rewritten",
+                  file=sys.stderr)
+            ok = False
+        elif sw_eligible > 0 and sw_gaps / sw_eligible >= 0.9:
+            print(f"FAIL: {path.name} {sw_gaps}/{sw_eligible} sw-eligible rows "
+                  f"have sw.membership_status=gap (>=90%) — SW industry leg "
+                  f"degraded; labels are append-only and will never be "
+                  f"rewritten", file=sys.stderr)
+            ok = False
+        elif sw_gaps:
+            print(f"WARN: {path.name} {sw_gaps}/{sw_eligible} sw-eligible "
+                  f"rows have sw.membership_status=gap")
         digest = _sha256_file(path)
         print(f"{'OK' if ok else 'FAIL'}: {path.name} lines={n} "
-              f"unique_keys={len(keys)} sha256={digest}")
+              f"unique_keys={len(keys)} sw_gaps={sw_gaps}/"
+              f"{sw_eligible} sha256={digest}")
         print(f"  status_counts={json.dumps(statuses, ensure_ascii=False)}")
     state_path = out_dir / STATE_FILE_NAME
     if state_path.exists():

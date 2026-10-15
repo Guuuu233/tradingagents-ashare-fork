@@ -953,3 +953,407 @@ def test_cli_subprocess_exit_codes(tmp_path):
         capture_output=True, text=True)
     assert proc.returncode == 2
     assert "FAIL-CLOSE" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# DAV-2041 — SW-leg degradation observability, hardened fail-close (DAV-2034
+# 总控 10-14 令): an ONLINE run without TUSHARE_TOKEN exits non-zero with
+# zero rows appended — the append-only key set can never be re-labelled, so
+# an unauthenticated run must fail before the first row is written.
+
+
+def _run_online_sw_stub(tmp_path: Path, cal: list[str], records: list[dict],
+                        monkeypatch, *, sw_member: dict | None,
+                        as_of: str, out_name: str = "out") -> tuple[int, Path]:
+    """Drive `run` through the ONLINE code path (no --*-file args) with all
+    market access stubbed: vendor bars synthetic, SW membership/sw_daily
+    stubbed to `sw_member` (None => the tushare-rejected gap path)."""
+    ledger = tmp_path / "forward_ledger.jsonl"
+    cal_file = tmp_path / "calendar.txt"
+    out_dir = tmp_path / out_name
+    if records:
+        _write_ledger(ledger, records)
+    cal_file.write_text("\n".join(cal) + "\n", "utf-8")
+
+    stock = {r["date"]: r for r in _stock_series("000001.SZ", cal)}
+    hs300 = {r["date"]: r for r in _stock_series("000300.SH", cal, base=4000.0)}
+
+    class _Bar:
+        def __init__(self, d):
+            self.open = d["open"]; self.high = d["high"]
+            self.low = d["low"]; self.close = d["close"]
+            self.volume = d["volume"]; self.is_suspended = d["is_suspended"]
+
+    class _StubProvider:
+        def get_bar(self, symbol, d):
+            src = hs300 if symbol == "000300.SH" else stock
+            row = src.get(d)
+            return _Bar(row) if row else None
+
+    monkeypatch.setattr(
+        "tradingagents.eval.v03_return_measure.VendorPriceDataProvider",
+        lambda *a, **k: _StubProvider())
+    monkeypatch.setattr(
+        "tradingagents.dataflows.sw_benchmark.default_sw_daily_fetcher",
+        lambda code, s, e: {d: {"open": 1.0, "high": 1.0, "low": 1.0,
+                                "close": 1.0} for d in cal if s <= d <= e})
+    monkeypatch.setattr(
+        "tradingagents.dataflows.sw_industry.resolve_sw_l1_benchmark",
+        lambda symbol, analysis_date: (
+            (sw_member, None) if sw_member is not None
+            else (None, "【数据获取失败】申万一级行业基准：index_classify_unavailable")))
+
+    rc = elp.main([
+        "run", "--ledger", str(ledger), "--out-dir", str(out_dir),
+        "--calendar-file", str(cal_file), "--as-of", as_of,
+        "--horizons", "short",
+    ])
+    return rc, out_dir
+
+
+def test_online_run_without_token_fail_close_zero_rows(tmp_path, monkeypatch):
+    """DAV-2034 10-14 令: online mode (no --*-file inputs) with empty
+    TUSHARE_TOKEN -> non-zero exit AND zero label rows appended — not a
+    WARN, because append-only gap rows are irreversible."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    cal = _weekday_calendar("2026-03-02", 60)
+    recs = [_record(f"r{i}", "000001.SZ", cal[2 + i]) for i in range(3)]
+    rc, out = _run_online_sw_stub(tmp_path, cal, recs, monkeypatch,
+                                  sw_member=None, as_of=cal[20])
+    assert rc == elp.EXIT_FAIL_CLOSED
+    # zero rows written: no label file may exist at all
+    assert not (out / elp.LABEL_FILE_NAMES["short"]).exists()
+    assert not (out / elp.LABEL_FILE_NAMES["medium"]).exists()
+    # state file records the aborted run is not written either — the run
+    # never reached the state-write stage
+    assert not (out / elp.STATE_FILE_NAME).exists()
+
+
+def test_offline_run_without_token_runs_normally(tmp_path, monkeypatch):
+    """Offline mode needs no TUSHARE_TOKEN at all — file inputs fully
+    drive the SW leg, so a missing token must NOT block replay/test runs."""
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    cal = _weekday_calendar("2026-03-02", 60)
+    rec = _record("r1", "000001.SZ", cal[2])
+    inputs = _offline_inputs(tmp_path, cal)
+    rc, state, out = _run(tmp_path, cal, [rec], inputs=inputs,
+                          as_of=cal[-1], extra=["--horizons", "short"])
+    assert rc == 0
+    assert state["counts"]["labeled"] == 1
+    assert state["sw_leg_missing"] is False
+
+
+def test_sw_gap_fail_loud_when_tushare_degrades(tmp_path, monkeypatch, capsys):
+    """DAV-2041 🟡-1 (post-10-14 semantics): token present but the Tushare
+    membership route rejects/degrades every row -> run still exits 0
+    (typed-status semantics, degradation discovered per-row) but `verify`
+    MUST fail loud instead of letting the timer report all-green."""
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake-token-present")
+    cal = _weekday_calendar("2026-03-02", 60)
+    recs = [_record(f"r{i}", "000001.SZ", cal[2 + i]) for i in range(3)]
+    rc, out = _run_online_sw_stub(tmp_path, cal, recs, monkeypatch,
+                                  sw_member=None, as_of=cal[20])
+    assert rc == 0
+    rows = _read_labels(out, "short")
+    assert len(rows) == 3
+    assert all(r["sw"]["membership_status"] == "gap" for r in rows)
+
+    capsys.readouterr()  # drain run output
+    assert elp.main(["verify", "--out-dir", str(out)]) == elp.EXIT_VERIFY_FAIL
+    err = capsys.readouterr().err
+    assert "membership_status=gap" in err
+
+
+def test_sw_gap_warn_only_when_minority(tmp_path, monkeypatch, capsys):
+    """Mixed file (some resolved, some gap) stays OK on verify — the
+    fail-loud gate is all-gap (or >=90%), not any-gap."""
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake-token-present")
+    cal = _weekday_calendar("2026-03-02", 60)
+    member = {"src": "SW2021", "level": "L1", "code": "801010.SI", "name": "银行"}
+    # 1 resolved row first...
+    rc, out = _run_online_sw_stub(tmp_path, cal, [_record("r0", "000001.SZ", cal[2])],
+                                  monkeypatch, sw_member=member, as_of=cal[20])
+    assert rc == 0
+    # ...then run again against the SAME out dir with the ledger now
+    # carrying r1 — this time the membership resolver degrades to gap
+    rec2 = _record("r1", "000001.SZ", cal[3])
+    ledger = tmp_path / "forward_ledger.jsonl"
+    with open(ledger, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec2, ensure_ascii=False) + "\n")
+    rc, out = _run_online_sw_stub(tmp_path, cal, [], monkeypatch,
+                                  sw_member=None, as_of=cal[20], out_name="out")
+    assert rc == 0
+    rows = _read_labels(out, "short")
+    assert len(rows) == 2
+    assert [r["sw"]["membership_status"] for r in rows].count("gap") == 1
+
+    capsys.readouterr()
+    assert elp.main(["verify", "--out-dir", str(out)]) == elp.EXIT_OK
+    assert "WARN" in capsys.readouterr().out
+
+
+def test_sw_gap_denominator_excludes_pre_sw_typed_rows(tmp_path, monkeypatch, capsys):
+    """DAV-2043 🟡: typed rows that never reach SW resolution (BSE-excluded
+    symbols, unmappable, non-trading signal date, missing stock bars,
+    resolution failure) are structurally membership=gap — they must NOT
+    inflate the verify gap-ratio denominator into a false-positive
+    SW-degradation alarm."""
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake-token-present")
+    cal = _weekday_calendar("2026-03-02", 60)
+    member = {"src": "SW2021", "level": "L1", "code": "801010.SI", "name": "银行"}
+    # 9 BSE-excluded rows (typed pre-SW) + 1 properly evaluated row.
+    recs = [_record(f"b{i}", "830799.BJ", cal[2]) for i in range(9)]
+    recs.append(_record("ok1", "000001.SZ", cal[2]))
+    rc, out = _run_online_sw_stub(tmp_path, cal, recs, monkeypatch,
+                                  sw_member=member, as_of=cal[20])
+    assert rc == 0
+    rows = _read_labels(out, "short")
+    assert len(rows) == 10
+    assert sum(1 for r in rows
+               if r["sw"]["membership_status"] == "gap") == 9
+
+    capsys.readouterr()
+    # 90% raw gap ratio, but only 0/1 of the sw-eligible denominator -> OK.
+    assert elp.main(["verify", "--out-dir", str(out)]) == elp.EXIT_OK
+
+
+def test_sw_leg_missing_flag_in_run_state(tmp_path, monkeypatch, capsys):
+    """run state still carries sw_leg_missing for observability; with a
+    token present the flag is False even when the route degrades."""
+    monkeypatch.setenv("TUSHARE_TOKEN", "fake-token-present")
+    cal = _weekday_calendar("2026-03-02", 60)
+    rec = _record("r1", "000001.SZ", cal[2])
+    rc, out = _run_online_sw_stub(tmp_path, cal, [rec], monkeypatch,
+                                  sw_member=None, as_of=cal[20])
+    assert rc == 0
+    state = json.loads((out / elp.STATE_FILE_NAME).read_text("utf-8"))
+    assert state["sw_leg_missing"] is False
+    assert state["files"][elp.LABEL_FILE_NAMES["short"]]["sw_gap_appended"] == 1
+    assert "all appended rows have sw membership gap" in \
+        (out / "label_pipeline.log").read_text("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# DAV-2058 打回复修 — wrapper shell gates (run_expiry_label_daily.sh)
+#
+# These tests exercise the REAL wrapper script as a subprocess (it is the
+# code that launchd runs; the .env gate only exists in shell). The wrapper's
+# fixed paths are shadowed by PATH stubs so no real credential file, ledger
+# or python interpreter is touched.
+
+
+WRAPPER = REPO / "scripts" / "phase2" / "run_expiry_label_daily.sh"
+
+
+def _wrapper_harness(tmp_path: Path, env_lines: list[str]):
+    """Run the REAL wrapper script under a shadowed runtime and return
+    (proc, sandbox_dir, alert_text). Only the path constants in the copied
+    script are rewritten; a stub interpreter makes the trading-day check
+    answer "non-trading day" so the wrapper exits 0 immediately AFTER the
+    .env gate — meaning: rc==16 => the gate rejected the file (the real
+    assertion of every evil-line test), and rc==0 => the gate accepted it
+    (non-trading-day skip path). A rejected .env is never sourced, so an
+    evil line's payload can be checked for non-execution via an untouched
+    sentinel file."""
+    import re as _re
+    import shutil
+    import stat
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    sandbox = tmp_path / "wrapper_sandbox"
+    bin_dir = sandbox / "bin"
+    work_root = sandbox / "work"
+    code_dir = sandbox / "code"
+    for d in (bin_dir, work_root / "phase2-labels",
+              work_root / "phase2-ledger",
+              code_dir / "scripts" / "phase2"):
+        d.mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger" / "forward_ledger.jsonl").write_text(
+        "", "utf-8")
+
+    env_file = sandbox / "test.env"
+    env_file.write_text("\n".join(env_lines) + "\n", "utf-8")
+
+    # stub for the fixed PYTHON path: the trading-day check is the only
+    # invocation we let through; it answers NON-trading day so the wrapper
+    # takes the early `exit 0` skip and never reaches run/gap/verify.
+    stub = """#!/usr/bin/env bash
+input="$(cat 2>/dev/null)"
+case "$input" in
+    *is_cn_trading_day*) echo "2026-10-14 False"; exit 0 ;;
+esac
+exit 0
+"""
+    stub_path = bin_dir / "python_stub"
+    stub_path.write_text(stub, "utf-8")
+    stub_path.chmod(stub_path.stat().st_mode | stat.S_IXUSR
+                    | stat.S_IXGRP | stat.S_IXOTH)
+
+    src = WRAPPER.read_text("utf-8")
+    src = _re.sub(r'^PYTHON=.*$', f'PYTHON="{stub_path}"', src, flags=_re.M)
+    src = _re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{env_file}"', src,
+                  flags=_re.M)
+    src = _re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src,
+                  flags=_re.M)
+    src = _re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src,
+                  flags=_re.M)
+    shutil.copy(REPO / "scripts" / "phase2" / "expiry_label_pipeline.py",
+                code_dir / "scripts" / "phase2" / "expiry_label_pipeline.py")
+    wrapper_copy = sandbox / "wrapper.sh"
+    wrapper_copy.write_text(src, "utf-8")
+
+    proc = subprocess.run(
+        ["/bin/bash", str(wrapper_copy)],
+        capture_output=True, text=True, timeout=30,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
+    alert = work_root / "phase2-labels" / "ALERT.launchd"
+    return (proc, sandbox,
+            alert.read_text("utf-8") if alert.exists() else "")
+
+
+def test_env_gate_rejects_assignment_prefixed_command(tmp_path):
+    """DAV-2058 🟡-1: `KEY=value touch <file>` passed the OLD head-anchored
+    regex and `source` then executed `touch`. The tightened value-whitelist
+    + line-end anchor must reject it at exit 16 — and the sentinel file
+    must NOT exist afterwards (proves the line was never sourced)."""
+    pwned = tmp_path / "PWNED_env_cmd"
+    proc, _, alert = _wrapper_harness(
+        tmp_path,
+        [f'EVIL=harmless touch {pwned}',
+         'TUSHARE_TOKEN=fake'])
+    assert proc.returncode == 16, (proc.returncode, proc.stderr, alert)
+    assert not pwned.exists()
+    assert "non KEY=VALUE lines" in alert
+
+
+def test_env_gate_rejects_metachar_injection_variants(tmp_path):
+    """Same threat class, different spellings — every line carries a valid
+    `KEY=value` prefix followed by a command or redirection; all must
+    exit 16 and none may have been sourced."""
+    shapes = (';touch {p}', ' touch {p}', '|tee {p}', '`touch {p}`',
+              '$(touch {p})', '>{p}', '>>{p}', '{{1,2}}id {p}')
+    for i, frag in enumerate(shapes):
+        sub = tmp_path / f"h{i}"
+        pwned = sub / "PWNED_meta"
+        proc, _, _ = _wrapper_harness(sub, ['K=v' + frag.format(p=pwned)])
+        assert proc.returncode == 16, (frag, proc.returncode)
+        assert not pwned.exists(), frag
+
+
+def test_env_gate_rejects_dquoted_substitution_payloads(tmp_path):
+    """DAV-2072 🟡-1: the previous double-quoted alternative excluded only
+    `"` and `\\`, so `K="$(touch ...)"` and K="`touch ...`" passed the gate
+    and `source` then EXECUTED the substitution (sandbox-verified: the
+    sentinel file was created). With $/`/\\ excluded a double-quoted value
+    is literal text only — each payload must exit 16 and leave no file."""
+    frags = ('"$(touch {p})"', '"`touch {p}`"',
+             '"${{BASH_ENV:-$(touch {p})}}"', '"x\\;touch {p}"')
+    for i, frag in enumerate(frags):
+        sub = tmp_path / f"dq{i}"
+        pwned = sub / "PWNED_dq"
+        proc, _, alert = _wrapper_harness(
+            sub, ['K=' + frag.format(p=pwned), 'TUSHARE_TOKEN=fake'])
+        assert proc.returncode == 16, (frag, proc.returncode, alert)
+        assert not pwned.exists(), frag
+
+
+def test_env_gate_rejects_dquoted_variable_expansion(tmp_path):
+    """DAV-2072 🟡-1 companion: `K="${HOME}/x"` needs no command
+    substitution to be dangerous — a sourced variable expansion can
+    retarget paths (e.g. shadow HOME) and re-opens the dollar door. Any
+    `$` inside double quotes is rejected, even without a payload."""
+    for i, line in enumerate(('K="${HOME}/x"', 'K="$HOME/x"',
+                              'K="a${B}b"')):
+        proc, _, _ = _wrapper_harness(tmp_path / f"dv{i}", [line])
+        assert proc.returncode == 16, (line, proc.returncode)
+
+
+def test_env_gate_accepts_production_shaped_env(tmp_path):
+    """The production .env (28 lines: comments, blanks, plain KEY=value,
+    no spaces around =, bare alnum/punct values incl. . : / -) must still pass — the
+    tighter pattern must not kill the legitimate credential file. Also
+    covers benign quoted values (literal double-quoted token without
+    $/`/\\, and a space-carrying single-quoted value). Gate pass =>
+    wrapper proceeds to the trading-day check => our stub says
+    non-trading => exit 0."""
+    proc, _, _ = _wrapper_harness(
+        tmp_path,
+        ['# comment line', '',
+         'TUSHARE_TOKEN=abc123',
+         'FUYAO_API_KEY=xyz-987',
+         'INVESTODAY_API_KEY=q1w2e3',
+         'MODEL_URL=https://api.example.com/v1',
+         'LIST=a,b,c:d/e.f-g',
+         'AKSHARE_TIMEOUT=30',
+         'QUOTED_DQ="abc-123_XYZ"',
+         "QUOTED_SQ='abc 123'",
+         'export EXTRA_FLAG=1'])
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+
+
+def test_env_gate_rejects_space_around_equals(tmp_path):
+    """`FOO =bar` / `FOO= bar` are not assignments to bash (FOO becomes a
+    command); the gate must keep rejecting them."""
+    for i, line in enumerate(('FOO =bar', 'FOO= bar', 'FOO = bar')):
+        proc, _, _ = _wrapper_harness(tmp_path / f"s{i}", [line])
+        assert proc.returncode == 16, (line, proc.returncode)
+
+
+def _wrapper_gap_guard_python() -> str:
+    """Extract the embedded Python the wrapper pipes to $PYTHON for its
+    post-run gap guard (the `<<'PY' ... PY` heredoc body) so the tests run
+    the SAME code the timer runs — not a paraphrased copy."""
+    script = WRAPPER.read_text("utf-8")
+    # second <<'PY' heredoc — the first is the trading-day check
+    marker = "<<'PY' 2>&1"
+    body = script.split(marker, 2)[2]
+    return body.split("\nPY\n", 1)[0]
+
+
+def test_wrapper_gap_guard_uses_sw_eligible_denominator(tmp_path):
+    """DAV-2058 🟡-2: an all-pre-SW-typed night (every row a typed
+    pre-resolution status like BSE-excluded) is structurally gap but NOT a
+    Tushare degradation — the guard must not exit 17. verify's
+    sw_eligible denominator is the contract; the wrapper now mirrors it."""
+    rows = [{"report_id": f"r{i}", "horizon": "t10",
+             "outcome_status": "symbol_excluded_bse",
+             "sw": {"membership_status": "gap"}}
+            for i in range(9)]
+    # stub reports worst=0 would be wrong — we want the REAL guard python
+    # to run on these rows. Re-run the embedded snippet directly instead:
+    # extract + exec via the real interpreter? Simpler: drive the real
+    # guard logic through the stubbed wrapper is impossible (stub prints a
+    # canned verdict). So this test executes the SAME python the wrapper
+    # embeds, extracted from the script, against a real out dir.
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open(out_dir / "labels_t10.jsonl", "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+    proc = subprocess.run(
+        [sys.executable, "-", str(out_dir)],
+        input=_wrapper_gap_guard_python(), capture_output=True, text=True)
+    assert proc.returncode == 0
+    worst = int(proc.stdout.split()[0])
+    assert worst == 0, proc.stdout  # eligible=0 -> no all-gap alarm
+
+
+def test_wrapper_gap_guard_still_catches_real_all_gap(tmp_path):
+    """Same guard, opposite case: all rows are sw-ELIGIBLE (evaluated) and
+    every one is gap -> worst=2 (real degradation, exit 17)."""
+    rows = [{"report_id": f"r{i}", "horizon": "t10",
+             "outcome_status": "evaluated_ok",
+             "sw": {"membership_status": "gap"}}
+            for i in range(9)]
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open(out_dir / "labels_t10.jsonl", "w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    proc = subprocess.run(
+        [sys.executable, "-", str(out_dir)],
+        input=_wrapper_gap_guard_python(), capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert int(proc.stdout.split()[0]) == 2
+    assert "sw-eligible" in proc.stdout

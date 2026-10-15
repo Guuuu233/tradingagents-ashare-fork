@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- DAV-2034 — daily expiry-label timer (TEMPLATE ONLY, do not install).
+     DAV-2041 — wrapper now sources ~/Documents/TradingAgents-AShare/.env
+     itself; keep EnvironmentVariables free of secrets.
+
+     Schedule : Mon-Fri 20:10 (after the 19:45 ledger seal).
+     Action   : run_expiry_label_daily.sh — inject credentials from .env,
+                trading-day gate, then expiry_label_pipeline.py run + verify
+                against the fixed P4 account; append-only under
+                work/phase2-labels/.
+     Data     : reads the LIVE forward ledger + live market/vendor routes;
+                never the snapshot DB (no --db, no SQLite touch at all).
+     Fail     : credential missing / calendar unavailable / run or verify
+                non-zero -> alert file + non-zero exit, no retry. A
+                non-trading weekday exits 0.
+
+     Install (inside the 10-18 release card, together with the timer
+     checkout upgrade so CODE_DIR contains expiry_label_pipeline.py):
+       cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+     Remove:
+       launchctl bootout gui/$UID/com.davidliu.ta-p4-expiry-labels
+       rm ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+
+     Path coupling (sync all three on checkout relocation):
+       1) ProgramArguments below,
+       2) WorkingDirectory below,
+       3) CODE_DIR + heredoc sys.path inside run_expiry_label_daily.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.davidliu.ta-p4-expiry-labels</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/davidliu/ta-p4-ef8aa9d9/scripts/phase2/run_expiry_label_daily.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/davidliu/ta-p4-ef8aa9d9</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NO_PROXY</key>
+        <string>127.0.0.1,localhost,100.64.0.0/10</string>
+        <key>no_proxy</key>
+        <string>127.0.0.1,localhost,100.64.0.0/10</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/davidliu/ta-p4-2e1e199f/work/phase2-labels/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliu/ta-p4-2e1e199f/work/phase2-labels/launchd.err.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
