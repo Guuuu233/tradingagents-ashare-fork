@@ -8,7 +8,10 @@ import asyncio
 import json
 
 from tradingagents.dataflows.fund_flow_evidence import (
+    RENDERED_VALUE_BLOCK_FOOTNOTE,
+    RENDERED_VALUE_BLOCK_TITLE,
     consensus_prompt_instruction,
+    render_fund_flow_value_block,
     select_fund_flow_source,
     validate_model_summary,
 )
@@ -460,6 +463,17 @@ def build_blocked_report_original(
     }
 
 
+def rendered_value_instruction(rendered_block: Mapping[str, Any] | None) -> str:
+    """DAV-2057: tell the model the numbers are program-rendered and final."""
+    if not isinstance(rendered_block, Mapping) or not rendered_block.get("rendered"):
+        return ""
+    return (
+        f"{RENDERED_VALUE_BLOCK_TITLE}已由程序写入下方【程序渲染资金流数值】区块，"
+        "其中数值即为你必须引用的唯一权威数值，请原样使用；"
+        "禁止自行取整、换算、估算或另行给出其他资金流金额与单位。"
+    )
+
+
 def validation_notice_header(validation: Any) -> str | None:
     """DAV-1291 rework: report-top notice for the validation outcome.
 
@@ -571,6 +585,17 @@ def create_smart_money_analyst(llm, data_collector=None):
             evidence_for_display = fund_flow_evidence
         evidence_text = json.dumps(evidence_for_display, ensure_ascii=False, sort_keys=True)
         consensus_instruction = consensus_prompt_instruction(selection)
+        # DAV-2057: render the authoritative numbers before the model runs so it
+        # interprets program-computed values instead of recomputing them.
+        rendered_block = render_fund_flow_value_block(
+            (fund_flow_evidence.get("records") or [])
+            if isinstance(fund_flow_evidence, Mapping)
+            else [],
+            selection,
+            requested_as_of=current_date,
+            symbol=ticker,
+        )
+        rendered_instruction = rendered_value_instruction(rendered_block)
 
         scale_metrics = None
         if isinstance(fund_flow_evidence, Mapping):
@@ -620,6 +645,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                 f"【资金流数据（来源、日期与口径见数据）】\n{fund_flow}\n\n"
                 f"【资金流结构化 evidence（仅用于精确累计，不得从展示文本反推）】\n{evidence_text}\n\n"
                 f"【资金流来源选择与方向规则】\n{consensus_instruction}\n\n"
+                f"{rendered_instruction}\n\n"
                 f"{scale_metrics_prompt}\n\n"
                 f"【龙虎榜数据】\n{lhb}\n\n"
                 f"【成交量指标(vwma)】\n{volume}"
@@ -758,6 +784,11 @@ def create_smart_money_analyst(llm, data_collector=None):
                 "请保留各来源原值，待日期、窗口、单位和字段语义校验通过后复核。"
             )
         else:
+            # DAV-2057: the program-rendered numbers lead the report body, so the
+            # authoritative figures are present before any model prose and the
+            # numeric-consistency gate validates exactly these numbers.
+            if rendered_block.get("rendered") and rendered_block.get("text"):
+                full_content = rendered_block["text"] + "\n\n" + full_content
             if isinstance(selection, dict) and selection.get("legacy_reference"):
                 full_content = (
                     "⚠️ legacy_web_algorithm：以下方向仅来自新浪旧 Web 算法，"
@@ -834,6 +865,8 @@ def create_smart_money_analyst(llm, data_collector=None):
             "smart_money_report_blocked_original": blocked_original,
             "price_ref_revision": {"smart_money": _rev_rec} if _rev_rec else {},
             "fund_flow_consensus_guard": consensus_guard,
+            # DAV-2057: audit trail of the program-rendered authoritative values.
+            "smart_money_rendered_values": rendered_block,
             "analyst_traces": [{
                 "agent": "smart_money_analyst",
                 "horizon": research_horizon,

@@ -844,6 +844,148 @@ def summarize_evidence(
     return result
 
 
+# ---------------------------------------------------------------------------
+# DAV-2057 phase 1: render the authoritative fund-flow numbers into the report
+# body from structured evidence, so the model only has to interpret them.
+# The numeric-consistency hard gate stays in place and still validates the
+# rendered values — this function only guarantees that the figures the model
+# reads are the exact ones the gate compares against.
+# ---------------------------------------------------------------------------
+
+RENDERED_VALUE_BLOCK_TITLE = "【程序渲染资金流数值（唯一权威口径）】"
+RENDERED_VALUE_BLOCK_FOOTNOTE = (
+    "以上数值由程序从结构化证据直接渲染并已通过数值一致性硬闸校验；"
+    "你只需据此解读方向与成因，不得自行取整、换算、改写或另行给出其他资金流数值。"
+)
+
+_RENDERED_DIRECTION_TEXT = {
+    "inflow": "净流入",
+    "outflow": "净流出",
+    "neutral": "基本持平",
+}
+
+_RENDERED_FIELD_TEXT = {
+    "r0_net": "主力净额",
+    "netamount": "总净额",
+    "lg_net": "大单净额",
+    "r0": "主力资金值",
+    "super_large_net": "特大单净额",
+    "large_net": "大单净额",
+}
+
+
+def render_fund_flow_value_block(
+    records: Iterable[Mapping[str, Any]],
+    selection: Mapping[str, Any] | None,
+    *,
+    requested_as_of: str | None = None,
+    symbol: str | None = None,
+) -> dict[str, Any]:
+    """Render the authoritative fund-flow numbers from structured evidence.
+
+    Arithmetic reuses :func:`summarize_evidence`, i.e. exactly the function the
+    numerical-consistency gate uses, so the rendered text cannot disagree with
+    the gate by construction. Nothing is rendered when the structured window is
+    unavailable or conflicting: callers then keep the previous behaviour and let
+    the hard gate decide.
+    """
+    empty: dict[str, Any] = {
+        "rendered": False,
+        "text": None,
+        "reason": "selection_unavailable",
+        "field": None,
+        "source": None,
+        "window_days": None,
+        "daily_value": None,
+        "window_value": None,
+    }
+    if not isinstance(selection, Mapping):
+        return empty
+    if selection.get("status") not in {"selected", "consensus"}:
+        return {**empty, "reason": f"selection_status:{selection.get('status')}"}
+    if not selection.get("direction_allowed"):
+        return {**empty, "reason": "direction_not_allowed"}
+
+    field = _canonical_field(selection.get("selected_field")) or selection.get("selected_field")
+    source = selection.get("selected_source")
+    if not field or not source:
+        return {**empty, "reason": "selection_missing_field_or_source"}
+    try:
+        window_days = int(selection.get("selected_window_days") or 1)
+    except (TypeError, ValueError):
+        window_days = 1
+    if window_days < 1:
+        window_days = 1
+
+    record_list = list(records or [])
+    daily = summarize_evidence(
+        record_list,
+        window_days=1,
+        field=field,
+        source=source,
+        requested_as_of=requested_as_of,
+    )
+    # A non-exact or conflicting single-day window has no authoritative number.
+    if daily.get("status") != "available":
+        return {**empty, "reason": f"daily_{daily.get('status')}"}
+
+    field_text = _RENDERED_FIELD_TEXT.get(field, field)
+    semantics = daily.get("selected_semantics") or _FIELD_SEMANTICS.get(field)
+    as_of = daily.get("dates", [None])[-1]
+    daily_value = decimal_value(daily.get("selected_value"))
+    if daily_value is None:
+        return {**empty, "reason": "daily_value_missing"}
+
+    lines = [
+        RENDERED_VALUE_BLOCK_TITLE,
+        f"- 标的：{symbol or '本标的'}｜数据日期：{as_of}",
+        f"- 字段口径：{field_text}（{semantics}）｜来源：{source}｜窗口：单日 1d",
+        f"- 单日（{as_of}）{field_text}：{_decimal_text(daily_value)} 亿元",
+    ]
+
+    window_value: Decimal | None = None
+    if window_days > 1:
+        windowed = summarize_evidence(
+            record_list,
+            window_days=window_days,
+            field=field,
+            source=source,
+            requested_as_of=requested_as_of,
+        )
+        if windowed.get("status") == "available":
+            window_value = decimal_value(windowed.get("selected_value"))
+            window_dates = windowed.get("dates") or []
+            span = (
+                f"{window_dates[0]}~{window_dates[-1]}"
+                if len(window_dates) > 1
+                else f"{window_dates[-1]}" if window_dates else ""
+            )
+            if window_value is not None:
+                lines.append(
+                    f"- 近{window_days}个交易日累计（{span}）{field_text}："
+                    f"{_decimal_text(window_value)} 亿元"
+                )
+    direction = str(selection.get("selected_direction") or "")
+    if direction in _RENDERED_DIRECTION_TEXT:
+        lines.append(
+            f"- 资金流方向：{_RENDERED_DIRECTION_TEXT[direction]}（由上述单日结构化原值判定）"
+        )
+    lines.append(RENDERED_VALUE_BLOCK_FOOTNOTE)
+
+    return {
+        "rendered": True,
+        "text": "\n".join(lines),
+        "reason": None,
+        "field": field,
+        "field_text": field_text,
+        "source": source,
+        "window_days": window_days,
+        "as_of": as_of,
+        "daily_value": _decimal_text(daily_value),
+        "window_value": _decimal_text(window_value) if window_value is not None else None,
+    }
+
+
 def _canonical_field(value: Any) -> str | None:
     if value is None:
         return None
