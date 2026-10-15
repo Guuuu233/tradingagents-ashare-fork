@@ -72,7 +72,10 @@ Options:
                       -> index_zh_a_hist -> stock_zh_index_daily_em) into
                       --benchmarks-dir (default work/phase2-weekly) when
                       --fetch-benchmarks is passed; otherwise section 4
-                      degrades without touching the network.
+                      degrades without touching the network. Fetching is a
+                      full daily OHLC crawl via akshare (not closes only)
+                      and writes the same {symbol,date,open,close} JSONL
+                      row format as --benchmarks.
   --min-cross-n N     daily cross-section floor (default 5 — provisional,
                       P1 owns the freeze)
   --min-total-n N     overall sufficiency floor for the banner (default 40
@@ -451,9 +454,13 @@ def _version_key(rec: Mapping[str, Any]) -> str:
     return "unversioned"
 
 
+# DAV-1498: production verdicts may carry the graded forms 偏多/偏空
+# (decision_status.py treats them as first-class DIRECTION_BULL/BEAR and
+# passes them through verbatim); bucket them with 看多/看空 so §1 does not
+# systematically under-count directional signals into 无结论.
 _DIRECTION_BUCKETS = (
-    ("看多", ("看多", "BUY", "BULL", "增持", "买入")),
-    ("看空", ("看空", "SELL", "BEAR", "减持", "卖出")),
+    ("看多", ("看多", "偏多", "BUY", "BULL", "增持", "买入")),
+    ("看空", ("看空", "偏空", "SELL", "BEAR", "减持", "卖出")),
     ("中性", ("中性", "NEUTRAL", "HOLD", "持有")),
 )
 
@@ -651,7 +658,12 @@ def build_report(
             lab_rets.append(v)
     bench_rets: list[float] = []
     bench_missing = 0
-    if bench_bars and bench_symbols:
+    # DAV-1504: distinguish "no benchmark file / no usable bars" (all
+    # matured samples missing at once) from "per-sample window missing"
+    # (some windows lack an entry open / exit close) so the 基准缺失 n
+    # column can never be misread as a partial-window count.
+    bench_no_data = not (bench_bars and bench_symbols)
+    if not bench_no_data:
         first = bench_bars.get(bench_symbols[0], {})
         for r in matured:
             sig = r.get("_sig")
@@ -663,7 +675,13 @@ def build_report(
             else:
                 bench_rets.append(v)
     else:
+        # No benchmark data at all: the whole matured cohort is missing,
+        # not individual windows. Keep fail-close semantics — never
+        # substitute a fallback price.
         bench_missing = len(matured)
+    bench_missing_note = (
+        "（基准文件缺失/无可用行情：n = 全部成熟样本数）"
+        if bench_no_data and bench_missing else "")
     ret_rows = [(
         "成熟样本", len(matured), len(lab_rets), _fmt(_mean(lab_rets)),
         lab_missing, len(bench_rets), _fmt(_mean(bench_rets)),
@@ -726,6 +744,8 @@ def build_report(
 
     out.append("## 1. 中线方向分布（按版本队列）")
     out.append("")
+    out.append("> 口径：偏多并入「看多」、偏空并入「看空」桶统计。")
+    out.append("")
     out.append(_md_table(
         ("版本队列", "总数", "看多", "看空", "中性", "无结论"), dir_rows))
     out.append("")
@@ -769,7 +789,7 @@ def build_report(
          f"标签收益 n（字段 {label_field}）", "标签收益均值",
          "标签缺失 n",
          "沪深300 同窗 n（T+1 开盘→T+40 收盘）", "沪深300 同窗均值",
-         "基准缺失 n"), ret_rows))
+         "基准缺失 n" + bench_missing_note), ret_rows))
     out.append("")
     if relative_caliber == "sw":
         out.append("> 当前口径 `sw`：标签列读申万行业相对收益字段。P2 合入前"
@@ -1001,8 +1021,12 @@ def main() -> int:
     p.add_argument("--benchmark-symbols", nargs="+",
                    default=list(DEFAULT_BENCH_SYMBOLS))
     p.add_argument("--fetch-benchmarks", action="store_true",
-                   help="fetch index closes via akshare when the file is "
-                        "absent (default: stay offline, degrade)")
+                   help="fetch index daily OHLC via akshare when the "
+                        "benchmarks file is absent and write "
+                        "{symbol,date,open,close} JSONL rows to "
+                        "--benchmarks-dir (open is required by the D-072 "
+                        "T+1 open entry leg; default: stay offline, "
+                        "section 4 degrades)")
     p.add_argument("--min-cross-n", type=int, default=DEFAULT_MIN_CROSS_N)
     p.add_argument("--min-total-n", type=int, default=DEFAULT_MIN_TOTAL_N)
     p.add_argument("--as-of", default=None)

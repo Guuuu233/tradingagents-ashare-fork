@@ -101,13 +101,16 @@ def _mk_db(path: Path, rows: list[tuple[str, str]]) -> Path:
 
 def _run(monkeypatch, tmp_path, records, labels=None, bench=None,
          db_rows=None, as_of="2026-12-01", caliber="hs300",
-         label_fields=None):
+         label_fields=None, no_bench_file=False):
     """Invoke cmd_run with synthetic inputs; returns (exit_code, out_text)."""
     tmp_path = Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
     ledger = _write_ledger(tmp_path / "forward_ledger.jsonl", records)
     lab = _write_labels(tmp_path / "labels.jsonl", labels or [])
-    bench_f = _write_bench(tmp_path / "bench.jsonl", bench or {})
+    if no_bench_file:
+        bench_f = tmp_path / "bench_absent.jsonl"  # never written
+    else:
+        bench_f = _write_bench(tmp_path / "bench.jsonl", bench or {})
     db = _mk_db(tmp_path / "t.db", db_rows or [])
     out = tmp_path / "report.md"
 
@@ -515,3 +518,118 @@ def test_benchmark_return_signal_before_calendar_is_missing():
     bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
             for i, d in enumerate(cal)}
     assert mod._benchmark_return(bars, cal, date(2020, 1, 1), 40) is None
+
+
+# ---------------------------------------------------------------------------
+# DAV-1498: ① graded verdicts 偏多/偏空 bucketed with 看多/看空
+#           ② §3 IC 口径锁定：同日部分缺标签样本只在 §3 跳过（§4 仍参与
+#              基准列统计），不混用基准收益口径
+
+
+def test_direction_bucket_graded_verdicts():
+    """DAV-1498①：生产 verdict 会原样透传 偏多/偏空
+    （decision_status.py 一等公民），必须分别并入 看多/看空 桶而非落入
+    无结论——否则 §1 方向分布系统性低估多空头寸。"""
+    assert mod._direction_bucket("偏多") == "看多"
+    assert mod._direction_bucket("偏空") == "看空"
+    # ungraded forms unchanged
+    assert mod._direction_bucket("看多") == "看多"
+    assert mod._direction_bucket("看空") == "看空"
+    assert mod._direction_bucket("中性") == "中性"
+    assert mod._direction_bucket(None) == "无结论"
+    assert mod._direction_bucket("") == "无结论"
+
+
+def test_section1_counts_pian_duo_pian_kong(tmp_path, monkeypatch):
+    """§1 方向分布表：偏多计入看多列、偏空计入看空列、不落无结论；
+    表头显式写明并桶口径。"""
+    recs = [
+        _rec("r1", "600519.SH", "2026-07-28", direction="偏多"),
+        _rec("r2", "600520.SH", "2026-07-28", direction="偏空"),
+        _rec("r3", "600521.SH", "2026-07-28", direction="中性"),
+    ]
+    code, text = _run(monkeypatch, tmp_path, recs)
+    assert code == 0
+    assert "中线账本记录总数：**3**" in text
+    # caliber note is printed under §1
+    assert "偏多并入「看多」、偏空并入「看空」" in text
+    for line in text.splitlines():
+        if line.startswith("| commit:abc123def45"):
+            cells = [c.strip() for c in line.split("|")]
+            # (queue, total, 看多, 看空, 中性, 无结论)
+            assert cells[2] == "3"          # total
+            assert cells[3] == "1"          # 看多 (偏多 merged)
+            assert cells[4] == "1"          # 看空 (偏空 merged)
+            assert cells[5] == "1"          # 中性
+            assert cells[6] == "0"          # 无结论
+
+
+def test_section3_same_day_partial_labels_skips_unlabeled(
+        tmp_path, monkeypatch):
+    """DAV-1498②：同日部分样本缺标签——§3 横截面只计入有标签样本
+    （IC 按有标签样本计算，缺失样本计入缺标签计数、不用基准收益回落
+    污染 IC 列）；§4 收益口径里该缺失样本仍参与基准列统计。"""
+    recs, labs = [], []
+    for i in range(4):
+        recs.append(_rec(f"r{i}", f"60000{i}.SH", "2026-07-28",
+                         prob=50 + i))
+        labs.append({"symbol": f"60000{i}.SH",
+                     "signal_date": "2026-07-28",
+                     "hs300_excess_pct": float(i)})
+    # same signal day, but no label row for this one
+    recs.append(_rec("r9", "600099.SH", "2026-07-28", prob=99))
+    cal = _cal("2026-07-01", 300)
+    bench = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+             for i, d in enumerate(cal)}
+    code, text = _run(monkeypatch, tmp_path, recs, labs, bench=bench)
+    assert code == 0
+    # §3: n=4 (not 5) and IC is exactly the labeled-only monotone 1.0000 —
+    # a benchmark fallback mixed into the same day would break both.
+    assert "| 2026-07-28 | 4 | ok | 1.0000" in text
+    assert "缺标签/缺字段样本 **1** 条" in text
+    # §4: 成熟样本 total 5, 标签列 4, 基准列 5 (缺失样本仍走基准列)
+    assert "| 成熟样本 | 5 | 4 |" in text
+
+
+# ---------------------------------------------------------------------------
+# DAV-1504 non-blocking cleanups: --fetch-benchmarks help wording +
+# 基准缺失 n 标注全量缺失情形（叠在已合入 1481/1651 的主干之上）
+
+
+def test_fetch_benchmarks_help_mentions_ohlc_not_closes():
+    """DAV-1504 项 ①：help 文案必须写 OHLC/日线口径并注明行格式，
+    不得再写 'fetch index closes'。"""
+    src = SCRIPT.read_text("utf-8")
+    assert "fetch index closes via akshare" not in src
+    assert "fetch index daily OHLC via akshare" in src
+    assert "{symbol,date,open,close} JSONL rows" in src
+
+
+def test_bench_missing_no_file_notes_total(tmp_path, monkeypatch):
+    """DAV-1504 项 ②a：基准文件完全缺失时，基准缺失列注明 n = 全部成熟
+    样本数，读者不会误以为是部分样本窗口缺 open/close。"""
+    recs = [_rec("r1", "600519.SH", "2026-07-28"),
+            _rec("r2", "600520.SH", "2026-07-28")]
+    code, text = _run(monkeypatch, tmp_path, recs, no_bench_file=True)
+    assert code == 0
+    assert "基准缺失 n（基准文件缺失/无可用行情：n = 全部成熟样本数）" \
+        in text
+    # 计数口径不变：全体缺失仍计 2（fail-close，无回落价）
+    assert "| 成熟样本 | 2 | 0 |" in text
+
+
+def test_bench_missing_partial_windows_no_note(tmp_path, monkeypatch):
+    """DAV-1504 项 ②b：基准文件存在但部分样本窗口缺 open/close 时，列头
+    不得带「全部成熟样本数」注记——区分部分缺失与全量缺失。"""
+    cal = _cal("2026-07-01", 300)
+    bars = {d.isoformat(): {"open": 3900 + i, "close": 4000 + i}
+            for i, d in enumerate(cal)}
+    # strip the entry-day open for the 2026-07-28 signal window only
+    idx = cal.index(date.fromisoformat("2026-07-28"))
+    del bars[cal[idx + 1].isoformat()]["open"]
+    recs = [_rec("r1", "600519.SH", "2026-07-28")]
+    code, text = _run(monkeypatch, tmp_path, recs, bench=bars)
+    assert code == 0
+    assert "基准缺失 n（" not in text
+    # partial missing still counted: bench leg n=0, missing=1
+    assert "| 成熟样本 | 1 | 0 | — | 1 | 0 | — | 1 |" in text
