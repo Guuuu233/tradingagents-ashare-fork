@@ -601,6 +601,14 @@ def create_smart_money_analyst(llm, data_collector=None):
         if isinstance(fund_flow_evidence, Mapping):
             scale_metrics = fund_flow_evidence.get("scale_metrics")
 
+        # DAV-2101: the block text itself (not just the instruction) must reach
+        # the prompt, so the model reads the same figures the hard gate checks.
+        rendered_prompt_section = (
+            f"【{RENDERED_VALUE_BLOCK_TITLE}】\n{rendered_block['text']}\n\n"
+            if rendered_block.get("rendered") and rendered_block.get("text")
+            else ""
+        )
+
         scale_metrics_prompt = format_fund_flow_scale_metrics_prompt(scale_metrics, selection)
         validation = (
             fund_flow_evidence.get("validation", {})
@@ -645,7 +653,7 @@ def create_smart_money_analyst(llm, data_collector=None):
                 f"【资金流数据（来源、日期与口径见数据）】\n{fund_flow}\n\n"
                 f"【资金流结构化 evidence（仅用于精确累计，不得从展示文本反推）】\n{evidence_text}\n\n"
                 f"【资金流来源选择与方向规则】\n{consensus_instruction}\n\n"
-                f"{rendered_instruction}\n\n"
+                f"{rendered_prompt_section}{rendered_instruction}\n\n"
                 f"{scale_metrics_prompt}\n\n"
                 f"【龙虎榜数据】\n{lhb}\n\n"
                 f"【成交量指标(vwma)】\n{volume}"

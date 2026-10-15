@@ -217,6 +217,7 @@ class Propagator:
             "macro_report": "",
             "smart_money_report": "",
             "smart_money_report_blocked_original": None,
+            "smart_money_rendered_values": None,
             "volume_price_report": "",
             "event_coverage": {},
             "investment_plan": "",

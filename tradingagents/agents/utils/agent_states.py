@@ -551,6 +551,11 @@ class AgentState(MessagesState):
         Optional[dict[str, Any]],
         "Original smart-money report blocked by the numeric guard, with mismatch detail",
     ]
+    # DAV-2057/2101: 程序渲染的权威资金流数值块（审计用，无决策效果）
+    smart_money_rendered_values: Annotated[
+        Optional[dict[str, Any]],
+        "Program-rendered authoritative fund-flow values injected into the smart-money report",
+    ]
     volume_price_report: Annotated[str, "Report from the Volume Price Analyst"]
     game_theory_report: Annotated[Optional[str], "Report from the Game Theory Analyst"]
     game_theory_signals: Annotated[Optional[dict[str, Any]], "Structured game theory signals"]

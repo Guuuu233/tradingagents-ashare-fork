@@ -917,6 +917,12 @@ def render_fund_flow_value_block(
     if window_days < 1:
         window_days = 1
 
+    # DAV-2101: an unknown field has no label -> fail closed instead of
+    # leaking a bare key into the report body.
+    field_text = _RENDERED_FIELD_TEXT.get(field)
+    if not field_text:
+        return {**empty, "reason": f"unrenderable_field:{field}"}
+
     record_list = list(records or [])
     daily = summarize_evidence(
         record_list,
@@ -929,8 +935,12 @@ def render_fund_flow_value_block(
     if daily.get("status") != "available":
         return {**empty, "reason": f"daily_{daily.get('status')}"}
 
-    field_text = _RENDERED_FIELD_TEXT.get(field, field)
-    semantics = daily.get("selected_semantics") or _FIELD_SEMANTICS.get(field)
+    semantics = (
+        daily.get("selected_semantics")
+        or _FIELD_SEMANTICS.get(field)
+        or _COMPONENT_SEMANTICS.get(field)
+        or "口径以结构化 evidence 为准"
+    )
     as_of = daily.get("dates", [None])[-1]
     daily_value = decimal_value(daily.get("selected_value"))
     if daily_value is None:
@@ -965,10 +975,15 @@ def render_fund_flow_value_block(
                     f"- 近{window_days}个交易日累计（{span}）{field_text}："
                     f"{_decimal_text(window_value)} 亿元"
                 )
-    direction = str(selection.get("selected_direction") or "")
+    # DAV-2101: derive the direction from the single-day value we actually
+    # rendered above, never from selection.selected_direction, which can carry
+    # another as_of window and contradict the rendered sign. Deriving here also
+    # means the direction row is never dropped for a missing selection field.
+    direction = _direction_for_field(field, daily_value)
     if direction in _RENDERED_DIRECTION_TEXT:
         lines.append(
-            f"- 资金流方向：{_RENDERED_DIRECTION_TEXT[direction]}（由上述单日结构化原值判定）"
+            f"- 资金流方向：{_RENDERED_DIRECTION_TEXT[direction]}"
+            f"（由上述单日 {as_of} 结构化原值判定）"
         )
     lines.append(RENDERED_VALUE_BLOCK_FOOTNOTE)
 
@@ -980,6 +995,7 @@ def render_fund_flow_value_block(
         "field_text": field_text,
         "source": source,
         "window_days": window_days,
+        "direction": direction,
         "as_of": as_of,
         "daily_value": _decimal_text(daily_value),
         "window_value": _decimal_text(window_value) if window_value is not None else None,

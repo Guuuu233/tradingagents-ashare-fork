@@ -3560,7 +3560,8 @@ async def _run_job_inner(
             _SHARED_ANALYST_KEYS = (
                 "market_report", "sentiment_report", "news_report",
                 "fundamentals_report", "macro_report", "smart_money_report",
-                "smart_money_report_blocked_original", "volume_price_report",
+                "smart_money_report_blocked_original", "smart_money_rendered_values",
+                "volume_price_report",
                 "market_data_context", "event_coverage",
                 "fund_flow_consensus_guard", "analyst_traces",
                 "price_ref_revision", "price_ref_source",

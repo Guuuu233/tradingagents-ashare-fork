@@ -286,3 +286,188 @@ def test_consensus_evidence_and_render_agree_on_value():
     if block["rendered"]:
         assert block["daily_value"] == "-2.49594848"
         assert Decimal(block["daily_value"]) == Decimal("-2.49594848")
+
+# ---------------------------------------------------------------------------
+# DAV-2101 rework of the DAV-2092 review findings
+# ---------------------------------------------------------------------------
+
+
+def _selection(records, symbol, as_of, source=None, field=None, window_days=None):
+    selection = select_fund_flow_source(records, symbol=symbol, requested_as_of=as_of)
+    if source:
+        selection["selected_source"] = source
+    if field:
+        selection["selected_field"] = field
+    if window_days is not None:
+        selection["selected_window_days"] = window_days
+    return selection
+
+
+def test_rendered_block_text_is_injected_into_the_prompt():
+    """DAV-2101 🔴-1: the rendered numbers themselves, not only the instruction
+    text, must be present in the prompt the model reads."""
+    symbol, records, as_of, _source, expected = _case_601398()
+    llm = _RecordingLLM("仅作方向解读，未给出其他数值。")
+    module = __import__(
+        "tradingagents.agents.analysts.smart_money_analyst",
+        fromlist=["smart_money_analyst"],
+    )
+    state = {
+        "trade_date": as_of,
+        "company_of_interest": symbol,
+        "user_intent": {"focus_areas": [], "specific_questions": []},
+    }
+    with (
+        patch.object(module, "get_cn_stock_name", return_value="测试股票"),
+        patch.object(module, "get_config", return_value={}),
+        patch.object(module, "get_prompt", return_value="固定系统提示"),
+        patch.object(module, "build_horizon_context", return_value="固定上下文"),
+        patch("api.database.log_llm_call"),
+    ):
+        result = asyncio.run(create_smart_money_analyst(llm, _Collector(records))(state))
+
+    prompt = llm.messages[1].content
+    assert RENDERED_VALUE_BLOCK_TITLE in prompt
+    assert expected in prompt
+    # The prompt and the report body carry the very same rendered text.
+    block_text = result["smart_money_rendered_values"]["text"]
+    assert block_text in prompt
+    assert block_text in result["smart_money_report"]
+
+
+def test_rendered_values_key_survives_the_agent_state_schema():
+    """DAV-2101 🔴-2: the audit key must be declared in AgentState, otherwise
+    langgraph silently drops it when the analyst node's updates are merged."""
+    from tradingagents.agents.utils.agent_states import AgentState
+
+    assert "smart_money_rendered_values" in AgentState.__annotations__
+
+    typed = AgentState.__annotations__["smart_money_rendered_values"]
+    assert getattr(typed, "__metadata__", None), "needs an Annotated description"
+
+
+def test_rendered_values_key_is_declared_in_the_shared_state_surfaces():
+    """propagation default + both trading_graph log_states_dict + api shared keys."""
+    import inspect
+
+    from tradingagents.graph import propagation, trading_graph
+
+    prop_src = inspect.getsource(propagation.Propagator.create_initial_state)
+    assert '"smart_money_rendered_values"' in prop_src
+
+    graph_src = inspect.getsource(trading_graph)
+    # Both horizon packaging dicts must forward the key.
+    assert graph_src.count('"smart_money_rendered_values": final_state.get("smart_money_rendered_values")') == 2
+
+    import pathlib
+
+    api_src = pathlib.Path(api_main_path()).read_text(encoding="utf-8")
+    assert '"smart_money_report_blocked_original", "smart_money_rendered_values"' in api_src
+
+
+def api_main_path() -> str:
+    """api/ is a sibling of the tradingagents package, not a child of it."""
+    import pathlib
+
+    return str(pathlib.Path(__file__).resolve().parents[1] / "api" / "main.py")
+
+
+def test_direction_row_follows_rendered_single_day_value_not_selection():
+    """DAV-2101 🟡-1: a selection.direction computed on another as_of must not
+    contradict the rendered single-day sign; the row also must not disappear
+    when selection.selected_direction is absent."""
+    symbol, records, as_of, _source, expected = _case_601225()
+    # evidence is a negative single-day value on as_of ...
+    selection = _selection(records, symbol, as_of)
+    # ... but the selection claims inflow (e.g. computed from an earlier window).
+    selection["selected_direction"] = "inflow"
+    block = render_fund_flow_value_block(records, selection, requested_as_of=as_of, symbol=symbol)
+    assert block["rendered"] is True
+    assert block["direction"] == "outflow"
+    assert "净流出" in block["text"]
+    assert "净流入" not in block["text"]
+    assert Decimal(expected) < 0
+
+    # Missing selected_direction must not make the whole row vanish.
+    selection.pop("selected_direction")
+    block2 = render_fund_flow_value_block(records, selection, requested_as_of=as_of, symbol=symbol)
+    assert "资金流方向" in block2["text"]
+
+
+def test_component_field_semantics_are_rendered_not_none():
+    """DAV-2101 🟡-2: lg_net and component fields must never render as （None）."""
+    symbol = "600519"
+    as_of = "2026-10-13"
+    records = [_record("eastmoney_direct", as_of, "lg_net", "-3.5", symbol)]
+    # lg_net is a component field, so build the selection contract by hand: the
+    # single-field selector only ranks the main-force fields.
+    selection = {
+        "status": "selected",
+        "direction_allowed": True,
+        "selected_field": "lg_net",
+        "selected_source": "eastmoney_direct",
+        "selected_window_days": 1,
+    }
+    block = render_fund_flow_value_block(records, selection, requested_as_of=as_of, symbol=symbol)
+    assert block["rendered"] is True
+    assert "（None）" not in block["text"]
+    assert "None" not in block["text"]
+    assert "大单净额" in block["text"]
+    assert "不含超大单分量" in block["text"]
+
+
+def test_unknown_field_fails_closed_instead_of_rendering_a_bare_key():
+    """DAV-2101 🟡-2 fail-closed branch: no label -> no block at all."""
+    symbol = "600519"
+    as_of = "2026-10-13"
+    records = [_record("eastmoney_direct", as_of, "r0_net", "1.0", symbol)]
+    selection = {
+        "status": "selected",
+        "direction_allowed": True,
+        "selected_field": "totally_unknown_field",
+        "selected_source": "eastmoney_direct",
+        "selected_window_days": 1,
+    }
+    block = render_fund_flow_value_block(records, selection, requested_as_of=as_of, symbol=symbol)
+    assert block["rendered"] is False
+    assert block["text"] is None
+    assert block["reason"].startswith("unrenderable_field:")
+
+
+def test_multi_day_window_render_agrees_with_structured_cumulative():
+    """DAV-2101 🟡-3: the window_days>1 branch is covered and equals the sum the
+    gate itself would compute via summarize_evidence."""
+    from tradingagents.dataflows.fund_flow_evidence import summarize_evidence
+
+    symbol = "600519"
+    as_of = "2026-10-13"
+    records = [
+        _record("eastmoney_direct", "2026-10-09", "r0_net", "1.5", symbol),
+        _record("eastmoney_direct", "2026-10-12", "r0_net", "2.5", symbol),
+        _record("eastmoney_direct", as_of, "r0_net", "-3.0", symbol),
+    ]
+    selection = _selection(records, symbol, as_of, window_days=3)
+    block = render_fund_flow_value_block(records, selection, requested_as_of=as_of, symbol=symbol)
+    assert block["rendered"] is True
+    assert block["window_days"] == 3
+    assert Decimal(block["daily_value"]) == Decimal("-3.0")
+    # 1.5 + 2.5 - 3.0 = 1.0
+    assert Decimal(block["window_value"]) == Decimal("1.0")
+    assert "2026-10-09~2026-10-13" in block["text"]
+    assert "近3个交易日累计" in block["text"]
+
+    structured = summarize_evidence(
+        records, window_days=3, field="r0_net",
+        source="eastmoney_direct", requested_as_of=as_of,
+    )
+    assert structured["status"] == "available"
+    assert Decimal(structured["selected_value"]) == Decimal(block["window_value"])
+
+    # The default selection window is 1 day in production, so the single-day
+    # rendering is the normal path and window_value stays None.
+    selection_1d = _selection(records, symbol, as_of)
+    assert int(selection_1d.get("selected_window_days") or 1) == 1
+    block_1d = render_fund_flow_value_block(
+        records, selection_1d, requested_as_of=as_of, symbol=symbol
+    )
+    assert block_1d["window_value"] is None
