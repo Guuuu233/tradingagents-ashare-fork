@@ -11,7 +11,7 @@
   （clean 管线、A3 冻结谓词、B1/B2/B3 判定全在上游）。
 - A1 固定标注「**需总控人工审计**」并附可执行档逐档清单（脚本不判
   假 clean）。
-- 只读 `--db`（默认 `/private/tmp/ta-snapshot/current.db` 共享快照，
+- 只读 `--db`（默认 `~/ta-snapshot/current.db` 共享快照，
   `mode=ro`）；不写生产库、不触网、零模型/provider。
 
 ## 用法
@@ -19,7 +19,7 @@
 ```bash
 env -u PYTHONPATH .venv310/bin/python \
   scripts/dav1950_exit_acceptance_report.py \
-  --db /private/tmp/ta-snapshot/current.db --as-of 2026-10-12 \
+  --db ~/ta-snapshot/current.db --as-of 2026-10-12 \
   [--start 2026-10-08] [--end ...] [--ids ids.json] [--all-history] \
   [--out report.md | --json | --self-test]
 ```
@@ -38,7 +38,7 @@ env -u PYTHONPATH .venv310/bin/python \
 ## 验收口径（自测实测，2026-10-12 快照）
 
 - 解释器：`.venv310` Python 3.10.20，`env -u PYTHONPATH`。
-- `--db /private/tmp/ta-snapshot/current.db --as-of 2026-10-12`
+- `--db ~/ta-snapshot/current.db --as-of 2026-10-12`
   两次运行 stdout sha256 相同；`/usr/bin/time -l` peak memory
   footprint ≈ 0.87 GiB（≤4 GiB 红线内，余量 ~4.6x；上游扫描
   tracemalloc 峰值 418.5 MB 已含在该包络内）。

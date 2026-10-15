@@ -4,7 +4,7 @@ production snapshot. Never touches the live DB.
 
 Usage (locked interpreter):
     env -u PYTHONPATH /path/.venv310/bin/python work/b6b_acceptance.py \
-        --source /private/tmp/ta-snapshot/current.db \
+        --source "$HOME/ta-snapshot/current.db" \
         --work /tmp/ta-b6b-acceptance.db
 
 What it does:
