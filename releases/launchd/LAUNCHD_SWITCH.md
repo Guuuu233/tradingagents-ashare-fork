@@ -270,3 +270,54 @@ env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/py
 未设 fail_alert、PROJECT_ROOT=主检出 fail_alert（含 `//` 变体，pwd -P 规范化）、
 检出不含 DAV-2033 锚点 fail_alert、
 交易日历缺失 fail_alert。不碰生产库、不装 launchd。
+
+## 生产健康哨兵（DAV-2063；总控 10-15 令：只交模板，不安装）
+
+背景：10-14 机器重启后守望随会话中断，生产停服 7.5h 无人发现。哨兵独立于
+任何 Claude/agent 会话，纯脚本 + launchd，只观测告警，**不做自动重启**
+（重启由上面的 `com.tradingagents.ashare` 负责）。10-17 与 DAV-1852 一起安装。
+
+| 文件 | 作用 |
+|---|---|
+| `releases/launchd/ta-prod-health-sentinel.sh` | 哨兵脚本（探活 + 版本校验 + 告警/恢复记录） |
+| `releases/launchd/com.tradingagents.prod-health-sentinel.plist` | launchd 作业模板（RunAtLoad + StartInterval=300） |
+| `releases/launchd/tests/test_prod_health_sentinel.sh` | 四情形桩测试（通/不通/版本不符/恢复） |
+
+判定规则：
+
+- `GET ${HEALTH_BASE_URL}/healthz`（curl `--max-time 10`）：连接失败 / 非 2xx /
+  2xx 但响应体无 `commit_sha` 均记为不通；
+- **不通连续两次**（`FAIL_THRESHOLD=2`）才告警，第一次只写状态、不告警、不通知；
+- `commit_sha` 与 `EXPECT_PROD_SHA` 不符**立即**告警（版本漂移不去抖）；
+- 告警落 `~/ta-watch/ALERT-prod-<utc>-<unreachable|sha_mismatch>.log`，
+  并 `osascript` 发系统通知（`TA_WATCH_NOTIFY=0` 可关）；
+- 从告警恢复到健康写 `~/ta-watch/ALERT-prod-recovered-<utc>.log`（含恢复时间与前序原因），
+  持续健康不重复写。
+
+安装前必做（占位符必须替换，残留为 0）：
+
+```bash
+# {{RELEASE_DIR}} / {{EXPECT_PROD_SHA}} / {{WATCH_DIR}} / {{VENV_PYTHON}}
+sed -i '' 's|{{RELEASE_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare-releases/<SHA>|g' \
+  ~/Library/LaunchAgents/com.tradingagents.prod-health-sentinel.plist
+grep -c '{{' ~/Library/LaunchAgents/com.tradingagents.prod-health-sentinel.plist   # 预期 0
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.prod-health-sentinel.plist
+```
+
+安装后自查：`RunAtLoad` 会立刻探一次；此后每 5 分钟一次，
+`launchctl print gui/$UID/com.tradingagents.prod-health-sentinel` 看 `last exit code`，
+状态与前序告警在 `~/ta-watch/.sentinel/state`。
+
+本地验证（不碰生产、不装 launchd）：
+
+```bash
+plutil -lint releases/launchd/com.tradingagents.prod-health-sentinel.plist  # OK
+bash -n releases/launchd/ta-prod-health-sentinel.sh                          # 语法 OK
+bash releases/launchd/tests/test_prod_health_sentinel.sh                      # 19 项断言全绿
+```
+
+测试只用临时目录 + 随机高位端口的桩服务（`BaseHTTPRequestHandler`），
+不连 8000，不发通知（`TA_WATCH_NOTIFY=0`）。
+
+注意：切换 release 时 `{{EXPECT_PROD_SHA}}` 必须同步改，否则哨兵立刻报
+`sha_mismatch`——这是有意为之的漂移检测，不是误报。
