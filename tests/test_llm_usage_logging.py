@@ -98,6 +98,55 @@ class TestExtractLlmResult:
         assert (out["input_tokens"], out["output_tokens"], out["total_tokens"]) == (5, 2, 7)
         assert out["model_name"] == "m1"
 
+    def test_zero_cache_read_is_recorded_not_null(self):
+        """DAV-2112: an explicit ``cache_read: 0`` is a real upstream reading
+        (provider reported zero cache hits), not a missing key. It must
+        persist as ``0``, never silently become NULL."""
+        out = _extract_llm_result(_llm_result(usage=_usage_metadata(
+            input_token_details={"cache_read": 0},
+            output_token_details={"reasoning": 0},
+        )))
+        assert out["cached_prompt_tokens"] == 0
+        assert out["reasoning_tokens"] == 0
+
+    def test_llm_output_zero_cached_tokens_preserved(self):
+        """Non-streaming path: ``cached_tokens: 0`` / ``reasoning_tokens: 0``
+        on the wire body must land as 0, not be falsy-dropped to None."""
+        gen = ChatGeneration(message=AIMessage(content="ok"), generation_info={})
+        result = LLMResult(
+            generations=[[gen]],
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
+            },
+        )
+        out = _extract_llm_result(result)
+        assert out["cached_prompt_tokens"] == 0
+        assert out["reasoning_tokens"] == 0
+
+    def test_llm_output_details_missing_stays_null(self):
+        """Guard the other direction: wire body without the detail keys must
+        still yield NULL — the fix distinguishes absent from zero."""
+        gen = ChatGeneration(message=AIMessage(content="ok"), generation_info={})
+        result = LLMResult(
+            generations=[[gen]],
+            llm_output={
+                "token_usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                },
+            },
+        )
+        out = _extract_llm_result(result)
+        assert out["cached_prompt_tokens"] is None
+        assert out["reasoning_tokens"] is None
+
 
 class TestCallbackLogging:
     def test_end_to_end_row(self):

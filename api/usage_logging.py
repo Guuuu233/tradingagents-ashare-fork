@@ -339,8 +339,15 @@ def _extract_llm_result(response: LLMResult) -> Dict[str, Any]:
         )
         if usage is None:
             input_tokens, output_tokens, total_tokens = ti, to, tt
-            cached_prompt_tokens = cached_prompt_tokens or t_cached
-            reasoning_tokens = reasoning_tokens or t_reason
+            # Explicit-None checks, not ``or``: an upstream ``cached_tokens: 0``
+            # / ``reasoning_tokens: 0`` is a real reading (provider reported the
+            # key), not a missing value. ``X or fallback`` would silently turn a
+            # legitimate 0 into the fallback's value — and into NULL when the
+            # fallback is absent — which is the DAV-2112 miss signature.
+            if cached_prompt_tokens is None:
+                cached_prompt_tokens = t_cached
+            if reasoning_tokens is None:
+                reasoning_tokens = t_reason
         else:
             # DAV-1426 backstop: when both sources exist but differ, prefer
             # the one with the smaller input_tokens — an inflated merged
