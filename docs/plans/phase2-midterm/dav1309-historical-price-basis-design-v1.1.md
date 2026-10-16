@@ -1,13 +1,15 @@
-# DAV-1309 设计文档：历史回放价格口径切换到「按分析日截断的前复权（pit_qfq）」v1.1
+# DAV-1309 设计文档：历史回放价格口径切换到「按分析日截断的前复权（pit_qfq）」v1.2
 
 | 项 | 内容 |
 |---|---|
 | 任务 | DAV-1309（规格卡，低优，历史回放专用） |
-| 状态 | v1.1，按总控 10-16 三项裁定修订；**只改文档，不实施；不修代码、不回写历史报告、不改实时路径** |
-| 起草 | 资深开发1：v1.0 于 2026-10-15，v1.1 于 2026-10-16 |
+| 状态 | v1.2，按 DAV-2146 复审打回（3🟡+2🟢）补齐；前身 v1.1 按总控 10-16 三项裁定修订；**只改文档，不实施；不修代码、不回写历史报告、不改实时路径** |
+| 起草 | 资深开发1：v1.0 于 2026-10-15，v1.1 于 2026-10-16，v1.2 于 2026-10-16 |
 | 核对基线 | `codex/dav-4-p2a-trunk` tip `5bfd6a82cfe08b58456af40a2df123ea16f55131`（`git ls-remote` 实测；引用代码行号在 v1.0 基线 `ddec52f9` 与 `5bfd6a82` 间未变） |
 | 实施排期 | 按卡面登记：**实施排到第二阶段回测之前**；本卡只交设计 |
 | 关联 | DAV-1312（前复权偏移误拦量审计）、DAV-703/D-01（raw 日线通道契约）、DAV-715（分红旁证）、DAV-1142/1198/1199（price_ref 注册表与价格门）、DAV-2045（缺凭据口径）、F1 协议 v1.0.1 §3（阶段 H 要求"事件当时的复权价格"） |
+
+**v1.2 修订记录（DAV-2146 复审打回补齐，3🟡+2🟢）**：§4.3-2 把「registry 经 `attach_price_ref_source` 已持有 pool」断言展开为显式改动点小清单（state→`stock_data_basis`→`_pool_from_state`→继承分支的取值链，及同文件 `:2089`/`:2133-2136`/`:2136-2178` 三处配套修订）；§1.2 补 registry 口径 token 表现状，§4.4 明确注入文案须先登记 `pit_qfq` 等价 token 并排除 `_DOC_DECL_RE`；§3.3-6 写明 `vol`/`amount` 两字段保留、`amount` 单位口径不换算；§3.4 补「包装层不得把日期参数改成位置参数」约束；§2.2 注明 backfill 锚点（窗口内最新）与本设计锚点（不晚于分析日）的有意差异。
 
 **v1.1 修订记录**：口径裁定落实为 **B（`pit_qfq`，按分析日截断的前复权）**，删去 A 方案主线；更正 v1.0 §2.1 中「600519 例 1246 vs 1276」的表述错误（见 §2.3）；按裁定新增两条必做验证（§6.2 锚定实测、§6.3 每日批存档对拍）；§4.3 执行坐标合法集改为 `run_coordinate_basis` 动态判定；§6.4 缺凭据改为进计算前报错退出。
 
@@ -42,6 +44,7 @@
 - `price_basis_gate._legal_execution_ref` 只认 `basis == vendor_qfq`；`price_basis_version` 只在 gate pass 时落 `price_basis.vendor_qfq`，否则 `unspecified`。
 - prompts（`tradingagents/prompts/zh.py` 2/356/419/500/535/568/571 行等）把"技术执行坐标一律使用前复权（vendor_qfq）"写死进契约文本。
 - **`adj_factor` 表尚无 provider 级通道**：`pit_qfq` 需要的因子表现在只在 `scripts/backfill_tplus5_shadow.py` 内以裸 `requests` 直查（`:259` 起，`api_name="adj_factor"`，`fields=ts_code,trade_date,adj_factor`，独立节流、session trust_env=False、凭证不外泄的错误归类）。该脚本已验证供给面可用，但实现进 provider 时须按 `_tushare_post` 的既有通道规范重写（typed 错误分类、PIT 守卫、禁凭证回退），不得 copy 裸请求。
+- **registry 口径 token 表无 `pit_qfq` 等价 token**（复审 🟡-2 前置现状）：`price_ref_registry.py` 的口径 token 体系——`_BASIS_TOKEN_RE`（`:1776`，`不复权|未复权|前复权|vendor_qfq|pit_raw|qfq`）、`_basis_token_basis`/`_declared_basis`（`:1728-1759`）、`_DECLARED_TAIL_RE`/`_DECLARED_PAREN_RE`（`:1762` 起）、`_DOC_DECL_RE`（`:1770`）——全部只认 `pit_raw`/`raw`/`vendor_qfq`/`qfq`/`前复权`/`不复权`/`未复权`；`pit_qfq` 与「截断前复权」字样目前**不映射任何 basis**。§4.4 的确定性声明行注入后，若 token 表不扩，该行会按现行规则被 `前复权→vendor_qfq` 误判；处理见 §4.4。
 
 ## 2. 口径裁定：B（`pit_qfq`），总控 10-16 已裁
 
@@ -66,6 +69,8 @@ anchor       = min(trade_date, max(adj_factor 表中的因子日))
 对 open/high/low 同样乘以 `f(t)/f(anchor)`；volume/amount 保持 raw（与 vendor_qfq 通道行为一致——成交量在 akshare qfq 输出中本就未缩放，保持一致以免下游量指标分裂）。
 
 **锚点恒等式（v1.1 新增，§6.2 的实测对象）**：若 `anchor = trade_date`（即 trade_date 当日因子表有行——A 股除权日当日因子总是已更新），则 `f(anchor)=f(trade_date)`，末根 bar `adj_close(trade_date) = raw_close(trade_date)` × 1 = **当日不复权收盘价**。也就是：*`pit_qfq` 序列的末根 K 线价格恒等于当日盘面价*；离 trade_date 越远的 bar 才随历次除权事件被压低。这正是"前复权"的语义——把历史价折算到最新因子口径，而"最新"在这里被截断到分析日。
+
+**与 backfill 脚本锚点的有意差异（不得照抄）**：`backfill_tplus5_shadow.py:305` 取 `anchor = max(factor_by_date)`——**查询窗口内的最新因子日**（该脚本拉取窗口本身即回填所需区间，锚到窗口末）。本设计锚点是 `min(trade_date, max(因子日))`——**不晚于分析日的最新因子**，窗口可外延至 `trade_date` 之外但锚点永不越过 `trade_date`。两者约束不同属有意收紧：backfill 面向「窗口内已发生事实的回填」，其窗口内因子全集天然 PIT 安全；`pit_qfq` 面向「还原分析日当时输入」，锚点必须显式压在分析日。实施时不得直接照抄 `:305` 一行，须按本节公式落锚。
 
 ### 2.3 v1.0 表述更正（裁定二-1）
 
@@ -115,7 +120,7 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 3. **锚定**：`anchor = min(trade_date, max(因子表因子日))`；`f(anchor) = adj_factor(anchor)`。anchor 行缺失（trade_date 不是交易日、或因子表最新日早于 trade_date 时取最新日）按"因子表实际最新日"落锚——`min` 语义即"不晚于分析日的最新因子"。
 4. **合成**：`adj_x(t) = raw_x(t) × f(t) / f(anchor)`（open/high/low/close）；任一 bar 因子缺失或非正值→该 bar 丢弃并记 gap；因子表整体 `no_rows`/`missing_field`/`token_missing`→失败闭合（不降级 akshare、不回落 vendor_qfq）。
 5. **标签**：`out.attrs["price_basis"] = "pit_qfq"`；CSV 头部 `# price_basis: pit_qfq`（复用 `_fetch_all` 的 provenance 改写骨架，§4.2）。
-6. **成交量**：不缩放（与 vendor_qfq 通道一致，见 §2.2）。
+6. **成交量/成交额字段保留**：`vol`、`amount` 两列保留在 pit_qfq 输出中，**不缩放**（与 vendor_qfq 通道一致，见 §2.2）。`amount` 单位与 akshare `stock_zh_a_hist` 输出同为**万元**（Tushare `daily` 的 `amount` 官方口径即千元之外的万元口径——与 akshare 该接口一致，**不做换算**，不新增单位字段）；`vol` 同为手/股原始量纲不换算。任何下游若将来要裁字段（如剔除 `amount`），须在实施卡显式登记对面板（market_analyst 注入块、VPA 特征列集、cache schema）的影响，不得静默裁剪。
 7. **失败闭合语义**：`pit_qfq` 通道**只允许 Tushare 私有网关**（daily+adj_factor 同源才能保证因子与 bar 对齐），无 akshare 公开源回退——token 缺失即失败闭合（§6.4）。
 
 ### 3.4 旁路与兜底面
@@ -123,6 +128,7 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 - **`market_analyst` 的 `_fetch_direct` 回退**（collector 未命中时直接 `route_to_vendor("get_stock_data")`/`get_indicators`）：历史模式下会拿回 vendor_qfq，与 pool 口径分裂。设计：回退路径同样经 `resolve_price_basis` 判定；`pit_qfq` 时拒绝走通用 vendor 链，直接调 `prov.get_stock_data(..., price_basis="pit_qfq", as_of=current_date)`，失败闭合文案。
 - **ToolNode 里的 `get_stock_data`/`get_indicators` 工具**（`trading_graph.py:612/676`）：历史模式下 agent 直调工具仍会拿到拉取日 qfq。设计：在工具包装层判定 `end_date` 为历史时改走 provider `pit_qfq` 通道，而不是拒绝（拒绝会把残留工具调用变成新的失败噪音；注释 `:675` 已注明"normally uses data_collector"，直调是边角路径）。
 - **`get_indicators`（provider `:1130`）**：签名无 `price_basis`，内部 `_fetch_hist_df` 默认 qfq。设计：加 `price_basis: str | None = None` 参数，`None`→按 `curr_date` 走 `resolve_price_basis`——历史日期自动切、当日不变。
+- **包装层参数形态约束（复审 🟢-1）**：`route_to_vendor` 的 as_of 提取（`interface.py:215 _extract_as_of`）依赖**固定位置下标表**（`get_stock_data`→args[2]、`get_indicators`→args[2]、`get_news`→args[2]，及 `curr_date`/`end_date`/`date` kwargs 优先）。**因此包装层/工具层新增 `price_basis`、`as_of` 等参数一律走 kwargs 追加，严禁把日期参数挪位或重排 positional 槽位、严禁把 kwargs 日期改写成位置参数形态**——否则 `_extract_as_of` 按既有索引取错值 → as_of=None → 历史判定静默短路（PIT 守卫失效但不报错）。本条同样约束 §3.4 前两点的包装改造。
 
 ## 4. 一致性切换：指标 · 数据池 · basis 标签 · 报告声明
 
@@ -137,9 +143,15 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 ### 4.3 price_ref basis 标签（registry + gate）——按总控 10-16 裁定
 
 1. `build_market_data_pool`：`pool.stock_data_basis` 直接来自 CSV 头部，已正确——refs 桥接（C5）随 `basis_hint` 自动标 `pit_qfq`。
-2. `audit_price_ref_registry` 技术报告继承：`:1973` 的 `technical_report:vendor_qfq` 改为按 `pool.stock_data_basis` 继承（registry 经 `attach_price_ref_source` 已持有 pool）。provenance 记 `technical_report:{basis}`。
+2. `audit_price_ref_registry` 技术报告继承（复审 🟡-1，展开为显式改动点清单）：
+   - **取值链**：`attach_price_ref_source`（`:1315`）已把 collected pool 的 `price_basis` 挂上 `state[PRICE_REF_SOURCE_KEY]`（`:1342`）；`_pool_from_state`（`:1354`）调 `build_market_data_pool(source,…)` 建池，池内 `stock_data_basis` 由 CSV 头部 `# price_basis:` 驱动（`:1202`，缺省回 `vendor_qfq`）。因此 `audit_price_ref_registry`（`:2229`）内 `pool = _pool_from_state(state)`（`:2256`）已拿到含本次运行口径的 pool——**断言成立，但要改的是消费点**：
+   - **改动点 a（继承分支）**：`:1971-1973` `elif is_technical:` 分支的 `ref["basis"] = PRICE_BASIS_VENDOR_QFQ` / `provenance="technical_report:vendor_qfq"` 改为 `ref["basis"] = pool.stock_data_basis`（经 `_pool_from_state` 结果）、`provenance=f"technical_report:{pool.stock_data_basis}"`；`pool=None`（state 无 source 或建池失败）时维持现值 `vendor_qfq` 兜底并记 `provenance="technical_report:fallback_vendor_qfq"`（兜底可追溯，不静默）。
+   - **配套改动点 b（`:2089`）**：`concrete_bases = {VENDOR_QFQ, RAW, PIT_RAW}` 集合须加入 `PRICE_BASIS_PIT_QFQ`，否则 pit_qfq 坐标的 refs 被判为「非 concrete」而豁免 R1/R2 混用检查——同句 pit_qfq vs raw 混用会漏拦。
+   - **配套改动点 c（`:2133-2136` non_qfq 判定）**：`non_qfq` 集合的语义是「非执行坐标」。在 pit_qfq run 下 `vendor_qfq` 与 `pit_qfq` 是不同坐标，`non_qfq` 判定须改为 `basis != run_coordinate_basis`（run 坐标=pool.stock_data_basis；披露价 `_potential_disclosure_price_ref` 仍恒入 non-coordinate 集），不能继续写死 `basis in (raw, pit_raw)`——否则 vendor_qfq 价在 pit_qfq run 里被错认成坐标侧。
+   - **配套改动点 d（`:2136-2178` qfq 侧锚点）**：R2 规则内所有 `ref["basis"] != PRICE_BASIS_VENDOR_QFQ → continue`、`r["basis"] == PRICE_BASIS_VENDOR_QFQ` 过滤、`qfq = next(... basis == VENDOR_QFQ ...)`（`:2177` 附近）等「qfq=坐标侧」锚点，全部改为按 `run_coordinate_basis` 判定（写死 vendor_qfq 时，pit_qfq run 的坐标价不进 R2 检查链，跨坐标引用漏拦）。
+   - provenance 记 `technical_report:{basis}`（与 gate 的 `run_coordinate_basis` 同源，避免两处各自推断）。
 3. `price_basis_gate`（裁定三）：
-   - **执行坐标合法集动态化**：`_legal_execution_ref` 由硬编码 `basis == vendor_qfq` 改为 `basis == run_coordinate_basis`（取自 pool 头部 `stock_data_basis`，即本次运行的执行坐标），外加合法 conversion；**不写死任何并集**。
+   - **执行坐标合法集动态化**：`price_basis_gate.py:128-136` 的 `_legal_execution_ref` 由硬编码 `ref["basis"] != PRICE_BASIS_VENDOR_QFQ → False` 改为 `basis == run_coordinate_basis`（取自 `state[PRICE_REF_SOURCE_KEY]["price_basis"]`，即 `pool.stock_data_basis`，本次运行的执行坐标），外加合法 conversion；**不写死任何并集**。
    - **披露价规则保留**：大宗/龙虎榜 raw、增减持/回购/定增 pit_raw 等 typed disclosure **不得直接充当可执行价位**——这条不因同族化而放开（pit_qfq 坐标下 raw 仍是异坐标，天然被挡；但规则须在代码中显式以 `disclosure_type`/`provenance` 判定，不依赖坐标差碰巧存在），并**单列测试**（§6.1-4）。
    - `price_basis_version`：pass 时落 `to_price_basis_version(run_coordinate_basis)`——历史 run 落 `price_basis.pit_qfq`；blocked 仍 `unspecified`。
    - **`pit_qfq` 标签注册**：`api/services/price_basis_labels.py` 新增 `PRICE_BASIS_PIT_QFQ="pit_qfq"` 与 `PRICE_BASIS_VERSION_PIT_QFQ="price_basis.pit_qfq"` 及双向映射（provider 侧 `_KNOWN_PRICE_BASIS_SHORT_LABELS` 同步）。
@@ -149,7 +161,8 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 ### 4.4 报告"前复权"声明
 
 - stock_data CSV 头部 `# price_basis: pit_qfq`（机器可读，已有机制）；
-- 报告正文：在 market_analyst 注入的 `【完整日线 OHLCV】` 前缀或 `market_data_context` 格式化块中加一行人读声明，文案随口径参数化："本报告价格为按 YYYY-MM-DD 截断的前复权价"（实时 run 维持"前复权"既有表述）。不做模型自觉声明（DAV-1312 已证明文档级声明传递有漏），由确定性文本注入承担；
+- 报告正文：在 market_analyst 注入的 `【完整日线 OHLCV】` 前缀或 `market_data_context` 格式化块中加一行人读声明，文案随口径参数化："本报告价格为按 YYYY-MM-DD 截断的前复权价（pit_qfq）"（实时 run 维持"前复权"既有表述）。不做模型自觉声明（DAV-1312 已证明文档级声明传递有漏），由确定性文本注入承担；
+- **注入文案的 token 登记前置（复审 🟡-2，与 §1.2 缺口联动）**：上述确定性声明行在进入报告正文**之前**，必须先在 registry 口径 token 表完成 `pit_qfq` 等价 token 登记——即 `_BASIS_TOKEN_RE`（`:1776`）、`_basis_token_basis`（`:1728`）、`_declared_basis`（`:1743`）、`_DECLARED_TAIL_RE`/`_DECLARED_PAREN_RE`（`:1762` 起）同步扩入 `pit_qfq` 与「截断前复权」字样的映射（`pit_qfq`/`截断前复权` → `PRICE_BASIS_PIT_QFQ`）。**同时**，本行是系统注入的确定性声明、不是模型生成的「全文一律」宣言，必须把该注入文本**排除在 `_DOC_DECL_RE`（`:1770`）匹配之外**（文档级声明 RE 只认「一律/一概/全部/所有/统一/以下/本文/本报告/本计划/本方案」scope 词引导的声明；注入行若被它命中，会按 token→basis 映射产生传播源，与本行的真实语义脱钩）。实现上由注入通道用固定模板生成并在 registry 侧对该模板显式豁免，而非让正则碰巧不匹配——登记与豁免两处改动须在同一提交，缺一都会留下误拦/漏拦口。
 - `result_data.price_basis`/`price_basis_version` 按 §4.3 落值，`price_ref_contract_version="price_ref.v2"`。
 
 ## 5. cache key 与 `market_data_context.daily.as_of` 语义
@@ -210,7 +223,7 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 3. **`pit_qfq` 与盘面的残余差异**：中间历史 bar 仍可能偏离当时盘面价（折算到 trade_date 口径）——这是"还原当日实时输入"的忠实语义而非缺陷；末根恒等盘面价（§2.2/§6.2）。报告的"支撑位/目标价"可读性依赖末根与近端 bar，语义恢复成立。
 4. **token 依赖**：`pit_qfq` 只走 Tushare 私有网关，无 akshare 公开源回退；历史批量在无 token 环境**整体失败闭合**（§6.4，裁定四，与 DAV-2045 口径一致）。
 5. **`unspecified` 语义不变**：仍是失败闭合通道；本设计不给它新含义。
-6. **实施排期**：按卡面登记排到第二阶段回测之前；实施前需总控对本 v1.1 复审签字。**复审通过后 1309、2108 置 done**（裁定五）。
+6. **实施排期**：按卡面登记排到第二阶段回测之前；实施前需总控对本 v1.2 复审签字。**复审通过后 1309、2108 置 done**（裁定五）。
 
 ## 8. 变更文件清单（实施时预告）
 
@@ -219,7 +232,7 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 | `tradingagents/graph/data_collector.py` | `resolve_price_basis`；三处白名单放行 `pit_qfq`；cache key 后缀；无 token 前置失败（§6.4） |
 | `tradingagents/dataflows/providers/cn_akshare_provider.py` | 新增 `_fetch_pit_qfq_daily`（daily+adj_factor 两表合成）；`pit_qfq` 放行；`get_indicators` 加 `price_basis` 参数 |
 | `api/services/price_basis_labels.py` | `pit_qfq` 短标 + `price_basis.pit_qfq` 版本标注册及双向映射 |
-| `tradingagents/agents/utils/price_ref_registry.py` | 技术报告继承改为 `pool.stock_data_basis` 驱动 |
+| `tradingagents/agents/utils/price_ref_registry.py` | 技术报告继承改由 `pool.stock_data_basis` 驱动（§4.3-2 改动点 a-d：`stock_data_basis` 取值链、`concrete_bases` 加 `pit_qfq`、`non_qfq` 判定改 `run_coordinate_basis`、R2 qfq 侧锚点同步） |
 | `tradingagents/agents/utils/price_basis_gate.py` | 执行坐标集动态化（`run_coordinate_basis`，不写死并集）；披露价挡法按 `disclosure_type`/`provenance` 显式保留；`price_ref.v2` |
 | `tradingagents/prompts/zh.py`（及 en.py 对应段） | 契约文案按 run 口径参数化注入 |
 | `api/main.py`、`tradingagents/graph/trading_graph.py` | 视接法：collect 传参或零改动（推荐后者） |
@@ -229,4 +242,4 @@ def resolve_price_basis(trade_date: str, config: Mapping | None = None) -> str:
 
 ---
 
-*本文件为设计稿 v1.1，按总控 2026-10-16 三项裁定修订；复审只核改动部分（§2、§4.3、§6.2–6.4 及全文 B 口径落实）。代码位置行号以基线 `ddec52f9`/`5bfd6a82` 为准。*
+*本文件为设计稿 v1.2，在 v1.1（总控 2026-10-16 三项裁定）基础上按 DAV-2146 复审打回（3🟡+2🟢）补齐：§4.3-2 改动点清单、§1.2 token 表现状与 §4.4 登记/豁免前置、§3.3-6 vol/amount 口径、§3.4 位置参数约束、§2.2 backfill 锚点差异。复审只核本版相对 v1.1 的改动行。代码位置行号以基线 `ddec52f9`/`5bfd6a82` 为准。*
