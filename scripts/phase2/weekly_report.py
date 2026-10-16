@@ -112,11 +112,13 @@ import daily_snapshot_ledger as dsl  # noqa: E402
 # DAV-1506 (存储 B-1, D-072 附注): canonical ``result_data.storage.v1`` rows
 # no longer persist ``horizons.<h>`` — it is a read-layer virtual key rebuilt
 # from the authoritative ``<h>_term`` slice. Every record reaching
-# build_report passes through ``result_data_compat_view`` so rows sealed under
-# the new layout still resolve ``horizons.MEDIUM`` (DAV-1651; legacy rows are
-# returned untouched by the fail-close wrapper).
+# build_report passes through ``result_data_authoritative_view`` so rows
+# sealed under the new layout still resolve ``horizons.MEDIUM`` and, per
+# DAV-2129 (总控裁: 权威副本为 <h>_term), a stale legacy ``horizons`` alias
+# mirror can never override the ``<h>_term`` slice on the judgement fields
+# this report consumes.
 from tradingagents.storage.result_data_compat import (  # noqa: E402
-    result_data_compat_view,
+    result_data_authoritative_view,
 )
 
 PIPELINE_VERSION = "weekly_report.v1"
@@ -536,7 +538,9 @@ def build_report(
         # DAV-1651: expand the legacy ``horizons`` view on canonical
         # (result_data.storage.v1) records; legacy records pass through
         # unchanged (fail-close: conflicts keep the stored form).
-        r = result_data_compat_view(r)
+        # DAV-2129: authoritative view — on legacy dual-alias rows the
+        # ``<h>_term`` slice wins over a stale ``horizons.<h>`` mirror.
+        r = result_data_authoritative_view(r)
         j = (r.get("horizons") or {}).get(MEDIUM)
         if not isinstance(j, dict):
             continue

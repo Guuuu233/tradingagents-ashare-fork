@@ -102,6 +102,9 @@ from tradingagents.dataflows.return_labels import (  # noqa: E402
 )
 from tradingagents.dataflows.sw_benchmark import resolve_sw_benchmark_leg  # noqa: E402
 from tradingagents.graph.horizon_profile import HORIZON_PROFILE_V1  # noqa: E402
+from tradingagents.storage.result_data_compat import (  # noqa: E402
+    result_data_authoritative_view,
+)
 
 PIPELINE_VERSION = "expiry_label_pipeline.v1"
 DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
@@ -928,7 +931,14 @@ def compute_label_row(
             hs300_leg = {"status": "benchmark_unavailable"}
 
     # Direction (ledger horizon judgement; DAV-1498 bucket).
-    hz_judgement = (record.get("horizons") or {}).get(horizon) or {}
+    # DAV-2129: resolve through the authoritative view — the record's
+    # ``horizons`` slot is whatever the sealer wrote, and on any raw
+    # result_data-shaped record the ``<h>_term`` slice wins over a stale
+    # alias mirror (579-row shape: alias direction/T+5 keys stale).
+    hz_judgement = (
+        (result_data_authoritative_view(record).get("horizons") or {})
+        .get(horizon) or {}
+    )
     direction_raw = hz_judgement.get("direction")
     if direction_raw is None:
         direction_raw = record.get("direction_top")

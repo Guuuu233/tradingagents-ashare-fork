@@ -41,7 +41,10 @@ from tradingagents.agents.utils.debate_metrics import (
 from tradingagents.agents.utils.evidence_verifier import (
     is_daily_ohlcv_unavailable,
 )
-from tradingagents.storage.result_data_compat import result_data_compat_view
+from tradingagents.storage.result_data_compat import (
+    result_data_authoritative_view,
+    result_data_compat_view,
+)
 from tradingagents.agents.utils.price_basis_isolation import (
     REASON_CONTRACT_INCOMPLETE,
     REASON_CONTAMINATED,
@@ -1774,18 +1777,55 @@ def evaluate_h1b_system_gates(
 
     for s in samples:
         res_data = s.get("result_data") if isinstance(s.get("result_data"), Mapping) else {}
+        # DAV-2129 (总控裁: 权威副本为 <h>_term): a packaged dual-horizon
+        # ``res_data`` can carry THREE copies of shadow_credit_metrics —
+        # the authoritative ``<h>_term`` slice, a stale ``horizons.<h>``
+        # mirror and a stale top-level copy (579-row shape: both stale
+        # copies have T+5 keys = null). The unit-level ``s`` (split from
+        # ``*_term`` by split_report_into_units) is authoritative; when
+        # falling back to ``res_data`` resolve through the horizon's term
+        # slice first, then the authoritative view, never the bare
+        # top-level copy.
+        hz_label = normalize_horizon_label(s.get("horizon"))
+        term_slice = (
+            res_data.get(f"{hz_label}_term")
+            if hz_label and isinstance(res_data, Mapping)
+            else None
+        )
+        if not isinstance(term_slice, Mapping):
+            term_slice = None
+        # Authoritative view for any horizons-shaped access; top-level keys
+        # are unchanged by the view so plain reads stay equivalent.
+        rd_view = (
+            result_data_authoritative_view(res_data)
+            if isinstance(res_data, Mapping) else res_data
+        )
+
         metrics = s.get("shadow_credit_metrics")
         if not metrics or not isinstance(metrics, Mapping):
-            metrics = res_data.get("shadow_credit_metrics") if isinstance(res_data.get("shadow_credit_metrics"), Mapping) else None
+            metrics = (
+                term_slice.get("shadow_credit_metrics")
+                if isinstance(term_slice, Mapping)
+                and isinstance(term_slice.get("shadow_credit_metrics"), Mapping)
+                else None
+            )
+        if not metrics or not isinstance(metrics, Mapping):
+            metrics = rd_view.get("shadow_credit_metrics") if isinstance(rd_view.get("shadow_credit_metrics"), Mapping) else None
         if not metrics or not isinstance(metrics, Mapping):
             metrics = calculate_shadow_credit_metrics(s)
         hit = metrics.get("t_plus_5_direction_hit")
-        st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status") or res_data.get("t_plus_5_status")
+        st = (
+            s.get("t_plus_5_status")
+            or metrics.get("t_plus_5_status")
+            or (term_slice.get("t_plus_5_status") if term_slice else None)
+            or res_data.get("t_plus_5_status")
+        )
         # Exclude suspension from due denominator
         if (
             st == T_PLUS_5_STATUS_SUSPENSION
             or s.get("is_suspended") is True
             or s.get("suspension") is True
+            or (term_slice is not None and term_slice.get("is_suspended") is True)
             or res_data.get("is_suspended") is True
             or res_data.get("suspension") is True
         ):
@@ -1795,12 +1835,16 @@ def evaluate_h1b_system_gates(
             st == T_PLUS_5_STATUS_PENDING_DUE
             or s.get("is_in_flight") is True
             or s.get("is_t_plus_5_due") is False
+            or (term_slice is not None and term_slice.get("is_in_flight") is True)
+            or (term_slice is not None and term_slice.get("is_t_plus_5_due") is False)
             or res_data.get("is_in_flight") is True
             or res_data.get("is_t_plus_5_due") is False
         ):
             continue
 
         is_due = s.get("is_t_plus_5_due")
+        if is_due is None and term_slice is not None:
+            is_due = term_slice.get("is_t_plus_5_due")
         if is_due is None and res_data:
             is_due = res_data.get("is_t_plus_5_due")
 
@@ -1808,15 +1852,18 @@ def evaluate_h1b_system_gates(
             if (
                 (hit is not None)
                 or bool(s.get("t_plus_5_evaluated", False))
+                or (term_slice is not None
+                    and bool(term_slice.get("t_plus_5_evaluated", False)))
                 or bool(res_data.get("t_plus_5_evaluated", False))
                 or (st in (T_PLUS_5_STATUS_DUE_AND_EVALUATED, T_PLUS_5_STATUS_DATA_MISSING))
             ):
                 is_due = True
             else:
-                # 1. Check if t_plus_5_date exists (top-level, shadow_credit_metrics, or result_data) and <= as_of
+                # 1. Check if t_plus_5_date exists (unit, term slice, metrics, or result_data) and <= as_of
                 raw_t5_date = (
                     s.get("t_plus_5_date")
                     or metrics.get("t_plus_5_date")
+                    or (term_slice.get("t_plus_5_date") if term_slice else None)
                     or res_data.get("t_plus_5_date")
                 )
                 t5_parsed = _parse_sample_date(raw_t5_date) if raw_t5_date else None

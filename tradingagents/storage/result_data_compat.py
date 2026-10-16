@@ -636,6 +636,71 @@ def expand_compat_view(result_data: Any) -> Dict[str, Any]:
     return view
 
 
+def _authoritative_alias_slice(alias: Any, term: Any) -> Any:
+    """One ``horizons.<h>`` slot overlaid on its authoritative ``<h>_term``.
+
+    Term wins on every shared key; alias-only keys are preserved verbatim
+    (a read view must not drop content — 裁定 §3 keeps them surfaced for
+    the exception list instead of silently deleting them). Term-only keys
+    are NOT injected: the alias slot keeps its legacy shape, matching what
+    ``expand_compat_view`` rebuilds under ``horizon_key_masks`` (term-only
+    version/SHA stamps never belonged to the alias). Anything that is not
+    a dict pair is returned unchanged.
+    """
+    if not isinstance(alias, dict) or not isinstance(term, dict):
+        return alias
+    return {
+        k: (copy.deepcopy(term[k]) if k in term else copy.deepcopy(v))
+        for k, v in alias.items()
+    }
+
+
+def result_data_authoritative_view(result_data: Any) -> Dict[str, Any]:
+    """Read-layer view where the authoritative ``<h>_term`` copy always wins.
+
+    DAV-2129 (依据 2124 问 3 / 2128 实测): every read point that resolves
+    ``horizons.<h>`` content must prefer the authoritative ``<h>_term``
+    slice — the physical ``horizons`` alias on pre-canonical rows can be a
+    stale mirror (B-4 冲突 579 行: alias T+5 keys are null while
+    ``<h>_term`` carries the real values).
+
+    * Canonical rows (``result_data.storage.v1``) → ``expand_compat_view``
+      (``horizons.<h>`` is *rebuilt* from ``<h>_term`` — already
+      authoritative); conflicts keep the fail-close stored form.
+    * Legacy rows that still carry a physical ``horizons`` alias alongside
+      ``<h>_term`` twins → shallow copy where each ``horizons.<h>`` is the
+      alias slice overlaid by ``_authoritative_alias_slice`` (term wins on
+      shared keys). This mirrors B-4's ``narrow_release_merge`` rule
+      (总控裁定: 权威副本为 <h>_term) so readers see exactly what the
+      post-conversion row will store.
+    * Anything else (single-horizon rows, no ``horizons`` map, non-dicts)
+      → returned as-is.
+
+    The view is a copy on the canonical path (see ``expand_compat_view``)
+    and a shallow copy on the legacy path; the input is never mutated.
+    """
+    if is_canonical_storage(result_data):
+        # expand_compat_view rebuilds horizons.<h> from <h>_term — already
+        # authoritative; conflicts fail closed to the stored form.
+        return result_data_compat_view(result_data)
+    if not isinstance(result_data, dict):
+        return result_data
+
+    horizons = result_data.get("horizons")
+    if not isinstance(horizons, dict) or not horizons:
+        return result_data
+    view = dict(result_data)
+    merged: Dict[str, Any] = {}
+    for horizon, alias in horizons.items():
+        term = (
+            result_data.get(_term_key_for(horizon))
+            if isinstance(horizon, str) else None
+        )
+        merged[horizon] = _authoritative_alias_slice(alias, term)
+    view["horizons"] = merged
+    return view
+
+
 def result_data_compat_view(result_data: Any) -> Dict[str, Any]:
     """Fail-close wrapper: expanded view, or the stored form on conflict.
 
@@ -708,6 +773,7 @@ __all__ = [
     "encode_canonical",
     "expand_compat_view",
     "is_canonical_storage",
+    "result_data_authoritative_view",
     "result_data_compat_view",
     "strip_compat_view_for_persist",
 ]

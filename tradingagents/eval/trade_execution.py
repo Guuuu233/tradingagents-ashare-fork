@@ -44,6 +44,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from tradingagents.eval.v03_return_measure import CostModel
+from tradingagents.storage.result_data_compat import (
+    result_data_authoritative_view,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -528,10 +531,13 @@ _NEUTRAL_WORDS = ("N/A", "NONE", "NULL", "中性", "HOLD", "WAIT", "NO_TRADE",
 def ledger_direction(record: Mapping[str, Any], horizon: str = "medium") -> Optional[str]:
     """从封存账本行提取方向：优先 horizons[hz].direction，退化为顶层 direction。
 
+    DAV-2129: horizons 经 authoritative view 读取——存在 ``<h>_term`` 权威
+    副本时其值覆盖别名镜像（账本封存记录无 ``*_term`` twin，为 no-op）。
+
     返回 'BUY' / 'SELL' / None（中性、NO_TRADE、缺失、歧义等不可下单方向）。
     匹配大小写不敏感；bull 与 bear 词同时命中视为歧义 → None（保守不产单）。
     """
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    hz = (result_data_authoritative_view(record).get("horizons") or {}).get(horizon) or {}
     raw = hz.get("direction") or record.get("direction_top")
     if raw is None:
         return None
@@ -550,7 +556,10 @@ def ledger_direction(record: Mapping[str, Any], horizon: str = "medium") -> Opti
 
 
 def ledger_trade_action(record: Mapping[str, Any], horizon: str = "medium") -> Optional[str]:
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    # DAV-2129: authoritative view — ``<h>_term`` wins over a stale
+    # ``horizons.<h>`` mirror on shared keys (no-op on sealed ledger
+    # records, which carry no ``*_term`` twin).
+    hz = (result_data_authoritative_view(record).get("horizons") or {}).get(horizon) or {}
     return hz.get("trade_action") or record.get("trade_action_top")
 
 
