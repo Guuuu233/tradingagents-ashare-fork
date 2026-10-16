@@ -77,6 +77,11 @@ run_sentinel() {  # env 覆盖 + 一次执行；输出到 stdout
     bash "${SENTINEL}" 2>&1
 }
 
+# 告警/恢复计数一律以 **脚本 stdout 的事件行** 为准，不以目录内文件数为准：
+# 落地文件名是秒级时间戳（ta-prod-health-sentinel.sh 的 ts_utc），同一秒内的多次
+# 告警会写同一个文件名并互相覆盖，目录文件计数因此跨秒随机。stdout 事件行不受影响。
+alert_lines()  { printf '%s\n' "$1" | grep -c 'sentinel: ALERT ' || true; }
+recovered_lines() { printf '%s\n' "$1" | grep -c 'sentinel: RECOVERED ' || true; }
 alert_files()  { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-[0-9]' || true; }
 recovered_files() { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-recovered-' || true; }
 
@@ -93,8 +98,8 @@ echo "== 情形 2：healthz 不通 → 第一次不告警，第二次才告警 =
 watch_reset 2-unreachable
 stop_stub
 PORT=1   # 无监听端口，必然连接失败
-out1=$(run_sentinel); n1=$(alert_files)
-out2=$(run_sentinel); n2=$(alert_files)
+out1=$(run_sentinel); n1=$(alert_lines "${out1}")
+out2=$(run_sentinel); n2=$(alert_lines "${out2}")
 [ "${n1}" = "0" ] && ok "第 1 次失败无告警" || bad "第 1 次失败就告警（未去抖）"
 echo "${out1}" | grep -q '1/2' && ok "第 1 次计入 1/2" || bad "第 1 次未计数: ${out1}"
 [ "${n2}" = "$((n1 + 1))" ] && ok "第 2 次失败新增 1 个告警" || bad "第 2 次未告警（${n1}->${n2}）"
@@ -106,9 +111,9 @@ echo "== 情形 3：commit_sha 与期望不符 → 立即告警（独立全新 s
 watch_reset 3-sha   # 不复用情形 2 的 state，fresh 下单次命中即验证
 start_stub bad_sha || exit 1
 n_before=$(alert_files)
-run_sentinel >/dev/null
-n_after=$(alert_files)
-[ "${n_after}" = "$((n_before + 1))" ] && ok "单次即告警（不等两次）" || bad "版本漂移未即时告警（${n_before}->${n_after}）"
+out3=$(run_sentinel)
+[ "$(alert_lines "${out3}")" = "1" ] && ok "单次即告警（不等两次）" || bad "版本漂移未即时告警：$(printf '%s' "${out3}" | tr '\n' '|')"
+[ "$(alert_files)" -ge "$((n_before + 1))" ] || echo "  WARN: 告警文件与前次同秒被覆盖（文件名秒级精度），仅告警"
 f=$(ls -t "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
 grep -q 'reason=sha_mismatch' "${WATCH}/${f}" && ok "原因为 sha_mismatch" || bad "原因字段不对"
 grep -q "observed_commit_sha=$(printf '0%.0s' {1..16})" "${WATCH}/${f}" && ok "记录了观测 sha" || bad "未记录观测 sha"
@@ -116,24 +121,26 @@ grep -q "observed_commit_sha=$(printf '0%.0s' {1..16})" "${WATCH}/${f}" && ok "�
 echo "== 情形 4：恢复 → 写恢复记录（沿用情形 3 的告警状态）=="
 n_recovered_before=$(recovered_files)
 stop_stub; start_stub ok || exit 1
-run_sentinel >/dev/null
-[ "$(recovered_files)" = "$((n_recovered_before + 1))" ] && ok "恢复后写出恢复记录" || bad "未写恢复记录"
+out4=$(run_sentinel)
+[ "$(recovered_lines "${out4}")" = "1" ] && ok "恢复后写出恢复记录" || bad "未写恢复记录"
 f=$(ls -t "${WATCH}" | grep '^ALERT-prod-recovered-' | head -1)
 grep -q 'previous_alert_reason=sha_mismatch' "${WATCH}/${f}" && ok "记录前序告警原因" || bad "缺前序原因"
 grep -q 'time_utc=' "${WATCH}/${f}" && ok "含恢复时间" || bad "缺恢复时间"
-run_sentinel >/dev/null
-[ "$(recovered_files)" = "$((n_recovered_before + 1))" ] && ok "持续健康不重复写恢复记录" || bad "重复写恢复记录"
+out_healthy=$(run_sentinel)
+[ "$(recovered_lines "${out_healthy}")" = "0" ] && ok "持续健康不重复写恢复记录" || bad "重复写恢复记录"
 
 echo "== 附加：非 2xx / 垃圾响应 / 并发锁 =="
 watch_reset 4-extra
 start_stub http500 || exit 1
-run_sentinel >/dev/null; run_sentinel >/dev/null   # 非 2xx 也走去抖，需两次
-[ "$(alert_files)" = "1" ] && ok "HTTP 500 计为不通（两次后告警）" || bad "HTTP 500 未告警"
+out5=$(run_sentinel); out6=$(run_sentinel)   # 非 2xx 也走去抖，需两次
+n_alert=$(alert_lines "${out5}"); n_alert=$((n_alert + $(alert_lines "${out6}")))
+[ "${n_alert}" = "1" ] && ok "HTTP 500 计为不通（两次后告警）" || bad "HTTP 500 未告警（告警 ${n_alert} 次）"
 f=$(ls "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
 grep -q 'reason=unreachable' "${WATCH}/${f}" && ok "非 2xx 原因为 unreachable" || bad "原因字段不对"
 stop_stub; start_stub garbage || exit 1
-n=$(alert_files); run_sentinel >/dev/null; run_sentinel >/dev/null
-[ "$(alert_files)" -gt "${n}" ] && ok "2xx 但响应体不可解析计为不通" || bad "垃圾响应未告警"
+out7=$(run_sentinel); out8=$(run_sentinel)
+n=$(alert_lines "${out7}"); n=$((n + $(alert_lines "${out8}")))
+[ "${n}" -gt "0" ] && ok "2xx 但响应体不可解析计为不通" || bad "垃圾响应未告警（两次执行均无 ALERT 事件）"
 
 mkdir -p "${WATCH}/.sentinel/check.lock"
 out=$(run_sentinel)
