@@ -45,11 +45,15 @@ Label leg (DAV-1875 ``labels_t10.jsonl``):
 
 Dedup (签收 item 4): same (symbol, signal_date, version_key) keeps the
 earliest-``created_at`` completed run — fixed ex ante, no ex-post picking.
-Ledger ``version_key`` is reconstructed as
-``commit:<generated_by_commit_sha[:12]>:<evidence_contract_version>``
-(falling back to run_identity SHA then "unversioned"); a multi-version
-input fails closed unless ``--version-key`` names one queue (D-075/DAV-1682
-single-version rule — cross-version comparison belongs to M3).
+Ledger ``version_key`` is the DAV-2142 frozen analysis-version key
+``AV|anchor=<production release anchor>|contract=<evidence contract>|resolved=<sha256 of run_identity.prompt_resolved_hashes>|custom=<sha256 of custom_prompt_snapshot>|served=<sorted served_model set>``
+(冻结登记 §3: only an analysis-path change — prompts / agents / dataflows
+/ graph / LLM config — or a served_model change switches the version; the
+production release SHA is an AUDIT anchor, not a per-deploy split key, so
+the adjudicated-equivalent 10-12 deploy keeps one key before and after).
+A multi-version input fails closed unless ``--version-key`` names one
+queue (D-075/DAV-1682 single-version rule — cross-version comparison
+belongs to M3).
 
 Fail-close: the trading calendar must resolve (``--calendar-file`` or the
 live ``require_cn_trade_dates`` route) — unavailable → exit 2; an
@@ -129,31 +133,105 @@ def _parse_d(raw: Any) -> str | None:
 # 1. ledger -> per-record p_rel_t10 frame
 # ---------------------------------------------------------------------------
 
-def _record_version_key(record: Mapping[str, Any]) -> str:
-    """M1 queue key from the ledger `versions` block.
+def _canonical_json_sha(obj: Any) -> str | None:
+    """sha256 of the canonical-JSON form used by freeze register §3
+    (UTF-8, sort_keys=True, ensure_ascii=False, separators=(",",":"))."""
+    if obj is None:
+        return None
+    blob = json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
-    commit SHA (generated_by_commit_sha, else run_identity.commit_sha) +
-    contract version (evidence_contract_version / protocol_version) — the
-    two fields the ledger seals per run; serving-model / prompt-hash
-    granularity collapses into run_identity when no commit is recorded.
-    """
+
+def _record_analysis_anchor(record: Mapping[str, Any]) -> str:
+    """Audit anchor for the version key = the production release SHA the
+    record was sealed under (generated_by_commit_sha → run_identity.commit_sha).
+    It is an anchor label, NOT a split factor — an adjudicated-equivalent
+    deploy (10-12 65988c79→082be047) keeps the same queue because the split
+    factors (contract/resolved/custom/served) do not change."""
     v = record.get("versions") or {}
     commit = v.get("generated_by_commit_sha")
     if isinstance(commit, str) and commit:
-        base = "commit:" + commit[:12]
-    else:
-        ri = v.get("run_identity")
-        c = ri.get("commit_sha") if isinstance(ri, dict) else None
-        if isinstance(c, str) and c:
-            base = "commit:" + c[:12]
-        elif isinstance(ri, str) and ri:
-            base = "run_identity:" + ri[:16]
-        else:
-            base = "unversioned"
-    cv = (v.get("evidence_contract_version")
-          or v.get("protocol_version")
-          or "novc")
-    return f"{base}:{cv}"
+        return commit[:12]
+    ri = v.get("run_identity")
+    c = ri.get("commit_sha") if isinstance(ri, dict) else None
+    if isinstance(c, str) and c:
+        return c[:12]
+    if isinstance(ri, str) and ri:
+        return ri[:12]
+    return "unanchored"
+
+
+def _record_prompt_resolved_sha(record: Mapping[str, Any]) -> str | None:
+    """Prompt-equivalence evidence: sha256 of run_identity.prompt_resolved_hashes."""
+    v = record.get("versions") or {}
+    ri = v.get("run_identity")
+    if isinstance(ri, dict):
+        return _canonical_json_sha(ri.get("prompt_resolved_hashes"))
+    return None
+
+
+def _record_custom_prompt_sha(record: Mapping[str, Any]) -> str | None:
+    """Prompt-equivalence evidence: sha256 of custom_prompt_snapshot (kept
+    under ``versions.custom_prompt_snapshot`` when the ledger sealed it)."""
+    v = record.get("versions") or {}
+    return _canonical_json_sha(v.get("custom_prompt_snapshot"))
+
+
+def _record_served_set(record: Mapping[str, Any]) -> tuple[list[str], int]:
+    """Flatten ``versions.served_models.by_role`` into the deduped served
+    set + the count of calls whose response carried no model (DAV-2142
+    §2.3: llm_call_logs.served_model is the version-key field; a report
+    with >1 non-empty served_model is multi-model and gets flagged)."""
+    v = record.get("versions") or {}
+    sm = v.get("served_models")
+    if not isinstance(sm, dict):
+        return [], 0
+    by_role = sm.get("by_role")
+    models: list[str] = []
+    if isinstance(by_role, dict):
+        for vals in by_role.values():
+            if isinstance(vals, str):
+                vals = [vals]
+            for x in vals or []:
+                if isinstance(x, str) and x and x not in models:
+                    models.append(x)
+    missing = sm.get("served_model_missing")
+    try:
+        missing_n = int(missing or 0)
+    except (TypeError, ValueError):
+        missing_n = 0
+    return sorted(models), missing_n
+
+
+def _record_version_key(record: Mapping[str, Any],
+                        anchor: str | None = None) -> str:
+    """DAV-2142 frozen analysis-version key (登记 §3).
+
+    Split factors: contract version + resolved-prompt hash + custom-prompt
+    hash + served_model set — the production release commit is only an
+    audit anchor, never a per-deploy split key. ``anchor`` is the frozen
+    production-release anchor (``--analysis-anchor``); when supplied it is
+    stamped on every record so a deployment adjudicated analysis-path-
+    equivalent (10-12 65988c79→082be047) keeps ONE key before and after.
+    Without it each record carries its own sealed commit and two genuinely
+    different deploys split — fail-closed, never silently merged. A real
+    analysis-path change still switches the key via resolved/custom even
+    under a fixed anchor.
+    """
+    v = record.get("versions") or {}
+    anchor = anchor or _record_analysis_anchor(record)
+    contract = (v.get("evidence_contract_version")
+                or v.get("protocol_version")
+                or "novc")
+    resolved = _record_prompt_resolved_sha(record)
+    custom = _record_custom_prompt_sha(record)
+    served, _missing = _record_served_set(record)
+    served_s = "+".join(served) if served else "none"
+    return (f"AV|anchor={anchor}|contract={contract}"
+            f"|resolved={(resolved or 'none')[:12]}"
+            f"|custom={(custom or 'none')[:12]}"
+            f"|served={served_s}")
 
 
 def _p_rel_t10(record: Mapping[str, Any]) -> tuple[int | None, str]:
@@ -201,6 +279,7 @@ def load_ledger_signals(
     labels: Mapping[tuple[str, str], Mapping[str, Any]],
     user_id: str,
     reattest_index: Optional[Mapping[str, dict]] = None,
+    analysis_anchor: str | None = None,
 ) -> pd.DataFrame:
     """Stream the ledger; one signal row per P4-account ledger line.
 
@@ -231,6 +310,7 @@ def load_ledger_signals(
         pit = rec.get("input_pit_status")
         eff_pit = pit_reattest.resolve_effective_pit(
             pit, rec.get("report_id"), reattest_index)
+        served_set, served_missing = _record_served_set(rec)
         rows.append({
             "signal_date": sig,
             "symbol": str(sym) if sym is not None else None,
@@ -243,6 +323,10 @@ def load_ledger_signals(
             "completed": rec.get("status") == "completed",
             "user_id": rec.get("user_id"),
             "version_key": _record_version_key(rec),
+            "analysis_anchor": _record_analysis_anchor(rec),
+            "served_models": served_set,
+            "served_model_missing": served_missing,
+            "multi_model": len(served_set) > 1,
             "p_rel_t10": p,
             "_p_status": p_status,
             "r": r,
@@ -311,6 +395,64 @@ def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
         md = panel["mat"].astype(str).str.replace("-", "", regex=False)
         panel["mat"] = (md.str[:4] + "-" + md.str[4:6] + "-" + md.str[6:8])
     return panel
+
+
+def _freeze_file_sha(path: Path) -> str | None:
+    """sha256 of a freeze-register file under the repo (None when absent)."""
+    try:
+        p = Path(path)
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+# DAV-2160: freeze evidence fingerprints printed on the report's first
+# screen (§6 来源表 item 1). The plan/register were signed at freeze SHA
+# 58d6a2eb; the working tree copies are hashed live so a post-freeze edit
+# is visible as a mismatch, not silently stamped.
+FREEZE_PLAN_FILE = (REPO_ROOT / "docs/plans/phase2-midterm"
+                    / "dav2142-phase1-preregistration-v0.2.md")
+FREEZE_REGISTER_FILE = (REPO_ROOT / "docs/plans/phase2-midterm"
+                        / "dav2142-freeze-register-v0.2.md")
+FREEZE_PLAN_SHA256_SIGNED = ("2f63d4f49a5f5d6587e53b71c8ef3ffab34da59e3d"
+                           "55c5c3a7eabd355e3caaef")
+FREEZE_REGISTER_SHA256_SIGNED = ("7946f7d9b085709773182182d9b7a59159816638"
+                               "4268d7cf52b898de8852dd76")
+
+
+def freeze_block(analysis_anchor: str | None,
+                 report_kind: str | None,
+                 df: pd.DataFrame) -> dict:
+    """Report first-screen freeze block (DAV-2160 §report requirements):
+    plan sha256, descriptive-vs-confirmatory label, and the served_model-
+    non-unique report list (multi-model reports flagged per DAV-2142 §2.3).
+    ``report_kind`` is "descriptive" / "confirmatory" — the frozen plan
+    allows exactly one confirmatory read; everything else is descriptive.
+    """
+    multi_ids: list[str] = []
+    served_dist: dict[str, int] = {}
+    if "run_id" in df.columns and "multi_model" in df.columns:
+        mm = df.loc[df["multi_model"] == True]  # noqa: E712
+        multi_ids = sorted(str(x) for x in mm["run_id"].tolist())
+    if "served_models" in df.columns:
+        for models in df["served_models"]:
+            key = "+".join(models) if models else "none"
+            served_dist[key] = served_dist.get(key, 0) + 1
+    return {
+        "plan_file": str(FREEZE_PLAN_FILE.relative_to(REPO_ROOT)),
+        "plan_sha256": _freeze_file_sha(FREEZE_PLAN_FILE),
+        "plan_sha256_signed": FREEZE_PLAN_SHA256_SIGNED,
+        "register_file": str(FREEZE_REGISTER_FILE.relative_to(REPO_ROOT)),
+        "register_sha256": _freeze_file_sha(FREEZE_REGISTER_FILE),
+        "register_sha256_signed": FREEZE_REGISTER_SHA256_SIGNED,
+        "report_kind": report_kind or "descriptive",
+        "analysis_anchor": analysis_anchor,
+        "multi_model_reports": multi_ids,
+        "multi_model_count": len(multi_ids),
+        "served_model_distribution": served_dist,
+        "note": "描述性读数不进入确认族；唯一确认读数仅在冻结截点跑一次。"
+                "多模型报告必标记并单列（剔除敏感性由下游报告承担）。",
+    }
 
 
 def _chunks_manifest_sha(chunks_dir: Path) -> str | None:
@@ -472,7 +614,9 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         calendar_path: Path | None = None,
         base_chunks: Path | None = None,
         user_id: str = DEFAULT_USER_ID,
-        reattest_path: Path | None = None) -> dict:
+        reattest_path: Path | None = None,
+        analysis_anchor: str | None = None,
+        report_kind: str | None = None) -> dict:
     t0 = time.time()
     log(f"loading labels {labels_path}")
     labels = load_labels(labels_path)
@@ -485,9 +629,16 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         reattest_index = pit_reattest.load_reattest_index(rp)
         log(f"reattest index: {len(reattest_index)} adjudicated line(s)")
     df = load_ledger_signals(ledger_path, labels, user_id,
-                             reattest_index=reattest_index)
+                             reattest_index=reattest_index,
+                             analysis_anchor=analysis_anchor)
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
+
+    # DAV-2160: freeze block is computed on the FULL input frame —
+    # multi-model reports must be flagged even when they sit outside the
+    # selected version queue (multi-model is a report-level disclosure,
+    # independent of which queue the run reads).
+    freeze = freeze_block(analysis_anchor, report_kind, df)
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
@@ -593,6 +744,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
     funnel["excl_version"] = int(ledger_rows_input - post_version_rows)
     funnel["seal_dateonly_fallback"] = n_dateonly
+    funnel["multi_model_reports"] = freeze["multi_model_count"]
     funnel["version_key"] = version_key or (
         str(df["version_key"].iloc[0])
         if "version_key" in df.columns and len(df) else "default")
@@ -658,6 +810,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
 
     out = {
         "pipeline": PIPELINE_VERSION,
+        "freeze": freeze,
         "input": {"ledger": str(ledger_path), "labels": str(labels_path)},
         "base_source": base_source,
         "days": [vars(x) for x in days],
@@ -673,7 +826,8 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
                  "quintile_tied_n", "brier"])
     days_df.to_parquet(out_dir / "day_series.parquet", index=False)
     (out_dir / "verdict.json").write_text(
-        json.dumps({"model": verdict, "increment_m200_W0": increment,
+        json.dumps({"model": verdict, "freeze": freeze,
+                    "increment_m200_W0": increment,
                     "base_source": base_source,
                     "sensitivity": sensitivity},
                    ensure_ascii=False, indent=2))
@@ -683,6 +837,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "pipeline": PIPELINE_VERSION,
         "elapsed_s": round(time.time() - t0, 2),
         "peak_rss_gb": round(m1.peak_rss_gb(), 3),
+        "freeze": freeze,
         "ledger_rows": ledger_rows_input,
         "formal_rows": len(formal),
         "seal_gate": seal_gate_block,
@@ -705,15 +860,29 @@ def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
                 *, user: str = DEFAULT_USER_ID, tc: str = "F0",
                 pit: str = "VERIFIED", created: str = "2026-01-05T09:00",
                 sealed_at: str | None = None,
-                commit: str = "abc123def456") -> dict:
+                commit: str = "abc123def456",
+                served_models: Any = None,
+                prompt_resolved: Any = None,
+                custom_prompt: Any = None,
+                contract: str = "v1") -> dict:
+    versions: dict[str, Any] = {"generated_by_commit_sha": commit,
+                                "evidence_contract_version": contract,
+                                "run_identity": {
+                                    "commit_sha": commit,
+                                    "prompt_resolved_hashes":
+                                        prompt_resolved},
+                                }
+    if served_models is not None:
+        versions["served_models"] = served_models
+    if custom_prompt is not None:
+        versions["custom_prompt_snapshot"] = custom_prompt
     rec = {
         "ledger_version": 1, "report_id": rid, "user_id": user,
         "symbol": symbol, "signal_date": day, "created_at": created,
         "sealed_at": sealed_at,
         "status": "completed", "timing_class": tc,
         "input_pit_status": pit, "backfilled": False,
-        "versions": {"generated_by_commit_sha": commit,
-                     "evidence_contract_version": "v1"},
+        "versions": versions,
         "horizons": {"short": {"forecast": {"status": "valid" if p else "missing",
                                           "p_rel_t10": p}},
                      "medium": {}},
@@ -869,6 +1038,14 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--labels", type=Path, default=DEFAULT_LABELS)
     r.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     r.add_argument("--version-key", default=None)
+    r.add_argument("--analysis-anchor", default=None,
+                   help="frozen production-release anchor stamped on every "
+                        "record's version key (DAV-2160); omit -> each "
+                        "record's own sealed commit anchors its key")
+    r.add_argument("--report-kind", default=None,
+                   choices=["descriptive", "confirmatory"],
+                   help="first-screen label: descriptive (default) or the "
+                        "single frozen confirmatory read")
     r.add_argument("--calendar-file", default=None,
                    help="trading calendar (one date per line); default live")
     r.add_argument("--base-chunks", type=Path, default=None,
@@ -901,7 +1078,9 @@ def main(argv: list[str] | None = None) -> int:
                 version_key=a.version_key,
                 calendar_path=a.calendar_file,
                 base_chunks=a.base_chunks, user_id=a.user_id,
-                reattest_path=a.pit_reattest)
+                reattest_path=a.pit_reattest,
+                analysis_anchor=a.analysis_anchor,
+                report_kind=a.report_kind)
             return 0
         except elp.PipelineError as exc:
             print(f"FAIL-CLOSE: {exc}", file=sys.stderr)
