@@ -91,6 +91,8 @@ from tradingagents.storage.result_data_compat import (
     STORAGE_SCHEMA_KEY,
     STORAGE_SCHEMA_VERSION,
     StorageCompatConflict,
+    _values_equal,
+    detect_alias_conflicts,
     encode_canonical,
     expand_compat_view,
     is_canonical_storage,
@@ -108,6 +110,137 @@ MARKER_KEYS = (STORAGE_COMPAT_KEY, STORAGE_SCHEMA_KEY)
 # scope is exactly the rows that physically carry the legacy ``horizons``
 # map — see canonicalize_for_slim's docstring for why ``*_term``-only rows
 # are deliberately out of scope.
+
+
+# ---------------------------------------------------------------------------
+# narrow release (DAV-2127, 总控 10-16 裁定)
+#
+# ``detect_alias_conflicts`` stays fail-close and unchanged. This layer adds a
+# deliberately narrow admission in front of it: a row whose alias conflicts
+# are *only* the authoritative-copy case — the physical ``horizons.<h>``
+# mirror lags behind ``<h>_term`` on T+5 fields, i.e. every differing common
+# key is null on the alias side and non-null on the term side — may be
+# converted with ``<h>_term`` as the authoritative content. Anything else
+# (alias-only keys, real value contradictions, differences outside the
+# allowed fields) is still counted as a conflict.
+
+
+#: Field paths a narrow release may differ on. ``shadow_credit_metrics`` and
+#: the copy embedded in ``investment_debate_state`` are the only two families
+#: 2124 proved to be a stale ``horizons`` mirror of the authoritative
+#: ``<h>_term`` slice.
+NARROW_RELEASE_PATHS = (
+    ("shadow_credit_metrics",),
+    ("investment_debate_state", "shadow_credit_metrics"),
+)
+
+
+def _path_class(path):
+    """Class name of an allowed release path, or None when not allowed."""
+    for allowed in NARROW_RELEASE_PATHS:
+        if path[:len(allowed)] == allowed:
+            return ".".join(allowed)
+    return None
+
+
+def _narrow_scan_pair(alias, term, path, diffs, blockers, label):
+    """Recursive alias-vs-term comparison for one ``horizons.<h>`` pair."""
+    for key in alias:
+        if key not in term:
+            # 条件②: the alias carries a key the authoritative slice lacks —
+            # deleting the alias would lose it. Never releasable.
+            blockers.append(
+                f"{label}: alias-only key '{'.'.join(path + (key,))}'")
+    for key, alias_value in alias.items():
+        if key not in term:
+            continue
+        term_value = term[key]
+        sub = path + (key,)
+        if alias_value is None and term_value is not None:
+            # 条件①: stale mirror — null on the alias side, value on the
+            # authoritative side.
+            diffs.append(sub)
+        elif isinstance(alias_value, dict) and isinstance(term_value, dict):
+            _narrow_scan_pair(alias_value, term_value, sub, diffs, blockers,
+                              label)
+        elif not _values_equal(alias_value, term_value):
+            # 条件③: a real value contradiction.
+            blockers.append(
+                f"{label}: contradiction at '{'.'.join(sub)}'")
+
+
+def classify_narrow_release(result_data):
+    """Classify a conflicting legacy row against the narrow release rules.
+
+    Returns a dict: ``admissible`` (all four conditions hold), ``classes``
+    (allowed-path name -> number of released differences), ``differences``
+    (one dotted path per released difference, in discovery order) and
+    ``blockers`` (why the row is not releasable).
+    """
+    classes = {}
+    differences = []
+    blockers = []
+    if not isinstance(result_data, dict):
+        return {"admissible": False, "classes": {},
+                "differences": [], "blockers": ["result_data is not an object"]}
+    horizons = result_data.get("horizons")
+    if not isinstance(horizons, dict) or not horizons:
+        return {"admissible": False, "classes": {}, "differences": [],
+                "blockers": ["no physical horizons alias to release"]}
+    for horizon, alias in horizons.items():
+        term_key = f"{horizon}_term"
+        term = result_data.get(term_key)
+        label = f"horizons.{horizon}"
+        if not isinstance(alias, dict):
+            blockers.append(f"{label} is not an object")
+            continue
+        if not isinstance(term, dict):
+            blockers.append(f"{label} has no authoritative {term_key} twin")
+            continue
+        _narrow_scan_pair(alias, term, (), differences, blockers, label)
+
+    # 条件④: differences may only sit in the two allowed families.
+    rejected = []
+    for path in differences:
+        name = _path_class(path)
+        if name is None:
+            rejected.append(".".join(path))
+        else:
+            classes[name] = classes.get(name, 0) + 1
+    if rejected:
+        blockers.append("differences outside the allowed fields: "
+                        + ", ".join(sorted(set(rejected))))
+
+    admissible = bool(differences) and not blockers
+    if not differences and not blockers:
+        blockers.append("no narrow-release difference (row is not stale-mirror)")
+    return {"admissible": admissible, "classes": classes,
+            "differences": [".".join(p) for p in differences],
+            "blockers": blockers}
+
+
+def narrow_release_merge(result_data):
+    """Return the row whose alias slices carry the authoritative term values.
+
+    The physical structure is unchanged except that every co-present
+    ``horizons.<h>`` slice is replaced by the ``<h>_term`` slice projected on
+    the alias's own key order (``{k: term[k] for k in alias}``) — the merge
+    rule 总控 ruled on: ``<h>_term`` wins, and no alias-only key may exist
+    (condition ② guarantees ``alias ⊆ term``). Key order, whitespace and all
+    other members are untouched, so the conversion stays byte-level.
+    """
+    merged = dict(result_data)
+    horizons = merged.get("horizons")
+    if not isinstance(horizons, dict):
+        return merged
+    merged_horizons = dict(horizons)
+    for horizon, alias in horizons.items():
+        term = merged.get(f"{horizon}_term")
+        if not isinstance(alias, dict) or not isinstance(term, dict):
+            continue
+        merged_horizons[horizon] = {k: term[k] for k in alias}
+    merged["horizons"] = merged_horizons
+    return merged
 
 
 def canonicalize_for_slim(result_data):
@@ -302,17 +435,25 @@ def _view_bytes(text):
 # conversion
 
 
-def convert_legacy_text(raw):
+def convert_legacy_text(raw, *, value=None, baseline=None):
     """Convert a legacy-format result_data JSON *string* to canonical text.
 
     Returns the new JSON text. Raises StorageCompatConflict (fail-close)
     or ValueError when the row cannot be converted without changing the
     compat-layer read output.
+
+    ``value`` / ``baseline`` are the narrow-release seam (DAV-2127): when a
+    stale ``horizons`` mirror is merged to the authoritative ``<h>_term``
+    values before encoding, ``value`` carries that merged document and
+    ``baseline`` its JSON text, so the witness and view contracts compare
+    against the merged row instead of the stale physical one.
     """
     node = _json_node(raw)
     if "members" not in node:
         raise StorageCompatConflict(["result_data is not a JSON object"])
-    value = node["value"]
+    parsed = node["value"]
+    value = parsed if value is None else value
+    witness_baseline = raw if baseline is None else baseline
 
     canonical = canonicalize_for_slim(value)
     if not is_canonical_storage(canonical):
@@ -321,7 +462,7 @@ def convert_legacy_text(raw):
     compat = canonical[STORAGE_COMPAT_KEY]
 
     # Contract precheck on parsed values before touching bytes.
-    if _view_bytes(_dump(canonical)) != _view_bytes(raw):
+    if _view_bytes(_dump(canonical)) != _view_bytes(witness_baseline):
         raise ValueError("canonical round-trip differs from legacy view")
 
     text = raw
@@ -398,9 +539,9 @@ def convert_legacy_text(raw):
     ])
 
     # 5. Post-conditions (defense in depth; _write_row re-verifies).
-    if not _witness_equal(text, raw):
+    if not _witness_equal(text, witness_baseline):
         raise ValueError("non-alias bytes changed during conversion")
-    if _view_bytes(text) != _view_bytes(raw):
+    if _view_bytes(text) != _view_bytes(witness_baseline):
         raise ValueError("compat view differs after conversion")
     return text
 
@@ -717,6 +858,32 @@ def _load_pre_export(path, expected_sha256=None):
 # write + restore
 
 
+def convert_with_narrow_release(raw):
+    """Convert a row whose only conflicts are the stale-mirror case.
+
+    Returns ``(text, classes)`` for an admissible row, ``(None, None)``
+    when the row is not narrowly releasable — the caller then keeps the
+    ordinary fail-close behaviour. ``detect_alias_conflicts`` is never
+    relaxed: this only decides whether the merged row (alias slices carrying
+    the authoritative ``<h>_term`` values) is fed to the same encoder.
+    """
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None, None
+    if not isinstance(value, dict) or is_canonical_storage(value):
+        return None, None
+    if not detect_alias_conflicts(value):
+        return None, None  # ordinary path handles conflict-free rows
+    verdict = classify_narrow_release(value)
+    if not verdict["admissible"]:
+        return None, None
+    merged = narrow_release_merge(value)
+    baseline = _dump(merged)
+    text = convert_legacy_text(raw, value=merged, baseline=baseline)
+    return text, verdict["classes"]
+
+
 def _write_row(conn, report_id, audit, exported_sha=None):
     """Convert one row inside its own transaction.
 
@@ -741,28 +908,41 @@ def _write_row(conn, report_id, audit, exported_sha=None):
             if current_sha != exported_sha:
                 conn.rollback()
                 return "pre_export_mismatch"
-        new_text = convert_legacy_text(original)
+        release_text, release_classes = convert_with_narrow_release(original)
+        baseline = original
+        if release_text is None:
+            new_text = convert_legacy_text(original)
+        else:
+            # DAV-2127 narrow release: the merged row (alias slices carrying
+            # the authoritative <h>_term values) is the post-condition
+            # witness — the stale mirror is exactly what the release fixes,
+            # so comparing the view against it would defeat the release.
+            new_text = release_text
+            baseline = _dump(narrow_release_merge(json.loads(original)))
         if original == new_text:
             conn.rollback()
             return "unchanged"
         before_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
         after_sha = hashlib.sha256(new_text.encode("utf-8")).hexdigest()
         _journal_emit(audit, {"phase": "prepared", "report_id": report_id,
-                              "before_sha256": before_sha, "after_sha256": after_sha})
+                              "before_sha256": before_sha, "after_sha256": after_sha,
+                              "narrow_release": release_classes})
         conn.execute("UPDATE reports SET result_data=? WHERE id=?",
                      (new_text, report_id))
         stored = conn.execute(
             "SELECT result_data FROM reports WHERE id=?", (report_id,)).fetchone()[0]
         if stored != new_text:
             raise ValueError("stored bytes differ from converted bytes")
-        # 卡面硬验收: compat-layer read must be verbatim identical.
-        if _view_bytes(stored) != _view_bytes(original):
+        # 卡面硬验收: compat-layer read must be verbatim identical to the
+        # witness baseline (the row itself, or its narrowly merged form).
+        if _view_bytes(stored) != _view_bytes(baseline):
             raise ValueError("post-write compat view mismatch")
-        if not _witness_equal(stored, original):
+        if not _witness_equal(stored, baseline):
             raise ValueError("post-write non-alias byte mismatch")
         conn.commit()
         _journal_emit(audit, {"phase": "committed", "report_id": report_id,
-                              "after_sha256": after_sha})
+                              "after_sha256": after_sha,
+                              "narrow_release": release_classes})
         return "converted"
     except Exception:
         conn.rollback()
@@ -948,7 +1128,9 @@ def run_slim(*, db_path, batch_size=200, batch_byte_limit=512 * 1024 * 1024,
               "top_mdc_sole_copy": 0, "top_mdc_rebuildable": 0,
               "converted_rows": 0, "unchanged": 0, "pre_export_mismatch": 0,
               "conflicts": 0, "verify_failures": 0, "missing": 0,
-              "write_conflicts": 0, "batches": 0, "pre_export_files": []}
+              "write_conflicts": 0, "batches": 0, "pre_export_files": [],
+              "narrow_released_rows": 0, "narrow_released_diffs": 0,
+              "narrow_release_rejected": 0, "narrow_release_classes": {}}
     exceptions = []
 
     # Pass 1 runs in a *subprocess*: parsing ~5 GB of JSON peaks the
@@ -1142,12 +1324,28 @@ def _scan_pass(db_path, committed_ids, result, exceptions):
                     result["top_mdc_sole_copy"] += 1
             continue
         try:
-            convert_legacy_text(raw)
-        except (StorageCompatConflict, ValueError) as exc:
-            result["conflicts"] += 1
-            exceptions.append({"report_id": report_id,
-                               "conflicts": getattr(exc, "conflicts", [str(exc)])})
-            continue
+            release_text, release_classes = convert_with_narrow_release(raw)
+        except (StorageCompatConflict, ValueError):
+            release_text, release_classes = None, None
+            result["narrow_release_rejected"] = \
+                result.get("narrow_release_rejected", 0) + 1
+        if release_text is None:
+            try:
+                convert_legacy_text(raw)
+            except (StorageCompatConflict, ValueError) as exc:
+                result["conflicts"] += 1
+                exceptions.append({"report_id": report_id,
+                                   "conflicts": getattr(exc, "conflicts", [str(exc)])})
+                continue
+        else:
+            # 放行行: journal 类别与计数（总控 10-16 裁定）。
+            classes = result.setdefault("narrow_release_classes", {})
+            for name, count in release_classes.items():
+                classes[name] = classes.get(name, 0) + count
+            result["narrow_released_rows"] = \
+                result.get("narrow_released_rows", 0) + 1
+            result["narrow_released_diffs"] = \
+                result.get("narrow_released_diffs", 0) + sum(release_classes.values())
         planned.append({"id": report_id,
                         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
                         "bytes": len(raw.encode("utf-8"))})

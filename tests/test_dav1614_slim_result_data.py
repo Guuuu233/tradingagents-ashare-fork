@@ -38,6 +38,10 @@ def unit(horizon, mdc=True):
         "decision_model_version": "decision_model.v1",
         "evidence_contract_version": "evidence_contract.v2",
         "generated_by_commit_sha": "a" * 40,
+        "shadow_credit_metrics": {"t_plus_5_status": None,
+                                  "score": 0.5},
+        "investment_debate_state": {"shadow_credit_metrics": {
+            "t_plus_5_status": None, "score": 0.5}, "rounds": 3},
     }
     if mdc:
         payload["market_data_context"] = {
@@ -181,6 +185,147 @@ def test_conflict_rows_fail_closed_and_are_reported(tmp_path, monkeypatch):
     assert db_text(p, "conflict") == raw  # untouched
     exc = json.loads((tmp_path / "e.json").read_text())
     assert exc["exceptions"][0]["report_id"] == "conflict"
+
+
+# --- DAV-2127 narrow release (总控 10-16 裁定) ------------------------------
+
+
+T5_KEYS = ("t_plus_5_status", "t_plus_5_date", "is_t_plus_5_due",
+           "t_plus_5_evaluated", "t_plus_5_provenance", "t_plus_5_price",
+           "t_plus_5_return_pct", "t_plus_5_direction_hit",
+           "t_plus_5_missing_reason")
+
+
+def stale_mirror_579_row():
+    """The 579-row shape DAV-2124 measured: the physical ``horizons`` mirror
+    lags the authoritative ``<h>_term`` slice on T+5 fields (null on the alias
+    side), inside ``shadow_credit_metrics`` and the copy embedded in
+    ``investment_debate_state``. No alias-only key, no value contradiction.
+    """
+    data = legacy_dual()
+    for horizon in ("short", "medium"):
+        term = data[f"{horizon}_term"]
+        alias = data["horizons"][horizon]
+        for i, key in enumerate(T5_KEYS):
+            term["shadow_credit_metrics"][key] = (
+                "pending" if i % 2 else ("2026-10-13" if i % 4 else 0.031))
+            alias["shadow_credit_metrics"][key] = None
+            term["investment_debate_state"]["shadow_credit_metrics"][key] = (
+                "pending" if i % 2 else ("2026-10-13" if i % 4 else 0.031))
+            alias["investment_debate_state"]["shadow_credit_metrics"][key] = None
+    return data
+
+
+def test_narrow_release_converts_stale_mirror_row(tmp_path, monkeypatch):
+    """放行样例: the 579 typical shape converts with <h>_term authoritative."""
+    idle_guard(monkeypatch)
+    data = stale_mirror_579_row()
+    raw = json.dumps(data, ensure_ascii=False)
+    p = make_db(tmp_path, [("stale", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["conflicts"] == 0
+    assert res["converted_rows"] == 1
+    assert res["narrow_released_rows"] == 1
+    assert res["narrow_released_diffs"] == 2 * len(T5_KEYS) * 2
+    assert res["narrow_release_classes"] == {
+        "shadow_credit_metrics": 2 * len(T5_KEYS),
+        "investment_debate_state.shadow_credit_metrics": 2 * len(T5_KEYS),
+    }
+    stored = json.loads(db_text(p, "stale"))
+    assert is_canonical_storage(stored)
+    assert "horizons" not in stored and "market_data_context" not in stored
+    # 权威副本 <h>_term keeps every T+5 value; nothing else moved.
+    for horizon in ("short", "medium"):
+        assert stored[f"{horizon}_term"]["shadow_credit_metrics"]["t_plus_5_status"] \
+            == data[f"{horizon}_term"]["shadow_credit_metrics"]["t_plus_5_status"]
+    # Non-alias content is byte-identical to the pre-conversion row.
+    assert slim._witness_equal(db_text(p, "stale"), raw)
+    # The compat read after conversion equals the compat read of the *merged*
+    # row (alias slices carrying the authoritative term values) — never the
+    # stale mirror.
+    merged = json.dumps(slim.narrow_release_merge(data), ensure_ascii=False)
+    assert view(p, "stale") == slim._view_bytes(merged)
+    # journal records the released classes per row.
+    events = [json.loads(line) for line in
+              (tmp_path / "j.jsonl").read_text().splitlines() if line.strip()]
+    committed = [e for e in events
+                 if e.get("phase") == "committed" and e["report_id"] == "stale"]
+    assert committed and committed[0]["narrow_release"] == {
+        "shadow_credit_metrics": 2 * len(T5_KEYS),
+        "investment_debate_state.shadow_credit_metrics": 2 * len(T5_KEYS),
+    }
+
+
+def test_narrow_release_blocks_alias_only_key(tmp_path, monkeypatch):
+    """别名独有键: deleting the alias would lose content — must fail closed."""
+    idle_guard(monkeypatch)
+    data = stale_mirror_579_row()
+    data["horizons"]["short"]["shadow_credit_metrics"]["alias_only"] = "keepme"
+    raw = json.dumps(data, ensure_ascii=False)
+    verdict = slim.classify_narrow_release(data)
+    assert not verdict["admissible"]
+    assert any("alias-only key" in b for b in verdict["blockers"])
+    p = make_db(tmp_path, [("aliasonly", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 0
+    assert res["conflicts"] == 1 and res["narrow_released_rows"] == 0
+    assert db_text(p, "aliasonly") == raw  # untouched
+
+
+def test_narrow_release_blocks_true_value_contradiction(tmp_path, monkeypatch):
+    """真值矛盾: both sides non-null and unequal — must fail closed."""
+    idle_guard(monkeypatch)
+    data = stale_mirror_579_row()
+    data["horizons"]["short"]["shadow_credit_metrics"]["t_plus_5_return_pct"] = 0.99
+    raw = json.dumps(data, ensure_ascii=False)
+    verdict = slim.classify_narrow_release(data)
+    assert not verdict["admissible"]
+    assert any("contradiction" in b for b in verdict["blockers"])
+    p = make_db(tmp_path, [("contra", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 0
+    assert res["conflicts"] == 1 and res["narrow_released_rows"] == 0
+    assert db_text(p, "contra") == raw
+
+
+def test_narrow_release_blocks_difference_in_other_field(tmp_path, monkeypatch):
+    """矛盾出现在其他字段: null-vs-value outside the two allowed families."""
+    idle_guard(monkeypatch)
+    data = stale_mirror_579_row()
+    data["horizons"]["short"]["direction"] = None  # term side keeps 看多
+    raw = json.dumps(data, ensure_ascii=False)
+    verdict = slim.classify_narrow_release(data)
+    assert not verdict["admissible"]
+    assert any("outside the allowed fields" in b for b in verdict["blockers"])
+    p = make_db(tmp_path, [("otherfield", raw)])
+    res = slim.run_slim(db_path=str(p), copy_rehearsal=True,
+                        journal_path=str(tmp_path / "j.jsonl"),
+                        exceptions_path=str(tmp_path / "e.json"),
+                        pre_export_dir=str(tmp_path / "exports"))
+    assert res["converted_rows"] == 0
+    assert res["conflicts"] == 1 and res["narrow_released_rows"] == 0
+    assert db_text(p, "otherfield") == raw
+
+
+def test_detect_alias_conflicts_is_not_relaxed():
+    """裁定: detect_alias_conflicts itself stays strict — the release is a
+    separate layer in the migration script."""
+    from tradingagents.storage import result_data_compat as compat
+    data = stale_mirror_579_row()
+    assert compat.detect_alias_conflicts(data)  # still flags the stale mirror
+    slim.convert_with_narrow_release(json.dumps(data, ensure_ascii=False))
+    text, classes = slim.convert_with_narrow_release(
+        json.dumps(data, ensure_ascii=False))
+    assert text is not None and classes
 
 
 def test_top_mdc_null_is_rebuilt(tmp_path, monkeypatch):
