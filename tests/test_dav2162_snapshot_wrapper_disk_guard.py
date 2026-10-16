@@ -1,0 +1,145 @@
+"""DAV-2162 — disk-guard threshold tests for the snapshot wrapper.
+
+``work/ta-snapshot/run_snapshot.py`` skips the daily snapshot when free space
+under the snapshot dir drops below ``MIN_FREE_GB`` (now **60 GiB**, aligned
+with the 总控 10-16 disk floor; previously 100 GiB, which silently skipped
+10-16's run at 80.8 GiB free).
+
+Everything runs against a **sandboxed copy** of the wrapper: the deployment
+constants (``ROOT`` / ``HERE`` / ``OUT`` / ``BATCH_DIR`` / ``PY`` / ``SCRIPT``)
+are rewritten to tmp paths, ``shutil.disk_usage`` is stubbed via monkeypatch,
+and ``PY`` points at a stub interpreter that prints canned JSON — nothing ever
+touches the real DB, snapshot dir, or launchd state.
+
+Covers the card's two required cases:
+
+* ``free < 60`` GiB → wrapper writes ``ALERT-disk-<date>.log`` and exits 3
+  without running the snapshot;
+* ``free >= 60`` GiB → wrapper proceeds past the guard and runs the
+  snapshot subprocess (stubbed), writing ``done-<date>.ok``.
+"""
+import importlib.util
+import json
+import os
+import stat
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+WRAPPER = ROOT / "work" / "ta-snapshot" / "run_snapshot.py"
+
+
+def test_wrapper_is_valid_python():
+    assert WRAPPER.is_file()
+    import py_compile
+    py_compile.compile(str(WRAPPER), doraise=True)
+
+
+def test_min_free_gb_is_60():
+    """The guard threshold must match the 60 GiB disk floor (总控 10-16 令)."""
+    import re
+    m = re.search(r"^MIN_FREE_GB\s*=\s*(\d+)", WRAPPER.read_text(), re.M)
+    assert m, "MIN_FREE_GB constant not found in wrapper"
+    assert int(m.group(1)) == 60
+
+
+# --------------------------------------------------------------------------- #
+# Sandbox: rewritten copy of the wrapper, all machine paths → tmp_path        #
+# --------------------------------------------------------------------------- #
+
+_STUB_PY = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    \"\"\"Stub for scripts/ta_snapshot.py: print canned report JSON, exit 0.\"\"\"
+    import json, sys
+    print(json.dumps({"snapshot": "/tmp/x.db.zst", "skipped": "already_exists",
+                      "bytes": 123}))
+    sys.exit(0)
+    """
+)
+
+
+def _load_sandboxed_wrapper(tmp_path, monkeypatch):
+    """Exec a path-rewritten copy of run_snapshot.py; return the module.
+
+    The copy lives under tmp_path so ``os.makedirs``/``os.chdir`` side effects
+    land in the sandbox. A fake ``summary.json`` for today's batch is
+    pre-created so the wrapper proceeds past the batch-presence check.
+    """
+    from datetime import date
+
+    sb = tmp_path / "sb"
+    root = sb / "repo"
+    here = sb / "state"
+    out = sb / "ta-snapshot"
+    batch_dir = root / "work" / "daily-batch" / date.today().isoformat()
+    for d in (root, here, out, batch_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    (batch_dir / "summary.json").write_text("{}")
+
+    stub = sb / "stub-ta_snapshot.py"
+    stub.write_text(_STUB_PY)
+
+    text = WRAPPER.read_text()
+    replacements = {
+        'ROOT = "/Users/davidliu/Documents/TradingAgents-AShare"':
+            f'ROOT = {str(root)!r}',
+        'PY = os.path.join(ROOT, ".venv310/bin/python")':
+            f'PY = {sys.executable!r}',
+        'SCRIPT = "/Users/davidliu/ta-work/dav-snap-8571/scripts/ta_snapshot.py"':
+            f'SCRIPT = {str(stub)!r}',
+        'BATCH_DIR = os.path.join(ROOT, "work/daily-batch")':
+            f'BATCH_DIR = {str(batch_dir.parent)!r}',
+        'OUT = os.path.expanduser("~/ta-snapshot")':
+            f'OUT = {str(out)!r}',
+        'HERE = "/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot"':
+            f'HERE = {str(here)!r}',
+        'DB = os.path.join(ROOT, "data", "tradingagents.db")':
+            f'DB = {str(root / "data" / "db.sqlite")!r}',
+    }
+    for old, new in replacements.items():
+        assert old in text, f"constant not found to rewrite: {old}"
+        text = text.replace(old, new)
+
+    mod_path = sb / "run_snapshot_sandboxed.py"
+    mod_path.write_text(text)
+    spec = importlib.util.spec_from_file_location(
+        "run_snapshot_sandboxed", str(mod_path))
+    mod = importlib.util.module_from_spec(spec)
+    cwd = os.getcwd()
+    try:
+        spec.loader.exec_module(mod)  # module body: makedirs + chdir(ROOT=tmp)
+    finally:
+        os.chdir(cwd)
+    return mod, {"here": here, "out": out, "batch_date": date.today().isoformat()}
+
+
+def _set_free_gb(monkeypatch, mod, free_gb):
+    import shutil
+    real = shutil.disk_usage
+    def fake(path):
+        u = real(path)
+        return type(u)(u.total, u.used, int(free_gb * 2**30))
+    monkeypatch.setattr(shutil, "disk_usage", fake)
+
+
+@pytest.mark.parametrize("free_gb,expect_rc,expect_alert,expect_done", [
+    (59.9, 3, True, False),   # below the 60 GiB floor → skip + alert
+    (60.0, 0, False, True),   # at the floor → snapshot proceeds
+    (80.8, 0, False, True),   # the 10-16 incident value → must NOT skip now
+])
+def test_disk_guard_threshold(tmp_path, monkeypatch,
+                              free_gb, expect_rc, expect_alert, expect_done):
+    mod, env = _load_sandboxed_wrapper(tmp_path, monkeypatch)
+    _set_free_gb(monkeypatch, mod, free_gb)
+    rc = mod.main()
+    assert rc == expect_rc
+    alerts = list(env["here"].glob("ALERT-disk-*.log"))
+    assert bool(alerts) == expect_alert
+    if expect_alert:
+        assert "60" in alerts[0].read_text()  # alert names the 60 GiB floor
+    done = env["here"] / f"done-{env['batch_date']}.ok"
+    assert done.exists() == expect_done
