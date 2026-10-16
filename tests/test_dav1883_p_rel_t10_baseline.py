@@ -81,15 +81,16 @@ class TestVersionKey:
     def test_commit_contract(self):
         rec = _rec("r", "S", "2026-01-05", 50, commit="abcdef123456")
         key = m._record_version_key(rec)
-        assert key.startswith("AV|anchor=abcdef123456|contract=v1|")
-        assert "|resolved=none|custom=none|served=none" in key
+        assert key.startswith("AV1|anchor=abcdef12|contract=v1-T10|")
+        assert "|resolved=unverifiable|custom=unverifiable|served=none" in key
 
     def test_unversioned(self):
         rec = _rec("r", "S", "2026-01-05", 50)
         rec["versions"] = {}
+        rec["horizons"] = {"short": {"forecast": {}}}
         assert m._record_version_key(rec) == (
-            "AV|anchor=unanchored|contract=novc"
-            "|resolved=none|custom=none|served=none")
+            "AV1|anchor=unanchored|contract=unverifiable"
+            "|resolved=unverifiable|custom=unverifiable|served=none")
 
     def test_multi_version_fails_closed(self):
         recs = [_rec(f"a{i}", "S1", "2026-01-05", 50, commit="aaa") for i in range(3)]
@@ -124,9 +125,66 @@ class TestFrozenVersionKey:
         k_post = m._record_version_key(post, anchor="082be047")
         assert k_pre == k_post
         assert "anchor=082be047" in k_pre
+        assert k_pre.startswith("AV1|")
         # without a fixed anchor the two commits anchor differently —
         # fail-closed split, never a silent merge.
         assert m._record_version_key(pre) != m._record_version_key(post)
+
+    def test_analysis_anchor_reaches_version_key_via_loader(self, tmp_path):
+        """DAV-2166 🔴-1 regression: ``--analysis-anchor`` must reach
+        ``_record_version_key`` on the production path — the 3381848f bug
+        threaded the CLI arg into ``load_ledger_signals`` but dropped it
+        before key construction, so it had zero effect on the real ledger.
+        Two records identical except ``generated_by_commit_sha`` (all split
+        factors equal) must collapse to ONE key under a fixed anchor and
+        stay TWO keys without it — on the loader output, not a direct call.
+        Red before the fix (anchor never reached the key), green after."""
+        served = self._served({"trader": ["gemini-3.8-flash-n"]})
+        prompts = {"trader": "a9950a9e"}
+        recs = [
+            _rec("pre", "S1", "2026-01-05", 50, commit="65988c79aaaa",
+                 served_models=served, prompt_resolved=prompts),
+            _rec("post", "S2", "2026-01-05", 55, commit="082be047bbbb",
+                 served_models=served, prompt_resolved=prompts),
+        ]
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 1.0),
+                  ("S2", "2026-01-05"): m._label("S2", "2026-01-05", 2.0)}
+        anchored = m.load_ledger_signals(ledger, labels, FIXED,
+                                        analysis_anchor="082be047")
+        keys = set(anchored["version_key"])
+        assert len(keys) == 1, keys
+        only = next(iter(keys))
+        assert "anchor=082be047" in only
+        # No anchor -> each record's own sealed commit anchors its key →
+        # the two deploys split (fail-closed, never silently merged).
+        unanchored = m.load_ledger_signals(ledger, labels, FIXED)
+        keys2 = set(unanchored["version_key"])
+        assert len(keys2) == 2, keys2
+        assert any("anchor=65988c79" in k for k in keys2)
+        assert any("anchor=082be047" in k for k in keys2)
+
+    def test_key_matches_register_format(self):
+        """DAV-2166 🔴-2: the script key must reconcile against register
+        §3 ``analysis_version_id`` — AV1 prefix, 8-char anchor, forecast
+        contract + -T10, full 64-char resolved hash, explicit
+        ``unverifiable`` custom (ledger never seals it), served set."""
+        served = self._served({"trader": ["gemini-3.8-flash-n"]})
+        rec = _rec("r", "S", "2026-01-05", 50, commit="082be047xxxx",
+                   contract="b1.v1", served_models=served,
+                   prompt_resolved={"trader": "h"})
+        key = m._record_version_key(rec, anchor="082be047")
+        parts = key.split("|")
+        assert parts[0] == "AV1"
+        fields = dict(p.split("=", 1) for p in parts[1:])
+        assert fields["anchor"] == "082be047"
+        assert fields["contract"] == "b1.v1-T10"
+        assert len(fields["resolved"]) == 64
+        assert fields["custom"] == "unverifiable"
+        assert fields["served"] == "gemini-3.8-flash-n"
+        # The custom leg never borrows the register hash — the ledger did
+        # not observe it, so it is honestly unverifiable, not b0ababd6….
+        assert "b0ababd6" not in key
 
     def test_served_model_change_switches_key(self):
         """served_model 变化时切换版本 — even under the same frozen

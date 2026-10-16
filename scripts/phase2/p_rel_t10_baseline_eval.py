@@ -46,11 +46,15 @@ Label leg (DAV-1875 ``labels_t10.jsonl``):
 Dedup (签收 item 4): same (symbol, signal_date, version_key) keeps the
 earliest-``created_at`` completed run — fixed ex ante, no ex-post picking.
 Ledger ``version_key`` is the DAV-2142 frozen analysis-version key
-``AV|anchor=<production release anchor>|contract=<evidence contract>|resolved=<sha256 of run_identity.prompt_resolved_hashes>|custom=<sha256 of custom_prompt_snapshot>|served=<sorted served_model set>``
-(冻结登记 §3: only an analysis-path change — prompts / agents / dataflows
-/ graph / LLM config — or a served_model change switches the version; the
-production release SHA is an AUDIT anchor, not a per-deploy split key, so
-the adjudicated-equivalent 10-12 deploy keeps one key before and after).
+``AV1|anchor=<8-char production release anchor>|contract=<forecast contract>-T10|resolved=<full sha256 of run_identity.prompt_resolved_hashes>|custom=<full sha256 of custom_prompt_snapshot | unverifiable>|served=<sorted served_model set>``
+— verbatim the signed freeze register §3 ``analysis_version_id`` (DAV-2166:
+key must reconcile against the register, not a home-grown format). A field
+whose evidence the ledger did not seal (``custom`` —
+``daily_snapshot_ledger._version_fields`` never captures
+``custom_prompt_snapshot``) is written ``unverifiable`` instead of ``none``
+so a missing hash can never masquerade as a real one; ``custom`` collection
+requires the whitelisted ledger column to change, which is out of this
+card's scope.
 A multi-version input fails closed unless ``--version-key`` names one
 queue (D-075/DAV-1682 single-version rule — cross-version comparison
 belongs to M3).
@@ -145,25 +149,55 @@ def _canonical_json_sha(obj: Any) -> str | None:
 
 def _record_analysis_anchor(record: Mapping[str, Any]) -> str:
     """Audit anchor for the version key = the production release SHA the
-    record was sealed under (generated_by_commit_sha → run_identity.commit_sha).
-    It is an anchor label, NOT a split factor — an adjudicated-equivalent
-    deploy (10-12 65988c79→082be047) keeps the same queue because the split
+    record was sealed under (generated_by_commit_sha → run_identity.commit_sha),
+    truncated to 8 chars to match the register §3 ``anchor`` field. It is an
+    anchor label, NOT a split factor — an adjudicated-equivalent deploy
+    (10-12 65988c79→082be047) keeps the same queue because the split
     factors (contract/resolved/custom/served) do not change."""
     v = record.get("versions") or {}
     commit = v.get("generated_by_commit_sha")
     if isinstance(commit, str) and commit:
-        return commit[:12]
+        return commit[:8]
     ri = v.get("run_identity")
     c = ri.get("commit_sha") if isinstance(ri, dict) else None
     if isinstance(c, str) and c:
-        return c[:12]
+        return c[:8]
     if isinstance(ri, str) and ri:
-        return ri[:12]
+        return ri[:8]
     return "unanchored"
 
 
+def _record_contract_t10(record: Mapping[str, Any]) -> str | None:
+    """Register §3 ``contract`` field = the short-horizon forecast contract
+    plus the ``-T10`` horizon suffix (``b1.v1`` → ``b1.v1-T10``). Read at the
+    same node the probability itself is read from —
+    ``horizons.short.forecast.contract`` first, then the
+    ``manager_verdict.forecast_input`` twin — so the version-key contract
+    labels the actual probability contract the queue consumes, never the
+    ledger's storage-level ``evidence_contract_version`` (DAV-2166: the two
+    disagree on the real ledger and the register value tracks the
+    probability contract). Returns ``None`` when no contract string is
+    sealed — the key then carries ``unverifiable``."""
+    hz = (record.get("horizons") or {}).get("short") or {}
+    fc = hz.get("forecast")
+    if isinstance(fc, dict):
+        c = fc.get("contract")
+        if isinstance(c, str) and c:
+            return f"{c}-T10"
+    mv = hz.get("manager_verdict") if isinstance(hz.get("manager_verdict"), dict) else {}
+    fi = mv.get("forecast_input") if isinstance(mv.get("forecast_input"), dict) else {}
+    c = (fi.get("contract") or fi.get("probability_contract_version"))
+    if isinstance(c, str) and c:
+        return f"{c}-T10"
+    return None
+
+
 def _record_prompt_resolved_sha(record: Mapping[str, Any]) -> str | None:
-    """Prompt-equivalence evidence: sha256 of run_identity.prompt_resolved_hashes."""
+    """Prompt-equivalence evidence: full sha256 of
+    ``run_identity.prompt_resolved_hashes`` under the register §3
+    canonicalisation (``sort_keys=True, ensure_ascii=False,
+    separators=(\",\",\":\")``). Returns None when the record sealed no
+    ``run_identity`` dict — ``unverifiable`` in the key, never ``none``."""
     v = record.get("versions") or {}
     ri = v.get("run_identity")
     if isinstance(ri, dict):
@@ -172,10 +206,20 @@ def _record_prompt_resolved_sha(record: Mapping[str, Any]) -> str | None:
 
 
 def _record_custom_prompt_sha(record: Mapping[str, Any]) -> str | None:
-    """Prompt-equivalence evidence: sha256 of custom_prompt_snapshot (kept
-    under ``versions.custom_prompt_snapshot`` when the ledger sealed it)."""
+    """Prompt-equivalence evidence: sha256 of ``custom_prompt_snapshot``.
+    The sealed record carries it at ``result_data.custom_prompt_snapshot``
+    top level (``api/main.py:_attach_custom_prompt_snapshot``); the ledger's
+    ``versions`` projection never captured it (``_version_fields``), so
+    every existing row returns None → ``unverifiable`` in the key. Wired to
+    both the plausible record locations so a future ledger column that
+    seals it starts producing real hashes without a code change."""
     v = record.get("versions") or {}
-    return _canonical_json_sha(v.get("custom_prompt_snapshot"))
+    if isinstance(v.get("custom_prompt_snapshot"), (dict, list)):
+        return _canonical_json_sha(v["custom_prompt_snapshot"])
+    cps = record.get("custom_prompt_snapshot")
+    if isinstance(cps, (dict, list)):
+        return _canonical_json_sha(cps)
+    return None
 
 
 def _record_served_set(record: Mapping[str, Any]) -> tuple[list[str], int]:
@@ -206,32 +250,62 @@ def _record_served_set(record: Mapping[str, Any]) -> tuple[list[str], int]:
 
 def _record_version_key(record: Mapping[str, Any],
                         anchor: str | None = None) -> str:
-    """DAV-2142 frozen analysis-version key (登记 §3).
+    """DAV-2142 frozen analysis-version key, verbatim register §3
+    ``analysis_version_id`` (DAV-2166: the script's key must reconcile
+    against the register, not a home-grown format).
 
-    Split factors: contract version + resolved-prompt hash + custom-prompt
-    hash + served_model set — the production release commit is only an
-    audit anchor, never a per-deploy split key. ``anchor`` is the frozen
-    production-release anchor (``--analysis-anchor``); when supplied it is
-    stamped on every record so a deployment adjudicated analysis-path-
-    equivalent (10-12 65988c79→082be047) keeps ONE key before and after.
+    ``AV1|anchor=<8>|contract=<forecast contract>-T10|resolved=<64>|custom=<64|unverifiable>|served=<set>``
+
+    Split factors: the probability contract + resolved-prompt hash +
+    custom-prompt hash + served_model set — the production release commit
+    is only an audit anchor, never a per-deploy split key. ``anchor`` is
+    the frozen production-release anchor (``--analysis-anchor``); when
+    supplied it is stamped on every record so the adjudicated-equivalent
+    10-12 deploy (65988c79→082be047) keeps ONE key before and after.
     Without it each record carries its own sealed commit and two genuinely
-    different deploys split — fail-closed, never silently merged. A real
+    different deploys split — fail-closed, never silently merged.
+
+    A field whose evidence the ledger never sealed is written
+    ``unverifiable`` (not ``none``): ``custom`` is unrecoverable today
+    (``_version_fields`` doesn't project ``custom_prompt_snapshot``) and a
+    bare ``none`` would falsely imply a real empty hash. A real
     analysis-path change still switches the key via resolved/custom even
-    under a fixed anchor.
-    """
-    v = record.get("versions") or {}
+    under a fixed anchor."""
     anchor = anchor or _record_analysis_anchor(record)
-    contract = (v.get("evidence_contract_version")
-                or v.get("protocol_version")
-                or "novc")
-    resolved = _record_prompt_resolved_sha(record)
-    custom = _record_custom_prompt_sha(record)
+    contract = _record_contract_t10(record) or "unverifiable"
+    resolved = _record_prompt_resolved_sha(record) or "unverifiable"
+    custom = _record_custom_prompt_sha(record) or "unverifiable"
     served, _missing = _record_served_set(record)
     served_s = "+".join(served) if served else "none"
-    return (f"AV|anchor={anchor}|contract={contract}"
-            f"|resolved={(resolved or 'none')[:12]}"
-            f"|custom={(custom or 'none')[:12]}"
+    return (f"AV1|anchor={anchor}|contract={contract}"
+            f"|resolved={resolved}"
+            f"|custom={custom}"
             f"|served={served_s}")
+
+
+def _key_register_diff(key: str) -> dict:
+    """Per-segment diff of a script version key vs the register §3
+    ``analysis_version_id`` — ``{segment: {script, register}}`` for every
+    segment that disagrees. Empty dict = verbatim match. Surfaces the
+    honest `custom=unverifiable` divergence (ledger never seals the
+    snapshot) without string-diffing two 300-char keys by eye."""
+
+    def _seg(k: str) -> dict:
+        out: dict[str, str] = {}
+        parts = k.split("|")
+        out["prefix"] = parts[0]
+        for p in parts[1:]:
+            name, _, val = p.partition("=")
+            out[name] = val
+        return out
+
+    a = _seg(key)
+    b = _seg(REGISTER_ANALYSIS_VERSION_ID)
+    diff: dict[str, dict] = {}
+    for name in sorted(set(a) | set(b)):
+        if a.get(name) != b.get(name):
+            diff[name] = {"script": a.get(name), "register": b.get(name)}
+    return diff
 
 
 def _p_rel_t10(record: Mapping[str, Any]) -> tuple[int | None, str]:
@@ -322,7 +396,7 @@ def load_ledger_signals(
             "_ledger_input_pit_status": pit,
             "completed": rec.get("status") == "completed",
             "user_id": rec.get("user_id"),
-            "version_key": _record_version_key(rec),
+            "version_key": _record_version_key(rec, anchor=analysis_anchor),
             "analysis_anchor": _record_analysis_anchor(rec),
             "served_models": served_set,
             "served_model_missing": served_missing,
@@ -419,40 +493,131 @@ FREEZE_PLAN_SHA256_SIGNED = ("2f63d4f49a5f5d6587e53b71c8ef3ffab34da59e3d"
 FREEZE_REGISTER_SHA256_SIGNED = ("7946f7d9b085709773182182d9b7a59159816638"
                                "4268d7cf52b898de8852dd76")
 
+# Freeze register §3 signed analysis_version_id — the statutory key the
+# first-screen report must reconcile against (DAV-2166 🔴-2). Written on
+# every run.json so a reviewer can compare ``selected_version_key`` to the
+# register value mechanically. The script's ``custom`` leg is the only
+# segment that cannot match the register today (the ledger never seals
+# ``custom_prompt_snapshot``) — it stays ``unverifiable`` rather than
+# borrowing the register's ``b0ababd6…`` value, which would assert an
+# evidence this pipeline did not observe.
+REGISTER_ANALYSIS_VERSION_ID = (
+    "AV1|anchor=082be047|contract=b1.v1-T10"
+    "|resolved=a9950a9e81f5a18571cd7acb82777922583f147419f97d5499fdd5659d0b781d"
+    "|custom=b0ababd6ba2245ace36191d22b0958a41cab8cff0a572b03e5bab4da2d3e33a2"
+    "|served=gemini-3.8-flash-n")
+
 
 def freeze_block(analysis_anchor: str | None,
                  report_kind: str | None,
-                 df: pd.DataFrame) -> dict:
+                 df: pd.DataFrame,
+                 formal: pd.DataFrame | None = None,
+                 multi_model_sensitivity: dict | None = None) -> dict:
     """Report first-screen freeze block (DAV-2160 §report requirements):
-    plan sha256, descriptive-vs-confirmatory label, and the served_model-
-    non-unique report list (multi-model reports flagged per DAV-2142 §2.3).
-    ``report_kind`` is "descriptive" / "confirmatory" — the frozen plan
-    allows exactly one confirmatory read; everything else is descriptive.
-    """
-    multi_ids: list[str] = []
-    served_dist: dict[str, int] = {}
-    if "run_id" in df.columns and "multi_model" in df.columns:
-        mm = df.loc[df["multi_model"] == True]  # noqa: E712
-        multi_ids = sorted(str(x) for x in mm["run_id"].tolist())
-    if "served_models" in df.columns:
-        for models in df["served_models"]:
+    plan sha256, descriptive-vs-confirmatory label, the served_model-
+    non-unique report list, and the register §3 analysis_version_id the run
+    reconciles against.
+
+    ``df`` is the FULL pre-select_version input frame (all ledger rows):
+    multi-model disclosure is report-level, independent of which queue the
+    run reads. ``formal`` is the post-admit formal cohort — when supplied
+    the model-distribution block is emitted on BOTH denominators
+    (``*_formal_cohort`` vs ``*_all_ledger_rows``, each annotated with
+    ``n_rows`` / ``n_reports``) so the register §4 口径区分 is explicit
+    (DAV-2166 🟡-3).
+
+    ``multi_model_sensitivity`` is the register §4 必做剔除敏感性臂
+    outcome — computed by the caller after the formal queue exists; a
+    0-multi-model cohort still writes an explicit ``excluded_reports: 0``
+    arm rather than skipping the block."""
+
+    def _model_block(frame: pd.DataFrame) -> dict:
+        """Per-denominator served-model distribution: counted on the
+        report (run_id) axis — a report's model SET is one observation,
+        rows of the same report do not multiply its weight (DAV-2166
+        🟡-4). Reports with no ``run_id`` are bucketed separately under
+        ``no_run_id`` since they cannot be deduplicated by report."""
+        n_rows = int(len(frame))
+        if frame.empty or "run_id" not in frame.columns:
+            return {"n_rows": n_rows, "n_reports": 0,
+                    "served_model_distribution": {},
+                    "no_run_id_rows": n_rows,
+                    "served_model_missing_total": 0,
+                    "multi_model_reports": [], "multi_model_count": 0}
+        work = frame.copy()
+        work["_rid"] = work["run_id"].map(
+            lambda x: str(x) if isinstance(x, str) and x else None)
+        has_id = work[work["_rid"].notna()]
+        no_id = work[work["_rid"].isna()]
+        # one row per distinct report keeps the report-axis denominator.
+        first = (has_id.sort_index()
+                 .drop_duplicates(subset=["_rid"], keep="first"))
+        dist: dict[str, int] = {}
+        missing_total = 0
+        for _i, row in first.iterrows():
+            models = row.get("served_models")
             key = "+".join(models) if models else "none"
-            served_dist[key] = served_dist.get(key, 0) + 1
-    return {
+            dist[key] = dist.get(key, 0) + 1
+            try:
+                missing_total += int(row.get("served_model_missing") or 0)
+            except (TypeError, ValueError):
+                pass
+        if len(no_id):
+            # 缺 run_id 的报告无法按报告去重 —— 单列桶，分母口径写明。
+            dist["no_run_id"] = dist.get("no_run_id", 0) + int(len(no_id))
+            for _i, row in no_id.iterrows():
+                try:
+                    missing_total += int(row.get("served_model_missing") or 0)
+                except (TypeError, ValueError):
+                    pass
+        multi = sorted(
+            str(r) for r in
+            first.loc[first["multi_model"] == True, "_rid"])  # noqa: E712
+        return {
+            "n_rows": n_rows,
+            "n_reports": int(len(first)),
+            "served_model_distribution": dist,
+            "no_run_id_rows": int(len(no_id)),
+            "served_model_missing_total": missing_total,
+            "multi_model_reports": multi,
+            "multi_model_count": len(multi),
+        }
+
+    all_block = _model_block(df)
+    formal_block = _model_block(formal) if formal is not None else None
+
+    out = {
         "plan_file": str(FREEZE_PLAN_FILE.relative_to(REPO_ROOT)),
         "plan_sha256": _freeze_file_sha(FREEZE_PLAN_FILE),
         "plan_sha256_signed": FREEZE_PLAN_SHA256_SIGNED,
         "register_file": str(FREEZE_REGISTER_FILE.relative_to(REPO_ROOT)),
         "register_sha256": _freeze_file_sha(FREEZE_REGISTER_FILE),
         "register_sha256_signed": FREEZE_REGISTER_SHA256_SIGNED,
+        "register_analysis_version_id": REGISTER_ANALYSIS_VERSION_ID,
         "report_kind": report_kind or "descriptive",
+        # DAV-2166 🟡-5: the single-confirmatory guarantee is owned by the
+        # caller — the script cannot enforce it. Stamped explicitly so a
+        # confirmatory run.json carries the provenance obligation.
+        "confirmatory_uniqueness": (
+            "unique_per_caller" if report_kind == "confirmatory"
+            else "not_applicable"),
+        "confirmatory_uniqueness_note": (
+            "冻结计划允许恰好一次确认读数；本脚本不裁决亦不记忆第几次 "
+            "确认运行 —— 唯一性由调用方按总控调度保证并在交付评论留痕。"),
         "analysis_anchor": analysis_anchor,
-        "multi_model_reports": multi_ids,
-        "multi_model_count": len(multi_ids),
-        "served_model_distribution": served_dist,
+        "model_distribution_all_ledger_rows": all_block,
+        "model_distribution_formal_cohort": formal_block,
+        "multi_model_sensitivity": multi_model_sensitivity,
         "note": "描述性读数不进入确认族；唯一确认读数仅在冻结截点跑一次。"
-                "多模型报告必标记并单列（剔除敏感性由下游报告承担）。",
+                "多模型报告必标记并单列；剔除敏感性臂（登记 §4 必做）按 "
+                "正式 cohort 全量重算，0 多模型也显式写出。",
     }
+    # Back-compat: the earlier first-screen keys stay populated on the
+    # all-ledger denominator so existing consumers/tests keep working.
+    out["multi_model_reports"] = all_block["multi_model_reports"]
+    out["multi_model_count"] = all_block["multi_model_count"]
+    out["served_model_distribution"] = all_block["served_model_distribution"]
+    return out
 
 
 def _chunks_manifest_sha(chunks_dir: Path) -> str | None:
@@ -634,11 +799,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
-    # DAV-2160: freeze block is computed on the FULL input frame —
-    # multi-model reports must be flagged even when they sit outside the
-    # selected version queue (multi-model is a report-level disclosure,
-    # independent of which queue the run reads).
-    freeze = freeze_block(analysis_anchor, report_kind, df)
+    # Full input frame preserved for the freeze block's all-ledger
+    # denominator (multi-model disclosure is report-level, independent of
+    # which queue the run reads) — select_version below narrows `df`.
+    df_full = df.copy()
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
@@ -668,6 +832,50 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     pre_admit_ids = set(df["run_id"]) if "run_id" in df.columns else set()
 
     formal, funnel = m1.admit(df, user_id=user_id, calendar=cal_ymd)
+
+    # Multi-model exclusion sensitivity arm (register §4 必做, DAV-2166
+    # 🟡-3): recompute the formal cohort with every multi-model report
+    # dropped and re-run the same day-series. 0 multi-model reports still
+    # produces an explicit arm (excluded_reports: 0, identical metrics)
+    # rather than a missing block — the arm exists to prove the main
+    # number is stable under the exclusion, not only when it changes.
+    formal_mm = formal[formal["multi_model"] == True] \
+        if "multi_model" in formal.columns else pd.DataFrame()
+    mm_sens: dict = {
+        "excluded_reports": int(formal_mm["run_id"].nunique())
+        if len(formal_mm) else 0,
+        "excluded_rows": int(len(formal_mm)),
+        "cohort_rows_before": int(len(formal)),
+        "cohort_rows_after": int(len(formal) - len(formal_mm)),
+    }
+    if len(formal_mm):
+        formal_excl = formal[formal["multi_model"] != True]
+        days_excl = m1.eval_days(formal_excl, calendar=cal_ymd)
+        # grade() embeds the passed funnel into its return — hand it an
+        # empty dict so the sensitivity arm doesn't smuggle the main
+        # funnel's counts under its own label.
+        v_excl = m1.grade(days_excl, {})
+        mm_sens.update({
+            "valid_days_excl": int(v_excl["valid_days"]),
+            "mean_ic_excl": float(v_excl["mean_ic"])
+            if np.isfinite(v_excl["mean_ic"]) else None,
+            "grade_excl": v_excl["grade"],
+        })
+    else:
+        mm_sens.update({
+            "valid_days_excl": None, "mean_ic_excl": None,
+            "grade_excl": None,
+            "note": "正式 cohort 无多模型报告；敏感性与主样本相同。",
+        })
+
+    # Build the report first-screen freeze block now that the formal
+    # cohort exists — model distribution is emitted on both denominators
+    # (all ledger rows vs formal cohort, each n_rows / n_reports
+    # annotated) and the multi-model sensitivity arm is attached
+    # (DAV-2166 🟡-3 / 🟡-4).
+    freeze = freeze_block(analysis_anchor, report_kind, df_full,
+                          formal=formal,
+                          multi_model_sensitivity=mm_sens)
 
     # seal_gate 块（DAV-1993 🟡 M-1）: 口径 + 被分流 run_id 落盘，verdict.model
     # 与 run.json 顶层各一份同值。计数取自 m1.admit 的 funnel：
@@ -842,6 +1050,16 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "formal_rows": len(formal),
         "seal_gate": seal_gate_block,
         "labels": len(labels), "version_key": funnel["version_key"],
+        # Register §3 reconciliation: the selected queue's key alongside
+        # the signed analysis_version_id the report must match, plus a
+        # per-segment diff so a reviewer sees exactly which leg disagrees
+        # (today only `custom` — the ledger never seals the snapshot).
+        "selected_version_key": funnel["version_key"],
+        "register_analysis_version_id": REGISTER_ANALYSIS_VERSION_ID,
+        "version_key_matches_register": (
+            funnel["version_key"] == REGISTER_ANALYSIS_VERSION_ID),
+        "version_key_register_diff": _key_register_diff(
+            funnel["version_key"]),
         "user_id": user_id,
         "base_source_kind": base_source.get("kind"),
         "funnel": funnel,
@@ -883,8 +1101,12 @@ def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
         "status": "completed", "timing_class": tc,
         "input_pit_status": pit, "backfilled": False,
         "versions": versions,
+        # DAV-2166: the version-key contract is read at the probability
+        # node — `forecast.contract` (register b1.v1-T10) — so the fixture
+        # must seal it there, not only under versions.evidence_contract_.
         "horizons": {"short": {"forecast": {"status": "valid" if p else "missing",
-                                          "p_rel_t10": p}},
+                                          "p_rel_t10": p,
+                                          "contract": contract}},
                      "medium": {}},
     }
     return rec
