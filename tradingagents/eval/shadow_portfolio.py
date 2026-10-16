@@ -49,6 +49,9 @@ from tradingagents.eval.trade_execution import (
     ledger_direction,
     next_trading_day,
 )
+from tradingagents.storage.result_data_compat import (
+    result_data_authoritative_view,
+)
 
 # ---------------------------------------------------------------------------
 # 账本输入
@@ -83,8 +86,19 @@ def _norm_decision(raw: Any) -> str | None:
     return s if s in ("BUY", "SELL", "HOLD", "WAIT", "NO_TRADE") else None
 
 
+def _record_hz(record: Mapping[str, Any], horizon: str) -> Mapping[str, Any]:
+    """``horizons.<hz>`` on a sealed ledger record, read via the
+    authoritative view (DAV-2129): when the record carries a ``*_term``
+    twin its values win over a stale alias mirror; on plain ledger
+    records (no ``*_term``) this is a pass-through.
+    """
+    return (
+        result_data_authoritative_view(record).get("horizons") or {}
+    ).get(horizon) or {}
+
+
 def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> float | None:
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    hz = _record_hz(record, horizon)
     v = hz.get("confidence")
     if v is None:
         v = record.get("confidence_top")
@@ -95,7 +109,7 @@ def ledger_confidence(record: Mapping[str, Any], horizon: str = "medium") -> flo
 
 
 def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> float | None:
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    hz = _record_hz(record, horizon)
     v = hz.get("probability")
     if v is None:
         v = record.get("probability_top")
@@ -107,7 +121,7 @@ def ledger_probability(record: Mapping[str, Any], horizon: str = "medium") -> fl
 
 
 def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> str | None:
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    hz = _record_hz(record, horizon)
     v = hz.get("risk_status")
     if v is None:
         v = record.get("risk_status_top")
@@ -117,7 +131,7 @@ def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> st
 
 def ledger_final_action(record: Mapping[str, Any], horizon: str = "medium") -> str | None:
     """风控后的最终动作：trade_action → decision → direction 映射。"""
-    hz = (record.get("horizons") or {}).get(horizon) or {}
+    hz = _record_hz(record, horizon)
     act = _norm_action(hz.get("trade_action")) or _norm_action(record.get("trade_action_top"))
     if act is not None:
         return act

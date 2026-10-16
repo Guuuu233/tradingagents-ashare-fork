@@ -532,9 +532,16 @@ _JUDGEMENT_FIELDS = (
 
 
 def _horizon_judgement(result_data: dict[str, Any], hz: str) -> dict[str, Any]:
-    sub = (result_data.get("horizons") or {}).get(hz)
+    # DAV-2129 (总控裁: 权威副本为 <h>_term): the authoritative ``*_term``
+    # slice wins — a physically present ``horizons.<h>`` alias can be a
+    # stale mirror (579-row shape: alias T+5 keys null while the term
+    # slice carries values), so it is only a fallback when the term slice
+    # is absent/unreadable.
+    sub = result_data.get(f"{hz}_term")
+    if not isinstance(sub, dict) or not sub:
+        sub = (result_data.get("horizons") or {}).get(hz)
     if not isinstance(sub, dict):
-        sub = result_data.get(f"{hz}_term") or {}
+        sub = {}
     out = {k: sub.get(k) for k in _JUDGEMENT_FIELDS if k in sub}
     if not out:
         # very old rows: fall back to top-level fields once
@@ -576,9 +583,13 @@ def build_record(
     # DAV-1506 (B-1): canonical rows rebuild the legacy horizons.<h> and
     # top-level market_data_context view from the authoritative *_term
     # slices so pit/horizon extraction reads identical values on both
-    # storage layouts.
-    from tradingagents.storage.result_data_compat import result_data_compat_view
-    result_data = result_data_compat_view(result_data)
+    # storage layouts. DAV-2129: read via the authoritative view so a
+    # stale ``horizons`` alias mirror (579-row shape) can never override
+    # the term slice on legacy rows either.
+    from tradingagents.storage.result_data_compat import (
+        result_data_authoritative_view,
+    )
+    result_data = result_data_authoritative_view(result_data)
     pit_status, pit_evidence, _pit_mdc = _classify_input_pit(result_data)
 
     created = _parse_dt(row["created_at"])
@@ -914,10 +925,12 @@ def reattest_entries_for_row(
     if not isinstance(result_data, dict):
         result_data = {}
     if result_data:
+        # DAV-2129: same authoritative-view read as build_record — a stale
+        # ``horizons`` alias mirror must not win over ``*_term``.
         from tradingagents.storage.result_data_compat import (
-            result_data_compat_view,
+            result_data_authoritative_view,
         )
-        result_data = result_data_compat_view(result_data)
+        result_data = result_data_authoritative_view(result_data)
 
     status, evidence, mdc = _classify_input_pit(result_data)
     sha = evidence.get("market_data_context_sha256")
