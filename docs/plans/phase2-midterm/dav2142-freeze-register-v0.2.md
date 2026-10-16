@@ -1,6 +1,6 @@
-# DAV-2142｜冻结登记附表 v0.2
+# DAV-2142｜冻结登记附表 v0.3
 
-**登记结论：已填可核证据，仍有明确阻塞，尚未签字冻结。目标10-21前。** 总控对本附表与计划所在40位SHA签字即为冻结；缺失来源不因签字变成已验证。
+**登记结论：三项待裁事项已按总控10-16裁定落文，待增量复审及总控签字，尚未冻结；目标10-21前。** 总控对本附表与计划所在40位SHA签字即为冻结。沿用v0.2文件路径以便增量复审；只改模型字段、部署等价、跨年日期补登。
 
 ## 1. 采集环境与边界
 
@@ -15,7 +15,7 @@
 SHA256：`f1f1ce33c5cceb5c530c3271fc951405cb5624d2f30becec85dc7a85fd47e656`；覆盖 `1990-12-19` 至 `2026-12-31`。
 首个正式信号日：**2026-10-08**；含起点按文件交易日顺序取60日，A/B轮换不删除计划日。第60日=**2026-12-30**。
 
-**阻塞 CALENDAR_T10_OUT_OF_RANGE：该文件仅至2026-12-31，最后9个计划日的T+10跨入2027，无法从该日历计算。不得用周一到周五、猜测节假日或自然日补齐。** 因而第60日T+10日期、正常管线可用日及确认截点尚不可登记为具体日期。需总控指定/补交覆盖到第60日T+10的权威交易日历及sha256，再完整复核本表；不为本卡擅自联网拉取或改日历。
+**按现有日历冻结；CALENDAR_T10_OUT_OF_RANGE为待补日期标记，不再作为本次冻结阻塞。** 最后9个计划日的T+10跨2027，当前保留null，不用普通周一至周五或自然日猜补。官方2027交易日历公布后，按计划§5既定规则机械推算：维持60日序号及信号日，以官方交易日续接现有日历，从每个原信号日偏移10个交易日，填最后9个T+10可用日；确认截点=第60日T+10正常标签可用日的次一上海工作日12:00，工作日按官方安排确定。**仅作为补登附录追加日期，附官方来源和新日历SHA256；不得改动任何口径；补登须早于其中最早一个T+10日。** 冻结正文不覆盖，逾期则记录偏差及不可判定，不因补登重选样本或检验日程。
 
 “T+10可用”指对应交易日收盘后、既有每日标签任务正常成功后；下表为交易日下界，不承诺任务成功。标签晚到不改变既定截点。上海工作日不能默认公历周一至周五；跨年工作日历亦需验证，确认截点遵从计划规定的次一上海工作日12:00。
 
@@ -84,7 +84,7 @@ SHA256：`f1f1ce33c5cceb5c530c3271fc951405cb5624d2f30becec85dc7a85fd47e656`；�
 
 第20/40计划日仅发描述性快照；其信号日/T+10下界分别为 2026-11-04 / 2026-11-18; 2026-12-02 / 2026-12-16。不改成第20/40个有效日。
 
-## 3. 当前分析版本候选键与证据
+## 3. 当前分析版本键与证据
 
 生产发布锚点（总控指定、Git对象核验）：`082be0476c1b68dcc9cd33048d3588ff6346ac96`；本轮不以访问生产进程验证部署。
 提示词代码树Git OID：`552db230e735dad8a8646a8cd3fbae8e184fc22e`。
@@ -98,13 +98,13 @@ SHA256：`f1f1ce33c5cceb5c530c3271fc951405cb5624d2f30becec85dc7a85fd47e656`；�
 
 运行提示词resolved_hashes覆盖五角色：bull_researcher、bear_researcher、research_manager、trader、risk_manager。报告内custom_prompt_snapshot仅存哈希，本附表不暴露提示词全文/凭据。当前设置表在10-11重建，不能用当前设置代替历史；采用逐报告历史snapshot及run_identity等价证据。
 
-**候选analysis_version_id**：`AV1|anchor=082be047|contract=b1.v1-T10|resolved=a9950a9e81f5a18571cd7acb82777922583f147419f97d5499fdd5659d0b781d|custom=b0ababd6ba2245ace36191d22b0958a41cab8cff0a572b03e5bab4da2d3e33a2|served=gemini-3.8-flash-n`。
+**analysis_version_id（待本SHA签字冻结）**：`AV1|anchor=082be047|contract=b1.v1-T10|resolved=a9950a9e81f5a18571cd7acb82777922583f147419f97d5499fdd5659d0b781d|custom=b0ababd6ba2245ace36191d22b0958a41cab8cff0a572b03e5bab4da2d3e33a2|served=gemini-3.8-flash-n`。
 
-只有分析路径或实际服务模型变动才切换，其他部署记录release_sha而沿用analysis_version_id。提示词证据稳定和模型稳定不能单独证明部署无分析改动。10-08至10-09部署前后是否同分析队列仍待完整部署清单及分析路径审阅；不能只看收敛哈希擅自合队列。
+只有分析路径实际改变或served_model改变才切换，其他部署记录release_sha而沿用analysis_version_id。总控已裁10-08以来唯一部署是10-12的65988c79→082be047，属兼容读写改造且view_mismatches=0，不切换版本；部署前后共用本键。10-14、10-15为同版本重启，不算部署。完整清单及裁定说明见§6，不再以缺部署等价裁定阻挡冻结。
 
 ## 4. 模型分布及多模型报告
 
-**字段差异 SCHEMA_MODEL_MAPPING_PENDING**：快照llm_call_logs没有总控原文的`model`列；存在`model_name`、`served_model`、`requested_model`。项目usage_logging.py区分响应served_model与可能回退的model_name。本附表分开原样报告，待总控/复审认可响应字段映射。不得假称执行了SELECT model。
+**模型字段已裁定**：版本键的实际服务模型取`llm_call_logs.served_model`；`requested_model`只记录，不参与实际模型判定；`model_name`仅旁证。照既有查询与本条总控裁定登记：10-08以来149份报告、4253次调用served_model全部为`gemini-3.8-flash-n`，多模型报告0。保留下面原分布及采集截点，不为本轮文档修订重新抽样。
 
 查询范围：固定账户报告trade_date>=2026-10-08，JOIN reports.id=llm_call_logs.report_id；本快照实际范围10-08至10-15。包含所有该账户报告，不声称这些都属于正式cohort。149报告（24/29/24/24/24/24），10-09含额外报告需在正式漏斗另排除；此处仅登记全量分布。无日志报告/被删报告不在此分布中，不推断为零。
 
@@ -126,23 +126,86 @@ SHA256：`f1f1ce33c5cceb5c530c3271fc951405cb5624d2f30becec85dc7a85fd47e656`；�
 
 P1选择DAV-2080试跑所建T+10全市场面板的stats.json（不是T+40面板或P4自选样本）。该manifest为来源登记，不意味着本卡重算分区或基率；未来变更必须记偏差及新manifest哈希。补判沿计划账本终态优先、UNVERIFIED查最后adjudicated、no_evidence只诊断；本轮未重生成。
 
-## 6. 部署偏差表与待补证据
+## 6. 部署偏差表与完整文件清单
 
-| 部署 | 前后SHA/文件清单 | 分析路径结论 | 队列处理 |
+| 事件 | 前后SHA/清单 | 分析路径结论及证据 | 队列处理 |
 |---|---|---|---|
-| 当前生产锚点 | 082be0476c1b68dcc9cd33048d3588ff6346ac96；来源=总控指令+Git对象 | 未以本轮元数据查询验证运行进程；非完整历史部署清单 | 当前候选锚点，不自动切每次部署 |
-| 10-08以来每次实际部署 | 待提供release时间、前后40位SHA及完整git diff --name-only | DEPLOYMENT_ANALYSIS_PATH_UNVERIFIED | 未证等价前不得自动合队列 |
+| 10-12：10-08以来唯一部署 | `65988c799d454fc41c12fbc8e5dbe89114511c69` → `082be0476c1b68dcc9cd33048d3588ff6346ac96`；完整清单如下 | 总控已核：shadow_credit.py、historical_cases.py改走result_data_compat_view读取；thinking_cleaner.py规范行写入不再物化horizons别名；新增zstandard依赖；提示词、dataflows/、graph/、LLM配置均未改。B链上线前兼容视图逐行比对view_mismatches=0 | 按总控裁定等价，不切换分析版本 |
+| 10-14、10-15 | 同版本重启，不算部署 | 来源为总控10-16裁定；本轮不访问生产进程 | 不切版 |
 
-部署登记须逐次保存完整清单，不只搜索几个目录便证明“未改判断”。只要改agents、提示词、dataflows、graph、LLM配置或实际模型则切版；无分析改变则不切版。候选版本不能因运维部署被机械拆开，也不能仅因提示词相同而自动合并。
+裁定来源：DAV-2142触发评论 `01a143e1-8527-7bb0-a7df-836b58f61186`（总工转总控10-16三项裁定）。以上运行/比对结论按裁定登记，并非本轮重新执行兼容比对。以下为本轮在本agent检出实跑 `git diff --name-only 65988c79 082be047` 的完整输出（59文件），不以局部目录搜索代替完整清单：
 
-## 7. 验证结果与冻结阻塞
+```text
+.gitignore
+DECISIONS.md
+PROJECT_STATE.md
+api/main.py
+api/services/report_service.py
+docs/plans/phase2-midterm/m1-evaluation-criteria.md
+docs/research/phase2-midterm/cache-acceptance.md
+docs/research/phase2-midterm/chunk-build.md
+docs/research/phase2-midterm/p1-report.md
+docs/research/phase2-midterm/p1-study-spec.md
+docs/ta-snapshot-usage.md
+pyproject.toml
+requirements.txt
+scheduler/main.py
+scripts/backfill_tplus5_shadow.py
+scripts/dav1507_exit_progress.py
+scripts/phase2/README.md
+scripts/phase2/build_phase2_chunks.py
+scripts/phase2/cache_acceptance.py
+scripts/phase2/com.davidliu.ta-p4-ledger.plist
+scripts/phase2/daily_snapshot_ledger.py
+scripts/phase2/m1_base_rate.py
+scripts/phase2/m1_base_rate_bridge.py
+scripts/phase2/m1_eval.py
+scripts/phase2/m2_periodic_report.py
+scripts/phase2/m2_sampler.py
+scripts/phase2/p1_stats_layer.py
+scripts/phase2/validate_phase2_chunks.py
+scripts/ta_snapshot.py
+tests/test_dav1480_snapshot_ledger.py
+tests/test_dav1506_result_data_compat.py
+tests/test_dav1507_exit_progress.py
+tests/test_dav1545_single_write.py
+tests/test_dav1547_qfq_label.py
+tests/test_dav1678_m1_eval.py
+tests/test_dav1705_pipeline_drivers.py
+tests/test_m1_base_rate.py
+tests/test_m1_base_rate_bridge.py
+tests/test_m2_periodic_report.py
+tests/test_m2_sampler.py
+tests/test_provider_resource_cleanup.py
+tests/test_report_dual_horizon.py
+tests/test_shadow_portfolio.py
+tests/test_tplus5_operational_backfill.py
+tests/test_trade_execution_rules.py
+tradingagents/agents/utils/shadow_credit.py
+tradingagents/eval/shadow_portfolio.py
+tradingagents/eval/trade_execution.py
+tradingagents/knowledge/historical_cases.py
+tradingagents/llm_clients/thinking_cleaner.py
+tradingagents/storage/__init__.py
+tradingagents/storage/result_data_compat.py
+uv.lock
+work/dav1506-read-points.md
+work/dav1507-exit-progress/spec_v4.md
+work/dav1705_pipeline/README.md
+work/dav1705_pipeline/build_ledger_chunked.py
+work/dav1705_pipeline/finalize_trial.py
+work/dav1705_pipeline/run_shadow_trial.py
+```
+
+该次兼容读写改造的目录命中按总控明确等价裁定不切版；其他未来部署仍按原分析版本规则逐次登记完整改动清单，不把本例外泛化为可任意修改分析路径。
+
+## 7. 验证结果与后续事项
 
 只读采集：collect_freeze_evidence.py退出0，peak footprint=28,410,312 bytes（0.02646 GiB）；逐报告提示词流式哈希inspect_prompt_evidence.py退出0，peak footprint=1,046,250,960 bytes（0.97440 GiB），maximum RSS=1,045,037,056 bytes，均≤4 GiB。0项目tests；无数据库写入、模型/provider调用、生产重启或分析执行。
 
-**阻塞清单（不冒充已完整交付冻结登记）**：
-1. 跨年日历缺9个T+10日期，需覆盖2027的权威日历，才可补确认日及次一上海工作日12:00具体截点。
-2. 总控原文model列与实际schema不符，需认可served_model的响应语义映射；本次model_name与served_model分布一致但不掩盖字段差异。
-3. 10-08以来完整实际部署及分析路径/LLM配置变更记录缺失；现有哈希可证明已读字段稳定，不能证明所有分析路径从未改变。
-4. 版本等价、正式cohort额外报告排除及冻结SHA仍待总控审阅签字。
+**三项裁定落文及后续事项**：
+1. 跨年9个T+10日期及确认截点按现有日历冻结、官方2027日历公布后机械补登；附新日历SHA256，只填日期不改口径，补登早于其中最早T+10日。
+2. 模型字段以served_model为准；149报告/4253调用、gemini-3.8-flash-n、多模型0照登，requested_model仅记录。
+3. 10-12唯一部署按总控等价裁定不切版；完整文件清单见§6，10-14/15仅同版重启。
 
-路径建议：先提供日历及部署证据、认可模型字段映射；按原日程补全附表并以新40位SHA报签，复审只核本轮四项修订及登记证据。不擅自变更生产、延长测量或启动M1。
+本轮仅上述三类文档修订，不重读数据库、不跑收益分析或项目测试；§1及本节peak数值保留为v0.2采集的历史证据，不冒充本轮实测。封存门、补判顺序、两项Holm、NW60/120取较大p、不可判定线、描述性风格与第20/40日描述快照均不变。后续先做只核改动部分的复审，通过后总控对40位SHA签字即冻结；正式cohort额外报告仍按原漏斗排除，不擅自合入、上线、延长测量或启动M1。
