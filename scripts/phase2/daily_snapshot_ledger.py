@@ -28,11 +28,27 @@ ledger under ``work/phase2-ledger/``. Each line carries:
                 source provenance entry explicitly marked "future"
     UNVERIFIED— some source lacks a readable timestamp, or provenance info is
                 absent for a source expected in input_snapshot.keys
-  Source timestamps come from result_data.market_data_context[hz].source_provenance
-  (written by data_collector._build_source_provenance); sources absent from
+  Read position (总控 10-15 裁①): a physical top-level market_data_context
+  is judged directly; otherwise each horizon's <h>_term.market_data_context
+  is judged and merged (any FAILED -> FAILED; all VERIFIED -> VERIFIED;
+  else UNVERIFIED). Per-horizon detail lives in
+  input_pit_evidence["horizons"]; market_data_context_sha256 pins the
+  exact mapping(s) read. Sources whose provenance marks them refused /
+  unavailable (data never entered the analysis) are exempt from the
+  verdict and recorded under input_pit_evidence["gap_sources"] (裁②);
+  status=available without a readable timestamp still counts UNVERIFIED.
+  Source timestamps come from the mdc's source_provenance (written by
+  data_collector._build_source_provenance); sources absent from
   provenance fall back to "no timestamp" -> UNVERIFIED. Never defaults to
-  VERIFIED. requested/actual as_of values are compared as parsed timestamps
-  (_parse_dt), not raw strings, so both "YYYY-MM-DD" and ISO datetimes work.
+  VERIFIED. requested/actual as_of values are compared as parsed
+  timestamps (_parse_dt), not raw strings, so both "YYYY-MM-DD" and ISO
+  datetimes work.
+* ``pit_reattest.jsonl`` (DAV-2097 ③): re-adjudications under the fixed
+  rules are appended to this sidecar file (never rewriting ledger
+  lines). Evaluation scripts resolve effective pit status as: ledger
+  VERIFIED/FAILED wins; UNVERIFIED consults the latest adjudicated
+  reattest line; reports with no readable evidence are stamped
+  ``no_evidence`` (diagnostic only).
 
 External head anchor (work/phase2-ledger/HEAD): a hash chain alone cannot
 prove the tail of the file was not truncated — every surviving line still
@@ -74,6 +90,18 @@ from tradingagents.storage.compressed_json import (  # noqa: E402
     decode_frame_bytes,
     result_data_select_expr,
 )
+
+# Sibling module: append-only PIT re-attestation (DAV-2097 ③ — the ledger
+# itself is never rewritten; re-adjudications under the fixed rules live
+# in pit_reattest.jsonl next to the ledger).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pit_reattest  # noqa: E402
+
+# Bump when input-PIT classification semantics change; stamped on every
+# pit_reattest.jsonl line so audits know which rule produced a verdict.
+# v2 = DAV-2097 ①+② (per-horizon read + refused/unavailable exemption).
+PIT_RULE_VERSION = pit_reattest.PIT_RULE_VERSION
+REATTEST_FILE = pit_reattest.REATTEST_FILE
 
 def _result_data_text(row_value) -> str:
     """Normalize the physical result_data cell to its serialized JSON text.
@@ -243,9 +271,25 @@ def _classify_timing(
 
 
 def _iter_source_entries(mdc: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
-    """Yield (source, provenance entry) across horizons."""
+    """Yield (source, provenance entry) for one market_data_context.
+
+    Handles both stored shapes: ``{<horizon>: {source_provenance: {...}}}``
+    (legacy top-level map, one entry per source — first horizon wins on
+    collisions, matching the pre-2097 behavior) and the flat B-3 "kept"
+    form ``{source_provenance: {...}, ...}`` (single-horizon / slice mdc),
+    plus a mixture of the two.
+    """
     seen: set[str] = set()
+    flat_sp = mdc.get("source_provenance")
+    if isinstance(flat_sp, dict):
+        for src, info in flat_sp.items():
+            if src in seen or not isinstance(info, dict):
+                continue
+            seen.add(src)
+            yield src, info
     for hz, sub in mdc.items():
+        if hz == "source_provenance":
+            continue
         if not isinstance(sub, dict):
             continue
         sp = sub.get("source_provenance")
@@ -289,32 +333,62 @@ def _pit_as_of_cmp(actual: Any, requested: Any) -> Optional[int]:
 
 
 
-def _classify_input_pit(
-    result_data: dict[str, Any],
-) -> tuple[str, dict[str, Any]]:
-    """VERIFIED / FAILED / UNVERIFIED from market_data_context provenance."""
-    mdc = result_data.get("market_data_context")
-    snap = result_data.get("input_snapshot") or {}
-    expected = set(snap.get("keys") or [])
+# Sources whose provenance marks them as never having entered the
+# analysis — the pull failed / source was unavailable (provenance_status
+# "refused", or status/provenance_status "unavailable"). 总控 10-15 裁②:
+# these are EXEMPT from the input-PIT timeliness verdict — a fetch gap is
+# not a point-in-time violation — and are recorded under ``gap_sources``
+# in the evidence instead of dragging the record to UNVERIFIED.
+_GAP_PROVENANCE_STATUSES = {"refused", "unavailable"}
+_GAP_ENTRY_STATUSES = {"refused", "unavailable"}
 
+
+def _classify_pit_mdc(
+    mdc: Any,
+    expected: set[str],
+    *,
+    horizon_label: Optional[str] = None,
+) -> tuple[str, dict[str, Any]]:
+    """Classify ONE market_data_context mapping → (status, evidence).
+
+    ``mdc`` may be the legacy top-level ``{<horizon>: {source_provenance}}``
+    map, a single horizon's mdc slice, or a flat mdc whose
+    ``source_provenance`` sits at the top (the B-3 "kept" form). The
+    caller tags the returned evidence with ``mdc_shape`` /
+    ``horizon_label`` so the report can tell which read position produced
+    the verdict.
+    """
     evidence: dict[str, Any] = {"expected_sources": sorted(expected),
                               "unverified_sources": [], "failed_sources": [],
-                              "covered_sources": [], "exempt_sources": []}
+                              "covered_sources": [], "exempt_sources": [],
+                              "gap_sources": []}
+    if horizon_label is not None:
+        evidence["horizon"] = horizon_label
     if not isinstance(mdc, dict) or not mdc:
         evidence["reason"] = "market_data_context missing"
         return "UNVERIFIED", evidence
 
     entries = dict(_iter_source_entries(mdc))
 
-    failed, unverified, covered = [], [], []
+    failed, unverified, covered, gaps = [], [], [], []
     for src, info in entries.items():
         ps = info.get("provenance_status")
+        status = info.get("status")
         req = info.get("requested_as_of")
         act = info.get("actual_as_of") or info.get("as_of")
         cmp_asof = _pit_as_of_cmp(act, req) if (req and act) else None
-        if ps == "future" or cmp_asof == 1:
+        # Order matters: a future-dated fetch failure still counts as a
+        # FAILED verdict (look-ahead evidence beats the fetch-gap
+        # exemption), matching the "as_of 超前 → FAILED" invariant.
+        if ps == "future" or status == "future" or cmp_asof == 1:
             failed.append({"source": src, "requested_as_of": req,
-                           "actual_as_of": act, "status": info.get("status")})
+                           "actual_as_of": act, "status": status})
+        elif ps in _GAP_PROVENANCE_STATUSES or status in _GAP_ENTRY_STATUSES:
+            # refused / unavailable: the data never entered the analysis
+            # (fetch failed), so there is no timeliness to verify — exempt,
+            # disclosed under gap_sources (总控裁②).
+            gaps.append({"source": src, "provenance_status": ps,
+                         "status": status})
         elif ps == "verified":
             covered.append(src)
         elif cmp_asof is not None and cmp_asof <= 0:
@@ -324,7 +398,7 @@ def _classify_input_pit(
         else:
             unverified.append({"source": src,
                                "provenance_status": ps,
-                               "status": info.get("status")})
+                               "status": status})
 
     if not entries:
         evidence["reason"] = "source_provenance missing"
@@ -342,6 +416,7 @@ def _classify_input_pit(
     evidence["failed_sources"] = failed
     evidence["unverified_sources"] = unverified
     evidence["covered_sources"] = sorted(covered)
+    evidence["gap_sources"] = gaps
 
     if failed:
         return "FAILED", evidence
@@ -350,6 +425,100 @@ def _classify_input_pit(
     if not covered and not entries:
         return "UNVERIFIED", evidence
     return "VERIFIED", evidence
+
+
+def _mdc_sha_of(mdc: Any) -> Optional[str]:
+    """sha256 over the canonical JSON of the mdc actually read (DAV-2097③)."""
+    if mdc is None:
+        return None
+    return _sha256_bytes(_canonical(mdc))
+
+
+def _classify_input_pit(
+    result_data: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """VERIFIED / FAILED / UNVERIFIED from market_data_context provenance.
+
+    Read position (总控 10-15 裁①): a physically present top-level
+    ``market_data_context`` is judged as before; otherwise each horizon's
+    ``<h>_term.market_data_context`` slice is judged on its own and the
+    per-horizon verdicts merge — any FAILED → FAILED, all VERIFIED →
+    VERIFIED, anything else → UNVERIFIED. The evidence carries a
+    ``horizons`` block with the per-horizon detail and
+    ``market_data_context_sha256`` over the exact mapping(s) read (the
+    value the pit_reattest.jsonl sidecar later pins).
+
+    Returns ``(status, evidence, mdc)`` — the third element is the mdc
+    mapping(s) actually read (single top-level dict, or ``{hz: mdc}``),
+    or ``None`` when nothing was readable; ``mdc_sha_of`` of it equals
+    ``market_data_context_sha256`` in the evidence.
+    """
+    snap = result_data.get("input_snapshot") or {}
+    expected = set(snap.get("keys") or [])
+
+    top_mdc = result_data.get("market_data_context")
+    if isinstance(top_mdc, dict) and top_mdc:
+        status, ev = _classify_pit_mdc(top_mdc, expected)
+        ev["mdc_shape"] = "top_level"
+        ev["market_data_context_sha256"] = _mdc_sha_of(top_mdc)
+        return status, ev, top_mdc
+
+    # Per-horizon path (canonical v1 rows: top-level mdc is not
+    # materialised; each <h>_term slice carries its own).
+    term_mdcs: dict[str, Any] = {}
+    for hz in HORIZONS:
+        term = result_data.get(f"{hz}_term")
+        if isinstance(term, dict) and isinstance(
+                term.get("market_data_context"), dict) \
+                and term["market_data_context"]:
+            term_mdcs[hz] = term["market_data_context"]
+
+    if not term_mdcs:
+        evidence: dict[str, Any] = {
+            "expected_sources": sorted(expected),
+            "unverified_sources": [], "failed_sources": [],
+            "covered_sources": [], "exempt_sources": [], "gap_sources": [],
+            "reason": "market_data_context missing",
+            "mdc_shape": "absent",
+            "market_data_context_sha256": None,
+        }
+        return "UNVERIFIED", evidence, None
+
+    per_hz: dict[str, dict[str, Any]] = {}
+    merged_mdc = {hz: term_mdcs[hz] for hz in sorted(term_mdcs)}
+    for hz, mdc in sorted(term_mdcs.items()):
+        st, ev = _classify_pit_mdc(mdc, expected, horizon_label=hz)
+        per_hz[hz] = {"status": st, **{k: v for k, v in ev.items()
+                                       if k != "expected_sources"}}
+    statuses = [per_hz[hz]["status"] for hz in sorted(per_hz)]
+    if any(s == "FAILED" for s in statuses):
+        merged = "FAILED"
+    elif all(s == "VERIFIED" for s in statuses):
+        merged = "VERIFIED"
+    else:
+        merged = "UNVERIFIED"
+
+    evidence = {
+        "expected_sources": sorted(expected),
+        "mdc_shape": "per_horizon",
+        "horizons": per_hz,
+        "market_data_context_sha256": _mdc_sha_of(merged_mdc),
+    }
+    # Unioned views keep downstream diagnostics readable (which sources
+    # dragged the verdict, which were fetch gaps).
+    for field in ("unverified_sources", "failed_sources",
+                  "covered_sources", "exempt_sources", "gap_sources"):
+        seen: set[str] = set()
+        merged_list: list[Any] = []
+        for hz in sorted(per_hz):
+            for item in per_hz[hz].get(field) or []:
+                name = item.get("source") if isinstance(item, dict) else item
+                if name in seen:
+                    continue
+                seen.add(name)
+                merged_list.append(item)
+        evidence[field] = merged_list
+    return merged, evidence, merged_mdc
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +579,7 @@ def build_record(
     # storage layouts.
     from tradingagents.storage.result_data_compat import result_data_compat_view
     result_data = result_data_compat_view(result_data)
-    pit_status, pit_evidence = _classify_input_pit(result_data)
+    pit_status, pit_evidence, _pit_mdc = _classify_input_pit(result_data)
 
     created = _parse_dt(row["created_at"])
     seal_basis = sealed_at
@@ -725,6 +894,124 @@ def cmd_run(args: argparse.Namespace) -> int:
         con.close()
 
 
+def reattest_entries_for_row(
+    row: sqlite3.Row,
+    result_data_raw: str,
+) -> dict[str, Any]:
+    """One pit_reattest.jsonl entry for a sealed report row (DAV-2097③).
+
+    Re-runs the FIXED classifier (:func:`_classify_input_pit`) on the row's
+    stored result_data and returns the sidecar entry. Rows with no
+    readable evidence (result_data null/unparseable, or no
+    market_data_context anywhere the fixed read positions look) come back
+    ``status="no_evidence"`` — a diagnostic line, never consulted by the
+    effective-status lookup.
+    """
+    try:
+        result_data = json.loads(result_data_raw) if result_data_raw else {}
+    except Exception:
+        result_data = {}
+    if not isinstance(result_data, dict):
+        result_data = {}
+    if result_data:
+        from tradingagents.storage.result_data_compat import (
+            result_data_compat_view,
+        )
+        result_data = result_data_compat_view(result_data)
+
+    status, evidence, mdc = _classify_input_pit(result_data)
+    sha = evidence.get("market_data_context_sha256")
+    no_evidence = mdc is None
+    # Trim the per-record evidence to what an audit needs — expected
+    # sources and the mdc pin are already top-level fields.
+    ev = {k: v for k, v in evidence.items()
+          if k not in ("expected_sources",)}
+    entry = {
+        "report_id": row["id"],
+        "input_pit_status": status,
+        "rule_version": PIT_RULE_VERSION,
+        "mdc_sha256": sha,
+        "status": (pit_reattest.STATUS_NO_EVIDENCE if no_evidence
+                   else pit_reattest.STATUS_ADJUDICATED),
+        "evidence": ev,
+    }
+    if no_evidence:
+        entry["note"] = (
+            "no readable market_data_context / source_provenance under the "
+            "fixed read positions (result_data null or pre-provenance row); "
+            "diagnostic only — not consulted by effective-status lookup")
+    return entry
+
+
+def cmd_reattest(args: argparse.Namespace) -> int:
+    """Append re-adjudication lines for existing ledger records.
+
+    Reads the ledger for sealed report_ids, re-classifies each under the
+    fixed rules from the LIVE DB's stored result_data (read-only
+    ``file:…?mode=ro`` — caller passes ``&immutable=1`` in the URI when a
+    hard immutability guarantee is needed), and appends one line per
+    report to ``<ledger-dir>/pit_reattest.jsonl``. Append-only + idempotent
+    (duplicate (report_id, status, mdc_sha256) keys are skipped); the
+    ledger file itself is never touched. Records whose ledger verdict is
+    already VERIFIED/FAILED still get an audit line — the effective-status
+    lookup keeps the ledger verdict for them anyway.
+    """
+    ledger_dir = Path(args.ledger_dir)
+    ledger_path = ledger_dir / LEDGER_FILE
+    if not ledger_path.exists():
+        _log(ledger_dir, f"FAILED: ledger not found: {ledger_path}")
+        return 2
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+
+    report_ids: list[str] = []
+    with open(ledger_path, "r", encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                _log(ledger_dir,
+                     f"FAILED: ledger line {lineno} unreadable: {exc}")
+                return 3
+            rec = obj.get("record") if isinstance(obj, dict) else None
+            if not isinstance(rec, dict) or not rec.get("report_id"):
+                _log(ledger_dir,
+                     f"FAILED: ledger line {lineno}: record/report_id missing")
+                return 3
+            report_ids.append(str(rec["report_id"]))
+
+    con = _connect_ro(Path(args.db))
+    try:
+        entries: list[dict[str, Any]] = []
+        missing = 0
+        for rid in report_ids:
+            row = con.execute(
+                f"SELECT id, {result_data_select_expr(con)} AS result_data"
+                "  FROM reports WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                missing += 1
+                entries.append({
+                    "report_id": rid,
+                    "input_pit_status": None,
+                    "rule_version": PIT_RULE_VERSION,
+                    "mdc_sha256": None,
+                    "status": pit_reattest.STATUS_NO_EVIDENCE,
+                    "note": "report_id no longer present in reports table",
+                })
+                continue
+            entries.append(
+                reattest_entries_for_row(row, _result_data_text(row["result_data"])))
+        res = pit_reattest.append_reattest(ledger_dir, entries)
+        _log(ledger_dir,
+             f"OK: reattest appended {res['appended']} line(s) "
+             f"({res['skipped_duplicates']} already present, "
+             f"{missing} report_id(s) absent from DB); file={res['file']}")
+        return 0
+    finally:
+        con.close()
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     ledger_path = Path(args.ledger_dir) / LEDGER_FILE
     if not ledger_path.exists():
@@ -888,6 +1175,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_s = sub.add_parser("status", help="ledger summary")
     common(p_s)
     p_s.set_defaults(func=cmd_status)
+
+    p_r = sub.add_parser(
+        "reattest",
+        help="append re-adjudication lines to pit_reattest.jsonl (DAV-2097③; "
+             "ledger itself is never rewritten)")
+    common(p_r)
+    p_r.set_defaults(func=cmd_reattest)
 
     args = ap.parse_args(argv)
     return args.func(args)

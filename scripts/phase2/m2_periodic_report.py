@@ -66,6 +66,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # single-sourced with the ledger writer (DAV-1480).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import daily_snapshot_ledger as dsl  # noqa: E402
+import pit_reattest  # noqa: E402
 
 PIPELINE_VERSION = "m2_periodic_report.v1"
 # Fixed P4 account (controller order 2026-10-09): single-sourced with the
@@ -364,11 +365,28 @@ def _outcome_day(rec: Mapping[str, Any],
 
 def _enrich(records: list[dict[str, Any]],
             trade_dates: list[date],
-            as_of: date) -> list[dict[str, Any]]:
-    """挂截面字段；不改动传入对象（浅拷贝）。"""
+            as_of: date,
+            reattest_index: Optional[Mapping[str, dict]] = None
+            ) -> list[dict[str, Any]]:
+    """挂截面字段；不改动传入对象（浅拷贝）。
+
+    ``reattest_index`` (DAV-2097③, 总控 10-15 令): when given, the
+    effective input_pit_status is resolved per record BEFORE the
+    formal-gate fields — ledger VERIFIED/FAILED stand; UNVERIFIED
+    consults pit_reattest.jsonl (report_id -> adjudicated verdict). The
+    ledger's own value is kept on ``_ledger_input_pit_status`` so the
+    M3 cross-table can still report what the sealed record said.
+    """
     out = []
     for r in records:
         e = dict(r)
+        if reattest_index is not None:
+            eff = pit_reattest.resolve_effective_pit(
+                r.get("input_pit_status"), r.get("report_id"),
+                reattest_index)
+            if eff != str(r.get("input_pit_status") or "").upper():
+                e["_ledger_input_pit_status"] = r.get("input_pit_status")
+                e["input_pit_status"] = eff
         sig = _parse_d(r.get("signal_date"))
         e["_sig"] = sig
         e["_sig_s"] = sig.isoformat() if sig else None
@@ -378,7 +396,7 @@ def _enrich(records: list[dict[str, Any]],
         e["_formal"] = bool(
             e["_matured"]
             and r.get("timing_class") == "F0"
-            and r.get("input_pit_status") == "VERIFIED"
+            and e["input_pit_status"] == "VERIFIED"
             and not r.get("backfilled"))
         e["_ver"] = _version_key(r)
         e["_risk"] = _risk_bucket(r.get("risk_status_top"))
@@ -456,9 +474,10 @@ def build_daily(records: list[dict[str, Any]], *,
                 min_cross_n: int, min_total_n: int,
                 digest: str,
                 excluded_user_n: int = 0,
-                user_id: str = DEFAULT_USER_ID) -> str:
+                user_id: str = DEFAULT_USER_ID,
+                reattest_index: Optional[Mapping[str, dict]] = None) -> str:
     """日报：封存/到期于上一交易日窗口的信号。"""
-    env = _enrich(records, trade_dates, as_of)
+    env = _enrich(records, trade_dates, as_of, reattest_index)
     cohort = [r for r in env
               if r["_sig"] is not None and r["_sig"] in period_dates]
     anchor_s = anchor.isoformat()
@@ -587,9 +606,10 @@ def build_monthly(records: list[dict[str, Any]], *,
                   min_cross_n: int, min_total_n: int,
                   digest: str,
                   excluded_user_n: int = 0,
-                  user_id: str = DEFAULT_USER_ID) -> str:
+                  user_id: str = DEFAULT_USER_ID,
+                  reattest_index: Optional[Mapping[str, dict]] = None) -> str:
     """月报：信号日落入该自然月（交易日历口径）的全部封存记录。"""
-    env = _enrich(records, trade_dates, as_of)
+    env = _enrich(records, trade_dates, as_of, reattest_index)
     cohort = [r for r in env
               if r["_sig"] is not None and r["_sig"] in period_dates]
     win = (min(period_dates).isoformat() if period_dates else "—",
@@ -805,6 +825,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     except (FileNotFoundError, ValueError) as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return 4
+    reattest_index = None
+    if getattr(args, "pit_reattest", None):
+        rp = Path(args.pit_reattest)
+        if not rp.exists():
+            print(f"FAILED: reattest file not found: {rp}", file=sys.stderr)
+            return 4
+        try:
+            reattest_index = pit_reattest.load_reattest_index(rp)
+        except ValueError as exc:
+            print(f"FAILED: {exc}", file=sys.stderr)
+            return 4
     user_id = getattr(args, "user_id", None) or DEFAULT_USER_ID
     _all_n = len(records)
     records, excluded_user_n = filter_by_user(records, user_id)
@@ -834,7 +865,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             bench_symbols=args.benchmark_symbols,
             min_cross_n=args.min_cross_n, min_total_n=args.min_total_n,
             digest=digest, excluded_user_n=excluded_user_n,
-            user_id=user_id)
+            user_id=user_id, reattest_index=reattest_index)
         p = Path(args.daily_out) if args.daily_out else (
             out_dir / f"m2_daily_{anchor.isoformat()}.md")
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -855,7 +886,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             bench_symbols=args.benchmark_symbols,
             min_cross_n=args.min_cross_n, min_total_n=args.min_total_n,
             digest=digest, excluded_user_n=excluded_user_n,
-            user_id=user_id)
+            user_id=user_id, reattest_index=reattest_index)
         p = Path(args.monthly_out) if args.monthly_out else (
             out_dir / f"m2_monthly_{mon}.md")
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -897,6 +928,10 @@ def main() -> int:
     p.add_argument("--user-id", default=DEFAULT_USER_ID,
                    help="仅统计该 user_id 的账本记录 "
                         "(default: fixed P4 account)")
+    p.add_argument("--pit-reattest", default=None,
+                   help="可选 pit_reattest.jsonl（DAV-2097③）：账本 "
+                        "input_pit_status=UNVERIFIED 的记录取补判文件的 "
+                        "adjudicated 判定；VERIFIED/FAILED 以账本为准。")
     p.add_argument("--daily-out", default=None)
     p.add_argument("--monthly-out", default=None)
     args = ap.parse_args()
