@@ -618,3 +618,4 @@
 {"kind": "adj_factor", "trade_date": "20261014", "rows": 5574}
 {"kind": "adj_factor", "trade_date": "20261015", "rows": 5576}
 {"kind": "adj_factor", "trade_date": "20261016", "rows": 5577}
+{"kind": "namechange_rework_dav2169", "merge_key": ["ts_code","name","start_date","end_date"], "new_rows": 363, "frozen_rows": 34755, "merged_rows": 20795, "supersedes_3col_merged_rows": 18966}

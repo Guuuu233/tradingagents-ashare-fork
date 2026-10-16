@@ -1,12 +1,12 @@
 {
- "partitions": {
-  "chunks/year=2026/data.parquet": {
-   "sampled": 4000,
-   "checked": 3133,
-   "mismatches": 0
-  }
- },
- "mismatches": [],
- "stats_partitions": 1,
- "total_mismatches": 0
+  "partitions": {
+    "chunks/year=2026/data.parquet": {
+      "sampled": 4000,
+      "checked": 3145,
+      "mismatches": 0
+    }
+  },
+  "mismatches": [],
+  "stats_partitions": 1,
+  "total_mismatches": 0
 }

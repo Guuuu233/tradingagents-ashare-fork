@@ -71,6 +71,14 @@ def api(api_name: str, params: dict, fields: str) -> pd.DataFrame | None:
 
 
 def merge_on_key(old: pd.DataFrame, new: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Append `new` on top of the frozen `old`, deduping on the full key.
+
+    The key must carry every column that distinguishes two rows. Dropping
+    `end_date` from the namechange key silently deleted 29,627 historical rows
+    whose only difference was `end_date` (DAV-2169), which in turn halved the
+    ST interval count and mislabelled `is_st` / LIMIT_RATE_ST on the 2026
+    partition. m2_sampler already dedupes on the 4-column key; keep both in sync.
+    """
     if new is None or new.empty:
         return old
     old = old.drop_duplicates(subset=keys, keep="last")
@@ -217,7 +225,9 @@ def main() -> int:
     nc_old = pd.read_pickle(BASE_CACHE / "namechange.pkl")
     nc_new = api("namechange", {"start_date": "20260101", "end_date": through},
                  "ts_code,name,start_date,end_date,change_reason")
-    nc = merge_on_key(nc_old, nc_new, ["ts_code", "name", "start_date"])
+    # 4-column key, matching m2_sampler.build_st_intervals: (ts_code, name,
+    # start_date, end_date). A 3-column key is lossy — see merge_on_key docstring.
+    nc = merge_on_key(nc_old, nc_new, ["ts_code", "name", "start_date", "end_date"])
     nc.to_pickle(ov / "namechange.pkl")
     jrec(kind="namechange", new_rows=0 if nc_new is None else len(nc_new), merged=len(nc))
     log(f"  namechange rows={len(nc_old)}->{len(nc)} "

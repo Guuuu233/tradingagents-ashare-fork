@@ -1,0 +1,31 @@
+[22:10:46] cache=/Users/davidliu/ta-work/dav-2165/overlay_cache out=/Users/davidliu/ta-work/dav-2165/out_v2
+[22:10:46] calendar: 2679 open days 20151008..20261016
+[22:10:49] static refs loaded rss=0.46GB
+[22:10:49]   2026 months=all: loading 238 daily files (signals 20260105..20261016, lookback 20251023, exit coverage through 20261016)
+[22:10:50]   daily rows=1,307,523 basic rows=1,036,249 rss=0.95GB
+[22:10:50]   symbols with signals: 5597
+[22:10:54]     1000/5597 symbols rss=1.31GB
+[22:10:57]     2000/5597 symbols rss=1.38GB
+[22:11:00]     3000/5597 symbols rss=1.46GB
+[22:11:03]     4000/5597 symbols rss=1.54GB
+[22:11:06]     5000/5597 symbols rss=1.62GB
+[22:11:18]   wrote year=2026: rows=1,035,505 symbols=5597 ok=811,598 rss=1.928GB
+[22:11:19] done in 33s peak_rss=1.93GB partitions=1
+       33.22 real        27.91 user         1.58 sys
+          2070183936  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              285523  page reclaims
+                 156  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+               28859  voluntary context switches
+               38135  involuntary context switches
+        353298123762  instructions retired
+        106256107644  cycles elapsed
+          2365786560  peak memory footprint
