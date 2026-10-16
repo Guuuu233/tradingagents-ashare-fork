@@ -1,0 +1,13 @@
+[21:38:49] cache=/Users/davidliu/ta-work/dav-2165/overlay_cache out=/Users/davidliu/ta-work/dav-2165/out_v2
+[21:38:49] calendar: 2679 open days 20151008..20261016
+[21:38:51] static refs loaded rss=0.46GB
+[21:38:51]   2026 months=all: loading 238 daily files (signals 20260105..20261016, lookback 20251023, exit coverage through 20261016)
+[21:38:51]   daily rows=1,307,523 basic rows=1,036,249 rss=0.94GB
+[21:38:52]   symbols with signals: 5597
+[21:38:55]     1000/5597 symbols rss=1.31GB
+[21:38:59]     2000/5597 symbols rss=1.38GB
+[21:39:02]     3000/5597 symbols rss=1.46GB
+[21:39:05]     4000/5597 symbols rss=1.54GB
+[21:39:09]     5000/5597 symbols rss=1.62GB
+[21:39:19]   wrote year=2026: rows=1,035,505 symbols=5597 ok=811,595 rss=2.409GB
+[21:39:20] done in 31s peak_rss=2.41GB partitions=1

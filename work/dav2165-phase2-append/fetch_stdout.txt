@@ -1,0 +1,54 @@
+[20:41:45] trade_cal SSE 20151001-20261231
+[20:41:48] calendar open days=2733 cached_max=20251231 new_days_to_fetch=188 (['20260105', '20260106']..['20261016'])
+[20:43:46]   daily_by_day 20/188 last=20260130 rows=5462
+[20:45:33]   daily_by_day 40/188 last=20260309 rows=5481
+[20:46:55]   daily_by_day 60/188 last=20260407 rows=5484
+[20:48:43]   daily_by_day 80/188 last=20260508 rows=5491
+[20:50:27]   daily_by_day 100/188 last=20260605 rows=5514
+[20:52:06]   daily_by_day 120/188 last=20260706 rows=5518
+[20:53:40]   daily_by_day 140/188 last=20260803 rows=5533
+[20:55:09]   daily_by_day 160/188 last=20260831 rows=5549
+[20:56:30]   daily_by_day 180/188 last=20260929 rows=5562
+[20:57:03]   daily_by_day 188/188 last=20261016 rows=5577
+[20:58:31]   daily_basic_by_day 20/188 last=20260130 rows=5462
+[20:59:10]   retry 1/4 daily_basic {'trade_date': '20260210'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:00:12]   daily_basic_by_day 40/188 last=20260309 rows=5481
+[21:01:39]   daily_basic_by_day 60/188 last=20260407 rows=5484
+[21:02:14]   retry 1/4 daily_basic {'trade_date': '20260414'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:03:28]   daily_basic_by_day 80/188 last=20260508 rows=5491
+[21:05:00]   daily_basic_by_day 100/188 last=20260605 rows=5514
+[21:06:44]   daily_basic_by_day 120/188 last=20260706 rows=5595
+[21:08:11]   daily_basic_by_day 140/188 last=20260803 rows=5529
+[21:09:53]   retry 1/4 daily_basic {'trade_date': '20260831'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:09:59]   daily_basic_by_day 160/188 last=20260831 rows=5545
+[21:11:37]   daily_basic_by_day 180/188 last=20260929 rows=5559
+[21:12:15]   daily_basic_by_day 188/188 last=20261016 rows=5567
+[21:12:16] sw_daily 31 L1 indices
+[21:12:50]   retry 1/4 sw_daily {'ts_code': '801140.SI', 'start_date': '20260101', 'end_date': '20261016'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:14:00]   retry 1/4 sw_daily {'ts_code': '801950.SI', 'start_date': '20260101', 'end_date': '20261016'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:14:15]   sw_daily merged rows=77221->83049 max=20261016
+[21:14:40]   retry 1/4 index_weight {'index_code': '000300.SH', 'trade_date': '20260630'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:14:57]   retry 1/4 index_weight {'index_code': '000300.SH', 'trade_date': '20260731'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:15:10]   000300.SH snapshots added=['20260130', '20260227', '20260331', '20260430', '20260529', '20260630', '20260731', '20260831', '20260930'] rows=59100->61800
+[21:15:48]   retry 1/4 index_weight {'index_code': '000905.SH', 'trade_date': '20261016'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:15:53]   000905.SH snapshots added=['20260130', '20260227', '20260331', '20260430', '20260529', '20260630', '20260731', '20260831', '20260930'] rows=61514->66014
+[21:16:00]   stock_basic rows=5916 max_list_date=20261016
+[21:16:08]   namechange rows=34755->18966 new_max_start=20261015
+[21:17:12]   retry 1/4 adj_factor {'trade_date': '20260123'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:19:07]   adj_factor 40/188 symbols=5496
+[21:21:19]   retry 1/4 adj_factor {'trade_date': '20260420'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:22:19]   adj_factor 80/188 symbols=5525
+[21:22:37]   retry 1/4 adj_factor {'trade_date': '20260513'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:23:44]   retry 1/4 adj_factor {'trade_date': '20260601'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:25:04]   retry 1/4 adj_factor {'trade_date': '20260624'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:25:42]   adj_factor 120/188 symbols=5548
+[21:25:53]   retry 1/4 adj_factor {'trade_date': '20260707'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:26:29]   retry 1/4 adj_factor {'trade_date': '20260715'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:27:17]   retry 1/4 adj_factor {'trade_date': '20260723'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:27:29]   retry 2/4 adj_factor {'trade_date': '20260723'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:27:48]   retry 1/4 adj_factor {'trade_date': '20260724'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:29:15]   retry 1/4 adj_factor {'trade_date': '20260820'} err=timeout Tushare 请求超时: HTTPSConnectionPool(host='t.xiaodefa.top', port=443): Read timed out. (read timeout=10)
+[21:29:53]   adj_factor 160/188 symbols=5577
+[21:31:46]   adj_factor 188/188 symbols=5603
+[21:33:00]   adj_factor merged=5603 symlinked=313
+[21:33:00] overlay ready: /Users/davidliu/ta-work/dav-2165/overlay_cache

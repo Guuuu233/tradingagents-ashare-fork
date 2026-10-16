@@ -1,0 +1,620 @@
+{"kind": "trade_cal", "rows": 4034, "max_date": "20261016", "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/api_cache/trade_cal_0_dav2165.pkl"}
+{"kind": "daily", "trade_date": "20260105", "rows": 5457, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-05.pkl"}
+{"kind": "daily", "trade_date": "20260106", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-06.pkl"}
+{"kind": "daily", "trade_date": "20260107", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-07.pkl"}
+{"kind": "daily", "trade_date": "20260108", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-08.pkl"}
+{"kind": "daily", "trade_date": "20260109", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-09.pkl"}
+{"kind": "daily", "trade_date": "20260112", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-12.pkl"}
+{"kind": "daily", "trade_date": "20260113", "rows": 5452, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-13.pkl"}
+{"kind": "daily", "trade_date": "20260114", "rows": 5454, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-14.pkl"}
+{"kind": "daily", "trade_date": "20260115", "rows": 5457, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-15.pkl"}
+{"kind": "daily", "trade_date": "20260116", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-16.pkl"}
+{"kind": "daily", "trade_date": "20260119", "rows": 5461, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-19.pkl"}
+{"kind": "daily", "trade_date": "20260120", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-20.pkl"}
+{"kind": "daily", "trade_date": "20260121", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-21.pkl"}
+{"kind": "daily", "trade_date": "20260122", "rows": 5466, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-22.pkl"}
+{"kind": "daily", "trade_date": "20260123", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-23.pkl"}
+{"kind": "daily", "trade_date": "20260126", "rows": 5463, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-26.pkl"}
+{"kind": "daily", "trade_date": "20260127", "rows": 5463, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-27.pkl"}
+{"kind": "daily", "trade_date": "20260128", "rows": 5464, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-28.pkl"}
+{"kind": "daily", "trade_date": "20260129", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-29.pkl"}
+{"kind": "daily", "trade_date": "20260130", "rows": 5462, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-01-30.pkl"}
+{"kind": "daily", "trade_date": "20260202", "rows": 5464, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-02.pkl"}
+{"kind": "daily", "trade_date": "20260203", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-03.pkl"}
+{"kind": "daily", "trade_date": "20260204", "rows": 5468, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-04.pkl"}
+{"kind": "daily", "trade_date": "20260205", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-05.pkl"}
+{"kind": "daily", "trade_date": "20260206", "rows": 5466, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-06.pkl"}
+{"kind": "daily", "trade_date": "20260209", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-09.pkl"}
+{"kind": "daily", "trade_date": "20260210", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-10.pkl"}
+{"kind": "daily", "trade_date": "20260211", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-11.pkl"}
+{"kind": "daily", "trade_date": "20260212", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-12.pkl"}
+{"kind": "daily", "trade_date": "20260213", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-13.pkl"}
+{"kind": "daily", "trade_date": "20260224", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-24.pkl"}
+{"kind": "daily", "trade_date": "20260225", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-25.pkl"}
+{"kind": "daily", "trade_date": "20260226", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-26.pkl"}
+{"kind": "daily", "trade_date": "20260227", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-02-27.pkl"}
+{"kind": "daily", "trade_date": "20260302", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-02.pkl"}
+{"kind": "daily", "trade_date": "20260303", "rows": 5472, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-03.pkl"}
+{"kind": "daily", "trade_date": "20260304", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-04.pkl"}
+{"kind": "daily", "trade_date": "20260305", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-05.pkl"}
+{"kind": "daily", "trade_date": "20260306", "rows": 5477, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-06.pkl"}
+{"kind": "daily", "trade_date": "20260309", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-09.pkl"}
+{"kind": "daily", "trade_date": "20260310", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-10.pkl"}
+{"kind": "daily", "trade_date": "20260311", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-11.pkl"}
+{"kind": "daily", "trade_date": "20260312", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-12.pkl"}
+{"kind": "daily", "trade_date": "20260313", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-13.pkl"}
+{"kind": "daily", "trade_date": "20260316", "rows": 5480, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-16.pkl"}
+{"kind": "daily", "trade_date": "20260317", "rows": 5478, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-17.pkl"}
+{"kind": "daily", "trade_date": "20260318", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-18.pkl"}
+{"kind": "daily", "trade_date": "20260319", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-19.pkl"}
+{"kind": "daily", "trade_date": "20260320", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-20.pkl"}
+{"kind": "daily", "trade_date": "20260323", "rows": 5483, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-23.pkl"}
+{"kind": "daily", "trade_date": "20260324", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-24.pkl"}
+{"kind": "daily", "trade_date": "20260325", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-25.pkl"}
+{"kind": "daily", "trade_date": "20260326", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-26.pkl"}
+{"kind": "daily", "trade_date": "20260327", "rows": 5478, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-27.pkl"}
+{"kind": "daily", "trade_date": "20260330", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-30.pkl"}
+{"kind": "daily", "trade_date": "20260331", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-03-31.pkl"}
+{"kind": "daily", "trade_date": "20260401", "rows": 5485, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-01.pkl"}
+{"kind": "daily", "trade_date": "20260402", "rows": 5485, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-02.pkl"}
+{"kind": "daily", "trade_date": "20260403", "rows": 5486, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-03.pkl"}
+{"kind": "daily", "trade_date": "20260407", "rows": 5484, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-07.pkl"}
+{"kind": "daily", "trade_date": "20260408", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-08.pkl"}
+{"kind": "daily", "trade_date": "20260409", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-09.pkl"}
+{"kind": "daily", "trade_date": "20260410", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-10.pkl"}
+{"kind": "daily", "trade_date": "20260413", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-13.pkl"}
+{"kind": "daily", "trade_date": "20260414", "rows": 5496, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-14.pkl"}
+{"kind": "daily", "trade_date": "20260415", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-15.pkl"}
+{"kind": "daily", "trade_date": "20260416", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-16.pkl"}
+{"kind": "daily", "trade_date": "20260417", "rows": 5497, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-17.pkl"}
+{"kind": "daily", "trade_date": "20260420", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-20.pkl"}
+{"kind": "daily", "trade_date": "20260421", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-21.pkl"}
+{"kind": "daily", "trade_date": "20260422", "rows": 5497, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-22.pkl"}
+{"kind": "daily", "trade_date": "20260423", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-23.pkl"}
+{"kind": "daily", "trade_date": "20260424", "rows": 5496, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-24.pkl"}
+{"kind": "daily", "trade_date": "20260427", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-27.pkl"}
+{"kind": "daily", "trade_date": "20260428", "rows": 5488, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-28.pkl"}
+{"kind": "daily", "trade_date": "20260429", "rows": 5462, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-29.pkl"}
+{"kind": "daily", "trade_date": "20260430", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-04-30.pkl"}
+{"kind": "daily", "trade_date": "20260506", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-06.pkl"}
+{"kind": "daily", "trade_date": "20260507", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-07.pkl"}
+{"kind": "daily", "trade_date": "20260508", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-08.pkl"}
+{"kind": "daily", "trade_date": "20260511", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-11.pkl"}
+{"kind": "daily", "trade_date": "20260512", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-12.pkl"}
+{"kind": "daily", "trade_date": "20260513", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-13.pkl"}
+{"kind": "daily", "trade_date": "20260514", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-14.pkl"}
+{"kind": "daily", "trade_date": "20260515", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-15.pkl"}
+{"kind": "daily", "trade_date": "20260518", "rows": 5499, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-18.pkl"}
+{"kind": "daily", "trade_date": "20260519", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-19.pkl"}
+{"kind": "daily", "trade_date": "20260520", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-20.pkl"}
+{"kind": "daily", "trade_date": "20260521", "rows": 5501, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-21.pkl"}
+{"kind": "daily", "trade_date": "20260522", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-22.pkl"}
+{"kind": "daily", "trade_date": "20260525", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-25.pkl"}
+{"kind": "daily", "trade_date": "20260526", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-26.pkl"}
+{"kind": "daily", "trade_date": "20260527", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-27.pkl"}
+{"kind": "daily", "trade_date": "20260528", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-28.pkl"}
+{"kind": "daily", "trade_date": "20260529", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-05-29.pkl"}
+{"kind": "daily", "trade_date": "20260601", "rows": 5508, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-01.pkl"}
+{"kind": "daily", "trade_date": "20260602", "rows": 5507, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-02.pkl"}
+{"kind": "daily", "trade_date": "20260603", "rows": 5511, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-03.pkl"}
+{"kind": "daily", "trade_date": "20260604", "rows": 5511, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-04.pkl"}
+{"kind": "daily", "trade_date": "20260605", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-05.pkl"}
+{"kind": "daily", "trade_date": "20260608", "rows": 5515, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-08.pkl"}
+{"kind": "daily", "trade_date": "20260609", "rows": 5515, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-09.pkl"}
+{"kind": "daily", "trade_date": "20260610", "rows": 5515, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-10.pkl"}
+{"kind": "daily", "trade_date": "20260611", "rows": 5517, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-11.pkl"}
+{"kind": "daily", "trade_date": "20260612", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-12.pkl"}
+{"kind": "daily", "trade_date": "20260615", "rows": 5516, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-15.pkl"}
+{"kind": "daily", "trade_date": "20260616", "rows": 5516, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-16.pkl"}
+{"kind": "daily", "trade_date": "20260617", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-17.pkl"}
+{"kind": "daily", "trade_date": "20260618", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-18.pkl"}
+{"kind": "daily", "trade_date": "20260622", "rows": 5512, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-22.pkl"}
+{"kind": "daily", "trade_date": "20260623", "rows": 5519, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-23.pkl"}
+{"kind": "daily", "trade_date": "20260624", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-24.pkl"}
+{"kind": "daily", "trade_date": "20260625", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-25.pkl"}
+{"kind": "daily", "trade_date": "20260626", "rows": 5518, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-26.pkl"}
+{"kind": "daily", "trade_date": "20260629", "rows": 5517, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-29.pkl"}
+{"kind": "daily", "trade_date": "20260630", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-06-30.pkl"}
+{"kind": "daily", "trade_date": "20260701", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-01.pkl"}
+{"kind": "daily", "trade_date": "20260702", "rows": 5517, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-02.pkl"}
+{"kind": "daily", "trade_date": "20260703", "rows": 5517, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-03.pkl"}
+{"kind": "daily", "trade_date": "20260706", "rows": 5518, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-06.pkl"}
+{"kind": "daily", "trade_date": "20260707", "rows": 5519, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-07.pkl"}
+{"kind": "daily", "trade_date": "20260708", "rows": 5519, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-08.pkl"}
+{"kind": "daily", "trade_date": "20260709", "rows": 5521, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-09.pkl"}
+{"kind": "daily", "trade_date": "20260710", "rows": 5530, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-10.pkl"}
+{"kind": "daily", "trade_date": "20260713", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-13.pkl"}
+{"kind": "daily", "trade_date": "20260714", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-14.pkl"}
+{"kind": "daily", "trade_date": "20260715", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-15.pkl"}
+{"kind": "daily", "trade_date": "20260716", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-16.pkl"}
+{"kind": "daily", "trade_date": "20260717", "rows": 5527, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-17.pkl"}
+{"kind": "daily", "trade_date": "20260720", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-20.pkl"}
+{"kind": "daily", "trade_date": "20260721", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-21.pkl"}
+{"kind": "daily", "trade_date": "20260722", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-22.pkl"}
+{"kind": "daily", "trade_date": "20260723", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-23.pkl"}
+{"kind": "daily", "trade_date": "20260724", "rows": 5529, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-24.pkl"}
+{"kind": "daily", "trade_date": "20260727", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-27.pkl"}
+{"kind": "daily", "trade_date": "20260728", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-28.pkl"}
+{"kind": "daily", "trade_date": "20260729", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-29.pkl"}
+{"kind": "daily", "trade_date": "20260730", "rows": 5534, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-30.pkl"}
+{"kind": "daily", "trade_date": "20260731", "rows": 5534, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-07-31.pkl"}
+{"kind": "daily", "trade_date": "20260803", "rows": 5533, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-03.pkl"}
+{"kind": "daily", "trade_date": "20260804", "rows": 5531, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-04.pkl"}
+{"kind": "daily", "trade_date": "20260805", "rows": 5532, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-05.pkl"}
+{"kind": "daily", "trade_date": "20260806", "rows": 5534, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-06.pkl"}
+{"kind": "daily", "trade_date": "20260807", "rows": 5535, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-07.pkl"}
+{"kind": "daily", "trade_date": "20260810", "rows": 5538, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-10.pkl"}
+{"kind": "daily", "trade_date": "20260811", "rows": 5539, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-11.pkl"}
+{"kind": "daily", "trade_date": "20260812", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-12.pkl"}
+{"kind": "daily", "trade_date": "20260813", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-13.pkl"}
+{"kind": "daily", "trade_date": "20260814", "rows": 5540, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-14.pkl"}
+{"kind": "daily", "trade_date": "20260817", "rows": 5539, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-17.pkl"}
+{"kind": "daily", "trade_date": "20260818", "rows": 5540, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-18.pkl"}
+{"kind": "daily", "trade_date": "20260819", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-19.pkl"}
+{"kind": "daily", "trade_date": "20260820", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-20.pkl"}
+{"kind": "daily", "trade_date": "20260821", "rows": 5543, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-21.pkl"}
+{"kind": "daily", "trade_date": "20260824", "rows": 5545, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-24.pkl"}
+{"kind": "daily", "trade_date": "20260825", "rows": 5546, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-25.pkl"}
+{"kind": "daily", "trade_date": "20260826", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-26.pkl"}
+{"kind": "daily", "trade_date": "20260827", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-27.pkl"}
+{"kind": "daily", "trade_date": "20260828", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-28.pkl"}
+{"kind": "daily", "trade_date": "20260831", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-08-31.pkl"}
+{"kind": "daily", "trade_date": "20260901", "rows": 5548, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-01.pkl"}
+{"kind": "daily", "trade_date": "20260902", "rows": 5548, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-02.pkl"}
+{"kind": "daily", "trade_date": "20260903", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-03.pkl"}
+{"kind": "daily", "trade_date": "20260904", "rows": 5550, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-04.pkl"}
+{"kind": "daily", "trade_date": "20260907", "rows": 5551, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-07.pkl"}
+{"kind": "daily", "trade_date": "20260908", "rows": 5551, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-08.pkl"}
+{"kind": "daily", "trade_date": "20260909", "rows": 5552, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-09.pkl"}
+{"kind": "daily", "trade_date": "20260910", "rows": 5552, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-10.pkl"}
+{"kind": "daily", "trade_date": "20260911", "rows": 5552, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-11.pkl"}
+{"kind": "daily", "trade_date": "20260914", "rows": 5562, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-14.pkl"}
+{"kind": "daily", "trade_date": "20260915", "rows": 5562, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-15.pkl"}
+{"kind": "daily", "trade_date": "20260916", "rows": 5564, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-16.pkl"}
+{"kind": "daily", "trade_date": "20260917", "rows": 5565, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-17.pkl"}
+{"kind": "daily", "trade_date": "20260918", "rows": 5565, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-18.pkl"}
+{"kind": "daily", "trade_date": "20260921", "rows": 5565, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-21.pkl"}
+{"kind": "daily", "trade_date": "20260922", "rows": 5555, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-22.pkl"}
+{"kind": "daily", "trade_date": "20260923", "rows": 5568, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-23.pkl"}
+{"kind": "daily", "trade_date": "20260924", "rows": 5569, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-24.pkl"}
+{"kind": "daily", "trade_date": "20260928", "rows": 5558, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-28.pkl"}
+{"kind": "daily", "trade_date": "20260929", "rows": 5562, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-29.pkl"}
+{"kind": "daily", "trade_date": "20260930", "rows": 5572, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-09-30.pkl"}
+{"kind": "daily", "trade_date": "20261008", "rows": 5561, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-08.pkl"}
+{"kind": "daily", "trade_date": "20261009", "rows": 5569, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-09.pkl"}
+{"kind": "daily", "trade_date": "20261012", "rows": 5573, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-12.pkl"}
+{"kind": "daily", "trade_date": "20261013", "rows": 5574, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-13.pkl"}
+{"kind": "daily", "trade_date": "20261014", "rows": 5574, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-14.pkl"}
+{"kind": "daily", "trade_date": "20261015", "rows": 5576, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-15.pkl"}
+{"kind": "daily", "trade_date": "20261016", "rows": 5577, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_by_day/2026-10-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260105", "rows": 5457, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-05.pkl"}
+{"kind": "daily_basic", "trade_date": "20260106", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260107", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260108", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260109", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260112", "rows": 5459, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260113", "rows": 5452, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260114", "rows": 5454, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260115", "rows": 5457, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260116", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260119", "rows": 5461, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-19.pkl"}
+{"kind": "daily_basic", "trade_date": "20260120", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260121", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260122", "rows": 5466, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260123", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260126", "rows": 5463, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260127", "rows": 5463, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260128", "rows": 5464, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260129", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260130", "rows": 5462, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-01-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20260202", "rows": 5464, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260203", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260204", "rows": 5468, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-04.pkl"}
+{"kind": "daily_basic", "trade_date": "20260205", "rows": 5467, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-05.pkl"}
+{"kind": "daily_basic", "trade_date": "20260206", "rows": 5466, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260209", "rows": 5465, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260210", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260211", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260212", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260213", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260224", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260225", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-25.pkl"}
+{"kind": "daily_basic", "trade_date": "20260226", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260227", "rows": 5471, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-02-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260302", "rows": 5470, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260303", "rows": 5472, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260304", "rows": 5474, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-04.pkl"}
+{"kind": "daily_basic", "trade_date": "20260305", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-05.pkl"}
+{"kind": "daily_basic", "trade_date": "20260306", "rows": 5477, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260309", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260310", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260311", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260312", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260313", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260316", "rows": 5480, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260317", "rows": 5478, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260318", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-18.pkl"}
+{"kind": "daily_basic", "trade_date": "20260319", "rows": 5479, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-19.pkl"}
+{"kind": "daily_basic", "trade_date": "20260320", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260323", "rows": 5483, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260324", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260325", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-25.pkl"}
+{"kind": "daily_basic", "trade_date": "20260326", "rows": 5481, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260327", "rows": 5478, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260330", "rows": 5476, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20260331", "rows": 5482, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-03-31.pkl"}
+{"kind": "daily_basic", "trade_date": "20260401", "rows": 5485, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-01.pkl"}
+{"kind": "daily_basic", "trade_date": "20260402", "rows": 5485, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260403", "rows": 5486, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260407", "rows": 5484, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260408", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260409", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260410", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260413", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260414", "rows": 5496, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260415", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260416", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260417", "rows": 5497, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260420", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260421", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260422", "rows": 5497, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260423", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260424", "rows": 5496, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260427", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260428", "rows": 5488, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260429", "rows": 5462, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260430", "rows": 5460, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-04-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20260506", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260507", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260508", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260511", "rows": 5491, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260512", "rows": 5490, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260513", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260514", "rows": 5493, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260515", "rows": 5495, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260518", "rows": 5499, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-18.pkl"}
+{"kind": "daily_basic", "trade_date": "20260519", "rows": 5494, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-19.pkl"}
+{"kind": "daily_basic", "trade_date": "20260520", "rows": 5498, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260521", "rows": 5501, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260522", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260525", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-25.pkl"}
+{"kind": "daily_basic", "trade_date": "20260526", "rows": 5504, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260527", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260528", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260529", "rows": 5506, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-05-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260601", "rows": 5508, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-01.pkl"}
+{"kind": "daily_basic", "trade_date": "20260602", "rows": 5507, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260603", "rows": 5511, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260604", "rows": 5511, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-04.pkl"}
+{"kind": "daily_basic", "trade_date": "20260605", "rows": 5514, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-05.pkl"}
+{"kind": "daily_basic", "trade_date": "20260608", "rows": 5515, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260609", "rows": 5515, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260610", "rows": 5512, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260611", "rows": 5511, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260612", "rows": 5512, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260615", "rows": 5508, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260616", "rows": 5513, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260617", "rows": 5509, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260618", "rows": 5507, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-18.pkl"}
+{"kind": "daily_basic", "trade_date": "20260622", "rows": 5510, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260623", "rows": 5513, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260624", "rows": 5590, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260625", "rows": 5589, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-25.pkl"}
+{"kind": "daily_basic", "trade_date": "20260626", "rows": 5591, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260629", "rows": 5588, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260630", "rows": 5586, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-06-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20260701", "rows": 5589, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-01.pkl"}
+{"kind": "daily_basic", "trade_date": "20260702", "rows": 5595, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260703", "rows": 5594, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260706", "rows": 5595, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260707", "rows": 5595, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260708", "rows": 5596, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260709", "rows": 5598, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260710", "rows": 5599, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260713", "rows": 5602, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260714", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260715", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260716", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260717", "rows": 5522, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260720", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260721", "rows": 5525, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260722", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260723", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260724", "rows": 5526, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260727", "rows": 5523, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260728", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260729", "rows": 5524, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260730", "rows": 5528, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20260731", "rows": 5528, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-07-31.pkl"}
+{"kind": "daily_basic", "trade_date": "20260803", "rows": 5529, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260804", "rows": 5529, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-04.pkl"}
+{"kind": "daily_basic", "trade_date": "20260805", "rows": 5532, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-05.pkl"}
+{"kind": "daily_basic", "trade_date": "20260806", "rows": 5533, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-06.pkl"}
+{"kind": "daily_basic", "trade_date": "20260807", "rows": 5535, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260810", "rows": 5538, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260811", "rows": 5539, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260812", "rows": 5539, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20260813", "rows": 5540, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20260814", "rows": 5540, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260817", "rows": 5539, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260818", "rows": 5540, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-18.pkl"}
+{"kind": "daily_basic", "trade_date": "20260819", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-19.pkl"}
+{"kind": "daily_basic", "trade_date": "20260820", "rows": 5541, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-20.pkl"}
+{"kind": "daily_basic", "trade_date": "20260821", "rows": 5543, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260824", "rows": 5545, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260825", "rows": 5546, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-25.pkl"}
+{"kind": "daily_basic", "trade_date": "20260826", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-26.pkl"}
+{"kind": "daily_basic", "trade_date": "20260827", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-27.pkl"}
+{"kind": "daily_basic", "trade_date": "20260828", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260831", "rows": 5545, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-08-31.pkl"}
+{"kind": "daily_basic", "trade_date": "20260901", "rows": 5546, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-01.pkl"}
+{"kind": "daily_basic", "trade_date": "20260902", "rows": 5547, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-02.pkl"}
+{"kind": "daily_basic", "trade_date": "20260903", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-03.pkl"}
+{"kind": "daily_basic", "trade_date": "20260904", "rows": 5548, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-04.pkl"}
+{"kind": "daily_basic", "trade_date": "20260907", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-07.pkl"}
+{"kind": "daily_basic", "trade_date": "20260908", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20260909", "rows": 5550, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20260910", "rows": 5549, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-10.pkl"}
+{"kind": "daily_basic", "trade_date": "20260911", "rows": 5550, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-11.pkl"}
+{"kind": "daily_basic", "trade_date": "20260914", "rows": 5550, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20260915", "rows": 5548, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20260916", "rows": 5550, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-16.pkl"}
+{"kind": "daily_basic", "trade_date": "20260917", "rows": 5553, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-17.pkl"}
+{"kind": "daily_basic", "trade_date": "20260918", "rows": 5553, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-18.pkl"}
+{"kind": "daily_basic", "trade_date": "20260921", "rows": 5553, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-21.pkl"}
+{"kind": "daily_basic", "trade_date": "20260922", "rows": 5554, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-22.pkl"}
+{"kind": "daily_basic", "trade_date": "20260923", "rows": 5556, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-23.pkl"}
+{"kind": "daily_basic", "trade_date": "20260924", "rows": 5557, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-24.pkl"}
+{"kind": "daily_basic", "trade_date": "20260928", "rows": 5557, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-28.pkl"}
+{"kind": "daily_basic", "trade_date": "20260929", "rows": 5559, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-29.pkl"}
+{"kind": "daily_basic", "trade_date": "20260930", "rows": 5561, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-09-30.pkl"}
+{"kind": "daily_basic", "trade_date": "20261008", "rows": 5557, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-08.pkl"}
+{"kind": "daily_basic", "trade_date": "20261009", "rows": 5559, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-09.pkl"}
+{"kind": "daily_basic", "trade_date": "20261012", "rows": 5561, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-12.pkl"}
+{"kind": "daily_basic", "trade_date": "20261013", "rows": 5561, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-13.pkl"}
+{"kind": "daily_basic", "trade_date": "20261014", "rows": 5563, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-14.pkl"}
+{"kind": "daily_basic", "trade_date": "20261015", "rows": 5565, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-15.pkl"}
+{"kind": "daily_basic", "trade_date": "20261016", "rows": 5567, "path": "/Users/davidliu/ta-work/dav-2165/overlay_cache/daily_basic_by_day/2026-10-16.pkl"}
+{"kind": "sw_daily", "ts_code": "801010.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801030.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801040.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801050.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801080.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801110.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801120.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801130.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801140.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801150.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801160.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801170.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801180.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801200.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801210.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801230.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801710.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801720.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801730.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801740.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801750.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801760.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801770.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801780.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801790.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801880.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801890.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801950.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801960.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801970.SI", "rows": 188}
+{"kind": "sw_daily", "ts_code": "801980.SI", "rows": 188}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260130", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260227", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260331", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260430", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260529", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260630", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260731", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260831", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20260930", "rows": 300}
+{"kind": "index_weight", "index_code": "000300.SH", "trade_date": "20261016", "rows": 0}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260130", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260227", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260331", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260430", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260529", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260630", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260731", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260831", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20260930", "rows": 500}
+{"kind": "index_weight", "index_code": "000905.SH", "trade_date": "20261016", "rows": 0}
+{"kind": "stock_basic", "list_status": "L", "rows": 5577, "max_list_date": "20261016"}
+{"kind": "stock_basic", "list_status": "D", "rows": 339, "max_list_date": "20220525"}
+{"kind": "namechange", "new_rows": 363, "merged": 18966}
+{"kind": "index_member_all", "mode": "symlink_mirror", "files": 5911}
+{"kind": "adj_factor", "trade_date": "20260105", "rows": 5475}
+{"kind": "adj_factor", "trade_date": "20260106", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260107", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260108", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260109", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260112", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260113", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260114", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260115", "rows": 5477}
+{"kind": "adj_factor", "trade_date": "20260116", "rows": 5478}
+{"kind": "adj_factor", "trade_date": "20260119", "rows": 5478}
+{"kind": "adj_factor", "trade_date": "20260120", "rows": 5472}
+{"kind": "adj_factor", "trade_date": "20260121", "rows": 5473}
+{"kind": "adj_factor", "trade_date": "20260122", "rows": 5474}
+{"kind": "adj_factor", "trade_date": "20260123", "rows": 5474}
+{"kind": "adj_factor", "trade_date": "20260126", "rows": 5474}
+{"kind": "adj_factor", "trade_date": "20260127", "rows": 5474}
+{"kind": "adj_factor", "trade_date": "20260128", "rows": 5476}
+{"kind": "adj_factor", "trade_date": "20260129", "rows": 5477}
+{"kind": "adj_factor", "trade_date": "20260130", "rows": 5478}
+{"kind": "adj_factor", "trade_date": "20260202", "rows": 5478}
+{"kind": "adj_factor", "trade_date": "20260203", "rows": 5465}
+{"kind": "adj_factor", "trade_date": "20260204", "rows": 5479}
+{"kind": "adj_factor", "trade_date": "20260205", "rows": 5480}
+{"kind": "adj_factor", "trade_date": "20260206", "rows": 5480}
+{"kind": "adj_factor", "trade_date": "20260209", "rows": 5480}
+{"kind": "adj_factor", "trade_date": "20260210", "rows": 5483}
+{"kind": "adj_factor", "trade_date": "20260211", "rows": 5484}
+{"kind": "adj_factor", "trade_date": "20260212", "rows": 5485}
+{"kind": "adj_factor", "trade_date": "20260213", "rows": 5485}
+{"kind": "adj_factor", "trade_date": "20260224", "rows": 5485}
+{"kind": "adj_factor", "trade_date": "20260225", "rows": 5485}
+{"kind": "adj_factor", "trade_date": "20260226", "rows": 5486}
+{"kind": "adj_factor", "trade_date": "20260227", "rows": 5486}
+{"kind": "adj_factor", "trade_date": "20260302", "rows": 5486}
+{"kind": "adj_factor", "trade_date": "20260303", "rows": 5486}
+{"kind": "adj_factor", "trade_date": "20260304", "rows": 5487}
+{"kind": "adj_factor", "trade_date": "20260305", "rows": 5488}
+{"kind": "adj_factor", "trade_date": "20260306", "rows": 5489}
+{"kind": "adj_factor", "trade_date": "20260309", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260310", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260311", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260312", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260313", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260316", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260317", "rows": 5490}
+{"kind": "adj_factor", "trade_date": "20260318", "rows": 5491}
+{"kind": "adj_factor", "trade_date": "20260319", "rows": 5491}
+{"kind": "adj_factor", "trade_date": "20260320", "rows": 5492}
+{"kind": "adj_factor", "trade_date": "20260323", "rows": 5492}
+{"kind": "adj_factor", "trade_date": "20260324", "rows": 5492}
+{"kind": "adj_factor", "trade_date": "20260325", "rows": 5494}
+{"kind": "adj_factor", "trade_date": "20260326", "rows": 5494}
+{"kind": "adj_factor", "trade_date": "20260327", "rows": 5495}
+{"kind": "adj_factor", "trade_date": "20260330", "rows": 5496}
+{"kind": "adj_factor", "trade_date": "20260331", "rows": 5499}
+{"kind": "adj_factor", "trade_date": "20260401", "rows": 5500}
+{"kind": "adj_factor", "trade_date": "20260402", "rows": 5500}
+{"kind": "adj_factor", "trade_date": "20260403", "rows": 5500}
+{"kind": "adj_factor", "trade_date": "20260407", "rows": 5500}
+{"kind": "adj_factor", "trade_date": "20260408", "rows": 5502}
+{"kind": "adj_factor", "trade_date": "20260409", "rows": 5502}
+{"kind": "adj_factor", "trade_date": "20260410", "rows": 5505}
+{"kind": "adj_factor", "trade_date": "20260413", "rows": 5506}
+{"kind": "adj_factor", "trade_date": "20260414", "rows": 5506}
+{"kind": "adj_factor", "trade_date": "20260415", "rows": 5506}
+{"kind": "adj_factor", "trade_date": "20260416", "rows": 5509}
+{"kind": "adj_factor", "trade_date": "20260417", "rows": 5510}
+{"kind": "adj_factor", "trade_date": "20260420", "rows": 5511}
+{"kind": "adj_factor", "trade_date": "20260421", "rows": 5513}
+{"kind": "adj_factor", "trade_date": "20260422", "rows": 5513}
+{"kind": "adj_factor", "trade_date": "20260423", "rows": 5513}
+{"kind": "adj_factor", "trade_date": "20260424", "rows": 5515}
+{"kind": "adj_factor", "trade_date": "20260427", "rows": 5516}
+{"kind": "adj_factor", "trade_date": "20260428", "rows": 5516}
+{"kind": "adj_factor", "trade_date": "20260429", "rows": 5517}
+{"kind": "adj_factor", "trade_date": "20260430", "rows": 5518}
+{"kind": "adj_factor", "trade_date": "20260506", "rows": 5518}
+{"kind": "adj_factor", "trade_date": "20260507", "rows": 5519}
+{"kind": "adj_factor", "trade_date": "20260508", "rows": 5519}
+{"kind": "adj_factor", "trade_date": "20260511", "rows": 5521}
+{"kind": "adj_factor", "trade_date": "20260512", "rows": 5521}
+{"kind": "adj_factor", "trade_date": "20260513", "rows": 5521}
+{"kind": "adj_factor", "trade_date": "20260514", "rows": 5521}
+{"kind": "adj_factor", "trade_date": "20260515", "rows": 5523}
+{"kind": "adj_factor", "trade_date": "20260518", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260519", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260520", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260521", "rows": 5519}
+{"kind": "adj_factor", "trade_date": "20260522", "rows": 5522}
+{"kind": "adj_factor", "trade_date": "20260525", "rows": 5522}
+{"kind": "adj_factor", "trade_date": "20260526", "rows": 5522}
+{"kind": "adj_factor", "trade_date": "20260527", "rows": 5524}
+{"kind": "adj_factor", "trade_date": "20260528", "rows": 5524}
+{"kind": "adj_factor", "trade_date": "20260529", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260601", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260602", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260603", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260604", "rows": 5525}
+{"kind": "adj_factor", "trade_date": "20260605", "rows": 5526}
+{"kind": "adj_factor", "trade_date": "20260608", "rows": 5527}
+{"kind": "adj_factor", "trade_date": "20260609", "rows": 5528}
+{"kind": "adj_factor", "trade_date": "20260610", "rows": 5528}
+{"kind": "adj_factor", "trade_date": "20260611", "rows": 5529}
+{"kind": "adj_factor", "trade_date": "20260612", "rows": 5529}
+{"kind": "adj_factor", "trade_date": "20260615", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260616", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260617", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260618", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260622", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260623", "rows": 5530}
+{"kind": "adj_factor", "trade_date": "20260624", "rows": 5531}
+{"kind": "adj_factor", "trade_date": "20260625", "rows": 5531}
+{"kind": "adj_factor", "trade_date": "20260626", "rows": 5532}
+{"kind": "adj_factor", "trade_date": "20260629", "rows": 5533}
+{"kind": "adj_factor", "trade_date": "20260630", "rows": 5534}
+{"kind": "adj_factor", "trade_date": "20260701", "rows": 5534}
+{"kind": "adj_factor", "trade_date": "20260702", "rows": 5536}
+{"kind": "adj_factor", "trade_date": "20260703", "rows": 5536}
+{"kind": "adj_factor", "trade_date": "20260706", "rows": 5536}
+{"kind": "adj_factor", "trade_date": "20260707", "rows": 5536}
+{"kind": "adj_factor", "trade_date": "20260708", "rows": 5537}
+{"kind": "adj_factor", "trade_date": "20260709", "rows": 5538}
+{"kind": "adj_factor", "trade_date": "20260710", "rows": 5540}
+{"kind": "adj_factor", "trade_date": "20260713", "rows": 5540}
+{"kind": "adj_factor", "trade_date": "20260714", "rows": 5540}
+{"kind": "adj_factor", "trade_date": "20260715", "rows": 5540}
+{"kind": "adj_factor", "trade_date": "20260716", "rows": 5541}
+{"kind": "adj_factor", "trade_date": "20260717", "rows": 5541}
+{"kind": "adj_factor", "trade_date": "20260720", "rows": 5541}
+{"kind": "adj_factor", "trade_date": "20260721", "rows": 5542}
+{"kind": "adj_factor", "trade_date": "20260722", "rows": 5543}
+{"kind": "adj_factor", "trade_date": "20260723", "rows": 5543}
+{"kind": "adj_factor", "trade_date": "20260724", "rows": 5544}
+{"kind": "adj_factor", "trade_date": "20260727", "rows": 5546}
+{"kind": "adj_factor", "trade_date": "20260728", "rows": 5546}
+{"kind": "adj_factor", "trade_date": "20260729", "rows": 5547}
+{"kind": "adj_factor", "trade_date": "20260730", "rows": 5548}
+{"kind": "adj_factor", "trade_date": "20260731", "rows": 5548}
+{"kind": "adj_factor", "trade_date": "20260803", "rows": 5549}
+{"kind": "adj_factor", "trade_date": "20260804", "rows": 5550}
+{"kind": "adj_factor", "trade_date": "20260805", "rows": 5551}
+{"kind": "adj_factor", "trade_date": "20260806", "rows": 5552}
+{"kind": "adj_factor", "trade_date": "20260807", "rows": 5553}
+{"kind": "adj_factor", "trade_date": "20260810", "rows": 5553}
+{"kind": "adj_factor", "trade_date": "20260811", "rows": 5556}
+{"kind": "adj_factor", "trade_date": "20260812", "rows": 5557}
+{"kind": "adj_factor", "trade_date": "20260813", "rows": 5557}
+{"kind": "adj_factor", "trade_date": "20260814", "rows": 5557}
+{"kind": "adj_factor", "trade_date": "20260817", "rows": 5558}
+{"kind": "adj_factor", "trade_date": "20260818", "rows": 5559}
+{"kind": "adj_factor", "trade_date": "20260819", "rows": 5561}
+{"kind": "adj_factor", "trade_date": "20260820", "rows": 5562}
+{"kind": "adj_factor", "trade_date": "20260821", "rows": 5563}
+{"kind": "adj_factor", "trade_date": "20260824", "rows": 5563}
+{"kind": "adj_factor", "trade_date": "20260825", "rows": 5564}
+{"kind": "adj_factor", "trade_date": "20260826", "rows": 5564}
+{"kind": "adj_factor", "trade_date": "20260827", "rows": 5564}
+{"kind": "adj_factor", "trade_date": "20260828", "rows": 5565}
+{"kind": "adj_factor", "trade_date": "20260831", "rows": 5565}
+{"kind": "adj_factor", "trade_date": "20260901", "rows": 5567}
+{"kind": "adj_factor", "trade_date": "20260902", "rows": 5568}
+{"kind": "adj_factor", "trade_date": "20260903", "rows": 5569}
+{"kind": "adj_factor", "trade_date": "20260904", "rows": 5556}
+{"kind": "adj_factor", "trade_date": "20260907", "rows": 5558}
+{"kind": "adj_factor", "trade_date": "20260908", "rows": 5558}
+{"kind": "adj_factor", "trade_date": "20260909", "rows": 5560}
+{"kind": "adj_factor", "trade_date": "20260910", "rows": 5561}
+{"kind": "adj_factor", "trade_date": "20260911", "rows": 5562}
+{"kind": "adj_factor", "trade_date": "20260914", "rows": 5562}
+{"kind": "adj_factor", "trade_date": "20260915", "rows": 5562}
+{"kind": "adj_factor", "trade_date": "20260916", "rows": 5564}
+{"kind": "adj_factor", "trade_date": "20260917", "rows": 5565}
+{"kind": "adj_factor", "trade_date": "20260918", "rows": 5565}
+{"kind": "adj_factor", "trade_date": "20260921", "rows": 5565}
+{"kind": "adj_factor", "trade_date": "20260922", "rows": 5567}
+{"kind": "adj_factor", "trade_date": "20260923", "rows": 5568}
+{"kind": "adj_factor", "trade_date": "20260924", "rows": 5569}
+{"kind": "adj_factor", "trade_date": "20260928", "rows": 5569}
+{"kind": "adj_factor", "trade_date": "20260929", "rows": 5571}
+{"kind": "adj_factor", "trade_date": "20260930", "rows": 5572}
+{"kind": "adj_factor", "trade_date": "20261008", "rows": 5572}
+{"kind": "adj_factor", "trade_date": "20261009", "rows": 5573}
+{"kind": "adj_factor", "trade_date": "20261012", "rows": 5573}
+{"kind": "adj_factor", "trade_date": "20261013", "rows": 5574}
+{"kind": "adj_factor", "trade_date": "20261014", "rows": 5574}
+{"kind": "adj_factor", "trade_date": "20261015", "rows": 5576}
+{"kind": "adj_factor", "trade_date": "20261016", "rows": 5577}
