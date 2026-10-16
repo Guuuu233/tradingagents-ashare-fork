@@ -633,6 +633,7 @@ def _stream_run_gate_eval(
 
     from tradingagents.agents.utils.shadow_credit import (
         H1B_THRESHOLDS, _is_bull, _is_bear, _parse_sample_date,
+        normalize_horizon_label,
         PRICE_BASIS_UNSPECIFIED,
         T_PLUS_5_STATUS_SUSPENSION, T_PLUS_5_STATUS_PENDING_DUE,
         T_PLUS_5_STATUS_DUE_AND_EVALUATED, T_PLUS_5_STATUS_DATA_MISSING,
@@ -821,17 +822,41 @@ def _stream_run_gate_eval(
     due_t5_count = completed_t5_count = 0
     for s in samples:
         res_data = s.get("result_data") if isinstance(s.get("result_data"), Mapping) else {}
+        # DAV-2129: mirror of the module D4 fix — resolve scm/T+5 through
+        # the sample's horizon term slice first so a stale top-level
+        # shadow_credit_metrics copy (579-row shape) can never win.
+        hz_label = normalize_horizon_label(s.get("horizon"))
+        term_slice = (
+            res_data.get(f"{hz_label}_term")
+            if hz_label and isinstance(res_data, Mapping)
+            else None
+        )
+        if not isinstance(term_slice, Mapping):
+            term_slice = None
         metrics = s.get("shadow_credit_metrics")
+        if not metrics or not isinstance(metrics, Mapping):
+            metrics = (
+                term_slice.get("shadow_credit_metrics")
+                if term_slice is not None
+                and isinstance(term_slice.get("shadow_credit_metrics"), Mapping)
+                else None
+            )
         if not metrics or not isinstance(metrics, Mapping):
             metrics = res_data.get("shadow_credit_metrics") if isinstance(res_data.get("shadow_credit_metrics"), Mapping) else None
         if not metrics or not isinstance(metrics, Mapping):
             metrics = calculate_shadow_credit_metrics(s)
         hit = metrics.get("t_plus_5_direction_hit")
-        st = s.get("t_plus_5_status") or metrics.get("t_plus_5_status") or res_data.get("t_plus_5_status")
+        st = (
+            s.get("t_plus_5_status")
+            or metrics.get("t_plus_5_status")
+            or (term_slice.get("t_plus_5_status") if term_slice is not None else None)
+            or res_data.get("t_plus_5_status")
+        )
         if (
             st == T_PLUS_5_STATUS_SUSPENSION
             or s.get("is_suspended") is True
             or s.get("suspension") is True
+            or (term_slice is not None and term_slice.get("is_suspended") is True)
             or res_data.get("is_suspended") is True
             or res_data.get("suspension") is True
         ):
@@ -840,24 +865,32 @@ def _stream_run_gate_eval(
             st == T_PLUS_5_STATUS_PENDING_DUE
             or s.get("is_in_flight") is True
             or s.get("is_t_plus_5_due") is False
+            or (term_slice is not None and term_slice.get("is_in_flight") is True)
+            or (term_slice is not None and term_slice.get("is_t_plus_5_due") is False)
             or res_data.get("is_in_flight") is True
             or res_data.get("is_t_plus_5_due") is False
         ):
             continue
         is_due = s.get("is_t_plus_5_due")
+        if is_due is None and term_slice is not None:
+            is_due = term_slice.get("is_t_plus_5_due")
         if is_due is None and res_data:
             is_due = res_data.get("is_t_plus_5_due")
         if is_due is None:
             if (
                 (hit is not None)
                 or bool(s.get("t_plus_5_evaluated", False))
+                or (term_slice is not None
+                    and bool(term_slice.get("t_plus_5_evaluated", False)))
                 or bool(res_data.get("t_plus_5_evaluated", False))
                 or (st in (T_PLUS_5_STATUS_DUE_AND_EVALUATED, T_PLUS_5_STATUS_DATA_MISSING))
             ):
                 is_due = True
             else:
                 raw_t5_date = (
-                    s.get("t_plus_5_date") or metrics.get("t_plus_5_date") or res_data.get("t_plus_5_date")
+                    s.get("t_plus_5_date") or metrics.get("t_plus_5_date")
+                    or (term_slice.get("t_plus_5_date") if term_slice is not None else None)
+                    or res_data.get("t_plus_5_date")
                 )
                 t5_parsed = _parse_sample_date(raw_t5_date) if raw_t5_date else None
                 if t5_parsed is not None:
