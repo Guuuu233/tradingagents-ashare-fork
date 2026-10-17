@@ -75,6 +75,20 @@ DAV-2181 — ``daily_snapshot_ledger._version_fields`` did not capture
 ``custom_prompt_snapshot`` then; post-DAV-2181 rows seal it verbatim) is
 written ``unverifiable`` instead of ``none`` so a missing hash can never
 masquerade as a real one.
+
+Custom-prompt evidence bases (DAV-2214, 总控 10-17): a ledger row whose
+seal never captured ``custom_prompt_snapshot`` takes the per-report
+snapshot from the shared static snapshot (``~/ta-snapshot/current.db``,
+``reports.result_data.custom_prompt_snapshot`` looked up by
+``report_id``, opened ``file:…?mode=ro&immutable=1`` only — never the
+live DB) and hashes it under the same register §3 canonicalisation.
+Every row carries a ``custom_basis`` label: ``ledger`` (the seal itself
+carries the snapshot), ``report_snapshot`` (only the report carries it),
+or ``unverifiable`` (neither — the register value is never substituted).
+A row whose two evidences disagree is excluded with reason code
+``custom_conflict`` (never a silent pick), and the run's first screen
+raises the alarm. Per-row evidence is also written to
+``custom_evidence.jsonl`` in the output directory.
 A multi-version input fails closed unless ``--version-key`` names one
 queue (D-075/DAV-1682 single-version rule — cross-version comparison
 belongs to M3).
@@ -102,6 +116,7 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 import sys
 import time
 from collections.abc import Mapping
@@ -168,6 +183,20 @@ LABEL_RETURN_FIELDS: tuple[str, ...] = (
 # 的观测停止并给出原因码).
 REASON_LABEL_CONFLICT = "label_conflict"
 REASON_LABEL_RECORD_SHA_MISMATCH = "label_record_sha256_mismatch"
+
+# DAV-2214: custom-prompt evidence bases + the exclusion reason code for a
+# row whose ledger seal and report snapshot disagree.
+CUSTOM_BASIS_LEDGER = "ledger"
+CUSTOM_BASIS_REPORT_SNAPSHOT = "report_snapshot"
+CUSTOM_BASIS_UNVERIFIABLE = "unverifiable"
+CUSTOM_BASIS_CONFLICT = "conflict"
+REASON_CUSTOM_CONFLICT = "custom_conflict"
+CUSTOM_EVIDENCE_FILE = "custom_evidence.jsonl"
+
+# Shared static snapshot (总控 10-13 令 / DAV-2033): read ``current.db``
+# in place through the read-only URI — never copy it, never open the live
+# ``data/tradingagents.db``.
+DEFAULT_SNAPSHOT_DB = Path("~").expanduser() / "ta-snapshot" / "current.db"
 
 # D-075 primary baseline grid (fixed; other (m, W) never substituted ex
 # post — they are emitted as sensitivity only).
@@ -266,7 +295,13 @@ def _record_custom_prompt_sha(record: Mapping[str, Any]) -> str | None:
     ``versions.custom_prompt_snapshot``), so rows sealed after that
     projection change produce the real hash; pre-DAV-2181 rows keep
     returning None → ``unverifiable`` in the key. The top-level record
-    fallback covers hand-shaped ledger lines."""
+    fallback covers hand-shaped ledger lines.
+
+    DAV-2214: this function answers "did the LEDGER seal it?". When it
+    returns None the caller resolves the report-side evidence through
+    :class:`ReportSnapshotReader` and stamps
+    ``custom_basis=report_snapshot``; this function itself never touches
+    the DB (kept pure so version-key unit tests need no fixture DB)."""
     v = record.get("versions") or {}
     if isinstance(v.get("custom_prompt_snapshot"), (dict, list)):
         return _canonical_json_sha(v["custom_prompt_snapshot"])
@@ -274,6 +309,172 @@ def _record_custom_prompt_sha(record: Mapping[str, Any]) -> str | None:
     if isinstance(cps, (dict, list)):
         return _canonical_json_sha(cps)
     return None
+
+
+# ---------------------------------------------------------------------------
+# 1b. DAV-2214 custom-prompt evidence: ledger seal, else report snapshot
+# ---------------------------------------------------------------------------
+
+def _decode_report_payload(raw: Any) -> Any:
+    """A ``reports.result_data`` cell → dict (or None).
+
+    The physical cell is plaintext JSON on dual/plaintext rows and a
+    zstd-9 frame on ``compressed_only`` rows (DAV-1770); the production
+    codec stays single-sourced in
+    ``tradingagents/storage/compressed_json.py`` so this reader never
+    re-implements the storage layout."""
+    if raw is None or isinstance(raw, dict):
+        return raw
+    from tradingagents.storage.compressed_json import decode_result_data
+    return decode_result_data(raw)
+
+
+class ReportSnapshotReader:
+    """Per-report ``result_data.custom_prompt_snapshot`` from the shared
+    static snapshot ``~/ta-snapshot/current.db`` (DAV-2214).
+
+    Read discipline (总控 10-13 令 / DAV-2033): in-place read through
+    ``file:<path>?mode=ro&immutable=1`` + ``PRAGMA query_only=ON`` — the
+    live DB is never opened and the snapshot is never copied. The
+    connection is lazy, one sha per ``report_id`` is cached, and a
+    snapshot that is absent or unreadable degrades to
+    ``(None, "unavailable")`` instead of guessing — the row then keeps its
+    honest ``unverifiable`` basis.
+    """
+
+    def __init__(self, db_path: Path | str):
+        self.db_path = Path(db_path).expanduser()
+        self._con: sqlite3.Connection | None = None
+        self._cache: dict[str, tuple[str | None, str]] = {}
+        self.unavailable_reason: str | None = None
+        self.lookups = 0
+        self.status_counts: dict[str, int] = {}
+        if not self.db_path.exists():
+            self.unavailable_reason = f"snapshot db not found: {self.db_path}"
+            log("!! report-snapshot custom evidence unavailable — "
+                + self.unavailable_reason)
+
+    @property
+    def available(self) -> bool:
+        return self.unavailable_reason is None
+
+    def close(self) -> None:
+        if self._con is not None:
+            self._con.close()
+            self._con = None
+
+    def _connect(self) -> sqlite3.Connection:
+        if self._con is None:
+            self._con = sqlite3.connect(
+                f"file:{self.db_path}?mode=ro&immutable=1",
+                uri=True, timeout=30)
+            self._con.execute("PRAGMA query_only=ON")
+        return self._con
+
+    def custom_snapshot_sha256(self, report_id: Any) -> tuple[str | None, str]:
+        """``(canonical sha256, status)`` for one report id.
+
+        status: ``ok`` | ``missing_report`` | ``missing_field`` |
+        ``unreadable`` (= row/lookup failure, treated as no evidence).
+        """
+        if report_id in (None, ""):
+            return None, "missing_report"
+        if not self.available:
+            return None, "unavailable"
+        rid = str(report_id)
+        if rid in self._cache:
+            return self._cache[rid]
+        self.lookups += 1
+        out = self._lookup(rid)
+        self.status_counts[out[1]] = self.status_counts.get(out[1], 0) + 1
+        self._cache[rid] = out
+        return out
+
+    def _lookup(self, rid: str) -> tuple[str | None, str]:
+        try:
+            con = self._connect()
+            # Plaintext-first operand order (the ORM's plaintext mode), and
+            # the select expression comes from the single-sourced decode
+            # layer so this reader never hard-codes the storage layout
+            # (DAV-1904 B-6e raw-SQL gate).
+            from tradingagents.storage.compressed_json import (
+                result_data_select_expr_plaintext)
+            expr = result_data_select_expr_plaintext(con)
+            row = con.execute(
+                f"SELECT {expr} FROM reports WHERE id = ?",
+                (rid,)).fetchone()
+        except sqlite3.Error as exc:
+            self.unavailable_reason = f"snapshot db unreadable: {exc}"
+            log("!! report-snapshot custom evidence unavailable — "
+                + self.unavailable_reason)
+            return None, "unreadable"
+        if row is None or row[0] is None:
+            return None, "missing_report"
+        try:
+            data = _decode_report_payload(row[0])
+        except Exception as exc:  # zstd/json corruption — never guessed
+            log(f"!! report {rid}: result_data undecodable ({exc}); "
+                "custom evidence stays unverifiable")
+            return None, "unreadable"
+        if not isinstance(data, Mapping):
+            return None, "missing_field"
+        snap = data.get("custom_prompt_snapshot")
+        if not isinstance(snap, (dict, list)):
+            return None, "missing_field"
+        return _canonical_json_sha(snap), "ok"
+
+
+def resolve_custom_evidence(record: Mapping[str, Any],
+                            reader: ReportSnapshotReader | None,
+                            ) -> dict[str, Any]:
+    """DAV-2214 rule engine: one ledger record → its custom evidence.
+
+    * ledger seal carries the snapshot and no report evidence is read →
+      ``custom_basis=ledger``;
+    * only the report snapshot carries it →
+      ``custom_basis=report_snapshot`` (register §3 canonicalisation);
+    * both carry it and the hashes agree → ``ledger`` (the seal wins);
+    * both carry it and they disagree → NO basis is silently picked:
+      ``custom_basis=conflict`` + reason code ``custom_conflict`` — the
+      row leaves the formal queue;
+    * neither carries it → ``unverifiable``; the register's value is
+      never substituted for an evidence the pipeline did not observe.
+
+    The returned ``sha`` is what :func:`_record_version_key` must stamp on
+    the row's key (never the register value).
+    """
+    ledger_sha = _record_custom_prompt_sha(record)
+    report_sha: str | None = None
+    lookup = "not_read"
+    if reader is not None:
+        report_sha, lookup = reader.custom_snapshot_sha256(
+            record.get("report_id"))
+    out = {
+        "ledger_sha256": ledger_sha,
+        "report_sha256": report_sha,
+        "report_lookup": lookup,
+        "sha256": None,
+        "basis": CUSTOM_BASIS_UNVERIFIABLE,
+        "reason": None,
+        "reason_detail": None,
+    }
+    if ledger_sha and report_sha:
+        if ledger_sha == report_sha:
+            out["sha256"] = ledger_sha
+            out["basis"] = CUSTOM_BASIS_LEDGER
+        else:
+            out["basis"] = CUSTOM_BASIS_CONFLICT
+            out["reason"] = REASON_CUSTOM_CONFLICT
+            out["reason_detail"] = (
+                f"ledger custom_prompt_snapshot={ledger_sha} != report "
+                f"result_data.custom_prompt_snapshot={report_sha}")
+    elif ledger_sha:
+        out["sha256"] = ledger_sha
+        out["basis"] = CUSTOM_BASIS_LEDGER
+    elif report_sha:
+        out["sha256"] = report_sha
+        out["basis"] = CUSTOM_BASIS_REPORT_SNAPSHOT
+    return out
 
 
 def _record_served_set(record: Mapping[str, Any]) -> tuple[list[str], int]:
@@ -303,7 +504,8 @@ def _record_served_set(record: Mapping[str, Any]) -> tuple[list[str], int]:
 
 
 def _record_version_key(record: Mapping[str, Any],
-                        anchor: str | None = None) -> str:
+                        anchor: str | None = None,
+                        custom_sha: str | None = None) -> str:
     """DAV-2142 frozen analysis-version key, verbatim register §3
     ``analysis_version_id`` (DAV-2166: the script's key must reconcile
     against the register, not a home-grown format).
@@ -324,11 +526,18 @@ def _record_version_key(record: Mapping[str, Any],
     project ``custom_prompt_snapshot`` and a bare ``none`` would falsely
     imply a real empty hash. Rows sealed after DAV-2181 carry the real
     snapshot hash, so a custom-prompt change switches the key via
-    resolved/custom even under a fixed anchor."""
+    resolved/custom even under a fixed anchor.
+
+    ``custom_sha`` (DAV-2214) overrides the custom leg with the resolved
+    evidence — the ledger's own seal when it has one, else the report
+    snapshot's canonical hash. Only the hash is injected; the resolution
+    rule and its ``custom_basis`` label live in
+    :func:`resolve_custom_evidence`, so this function stays pure."""
     anchor = anchor or _record_analysis_anchor(record)
     contract = _record_contract_t10(record) or "unverifiable"
     resolved = _record_prompt_resolved_sha(record) or "unverifiable"
-    custom = _record_custom_prompt_sha(record) or "unverifiable"
+    custom = (custom_sha or _record_custom_prompt_sha(record)
+              or "unverifiable")
     served, _missing = _record_served_set(record)
     served_s = "+".join(served) if served else "none"
     return (f"AV1|anchor={anchor}|contract={contract}"
@@ -408,6 +617,7 @@ def load_ledger_signals(
     user_id: str,
     reattest_index: Optional[Mapping[str, dict]] = None,
     analysis_anchor: str | None = None,
+    snapshot: ReportSnapshotReader | None = None,
 ) -> pd.DataFrame:
     """Stream the ledger; one signal row per P4-account ledger line.
 
@@ -426,6 +636,15 @@ def load_ledger_signals(
     index (report_id -> adjudicated verdict). The label row's own
     ``input_pit_status`` is never read — the ledger's status is kept in
     ``_ledger_input_pit_status`` for disclosure.
+
+    ``snapshot`` (DAV-2214) supplies the report-side
+    ``custom_prompt_snapshot`` for rows whose ledger seal never captured
+    it; every row gets ``custom_basis`` / ``custom_sha256`` and the
+    version key is stamped with the resolved hash (the ledger value wins
+    whenever it exists and agrees, an absence never borrows the register
+    value). A row whose two evidences disagree carries
+    ``custom_reason=custom_conflict`` and is dropped by
+    :func:`_apply_custom_gate` before version selection.
     """
     idx = _as_label_index(labels)
     rows: list[dict[str, Any]] = []
@@ -482,6 +701,7 @@ def load_ledger_signals(
             pit, rec.get("report_id"), reattest_index)
         ledger_pit_u = str(pit or "").upper() or "UNVERIFIED"
         served_set, served_missing = _record_served_set(rec)
+        custom = resolve_custom_evidence(rec, snapshot)
         rows.append({
             "signal_date": sig,
             "symbol": str(sym) if sym is not None else None,
@@ -497,8 +717,18 @@ def load_ledger_signals(
             "pit_reattest_applied": bool(eff_pit != ledger_pit_u),
             "completed": rec.get("status") == "completed",
             "user_id": rec.get("user_id"),
-            "version_key": _record_version_key(rec, anchor=analysis_anchor),
+            "version_key": _record_version_key(
+                rec, anchor=analysis_anchor, custom_sha=custom["sha256"]),
             "analysis_anchor": _record_analysis_anchor(rec),
+            # DAV-2214 custom-prompt evidence (per-row, also dumped to
+            # custom_evidence.jsonl by run()).
+            "custom_basis": custom["basis"],
+            "custom_sha256": custom["sha256"],
+            "custom_ledger_sha256": custom["ledger_sha256"],
+            "custom_report_sha256": custom["report_sha256"],
+            "custom_report_lookup": custom["report_lookup"],
+            "custom_reason": custom["reason"],
+            "custom_reason_detail": custom["reason_detail"],
             "served_models": served_set,
             "served_model_missing": served_missing,
             "multi_model": len(served_set) > 1,
@@ -1013,6 +1243,143 @@ def _apply_label_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df[~mask], block
 
 
+def _apply_custom_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Drop ledger rows whose custom-prompt evidences disagree (DAV-2214).
+
+    ``load_ledger_signals`` stamps ``custom_reason=custom_conflict`` when
+    BOTH the ledger seal and the report snapshot carry a
+    ``custom_prompt_snapshot`` and their register §3 hashes differ; such a
+    row is excluded with its reason code (plan §2.2: 冲突、不一致的观测
+    停止并给出原因码) — neither side is silently preferred. Rows with
+    one-sided or absent evidence are NOT excluded here: they keep their
+    ``custom_basis`` (ledger / report_snapshot / unverifiable) and stay in
+    the funnel.
+
+    Deliberately runs BEFORE ``m1.select_version``: a conflicting row must
+    not force the multi-version fail-close on a queue it never enters
+    (its two versions are exactly what is in dispute) — the exclusion is
+    the disposition the card requires.
+    """
+    block: dict[str, Any] = {
+        "association_key": "report_id",
+        "input_rows": int(len(df)),
+        "basis_counts": {},
+        "reason_codes": {},
+        "excluded": [],
+    }
+    if df.empty or "custom_basis" not in df.columns:
+        return df, block
+    block["basis_counts"] = {
+        str(k): int(v) for k, v in
+        df["custom_basis"].value_counts().items()}
+    if "custom_reason" not in df.columns:
+        return df, block
+    reason = df["custom_reason"]
+    mask = reason.notna() & (reason.astype(str).str.len() > 0)
+    if not mask.any():
+        return df, block
+    counts: dict[str, int] = {}
+    detail: list[dict[str, Any]] = []
+    for _i, row in df[mask].iterrows():
+        code = str(row.get("custom_reason"))
+        counts[code] = counts.get(code, 0) + 1
+        detail.append({
+            "report_id": (str(row.get("run_id"))
+                          if row.get("run_id") is not None else None),
+            "symbol": row.get("symbol"),
+            "signal_date": row.get("signal_date"),
+            "reason": code,
+            "detail": row.get("custom_reason_detail"),
+        })
+    block["reason_codes"] = counts
+    block["excluded"] = sorted(
+        detail, key=lambda x: (x["reason"], str(x["report_id"])))
+    return df[~mask], block
+
+
+def _custom_evidence_alert(block: Mapping[str, Any]) -> str | None:
+    """First-screen alarm for the DAV-2214 ``custom_conflict`` exclusion."""
+    counts = dict(block.get("reason_codes") or {})
+    n = int(counts.get(REASON_CUSTOM_CONFLICT, 0))
+    if not n:
+        return None
+    ids = sorted({str(x.get("report_id"))
+                  for x in (block.get("excluded") or [])})
+    return (f"custom_conflict: {n} ledger row(s) carry a "
+            "custom_prompt_snapshot whose ledger-sealed hash disagrees "
+            "with the report snapshot — excluded from the formal queue "
+            f"({', '.join(ids)})")
+
+
+def _custom_evidence_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """One audit line per ledger row (DAV-2214 逐行证据)."""
+    cols = ["run_id", "user_id", "symbol", "signal_date", "custom_basis",
+            "custom_sha256", "custom_ledger_sha256", "custom_report_sha256",
+            "custom_report_lookup", "custom_reason",
+            "custom_reason_detail"]
+    if df.empty or "custom_basis" not in df.columns:
+        return []
+    work = df[[c for c in cols if c in df.columns]].copy()
+    work["_rid"] = work["run_id"].map(
+        lambda x: str(x) if x not in (None, "") else None)
+    work["_sd"] = work["signal_date"].astype(str)
+    work = work.sort_values(["_sd", "_rid"], na_position="last",
+                            kind="stable")
+    out: list[dict[str, Any]] = []
+    for _i, row in work.iterrows():
+        out.append({
+            "report_id": row.get("_rid"),
+            "user_id": row.get("user_id"),
+            "symbol": row.get("symbol"),
+            "signal_date": row.get("signal_date"),
+            "custom_basis": row.get("custom_basis"),
+            "custom_sha256": row.get("custom_sha256"),
+            "ledger_custom_sha256": row.get("custom_ledger_sha256"),
+            "report_custom_sha256": row.get("custom_report_sha256"),
+            "report_lookup": row.get("custom_report_lookup"),
+            "reason": row.get("custom_reason"),
+            "detail": row.get("custom_reason_detail"),
+        })
+    return out
+
+
+def _custom_evidence_summary(df_full: pd.DataFrame,
+                             reader: ReportSnapshotReader | None,
+                             gate: Mapping[str, Any]) -> dict:
+    """First-screen + run.json block for the custom evidence bases."""
+    basis = dict((gate or {}).get("basis_counts") or {})
+    lookups = dict(reader.status_counts) if reader is not None else {}
+    db: dict[str, Any] = {"path": None, "available": False}
+    if reader is not None:
+        db = {"path": str(reader.db_path), "available": bool(reader.available)}
+        if reader.db_path.exists():
+            st = reader.db_path.stat()
+            db.update({
+                "size_bytes": int(st.st_size),
+                "mtime_utc": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime)),
+                "uri": f"file:{reader.db_path}?mode=ro&immutable=1",
+            })
+        if reader.unavailable_reason:
+            db["unavailable_reason"] = reader.unavailable_reason
+    return {
+        "rule": "账本自带 custom_prompt_snapshot→custom_basis=ledger；账本缺、"
+                "报告 result_data.custom_prompt_snapshot 有→"
+                "report_snapshot（登记 §3 规范化后算哈希）；两处都有但不"
+                "一致→custom_conflict 排除；两处都缺→unverifiable"
+                "（不得用登记值填补）",
+        "ledger_rows": int(len(df_full)),
+        "basis_counts": basis,
+        "report_lookup_counts": lookups,
+        "report_snapshot_db": db,
+        "register_value_used_as_fill": False,
+        "excluded": list((gate or {}).get("excluded") or []),
+        "reason_codes": dict((gate or {}).get("reason_codes") or {}),
+        "alert": _custom_evidence_alert(gate or {}),
+        "evidence_file": CUSTOM_EVIDENCE_FILE,
+    }
+
+
 def _label_integrity_alert(integrity: Mapping[str, Any]) -> str | None:
     """First-screen alarm text, or None when nothing needs flagging.
 
@@ -1046,7 +1413,8 @@ def freeze_block(analysis_anchor: str | None,
                  multi_model_sensitivity: dict | None = None,
                  label_integrity: dict | None = None,
                  formal_start: dict | None = None,
-                 pit_provenance: dict | None = None) -> dict:
+                 pit_provenance: dict | None = None,
+                 custom_evidence: dict | None = None) -> dict:
     """Report first-screen freeze block (DAV-2160 §report requirements):
     plan sha256, descriptive-vs-confirmatory label, the served_model-
     non-unique report list, and the register §3 analysis_version_id the run
@@ -1063,7 +1431,13 @@ def freeze_block(analysis_anchor: str | None,
     ``multi_model_sensitivity`` is the register §4 必做剔除敏感性臂
     outcome — computed by the caller after the formal queue exists; a
     0-multi-model cohort still writes an explicit ``excluded_reports: 0``
-    arm rather than skipping the block."""
+    arm rather than skipping the block.
+
+    ``custom_evidence`` (DAV-2214) is the per-basis distribution of the
+    custom-prompt evidences (ledger / report_snapshot / unverifiable)
+    plus the ``custom_conflict`` exclusions and the snapshot provenance —
+    emitted on the first screen so the register §3 reconciliation is
+    auditable without re-deriving it from the ledger."""
 
     def _model_block(frame: pd.DataFrame) -> dict:
         """Per-denominator served-model distribution: counted on the
@@ -1133,6 +1507,7 @@ def freeze_block(analysis_anchor: str | None,
         # block including the label_conflict alarm.
         "formal_cohort_start": formal_start,
         "label_integrity": label_integrity,
+        "custom_evidence": custom_evidence,
         "pit_provenance": pit_provenance,
         "report_kind": report_kind or "descriptive",
         # DAV-2166 🟡-5: the single-confirmatory guarantee is owned by the
@@ -1327,7 +1702,13 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         user_id: str = DEFAULT_USER_ID,
         reattest_path: Path | None = None,
         analysis_anchor: str | None = None,
-        report_kind: str | None = None) -> dict:
+        report_kind: str | None = None,
+        snapshot_db: Path | str | None = None) -> dict:
+    """Run the evaluation. ``snapshot_db`` (DAV-2214) is the read-only
+    shared snapshot supplying the report-side custom_prompt_snapshot; the
+    CLI passes ``~/ta-snapshot/current.db`` by default, ``None`` = run
+    ledger-only (programmatic/test callers stay hermetic and never touch
+    an operator's snapshot implicitly)."""
     t0 = time.time()
     # DAV-2198 ②: fail-close BEFORE any work when the frozen cohort start is
     # unreadable or disagrees with the code constant.
@@ -1370,16 +1751,48 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
             f"from {rp}")
     else:
         reattest_src = None
+
+    # DAV-2214: the report-side custom_prompt_snapshot comes from the
+    # shared static snapshot. An explicit snapshot path that does not exist
+    # fails closed — "evidence silently missing" is exactly the failure
+    # mode the evidence bases exist to make visible; --no-report-snapshot
+    # is the deliberate opt-out (rows then stay ledger/unverifiable).
+    snapshot_reader: ReportSnapshotReader | None = None
+    if snapshot_db is not None:
+        snap_path = Path(snapshot_db).expanduser()
+        if not snap_path.exists():
+            raise elp.PipelineError(
+                f"report snapshot db not found: {snap_path}; refusing to "
+                "run with custom evidence silently missing — pass "
+                "--no-report-snapshot to accept ledger-only evidence "
+                "(rows keep custom_basis=unverifiable)")
+        snapshot_reader = ReportSnapshotReader(snap_path)
+        log(f"report snapshot for custom evidence: {snap_path} "
+            "(file:…?mode=ro&immutable=1, query_only=ON)")
     df = load_ledger_signals(ledger_path, labels, user_id,
                              reattest_index=reattest_index,
-                             analysis_anchor=analysis_anchor)
+                             analysis_anchor=analysis_anchor,
+                             snapshot=snapshot_reader)
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
     # Full input frame preserved for the freeze block's all-ledger
     # denominator (multi-model disclosure is report-level, independent of
-    # which queue the run reads) — select_version below narrows `df`.
+    # which queue the run reads, and the DAV-2214 custom-conflict rows are
+    # disclosed there too) — the gates/select_version below narrow `df`.
     df_full = df.copy()
+
+    # DAV-2214: custom-prompt evidence gate. Runs BEFORE select_version so
+    # an excluded conflict row cannot force the multi-version fail-close on
+    # a queue it never enters.
+    df, custom_join = _apply_custom_gate(df)
+    custom_evidence = _custom_evidence_summary(df_full, snapshot_reader,
+                                               custom_join)
+    if custom_join["reason_codes"]:
+        log(f"custom evidence gate: {custom_join['reason_codes']}")
+    if custom_evidence["alert"]:
+        log("!! CUSTOM EVIDENCE ALERT — " + custom_evidence["alert"])
+    version_input_rows = len(df)
 
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
@@ -1413,7 +1826,8 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # 门前的 select_version 分流仍在 funnel 里单列 excl_version。
     #
     # DAV-2052 🟡-1 产物内守恒式（审计对账无需外部数据）:
-    #   ledger_rows         = excl_version + excl_pre_cohort
+    #   ledger_rows         = excl_custom_conflict + excl_version
+    #       + excl_pre_cohort
     #       + excl_label_conflict + excl_label_record_sha256_mismatch
     #       + admit_input_rows
     #   admit_input_rows（进入 m1.admit 的行数）
@@ -1424,8 +1838,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     #   seal_gate.input_rows（进入封存门的行数）= post_gate_rows
     #       + excl_late_seal + excl_not_completed + excl_bad_prob
     #       + excl_immature_label + excl_dup_run
+    # DAV-2214 在 select_version 之前新增一个门前桶（custom_conflict），
+    # 因此 excl_version 只在检出 custom 冲突后的行数上计算；
     # DAV-2198 ②/① 新增的三个门前桶（cohort 起点 / label_conflict /
-    # record_sha256 不一致）在 admit 之前分流，同样计入 admit_input_rows。
+    # record_sha256 不一致）同样在 admit 之前分流，同样计入 admit_input_rows。
     # 注意: m1 把「晚封 | sealed 解析失败 | T+1 截止不可解析」单掩码全计入
     # excl_late_seal — excl_seal_t1_unresolved / seal_unparseable /
     # excl_seal_unresolvable 都是它的子集披露，绝不再相加（相加即重复
@@ -1436,10 +1852,25 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     pre_admit_ids = set(df["run_id"]) if "run_id" in df.columns else set()
 
     formal, funnel = m1.admit(df, user_id=user_id, calendar=cal_ymd)
+    # DAV-2214: custom-basis distributions of the two narrower denominators
+    # the card's 交付附 asks about — the version-selected queue
+    # (post select_version, pre-cohort/label gates) and the admitted formal
+    # cohort — next to the all-ledger-row basis_counts above.
+    custom_evidence["selected_queue_basis_counts"] = (
+        {str(k): int(v) for k, v in df["custom_basis"].value_counts().items()}
+        if "custom_basis" in df.columns else {})
+    custom_evidence["formal_cohort_basis_counts"] = (
+        {str(k): int(v) for k, v in
+         formal["custom_basis"].value_counts().items()}
+        if "custom_basis" in formal.columns else {})
 
     # DAV-2198: the three pre-admit buckets live in the same funnel so the
     # product-internal conservation identity closes without external data.
     funnel["excl_pre_cohort"] = int(formal_start["excluded_rows"])
+    # DAV-2214: custom_prompt_snapshot 两处证据不一致（custom_conflict）
+    # 在 select_version 之前排除 — 单列桶使内守恒式仍可闭合。
+    funnel["excl_custom_conflict"] = int(
+        custom_join["reason_codes"].get(REASON_CUSTOM_CONFLICT, 0))
     funnel["excl_label_conflict"] = int(
         label_join["counts"].get(REASON_LABEL_CONFLICT, 0))
     funnel["excl_label_record_sha256_mismatch"] = int(
@@ -1503,7 +1934,8 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
                           multi_model_sensitivity=mm_sens,
                           label_integrity=label_integrity,
                           formal_start=formal_start,
-                          pit_provenance=pit_provenance)
+                          pit_provenance=pit_provenance,
+                          custom_evidence=custom_evidence)
 
     # seal_gate 块（DAV-1993 🟡 M-1）: 口径 + 被分流 run_id 落盘，verdict.model
     # 与 run.json 顶层各一份同值。计数取自 m1.admit 的 funnel：
@@ -1578,7 +2010,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     }
     funnel["excl_seal_late"] = seal_gate["excl_seal_late"]
     funnel["excl_seal_unresolvable"] = seal_gate["excl_seal_unresolvable"]
-    funnel["excl_version"] = int(ledger_rows_input - post_version_rows)
+    funnel["excl_version"] = int(version_input_rows - post_version_rows)
     funnel["seal_dateonly_fallback"] = n_dateonly
     funnel["multi_model_reports"] = freeze["multi_model_count"]
     funnel["version_key"] = version_key or (
@@ -1650,6 +2082,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "input": {"ledger": str(ledger_path), "labels": str(labels_path)},
         "formal_cohort_start": formal_start,
         "label_integrity": label_integrity,
+        "custom_evidence": custom_evidence,
         "label_join": label_join,
         "pit_provenance": pit_provenance,
         "base_source": base_source,
@@ -1660,6 +2093,16 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "sensitivity": sensitivity,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
+    # DAV-2214 逐行证据: one line per ledger row (all input rows, excluded
+    # ones included) so the custom_basis labels are auditable byte-for-byte.
+    evidence_rows = _custom_evidence_rows(df_full)
+    ev_path = out_dir / CUSTOM_EVIDENCE_FILE
+    ev_path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n"
+                for r in evidence_rows), encoding="utf-8")
+    custom_evidence["evidence_rows"] = len(evidence_rows)
+    custom_evidence["evidence_file_sha256"] = hashlib.sha256(
+        ev_path.read_bytes()).hexdigest()
     days_df = pd.DataFrame(
         [vars(x) for x in days],
         columns=["date", "n_t", "status", "ic", "quintile_diff",
@@ -1683,6 +2126,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "seal_gate": seal_gate_block,
         "formal_cohort_start": formal_start,
         "label_integrity": label_integrity,
+        "custom_evidence": custom_evidence,
         "label_join": label_join,
         "pit_provenance": pit_provenance,
         "labels": len(labels), "version_key": funnel["version_key"],
@@ -1888,7 +2332,8 @@ def selftest(tmp: Path) -> dict:
     cal.write_text("\n".join(days) + "\n")
 
     out = run(ledger, lab_f, tmp / "out", calendar_path=cal,
-              base_chunks=chunks)
+              base_chunks=chunks, snapshot_db=None)
+    checks.update(_selftest_custom_evidence(tmp))
     checks["grade"] = out["verdict"]["grade"]
     checks["inc_verdict"] = out["increment_m200_W0"]["verdict"]
     checks["inc_diff_mean"] = out["increment_m200_W0"]["diff_mean"]
@@ -1908,6 +2353,87 @@ def selftest(tmp: Path) -> dict:
     assert checks["valid_days"] == 79, checks
     assert checks["base_kind"] == "p1_t10_partitions"
     print(f"[selftest] PASS {checks}", flush=True)
+    return checks
+
+
+def _selftest_custom_evidence(tmp: Path) -> dict:
+    """DAV-2214: the four custom-evidence bases, exercised against a
+    synthetic read-only snapshot db (no operator snapshot needed).
+
+    Covers the four card cases: ledger-only, report-only, both-equal,
+    both-conflicting (excluded with ``custom_conflict``), plus
+    neither-present -> ``unverifiable``.
+    """
+    checks: dict[str, Any] = {}
+    db = tmp / "selftest_snapshot.db"
+    cps = {"enabled": True, "placement": "after_data",
+           "roles": {"trader": {"resolved_hash": "h"}}}
+    other = {"enabled": True, "placement": "after_data",
+             "roles": {"trader": {"resolved_hash": "DIFFERENT"}}}
+    if db.exists():
+        db.unlink()
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, "
+                "result_data TEXT, result_data_zst BLOB)")
+    for rid, snap in (("rep_ok", cps), ("rep_only", cps),
+                      ("rep_conflict", other), ("rep_none", None)):
+        body = {"analysis_status": "completed"}
+        if snap is not None:
+            body["custom_prompt_snapshot"] = snap
+        con.execute("INSERT INTO reports (id, result_data) VALUES (?, ?)",
+                    (rid, json.dumps(body)))
+    con.commit()
+    con.close()
+    reader = ReportSnapshotReader(db)
+
+    def _rec(rid, *, ledger_snap=True):
+        return _ledger_rec(rid, "S", "2026-10-08", 50,
+                           custom_prompt=(cps if ledger_snap else None),
+                           contract="b1.v1")
+
+    cases = {
+        "ledger_and_report_agree": (_rec("rep_ok"), CUSTOM_BASIS_LEDGER),
+        "report_only": (_rec("rep_only", ledger_snap=False),
+                        CUSTOM_BASIS_REPORT_SNAPSHOT),
+        "conflict": (_rec("rep_conflict"), CUSTOM_BASIS_CONFLICT),
+        "neither": (_rec("rep_none", ledger_snap=False),
+                    CUSTOM_BASIS_UNVERIFIABLE),
+    }
+    basis = {}
+    for name, (rec, want) in cases.items():
+        ev = resolve_custom_evidence(rec, reader)
+        basis[name] = ev["basis"]
+        assert ev["basis"] == want, (name, ev)
+    a = resolve_custom_evidence(cases["ledger_and_report_agree"][0], reader)
+    b = resolve_custom_evidence(cases["report_only"][0], reader)
+    c = resolve_custom_evidence(cases["conflict"][0], reader)
+    d = resolve_custom_evidence(cases["neither"][0], reader)
+    assert a["sha256"] == b["sha256"] == _canonical_json_sha(cps)
+    assert c["reason"] == REASON_CUSTOM_CONFLICT and c["sha256"] is None
+    assert d["sha256"] is None and d["report_lookup"] == "missing_field"
+    # the report-only hash is what the version key stamps (never the
+    # register's b0abab… value nor an "unverifiable" placeholder).
+    key = _record_version_key(cases["report_only"][0], anchor="082be047",
+                              custom_sha=b["sha256"])
+    assert "custom=" + b["sha256"] in key
+    # the conflict row leaves the queue with its reason code
+    frame = pd.DataFrame(
+        [{"run_id": r["report_id"], "symbol": "S", "signal_date": "20261008",
+          "custom_basis": resolve_custom_evidence(r, reader)["basis"],
+          "custom_sha256": resolve_custom_evidence(r, reader)["sha256"],
+          "custom_reason": resolve_custom_evidence(r, reader)["reason"],
+          "custom_reason_detail":
+              resolve_custom_evidence(r, reader)["reason_detail"],
+          "label_reason": None}
+         for r, _w in cases.values()])
+    kept, gate = _apply_custom_gate(frame)
+    assert len(kept) == len(frame) - 1
+    assert gate["reason_codes"] == {REASON_CUSTOM_CONFLICT: 1}
+    assert _custom_evidence_alert(gate) is not None
+    reader.close()
+    checks["custom_basis"] = basis
+    checks["custom_conflict_excluded"] = 1
+    checks["custom_basis_counts"] = gate["basis_counts"]
     return checks
 
 
@@ -1943,6 +2469,18 @@ def main(argv: list[str] | None = None) -> int:
                         "sidecar's adjudicated verdict; VERIFIED/FAILED stay "
                         "ledger-final. Default: the ledger's sibling "
                         "pit_reattest.jsonl when present, else no overlay")
+    r.add_argument("--snapshot-db", type=Path, default=DEFAULT_SNAPSHOT_DB,
+                   help="read-only shared snapshot (default "
+                        "~/ta-snapshot/current.db, opened "
+                        "file:…?mode=ro&immutable=1) whose "
+                        "reports.result_data.custom_prompt_snapshot supplies "
+                        "the custom evidence for ledger rows that never "
+                        "sealed it (DAV-2214); a missing file fails closed")
+    r.add_argument("--no-report-snapshot", action="store_true",
+                   help="opt out of the report snapshot: custom evidence is "
+                        "ledger-only and such rows keep "
+                        "custom_basis=unverifiable (never filled from the "
+                        "register)")
     b = sub.add_parser("build-base",
                        help="build P1 all-market T+10 partitions (1547 caliber, "
                             "offset=10 roll=2) into --out-dir/chunks_t10")
@@ -1967,7 +2505,9 @@ def main(argv: list[str] | None = None) -> int:
                 base_chunks=a.base_chunks, user_id=a.user_id,
                 reattest_path=a.pit_reattest,
                 analysis_anchor=a.analysis_anchor,
-                report_kind=a.report_kind)
+                report_kind=a.report_kind,
+                snapshot_db=(None if a.no_report_snapshot
+                             else a.snapshot_db))
             return 0
         except elp.PipelineError as exc:
             print(f"FAIL-CLOSE: {exc}", file=sys.stderr)
