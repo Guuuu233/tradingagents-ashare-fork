@@ -7,7 +7,18 @@
     "trunk_commit": "cb82987b737be2cc3c40c939082b70c4135db7b8",
     "script_sha256": "295af94d5578c6cbfda9c81308783a41b67859207202b479d225e739069d5cf9",
     "python": "3.10.20",
-    "cache_dir": "TradingAgents-AShare-cache/phase2/v2-20261016/"
+    "cache_root": "TradingAgents-AShare-cache/phase2/v2-20261016/",
+    "cache_dir": "TradingAgents-AShare-cache/phase2/v2-20261016/overlay_cache/",
+    "cache_dir_note": "cache_dir 是 m2_sampler 实际读表的目录（PHASE2_CACHE_DIR / --cache-dir）。v2-20261016/ 根目录下没有 index_weight_*.pkl 等文件，直接指向根目录会 FileNotFoundError；overlay_cache/ 才是 live 目录，其中 index_classify.pkl、stock_basic.pkl、index_member_all_all.pkl 为指向 phase2/ 主缓存原件的软链。",
+    "input_sha256": {
+      "index_weight_000300.SH.pkl": "c73a05fa32ca1799d02c2972bfdf91c9b5603b50bcb11f2dbedaa49fbcaf957e",
+      "index_weight_000905.SH.pkl": "53adaf617d721d0a98969e5c0d63ca35f96d29527932699870f0b1325037b15b",
+      "namechange.pkl": "57ff7a79bed3a52eeb01727dd984c50db5e361831a11ca6cc5680d2319e17dd8",
+      "stock_basic.pkl": "b67b06e834a51ef79316a314916c8f085c4844a4b60c6a5afa5bc206941fc6dc",
+      "index_member_all_all.pkl": "d2e276a5b15977bf320675006109adf15bf7691019ce7b2d5009f16d0eb99358",
+      "daily_by_day/2026-10-16.pkl": "0e61f70863d1455a671c2dd7cbeda420bd9ae8e2c8426cabc71c42e6bb954f8f"
+    },
+    "input_sha256_note": "以上为本批实际取数时读到的输入件摘要（含软链目标原件）。index_member_all_all.pkl 按总控裁定使用主缓存原件，摘要与主缓存一致。sw_daily.pkl / daily_basic_by_day/ 不被 m2_sampler.py 读取，未列入。"
   },
   "batches": [
     {
