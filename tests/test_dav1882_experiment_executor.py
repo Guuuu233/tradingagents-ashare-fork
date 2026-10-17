@@ -29,11 +29,15 @@ from scripts.phase2.experiment_executor import (  # noqa: E402
     HttpTransport,
     Ledger,
     Manifest,
+    PairSpec,
     StopConfig,
+    TrunkGuardError,
     blackout_active,
     classify_error,
     flatten_served_models,
+    resolve_trunk_head,
     verify_pair,
+    verify_trunk_head,
 )
 
 EXPECTED_MODEL = "deepseek-v3.2-exp-frozen"
@@ -1399,3 +1403,153 @@ def test_real_cli_status_subcommand_works(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert json.loads(proc.stdout)["stop_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# 11. 主干守卫（DAV-2204）：开跑前校验检出 HEAD == batch_spec.trunk_commit
+# ---------------------------------------------------------------------------
+
+
+HEAD_A = "a" * 40
+HEAD_B = "b" * 40
+
+
+def _batch_spec_file(tmp_path: Path, *, trunk_commit: str, path: Path = None) -> Path:
+    payload = {
+        "schema": "dav1789-batch-spec/1",
+        "sampler": {"script": "scripts/phase2/m2_sampler.py"},
+        "batches": [{"batch_index": 1, "date": "20261016", "n": 5}],
+    }
+    if trunk_commit is not None:
+        payload["sampler"]["trunk_commit"] = trunk_commit
+    f = path or (tmp_path / "batch_spec.json")
+    f.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return f
+
+
+def test_load_batch_specs_reads_trunk_commit(tmp_path):
+    """口径里的 sampler.trunk_commit 必须真被读进 BatchSpec（否则守卫无从比对）。"""
+    specs = load_batch_specs(_batch_spec_file(tmp_path, trunk_commit=HEAD_A))
+    assert [s.trunk_commit for s in specs] == [HEAD_A]
+
+
+def test_load_batch_specs_without_trunk_commit_is_backward_compatible(tmp_path):
+    """老口径没有该字段 → None，不报错、不静默编一个值。"""
+    specs = load_batch_specs(_batch_spec_file(tmp_path, trunk_commit=None))
+    assert [s.trunk_commit for s in specs] == [None]
+
+
+def test_trunk_head_match_allows_run(tmp_path):
+    """HEAD 相符 → 放行，run() 正常跑完。"""
+    code, detail = verify_trunk_head([BatchSpec(1, "20261016", 5, trunk_commit=HEAD_A)],
+                                    head_sha=HEAD_A)
+    assert (code, detail) == (None, "")
+
+
+def test_trunk_head_short_sha_prefix_counts_as_match(tmp_path):
+    """短 sha（签发时常写 8 位）按前缀匹配，仍算相符。"""
+    code, _ = verify_trunk_head([BatchSpec(1, "20261016", 5, trunk_commit=HEAD_A[:8])],
+                                head_sha=HEAD_A)
+    assert code is None
+
+
+def test_trunk_head_mismatch_is_refused():
+    """HEAD 不符 → 必须给明确原因码，不放行。"""
+    code, detail = verify_trunk_head([BatchSpec(1, "20261016", 5, trunk_commit=HEAD_A)],
+                                     head_sha=HEAD_B)
+    assert code == "trunk_head_mismatch"
+    assert HEAD_A in detail and HEAD_B in detail
+
+
+def test_trunk_head_unresolved_is_refused():
+    """取不到 HEAD（不在 git 检出里）→ 拒绝，不得默认放行。"""
+    code, detail = verify_trunk_head([BatchSpec(1, "20261016", 5, trunk_commit=HEAD_A)],
+                                     head_sha=None, repo_root=tmp_path_none())
+    assert code == "trunk_head_unresolved"
+    assert HEAD_A in detail
+
+
+def tmp_path_none():
+    """一个不属于任何 git 工作树的路径（resolve_trunk_head 会失败）。"""
+    import tempfile
+    d = tempfile.mkdtemp()
+    import pathlib
+    return pathlib.Path(d)
+
+
+def test_conflicting_trunk_commits_are_refused():
+    """各批 trunk_commit 不一致 → 无法判定对齐谁，拒绝。"""
+    code, _ = verify_trunk_head(
+        [BatchSpec(1, "20261016", 5, trunk_commit=HEAD_A),
+         BatchSpec(2, "20261017", 5, trunk_commit=HEAD_B)],
+        head_sha=HEAD_A,
+    )
+    assert code == "trunk_commit_unspecified"
+
+
+def test_spec_without_trunk_commit_skips_guard():
+    """未签 trunk_commit 的老口径 → 不启用守卫（向后兼容），但 None 不得被
+    误当成「取不到 HEAD」。"""
+    assert verify_trunk_head([BatchSpec(1, "20261016", 5)], head_sha=HEAD_B) == (None, "")
+
+
+def test_executor_refuses_to_run_when_guard_trips(tmp_path):
+    """守卫生效且命中 → run() 抛 TrunkGuardError，一次请求都不发。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.trunk_guard = ("trunk_head_mismatch", "检出 HEAD=b 与 trunk_commit=a 不符")
+    with pytest.raises(TrunkGuardError) as ei:
+        ex.run(_manifest([_pair("p1")]))
+    assert ei.value.reason_code == "trunk_head_mismatch"
+    assert ex.ledger.totals.get("analysis_requests", 0) == 0
+
+
+def test_executor_runs_when_guard_passes(tmp_path):
+    """守卫放行时 run() 照常跑（守卫不是把执行器堵死的开关）。"""
+    ex = _executor(tmp_path, _two_servers())
+    ex.trunk_guard = (None, "")
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_ok == 1
+
+
+def test_run_cli_refuses_when_trunk_commit_differs_from_real_head(tmp_path, monkeypatch):
+    """CLI 端到端：口径签的主干 ≠ 本仓 HEAD → 直接拒绝运行，且不落 run_report。"""
+    import scripts.phase2.experiment_executor as mod
+    spec = _batch_spec_file(tmp_path, trunk_commit=HEAD_A)
+    monkeypatch.setattr(mod, "resolve_trunk_head", lambda repo_root=None: HEAD_B)
+    monkeypatch.setattr(
+        mod, "fetch_batch_pairs",
+        lambda *a, **k: pytest.fail("守卫失败时不得取样"),
+    )
+    with pytest.raises(SystemExit) as ei:
+        mod.main(["run", "--batch-spec", str(spec), "--instance", "O=http://127.0.0.1:9",
+                  "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL])
+    assert "主干守卫拒绝执行" in str(ei.value)
+    assert not (tmp_path / "st" / "run_report.json").exists()
+
+
+def test_run_cli_proceeds_when_trunk_commit_matches_real_head(tmp_path, monkeypatch):
+    """相符 → 守卫生效，流程继续（后续失败不是守卫的锅）。"""
+    import scripts.phase2.experiment_executor as mod
+    spec = _batch_spec_file(tmp_path, trunk_commit=HEAD_A)
+    monkeypatch.setattr(mod, "resolve_trunk_head", lambda repo_root=None: HEAD_A)
+    monkeypatch.setattr(
+        mod, "fetch_batch_pairs",
+        lambda spec_, **k: ([PairSpec(pair_id="b01-600519.SH", symbol="600519.SH",
+                                      trade_date="20261016", expected_model=EXPECTED_MODEL)],
+                            {"eligible_digest": "d", "n_picked": 1}),
+    )
+    rc = mod.main(["run", "--batch-spec", str(spec), "--instance", "O=http://127.0.0.1:9",
+                   "--instance", "N=http://127.0.0.1:9",
+                   "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL,
+                   "--daily-gate-policy", "stop", "--blackout-policy", "stop",
+                   "--poll-interval", "0", "--job-timeout", "1", "--pair-retries", "0"])
+    # 关键：守卫放行 → 正常返回并落报告，而不是抛守卫拒绝
+    assert rc == 0
+    assert (tmp_path / "st" / "run_report.json").exists()
+
+
+def test_real_repo_head_resolves_to_a_sha():
+    """resolve_trunk_head 在真仓里必须能拿到 sha（否则守卫永远处于 unresolved）。"""
+    head = resolve_trunk_head()
+    assert head and len(head) == 40 and set(head) <= set("0123456789abcdef")

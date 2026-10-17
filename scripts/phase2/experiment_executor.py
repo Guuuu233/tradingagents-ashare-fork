@@ -45,6 +45,11 @@
 
 ``--total-request-cap`` 默认 20328，与总控 10-11 令一致。
 
+主干守卫（DAV-2204）：``run --batch-spec`` 时先校验「所在检出 HEAD ==
+``batch_spec.sampler.trunk_commit``」，不符即**拒绝运行**并给出原因码
+（``trunk_head_mismatch`` / ``trunk_head_unresolved`` / ``trunk_commit_unspecified``），
+取样与任何请求都不发生；``--manifest`` 与无该字段的老口径不启用守卫。
+
 测试用桩服务跑在内存里（见 ``tests/test_dav1882_experiment_executor.py``），
 覆盖作废、续跑、停批三条路径。
 """
@@ -109,6 +114,12 @@ _QUOTA_MARKERS = (
     "配额",
     "限流",
 )
+
+# 主干守卫：开跑前校验「所在检出 HEAD == batch_spec 签发的 trunk_commit」。
+# 三类原因码分别对应三种拒绝，避免只给一句人话而无法机器判定。
+TRUNK_GUARD_MISMATCH = "trunk_head_mismatch"
+TRUNK_GUARD_UNRESOLVED = "trunk_head_unresolved"
+TRUNK_GUARD_UNSPECIFIED = "trunk_commit_unspecified"
 
 STOP_ALL_PAIRS_DONE = "all_pairs_done"
 STOP_QUOTA = "quota_or_rate_limit"
@@ -241,6 +252,9 @@ class BatchSpec:
     date: str                       # YYYYMMDD，交给 m2_sampler 的信号日
     n: int                          # 该批抽多少个标的
     seed_base: int = SAMPLER_SEED_BASE
+    # 签发这份口径时的主干提交；开跑前据此校验所在检出 HEAD（见
+    # ``verify_trunk_head``）。老口径文件没有这个字段 → None → 不做守卫。
+    trunk_commit: Optional[str] = None
 
     @property
     def sampler_seed(self) -> int:
@@ -272,11 +286,16 @@ def load_batch_specs(path: Path, *, seed_base: Optional[int] = None) -> List[Bat
                 f"seed_base={seed_base} 冲突，拒绝静默取其一"
             )
         effective = seed_base if seed_base is not None else file_base
+        sampler = payload.get("sampler")
+        trunk_commit = None
+        if isinstance(sampler, dict):
+            trunk_commit = str(sampler.get("trunk_commit") or "").strip() or None
         specs.append(BatchSpec(
             batch_index=int(item["batch_index"]),
             date=str(item["date"]),
             n=int(item["n"]),
             seed_base=int(effective) if effective is not None else SAMPLER_SEED_BASE,
+            trunk_commit=trunk_commit,
         ))
     if not specs:
         raise ValueError(f"{path}: batches 为空")
@@ -359,6 +378,82 @@ def _locked_python() -> str:
         return override
     candidate = Path.home() / "Documents/TradingAgents-AShare/.venv310/bin/python"
     return str(candidate) if candidate.exists() else "python3"
+
+
+# ---------------------------------------------------------------------------
+# 主干守卫
+# ---------------------------------------------------------------------------
+
+
+class TrunkGuardError(RuntimeError):
+    """主干守卫拒绝执行。``reason_code`` 供机器判定，文案供人读。"""
+
+    def __init__(self, reason_code: str, detail: str):
+        super().__init__(f"[{reason_code}] {detail}")
+        self.reason_code = reason_code
+        self.detail = detail
+
+
+def resolve_trunk_head(repo_root: Optional[Path] = None) -> Optional[str]:
+    """所在检出的完整 HEAD sha；无法确定（如非 git 工作树）时返回 None。"""
+    import subprocess
+
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    head = proc.stdout.strip()
+    return head or None
+
+
+def verify_trunk_head(
+    specs: Sequence[BatchSpec],
+    *,
+    head_sha: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> Tuple[Optional[str], str]:
+    """开跑前的主干守卫。
+
+    ``batch_spec`` 里的 ``sampler.trunk_commit`` 是签发口径时的主干提交。执行器
+    必须跑在**同一份检出**上，否则取样器 / 缓存 / 核对口径都可能与签发时不同，
+    跑出来的数据却记在同一份口径下。因此返回 ``(None, "")`` 放行，任何不一致
+    返回 ``(原因码, 人话)``，由调用方拒绝执行。
+
+    放行条件：
+
+    1. 所有批的 ``trunk_commit`` 一致（不一致 → ``trunk_commit_unspecified``，
+       否则无法判定该对齐谁）；
+    2. ``trunk_commit`` 非空（老口径无此字段 → 不启用守卫，向后兼容）；
+    3. 实际 HEAD 等于 ``trunk_commit``（短 sha 视为前缀匹配；HEAD 取不到 →
+       ``trunk_head_unresolved``）。
+    """
+    declared = {s.trunk_commit for s in specs if s.trunk_commit is not None}
+    if len(declared) > 1:
+        return TRUNK_GUARD_UNSPECIFIED, (
+            "batch_spec 各批的 trunk_commit 不一致（"
+            + ", ".join(sorted(declared))
+            + "），无法判定应对齐哪个主干，拒绝执行"
+        )
+    if not declared:
+        return None, ""
+    want = next(iter(declared))
+    head = head_sha if head_sha is not None else resolve_trunk_head(repo_root)
+    if not head:
+        return TRUNK_GUARD_UNRESOLVED, (
+            f"无法确定所在检出的 HEAD（git rev-parse 失败），无法校验是否等于 "
+            f"trunk_commit={want}，拒绝执行"
+        )
+    if not (head == want or (len(want) >= 7 and head.startswith(want))):
+        return TRUNK_GUARD_MISMATCH, (
+            f"检出 HEAD={head} 与 batch_spec.trunk_commit={want} 不符，拒绝执行"
+        )
+    return None, ""
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +886,9 @@ class ExperimentExecutor:
         token_for: Callable[[str], Optional[str]] = lambda name: None,
         transport_factory: Callable[[str, str], HttpTransport] = None,
         config: StopConfig = None,
+        # 主干守卫：run() 开跑前必须先核过 HEAD；由 main() 用 verify_trunk_head 填。
+        # None = 未配置守卫（离线/测试可直接调 run），非 None = 命中即拒绝运行。
+        trunk_guard: Optional[Tuple[Optional[str], str]] = None,
         now: Callable[[], datetime] = None,
         sleep: Callable[[float], None] = time.sleep,
         poll_interval: float = 5.0,
@@ -803,6 +901,7 @@ class ExperimentExecutor:
             lambda name, base_url: HttpTransport()
         )
         self.config = config or StopConfig()
+        self.trunk_guard = trunk_guard
         self.now = now or (lambda: datetime.now(CN_TZ))
         self.sleep = sleep
         self.poll_interval = poll_interval
@@ -1071,6 +1170,10 @@ class ExperimentExecutor:
 
     # -- 主循环 -------------------------------------------------------------
     def run(self, manifest: Manifest) -> RunReport:
+        if self.trunk_guard is not None:
+            code, detail = self.trunk_guard
+            if code:
+                raise TrunkGuardError(code, detail)
         report = RunReport(
             manifest=manifest.name,
             started_at=self.now().isoformat(timespec="seconds"),
@@ -1339,9 +1442,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     instances = _instances_from_args(args.instance)
 
     tokens = _tokens_from_args(args.token)
+    trunk_guard = None
     if args.batch_spec:
+        specs = load_batch_specs(Path(args.batch_spec), seed_base=args.sampler_seed_base)
+        # 开跑前先核主干：不符即拒绝，不取样、不建 executor、不发任何请求。
+        code, detail = verify_trunk_head(specs)
+        if code:
+            print(f"[trunk-guard] {code}: {detail}", file=sys.stderr)
+            raise SystemExit(f"主干守卫拒绝执行：{detail}")
+        trunk_guard = (code, detail)
         manifest = build_forward_manifest(
-            load_batch_specs(Path(args.batch_spec), seed_base=args.sampler_seed_base),
+            specs,
             instances=[n for n in instances] or ["O", "N"],
             expected_model=args.expected_model,
         )
@@ -1369,6 +1480,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             blackout_policy=args.blackout_policy,
             daily_gate_policy=args.daily_gate_policy,
         ),
+        trunk_guard=trunk_guard,
         poll_interval=args.poll_interval,
         job_timeout=args.job_timeout,
     )
