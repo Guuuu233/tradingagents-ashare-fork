@@ -557,6 +557,13 @@ def _version_fields(result_data: dict[str, Any]) -> dict[str, Any]:
         "protocol_version": result_data.get("protocol_version"),
         "evidence_contract_version": result_data.get("evidence_contract_version"),
         "decision_model_version": result_data.get("decision_model_version"),
+        # DAV-2181: seal the per-report custom-prompt evidence the
+        # register §3 ``custom`` leg hashes
+        # (``api/main.py:_attach_custom_prompt_snapshot`` persists the
+        # full snapshot object at result_data.custom_prompt_snapshot; the
+        # ledger keeps the object verbatim and the eval script hashes it
+        # under the register canonicalisation).
+        "custom_prompt_snapshot": result_data.get("custom_prompt_snapshot"),
         "requested_horizons": hrm.get("requested") or result_data.get("requested_horizons"),
         "resolved_horizons": hrm.get("resolved"),
         "primary_eval_offsets": hrm.get("primary_eval_offsets"),
