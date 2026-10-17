@@ -13,9 +13,12 @@
   "build_provenance": {
     "script": "scripts/phase2/build_phase2_chunks.py",
     "script_sha256": "c05073fc67d86f4a4800d2d8455de54a890d9eb8ede8f87ba719921ec6439a9d",
-    "git_sha": "cd319ef6ed2d6762e33da961757c3c91011b1d3b",
+    "git_sha": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
     "git_dirty": false,
-    "recorded_at": "2026-10-16T21:38:51"
+    "recorded_at": "2026-10-16T21:38:51",
+    "base_git_sha": "cd319ef6ed2d6762e33da961757c3c91011b1d3b",
+    "rework_git_sha": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
+    "provenance_note": "git_sha/rework_git_sha is the candidate commit that actually produced the year=2026 partition (the 4-column-key rework of DAV-2169). base_git_sha records the pre-rework DAV-2165 commit, on which the frozen 2015-2025 partitions and the appended cache overlay were built. Corrected by DAV-2182 per DAV-2170 review finding 2; verified byte-identical rebuild (parquet sha256 528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249)."
   },
   "calendar_days": 2679,
   "peak_rss_gb": 1.928,
@@ -225,5 +228,15 @@
     "root_cause": "fetch_append_cache.py merged namechange on the 3-column key (ts_code,name,start_date); 29,627 historical rows differing only in end_date were dropped, so build_phase2_chunks.build_st_intervals lost 3120 of 6213 ST intervals (200,669 ST stock-days over 2015-2026) and the 2026 partition under-flagged is_st.",
     "fix": "4-column key (ts_code,name,start_date,end_date), aligned with m2_sampler.build_st_intervals; only namechange.pkl in the overlay and the year=2026 partition were regenerated. Frozen cache and 2015-2025 partitions untouched.",
     "supersedes_parquet_sha256": "97db09675179767fc1ebcd5147d4ff509a9c40029d965d300cec779da421312f"
+  },
+  "provenance_correction": {
+    "corrected_by": "DAV-2182 (DAV-2170 review finding 2)",
+    "field": "build_provenance.git_sha",
+    "previous_value": "cd319ef6ed2d6762e33da961757c3c91011b1d3b",
+    "new_value": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
+    "previous_recorded_at": "2026-10-16T21:38:51",
+    "reason": "the previous value pointed at the pre-rework DAV-2165 commit, on which work/dav2165-phase2-append/fetch_append_cache.py still merged namechange on the 3-column key; reproducing from that SHA yields the superseded partition 97db0967..., not the registered one.",
+    "data_files_unchanged": true,
+    "published_partition_sha256_unchanged": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249"
   }
 }

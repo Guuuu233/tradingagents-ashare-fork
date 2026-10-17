@@ -1,7 +1,7 @@
 {
   "script": "build_phase2_chunks.py",
   "script_sha256": "c05073fc67d86f4a4800d2d8455de54a890d9eb8ede8f87ba719921ec6439a9d",
-  "git_sha": "25bf8501b0eb9bdf1479e36a2bf4aece1f7f4802",
+  "git_sha": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
   "git_dirty": false,
   "cache_dir": "/Users/davidliu/ta-work/dav-2165/overlay_cache",
   "out_dir": "/Users/davidliu/ta-work/dav-2165/out_v2",
@@ -83,5 +83,19 @@
     "mismatches": [],
     "stats_partitions": 1,
     "total_mismatches": 0
+  },
+  "base_git_sha": "25bf8501b0eb9bdf1479e36a2bf4aece1f7f4802",
+  "rework_git_sha": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
+  "provenance_note": "git_sha/rework_git_sha = candidate commit that actually produced the year=2026 partition; base_git_sha = pre-rework DAV-2165 commit. Corrected by DAV-2182 per DAV-2170 review finding 2.",
+  "reproducibility_check_dav2182": {
+    "clean_checkout_of": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
+    "rebuilt_out_dir": "/Users/davidliu/ta-work/dav-2182/repro/out_repro (temporary, not committed)",
+    "cache_dir": "/Users/davidliu/Documents/TradingAgents-AShare-cache/phase2/v2-20261016/overlay_cache (published copy)",
+    "parquet_sha256": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249",
+    "bytes_identical_to_published": true,
+    "canonical_rowhash": "3e3b8ac802a64c1d637ac7d2139ccfe73a118c618bed5fef5d32a9598d5daa81",
+    "per_column_differences": 0,
+    "peak_rss_gb": 1.438,
+    "elapsed_s": 42.4
   }
 }
