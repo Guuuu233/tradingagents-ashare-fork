@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TradingAgents-AShare 存储健康巡检 launchd 模板（DAV-2215；总控 10-17 令：
+  只交模板，**不安装、不启用**；安装另走发布卡，排在 10-19 之后）
+
+  职责（只读巡检，不删任何东西）：
+    每日 09:00 跑一次 `storage_health.sh auto`，报告写
+    {{LOG_DIR}}/storage-health-<YYYY-MM-DD>.md；脚本内部逢周三自动追加
+    「每周基线」小节（挑当周最后一份 DAV-1528 快照，记大小 + SHA256，
+    有 quark CLI 时上传夸克，否则在报告里提示人工上传）。
+
+  水位口径（总控 10-17 令，脚本内为唯一实现）：
+    ≥100 GiB 绿 ／ 60–99 GiB 黄（只记录，不唤醒）／ <60 GiB 红（立即唤醒、
+    停止建整库副本）。
+
+  只读纪律（脚本与模板都遵守）：
+    脚本只调用 df / du / find / ls / shasum / stat 等统计类命令，**无任何
+    rm、删除、覆盖清理逻辑**；本 plist 也不做清理，除 {{LOG_DIR}} 下的报告
+    与两份 stderr 日志外不写任何位置，脚本本身不改云端（夸克超 2 份由人手工删）。
+
+  安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.storage-health.plist
+
+  占位符共 2 个（安装时必须替换，替换后残留必须为 0）：
+    {{REPO_DIR}}  仓库检出目录（脚本路径以其为前缀）
+    {{LOG_DIR}}   报告目录（宿主机建议 ~/Documents/TradingAgents-AShare-releases/logs）
+
+  ⚠️ 安装前必须实测的两项（本卡不验证、不安装，见 releases/launchd/STORAGE_HEALTH.md）：
+    1. TCC：DAV-2180 实测 launchd 对 ~/Documents 全树拒读（/bin/bash 唤起时
+       getcwd、ls ~/Documents 均 Operation not permitted）。本模板沿用
+       /bin/zsh -c，脚本体与报告目录默认都在 ~/Documents 下，必须先用临时
+       探针确认 zsh 在 launchd 下**可读 {{REPO_DIR}}、可写 {{LOG_DIR}}**，
+       否则作业会静默失败。
+    2. 每周基线上传依赖 PATH 里的 quark CLI：launchd 不读登录 shell 配置，
+       默认 PATH 不含 /opt/homebrew/bin，故此处显式注入。launchd 同样没有
+       登录环境的代理变量（本机 Clash 7897），quark 直连能否成功**未验证**；
+       失败时脚本只在报告里提示人工上传，不中断巡检。
+-->
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>com.tradingagents.storage-health</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-c</string>
+    <string>{{REPO_DIR}}/releases/launchd/storage_health.sh auto > {{LOG_DIR}}/storage-health-$(date +\%F).md 2>> {{LOG_DIR}}/storage-health-stderr.log</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>{{REPO_DIR}}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- quark CLI 在 /opt/homebrew/bin；launchd 默认 PATH 不含它。
+         巡检对象不在此注入：脚本默认 STORAGE_PROJ=$HOME/Documents/TradingAgents-AShare
+         （= 生产主检出）。要改对象用脚本环境变量覆盖，别改模板。 -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <!-- 一次性短任务：不设 KeepAlive，避免脚本非零退出时被无界重拉 -->
+  <key>ProcessType</key><string>Background</string>
+
+  <!-- launchd 自身诊断（getcwd/exec 失败等）单独留证，不污染当日 markdown 报告 -->
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/launchd-storage-health-stderr.log</string>
+</dict></plist>
