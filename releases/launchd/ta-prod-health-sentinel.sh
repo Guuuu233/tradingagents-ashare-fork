@@ -10,10 +10,16 @@
 #          （FAIL_THRESHOLD，默认 2）才告警，第一次只记状态不告警；
 #        - 通但 commit_sha 与 EXPECT_PROD_SHA 不符：**立即**告警
 #          （版本漂移不做去抖，避免长时间跑错 release 而无人知）。
-#   3. 告警落地：写 ${WATCH_DIR}/ALERT-prod-<utc时间戳>-<原因>.log，
+#   3. 告警落地：写 ${WATCH_DIR}/ALERT-prod-<utc时间戳>-<原因>-<pid>.log，
 #      并用 osascript 发系统通知（TA_WATCH_NOTIFY=0 可关，测试用）。
 #   4. 从告警状态恢复到健康后写一条恢复记录：
-#      ${WATCH_DIR}/ALERT-prod-recovered-<utc时间戳>.log（含恢复时间、前序原因）。
+#      ${WATCH_DIR}/ALERT-prod-recovered-<utc时间戳>-<pid>.log（含恢复时间、前序原因）。
+#
+#   文件名带进程号（DAV-2157）：时间戳只精确到秒（ts_utc），同秒内发生的两次记录
+#   此前会写同一个文件名、后一次静默覆盖前一次（DAV-2149 根因：丢一条告警）。
+#   哨兵有 mkdir 原子锁，同一时刻至多一个哨兵进程在跑；单次执行最多写一个记录
+#   文件（告警与恢复分支互斥，且各自只调一次）。因此 <pid> 后缀足以保证同秒不撞名，
+#   无需额外计数器；秒级时间戳保留，便于人读与按名排序。
 #   5. **不做任何自动重启/拉起**——重启语义由 com.tradingagents.ashare
 #      （DAV-1790 体系 wrapper + DAV-1852 安装）负责，哨兵只观测与告警。
 #
@@ -85,7 +91,7 @@ write_state() {
 raise_alert() {   # $1=原因标签 $2=人类可读细节
   local reason="$1" detail="$2" stamp file
   stamp=$(ts_utc)
-  file="${WATCH_DIR}/ALERT-prod-${stamp}-${reason}.log"
+  file="${WATCH_DIR}/ALERT-prod-${stamp}-${reason}-$$.log"
   mkdir -p "${WATCH_DIR}" 2>/dev/null
   {
     echo "time_human=$(ts_human)"
@@ -106,7 +112,7 @@ raise_alert() {   # $1=原因标签 $2=人类可读细节
 record_recovery() {  # $1=前序告警原因
   local stamp file
   stamp=$(ts_utc)
-  file="${WATCH_DIR}/ALERT-prod-recovered-${stamp}.log"
+  file="${WATCH_DIR}/ALERT-prod-recovered-${stamp}-$$.log"
   mkdir -p "${WATCH_DIR}" 2>/dev/null
   {
     echo "time_human=$(ts_human)"
