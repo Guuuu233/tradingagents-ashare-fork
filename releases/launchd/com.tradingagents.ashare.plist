@@ -11,7 +11,7 @@
   占位符为 0（grep -cE '\{\{[A-Z_]+\}\}' 输出必须为 0——本注释已避开任何
   形如「双花括号包大写名」的串，故 grep 命中即漏替换）。切换 release 时同步
   改本文件两处：WorkingDirectory、Standard*Path 内的 uvicorn-<sha>.log
-  （ProgramArguments 无占位——解释器固定指向 .venv310）。
+  （ProgramArguments 无占位——解释器固定指向 ~/ta-venv/py310）。
 
   ===== DAV-2180 直启版说明（为何不经 bash 包装） =====
   10-17 安装尝试（wrapper 路径）launchd bootstrap 连续 exit 1：launchd 对
@@ -25,9 +25,12 @@
   不经过 bash 包装脚本；原 wrapper 注入的那一套环境变量改放 plist 的
   EnvironmentVariables（env -i 等价——launchd 作业环境本就仅含 plist 声明的键）。
 
-  解释器（生产固定）：/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python
+  解释器（生产固定）：/Users/davidliu/ta-venv/py310/bin/python
     realpath → /Users/davidliu/.local/share/uv/python/cpython-3.10.20-macos-aarch64-none/bin/python3.10
     （ad-hoc 签名 Mach-O arm64，实测 launchd 下可读 ~/Documents，Python 3.10.20）
+    选型依据（总控 10-17 返修令）：DAV-2087 审计认定主检出的 .venv310 是最大单点，
+    10-17 存量任务已迁离，故改指独立 venv。10-17 实测：两者 realpath 相同、
+    `pip freeze` 逐行 diff 为空、uvicorn 均 0.41.0；TCC 探针已用本路径重跑通过。
 
   ===== 与 launch-082be047.txt 的逐项对照（留档启动令 16/16 键等价） =====
   留档令形如 `/bin/bash -c 'cd REL_DIR && env -i [16 个 KEY=VAL] VENV_PY -m uvicorn … >> log 2>&1'`。
@@ -40,27 +43,29 @@
     - `>> logs/uvicorn-SHA.log 2>&1`   → StandardOutPath + StandardErrorPath 同指该文件
                                         （launchd 打开 fd 追加写，无需 bash 重定向）
 
-  ===== 限流语义的变更（重要，复审须确认） =====
+  ===== 限流语义（总控 10-17 已确认：ThrottleInterval + StartInterval，无滑动窗口熔断） =====
   旧 wrapper 版在脚本内做「同一小时最多 3 次」滑动窗口限流 + logs/ 不可写兜底
   戳 + 人工旁路哨兵。直启版没有脚本层，无法保留滑动窗口计数——本版改用
   launchd 原生 ThrottleInterval（两次 respawn 至少间隔 120s）+ StartInterval=600
   周期探测兜底，硬上限等效为「两次拉起至少隔 120s」。**差异：不再有"每小时 3 次
   熔断停手"**——若 uvicorn 持续崩溃，launchd 会按 ThrottleInterval 一直重拉。
   缓解：uvicorn 崩溃会写 uvicorn-<sha>.log 与 launchd-stderr.log 留证，守望哨兵
-  （prod-health-sentinel）+ 巡检应把反复崩溃列为告警。若复审要求恢复熔断语义，
-  需引入一个仍不经 bash 的轻量 supervisor（例如 python -c 实现的计数 wrapper，
-  或独立的编译 helper）——本卡未采用，留作复审决策点。
+  （prod-health-sentinel）+ 巡检应把反复崩溃列为告警。**本版限流参数即
+  `ThrottleInterval=120` + `StartInterval=600`，总控 10-17 明确接受「不再有每小时
+  3 次熔断」，无待决项**；若日后要恢复熔断语义，须另引入仍不经 bash 的轻量
+  supervisor（例如 python -c 实现的计数 wrapper，或独立的编译 helper）。
 -->
 <plist version="1.0"><dict>
   <key>Label</key>
   <string>com.tradingagents.ashare</string>
 
   <!-- 直启：生产 venv 解释器直接跑 uvicorn（前台，不经 bash wrapper）。
-       解释器固定指向 .venv310/bin/python（其 realpath 为 uv 管理的
-       cpython-3.10.20，已实测在 launchd 下可读 ~/Documents）。 -->
+       解释器固定指向独立 venv /Users/davidliu/ta-venv/py310/bin/python（其 realpath
+       为 uv 管理的 cpython-3.10.20，已实测在 launchd 下可读 ~/Documents；与主检出
+       .venv310 realpath/freeze 一致，但不依赖主检出）。 -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python</string>
+    <string>/Users/davidliu/ta-venv/py310/bin/python</string>
     <string>-m</string>
     <string>uvicorn</string>
     <string>api.main:app</string>

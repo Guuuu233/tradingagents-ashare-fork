@@ -6,9 +6,12 @@
 > **DAV-2180 变更**：10-17 实测 launchd 对 `~/Documents` 全树 TCC 拒读，`/bin/bash`
 > 唤起时 `getcwd`/`ls ~/Documents` 均 `Operation not permitted`，bash 包装脚本路径不可行。
 > 本版改为 **plist `ProgramArguments` 直接 exec 生产 venv 解释器跑 uvicorn**
-> （`/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python`，realpath 为 uv 管
-> 理的 `cpython-3.10.20-macos-aarch64-none/bin/python3.10`，ad-hoc 签名，实测 launchd 下
+> （`/Users/davidliu/ta-venv/py310/bin/python`，realpath 为 uv 管理的
+> `cpython-3.10.20-macos-aarch64-none/bin/python3.10`，ad-hoc 签名，实测 launchd 下
 > 可读 `~/Documents`）；原 wrapper 注入的 16 个环境变量迁入 plist `EnvironmentVariables`。
+> **解释器选型（总控 10-17 返修令）**：不用主检出的 `.venv310`（DAV-2087 审计认定的
+> 最大单点，10-17 存量任务已迁离），改指独立 venv `~/ta-venv/py310`；10-17 实测两者
+> realpath 相同、`pip freeze` 逐行 diff 为空、uvicorn 均 0.41.0。
 > **不再使用 `ta-launchd-wrapper.sh`**（本版 plist 不引用它）。
 
 以 `releases/RESTART.md` 为现行拉起基线（当前生产 release=`65988c79`，端口 8000）。
@@ -36,9 +39,10 @@
 - **DAV-2180 差异**：直启版不经 bash 包装脚本，旧版「同一小时最多 3 次」滑动窗口
   熔断随脚本一并移除。本版改用 `ThrottleInterval=120`（两次 respawn 至少隔 120s）+
   `StartInterval=600` 周期探测。**不再有"每小时 3 次熔断停手"语义**——若 uvicorn
-  持续崩溃，launchd 按 120s 间隔一直重拉。复审须确认是否接受此变化；如需恢复
-  熔断语义，须引入不经 bash 的轻量 supervisor（如 python -c 计数 wrapper 或编译型
-  helper），本卡未采用，留作决策点。
+  持续崩溃，launchd 按 120s 间隔一直重拉。**总控 10-17 已确认接受此变化**——限流参数
+  只有 `ThrottleInterval=120` + `StartInterval=600`，不再有每小时 3 次熔断；若日后要
+  恢复熔断语义，须另引入不经 bash 的轻量 supervisor（如 python -c 计数 wrapper 或编译型
+  helper）。
 - 崩溃留证：uvicorn 崩溃输出全部落 `logs/uvicorn-<sha>.log`（StandardOut/ErrorPath
   同指），launchd 自身诊断落 `logs/launchd-stderr.log`（见下表）；守望哨兵
   （prod-health-sentinel）与巡检应把反复崩溃列为告警项。
@@ -146,16 +150,19 @@ sleep 25; curl -s http://127.0.0.1:8000/healthz
 plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
 
 # 解释器 realpath 与 TCC 探针（DAV-2180 已实测，复审可复跑）
-realpath /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python
+realpath /Users/davidliu/ta-venv/py310/bin/python
 # → /Users/davidliu/.local/share/uv/python/cpython-3.10.20-macos-aarch64-none/bin/python3.10
 # 临时 launchd 探针：写一个 Label=com.tradingagents.tccprobe 的 plist，
 # ProgramArguments=[<realpath>, -c, 'import os;print(os.access("/Users/davidliu/Documents",os.R_OK))']，
 # bootstrap 后读 StandardOutPath，跑完 bootout 删 plist。实测 python3.10 返回 True，
 # /bin/bash 返回 Operation not permitted——故直启可行。
 
-# uvicorn 可解析（venv310 内）
-env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python \
+# uvicorn 可解析（独立 venv 内）
+env -u PYTHONPATH /Users/davidliu/ta-venv/py310/bin/python \
   -c "import uvicorn; print(uvicorn.__version__)"   # 0.41.0
+# 与主检出 .venv310 的依赖一致性（输出为空 = 一致）
+diff <(env -u PYTHONPATH /Users/davidliu/ta-venv/py310/bin/python -m pip freeze | sort) \
+     <(env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python -m pip freeze | sort)
 
 # newsyslog dry-run（仅两条，直启版无 wrapper-diagnostic/restart-stamps）
 newsyslog -vnrs -f /dev/stdin <<'EOF'
@@ -170,8 +177,9 @@ EOF
 - 不要 `setsid`（macOS 无此命令）；launchd 本身就是会话外守护，无需 nohup/disown。
 - plist `ProgramArguments` **直接 exec venv python 跑 uvicorn**，不经 bash wrapper；
   `exec` 语义由 launchd 自身完成，不要再加 `&` 后台。
-- 解释器固定指向 `.venv310/bin/python`（realpath = uv 管理的 `cpython-3.10.20`，
-  ad-hoc 签名，实测 launchd 下可读 `~/Documents`）。换解释器必须重跑 TCC 探针。
+- 解释器固定指向 `/Users/davidliu/ta-venv/py310/bin/python`（realpath = uv 管理的
+  `cpython-3.10.20`，ad-hoc 签名，实测 launchd 下可读 `~/Documents`）。换解释器必须
+  重跑 TCC 探针；主检出 `.venv310` 10-17 起不再是生产托管入口。
 - 无滑动窗口熔断：持续崩溃会被 `ThrottleInterval=120` 间隔一直重拉，崩溃输出
   落 `uvicorn-<sha>.log`；守望哨兵 + 巡检须把反复崩溃列为告警项。
 - `launchctl kickstart` 无 `-e` 传 env 能力（macOS 27.x 仅 `[-k] [-p] [-s]`）；
@@ -287,6 +295,15 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.prod-healt
 安装后自查：`RunAtLoad` 会立刻探一次；此后每 5 分钟一次，
 `launchctl print gui/$UID/com.tradingagents.prod-health-sentinel` 看 `last exit code`，
 状态与前序告警在 `~/ta-watch/.sentinel/state`。
+
+**10-18 安装窗口待办（DAV-2180 说明，非本版代码改动）**：10-17 已装实例的
+`ProgramArguments` 为 `[/bin/bash, ~/ta-watch/ta-prod-health-sentinel.sh,
+~/Documents/…/082be047/releases/launchd/ta-prod-health-sentinel.sh]`——**第三个是多余参数**。
+脚本只从 `EnvironmentVariables` 取配置、不读任何位置参数（`$1`/`$2` 仅作函数形参），
+且该路径与 ta-watch 实际执行副本逐字节相同（10-17 `diff` 为空），删掉不影响行为；
+它是安装时替换 `{{RELEASE_DIR}}` 后残留的来源路径（指向 TCC 受限的 `~/Documents`）。
+安装窗口从已装 plist 删掉该 `<string>` 后 `bootout` + `bootstrap` 重载即可；
+模板本身只有前两个元素，无需改。
 
 本地验证（不碰生产、不装 launchd）：
 
