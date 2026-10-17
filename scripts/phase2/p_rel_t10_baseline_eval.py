@@ -467,7 +467,13 @@ def load_ledger_signals(
         # exists with an explicit JSON null — guard with `or {}` so a
         # `prediction: null` label row routes to excl_immature_label instead
         # of crashing the run with AttributeError.
-        if lab is not None and (lab.get("prediction") or {}).get("status") == "evaluated":
+        # DAV-2207 ③: the r-extractor and the duplicate-label classifier now
+        # share one predicate — a row the gate classifies ``typed`` can no
+        # longer hand its `r` to the queue behind the gate's back. The
+        # pre-existing r contract (``prediction.status == "evaluated"``) is
+        # kept as-is, so this only ever *withholds* a return, never adds one.
+        if (lab is not None and _is_evaluated_ok(lab)
+                and (lab.get("prediction") or {}).get("status") == "evaluated"):
             v = lab.get("sw_excess_pct_prediction")
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 r = float(v) / 100.0
@@ -526,20 +532,33 @@ def load_ledger_signals(
 # 2. labels -> (report_id, 档位) index + T+10 base-rate panel
 # ---------------------------------------------------------------------------
 
-def _num_or_none(v: Any) -> float | None:
-    """Compare value for a return field: bool/str/NaN → None.
+# DAV-2207 🟡-1(a) (复审 DAV-2202 §三): the r-extractor reads a row through
+# ``prediction.status == "evaluated"`` while the duplicate-label classifier
+# only knew ``evaluated_ok``, so a return-carrying legacy row fell to
+# ``typed`` and bypassed the conflict gate (silent pick of a row). Both
+# spellings mean "the return fields count" — accept either; a non-empty
+# ``outcome_status`` still wins (DAV-2198 ③ vocabulary unchanged).
+_EVALUATED_STATUS = frozenset({"evaluated_ok", "evaluated"})
 
-    ``None`` here means "the field carries no usable number" (clearly
-    distinct from the number 0.0), so a ``null`` vs ``null`` pair compares
-    equal while a ``null`` vs a real value is a difference — the
-    append-only conflict test must not turn an absent value into 0.
+
+def _label_value_class(v: Any) -> tuple:
+    """Comparison token for ONE return field (DAV-2207 🟡-1(b)).
+
+    Values compare by class: ``null`` equals only ``null`` (an absent field
+    must never be turned into 0), numbers compare numerically (NaN is the
+    same "no value" as NaN), every other payload — bool, string, list —
+    keeps its own identity. The previous "non-numeric → None" mapping made
+    ``"1.0"`` and ``"9.9"`` compare equal, so two rows that genuinely
+    disagree were waved through as an append-only duplicate.
     """
-    if isinstance(v, bool) or v is None:
-        return None
+    if v is None:
+        return ("null",)
+    if isinstance(v, bool):
+        return ("bool", v)
     if isinstance(v, (int, float)):
         f = float(v)
-        return None if math.isnan(f) else f
-    return None
+        return ("nan",) if math.isnan(f) else ("num", f)
+    return ("raw", json.dumps(v, sort_keys=True, default=str))
 
 
 def _label_status(row: Mapping[str, Any]) -> str:
@@ -554,11 +573,11 @@ def _label_status(row: Mapping[str, Any]) -> str:
 
 
 def _is_evaluated_ok(row: Mapping[str, Any]) -> bool:
-    return _label_status(row) == "evaluated_ok"
+    return _label_status(row) in _EVALUATED_STATUS
 
 
 def _label_return_signature(row: Mapping[str, Any]) -> tuple:
-    return tuple(_num_or_none(row.get(f)) for f in LABEL_RETURN_FIELDS)
+    return tuple(_label_value_class(row.get(f)) for f in LABEL_RETURN_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -676,6 +695,11 @@ def build_label_index(rows) -> LabelIndex:
         duplicate_identical = 0
         if len(ev) >= 2:
             sigs = [_label_return_signature(r) for _i, r in ev]
+            # raw rows parallel to `sigs`: the comparison uses value-class
+            # tokens, while the "values" disclosure below must stay the
+            # literal field values a human reads (DAV-2207 🟡-1(b)).
+            raws = [tuple(r.get(f) for f in LABEL_RETURN_FIELDS)
+                    for _i, r in ev]
             conflict_fields = tuple(
                 f for j, f in enumerate(LABEL_RETURN_FIELDS)
                 if len({s[j] for s in sigs}) > 1)
@@ -689,7 +713,7 @@ def build_label_index(rows) -> LabelIndex:
                     "statuses": list(statuses),
                     "fields": list(conflict_fields),
                     "values": {
-                        f: [s[j] for s in sigs]
+                        f: [s[j] for s in raws]
                         for j, f in enumerate(LABEL_RETURN_FIELDS)
                         if f in conflict_fields},
                     "outcome": (REASON_LABEL_CONFLICT
