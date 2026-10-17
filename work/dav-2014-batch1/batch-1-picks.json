@@ -1,0 +1,71 @@
+{
+  "eligible": 793,
+  "eligible_digest": "034f5fa64180c8b903679308380c60e59bb34c0303471bde8a57a8b78ec89035",
+  "excluded": {
+    "listing_lt_1y": [
+      "001280.SZ",
+      "001386.SZ",
+      "601112.SH",
+      "603092.SH",
+      "603175.SH"
+    ],
+    "no_sw_l1": [],
+    "st": [],
+    "suspended": [
+      "601059.SH",
+      "601198.SH"
+    ]
+  },
+  "excluded_counts": {
+    "listing_lt_1y": 5,
+    "no_sw_l1": 0,
+    "st": 0,
+    "suspended": 2
+  },
+  "index_snapshot_dates": {
+    "hs300": "20260930",
+    "zz500": "20260930"
+  },
+  "n_picked": 5,
+  "n_requested": 5,
+  "picks": [
+    {
+      "in_hs300": false,
+      "in_zz500": true,
+      "sw_l1_code": "801730.SI",
+      "sw_l1_name": "电力设备",
+      "ts_code": "002335.SZ"
+    },
+    {
+      "in_hs300": false,
+      "in_zz500": true,
+      "sw_l1_code": "801080.SI",
+      "sw_l1_name": "电子",
+      "ts_code": "300054.SZ"
+    },
+    {
+      "in_hs300": false,
+      "in_zz500": true,
+      "sw_l1_code": "801750.SI",
+      "sw_l1_name": "计算机",
+      "ts_code": "600100.SH"
+    },
+    {
+      "in_hs300": false,
+      "in_zz500": true,
+      "sw_l1_code": "801150.SI",
+      "sw_l1_name": "医药生物",
+      "ts_code": "600380.SH"
+    },
+    {
+      "in_hs300": true,
+      "in_zz500": false,
+      "sw_l1_code": "801790.SI",
+      "sw_l1_name": "非银金融",
+      "ts_code": "601336.SH"
+    }
+  ],
+  "pool_size": 800,
+  "seed": 20261011,
+  "trade_date": "20261016"
+}

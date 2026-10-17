@@ -1,0 +1,21 @@
+{
+  "schema": "dav1789-batch-spec/1",
+  "frozen_by": "DAV-2179",
+  "base_day": "2026-10-16",
+  "sampler": {
+    "script": "scripts/phase2/m2_sampler.py",
+    "trunk_commit": "cb82987b737be2cc3c40c939082b70c4135db7b8",
+    "script_sha256": "295af94d5578c6cbfda9c81308783a41b67859207202b479d225e739069d5cf9",
+    "python": "3.10.20",
+    "cache_dir": "TradingAgents-AShare-cache/phase2/v2-20261016/"
+  },
+  "batches": [
+    {
+      "batch_index": 1,
+      "date": "20261016",
+      "n": 5,
+      "seed_base": 20261010,
+      "expected_model": "gemini-3.8-flash-n"
+    }
+  ]
+}
