@@ -1,0 +1,51 @@
+{
+  "card": "DAV-2182 §3 retired-file cleanup",
+  "deleted_at": "2026-10-17T12:15:00+08:00",
+  "reference_scan": {
+    "scanned": [
+      "/Users/davidliu/ta-work/dav-2182/tree (full candidate worktree, all files)",
+      "/Users/davidliu/Documents/TradingAgents-AShare (main checkout)",
+      "tradingagents/",
+      "scripts/",
+      "tests/ in both trees",
+      "/Users/davidliu/ta-work/dav-2014/batch_spec-batch1.json",
+      "any product code or batch_spec referencing out_v3_3col / namechange_v2_backup_3col / 97db0967"
+    ],
+    "hits_outside_historical_reports": 0,
+    "note": "remaining hits are literal mentions inside historical REPORT/REPORT_v2 documents and this retirement record only; no code path, sampler, batch_spec or manifest reads any of these three paths"
+  },
+  "preserved": {
+    "published_manifest": "/Users/davidliu/Documents/TradingAgents-AShare-cache/phase2/v2-20261016/manifest_v2_dav2165.json (sha256 9e14bb7a3cca636d4491687a7df2c1ac2713ddcc199134cffd63c737efc03dbf, untouched)",
+    "published_overlay_namechange": "/Users/davidliu/Documents/TradingAgents-AShare-cache/phase2/v2-20261016/overlay_cache/namechange.pkl (sha256 57ff7a79bed3a52eeb01727dd984c50db5e361831a11ca6cc5680d2319e17dd8, untouched)",
+    "out_v2_rerun": "/Users/davidliu/ta-work/dav-2165/out_v2_rerun (byte-identical rerun of the registered partition, NOT retired)",
+    "overlay_cache": "/Users/davidliu/ta-work/dav-2165/overlay_cache (build source of the published overlay, NOT retired)"
+  },
+  "items": [
+    {
+      "path": "/Users/davidliu/ta-work/dav-2165/out_v3_3col/",
+      "kind": "directory",
+      "size_bytes": null,
+      "contents": [
+        "out_v3_3col/chunks/year=2026/data.parquet",
+        "out_v3_3col/chunks/year=2026/stat.json",
+        "out_v3_3col/stats.json"
+      ],
+      "key_sha256": "97db09675179767fc1ebcd5147d4ff509a9c40029d965d300cec779da421312f",
+      "why_retired": "superseded 3-column-key namechange partition (the DAV-2168 defect); explicitly superseded by manifest rework.supersedes_parquet_sha256"
+    },
+    {
+      "path": "/Users/davidliu/ta-work/dav-2165/manifest_v2_dav2165.json",
+      "kind": "file",
+      "key_sha256": "00754b9ab0e137b47a7de1bb8e7db0bbf199026a9919d30cf16f533d11be1ed0",
+      "manifest_version": "v2-dav2165-append",
+      "why_retired": "stale pre-rework manifest (DAV-2165 first version); the current v2.1-dav2169-namechange-4col manifest lives in the candidate branch and in the published cache dir"
+    },
+    {
+      "path": "/Users/davidliu/ta-work/dav-2165/namechange_v2_backup_3col.pkl",
+      "kind": "file",
+      "key_sha256": "339aad85cc353cb9a4ffb1717ae86963b42eae00867a1045a9f5b98d69aa5f06",
+      "why_retired": "backup of the 3-column-key merged namechange before the 4-column-key rework; superseded by overlay_cache/namechange.pkl sha256 57ff7a79bed3a52eeb01727dd984c50db5e361831a11ca6cc5680d2319e17dd8"
+    }
+  ],
+  "committed_first": true
+}

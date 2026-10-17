@@ -1,0 +1,55 @@
+{
+  "card": "DAV-2182 §2 reproducible verification of the DAV-2169 candidate",
+  "run_at": "2026-10-17T12:03:02+08:00",
+  "interpreter": "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python (-V = Python 3.10.20, env -u PYTHONPATH)",
+  "code_tree": "/Users/davidliu/ta-work/dav-2182/tree (fresh worktree, clean checkout of agent/senior-dev-2/dav-2165-phase2-append)",
+  "code_sha": "ffbb5cbb4a106c0a45f081f69a939f09fa3d9c93",
+  "command": "PHASE2_CACHE_DIR=<published overlay_cache> env -u PYTHONPATH .venv310/bin/python scripts/phase2/build_phase2_chunks.py --out-dir <tmp>/out_repro --years 2026",
+  "out_dir": "/Users/davidliu/ta-work/dav-2182/repro/out_repro (temporary directory, not committed)",
+  "published_partition_dir": "/Users/davidliu/Documents/TradingAgents-AShare-cache/phase2/v2-20261016/out_v2/chunks/year=2026",
+  "results": {
+    "rows": 1035505,
+    "parquet_sha256_repro": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249",
+    "parquet_sha256_published": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249",
+    "parquet_bytes_identical": true,
+    "canonical_rowhash_repro": "3e3b8ac802a64c1d637ac7d2139ccfe73a118c618bed5fef5d32a9598d5daa81",
+    "canonical_rowhash_published": "3e3b8ac802a64c1d637ac7d2139ccfe73a118c618bed5fef5d32a9598d5daa81",
+    "rowhash_definition": "sha256 over sorted-by-(ts_code,signal_date) frame: column name list, then per column (name, 8-byte LE length, canonical bytes; float64 with NaN canonicalised, ints/bools native, other columns joined by 0x1f with NA as empty string)",
+    "per_column_diff_vs_published": {},
+    "dtypes_equal": true,
+    "stat_json_sha256_repro": "e1a8bb3d9db7dd3d58ea37c631bdbfa3adf96b24eee22a32eabb2afd5b56dfa6",
+    "stat_json_sha256_published": "47239ddc9bffa71198283d5ce2c5faf98907a19665fe7e45ecb5f7b84f317a5b",
+    "stat_json_differences": [
+      "parquet (output path)",
+      "peak_rss_gb",
+      "written_at"
+    ],
+    "stats_json_differences": [
+      "build_started",
+      "build_finished",
+      "build_provenance.git_sha",
+      "build_provenance.recorded_at",
+      "elapsed_s",
+      "peak_rss_gb",
+      "partitions[0].parquet",
+      "partitions[0].peak_rss_gb",
+      "partitions[0].written_at"
+    ],
+    "stats_json_data_identical": [
+      "rows",
+      "symbols",
+      "signal_date_min/max",
+      "evaluated_ok",
+      "unexecutable_entry",
+      "suspension",
+      "data_missing",
+      "pending_due",
+      "y_rel_nonnull",
+      "universe_ok_rows",
+      "calendar_days"
+    ],
+    "peak_rss_gb_repro": 1.438,
+    "elapsed_s_repro": 42.4
+  },
+  "conclusion": "IDENTICAL - the published partition 528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249 is byte-for-byte reproducible from a clean checkout of ffbb5cbb against the published overlay cache; only non-data metadata (paths, timestamps, rss, provenance git_sha) differs."
+}
