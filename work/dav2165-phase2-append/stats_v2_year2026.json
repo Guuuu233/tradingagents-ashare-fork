@@ -1,33 +1,87 @@
 {
- "partitions": [
-  {
-   "partition": "year=2026",
-   "rows": 1035505,
-   "symbols": 5597,
-   "signal_date_min": "20260105",
-   "signal_date_max": "20261016",
-   "evaluated_ok": 811595,
-   "unexecutable_entry": 336,
-   "suspension": 60,
-   "data_missing": 1265,
-   "pending_due": 222249,
-   "y_rel_nonnull": 811407,
-   "universe_ok_rows": 911107,
-   "parquet": "/Users/davidliu/ta-work/dav-2165/out_v2/chunks/year=2026/data.parquet",
-   "peak_rss_gb": 2.409,
-   "written_at": "2026-10-16T21:39:19"
-  }
- ],
- "build_started": "2026-10-16T21:38:51",
- "calendar_days": 2679,
- "build_provenance": {
-  "script": "scripts/phase2/build_phase2_chunks.py",
+  "script": "build_phase2_chunks.py",
   "script_sha256": "c05073fc67d86f4a4800d2d8455de54a890d9eb8ede8f87ba719921ec6439a9d",
-  "git_sha": "cd319ef6ed2d6762e33da961757c3c91011b1d3b",
+  "git_sha": "25bf8501b0eb9bdf1479e36a2bf4aece1f7f4802",
   "git_dirty": false,
-  "recorded_at": "2026-10-16T21:38:51"
- },
- "elapsed_s": 30.8,
- "peak_rss_gb": 2.409,
- "build_finished": "2026-10-16T21:39:20"
+  "cache_dir": "/Users/davidliu/ta-work/dav-2165/overlay_cache",
+  "out_dir": "/Users/davidliu/ta-work/dav-2165/out_v2",
+  "interpreter": "/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python (Python 3.10.20, env -u PYTHONPATH)",
+  "partition": {
+    "partition": "year=2026",
+    "rows": 1035505,
+    "symbols": 5597,
+    "signal_date_min": "20260105",
+    "signal_date_max": "20261016",
+    "evaluated_ok": 811598,
+    "unexecutable_entry": 333,
+    "suspension": 60,
+    "data_missing": 1265,
+    "pending_due": 222249,
+    "y_rel_nonnull": 811410,
+    "universe_ok_rows": 886905,
+    "parquet": "/Users/davidliu/ta-work/dav-2165/out_v2/chunks/year=2026/data.parquet",
+    "peak_rss_gb": 1.928,
+    "written_at": "2026-10-16T22:11:18"
+  },
+  "calendar_days": 2679,
+  "elapsed_s": 32.8,
+  "peak_rss_gb": 1.928,
+  "namechange_merge_key": [
+    "ts_code",
+    "name",
+    "start_date",
+    "end_date"
+  ],
+  "namechange_rows_frozen": 34755,
+  "namechange_rows_merged": 20795,
+  "st_intervals_build_phase2_pairs": {
+    "frozen": 6213,
+    "dav2165_3col_bug": 3093,
+    "rework_4col": 3828
+  },
+  "st_intervals_m2_sampler_pairs": {
+    "frozen": 20452,
+    "dav2165_3col_bug": 18634,
+    "rework_4col": 20458
+  },
+  "st_stock_days_2015_2026": {
+    "frozen": 868904,
+    "dav2165_3col_bug": 668235,
+    "rework_4col": 868904,
+    "sym_diff_vs_frozen": 0
+  },
+  "st_stocks_in_2026": {
+    "dav2165_3col_bug": 549,
+    "rework_4col": 730
+  },
+  "partition_diff_3col_vs_4col": {
+    "rows_total": 1035505,
+    "is_st_rows_delta": 24202,
+    "is_st_stocks_delta": 122,
+    "outcome_status_changed_rows": 3,
+    "universe_ok_rows": {
+      "3col": 911107,
+      "4col": 886905
+    }
+  },
+  "determinism_rerun": {
+    "out_dir": "/Users/davidliu/ta-work/dav-2165/out_v2_rerun",
+    "parquet_sha256": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249",
+    "identical_to_primary": true
+  },
+  "parquet_sha256": "528285464c120969f306033d5b88af1d38af51ee836941c5ff6614c85ea75249",
+  "stat_json_sha256": "47239ddc9bffa71198283d5ce2c5faf98907a19665fe7e45ecb5f7b84f317a5b",
+  "stats_json_sha256": "7bfe11d37ddb2e9a1cf51ef351f5e8e7c65216adea83be0046c2c875543354d1",
+  "validation": {
+    "partitions": {
+      "chunks/year=2026/data.parquet": {
+        "sampled": 4000,
+        "checked": 3145,
+        "mismatches": 0
+      }
+    },
+    "mismatches": [],
+    "stats_partitions": 1,
+    "total_mismatches": 0
+  }
 }
