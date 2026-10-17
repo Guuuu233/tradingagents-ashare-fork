@@ -7,6 +7,7 @@ the calendar fail-close. No DB, no network, no vendor data.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -21,12 +22,32 @@ import p_rel_t10_baseline_eval as m
 
 FIXED = m.DEFAULT_USER_ID
 
+# DAV-2198 ②: the frozen formal cohort starts 2026-10-08 (freeze register
+# §2 首个正式信号日) — run()-level fixtures must sit inside that window.
+D0, D1, D2 = "2026-10-08", "2026-10-09", "2026-10-12"
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _fixture(name):
+    """Verbatim DAV-2195 label rows from tests/fixtures/."""
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))["rows"]
+
 
 def _rec(rid, sym, day, p, **kw):
     # sealed_at defaults to the signal day's own 08:00 UTC -> always before
     # the next-trading-day 09:30 Asia/Shanghai seal gate for these fixtures.
     kw.setdefault("sealed_at", f"{day} 08:00:00.000000")
     return m._ledger_rec(rid, sym, day, p, **kw)
+
+
+def _lab(rec, r_pct, l1="801010.SI", **kw):
+    """Evaluated label row bound to its ledger record (DAV-2198 ①): the
+    association key is report_id + 档位 and the row echoes the sealed
+    record's own sha256."""
+    return m._label(rec["symbol"], rec["signal_date"], r_pct, l1=l1,
+                    report_id=rec["report_id"],
+                    record_sha256=elp._record_identity(rec), **kw)
 
 
 def _write_ledger(path, recs):
@@ -148,8 +169,8 @@ class TestFrozenVersionKey:
                  served_models=served, prompt_resolved=prompts),
         ]
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
-        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 1.0),
-                  ("S2", "2026-01-05"): m._label("S2", "2026-01-05", 2.0)}
+        labels = m.build_label_index([_lab(recs[0], 1.0),
+                                      _lab(recs[1], 2.0)])
         anchored = m.load_ledger_signals(ledger, labels, FIXED,
                                         analysis_anchor="082be047")
         keys = set(anchored["version_key"])
@@ -216,18 +237,20 @@ class TestFrozenVersionKey:
     def test_multi_model_report_flagged(self, tmp_path):
         """多模型报告被标记: a report whose served_models span >1 model is
         flagged in the freeze block and counted in the funnel."""
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days = [D0, D1, D2]
         recs, labs = [], []
         for i in range(12):
-            recs.append(_rec(f"ok{i}", f"A{i:02d}", "2026-01-05", 30 + i,
-                             sealed_at="2026-01-05 08:00:00.000000",
-                             served_models=self._served({"trader": ["m1"]})))
-            labs.append(m._label(f"A{i:02d}", "2026-01-05", 0.1 * i))
-        recs.append(_rec("mm1", "MM", "2026-01-05", 50,
-                         sealed_at="2026-01-05 08:00:00.000000",
-                         served_models=self._served(
-                             {"trader": ["m1", "m2"]})))
-        labs.append(m._label("MM", "2026-01-05", 1.0))
+            rec = _rec(f"ok{i}", f"A{i:02d}", D0, 30 + i,
+                       sealed_at=f"{D0} 08:00:00.000000",
+                       served_models=self._served({"trader": ["m1"]}))
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        rec = _rec("mm1", "MM", D0, 50,
+                   sealed_at=f"{D0} 08:00:00.000000",
+                   served_models=self._served(
+                       {"trader": ["m1", "m2"]}))
+        recs.append(rec)
+        labs.append(_lab(rec, 1.0))
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
@@ -235,9 +258,8 @@ class TestFrozenVersionKey:
         # version key. Select the m1 queue explicitly (single-version rule);
         # the multi-model report is excluded from the formal queue yet still
         # flagged in the freeze block (报告级披露独立于版本分键).
-        probe = m.load_ledger_signals(ledger,
-                                      {("A00", "2026-01-05"): labs[0]},
-                                      FIXED, analysis_anchor="082be047")
+        probe = m.load_ledger_signals(ledger, {}, FIXED,
+                                      analysis_anchor="082be047")
         m1_key = sorted(probe.loc[probe["served_models"].map(len) == 1,
                                   "version_key"])[0]
         out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
@@ -278,8 +300,7 @@ class TestFunnel:
             _rec("np", "S6", "2026-01-05", None),   # missing prob
             _rec("nom", "S7", "2026-01-05", 60),    # no matured label
         ]
-        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 5.0),
-                  ("S7", "2026-01-05"): m._label("S7", "2026-01-05", 5.0)}
+        labels = m.build_label_index([_lab(recs[0], 5.0), _lab(recs[6], 5.0)])
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         df = m.load_ledger_signals(ledger, labels, FIXED)
@@ -298,10 +319,13 @@ class TestFunnel:
 
     def test_dedup_earliest_wins(self, tmp_path):
         recs = [
-            _rec("late", "S1", "2026-01-05", 90, created="2026-01-05T10:00"),
-            _rec("early", "S1", "2026-01-05", 10, created="2026-01-05T09:00"),
+            _rec("late", "S1", D0, 90, created=f"{D0}T10:00"),
+            _rec("early", "S1", D0, 10, created=f"{D0}T09:00"),
         ]
-        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 5.0)}
+        # DAV-2198 ①: each duplicate run needs its OWN label row keyed by
+        # report_id — a symbol+date match can no longer stand in for it.
+        labels = m.build_label_index([_lab(recs[0], 5.0),
+                                      _lab(recs[1], 5.0)])
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         df = m.load_ledger_signals(ledger, labels, FIXED)
@@ -316,10 +340,10 @@ class TestFunnel:
     def test_valid_status_out_of_contract_funnels_bad_prob(self, tmp_path, bad_p):
         # DAV-1890 必补两用例: forecast.status=="valid" but p out of contract
         # -> excl_bad_prob +1, never enters the formal queue.
-        rec = _rec("bad", "S1", "2026-01-05", 60)
+        rec = _rec("bad", "S1", D0, 60)
         rec["horizons"]["short"]["forecast"] = {"status": "valid",
                                                 "p_rel_t10": bad_p}
-        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 5.0)}
+        labels = m.build_label_index([_lab(rec, 5.0)])
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, [rec])
         df = m.load_ledger_signals(ledger, labels, FIXED)
@@ -466,21 +490,24 @@ class TestSealGate:
         assert len(formal) == 1 and fun["excl_late_seal"] == 0
 
     def test_seal_gate_counts_in_run_funnel(self, tmp_path):
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days = [D0, D1, D2]
         recs = []
         labs = []
-        # 12 on-time seals on 01-05, 12 late seals on 01-05
+        # 12 on-time seals on D0, 12 late seals on D0
         for i in range(12):
-            recs.append(_rec(f"on{i}", f"A{i:02d}", "2026-01-05", 30 + i,
-                             sealed_at="2026-01-05 08:00:00.000000"))
-            labs.append(m._label(f"A{i:02d}", "2026-01-05", 0.1 * i))
-            recs.append(_rec(f"late{i}", f"B{i:02d}", "2026-01-05", 30 + i,
-                             sealed_at="2026-01-06 03:00:00.000000"))
-            labs.append(m._label(f"B{i:02d}", "2026-01-05", 0.1 * i))
+            on = _rec(f"on{i}", f"A{i:02d}", D0, 30 + i,
+                      sealed_at=f"{D0} 08:00:00.000000")
+            recs.append(on)
+            labs.append(_lab(on, 0.1 * i))
+            late = _rec(f"late{i}", f"B{i:02d}", D0, 30 + i,
+                        sealed_at=f"{D1} 03:00:00.000000")
+            recs.append(late)
+            labs.append(_lab(late, 0.1 * i))
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
-        prows = [m._p1_row("M", "20260105", "801010.SI", y, exit_date="20260105")
+        d0 = D0.replace("-", "")
+        prows = [m._p1_row("M", d0, "801010.SI", y, exit_date=d0)
                  for y in [1.0]*20 + [0.0]*20]
         chunks = tmp_path / "chunks"; m._write_p1_chunks(chunks, prows)
         out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
@@ -505,13 +532,16 @@ class TestSealGate:
             fun[k] for k in ("excl_late_seal", "excl_not_completed",
                              "excl_bad_prob", "excl_immature_label",
                              "excl_dup_run"))
-        # admit 入口行数守恒: admit_input_rows = post_gate + 全部 9 桶。
+        # admit 入口行数守恒: admit_input_rows = post_gate + 全部 9 桶
+        # （DAV-2198 ②/① 的三个门前桶在此样本为 0）。
         assert sg["admit_input_rows"] == sg["post_gate_rows"] + sum(
             fun[k] for k in ("excl_wrong_user", "excl_pit_failed",
                              "excl_non_f0", "excl_unverified",
                              "excl_late_seal", "excl_not_completed",
                              "excl_bad_prob", "excl_immature_label",
-                             "excl_dup_run"))
+                             "excl_dup_run", "excl_pre_cohort",
+                             "excl_label_conflict",
+                             "excl_label_record_sha256_mismatch"))
         assert sg["excl_seal_late_includes_unresolvable"] is True
         runj = json.loads((tmp_path / "o" / "run.json").read_text())
         assert runj["seal_gate"] == sg
@@ -525,22 +555,24 @@ class TestSealGate:
         excl_seal_late + excl_seal_unresolvable 在任一非封存桶非零时即破
         ——这里混入 wrong_user / not_completed / bad_prob / dup_run 各一
         条，守恒式必须按真等式闭合。"""
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days = [D0, D1, D2]
         recs, labs = [], []
         for i in range(4):
-            recs.append(_rec(f"ok{i}", f"A{i}", "2026-01-05", 30 + i,
-                             sealed_at="2026-01-05 08:00:00.000000"))
-            labs.append(m._label(f"A{i}", "2026-01-05", 0.1 * i))
-        recs.append(_rec("wu", "W1", "2026-01-05", 50, user="other"))
-        recs.append(_rec("nc", "W2", "2026-01-05", 50,
-                         sealed_at="2026-01-05 08:00:00.000000"))
+            ok = _rec(f"ok{i}", f"A{i}", D0, 30 + i,
+                      sealed_at=f"{D0} 08:00:00.000000")
+            recs.append(ok)
+            labs.append(_lab(ok, 0.1 * i))
+        recs.append(_rec("wu", "W1", D0, 50, user="other"))
+        recs.append(_rec("nc", "W2", D0, 50,
+                         sealed_at=f"{D0} 08:00:00.000000"))
         recs[-1]["status"] = "running"            # not completed
-        recs.append(_rec("bp", "W3", "2026-01-05", None,
-                         sealed_at="2026-01-05 08:00:00.000000"))
+        recs.append(_rec("bp", "W3", D0, None,
+                         sealed_at=f"{D0} 08:00:00.000000"))
         # dup: same symbol+day, later created -> excl_dup_run
-        recs.append(_rec("ok0dup", "A0", "2026-01-05", 70,
-                         created="2026-01-05T10:00",
-                         sealed_at="2026-01-05 08:00:00.000000"))
+        dup = _rec("ok0dup", "A0", D0, 70, created=f"{D0}T10:00",
+                   sealed_at=f"{D0} 08:00:00.000000")
+        recs.append(dup)
+        labs.append(_lab(dup, 0.5))
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
@@ -566,7 +598,9 @@ class TestSealGate:
                              "excl_non_f0", "excl_unverified",
                              "excl_late_seal", "excl_not_completed",
                              "excl_bad_prob", "excl_immature_label",
-                             "excl_dup_run"))
+                             "excl_dup_run", "excl_pre_cohort",
+                             "excl_label_conflict",
+                             "excl_label_record_sha256_mismatch"))
         # 旧等式在脏样本上必破: post_gate + excl_seal_late +
         # excl_seal_unresolvable = 4 + 0 + 0 = 4 ≠ 7。
         assert (sg["post_gate_rows"] + sg["excl_seal_late"]
@@ -580,14 +614,14 @@ class TestSealGate:
     def test_none_run_id_sorted_no_crash(self, tmp_path):
         """DAV-2052 🟡-2: 账本行 report_id=null 且被排除时，sorted() 必须
         不抛 TypeError —— rc in (0,2)，不走 traceback。"""
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
-        ok = _rec("ok1", "A1", "2026-01-05", 50,
-                  sealed_at="2026-01-05 08:00:00.000000")
-        labs = [m._label("A1", "2026-01-05", 1.0)]
-        noid = _rec(None, "W9", "2026-01-05", 50, user="other")
+        days = [D0, D1, D2]
+        ok = _rec("ok1", "A1", D0, 50,
+                  sealed_at=f"{D0} 08:00:00.000000")
+        labs = [_lab(ok, 1.0)]
+        noid = _rec(None, "W9", D0, 50, user="other")
         noid["report_id"] = None
-        late = _rec(None, "A1", "2026-01-05", 60,
-                    sealed_at="2026-01-06 03:00:00.000000")
+        late = _rec(None, "A1", D0, 60,
+                    sealed_at=f"{D1} 03:00:00.000000")
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, [ok, noid, late])
         lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
@@ -604,12 +638,11 @@ class TestSealGate:
     def test_dateonly_seal_disclosed_in_funnel(self, tmp_path):
         """DAV-2052 🟡-3: date-only sealed_at 由 m1 读成 00:00 UTC 准入
         （行为与旧实现一致），但产物必须如实计数，不再是硬编码 0。"""
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
-        recs = [_rec("d1", "A1", "2026-01-05", 50, sealed_at="2026-01-05"),
-                _rec("d2", "A2", "2026-01-05", 55,
-                     sealed_at="2026-01-05 08:00:00.000000")]
-        labs = [m._label("A1", "2026-01-05", 1.0),
-                m._label("A2", "2026-01-05", 2.0)]
+        days = [D0, D1, D2]
+        recs = [_rec("d1", "A1", D0, 50, sealed_at=D0),
+                _rec("d2", "A2", D0, 55,
+                     sealed_at=f"{D0} 08:00:00.000000")]
+        labs = [_lab(recs[0], 1.0), _lab(recs[1], 2.0)]
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
@@ -627,10 +660,10 @@ class TestNullDefense:
     gracefully — never AttributeError out of `.get(...)`."""
 
     def test_prediction_null_routes_immature_not_crash(self, tmp_path):
-        rec = _rec("np", "S1", "2026-01-05", 60)
-        lab = m._label("S1", "2026-01-05", 5.0)
+        rec = _rec("np", "S1", D0, 60)
+        lab = _lab(rec, 5.0)
         lab["prediction"] = None
-        labels = {("S1", "2026-01-05"): lab}
+        labels = m.build_label_index([lab])
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, [rec])
         # must not raise AttributeError on `None.get("status")`
@@ -644,9 +677,9 @@ class TestNullDefense:
         assert fun["excl_immature_label"] == 1
 
     def test_prediction_null_cli_fails_clean_or_excludes(self, tmp_path):
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
-        recs = [_rec("ok", "S1", "2026-01-05", 60)]
-        lab = m._label("S1", "2026-01-05", 5.0)
+        days = [D0, D1, D2]
+        recs = [_rec("ok", "S1", D0, 60)]
+        lab = _lab(recs[0], 5.0)
         lab["prediction"] = None
         labs = [lab]
         ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
@@ -660,22 +693,20 @@ class TestNullDefense:
         assert rc in (0, 2)
 
     def test_sw_null_qbase_nan_not_crash(self, tmp_path):
-        # sw: null inside the labels map must yield l1="" -> q_base NaN ->
-        # row dropped from the paired subset, not AttributeError.
+        # A label row whose `sw` is an explicit JSON null reaches the frame
+        # as label_l1="" (normalised at the report_id join, DAV-2198 ①) ->
+        # q_base NaN -> row dropped from the paired subset, never
+        # AttributeError.
         formal = pd.DataFrame({
-            "signal_date": ["2026-01-05"] * 12,
+            "signal_date": [D0] * 12,
             "symbol": [f"S{i}" for i in range(12)],
             "q": np.linspace(0.1, 0.9, 12),
             "r": np.linspace(-1, 1, 12),
+            "label_l1": [""] * 12,
         })
-        labels = {}
-        for i in range(12):
-            lab = m._label(f"S{i}", "2026-01-05", 1.0)
-            lab["sw"] = None
-            labels[(f"S{i}", "2026-01-05")] = lab
-        inc = m.paired_increment(formal, labels,
-                                 {("2026-01-05", "801010.SI"): 0.6},
-                                 ["20260105"])
+        inc = m.paired_increment(formal,
+                                 {(D0, "801010.SI"): 0.6},
+                                 [D0.replace("-", "")])
         # every paired leg dropped -> 0 paired days, diff series empty
         assert inc["paired_days"] == 0
 
@@ -694,25 +725,24 @@ class TestIncrement:
         - FIXED code: both legs over the same 11 covered rows -> IC=1 each
           -> diff == 0.
         """
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days = [D0, D1, D2]
         days_index = [d.replace("-", "") for d in days]
         n = 12
-        formal, labels, qmap = [], {}, {}
+        formal, qmap = [], {}
         for day in days:
             iso = day
             for i in range(n):
                 sym = f"{day[-2:]}S{i}"
                 r = float(i) if i < n - 1 else -999.0   # S11 = IC breaker
-                formal.append({"signal_date": day, "symbol": sym,
-                               "q": float(i), "r": r})
                 l1 = "" if i == n - 1 else f"L{i}"
+                formal.append({"signal_date": day, "symbol": sym,
+                               "q": float(i), "r": r, "label_l1": l1})
                 if l1:
                     # one cell per row, base rate monotone in i -> base
                     # IC == 1 on the paired 11-row subset
                     qmap[(iso, l1)] = 0.5 + 0.02 * i
-                labels[(sym, iso)] = m._label(sym, day, 1.0, l1=l1)
         dfr = pd.DataFrame(formal)
-        inc = m.paired_increment(dfr, labels, qmap, days_index)
+        inc = m.paired_increment(dfr, qmap, days_index)
         assert inc["paired_days"] == 3
         # 总控 10-13 漏斗单列: 3 天 x 1 条 gap = 3 行缺基率两侧都不用。
         assert inc["model_rows"] == 36
@@ -732,20 +762,19 @@ class TestIncrement:
         but only 24 carrying a base rate -> BOTH legs must be computed on
         the SAME 24-row cross-section.
         """
-        day = "2026-01-05"
-        formal, labels, qmap = [], {}, {}
+        day = D0
+        formal, qmap = [], {}
         for i in range(36):
             sym = f"S{i:02d}"
-            formal.append({"signal_date": day, "symbol": sym,
-                           "q": float(i), "r": float(i)})
             if i < 24:
                 l1 = f"L{i}"
                 qmap[(day, l1)] = 0.4 + 0.01 * i   # monotone -> base IC 1
             else:
                 l1 = ""                            # no base rate
-            labels[(sym, day)] = m._label(sym, day, 1.0, l1=l1)
-        inc = m.paired_increment(pd.DataFrame(formal), labels, qmap,
-                                 ["20260105"])
+            formal.append({"signal_date": day, "symbol": sym,
+                           "q": float(i), "r": float(i), "label_l1": l1})
+        inc = m.paired_increment(pd.DataFrame(formal), qmap,
+                                 [day.replace("-", "")])
         assert inc["model_rows"] == 36
         assert inc["paired_rows"] == 24
         assert inc["no_base_rows"] == 12
@@ -761,20 +790,16 @@ class TestIncrement:
         day at/above MIN_DAILY_N, the whole day leaves the paired set."""
         n = m.m1.MIN_DAILY_N            # exactly at the threshold
         formal = pd.DataFrame({
-            "signal_date": ["2026-01-05"] * n,
+            "signal_date": [D0] * n,
             "symbol": [f"S{i}" for i in range(n)],
             "q": np.arange(n, dtype=float),
             "r": np.arange(n, dtype=float),
+            "label_l1": ["" if i == n - 1 else f"L{i}" for i in range(n)],
         })
-        labels = {}
         qmap = {}
-        for i in range(n):
-            l1 = "" if i == n - 1 else f"L{i}"
-            if l1:
-                qmap[("2026-01-05", l1)] = 0.5 + 0.01 * i
-            labels[(f"S{i}", "2026-01-05")] = m._label(
-                f"S{i}", "2026-01-05", 1.0, l1=l1)
-        inc = m.paired_increment(formal, labels, qmap, ["20260105"])
+        for i in range(n - 1):
+            qmap[(D0, f"L{i}")] = 0.5 + 0.01 * i
+        inc = m.paired_increment(formal, qmap, [D0.replace("-", "")])
         # paired subset = 9 < MIN_DAILY_N -> the day never pairs.
         assert inc["paired_days"] == 0
 
@@ -793,20 +818,20 @@ class TestIncrement:
         """When q == q_base on the same paired subset, diff must be exactly
         0 — guards the same-sample wiring end to end (3 days so the NW mean
         is defined)."""
-        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        days = [D0, D1, D2]
         days_index = [d.replace("-", "") for d in days]
         n = 12
         q = np.linspace(0.05, 0.95, n)
-        formal, labels, qmap = [], {}, {}
+        formal, qmap = [], {}
         for day in days:
             for i in range(n):
                 sym = f"{day[-2:]}S{i}"
-                formal.append({"signal_date": day, "symbol": sym,
-                               "q": float(q[i]), "r": float(i)})
                 l1 = f"L{i}"          # own cell -> per-row q_base == q
                 qmap[(day, l1)] = float(q[i])
-                labels[(sym, day)] = m._label(sym, day, 1.0, l1=l1)
-        inc = m.paired_increment(pd.DataFrame(formal), labels, qmap,
+                formal.append({"signal_date": day, "symbol": sym,
+                               "q": float(q[i]), "r": float(i),
+                               "label_l1": l1})
+        inc = m.paired_increment(pd.DataFrame(formal), qmap,
                                  days_index)
         assert inc["paired_days"] == 3
         assert inc["model_ic_mean"] == pytest.approx(1.0)
@@ -854,13 +879,14 @@ class TestAllMarketBase:
         assert qmap == qmap2
 
     def test_no_base_chunks_marks_indeterminate(self, tmp_path):
-        days = pd.bdate_range("2026-01-05", periods=3).strftime("%Y-%m-%d")
+        days = pd.bdate_range(D0, periods=3).strftime("%Y-%m-%d")
         recs, labs = [], []
         for di, d in enumerate(days):
             for i in range(12):
-                recs.append(_rec(f"{di}_{i}", f"S{i:02d}", d, 30 + i,
-                                 created=f"{d}T09:00"))
-                labs.append(m._label(f"S{i:02d}", d, 0.2 * i))
+                rec = _rec(f"{di}_{i}", f"S{i:02d}", d, 30 + i,
+                           created=f"{d}T09:00")
+                recs.append(rec)
+                labs.append(_lab(rec, 0.2 * i))
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"
@@ -872,6 +898,335 @@ class TestAllMarketBase:
         assert out["increment_m200_W0"]["paired_days"] == 0
 
 
+class TestDav2198LabelAssociation:
+    """DAV-2198 ①–⑤: label association by report_id + 档位 with the
+    record_sha256 check, the frozen formal cohort start, ledger-first PIT
+    with the pit_reattest default, and the append-only duplicate rules.
+
+    Fixtures are the verbatim rows DAV-2195 listed: the 000776.SZ 7-row
+    cross-generation file (tests/fixtures/dav2198_labels_000776_conflict.json)
+    and the 19 typed rows (tests/fixtures/dav2198_labels_typed_19rows.json)."""
+
+    CONFLICT_RID = "97955c713edc483a83d5afea24519be9"
+
+    # --- ④ the 000776.SZ 7-row conflict fixture (verbatim) ---------------
+    def test_000776_seven_rows_two_generations_are_label_conflict(self):
+        rows = _fixture("dav2198_labels_000776_conflict.json")
+        assert len(rows) == 14                 # 7 reports × 2 generations
+        idx = m.build_label_index(rows)
+        integ = idx.integrity
+        assert integ["n_groups"] == 7
+        assert integ["n_conflict_groups"] == 7
+        assert integ["n_evaluated_groups"] == 0
+        assert integ["reason_codes"] == {m.REASON_LABEL_CONFLICT: 7}
+        assert len(integ["conflict_reports"]) == 7
+        first = integ["conflicts"][0]
+        # the 10-12 → 10-15 drift DAV-2195 §5.1 listed (both rows are
+        # evaluated_ok, yet prices and every return leg moved)
+        assert set(first["fields"]) == {
+            "entry_price", "exit_price", "return_pct", "hs300_excess_pct",
+            "sw_excess_pct_prediction", "sw_excess_pct"}
+        assert first["values"]["entry_price"] == [20.46, 20.2]
+        assert first["values"]["return_pct"] == [4.5943, 4.604]
+        # no canonical row is picked silently
+        entry = idx[(first["report_id"], m.SHORT_HORIZON)]
+        assert entry.status == "conflict" and entry.row is None
+        assert entry.conflict_fields == tuple(first["fields"])
+        assert entry.statuses == ("evaluated_ok", "evaluated_ok")
+
+    def test_run_excludes_conflicted_report_and_alerts_first_screen(
+            self, tmp_path, capsys):
+        """DAV-2198 ④: a conflicted (report_id, 档位) leaves the formal
+        queue with reason code label_conflict AND the output's first screen
+        shows the alarm. Return values are the verbatim §5.1 ones; only the
+        signal dates move into the 10-08 window so the row reaches the
+        queue-level gate instead of the cohort gate."""
+        recs, labs = [], []
+        for i in range(12):
+            rec = _rec(f"ok{i}", f"S{i:02d}", D0, 30 + i)
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        conflict_rows = [
+            r for r in _fixture("dav2198_labels_000776_conflict.json")
+            if r["report_id"] == self.CONFLICT_RID]
+        assert len(conflict_rows) == 2
+        recs.append(_rec(self.CONFLICT_RID, "000776.SZ", D0, 60,
+                         record_sha256=conflict_rows[0]["ledger_record_sha256"]))
+        for row in conflict_rows:
+            labs.append(dict(row, signal_date=D0, target_date=D0))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        rc = m.main(["run", "--ledger", str(ledger), "--labels", str(lab),
+                     "--calendar-file", str(cal),
+                     "--out-dir", str(tmp_path / "o")])
+        assert rc == 0
+        stdout = capsys.readouterr().out
+        assert "LABEL INTEGRITY ALERT" in stdout
+        assert m.REASON_LABEL_CONFLICT in stdout
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["funnel"]["excl_label_conflict"] == 1
+        assert runj["formal_rows"] == 12
+        assert runj["label_join"]["counts"] == {m.REASON_LABEL_CONFLICT: 1}
+        assert runj["label_join"]["excluded"][0]["report_id"] \
+            == self.CONFLICT_RID
+        fi = runj["freeze"]["label_integrity"]
+        assert fi["conflict_reports"] == [self.CONFLICT_RID]
+        assert fi["alert"] and self.CONFLICT_RID in fi["alert"]
+
+    # --- ④ typed rows (verbatim §5.2 fixture) + supersede rule ----------
+    def test_typed_19_rows_fixture_and_supersede(self):
+        rows = _fixture("dav2198_labels_typed_19rows.json")
+        assert len(rows) == 19
+        idx = m.build_label_index(rows)
+        assert idx.integrity["n_short_rows"] == 14
+        assert idx.integrity["n_other_horizon_rows"] == 5   # labels_t40 rows
+        assert idx.integrity["n_typed_groups"] == 14
+        assert idx.integrity["n_conflict_groups"] == 0
+        key = ("4390ddfd08a2406d8784d4c66e0af28e", m.SHORT_HORIZON)
+        assert idx[key].status == "typed"
+        assert idx[key].row["outcome_status"] == "data_missing"
+        assert idx[key].row["prediction"]["status"] == "target_bar_missing"
+        # a LATER evaluated_ok row on the same key is the normal supersede
+        later = dict(idx[key].row)
+        later.update({"outcome_status": "evaluated_ok",
+                      "prediction": {"status": "evaluated",
+                                     "return_pct": 1.25},
+                      "sw_excess_pct_prediction": 1.25})
+        idx2 = m.build_label_index(rows + [later])
+        entry = idx2[key]
+        assert entry.status == "evaluated_ok"
+        assert entry.superseded_typed == 1
+        assert entry.typed_after_evaluated == 0
+        assert idx2.integrity["n_conflict_groups"] == 0
+        assert idx2.integrity["superseded_typed_rows"] == 1
+        # …but two evaluated_ok rows with different returns are a conflict
+        other = dict(later, sw_excess_pct_prediction=9.9)
+        idx3 = m.build_label_index(rows + [later, other])
+        assert idx3[key].status == "conflict"
+        assert "sw_excess_pct_prediction" in idx3[key].conflict_fields
+
+    def test_run_admits_report_whose_typed_row_is_superseded(self, tmp_path):
+        rows = _fixture("dav2198_labels_typed_19rows.json")
+        short = [r for r in rows if r["horizon"] == m.SHORT_HORIZON]
+        target = short[0]
+        recs, labs = [], []
+        for i in range(12):
+            rec = _rec(f"ok{i}", f"S{i:02d}", D0, 30 + i)
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        rec = _rec(target["report_id"], target["symbol"], D0, 60,
+                   record_sha256=target["ledger_record_sha256"])
+        recs.append(rec)
+        labs.extend(dict(r, signal_date=D0, target_date=D0) for r in short)
+        labs.append(_lab(rec, 5.0))          # the later evaluated_ok row
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        fun = out["verdict"]["funnel"]
+        assert fun["excl_label_conflict"] == 0
+        assert fun["formal_rows"] == 13
+        assert out["label_integrity"]["superseded_typed_rows"] == 1
+
+    def test_identical_evaluated_duplicate_is_normal(self):
+        rec = _rec("dup", "S1", D0, 60)
+        lab = _lab(rec, 1.0)
+        idx = m.build_label_index([lab, dict(lab)])
+        entry = idx[("dup", m.SHORT_HORIZON)]
+        assert entry.status == "evaluated_ok"
+        assert entry.duplicate_identical == 1
+        assert idx.integrity["n_conflict_groups"] == 0
+
+    # --- ① record_sha256 check + report_id association ------------------
+    def test_record_sha256_mismatch_excluded_with_reason(self, tmp_path):
+        recs, labs = [], []
+        for i in range(12):
+            rec = _rec(f"ok{i}", f"S{i:02d}", D0, 30 + i)
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        bad = _rec("bad", "S99", D0, 60, record_sha256="deadbeef" * 8)
+        recs.append(bad)
+        labs.append(m._label("S99", D0, 1.0, report_id="bad",
+                             record_sha256="00" * 32))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        fun = out["verdict"]["funnel"]
+        assert fun["excl_label_record_sha256_mismatch"] == 1
+        assert fun["formal_rows"] == 12
+        assert out["label_integrity"]["reason_codes"] \
+            [m.REASON_LABEL_RECORD_SHA_MISMATCH] == 1
+        detail = out["label_join"]["excluded"][0]
+        assert detail["report_id"] == "bad"
+        assert "record_sha256" in detail["detail"]
+
+    def test_association_is_not_symbol_date(self, tmp_path):
+        """DAV-2195 §5.3 regression: two reports share symbol+day; only the
+        report the label names may take its `r`."""
+        r1 = _rec("r1", "S1", D0, 60)
+        r2 = _rec("r2", "S1", D0, 55)
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, [r1, r2])
+        labels = m.build_label_index([_lab(r1, 1.0)])
+        df = m.load_ledger_signals(ledger, labels, FIXED)
+        got = dict(zip(df["run_id"], df["r"]))
+        assert got["r1"] == pytest.approx(0.01)
+        assert pd.isna(got["r2"])      # None -> NaN in the float column
+        present = dict(zip(df["run_id"], df["label_key_present"]))
+        assert present == {"r1": True, "r2": False}
+
+    def test_sw_null_label_row_degrades_to_empty_l1(self, tmp_path):
+        rec = _rec("sw", "S1", D0, 60)
+        lab = _lab(rec, 1.0)
+        lab["sw"] = None
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, [rec])
+        df = m.load_ledger_signals(ledger, m.build_label_index([lab]), FIXED)
+        assert df.iloc[0]["label_l1"] == ""
+        assert df.iloc[0]["r"] == pytest.approx(0.01)
+
+    # --- ② frozen formal cohort start ----------------------------------
+    def test_formal_start_enforced_from_register(self, tmp_path):
+        pre = _rec("pre", "S0", "2026-10-07", 60)
+        on = _rec("on", "S1", D0, 60)
+        broken = _rec("nd", "S2", None, 60,
+                      sealed_at=f"{D0} 08:00:00.000000")
+        ledger = tmp_path / "l.jsonl"
+        _write_ledger(ledger, [pre, on, broken])
+        lab = tmp_path / "lab.jsonl"
+        _write_labels(lab, [_lab(pre, 1.0), _lab(on, 2.0)])
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        fun = out["verdict"]["funnel"]
+        # boundary is inclusive (signal_date >= 2026-10-08); the pre-cohort
+        # row is its OWN bucket; an unparseable date is NOT absorbed into it
+        assert fun["excl_pre_cohort"] == 1
+        assert fun["formal_rows"] == 1
+        assert fun["formal_start"] == "2026-10-08"
+        assert out["formal_cohort_start"]["start"] == "2026-10-08"
+        assert out["formal_cohort_start"]["register_value"] == "2026-10-08"
+        assert out["formal_cohort_start"]["register_sha256"] \
+            == m.FREEZE_REGISTER_SHA256_SIGNED
+        assert out["formal_cohort_start"]["match"] is True
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["funnel"]["formal_start"] == "2026-10-08"
+        assert runj["ledger_rows"] == (
+            runj["funnel"]["excl_version"]
+            + runj["funnel"]["excl_pre_cohort"]
+            + runj["funnel"]["excl_label_conflict"]
+            + runj["funnel"]["excl_label_record_sha256_mismatch"]
+            + runj["seal_gate"]["admit_input_rows"])
+
+    def test_formal_start_gate_fails_closed(self, tmp_path):
+        moved = tmp_path / "register.md"
+        moved.write_text("首个正式信号日：**2026-10-09**；含起点。",
+                         encoding="utf-8")
+        with pytest.raises(elp.PipelineError, match="FORMAL_COHORT_START"):
+            m._formal_start_gate(moved)
+        blank = tmp_path / "blank.md"
+        blank.write_text("no marker here", encoding="utf-8")
+        with pytest.raises(elp.PipelineError, match="not readable"):
+            m._formal_start_gate(blank)
+        with pytest.raises(elp.PipelineError, match="not readable"):
+            m._formal_start_gate(tmp_path / "missing.md")
+        # the shipped register resolves to the code constant
+        assert m._formal_start_gate()["match"] is True
+
+    # --- ③ PIT: ledger first, then pit_reattest; label never read -------
+    def _pit_run(self, tmp_path, uv_label_pit, ledger_pit="UNVERIFIED",
+                 reattest=None, rid="uv"):
+        recs, labs = [], []
+        for i in range(12):
+            rec = _rec(f"ok{i}", f"S{i:02d}", D0, 30 + i)
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        rec = _rec(rid, "S99", D0, 60, pit=ledger_pit)
+        recs.append(rec)
+        lab = _lab(rec, 1.0)
+        lab["input_pit_status"] = uv_label_pit
+        labs.append(lab)
+        ledger_dir = tmp_path / "ledger"
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        ledger = ledger_dir / "forward_ledger.jsonl"
+        _write_ledger(ledger, recs)
+        lab_f = tmp_path / "lab.jsonl"; _write_labels(lab_f, labs)
+        if reattest is not None:
+            (ledger_dir / "pit_reattest.jsonl").write_text(
+                json.dumps(reattest) + "\n", encoding="utf-8")
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        return m.run(ledger, lab_f, tmp_path / "o", calendar_path=cal)
+
+    def test_label_input_pit_status_is_never_read(self, tmp_path):
+        # label claims VERIFIED while the ledger says UNVERIFIED and no
+        # reattest line exists -> the ledger verdict stands (excluded).
+        out = self._pit_run(tmp_path, uv_label_pit="VERIFIED")
+        assert out["verdict"]["funnel"]["excl_unverified"] == 1
+        assert out["verdict"]["funnel"]["formal_rows"] == 12
+        # and the reverse: ledger VERIFIED + label UNVERIFIED is admitted
+        out2 = self._pit_run(tmp_path / "rev", uv_label_pit="UNVERIFIED",
+                             ledger_pit="VERIFIED")
+        assert out2["verdict"]["funnel"]["excl_unverified"] == 0
+        assert out2["verdict"]["funnel"]["formal_rows"] == 13
+
+    def test_reattest_sibling_is_the_default_source(self, tmp_path):
+        # 账本 UNVERIFIED + sibling pit_reattest.jsonl adjudicated VERIFIED
+        # -> admitted without any --pit-reattest flag
+        out = self._pit_run(tmp_path, uv_label_pit="VERIFIED", reattest={
+            "report_id": "uv", "input_pit_status": "VERIFIED",
+            "rule_version": "pit_rules.v2", "mdc_sha256": None,
+            "adjudicated_at": "2026-10-17T00:00:00+00:00",
+            "status": "adjudicated"})
+        assert out["verdict"]["funnel"]["formal_rows"] == 13
+        # first-screen provenance: the sidecar is the overlay source and the
+        # label row's own input_pit_status was never read
+        pp = out["pit_provenance"]
+        assert pp["overlay_applied"] == 1
+        assert pp["effective"]["VERIFIED"] == 13
+        assert pp["source"]["adjudicated_lines"] == 1
+        assert len(pp["source"]["sha256"]) == 64
+        assert pp["label_row_input_pit_status_read"] is False
+        assert out["verdict"]["funnel"]["pit_reattest_applied"] == 1
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["freeze"]["pit_provenance"] == pp
+        # a reattest FAILED excludes; a ledger-side FAILED is never
+        # overridden by a reattest VERIFIED (账本为终态)
+        out2 = self._pit_run(tmp_path / "f", uv_label_pit="VERIFIED",
+                             reattest={
+                                 "report_id": "uv",
+                                 "input_pit_status": "FAILED",
+                                 "rule_version": "pit_rules.v2",
+                                 "mdc_sha256": None,
+                                 "status": "adjudicated"})
+        assert out2["verdict"]["funnel"]["excl_pit_failed"] == 1
+        out3 = self._pit_run(tmp_path / "l", uv_label_pit="VERIFIED",
+                             ledger_pit="FAILED", reattest={
+                                 "report_id": "uv",
+                                 "input_pit_status": "VERIFIED",
+                                 "rule_version": "pit_rules.v2",
+                                 "mdc_sha256": None,
+                                 "status": "adjudicated"})
+        assert out3["verdict"]["funnel"]["excl_pit_failed"] == 1
+        assert out3["verdict"]["funnel"]["formal_rows"] == 12
+
+    # --- ⑤ append-only label file --------------------------------------
+    def test_label_file_is_never_rewritten(self, tmp_path):
+        recs, labs = [], []
+        for i in range(12):
+            rec = _rec(f"ok{i}", f"S{i:02d}", D0, 30 + i)
+            recs.append(rec)
+            labs.append(_lab(rec, 0.1 * i))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        before = hashlib.sha256(lab.read_bytes()).hexdigest()
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal)
+        after = hashlib.sha256(lab.read_bytes()).hexdigest()
+        assert before == after
+        assert out["label_integrity"]["labels_sha256"] == before
+        # no row was appended either (append-only means read-only here)
+        assert lab.read_text(encoding="utf-8").count("\n") == len(labs)
+
+
 class TestFailClose:
     def test_missing_labels_file(self, tmp_path):
         with pytest.raises(elp.PipelineError):
@@ -879,9 +1234,10 @@ class TestFailClose:
 
     def test_missing_calendar_fails(self, tmp_path):
         ledger = tmp_path / "l.jsonl"
-        _write_ledger(ledger, [_rec("a", "S1", "2026-01-05", 60)])
+        rec = _rec("a", "S1", D0, 60)
+        _write_ledger(ledger, [rec])
         labs = tmp_path / "lab.jsonl"
-        _write_labels(labs, [m._label("S1", "2026-01-05", 1.0)])
+        _write_labels(labs, [_lab(rec, 1.0)])
         rc = m.main(["run", "--ledger", str(ledger), "--labels", str(labs),
                      "--calendar-file", str(tmp_path / "nocal.txt"),
                      "--out-dir", str(tmp_path / "o")])
@@ -891,7 +1247,7 @@ class TestFailClose:
 class TestEndToEnd:
     def test_run_smoke(self, tmp_path):
         rng = np.random.default_rng(1)
-        days = pd.bdate_range("2026-02-02", periods=25).strftime("%Y-%m-%d")
+        days = pd.bdate_range(D0, periods=25).strftime("%Y-%m-%d")
         recs, labs = [], []
         l1s = ["801010.SI", "801020.SI", "801030.SI", "801040.SI"]
         for di, d in enumerate(days):
@@ -900,9 +1256,10 @@ class TestEndToEnd:
                 l1 = l1s[i % 4]
                 q = 10 + i * 5
                 r = 0.4 * i - 3 + drift * 10 + float(rng.normal(0, 0.5))
-                recs.append(_rec(f"{di}_{i}", f"S{i:02d}", d, q,
-                                 created=f"{d}T09:00"))
-                labs.append(m._label(f"S{i:02d}", d, r, l1=l1))
+                rec = _rec(f"{di}_{i}", f"S{i:02d}", d, q,
+                           created=f"{d}T09:00")
+                recs.append(rec)
+                labs.append(_lab(rec, r, l1=l1))
         ledger = tmp_path / "l.jsonl"
         _write_ledger(ledger, recs)
         lab = tmp_path / "lab.jsonl"
@@ -920,7 +1277,7 @@ class TestEndToEnd:
         m._write_p1_chunks(chunks, prows)
         cal = tmp_path / "c.txt"
         # calendar extends past the last signal so its T+1 entry day exists
-        cal_days = pd.bdate_range("2026-02-02", periods=40).strftime("%Y-%m-%d")
+        cal_days = pd.bdate_range(D0, periods=40).strftime("%Y-%m-%d")
         cal.write_text("\n".join(cal_days) + "\n")
         out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
                     base_chunks=chunks)

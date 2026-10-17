@@ -32,7 +32,13 @@ Ledger p_rel_t10 read node (M1 签收 item 2 — 三处都要核到):
   formal queue — malformed/missing/node_failed count in the funnel, never
   filled.
 
-Label leg (DAV-1875 ``labels_t10.jsonl``):
+Label leg (DAV-1875 ``labels_t10.jsonl``; DAV-2198 ①/③/④ rework):
+  association = ``report_id`` + 档位 (``horizon``) — NEVER symbol+date
+  (DAV-2195 §5.3: the old (symbol, signal_date) index could pick another
+  report's row); every joined row must carry the same
+  ``ledger_record_sha256`` as the sealed ledger record
+  (``record_sha256``), else the record is excluded with reason code
+  ``label_record_sha256_mismatch``;
   r = ``sw_excess_pct_prediction`` / 100   (stock − SW L1, T+1 open →
        target close, prediction basis, NO roll — the contract window of
        p_rel_t10);
@@ -42,6 +48,21 @@ Label leg (DAV-1875 ``labels_t10.jsonl``):
   ``未到期`` / ``suspension`` / ``unexecutable_entry`` / typed-status rows
   carry no r and count as immature in the funnel (not zero, not dropped
   silently).
+  Duplicate rows on one ``(report_id, 档位)`` key (the file is append-only):
+  a typed row (``pending`` / ``data_missing`` …) superseded by a later
+  ``evaluated_ok`` row is NORMAL; two ``evaluated_ok`` rows whose return
+  fields disagree are a ``label_conflict`` — the report leaves the formal
+  queue under that reason code and the report's first screen raises the
+  alarm (never a silent pick). The label file itself is never rewritten
+  (DAV-2198 ⑤) and its row-level ``input_pit_status`` is never read: 时点
+  判定 = 账本 VERIFIED/FAILED 优先, UNVERIFIED 查 ``pit_reattest.jsonl``
+  (DAV-2198 ③, 总控 10-15 取值顺序).
+
+Formal cohort start (DAV-2198 ②, freeze register §2): 首个正式信号日
+``2026-10-08`` is enforced HERE and read from
+``docs/plans/phase2-midterm/dav2142-freeze-register-v0.2.md``; a register
+that is unreadable or disagrees with the code constant fails closed rather
+than silently moving the cohort start.
 
 Dedup (签收 item 4): same (symbol, signal_date, version_key) keeps the
 earliest-``created_at`` completed run — fixed ex ante, no ex-post picking.
@@ -79,10 +100,12 @@ import argparse
 import bisect
 import hashlib
 import json
+import math
 import re
 import sys
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -115,6 +138,36 @@ DEFAULT_USER_ID = dsl.DEFAULT_USER_ID
 DEFAULT_LEDGER = dsl.DEFAULT_LEDGER_DIR / dsl.LEDGER_FILE
 DEFAULT_LABELS = elp.DEFAULT_OUT_DIR / elp.LABEL_FILE_NAMES["short"]
 DEFAULT_OUT_DIR = REPO_ROOT / "work" / "phase2-p_rel_t10_baseline"
+
+# DAV-2198: 档位 of the label file this script consumes (``horizon`` field).
+SHORT_HORIZON = "short"
+
+# DAV-2198 ② / DAV-2142 §2.2 (frozen preregistration): 每日批正式起点.
+# 取值来自冻结登记 §2「首个正式信号日」— the cross-check below fails closed
+# when the register is unreadable or disagrees, so the cohort start can
+# never drift silently (a re-signed register forces a reviewed code change).
+FORMAL_COHORT_START = "2026-10-08"
+_FORMAL_START_RE = re.compile(
+    r"首个正式信号日\s*[：:]\s*\*{0,2}\s*(\d{4}-\d{2}-\d{2})")
+
+# DAV-2198 ④ / DAV-2195 §5.1: return-carrying fields compared when one
+# ``(report_id, 档位)`` carries more than one ``evaluated_ok`` row. All
+# equal → append-only duplicate row, normal; any difference →
+# ``label_conflict`` (no silent pick, affected report excluded).
+LABEL_RETURN_FIELDS: tuple[str, ...] = (
+    "sw_excess_pct_prediction",   # the `r` this pipeline consumes
+    "sw_excess_pct",
+    "return_pct",
+    "hs300_excess_pct",
+    "entry_price",
+    "exit_price",
+    "direction_signed_return_pct",
+)
+
+# Reason codes for a label that cannot be trusted (plan §2.2: 冲突/不一致
+# 的观测停止并给出原因码).
+REASON_LABEL_CONFLICT = "label_conflict"
+REASON_LABEL_RECORD_SHA_MISMATCH = "label_record_sha256_mismatch"
 
 # D-075 primary baseline grid (fixed; other (m, W) never substituted ex
 # post — they are emitted as sensitivity only).
@@ -351,28 +404,64 @@ def _p_rel_t10(record: Mapping[str, Any]) -> tuple[int | None, str]:
 
 def load_ledger_signals(
     ledger_path: Path,
-    labels: Mapping[tuple[str, str], Mapping[str, Any]],
+    labels: Any,
     user_id: str,
     reattest_index: Optional[Mapping[str, dict]] = None,
     analysis_anchor: str | None = None,
 ) -> pd.DataFrame:
     """Stream the ledger; one signal row per P4-account ledger line.
 
-    Only short-horizon matured labels supply `r`; every ledger line still
-    lands in the frame so the funnel counts the honest denominator
-    (无标签 / 未到期 = excl_immature_label downstream).
+    ``labels`` is a :class:`LabelIndex` (or a plain mapping of the same
+    shape). Association is by ``report_id`` + 档位 and each joined row is
+    checked against the ledger record's own ``record_sha256``
+    (``elp._record_identity``); a conflict or a hash mismatch sets
+    ``label_reason`` instead of silently using another record's row
+    (DAV-2198 ①, DAV-2195 §5.3). Only short-horizon matured labels supply
+    `r`; every ledger line still lands in the frame so the funnel counts
+    the honest denominator (无标签 / 未到期 = excl_immature_label
+    downstream).
 
-    ``reattest_index`` (DAV-2097③, 总控取值顺序): ledger VERIFIED/FAILED
-    stand; UNVERIFIED consults the pit_reattest.jsonl index
-    (report_id -> adjudicated verdict). The ledger's own status is kept
-    in ``_ledger_input_pit_status`` for disclosure.
+    ``reattest_index`` (DAV-2097③, 总控取值顺序 / DAV-2198 ③): ledger
+    VERIFIED/FAILED stand; UNVERIFIED consults the pit_reattest.jsonl
+    index (report_id -> adjudicated verdict). The label row's own
+    ``input_pit_status`` is never read — the ledger's status is kept in
+    ``_ledger_input_pit_status`` for disclosure.
     """
+    idx = _as_label_index(labels)
     rows: list[dict[str, Any]] = []
     for _lineno, rec in elp._iter_ledger_records(ledger_path):
         sig = _parse_d(rec.get("signal_date") or rec.get("trade_date"))
         sym = rec.get("symbol")
         p, p_status = _p_rel_t10(rec)
-        lab = labels.get((str(sym), sig)) if (sym is not None and sig) else None
+        entry = None
+        rid = rec.get("report_id")
+        if idx and rid is not None:
+            entry = idx.get((str(rid), SHORT_HORIZON))
+        lab = None
+        label_reason = None
+        label_reason_detail = None
+        label_l1 = ""
+        if entry is not None:
+            if entry.status == "conflict":
+                label_reason = REASON_LABEL_CONFLICT
+                label_reason_detail = (
+                    "two evaluated_ok rows differ on: "
+                    + ",".join(entry.conflict_fields))
+            else:
+                lab = entry.row
+                ledger_sha = elp._record_identity(rec)
+                label_sha = entry.record_sha256
+                if not label_sha or label_sha != ledger_sha:
+                    # Cannot prove the row belongs to THIS sealed record
+                    # (plan §2.2: 只凭股票+日期关联不足；不一致的排除).
+                    label_reason = REASON_LABEL_RECORD_SHA_MISMATCH
+                    label_reason_detail = (
+                        "label ledger_record_sha256="
+                        f"{label_sha or '<missing>'} != ledger "
+                        f"record_sha256={ledger_sha}")
+                    lab = None
+        if lab is not None:
+            label_l1 = ((lab.get("sw") or {}).get("index_code") or "")
         r = None
         # DAV-2025 🟡-2: `.get(key, {})` returns None (not {}) when the key
         # exists with an explicit JSON null — guard with `or {}` so a
@@ -385,6 +474,7 @@ def load_ledger_signals(
         pit = rec.get("input_pit_status")
         eff_pit = pit_reattest.resolve_effective_pit(
             pit, rec.get("report_id"), reattest_index)
+        ledger_pit_u = str(pit or "").upper() or "UNVERIFIED"
         served_set, served_missing = _record_served_set(rec)
         rows.append({
             "signal_date": sig,
@@ -395,6 +485,10 @@ def load_ledger_signals(
             "timing_class": rec.get("timing_class"),
             "input_pit_status": eff_pit,
             "_ledger_input_pit_status": pit,
+            # DAV-2198 ③: the effective status came from the reattest sidecar
+            # (ledger UNVERIFIED/non-final overridden) — disclosed, never
+            # sourced from the label row.
+            "pit_reattest_applied": bool(eff_pit != ledger_pit_u),
             "completed": rec.get("status") == "completed",
             "user_id": rec.get("user_id"),
             "version_key": _record_version_key(rec, anchor=analysis_anchor),
@@ -405,6 +499,12 @@ def load_ledger_signals(
             "p_rel_t10": p,
             "_p_status": p_status,
             "r": r,
+            # DAV-2198: label association evidence (never the row's own
+            # input_pit_status — 时点 only from the ledger + reattest).
+            "label_key_present": entry is not None,
+            "label_reason": label_reason,
+            "label_reason_detail": label_reason_detail,
+            "label_l1": label_l1,
         })
     df = pd.DataFrame(rows)
     if not df.empty:
@@ -423,30 +523,246 @@ def load_ledger_signals(
 
 
 # ---------------------------------------------------------------------------
-# 2. labels -> (symbol, signal_date) map + T+10 base-rate panel
+# 2. labels -> (report_id, 档位) index + T+10 base-rate panel
 # ---------------------------------------------------------------------------
 
-def load_labels(path: Path) -> dict[tuple[str, str], Mapping[str, Any]]:
-    """(symbol, signal_date) -> label row (short/T+10 file only)."""
+def _num_or_none(v: Any) -> float | None:
+    """Compare value for a return field: bool/str/NaN → None.
+
+    ``None`` here means "the field carries no usable number" (clearly
+    distinct from the number 0.0), so a ``null`` vs ``null`` pair compares
+    equal while a ``null`` vs a real value is a difference — the
+    append-only conflict test must not turn an absent value into 0.
+    """
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return None if math.isnan(f) else f
+    return None
+
+
+def _label_status(row: Mapping[str, Any]) -> str:
+    """Row-level label status: ``outcome_status`` (the 7-state
+    OutcomeStatus vocabulary ``expiry_label_pipeline`` writes), falling
+    back to the ``prediction`` sub-status for hand-shaped rows."""
+    st = str(row.get("outcome_status") or "").strip()
+    if st:
+        return st
+    pred = row.get("prediction") or {}
+    return str(pred.get("status") or "").strip()
+
+
+def _is_evaluated_ok(row: Mapping[str, Any]) -> bool:
+    return _label_status(row) == "evaluated_ok"
+
+
+def _label_return_signature(row: Mapping[str, Any]) -> tuple:
+    return tuple(_num_or_none(row.get(f)) for f in LABEL_RETURN_FIELDS)
+
+
+@dataclass(frozen=True)
+class LabelEntry:
+    """Every append-only row for ONE ``(report_id, 档位)`` key, resolved.
+
+    ``row`` is the canonical row the eval consumes (``None`` on conflict —
+    a conflicted key has no canonical row by construction). Counters feed
+    the first-screen integrity block; nothing here is ever written back.
+    """
+    report_id: str
+    horizon: str
+    row: Optional[Mapping[str, Any]]
+    status: str                      # evaluated_ok | typed | conflict
+    n_rows: int
+    statuses: tuple[str, ...]
+    superseded_typed: int            # typed rows superseded by evaluated_ok
+    typed_after_evaluated: int       # …appearing AFTER it (anomaly disclosure)
+    duplicate_identical: int         # extra evaluated_ok rows, values equal
+    conflict_fields: tuple[str, ...]
+    record_sha256: Optional[str]     # the label row's ledger_record_sha256
+
+
+class LabelIndex:
+    """``{(report_id, 档位): LabelEntry}`` + append-only integrity evidence.
+
+    Association is by report_id + 档位 (DAV-2198 ① / DAV-2195 §5.3);
+    ``(symbol, signal_date)`` is never a join key. ``.integrity`` carries
+    the duplicate/conflict counters the report's first screen discloses.
+    """
+
+    def __init__(self, entries: Mapping[tuple, LabelEntry],
+                 integrity: Mapping[str, Any]):
+        self.entries = dict(entries)
+        self.integrity = dict(integrity)
+
+    def get(self, key: tuple, default: Any = None) -> Any:
+        return self.entries.get(key, default)
+
+    def __getitem__(self, key: tuple) -> LabelEntry:
+        return self.entries[key]
+
+    def __contains__(self, key: tuple) -> bool:
+        return key in self.entries
+
+    def __iter__(self):
+        return iter(self.entries)
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
+def build_label_index(rows) -> LabelIndex:
+    """Resolve append-only label rows into one entry per (report_id, 档位).
+
+    DAV-2198 ④ rules (DAV-2195 §5.1/§5.2 facts):
+
+    * ``pending`` / ``data_missing`` … typed row superseded by an
+      ``evaluated_ok`` row → normal; canonical = the last ``evaluated_ok``
+      row (append-only file order); typed rows are counted as superseded;
+      typed rows landing AFTER the canonical evaluated row are disclosed
+      (``typed_after_evaluated``) but follow the same rule — the card
+      does not invent an exclusion for that ordering;
+    * ≥2 ``evaluated_ok`` rows whose return fields all agree → duplicate
+      append-only row, normal; canonical = the LAST one;
+    * ≥2 ``evaluated_ok`` rows whose return fields differ → the key is a
+      ``label_conflict``: no row is silently picked, ``status="conflict"``
+      and the affected report is excluded downstream.
+
+    Rows without ``report_id`` cannot be associated (association is
+    report_id + 档位, never symbol+date) and are counted, not guessed.
+    """
+    groups: dict[tuple[str, str], list[tuple[int, Mapping[str, Any]]]] = {}
+    integrity: dict[str, Any] = {
+        "n_rows": 0,
+        "n_short_rows": 0,
+        "n_other_horizon_rows": 0,
+        "n_unkeyed_rows": 0,
+        "n_groups": 0,
+        "n_evaluated_groups": 0,
+        "n_typed_groups": 0,
+        "n_conflict_groups": 0,
+        "superseded_typed_rows": 0,
+        "typed_after_evaluated_rows": 0,
+        "duplicate_identical_evaluated_rows": 0,
+        "conflict_reports": [],
+        "conflicts": [],
+        "reason_codes": {},
+    }
+    seq = 0
+    for row in rows:
+        integrity["n_rows"] += 1
+        if not isinstance(row, Mapping):
+            raise elp.PipelineError(
+                "label row is not a JSON object; refusing to guess")
+        horizon = str(row.get("horizon") or "").strip()
+        if horizon != SHORT_HORIZON:
+            integrity["n_other_horizon_rows"] += 1
+            continue
+        integrity["n_short_rows"] += 1
+        rid = row.get("report_id")
+        rid_s = str(rid) if rid not in (None, "") else ""
+        if not rid_s:
+            integrity["n_unkeyed_rows"] += 1
+            continue
+        groups.setdefault((rid_s, horizon), []).append((seq, row))
+        seq += 1
+
+    entries: dict[tuple, LabelEntry] = {}
+    for key, items in groups.items():
+        ev = [(i, r) for i, r in items if _is_evaluated_ok(r)]
+        typed = [(i, r) for i, r in items if not _is_evaluated_ok(r)]
+        statuses = tuple(_label_status(r) or "unknown" for _i, r in items)
+        conflict_fields: tuple[str, ...] = ()
+        duplicate_identical = 0
+        if len(ev) >= 2:
+            sigs = [_label_return_signature(r) for _i, r in ev]
+            conflict_fields = tuple(
+                f for j, f in enumerate(LABEL_RETURN_FIELDS)
+                if len({s[j] for s in sigs}) > 1)
+            if conflict_fields:
+                integrity["n_conflict_groups"] += 1
+                integrity["conflict_reports"].append(key[0])
+                integrity["conflicts"].append({
+                    "report_id": key[0],
+                    "horizon": key[1],
+                    "n_rows": len(items),
+                    "statuses": list(statuses),
+                    "fields": list(conflict_fields),
+                    "values": {
+                        f: [s[j] for s in sigs]
+                        for j, f in enumerate(LABEL_RETURN_FIELDS)
+                        if f in conflict_fields},
+                    "outcome": (REASON_LABEL_CONFLICT
+                                + ": report excluded from the formal queue"),
+                })
+                entries[key] = LabelEntry(
+                    report_id=key[0], horizon=key[1], row=None,
+                    status="conflict", n_rows=len(items),
+                    statuses=statuses, superseded_typed=len(typed),
+                    typed_after_evaluated=0, duplicate_identical=0,
+                    conflict_fields=conflict_fields, record_sha256=None)
+                continue
+            # identical values → append-only duplicate; normal, last wins.
+            duplicate_identical = len(ev) - 1
+            integrity["duplicate_identical_evaluated_rows"] += \
+                duplicate_identical
+        canonical = ev[-1] if ev else typed[-1]
+        typed_after = sum(1 for i, _r in typed if i > canonical[0]) if ev else 0
+        if ev:
+            integrity["superseded_typed_rows"] += len(typed)
+            integrity["typed_after_evaluated_rows"] += typed_after
+        sha = canonical[1].get("ledger_record_sha256")
+        entries[key] = LabelEntry(
+            report_id=key[0], horizon=key[1], row=canonical[1],
+            status="evaluated_ok" if ev else "typed", n_rows=len(items),
+            statuses=statuses, superseded_typed=len(typed) if ev else 0,
+            typed_after_evaluated=typed_after,
+            duplicate_identical=duplicate_identical,
+            conflict_fields=conflict_fields,
+            record_sha256=str(sha) if isinstance(sha, str) and sha else None)
+
+    integrity["n_groups"] = len(entries)
+    integrity["n_evaluated_groups"] = sum(
+        1 for e in entries.values() if e.status == "evaluated_ok")
+    integrity["n_typed_groups"] = sum(
+        1 for e in entries.values() if e.status == "typed")
+    if integrity["n_conflict_groups"]:
+        integrity["reason_codes"] = {
+            REASON_LABEL_CONFLICT: integrity["n_conflict_groups"]}
+    return LabelIndex(entries, integrity)
+
+
+def load_labels(path: Path) -> LabelIndex:
+    """Read the append-only short-horizon label file into a LabelIndex.
+
+    READ-ONLY (DAV-2198 ⑤): the file is never rewritten — duplicate and
+    conflicting rows are resolved in memory and disclosed, never repaired
+    in place. The file sha256 is recorded as first-screen evidence that
+    the run did not touch it.
+    """
     if not path.exists():
         raise elp.PipelineError(f"labels file not found: {path}")
-    out: dict[tuple[str, str], dict[str, Any]] = {}
-    with open(path, "r", encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, 1):
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise elp.PipelineError(
-                    f"label file {path} line {lineno} unreadable: {exc}") from exc
-            if obj.get("horizon") != "short":
-                continue
-            sig = _parse_d(obj.get("signal_date"))
-            sym = obj.get("symbol")
-            if sym and sig:
-                out[(str(sym), sig)] = obj
-    return out
+    blob = Path(path).read_bytes()
+    rows: list[Any] = []
+    for lineno, line in enumerate(blob.decode("utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise elp.PipelineError(
+                f"label file {path} line {lineno} unreadable: {exc}") from exc
+    index = build_label_index(rows)
+    index.integrity["labels_file"] = str(path)
+    index.integrity["labels_sha256"] = hashlib.sha256(blob).hexdigest()
+    return index
+
+
+def _as_label_index(labels: Any) -> Mapping:
+    """Accept a LabelIndex or a plain mapping (tests / partial callers)."""
+    if isinstance(labels, LabelIndex):
+        return labels.entries
+    return labels or {}
 
 
 def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
@@ -509,11 +825,204 @@ REGISTER_ANALYSIS_VERSION_ID = (
     "|served=gemini-3.8-flash-n")
 
 
+def _register_formal_start(
+        register_file: Path = FREEZE_REGISTER_FILE) -> str | None:
+    """首个正式信号日 as written in the freeze register §2, or None.
+
+    Read live from the register (not duplicated as the only source) so a
+    re-signed register that moves the cohort start is visible to the code:
+    :func:`_formal_start_gate` then fails closed instead of silently
+    running the old window.
+    """
+    try:
+        text = Path(register_file).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _FORMAL_START_RE.search(text)
+    return m.group(1) if m else None
+
+
+def _formal_start_gate(
+        register_file: Path = FREEZE_REGISTER_FILE) -> dict:
+    """DAV-2198 ②: enforce the formal cohort start, sourced from the
+    freeze register §2 (首个正式信号日).
+
+    Fail-close (never a silently moved window):
+    * the register is unreadable or no 首个正式信号日 line parses;
+    * the register's value disagrees with :data:`FORMAL_COHORT_START`
+      (a re-signed register must force an explicit, reviewed code change).
+    """
+    value = _register_formal_start(register_file)
+    if value is None:
+        raise elp.PipelineError(
+            "formal cohort start (首个正式信号日) not readable from the "
+            f"freeze register {register_file}; refusing to run without the "
+            "frozen 起点 (DAV-2198 ②)")
+    if value != FORMAL_COHORT_START:
+        raise elp.PipelineError(
+            f"freeze register 首个正式信号日={value} != code-enforced "
+            f"FORMAL_COHORT_START={FORMAL_COHORT_START}; re-sign the "
+            "register and update the code constant in the same review "
+            "(DAV-2198 ②)")
+    try:
+        source = str(Path(register_file).relative_to(REPO_ROOT))
+    except ValueError:
+        source = str(register_file)
+    return {
+        "start": FORMAL_COHORT_START,
+        "enforced_in_code": True,
+        "rule": "signal_date >= start (DAV-2142 §2.2 每日批正式起点)",
+        "source_file": source,
+        "source_field": "首个正式信号日",
+        "register_value": value,
+        "register_sha256": _freeze_file_sha(Path(register_file)),
+        "register_sha256_signed": FREEZE_REGISTER_SHA256_SIGNED,
+        "match": True,
+    }
+
+
+def _apply_formal_start(df: pd.DataFrame,
+                        block: Mapping[str, Any]) -> tuple[pd.DataFrame, dict]:
+    """Drop ledger rows whose signal_date precedes the frozen cohort start.
+
+    Only rows carrying a parseable ``YYYYMMDD`` signal date can be judged
+    as pre-cohort; an unparseable/missing date is NOT counted here — it
+    stays in the frame and keeps failing downstream where it already did
+    (seal gate / immature label), so this gate cannot absorb a different
+    failure bucket.
+    """
+    out = dict(block)
+    out.update({"excluded_rows": 0, "excluded_min_signal_date": None,
+                "excluded_max_signal_date": None})
+    if df.empty or "signal_date" not in df.columns:
+        return df, out
+    start_ymd = str(block["start"]).replace("-", "")
+    sd = df["signal_date"].astype(str)
+    before = sd.str.fullmatch(r"\d{8}") & (sd < start_ymd)
+    if not before.any():
+        return df, out
+    ex = sd[before]
+    out.update({
+        "excluded_rows": int(before.sum()),
+        "excluded_min_signal_date": str(ex.min()),
+        "excluded_max_signal_date": str(ex.max()),
+    })
+    return df[~before], out
+
+
+def _pit_provenance(df: pd.DataFrame,
+                    source: Mapping[str, Any] | None) -> dict:
+    """DAV-2198 ③ first-screen evidence: where the effective input-pit
+    status came from on the selected queue.
+
+    口径: 账本 VERIFIED/FAILED 为终态；账本 UNVERIFIED 才查
+    ``pit_reattest.jsonl``（仅 adjudicated 行）。标签行的
+    ``input_pit_status`` 从不参与（``label_row_input_pit_status_read``）。
+    """
+    eff = (df["input_pit_status"].astype(str).str.upper()
+           if "input_pit_status" in df.columns else pd.Series(dtype=str))
+    applied = (df["pit_reattest_applied"].fillna(False).astype(bool)
+               if "pit_reattest_applied" in df.columns
+               else pd.Series(dtype=bool))
+    return {
+        "order": "账本 VERIFIED/FAILED 优先；账本 UNVERIFIED 查 "
+                 "pit_reattest.jsonl（仅 adjudicated 行）",
+        "label_row_input_pit_status_read": False,
+        "scope": "selected version queue (post select_version, pre-cohort)",
+        "queue_rows": int(len(df)),
+        "overlay_applied": int(applied.sum()),
+        "effective": {k: int((eff == k).sum())
+                      for k in ("VERIFIED", "UNVERIFIED", "FAILED")},
+        "source": dict(source) if source else None,
+    }
+
+
+def _apply_label_gate(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Drop ledger rows whose joined label could not be trusted.
+
+    ``load_ledger_signals`` sets ``label_reason`` for ① a key that carries
+    two differing ``evaluated_ok`` rows (``label_conflict``) and ② a label
+    whose ``ledger_record_sha256`` does not match the sealed record
+    (``label_record_sha256_mismatch``). Both leave the formal queue and
+    are reported with their reason code (plan §2.2: 冲突、不一致的观测
+    停止，不能悄悄选择一份).
+
+    The record hash is the sealed record's whole-record chain hash, so it
+    also anchors the symbol / signal_date / 档位 identity the plan §2.2
+    requires — 只凭股票+日期关联不足 no longer arises.
+    """
+    block: dict[str, Any] = {
+        "association_key": "report_id+horizon",
+        "horizon": SHORT_HORIZON,
+        "record_sha256_verified": True,
+        "counts": {},
+        "excluded": [],
+    }
+    if df.empty or "label_reason" not in df.columns:
+        return df, block
+    reason = df["label_reason"]
+    mask = reason.notna() & (reason.astype(str).str.len() > 0)
+    if "label_key_present" in df.columns:
+        key_present = df["label_key_present"].fillna(False).astype(bool)
+        block["rows_with_label_key"] = int(key_present.sum())
+        block["rows_usable"] = int((key_present & ~mask).sum())
+    if "r" in df.columns:
+        block["rows_with_evaluated_label"] = int(df["r"].notna().sum())
+    if not mask.any():
+        return df, block
+    counts: dict[str, int] = {}
+    detail: list[dict[str, Any]] = []
+    for _i, row in df[mask].iterrows():
+        code = str(row.get("label_reason"))
+        counts[code] = counts.get(code, 0) + 1
+        detail.append({
+            "report_id": (str(row.get("run_id"))
+                          if row.get("run_id") is not None else None),
+            "symbol": row.get("symbol"),
+            "signal_date": row.get("signal_date"),
+            "reason": code,
+            "detail": row.get("label_reason_detail"),
+        })
+    block["counts"] = counts
+    block["excluded"] = sorted(
+        detail, key=lambda x: (x["reason"], str(x["report_id"])))
+    return df[~mask], block
+
+
+def _label_integrity_alert(integrity: Mapping[str, Any]) -> str | None:
+    """First-screen alarm text, or None when nothing needs flagging.
+
+    Covers the DAV-2198 ④ ``label_conflict`` (two differing ``evaluated_ok``
+    rows) and the ① hash mismatch. A run with either must say so on the
+    report's first screen — never bury it in a later block.
+    """
+    conflicts = list(integrity.get("conflict_reports") or [])
+    counts = dict(integrity.get("reason_codes") or {})
+    mismatch = int(counts.get(REASON_LABEL_RECORD_SHA_MISMATCH, 0))
+    if not conflicts and not mismatch:
+        return None
+    bits: list[str] = []
+    if conflicts:
+        bits.append(
+            f"label_conflict: {len(conflicts)} report(s) carry two "
+            "evaluated_ok label rows with differing return fields — "
+            "excluded from the formal queue "
+            f"({', '.join(sorted(conflicts))})")
+    if mismatch:
+        bits.append(
+            f"label_record_sha256_mismatch: {mismatch} ledger row(s) "
+            "excluded (label row does not carry the sealed record hash)")
+    return " | ".join(bits)
+
+
 def freeze_block(analysis_anchor: str | None,
                  report_kind: str | None,
                  df: pd.DataFrame,
                  formal: pd.DataFrame | None = None,
-                 multi_model_sensitivity: dict | None = None) -> dict:
+                 multi_model_sensitivity: dict | None = None,
+                 label_integrity: dict | None = None,
+                 formal_start: dict | None = None,
+                 pit_provenance: dict | None = None) -> dict:
     """Report first-screen freeze block (DAV-2160 §report requirements):
     plan sha256, descriptive-vs-confirmatory label, the served_model-
     non-unique report list, and the register §3 analysis_version_id the run
@@ -595,6 +1104,12 @@ def freeze_block(analysis_anchor: str | None,
         "register_sha256": _freeze_file_sha(FREEZE_REGISTER_FILE),
         "register_sha256_signed": FREEZE_REGISTER_SHA256_SIGNED,
         "register_analysis_version_id": REGISTER_ANALYSIS_VERSION_ID,
+        # DAV-2198 ①/②/④ first-screen disclosure: the enforced cohort start
+        # (sourced from the register) and the label association integrity
+        # block including the label_conflict alarm.
+        "formal_cohort_start": formal_start,
+        "label_integrity": label_integrity,
+        "pit_provenance": pit_provenance,
         "report_kind": report_kind or "descriptive",
         # DAV-2166 🟡-5: the single-confirmatory guarantee is owned by the
         # caller — the script cannot enforce it. Stamped explicitly so a
@@ -673,7 +1188,6 @@ def base_q_map(panel: pd.DataFrame, m: int = BASE_M, W: int = BASE_W) -> dict:
 # ---------------------------------------------------------------------------
 
 def paired_increment(formal: pd.DataFrame,
-                     labels: Mapping[tuple[str, str], Mapping[str, Any]],
                      qmap: Mapping[tuple[str, str], float],
                      days_index: list[str]) -> dict:
     """Daily IC_model − IC_base on the same cross-sections + NW60/120 CI.
@@ -689,20 +1203,27 @@ def paired_increment(formal: pd.DataFrame,
     q_base are dropped from BOTH legs and reported separately in
     ``no_base_rows`` (总控 10-13 漏斗单列); ``paired_day_n`` records the
     shared cross-section size of each paired day.
+
+    The SW L1 leg comes from the label row the (report_id, 档位) join
+    selected (frame column ``label_l1``; empty when the row had none) —
+    this function never re-joins labels by symbol+date (DAV-2198 ①).
     """
     d = formal.copy()
     d["_ymd"] = pd.to_datetime(d["signal_date"]).dt.strftime("%Y-%m-%d")
     # day_index entries are YYYYMMDD (DayRow.date); map to the ISO keys used
-    # by `labels` / ic_model / ic_base.
+    # by `ic_model` / `ic_base`.
     def _iso(ymd: str) -> str:
         s = str(ymd)
         return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if "-" not in s else s
-    # DAV-2025 🟡-2: explicit JSON null on `sw` (`"sw": null`) must degrade
-    # to l1="" (no base rate found -> NaN q_base -> dropped from the paired
-    # subset), not AttributeError out of `.get("index_code")`.
-    key = list(zip(d["_ymd"],
-                   [((labels.get((s, t)) or {}).get("sw") or {}).get("index_code") or ""
-                    for s, t in zip(d["symbol"], d["_ymd"])]))
+    # DAV-2025 🟡-2: a label row whose `sw` was an explicit JSON null must
+    # degrade to l1="" (no base rate found -> NaN q_base -> dropped from the
+    # paired subset), never AttributeError — load_ledger_signals already
+    # normalises it to "" at the join, this keeps the frame-contract guard.
+    if "label_l1" in d.columns:
+        l1 = d["label_l1"].fillna("").astype(str)
+    else:
+        l1 = pd.Series([""] * len(d), index=d.index)
+    key = list(zip(d["_ymd"], l1))
     d["q_base"] = [qmap.get(k, np.nan) for k in key]
 
     ic_model: dict[str, float] = {}
@@ -784,16 +1305,47 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         analysis_anchor: str | None = None,
         report_kind: str | None = None) -> dict:
     t0 = time.time()
+    # DAV-2198 ②: fail-close BEFORE any work when the frozen cohort start is
+    # unreadable or disagrees with the code constant.
+    formal_start = _formal_start_gate()
+    log(f"formal cohort start {formal_start['start']} (freeze register "
+        f"{formal_start['source_file']}, match=True)")
     log(f"loading labels {labels_path}")
     labels = load_labels(labels_path)
-    log(f"{len(labels)} matured short labels")
+    label_integrity = dict(labels.integrity)
+    log(f"{len(labels)} (report_id, {SHORT_HORIZON}) label key(s) from "
+        f"{label_integrity['n_short_rows']} short row(s)")
+    early_alert = _label_integrity_alert(label_integrity)
+    if early_alert:
+        # 首屏告警: the first thing the operator/report sees (DAV-2198 ④).
+        log("!! LABEL INTEGRITY ALERT — " + early_alert)
     reattest_index = None
+    rp: Path | None = None
+    reattest_src: dict | None = None
     if reattest_path is not None:
         rp = Path(reattest_path)
         if not rp.exists():
             raise elp.PipelineError(f"reattest file not found: {rp}")
+    else:
+        # DAV-2198 ③ / plan §2.2: 账本 UNVERIFIED 查 pit_reattest.jsonl — the
+        # ledger's sibling file is the default source (an explicit
+        # --pit-reattest still wins). Absent file = no overlay, UNVERIFIED
+        # stands (never a silent VERIFIED).
+        sibling = Path(ledger_path).parent / pit_reattest.REATTEST_FILE
+        rp = sibling if sibling.exists() else None
+    if rp is not None:
         reattest_index = pit_reattest.load_reattest_index(rp)
-        log(f"reattest index: {len(reattest_index)} adjudicated line(s)")
+        reattest_src = {
+            "file": str(rp),
+            "sha256": hashlib.sha256(Path(rp).read_bytes()).hexdigest(),
+            "adjudicated_lines": len(reattest_index),
+            "note": "no_evidence lines are diagnostics and never enter the "
+                    "index (DAV-2097③)",
+        }
+        log(f"reattest index: {len(reattest_index)} adjudicated line(s) "
+            f"from {rp}")
+    else:
+        reattest_src = None
     df = load_ledger_signals(ledger_path, labels, user_id,
                              reattest_index=reattest_index,
                              analysis_anchor=analysis_anchor)
@@ -809,20 +1361,47 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     df = m1.select_version(df, version_key)
     post_version_rows = len(df)
 
+    # DAV-2198 ③: PIT provenance of the selected queue (ledger first, the
+    # sidecar only for non-final ledger statuses; the label row's own
+    # input_pit_status is never read).
+    pit_provenance = _pit_provenance(df, reattest_src)
+    log(f"pit provenance: {pit_provenance['effective']} "
+        f"overlay={pit_provenance['overlay_applied']}")
+
+    # DAV-2198 ②: formal cohort start, enforced in code from the frozen
+    # register — rows before 2026-10-08 never reach the formal queue.
+    df, formal_start = _apply_formal_start(df, formal_start)
+    log(f"cohort start filter: -{formal_start['excluded_rows']} row(s) "
+        f"before {formal_start['start']} "
+        f"({formal_start['excluded_min_signal_date']}.."
+        f"{formal_start['excluded_max_signal_date']})")
+
+    # DAV-2198 ①/④: label association + duplicate-label integrity gate —
+    # conflicted / unverifiable links leave the queue under a reason code.
+    df, label_join = _apply_label_gate(df)
+    if label_join["counts"]:
+        log(f"label gate: {label_join['counts']}")
+    admit_input_rows = len(df)
+
     # 封存时点门统一为 m1_eval 的 DAV-1991 实现（总控 10-14 令）——本卡不再
     # 自养一套 _sealed_at_utc/apply_seal_gate，改为把交易日历传进
     # m1.admit(calendar=...) 由它判 sealed_at < T+1 09:30 Asia/Shanghai。
     # 门前的 select_version 分流仍在 funnel 里单列 excl_version。
     #
     # DAV-2052 🟡-1 产物内守恒式（审计对账无需外部数据）:
-    #   ledger_rows         = excl_version + admit_input_rows
-    #   admit_input_rows    = post_gate_rows(=funnel.formal_rows)
+    #   ledger_rows         = excl_version + excl_pre_cohort
+    #       + excl_label_conflict + excl_label_record_sha256_mismatch
+    #       + admit_input_rows
+    #   admit_input_rows（进入 m1.admit 的行数）
+    #       = post_gate_rows(=funnel.formal_rows)
     #       + excl_wrong_user + excl_pit_failed + excl_non_f0
     #       + excl_unverified + excl_late_seal + excl_not_completed
     #       + excl_bad_prob + excl_immature_label + excl_dup_run
     #   seal_gate.input_rows（进入封存门的行数）= post_gate_rows
     #       + excl_late_seal + excl_not_completed + excl_bad_prob
     #       + excl_immature_label + excl_dup_run
+    # DAV-2198 ②/① 新增的三个门前桶（cohort 起点 / label_conflict /
+    # record_sha256 不一致）在 admit 之前分流，同样计入 admit_input_rows。
     # 注意: m1 把「晚封 | sealed 解析失败 | T+1 截止不可解析」单掩码全计入
     # excl_late_seal — excl_seal_t1_unresolved / seal_unparseable /
     # excl_seal_unresolvable 都是它的子集披露，绝不再相加（相加即重复
@@ -833,6 +1412,27 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     pre_admit_ids = set(df["run_id"]) if "run_id" in df.columns else set()
 
     formal, funnel = m1.admit(df, user_id=user_id, calendar=cal_ymd)
+
+    # DAV-2198: the three pre-admit buckets live in the same funnel so the
+    # product-internal conservation identity closes without external data.
+    funnel["excl_pre_cohort"] = int(formal_start["excluded_rows"])
+    funnel["excl_label_conflict"] = int(
+        label_join["counts"].get(REASON_LABEL_CONFLICT, 0))
+    funnel["excl_label_record_sha256_mismatch"] = int(
+        label_join["counts"].get(REASON_LABEL_RECORD_SHA_MISMATCH, 0))
+    funnel["formal_start"] = formal_start["start"]
+    funnel["admit_input_rows"] = int(admit_input_rows)
+    # The overlay happened in load_ledger_signals (ledger-first order), not
+    # inside m1.admit — report the real count under the same key.
+    funnel["pit_reattest_applied"] = int(pit_provenance["overlay_applied"])
+
+    # Label-integrity first-screen block: join exclusions + the alarm.
+    label_integrity["join_exclusions"] = label_join
+    label_integrity["reason_codes"] = {
+        **(label_integrity.get("reason_codes") or {}),
+        **label_join["counts"],
+    }
+    label_integrity["alert"] = _label_integrity_alert(label_integrity)
 
     # Multi-model exclusion sensitivity arm (register §4 必做, DAV-2166
     # 🟡-3): recompute the formal cohort with every multi-model report
@@ -876,7 +1476,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # (DAV-2166 🟡-3 / 🟡-4).
     freeze = freeze_block(analysis_anchor, report_kind, df_full,
                           formal=formal,
-                          multi_model_sensitivity=mm_sens)
+                          multi_model_sensitivity=mm_sens,
+                          label_integrity=label_integrity,
+                          formal_start=formal_start,
+                          pit_provenance=pit_provenance)
 
     # seal_gate 块（DAV-1993 🟡 M-1）: 口径 + 被分流 run_id 落盘，verdict.model
     # 与 run.json 顶层各一份同值。计数取自 m1.admit 的 funnel：
@@ -934,7 +1537,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         # 判别的行数 len(d0)；admit_input_rows 另列 admit 入口行数
         # (=post_version_rows) 供全链路对账。守恒式见上方块注释。
         "input_rows": int(len(d0)),
-        "admit_input_rows": int(post_version_rows),
+        "admit_input_rows": int(admit_input_rows),
         "excl_seal_late": int(funnel["excl_late_seal"]),
         "seal_late_ids": late_ids,
         # excl_late_seal 总桶已含不可判定子集（m1 单掩码）— 自证标记。
@@ -987,7 +1590,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
                        "no --base-chunks given — D-075 增量不可判定"}
     qmap = base_q_map(panel, m=BASE_M, W=BASE_W)
     days_index = [vars(x)["date"] for x in days]
-    increment = paired_increment(formal, labels, qmap, days_index)
+    increment = paired_increment(formal, qmap, days_index)
     # 总控 10-13: 缺基率记录两侧都不用、漏斗单列 — 同步进主 funnel 落盘，
     # 使 run.json 顶层即可对账，不依赖 increment 块。
     funnel["paired_no_base_rows"] = increment["no_base_rows"]
@@ -1007,7 +1610,7 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
                 sub = base.loc[base["W"] == W, ["signal_date", "l1", col]]
                 qm = {(str(a), str(b)): float(c)
                       for a, b, c in zip(sub["signal_date"], sub["l1"], sub[col])}
-                inc = paired_increment(formal, labels, qm, days_index)
+                inc = paired_increment(formal, qm, days_index)
                 sensitivity[f"m{mm}_W{W}"] = {
                     "paired_days": inc["paired_days"],
                     "base_ic_mean": inc["base_ic_mean"],
@@ -1021,6 +1624,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "pipeline": PIPELINE_VERSION,
         "freeze": freeze,
         "input": {"ledger": str(ledger_path), "labels": str(labels_path)},
+        "formal_cohort_start": formal_start,
+        "label_integrity": label_integrity,
+        "label_join": label_join,
+        "pit_provenance": pit_provenance,
         "base_source": base_source,
         "days": [vars(x) for x in days],
         "reliability": rel,
@@ -1050,6 +1657,10 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         "ledger_rows": ledger_rows_input,
         "formal_rows": len(formal),
         "seal_gate": seal_gate_block,
+        "formal_cohort_start": formal_start,
+        "label_integrity": label_integrity,
+        "label_join": label_join,
+        "pit_provenance": pit_provenance,
         "labels": len(labels), "version_key": funnel["version_key"],
         # Register §3 reconciliation: the selected queue's key alongside
         # the signed analysis_version_id the report must match, plus a
@@ -1084,7 +1695,8 @@ def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
                 served_models: Any = None,
                 prompt_resolved: Any = None,
                 custom_prompt: Any = None,
-                contract: str = "v1") -> dict:
+                contract: str = "v1",
+                record_sha256: str | None = None) -> dict:
     versions: dict[str, Any] = {"generated_by_commit_sha": commit,
                                 "evidence_contract_version": contract,
                                 "run_identity": {
@@ -1100,6 +1712,13 @@ def _ledger_rec(rid: str, symbol: str, day: str, p: int | None,
         "ledger_version": 1, "report_id": rid, "user_id": user,
         "symbol": symbol, "signal_date": day, "created_at": created,
         "sealed_at": sealed_at,
+        # DAV-2198 ①: the ledger's own chain field the label row must
+        # echo; fixtures may stamp a real value or leave None (then
+        # elp._record_identity recomputes the canonical hash).
+        "record_sha256": record_sha256,
+        # DAV-2166: the version-key contract is read at the probability
+        # node — `forecast.contract` (register b1.v1-T10) — so the fixture
+        # must seal it there, not only under versions.evidence_contract_.
         "status": "completed", "timing_class": tc,
         "input_pit_status": pit, "backfilled": False,
         "versions": versions,
@@ -1153,9 +1772,22 @@ def build_base_t10(out_dir: Path, *, years: str = "", months: str = "",
     return b1547.main()
 
 
-def _label(sym: str, day: str, r_pct: float, l1: str = "801010.SI") -> dict:
-    return {"horizon": "short", "symbol": sym, "signal_date": day,
+def _label(sym: str, day: str, r_pct: float, l1: str = "801010.SI",
+           *, report_id: str | None = None,
+           record_sha256: str | None = None,
+           horizon: str = SHORT_HORIZON,
+           outcome_status: str = "evaluated_ok") -> dict:
+    """Synthetic evaluated label row (DAV-1875 row contract).
+
+    ``report_id`` / ``record_sha256`` are the DAV-2198 ① association key
+    and the ledger-hash check — fixtures that feed ``load_labels`` must
+    set both.
+    """
+    return {"horizon": horizon, "symbol": sym, "signal_date": day,
             "target_date": day,
+            "report_id": report_id,
+            "ledger_record_sha256": record_sha256,
+            "outcome_status": outcome_status,
             "prediction": {"status": "evaluated", "return_pct": r_pct},
             "sw": {"index_code": l1,
                    "prediction": {"status": "ok", "return_pct": 0.0},
@@ -1195,7 +1827,7 @@ def selftest(tmp: Path) -> dict:
     ledger = tmp / "forward_ledger.jsonl"
     lab_f = tmp / "labels_t10.jsonl"
     chunks = tmp / "chunks"
-    days = pd.bdate_range("2026-01-05", periods=80).strftime("%Y-%m-%d")
+    days = pd.bdate_range("2026-10-08", periods=80).strftime("%Y-%m-%d")
     l1s = ["801010.SI", "801020.SI", "801030.SI", "801040.SI"]
     recs, labs, panel_rows = [], [], []
     for di, day in enumerate(days):
@@ -1205,10 +1837,15 @@ def selftest(tmp: Path) -> dict:
             q = 5 + i * 4
             # r monotone in q plus an industry drift common to that l1 cell
             r = 0.5 * i - 5.0 + drift * 10 + float(rng.normal(0, 0.3))
-            recs.append(_ledger_rec(f"r{di}_{i}", f"S{i:03d}", day, q,
-                                    created=f"{day}T09:00",
-                                    sealed_at=f"{day} 08:00:00.000000"))
-            labs.append(_label(f"S{i:03d}", day, r, l1=l1))
+            rec = _ledger_rec(f"r{di}_{i}", f"S{i:03d}", day, q,
+                              created=f"{day}T09:00",
+                              sealed_at=f"{day} 08:00:00.000000")
+            recs.append(rec)
+            # DAV-2198 ①: association is report_id + 档位 and the label must
+            # echo the sealed record's own sha256.
+            labs.append(_label(f"S{i:03d}", day, r, l1=l1,
+                               report_id=rec["report_id"],
+                               record_sha256=elp._record_identity(rec)))
     # all-market panel: many more rows per (day, industry) than the
             # 20-symbol ledger sample — base must come from THIS, not ledger
             ymd = day.replace("-", "")
@@ -1277,9 +1914,11 @@ def main(argv: list[str] | None = None) -> int:
                         "omit -> D-075 增量不可判定 (base_source=none)")
     r.add_argument("--user-id", default=DEFAULT_USER_ID)
     r.add_argument("--pit-reattest", type=Path, default=None,
-                   help="optional pit_reattest.jsonl (DAV-2097③): ledger "
-                        "input_pit_status=UNVERIFIED rows take the sidecar's "
-                        "adjudicated verdict; VERIFIED/FAILED stay ledger-final")
+                   help="optional pit_reattest.jsonl (DAV-2097③, DAV-2198 ③): "
+                        "ledger input_pit_status=UNVERIFIED rows take the "
+                        "sidecar's adjudicated verdict; VERIFIED/FAILED stay "
+                        "ledger-final. Default: the ledger's sibling "
+                        "pit_reattest.jsonl when present, else no overlay")
     b = sub.add_parser("build-base",
                        help="build P1 all-market T+10 partitions (1547 caliber, "
                             "offset=10 roll=2) into --out-dir/chunks_t10")
