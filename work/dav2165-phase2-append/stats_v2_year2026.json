@@ -1,0 +1,33 @@
+{
+ "partitions": [
+  {
+   "partition": "year=2026",
+   "rows": 1035505,
+   "symbols": 5597,
+   "signal_date_min": "20260105",
+   "signal_date_max": "20261016",
+   "evaluated_ok": 811595,
+   "unexecutable_entry": 336,
+   "suspension": 60,
+   "data_missing": 1265,
+   "pending_due": 222249,
+   "y_rel_nonnull": 811407,
+   "universe_ok_rows": 911107,
+   "parquet": "/Users/davidliu/ta-work/dav-2165/out_v2/chunks/year=2026/data.parquet",
+   "peak_rss_gb": 2.409,
+   "written_at": "2026-10-16T21:39:19"
+  }
+ ],
+ "build_started": "2026-10-16T21:38:51",
+ "calendar_days": 2679,
+ "build_provenance": {
+  "script": "scripts/phase2/build_phase2_chunks.py",
+  "script_sha256": "c05073fc67d86f4a4800d2d8455de54a890d9eb8ede8f87ba719921ec6439a9d",
+  "git_sha": "cd319ef6ed2d6762e33da961757c3c91011b1d3b",
+  "git_dirty": false,
+  "recorded_at": "2026-10-16T21:38:51"
+ },
+ "elapsed_s": 30.8,
+ "peak_rss_gb": 2.409,
+ "build_finished": "2026-10-16T21:39:20"
+}
