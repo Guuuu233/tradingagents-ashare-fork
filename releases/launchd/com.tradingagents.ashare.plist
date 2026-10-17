@@ -1,66 +1,124 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  TradingAgents-AShare 生产服务 launchd 模板（DAV-1790，DAV-1800 返修；总控 10-10 令：只交模板，不安装）
+  TradingAgents-AShare 生产服务 launchd 模板（DAV-2180 直启版；总控 10-17 令：只交模板，不安装）
 
   安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.ashare.plist
-  安装时间：10-12 窗口之后由总控另定；当前仅存档。
+  安装时间：复审通过后由总控另排安装窗口；本卡不执行安装。
 
-  占位符：{{RELEASE_DIR}} = 当前生产 release 目录（本令时点 = 65988c79，
-  见 releases/RESTART.md——宿主机侧文件，未入库，同步口径见 LAUNCHD_SWITCH.md）。
-  安装前必须把 {{RELEASE_DIR}} 全量替换为实际路径并校验残留占位符为 0，
-  切换 release 时同步改本文件与包装脚本指向。
+  占位符：{{RELEASE_DIR}} = 当前生产 release 目录（本令时点 = 082be047）。
+  安装前必须把 {{RELEASE_DIR}} 与 {{RELEASE_SHA}} 全量替换为实际值并校验残留
+  占位符为 0（grep -cE '\{\{[A-Z_]+\}\}' 输出必须为 0——本注释已避开任何
+  形如「双花括号包大写名」的串，故 grep 命中即漏替换）。切换 release 时同步
+  改本文件两处：WorkingDirectory、Standard*Path 内的 uvicorn-<sha>.log
+  （ProgramArguments 无占位——解释器固定指向 ~/ta-venv/py310）。
 
-  重启节流（同一小时最多 3 次）由包装脚本 ta-launchd-wrapper.sh 内
-  滑动窗口计数实现——launchd 原生 ThrottleInterval 只能表达
-  「两次 respawn 至少间隔 N 秒」，无法表达「每小时至多 N 次」，
-  故限流逻辑放包装层。KeepAlive={"SuccessfulExit":false} 负责
-  「非零退出与信号退出（含 SIGKILL/OOM）重拉」；wrapper 限流超限走
-  exit 0（视为成功退出）不再 respawn，等 StartInterval 周期探测在
-  窗口过期后自动恢复，或人工旁路（创建哨兵文件后 kickstart，
-  见 LAUNCHD_SWITCH.md——launchctl kickstart 无 -e 传 env 能力，
-  旁路改走受控哨兵文件）。
-  KeepAlive 语义隐含 RunAtLoad（man launchd.plist），bootstrap 即首启动。
+  ===== DAV-2180 直启版说明（为何不经 bash 包装） =====
+  10-17 安装尝试（wrapper 路径）launchd bootstrap 连续 exit 1：launchd 对
+  ~/Documents 全树 TCC 拒读——/bin/bash 作为已授权 TCC 客户端之外的系统可执行，
+  getcwd/脚本读取/重定向落盘全部被拒（launchd-stderr.log 实测 "Operation not
+  permitted"）。临时探针（DAV-2180 记录）证实差异：
+    - /bin/bash 由 launchd 唤起时 `ls /Users/davidliu/Documents` = Operation not permitted；
+    - uv 管理的 ad-hoc 签名 python3.10（realpath 见下）由 launchd 唤起时
+      ~/Documents 全树 R=True、getcwd 正常、launchd 自身 StandardOut 落盘成功。
+  故本版把 ProgramArguments 改为「直接 exec 生产 venv 的解释器跑 uvicorn」，
+  不经过 bash 包装脚本；原 wrapper 注入的那一套环境变量改放 plist 的
+  EnvironmentVariables（env -i 等价——launchd 作业环境本就仅含 plist 声明的键）。
+
+  解释器（生产固定）：/Users/davidliu/ta-venv/py310/bin/python
+    realpath → /Users/davidliu/.local/share/uv/python/cpython-3.10.20-macos-aarch64-none/bin/python3.10
+    （ad-hoc 签名 Mach-O arm64，实测 launchd 下可读 ~/Documents，Python 3.10.20）
+    选型依据（总控 10-17 返修令）：DAV-2087 审计认定主检出的 .venv310 是最大单点，
+    10-17 存量任务已迁离，故改指独立 venv。10-17 实测：两者 realpath 相同、
+    `pip freeze` 逐行 diff 为空、uvicorn 均 0.41.0；TCC 探针已用本路径重跑通过。
+
+  ===== 与 launch-082be047.txt 的逐项对照（留档启动令 16/16 键等价） =====
+  留档令形如 `/bin/bash -c 'cd REL_DIR && env -i [16 个 KEY=VAL] VENV_PY -m uvicorn … >> log 2>&1'`。
+  本 plist 的等价映射：
+    - `cd REL_DIR`                     → WorkingDirectory={{RELEASE_DIR}}
+    - `env -i` 基线                    → launchd 作业环境天然 env -i（只含 EnvironmentVariables 键）
+    - 16 个 KEY=VAL                    → EnvironmentVariables 逐项同名同值（见下，逐字一致）
+    - `VENV_PY -m uvicorn api.main:app -host 127.0.0.1 -port 8000`
+                                      → ProgramArguments（python 绝对路径 + -m uvicorn …）
+    - `>> logs/uvicorn-SHA.log 2>&1`   → StandardOutPath + StandardErrorPath 同指该文件
+                                        （launchd 打开 fd 追加写，无需 bash 重定向）
+
+  ===== 限流语义（总控 10-17 已确认：ThrottleInterval + StartInterval，无滑动窗口熔断） =====
+  旧 wrapper 版在脚本内做「同一小时最多 3 次」滑动窗口限流 + logs/ 不可写兜底
+  戳 + 人工旁路哨兵。直启版没有脚本层，无法保留滑动窗口计数——本版改用
+  launchd 原生 ThrottleInterval（两次 respawn 至少间隔 120s）+ StartInterval=600
+  周期探测兜底，硬上限等效为「两次拉起至少隔 120s」。**差异：不再有"每小时 3 次
+  熔断停手"**——若 uvicorn 持续崩溃，launchd 会按 ThrottleInterval 一直重拉。
+  缓解：uvicorn 崩溃会写 uvicorn-<sha>.log 与 launchd-stderr.log 留证，守望哨兵
+  （prod-health-sentinel）+ 巡检应把反复崩溃列为告警。**本版限流参数即
+  `ThrottleInterval=120` + `StartInterval=600`，总控 10-17 明确接受「不再有每小时
+  3 次熔断」，无待决项**；若日后要恢复熔断语义，须另引入仍不经 bash 的轻量
+  supervisor（例如 python -c 实现的计数 wrapper，或独立的编译 helper）。
 -->
 <plist version="1.0"><dict>
   <key>Label</key>
   <string>com.tradingagents.ashare</string>
 
-  <!-- 包装脚本：崩溃计数 + 环境固化 + 真正拉起 uvicorn（前台 exec） -->
+  <!-- 直启：生产 venv 解释器直接跑 uvicorn（前台，不经 bash wrapper）。
+       解释器固定指向独立 venv /Users/davidliu/ta-venv/py310/bin/python（其 realpath
+       为 uv 管理的 cpython-3.10.20，已实测在 launchd 下可读 ~/Documents；与主检出
+       .venv310 realpath/freeze 一致，但不依赖主检出）。 -->
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>{{RELEASE_DIR}}/releases/launchd/ta-launchd-wrapper.sh</string>
+    <string>/Users/davidliu/ta-venv/py310/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>api.main:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8000</string>
   </array>
   <key>WorkingDirectory</key>
   <string>{{RELEASE_DIR}}</string>
 
-  <!-- 非零退出与信号退出（SIGKILL/OOM 覆盖在内）都重拉；wrapper 限流超限
-       走 exit 0，视为"成功退出"不 respawn——两者配合实现"崩溃重拉+限流停手" -->
+  <!-- 原 wrapper 用 env -i 注入的 16 个键，逐项迁入（逐字一致）。
+       launchd 作业环境天然等价 env -i（只含本表声明的键）。 -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/davidliu</string>
+    <key>USER</key><string>davidliu</string>
+    <key>LOGNAME</key><string>davidliu</string>
+    <key>SHELL</key><string>/bin/zsh</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>TMPDIR</key><string>/var/folders/8k/kg3t37vn3_b1jxs_gdbwpk0c0000gn/T/</string>
+    <key>DATABASE_URL</key><string>sqlite:////Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db</string>
+    <key>TA_SOCIAL_MODE</key><string>disabled</string>
+    <key>APP_VERSION</key><string>0.6.0</string>
+    <key>TA_PRICE_REF_REVISION_ENABLED</key><string>1</string>
+    <key>TA_E04_REVISION_ENABLED</key><string>1</string>
+    <key>http_proxy</key><string>http://127.0.0.1:7897</string>
+    <key>https_proxy</key><string>http://127.0.0.1:7897</string>
+    <key>all_proxy</key><string>socks5://127.0.0.1:7897</string>
+    <key>no_proxy</key><string>localhost,127.0.0.1,100.65.130.33,100.67.61.23,100.64.0.0/10,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,.eastmoney.com,.sina.com.cn,.sinaimg.cn,.tencent.com,.qq.com,.gtimg.cn,.baostock.com,.akshare.xyz,.10jqka.com.cn,.cninfo.com.cn,.csindex.com.cn,.cnstock.com,.xinhuanet.com,.people.com.cn,.gov.cn</string>
+    <key>NO_PROXY</key><string>localhost,127.0.0.1,100.65.130.33,100.67.61.23,100.64.0.0/10,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,.eastmoney.com,.sina.com.cn,.sinaimg.cn,.tencent.com,.qq.com,.gtimg.cn,.baostock.com,.akshare.xyz,.10jqka.com.cn,.cninfo.com.cn,.csindex.com.cn,.cnstock.com,.xinhuanet.com,.people.com.cn,.gov.cn</string>
+  </dict>
+
+  <!-- 非零退出与信号退出（SIGKILL/OOM 覆盖在内）都重拉。KeepAlive 隐含
+       RunAtLoad（bootstrap 即首启动）。ThrottleInterval=120：两次 respawn
+       至少隔 120s，替代旧 wrapper 的"每小时 3 次"熔断（语义差异见文件头注）。 -->
   <key>KeepAlive</key>
   <dict>
     <key>SuccessfulExit</key><false/>
-    <!-- RunAtLoad 键已删（DAV-1802 🟡-1）：KeepAlive 隐含 RunAtLoad=true，
-         显式写 false 不产生任何效果且误导阅读——bootstrap 即首启动。 -->
   </dict>
-
-  <!-- 限流停手（exit 0）后的周期探测：窗口过期即自动恢复，最长 600s 粒度。
-       正常运行/崩溃重拉路径不受影响（KeepAlive 语义不变）。 -->
+  <key>ThrottleInterval</key><integer>120</integer>
   <key>StartInterval</key><integer>600</integer>
 
-  <!-- Interactive = 不施加资源限制（man launchd.plist："same resource
-       limitations as apps, that is to say, none"），避免长驻服务被 throttled。
-       launchd 直管 uvicorn 进程本体靠的是 wrapper 里 exec（bash 被原地替换，
-       已实测），与 ProcessType 无关。 -->
+  <!-- Interactive = 不施加资源限制；launchd 直管 uvicorn 进程本体。 -->
   <key>ProcessType</key><string>Interactive</string>
   <key>ExitTimeOut</key><integer>20</integer>
 
-  <!-- 日志：uvicorn 本体输出由 wrapper 追加到 logs/uvicorn-<sha>.log；
-       wrapper 的诊断日志双写到 fd2（本文件 StandardErrorPath）与
-       logs/wrapper-diagnostic.log。两个 launchd-*.log 为 append 无上限，
-       轮转策略见 LAUNCHD_SWITCH.md"日志与轮转"。 -->
+  <!-- uvicorn 本体输出（stdout+stderr 合并）直落 logs/uvicorn-<sha>.log，
+       与旧 wrapper 的 `>> log 2>&1` 等价；launchd 打开 fd 追加写，无需 bash。
+       launchd 自身的 stderr（getcwd/exec 失败等）另落 launchd-stderr.log。
+       {{RELEASE_SHA}} 安装时替换为实际 sha（如 082be047）。 -->
   <key>StandardOutPath</key>
-  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stdout.log</string>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/uvicorn-{{RELEASE_SHA}}.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/launchd-stderr.log</string>
+  <string>/Users/davidliu/Documents/TradingAgents-AShare-releases/logs/uvicorn-{{RELEASE_SHA}}.log</string>
 </dict></plist>
