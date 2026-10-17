@@ -80,12 +80,17 @@ class TestReadNode:
 class TestVersionKey:
     def test_commit_contract(self):
         rec = _rec("r", "S", "2026-01-05", 50, commit="abcdef123456")
-        assert m._record_version_key(rec) == "commit:abcdef123456:v1"
+        key = m._record_version_key(rec)
+        assert key.startswith("AV1|anchor=abcdef12|contract=v1-T10|")
+        assert "|resolved=unverifiable|custom=unverifiable|served=none" in key
 
     def test_unversioned(self):
         rec = _rec("r", "S", "2026-01-05", 50)
         rec["versions"] = {}
-        assert m._record_version_key(rec) == "unversioned:novc"
+        rec["horizons"] = {"short": {"forecast": {}}}
+        assert m._record_version_key(rec) == (
+            "AV1|anchor=unanchored|contract=unverifiable"
+            "|resolved=unverifiable|custom=unverifiable|served=none")
 
     def test_multi_version_fails_closed(self):
         recs = [_rec(f"a{i}", "S1", "2026-01-05", 50, commit="aaa") for i in range(3)]
@@ -95,6 +100,169 @@ class TestVersionKey:
                             "version_key": m._record_version_key(r)} for r in recs])
         with pytest.raises(ValueError, match="version_key"):
             m.m1.select_version(df)
+
+
+class TestFrozenVersionKey:
+    """DAV-2160: version key follows the frozen plan (登记 §3) — the split
+    factors are contract + prompt-equivalence hashes + served_model; the
+    production release commit is only an audit anchor."""
+
+    @staticmethod
+    def _served(by_role, missing=0):
+        return {"by_role": by_role, "served_model_missing": missing,
+                "call_count": sum(len(v) for v in by_role.values())}
+
+    def test_equivalent_deploy_same_key(self):
+        """等价部署前后归为同一版本: the adjudicated-equivalent 10-12
+        deploy (65988c79→082be047) changes the record commit but none of
+        the split factors -> with a fixed --analysis-anchor both sides of
+        the deploy share ONE version key."""
+        pre = _rec("pre", "S", "2026-01-05", 50, commit="65988c79aaaa",
+                   served_models=self._served({"trader": ["m1"]}))
+        post = _rec("post", "S", "2026-01-06", 50, commit="082be047bbbb",
+                    served_models=self._served({"trader": ["m1"]}))
+        k_pre = m._record_version_key(pre, anchor="082be047")
+        k_post = m._record_version_key(post, anchor="082be047")
+        assert k_pre == k_post
+        assert "anchor=082be047" in k_pre
+        assert k_pre.startswith("AV1|")
+        # without a fixed anchor the two commits anchor differently —
+        # fail-closed split, never a silent merge.
+        assert m._record_version_key(pre) != m._record_version_key(post)
+
+    def test_analysis_anchor_reaches_version_key_via_loader(self, tmp_path):
+        """DAV-2166 🔴-1 regression: ``--analysis-anchor`` must reach
+        ``_record_version_key`` on the production path — the 3381848f bug
+        threaded the CLI arg into ``load_ledger_signals`` but dropped it
+        before key construction, so it had zero effect on the real ledger.
+        Two records identical except ``generated_by_commit_sha`` (all split
+        factors equal) must collapse to ONE key under a fixed anchor and
+        stay TWO keys without it — on the loader output, not a direct call.
+        Red before the fix (anchor never reached the key), green after."""
+        served = self._served({"trader": ["gemini-3.8-flash-n"]})
+        prompts = {"trader": "a9950a9e"}
+        recs = [
+            _rec("pre", "S1", "2026-01-05", 50, commit="65988c79aaaa",
+                 served_models=served, prompt_resolved=prompts),
+            _rec("post", "S2", "2026-01-05", 55, commit="082be047bbbb",
+                 served_models=served, prompt_resolved=prompts),
+        ]
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        labels = {("S1", "2026-01-05"): m._label("S1", "2026-01-05", 1.0),
+                  ("S2", "2026-01-05"): m._label("S2", "2026-01-05", 2.0)}
+        anchored = m.load_ledger_signals(ledger, labels, FIXED,
+                                        analysis_anchor="082be047")
+        keys = set(anchored["version_key"])
+        assert len(keys) == 1, keys
+        only = next(iter(keys))
+        assert "anchor=082be047" in only
+        # No anchor -> each record's own sealed commit anchors its key →
+        # the two deploys split (fail-closed, never silently merged).
+        unanchored = m.load_ledger_signals(ledger, labels, FIXED)
+        keys2 = set(unanchored["version_key"])
+        assert len(keys2) == 2, keys2
+        assert any("anchor=65988c79" in k for k in keys2)
+        assert any("anchor=082be047" in k for k in keys2)
+
+    def test_key_matches_register_format(self):
+        """DAV-2166 🔴-2: the script key must reconcile against register
+        §3 ``analysis_version_id`` — AV1 prefix, 8-char anchor, forecast
+        contract + -T10, full 64-char resolved hash, explicit
+        ``unverifiable`` custom (ledger never seals it), served set."""
+        served = self._served({"trader": ["gemini-3.8-flash-n"]})
+        rec = _rec("r", "S", "2026-01-05", 50, commit="082be047xxxx",
+                   contract="b1.v1", served_models=served,
+                   prompt_resolved={"trader": "h"})
+        key = m._record_version_key(rec, anchor="082be047")
+        parts = key.split("|")
+        assert parts[0] == "AV1"
+        fields = dict(p.split("=", 1) for p in parts[1:])
+        assert fields["anchor"] == "082be047"
+        assert fields["contract"] == "b1.v1-T10"
+        assert len(fields["resolved"]) == 64
+        assert fields["custom"] == "unverifiable"
+        assert fields["served"] == "gemini-3.8-flash-n"
+        # The custom leg never borrows the register hash — the ledger did
+        # not observe it, so it is honestly unverifiable, not b0ababd6….
+        assert "b0ababd6" not in key
+
+    def test_served_model_change_switches_key(self):
+        """served_model 变化时切换版本 — even under the same frozen
+        anchor and identical prompts/commit."""
+        a = _rec("a", "S", "2026-01-05", 50, commit="082be047",
+                 served_models=self._served({"trader": ["gemini-3.8-flash-n"]}))
+        b = _rec("b", "S", "2026-01-05", 50, commit="082be047",
+                 served_models=self._served({"trader": ["gemini-3.8-flash-high"]}))
+        ka = m._record_version_key(a, anchor="082be047")
+        kb = m._record_version_key(b, anchor="082be047")
+        assert ka != kb
+        assert "served=gemini-3.8-flash-n" in ka
+        assert "served=gemini-3.8-flash-high" in kb
+
+    def test_prompt_hash_change_switches_key(self):
+        """提示词等价哈希变化也切换版本 (resolved / custom 任一变即变)。"""
+        base = dict(commit="082be047",
+                    served_models=self._served({"trader": ["m1"]}),
+                    prompt_resolved={"trader": "h1"},
+                    custom_prompt={"roles": {"trader": {"resolved_hash": "x"}}})
+        changed = dict(base)
+        changed["prompt_resolved"] = {"trader": "h2"}
+        ka = m._record_version_key(_rec("a", "S", "2026-01-05", 50, **base),
+                                   anchor="082be047")
+        kb = m._record_version_key(_rec("b", "S", "2026-01-05", 50, **changed),
+                                   anchor="082be047")
+        assert ka != kb
+
+    def test_multi_model_report_flagged(self, tmp_path):
+        """多模型报告被标记: a report whose served_models span >1 model is
+        flagged in the freeze block and counted in the funnel."""
+        days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+        recs, labs = [], []
+        for i in range(12):
+            recs.append(_rec(f"ok{i}", f"A{i:02d}", "2026-01-05", 30 + i,
+                             sealed_at="2026-01-05 08:00:00.000000",
+                             served_models=self._served({"trader": ["m1"]})))
+            labs.append(m._label(f"A{i:02d}", "2026-01-05", 0.1 * i))
+        recs.append(_rec("mm1", "MM", "2026-01-05", 50,
+                         sealed_at="2026-01-05 08:00:00.000000",
+                         served_models=self._served(
+                             {"trader": ["m1", "m2"]})))
+        labs.append(m._label("MM", "2026-01-05", 1.0))
+        ledger = tmp_path / "l.jsonl"; _write_ledger(ledger, recs)
+        lab = tmp_path / "lab.jsonl"; _write_labels(lab, labs)
+        cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
+        # the multi-model report carries a different served set -> its own
+        # version key. Select the m1 queue explicitly (single-version rule);
+        # the multi-model report is excluded from the formal queue yet still
+        # flagged in the freeze block (报告级披露独立于版本分键).
+        probe = m.load_ledger_signals(ledger,
+                                      {("A00", "2026-01-05"): labs[0]},
+                                      FIXED, analysis_anchor="082be047")
+        m1_key = sorted(probe.loc[probe["served_models"].map(len) == 1,
+                                  "version_key"])[0]
+        out = m.run(ledger, lab, tmp_path / "o", calendar_path=cal,
+                    analysis_anchor="082be047", report_kind="descriptive",
+                    version_key=m1_key)
+        fb = out["freeze"]
+        assert fb["multi_model_reports"] == ["mm1"]
+        assert fb["multi_model_count"] == 1
+        assert fb["report_kind"] == "descriptive"
+        assert fb["plan_sha256"] == m.FREEZE_PLAN_SHA256_SIGNED
+        assert fb["register_sha256"] == m.FREEZE_REGISTER_SHA256_SIGNED
+        assert fb["analysis_anchor"] == "082be047"
+        assert fb["served_model_distribution"]["m1"] == 12
+        assert fb["served_model_distribution"]["m1+m2"] == 1
+        # run.json first screen carries the same freeze block.
+        runj = json.loads((tmp_path / "o" / "run.json").read_text())
+        assert runj["freeze"]["multi_model_reports"] == ["mm1"]
+        assert runj["freeze"]["plan_sha256"] == fb["plan_sha256"]
+        assert out["verdict"]["funnel"]["multi_model_reports"] == 1
+
+    def test_missing_served_models_counts_none(self):
+        rec = _rec("r", "S", "2026-01-05", 50)
+        served, missing = m._record_served_set(rec)
+        assert served == [] and missing == 0
+        assert "served=none" in m._record_version_key(rec)
 
 
 class TestFunnel:
