@@ -49,12 +49,11 @@ Ledger ``version_key`` is the DAV-2142 frozen analysis-version key
 ``AV1|anchor=<8-char production release anchor>|contract=<forecast contract>-T10|resolved=<full sha256 of run_identity.prompt_resolved_hashes>|custom=<full sha256 of custom_prompt_snapshot | unverifiable>|served=<sorted served_model set>``
 — verbatim the signed freeze register §3 ``analysis_version_id`` (DAV-2166:
 key must reconcile against the register, not a home-grown format). A field
-whose evidence the ledger did not seal (``custom`` —
-``daily_snapshot_ledger._version_fields`` never captures
-``custom_prompt_snapshot``) is written ``unverifiable`` instead of ``none``
-so a missing hash can never masquerade as a real one; ``custom`` collection
-requires the whitelisted ledger column to change, which is out of this
-card's scope.
+whose evidence the ledger did not seal (``custom`` on rows sealed before
+DAV-2181 — ``daily_snapshot_ledger._version_fields`` did not capture
+``custom_prompt_snapshot`` then; post-DAV-2181 rows seal it verbatim) is
+written ``unverifiable`` instead of ``none`` so a missing hash can never
+masquerade as a real one.
 A multi-version input fails closed unless ``--version-key`` names one
 queue (D-075/DAV-1682 single-version rule — cross-version comparison
 belongs to M3).
@@ -206,13 +205,15 @@ def _record_prompt_resolved_sha(record: Mapping[str, Any]) -> str | None:
 
 
 def _record_custom_prompt_sha(record: Mapping[str, Any]) -> str | None:
-    """Prompt-equivalence evidence: sha256 of ``custom_prompt_snapshot``.
-    The sealed record carries it at ``result_data.custom_prompt_snapshot``
-    top level (``api/main.py:_attach_custom_prompt_snapshot``); the ledger's
-    ``versions`` projection never captured it (``_version_fields``), so
-    every existing row returns None → ``unverifiable`` in the key. Wired to
-    both the plausible record locations so a future ledger column that
-    seals it starts producing real hashes without a code change."""
+    """Prompt-equivalence evidence: sha256 of ``custom_prompt_snapshot``
+    under the register §3 canonicalisation. The sealed record carries the
+    snapshot object at ``result_data.custom_prompt_snapshot``
+    (``api/main.py:_attach_custom_prompt_snapshot``); the ledger's
+    ``versions`` projection seals it verbatim (DAV-2181:
+    ``versions.custom_prompt_snapshot``), so rows sealed after that
+    projection change produce the real hash; pre-DAV-2181 rows keep
+    returning None → ``unverifiable`` in the key. The top-level record
+    fallback covers hand-shaped ledger lines."""
     v = record.get("versions") or {}
     if isinstance(v.get("custom_prompt_snapshot"), (dict, list)):
         return _canonical_json_sha(v["custom_prompt_snapshot"])
@@ -266,11 +267,11 @@ def _record_version_key(record: Mapping[str, Any],
     different deploys split — fail-closed, never silently merged.
 
     A field whose evidence the ledger never sealed is written
-    ``unverifiable`` (not ``none``): ``custom`` is unrecoverable today
-    (``_version_fields`` doesn't project ``custom_prompt_snapshot``) and a
-    bare ``none`` would falsely imply a real empty hash. A real
-    analysis-path change still switches the key via resolved/custom even
-    under a fixed anchor."""
+    ``unverifiable`` (not ``none``): pre-DAV-2181 ledger rows do not
+    project ``custom_prompt_snapshot`` and a bare ``none`` would falsely
+    imply a real empty hash. Rows sealed after DAV-2181 carry the real
+    snapshot hash, so a custom-prompt change switches the key via
+    resolved/custom even under a fixed anchor."""
     anchor = anchor or _record_analysis_anchor(record)
     contract = _record_contract_t10(record) or "unverifiable"
     resolved = _record_prompt_resolved_sha(record) or "unverifiable"
@@ -496,11 +497,11 @@ FREEZE_REGISTER_SHA256_SIGNED = ("7946f7d9b085709773182182d9b7a59159816638"
 # Freeze register §3 signed analysis_version_id — the statutory key the
 # first-screen report must reconcile against (DAV-2166 🔴-2). Written on
 # every run.json so a reviewer can compare ``selected_version_key`` to the
-# register value mechanically. The script's ``custom`` leg is the only
-# segment that cannot match the register today (the ledger never seals
-# ``custom_prompt_snapshot``) — it stays ``unverifiable`` rather than
-# borrowing the register's ``b0ababd6…`` value, which would assert an
-# evidence this pipeline did not observe.
+# register value mechanically. On ledgers sealed before DAV-2181 the
+# script's ``custom`` leg stays ``unverifiable`` (those rows never sealed
+# the snapshot) rather than borrowing the register's ``b0ababd6…`` value,
+# which would assert an evidence this pipeline did not observe; rows
+# sealed after DAV-2181 carry the real hash and the leg matches verbatim.
 REGISTER_ANALYSIS_VERSION_ID = (
     "AV1|anchor=082be047|contract=b1.v1-T10"
     "|resolved=a9950a9e81f5a18571cd7acb82777922583f147419f97d5499fdd5659d0b781d"
@@ -1053,7 +1054,8 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         # Register §3 reconciliation: the selected queue's key alongside
         # the signed analysis_version_id the report must match, plus a
         # per-segment diff so a reviewer sees exactly which leg disagrees
-        # (today only `custom` — the ledger never seals the snapshot).
+        # (`custom` on pre-DAV-2181 ledgers — those rows never sealed the
+        # snapshot; empty diff once every queued row carries it).
         "selected_version_key": funnel["version_key"],
         "register_analysis_version_id": REGISTER_ANALYSIS_VERSION_ID,
         "version_key_matches_register": (

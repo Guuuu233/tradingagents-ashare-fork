@@ -519,3 +519,49 @@ def test_run_date_help_says_local_day(capsys):
     out = capsys.readouterr().out
     assert "Asia/Shanghai" in out
     assert "today UTC" not in out
+
+
+# ---------------------------------------------------------------------------
+# DAV-2181: custom_prompt_snapshot 补采 — versions projection seals the
+# per-report snapshot object verbatim
+
+
+def test_version_fields_seal_custom_prompt_snapshot():
+    """``versions.custom_prompt_snapshot`` carries the result_data snapshot
+    verbatim (register §3 ``custom`` leg hashes the canonical form of this
+    object downstream)."""
+    cps = {"enabled": True, "placement": "after_data",
+           "roles": {"trader": {"resolved_text": "x",
+                                "resolved_hash": "h",
+                                "resolved_length": 1, "injected": True}}}
+    rec = mod.build_record(_row(), _rd(custom_prompt_snapshot=cps),
+                           SEALED, "2026-07-28", _cal())
+    assert rec["versions"]["custom_prompt_snapshot"] == cps
+
+
+def test_version_fields_custom_prompt_absent_is_none():
+    """Rows whose result_data carries no snapshot seal ``None`` — the
+    eval-side key writes ``unverifiable`` for these, never ``none``."""
+    rec = mod.build_record(_row(), _rd(), SEALED, "2026-07-28", _cal())
+    assert rec["versions"]["custom_prompt_snapshot"] is None
+
+
+def test_version_fields_custom_prompt_survives_canonical_sha():
+    """The sealed object must hash under the register §3 canonicalisation
+    (sort_keys / ensure_ascii=False / tight separators) to a stable 64-hex
+    value — same snapshot, same hash, regardless of row."""
+    import hashlib as _hl
+    cps = {"enabled": False, "placement": "after_data",
+           "roles": {"t": {"resolved_text": "", "resolved_hash": None,
+                           "resolved_length": 0, "injected": False}}}
+    r1 = mod.build_record(_row(id="a"), _rd(custom_prompt_snapshot=cps),
+                          SEALED, "2026-07-28", _cal())
+    r2 = mod.build_record(_row(id="b"), _rd(custom_prompt_snapshot=cps),
+                          SEALED, "2026-07-28", _cal())
+    def _h(o):
+        blob = json.dumps(o, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"))
+        return _hl.sha256(blob.encode("utf-8")).hexdigest()
+    h1 = _h(r1["versions"]["custom_prompt_snapshot"])
+    assert h1 == _h(r2["versions"]["custom_prompt_snapshot"])
+    assert len(h1) == 64

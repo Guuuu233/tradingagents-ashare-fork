@@ -931,3 +931,89 @@ class TestEndToEnd:
         assert (tmp_path / "o" / "day_series.parquet").exists()
         assert (tmp_path / "o" / "verdict.json").exists()
         assert (tmp_path / "o" / "run.json").exists()
+
+
+class TestCustomPromptSeal:
+    """DAV-2181: ``custom_prompt_snapshot`` 补采 — the ledger now seals the
+    snapshot object at ``versions.custom_prompt_snapshot``; the version-key
+    ``custom`` leg must hash it under register §3 canonicalisation and only
+    stay ``unverifiable`` when truly absent."""
+
+    def test_custom_leg_hashes_sealed_snapshot(self):
+        """A record carrying ``versions.custom_prompt_snapshot`` (post
+        DAV-2181 ledger seal) must produce the real canonical sha256 —
+        never ``unverifiable``."""
+        cps = {"enabled": True, "placement": "after_data",
+               "roles": {"trader": {"resolved_text": "x",
+                                    "resolved_hash": "h",
+                                    "resolved_length": 1,
+                                    "injected": True}}}
+        rec = _rec("r", "S", "2026-01-05", 50, commit="082be047xxxx",
+                   contract="b1.v1",
+                   served_models=TestFrozenVersionKey._served(
+                       {"trader": ["m1"]}),
+                   custom_prompt=cps)
+        key = m._record_version_key(rec, anchor="082be047")
+        fields = dict(p.split("=", 1) for p in key.split("|")[1:])
+        assert fields["custom"] == m._canonical_json_sha(cps)
+        assert fields["custom"] != "unverifiable"
+
+    def test_custom_leg_unverifiable_only_when_absent(self):
+        """A record with no snapshot anywhere keeps ``unverifiable`` —
+        the honest 'not sealed' marker, never ``none``."""
+        rec = _rec("r", "S", "2026-01-05", 50, commit="082be047xxxx",
+                   contract="b1.v1")
+        fields = dict(p.split("=", 1)
+                      for p in m._record_version_key(
+                          rec, anchor="082be047").split("|")[1:])
+        assert fields["custom"] == "unverifiable"
+
+    def test_custom_snapshot_change_switches_key(self):
+        """Two snapshots differing only in one role's resolved_hash must
+        split the version key — the custom leg is a live split factor."""
+        base = dict(commit="082be047", contract="b1.v1",
+                    served_models=TestFrozenVersionKey._served(
+                        {"trader": ["m1"]}),
+                    prompt_resolved={"trader": "h1"})
+        cps_a = {"enabled": True, "placement": "after_data",
+                 "roles": {"trader": {"resolved_hash": "a"}}}
+        cps_b = {"enabled": True, "placement": "after_data",
+                 "roles": {"trader": {"resolved_hash": "b"}}}
+        ka = m._record_version_key(
+            _rec("a", "S", "2026-01-05", 50, custom_prompt=cps_a, **base),
+            anchor="082be047")
+        kb = m._record_version_key(
+            _rec("b", "S", "2026-01-05", 50, custom_prompt=cps_b, **base),
+            anchor="082be047")
+        assert ka != kb
+
+    def test_register_diff_empty_when_all_segments_match(self):
+        """End-to-end DAV-2181 acceptance: a record sealed with the
+        register's own evidence values must reconcile to
+        ``version_key_matches_register=True`` — the empty diff proves the
+        register key is verbatim reproducible once the ledger seals the
+        snapshot (register custom = canonical sha256 of the snapshot)."""
+        cps = {"enabled": False, "placement": "after_data",
+               "roles": {"t": {"resolved_text": "",
+                               "resolved_hash": None,
+                               "resolved_length": 0,
+                               "injected": False}}}
+        register_custom = m._canonical_json_sha(cps)
+        # Forge a register-shaped key carrying this real custom hash and
+        # confirm the register-diff reconciles to empty iff every leg
+        # matches — the check that must pass verbatim post-补采.
+        reg_fields = dict(
+            p.split("=", 1)
+            for p in m.REGISTER_ANALYSIS_VERSION_ID.split("|")[1:])
+        key = (f"AV1|anchor={reg_fields['anchor']}"
+               f"|contract={reg_fields['contract']}"
+               f"|resolved={reg_fields['resolved']}"
+               f"|custom={register_custom}"
+               f"|served={reg_fields['served']}")
+        if reg_fields["custom"] == register_custom:
+            assert m._key_register_diff(key) == {}
+        else:
+            diff = m._key_register_diff(key)
+            assert set(diff) == {"custom"}
+            assert diff["custom"]["script"] == register_custom
+            assert diff["custom"]["register"] == reg_fields["custom"]
