@@ -590,9 +590,12 @@ def build_record(
     # DAV-1506 (B-1): canonical rows rebuild the legacy horizons.<h> and
     # top-level market_data_context view from the authoritative *_term
     # slices so pit/horizon extraction reads identical values on both
-    # storage layouts. DAV-2129: read via the authoritative view so a
-    # stale ``horizons`` alias mirror (579-row shape) can never override
-    # the term slice on legacy rows either.
+    # storage layouts. DAV-2129: read via the authoritative view so this
+    # call site uses the same normalisation as ``_horizon_judgement``.
+    # Note (DAV-2258 🟢-1): the consumers below (``_classify_input_pit``,
+    # ``_version_fields``) read only top-level keys, so on the legacy rows
+    # this view remaps ``horizons`` without changing their result — it is
+    # 口径归一, not a behaviour fix for a stale ``horizons`` mirror.
     from tradingagents.storage.result_data_compat import (
         result_data_authoritative_view,
     )
@@ -932,8 +935,10 @@ def reattest_entries_for_row(
     if not isinstance(result_data, dict):
         result_data = {}
     if result_data:
-        # DAV-2129: same authoritative-view read as build_record — a stale
-        # ``horizons`` alias mirror must not win over ``*_term``.
+        # DAV-2129: same authoritative-view read as build_record (口径归一
+        # with ``_horizon_judgement``); the classifier below reads only the
+        # top-level market_data_context, so the view is a no-op here on
+        # legacy rows — see the build_record note (DAV-2258 🟢-1).
         from tradingagents.storage.result_data_compat import (
             result_data_authoritative_view,
         )
