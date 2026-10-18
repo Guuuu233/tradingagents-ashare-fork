@@ -32,6 +32,18 @@ Point-in-time discipline (the M1 forward-looking rule):
   Industry-unassigned rows (sw_l1_code empty) still feed the market prior
   (they carry real y_rel information) but get no industry line.
 
+Explicit query days (DAV-2240 / 冻结计划 §2.4 W0):
+  ``build_pit_base_rates`` also accepts ``query_days`` — the formal
+  evaluation's signal days. They join the panel's own signal-day grid in
+  the same date-ordered walk, so a query day AFTER the panel's last signal
+  day still gets a base rate from every label matured on or before it
+  (W0 expanding window as of that day). The panel itself is neither
+  extended nor recomputed, and a panel signal day keeps byte-identical
+  counters: a later query day only appends new cells, it never rewrites an
+  earlier day's running state. Query days are rendered in the panel's own
+  day shape (``YYYYMMDD`` vs ``YYYY-MM-DD`` auto-detected); panel day
+  strings are never rewritten.
+
 Window parameter W (maturity-days lookback):
   Only samples matured within the trailing W maturity days before T count.
   W=0 (default) = expanding window, all history; W>0 = rolling window over
@@ -66,6 +78,7 @@ import resource
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -130,10 +143,35 @@ def load_panel(chunks_dir: Path) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 # PIT expanding / rolling base-rate engine
 # --------------------------------------------------------------------------
+def normalise_days(days: Iterable[str] | None,
+                   like: str | None = None) -> list[str]:
+    """DAV-2240: sorted, de-duplicated day strings rendered like ``like``.
+
+    ``like`` is a reference day in the caller's own format (a panel
+    ``signal_date`` value): a digit-only reference renders ``YYYYMMDD``, a
+    dashed reference renders ``YYYY-MM-DD``. Days already in the reference
+    shape are kept verbatim; day strings are never otherwise rewritten.
+    """
+    if not days:
+        return []
+    dashed = bool(like) and "-" in str(like)
+    out: set[str] = set()
+    for d in days:
+        s = str(d)
+        if dashed and "-" not in s and len(s) == 8 and s.isdigit():
+            s = f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        elif like and not dashed and "-" in s:
+            s = s.replace("-", "")
+        out.add(s)
+    return sorted(out)
+
+
 def build_pit_base_rates(panel: pd.DataFrame,
                          shrink_ms: tuple[int, ...],
                          window_days: tuple[int, ...],
-                         min_cell_n: int = 1) -> tuple[pd.DataFrame, dict]:
+                         min_cell_n: int = 1,
+                         query_days: Iterable[str] | None = None
+                         ) -> tuple[pd.DataFrame, dict]:
     """Per (signal_date T, industry j) shrunken base rate, strictly matured
     labels only (actual_exit_date <= T, trailing W maturity days).
 
@@ -142,8 +180,19 @@ def build_pit_base_rates(panel: pd.DataFrame,
     market. For W>0 additionally keep FIFO queues of matured (day, l1, y) to
     expire labels that fall out of the trailing window. No (signal x label)
     materialisation — O(#matured_labels + #signal_days x #industries).
+
+    ``query_days`` (DAV-2240): explicit query-date set = the formal
+    evaluation's signal days. The union of the panel's own signal days and
+    the query days is walked in date order, so a query day outside the
+    panel's day grid receives the W0 expansion **as of that day** (same
+    panel, same matured rule) while every panel day keeps its previous
+    values verbatim. Days are rendered like the panel's own ``signal_date``
+    (see :func:`normalise_days`).
     """
-    sig_days = np.sort(panel["signal_date"].unique())
+    panel_days = sorted({str(d) for d in panel["signal_date"].unique()})
+    q_days = normalise_days(query_days,
+                            panel_days[0] if panel_days else None)
+    sig_days = sorted(set(panel_days) | set(q_days))
     l1_codes = sorted(c for c in panel["l1"].unique() if c)
 
     # matured labels grouped by maturation day (only matured rows can enter)
@@ -155,6 +204,11 @@ def build_pit_base_rates(panel: pd.DataFrame,
     # (window is in maturity days; map each mat day to its position)
     out_rows = []
     summary = {"signal_days": len(sig_days),
+               "panel_signal_days": len(panel_days),
+               "query_days": len(q_days),
+               "query_days_not_in_panel": len(set(q_days) - set(panel_days)),
+               "query_days_after_panel_max": sum(
+                   1 for d in q_days if panel_days and d > panel_days[-1]),
                "industries": len(l1_codes),
                "matured_labels": len(matured),
                "configs": []}
