@@ -7,14 +7,17 @@
 覆盖（对齐卡要求的三情形 + 各原因码）：
 
 * 放行：父目录存在可写、目标不存在（launchd 可自建）；
-* 放行：父目录存在可写、目标已存在且属主为当前 uid 且可追加；
+* 放行：父目录存在可写、目标已存在、无 provenance 扩展属性、属主为当前 uid
+  且可追加；
+* 拒绝：目标已存在且带 ``com.apple.provenance``（10-18 事故真因形态：属主/权限
+  正常仍被 launchd 判 EX_CONFIG 78）；
 * 拒绝：父目录不存在 / 不可写；
-* 拒绝：目标已存在但属主非当前 uid（10-18 首次安装 EX_CONFIG 78 的成因形态）；
+* 拒绝：目标已存在但属主非当前 uid；
 * 拒绝：目标已存在但不可写（mode 444）；目标不是普通文件（目录）；
 * 拒绝：旧版包装脚本遗留 —— 按文件名（wrapper-diagnostic.log）与
   按目录（.launchd/、/tmp/ta-launchd-die-stamps-*）；
 * 拒绝：占位符未替换、相对路径、plist 无法解析；
-* CLI 退出码契约：0 / 2 / 3，且 JSON 输出可被消费。
+* CLI 退出码契约：0 / 2 / 3（无参与坏参数也走 3），且 JSON 输出可被消费。
 """
 from __future__ import annotations
 
@@ -71,13 +74,15 @@ def test_writable_parent_missing_target_passes(tmp_path):
 
 
 def test_existing_owned_appendable_file_passes(tmp_path):
-    """已存在的日志文件属主为当前 uid 且可写 → 放行。"""
+    """已存在、无 provenance、属主为当前 uid 且可写 → 放行。"""
     log = tmp_path / "logs" / "uvicorn-abc123.log"
     log.parent.mkdir()
     log.write_text("prev\n")
+    _drop_provenance(log)
     plist = _write_plist(tmp_path / "a.plist", str(log), str(log))
     report = mod.check_plist(plist)
     assert report.ok, [f.message for f in report.failures]
+    assert not mod._carries_provenance(str(log))  # 前提：确实无 provenance 属性
     assert len(report.findings) == 2
     assert log.read_text() == "prev\n"  # 未改内容
 
@@ -173,6 +178,81 @@ def test_foreign_owner_detected_via_lstat_stub(tmp_path, monkeypatch):
     assert "属主" in report.failures[0].message
 
 
+def _drop_provenance(path: Path) -> None:
+    """确保沙箱文件不带 provenance（macOS 可能从父目录继承该属性）。
+
+    ``xattr -c`` 在属性不存在时也返回 1，故不 check。
+    """
+    subprocess.run([mod.XATTR_BIN, "-c", mod.PROVENANCE_XATTR, "--", str(path)])
+
+
+def _set_provenance(path: Path) -> None:
+    """给沙箱文件打上 com.apple.provenance，模拟 bash/>> 写出的既有日志。"""
+    subprocess.run(
+        [mod.XATTR_BIN, "-w", mod.PROVENANCE_XATTR, "0100", str(path)], check=True
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 拒绝：com.apple.provenance（10-18 事故真因形态）                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_provenance_target_rejected_with_owner_and_mode_intact(tmp_path):
+    """10-18 事故形态：属主=当前 uid、mode 0644、只因带 provenance 就必须拒。
+
+    旧实现只查 mode/uid，对这一形态判 PASS（复审 DAV-2226 红队实测）。
+    """
+    log = tmp_path / "logs" / "uvicorn-082be047.log.pre-launchd-20261018T0210Z"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+    os.chmod(log, 0o644)
+    _set_provenance(log)
+
+    st = log.stat()
+    assert st.st_uid == os.getuid() and st.st_mode & 0o777 == 0o644
+    assert os.access(log, os.W_OK)
+
+    plist = _write_plist(tmp_path / "a.plist", str(log), str(log))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert [f.reason_code for f in report.failures] == [
+        mod.RC_TARGET_PROVENANCE, mod.RC_TARGET_PROVENANCE,
+    ]
+    assert "改名留档" in report.failures[0].message
+
+
+def test_provenance_check_precedes_owner_check(tmp_path, monkeypatch):
+    """provenance 判定在属主判定之前——真因优先，且不依赖 uid 改写。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+    _set_provenance(log)
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+    assert mod.check_plist(plist).failures[0].reason_code == mod.RC_TARGET_PROVENANCE
+
+
+def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
+    """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+    _drop_provenance(log)
+    before = log.stat().st_size
+    assert mod._carries_provenance(str(log)) is False
+    assert mod._carries_provenance(str(tmp_path / "nope.log")) is False
+    assert log.stat().st_size == before  # 零副作用：不预创建、不追加
+
+
+def test_provenance_probe_monkeypatched(monkeypatch, tmp_path):
+    """xattr(1) 不可用/异常时 fail-closed（视为带属性）——不静默放行。"""
+    def boom(*a, **k):
+        raise OSError("no xattr(1) here")
+
+    monkeypatch.setattr(mod.subprocess, "run", boom)
+    assert mod._carries_provenance(str(tmp_path)) is True
+
+
 # --------------------------------------------------------------------------- #
 # 拒绝：旧版包装脚本遗留物                                                     #
 # --------------------------------------------------------------------------- #
@@ -189,6 +269,18 @@ def test_legacy_wrapper_filename_rejected(tmp_path, name):
     assert report.failures[0].reason_code == mod.RC_LEGACY_NAME
 
 
+@pytest.mark.parametrize("name", ["Wrapper-Diagnostic.log", "WRAPPER-DIAGNOSTIC.LOG"])
+def test_legacy_wrapper_filename_case_insensitive(tmp_path, name):
+    """宿主机卷大小写不敏感：logs/Wrapper-Diagnostic.log 实测命中真实文件 → 需 casefold。"""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "Wrapper-Diagnostic.log").write_text("old\n")
+    plist = _write_plist(tmp_path / "a.plist", str(logs / name))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert report.failures[0].reason_code == mod.RC_LEGACY_NAME
+
+
 def test_legacy_wrapper_dir_rejected(tmp_path):
     d = tmp_path / "logs" / ".launchd"
     d.mkdir(parents=True)
@@ -198,18 +290,17 @@ def test_legacy_wrapper_dir_rejected(tmp_path):
     assert report.failures[0].reason_code == mod.RC_LEGACY_DIR
 
 
-def test_legacy_tmp_stamp_dir_rejected(tmp_path):
-    """wrapper 时代 /tmp 兜底戳目录形态（/tmp/ta-launchd-die-stamps-<uid>-<sha>）。"""
-    import shutil
-    d = Path("/tmp/ta-launchd-die-stamps-501-082be047-test")
-    if d.exists():
-        shutil.rmtree(d)
+def test_legacy_tmp_stamp_dir_rejected(tmp_path, monkeypatch):
+    """wrapper 时代 /tmp 兜底戳目录形态（/tmp/ta-launchd-die-stamps-<uid>-<sha>）。
+
+    旧写法在真实 /tmp 建/删目录（违背「全部用例在 tmp_path 沙箱跑」的声明），
+    改用 monkeypatch 改写 LEGACY_DIR_PREFIXES。
+    """
+    monkeypatch.setattr(mod, "LEGACY_DIR_PREFIXES", (str(tmp_path / "ta-launchd-die-stamps-"),))
+    d = tmp_path / "ta-launchd-die-stamps-501-082be047-test"
     d.mkdir()
-    try:
-        plist = _write_plist(tmp_path / "a.plist", str(d / "restart-stamps-1200"))
-        report = mod.check_plist(plist)
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
+    plist = _write_plist(tmp_path / "a.plist", str(d / "restart-stamps-1200"))
+    report = mod.check_plist(plist)
     assert not report.ok
     assert report.failures[0].reason_code == mod.RC_LEGACY_DIR
 
@@ -292,6 +383,16 @@ def test_cli_exit_3_on_missing_file(tmp_path):
     assert "文件不存在" in r.stderr
 
 
+def test_cli_usage_errors_are_exit_3_not_2(tmp_path):
+    """无参 / 未知参数 → EXIT_USAGE(3)，不得与 EXIT_PREFLIGHT_FAILED(2) 撞码。"""
+    assert _run([], cwd=tmp_path).returncode == mod.EXIT_USAGE
+    assert _run(["--bogus-flag"], cwd=tmp_path).returncode == mod.EXIT_USAGE
+
+
+def test_cli_help_exits_0(tmp_path):
+    assert _run(["--help"], cwd=tmp_path).returncode == mod.EXIT_OK
+
+
 def test_cli_json_output(tmp_path):
     (tmp_path / "logs").mkdir()
     plist = _write_plist(tmp_path / "a.plist", str(tmp_path / "logs" / "uvicorn.log"))
@@ -314,10 +415,21 @@ def test_cli_json_failure_carries_reason_code(tmp_path):
     assert data["reports"][0]["findings"][0]["reason_code"] == mod.RC_LEGACY_NAME
 
 
-def test_repo_templates_have_expected_log_keys():
-    """仓库内 4 个 plist 模板都能被解析（占位符未替换时应判 FAIL，不是崩溃）。"""
-    for plist in sorted((ROOT / "releases" / "launchd").glob("*.plist")):
-        if mod._PLACEHOLDER_RE.search(plist.read_text(encoding="utf-8", errors="ignore")):
-            continue  # 含占位符的模板只验到「解析不炸」即可
-        report = mod.check_plist(plist)
-        assert isinstance(report.ok, bool)
+def test_repo_templates_parse_after_placeholder_substitution(tmp_path):
+    """仓库内 4 个 plist 模板：占位符替换后都能被 plistlib 解析。
+
+    断言是真实断言（复审 DAV-2226 🟡-2：旧写法遇到占位符就 continue，等于把会炸的
+    模板全跳过了——而 ta-daily-reports.plist 注释里的 ``--`` 确实让 plistlib 报
+    ExpatError，plutil -lint 却一直判 OK）。
+    """
+    templates = sorted((ROOT / "releases" / "launchd").glob("*.plist"))
+    assert len(templates) == 4, [p.name for p in templates]
+    for src in templates:
+        rendered = mod._PLACEHOLDER_RE.sub(
+            "PLACEHOLDER", src.read_text(encoding="utf-8")
+        ).encode()
+        obj = plistlib.loads(rendered)  # 解析失败即用例失败
+        assert isinstance(obj, dict), src.name
+        target = tmp_path / src.name
+        target.write_bytes(plistlib.dumps(obj))
+        assert isinstance(mod.check_plist(target).ok, bool), src.name

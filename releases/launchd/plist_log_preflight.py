@@ -6,18 +6,20 @@
 ``launchctl bootstrap gui/$UID <plist>`` 在作业 ``StandardOutPath`` /
 ``StandardErrorPath`` 打不开时，launchd 直接拒绝装载并返回
 ``EX_CONFIG``（= 78）。10-18 首次安装失败即属此情形：日志文件是
-**旧版包装脚本时代遗留的**文件（属主/权限异常），已被改名留档处置。
-launchd 自身只在 stderr 留一行，不区分「权限问题」与「文件不存在」，
-运维侧无法在安装前察觉。
+**旧版包装脚本时代由 bash/``>>`` 写的既存文件**，带着
+``com.apple.provenance`` 扩展属性（属主/权限位完全正常），改名留档后由
+launchd 重建同名文件才恢复。launchd 自身只在 stderr 留一行，不区分
+「权限问题」与「文件打不开」，运维侧无法在安装前察觉。
 
 本脚本做安装**前**的确定性检查，只读、不改任何文件、不碰生产：
 
 1. 解析 plist（``plistlib``，标准库；占位符 ``{{NAME}}`` 必须先替换）；
 2. 对每个 ``StandardOutPath`` / ``StandardErrorPath`` 判定：
    - 父目录存在、是目录、可写（必要时可创建）；
-   - 目标不存在则放行（launchd 会自建）；已存在必须是**普通文件**、
+   - 目标不存在则放行（launchd 会自建）；已存在必须是**普通文件**、**不带
+     ``com.apple.provenance``**（该属性即「非 launchd 创建」的判据）、
      **属主为当前 uid**、**可追加**；
-   - 不属于旧版包装脚本遗留物（废弃文件名 / 已废弃目录 / 属主异常）。
+   - 不属于旧版包装脚本遗留物（废弃文件名 / 已废弃目录）。
 3. 任一条不满足 → **fail-closed**：打印原因码 + 明确文案，退出码非 0，
    绝不静默放行。
 
@@ -47,6 +49,7 @@ import plistlib
 import pwd
 import re
 import stat
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -62,13 +65,17 @@ RC_KEY_NOT_ABSOLUTE = "LOGPATH_NOT_ABSOLUTE"
 RC_PARENT_MISSING = "LOGPATH_PARENT_MISSING"
 RC_PARENT_NOT_DIR = "LOGPATH_PARENT_NOT_DIR"
 RC_PARENT_NOT_WRITABLE = "LOGPATH_PARENT_NOT_WRITABLE"
-RC_PARENT_UNUSABLE = "LOGPATH_PARENT_UNUSABLE"
 RC_TARGET_NOT_REGULAR = "LOGPATH_TARGET_NOT_REGULAR_FILE"
+RC_TARGET_PROVENANCE = "LOGPATH_TARGET_PROVENANCE_XATTR"
 RC_TARGET_NOT_OWNED = "LOGPATH_TARGET_NOT_OWNED_BY_UID"
 RC_TARGET_NOT_APPENDABLE = "LOGPATH_TARGET_NOT_APPENDABLE"
 RC_LEGACY_NAME = "LOGPATH_LEGACY_WRAPPER_ARTIFACT"
 RC_LEGACY_DIR = "LOGPATH_LEGACY_WRAPPER_DIRECTORY"
 RC_OPEN_PROBE = "LOGPATH_OPEN_PROBE_FAILED"
+
+#: 宿主 ``/usr/bin/xattr``；判 provenance 用（macOS Python 无 os.getxattr）。
+XATTR_BIN = "/usr/bin/xattr"
+PROVENANCE_XATTR = "com.apple.provenance"
 
 # --- 旧版包装脚本（ta-launchd-wrapper.sh 时代）遗留物黑名单 ------------------
 # DAV-2180 起新 plist 不再引用 wrapper，wrapper 独有的落点若仍出现在
@@ -123,6 +130,27 @@ def _is_legacy_dir(path: Path, legacy_dirs: tuple[str, ...]) -> str | None:
     return None
 
 
+def _carries_provenance(path: str) -> bool:
+    """目标是否带 ``com.apple.provenance`` 扩展属性。
+
+    口径来源：宿主 ``RESTART.md`` 的 10-18 三次对照——launchd（xpcproxy）创建的
+    文件带 ``com.apple.macl``，由 bash/``>>``（wrapper 时代）写的既存文件带
+    ``com.apple.provenance``，后者 launchd 打不开 → ``78 EX_CONFIG``。
+
+    macOS 的 Python 没有 ``os.getxattr`` / ``os.listxattr``（实测 AttributeError），
+    故走 ``xattr(1)``。**刻意不用 ``open(path, "a")`` 探针**——那会在宿主机留下
+    空文件，违背本脚本的零副作用承诺。``xattr -p`` 只读；rc==0 即带。
+    """
+    try:
+        proc = subprocess.run(
+            [XATTR_BIN, "-p", PROVENANCE_XATTR, "--", path],
+            capture_output=True,
+        )
+    except OSError:  # 非 macOS / 无 xattr(1)：无法判定即视为带（fail-closed）
+        return True
+    return proc.returncode == 0
+
+
 def _check_path(
     *, plist: str, key: str, raw: str, legacy_names: tuple[str, ...], legacy_dirs: tuple[str, ...]
 ) -> Finding:
@@ -144,10 +172,10 @@ def _check_path(
     p = Path(raw)
 
     # 1. 遗留物黑名单：先判文件名，再判目录（两者都指向 wrapper 时代残留）
-    if p.name in legacy_names:
+    if p.name.casefold() in {name.casefold() for name in legacy_names}:
         return Finding(
             plist, key, raw, False, RC_LEGACY_NAME,
-            f"{key} 指向旧版包装脚本遗留文件 {p.name}——DAV-2180 起新 plist 不再引用 "
+            f"{key} 指向旧版包装脚本遗留文件 {p.name}（大小写不敏感匹配）——DAV-2180 起新 plist 不再引用 "
             "wrapper，请改指现行日志（如 uvicorn-<sha>.log）；旧文件已改名留档，不要复用",
         )
     legacy_dir = _is_legacy_dir(p.parent, legacy_dirs)
@@ -191,6 +219,16 @@ def _check_path(
                 f"{key} 已存在但不是普通文件（mode={stat.filemode(st.st_mode)}）：{raw}"
                 "——launchd 只接受普通文件，目录/设备/套接字一律 EX_CONFIG",
             )
+        # 3a. provenance 属性判定（放在属主/权限之前：10-18 真因在这里）
+        if _carries_provenance(raw):
+            return Finding(
+                plist, key, raw, False, RC_TARGET_PROVENANCE,
+                f"{key} 的目标已存在且带 {PROVENANCE_XATTR} 扩展属性（xattr -l "
+                f"{p.name} 可复核）——该属性标记它是由 bash/>> 等终端侧进程写出的，"
+                "launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它，"
+                "bootstrap 必 EX_CONFIG 78（属主/权限正常也会踩）；"
+                "请改名留档后由 launchd 重建该文件，不要复用该路径",
+            )
         owner_uid = st.st_uid
         try:
             current_uid = os.getuid()
@@ -204,7 +242,7 @@ def _check_path(
             return Finding(
                 plist, key, raw, False, RC_TARGET_NOT_OWNED,
                 f"{key} 的属主是 {owner_name}(uid={owner_uid})，当前 uid={current_uid}"
-                "——属主异常的日志文件正是 10-18 首次安装 EX_CONFIG 78 的典型成因，"
+                "——属主异常的日志文件同样会让 launchd 打不开，"
                 "请改名留档后另起新文件，勿复用该路径",
             )
         if not os.access(raw, os.W_OK):
@@ -267,7 +305,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--legacy-dir", action="append", default=[],
                         help="追加旧版包装脚本遗留目录名黑名单（可重复）")
     parser.add_argument("--json", action="store_true", help="输出 JSON（便于门禁脚本消费）")
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse 用法错误自带 exit 2，与 EXIT_PREFLIGHT_FAILED 撞码；此处统一归 3。
+        if not exc.code:  # --help 正常退出
+            raise
+        return EXIT_USAGE
 
     legacy_names = LEGACY_NAMES + tuple(args.legacy_name)
     legacy_dirs = LEGACY_DIRS + tuple(args.legacy_dir)
@@ -328,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return EXIT_PREFLIGHT_FAILED
     if not args.json:
-        print("前置检查通过：全部日志路径可写且非旧版包装脚本遗留，可继续安装。")
+        print("前置检查通过：全部日志路径可用且非终端侧遗留（无 provenance 扩展属性），可继续安装。")
     return EXIT_OK
 
 

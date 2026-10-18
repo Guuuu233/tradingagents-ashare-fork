@@ -155,13 +155,22 @@ plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
 
 # 日志路径前置检查（DAV-2223：fail-closed，防 EX_CONFIG 78 复发）
 python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
-# 退出码：0 通过 / 2 前置不通过（原因码见下）/ 3 输入错误。
+# 退出码：0 通过 / 2 前置不通过（原因码见下）/ 3 输入或用法错误。
 # 检查项：StandardOut/ErrorPath 非空、无未替换占位符、绝对路径、父目录存在且
-# 可写、目标不存在或为属主为本用户且可追加的**普通文件**、且不落在旧版包装
-# 脚本遗留物上（wrapper-diagnostic.log / diag-fallback.log / .launchd/ /
-# /tmp/ta-launchd-die-stamps-*）。
-# 10-18 首次 bootstrap 失败（EX_CONFIG 78）即因日志文件是 wrapper 时代遗留、
-# 属主/权限异常——该检查在安装前把它变成一条明确原因码，而非 launchd 的一行 stderr。
+# 可写、目标不存在或为**不带 com.apple.provenance 的**、属主为本用户且可追加的
+# **普通文件**、且不落在旧版包装脚本遗留物上（wrapper-diagnostic.log /
+# diag-fallback.log / .launchd/ / /tmp/ta-launchd-die-stamps-*，文件名大小写
+# 不敏感匹配）。
+# 10-18 首次 bootstrap 失败（EX_CONFIG 78）的真因：日志文件是 wrapper 时代由
+# bash/>> 写出的**既存**文件，带 com.apple.provenance（属主/权限完全正常）；
+# launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它。判定用
+# `xattr -p com.apple.provenance -- <path>`（只读，不写盘；launchd 建的文件是
+# com.apple.macl）。命中 → 原因码 LOGPATH_TARGET_PROVENANCE_XATTR，
+# 处置：改名留档后由 launchd 重建同名文件，勿复用该路径。
+# 注：符号链接目标一律判 LOGPATH_TARGET_NOT_REGULAR_FILE（比 launchd 严格），
+# 故不要用 uvicorn-current.log -> uvicorn-<sha>.log 的软链方案做轮转。
+# 注：以 root/sudo 运行会让属主比对与可写判定失真（os.access 对 root 恒真），
+# 请以登录用户身份运行本检查。
 
 # 解释器 realpath 与 TCC 探针（DAV-2180 已实测，复审可复跑）
 realpath /Users/davidliu/ta-venv/py310/bin/python
