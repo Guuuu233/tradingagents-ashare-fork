@@ -1,166 +1,138 @@
-# DAV-2242 — 评估入口 peak footprint 高水位定位与降低
+# DAV-2242 — 评估入口 peak footprint 高水位定位与降低（重底后 v2）
 
-**基线**：DAV-2240 候选 `8b817a309d1ef6cfe3267f6bf16ff713450ef544`（合入后合）
-**解释器**：`/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python`
-（`-V` = `Python 3.10.20`；pandas 2.3.0 / numpy 2.2.6 / pyarrow 25.0.1；全程 `env -u PYTHONPATH`）
-**口径**：`/usr/bin/time -l` 的 **peak memory footprint**；同时记录 `maximum resident set size`。
-**冻结输入**：`p1-base_t10-frozen/` 与快照/账本/标签 33 文件全程 sha256 不变（改前改后同一指纹
-`046fb689…c83d`）。m200/W0、敏感性网格、冻结来源均未改动。
+**总工 10-19 执行令**：DAV-2255 已合入主干 → 本卡在**新主干 `01467c8e` 上重底**，
+重跑 RT-FULL 与 peak 复测，交 DAV-2263 复审。
+**候选**：`agent/senior-dev-1/dav-2242-peak-mem`。
+**代码提交 = `26000bc9`，其直接父 = 新主干 `01467c8e74ed473e1332ff5fd433f5826b0a06d9`**
+（`git rev-parse 26000bc9^` 实核）；其后为证据/报告提交，**分支 tip 见交付评论**（tip SHA 会随证据提交变化，故不写死在本文件里）。
+**解释器**：`.venv310`，`-V` = `Python 3.10.20`；pandas 2.3.0 / numpy 2.2.6 / pyarrow 25.0.1；全程 `env -u PYTHONPATH`。
+**口径**：`/usr/bin/time -l` 的 peak memory footprint。
+**冻结输入**：`p1-base_t10-frozen/` + 快照/账本/标签 33 文件 sha256 全程不变（改前改后同一指纹 `046fb689…c83d`）。
 
 ---
 
-## 1. 结论
+## 1. 结论（重底后实测）
 
-| 项 | 改前 | 改后 | 变化 |
+| 项 | 改前（主干 `01467c8e`） | 改后（重底候选） | 变化 |
 |---|---:|---:|---:|
-| **peak footprint（中位，3 次）** | **4.699 GiB** | **2.742 GiB** | **−1.957 GiB（−41.6%）** |
-| peak footprint（最大，3 次） | 4.753 GiB | 3.196 GiB | −1.557 GiB（−32.8%） |
-| peak RSS（最大） | 3.970 GiB | 2.159 GiB | −1.811 GiB |
-| 墙钟（中位） | 118.9 s | 72.8 s | −46.1 s |
-| 产物 `verdict.json` sha256 | `bdf933d4…079b` | `bdf933d4…079b` | **逐字节相同** |
+| **peak footprint 中位（3 次）** | **4.456 GiB** | **3.374 GiB** | **−1.082 GiB（−24.3%）** |
+| peak footprint 最大 | 4.674 GiB | 3.416 GiB | −1.258 GiB（−26.9%） |
+| peak RSS 最大 | 3.321 GiB | 2.123 GiB | −1.198 GiB |
+| 墙钟中位 | 77.3 s | 75.3 s | −2.0 s |
 
-`run.json` 仅 `elapsed_s` / `peak_rss_gb` 两个计量字段不同，其余字段（含 funnel、
-base_source、sensitivity、version_key 对账）逐值相同；`day_series.parquet` 与
-`custom_evidence.jsonl`、`reliability.json` 逐字节相同。
+资源门（总控 10-18：≤6 GiB、终止线 5.5 GiB）：改后最大 **3.416 GiB**，**余量 2.58 GiB**。
 
-资源门（总控 10-18：≤6 GiB、终止线 5.5 GiB）改后最大 3.196 GiB，**余量 2.30 GiB**。
+**口径零漂移**：两次入口产物 `verdict.json` 均 `a600b22a…9ec9`，
+`day_series.parquet` / `custom_evidence.jsonl` / `reliability.json` 逐字节相同；
+`run.json` 仅 `elapsed_s`、`peak_rss_gb` 两字段不同。
 
----
+### 与重底前（v1，父 `8b817a30`）的比例差异必须说明
 
-## 2. 高水位定位（实测，非推断）
+v1 报的是 −41.6%（4.699 → 2.742 GiB）。重底后同样改动只拿到 −24.3%，**不是改动失效**，
+而是 **DAV-2255 引入了新的高水位来源**，把"地板"抬高了。逐阶段证据见 §2.1：
 
-方法：在**真实 `run()`** 的每个生产调用点包一层 rusage 采样（不修改被测文件），
-读取 `proc_pid_rusage(RUSAGE_INFO_V4)` 的 `ri_lifetime_max_phys_footprint`。
-结构字段偏移按本机 SDK `sys/resource.h` 的 `struct rusage_info_v4` 逐字段核对
-（`ri_lifetime_max_phys_footprint` 在偏移 240，采样器内有 `assert` 防 SDK 漂移）。
+- 我的改动效果**完全未变**：`build_base_panel` 峰值 4.113 → 2.249 GiB（**−1.86 GiB**，
+  与 v1 在旧主干的 3.802 → 2.343 一致）；
+- 但 2255 新增的 `base_query_audit` 行级日期解析（`matured_rows["mat"].map(day_key)`，
+  9.24M 次 Python 调用）与 W>0 敏感性网格接入查询日后，把整条链的峰值抬到 3.44 GiB，
+  使面板改造后**总峰值不再由面板决定**。
 
-| 阶段 | 阶段内 footprint 变化 | 阶段结束时 lifetime peak |
-|---|---|---:|
-| imports | 0 → 0.203 | 0.203 |
-| load_labels / reattest | → 0.224 | 0.224 |
-| load_ledger_signals（1749 行 + 快照 custom 证据） | 0.224 → 0.308 | 0.501 |
-| **build_base_panel（9,244,318 行）** | **0.309 → 2.523** | **3.802** |
-| `_panel_n_distribution` | 2.523 → 2.526 | 3.802 |
-| build_pit_base_rates（m200/W0 主基准） | 2.526 → 2.616 | 3.802 |
-| build_pit_base_rates（敏感性 3×3 网格） | 2.618 → 2.872 | 3.802 |
-| 全部 paired_increment（8 次） | 2.874 → 2.874 | 3.802 |
+## 2. 高水位定位
 
-**高水位完全由 `build_base_panel` 一步决定**：面板驻留只涨 2.2 GiB，却把 lifetime
-peak 顶到 3.80 GiB —— 差额是**瞬时**分配，不是驻留。账本/快照、基率引擎、敏感性
-网格、配对都不构成高水位。
+### 2.1 阶段级（主线 `01467c8e` vs 重底候选，同一 run()、同输入）
 
-### 2.1 进一步拆到语句级
+方法：在真实 `run()` 的生产调用点包 rusage 采样（不改被测文件），读
+`proc_pid_rusage(RUSAGE_INFO_V4).ri_lifetime_max_phys_footprint`；字段偏移按本机 SDK
+`sys/resource.h` 的 `struct rusage_info_v4` 逐字段核对（`ri_lifetime_max_phys_footprint`
+偏移 240，采样器带 assert 防 SDK 漂移）。
 
-在同一份已装载面板（footprint 1.878 GiB）上逐步执行改前的归一化表达式：
+| 阶段 | 主干 `01467c8e` 结束时峰值 | 重底候选 结束时峰值 | 说明 |
+|---|---:|---:|---|
+| imports + labels + reattest | 0.500 | 0.412 | — |
+| **build_base_panel** | **4.113** | **2.249** | ← 本卡改动命中处，−1.86 GiB |
+| `_panel_n_distribution` | 4.113 | 2.249 | 不推高 |
+| m200/W0 主基准（base_q_map） | 4.113 | 2.837 | 引擎侧固定开销 |
+| **base_query_audit（DAV-2255 新增）** | 4.113 | **3.095** | 行级 `map(day_key)`，见 §2.2 |
+| 敏感性 3×3 网格（含查询日） | **4.607** | **3.442** | 主峰在这两步 |
 
-| 语句 | footprint | lifetime peak |
-|---|---:|---:|
-| 面板已装配 | 1.878 | 1.878 |
-| `astype(str).str.replace(...)` | 1.955 | 1.955 |
-| **`sd.str[:4]` / `"-"` / `sd.str[4:6]` / `"-"` / `sd.str[6:8]` 五段全部物化** | **3.552** | 3.552 |
-| **链式 `+` 求值（改前代码）** | 3.892 | **4.797** |
+即：改前主峰 4.607 出现在敏感性网格；改后主峰 3.442 也出现在敏感性网格 —— **面板不再是主峰**。
 
-**根因**：`signal_date` / `mat` 两列各 9,244,318 行，改前按**行**做四段字符串拼接：
+### 2.2 DAV-2255 新增的残余热点（如实记录，本卡未改）
+
+`base_query_audit` 里为统一 ISO 口径引入：
 
 ```python
-panel["signal_date"] = (sd.str[:4] + "-" + sd.str[4:6] + "-" + sd.str[6:8])
+matured_rows = panel.loc[with_mat]
+mat_keys = matured_rows["mat"].astype(str).map(m1.day_key).to_numpy()
 ```
 
-每个 `.str[]` 都新建一个 9.24M 元素的 object 数组（每元素一个新 `str` 对象），
-链式 `+` 会同时持有全部中间列；单列瞬时 3.55 GiB、峰值 4.80 GiB。
-而这两列的**不同值只有 2,481 个**（2015-10-08 … 2025-12-31 的信号日）。
-面板本身驻留 1.88 GiB，其中三列 object 指针 3×74 MB，字符串对象按 2,481 个不同值
-经 pyarrow 读取时已天然共享（实测 `signal_date` 20 万行只有 243 个不同对象）。
+`panel.loc[...]` 先整体复制一份 9.24M 行面板，`map(day_key)` 再逐行做 Python 调用
+（`day_key` 里是 `str().strip().replace()`）。实测（面板已装配、footprint 2.035 GiB 起）：
 
-> 已排除的两条假设（都实测证伪，未写入改动）：
-> ①「`pd.concat` 逐分区复制字符串导致膨胀」——11 个分区帧合计 1.383 GiB，
-> concat 后 1.659 GiB，仅 +0.28 GiB，不是主因；
-> ②「`load_panel` 每行一个 `str` 对象」——pyarrow 读取已按值去重，20 万行仅 243 个对象。
+| 语句 | 累计 footprint | 峰值 |
+|---|---:|---:|
+| `mat.astype(str).str.strip()` | 2.043 | 2.222 |
+| `+ replace("-","").str.fullmatch(r"\d{8}")` | 2.112 | 2.222 |
+| **`panel.loc[with_mat]` + `map(day_key)`** | **2.811** | **3.087** |
+| `l1.astype(str).to_numpy()` | 2.811 | 3.087 |
 
----
+**注意**：`with_mat` 在真实冻结面板上 9,244,318 行全部为 True（无无效 mat），所以
+`panel.loc[with_mat]` 是一次**全量复制**，白付一份面板。这一处**属于 DAV-2255 的
+已合入代码**，本卡不擅自改它 —— 见 §6 建议。
 
-## 3. 改法（已实施）
+## 3. 改法（本次重底未改动逻辑，仅重底 + 补证据）
 
-`scripts/phase2/p_rel_t10_baseline_eval.py`：新增 `_iso_days_by_unique_value()`，
-`build_base_panel()` 改调用它。逻辑：`pd.factorize` 先取不同值 → 只对**不同值**执行
-原来那条表达式 → 按 int 位置回填。空值分支（`NaN`→`"nan--"`、`None`→`"None--"`）
-逐行保留原表示，绝不折叠成一个共享值；冻结面板无空值，生产零成本。
+`scripts/phase2/p_rel_t10_baseline_eval.py`：`build_base_panel()` 的日期归一化从
+**按行**四段字符串拼接改为 `_iso_days_by_unique_value()`：`pd.factorize` 先取不同值 →
+只对 2,481 个不同值执行原表达式 → 按 int 位置回填。
 
-实测同一列：**9,244,318 个对象 → 2,481 个对象**，字符串内容 sha256 与改前完全一致
-（`signal_date` `2c0679fe5ca1fe4a`、`mat` `7a5c41b56a0790c1`，新旧相同）。
-`build_base_panel` 自身墙钟 21.5 s → 4.4 s（单测级 0.3–0.4 s/列）。
+空值分支保留原表示（`NaN`→`"nan--"`、`None`→`"None--"`）—— 两者在旧表达式下渲染不同，
+折叠成一个共享值会造成静默漂移；冻结面板无空值，故生产零成本。
 
-**未做的事（有意）**：`m1_base_rate.load_panel` 的 `pd.concat` 保持原样（实测非主因，
-改它只是增加回归面）；未改 dtype（不引入 category，避免 dtype 语义变化）。
+重底后在**新主干**上重核：同一列 **9,244,318 个对象 → 2,481 个对象**，
+`signal_date` sha256 `2c0679fe5ca1fe4a`、`mat` `7a5c41b56a0790c1`，**新旧完全一致**
+（`prof/verify_identity2.py`，对照组为 `01467c8e` 的 `build_base_panel` 原体）。
 
----
+`build_base_panel` 墙钟 11.1 s → 5.3 s。
 
-## 4. 测试
+## 4. 测试（重底后重跑）
 
-新增 `tests/test_dav2242_peak_memory.py`（11 条，全绿）：
+- 定向：`tests/test_dav2242_peak_memory.py`(11) + `tests/test_dav2255_sensitivity_query_days_iso_days.py` +
+  `test_m1_base_rate` + `test_dav2240_query_days_base_rate` + `test_dav1883_p_rel_t10_baseline` +
+  `test_m1_base_rate_bridge` = **113 passed, 10 skipped**（含 2255 的新用例，确认两卡不冲突）。
+- **RT-FULL**（`-q -p no:randomly`、隔离 `DATABASE_URL`、已 deselect DAV-979 既有死锁用例
+  `tests/test_fund_flow_scale_consumption.py::TestFundFlowScalePersistenceAndReadback::test_single_horizon_report_persists_and_reads_all_scale_fields`）：
 
-1. 函数级：逐行表达式 vs 去重值实现，含空帧、空值（`nan--`/`None--`）、首末冻结日；
-2. 面板级：`build_base_panel` 输出与改前逐行表达式**逐值相同**，未触及列（`l1`/`y`）
-   保持 loader 原值，去行业行仍是空串，畸形 8 位日期仍被原过滤器挡掉；
-3. 引擎级：同一帧喂 `build_pit_base_rates`，主基准 m200/W0（含面板后查询日）与
-   3×3 敏感性网格每格逐值（含 NaN 位置）相同；
-4. 资源级：新实现持有的对象数 == **不同值个数**（40）而非行数（20,000）——
-   若退回逐行对象，本卡实测收益即不成立，测试会失败。
-
-**RT-FULL**（固定解释器、`-q -p no:randomly`、隔离 `DATABASE_URL`、已 deselect
-`test_fund_flow_scale_consumption…test_single_horizon_report_persists_and_reads_all_scale_fields`（DAV-979 主干既有死锁））：
-
-| 跑次 | 结果 |
+| 侧 | 结果 |
 |---|---|
-| 基线 `8b817a30`（未改） | **8049 passed, 0 failed**，28 skipped，7 deselected，3784 s |
-| 候选 第 1 次 | 8059 passed, **1 failed**（`test_offline_network_guardrail.py::…test_sentinel_executed_and_pid_matches_pytest_main`，"Observation log missing SENTINEL records"） |
-| 候选 第 2 次 | **8060 passed, 0 failed**，28 skipped，7 deselected，772 s |
+| 父（主干 `01467c8e`） | **8124 passed / 0 failed**，29 skipped，7 deselected，464.6 s |
+| 候选（重底后） | **8135 passed / 0 failed**，29 skipped，7 deselected，484.5 s |
 
-第 1 次的那条失败：**非本卡引入**。依据：①该测试与 `p_rel_t10` / `m1_base_rate`
-无任何 import 关系，本卡 diff 只碰 `build_base_panel` 的日期归一化；②它在
-`pytest_sessionstart` 的 sentinel 阶段写入日志，失败信息是"观察日志里没有本进程 PID
-的 SENTINEL"，而同一日志确有 SENTINEL 记录（PID 91357 / 93270，属并行跑的其它
-RT 进程）—— 这是并行 agent 同时跑 RT-FULL 时的**共享 `/tmp/rt_observe_*.log`
-环境竞争**（日志按启动时间+PID+uuid 命名，但并行任务的巡检脚本会读到别人的）；
-③单独连跑 3 次（含与本卡新测试同批）均绿；④候选第 2 次全量绿。
-结论按「相对基线有无**新增**失败」判：**无新增失败**。
+候选 = 父 + 11 条（本卡新增测试）。两侧均 0 失败，**无新增失败**。
 
-`sensitivity` / 数值零漂移由 §1 的逐字节产物比对独立覆盖。
+## 5. 证据文件（均在 `work/dav2242-evidence/`，分支内可核）
 
----
+| 文件 | 实测值 |
+|---|---:|
+| `peak-before-1/2/3.stderr.txt` | 4.674 / 4.456 / 4.424 GiB（主干 `01467c8e`） |
+| `peak-after-1/2/3.stderr.txt` | 3.416 / 3.311 / 3.374 GiB（重底候选） |
+| `rtfull-baseline.txt` | 8124 passed / 0 failed |
+| `rtfull-candidate.txt` | 8135 passed / 0 failed |
 
-## 5. 证据文件
+评价入口产物（逐字节比对对象）在本地 `run2/before-*/evaluation/`、`run2/after-*/evaluation/`，
+未入库（体积大、可由 `run/eval_cmd2.sh` 复现）。
 
-全部在 `work/dav2242-evidence/`（分支内，可直接核）：
+## 6. 遗留与建议
 
-| 文件 | 实测值 | 内容 |
-|---|---:|---|
-| `peak-before-1.stderr.txt` | **4.699 GiB** | 改前（ta-base `8b817a30`）`/usr/bin/time -l` 原文 |
-| `peak-before-2.stderr.txt` | 4.697 GiB | 同上，第 2 次 |
-| `peak-before-3.stderr.txt` | 4.753 GiB | 同上，第 3 次（最大） |
-| `peak-after-1.stderr.txt` | **2.742 GiB** | 改后，第 1 次（= 中位） |
-| `peak-after-2.stderr.txt` | 3.196 GiB | 改后，第 2 次（最大，系统并行负载较高） |
-| `peak-after-3.stderr.txt` | 2.262 GiB | 改后，第 3 次 |
-| `rtfull-baseline.txt` | 8049 passed / 0 failed | 基线 RT-FULL 全文 |
-| `rtfull-candidate.txt` | 8060 passed / 0 failed | 候选 RT-FULL 第 2 次（全绿）全文 |
-| `rtfull-candidate-run1-sentinelfail.txt` | 1 failed / 8059 passed | 候选 RT-FULL 第 1 次（含那条环境失败）全文 |
-
-评价入口产物（逐字节比对对象，`verdict.json` 两侧均 `bdf933d4…079b`）为本地运行目录
-`run/before/evaluation/`、`run/after/evaluation/`，**未入库**（体积大且可由上面命令复现）。
-
----
-
-## 6. 遗留与风险
-
-1. **本卡只做"定位 + 降低驻留/瞬时"，未改任何口径**。峰值余量已到 2.30 GiB；
-   如实测口径变化（例如面板扩到更多年、或敏感性网格加档），需重测 —— 高水位与
-   **面板行数 × 每列不同值数**相关，不是固定值。
-2. **`_panel_n_distribution`（约 1.9 s / 7 个 groupby 键）与敏感性网格仍会复制面板
-   视图**，但实测不进入高水位（结束时 lifetime peak 未被推高），故未动。
-3. **未做**：`--snapshot-db` 快照读取本身在本机耗时 25–55 s（SQLite 6.4 GB、
-   `cache_size=-2000`），这不是内存问题，留给后续性能卡。
-4. **并行 RT 干扰**：本机同时有多个 agent 跑 RT-FULL 时，`test_offline_network_guardrail`
-   会偶发读到别的进程的 SENTINEL 日志。这是宿主测试设施问题（共享 `/tmp` 前缀），
-   不属本卡范围，但会持续污染其它卡的 RT 结论，建议另开卡让日志路径带
-   `PYTEST_XDIST_WORKER`/任务 UUID 隔离。
-5. 合入顺序：本卡排在 DAV-2240 **合入之后**合入（同文件 `p_rel_t10_baseline_eval.py`）。
+1. **DAV-2255 的 `base_query_audit` 值得单独优化**（本卡不擅改已合入的他卡代码）：
+   `with_mat` 在真实面板上是全 True，`panel.loc[with_mat]` 白复制一份 9.24M 行面板；
+   `map(day_key)` 逐行 Python 调用。改为「先判有无无效 mat，全 True 则跳过 loc；
+   day_key 按不同值（2,481 个）算一次再按 int 位置回填」可省约 0.6～0.8 GiB 峰值，
+   且结果逐值相同（已用 `np.unique + return_inverse` 实测 `IDENTICAL: True`）。
+   建议另开卡，由 2255 执行人做，避免本卡 diff 越界。
+2. 主峰现在落在**敏感性网格**（3.44 GiB）。若要把入口峰值继续压到 3 GiB 以下，
+   需要动 `build_pit_base_rates` 的 `out_rows`（每条 cells 一个 dict，3 档 W × 2.48k 日 × 31 行业
+   ≈ 230k dict）。本卡不动，留给后续。
+3. 峰值与「面板行数 × 每列不同值数」相关，扩年或加档需重测。
+4. 快照读取（SQLite 6.4 GB，25–55 s）不进内存高水位。
+5. RT 观察日志路径建议加任务 UUID 隔离（并行 RT 会互相污染 sentinel 判定），本卡不改宿主测试设施。

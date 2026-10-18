@@ -1,5 +1,7 @@
 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/langgraph/cache/base/__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
   from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+/Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tradingagents/agents/utils/price_ref_registry.py:1: DeprecationWarning: invalid escape sequence '\d'
+  """PriceRef registry and per-reference basis/provenance audit layer (DAV-1142 / DAV-1198 / DAV-1224).
 ........................................................................ [  0%]
 ........................................................................ [  1%]
 ........................................................................ [  2%]
@@ -8,7 +10,7 @@
 ........................................................................ [  5%]
 ........................................................................ [  6%]
 ........................................................................ [  7%]
-........................................................................ [  8%]
+........................................................................ [  7%]
 ........................................................................ [  8%]
 ........................................................................ [  9%]
 ........................................................................ [ 10%]
@@ -17,7 +19,7 @@
 ........................................................................ [ 13%]
 ........................................................................ [ 14%]
 ........................................................................ [ 15%]
-........................................................................ [ 16%]
+........................................................................ [ 15%]
 ........................................................................ [ 16%]
 ........................................................................ [ 17%]
 ........................................................................ [ 18%]
@@ -25,65 +27,66 @@
 ........................................................................ [ 20%]
 ........................................................................ [ 21%]
 ........................................................................ [ 22%]
+........................................................................ [ 22%]
 ........................................................................ [ 23%]
-........................................................................ [ 24%]
-....................................ssssssss............................ [ 24%]
+......................................................ssssssss.......... [ 24%]
 ........................................................................ [ 25%]
 ........................................................................ [ 26%]
 ........................................................................ [ 27%]
-........................................................ssssssssss...... [ 28%]
-........................................................................ [ 29%]
+........................................................................ [ 28%]
+..ssssssssss............................................................ [ 29%]
+.........................................s.............................. [ 30%]
 ........................................................................ [ 30%]
 ........................................................................ [ 31%]
-........................................................................ [ 32%]
 ........................................................................ [ 32%]
 ........................................................................ [ 33%]
 ........................................................................ [ 34%]
 ........................................................................ [ 35%]
 ........................................................................ [ 36%]
 ........................................................................ [ 37%]
+........................................................................ [ 37%]
 ........................................................................ [ 38%]
 ........................................................................ [ 39%]
 ........................................................................ [ 40%]
-........................................................................ [ 41%]
 ........................................................................ [ 41%]
 ........................................................................ [ 42%]
 ........................................................................ [ 43%]
 ........................................................................ [ 44%]
 ........................................................................ [ 45%]
+........................................................................ [ 45%]
 ........................................................................ [ 46%]
 ........................................................................ [ 47%]
 ........................................................................ [ 48%]
 ........................................................................ [ 49%]
-........................................................................ [ 49%]
 ........................................................................ [ 50%]
 ........................................................................ [ 51%]
+........................................................................ [ 52%]
 ........................................................................ [ 52%]
 ..................................................................... [ 53%]
 ........................................................................ [ 54%]
 ........................................................................ [ 55%]
 ........................................................................ [ 56%]
 ........................................................................ [ 57%]
-........................................................................ [ 57%]
 ........................................................................ [ 58%]
 ........................................................................ [ 59%]
+........................................................................ [ 60%]
 ........................................................................ [ 60%]
 ........................................................................ [ 61%]
 ........................................................................ [ 62%]
 ........................................................................ [ 63%]
 ........................................................................ [ 64%]
 ........................................................................ [ 65%]
-........................................................................ [ 65%]
 ........................................................................ [ 66%]
-..................ssssssssss............................................ [ 67%]
+........................................................................ [ 67%]
+......................ssssssssss........................................ [ 67%]
 ........................................................................ [ 68%]
 ........................................................................ [ 69%]
 ........................................................................ [ 70%]
 ........................................................................ [ 71%]
 ........................................................................ [ 72%]
 ........................................................................ [ 73%]
-........................................................................ [ 73%]
 ........................................................................ [ 74%]
+........................................................................ [ 75%]
 ........................................................................ [ 75%]
 ........................................................................ [ 76%]
 ........................................................................ [ 77%]
@@ -91,7 +94,7 @@
 ........................................................................ [ 79%]
 ........................................................................ [ 80%]
 ........................................................................ [ 81%]
-........................................................................ [ 81%]
+........................................................................ [ 82%]
 ........................................................................ [ 82%]
 ........................................................................ [ 83%]
 ........................................................................ [ 84%]
@@ -100,7 +103,7 @@
 ........................................................................ [ 87%]
 ........................................................................ [ 88%]
 ........................................................................ [ 89%]
-........................................................................ [ 89%]
+........................................................................ [ 90%]
 ........................................................................ [ 90%]
 ........................................................................ [ 91%]
 ........................................................................ [ 92%]
@@ -109,23 +112,23 @@
 ........................................................................ [ 95%]
 ........................................................................ [ 96%]
 ........................................................................ [ 97%]
-........................................................................ [ 98%]
+........................................................................ [ 97%]
 ........................................................................ [ 98%]
 ........................................................................ [ 99%]
-................                                                         [100%]
+....................                                                     [100%]
 =============================== warnings summary ===============================
 tests/test_tplus5_operational_backfill.py:146
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_tplus5_operational_backfill.py:146: DeprecationWarning: invalid escape sequence '\+'
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_tplus5_operational_backfill.py:146: DeprecationWarning: invalid escape sequence '\+'
     with pytest.raises(ValueError, match="non.T\+5"):
 
 tests/test_tplus5_operational_backfill.py:427
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_tplus5_operational_backfill.py:427: DeprecationWarning: invalid escape sequence '\+'
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_tplus5_operational_backfill.py:427: DeprecationWarning: invalid escape sequence '\+'
     with pytest.raises(ValueError, match="non.T\+5"):
 
 tests/test_api_smoke.py: 41 warnings
 tests/test_auth_security.py: 2 warnings
 tests/test_backtest_security.py: 9 warnings
-tests/test_calibration_service.py: 36 warnings
+tests/test_calibration_service.py: 41 warnings
 tests/test_calibration_small_sample_guard.py: 1 warning
 tests/test_dashboard_tracking.py: 2 warnings
 tests/test_dav1283_dual_horizon_postgate.py: 2 warnings
@@ -162,15 +165,15 @@ tests/test_v2_debate_override_allowlist.py: 1 warning
 
 tests/test_baostock_fail_fast.py::TestBaoStockAstGuard::test_no_bypass_baostock_imports_in_production_trees
 tests/test_offline_network_guardrail.py::TestBaostockHardeningVerification::test_static_guard_no_direct_baostock_import_outside_accessor
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tradingagents/agents/utils/price_ref_registry.py:1: DeprecationWarning: invalid escape sequence '\d'
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tradingagents/agents/utils/price_ref_registry.py:1: DeprecationWarning: invalid escape sequence '\d'
     """PriceRef registry and per-reference basis/provenance audit layer (DAV-1142 / DAV-1198 / DAV-1224).
 
 tests/test_dav28_data_boundaries.py::test_fetch_all_unavailable_when_all_rows_invalid
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tradingagents/graph/data_collector.py:230: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tradingagents/graph/data_collector.py:230: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
 
 tests/test_kline_api_integrity.py::TestKlineApiIntegrity::test_kline_endpoint_stock_bad_date_rows_dropped
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/api/main.py:5092: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/api/main.py:5187: UserWarning: Could not infer format, so each element will be parsed individually, falling back to `dateutil`. To ensure parsing is consistent and as-expected, please specify a format.
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
 tests/test_python310_syntax_compat.py::test_all_tracked_py_files_compile_under_current_interpreter
@@ -189,196 +192,196 @@ tests/test_python310_syntax_compat.py::test_no_python311_plus_names_empty_whitel
     """PriceRef registry and per-reference basis/provenance audit layer (DAV-1142 / DAV-1198 / DAV-1224).
 
 tests/test_v03_offline_guard.py::test_rt1_offline_no_vendor_or_network_calls
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:159: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:159: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt1_offline_no_vendor_or_network_calls
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:172: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:172: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine2 = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt2_no_snapshot_forward_sample_is_typed_missing
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:186: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:186: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt2_snapshot_with_metadata_but_no_bars_gives_traceable_gap
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:232: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:232: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt3_snapshot_t1_open_t5_close_evaluated
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:254: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:254: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt4_explicit_forward_end_classifies_forward_oos
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:376: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:376: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_rt5_pool_exclusion_st_still_excluded_offline
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:452: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:452: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_dav1052_metadata_without_st_fields_is_typed_missing
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:482: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:482: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_dav1052_explicit_st_false_still_evaluated
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:516: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:516: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_dav1052_explicit_st_true_still_excluded
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:539: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:539: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_offline_guard.py::test_dav1052_legal_dates_still_measure_t1_t5
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_offline_guard.py:619: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_offline_guard.py:619: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt1_untradable_suspended_on_t_plus_1
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:345: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:345: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt1_untradable_limit_up_locked_on_t_plus_1
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:366: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:366: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt2_typed_missing_lens_gap
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:392: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:392: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt3_collision_merging
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:418: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:418: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt4_stock_pool_filtering
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:462: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:462: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt6_oos_segment_boundaries
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:581: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:581: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=DictPriceDataProvider(), hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt7_entry_price_t_plus_1_open
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:603: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:603: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt8_excess_return_vs_csi300
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:630: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:630: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt9_metadata_and_system_completeness_stamps
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:662: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:662: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt10_coverage_vs_return_metrics_separation
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:685: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:685: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_markdown_report_formatting
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:757: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:757: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt_s1_multi_account_isolation
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:845: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:845: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt_s1_multi_account_isolation
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:859: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:859: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine_other = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt_s2_failed_and_uncompleted_status_excluded
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:910: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:910: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt_s3_metadata_stamps_user_and_scope
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:925: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:925: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt_s4_david_account_clean_population_counts
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1010: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1010: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt2_multi_account_status_scope_filtering
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1145: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1145: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt3_minimum_25_field_offline_audit_table
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1168: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1168: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt4_three_segment_oos_boundaries
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1227: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1227: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_rt5_six_regression_symbols_permanently_isolated
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1254: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1254: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt6_typed_missing_coverage_not_return
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1292: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1292: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt7_entry_price_t_plus_1_open_and_untradable
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1319: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1319: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt8_cost_model_and_csi300_benchmark
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1375: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1375: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt9_no_probability_calibration_no_portfolio_rules
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1401: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1401: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt11_order_ablation_seeded_replay
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1449: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1449: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt12_gap_ablation_typed_gap_no_defaults
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1482: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1482: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt14_purging_and_embargo_overlapping_labels
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1548: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1548: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt15_ablation_variants_share_identical_snapshot_hash
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1580: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1580: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_rt16_honest_forward_oos_zero_reporting
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1607: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1607: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_dav865_engine_stamps_explicit_running_service_and_provenance
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1702: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1702: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_dav865_engine_offline_replay_stamps_typed_gap
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1730: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1730: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_dav865_no_hardcoded_stats_fallback_fail_closed_or_typed_gap
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1761: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1761: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_dav865_real_stats_accurate_readback_when_provided
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1796: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1796: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_dav866_measure_dataset_default_stamp_and_manifest_consistent_offline_gap
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:1837: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:1837: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_p0_missing_metadata_fail_closed
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:2008: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:2008: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=provider, hold_days=5)
 
 tests/test_v03_return_measure.py::test_p0_runner_and_engine_no_sql_truncation
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:2172: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:2172: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(
 
 tests/test_v03_return_measure.py::test_p0_markdown_dynamic_game_theory_text
-  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base/tests/test_v03_return_measure.py:2216: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
+  /Users/davidliu/multica_workspaces_steer/davidsworks-d70c6ff76b54/dav-2242-bfbc89fdfc66/workdir/ta-base2/tests/test_v03_return_measure.py:2216: DeprecationWarning: hold_days is DEPRECATED (V-03a). It is mapped to eval_offset_from_signal = hold_days + 1; pass eval_offset_from_signal / horizon_key instead.
     engine = V03ReturnMeasureEngine(price_provider=mock_price_provider, hold_days=5)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-8049 passed, 28 skipped, 7 deselected, 275 warnings, 3 subtests passed in 3784.16s (1:03:04)
+8124 passed, 29 skipped, 7 deselected, 280 warnings, 3 subtests passed in 464.62s (0:07:44)
