@@ -12,12 +12,17 @@
 * 拒绝：目标已存在且带 ``com.apple.provenance``（10-18 事故真因形态：属主/权限
   正常仍被 launchd 判 EX_CONFIG 78）；
 * 拒绝：父目录不存在 / 不可写；
-* 拒绝：目标已存在但属主非当前 uid；
-* 拒绝：目标已存在但不可写（mode 444）；目标不是普通文件（目录）；
+* 拒绝：目标已存在但属主非当前 uid（非 10-18 形态）；
+* 拒绝：xattr(1) 不可用/执行失败 → ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``；
 * 拒绝：旧版包装脚本遗留 —— 按文件名（wrapper-diagnostic.log）与
   按目录（.launchd/、/tmp/ta-launchd-die-stamps-*）；
 * 拒绝：占位符未替换、相对路径、plist 无法解析；
 * CLI 退出码契约：0 / 2 / 3（无参与坏参数也走 3），且 JSON 输出可被消费。
+
+DAV-2232（复审 DAV-2230 打回）：非 provenance 主题的用例一律
+``monkeypatch`` 掉 ``_carries_provenance``，整套测试不再依赖宿主 ``/usr/bin/xattr``
+的运行时状态（此前标准全量口径下曾 4 条不可复现失败）。依赖真调 ``xattr`` 的
+只有本文件内标 ``needs_xattr`` 的用例（仅 macOS），仍随文件全部 skip 语义保持。
 """
 from __future__ import annotations
 
@@ -33,6 +38,22 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "releases" / "launchd" / "plist_log_preflight.py"
+
+needs_xattr = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="需要宿主 /usr/bin/xattr（仅 macOS；DAV-2232 🟢-6）",
+)
+
+
+@pytest.fixture
+def no_provenance(monkeypatch):
+    """把 provenance 探测钉死为「不带」——非 provenance 主题用例用。
+
+    使这些用例与宿主 ``xattr(1)`` 的运行时状态（压力下的 ``OSError``、外部写入的
+    属性）完全解耦，消除 DAV-2230 复审记录到的“首次全量 4 条失败、二次全绿”。
+    """
+    monkeypatch.setattr(mod, "_carries_provenance", lambda _p: False)
+    return lambda _p: False
 
 
 def _load_module():
@@ -64,7 +85,7 @@ def _write_plist(path: Path, out_path: str, err_path: str | None = None) -> Path
 # --------------------------------------------------------------------------- #
 
 
-def test_writable_parent_missing_target_passes(tmp_path):
+def test_writable_parent_missing_target_passes(tmp_path, no_provenance):
     """可写父目录 + 目标不存在 → 放行（launchd 能自建文件）。"""
     plist = _write_plist(tmp_path / "a.plist", str(tmp_path / "logs" / "uvicorn-abc123.log"))
     (tmp_path / "logs").mkdir()
@@ -73,16 +94,14 @@ def test_writable_parent_missing_target_passes(tmp_path):
     assert not (tmp_path / "logs" / "uvicorn-abc123.log").exists()  # 检查零副作用
 
 
-def test_existing_owned_appendable_file_passes(tmp_path):
+def test_existing_owned_appendable_file_passes(tmp_path, no_provenance):
     """已存在、无 provenance、属主为当前 uid 且可写 → 放行。"""
     log = tmp_path / "logs" / "uvicorn-abc123.log"
     log.parent.mkdir()
     log.write_text("prev\n")
-    _drop_provenance(log)
     plist = _write_plist(tmp_path / "a.plist", str(log), str(log))
     report = mod.check_plist(plist)
     assert report.ok, [f.message for f in report.failures]
-    assert not mod._carries_provenance(str(log))  # 前提：确实无 provenance 属性
     assert len(report.findings) == 2
     assert log.read_text() == "prev\n"  # 未改内容
 
@@ -92,7 +111,7 @@ def test_existing_owned_appendable_file_passes(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_missing_parent_dir_rejected(tmp_path):
+def test_missing_parent_dir_rejected(tmp_path, no_provenance):
     plist = _write_plist(tmp_path / "a.plist", str(tmp_path / "nope" / "uvicorn.log"))
     report = mod.check_plist(plist)
     assert not report.ok
@@ -100,7 +119,7 @@ def test_missing_parent_dir_rejected(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root 绕过 DAC 权限位，无法构造不可写目录")
-def test_unwritable_parent_dir_rejected(tmp_path):
+def test_unwritable_parent_dir_rejected(tmp_path, no_provenance):
     d = tmp_path / "ro"
     d.mkdir()
     d.chmod(0o555)
@@ -114,7 +133,7 @@ def test_unwritable_parent_dir_rejected(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root 绕过 DAC 权限位")
-def test_existing_non_appendable_file_rejected(tmp_path):
+def test_existing_non_appendable_file_rejected(tmp_path, no_provenance):
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
     log.write_text("x")
@@ -128,7 +147,7 @@ def test_existing_non_appendable_file_rejected(tmp_path):
     assert report.failures[0].reason_code == mod.RC_TARGET_NOT_APPENDABLE
 
 
-def test_directory_target_rejected(tmp_path):
+def test_directory_target_rejected(tmp_path, no_provenance):
     d = tmp_path / "logs" / "uvicorn.log"
     d.mkdir(parents=True)
     plist = _write_plist(tmp_path / "a.plist", str(d))
@@ -138,7 +157,7 @@ def test_directory_target_rejected(tmp_path):
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="非 root 无法构造他人属主文件")
-def test_foreign_owned_file_rejected(tmp_path):
+def test_foreign_owned_file_rejected(tmp_path, no_provenance):
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
     log.write_text("x")
@@ -149,11 +168,13 @@ def test_foreign_owned_file_rejected(tmp_path):
     assert report.failures[0].reason_code == mod.RC_TARGET_NOT_OWNED
 
 
-def test_foreign_owner_detected_via_lstat_stub(tmp_path, monkeypatch):
+def test_foreign_owner_detected_via_lstat_stub(tmp_path, monkeypatch, no_provenance):
     """属主异常路径的可移植覆盖：非 root 环境用 monkeypatch 假冒 st_uid。
 
-    这正是 10-18 首次安装失败的形态（属主/权限异常的遗留日志文件），
-    必须在任意 uid 下都被检出，故单独做一条桩化用例。
+    **这不是 10-18 首次安装失败的形态**：属主/权限异常同样会让 launchd 打不开，
+    但 10-18 的真因是既存文件带 ``com.apple.provenance`` 且属主/权限完全正常
+    （见本文件模块 docstring）。本条只覆盖属主分支，故必须把 provenance 判定
+    钉死为 False，否则真因会把属主分支遮住、这条用例就变成假覆盖。
     """
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
@@ -232,6 +253,7 @@ def test_provenance_check_precedes_owner_check(tmp_path, monkeypatch):
     assert mod.check_plist(plist).failures[0].reason_code == mod.RC_TARGET_PROVENANCE
 
 
+@needs_xattr
 def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
     """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。"""
     log = tmp_path / "logs" / "uvicorn.log"
@@ -244,13 +266,92 @@ def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
     assert log.stat().st_size == before  # 零副作用：不预创建、不追加
 
 
-def test_provenance_probe_monkeypatched(monkeypatch, tmp_path):
-    """xattr(1) 不可用/异常时 fail-closed（视为带属性）——不静默放行。"""
+@needs_xattr
+def test_provenance_probe_detects_real_attribute(tmp_path):
+    """真调 xattr：带属性时 rc==0 → True（漏判会让假 PASS 复发）。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    _set_provenance(log)
+    assert mod._carries_provenance(str(log)) is True
+
+
+def test_provenance_probe_unavailable_when_xattr_missing(tmp_path, monkeypatch):
+    """xattr(1) 不可用 → 「无法判定」，不得报成「带属性」（DAV-2232 🟡-2）。"""
     def boom(*a, **k):
-        raise OSError("no xattr(1) here")
+        raise FileNotFoundError(2, "No such file or directory")
 
     monkeypatch.setattr(mod.subprocess, "run", boom)
-    assert mod._carries_provenance(str(tmp_path)) is True
+    with pytest.raises(mod.ProvenanceProbeUnavailable):
+        mod._carries_provenance(str(tmp_path))
+
+
+def test_provenance_probe_unavailable_reported_as_own_reason_code(tmp_path, monkeypatch):
+    """探测不可用 → 独立原因码 + fail-closed，且文案不诱导改名留档。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+
+    def boom(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(mod.subprocess, "run", boom)
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert [f.reason_code for f in report.failures] == [
+        mod.RC_PROVENANCE_PROBE_UNAVAILABLE
+    ]
+    msg = report.failures[0].message
+    assert "FileNotFoundError" in msg and "No such file or directory" in msg
+    assert "不等于" in msg  # 明说「不等于带属性」
+    assert "请改名留档" not in msg  # 不诱导高风险动作
+
+
+def test_provenance_probe_nonzero_rc_without_no_such_xattr_is_unavailable(
+    tmp_path, monkeypatch
+):
+    """rc!=0 且不是「无此属性」（如 EACCES）→ 无法判定，不得静默放行（🟢-4）。"""
+
+    class _Proc:
+        returncode = 1
+        stderr = b"xattr: [Errno 13] Permission denied: 'uvicorn.log'"
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    with pytest.raises(mod.ProvenanceProbeUnavailable):
+        mod._carries_provenance(str(tmp_path))
+
+
+def test_provenance_probe_rc1_no_such_xattr_is_false(tmp_path, monkeypatch):
+    """rc==1 且 stderr 明说「无此属性」→ 唯一可安全放行的失败态。"""
+
+    class _Proc:
+        returncode = 1
+        stderr = "xattr: uvicorn.log: No such xattr: com.apple.provenance".encode()
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    assert mod._carries_provenance(str(tmp_path)) is False
+
+
+def test_non_provenance_failure_path_does_not_call_host_xattr(
+    tmp_path, monkeypatch, no_provenance
+):
+    """非 provenance 主题的拒绝路径不碰宿主 xattr（DAV-2232 🟡-2 用例注入）。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    log.chmod(0o444)
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+
+    def boom(*a, **k):  # 若用例仍走真调用则此用例必红
+        raise AssertionError("非 provenance 主题用例不应调用 xattr(1)")
+
+    monkeypatch.setattr(mod.subprocess, "run", boom)
+    try:
+        report = mod.check_plist(plist)
+    finally:
+        log.chmod(0o644)
+    assert report.failures[0].reason_code == mod.RC_TARGET_NOT_APPENDABLE
 
 
 # --------------------------------------------------------------------------- #

@@ -18,7 +18,8 @@ launchd 重建同名文件才恢复。launchd 自身只在 stderr 留一行，�
    - 父目录存在、是目录、可写（必要时可创建）；
    - 目标不存在则放行（launchd 会自建）；已存在必须是**普通文件**、**不带
      ``com.apple.provenance``**（该属性即「非 launchd 创建」的判据）、
-     **属主为当前 uid**、**可追加**；
+     **属主为当前 uid**、**可追加**；``xattr(1)`` 不可用时无法判定 → 单独原因码
+     ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``（fail-closed，但不谎报带属性）；
    - 不属于旧版包装脚本遗留物（废弃文件名 / 已废弃目录）。
 3. 任一条不满足 → **fail-closed**：打印原因码 + 明确文案，退出码非 0，
    绝不静默放行。
@@ -72,6 +73,10 @@ RC_TARGET_NOT_APPENDABLE = "LOGPATH_TARGET_NOT_APPENDABLE"
 RC_LEGACY_NAME = "LOGPATH_LEGACY_WRAPPER_ARTIFACT"
 RC_LEGACY_DIR = "LOGPATH_LEGACY_WRAPPER_DIRECTORY"
 RC_OPEN_PROBE = "LOGPATH_OPEN_PROBE_FAILED"
+# DAV-2232 新增（只追加）：xattr(1) 不可用/执行失败 → 「无法判定」。
+# 与 RC_TARGET_PROVENANCE 分开，避免把「判不出来」报成「确实带属性」，
+# 后者的处置动作（改名留档）对在役持有的日志是高风险误导。
+RC_PROVENANCE_PROBE_UNAVAILABLE = "LOGPATH_PROVENANCE_PROBE_UNAVAILABLE"
 
 #: 宿主 ``/usr/bin/xattr``；判 provenance 用（macOS Python 无 os.getxattr）。
 XATTR_BIN = "/usr/bin/xattr"
@@ -130,8 +135,16 @@ def _is_legacy_dir(path: Path, legacy_dirs: tuple[str, ...]) -> str | None:
     return None
 
 
+class ProvenanceProbeUnavailable(RuntimeError):
+    """xattr(1) 不可用或执行失败 → provenance 属性**无法判定**。
+
+    与「判定为带属性」严格区分（DAV-2232 🟡-2）：调用方须把它映射到
+    ``RC_PROVENANCE_PROBE_UNAVAILABLE``，不得当成带属性。
+    """
+
+
 def _carries_provenance(path: str) -> bool:
-    """目标是否带 ``com.apple.provenance`` 扩展属性。
+    """目标是否带 ``com.apple.provenance`` 扩展属性。无法判定时抛异常。
 
     口径来源：宿主 ``RESTART.md`` 的 10-18 三次对照——launchd（xpcproxy）创建的
     文件带 ``com.apple.macl``，由 bash/``>>``（wrapper 时代）写的既存文件带
@@ -140,15 +153,37 @@ def _carries_provenance(path: str) -> bool:
     macOS 的 Python 没有 ``os.getxattr`` / ``os.listxattr``（实测 AttributeError），
     故走 ``xattr(1)``。**刻意不用 ``open(path, "a")`` 探针**——那会在宿主机留下
     空文件，违背本脚本的零副作用承诺。``xattr -p`` 只读；rc==0 即带。
+
+    返回码处理（DAV-2232 🟢-4，三态而非「非 0 即不带」）：
+
+    * rc==0 → True（确实带属性）；
+    * stderr 含 ``No such xattr`` → False（属性不存在，唯一可安全放行的失败态）；
+    * stderr 含 ``No such file`` → False（路径不存在，lstat→xattr 之间的竞态删除；
+      launchd 本就会自建，不存在的东西不可能带属性）；
+    * 其他任何情况（``OSError`` 含 xattr(1) 缺失、非 0 且非上两种、例如 EACCES /
+      文件系统不支持 xattr）→ 抛 :class:`ProvenanceProbeUnavailable`，
+      fail-closed 但**不谎报带属性**。
+
+    stderr 文本若因本地化而不匹配，只会落到「无法判定」（更保守的一侧），
+    不会误放行。
     """
     try:
         proc = subprocess.run(
             [XATTR_BIN, "-p", PROVENANCE_XATTR, "--", path],
             capture_output=True,
         )
-    except OSError:  # 非 macOS / 无 xattr(1)：无法判定即视为带（fail-closed）
+    except OSError as exc:  # 非 macOS / 无 xattr(1)：无法判定
+        raise ProvenanceProbeUnavailable(
+            f"{XATTR_BIN} 不可用（{exc.__class__.__name__}: {exc}）"
+        ) from exc
+    if proc.returncode == 0:
         return True
-    return proc.returncode == 0
+    stderr = (proc.stderr or b"").decode("utf-8", "replace")
+    if "No such xattr" in stderr or "No such file" in stderr:
+        return False
+    raise ProvenanceProbeUnavailable(
+        f"{XATTR_BIN} -p 返回 rc={proc.returncode} 且非「无此属性」：{stderr.strip() or '<无 stderr>'}"
+    )
 
 
 def _check_path(
@@ -220,14 +255,26 @@ def _check_path(
                 "——launchd 只接受普通文件，目录/设备/套接字一律 EX_CONFIG",
             )
         # 3a. provenance 属性判定（放在属主/权限之前：10-18 真因在这里）
-        if _carries_provenance(raw):
+        try:
+            carries = _carries_provenance(raw)
+        except ProvenanceProbeUnavailable as exc:
+            return Finding(
+                plist, key, raw, False, RC_PROVENANCE_PROBE_UNAVAILABLE,
+                f"{key} 的目标 {p.name} 无法判定是否带 {PROVENANCE_XATTR}：{exc}"
+                "——本检查 fail-closed，但这**不等于**文件带该属性；"
+                f"请人工复核（xattr -l {p.name} / xattr -p {PROVENANCE_XATTR} -- {raw}）"
+                "或换到 xattr(1) 可用的环境重跑本检查后再安装，勿据此改名留档",
+            )
+        if carries:
             return Finding(
                 plist, key, raw, False, RC_TARGET_PROVENANCE,
                 f"{key} 的目标已存在且带 {PROVENANCE_XATTR} 扩展属性（xattr -l "
                 f"{p.name} 可复核）——该属性标记它是由 bash/>> 等终端侧进程写出的，"
                 "launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它，"
                 "bootstrap 必 EX_CONFIG 78（属主/权限正常也会踩）；"
-                "请改名留档后由 launchd 重建该文件，不要复用该路径",
+                "请改名留档后由 launchd 重建该文件，不要复用该路径；"
+                "若该文件正被在役作业持有（lsof -nP <path> 有输出），"
+                "先 launchctl bootout 再改名——改名后 launchd 仍写旧 inode",
             )
         owner_uid = st.st_uid
         try:

@@ -164,9 +164,16 @@ python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradi
 # 10-18 首次 bootstrap 失败（EX_CONFIG 78）的真因：日志文件是 wrapper 时代由
 # bash/>> 写出的**既存**文件，带 com.apple.provenance（属主/权限完全正常）；
 # launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它。判定用
-# `xattr -p com.apple.provenance -- <path>`（只读，不写盘；launchd 建的文件是
-# com.apple.macl）。命中 → 原因码 LOGPATH_TARGET_PROVENANCE_XATTR，
-# 处置：改名留档后由 launchd 重建同名文件，勿复用该路径。
+# `xattr -p com.apple.provenance -- <path>`（只读，不写盘；launchd 新建的文件通常
+# **只有** com.apple.macl，但两者可共存——10-18 事故文件就同时带 macl 与
+# provenance，**有 macl 不能反推安全**；判据只取 provenance 有无）。命中 → 原因码
+# LOGPATH_TARGET_PROVENANCE_XATTR，处置：改名留档后由 launchd 重建同名文件，
+# 勿复用该路径；若该文件正被在役作业持有（lsof -nP <path> 有输出），先
+# launchctl bootout 再改名（改名后 launchd 仍写旧 inode）。
+# xattr(1) 本身不可用/执行失败（非 0 且非「无此属性」，如 EACCES、不支持 xattr 的
+# 文件系统）→ 原因码 LOGPATH_PROVENANCE_PROBE_UNAVAILABLE，同样 fail-closed，
+# 但**不代表文件带该属性**，文案带异常文本：请人工 `xattr -l` 复核或换用可用的
+# 解释器重跑，不要据此改名。
 # 注：符号链接目标一律判 LOGPATH_TARGET_NOT_REGULAR_FILE（比 launchd 严格），
 # 故不要用 uvicorn-current.log -> uvicorn-<sha>.log 的软链方案做轮转。
 # 注：以 root/sudo 运行会让属主比对与可写判定失真（os.access 对 root 恒真），
