@@ -2202,6 +2202,88 @@ def check_price_plan(slice_: Dict[str, Any], market_source: Optional[Dict[str, A
     return check
 
 
+# DAV-2173: analysis status of a deliberate, rule/gate driven abstention. On
+# such runs confidence & probability are absent *by construction* (see
+# ``decision_status.abstain_status``, which writes None for both), so their
+# absence must not be reported as an extraction failure.
+_ABSTAIN_ANALYSIS_STATUS = "ABSTAIN"
+_HORIZON_SLICE_KEYS = {"short": "short_term", "medium": "medium_term"}
+
+
+def _recorded_analysis_status(container: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Recorded post-gate ``analysis_status`` of one result-data container.
+
+    Same precedence as :func:`_resolve_slice_post_gate_fields`: the flat field
+    wins over the nested ``decision_status`` copy. ``None`` means *no status was
+    recorded* — that is not an abstention.
+    """
+    if not isinstance(container, dict):
+        return None
+    raw = container.get("analysis_status")
+    if not raw:
+        decision_status = container.get("decision_status")
+        if isinstance(decision_status, dict):
+            raw = decision_status.get("analysis_status")
+    value = str(raw or "").strip().upper()
+    return value or None
+
+
+def is_rule_driven_abstention(result_data: Optional[Dict[str, Any]]) -> bool:
+    """DAV-2173: True when every recorded horizon status is a deliberate
+    ``ABSTAIN`` — a business gate / rule short-circuit (e.g.
+    ``fund_flow_guard:selected`` → ABSTAIN/NO_TRADE) rather than an extraction
+    failure. Confidence and probability are absent by design there, so
+    ``extraction_warning`` must not be raised.
+
+    Dual-horizon reports keep the ground truth on their ``short_term`` /
+    ``medium_term`` slices while the top-level status is only a display
+    aggregate derived from them, so the slices take precedence:
+
+    * declared ``requested_horizons`` — every requested horizon must record
+      ``ABSTAIN``; a horizon that recorded another status (or nothing at all)
+      keeps the warning, because a silent or failed horizon is a real anomaly;
+    * legacy payloads without ``requested_horizons`` — the slices that did
+      record a status are judged, so stub slices of horizons that never ran do
+      not veto the abstention;
+    * no slice status at all — the container's own status decides.
+    """
+    if not isinstance(result_data, dict):
+        return False
+
+    requested: List[str] = []
+    raw_requested = result_data.get("requested_horizons")
+    if isinstance(raw_requested, (list, tuple)):
+        requested = [str(h) for h in raw_requested if str(h) in _HORIZON_SLICE_KEYS]
+
+    if requested:
+        # Declared horizons: every requested horizon must record ABSTAIN. A
+        # horizon that recorded another status — or nothing at all — is a real
+        # anomaly and keeps the warning.
+        statuses = [
+            _recorded_analysis_status(result_data.get(_HORIZON_SLICE_KEYS[horizon]))
+            for horizon in requested
+        ]
+        if any(status is not None for status in statuses):
+            return all(status == _ABSTAIN_ANALYSIS_STATUS for status in statuses)
+        # Legacy flat payload: no slice for the declared horizon, so the
+        # container itself carries the horizon status.
+        return _recorded_analysis_status(result_data) == _ABSTAIN_ANALYSIS_STATUS
+
+    # Legacy rows without ``requested_horizons``: judge the slices that actually
+    # recorded a status. Stub slices of horizons that never ran carry none and
+    # must not veto the abstention.
+    recorded = [
+        _recorded_analysis_status(result_data.get(key))
+        for key in _HORIZON_SLICE_KEYS.values()
+    ]
+    recorded = [status for status in recorded if status is not None]
+    if recorded:
+        return all(status == _ABSTAIN_ANALYSIS_STATUS for status in recorded)
+
+    # Single-horizon shape: the container itself carries the horizon status.
+    return _recorded_analysis_status(result_data) == _ABSTAIN_ANALYSIS_STATUS
+
+
 def resolve_report_fields(
     result_data: Optional[Dict[str, Any]] = None,
     confidence_override: Optional[int] = None,
@@ -2272,9 +2354,12 @@ def resolve_report_fields(
         if judge_decision:
             probability = _extract_probability_regex(judge_decision)
 
-    # 3. Extraction warning: marked when both confidence and probability are missing across all sources
+    # 3. Extraction warning: marked when both confidence and probability are missing across all sources.
+    # DAV-2173: a rule/gate driven abstention has no confidence/probability by
+    # design — keep the warning for real extraction failures only.
     extraction_warning = None
-    if confidence is None and probability is None:
+    rule_driven_abstention = is_rule_driven_abstention(result_data)
+    if confidence is None and probability is None and not rule_driven_abstention:
         extraction_warning = "置信度及概率数据全部缺失"
 
     # 4. Target price and stop loss price extraction
@@ -2300,7 +2385,7 @@ def resolve_report_fields(
     if is_hold and target_price is None:
         notes.append("观望不设目标价")
 
-    if probability is None and not extraction_warning:
+    if probability is None and not extraction_warning and not rule_driven_abstention:
         notes.append("概率未提供/未提取")
 
     extraction_note = "；".join(notes) if notes else None
