@@ -23,6 +23,15 @@ fixed account only) plus the DAV-1875 short-horizon expiry labels
   T+10 label panel) — D-075 fixes m200/W0 as the primary baseline, other
   grids are never substituted ex post.
 
+DAV-2240 查询日期集合（冻结计划 §2.4 W0）: 基率引擎改为接收**正式评价的
+查询日期集合**（正式 cohort 的信号日 ∪ admit 输入行中标签尚未到期的待评
+信号日），与冻结 P1 面板自身的信号日同走一遍按日排序的成熟标签吸收过程
+—— 面板之后的正式信号日因此用**同一冻结面板、同一 m200/W0、同一成熟
+规则**按「截至该日已成熟标签」（``actual_exit_date <= T``）的扩窗取得
+``q_base``；冻结面板本身不替换、不扩充、不重算，面板内日期的取值逐值
+不变。无已成熟标签的单元判缺失（NaN，记入 ``no_base_rows``），不填市场
+常数凑配对。
+
 Ledger p_rel_t10 read node (M1 签收 item 2 — 三处都要核到):
   record → ``horizons.short`` → ``forecast.p_rel_t10``
   (the slice's ``forecast`` dict is the ``parse_horizon_forecast`` output
@@ -119,7 +128,7 @@ import re
 import sqlite3
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -137,7 +146,7 @@ import daily_snapshot_ledger as dsl
 import expiry_label_pipeline as elp
 import m1_eval as m1
 import pit_reattest
-from m1_base_rate import build_pit_base_rates, load_panel
+from m1_base_rate import build_pit_base_rates, load_panel, normalise_days
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
 
@@ -1601,16 +1610,102 @@ def _panel_n_distribution(panel: pd.DataFrame) -> dict:
     }
 
 
-def base_q_map(panel: pd.DataFrame, m: int = BASE_M, W: int = BASE_W) -> dict:
-    """(signal_date, l1) -> shrunken base rate p_m{m} for the T+10 panel."""
+def base_q_map(panel: pd.DataFrame, m: int = BASE_M, W: int = BASE_W,
+               query_days: Iterable[str] | None = None) -> dict:
+    """(signal_date, l1) -> shrunken base rate p_m{m} for the T+10 panel.
+
+    ``query_days`` (DAV-2240) = the formal evaluation's signal days. They
+    are handed to the engine's single date-ordered walk, so a formal day
+    after the panel's last signal day still gets the W0 expanding base
+    rate built from the labels matured on or before it — same frozen
+    panel, same maturity rule (``actual_exit_date <= T``), no panel
+    recomputation and no look-ahead. Panel-internal days keep their
+    previous values verbatim. Day strings are rendered in the panel's own
+    shape (``YYYYMMDD`` ↔ ``YYYY-MM-DD``).
+    """
     if panel.empty:
         return {}
     base, _summary = build_pit_base_rates(
-        panel, shrink_ms=(m,), window_days=(W,), min_cell_n=1)
+        panel, shrink_ms=(m,), window_days=(W,), min_cell_n=1,
+        query_days=query_days)
     col = f"p_m{m}"
     sub = base.loc[base["W"] == W, ["signal_date", "l1", col]]
     return {(str(d), str(l1)): float(q)
             for d, l1, q in zip(sub["signal_date"], sub["l1"], sub[col])}
+
+
+def base_query_audit(panel: pd.DataFrame, query_days,
+                     *, m: int = BASE_M, W: int = BASE_W,
+                     qmap: Mapping[tuple[str, str], float] | None = None,
+                     ) -> dict:
+    """DAV-2240 交付附 — per-query-day base-rate keys + matured counts.
+
+    ``keys`` / ``cells``: (query day, industry) cells carrying a finite
+    ``p_m{m}`` / every cell emitted for the query days; a NaN cell is the
+    honest 缺失 — 该查询日该行业无已成熟标签，never a filled market constant.
+    ``matured_by_l1`` / ``matured_market``: matured-label counts as of the
+    LAST query day (the engine's own rule ``mat <= day``; unassigned
+    industries feed the market prior but get no industry line).
+    ``matured_by_l1_per_day`` is emitted only when the per-day counts
+    differ, so one map can never silently stand for days it does not
+    describe.
+    """
+    like = None if panel.empty else str(panel["signal_date"].iloc[0])
+    days = normalise_days(query_days, like)
+    if panel.empty or not days:
+        return {
+            "formal_signal_days": len(days),
+            "cells": 0, "keys": 0, "missing_cells": 0,
+            "keys_by_day": {}, "matured_by_l1": {}, "matured_market": 0,
+            "matured_by_l1_same_all_days": True,
+            "matured_by_l1_per_day": None,
+            "reason": ("no --base-chunks: 基率来源缺失（D-075 增量"
+                       "不可判定）" if panel.empty else "无正式信号日"),
+        }
+    if qmap is None:
+        qmap = base_q_map(panel, m=m, W=W, query_days=days)
+    day_set = set(days)
+    sub = {k: v for k, v in qmap.items() if k[0] in day_set}
+    keys_by_day = {d: 0 for d in days}
+    missing = 0
+    for (d, _l1), v in sub.items():
+        if isinstance(v, float) and math.isfinite(v):
+            keys_by_day[d] += 1
+        else:
+            missing += 1
+    # matured counts per query day under the engine's own absorption rule
+    # (mat != "" and mat <= day; unassigned rows count to the market only)
+    mats = panel["mat"].astype(str)
+    with_mat = mats.ne("")
+    per_day: dict[str, dict] = {}
+    for d in days:
+        matured = panel.loc[with_mat & (mats <= d)]
+        by_l1 = (matured.loc[matured["l1"].astype(str) != "", "l1"]
+                 .astype(str).value_counts())
+        per_day[d] = {"by_l1": {str(k): int(v) for k, v in by_l1.items()},
+                      "market": int(len(matured))}
+    last = days[-1]
+    same = all(per_day[d] == per_day[last] for d in days)
+    return {
+        "formal_signal_days": len(days),
+        "range": [days[0], days[-1]],
+        "cells": len(sub),
+        "keys": int(len(sub) - missing),
+        "missing_cells": int(missing),
+        "keys_by_day": keys_by_day,
+        "matured_by_l1": per_day[last]["by_l1"],
+        "matured_market": per_day[last]["market"],
+        "matured_as_of": last,
+        "matured_by_l1_same_all_days": bool(same),
+        "matured_by_l1_per_day": (
+            None if same else {d: per_day[d]["by_l1"] for d in days}),
+        "missing_rule": "无已成熟标签的 (查询日, 行业) 单元不出基率"
+                        "（NaN，不填市场常数）；缺行业"
+                        "（sw.index_code 空）不产行业线",
+        "note": "冻结 P1 面板不重算；每个正式信号日按 "
+                "actual_exit_date <= 该日 的已成熟标签、同一 "
+                "m/W 与成熟规则取值 (DAV-2240)",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2081,6 +2176,18 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # The base panel comes from P1 T+10 partitions (--base-chunks /
     # build-base), never from the P4 ledger's own labels (DAV-1890 fix).
     base_source: dict = {}
+    # DAV-2240: 正式评价的查询日期集合 = 正式 cohort 的信号日 ∪ admit 输入行
+    # 中「标签未到期」(r 为空) 的信号日 —— 基率必须在批次当日就能生成，
+    # 不能等 T+10 标签到期（否则面板之后的正式信号日永远缺基率，
+    # D-075 配对在首个到期日就断掉）。取值放在 admit 输入帧（post 起点/
+    # 自定义/版本/标签门）上；纯描述性账本豁免不在本卡范围。
+    cohort_days = (sorted({str(d) for d in formal["signal_date"].dropna()})
+                   if "signal_date" in formal.columns else [])
+    pending_days = (sorted({str(d) for d in
+                            df.loc[df["r"].isna(), "signal_date"].dropna()})
+                    if "r" in df.columns and "signal_date" in df.columns
+                    else [])
+    formal_days = sorted(set(cohort_days) | set(pending_days))
     if base_chunks is not None:
         panel = build_base_panel(Path(base_chunks))
         base_source = {
@@ -2093,7 +2200,16 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         panel = pd.DataFrame(columns=["signal_date", "mat", "l1", "y"])
         base_source = {"kind": "none", "note":
                        "no --base-chunks given — D-075 增量不可判定"}
-    qmap = base_q_map(panel, m=BASE_M, W=BASE_W)
+    qmap = base_q_map(panel, m=BASE_M, W=BASE_W, query_days=formal_days)
+    base_source["query_days"] = base_query_audit(panel, formal_days,
+                                                 qmap=qmap)
+    base_source["query_days"]["scope"] = {
+        "rule": "query days = 正式 cohort 信号日 ∪ admit 输入行中标签未到期"
+                "（r 为空）的待评信号日（DAV-2240）",
+        "formal_cohort_days": len(cohort_days),
+        "pending_days": len(pending_days),
+        "query_days": len(formal_days),
+    }
     days_index = [vars(x)["date"] for x in days]
     increment = paired_increment(formal, qmap, days_index)
     # 总控 10-13: 缺基率记录两侧都不用、漏斗单列 — 同步进主 funnel 落盘，
@@ -2510,7 +2626,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="trading calendar (one date per line); default live")
     r.add_argument("--base-chunks", type=Path, default=None,
                    help="P1 all-market T+10 partition dir (year=*/data.parquet); "
-                        "omit -> D-075 增量不可判定 (base_source=none)")
+                        "the formal evaluation's signal days (cohort ∪ "
+                        "label-pending admit inputs) are handed to the base "
+                        "engine as query days (DAV-2240: panel-internal days "
+                        "unchanged, later days use the W0 expansion as of "
+                        "that day); omit -> D-075 增量不可判定 "
+                        "(base_source=none)")
     r.add_argument("--user-id", default=DEFAULT_USER_ID)
     r.add_argument("--pit-reattest", type=Path, default=None,
                    help="optional pit_reattest.jsonl (DAV-2097③, DAV-2198 ③): "
