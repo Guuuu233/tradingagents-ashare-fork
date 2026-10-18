@@ -18,11 +18,13 @@ launchd 重建同名文件才恢复。launchd 自身只在 stderr 留一行，�
    - 父目录存在、是目录、可写（必要时可创建）；
    - 目标不存在则放行（launchd 会自建）；已存在必须是**普通文件**、**不带
      ``com.apple.provenance``**（该属性即「非 launchd 创建」的判据）、
-     **属主为当前 uid**、**可追加**；``xattr(1)`` 不可用时无法判定 → 单独原因码
-     ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``（fail-closed，但不谎报带属性）；
+     **属主为当前 uid**、**可追加**——最后一条全部满足时判 **WARN 不拦**
+     （总控 10-18 口径第 2 条）并列出文件；``xattr(1)`` 不可用时无法判定 →
+     单独原因码 ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``（fail-closed，但不谎报
+     带属性）；
    - 不属于旧版包装脚本遗留物（废弃文件名 / 已废弃目录）。
-3. 任一条不满足 → **fail-closed**：打印原因码 + 明确文案，退出码非 0，
-   绝不静默放行。
+3. 任一 **FAIL** → **fail-closed**：打印原因码 + 明确文案，退出码非 0，
+   绝不静默放行。**WARN 不阻断**（退出码仍为 0），但会逐条列出。
 
 用法
 ----
@@ -32,10 +34,25 @@ launchd 重建同名文件才恢复。launchd 自身只在 stderr 留一行，�
 退出码
 ------
 ====  =========================================================
-  0   全部检查通过
+  0   全部检查通过（可能含 WARN，见下）
   2   前置检查不通过（fail-closed；输出原因码）
   3   用法/输入错误（plist 不存在、无法解析、占位符未替换）
 ====  =========================================================
+
+严重度与口径（总控 10-18 令）
+--------------------------
+本检查有三档，**只有 FAIL 阻断安装**：
+
+* **FAIL**（退出码 2，fail-closed）：带 ``com.apple.provenance`` 的既存日志
+  （**10-18 事故形态**）、探测不可用、属主/可追加/形态/黑名单/占位符各类不满足。
+  10-18 的处置是**改名留档后由 launchd 重建同名文件，不直接覆盖**（直接覆盖
+  无法让 launchd 获得它需要的打开路径，且在役持有旧 inode 时改名也不生效）。
+* **WARN**（退出码 0，**不拦**）：既存日志文件不带 provenance 且当前用户可追加写
+  ——launchd 能正常打开并追加，属可接受形态，仅提示运维知情；终端与 ``--json``
+  输出均**列出这些文件**（原因码 ``LOGPATH_TARGET_EXISTING_APPENDABLE``）。
+* **PASS**：目标不存在（launchd 自建）。
+
+``WARN`` 的存在不改变退出码；调用方若要区别对待，读 JSON 的 ``warnings`` 字段。
 
 ``--legacy-name`` / ``--legacy-dir`` 供调用方按现行部署补充遗留物黑名单；
 默认内置 DAV-2180 直启版之前 wrapper 时代的废弃落点（见 ``LEGACY_*``）。
@@ -77,6 +94,9 @@ RC_OPEN_PROBE = "LOGPATH_OPEN_PROBE_FAILED"
 # 与 RC_TARGET_PROVENANCE 分开，避免把「判不出来」报成「确实带属性」，
 # 后者的处置动作（改名留档）对在役持有的日志是高风险误导。
 RC_PROVENANCE_PROBE_UNAVAILABLE = "LOGPATH_PROVENANCE_PROBE_UNAVAILABLE"
+# DAV-2232 新增（只追加，总控 10-18 口径）：既存日志文件不带 provenance 且当前
+# 用户可追加 → **WARN、不拦**。该码只是 WARN 的标识，不参与阻断。
+RC_TARGET_EXISTING_APPENDABLE = "LOGPATH_TARGET_EXISTING_APPENDABLE"
 
 #: 宿主 ``/usr/bin/xattr``；判 provenance 用（macOS Python 无 os.getxattr）。
 XATTR_BIN = "/usr/bin/xattr"
@@ -100,7 +120,11 @@ _PLACEHOLDER_RE = re.compile(r"\{\{[A-Z0-9_]+\}\}")
 
 @dataclass
 class Finding:
-    """单条判定结果。``ok=False`` 即阻断安装。"""
+    """单条判定结果。
+
+    ``ok=False``（即 :attr:`severity` ``"FAIL"``）阻断安装；
+    ``severity="WARN"`` 不阻断，仅提示并在输出里列出（总控 10-18 口径第 2 条）。
+    """
 
     plist: str
     key: str
@@ -108,6 +132,17 @@ class Finding:
     ok: bool
     reason_code: str | None = None
     message: str | None = None
+    #: ``None`` = 由 ``ok`` 推导（False→FAIL，True→PASS）；WARN 必须显式传。
+    severity: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.severity is None:
+            self.severity = "FAIL" if not self.ok else "PASS"
+        if self.severity not in ("PASS", "WARN", "FAIL"):
+            raise ValueError(f"非法 severity：{self.severity}")
+        # ok 是唯一的阻断开关：FAIL 必为 False，WARN/PASS 必为 True。
+        if (self.severity == "FAIL") != (not self.ok):
+            raise ValueError(f"severity={self.severity} 与 ok={self.ok} 矛盾")
 
 
 @dataclass
@@ -123,6 +158,11 @@ class PlistReport:
     @property
     def failures(self) -> list[Finding]:
         return [f for f in self.findings if not f.ok]
+
+    @property
+    def warnings(self) -> list[Finding]:
+        """可接受但需知情的既存文件（WARN）；总控 10-18 口径要求逐个列出。"""
+        return [f for f in self.findings if f.severity == "WARN"]
 
 
 def _is_legacy_dir(path: Path, legacy_dirs: tuple[str, ...]) -> str | None:
@@ -297,6 +337,16 @@ def _check_path(
                 plist, key, raw, False, RC_TARGET_NOT_APPENDABLE,
                 f"{key} 已存在但不可追加写（mode={stat.filemode(st.st_mode)}）：{raw}",
             )
+        # 走到这里：既存、普通文件、无 provenance、属主本 uid、可追加
+        # → 总控 10-18 口径第 2 条：判 WARN、**不拦**，并逐个列出供运维知情。
+        return Finding(
+            plist, key, raw, True, RC_TARGET_EXISTING_APPENDABLE,
+            f"{key} 指向**既存**日志文件 {p.name}（不带 {PROVENANCE_XATTR}，"
+            f"属主=当前 uid、可追加写）——launchd 可正常打开并追加，故 WARN 不拦；"
+            "这是与 10-18 事故形态不同的可接受状态，列出供知情："
+            "确认它不是终端侧遗留（`xattr -l " + str(p.name) + "`）即可继续安装",
+            severity="WARN",
+        )
     # 目标不存在即放行：父目录可写时 launchd 可自行创建新文件。
     # 本脚本不预创建、不探测写入，保持对宿主机零副作用。
     return Finding(plist, key, raw, True)
@@ -384,6 +434,11 @@ def main(argv: list[str] | None = None) -> int:
                         "plist": r.plist, "label": r.label,
                         "ok": r.ok,
                         "findings": [asdict(f) for f in r.findings],
+                        "warnings": [
+                            {"key": f.key, "path": f.path,
+                             "reason_code": f.reason_code, "message": f.message}
+                            for f in r.warnings
+                        ],
                     }
                     for r in reports
                 ],
@@ -398,18 +453,19 @@ def main(argv: list[str] | None = None) -> int:
         for r in reports:
             print(f"[{r.plist}] label={r.label}")
             for f in r.findings:
-                mark = "PASS" if f.ok else "FAIL"
-                if f.ok:
-                    print(f"  {mark} {f.key} = {f.path}" + (f" — {f.message}" if f.message else ""))
+                if f.severity == "FAIL":
+                    print(f"  FAIL [{f.reason_code}] {f.key} = {f.path}\n       {f.message}")
+                elif f.severity == "WARN":
+                    print(f"  WARN [{f.reason_code}] {f.key} = {f.path}\n       {f.message}")
                 else:
-                    print(f"  {mark} [{f.reason_code}] {f.key} = {f.path}\n       {f.message}")
+                    print(f"  PASS {f.key} = {f.path}" + (f" — {f.message}" if f.message else ""))
 
     if usage_errors:
         print("前置检查未执行完毕（输入错误），fail-closed：拒绝安装。", file=sys.stderr)
         return EXIT_USAGE
     failed = [(r, f) for r in reports for f in r.failures]
     if failed:
-        print("", file=sys.stderr)
+        print(file=sys.stderr)
         for r, f in failed:
             print(f"前置检查不通过 [{f.reason_code}] {r.plist} {f.key}", file=sys.stderr)
         print(
@@ -418,8 +474,20 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_PREFLIGHT_FAILED
+    warned = [(r, f) for r in reports for f in r.warnings]
     if not args.json:
-        print("前置检查通过：全部日志路径可用且非终端侧遗留（无 provenance 扩展属性），可继续安装。")
+        if warned:
+            print(file=sys.stderr)
+            for r, f in warned:
+                print(f"WARN [{f.reason_code}] {r.plist} {f.key} = {f.path}", file=sys.stderr)
+            print(
+                f"提示：以上 {len(warned)} 条为既存但可用的日志文件（不带 "
+                f"{PROVENANCE_XATTR}、当前用户可追加），launchd 能正常打开——"
+                "**不阻断安装**。如需彻底隔离终端侧遗留，可在停机窗口改名留档后重装。",
+                file=sys.stderr,
+            )
+        else:
+            print("前置检查通过：全部日志路径可用且非终端侧遗留（无 provenance 扩展属性），可继续安装。")
     return EXIT_OK
 
 

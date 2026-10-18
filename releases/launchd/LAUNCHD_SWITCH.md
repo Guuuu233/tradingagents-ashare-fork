@@ -18,12 +18,12 @@
 
 ## 文件清单
 
-| 文件 | 作用 |
-|---|---|
+| 文件                                              | 作用                                                                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `releases/launchd/com.tradingagents.ashare.plist` | launchd 作业模板（用户域 LaunchAgents）；DAV-2180 直启版：ProgramArguments 直接调 venv python，环境变量在 `EnvironmentVariables` |
-| `releases/launchd/ta-launchd-wrapper.sh` | **旧版**包装脚本（限流计数 + 环境固化 + exec uvicorn）；DAV-2180 起新 plist 不再引用，仅留档供回退/对照 |
-| `releases/launchd/LAUNCHD_SWITCH.md` | 本说明：切换 / 回退步骤 |
-| `releases/launchd/plist_log_preflight.py` | **DAV-2223**：安装前日志路径前置检查（fail-closed，防 EX_CONFIG 78）。只读、不装 launchd、不碰生产 |
+| `releases/launchd/ta-launchd-wrapper.sh`          | **旧版**包装脚本（限流计数 + 环境固化 + exec uvicorn）；DAV-2180 起新 plist 不再引用，仅留档供回退/对照                          |
+| `releases/launchd/LAUNCHD_SWITCH.md`              | 本说明：切换 / 回退步骤                                                                                                          |
+| `releases/launchd/plist_log_preflight.py`         | **DAV-2223**：安装前日志路径前置检查（fail-closed，防 EX_CONFIG 78）。只读、不装 launchd、不碰生产                               |
 
 ## RESTART.md 基线说明（🟡-4 订正）
 
@@ -52,10 +52,10 @@
 
 ## 日志与轮转（DAV-2180 直启版）
 
-| 日志 | 来源 | 轮转 |
-|---|---|---|
-| `logs/uvicorn-<sha>.log` | **plist `StandardOutPath`/`StandardErrorPath` 同指**——uvicorn stdout+stderr 合并直落，与旧 wrapper `>> log 2>&1` 等价；launchd 打开 fd 追加写，不经 bash | 沿用宿主机现行外部轮转 |
-| `logs/launchd-stderr.log` | launchd 自身诊断（getcwd/exec 失败等）——plist 未设 Standard*Path 给 launchd 自身，实际落点是 launchd 默认；**本版把 uvicorn 输出直接指到 uvicorn-<sha>.log，launchd-stderr.log 仅留 launchd 层错误** | 见下 |
+| 日志                      | 来源                                                                                                                                                                                                 | 轮转                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `logs/uvicorn-<sha>.log`  | **plist `StandardOutPath`/`StandardErrorPath` 同指**——uvicorn stdout+stderr 合并直落，与旧 wrapper `>> log 2>&1` 等价；launchd 打开 fd 追加写，不经 bash                                             | 沿用宿主机现行外部轮转 |
+| `logs/launchd-stderr.log` | launchd 自身诊断（getcwd/exec 失败等）——plist 未设 Standard*Path 给 launchd 自身，实际落点是 launchd 默认；**本版把 uvicorn 输出直接指到 uvicorn-<sha>.log，launchd-stderr.log 仅留 launchd 层错误** | 见下                   |
 
 > **变更**：旧版 wrapper 的 `logs/wrapper-diagnostic.log`、`logs/.launchd/restart-stamps`、
 > 兜底戳目录、`manual-bypass` 哨兵等**计数设施随脚本一并移除**，直启版不再产生。
@@ -155,12 +155,20 @@ plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
 
 # 日志路径前置检查（DAV-2223：fail-closed，防 EX_CONFIG 78 复发）
 python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
-# 退出码：0 通过 / 2 前置不通过（原因码见下）/ 3 输入或用法错误。
+# 退出码：0 通过（可能含 WARN）/ 2 前置不通过（原因码见下）/ 3 输入或用法错误。
+# 三档判定（总控 10-18 令），**只有 FAIL 阻断安装**：
+#   FAIL  带 com.apple.provenance 的既存日志（10-18 事故形态）→ 处置 = **改名留档**
+#         后由 launchd 重建同名文件，**不直接覆盖**；其他不满足项（探测不可用、
+#         属主/可追加/形态/黑名单/占位符）同样 fail-closed。
+#   WARN  既存日志文件**不带** provenance 且当前用户可追加写 → launchd 能正常打开
+#         并追加，故 **WARN 不拦**（退出码仍为 0），终端与 --json 均**逐条列出**
+#         （原因码 LOGPATH_TARGET_EXISTING_APPENDABLE），供运维知情。
+#   PASS  目标不存在（launchd 自建）。
 # 检查项：StandardOut/ErrorPath 非空、无未替换占位符、绝对路径、父目录存在且
-# 可写、目标不存在或为**不带 com.apple.provenance 的**、属主为本用户且可追加的
-# **普通文件**、且不落在旧版包装脚本遗留物上（wrapper-diagnostic.log /
-# diag-fallback.log / .launchd/ / /tmp/ta-launchd-die-stamps-*，文件名大小写
-# 不敏感匹配）。
+# 可写、目标不存在（PASS），或为**不带 com.apple.provenance 的**、属主为本用户且
+# 可追加的**普通文件**（WARN 不拦，见上），且不落在旧版包装脚本遗留物上
+# （wrapper-diagnostic.log / diag-fallback.log / .launchd/ /
+# /tmp/ta-launchd-die-stamps-*，文件名大小写不敏感匹配）。
 # 10-18 首次 bootstrap 失败（EX_CONFIG 78）的真因：日志文件是 wrapper 时代由
 # bash/>> 写出的**既存**文件，带 com.apple.provenance（属主/权限完全正常）；
 # launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它。判定用
@@ -178,6 +186,8 @@ python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradi
 # 故不要用 uvicorn-current.log -> uvicorn-<sha>.log 的软链方案做轮转。
 # 注：以 root/sudo 运行会让属主比对与可写判定失真（os.access 对 root 恒真），
 # 请以登录用户身份运行本检查。
+# 最终验收（总控 10-18 令）：以 launchd bootstrap 后 `launchctl print` 显示
+# state=running、且日志有新写入为准；本检查只是安装**前**的确定性预检。
 
 # 解释器 realpath 与 TCC 探针（DAV-2180 已实测，复审可复跑）
 realpath /Users/davidliu/ta-venv/py310/bin/python
@@ -229,16 +239,16 @@ EOF
 与**1950 验收报告**（`dav1950_exit_acceptance_report.py --json`）。安装时间同令：
 **10-18 部署后、与定时任务检出升级同发布卡**。
 
-| 项 | 口径 |
-|---|---|
-| 输入 | `~/ta-snapshot/current.db`，**只读**；读取的 `file:…?mode=ro&immutable=1` URI 口径由 **DAV-2033** 在 `open_ro`/`_connect_ro` 内部统一，本 wrapper 只传 `--db`，不自己拼 URI、不复制快照 |
-| 输出 | `~/ta-work/reports/YYYY-MM-DD/`：`exit-progress-<date>.json`、`acceptance-<date>.json`、`run-status-<ts>.txt`（成功标记），失败时额外 `ALERT-<ts>.log` |
-| 保留 | **30 天**（`TA_RETENTION_DAYS`）。清理只删名字形如 `YYYY-MM-DD` 的目录，`_logs/` 等不匹配目录一律跳过 |
-| 失败 | 任一脚本非零退出或产出空文件 → 写 `ALERT-<ts>.log` + `run-status` FAILED + **wrapper exit 1**，不静默 |
+| 项           | 口径                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 输入         | `~/ta-snapshot/current.db`，**只读**；读取的 `file:…?mode=ro&immutable=1` URI 口径由 **DAV-2033** 在 `open_ro`/`_connect_ro` 内部统一，本 wrapper 只传 `--db`，不自己拼 URI、不复制快照                                                                                                                                                                                                                                                                                                       |
+| 输出         | `~/ta-work/reports/YYYY-MM-DD/`：`exit-progress-<date>.json`、`acceptance-<date>.json`、`run-status-<ts>.txt`（成功标记），失败时额外 `ALERT-<ts>.log`                                                                                                                                                                                                                                                                                                                                        |
+| 保留         | **30 天**（`TA_RETENTION_DAYS`）。清理只删名字形如 `YYYY-MM-DD` 的目录，`_logs/` 等不匹配目录一律跳过                                                                                                                                                                                                                                                                                                                                                                                         |
+| 失败         | 任一脚本非零退出或产出空文件 → 写 `ALERT-<ts>.log` + `run-status` FAILED + **wrapper exit 1**，不静默                                                                                                                                                                                                                                                                                                                                                                                         |
 | PROJECT_ROOT | **总控 10-14 令**：`TA_PROJECT_ROOT` 无默认值——plist 必须显式指向一个**专用检出**（如 `~/ta-reports-<sha>`），**禁止主检出** `~/Documents/TradingAgents-AShare`。wrapper 启动时用 `git -C "$PROJECT_ROOT" merge-base --is-ancestor 8571c80b HEAD` 核对该检出包含 DAV-2033，不满足即 `fail_alert`。锚点默认值为 `8571c80b3578c7ea40e3bdf6eed2ad7646415db9`（DAV-2033 在 `codex/dav-4-p2a-trunk` 上的合入提交），plist 以 `TA_REQUIRED_DAV2033_COMMIT` 显式接线；主检出比对前先 `pwd -P` 规范化 |
-| 交易日历 | **总控 10-14 令**：`TA_CALENDAR_JSON` 指向的日历文件不存在时直接 `fail_alert`，不再 WARN 放行 |
-| 无 KeepAlive | 失败的报表运行**不重拉**：重拉只会重复撞同一个 bug；告警留证，下一交易日自然再跑 |
-| 日志 | `~/ta-work/reports/_logs/{exit-progress,acceptance}-<date>.log` + launchd 自己的 `launchd.{out,err}.log` |
+| 交易日历     | **总控 10-14 令**：`TA_CALENDAR_JSON` 指向的日历文件不存在时直接 `fail_alert`，不再 WARN 放行                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 无 KeepAlive | 失败的报表运行**不重拉**：重拉只会重复撞同一个 bug；告警留证，下一交易日自然再跑                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 日志         | `~/ta-work/reports/_logs/{exit-progress,acceptance}-<date>.log` + launchd 自己的 `launchd.{out,err}.log`                                                                                                                                                                                                                                                                                                                                                                                      |
 
 环境（plist `EnvironmentVariables`，均可覆盖）：`TA_PYTHON_BIN`（生产固定
 `.venv310`）、`TA_PROJECT_ROOT`（**必填**，专用检出 `~/ta-reports-<sha>`）、
@@ -295,11 +305,11 @@ env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/py
 任何 Claude/agent 会话，纯脚本 + launchd，只观测告警，**不做自动重启**
 （重启由上面的 `com.tradingagents.ashare` 负责）。10-17 与 DAV-1852 一起安装。
 
-| 文件 | 作用 |
-|---|---|
-| `releases/launchd/ta-prod-health-sentinel.sh` | 哨兵脚本（探活 + 版本校验 + 告警/恢复记录） |
-| `releases/launchd/com.tradingagents.prod-health-sentinel.plist` | launchd 作业模板（RunAtLoad + StartInterval=300） |
-| `releases/launchd/tests/test_prod_health_sentinel.sh` | 五情形桩测试（通/不通/版本不符/恢复/同秒多记录不覆盖） |
+| 文件                                                            | 作用                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------------ |
+| `releases/launchd/ta-prod-health-sentinel.sh`                   | 哨兵脚本（探活 + 版本校验 + 告警/恢复记录）            |
+| `releases/launchd/com.tradingagents.prod-health-sentinel.plist` | launchd 作业模板（RunAtLoad + StartInterval=300）      |
+| `releases/launchd/tests/test_prod_health_sentinel.sh`           | 五情形桩测试（通/不通/版本不符/恢复/同秒多记录不覆盖） |
 
 判定规则：
 
