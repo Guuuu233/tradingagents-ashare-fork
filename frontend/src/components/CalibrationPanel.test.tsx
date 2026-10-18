@@ -363,4 +363,21 @@ describe('CalibrationPanel small sample guard (DAV-758)', () => {
         expect(html).toContain('无样本')
         expect(html).not.toContain('data-testid="small-sample-warning"')
     })
+
+    it('surfaces insufficient_reason as a non-error banner (DAV-1391)', () => {
+        const mockData = makeMockResponse({
+            sample_size: 0,
+            probability_sample_size: 0,
+            sample_sufficient: false,
+            min_sample_size: 30,
+            insufficient_reason: '当前筛选条件下暂无带概率的历史报告，调整日期范围或过滤条件后重试。',
+            brier_score: null,
+        })
+
+        const html = renderToStaticMarkup(<CalibrationPanel initialData={mockData} />)
+
+        expect(html).toContain('当前筛选条件下暂无带概率的历史报告')
+        // Not rendered through the error (rose) style block.
+        expect(html).not.toContain('text-rose-600')
+    })
 })
