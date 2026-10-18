@@ -627,6 +627,9 @@ class TestSealGate:
         cal = tmp_path / "c.txt"; cal.write_text("\n".join(days))
         rc = m.main(["run", "--ledger", str(ledger), "--labels", str(lab),
                      "--calendar-file", str(cal),
+                     # DAV-2214: offline suite never reads the operator's
+                     # shared snapshot (hermetic; ledger-only evidence).
+                     "--no-report-snapshot",
                      "--out-dir", str(tmp_path / "o")])
         assert rc in (0, 2)
         if rc == 0:
@@ -689,6 +692,8 @@ class TestNullDefense:
         # exit 2 — never a bare AttributeError traceback.
         rc = m.main(["run", "--ledger", str(ledger), "--labels", str(labf),
                      "--calendar-file", str(cal),
+                     # DAV-2214: hermetic offline run (see above).
+                     "--no-report-snapshot",
                      "--out-dir", str(tmp_path / "o")])
         assert rc in (0, 2)
 
@@ -959,6 +964,11 @@ class TestDav2198LabelAssociation:
         cal = tmp_path / "c.txt"; cal.write_text("\n".join([D0, D1, D2]))
         rc = m.main(["run", "--ledger", str(ledger), "--labels", str(lab),
                      "--calendar-file", str(cal),
+                     # DAV-2214: the fixture reuses a REAL report id, so the
+                     # offline suite must not read the operator's shared
+                     # snapshot (its real custom_prompt_snapshot would split
+                     # the version key) — this test is about the label gate.
+                     "--no-report-snapshot",
                      "--out-dir", str(tmp_path / "o")])
         assert rc == 0
         stdout = capsys.readouterr().out
@@ -1317,6 +1327,9 @@ class TestFailClose:
         _write_labels(labs, [_lab(rec, 1.0)])
         rc = m.main(["run", "--ledger", str(ledger), "--labels", str(labs),
                      "--calendar-file", str(tmp_path / "nocal.txt"),
+                     # DAV-2214: the missing-calendar fail-close must win
+                     # regardless of the operator's snapshot state.
+                     "--no-report-snapshot",
                      "--out-dir", str(tmp_path / "o")])
         assert rc == 2
 
