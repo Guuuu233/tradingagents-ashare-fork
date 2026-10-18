@@ -34,6 +34,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -173,8 +174,8 @@ def test_existing_file_without_attribute_warns_end_to_end(tmp_path):
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
     log.write_text("prev\n")
-    _drop_provenance(log)
-    assert mod._carries_provenance(str(log)) is False  # 前提：真无属性
+    _drop_provenance(log)  # 清理并验证，不依赖宿主此刻有无打标记
+    assert mod._carries_provenance(str(log)) is False  # 前提：真无属性（已验证）
     plist = _write_plist(tmp_path / "a.plist", str(log))
     report = mod.check_plist(plist)
     assert report.ok and len(report.warnings) == 1
@@ -287,12 +288,39 @@ def test_foreign_owner_detected_via_lstat_stub(tmp_path, monkeypatch, no_provena
     assert "属主" in report.failures[0].message
 
 
-def _drop_provenance(path: Path) -> None:
-    """确保沙箱文件不带 provenance（macOS 可能从父目录继承该属性）。
+def _probe_provenance(path: Path) -> bool:
+    """不经产品代码，直接问 xattr(1) 该路径当前是否带 provenance。"""
+    proc = subprocess.run(
+        [mod.XATTR_BIN, "-p", mod.PROVENANCE_XATTR, "--", str(path)], capture_output=True
+    )
+    return proc.returncode == 0
 
-    ``xattr -c`` 在属性不存在时也返回 1，故不 check。
+
+#: 清理重试窗口（DAV-2236 🟡-1）。清理本身瞬时完成，多出来的几轮只为等内核
+#: 异步落下的标记稳定后能被清掉。
+_DROP_RETRIES = 5
+_DROP_RETRY_SLEEP = 0.05
+
+
+def _drop_provenance(path: Path) -> None:
+    """确保沙箱文件不带 provenance。
+
+    **DAV-2236 🟡-1**：``xattr -c`` 的正确语法是 ``xattr -c <file>``（清空该文件
+    **全部**属性），**不接受属性名参数**。旧写法 ``xattr -c <attr> -- <path>`` 把
+    属性名当文件名，恒报 ``No such file``、rc=1、什么也清不掉（旧 docstring 把
+    「rc=1 即属性不存在」当正常返回，是误读），于是真调用例的「无属性」前提实际靠
+    「宿主恰好没打标记」支撑——这正是本链反复出现的偶发假失败根源。
+
+    macOS 可能在文件创建后**异步**补上 provenance 标记（DAV-2236 复审实测），
+    故此处「清理 → 探测验证」循环重试；末轮仍未清干净即报错，绝不静默返回一个
+    没清干净的文件让断言去解释。
     """
-    subprocess.run([mod.XATTR_BIN, "-c", mod.PROVENANCE_XATTR, "--", str(path)])
+    for _ in range(_DROP_RETRIES):
+        subprocess.run([mod.XATTR_BIN, "-c", str(path)], capture_output=True)
+        if not _probe_provenance(path):
+            return
+        time.sleep(_DROP_RETRY_SLEEP)
+    raise AssertionError(f"无法清除 {mod.PROVENANCE_XATTR}：{path}")
 
 
 def _set_provenance(path: Path) -> None:
@@ -343,15 +371,33 @@ def test_provenance_check_precedes_owner_check(tmp_path, monkeypatch):
 
 @needs_xattr
 def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
-    """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。"""
+    """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。
+
+    DAV-2236 🟡-1：「创建后立即探测」的旧写法踩在异步 provenance 标记的窗口上
+    （探测结果取决于宿主有没有恰好打过标记）。改为经 ``_drop_provenance`` **清理
+    并验证**后再探测，前提变得确定。
+    """
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
     log.write_text("prev\n")
-    _drop_provenance(log)
+    _drop_provenance(log)  # 内含「清理 → 探测验证」重试
     before = log.stat().st_size
     assert mod._carries_provenance(str(log)) is False
     assert mod._carries_provenance(str(tmp_path / "nope.log")) is False
     assert log.stat().st_size == before  # 零副作用：不预创建、不追加
+
+
+@needs_xattr
+def test_drop_provenance_actually_clears_attribute(tmp_path):
+    """_drop_provenance 必须真能清掉属性（旧写法是无操作，DAV-2236 🟡-1）。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    _set_provenance(log)
+    assert _probe_provenance(log) is True  # 前置：确实带上了
+    _drop_provenance(log)
+    assert _probe_provenance(log) is False
+    assert mod._carries_provenance(str(log)) is False
 
 
 @needs_xattr

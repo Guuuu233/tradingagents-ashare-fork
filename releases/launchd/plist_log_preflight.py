@@ -204,6 +204,14 @@ def _carries_provenance(path: str) -> bool:
       文件系统不支持 xattr）→ 抛 :class:`ProvenanceProbeUnavailable`，
       fail-closed 但**不谎报带属性**。
 
+    **locale 依赖登记（DAV-2236 🟢-2）**：上述两条「可放行」分支靠 ``xattr(1)``
+    的**英文** stderr 文案匹配识别。非英文 locale 下文案不同 → 落入「无法判定」
+    （EXIT 2 + ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``），是**安全方向**的退化
+    （不会误放行），代价只是可用性；本仓库门禁环境为英文 locale，非英文系统请以
+    ``LC_ALL=C`` 运行本检查。**不采用**「rc==1 且 stderr 非空即视为无属性」这类
+    更宽的兜底：实测 ``rc==1`` 同时覆盖「无此属性」「路径不存在」与 EACCES（仅
+    文案不同），放宽会把**真实的读取失败**静默放行，方向相反。
+
     stderr 文本若因本地化而不匹配，只会落到「无法判定」（更保守的一侧），
     不会误放行。
     """
