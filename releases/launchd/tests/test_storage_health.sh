@@ -16,6 +16,12 @@
 #   4. du 失败/无输出/非数值（DAV-2238 fail-closed）：不得判绿 —— 热备行须为「红
 #      （不可测，fail-closed）」、失败原因进报告、退出码非零（本实现为 2）；
 #      部分测量项不可测（含非预算项的 PROJ）同样判红；
+#   5. 枚举阶段/存在性判定失败（DAV-2239 🟡-1 返修回归点）：预算项②③改用 `find` 枚举 + 退出码
+#      判定，路径存在性用三态（present/absent/unknown）。「目录存在但不可读/不可进入」
+#      （用 `chmod 000` 等价模拟 TCC 拒读）与「上级目录不可读致 stat EACCES」均不得被静默按 0 计、
+#      不得出「0 个文件」、不得写成「目录不存在」、不得判绿；隐藏路径（`.` 开头的
+#      目录/文件）也须枚举到；PROJ 下有不可读子目录 → ③枚举失败判红，且大文件清单不得静默成空；
+#   6. 🟢-1：已测得部分和已超预算时优先出「红（超预算）」，并附「另有 N 项不可测」；
 #   5. 只读纪律静态门：剔除注释/`[[ ]]`/双引号字面量后，不得出现
 #      rm/rmdir/unlink/truncate/shred/mv/dd/install/cp、find -delete，
 #      也不得有写文件的重定向（只允许 2>/dev/null、>/dev/null、2>&1）；
@@ -226,6 +232,13 @@ check_has "${outzero}" "发布期 \`.pre-slim\` 副本：0 个文件" "无 .pre-
 check_has "${outzero}" "**热备副本占用：绿**" "空集合按 0 计，不判不可测"
 if [ "${rc_zero}" -eq 0 ]; then ok "空集合仍以退出码 0 结束（rc=0）"; else bad "空集合退出码应为 0，实得 ${rc_zero}"; fi
 
+# 3j. 🟢-1（DAV-2239）：已测得部分和已超预算 + 另有项不可测 → 仍要出现「红（超预算）」
+outov="$(run_daily_mix 120 FAKE_DU_KB_BACKUPS=16000000 FAKE_DU_KB_ZST=471792 FAKE_DU_FAIL_ITEM=proj)"; rc_ov=$?
+check_has "${outov}" "**热备副本占用：红（超预算）**" "部分和已超预算 → 出「红（超预算）」（🟢-1）"
+check_has "${outov}" "16471792 KiB" "已测得部分和原样可见（16000000 + 471792）"
+check_has "${outov}" "另有 1 个测量项不可测，合计不完整" "同时注明合计不完整（诊断串不被盖掉）"
+if [ "${rc_ov}" -eq 2 ]; then ok "超预算 + 有不可测项退出码为 2（rc=${rc_ov}）"; else bad "退出码应为 2，实得 ${rc_ov}"; fi
+
 # ---- 4. du 失败/不可测（DAV-2238：fail-closed，热备行判「红」）---------------
 echo "[4] du 失败判「红」（DAV-2238 fail-closed）"
 outfail="$(run_daily_mix 120 FAKE_DU_FAIL=1)"; rc_fail=$?
@@ -254,6 +267,61 @@ outp3="$(run_daily_mix 120 FAKE_DU_EMPTY=1)"; rc_p3=$?
 check_has "${outp3}" "**热备副本占用：红（不可测，fail-closed）**" "du 输出为空（rc=0）→ 判红"
 check_has "${outp3}" "du 无输出" "报告写明「du 无输出」原因"
 if [ "${rc_p3}" -eq 2 ]; then ok "空输出退出码为 2（rc=${rc_p3}）"; else bad "空输出退出码应为 2，实得 ${rc_p3}"; fi
+
+# ---- 4b. 枚举阶段失败（DAV-2239 🟡-1 回归点）--------------------------------
+echo "[4b] 存在但不可读的根目录 → 枚举失败判红（🟡-1）"
+# 夹具：快照目录存在、里面有 *.db.zst 与 current.db，但 chmod 000（等价 TCC 拒读）
+NOROOT="${TMP}/snap-noread"; mkdir -p "${NOROOT}"
+: > "${NOROOT}/tradingagents-2026-10-17.db.zst"; : > "${NOROOT}/current.db"
+chmod 000 "${NOROOT}"
+outnr="$(run_daily_mix 120 TA_SNAPSHOT_DIR="${NOROOT}")"; rc_nr=$?
+chmod 700 "${NOROOT}"    # 复原，保证 trap 的 rm -rf 能清掉
+check_has "${outnr}" "**热备副本占用：红（不可测，fail-closed）**" "存在但不可读的快照目录 → 热备行判红"
+check_not "${outnr}" "**热备副本占用：绿**" "枚举失败时绝不出现绿灯（🟡-1 核心断言）"
+check_not "${outnr}" "共享快照基线 \`*.db.zst\`：0 个文件" "不可读不得被写成「0 个文件」（不得静默按 0 计）"
+check_has "${outnr}" "⚠️ 不可测：${NOROOT}/*.db.zst" "点名不可读的快照目录（②项）"
+check_has "${outnr}" "⚠️ 不可测：${NOROOT} 下的 .pre-slim 副本" "点名不可读的快照目录（③项）"
+check_has "${outnr}" "Permission denied" "find 的失败原因入报告留证"
+if [ "${rc_nr}" -eq 2 ]; then ok "不可枚举时退出码为 2（rc=${rc_nr}）"; else bad "不可枚举时退出码应为 2，实得 ${rc_nr}"; fi
+
+# ---- 4c. 隐藏路径收口（DAV-2239 🟡-1 顺带）----------------------------------
+echo "[4c] 隐藏路径也必须枚举到（glob 默认不匹配反引号内的点开头路径段）"
+HID="${TMP}/hidden-fixture"
+mkdir -p "${HID}/proj/.hidden-dir" "${HID}/TradingAgents-AShare-releases/backups" "${HID}/snap"
+: > "${HID}/proj/.hidden-dir/tradingagents.db.pre-slim"    # 隐藏目录下的 .pre-slim 副本
+: > "${HID}/snap/.tradingagents-2026-10-15.db.zst"         # 隐藏的 *.db.zst
+outhid="$(run_daily_mix 120 STORAGE_PROJ="${HID}/proj" TA_SNAPSHOT_DIR="${HID}/snap" \
+                        FAKE_DU_KB_BACKUPS=3000 FAKE_DU_KB_ZST=1000 FAKE_DU_KB_PRESLIM=2000)"
+check_has "${outhid}" "共享快照基线 \`*.db.zst\`（1 个文件）" "隐藏的 *.db.zst 也被枚举到"
+check_has "${outhid}" "发布期 \`.pre-slim\` 副本（1 个文件）" "隐藏目录下的 .pre-slim 也被枚举到"
+check_has "${outhid}" "（6000 KiB；预算 ≤15 GiB = 15728640 KiB）" "隐藏路径计入合计（3000 + 1000 + 2000）"
+
+# ---- 4d. PROJ 内有不可读子目录 → ③判红 + 大文件清单留证（🟢-3）--------------
+echo "[4d] 不可读子目录：预算法不静默 + 大文件清单留证（🟢-3）"
+SUB="${TMP}/proj-subnoread"; mkdir -p "${SUB}/data" "${SUB}/.locked"
+: > "${SUB}/data/tradingagents.db"; : > "${SUB}/.locked/blocked.bin"
+chmod 000 "${SUB}/.locked"
+outsub="$(run_daily_mix 120 STORAGE_PROJ="${SUB}" FAKE_DU_KB_BACKUPS=1000)"; rc_sub=$?
+chmod 700 "${SUB}/.locked"    # 复原，保证 trap 的 rm -rf 能清掉
+check_has "${outsub}" "**热备副本占用：红（不可测，fail-closed）**" "PROJ 下有不可读子目录 → ③枚举失败判红"
+check_has "${outsub}" "⚠️ 不可测：${SUB} 下的 .pre-slim 副本" "点名枚举失败的根（子目录不可读）"
+check_has "${outsub}" "大文件清单不完整" "大文件清单不静默成空（🟢-3 留证）"
+if [ "${rc_sub}" -eq 2 ]; then ok "不可读子目录退出码为 2（rc=${rc_sub}）"; else bad "退出码应为 2，实得 ${rc_sub}"; fi
+
+# ---- 4e. 上级目录不可读：存在性无法判断 → 不可测（不得当作「不存在」跳过）-------------
+echo "[4e] 上级目录不可读 → 三态判 unknown，不得静默跳过"
+PAR="${TMP}/locked-parent"
+mkdir -p "${PAR}/TradingAgents-AShare-releases/backups" "${PAR}/proj/data"
+: > "${PAR}/TradingAgents-AShare-releases/backups/bak-x.db.zst"
+: > "${PAR}/proj/data/tradingagents.db"
+chmod 000 "${PAR}"
+outpar="$(run_daily_mix 120 STORAGE_PROJ="${PAR}/proj" TA_SNAPSHOT_DIR="${TMP}/snap")"; rc_par=$?
+chmod 700 "${PAR}"    # 复原，保证 trap 的 rm -rf 能清掉
+check_has "${outpar}" "**热备副本占用：红（不可测，fail-closed）**" "上级目录不可读 → 热备行判红"
+check_not "${outpar}" "**热备副本占用：绿**" "存在性判断不了时绝不出现绿灯"
+check_not "${outpar}" "目录不存在" "不得把「判断不了」写成「不存在」（不得静默按 0 计）"
+check_has "${outpar}" "路径存在性无法判断" "报告写明确切原因（path_state=unknown）"
+if [ "${rc_par}" -eq 2 ]; then ok "存在性未知退出码为 2（rc=${rc_par}）"; else bad "退出码应为 2，实得 ${rc_par}"; fi
 
 # ---- 5. 只读纪律静态门 -----------------------------------------------------
 # 先剔行首注释，再剔 `[[ ... ]]` 比较与双引号字面量（它们不是重定向），
