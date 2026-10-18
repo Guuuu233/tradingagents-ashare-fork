@@ -910,6 +910,122 @@ class TestDAV1391DuplicateSlotAndEmptyPoolShortCircuit:
         assert "暂无带概率的历史报告" in result["insufficient_reason"]
 
 
+class TestDAV1994Rework:
+    """DAV-1994 (DAV-1391 rework): WAIT diagnostic must survive an empty
+    calibration pool, env parsing must fail closed, and single-flight waits must
+    be bounded in wall-clock time."""
+
+    def test_wait_diagnostic_survives_empty_calibration_pool(self):
+        """M-1: only-WAIT filter must still resolve WAIT outcomes."""
+        user_id, _ = _user_token()
+        # No traded/calibratable report at all -> empty calibration pool.
+        _seed_report(
+            symbol="600519.SH",
+            trade_date="2024-01-04",
+            probability=0.75,
+            user_id=user_id,
+            trade_action="WAIT",
+        )
+        _seed_report(
+            symbol="600519.SH",
+            trade_date="2024-01-05",
+            probability=0.4,
+            user_id=user_id,
+            trade_action="WAIT",
+        )
+
+        with get_db_ctx() as db:
+            result = cal.compute_calibration(
+                db, user_id=user_id, hold_days=5, outcome_resolver=lambda r: r.trade_date == "2024-01-04"
+            )
+
+        assert result["probability_sample_size"] == 0
+        diag = result["wait_diagnostic"]
+        assert diag["total_wait_count"] == 2
+        assert diag["evaluable_wait_count"] == 2
+        assert diag["rise_count"] == 1
+        assert diag["fall_count"] == 1
+        assert diag["rise_rate"] == 50.0
+
+    @pytest.mark.parametrize("bad", ["", "  ", "abc", "3.0", "0", "-5"])
+    def test_malformed_single_flight_int_env_does_not_break_import(self, monkeypatch, bad):
+        """M-2: malformed int env values fall back to safe defaults (never crash import)."""
+        monkeypatch.setenv("CALIBRATION_SINGLE_FLIGHT_WAITS", bad)
+        assert cal._parse_bounded_int_env(
+            "CALIBRATION_SINGLE_FLIGHT_WAITS", default=3, low=1, high=1000
+        ) == 3
+
+    @pytest.mark.parametrize("bad", ["", "  ", "abc", "0", "-1", "100000"])
+    def test_malformed_single_flight_float_env_does_not_break_import(self, monkeypatch, bad):
+        """M-3: malformed wait-budget env values fall back to safe defaults."""
+        monkeypatch.setenv("CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS", bad)
+        assert cal._parse_bounded_float_env(
+            "CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS", default=30.0, low=0.1, high=300.0
+        ) == 30.0
+
+    def test_valid_single_flight_env_is_honoured(self):
+        assert cal._parse_bounded_int_env(
+            "X", default=3, low=1, high=1000, env_val="7"
+        ) == 7
+        assert cal._parse_bounded_float_env(
+            "X", default=30.0, low=0.1, high=300.0, env_val="1.5"
+        ) == 1.5
+
+    def test_waiter_falls_back_after_wait_budget(self, monkeypatch):
+        """M-3: a waiter whose budget expires takes the normal slot path."""
+        import threading
+
+        user_id, _ = _user_token()
+        monkeypatch.setattr(cal, "CALIBRATION_SINGLE_FLIGHT_WAIT_SECONDS", 0.5)
+        monkeypatch.setattr(cal, "MAX_CALIBRATION_SINGLE_FLIGHT_WAITS", 3)
+
+        release = threading.Event()
+        started = threading.Event()
+        canned = {"probability_sample_size": 1, "caller": "synthetic"}
+        call_count = []
+        lock = threading.Lock()
+
+        def _fake_compute(*args, **kwargs):
+            # Keep this test about the single-flight wait policy only: the first
+            # (in-flight owner) call blocks until released, the fallback call
+            # returns immediately so the waiter finishes within the budget test.
+            with lock:
+                call_count.append(1)
+                n = len(call_count)
+            if n == 1:
+                started.set()
+                release.wait(10)
+            return dict(canned)
+
+        results = []
+        errors = []
+
+        def _worker():
+            try:
+                with get_db_ctx() as db:
+                    results.append(cal.compute_calibration(db, user_id=user_id, hold_days=5))
+            except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+                errors.append(exc)
+
+        with patch.object(cal, "_compute_calibration_unlocked", side_effect=_fake_compute):
+            t1 = threading.Thread(target=_worker)
+            t1.start()
+            assert started.wait(5)
+            t2 = threading.Thread(target=_worker)
+            t2.start()
+            t2.join(5)
+            # The duplicate must have given up on the in-flight event and computed
+            # on its own instead of blocking forever on event.wait().
+            assert not t2.is_alive(), "waiter did not honour the wait budget"
+            assert len(call_count) == 2, call_count
+            release.set()
+            t1.join(10)
+
+        assert errors == []
+        assert len(results) == 2
+        assert results[0] == results[1]
+
+
 class TestV2WinnerOnlyCalibration:
     def test_v2_winner_only_reports_admitted_with_sample_size_greater_than_zero(self):
         """Track A8: completed v2 reports with winner in {bull, bear} and probability=NULL are admitted."""
