@@ -381,10 +381,19 @@ export interface PriceBasisGate {
     price_basis_version?: string
 }
 
+export interface ErrorDiagnostics {
+    stage?: string
+    error_type?: string
+    error_message?: string
+    traceback?: string
+    captured_at?: string
+}
+
 export interface AnalysisHorizonResult {
     horizon?: string
     status?: string
     error?: string
+    error_diagnostics?: ErrorDiagnostics
     impact?: string
     decision?: string
     direction?: string
