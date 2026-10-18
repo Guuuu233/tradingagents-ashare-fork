@@ -1,0 +1,1259 @@
+{
+ "source": "DAV-2195 §5.2: 19 data_missing typed rows frozen by the append-only label file (target 2026-10-15; 14 short rows in labels_t10.jsonl, 5 medium rows in labels_t40.jsonl), verbatim.",
+ "rows": [
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "4390ddfd08a2406d8784d4c66e0af28e",
+   "symbol": "600519.SH",
+   "symbol_raw": "600519.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "783e6cdc8517acdd71e32975fe79ed7d7c464717a0ed47091a6f9dff69163c5f",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 1250.01,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 1250.01,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801120.SI",
+    "index_name": "食品饮料",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "5d91f87eac935a9f349ff7610d4fde45c30227472174f7d4b92d41459f0ab07a"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "b37fd03083614cbe92fa686698876551",
+   "symbol": "600519.SH",
+   "symbol_raw": "600519.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "1bdb54bc9b01a1da927c903a3cc447ebdaa7576ebfe7794ef33663c047f2caf4",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "N/A",
+   "direction_bucket": "无结论",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 1250.01,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 1250.01,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801120.SI",
+    "index_name": "食品饮料",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "f479cca74b1d8e1287ba932612abc1087cd3ee2d8dbf74acaae5ac24217575f8"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "37a98805eec14ef8b94ca37864a4e1e5",
+   "symbol": "601225.SH",
+   "symbol_raw": "601225.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "a4f30b9a0af1b553906c79496a1a4b5bf9f41641fb7baaeaf03d4e36c5d1ff44",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 25.6,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 25.6,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801950.SI",
+    "index_name": "煤炭",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "c671095a6569e9a253a37501245c46662e3ca43f961b216085b666155a1dac31"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "8a1f3c1c22794f30968503e67d8b83b6",
+   "symbol": "600690.SH",
+   "symbol_raw": "600690.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "9ee594f40d6f0808b520278a11af8e4a3e3f75b04a50cbc3c6d66e97ae9017fa",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "NEUTRAL",
+   "direction_bucket": "中性",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 20.2,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 20.2,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801110.SI",
+    "index_name": "家用电器",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "fa3b16d037f1b8577c575bb235d312fe17a25106f16dcd21b8d2a170541dbe4a"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "633636155dd04a2eaf16da02da900893",
+   "symbol": "600585.SH",
+   "symbol_raw": "600585.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "246ca9cf1707f0446b64dae21361a25e4b44929d920fe0e21cc4a9b8a6af9f3a",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 17.09,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 17.09,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801710.SI",
+    "index_name": "建筑材料",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "58c6dbb792694baf0f0e7ae94e3ab7fb34f7f0c6d2bdb842e23259e032bc311b"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "0a0f1aa344674a21928a6c83d49f97d9",
+   "symbol": "601919.SH",
+   "symbol_raw": "601919.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "ff9d603e7c92fcc30eb9ca8f01874a533a3069e3bdebc6c6a0813697f561e51f",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "NEUTRAL",
+   "direction_bucket": "中性",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 16.31,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 16.31,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801170.SI",
+    "index_name": "交通运输",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "55f5c6b0ab3ceca23ae1453ec9be05db3cd1d9a53e6c578d2ab82986d1f1962d"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "5fe22ff68af84524880259c7be96ad82",
+   "symbol": "600104.SH",
+   "symbol_raw": "600104.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "d30df75d2a7d4c520d23f193013657fdaa7b99ccf780b87837a986cf8737b9f2",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 10.83,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 10.83,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801880.SI",
+    "index_name": "汽车",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "8f69344c1006f86d351d9f52518b10ded81e01fc2fd8133eff5d7dc8c59b1ada"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "8218e73af53c4adaaa967ace63487998",
+   "symbol": "002304.SZ",
+   "symbol_raw": "002304.SZ",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "826fd5fc604b3b666cc4a7861424e3d1da8a9023454cc705dfb77b1f0cc6d9d8",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 37.94,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 37.94,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801120.SI",
+    "index_name": "食品饮料",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "49f49bbd26c5789fd9e7d72cd0498d24724ca144297d02f2dbb53211e44896ef"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "d0c098bb4ff741778108dfa11e7d4ce6",
+   "symbol": "600438.SH",
+   "symbol_raw": "600438.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "c8072aa8835d18ddf34e67c38454f0bf520e40918229c49526ed078186d60474",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "NEUTRAL",
+   "direction_bucket": "中性",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 11.54,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 11.54,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801730.SI",
+    "index_name": "电力设备",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "ece23e478b318fb52286b8cc9cf292de74891a8d36aa8b79926e4b91a1a278e2"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "f59322f59f25485bb28a3a88a8366244",
+   "symbol": "300760.SZ",
+   "symbol_raw": "300760.SZ",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "5729dff96277fdf14efc006c278feb2cd0c906a8601be45afa5efc2290416782",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 155.12,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 155.12,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801150.SI",
+    "index_name": "医药生物",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "8ec38e72ae4bc07aed415efa19e801f3248639e9e4b9146e962b7a8ef52266cc"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "724171f619de4a5fb0543399a863c259",
+   "symbol": "603501.SH",
+   "symbol_raw": "603501.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "5ac7b981c1ba0829f176e8319cdbae60f13797e8c98e5078cbdd469cb69401c4",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 82.33,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 82.33,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801080.SI",
+    "index_name": "电子",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "088e73623000caa4e9d373b1133f1873f0e781de03c545ddf193d76f2722aee0"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "d21c5444dcfa4b969893242377f2f1fb",
+   "symbol": "601390.SH",
+   "symbol_raw": "601390.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "467b9333f7c70d48364daaf5449a22f535376689a3255b17ba058ebf1d002f68",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 4.22,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 4.22,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801720.SI",
+    "index_name": "建筑装饰",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "a290703ebf2a0ae78a3c2a0642670388339b871cf37448ec5c132a95a3969441"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "5941ab64774247e3833314c41890ed60",
+   "symbol": "600048.SH",
+   "symbol_raw": "600048.SH",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "45538038837f0d2b640c168f82cf0989af53196c8389ecda434e4c9eda78fefe",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 5.64,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 5.64,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801180.SI",
+    "index_name": "房地产",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "08b87755d4ecb36a2b7d4a12f36f91bf97bdee4e32f9d9dd27cd954914bf2e85"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "a2147c5411eb47ee8253c01ee428c2c5",
+   "symbol": "000002.SZ",
+   "symbol_raw": "000002.SZ",
+   "signal_date": "2026-09-23",
+   "horizon": "short",
+   "eval_offset": 10,
+   "ledger_record_sha256": "0ac12e94d01475f1b439cdf3e365a6b1f1c6e427154f296212ebde4c23453ecd",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "NEUTRAL",
+   "direction_bucket": "中性",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-09-24",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 3.89,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-09-24",
+    "exit_date": null,
+    "entry_price": 3.89,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801180.SI",
+    "index_name": "房地产",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "78ed0205435ae97732517afc5ddb092beb345a54025fc032b3e6259a699c5d1f"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "2b616882ee6b425ca8aa299f1aaabd5f",
+   "symbol": "600396.SH",
+   "symbol_raw": "600396.SH",
+   "signal_date": "2026-08-12",
+   "horizon": "medium",
+   "eval_offset": 40,
+   "ledger_record_sha256": "aec2b1207fdc2617769a44a48e6939619f992571bf8f32a86b86d9c45bdaf3e0",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "偏空",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-08-13",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 16.8,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-08-13",
+    "exit_date": null,
+    "entry_price": 16.8,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801160.SI",
+    "index_name": "公用事业",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "26b90fca477a45ef9b8ab253de2423cf5f752147a9e4f3fb85194770f4c226e6"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "196ee2d0a9f34bb1ad8dc84f59cbafca",
+   "symbol": "002167.SZ",
+   "symbol_raw": "002167.SZ",
+   "signal_date": "2026-08-12",
+   "horizon": "medium",
+   "eval_offset": 40,
+   "ledger_record_sha256": "00e0101b50ffa1dd118d1705db1d99e7759c96c12abd317073ec32a0ba27a5c5",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "偏空",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-08-13",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 17.6,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-08-13",
+    "exit_date": null,
+    "entry_price": 17.6,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801050.SI",
+    "index_name": "有色金属",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "2c5e6ed0e7461d94a18086159090c0038e013fa156783c9839f1b99e9fdb2697"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "c8ef2d48806040368fb436d11fd67412",
+   "symbol": "002167.SZ",
+   "symbol_raw": "002167.SZ",
+   "signal_date": "2026-08-12",
+   "horizon": "medium",
+   "eval_offset": 40,
+   "ledger_record_sha256": "9e2c4a69f5cba92d2614a681d8b9e44a9859d745fd29064843a9283b14d8ccde",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "偏空",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-08-13",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 17.6,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-08-13",
+    "exit_date": null,
+    "entry_price": 17.6,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801050.SI",
+    "index_name": "有色金属",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "2e6411e74c674aea0d0681b5dca7ceec1eb1bade93241bc3a842f2118015226e"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "93986f9e21a748a18ae7890d1683a764",
+   "symbol": "600276.SH",
+   "symbol_raw": "600276.SH",
+   "signal_date": "2026-08-12",
+   "horizon": "medium",
+   "eval_offset": 40,
+   "ledger_record_sha256": "dfcf7309f75755b495d3aa1fec3f1bc9359990d35e340fcda8a3632909659584",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "NEUTRAL",
+   "direction_bucket": "中性",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-08-13",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 54.05,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-08-13",
+    "exit_date": null,
+    "entry_price": 54.05,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801150.SI",
+    "index_name": "医药生物",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "dc846ea44b15c0e0f2ef2825853396519f137ea186ddedcd7fb64ec65c62156c"
+  },
+  {
+   "pipeline": "expiry_label_pipeline.v1",
+   "report_id": "69db22acc13946a8b1f89945962ef0a6",
+   "symbol": "002230.SZ",
+   "symbol_raw": "002230.SZ",
+   "signal_date": "2026-08-12",
+   "horizon": "medium",
+   "eval_offset": 40,
+   "ledger_record_sha256": "6a0beb74ca340ba2c360c46923a33b46b2a4d6bcf8ff2ed17d677b4a259f5aed",
+   "timing_class": "F1",
+   "input_pit_status": "UNVERIFIED",
+   "backfilled": false,
+   "as_of": "2026-10-15",
+   "as_of_market_closed": true,
+   "price_basis": "vendor_qfq",
+   "return_type": "price_return",
+   "direction_raw": "BEAR",
+   "direction_bucket": "看空",
+   "outcome_status": "data_missing",
+   "entry_date": "2026-08-13",
+   "target_date": "2026-10-15",
+   "actual_exit_date": null,
+   "roll_days_used": 0,
+   "entry_price": 42.62,
+   "exit_price": null,
+   "return_pct": null,
+   "direction_signed_return_pct": null,
+   "direction_hit": null,
+   "prediction": {
+    "status": "target_bar_missing"
+   },
+   "execution": {
+    "status": "data_missing",
+    "entry_date": "2026-08-13",
+    "exit_date": null,
+    "entry_price": 42.62,
+    "exit_price": null,
+    "return_pct": null
+   },
+   "hs300": {
+    "status": "not_evaluated"
+   },
+   "hs300_excess_pct": null,
+   "sw": {
+    "membership_status": "ok",
+    "index_code": "801750.SI",
+    "index_name": "计算机",
+    "membership_gap_note": null,
+    "prediction": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    },
+    "execution": {
+     "status": null,
+     "window_start": null,
+     "window_end": null,
+     "return_pct": null
+    }
+   },
+   "sw_excess_pct": null,
+   "sw_excess_pct_prediction": null,
+   "y_rel_prediction": null,
+   "input_sha256": "c1011aed214844e8a2e1bc25001ad335e3087a3ebefcfea18d426a9dfb262283"
+  }
+ ]
+}
