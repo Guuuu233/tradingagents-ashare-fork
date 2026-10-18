@@ -44,13 +44,16 @@ Explicit query days (DAV-2240 / 冻结计划 §2.4 W0):
   day shape (``YYYYMMDD`` vs ``YYYY-MM-DD`` auto-detected); panel day
   strings are never rewritten.
 
-Window parameter W (maturity-days lookback):
-  Only samples matured within the trailing W maturity days before T count.
+Window parameter W (calendar-day lookback):
+  Only samples matured within the trailing W calendar days before T count.
   W=0 (default) = expanding window, all history; W>0 = rolling window over
-  maturation days — answers "how much does the base rate drift / how does
-  shrinkage interact with recency". This is a *maturity-day* window: a label
-  counts if T - actual_exit_date <= W. The set of distinct maturity dates is
-  the observed exit calendar, not a synthetic business-day grid.
+  the last W calendar days — answers "how much does the base rate drift /
+  how does shrinkage interact with recency". A label counts when
+  T - actual_exit_date <= W calendar days; the exit calendar is the panel's
+  own ``mat`` days, no synthetic business-day grid. Every day comparison
+  goes through :func:`day_key` and every day shift through
+  :func:`shift_day`, so ``YYYYMMDD`` and ``YYYY-MM-DD`` presentations order
+  identically (DAV-2255 — raw string order is not date order across shapes).
 
 Sensitivity grid (card requirement 2): shrinkage m x window W -> per-cell
 p_base_rel_t40; summary table of industry dispersion (std of shrunken rate),
@@ -166,6 +169,32 @@ def normalise_days(days: Iterable[str] | None,
     return sorted(out)
 
 
+def day_key(day: str | int) -> int:
+    """Order key for one day — the only form in which days are compared.
+
+    Accepts the two day shapes the pipeline produces (``YYYYMMDD`` straight
+    from the P1 partitions, ``YYYY-MM-DD`` after ``build_base_panel``) and
+    returns the integer ``YYYYMMDD``. Raw string order is NOT date order
+    across shapes — ``'2023-09-27' < '20230927'`` because ``'-' < '0'`` —
+    so the W>0 window cutoff (rendered ``YYYYMMDD``) used to evict every
+    ``YYYY-MM-DD`` matured label and collapse finite W=250/500 cells to 0
+    (DAV-2255). Comparing day keys keeps the order independent of the
+    presentation.
+    """
+    s = str(day).strip().replace("-", "")
+    if len(s) == 8 and s.isdigit():
+        return int(s)
+    raise ValueError(f"not a day (YYYYMMDD or YYYY-MM-DD): {day!r}")
+
+
+def shift_day(day: str, days: int) -> str:
+    """Shift a day by ``days`` calendar days (negative = back in time),
+    returning the SAME day shape as the input (dashed stays dashed)."""
+    src = str(day)
+    t = pd.Timestamp(src) + pd.Timedelta(days=days)
+    return t.strftime("%Y-%m-%d") if "-" in src else t.strftime("%Y%m%d")
+
+
 def build_pit_base_rates(panel: pd.DataFrame,
                          shrink_ms: tuple[int, ...],
                          window_days: tuple[int, ...],
@@ -173,7 +202,7 @@ def build_pit_base_rates(panel: pd.DataFrame,
                          query_days: Iterable[str] | None = None
                          ) -> tuple[pd.DataFrame, dict]:
     """Per (signal_date T, industry j) shrunken base rate, strictly matured
-    labels only (actual_exit_date <= T, trailing W maturity days).
+    labels only (actual_exit_date <= T, trailing W calendar days).
 
     Implementation: sort matured labels by maturation day, walk signal days
     in order, maintain running (n, wins) counters per industry and for the
@@ -189,26 +218,36 @@ def build_pit_base_rates(panel: pd.DataFrame,
     values verbatim. Days are rendered like the panel's own ``signal_date``
     (see :func:`normalise_days`).
     """
-    panel_days = sorted({str(d) for d in panel["signal_date"].unique()})
+    panel_days = sorted({str(d) for d in panel["signal_date"].unique()},
+                        key=day_key)
     q_days = normalise_days(query_days,
                             panel_days[0] if panel_days else None)
-    sig_days = sorted(set(panel_days) | set(q_days))
+    sig_days = sorted(set(panel_days) | set(q_days), key=day_key)
     l1_codes = sorted(c for c in panel["l1"].unique() if c)
 
-    # matured labels grouped by maturation day (only matured rows can enter)
-    matured = panel[panel["mat"] != ""].sort_values("mat")
-    by_mat = {d: g for d, g in matured.groupby("mat", sort=True)}
-    mat_days = np.array(sorted(by_mat.keys()))
+    # matured labels grouped by maturation day (only matured rows can enter).
+    # A row's maturity must be a real day string; anything else (empty/NaN/
+    # malformed) was already out of the matured set and stays out — it can
+    # never be ordered against a signal day.
+    mats = panel["mat"].astype(str).str.strip()
+    valid_mat = mats.str.replace("-", "", regex=False).str.fullmatch(r"\d{8}")
+    matured = panel[valid_mat]
+    by_mat = {str(d): g for d, g in matured.groupby("mat", sort=False)}
+    mat_days = sorted(by_mat, key=day_key)
+    # integer day keys: absorbing / window eviction are ordered by date, never
+    # by the presentation of the day string
+    mat_keys = [day_key(d) for d in mat_days]
 
-    # calendar of distinct observed maturity days for window indexing
-    # (window is in maturity days; map each mat day to its position)
+    # observed maturity calendar (only real mat days enter; W indexes the
+    # trailing W calendar days, so a mat day's own date is all that matters)
     out_rows = []
     summary = {"signal_days": len(sig_days),
                "panel_signal_days": len(panel_days),
                "query_days": len(q_days),
                "query_days_not_in_panel": len(set(q_days) - set(panel_days)),
                "query_days_after_panel_max": sum(
-                   1 for d in q_days if panel_days and d > panel_days[-1]),
+                   1 for d in q_days
+                   if panel_days and day_key(d) > day_key(panel_days[-1])),
                "industries": len(l1_codes),
                "matured_labels": len(matured),
                "configs": []}
@@ -219,8 +258,8 @@ def build_pit_base_rates(panel: pd.DataFrame,
         run_s = defaultdict(float)
         mkt_n = 0
         mkt_s = 0.0
-        # FIFO of matured (mat_day, l1, y) inside the current window
-        fifo: list[tuple[str, str, float]] = []
+        # FIFO of matured (mat_day_key, l1, y) inside the current window
+        fifo: list[tuple[int, str, float]] = []
         fifo_head = 0
         mi = 0  # pointer into mat_days
         n_cells = 0
@@ -228,8 +267,9 @@ def build_pit_base_rates(panel: pd.DataFrame,
         shrunk_std_acc = []
 
         for T in sig_days:
-            # absorb every label matured on or before T
-            while mi < len(mat_days) and mat_days[mi] <= T:
+            t_key = day_key(T)
+            # absorb every label matured on or before T (date order)
+            while mi < len(mat_keys) and mat_keys[mi] <= t_key:
                 g = by_mat[mat_days[mi]]
                 for l1, yv in zip(g["l1"].to_numpy(), g["y"].to_numpy()):
                     run_n[l1] += 1
@@ -237,11 +277,11 @@ def build_pit_base_rates(panel: pd.DataFrame,
                     mkt_n += 1
                     mkt_s += float(yv)
                     if W > 0:
-                        fifo.append((mat_days[mi], l1, float(yv)))
+                        fifo.append((mat_keys[mi], l1, float(yv)))
                 mi += 1
-            # expire labels older than the trailing W maturity days
+            # expire labels older than the trailing W calendar days
             if W > 0:
-                cutoff = _shift_yyyymmdd(T, -W)
+                cutoff = day_key(shift_day(T, -W))
                 while fifo_head < len(fifo) and fifo[fifo_head][0] < cutoff:
                     _, l1, yv = fifo[fifo_head]
                     run_n[l1] -= 1
@@ -296,12 +336,6 @@ def build_pit_base_rates(panel: pd.DataFrame,
 
     df = pd.DataFrame(out_rows)
     return df, summary
-
-
-def _shift_yyyymmdd(d: str, days: int) -> str:
-    """Shift a YYYYMMDD string by `days` calendar days (negative = back)."""
-    t = pd.Timestamp(str(d))
-    return (t + pd.Timedelta(days=days)).strftime("%Y%m%d")
 
 
 # --------------------------------------------------------------------------
@@ -360,7 +394,7 @@ def selftest() -> int:
             for _ in range(30):
                 y = float(rng.random() < p)
                 rows.append({"signal_date": T, "l1": l1, "y": y,
-                             "mat": _shift_yyyymmdd(T, 14)})
+                             "mat": shift_day(T, 14)})
     panel = pd.DataFrame(rows)
     df, _ = build_pit_base_rates(panel, shrink_ms=(0, 50, 500),
                                  window_days=(0,))
@@ -376,7 +410,8 @@ def selftest() -> int:
     # PIT: at signal day T, n only counts labels matured on or before T
     for T in sig[:10]:
         for l1 in ("A", "B", "C"):
-            truth = panel[(panel["l1"] == l1) & (panel["mat"] <= T)]
+            truth = panel[(panel["l1"] == l1)
+                          & (panel["mat"].map(day_key) <= day_key(T))]
             got = df[(df["signal_date"] == T) & (df["l1"] == l1)]["n"]
             ok &= (len(truth) == 0 and len(got) == 0) or \
                   (len(got) and int(got.iloc[0]) == len(truth))

@@ -146,7 +146,8 @@ import daily_snapshot_ledger as dsl
 import expiry_label_pipeline as elp
 import m1_eval as m1
 import pit_reattest
-from m1_base_rate import build_pit_base_rates, load_panel, normalise_days
+from m1_base_rate import (build_pit_base_rates, day_key, load_panel,
+                          normalise_days)
 
 PIPELINE_VERSION = "p_rel_t10_baseline_eval.v1"
 
@@ -1652,6 +1653,8 @@ def base_query_audit(panel: pd.DataFrame, query_days,
     """
     like = None if panel.empty else str(panel["signal_date"].iloc[0])
     days = normalise_days(query_days, like)
+    mats = panel["mat"].astype(str).str.strip()
+    with_mat = mats.str.replace("-", "", regex=False).str.fullmatch(r"\d{8}")
     if panel.empty or not days:
         return {
             "formal_signal_days": len(days),
@@ -1674,16 +1677,19 @@ def base_query_audit(panel: pd.DataFrame, query_days,
         else:
             missing += 1
     # matured counts per query day under the engine's own absorption rule
-    # (mat != "" and mat <= day; unassigned rows count to the market only)
-    mats = panel["mat"].astype(str)
-    with_mat = mats.ne("")
+    # (mat is a real day and mat <= day; unassigned rows count to the market
+    # only). DAV-2255: the order comes from `day_key`, never from raw string
+    # ordering — '2023-09-27' < '20230927' in string order but both are the
+    # same day, so a mixed-shape panel would have been counted wrong here.
+    matured_rows = panel.loc[with_mat]
+    mat_keys = matured_rows["mat"].astype(str).map(day_key).to_numpy()
+    l1_vals = matured_rows["l1"].astype(str).to_numpy()
     per_day: dict[str, dict] = {}
     for d in days:
-        matured = panel.loc[with_mat & (mats <= d)]
-        by_l1 = (matured.loc[matured["l1"].astype(str) != "", "l1"]
-                 .astype(str).value_counts())
+        sel = mat_keys <= day_key(d)
+        by_l1 = pd.Series(l1_vals[sel & (l1_vals != "")]).value_counts()
         per_day[d] = {"by_l1": {str(k): int(v) for k, v in by_l1.items()},
-                      "market": int(len(matured))}
+                      "market": int(sel.sum())}
     last = days[-1]
     same = all(per_day[d] == per_day[last] for d in days)
     return {
@@ -2220,9 +2226,19 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # descriptive only, never a substitute for the fixed m200/W0 primary)
     sensitivity = {}
     if not panel.empty:
+        # DAV-2255: the grid must run on the SAME query-date set as the
+        # m200/W0 primary (DAV-2240). Without `query_days` the sensitivity
+        # cells only covered the frozen panel's own signal days, so every
+        # post-panel formal day had 0 paired days in all 8 grid cells while
+        # the primary had base rates — read as "sensitivity has no evidence"
+        # instead of "the same query days were never asked for".
         base, _ = build_pit_base_rates(
             panel, shrink_ms=SENSITIVITY_MS,
-            window_days=SENSITIVITY_WS, min_cell_n=1)
+            window_days=SENSITIVITY_WS, min_cell_n=1,
+            query_days=formal_days)
+        # 正式查询日是账本的 YYYYMMDD，引擎按面板形状输出（ISO）——
+        # 比对用日键，不用原样字符串
+        formal_day_keys = {day_key(d) for d in formal_days}
         for W in SENSITIVITY_WS:
             for mm in SENSITIVITY_MS:
                 if (mm, W) == (BASE_M, BASE_W):
@@ -2232,7 +2248,15 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
                 qm = {(str(a), str(b)): float(c)
                       for a, b, c in zip(sub["signal_date"], sub["l1"], sub[col])}
                 inc = paired_increment(formal, qm, days_index)
+                # 口径自证：本格用的查询日集合与主基准是同一个，以及这些
+                # 查询日上真正取到有限基率的单元数（0 = 该格在该窗口下无
+                # 已成熟标签，是缺证据而不是"无差异"，DAV-2255）。
                 sensitivity[f"m{mm}_W{W}"] = {
+                    "query_days": len(formal_days),
+                    "base_cells": int(sum(
+                        1 for (dd, _l1), vv in qm.items()
+                        if day_key(dd) in formal_day_keys
+                        and math.isfinite(vv))),
                     "paired_days": inc["paired_days"],
                     "base_ic_mean": inc["base_ic_mean"],
                     "diff_mean": inc["diff_mean"],
