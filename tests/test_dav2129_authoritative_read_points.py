@@ -9,6 +9,19 @@ stale *top-level* ``shadow_credit_metrics`` third copy (T+5 all null).
 ``result_data_compat_view`` alone is a no-op on these rows (non-canonical →
 fail-close keeps the stored form), so the read points must prefer ``*_term``.
 
+Every read point is driven through its *production* entry point (no
+re-implementation of the view call inside the test) so a revert of the
+candidate's fix — alias-first read, ``compat_view``, or a dropped
+``<h>_term`` fallback — turns the suite red:
+
+* read points 1-3, 6: sealed record / ledger helpers / D4 units;
+* read point 4: ``expiry_label_pipeline.compute_label_row`` (production);
+* read point 5: ``weekly_report.build_report`` §1 bucket counts + §3
+  spread (parsed out of the rendered report, never matched against a
+  fixed header literal);
+* read point 7 (card-external twin): ``verify_h1b_gates._stream_run_gate_eval``
+  streaming D4 — term slice, not the stale top-level copy.
+
 Offline only — synthetic rows/records; no DB, no akshare, no network.
 """
 from __future__ import annotations
@@ -48,6 +61,7 @@ from tradingagents.eval.trade_execution import (  # noqa: E402
     ledger_direction,
     ledger_trade_action,
 )
+from tradingagents.dataflows.return_labels import OutcomeStatus  # noqa: E402
 
 
 def _load(name: str, path: Path):
@@ -325,59 +339,179 @@ def test_eval_helpers_plain_ledger_record_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# read point 4: expiry_label_pipeline direction read
+# read point 4: expiry_label_pipeline direction read (production call)
 
 
-def test_expiry_label_reads_term_direction():
-    ep = _load("expiry_label_pipeline",
-               PHASE2 / "expiry_label_pipeline.py")
+def _weekday_calendar(start: str, n: int) -> list[str]:
+    """n consecutive Mon-Fri ISO dates from ``start`` (offline calendar)."""
+    d = date.fromisoformat(start)
+    out: list[str] = []
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+class _FlatMarket:
+    """Duck-typed ``MarketData`` stand-in: deterministic bars, no vendor."""
+
+    def __init__(self, calendar: list[str]) -> None:
+        self.calendar = calendar
+
+    def _bars(self, start: str, end: str) -> dict:
+        idx = {d: i for i, d in enumerate(self.calendar)}
+        return {
+            d: {"date": d, "open": 10.0, "high": 10.0, "low": 10.0,
+                "close": 10.0 + 0.01 * idx[d], "volume": 1.0e6,
+                "is_suspended": False}
+            for d in self.calendar if start <= d <= end
+        }
+
+    def stock_window(self, symbol, start, end):
+        return self._bars(start, end)
+
+    def benchmark_window(self, start, end):
+        return self._bars(start, end)
+
+    def sw_daily_fetcher(self):
+        return lambda code, start, end: {}
+
+    def membership_resolver(self):
+        return lambda symbol, as_of: (None, None)
+
+
+def test_expiry_label_compute_label_row_reads_term_direction():
+    """读点 4 直调生产函数: ``compute_label_row`` must resolve the judgement
+    direction through the authoritative view, so ``medium_term`` beats the
+    stale ``horizons.medium`` alias (579 shape).
+
+    Anti-regression: reverting ``expiry_label_pipeline.py``'s view call to a
+    direct ``record["horizons"]`` read flips ``direction_raw`` to the alias
+    (看多) and this test goes red (DAV-2258 M4 mutation — the old test
+    re-wrote the view inline and never touched production code).
+    """
+    ep = _load("expiry_label_pipeline", PHASE2 / "expiry_label_pipeline.py")
     rec = _ledger_like_record()
-    rec["horizons"]["medium"]["direction"] = "看多"  # stale alias flips dir
-    view_hz = (
-        (result_data_authoritative_view(rec).get("horizons") or {})
-        .get("medium") or {}
-    )
-    assert view_hz["direction"] == "看空"   # term wins → SELL bucket
-    assert ep._direction_bucket(view_hz["direction"]) == \
-        ep._direction_bucket("看空")
+    rec["symbol"] = "600519.SH"
+    # The alias is stale (579 shape) and points at the opposite side; the
+    # top-level direction_top copy says 看多 as well, so 看空 can only come
+    # from the authoritative ``medium_term`` slice.
+    rec["horizons"]["medium"]["direction"] = "看多"
+    rec["horizons"]["medium"]["probability"] = 0.99
+    cal = _weekday_calendar("2026-09-01", 120)
+
+    row = ep.compute_label_row(rec, horizon="medium", calendar=cal,
+                               as_of=cal[-1], as_of_market_closed=True,
+                               market=_FlatMarket(cal))
+
+    assert row is not None                      # reached the judgement read
+    assert row["outcome_status"] == OutcomeStatus.EVALUATED_OK.value
+    assert rec["medium_term"]["direction"] == "看空"   # term side
+    assert row["direction_raw"] == "看空"       # not the alias / top copy
+    assert row["direction_bucket"] == "看空"    # DAV-1498 SELL-side bucket
+    assert row["direction_bucket"] == ep._direction_bucket(row["direction_raw"])
 
 
 # ---------------------------------------------------------------------------
-# read point 5: weekly_report._render medium split
+# read point 5: weekly_report medium split (production report, parsed)
 
 
-def test_weekly_report_medium_split_uses_term(tmp_path):
-    wr = _load("weekly_report", PHASE2 / "weekly_report.py")
+def _weekly_trade_dates(n: int = 60) -> list[date]:
+    """Minimal trade calendar so the synthetic record matures at T+40."""
+    out: list[date] = []
+    d = date(2026, 10, 2)
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def _md_row(report: str, first_cell: str) -> list[str]:
+    """Cells of the first markdown table row whose first cell matches.
+
+    §1/§3 headers are fixed literals that already contain 「看空」/SELL, so
+    assertions must be made against parsed *data* rows, never against
+    ``x in report`` (DAV-2258 🟡-2).
+    """
+    for line in report.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) >= 2 and cells[0] == first_cell:
+            return cells
+    raise AssertionError(f"no table row starting with {first_cell!r}")
+
+
+def _weekly_record(*, symbol: str = "600519.SH") -> dict:
     rec = _ledger_like_record()
-    rec["horizons"]["medium"]["direction"] = "看多"   # stale alias
-    rec["horizons"]["medium"]["probability"] = 0.99
+    rec["symbol"] = symbol
     rec["timing_class"] = "F0"
     rec["input_pit_status"] = "VERIFIED"
     rec["backfilled"] = False
-    # minimal trade calendar so the record matures
-    tds = []
-    d = date(2026, 10, 2)
-    while len(tds) < 60:
-        if d.weekday() < 5:
-            tds.append(d)
-        d += timedelta(days=1)
+    return rec
+
+
+def test_weekly_report_medium_split_uses_term():
+    """读点 5: ``build_report`` §1 direction distribution must be built from
+    the authoritative ``medium_term`` judgement — term 看空 buckets into
+    看空=1, while the stale alias 看多 would render 看多=1.
+
+    Anti-regression: the previous assertion (``"看空" in out or ...``) was
+    satisfied by the fixed §1 header row, so reverting ``weekly_report.py`` to
+    ``compat_view``/a direct alias read stayed green (DAV-2258 🟡-2 / M5).
+    """
+    wr = _load("weekly_report", PHASE2 / "weekly_report.py")
+    rec = _weekly_record()
+    rec["horizons"]["medium"]["direction"] = "看多"   # stale alias
+    rec["horizons"]["medium"]["probability"] = 0.99
+
     out = wr.build_report(
-        records=[rec],
-        risk_status={},
-        labels={},
-        label_field="return_pct",
-        relative_caliber="exec",
-        bench_bars={},
-        bench_symbols=(),
-        trade_dates=tds,
-        as_of=date(2026, 12, 30),
-        min_cross_n=1,
-        min_total_n=1,
-        input_digest="x",
-    )    # medium bucket must see term direction 看空 → SELL-side bucket, and
-    # term probability 0.38 — not the stale alias 看多/0.99.
+        records=[rec], risk_status={}, labels={}, label_field="return_pct",
+        relative_caliber="exec", bench_bars={}, bench_symbols=(),
+        trade_dates=_weekly_trade_dates(), as_of=date(2026, 12, 30),
+        min_cross_n=1, min_total_n=1, input_digest="x")
+
     assert isinstance(out, str)
-    assert "看空" in out or "SELL" in out or "bear" in out.lower()
+    # §1 data row: | 版本队列 | 总数 | 看多 | 看空 | 中性 | 无结论 |
+    assert _md_row(out, "unversioned") == [
+        "unversioned", "1", "0", "1", "0", "0"]
+
+
+def test_weekly_report_medium_probability_is_term_side():
+    """读点 5, second read-out: §3 consumes the medium *probability*, which
+    must be the authoritative ``medium_term`` value (0.38), not the stale
+    alias copy (0.99).
+
+    Two matured records whose probabilities order one way under term
+    (0.38 < 0.75) and the opposite way under the alias (0.99 > 0.75) make the
+    rendered §3 spread flip sign under M5-style mutation
+    (+1.0000 → -1.0000) — a value-level lock, not a header match.
+    """
+    wr = _load("weekly_report", PHASE2 / "weekly_report.py")
+    stale = _weekly_record(symbol="600519.SH")
+    stale["horizons"]["medium"]["probability"] = 0.99      # stale alias only
+    clean = _weekly_record(symbol="000001.SZ")
+    clean["medium_term"]["probability"] = 0.75             # authoritative
+    clean["horizons"]["medium"]["probability"] = 0.75
+    labels = {("600519.SH", "2026-10-02"): {"return_pct": 1.0},
+              ("000001.SZ", "2026-10-02"): {"return_pct": 2.0}}
+
+    out = wr.build_report(
+        records=[stale, clean], risk_status={}, labels=labels,
+        label_field="return_pct", relative_caliber="exec", bench_bars={},
+        bench_symbols=(), trade_dates=_weekly_trade_dates(),
+        as_of=date(2026, 12, 30), min_cross_n=1, min_total_n=1,
+        input_digest="x")
+
+    # §3 data row: | 日期 | n | 状态 | IC | spread |
+    row = _md_row(out, "2026-10-02")
+    assert row[1] == "2" and row[2] == "ok"
+    # term probs (0.38, 0.75) rank 600519 → 000001 → spread +1.0
+    assert row[3] == "1.0000"      # IC
+    assert row[4] == "1.0000"      # top-minus-bottom tercile spread
 
 
 # ---------------------------------------------------------------------------
@@ -628,3 +762,72 @@ def test_d4_counterfactual_alias_first_would_collapse():
     # short term hit=True, medium hit=None → due=2, completed=1
     assert d4["due_count"] == 2
     assert d4["completed_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# read point 7 (card-external twin): verify_h1b_gates.py streaming D4
+#
+# ``_stream_run_gate_eval`` mirrors the module D4 (read point 6). The card
+# lists six read points; this seventh rewrite ships in the same candidate and
+# had zero coverage (DAV-2258 🟡-3 / M7). Both the scm resolution and the
+# term-level T+5 gates are pinned here.
+
+
+def _stream_d4_details(sample: dict) -> dict:
+    vhg = _load("verify_h1b_gates", REPO / "scripts" / "verify_h1b_gates.py")
+    res = vhg._stream_run_gate_eval(
+        [sample], as_of="2026-11-01", cohort=None, excluded_counts={},
+        pipeline_ledger={},
+        cohort_meta={"canonical_key": None, "commit_shas": []})
+    return res["matrix"]["dimension_t5"]["details"]
+
+
+def _stream_sample(horizon: str = "short") -> dict:
+    """A 579-shape projected sample: only the ``<h>_term`` slice carries
+    T+5, while the top-level ``shadow_credit_metrics`` is the third (stale,
+    all-null) copy. The sample itself carries no unit-level scm, so the
+    fallback chain is the only thing that can resolve the hit."""
+    return {
+        "id": "rep-2266", "symbol": "600519.SH",
+        "trade_date": "2026-10-02", "status": "completed",
+        "horizon": horizon, "result_data": stale_mirror_row(),
+        "is_t_plus_5_due": True,
+    }
+
+
+def test_stream_gate_d4_t5_reads_term_slice_not_stale_top_copy():
+    """The streaming D4 must read T+5 through the sample horizon's
+    ``<h>_term`` slice — the stale top-level scm (T+5 all null) must never
+    win. Anti-regression: deleting the ``term_slice`` fallback in
+    ``_stream_run_gate_eval`` drops completed_count 1 → 0."""
+    sample = _stream_sample()
+    term_scm = sample["result_data"]["short_term"]["shadow_credit_metrics"]
+    top_scm = sample["result_data"]["shadow_credit_metrics"]
+    assert term_scm["t_plus_5_direction_hit"] is True   # authoritative
+    assert top_scm["t_plus_5_direction_hit"] is None    # stale copy
+
+    d4 = _stream_d4_details(sample)
+    assert d4["due_count"] == 1
+    assert d4["completed_count"] == 1
+    assert d4["completeness_rate"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("kind", ["in_flight", "pending_due", "suspended"])
+def test_stream_gate_d4_term_slice_t5_gates_leave_denominator(kind):
+    """The term slice's own T+5 gates (in-flight / pending / suspension)
+    must keep the sample out of the due denominator even though the stale
+    top-level copy and ``is_t_plus_5_due=True`` say "due". Anti-regression:
+    without the term-slice read every case counts due=1 instead of 0."""
+    sample = _stream_sample()
+    term = sample["result_data"]["short_term"]
+    if kind == "in_flight":
+        term["is_in_flight"] = True
+    elif kind == "pending_due":
+        term["shadow_credit_metrics"]["t_plus_5_status"] = \
+            T_PLUS_5_STATUS_PENDING_DUE
+    else:
+        term["is_suspended"] = True
+
+    d4 = _stream_d4_details(sample)
+    assert d4["due_count"] == 0
+    assert d4["completed_count"] == 0

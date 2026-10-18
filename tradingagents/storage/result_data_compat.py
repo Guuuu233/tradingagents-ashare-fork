@@ -678,6 +678,14 @@ def result_data_authoritative_view(result_data: Any) -> Dict[str, Any]:
 
     The view is a copy on the canonical path (see ``expand_compat_view``)
     and a shallow copy on the legacy path; the input is never mutated.
+
+    Boundary (DAV-2258 🟢-2): the legacy branch is "alias shape + term
+    values" — it only overlays where the alias slot is a dict. A missing /
+    ``None`` / empty ``horizons`` map is returned as-is (no rebuild), so the
+    term slice stays invisible to consumers that read ``horizons.<h>``.
+    The 579 shape always carries the alias slot (2124/2128 实测), and read
+    points 1/6 read ``<h>_term`` directly, so this is a documented口径
+    boundary rather than a live gap.
     """
     if is_canonical_storage(result_data):
         # expand_compat_view rebuilds horizons.<h> from <h>_term — already
