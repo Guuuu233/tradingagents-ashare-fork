@@ -13,14 +13,18 @@
      (e.g. /Users/davidliu/ta-reports-<sha>) that contains DAV-2033 (commit
      8571c80b, reachable from codex/dav-4-p2a-trunk) — never the main checkout
      ~/Documents/TradingAgents-AShare.
-     The wrapper refuses to run otherwise (merge-base --is-ancestor check).
+     The wrapper refuses to run otherwise (the merge-base is-ancestor check).
+     NOTE: an XML comment may not contain the two-character sequence "two
+     hyphens"; plistlib (unlike plutil) rejects it as a malformed comment.
+     The flag is therefore spelled ISANC below; substitute the real two-hyphen
+     long option by hand when running the command.
 
      Provision the dedicated checkout at install time:
        RELEASE_SHA=<the release SHA on codex/dav-4-p2a-trunk>
        REPORTS_DIR=/Users/davidliu/ta-reports-${RELEASE_SHA:0:8}
        git clone /Users/davidliu/Documents/TradingAgents-AShare "${REPORTS_DIR}"
        git -C "${REPORTS_DIR}" checkout "${RELEASE_SHA}"
-       git -C "${REPORTS_DIR}" merge-base --is-ancestor 8571c80b HEAD  # must exit 0
+       git -C "${REPORTS_DIR}" merge-base ISANC 8571c80b HEAD  # must exit 0
 
      Install (after 总控 sign-off):
        cp releases/launchd/ta-daily-reports-wrapper.sh \
