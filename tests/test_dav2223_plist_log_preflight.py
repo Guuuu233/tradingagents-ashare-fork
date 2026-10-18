@@ -6,13 +6,15 @@
 
 覆盖（对齐卡要求的三情形 + 各原因码）：
 
-* 放行：父目录存在可写、目标不存在（launchd 可自建）；
-* 放行：父目录存在可写、目标已存在、无 provenance 扩展属性、属主为当前 uid
-  且可追加；
-* 拒绝：目标已存在且带 ``com.apple.provenance``（10-18 事故真因形态：属主/权限
-  正常仍被 launchd 判 EX_CONFIG 78）；
+* 放行：父目录存在可写、目标不存在（launchd 可自建）→ PASS；
+* **WARN 不拦**：父目录存在可写、目标已存在、无 provenance 扩展属性、属主为当前
+  uid 且可追加 → ``WARN[LOGPATH_TARGET_EXISTING_APPENDABLE]``、``ok=True``、退出码 0，
+  并在终端与 ``--json`` 中**逐条列出**（总控 10-18 口径第 2 条）；
+* 拒绝（FAIL）：目标已存在且带 ``com.apple.provenance``（10-18 事故真因形态：属主/
+  权限正常仍被 launchd 判 EX_CONFIG 78；处置 = 改名留档，不直接覆盖）；
 * 拒绝：父目录不存在 / 不可写；
-* 拒绝：目标已存在但属主非当前 uid（非 10-18 形态）；
+* 拒绝：目标已存在但属主非当前 uid（**非** 10-18 形态）；
+* 拒绝：目标已存在但不可写（mode 444）；目标不是普通文件（目录）；
 * 拒绝：xattr(1) 不可用/执行失败 → ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``；
 * 拒绝：旧版包装脚本遗留 —— 按文件名（wrapper-diagnostic.log）与
   按目录（.launchd/、/tmp/ta-launchd-die-stamps-*）；
@@ -94,16 +96,102 @@ def test_writable_parent_missing_target_passes(tmp_path, no_provenance):
     assert not (tmp_path / "logs" / "uvicorn-abc123.log").exists()  # 检查零副作用
 
 
-def test_existing_owned_appendable_file_passes(tmp_path, no_provenance):
-    """已存在、无 provenance、属主为当前 uid 且可写 → 放行。"""
+def test_existing_owned_appendable_file_warns_but_passes(tmp_path, no_provenance):
+    """口径第 2 条：既存 + 无 provenance + 属主本 uid + 可追加 → WARN、**不拦**。
+
+    launchd 能正常打开并追加该文件，与 10-18 事故形态（带 provenance）不同，
+    故不得判 FAIL；但必须让运维知情，故升级为 WARN 并在输出里列出。
+    """
     log = tmp_path / "logs" / "uvicorn-abc123.log"
     log.parent.mkdir()
     log.write_text("prev\n")
     plist = _write_plist(tmp_path / "a.plist", str(log), str(log))
     report = mod.check_plist(plist)
-    assert report.ok, [f.message for f in report.failures]
-    assert len(report.findings) == 2
+    assert report.ok, [f.message for f in report.failures]  # 不拦
+    assert [f.severity for f in report.findings] == ["WARN", "WARN"]
+    assert [f.reason_code for f in report.findings] == [
+        mod.RC_TARGET_EXISTING_APPENDABLE, mod.RC_TARGET_EXISTING_APPENDABLE
+    ]
+    assert [f.path for f in report.warnings] == [str(log), str(log)]  # 逐条列出
     assert log.read_text() == "prev\n"  # 未改内容
+
+
+def test_missing_target_is_pass_not_warn(tmp_path, no_provenance):
+    """口径第 3 档：目标不存在 → PASS（launchd 自建），不得混入 WARN 列表。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+    report = mod.check_plist(plist)
+    assert report.ok and report.warnings == []
+    assert report.findings[0].severity == "PASS"
+    assert report.findings[0].reason_code is None
+
+
+def test_warn_does_not_break_fail_closed_on_sibling_finding(tmp_path, no_provenance):
+    """同一 plist 内 WARN 与 FAIL 共存时，仍以 FAIL 阻断（ok=False）。"""
+    good = tmp_path / "logs" / "uvicorn.log"
+    good.parent.mkdir()
+    good.write_text("prev\n")
+    bad = tmp_path / "logs" / "missing-parent" / "x.log"
+    plist = _write_plist(tmp_path / "a.plist", str(good), str(bad))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert len(report.warnings) == 1
+    assert report.failures[0].reason_code == mod.RC_PARENT_MISSING
+
+
+def test_provenance_existing_file_is_fail_not_warn(tmp_path):
+    """口径第 1 条：带 provenance 的既存文件仍是 FAIL（10-18 事故形态）。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    _set_provenance(log)
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert report.warnings == []
+    assert report.failures[0].severity == "FAIL"
+    assert report.failures[0].reason_code == mod.RC_TARGET_PROVENANCE
+    assert "改名留档" in report.failures[0].message  # 处置 = 改名留档
+
+
+def test_finding_severity_ok_contract():
+    """severity 与 ok 必须一致（否则 WARN/FAIL 语义可被静默改坏）。"""
+    with pytest.raises(ValueError):
+        mod.Finding("p", "k", "", True, None, None, severity="FAIL")
+    with pytest.raises(ValueError):
+        mod.Finding("p", "k", "", False, None, None, severity="WARN")
+    with pytest.raises(ValueError):
+        mod.Finding("p", "k", "", True, None, None, severity="NOPE")
+    assert mod.Finding("p", "k", "", True, None, None, severity="WARN").ok is True
+    assert mod.Finding("p", "k", "", False, "C", None, severity="FAIL").ok is False
+
+
+@needs_xattr
+def test_existing_file_without_attribute_warns_end_to_end(tmp_path):
+    """端到端：真实 xattr 判定下，无 provenance 的既存文件 = WARN 且退出码 0。"""
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+    _drop_provenance(log)
+    assert mod._carries_provenance(str(log)) is False  # 前提：真无属性
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+    report = mod.check_plist(plist)
+    assert report.ok and len(report.warnings) == 1
+
+    r = _run([str(plist)], cwd=tmp_path)
+    assert r.returncode == mod.EXIT_OK  # WARN 不拦
+    assert "WARN" in r.stderr and "LOGPATH_TARGET_EXISTING_APPENDABLE" in r.stderr
+    assert "不阻断安装" in r.stderr
+
+    rj = _run([str(plist), "--json"], cwd=tmp_path)
+    assert rj.returncode == mod.EXIT_OK
+    data = json.loads(rj.stdout)
+    assert data["ok"] is True
+    assert data["reports"][0]["warnings"][0]["path"] == str(log)
+    assert data["reports"][0]["warnings"][0]["reason_code"] == (
+        mod.RC_TARGET_EXISTING_APPENDABLE
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -327,7 +415,7 @@ def test_provenance_probe_rc1_no_such_xattr_is_false(tmp_path, monkeypatch):
 
     class _Proc:
         returncode = 1
-        stderr = "xattr: uvicorn.log: No such xattr: com.apple.provenance".encode()
+        stderr = b"xattr: uvicorn.log: No such xattr: com.apple.provenance"
 
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
     assert mod._carries_provenance(str(tmp_path)) is False
