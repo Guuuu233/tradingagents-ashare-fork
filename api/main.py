@@ -305,16 +305,23 @@ async def _run_manual_trigger(
         _log(f"[Manual Trigger] Completed {symbol}")
     except Exception as e:
         error_text = f"{type(e).__name__}: {e}"
-        logger.error(f"[Manual Trigger] Failed {symbol}: {e}\n{traceback.format_exc()}")
+        err_diagnostics = _error_diagnostics(e, stage="scheduled_manual")
+        logger.error(f"[Manual Trigger] Failed {symbol}: {e}\n{err_diagnostics['traceback']}")
         _set_job(
             job_id,
             status="failed",
             error=error_text,
+            traceback=err_diagnostics["traceback"],
+            error_diagnostics=err_diagnostics,
             finished_at=_utcnow_iso(),
             overtime=False,
             overtime_at=None,
         )
-        _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": error_text})
+        _emit_job_event(
+            job_id,
+            "job.failed",
+            {"job_id": job_id, "error": error_text, "error_diagnostics": err_diagnostics},
+        )
 
         def _record_manual_failure():
             with get_db_ctx() as db:
@@ -2684,19 +2691,26 @@ async def _run_job(
         # _run_job_inner handles expected workflow errors itself.  This guards
         # failures before its try block (initialisation/configuration) as well.
         err_msg = f"{type(exc).__name__}: {exc}"
-        _log(f"[Job {job_id}] failed: {err_msg}")
+        err_diagnostics = _error_diagnostics(exc, stage="job_wrapper")
+        _log(f"[Job {job_id}] failed: {err_msg}\n{err_diagnostics['traceback']}")
         _set_job(
             job_id,
             status="failed",
             error=err_msg,
             overtime=False,
             overtime_at=None,
+            traceback=err_diagnostics["traceback"],
+            error_diagnostics=err_diagnostics,
             finished_at=_utcnow_iso(),
         )
         def _record_task_failure():
             with get_db_ctx() as db:
-                report_service.mark_report_failed(db, job_id, err_msg)
+                report_service.mark_report_failed(
+                    db, job_id, f"{err_msg}\n\n{err_diagnostics['traceback']}"
+                )
                 failed_result = _build_b1_unrun_result(request)
+                if len(request.horizons or []) == 1:
+                    failed_result["error_diagnostics"] = err_diagnostics
                 report_service.update_report_partial(db, job_id, result_data=failed_result)
                 _set_job(job_id, result=failed_result)
         try:
@@ -2705,7 +2719,11 @@ async def _run_job(
             await asyncio.to_thread(_record_task_failure)
         except Exception:
             pass
-        _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": err_msg})
+        _emit_job_event(
+            job_id,
+            "job.failed",
+            {"job_id": job_id, "error": err_msg, "error_diagnostics": err_diagnostics},
+        )
 
 
 async def _save_report_or_raise(
@@ -3841,6 +3859,9 @@ async def _run_job_inner(
                                 "horizon": horizon,
                                 "status": "failed",
                                 "error": _humanize_analysis_error(str(e)),
+                                "error_diagnostics": _error_diagnostics(
+                                    e, stage="shared_analyst_stage"
+                                ),
                                 "impact": "shared analyst stage failed; no horizon can proceed.",
                             },
                         )
@@ -3867,6 +3888,9 @@ async def _run_job_inner(
                             "horizon": horizon,
                             "status": "failed",
                             "error": _humanize_analysis_error(str(r)),
+                            "error_diagnostics": _error_diagnostics(
+                                r, stage=f"horizon:{horizon}"
+                            ),
                             "impact": f"{horizon} horizon is unavailable; no decision is produced for this horizon.",
                         },
                     )
@@ -3931,14 +3955,18 @@ async def _run_job_inner(
                 horizon_results: Dict[str, Dict[str, Any]] = {}
                 for horizon in request.horizons:
                     if horizon in horizon_errors:
+                        _slice_error = horizon_errors[horizon]
                         horizon_results[horizon] = {
                             "horizon": horizon,
                             "status": "failed",
-                            "error": _humanize_analysis_error(str(horizon_errors[horizon])),
+                            "error": _humanize_analysis_error(str(_slice_error)),
                             "not_applicable": None,
                             "impact": (
                                 f"{horizon} horizon is unavailable; downstream consumers must use only the "
                                 "completed horizon and treat this result as partial."
+                            ),
+                            "error_diagnostics": _error_diagnostics(
+                                _slice_error, stage=f"horizon:{horizon}"
                             ),
                             "horizon_run_metadata": _build_failed_slice_meta(),
                         }
@@ -4000,7 +4028,10 @@ async def _run_job_inner(
                         )
                         horizon_results[horizon] = horizon_result
                     except Exception as exc:
-                        _log(f"Horizon '{horizon}' post-processing failed: {exc}")
+                        _log(
+                            f"Horizon '{horizon}' post-processing failed: {exc}\n"
+                            f"{traceback.format_exc()}"
+                        )
                         horizon_errors[horizon] = exc
                         horizon_results[horizon] = {
                             "horizon": horizon,
@@ -4010,6 +4041,9 @@ async def _run_job_inner(
                             "impact": (
                                 f"{horizon} horizon is unavailable; downstream consumers must use only the "
                                 "completed horizon and treat this result as partial."
+                            ),
+                            "error_diagnostics": _error_diagnostics(
+                                exc, stage=f"horizon:{horizon}:post_processing"
                             ),
                             "horizon_run_metadata": _build_failed_slice_meta(),
                         }
@@ -4914,7 +4948,10 @@ async def _run_job_inner(
         _log(f"[Timer] TOTAL Job execution (single_horizon) took {time.time() - job_start_t:.2f}s")
     except Exception as exc:
         err_msg = _humanize_analysis_error(f"{type(exc).__name__}: {exc}")
+        err_diagnostics = _error_diagnostics(exc, stage="single_horizon")
         failed_result = _build_b1_unrun_result(request)
+        if request.horizons and len(request.horizons) == 1:
+            failed_result["error_diagnostics"] = err_diagnostics
         _set_job(
             job_id,
             status="failed",
@@ -4922,7 +4959,8 @@ async def _run_job_inner(
             error=err_msg,
             overtime=False,
             overtime_at=None,
-            traceback=traceback.format_exc(),
+            traceback=err_diagnostics["traceback"],
+            error_diagnostics=err_diagnostics,
             finished_at=_utcnow_iso(),
         )
         
@@ -4930,7 +4968,9 @@ async def _run_job_inner(
         try:
             def _record_failure():
                 with get_db_ctx() as err_db:
-                    report_service.mark_report_failed(err_db, job_id, f"{err_msg}\n\n{traceback.format_exc()}")
+                    report_service.mark_report_failed(
+                        err_db, job_id, f"{err_msg}\n\n{err_diagnostics['traceback']}"
+                    )
                     report_service.update_report_partial(err_db, job_id, result_data=failed_result)
             await asyncio.to_thread(_record_failure)
         except Exception as db_exc:
@@ -4939,7 +4979,7 @@ async def _run_job_inner(
         _emit_job_event(
             job_id,
             "job.failed",
-            {"job_id": job_id, "error": err_msg},
+            {"job_id": job_id, "error": err_msg, "error_diagnostics": err_diagnostics},
         )
     finally:
         try:
@@ -4976,6 +5016,61 @@ def _humanize_analysis_error(err: str) -> str:
         if re.search(pat, err, re.IGNORECASE):
             return f"{hint}\n\n（原始错误：{err[:200]}）"
     return err
+
+
+# DAV-2174: 诊断文本长度上限。堆栈只做取证，不参与判定，超长时保留首尾。
+_DIAGNOSTIC_MAX_TEXT = 4000
+# Only the openings the persistence gate actually rejects are neutralized, so the
+# rest of the traceback stays byte-faithful.
+_DIAGNOSTIC_MACHINE_BLOCK_OPEN_RE = re.compile(
+    r"<!--(?=\s*(?:DEBATE_STATE|RISK_STATE)\b)"
+)
+
+
+def _clip_diagnostic_text(value: Any, limit: int = _DIAGNOSTIC_MAX_TEXT) -> str:
+    """Normalize one diagnostic string: defuse machine-block tags, then clip.
+
+    ``report_service.validate_report_machine_blocks`` scans *every* string in
+    ``result_data`` for ``<!-- DEBATE_STATE`` / ``<!-- RISK_STATE`` openings and
+    fails the whole save closed. A traceback carries source lines verbatim, so a
+    frame that happens to print one of those markers would poison persistence.
+    Diagnostics are evidence, never semantics: neutralize only that opening
+    marker (`<!--` -> `&lt;!--`) so an added stack can never change whether a
+    report is saved, and leave every other byte of the stack untouched.
+    """
+    text = value if isinstance(value, str) else str(value)
+    text = _DIAGNOSTIC_MACHINE_BLOCK_OPEN_RE.sub("&lt;!--", text)
+    if len(text) <= limit:
+        return text
+    head = limit // 3
+    tail = limit - head
+    elided = len(text) - limit
+    return f"{text[:head]}\n...[truncated {elided} chars]...\n{text[-tail:]}"
+
+
+def _error_diagnostics(exc: BaseException, *, stage: str) -> Dict[str, Any]:
+    """DAV-2174: additive failure evidence — upstream text plus local stack.
+
+    The public ``error`` field on a horizon slice / job keeps exactly the text it
+    carried before (humanized when a known hint matches, otherwise the raw
+    upstream message), so no judgement or display semantics change. This dict is
+    attached alongside it and answers the question that outlived DAV-2164: which
+    local code raised, from which upstream string. ``error_message`` keeps the
+    upstream原文 verbatim (clipped), ``traceback`` keeps the local stack.
+    """
+    try:
+        tb_text = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+    except Exception:  # pragma: no cover - defensive: never mask the real error
+        tb_text = ""
+    return {
+        "stage": stage,
+        "error_type": type(exc).__name__,
+        "error_message": _clip_diagnostic_text(str(exc)),
+        "traceback": _clip_diagnostic_text(tb_text),
+        "captured_at": _utcnow_iso(),
+    }
 
 
 def _normalize_symbol(raw: str) -> str:
@@ -6151,18 +6246,23 @@ async def chat_completions(
                 await _run_job(job_id, analyze_req, True, True, current_user.id, "chat")
             except Exception as exc:
                 err_msg = _humanize_analysis_error(str(exc))
-                _log(f"[chat] _extract_and_run failed: {exc}")
+                err_diagnostics = _error_diagnostics(exc, stage="chat_intake")
+                _log(f"[chat] _extract_and_run failed: {exc}\n{err_diagnostics['traceback']}")
                 _set_job(
                     job_id,
                     status="failed",
                     error=err_msg,
+                    traceback=err_diagnostics["traceback"],
+                    error_diagnostics=err_diagnostics,
                     finished_at=_utcnow_iso(),
                     overtime=False,
                     overtime_at=None,
                 )
                 def _mark_chat_job_failed():
                     with get_db_ctx() as db:
-                        report_service.mark_report_failed(db, job_id, err_msg)
+                        report_service.mark_report_failed(
+                            db, job_id, f"{err_msg}\n\n{err_diagnostics['traceback']}"
+                        )
 
                 # DAV-1463 / DAV-1957 🟡3: sibling of the _run_job failure
                 # paths — a synchronous SQLite write on the loop thread.
@@ -6170,7 +6270,11 @@ async def chat_completions(
                     await asyncio.to_thread(_mark_chat_job_failed)
                 except Exception:
                     pass
-                _emit_job_event(job_id, "job.failed", {"job_id": job_id, "error": err_msg})
+                _emit_job_event(
+                    job_id,
+                    "job.failed",
+                    {"job_id": job_id, "error": err_msg, "error_diagnostics": err_diagnostics},
+                )
 
         _create_tracked_task(_extract_and_run())
         return StreamingResponse(
