@@ -23,6 +23,7 @@
 | `releases/launchd/com.tradingagents.ashare.plist` | launchd 作业模板（用户域 LaunchAgents）；DAV-2180 直启版：ProgramArguments 直接调 venv python，环境变量在 `EnvironmentVariables` |
 | `releases/launchd/ta-launchd-wrapper.sh` | **旧版**包装脚本（限流计数 + 环境固化 + exec uvicorn）；DAV-2180 起新 plist 不再引用，仅留档供回退/对照 |
 | `releases/launchd/LAUNCHD_SWITCH.md` | 本说明：切换 / 回退步骤 |
+| `releases/launchd/plist_log_preflight.py` | **DAV-2223**：安装前日志路径前置检查（fail-closed，防 EX_CONFIG 78）。只读、不装 launchd、不碰生产 |
 
 ## RESTART.md 基线说明（🟡-4 订正）
 
@@ -105,6 +106,9 @@ sed -e "s|{{RELEASE_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare-release
 grep -cE '\{\{[A-Z_]+\}\}' ~/Library/LaunchAgents/com.tradingagents.ashare.plist   # 必须为 0
 plutil -lint ~/Library/LaunchAgents/com.tradingagents.ashare.plist   # OK
 
+# 1b. 日志路径前置检查（DAV-2223；不通过即中止，不得 bootstrap）
+python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
+
 # 2. 装载并启动
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.ashare.plist
 # KeepAlive 隐含 RunAtLoad——bootstrap 即首启动。
@@ -148,6 +152,16 @@ sleep 25; curl -s http://127.0.0.1:8000/healthz
 ```bash
 # plist 语法
 plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
+
+# 日志路径前置检查（DAV-2223：fail-closed，防 EX_CONFIG 78 复发）
+python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
+# 退出码：0 通过 / 2 前置不通过（原因码见下）/ 3 输入错误。
+# 检查项：StandardOut/ErrorPath 非空、无未替换占位符、绝对路径、父目录存在且
+# 可写、目标不存在或为属主为本用户且可追加的**普通文件**、且不落在旧版包装
+# 脚本遗留物上（wrapper-diagnostic.log / diag-fallback.log / .launchd/ /
+# /tmp/ta-launchd-die-stamps-*）。
+# 10-18 首次 bootstrap 失败（EX_CONFIG 78）即因日志文件是 wrapper 时代遗留、
+# 属主/权限异常——该检查在安装前把它变成一条明确原因码，而非 launchd 的一行 stderr。
 
 # 解释器 realpath 与 TCC 探针（DAV-2180 已实测，复审可复跑）
 realpath /Users/davidliu/ta-venv/py310/bin/python
