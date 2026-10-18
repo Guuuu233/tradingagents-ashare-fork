@@ -358,6 +358,12 @@ class ReportSnapshotReader:
     def available(self) -> bool:
         return self.unavailable_reason is None
 
+    def __enter__(self) -> "ReportSnapshotReader":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     def close(self) -> None:
         if self._con is not None:
             self._con.close()
@@ -1349,6 +1355,22 @@ def _custom_evidence_summary(df_full: pd.DataFrame,
     """First-screen + run.json block for the custom evidence bases."""
     basis = dict((gate or {}).get("basis_counts") or {})
     lookups = dict(reader.status_counts) if reader is not None else {}
+    # DAV-2217 🟢-2: the register value must never be used as a fill. The
+    # guarantee is structural (``resolve_custom_evidence`` + the
+    # ``unverifiable`` branch of ``_record_version_key``), so it is ALSO
+    # recomputed here into counters that must stay 0 on every run — the
+    # boolean below is a rule declaration, these two are the self-check.
+    reg_custom = dict(p.split("=", 1) for p in
+                      REGISTER_ANALYSIS_VERSION_ID.split("|")[1:])["custom"]
+    unver = (df_full["custom_basis"] == CUSTOM_BASIS_UNVERIFIABLE
+             if "custom_basis" in df_full.columns
+             else pd.Series(False, index=df_full.index))
+    unver_shas = (df_full["custom_sha256"]
+                  if "custom_sha256" in df_full.columns
+                  else pd.Series(None, index=df_full.index, dtype=object))
+    unverifiable_with_sha = int((unver & unver_shas.notna()).sum())
+    unverifiable_with_register_value = int(
+        (unver & (unver_shas == reg_custom)).sum())
     db: dict[str, Any] = {"path": None, "available": False}
     if reader is not None:
         db = {"path": str(reader.db_path), "available": bool(reader.available)}
@@ -1371,8 +1393,17 @@ def _custom_evidence_summary(df_full: pd.DataFrame,
         "ledger_rows": int(len(df_full)),
         "basis_counts": basis,
         "report_lookup_counts": lookups,
+        "report_lookup_counts_note":
+            "按去重 report_id 计（缓存命中不重复计数）",
         "report_snapshot_db": db,
         "register_value_used_as_fill": False,
+        "register_value_used_as_fill_note":
+            "规则声明；实际保证在 resolve_custom_evidence 与 "
+            "_record_version_key 的 unverifiable 分支，两个计数为其自检"
+            "量（均应恒为 0）",
+        "unverifiable_rows_with_sha256": unverifiable_with_sha,
+        "unverifiable_rows_carrying_register_value":
+            unverifiable_with_register_value,
         "excluded": list((gate or {}).get("excluded") or []),
         "reason_codes": dict((gate or {}).get("reason_codes") or {}),
         "alert": _custom_evidence_alert(gate or {}),
@@ -1769,10 +1800,17 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
         snapshot_reader = ReportSnapshotReader(snap_path)
         log(f"report snapshot for custom evidence: {snap_path} "
             "(file:…?mode=ro&immutable=1, query_only=ON)")
-    df = load_ledger_signals(ledger_path, labels, user_id,
-                             reattest_index=reattest_index,
-                             analysis_anchor=analysis_anchor,
-                             snapshot=snapshot_reader)
+    # The reader is only needed for the per-row evidence resolution inside
+    # load_ledger_signals; close it as soon as that frame exists (DAV-2217
+    # 🟢-1 — the CLI process exit used to be the only thing releasing it).
+    try:
+        df = load_ledger_signals(ledger_path, labels, user_id,
+                                 reattest_index=reattest_index,
+                                 analysis_anchor=analysis_anchor,
+                                 snapshot=snapshot_reader)
+    finally:
+        if snapshot_reader is not None:
+            snapshot_reader.close()
     ledger_rows_input = len(df)
     log(f"ledger rows {ledger_rows_input}")
 
@@ -1797,6 +1835,16 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     # single-version queue (fail-close multi-version, D-075/DAV-1682)
     df = m1.select_version(df, version_key)
     post_version_rows = len(df)
+    # DAV-2214 / DAV-2217 🟡-1: the custom-basis distribution of the
+    # VERSION-SELECTED queue is counted HERE — after select_version and
+    # before the cohort / label gates narrow `df`. Counting it later (as
+    # the first cut did) silently describes admit_input_rows instead, so
+    # the field would drift below its own declared denominator whenever a
+    # run drops pre-cohort or label-gated rows. Snapshotted into a plain
+    # dict immediately so no later step can shift the denominator.
+    selected_queue_basis_counts = (
+        {str(k): int(v) for k, v in df["custom_basis"].value_counts().items()}
+        if "custom_basis" in df.columns else {})
 
     # DAV-2198 ③: PIT provenance of the selected queue (ledger first, the
     # sidecar only for non-final ledger statuses; the label row's own
@@ -1852,13 +1900,14 @@ def run(ledger_path: Path, labels_path: Path, out_dir: Path,
     pre_admit_ids = set(df["run_id"]) if "run_id" in df.columns else set()
 
     formal, funnel = m1.admit(df, user_id=user_id, calendar=cal_ymd)
-    # DAV-2214: custom-basis distributions of the two narrower denominators
-    # the card's 交付附 asks about — the version-selected queue
-    # (post select_version, pre-cohort/label gates) and the admitted formal
-    # cohort — next to the all-ledger-row basis_counts above.
-    custom_evidence["selected_queue_basis_counts"] = (
-        {str(k): int(v) for k, v in df["custom_basis"].value_counts().items()}
-        if "custom_basis" in df.columns else {})
+    # DAV-2214: custom-basis distributions of the three denominators the
+    # card's 交付附 and the first screen distinguish — all ledger rows
+    # (``basis_counts``), the version-selected queue (counted right after
+    # select_version, before the cohort/label gates) and the admitted
+    # formal cohort (DAV-2217 🟡-1: the queue count must NOT be taken from
+    # the post-gate frame).
+    custom_evidence["selected_queue_basis_counts"] = dict(
+        selected_queue_basis_counts)
     custom_evidence["formal_cohort_basis_counts"] = (
         {str(k): int(v) for k, v in
          formal["custom_basis"].value_counts().items()}

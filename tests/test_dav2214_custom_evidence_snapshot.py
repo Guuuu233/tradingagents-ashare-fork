@@ -454,3 +454,121 @@ class TestRunIntegration:
                       "--snapshot-db", str(tmp_path / "gone.db"),
                       "--out-dir", str(tmp_path / "co3")])
         assert rc3 == 2
+
+
+# ---------------------------------------------------------------------------
+# DAV-2217 返修：分母锁定 + 只读正向控制 + 不填补自检
+# ---------------------------------------------------------------------------
+
+class TestDav2217Rework:
+    """DAV-2217 🟡-1 / 🟢-1 / 🟢-2 / 🟢-3 — the rework's regression locks."""
+
+    def test_selected_queue_basis_counts_is_the_select_version_denominator(
+            self, tmp_path):
+        """🟡-1: the field must count the VERSION-SELECTED queue.
+
+        Probe (the reviewer's scenario): 12 cohort rows + 2 pre-cohort rows
+        that share the same version key, all report-only evidence. The
+        cohort gate then drops the 2 old rows, so admit sees 12 — the
+        distribution must still report 14, and stay distinguishable from
+        the admitted-cohort denominator.
+        """
+        t = TestRunIntegration()
+        pre = [_rec(f"pre{i}", f"P{i:02d}", "2026-10-07", 60)
+               for i in range(2)]
+        out = t._run(tmp_path, snapshot_db=None, rows_extra=pre, name="den")
+        fun = out["verdict"]["funnel"]
+        assert fun["excl_version"] == 0            # one key -> nothing split
+        assert fun["excl_pre_cohort"] == 2
+        assert fun["admit_input_rows"] == 12
+        assert fun["formal_rows"] == 12
+        ce = out["custom_evidence"]
+        assert ce["basis_counts"] == {"report_snapshot": 14}   # all rows
+        assert ce["selected_queue_basis_counts"] == {
+            "report_snapshot": 14}                            # pre-gate
+        assert ce["formal_cohort_basis_counts"] == {
+            "report_snapshot": 12}                            # post-admit
+        runj = json.loads((tmp_path / "den" / "run.json").read_text())
+        assert sum(runj["custom_evidence"][
+            "selected_queue_basis_counts"].values()) == 14
+        assert runj["custom_evidence"]["selected_queue_basis_counts"] != \
+            runj["custom_evidence"]["formal_cohort_basis_counts"]
+        # the queue denominator closes against the funnel, not against admit
+        assert sum(ce["selected_queue_basis_counts"].values()) == (
+            runj["ledger_rows"] - fun["excl_version"]
+            - fun["excl_custom_conflict"])
+
+    def test_snapshot_reader_is_read_only_and_default_path_is_locked(
+            self, tmp_path):
+        """🟢-3: positive control for the read-only discipline.
+
+        The fixture file is made writable on disk, so a successful UPDATE
+        would prove the guard absent; ``PRAGMA query_only=ON`` (plus the
+        ``mode=ro`` URI) must make the write fail. Also locks the default
+        snapshot path and asserts the in-place read leaves no WAL side
+        files next to the shared snapshot.
+        """
+        db = _snapshot_db(tmp_path / "ro.db", [
+            ("r1", {"custom_prompt_snapshot": SNAP_A}, "json")])
+        db.chmod(0o644)                      # writable on disk on purpose
+        with m.ReportSnapshotReader(db) as reader:
+            assert reader.available is True
+            assert reader.custom_snapshot_sha256("r1")[1] == "ok"
+            con = reader._connect()
+            assert con.execute("PRAGMA query_only").fetchone()[0] == 1
+            with pytest.raises(sqlite3.OperationalError):
+                con.execute("UPDATE reports SET result_data='{}' "
+                            "WHERE id='r1'")
+            with pytest.raises(sqlite3.OperationalError):
+                con.execute("DELETE FROM reports WHERE id='r1'")
+            # the read-only connection opened through the URI cannot have
+            # created side files
+            assert not Path(str(db) + "-wal").exists()
+            assert not Path(str(db) + "-shm").exists()
+            assert con.execute(
+                "SELECT COUNT(*) FROM reports").fetchone()[0] == 1
+        assert reader._con is None           # 🟢-1: closed on __exit__
+        assert m.DEFAULT_SNAPSHOT_DB == (
+            Path("~").expanduser() / "ta-snapshot" / "current.db")
+        assert m.DEFAULT_SNAPSHOT_DB.name == "current.db"
+
+    def test_reader_closed_after_run(self, tmp_path, monkeypatch):
+        """🟢-1: run() must release the reader as soon as the per-row
+        evidence is resolved (previously only process exit did)."""
+        closed: list[str] = []
+        real_close = m.ReportSnapshotReader.close
+
+        def _spy(self):
+            closed.append(self.db_path.name)
+            return real_close(self)
+
+        monkeypatch.setattr(m.ReportSnapshotReader, "close", _spy)
+        t = TestRunIntegration()
+        out = t._run(tmp_path, snapshot_db=None, name="closed")
+        assert closed == ["closed_snap.db"]        # opened once, closed once
+        assert out["custom_evidence"]["report_snapshot_db"]["available"] \
+            is True
+        assert out["custom_evidence"]["report_lookup_counts"] == {"ok": 12}
+
+    def test_unverifiable_rows_never_carry_the_register_value(self, tmp_path):
+        """🟢-2: the two self-check counters must stay 0 — no unverifiable
+        row gets a sha at all, let alone the register's custom value."""
+        t = TestRunIntegration()
+        recs = [_rec(f"u{i}", f"U{i:02d}", D0, 30 + i) for i in range(12)]
+        db = _snapshot_db(tmp_path / "empty_snap.db", [
+            (r["report_id"], {"analysis_status": "completed"}, "json")
+            for r in recs])
+        out = t._run(tmp_path, snapshot_db=db, name="unv")
+        ce = out["custom_evidence"]
+        assert ce["basis_counts"] == {"unverifiable": 12}
+        assert ce["register_value_used_as_fill"] is False
+        assert ce["register_value_used_as_fill_note"]
+        assert ce["unverifiable_rows_with_sha256"] == 0
+        assert ce["unverifiable_rows_carrying_register_value"] == 0
+        reg_custom = m.REGISTER_ANALYSIS_VERSION_ID.split("custom=")[1] \
+            .split("|")[0]
+        assert "custom=unverifiable" in out["verdict"]["funnel"]["version_key"]
+        assert reg_custom not in out["verdict"]["funnel"]["version_key"]
+        runj = json.loads((tmp_path / "unv" / "run.json").read_text())
+        assert runj["custom_evidence"][
+            "unverifiable_rows_carrying_register_value"] == 0
