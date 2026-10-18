@@ -1038,6 +1038,83 @@ class TestDav2198LabelAssociation:
         assert entry.duplicate_identical == 1
         assert idx.integrity["n_conflict_groups"] == 0
 
+    # --- DAV-2207 🟡-1: the conflict gate must not fail open ----------------
+    def test_legacy_evaluated_row_is_not_typed_past_the_gate(self):
+        """DAV-2207 🟡-1(a): a hand-shaped row with no ``outcome_status``
+        is read by the r-extractor through ``prediction.status ==
+        "evaluated"``; the classifier must speak that vocabulary too, or
+        the gate fails open and silently keeps the later row (review
+        DAV-2202 §三)."""
+        rec = _rec("legacy", "S1", D0, 60)
+        legacy = _lab(rec, 0.01)
+        del legacy["outcome_status"]       # hand-shaped: no 7-state field
+        later = _lab(rec, 2.0)             # later evaluated_ok row drifted
+        idx = m.build_label_index([legacy, later])
+        entry = idx[("legacy", m.SHORT_HORIZON)]
+        assert (legacy.get("prediction") or {}).get("status") == "evaluated"
+        assert entry.status == "conflict"
+        assert entry.row is None           # nothing is silently picked
+        assert entry.statuses == ("evaluated", "evaluated_ok")
+        assert "sw_excess_pct_prediction" in entry.conflict_fields
+        assert idx.integrity["n_conflict_groups"] == 1
+
+    def test_non_numeric_return_values_that_differ_are_a_conflict(self):
+        """DAV-2207 🟡-1(b): ``"1.0"`` vs ``"9.9"`` are two different
+        values, not two Nones — the append-only-duplicate shortcut must
+        not swallow them (review DAV-2202 §三)."""
+        rec = _rec("strv", "S1", D0, 60)
+        a, b = _lab(rec, 1.0), _lab(rec, 2.0)
+        a["sw_excess_pct_prediction"] = "1.0"
+        b["sw_excess_pct_prediction"] = "9.9"
+        idx = m.build_label_index([a, b])
+        entry = idx[("strv", m.SHORT_HORIZON)]
+        assert entry.status == "conflict"
+        assert entry.conflict_fields == ("sw_excess_pct_prediction",)
+        # the disclosure keeps the literal values, not comparison tokens
+        assert idx.integrity["conflicts"][0]["values"] \
+            ["sw_excess_pct_prediction"] == ["1.0", "9.9"]
+        # identical literals stay the normal append-only duplicate
+        idx2 = m.build_label_index(
+            [a, dict(b, sw_excess_pct_prediction="1.0")])
+        assert idx2[("strv", m.SHORT_HORIZON)].status == "evaluated_ok"
+        assert idx2.integrity["n_conflict_groups"] == 0
+
+    def test_every_extracted_r_comes_from_an_evaluated_ok_entry(
+            self, tmp_path):
+        """DAV-2207 ③ 反向不变量：`load_ledger_signals` 能给出 `r` 的每个
+        键，其 entry 必为 evaluated_ok —— 抽取判据与分类判据同一口径，
+        冲突闸门不再有 fail-open 旁路。毒行取复审原例：``outcome_status``
+        =data_missing（7 态权威口径判 typed）而子状态仍写着 evaluated。"""
+        ok = _rec("ok", "S1", D0, 60)
+        legacy = _rec("legacy", "S2", D0, 55)
+        poison = _rec("poison", "S3", D0, 65)
+        typed_row = next(
+            r for r in _fixture("dav2198_labels_typed_19rows.json")
+            if r["horizon"] == m.SHORT_HORIZON)
+        typed = _rec(typed_row["report_id"], typed_row["symbol"], D0, 70,
+                     record_sha256=typed_row["ledger_record_sha256"])
+        trid = typed_row["report_id"]
+        labs = [_lab(ok, 1.0), _lab(legacy, 2.0)]
+        del labs[1]["outcome_status"]
+        poison_lab = _lab(poison, 3.0)
+        poison_lab["outcome_status"] = "data_missing"
+        labs.append(poison_lab)
+        labs.append(dict(typed_row, signal_date=D0, target_date=D0))
+        ledger = tmp_path / "l.jsonl"
+        _write_ledger(ledger, [ok, legacy, poison, typed])
+        idx = m.build_label_index(labs)
+        assert idx[("poison", m.SHORT_HORIZON)].status == "typed"
+        df = m.load_ledger_signals(ledger, idx, FIXED)
+        got = dict(zip(df["run_id"], df["r"]))
+        assert got["ok"] == pytest.approx(0.01)
+        assert got["legacy"] == pytest.approx(0.02)   # legacy still yields r
+        assert pd.isna(got["poison"])                 # …poisoned one cannot
+        assert pd.isna(got[trid])
+        carried = {k for k, v in got.items() if not pd.isna(v)}
+        assert carried == {"ok", "legacy"}
+        for rid in carried:
+            assert idx[(rid, m.SHORT_HORIZON)].status == "evaluated_ok"
+
     # --- ① record_sha256 check + report_id association ------------------
     def test_record_sha256_mismatch_excluded_with_reason(self, tmp_path):
         recs, labs = [], []
