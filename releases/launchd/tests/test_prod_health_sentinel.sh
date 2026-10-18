@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# DAV-2063 四情形桩测试：通 / 不通（连续两次才告警）/ 版本不符 / 恢复
+# DAV-2063 桩测试：通 / 不通（连续两次才告警）/ 版本不符 / 恢复 / 同秒多记录不覆盖
+#   DAV-2157 追加情形 5：用固定时钟桩**确定性**复现「同一秒内多次告警/恢复」，
+#   校验文件名带进程号后不再互相覆盖、不丢记录。
 # 用法：bash releases/launchd/tests/test_prod_health_sentinel.sh
 # 全程只用临时目录 + 随机高位端口的桩服务，**不碰生产 8000**，不安装 launchd。
 set -u
+
+# 本机/CI 若设了 http_proxy，curl 会把 127.0.0.1 也走代理而假红（DAV-2152 🟢-4）；
+# 显式把回环地址排除在代理之外，让本测试只依赖本机桩进程。
+export NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCHD_DIR="$(dirname "${SCRIPT_DIR}")"
@@ -84,6 +90,8 @@ alert_lines()  { printf '%s\n' "$1" | grep -c 'sentinel: ALERT ' || true; }
 recovered_lines() { printf '%s\n' "$1" | grep -c 'sentinel: RECOVERED ' || true; }
 alert_files()  { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-[0-9]' || true; }
 recovered_files() { ls "${WATCH}" 2>/dev/null | grep -c '^ALERT-prod-recovered-' || true; }
+# 事件行里脚本无条件打印了落盘路径，可用于核对「声明即已落盘」（与文件名精度无关）。
+event_files() { printf '%s\n' "$@" | sed -n 's/^sentinel: .* -> \(.*\)$/\1/p'; }
 
 echo "== 情形 1：healthz 通（sha 匹配）→ 无告警 =="
 watch_reset 1-ok
@@ -113,13 +121,13 @@ start_stub bad_sha || exit 1
 n_before=$(alert_files)
 out3=$(run_sentinel)
 [ "$(alert_lines "${out3}")" = "1" ] && ok "单次即告警（不等两次）" || bad "版本漂移未即时告警：$(printf '%s' "${out3}" | tr '\n' '|')"
-[ "$(alert_files)" -ge "$((n_before + 1))" ] || echo "  WARN: 告警文件与前次同秒被覆盖（文件名秒级精度），仅告警"
+# DAV-2157 起文件名带 <pid>，同秒不再互相覆盖 → 该计数由「仅告警的 WARN」升为硬断言。
+[ "$(alert_files)" = "$((n_before + 1))" ] && ok "告警落盘新增 1 个文件（带进程号，同秒不覆盖）" || bad "告警落盘数异常（${n_before}->$(alert_files)，期望 +1）"
 f=$(ls -t "${WATCH}" | grep '^ALERT-prod-[0-9]' | head -1)
 grep -q 'reason=sha_mismatch' "${WATCH}/${f}" && ok "原因为 sha_mismatch" || bad "原因字段不对"
 grep -q "observed_commit_sha=$(printf '0%.0s' {1..16})" "${WATCH}/${f}" && ok "记录了观测 sha" || bad "未记录观测 sha"
 
 echo "== 情形 4：恢复 → 写恢复记录（沿用情形 3 的告警状态）=="
-n_recovered_before=$(recovered_files)
 stop_stub; start_stub ok || exit 1
 out4=$(run_sentinel)
 [ "$(recovered_lines "${out4}")" = "1" ] && ok "恢复后写出恢复记录" || bad "未写恢复记录"
@@ -141,11 +149,64 @@ stop_stub; start_stub garbage || exit 1
 out7=$(run_sentinel); out8=$(run_sentinel)
 n=$(alert_lines "${out7}"); n=$((n + $(alert_lines "${out8}")))
 [ "${n}" -gt "0" ] && ok "2xx 但响应体不可解析计为不通" || bad "垃圾响应未告警（两次执行均无 ALERT 事件）"
+# 此前本段是全脚本唯一「只有计数、无内容断言」的告警段（DAV-2152 🟢-2）：
+# 若计数放行但落盘失败会被漏掉，这里按事件行给出的路径补一条落盘内容断言。
+gf=$(event_files "${out7}" "${out8}" | tail -1)
+[ -n "${gf}" ] && [ -r "${gf}" ] && grep -q '^reason=unreachable$' "${gf}" \
+  && ok "垃圾响应告警确实落盘且原因=unreachable" || bad "垃圾响应告警未落盘或原因不对：${gf:-<无事件行>}"
 
 mkdir -p "${WATCH}/.sentinel/check.lock"
 out=$(run_sentinel)
 echo "${out}" | grep -q '跳过' && ok "已有锁时跳过（并发去重）" || bad "锁未生效: ${out}"
 rmdir "${WATCH}/.sentinel/check.lock"
+
+# ---- 情形 5（DAV-2157）：同一秒内多次告警/恢复不丢记录 ----
+# 根因：文件名时间戳只到秒（ts_utc），同秒两次写入会同名覆盖、静默丢记录。
+# 确定性做法：哨兵内的 `date` 走 PATH 解析，把假 date 放到 PATH 首位即可让本段
+# 所有执行落在同一秒（产品脚本不加测试专用开关），从而稳定复现"同秒"场景；
+# 旧实现下本段必然只剩 1 个 alert + 1 个 recovered 文件，新实现应为 2 + 2。
+echo "== 情形 5：同一秒内多次告警/恢复不丢记录（固定时钟桩）=="
+watch_reset 5-same-second
+FIXED_STAMP="20260101T000000Z"
+FAKE_BIN="${TMP}/fakebin"; mkdir -p "${FAKE_BIN}"
+cat > "${FAKE_BIN}/date" <<EOF
+#!/bin/sh
+case "\${1:-}" in
+  -u) printf '%s\n' "${FIXED_STAMP}" ;;
+  *)  printf '%s\n' "2026-01-01 00:00:00 UTC" ;;
+esac
+EOF
+chmod +x "${FAKE_BIN}/date"
+REAL_PATH="${PATH}"
+export PATH="${FAKE_BIN}:${REAL_PATH}"
+start_stub bad_sha || exit 1
+out_a=$(run_sentinel)                                  # 同秒告警 1（版本不符单次即告警）
+stop_stub; start_stub ok || exit 1
+out_b=$(run_sentinel)                                  # 同秒恢复 1
+stop_stub; start_stub bad_sha || exit 1
+out_c=$(run_sentinel)                                  # 同秒告警 2
+stop_stub; start_stub ok || exit 1
+out_d=$(run_sentinel)                                  # 同秒恢复 2
+export PATH="${REAL_PATH}"
+stop_stub
+
+[ "$(alert_files)" = "2" ] \
+  && ok "同秒 2 次告警落 2 个文件（旧实现会覆盖成 1 个）" || bad "同秒告警丢记录：alert 文件 $(alert_files) 个（期望 2）"
+[ "$(recovered_files)" = "2" ] \
+  && ok "同秒 2 次恢复落 2 个文件（旧实现会覆盖成 1 个）" || bad "同秒恢复丢记录：recovered 文件 $(recovered_files) 个（期望 2）"
+same_ts=$(grep -h '^time_utc=' "${WATCH}"/ALERT-prod-[0-9]*.log 2>/dev/null | sort -u)
+[ "${same_ts}" = "time_utc=${FIXED_STAMP}" ] \
+  && ok "两次告警确实落在同一秒（time_utc=${FIXED_STAMP}）" || bad "未复现同秒场景：${same_ts:-<无时间戳>}"
+bad_name=$(ls "${WATCH}" 2>/dev/null | grep -E '^ALERT-prod-' | grep -vE -- '-[0-9]+\.log$' | head -1)
+[ -z "${bad_name}" ] \
+  && ok "记录文件名均以 <pid> 结尾（同秒唯一性来源）" || bad "记录文件名缺进程号后缀：${bad_name}"
+[ "$(grep -l '^reason=sha_mismatch$' "${WATCH}"/ALERT-prod-[0-9]*.log 2>/dev/null | wc -l | tr -d ' ')" = "2" ] \
+  && ok "两个告警文件各自内容完整" || bad "告警内容不全（reason=sha_mismatch 命中数 != 2）"
+[ "$(grep -l '^previous_alert_reason=sha_mismatch$' "${WATCH}"/ALERT-prod-recovered-*.log 2>/dev/null | wc -l | tr -d ' ')" = "2" ] \
+  && ok "两个恢复文件各自内容完整" || bad "恢复内容不全（previous_alert_reason 命中数 != 2）"
+ev=$(event_files "${out_a}" "${out_b}" "${out_c}" "${out_d}")
+[ "$(printf '%s\n' "${ev}" | sort -u | wc -l | tr -d ' ')" = "4" ] \
+  && ok "4 条事件行各指向唯一文件（事件与落盘一一对应）" || bad "事件行路径不唯一：$(printf '%s' "${ev}" | tr '\n' ' ')"
 
 stop_stub
 echo

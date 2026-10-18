@@ -269,7 +269,7 @@ env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/py
 |---|---|
 | `releases/launchd/ta-prod-health-sentinel.sh` | 哨兵脚本（探活 + 版本校验 + 告警/恢复记录） |
 | `releases/launchd/com.tradingagents.prod-health-sentinel.plist` | launchd 作业模板（RunAtLoad + StartInterval=300） |
-| `releases/launchd/tests/test_prod_health_sentinel.sh` | 四情形桩测试（通/不通/版本不符/恢复） |
+| `releases/launchd/tests/test_prod_health_sentinel.sh` | 五情形桩测试（通/不通/版本不符/恢复/同秒多记录不覆盖） |
 
 判定规则：
 
@@ -277,10 +277,13 @@ env -u PYTHONPATH /Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/py
   2xx 但响应体无 `commit_sha` 均记为不通；
 - **不通连续两次**（`FAIL_THRESHOLD=2`）才告警，第一次只写状态、不告警、不通知；
 - `commit_sha` 与 `EXPECT_PROD_SHA` 不符**立即**告警（版本漂移不去抖）；
-- 告警落 `~/ta-watch/ALERT-prod-<utc>-<unreachable|sha_mismatch>.log`，
+- 告警落 `~/ta-watch/ALERT-prod-<utc>-<unreachable|sha_mismatch>-<pid>.log`，
   并 `osascript` 发系统通知（`TA_WATCH_NOTIFY=0` 可关）；
-- 从告警恢复到健康写 `~/ta-watch/ALERT-prod-recovered-<utc>.log`（含恢复时间与前序原因），
+- 从告警恢复到健康写 `~/ta-watch/ALERT-prod-recovered-<utc>-<pid>.log`（含恢复时间与前序原因），
   持续健康不重复写。
+- 文件名末尾的 `<pid>` 是 DAV-2157 加的：`<utc>` 只精确到秒，同秒内两次记录会写同一
+  文件名、后一次静默覆盖前一次（丢记录）；哨兵有 `mkdir` 锁（同刻至多一个进程）、
+  单次执行最多写一个记录文件（告警/恢复分支互斥），故进程号足以保证同秒不撞名。
 
 安装前必做（占位符必须替换，残留为 0）：
 
@@ -310,11 +313,14 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.prod-healt
 ```bash
 plutil -lint releases/launchd/com.tradingagents.prod-health-sentinel.plist  # OK
 bash -n releases/launchd/ta-prod-health-sentinel.sh                          # 语法 OK
-bash releases/launchd/tests/test_prod_health_sentinel.sh                      # 19 项断言全绿
+bash releases/launchd/tests/test_prod_health_sentinel.sh                      # 29 项断言全绿
 ```
 
 测试只用临时目录 + 随机高位端口的桩服务（`BaseHTTPRequestHandler`），
-不连 8000，不发通知（`TA_WATCH_NOTIFY=0`）。
+不连 8000，不发通知（`TA_WATCH_NOTIFY=0`）；测试开头导出 `NO_PROXY=localhost,127.0.0.1`，
+本机/CI 设了 `http_proxy` 时也不会把回环地址走代理而假红。
+情形 5 用 PATH 首位的假 `date` 把时间戳钉在同一秒，**确定性**复现「同秒多次告警/恢复」：
+旧实现下该段必然只剩 1 个告警 + 1 个恢复文件并不通过，新实现 2 + 2 全过。
 
 注意：切换 release 时 `{{EXPECT_PROD_SHA}}` 必须同步改，否则哨兵立刻报
 `sha_mismatch`——这是有意为之的漂移检测，不是误报。
