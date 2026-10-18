@@ -467,6 +467,7 @@ if [ "${rc_dg2}" -eq 2 ]; then ok "② 悬空根退出码 2（rc=${rc_dg2}）"; 
 # 清单阈值注入小值（生产默认 204800 KiB = 200 MiB），使门禁用 MiB 级实体夹具覆盖同一路径。
 echo "[4h] 大文件清单 / 周基线：链接解引用（DAV-2252 🟢-1）"
 BIG="${TMP}/biglink"; mkdir -p "${BIG}/proj/data" "${BIG}/outside/big-dir" "${BIG}/snap-empty"
+dd if=/dev/zero of="${BIG}/proj/data/tradingagents.db" bs=1024 count=4096 2>/dev/null  # 实体命中（在扫描根 PROJ 内）
 dd if=/dev/zero of="${BIG}/outside/big-real.db.zst" bs=1024 count=4096 2>/dev/null   # 4 MiB 实体
 dd if=/dev/zero of="${BIG}/outside/small-real.bin" bs=1024 count=64 2>/dev/null      # 64 KiB 实体
 ln -s "${BIG}/outside/big-real.db.zst" "${BIG}/proj/linked-big.db.zst"               # 链接→大实体（必须入清单）
@@ -474,8 +475,14 @@ ln -s "${BIG}/outside/small-real.bin" "${BIG}/proj/linked-small.bin"            
 ln -s "${BIG}/outside/big-dir" "${BIG}/proj/linked-dir"                              # 目录链接（清单不展开）
 outbig="$(run_daily_mix 120 STORAGE_PROJ="${BIG}/proj" TA_SNAPSHOT_DIR="${BIG}/snap-empty" \
                       STORAGE_HEALTH_BIGFILE_MIN_KB=1024)"
-check_has "${outbig}" "\`${BIG}/proj/linked-big.db.zst\` — 待人工判断" "只以符号链接存在的大副本也进大文件清单（🟢-1）"
-check_not "${outbig}" "${BIG}/proj/linked-small.bin" "小于阈值的链接不进清单（阈值对链接一遗生效）"
+# DAV-2264 🟡-1：“实体命中 + 链接命中”并存：两行必须各自成行、各自归因，不得被分隔符残渣粘连
+check_has "${outbig}" "\`${BIG}/proj/data/tradingagents.db\` — 活库，不处理" "实体命中行自成一行且归因正确"
+check_has "${outbig}" "\`${BIG}/proj/linked-big.db.zst\` — 待人工判断" "链接命中行自成一行且归因正确（仅以符号链接存在的大副本也入清单）"
+n_bf="$(printf '%s\n' "${outbig}" | grep -c '^- .* — ')"
+if [ "${n_bf}" -eq 2 ]; then ok "双命中清单恰 2 条独立条目行（未被分隔符残渣粘连）"
+else bad "双命中清单条目行数应为 2，实得 ${n_bf}"; fi
+check_not "${outbig}" "$'" "清单不得出现字面 \$' 残渣（zsh \${var:+word} 不解析 C 引号）"
+check_not "${outbig}" "${BIG}/proj/linked-small.bin" "小于阈值的链接不进清单（阈值对链接一并生效）"
 check_not "${outbig}" "${BIG}/proj/linked-dir" "目录链接不在大文件清单里展开"
 
 # 周基线：当周快照项本身是符号链接 → 大小/字节数都必须解引用（真 du / 真 stat）
