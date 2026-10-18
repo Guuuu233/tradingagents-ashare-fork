@@ -19,6 +19,16 @@
 #     否则整棵看不见的目录树会被静默按 0 计入（含 `backups/` 与 PROJ）。
 #     🟢-1（同批）：已测得部分和就超预算时，先出「红（超预算）」（部分和只会低估，判定可靠），
 #     并把「另有 N 项不可测、合计不完整」附在同一条里。
+#   DAV-2250 🟡-1（返修，符号链接口径）：②③在符号链接上同样不得静默按 0 计。写死双层口径
+#     ——**目录级不进入 / 文件级解引用**：
+#       · 目录级：`find -P`（BSD 默认即 -P，此处显式写出）不进入符号链接目录；根目录本身是
+#         符号链接时 `find -P "$root"` 会**静默返回 0 个匹配**（实测 rc=0），故先用 `cd -P`
+#         解析成物理路径再枚举；
+#       · 文件级：匹配集扩到 `-type f -o -type l`，再用 `[ -f ]` 解引用判类型——指向普通文件的
+#         符号链接保留，交给 `du -sk -H` 解引用测量（macOS/BSD `du` **默认不解引用命令行上的
+#         符号链接**：实测 `du -sk link`（link→20 MiB 文件）打印 0 且 rc=0，必须显式 `-H`）；
+#       · 名字匹配但按普通文件测不了（悬空链接 / 指向目录的链接）⇒ 记「不可测」判红
+#         （宁可误红：该名字断言「这里有一份副本」，既不能确认、也不该按 0 计入）。
 #   DAV-2219：
 #     🟡-2 预算按 KiB 精确比较（≤15728640 KiB = 15 GiB），不再整数截断；
 #     🟢-2 工作树/活库单列、不计预算（否则含活库长期假红，DAV-2216 实测）。
@@ -63,23 +73,33 @@ du_kb() {
   echo "OK $kb"; return 0
 }
 
-# 多路径合计测量：用于热备预算里的「文件集合」（快照 *.db.zst、.pre-slim 副本）。
-# 成功打印 "OK <KiB 合计>"，失败/无输出/非数值打印 "ERR <首行原因>" 并返回非零。
+# 文件集合测量：用于热备预算里的「文件集合」（快照 *.db.zst、.pre-slim 副本）。
+# 逐文件 `du -sk -H` 并累加（DAV-2250 返修）：
+#   · `-H` = **显式**解引用「命令行上的符号链接」，即文件级解引用。macOS/BSD `du` 默认
+#     **不**解引用命令行上的符号链接（实测 `du -sk link`（link→20 MiB 文件）打印 0、rc=0），
+#     不写 `-H` 就会把链接后方的副本静默按 0 计——正是本轮返修要堵的通道；
+#   · 逐文件而非一次性多参：单个文件失败可精确点名；同一份数据若同时以「实体 + 链接」命中
+#     会重复计数，方向偏大（只多不少），与 fail-closed 的预算判定一致。
+# 成功打印 "OK <KiB 合计>"，失败/无输出/非数值打印 "ERR <文件>：<原因>" 并返回非零。
 # 调用方必须保证至少传入 1 个真实路径——`du` 无参数会误测当前目录！
-du_kb_total() {
-  local out rc first kb
-  out="$(du -sk "$@" 2>&1)"; rc=$?
-  first="${out%%$'\n'*}"
-  if [ "$rc" -ne 0 ]; then
-    [ -n "$first" ] || first="du 无输出（退出码 $rc）"
-    echo "ERR $first"; return 1
-  fi
-  [ -n "$out" ] || { echo "ERR du 无输出（退出码 0，输出为空）"; return 1; }
-  kb="$(printf '%s\n' "$out" | awk '$1 ~ /^[0-9]+$/ {s += $1} END {print s + 0}')"
-  case "$kb" in
-    ''|*[!0-9]*) echo "ERR du 输出非数值：$first"; return 1 ;;
-  esac
-  echo "OK $kb"; return 0
+du_kb_sum() {
+  local total=0 f out rc first kb
+  [ "$#" -gt 0 ] || { echo "ERR 空文件集合（内部错误：调用方不该在 0 个文件时调用）"; return 1; }
+  for f in "$@"; do
+    out="$(du -sk -H "$f" 2>&1)"; rc=$?
+    first="${out%%$'\n'*}"
+    if [ "$rc" -ne 0 ]; then
+      [ -n "$first" ] || first="du 无输出（退出码 $rc）"
+      echo "ERR $f：$first"; return 1
+    fi
+    [ -n "$out" ] || { echo "ERR $f：du 无输出（退出码 0，输出为空）"; return 1; }
+    kb="${first%%[[:space:]]*}"
+    case "$kb" in
+      ''|*[!0-9]*) echo "ERR $f：du 输出非数值：$first"; return 1 ;;
+    esac
+    total=$(( total + kb ))
+  done
+  echo "OK $total"; return 0
 }
 
 # 文件枚举（DAV-2239 🟡-1）：用 `find` 并按退出码判成败。
@@ -91,20 +111,42 @@ du_kb_total() {
 # 注意：**不可用 `$(enumerate_files …)` 调用**（命令替换是子 shell，ENUM_FILES 会丢失）——
 #       必须直接调用后取 `$?`，从 ENUM_FILES / ENUM_ERR 读结果。
 # $3 = "1" 只枚举本层（`-maxdepth 1`，用于 `~/ta-snapshot/*.db.zst`）；否则递归。
+#
+# DAV-2250 🟡-1（同类通道收口，符号链接双层口径「目录级不进入 / 文件级解引用」）：
+#   1) `find -P`（BSD 默认即 -P，显式写出）：遍历中不进入符号链接目录（目录级不进入）；
+#   2) 匹配集 = `-type f -o -type l`，循环里再用 `[ -f ]`（会解引用）确认「按普通文件可测」：
+#      指向普通文件的符号链接保留，交由 `du -sk -H` 解引用测量（文件级解引用）；
+#      悬空链接 / 指向目录的链接 ⇒ 记「不可测」并返回非零（宁可误红，不得静默按 0 计）；
+#      枚举后已不可访问的条目同样走这里（同样不按 0 计）。
+#   3) 根目录本身是符号链接时 `find -P` **不会**进入（实测返回 0 个匹配、rc=0），
+#      又是一条静默按 0 计的通道 ⇒ 先用 `cd -P` 解析成物理路径再枚举。
 ENUM_FILES=(); ENUM_ERR=""
 enumerate_files() {
-  local root="$1" pat="$2" shallow="${3:-0}" out rc f
+  local root="$1" pat="$2" shallow="${3:-0}" out rc f rroot cdout
   ENUM_FILES=(); ENUM_ERR=""
+  rroot="$root"
+  if [ -L "$root" ]; then
+    cdout="$( { cd -P "$root" && pwd; } 2>&1 )"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+      ENUM_ERR="根目录是符号链接但无法解析：${cdout%%$'\n'*}"; return 1
+    fi
+    rroot="$cdout"
+  fi
   if [ "$shallow" = "1" ]; then
-    out="$(find "$root" -maxdepth 1 -name "$pat" -type f -print 2>&1)"; rc=$?
+    out="$(find -P "$rroot" -maxdepth 1 -name "$pat" \( -type f -o -type l \) -print 2>&1)"; rc=$?
   else
-    out="$(find "$root" -name "$pat" -type f -print 2>&1)"; rc=$?
+    out="$(find -P "$rroot" -name "$pat" \( -type f -o -type l \) -print 2>&1)"; rc=$?
   fi
   if [ "$rc" -ne 0 ]; then
     ENUM_ERR="${out%%$'\n'*}"; return 1
   fi
   for f in ${(f)out}; do
-    [ -n "$f" ] && ENUM_FILES+=( "$f" )
+    [ -n "$f" ] || continue
+    if [ -f "$f" ]; then
+      ENUM_FILES+=( "$f" )
+    else
+      ENUM_ERR="枚举结果中的条目无法按普通文件测量（悬空/指向目录的链接，或枚举后已不可访问）：$f"; return 1
+    fi
   done
   return 0
 }
@@ -156,6 +198,7 @@ daily_report() {
   # ② 共享快照基线 *.db.zst（current.db 是未压缩工作副本，不计入）
   #    三态：目录不存在 → 跳过（不算不可测）；可读 → 枚举（可为 0 个文件）；
   #          存在但不可读/枚举失败 → 不可测（DAV-2239 🟡-1）
+  #    DAV-2250：根为符号链接先解析；文件级链接解引用计入；目录级链接不进入。
   local -a zst_files=(); local zst_ok=1 snap_state
   snap_state="$(path_state "$SNAP_DIR")"
   if [ "$snap_state" = "present" ]; then
@@ -166,7 +209,7 @@ daily_report() {
     else
       zst_files=( "${ENUM_FILES[@]}" )
       if [ "${#zst_files}" -gt 0 ]; then
-        res="$(du_kb_total "${zst_files[@]}")"; rc=$?
+        res="$(du_kb_sum "${zst_files[@]}")"; rc=$?
         if [ "$rc" -eq 0 ]; then zst_kb="${res#OK }"; else
           unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/*.db.zst（${#zst_files} 个文件）— ${res#ERR }"$'\n'
         fi
@@ -178,6 +221,7 @@ daily_report() {
   fi
   # ③ 发布期 .pre-slim 类副本（只扫 PROJ/REL/SNAP；ta-work 实验副本不在口径内）
   #    与②同一三态：不存在→跳过；可读→枚举；不可读/存在性未知→不可测
+  #    DAV-2250：目录级链接不进入（不递归进去）；文件级链接解引用计入。
   local -a pre_files=(); local root pre_ok=1 root_state
   for root in "$PROJ" "$REL" "$SNAP_DIR"; do
     root_state="$(path_state "$root")"
@@ -196,7 +240,7 @@ daily_report() {
     fi
   done
   if [ "${#pre_files}" -gt 0 ]; then
-    res="$(du_kb_total "${pre_files[@]}")"; rc=$?
+    res="$(du_kb_sum "${pre_files[@]}")"; rc=$?
     if [ "$rc" -eq 0 ]; then pre_kb="${res#OK }"; else
       unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：.pre-slim 副本（${#pre_files} 个文件）— ${res#ERR }"$'\n'
     fi
