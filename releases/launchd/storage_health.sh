@@ -322,16 +322,17 @@ daily_report() {
   if [ -n "$cur_kb" ]; then echo "  - 不计入预算：快照目录未压缩副本 current.db（归 D-073 整库副本上限管）：$(fmt_gib "$cur_kb") GiB  $SNAP_DIR/current.db"; fi
   printf '%s' "$unable_lines"
   echo
-  echo "**无主/大文件清单（≥200 MiB）**"
+  # 清单阈值（KiB，默认 200 MiB = 204800 KiB）。STORAGE_HEALTH_BIGFILE_MIN_KB 仅供门禁注入小阈值，
+  # 使同一条代码路径能用 MiB 级夹具覆盖（不必在测试里写 200 MiB 实体文件）；生产不设该变量。
+  # 抬头阈值随之动态显示，避免「注入小阈值时抬头仍写 200 MiB」的误读；默认下与旧版逐字一致。
+  local bf_min_kb="${STORAGE_HEALTH_BIGFILE_MIN_KB:-204800}"
+  case "$bf_min_kb" in ''|*[!0-9]*) bf_min_kb=204800 ;; esac
+  echo "**无主/大文件清单（≥$(( bf_min_kb / 1024 )) MiB）**"
   # DAV-2239 🟢-3：find 报错（目录不可读）不能静默成「空清单」——错误原因归上方「不可测」清单，
   #                这里至少留一行「清单不完整」；仍不改变灯色与退出码（该清单不驱动判定）
   local bf_rc=0 bf_out=""
   local -a bf_roots=()
   for root in "$PROJ" "$REL" "$SNAP_DIR"; do [ -d "$root" ] && bf_roots+=( "$root" ); done
-  # 清单阈值（KiB，默认 200 MiB）。STORAGE_HEALTH_BIGFILE_MIN_KB 仅供门禁注入小阈值，
-  # 使同一条代码路径能用 MiB 级夹具覆盖（不必在测试里写 200 MiB 实体文件）；生产不设该变量。
-  local bf_min_kb="${STORAGE_HEALTH_BIGFILE_MIN_KB:-204800}"
-  case "$bf_min_kb" in ''|*[!0-9]*) bf_min_kb=204800 ;; esac
   if [ "${#bf_roots}" -gt 0 ]; then
     bf_out="$(find -P "${bf_roots[@]}" -type f -size +"${bf_min_kb}"k -not -path "*/.git/*" -exec du -h {} \; 2>/dev/null)"; bf_rc=$?
     # DAV-2252 🟢-1：`-size` 在 `-P` 下只看**链接自身**大小（实测 8~113 字节），因此
