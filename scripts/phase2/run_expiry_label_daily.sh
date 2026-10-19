@@ -37,7 +37,24 @@
 # is a warning in the log only — the calendar can still come from akshare
 # and a missing fallback is not worth paging at 20:10.
 #
-# Install (template only — do NOT install before the 10-18 release card):
+# DAV-2284 (macOS TCC): launchd-spawned /bin/bash is denied *reads* under
+# ~/Documents. Measured 2026-10-19: `grep: …/.env: Operation not permitted`
+# and `. .env: Operation not permitted`, which fell through to "TUSHARE_TOKEN
+# missing" — a real authorisation fault misreported as missing data. So:
+#   * the credential file path is TA_ENV_FILE (plist-supplied), defaulting to
+#     the old in-checkout .env only for manual terminal runs;
+#   * the recommended target is ~/ta-secrets/ta.env: dir 700, file 600, made
+#     by scripts/phase2/ta_secrets_install.sh (never by a bare `cp`);
+#   * a read DENIED by the OS (grep rc >= 2) is its own alert, exit 18, and
+#     NEVER falls through to `source` / "token missing";
+#   * the interpreter is the independent venv ~/ta-venv/py310 (总控 10-17 令:
+#     the in-checkout .venv310 is the audited single point AND sits under
+#     ~/Documents, i.e. behind the same TCC wall), overridable via TA_PYTHON.
+# Rationale + install/verification: releases/launchd/TA_ENV_TCC.md.
+#
+# Install (template only — do NOT install before the release card):
+#   scripts/phase2/ta_secrets_install.sh          # 700 dir + 600 copy
+#   scripts/phase2/ta_secrets_install.sh --check   # strict mode preflight
 #   cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
 #   launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 #
@@ -46,13 +63,18 @@
 #             credential missing, 14 run failed (incl. the pipeline's own
 #             no-token fail-close, exit 2), 15 verify failed,
 #             16 .env unreadable OR contains non KEY=VALUE lines,
-#             17 post-run all-gap SW-leg guard.
+#             17 post-run all-gap SW-leg guard,
+#             18 credential file READ denied by the OS (TCC/EACCES) —
+#             fail-closed, no source attempt, alert names the denial.
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
 # --- fixed paths (same layout as the installed 19:45 ledger timer) ---------
-PYTHON="/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python"
-ENV_FILE="/Users/davidliu/Documents/TradingAgents-AShare/.env"
+PYTHON="${TA_PYTHON:-/Users/davidliu/ta-venv/py310/bin/python}"
+# DAV-2284: TA_ENV_FILE is what the plist sets. launchd does NOT expand `~`
+# or `$VARS` in EnvironmentVariables, so the plist value must be absolute;
+# a non-absolute value is rejected below rather than silently misread.
+ENV_FILE="${TA_ENV_FILE:-/Users/davidliu/Documents/TradingAgents-AShare/.env}"
 CODE_DIR="/Users/davidliu/ta-p4-ef8aa9d9"
 PIPELINE="${CODE_DIR}/scripts/phase2/expiry_label_pipeline.py"
 WORK_ROOT="/Users/davidliu/ta-p4-2e1e199f/work"
@@ -122,18 +144,57 @@ log "timer start label=com.davidliu.ta-p4-expiry-labels"
 # gate and `source` executed the substitution (sandbox-verified PWNED
 # created); `K="${HOME}..."` also expands with side effects. $ and ` are
 # now excluded too — a double-quoted value is literal text only.
+# DAV-2284: an absolute path is mandatory — launchd does not expand `~` or
+# `$VARS` in EnvironmentVariables, so a `~/ta-secrets/ta.env` value would be
+# taken literally; a relative one would resolve against WorkingDirectory.
+case "${ENV_FILE}" in
+    /*) ;;
+    *) alert "credential file path must be absolute, got '${ENV_FILE}' — launchd does not expand ~ or \$VARS in EnvironmentVariables (use /Users/davidliu/ta-secrets/ta.env)" 16 ;;
+esac
+
 if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
+    # DAV-2284 item 3: the recommended copy is 600 in a 700 dir, created by
+    # scripts/phase2/ta_secrets_install.sh. A wrong mode is a WARN here, not
+    # a stop: a bare `cp` lands 644 under the default umask, and failing the
+    # 20:10 label job does not make the secret less exposed. The strict gate
+    # is `ta_secrets_install.sh --check`, run by the install/verify step.
+    # Modes only — never contents.
+    _file_mode="$(/usr/bin/stat -f '%Lp' "${ENV_FILE}" 2>/dev/null || true)"
+    case "${_file_mode}" in
+        ""|600|400) ;;
+        *) log "WARN credential file mode ${_file_mode} (want 600) — chmod 600 '${ENV_FILE}'" ;;
+    esac
+    _dir_mode="$(/usr/bin/stat -f '%Lp' "$(/usr/bin/dirname "${ENV_FILE}")" 2>/dev/null || true)"
+    case "${_dir_mode}" in
+        ""|700|500) ;;
+        *) log "WARN credential dir mode ${_dir_mode} (want 700) — chmod 700 '$(/usr/bin/dirname "${ENV_FILE}")'" ;;
+    esac
     # exit 0 = a bad line was FOUND (grep -vE prints lines that are NOT
-    # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source.
-    if /usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\$`]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}"; then
-        alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16
-    fi
+    # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source;
+    # exit >= 2 = grep could not READ the file at all (EPERM under macOS TCC,
+    # or EACCES) — DAV-2284 item 4: that is an environment/authorisation
+    # fault, so it gets its own fail-closed alert (18) and must never be
+    # downgraded to "TUSHARE_TOKEN missing" (which is what the 10-19 exit 13
+    # actually was: grep+source both EPERM'd under ~/Documents).
+    GREP_ERR="$(/usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\$`]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}" 2>&1 >/dev/null)"
+    GREP_RC=$?
+    case "${GREP_RC}" in
+        0) alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16 ;;
+        1) : ;;
+        *) log "grep could not read ${ENV_FILE}: rc=${GREP_RC} ${GREP_ERR:-<no stderr>}"
+           alert "凭据文件读取被拒（疑似系统授权）：launchd 下的 /bin/bash 无权读取 ${ENV_FILE}（grep rc=${GREP_RC}${GREP_ERR:+: ${GREP_ERR}}）—— 未 source 任何内容，fail-closed。请把凭据副本放到 ~/Documents 之外（如 /Users/davidliu/ta-secrets/ta.env，目录 700 / 文件 600，用 scripts/phase2/ta_secrets_install.sh 生成），并用 plist 的 TA_ENV_FILE 指过去" 18 ;;
+    esac
     set -a
     # shellcheck disable=SC1090
     . "${ENV_FILE}"
+    SOURCE_RC=$?
     set +a
+    # A readable file that passes the gate can still fail to source (bad
+    # quoting, unbound var under `set -u`); say so instead of letting the
+    # "token missing" probe 20 lines below take the blame.
+    [ "${SOURCE_RC}" -eq 0 ] || alert "credential file ${ENV_FILE} specified but failed to source (rc=${SOURCE_RC}) — no values injected" 16
 else
-    alert "credential file unreadable: ${ENV_FILE} — cannot inject TUSHARE_TOKEN/FUYAO_API_KEY/INVESTODAY_API_KEY" 16
+    alert "credential file missing or not readable: ${ENV_FILE} — cannot inject TUSHARE_TOKEN/FUYAO_API_KEY/INVESTODAY_API_KEY (TA_ENV_FILE must be an absolute path outside ~/Documents, e.g. /Users/davidliu/ta-secrets/ta.env)" 16
 fi
 
 # --- preconditions ---------------------------------------------------------
@@ -145,7 +206,7 @@ fi
 # membership_status=gap AND (report_id,horizon) is permanently skipped —
 # fail BEFORE the run mints irreversible gap labels.
 if [ -z "${TUSHARE_TOKEN:-}" ]; then
-    alert "TUSHARE_TOKEN missing after sourcing ${ENV_FILE} — SW industry leg would silently degrade to gap for every row" 13
+    alert "TUSHARE_TOKEN missing after sourcing ${ENV_FILE} (the file was readable and passed the KEY=VALUE gate, so this is a genuine content gap — not a TCC read denial, which exits 18 above) — SW industry leg would silently degrade to gap for every row" 13
 fi
 # Fallback/secondary credentials: warn-only (calendar still has akshare).
 [ -n "${FUYAO_API_KEY:-}" ]      || log "WARN FUYAO_API_KEY missing — trade-calendar fallback unavailable (akshare only)"
@@ -155,9 +216,12 @@ fi
 # is_cn_trading_day() raises TradeCalendarUnavailableError when the calendar
 # can't be loaded — that is exactly the "日历取不到" alert path, so we let the
 # exception propagate as a non-zero and catch it below.
-TODAY_CHECK="$("${PYTHON}" - <<'PY' 2>&1
+TODAY_CHECK="$("${PYTHON}" - "${CODE_DIR}" <<'PY' 2>&1
 import sys
-sys.path.insert(0, "/Users/davidliu/ta-p4-ef8aa9d9")
+# CODE_DIR comes in as argv[1] — deriving it here instead of hardcoding keeps
+# one copy of the install path (see the "Path coupling" note in the plist);
+# the 10-19 installed worktree had to hand-edit both copies to stay in sync.
+sys.path.insert(0, sys.argv[1])
 from tradingagents.dataflows.trade_calendar import cn_today_str, is_cn_trading_day
 today = cn_today_str()
 print(f"{today} {is_cn_trading_day(today, allow_weekday_fallback=False)}")

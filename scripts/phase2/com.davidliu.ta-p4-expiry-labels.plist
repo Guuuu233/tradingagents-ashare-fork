@@ -10,23 +10,40 @@
                 against the fixed P4 account; append-only under
                 work/phase2-labels/.
      Data     : reads the LIVE forward ledger + live market/vendor routes;
-                never the snapshot DB (no --db, no SQLite touch at all).
+                never the snapshot DB (no db flag, no SQLite touch at all).
      Fail     : credential missing / calendar unavailable / run or verify
                 non-zero -> alert file + non-zero exit, no retry. A
                 non-trading weekday exits 0.
 
-     Install (inside the 10-18 release card, together with the timer
+     Install (inside the release card, together with the timer
      checkout upgrade so CODE_DIR contains expiry_label_pipeline.py):
+       # DAV-2284 — credential copy OUTSIDE ~/Documents (launchd /bin/bash is
+       # TCC-denied reads there): dir 700, file 600, never a bare `cp`.
+       scripts/phase2/ta_secrets_install.sh          # install
+       scripts/phase2/ta_secrets_install.sh check    # strict preflight
        cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
        launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+       launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels   # one manual run
      Remove:
        launchctl bootout gui/$UID/com.davidliu.ta-p4-expiry-labels
        rm ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 
-     Path coupling (sync all three on checkout relocation):
+     DAV-2284 — TA_ENV_FILE: launchd does NOT expand `~`, `$HOME` or any
+     variable in EnvironmentVariables, so the value below MUST stay a
+     literal absolute path. It points at a 600 copy in a 700 dir outside
+     ~/Documents because macOS refuses launchd-spawned /bin/bash ANY read
+     under ~/Documents (measured 2026-10-19: grep and `source` both
+     "Operation not permitted" -> a misleading "TUSHARE_TOKEN missing",
+     exit 13). Nothing secret lives in this file. Rotating a key means
+     updating BOTH ~/Documents/TradingAgents-AShare/.env and the copy —
+     see releases/launchd/TA_ENV_TCC.md and the RESTART.md block it ships.
+
+     Path coupling (sync all of these on checkout relocation):
        1) ProgramArguments below,
        2) WorkingDirectory below,
-       3) CODE_DIR + heredoc sys.path inside run_expiry_label_daily.sh.
+       3) CODE_DIR inside run_expiry_label_daily.sh (the trading-day gate
+          now takes it as argv, so it is declared once),
+       4) TA_ENV_FILE below (independent of the checkout path).
 -->
 <plist version="1.0">
 <dict>
@@ -41,6 +58,10 @@
     <string>/Users/davidliu/ta-p4-ef8aa9d9</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- DAV-2284: absolute literal path — launchd does not expand ~ here.
+             600 file in a 700 dir, outside ~/Documents (TCC). No secret. -->
+        <key>TA_ENV_FILE</key>
+        <string>/Users/davidliu/ta-secrets/ta.env</string>
         <key>NO_PROXY</key>
         <string>127.0.0.1,localhost,100.64.0.0/10</string>
         <key>no_proxy</key>
