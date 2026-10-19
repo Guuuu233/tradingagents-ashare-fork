@@ -43,6 +43,10 @@
 #       （macOS `stat` **默认 lstat**，不加 `-L` 会把链接自身字节数当目标大小写进报告）；
 #     · 🟢-2：`STORAGE_HEALTH.md` 数字改实测值；
 #     · 🟢-3：根链接解析只取末行（`${cdout##*$'\n'}`），避免 stderr 噪声混进路径。
+#   DAV-2264 🟡-1（返修）：zsh 5.9 对 **`${var:+word}` 的替换词不解析 C 引号**（`${x:+$'\n'}`
+#     实测原样输出 5 个字面字符 `$'\n'`；而 `%%`/`##` 模式位会解析）——清单「实体命中 +
+#     链接命中」两遍拼接改用 `local nl; nl=$'\n'` 后的 `${bf_out:+${nl}}`，否则两行粘连成一行、
+#     `case` 归因失真、报告里混入 `$'` 残渣。
 #   DAV-2219：
 #     🟡-2 预算按 KiB 精确比较（≤15728640 KiB = 15 GiB），不再整数截断；
 #     🟢-2 工作树/活库单列、不计预算（否则含活库长期假红，DAV-2216 实测）。
@@ -331,6 +335,10 @@ daily_report() {
   # DAV-2239 🟢-3：find 报错（目录不可读）不能静默成「空清单」——错误原因归上方「不可测」清单，
   #                这里至少留一行「清单不完整」；仍不改变灯色与退出码（该清单不驱动判定）
   local bf_rc=0 bf_out=""
+  # zsh 5.9 对 `${var:+word}` 的替换词**不解析 C 引号**（`${x:+$'\n'}` 会原样输出 5 个字面字符
+  # `$'\n'`，实测 od 验证；`%%`/`##` 模式位则会解析）。故先把换行存进变量再引用（DAV-2264 🟡-1）。
+  local nl
+  nl=$'\n'
   local -a bf_roots=()
   for root in "$PROJ" "$REL" "$SNAP_DIR"; do [ -d "$root" ] && bf_roots+=( "$root" ); done
   if [ "${#bf_roots}" -gt 0 ]; then
@@ -352,7 +360,7 @@ daily_report() {
       [ -f "$bpath" ] && bf_big_links+=( "$bpath" )
     done <<< "$bf_lnk"
     if [ "${#bf_big_links[@]}" -gt 0 ]; then
-      bf_out="${bf_out}${bf_out:+$'\n'}$(du -h -H "${bf_big_links[@]}" 2>/dev/null)"
+      bf_out="${bf_out}${bf_out:+${nl}}$(du -h -H "${bf_big_links[@]}" 2>/dev/null)"
     fi
   fi
   if [ -n "$bf_out" ]; then
