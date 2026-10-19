@@ -135,15 +135,15 @@ RT 进程）—— 这是并行 agent 同时跑 RT-FULL 时的**共享 `/tmp/rt_
 
 | 文件 | 实测值 | 内容 |
 |---|---:|---|
-| `peak-before-1.stderr.log` | **4.699 GiB** | 改前（ta-base `8b817a30`）`/usr/bin/time -l` 原文 |
-| `peak-before-2.stderr.log` | 4.697 GiB | 同上，第 2 次 |
-| `peak-before-3.stderr.log` | 4.753 GiB | 同上，第 3 次（最大） |
-| `peak-after-1.stderr.log` | **2.742 GiB** | 改后，第 1 次（= 中位） |
-| `peak-after-2.stderr.log` | 3.196 GiB | 改后，第 2 次（最大，系统并行负载较高） |
-| `peak-after-3.stderr.log` | 2.262 GiB | 改后，第 3 次 |
-| `rtfull-baseline.log` | 8049 passed / 0 failed | 基线 RT-FULL 全文 |
-| `rtfull-candidate.log` | 8060 passed / 0 failed | 候选 RT-FULL 第 2 次（全绿）全文 |
-| `rtfull-candidate-run1-sentinelfail.log` | 1 failed / 8059 passed | 候选 RT-FULL 第 1 次（含那条环境失败）全文 |
+| `peak-before-1.stderr.txt` | **4.699 GiB** | 改前（ta-base `8b817a30`）`/usr/bin/time -l` 原文 |
+| `peak-before-2.stderr.txt` | 4.697 GiB | 同上，第 2 次 |
+| `peak-before-3.stderr.txt` | 4.753 GiB | 同上，第 3 次（最大） |
+| `peak-after-1.stderr.txt` | **2.742 GiB** | 改后，第 1 次（= 中位） |
+| `peak-after-2.stderr.txt` | 3.196 GiB | 改后，第 2 次（最大，系统并行负载较高） |
+| `peak-after-3.stderr.txt` | 2.262 GiB | 改后，第 3 次 |
+| `rtfull-baseline.txt` | 8049 passed / 0 failed | 基线 RT-FULL 全文 |
+| `rtfull-candidate.txt` | 8060 passed / 0 failed | 候选 RT-FULL 第 2 次（全绿）全文 |
+| `rtfull-candidate-run1-sentinelfail.txt` | 1 failed / 8059 passed | 候选 RT-FULL 第 1 次（含那条环境失败）全文 |
 
 评价入口产物（逐字节比对对象，`verdict.json` 两侧均 `bdf933d4…079b`）为本地运行目录
 `run/before/evaluation/`、`run/after/evaluation/`，**未入库**（体积大且可由上面命令复现）。
