@@ -27,6 +27,10 @@
 #  10. ① 目录级链接解引用 + 悬空根链接（DAV-2252 🟡-1/🟡-2）：`du_kb` 带 `-H`（真 `du` 断言
 #      ① ≥4096 KiB）、`$REL/backups` / `$SNAP_DIR` 为悬空符号链接 ⇒ 不可测判红，
 #      不得写成「目录不存在」/「0 个文件」；
+#  11. 大文件清单 / 周基线的链接解引用（DAV-2252 🟢-1）：清单阈值可用
+#      `STORAGE_HEALTH_BIGFILE_MIN_KB` 注入小值，覆盖「只以符号链接存在的大副本必须入清单、
+#      小于阈值的不入、目录链接不展开」；周基线用真 `du`/真 `stat` 断言链接项
+#      大小 ≠ `0B`、字节数 = 目标实体字节数（`stat -L`）；
 #   7. 🟢-1：已测得部分和已超预算时优先出「红（超预算）」，并附「另有 N 项不可测」；
 #   8. 只读纪律静态门：剔除注释/`[[ ]]`/双引号字面量后，不得出现
 #      rm/rmdir/unlink/truncate/shred/mv/dd/install/cp、find -delete，
@@ -453,7 +457,39 @@ outdg2="$(run_daily_mix 120 STORAGE_PROJ="${TMP}/proj-nopreslim" TA_SNAPSHOT_DIR
 check_has "${outdg2}" "**热备副本占用：红（不可测，fail-closed）**" "② 根为悬空符号链接 → 不可测判红"
 check_not "${outdg2}" "共享快照基线 \`*.db.zst\`：0 个文件" "悬空快照根不得写成「0 个文件」（不得静默按 0 计）"
 check_has "${outdg2}" "⚠️ 不可测：${DGL}/snap-dangling/*.db.zst" "点名悬空快照根（②项）"
+check_has "${outdg2}" "⚠️ 不可测：${DGL}/snap-dangling 下的 .pre-slim 副本" "点名悬空快照根（③项）"
+check_not "${outdg2}" "发布期 \`.pre-slim\` 副本：0 个文件" "悬空快照根也不得写成「0 个文件」（③项，总控 10-19 裁定）"
 if [ "${rc_dg2}" -eq 2 ]; then ok "② 悬空根退出码 2（rc=${rc_dg2}）"; else bad "退出码应为 2，实得 ${rc_dg2}"; fi
+
+# ---- 4h. 大文件清单 / 周基线的链接解引用（DAV-2252 🟢-1）--------------------
+# `find -size` 在 `-P` 下只看**链接自身**大小（实测 8~113 字节）；`du` 默认不解引用命令行
+# 符号链接；macOS `stat` 默认 lstat。三处不补都会把「只以链接存在的大副本」静默漏掉或报 0。
+# 清单阈值注入小值（生产默认 204800 KiB = 200 MiB），使门禁用 MiB 级实体夹具覆盖同一路径。
+echo "[4h] 大文件清单 / 周基线：链接解引用（DAV-2252 🟢-1）"
+BIG="${TMP}/biglink"; mkdir -p "${BIG}/proj/data" "${BIG}/outside/big-dir" "${BIG}/snap-empty"
+dd if=/dev/zero of="${BIG}/outside/big-real.db.zst" bs=1024 count=4096 2>/dev/null   # 4 MiB 实体
+dd if=/dev/zero of="${BIG}/outside/small-real.bin" bs=1024 count=64 2>/dev/null      # 64 KiB 实体
+ln -s "${BIG}/outside/big-real.db.zst" "${BIG}/proj/linked-big.db.zst"               # 链接→大实体（必须入清单）
+ln -s "${BIG}/outside/small-real.bin" "${BIG}/proj/linked-small.bin"                 # 链接→小实体（不得入清单）
+ln -s "${BIG}/outside/big-dir" "${BIG}/proj/linked-dir"                              # 目录链接（清单不展开）
+outbig="$(run_daily_mix 120 STORAGE_PROJ="${BIG}/proj" TA_SNAPSHOT_DIR="${BIG}/snap-empty" \
+                      STORAGE_HEALTH_BIGFILE_MIN_KB=1024)"
+check_has "${outbig}" "\`${BIG}/proj/linked-big.db.zst\` — 待人工判断" "只以符号链接存在的大副本也进大文件清单（🟢-1）"
+check_not "${outbig}" "${BIG}/proj/linked-small.bin" "小于阈值的链接不进清单（阈值对链接一遗生效）"
+check_not "${outbig}" "${BIG}/proj/linked-dir" "目录链接不在大文件清单里展开"
+
+# 周基线：当周快照项本身是符号链接 → 大小/字节数都必须解引用（真 du / 真 stat）
+WL="${TMP}/snap-weekly-link"; mkdir -p "${WL}"
+dd if=/dev/zero of="${WL}/real-src.db.zst" bs=1024 count=4096 2>/dev/null
+ln -s "${WL}/real-src.db.zst" "${WL}/tradingagents-2026-10-20.db.zst"
+outwl="$(env PATH="${BASE_PATH}" TA_SNAPSHOT_DIR="${WL}" STORAGE_PROJ="${TMP}/proj" \
+               "${ZSH_BIN}" "${SCRIPT}" weekly 2>&1)"
+check_has "${outwl}" "当周最后一份：\`${WL}/tradingagents-2026-10-20.db.zst\`" "链接形式的快照仍能被选为当周基线"
+check_has "${outwl}" "（4194304 字节）" "快照项为链接 → stat -L 取目标字节数（默认 lstat 会拿链接自身）"
+want_sha_l="$(shasum -a 256 "${WL}/real-src.db.zst" | awk '{print $1}')"
+check_has "${outwl}" "SHA256：${want_sha_l}" "SHA256 仍与目标实体一致（shasum 本就读穿链接）"
+check_not "${outwl}" "大小：0B" "真 du：快照项为链接 → du -h -H 解引用（默认会显示 0B）"
+check_has "${outwl}" "大小：4.0M" "真 du：链接项显示目标实体大小（4 MiB）"
 
 # ---- 5. 只读纪律静态门 -----------------------------------------------------
 # 先剔行首注释，再剔 `[[ ... ]]` 比较与双引号字面量（它们不是重定向），

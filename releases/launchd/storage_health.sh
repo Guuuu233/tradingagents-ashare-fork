@@ -36,6 +36,13 @@
 #     · `path_state` 增「悬空符号链接 ⇒ unknown」：`[ -e ]` 会解引用，悬空链接返回假，
 #       原实现滑到 absent 分支 ⇒ ①写「目录不存在」、②③写「0 个文件」，整行绿、`rc=0`
 #       （外置卷未挂载 / 目标被移走 / 只留链接的形态）。现按 fail-closed 记「不可测」判红。
+#   DAV-2252 🟢（总控 10-19 令：🟢-1/🟢-2/🟢-3 一并处理，🟢-4 维持）：
+#     · 🟢-1 把「解引用」口径补全到清单与周基线：大文件清单补「只以符号链接形式存在的
+#       ≥阈值 副本」一遍（`-size` 在 `-P` 下只看链接自身 ⇒ 须 `stat -L` 取目标字节数，
+#       再 `du -h -H` 生成展示行）；周基线大小/字节数改 `du -h -H` + `stat -L`
+#       （macOS `stat` **默认 lstat**，不加 `-L` 会把链接自身字节数当目标大小写进报告）；
+#     · 🟢-2：`STORAGE_HEALTH.md` 数字改实测值；
+#     · 🟢-3：根链接解析只取末行（`${cdout##*$'\n'}`），避免 stderr 噪声混进路径。
 #   DAV-2219：
 #     🟡-2 预算按 KiB 精确比较（≤15728640 KiB = 15 GiB），不再整数截断；
 #     🟢-2 工作树/活库单列、不计预算（否则含活库长期假红，DAV-2216 实测）。
@@ -141,7 +148,7 @@ enumerate_files() {
     if [ "$rc" -ne 0 ]; then
       ENUM_ERR="根目录是符号链接但无法解析：${cdout%%$'\n'*}"; return 1
     fi
-    rroot="$cdout"
+    rroot="${cdout##*$'\n'}"   # 🟢-3（DAV-2252）：只取末行（pwd 的输出），避免 stderr 噪声混进路径
   fi
   if [ "$shallow" = "1" ]; then
     out="$(find -P "$rroot" -maxdepth 1 -name "$pat" \( -type f -o -type l \) -print 2>&1)"; rc=$?
@@ -321,8 +328,31 @@ daily_report() {
   local bf_rc=0 bf_out=""
   local -a bf_roots=()
   for root in "$PROJ" "$REL" "$SNAP_DIR"; do [ -d "$root" ] && bf_roots+=( "$root" ); done
+  # 清单阈值（KiB，默认 200 MiB）。STORAGE_HEALTH_BIGFILE_MIN_KB 仅供门禁注入小阈值，
+  # 使同一条代码路径能用 MiB 级夹具覆盖（不必在测试里写 200 MiB 实体文件）；生产不设该变量。
+  local bf_min_kb="${STORAGE_HEALTH_BIGFILE_MIN_KB:-204800}"
+  case "$bf_min_kb" in ''|*[!0-9]*) bf_min_kb=204800 ;; esac
   if [ "${#bf_roots}" -gt 0 ]; then
-    bf_out="$(find "${bf_roots[@]}" -type f -size +200M -not -path "*/.git/*" -exec du -h {} \; 2>/dev/null)"; bf_rc=$?
+    bf_out="$(find -P "${bf_roots[@]}" -type f -size +"${bf_min_kb}"k -not -path "*/.git/*" -exec du -h {} \; 2>/dev/null)"; bf_rc=$?
+    # DAV-2252 🟢-1：`-size` 在 `-P` 下只看**链接自身**大小（实测 8~113 字节），因此
+    #   「≥阈值 的副本只以符号链接形式存在」不会进上面的清单。这里补一遍：`stat -L` 取
+    #   **目标**字节数（macOS `stat` 默认 lstat ⇒ 必须显式 `-L`，否则拿到链接自身字节数）——
+    #   只读元数据、不递归目标目录树，代价与链接数成线性；命中者再用 `du -h -H` 生成与
+    #   上一遍一致的展示行。只处理「指向普通文件」的链接（目录链接归预算口径，清单不展开）。
+    #   清单本身仍不驱动灯色与退出码。
+    local bf_lnk=""
+    bf_lnk="$(find -P "${bf_roots[@]}" -type l -not -path "*/.git/*" -exec stat -L -f '%z %N' {} + 2>/dev/null)"
+    local -a bf_big_links=()
+    local bsize bpath
+    while read -r bsize bpath; do
+      [ -n "${bsize:-}" ] || continue
+      case "$bsize" in ''|*[!0-9]*) continue ;; esac
+      [ "$bsize" -ge $(( bf_min_kb * 1024 )) ] || continue
+      [ -f "$bpath" ] && bf_big_links+=( "$bpath" )
+    done <<< "$bf_lnk"
+    if [ "${#bf_big_links[@]}" -gt 0 ]; then
+      bf_out="${bf_out}${bf_out:+$'\n'}$(du -h -H "${bf_big_links[@]}" 2>/dev/null)"
+    fi
   fi
   if [ -n "$bf_out" ]; then
     printf '%s\n' "$bf_out" | sort -rh | while read -r sz p; do
@@ -373,8 +403,8 @@ weekly_baseline() {
     echo "- ⚠️ 当周窗口内无 tradingagents-*.db.zst，本周无可上传基线"; echo; return 0
   fi
   sha=$(shasum -a 256 "$latest" | awk '{print $1}')
-  sz=$(du -h "$latest" | awk '{print $1}')
-  bytes=$(stat -f %z "$latest")
+  sz=$(du -h -H "$latest" | awk '{print $1}')
+  bytes=$(stat -L -f %z "$latest")   # 🟢-1：macOS stat 默认 lstat ⇒ 快照项为链接时必须 -L
   echo "- 当周最后一份：\`$latest\`"
   echo "- 大小：$sz（$bytes 字节）｜SHA256：$sha"
   echo "- 上传目标：夸克 \`$QUARK_REMOTE_DIR\`（保留最近 2 份）"
