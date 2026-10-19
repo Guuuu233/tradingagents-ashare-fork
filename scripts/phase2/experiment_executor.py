@@ -45,6 +45,29 @@
 
 ``--total-request-cap`` 默认 20328，与总控 10-11 令一致。
 
+DAV-2285（总控 10-20 令）四项收紧：
+
+1. **每次请求都带 ``experiment_run_identity``**：由 ``pair_id`` / 批号 /
+   实例名 / attempt / 本次 uuid 现造，附在 ``POST /v1/analyze`` 请求体里；
+   取回结果后**回读核对**服务端是否真的承接（``--run-identity-policy
+   require`` 默认 fail-closed）——当前 O/N 服务端
+   ``AnalyzeRequest`` 会静默丢弃未声明字段，只发不核对等于没发。
+2. **没给某实例配 ``--token`` 就拒绝启动**，并对每份报告回读 ``user_id``
+   核对归属固定账户（``--expect-account``）。不配 token 时服务端
+   ``RequireUser`` 会退到「本地默认账户」，请求照样成功，却不属实验口径的
+   固定账户——这类静默串号必须在开跑前就挡住。
+3. **轮询遇连接中断不直接判失败**：改为按退避重新查询服务端终态；重查耗尽
+   仍拿不到才记失败（``connection`` 桶），并如实记 ``poll_reconnects``。
+4. **``--pair-retries`` 对已判 ``failed`` 的对同样生效**：原先补跑只挂在
+   ``voided`` 分支上，请求本身失败的对永远不会用掉这次机会。配额类停批下
+   仍不补跑（重试无意义且白烧额度）。另：原补跑是单个 ``if``，
+   ``--pair-retries > 1`` 时第二次补跑永不发生（声明的次数是假的），
+   现改为按剩余额度循环。
+5. **凭据 / 身份门禁不通过即停批**（``run_guard_failed``，持久化到
+   ``state.json``）：这是**系统性**状态（服务端未承接身份、或凭据指向了非固定
+   账户），不是这一对的偶发波动。不立刻停的话，5 对 × 2 臂 × 首跑+补跑
+   = 20 次真实请求会全部白烧。
+
 主干守卫（DAV-2204）：``run --batch-spec`` 时先校验「所在检出 HEAD ==
 ``batch_spec.sampler.trunk_commit``」，不符即**拒绝运行**并给出原因码
 （``trunk_head_mismatch`` / ``trunk_head_unresolved`` / ``trunk_commit_unspecified``），
@@ -61,6 +84,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
@@ -121,6 +145,25 @@ TRUNK_GUARD_MISMATCH = "trunk_head_mismatch"
 TRUNK_GUARD_UNRESOLVED = "trunk_head_unresolved"
 TRUNK_GUARD_UNSPECIFIED = "trunk_commit_unspecified"
 
+# DAV-2285-1：请求体里带实验运行身份的键名。它与 O/N 被测代码落库的
+# ``result_data.experiment_run_identity``（DAV-1477 P3 / DAV-1486 独立键名）
+# 同名，便于服务端一旦支持就直接承接；当前 O/N 服务端
+# ``AnalyzeRequest``（pydantic v2, extra 默认 ignore）会**静默丢弃**该字段，
+# 所以执行器必须自己回读核对（见 ``verify_run_identity``），不得假设「发了
+# 就到了」。
+RUN_IDENTITY_KEY = "experiment_run_identity"
+
+# DAV-2285-2：未给实例配 token / 回读核对归属不通过时的原因码。
+PREFLIGHT_TOKEN_MISSING = "instance_token_missing"
+PREFLIGHT_ACCOUNT_MISMATCH = "report_account_mismatch"
+PREFLIGHT_ACCOUNT_UNAVAILABLE = "report_account_unavailable"
+
+# DAV-2285-3：轮询遇连接中断时，不直接判失败，改为重新查询服务端终态。
+# 重查次数与退避上限：够覆盖一次「实例瞬时重启 / 代理重连」，又不至于把
+# 一次真掉线拖成挂到 job_timeout 的长等待。
+POLL_RECONNECT_MAX_ATTEMPTS = 5
+POLL_RECONNECT_BACKOFF_SECONDS = (1.0, 2.0, 5.0, 10.0, 20.0)
+
 STOP_ALL_PAIRS_DONE = "all_pairs_done"
 STOP_QUOTA = "quota_or_rate_limit"
 STOP_NON_FROZEN_MODEL = "non_frozen_model"
@@ -130,6 +173,10 @@ STOP_BLACKOUT = "trading_day_blackout"
 STOP_DAILY_GATE = "daily_batch_gate_not_open"
 STOP_WEEKEND = "non_trading_day"
 STOP_DUPLICATE_BASE_DAY = "duplicate_base_day"
+# DAV-2285：凭据 / 身份门禁不通过是**系统性**状态（服务端没承接身份字段、或
+# 凭据指向了非固定账户），不是这一对的偶发问题。不立刻停批的话，5 对 × 2 臂
+# × 首跑+补跑 = 20 次真实请求会全部白烧。命中即停在当前这一对跑完之后。
+STOP_RUN_GUARD = "run_guard_failed"
 
 # 只有「需人工确认才能解除」的停批原因才写进 ``state.json``；窗口类原因
 # （每日一批闸 / 静默窗口 / 周末 / 同基准日第二批）只是**本次进程所处时刻的
@@ -138,6 +185,7 @@ STOP_DUPLICATE_BASE_DAY = "duplicate_base_day"
 # 再来永远跑不动——必须有人手工改 state.json 才能解除的死锁。
 PERSISTENT_STOP_REASONS = frozenset({
     STOP_QUOTA, STOP_NON_FROZEN_MODEL, STOP_FAIL_RATE, STOP_BUDGET,
+    STOP_RUN_GUARD,
 })
 
 
@@ -387,6 +435,15 @@ def _locked_python() -> str:
 
 class TrunkGuardError(RuntimeError):
     """主干守卫拒绝执行。``reason_code`` 供机器判定，文案供人读。"""
+
+    def __init__(self, reason_code: str, detail: str):
+        super().__init__(f"[{reason_code}] {detail}")
+        self.reason_code = reason_code
+        self.detail = detail
+
+
+class TokenPreflightError(RuntimeError):
+    """DAV-2285-2：凭据前置拒绝启动。理由码同 ``TrunkGuardError``，口径一致。"""
 
     def __init__(self, reason_code: str, detail: str):
         super().__init__(f"[{reason_code}] {detail}")
@@ -672,6 +729,153 @@ def flatten_served_models(result: Optional[Dict[str, Any]]) -> Tuple[List[str], 
     return models, missing_n
 
 
+# ---------------------------------------------------------------------------
+# DAV-2285-1：实验运行身份（随每次请求下发 + 回读核对）
+# ---------------------------------------------------------------------------
+
+
+def build_run_identity(
+    *,
+    pair_id: str,
+    batch_index: int,
+    instance: str,
+    attempt: int,
+    run_uuid: Optional[str] = None,
+) -> Dict[str, Any]:
+    """现造本次请求的 ``experiment_run_identity``。
+
+    字段只用执行器自己掌握、且事后能从报告回读核对的值；**不**编造
+    ``thread_id`` / ``checkpointer``——那两个由服务端图在 experiment 模式下
+    生成（DAV-1477 P3），执行器编出来只会是假身份。核对只比对下发的这组
+    字段（``experiment_id`` / ``pair_id`` / ``batch_index`` / ``arm`` /
+    ``replicate`` / ``run_uuid``），与预注册 §3「harness 附加或关联而不覆盖
+    图产生的 thread_id/checkpointer」一致。
+    """
+    return {
+        "experiment_id": pair_id.split("-", 1)[0] if "-" in pair_id else pair_id,
+        "pair_id": pair_id,
+        "batch_index": int(batch_index),
+        "arm": str(instance),
+        "replicate": int(attempt),
+        "run_uuid": run_uuid or uuid.uuid4().hex,
+    }
+
+
+def extract_run_identity(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """从 job result 里取出服务端回写/承认的 ``experiment_run_identity``。
+
+    取不到（None / 非 dict）返回 ``None``；只挑出执行器下发的那些键，避免
+    服务端额外附加的字段（thread_id/checkpointer）把比对变成永假。
+    """
+    if not isinstance(result, dict):
+        return None
+    identity = result.get(RUN_IDENTITY_KEY)
+    if not isinstance(identity, dict):
+        return None
+    return {
+        "experiment_id": identity.get("experiment_id"),
+        "pair_id": identity.get("pair_id"),
+        "batch_index": identity.get("batch_index"),
+        "arm": identity.get("arm"),
+        "replicate": identity.get("replicate"),
+        "run_uuid": identity.get("run_uuid"),
+    }
+
+
+def verify_run_identity(
+    sent: Dict[str, Any],
+    result: Optional[Dict[str, Any]],
+    *,
+    instance: str,
+) -> Tuple[bool, Optional[str]]:
+    """核对服务端是否真的承接了本次请求的身份。
+
+    返回 ``(ok, reason)``：``ok`` 为 False 时 reason 说明是「没回读到身份」
+    还是「回读到但对不上」——两者都不得当成通过。当前 O/N 服务端会静默丢弃
+    未声明字段，因此默认口径（``require``）下**每一对都会判 failed**；这是
+    有意的：宁可实验跑不出数据，也不能让一份没有身份的报告混进可比集。
+    """
+    echoed = extract_run_identity(result)
+    if echoed is None:
+        return False, (
+            f"identity_not_echoed:{instance}"
+        )
+    mismatched = [k for k in sent if echoed.get(k) != sent.get(k)]
+    if mismatched:
+        return False, (
+            f"identity_mismatch:{instance}:{','.join(sorted(mismatched))}"
+        )
+    return True, None
+
+
+# ---------------------------------------------------------------------------
+# DAV-2285-2：凭据前置 + 报告归属回读核对
+# ---------------------------------------------------------------------------
+
+
+def missing_instance_tokens(
+    instances: Iterable[str],
+    token_for: Callable[[str], Optional[str]],
+) -> List[str]:
+    """返回「配了实例但没配 token」的实例名列表。
+
+    服务端 ``RequireUser`` 在拿不到 Authorization 时会退到本地默认账户
+    （``get_or_create_default_user``），请求照样 200、报告照样落库，只是归属
+    不是实验口径的固定账户。执行器必须在开跑前就挡住这种情况。
+    """
+    out: List[str] = []
+    for name in instances:
+        if not (token_for(name) or "").strip():
+            out.append(name)
+    return out
+
+
+def extract_report_account(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """从 ``/v1/jobs/{id}/result`` 的响应里取报告归属的 ``user_id``。
+
+    ``result`` 是 ``/result`` 端点的整个响应体。归属落在落库报告的
+    ``user_id`` 上（``ReportDB.user_id``），而 job result 端点不回显它，
+    所以优先从 ``result`` 顶层找，找不到再看 ``result_data`` 内的同名键；
+    都取不到 → ``None``（调用方按「不可核对」处理，不得默认放行）。
+    """
+    if not isinstance(result, dict):
+        return None
+    for source in (result, result.get("result")):
+        if isinstance(source, dict):
+            value = source.get("user_id")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def verify_report_account(
+    observed: Optional[str],
+    expected: str,
+    *,
+    instance: str,
+    job_id: Optional[str],
+) -> Tuple[bool, Optional[str]]:
+    """核对单份报告是否归属固定账户。取不到归属同样判不通过。"""
+    if not observed:
+        return False, f"{PREFLIGHT_ACCOUNT_UNAVAILABLE}:{instance}:{job_id or '-'}"
+    if observed != expected:
+        return False, f"{PREFLIGHT_ACCOUNT_MISMATCH}:{instance}:{job_id or '-'}:{observed}"
+    return True, None
+
+
+# ---------------------------------------------------------------------------
+# DAV-2285-3：轮询遇连接中断 → 重新查询服务端终态
+# ---------------------------------------------------------------------------
+
+
+def _backoff_delay(attempt_index: int) -> float:
+    """按尝试序号取退避秒数，超出表尾就用最后一档。"""
+    table = POLL_RECONNECT_BACKOFF_SECONDS
+    if attempt_index < 0:
+        attempt_index = 0
+    return float(table[min(attempt_index, len(table) - 1)])
+
+
 def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tuple[
     str, Optional[str], List[str], str
 ]:
@@ -691,10 +895,18 @@ def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tupl
     request_failures: List[str] = []
     quota = False
     unverified: List[str] = []
+    gates: List[str] = []
     for name in pair.instances:
         info = per_instance.get(name)
         if info is None:
             request_failures.append(f"{name}:missing")
+            continue
+        # DAV-2285：凭据 / 身份类门禁优先于一切模型核对。不配 token 会退到
+        # 本地默认账户、身份没被服务端承接都属于「这台实例的这次运行不可采信」，
+        # 补跑也不会变好 → 直接 failed，不得退回 voided 走补跑额度。
+        gate_reason = info.get("gate_reason")
+        if gate_reason:
+            gates.append(f"{name}:{gate_reason}")
             continue
         bucket = info.get("error_bucket") or "none"
         if bucket != "none":
@@ -711,6 +923,10 @@ def verify_pair(pair: PairSpec, per_instance: Dict[str, Dict[str, Any]]) -> Tupl
         for m in models:
             if m not in observed:
                 observed.append(m)
+
+    # 凭据 / 身份门禁不通过：请求可能根本成功，只是这次运行不可采信。
+    if gates:
+        return "failed", f"guard_failed:{';'.join(gates)}", observed, "guard_failed"
 
     # 请求本身失败（超时、5xx、配额……）优先于核对结论：补跑也不会变好。
     if request_failures:
@@ -889,6 +1105,14 @@ class ExperimentExecutor:
         # 主干守卫：run() 开跑前必须先核过 HEAD；由 main() 用 verify_trunk_head 填。
         # None = 未配置守卫（离线/测试可直接调 run），非 None = 命中即拒绝运行。
         trunk_guard: Optional[Tuple[Optional[str], str]] = None,
+        # DAV-2285-1：require = 回读核对身份，不通过即 failed（默认）；
+        # off = 只下发不核对（供先跑通链路、尚未接身份回写的服务端）。
+        run_identity_policy: str = "require",
+        # DAV-2285-2：报告归属要核对的固定账户 user_id；None = 不核对归属
+        # （此时仍强制要求每个实例配 token，见 ``assert_tokens_present``）。
+        expect_account: Optional[str] = None,
+        # DAV-2285-3：轮询遇连接中断时的重查次数上限。
+        poll_reconnect_attempts: int = POLL_RECONNECT_MAX_ATTEMPTS,
         now: Callable[[], datetime] = None,
         sleep: Callable[[float], None] = time.sleep,
         poll_interval: float = 5.0,
@@ -902,6 +1126,9 @@ class ExperimentExecutor:
         )
         self.config = config or StopConfig()
         self.trunk_guard = trunk_guard
+        self.run_identity_policy = run_identity_policy
+        self.expect_account = expect_account
+        self.poll_reconnect_attempts = int(poll_reconnect_attempts)
         self.now = now or (lambda: datetime.now(CN_TZ))
         self.sleep = sleep
         self.poll_interval = poll_interval
@@ -978,10 +1205,19 @@ class ExperimentExecutor:
         transport = self.transport(name)
         base = self.instances[name].rstrip("/")
         headers = self.headers(name)
+        attempt_no = self.ledger.pair_state(pair.pair_id).attempts + 1
+        identity = build_run_identity(
+            pair_id=pair.pair_id,
+            batch_index=record.batch_index,
+            instance=name,
+            attempt=attempt_no,
+        )
         body = {
             "symbol": pair.symbol,
             "trade_date": pair.trade_date,
             "horizons": list(pair.horizons),
+            # DAV-2285-1：每次请求都带实验运行身份，服务端一旦支持即直接承接。
+            RUN_IDENTITY_KEY: identity,
         }
         if pair.overrides():
             body["config_overrides"] = pair.overrides()
@@ -997,6 +1233,10 @@ class ExperimentExecutor:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+            "run_identity": identity,
+            "run_identity_confirmed": False,
+            "poll_reconnects": 0,
+            "gate_reason": None,
         }
 
         code, payload = self._call(
@@ -1018,21 +1258,35 @@ class ExperimentExecutor:
         info["job_id"] = job_id
         started = time.monotonic()
         deadline = started + self.job_timeout
+        # DAV-2285-3：轮询遇连接中断不直接判失败——job 可能已在服务端跑完，
+        # 只是这一次查询没送达。按退避重新查服务端终态，重查耗尽才记失败。
+        poll_disconnects = 0
+        job: Any = None
+        status: Optional[str] = None
         while True:
-            code, job = self._call(
+            code, polled = self._call(
                 transport, "GET", f"{base}/v1/jobs/{job_id}", headers, None, record
             )
             if code == 0:
-                info["error"] = job
-                info["error_bucket"] = classify_error(job)
-                info["status"] = "status_failed"
+                if poll_disconnects < self.poll_reconnect_attempts:
+                    delay = _backoff_delay(poll_disconnects)
+                    poll_disconnects += 1
+                    info["poll_reconnects"] = poll_disconnects
+                    info["last_poll_error"] = str(polled)
+                    self.sleep(delay)
+                    continue
+                info["error"] = (
+                    f"job {job_id} 轮询连接中断 {poll_disconnects} 次后仍拿不到服务端状态：{polled}"
+                )
+                info["error_bucket"] = classify_error(str(polled)) if polled else "connection"
+                info["status"] = "status_unreachable"
                 return info
             # 非 200（含 404/401/5xx）必须立刻按错误处理：否则 job.get("status")
             # 取不到终态，循环只会挂到 job_timeout（默认 7200s）才记 timeout，
             # 把一次瞬时 5xx 误记成超时，且停批四条件迟迟判不了。
-            if code != 200 or not isinstance(job, dict):
-                detail = job.get("detail") if isinstance(job, dict) else job
-                info["error"] = str(detail if detail is not None else job)
+            if code != 200 or not isinstance(polled, dict):
+                detail = polled.get("detail") if isinstance(polled, dict) else polled
+                info["error"] = str(detail if detail is not None else polled)
                 # 200 但响应体不是 dict（代理层畸形响应）没有可归类的错误，
                 # 显式记成 malformed_response，不能落到 "none"——否则这一对
                 # 会被当成「请求成功但无法核对」而误判成作废。
@@ -1043,6 +1297,7 @@ class ExperimentExecutor:
                 )
                 info["status"] = "status_failed"
                 return info
+            job = polled
             status = job.get("status")
             if status in ("completed", "failed"):
                 break
@@ -1074,6 +1329,34 @@ class ExperimentExecutor:
 
         # /v1/jobs/{id}/result returns {"result": <result_data>, ...}
         payload_result = result.get("result") if isinstance(result, dict) else None
+
+        # DAV-2285-1：回读核对服务端是否真的承接了本次身份。当前 O/N 服务端会
+        # 静默丢弃未声明字段 → 这里判不通过。默认 require（fail-closed）：宁可
+        # 跑不出数据，也不能让一份没身份的报告进可比集。
+        if self.run_identity_policy == "require":
+            ok, reason = verify_run_identity(
+                identity, payload_result, instance=name
+            )
+            info["run_identity_confirmed"] = ok
+            if not ok:
+                info["gate_reason"] = reason
+                info["status"] = "run_identity_unconfirmed"
+                return info
+
+        # DAV-2285-2：回读报告归属，确认它确实落在固定账户名下。
+        # 无论核不核对都把观测值记下来（关核对时也有审计价值）。
+        observed_account = extract_report_account(result)
+        info["report_account"] = observed_account
+        if self.expect_account:
+            ok, reason = verify_report_account(
+                observed_account, self.expect_account,
+                instance=name, job_id=job_id,
+            )
+            if not ok:
+                info["gate_reason"] = reason
+                info["status"] = "account_unverified"
+                return info
+
         models, missing = flatten_served_models(payload_result)
         info["models"] = models
         info["model_missing"] = missing
@@ -1146,6 +1429,11 @@ class ExperimentExecutor:
         for rec in self._last_batch_records:
             if rec.error_bucket == "quota_or_rate_limit":
                 return STOP_QUOTA, f"{rec.pair_id} {rec.void_reason}"
+        # DAV-2285：凭据 / 身份门禁属于系统性失败（改配置或服务端变更才能解除），
+        # 不是这一对的偶发波动。继续跑只会把每一对都烧成 failed。
+        for rec in self._last_batch_records:
+            if rec.error_bucket == "guard_failed":
+                return STOP_RUN_GUARD, f"{rec.pair_id} {rec.void_reason}"
         if self._non_frozen_seen:
             return STOP_NON_FROZEN_MODEL, f"{self._non_frozen_seen[0][0]} {self._non_frozen_seen[0][1]}"
         # 失败率是停批项 → 必须在**对**的粒度上判。只数「已发起提交」的对会
@@ -1168,12 +1456,27 @@ class ExperimentExecutor:
             )
         return None
 
+    # -- 凭据前置（DAV-2285-2）-------------------------------------------
+    def missing_tokens(self) -> List[str]:
+        """配了实例却没配 token 的实例名。``run()`` 开跑前必查。"""
+        return missing_instance_tokens(self.instances.keys(), self.token_for)
+
     # -- 主循环 -------------------------------------------------------------
     def run(self, manifest: Manifest) -> RunReport:
         if self.trunk_guard is not None:
             code, detail = self.trunk_guard
             if code:
                 raise TrunkGuardError(code, detail)
+        # DAV-2285-2：没给某个实例传 --token 就拒绝启动，一个请求都不发。
+        # 服务端拿不到 Authorization 时会退到本地默认账户，请求照样成功，
+        # 但报告不属固定账户——这类串号必须在开跑前就挡住。
+        missing = self.missing_tokens()
+        if missing:
+            raise TokenPreflightError(
+                PREFLIGHT_TOKEN_MISSING,
+                "以下实例未配置 --token，拒绝启动：" + ", ".join(sorted(missing))
+                + "（不配 token 时服务端会退到本地默认账户，报告不属固定账户）",
+            )
         report = RunReport(
             manifest=manifest.name,
             started_at=self.now().isoformat(timespec="seconds"),
@@ -1227,9 +1530,20 @@ class ExperimentExecutor:
                 # 停批条件先判：命中就不再消耗配额补跑——配额/预算类错误下
                 # 补跑只会把停批往前推，非冻结模型下补跑也无意义。
                 stop = self.check_stop(outcomes, batch_requests, batch_touched)
-                if record.outcome == "voided" and stop is None:
-                    # 作废的对补跑 1 次；补跑仍不过就定终态，不无限重试。
-                    if self.ledger.pair_state(pair.pair_id).attempts <= self.config.pair_retries:
+                # DAV-2285-4：补跑对「作废」与「请求本身失败」两类都生效。
+                # 原先只挂在 voided 分支，--pair-retries 对已判 failed 的对完全
+                # 不起作用（server_error / timeout / 身份归属门禁都不消耗那次
+                # 机会）。配额这类停批条件下仍不补跑——重试无意义且白烧额度。
+                # 另：原先这是单个 ``if``，--pair-retries > 1 时第二次补跑永远
+                # 不发生（声明的次数是假的），改成按剩余额度循环。
+                retryable = record.outcome == "failed" and record.error_bucket != (
+                    "quota_or_rate_limit"
+                )
+                if record.outcome == "voided" or retryable:
+                    while stop is None and (
+                        self.ledger.pair_state(pair.pair_id).attempts
+                        <= self.config.pair_retries
+                    ):
                         rerun = self.run_pair(pair, bi)
                         self._last_batch_records.append(rerun)
                         batch_requests += rerun.analysis_requests
@@ -1243,6 +1557,9 @@ class ExperimentExecutor:
                             report.pairs_failed += 1
                         self._note_non_frozen(manifest, pair, rerun)
                         stop = self.check_stop(outcomes, batch_requests, batch_touched)
+                        # 补跑已转 ok 就不再消耗额度
+                        if rerun.outcome == "ok":
+                            break
                 self._note_non_frozen(manifest, pair, record)
                 # 失败率只按「每个对一条」计：作废对补跑后按补跑结果定终态，
                 # 首跑与补跑各计一次会把分母翻倍。
@@ -1331,7 +1648,20 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--total-request-cap", type=int, default=DEFAULT_TOTAL_REQUEST_CAP)
     run.add_argument("--batch-request-cap", type=int, default=None)
     run.add_argument("--fail-rate-threshold", type=float, default=DEFAULT_FAIL_RATE_THRESHOLD)
-    run.add_argument("--pair-retries", type=int, default=DEFAULT_PAIR_RETRIES)
+    run.add_argument("--pair-retries", type=int, default=DEFAULT_PAIR_RETRIES,
+                     help="作废 / 请求失败的对各自允许的补跑次数（默认 1）")
+    run.add_argument("--expect-account", default=None,
+                     help="固定账户 user_id：每份报告回读 user_id 核对归属，"
+                          "不符即该对作 failed（不配 --token 时服务端会退到本地"
+                          "默认账户，这里就是防串号的那一道）")
+    run.add_argument("--run-identity-policy", choices=["require", "off"],
+                     default="require",
+                     help="experiment_run_identity 回读核对：require=服务端未承接"
+                          "即该对 failed（默认 fail-closed）；off=只下发不核对")
+    run.add_argument("--poll-reconnect-attempts", type=int,
+                     default=POLL_RECONNECT_MAX_ATTEMPTS,
+                     help="轮询遇连接中断时重新查询服务端终态的次数上限"
+                          f"（默认 {POLL_RECONNECT_MAX_ATTEMPTS}）")
     run.add_argument("--blackout-policy", choices=["wait", "stop"], default="wait")
     run.add_argument("--daily-gate-policy", choices=["wait", "stop"], default="wait",
                      help="每日一批闸（交易日 19:50 后）未开时的行为：wait=睡到开闸，"
@@ -1442,6 +1772,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     instances = _instances_from_args(args.instance)
 
     tokens = _tokens_from_args(args.token)
+    # DAV-2285-2：先做凭据前置（不取样、不发任何请求），漏传 --token 直接拒启。
+    missing_tokens = missing_instance_tokens(instances.keys(), lambda n: tokens.get(n))
+    if missing_tokens:
+        detail = (
+            "以下实例未配置 --token，拒绝启动：" + ", ".join(sorted(missing_tokens))
+            + "（不配 token 时服务端 RequireUser 会退到本地默认账户，"
+              "报告不属固定账户）"
+        )
+        print(f"[token-preflight] {PREFLIGHT_TOKEN_MISSING}: {detail}", file=sys.stderr)
+        raise SystemExit(f"[{PREFLIGHT_TOKEN_MISSING}] 凭据前置拒绝执行：{detail}")
     trunk_guard = None
     if args.batch_spec:
         specs = load_batch_specs(Path(args.batch_spec), seed_base=args.sampler_seed_base)
@@ -1481,6 +1821,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             daily_gate_policy=args.daily_gate_policy,
         ),
         trunk_guard=trunk_guard,
+        run_identity_policy=getattr(args, "run_identity_policy", "require"),
+        expect_account=getattr(args, "expect_account", None),
+        poll_reconnect_attempts=getattr(args, "poll_reconnect_attempts",
+                                        POLL_RECONNECT_MAX_ATTEMPTS),
         poll_interval=args.poll_interval,
         job_timeout=args.job_timeout,
     )

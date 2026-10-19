@@ -22,7 +22,11 @@ if str(ROOT) not in sys.path:
 from scripts.phase2.experiment_executor import (  # noqa: E402
     CN_TZ,
     BatchSpec,
+    TokenPreflightError,
+    build_run_identity,
     daily_batch_gate_open,
+    extract_report_account,
+    extract_run_identity,
     fetch_batch_pairs,
     load_batch_specs,
     ExperimentExecutor,
@@ -30,18 +34,29 @@ from scripts.phase2.experiment_executor import (  # noqa: E402
     Ledger,
     Manifest,
     PairSpec,
+    PREFLIGHT_ACCOUNT_MISMATCH,
+    PREFLIGHT_ACCOUNT_UNAVAILABLE,
+    PREFLIGHT_TOKEN_MISSING,
+    RUN_IDENTITY_KEY,
     StopConfig,
     TrunkGuardError,
     blackout_active,
     classify_error,
     flatten_served_models,
+    missing_instance_tokens,
     resolve_trunk_head,
     verify_pair,
+    verify_report_account,
+    verify_run_identity,
     verify_trunk_head,
 )
 
 EXPECTED_MODEL = "deepseek-v3.2-exp-frozen"
 FROZEN = (EXPECTED_MODEL,)
+
+# DAV-2285：固定账户。执行器开跑前要求每个实例配 token（否则服务端退到本地
+# 默认账户），拿到结果后还要回读报告 user_id 核对归属。
+FIXED_ACCOUNT = "429163f7-50b6-4982-8bdf-96ae99506843"
 
 EXECUTOR_PATH = ROOT / "scripts" / "phase2" / "experiment_executor.py"
 
@@ -66,6 +81,9 @@ class StubServer:
         self.calls = []          # [(instance, method, url)]
         self.parallel = []       # 交错轨迹：每条是 (instance, 动作)
         self._job_seq = 0
+        # DAV-2285：桩默认模拟「服务端已承接身份、报告落在固定账户」。
+        self.echo_identity = True
+        self.report_account = FIXED_ACCOUNT
 
     # -- transport 适配 ----------------------------------------------------
     def transport(self) -> HttpTransport:
@@ -93,27 +111,34 @@ class StubServer:
         if path.startswith("/v1/jobs/") and path.endswith("/result"):
             job_id = path.split("/")[3]
             spec = self._store.get(job_id, {})
+            meta = self._store_meta.get(job_id) or {}
             self.parallel.append((self._name_of(job_id), f"result:{job_id}"))
-            # 形状对齐真实 /v1/jobs/{id}/result：result_data 藏在 result 下
+            # 形状对齐真实 /v1/jobs/{id}/result：result_data 藏在 result 下。
+            # DAV-2285：服务端承接身份 + 报告归属固定账户。``echo_identity=False``
+            # 的桩用来复现「服务端静默丢弃未声明字段」那一侧。
+            result_data = {
+                "served_models": {
+                    "call_count": 3,
+                    "by_role": (
+                        {} if spec.get("missing")
+                        else {"bull_researcher": [spec.get("model")]}
+                    ),
+                    "served_model_missing": 3 if spec.get("missing") else 0,
+                },
+                "usage_summary": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 200,
+                    "total_tokens": 1200,
+                },
+            }
+            if self.echo_identity and isinstance(meta.get(RUN_IDENTITY_KEY), dict):
+                result_data[RUN_IDENTITY_KEY] = meta[RUN_IDENTITY_KEY]
             return 200, {
                 "job_id": job_id,
                 "status": "completed",
                 "decision": None,
-                "result": {
-                    "served_models": {
-                        "call_count": 3,
-                        "by_role": (
-                            {} if spec.get("missing")
-                            else {"bull_researcher": [spec.get("model")]}
-                        ),
-                        "served_model_missing": 3 if spec.get("missing") else 0,
-                    },
-                    "usage_summary": {
-                        "prompt_tokens": 1000,
-                        "completion_tokens": 200,
-                        "total_tokens": 1200,
-                    },
-                },
+                "user_id": self.report_account,
+                "result": result_data,
                 "finished_at": "2026-10-13T09:00:00+08:00",
             }
         if path.startswith("/v1/jobs/"):
@@ -162,14 +187,22 @@ def _manifest(pairs_spec, *, frozen=FROZEN, batches=None) -> Manifest:
     })
 
 
-def _executor(tmp_path, servers: dict, *, now=None, **cfg):
+def _executor(tmp_path, servers: dict, *, now=None, tokens=None,
+              expect_account="__default__", **cfg):
     ledger = Ledger(tmp_path / "state", now=now or (lambda: datetime(2026, 10, 13, 9, 0, tzinfo=CN_TZ)))
     cfg.setdefault("pair_retries", 1)
+    # DAV-2285-2：不配 token 执行器直接拒启，因此这里的默认 token 是必填项；
+    # ``tokens`` 传空 dict 的用例就是在复验「没传 token 必须拒启」。
+    # ``expect_account`` 用哨兵区分「不传（默认核对固定账户）」与显式 None
+    # （显式关掉归属核对）。
+    account = FIXED_ACCOUNT if expect_account == "__default__" else expect_account
     return ExperimentExecutor(
         instances={name: srv.base_url for name, srv in servers.items()},
         ledger=ledger,
+        token_for=(lambda name: "stub-token") if tokens is None else tokens.get,
         transport_factory=lambda name, _url: servers[name].transport(),
         config=StopConfig(**cfg),
+        expect_account=account,
         now=now or (lambda: datetime(2026, 10, 13, 9, 0, tzinfo=CN_TZ)),
         sleep=lambda _s: None,
         poll_interval=0,
@@ -664,6 +697,7 @@ def test_unreachable_instance_fails_pair_without_crashing(tmp_path):
     ex = ExperimentExecutor(
         instances={"O": "http://dead:1", "N": "http://dead:2"},
         ledger=ledger,
+        token_for=lambda _name: "stub-token",
         transport_factory=lambda name, url: DeadTransport(),
         config=StopConfig(pair_retries=0),
         now=lambda: datetime(2026, 10, 13, 9, 0, tzinfo=CN_TZ),
@@ -728,6 +762,7 @@ def _executor_with_transport(tmp_path, transports, **cfg):
     ex = ExperimentExecutor(
         instances={name: f"http://stub:{i}" for i, name in enumerate(transports)},
         ledger=ledger,
+        token_for=lambda _name: "stub-token",
         transport_factory=lambda name, url: transports[name],
         config=StopConfig(**cfg),
         now=lambda: datetime(2026, 10, 13, 9, 0, tzinfo=CN_TZ),
@@ -779,7 +814,8 @@ def test_poll_still_waits_while_job_is_running(tmp_path):
         def handle(self, instance, method, path, body):
             if path == "/v1/analyze":
                 self._store["O-job-1"] = {"status": "completed", "model": EXPECTED_MODEL}
-                self._store_meta["O-job-1"] = {"symbol": "600519.SH"}
+                # 身份得原样带进 meta，否则 /result 阶段回读不到 → 门禁拦下
+                self._store_meta["O-job-1"] = dict(body or {})
                 return 200, {"job_id": "O-job-1", "status": "pending"}
             return super().handle(instance, method, path, body)
 
@@ -1304,6 +1340,7 @@ def test_daily_gate_policy_is_a_real_cli_switch(tmp_path):
         rc = mod.main([
             "run", "--manifest", str(man), "--state-dir", str(tmp_path / "st"),
             "--instance", "O=http://127.0.0.1:8021", "--instance", "N=http://127.0.0.1:8022",
+            "--token", "O=stub-token", "--token", "N=stub-token",
             "--expected-model", EXPECTED_MODEL, "--daily-gate-policy", "stop",
             "--blackout-policy", "stop",
         ])
@@ -1364,6 +1401,7 @@ def test_real_cli_snapshot_whitelist_survives_script_path(tmp_path):
         [sys.executable, str(EXECUTOR_PATH), "run",
          "--manifest", str(man),
          "--instance", "O=http://127.0.0.1:9", "--instance", "N=http://127.0.0.1:9",
+         "--token", "O=stub-token", "--token", "N=stub-token",
          "--state-dir", str(tmp_path / "state"),
          "--expected-model", EXPECTED_MODEL,
          "--daily-gate-policy", "stop", "--blackout-policy", "stop",
@@ -1386,6 +1424,7 @@ def test_real_cli_rejects_bad_snapshot_whitelist(tmp_path):
         [sys.executable, str(EXECUTOR_PATH), "run",
          "--manifest", str(man),
          "--instance", "O=http://127.0.0.1:9",
+         "--token", "O=stub-token",
          "--state-dir", str(tmp_path / "state"),
          "--expected-model", EXPECTED_MODEL,
          "--snapshot-whitelist", str(tmp_path / "nope.json")],
@@ -1523,6 +1562,7 @@ def test_run_cli_refuses_when_trunk_commit_differs_from_real_head(tmp_path, monk
     )
     with pytest.raises(SystemExit) as ei:
         mod.main(["run", "--batch-spec", str(spec), "--instance", "O=http://127.0.0.1:9",
+                  "--token", "O=stub-token",
                   "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL])
     assert "主干守卫拒绝执行" in str(ei.value)
     assert not (tmp_path / "st" / "run_report.json").exists()
@@ -1541,6 +1581,7 @@ def test_run_cli_proceeds_when_trunk_commit_matches_real_head(tmp_path, monkeypa
     )
     rc = mod.main(["run", "--batch-spec", str(spec), "--instance", "O=http://127.0.0.1:9",
                    "--instance", "N=http://127.0.0.1:9",
+                   "--token", "O=stub-token", "--token", "N=stub-token",
                    "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL,
                    "--daily-gate-policy", "stop", "--blackout-policy", "stop",
                    "--poll-interval", "0", "--job-timeout", "1", "--pair-retries", "0"])
@@ -1553,3 +1594,527 @@ def test_real_repo_head_resolves_to_a_sha():
     """resolve_trunk_head 在真仓里必须能拿到 sha（否则守卫永远处于 unresolved）。"""
     head = resolve_trunk_head()
     assert head and len(head) == 40 and set(head) <= set("0123456789abcdef")
+
+
+# ---------------------------------------------------------------------------
+# 13. DAV-2285-1：每次请求都带 experiment_run_identity，且必须回读核对
+# ---------------------------------------------------------------------------
+
+
+def test_run_identity_is_sent_on_every_analyze_request(tmp_path):
+    """身份随每一次 POST 下发（不只是首跑，补跑也必须带）。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers)
+    ex.run(_manifest([_pair("p1")]))
+    # 直接从桩存的 meta 读（提交体原样保留）
+    assert StubServer._store_meta
+    for job_id, meta in StubServer._store_meta.items():
+        identity = meta[RUN_IDENTITY_KEY]
+        assert identity["pair_id"] == "p1"
+        assert identity["batch_index"] == 0
+        assert identity["replicate"] == 1
+        assert identity["run_uuid"] and len(identity["run_uuid"]) == 32
+        assert identity["arm"] in {"O", "N"}
+    assert len(StubServer._store_meta) == 2      # O + N 各一次
+
+
+def test_run_identity_differs_per_instance_and_per_attempt(tmp_path):
+    """两臂身份必须能区分（arm 不同），每次请求换新 uuid，补跑递增 replicate。
+
+    构造：O 报非冻结模型 → 整对作废（voided）→ 用掉 --pair-retries 补跑一次。
+    """
+    servers = _two_servers({"O": {"default": {"status": "completed", "model": "rogue"}}})
+    ex = _executor(tmp_path, servers, pair_retries=1)
+    ex.run(_manifest([_pair("p1")]))
+    by_job = {j: m[RUN_IDENTITY_KEY] for j, m in StubServer._store_meta.items()}
+    arms = {i["arm"] for i in by_job.values()}
+    assert arms == {"O", "N"}
+    uuids = {i["run_uuid"] for i in by_job.values()}
+    assert len(uuids) == len(by_job)          # 每次请求一个独立 uuid
+    # 首跑 replicate=1，补跑 replicate=2（每臂各一次）
+    reps = sorted(i["replicate"] for i in by_job.values())
+    assert reps == [1, 1, 2, 2]
+    # 身份仍能按臂 + 次序区分
+    o_runs = sorted(i["replicate"] for i in by_job.values() if i["arm"] == "O")
+    n_runs = sorted(i["replicate"] for i in by_job.values() if i["arm"] == "N")
+    assert o_runs == [1, 2] and n_runs == [1, 2]
+
+
+def test_run_identity_not_echoed_fails_closed(tmp_path):
+    """服务端静默丢弃身份（当前 O/N 的真实行为）→ 该对 failed，不得进可比集。
+
+    且立即停批：身份门禁是**系统性**问题，不重试、不把后续对也烧掉。
+    """
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.echo_identity = False
+    ex = _executor(tmp_path, servers)
+    report = ex.run(_manifest([_pair("p1"), _pair("p2", symbol="600520.SH")]))
+    assert report.pairs_ok == 0
+    assert report.pairs_failed == 1
+    assert report.pairs_rerun == 0                       # 门禁失败不补跑
+    assert report.stop_reason == "run_guard_failed"
+    state = ex.ledger.pair_state("p1")
+    assert state.status == "failed"
+    assert "guard_failed" in state.reason
+    assert "identity_not_echoed" in state.reason
+    # 第二对未被发起：5 对全烧的浪费被堵住
+    assert ex.ledger.pair_state("p2").status == "pending"
+    assert ex.ledger.total_analysis_requests() == 2      # 只有首对的 O + N
+    rec = json.loads((tmp_path / "state" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert rec["runs"][0]["status"] == "run_identity_unconfirmed"
+    assert rec["runs"][0]["run_identity_confirmed"] is False
+    # 身份仍然照实记在账里，供事后判断「发了但没被承接」
+    assert rec["runs"][0]["run_identity"]["pair_id"] == "p1"
+
+
+def test_run_guard_stop_is_persistent_across_resume(tmp_path):
+    """身份门禁停批需人工/服务端变更才能解除 → 必须粘住，不得续跑就清掉。"""
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.echo_identity = False
+    ex = _executor(tmp_path, servers)
+    ex.run(_manifest([_pair("p1")]))
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["stop_reason"] == "run_guard_failed"
+
+    ex2 = _executor(tmp_path, _two_servers())
+    report2 = ex2.run(_manifest([_pair("p1"), _pair("p2", symbol="600520.SH")]))
+    assert report2.pairs_run == 0                       # 粘住，一个请求都不发
+
+
+def test_run_identity_mismatch_is_detected(tmp_path):
+    """回读到身份但内容对不上 → 判不通过（防串号/防报告错配）。"""
+    class WrongEcho(StubServer):
+        def handle(self, instance, method, path, body):
+            code, payload = super().handle(instance, method, path, body)
+            if path.endswith("/result") and isinstance(payload, dict):
+                rd = payload.get("result") or {}
+                if isinstance(rd.get(RUN_IDENTITY_KEY), dict):
+                    rd[RUN_IDENTITY_KEY] = dict(rd[RUN_IDENTITY_KEY], pair_id="OTHER")
+            return code, payload
+
+    StubServer._store = {}
+    StubServer._store_meta = {}
+    servers = {"O": WrongEcho("http://stub:8021", {}, name="O")}
+    ex, _ = _executor_with_transport(tmp_path, {"O": servers["O"].transport()})
+    ex.sleep = lambda _s: None
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+    assert record.outcome == "failed"
+    assert "identity_mismatch" in record.void_reason
+    assert "pair_id" in record.void_reason
+
+
+def test_run_identity_policy_off_still_sends_but_skips_check(tmp_path):
+    """off：只下发不核对（供先跑通链路）。仍必须在请求体里。"""
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.echo_identity = False
+    ex = _executor(tmp_path, servers)
+    ex.run_identity_policy = "off"
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_ok == 1                       # 不核对 → 放行
+    assert all(
+        RUN_IDENTITY_KEY in meta for meta in StubServer._store_meta.values()
+    )                                                # 但确实发了
+
+
+def test_verify_run_identity_unit():
+    sent = build_run_identity(pair_id="b01-600519.SH", batch_index=1,
+                              instance="O", attempt=1)
+    assert sent["experiment_id"] == "b01"
+    assert sent["pair_id"] == "b01-600519.SH"
+    assert sent["batch_index"] == 1
+    assert sent["arm"] == "O" and sent["replicate"] == 1
+
+    ok, reason = verify_run_identity(sent, {RUN_IDENTITY_KEY: dict(sent)}, instance="O")
+    assert ok and reason is None
+
+    # 服务端额外附加 thread_id/checkpointer 不影响比对（只比执行器下发的键）
+    echoed = dict(sent, thread_id="t:1", checkpointer="InMemorySaver@1")
+    ok, _ = verify_run_identity(sent, {RUN_IDENTITY_KEY: echoed}, instance="O")
+    assert ok
+
+    ok, reason = verify_run_identity(sent, {"other": {}}, instance="O")
+    assert not ok and reason == "identity_not_echoed:O"
+    ok, reason = verify_run_identity(sent, None, instance="O")
+    assert not ok and reason == "identity_not_echoed:O"
+    ok, reason = verify_run_identity(
+        sent, {RUN_IDENTITY_KEY: dict(sent, run_uuid="deadbeef")}, instance="O"
+    )
+    assert not ok and "run_uuid" in reason
+
+
+def test_build_run_identity_uses_fresh_uuid_each_call():
+    a = build_run_identity(pair_id="p1", batch_index=0, instance="O", attempt=1)
+    b = build_run_identity(pair_id="p1", batch_index=0, instance="O", attempt=1)
+    assert a["run_uuid"] != b["run_uuid"]
+
+
+# ---------------------------------------------------------------------------
+# 14. DAV-2285-2：没配 --token 拒启 + 回读核对报告归属
+# ---------------------------------------------------------------------------
+
+
+def test_run_refuses_to_start_without_token(tmp_path):
+    """未给实例配 token → 拒绝启动，一个请求都不发。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, tokens={})     # 完全不配 token
+    with pytest.raises(TokenPreflightError) as ei:
+        ex.run(_manifest([_pair("p1")]))
+    assert ei.value.reason_code == PREFLIGHT_TOKEN_MISSING
+    assert "O" in ei.value.detail and "N" in ei.value.detail
+    assert servers["O"].calls == [] and servers["N"].calls == []
+    assert ex.ledger.totals.get("analysis_requests", 0) == 0
+
+
+def test_run_refuses_when_only_one_instance_lacks_token(tmp_path):
+    """漏一个也不行：N 没配就整体拒启（半套凭据同样会串号）。"""
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, tokens={"O": "stub-token"})
+    with pytest.raises(TokenPreflightError) as ei:
+        ex.run(_manifest([_pair("p1")]))
+    assert ei.value.reason_code == PREFLIGHT_TOKEN_MISSING
+    assert ei.value.detail.startswith("以下实例未配置 --token")
+    assert "N" in ei.value.detail
+    assert servers["O"].calls == []
+
+
+def test_blank_token_counts_as_missing(tmp_path):
+    servers = _two_servers()
+    ex = _executor(tmp_path, servers, tokens={"O": "   ", "N": "stub-token"})
+    with pytest.raises(TokenPreflightError):
+        ex.run(_manifest([_pair("p1")]))
+
+
+def test_missing_instance_tokens_unit():
+    toks = {"O": "t", "N": "x"}
+    assert missing_instance_tokens(["O", "N"], lambda n: toks.get(n)) == []
+    assert missing_instance_tokens(["O", "N"], lambda n: None) == ["O", "N"]
+    assert missing_instance_tokens(["N"], lambda n: None) == ["N"]
+    assert missing_instance_tokens(["N"], lambda n: "  ") == ["N"]
+
+
+def test_report_attributed_to_another_account_fails_pair(tmp_path):
+    """回读 user_id 与固定账户不符 → 该对 failed（串号当场抓到）。"""
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.report_account = "some-other-user"
+    ex = _executor(tmp_path, servers, pair_retries=0)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_ok == 0
+    assert report.pairs_failed == 1
+    state = ex.ledger.pair_state("p1")
+    assert state.status == "failed"
+    assert PREFLIGHT_ACCOUNT_MISMATCH in state.reason
+    assert "some-other-user" in state.reason
+    rec = json.loads((tmp_path / "state" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert rec["runs"][0]["status"] == "account_unverified"
+    assert rec["runs"][0]["report_account"] == "some-other-user"
+
+
+def test_report_account_missing_fails_closed(tmp_path):
+    """回读不到 user_id → 同样不通过（不得默认放行）。"""
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.report_account = ""          # 桩不回显归属
+    ex = _executor(tmp_path, servers, pair_retries=0)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_failed == 1
+    state = ex.ledger.pair_state("p1")
+    assert PREFLIGHT_ACCOUNT_UNAVAILABLE in state.reason
+
+
+def test_account_check_can_be_disabled_but_token_still_required(tmp_path):
+    """``expect_account=None`` 只关掉归属核对，凭据前置仍然生效。"""
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.report_account = "whoever"
+    ex = _executor(tmp_path, servers, expect_account=None, pair_retries=0)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_ok == 1                     # 不核对归属 → 放行
+    with pytest.raises(TokenPreflightError):
+        _executor(tmp_path, servers, expect_account=None, tokens={}).run(
+            _manifest([_pair("p1")])
+        )
+
+
+def test_extract_report_account_and_verify_unit():
+    assert extract_report_account(None) is None
+    assert extract_report_account({}) is None
+    assert extract_report_account({"user_id": " u1 "}) == "u1"
+    # 也接受藏在 result_data 里的同一字段
+    assert extract_report_account({"result": {"user_id": "u2"}}) == "u2"
+    assert extract_report_account({"user_id": ""}) is None
+
+    ok, reason = verify_report_account(FIXED_ACCOUNT, FIXED_ACCOUNT,
+                                       instance="O", job_id="j1")
+    assert ok and reason is None
+    ok, reason = verify_report_account("other", FIXED_ACCOUNT, instance="N", job_id="j2")
+    assert not ok and reason.startswith(PREFLIGHT_ACCOUNT_MISMATCH)
+    assert "other" in reason and "j2" in reason
+    ok, reason = verify_report_account(None, FIXED_ACCOUNT, instance="O", job_id="j3")
+    assert not ok and reason.startswith(PREFLIGHT_ACCOUNT_UNAVAILABLE)
+
+
+def test_cli_refuses_to_start_without_token(tmp_path, monkeypatch):
+    """CLI 端到端：漏 --token 直接拒启，且不落 run_report.json。"""
+    import scripts.phase2.experiment_executor as mod
+    man = _write_cli_manifest(tmp_path)
+    monkeypatch.setattr(mod, "ExperimentExecutor",
+                        lambda *a, **k: pytest.fail("前置失败时不得建执行器"))
+    with pytest.raises(SystemExit) as ei:
+        mod.main(["run", "--manifest", str(man),
+                  "--instance", "O=http://127.0.0.1:9", "--instance", "N=http://127.0.0.1:9",
+                  "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL])
+    assert PREFLIGHT_TOKEN_MISSING in str(ei.value)
+    assert not (tmp_path / "st" / "run_report.json").exists()
+    # 且取样都没发生
+    monkeypatch.setattr(mod, "fetch_batch_pairs",
+                        lambda *a, **k: pytest.fail("前置失败时不得取样"))
+
+
+def test_cli_token_preflight_runs_before_sampling(tmp_path, monkeypatch):
+    """顺序门：凭据前置在取样之前（不配 token 时一个请求都不发）。"""
+    import scripts.phase2.experiment_executor as mod
+    spec = _batch_spec_file(tmp_path, trunk_commit=HEAD_A)
+    monkeypatch.setattr(mod, "resolve_trunk_head", lambda repo_root=None: HEAD_A)
+    monkeypatch.setattr(mod, "fetch_batch_pairs",
+                        lambda *a, **k: pytest.fail("不得取样"))
+    with pytest.raises(SystemExit) as ei:
+        mod.main(["run", "--batch-spec", str(spec), "--instance", "O=http://127.0.0.1:9",
+                  "--state-dir", str(tmp_path / "st"), "--expected-model", EXPECTED_MODEL])
+    assert PREFLIGHT_TOKEN_MISSING in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# 15. DAV-2285-3：轮询遇连接中断 → 重新查服务端终态，不直接判失败
+# ---------------------------------------------------------------------------
+
+
+class _FlakyPollTransport(HttpTransport):
+    """提交成功；轮询前 ``disconnects`` 次抛传输层异常，之后返回指定终态。"""
+
+    def __init__(self, *, disconnects: int, final_status: str = "completed",
+                 model: str = EXPECTED_MODEL):
+        super().__init__(session=None)
+        self.disconnects = disconnects
+        self.final_status = final_status
+        self.model = model
+        self.polls = 0
+        self.submitted_body = None
+        self.submitted_identity = None
+
+    def request(self, method, url, *, headers=None, json_body=None):
+        from urllib.parse import urlparse
+
+        path = urlparse(url).path
+        if path == "/v1/analyze":
+            self.submitted_body = json_body
+            self.submitted_identity = (json_body or {}).get(RUN_IDENTITY_KEY)
+            return 200, {"job_id": "j1", "status": "pending"}
+        if path.endswith("/result"):
+            return 200, {
+                "job_id": "j1", "status": "completed",
+                "user_id": FIXED_ACCOUNT,
+                "result": {
+                    RUN_IDENTITY_KEY: self.submitted_identity,
+                    "served_models": {"by_role": {"bull_researcher": [self.model]},
+                                      "served_model_missing": 0},
+                    "usage_summary": {"prompt_tokens": 1, "completion_tokens": 1,
+                                      "total_tokens": 2},
+                },
+            }
+        self.polls += 1
+        if self.polls <= self.disconnects:
+            raise ConnectionResetError(f"conn reset #{self.polls}")
+        status = self.final_status
+        return 200, {"job_id": "j1", "status": status,
+                     "error": None if status == "completed" else "boom"}
+
+
+def test_poll_connection_break_requeries_server_final_state(tmp_path):
+    """关键回归：轮询前两次连接中断，服务端其实已完成 → 不得直接判失败。
+
+    原行为：第一次 code==0 就 ``status_failed``，一对已跑完的分析被当成失败。
+    """
+    tr = _FlakyPollTransport(disconnects=2)
+    ex, ledger = _executor_with_transport(tmp_path, {"O": tr}, pair_retries=0)
+    ex.sleep = lambda _s: None
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+
+    assert record.outcome == "ok"
+    assert record.runs[0]["status"] == "completed"
+    assert record.runs[0]["poll_reconnects"] == 2
+    assert tr.polls == 3                     # 两次断 + 一次成功
+    assert "conn reset" in record.runs[0]["last_poll_error"]
+
+
+def test_poll_reconnect_still_fails_when_recovery_never_arrives(tmp_path):
+    """反侧守住：重查耗尽仍拿不到状态 → 记 failed，且如实记 connection 桶。"""
+    tr = _FlakyPollTransport(disconnects=99)
+    ex, ledger = _executor_with_transport(tmp_path, {"O": tr}, pair_retries=0)
+    ex.sleep = lambda _s: None
+    ex.poll_reconnect_attempts = 3
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+
+    assert record.outcome == "failed"
+    run = record.runs[0]
+    assert run["status"] == "status_unreachable"
+    assert run["error_bucket"] == "connection"
+    assert run["poll_reconnects"] == 3
+    assert "轮询连接中断" in run["error"]
+    # attempts=3 = 初次 + 3 次重查，共 4 次轮询尝试
+    assert tr.polls == 4
+
+
+def test_poll_reconnect_recovers_a_failed_server_status(tmp_path):
+    """重查拿回的是 failed 终态 → 照实按请求失败记（不得当 ok）。"""
+    tr = _FlakyPollTransport(disconnects=1, final_status="failed")
+    ex, ledger = _executor_with_transport(tmp_path, {"O": tr}, pair_retries=0)
+    ex.sleep = lambda _s: None
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+    assert record.outcome == "failed"
+    assert record.runs[0]["status"] == "failed"
+    assert record.runs[0]["poll_reconnects"] == 1
+
+
+def test_poll_reconnect_does_not_swallow_http_errors(tmp_path):
+    """只重查连接中断；4xx/5xx 仍按原口径立即失败（不重试）。"""
+    ex, _ = _executor_with_transport(tmp_path, {"O": _PollStatusTransport(503)})
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    record = ex.run_pair(pair, 0)
+    assert record.runs[0]["error_bucket"] == "server_error"
+    assert record.runs[0].get("poll_reconnects", 0) == 0
+    assert ex.transport("O").polls == 1
+
+
+def test_backoff_delay_is_bounded_and_monotone():
+    import scripts.phase2.experiment_executor as mod
+    from scripts.phase2.experiment_executor import _backoff_delay
+    d = [_backoff_delay(i) for i in range(8)]
+    assert d == sorted(d)
+    assert d[0] == 1.0 and d[-1] == max(mod.POLL_RECONNECT_BACKOFF_SECONDS)
+    assert _backoff_delay(-5) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# 16. DAV-2285-4：--pair-retries 对已判 failed 的对也生效
+# ---------------------------------------------------------------------------
+
+
+def test_pair_retries_actually_retries_a_failed_pair(tmp_path):
+    """🔴 关键回归：请求失败（server_error）的对原先根本不走补跑分支。
+
+    构造：N 首跑 5xx（failed），补跑时桩修好 → 终态 ok。原先 ``--pair-retries``
+    对 failed 的对是死开关，这条会红。
+    """
+    StubServer._store = {}
+    StubServer._store_meta = {}
+    calls = {"n": 0}
+
+    class FlakyN(StubServer):
+        def _behaviour(self, instance, body):
+            if instance != "N":
+                return {"status": "completed", "model": EXPECTED_MODEL}
+            calls["n"] += 1
+            if calls["n"] <= 1:
+                return {"status": "failed", "error": "upstream 502 boom"}
+            return {"status": "completed", "model": EXPECTED_MODEL}
+
+    servers = {
+        "O": StubServer("http://stub:8021", {}, name="O"),
+        "N": FlakyN("http://stub:8022", {}, name="N"),
+    }
+    ex = _executor(tmp_path, servers, pair_retries=1, min_fail_rate_samples=99)
+    report = ex.run(_manifest([_pair("p1")]))
+
+    assert report.pairs_rerun == 1, "failed 的对必须用掉 --pair-retries"
+    assert report.pairs_failed == 1                      # 首跑记一次
+    assert report.pairs_ok == 1                          # 补跑恢复
+    assert ex.ledger.pair_state("p1").status == "ok"
+    assert ex.ledger.pair_state("p1").attempts == 2
+
+
+def test_failed_pair_retry_is_capped_and_becomes_terminal(tmp_path):
+    """补跑仍失败 → 用满次数定终态，不再无限重试（失败率闸照常生效）。"""
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "502 boom"}}})
+    ex = _executor(tmp_path, servers, pair_retries=1, min_fail_rate_samples=99)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_rerun == 1
+    assert report.pairs_failed == 2                     # 首跑 + 补跑
+    assert ex.ledger.pair_state("p1").status == "failed"
+    assert ex.ledger.pair_state("p1").attempts == 2
+
+    # 续跑不再消耗请求（终态）
+    requests_before = ex.ledger.total_analysis_requests()
+    ex2 = _executor(tmp_path, servers, pair_retries=1, min_fail_rate_samples=99)
+    report2 = ex2.run(_manifest([_pair("p1")]))
+    assert report2.pairs_run == 0
+    assert report2.pairs_skipped_done == 1
+    assert ex2.ledger.total_analysis_requests() == requests_before
+
+
+def test_pair_retries_zero_keeps_failed_pair_single_attempt(tmp_path):
+    """--pair-retries 0 → 不补跑（显式关闭时必须真的关掉）。"""
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "502 boom"}}})
+    ex = _executor(tmp_path, servers, pair_retries=0, min_fail_rate_samples=99)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_rerun == 0
+    assert report.pairs_failed == 1
+    assert ex.ledger.pair_state("p1").attempts == 1
+
+
+def test_pair_retries_two_allows_two_retries(tmp_path):
+    """--pair-retries 2 → 最多补跑两次，首跑 + 2 = 3 次尝试。"""
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "502 boom"}}})
+    ex = _executor(tmp_path, servers, pair_retries=2, min_fail_rate_samples=99)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.pairs_rerun == 2
+    assert ex.ledger.pair_state("p1").attempts == 3
+    assert ex.ledger.pair_state("p1").status == "failed"
+
+
+def test_quota_failure_is_never_retried(tmp_path):
+    """反侧：配额类停批下不补跑（重试只会把停批往前推，且白烧额度）。"""
+    servers = _two_servers({"N": {"default": {"status": "failed", "error": "429 rate_limit"}}})
+    ex = _executor(tmp_path, servers, pair_retries=2)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.stop_reason == "quota_or_rate_limit"
+    assert report.pairs_rerun == 0
+    assert ex.ledger.pair_state("p1").attempts == 1
+
+
+def test_guard_failed_pair_does_not_burn_retry_budget(tmp_path):
+    """身份 / 归属门禁属系统性失败：停批而不是把补跑额度白花掉。
+
+    对照 DAV-2285-4：普通请求失败（server_error）会走补跑；门禁失败不会。
+    """
+    servers = _two_servers()
+    for srv in servers.values():
+        srv.report_account = "wrong-account"
+    ex = _executor(tmp_path, servers, pair_retries=1, min_fail_rate_samples=99)
+    report = ex.run(_manifest([_pair("p1")]))
+    assert report.stop_reason == "run_guard_failed"
+    assert report.pairs_rerun == 0
+    assert ex.ledger.pair_state("p1").attempts == 1
+    assert PREFLIGHT_ACCOUNT_MISMATCH in ex.ledger.pair_state("p1").reason
+
+
+def test_ledger_row_records_poll_reconnects_and_identity(tmp_path):
+    """新增字段必须真的落进 ledger.jsonl（供事后审计）。"""
+    tr = _FlakyPollTransport(disconnects=2)
+    ex, ledger = _executor_with_transport(tmp_path, {"O": tr}, pair_retries=0)
+    ex.sleep = lambda _s: None
+    pair = Manifest.from_dict({"pairs": [_pair("p1", instances=("O",))]}).pair_by_id("p1")
+    ex.run_pair(pair, 0)
+    rec = json.loads((tmp_path / "state" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    run = rec["runs"][0]
+    assert run["poll_reconnects"] == 2
+    assert run["run_identity"]["pair_id"] == "p1"
+    assert run["run_identity_confirmed"] is True
+    assert run["report_account"] == FIXED_ACCOUNT
