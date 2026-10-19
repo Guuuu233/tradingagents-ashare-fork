@@ -42,7 +42,11 @@ Explicit query days (DAV-2240 / 冻结计划 §2.4 W0):
   counters: a later query day only appends new cells, it never rewrites an
   earlier day's running state. Query days are rendered in the panel's own
   day shape (``YYYYMMDD`` vs ``YYYY-MM-DD`` auto-detected); panel day
-  strings are never rewritten.
+  strings are never rewritten. Every day value must be one of those two
+  shapes and the panel's grid must use ONE of them: a non-standard or
+  mixed-shape grid is rejected at the boundary / entry (DAV-2271), never
+  silently collapsed — a same-day double spelling used to walk that day
+  twice and emit two ``(signal_date, l1)`` rows.
 
 Window parameter W (calendar-day lookback):
   Only samples matured within the trailing W calendar days before T count.
@@ -122,6 +126,12 @@ def load_panel(chunks_dir: Path) -> pd.DataFrame:
     pending_due / data_missing / unexecutable / suspension stay out of the
     denominator entirely (they are not matured labels), matching the
     P1 D4 numerator/denominator convention.
+
+    The ``signal_date`` grid of the kept rows is shape-checked per partition
+    (DAV-2271 ②): a non-standard day raises here with the partition path and
+    sample values instead of a bare ``day_key`` ``ValueError`` from inside
+    the walk. Values are otherwise kept verbatim — no rewriting, no
+    normalisation (``build_base_panel`` is the caller that renders ISO).
     """
     parts = sorted(chunks_dir.glob("year=*/data.parquet"))
     if not parts:
@@ -132,6 +142,12 @@ def load_panel(chunks_dir: Path) -> pd.DataFrame:
         ok = df[(df["outcome_status"] == EVAL_OK) & df["universe_ok"]]
         ok = ok[ok["y_rel"].notna() & ok["actual_exit_date"].notna()
                 & (ok["actual_exit_date"].astype(str).str.len() == 8)]
+        # DAV-2271 ②: check the day grid where it is produced, so a damaged
+        # partition names itself and its sample values. Only rows that enter
+        # the panel are checked — a bad day on a row already excluded above
+        # cannot reach any emitted counter. (`mat` keeps its own documented
+        # tolerance; see `_check_day_values`.)
+        _check_day_values(ok["signal_date"], str(pq_path))
         frames.append(ok[["signal_date", "sw_l1_code",
                           "actual_exit_date", "y_rel"]])
         del df, ok
@@ -195,6 +211,71 @@ def shift_day(day: str, days: int) -> str:
     return t.strftime("%Y-%m-%d") if "-" in src else t.strftime("%Y%m%d")
 
 
+# DAV-2271: the two day shapes the pipeline produces. Both are matched with
+# `fullmatch`, so a hybrid like '2024-0102' — which `day_key` would accept by
+# stripping the dash — is rejected: a day grid is one of the two documented
+# presentations, never a third.
+_DAY_DIGITS = r"\d{8}"
+_DAY_DASHED = r"\d{4}-\d{2}-\d{2}"
+
+
+def _check_day_values(days: pd.Series, source: str) -> None:
+    """Every day value must be ``YYYYMMDD`` or ``YYYY-MM-DD`` (DAV-2271 ②).
+
+    ``day_key`` is the only day parser in the walk, so a non-standard
+    ``signal_date`` used to surface as its bare ``ValueError`` from deep
+    inside the 9M-row pipeline with no hint which partition is damaged. The
+    shape is checked at the boundaries instead — once per grid partition in
+    :func:`load_panel`, once on the assembled panel and on the raw
+    ``query_days`` in :func:`build_pit_base_rates` — and the error names the
+    source plus sample values.
+
+    Deliberately asymmetric with ``mat``: an unreadable maturation day only
+    has to leave the matured set (it can never be date-ordered against a
+    signal day, and dropping it cannot invent look-ahead), while a signal
+    day IS the panel's own day grid — silently dropping one would drop a
+    whole cross-section from the emitted series, so the grid fails closed.
+    """
+    s = days.astype(str)
+    bad = ~(s.str.fullmatch(_DAY_DIGITS) | s.str.fullmatch(_DAY_DASHED))
+    if bad.any():
+        sample = ", ".join(repr(v) for v in sorted(set(s[bad]))[:3])
+        raise ValueError(
+            f"{source}: {int(bad.sum()):,} day value(s) are neither "
+            f"YYYYMMDD nor YYYY-MM-DD (e.g. {sample})")
+
+
+def _check_single_day_shape(days: pd.Series, source: str) -> None:
+    """Reject days mixing ``YYYYMMDD`` and ``YYYY-MM-DD`` (DAV-2271 ①).
+
+    The engine's day contract assumes ONE presentation: panel day strings
+    are emitted verbatim (never rewritten), :func:`normalise_days` renders
+    query days into the panel's single reference shape, and consumers key
+    their look-ups by the exact string (``base_q_map`` -> the ISO keys
+    ``paired_increment`` asks for). A panel carrying both ``20240102`` and
+    ``2024-01-02`` broke that in the worst way: the same calendar day was
+    walked once per spelling and emitted two ``(signal_date, l1)`` rows —
+    same values, two keys — so a consumer silently got whichever spelling
+    it happened to look up. De-duplicating the walk would only move that
+    ambiguity one step down (the surviving spelling need not be the one a
+    consumer asks for), so the grid is rejected before any row is emitted.
+    """
+    s = days.astype(str)
+    dashed = s.str.fullmatch(_DAY_DASHED)
+    if not (dashed.any() and (~dashed).any()):
+        return
+    both = sorted(set(s[dashed].str.replace("-", "", regex=False))
+                  & set(s[~dashed]))
+    detail = (f"{len(both)} calendar day(s) spelled both ways "
+              f"(e.g. {', '.join(both[:3])})" if both else
+              "no calendar day is spelled twice — the grid itself mixes "
+              "the two shapes")
+    raise ValueError(
+        f"{source}: day values mix YYYYMMDD and YYYY-MM-DD "
+        f"({int((~dashed).sum()):,} digit-only, {int(dashed.sum()):,} "
+        f"dashed; {detail}); the panel's day grid must use ONE shape")
+
+
 def build_pit_base_rates(panel: pd.DataFrame,
                          shrink_ms: tuple[int, ...],
                          window_days: tuple[int, ...],
@@ -217,10 +298,31 @@ def build_pit_base_rates(panel: pd.DataFrame,
     panel, same matured rule) while every panel day keeps its previous
     values verbatim. Days are rendered like the panel's own ``signal_date``
     (see :func:`normalise_days`).
+
+    Day shape (DAV-2271): the panel's grid must present every day as
+    ``YYYYMMDD`` or every day as ``YYYY-MM-DD`` — one shape, both spellings
+    of a single day included — and query days must be one of the two shapes
+    too; anything else raises ``ValueError`` naming the offending values
+    before the walk starts.
     """
+    # DAV-2271: the day grid is a contract, not a presentation detail — the
+    # walk below emits the panel's own day strings verbatim, so a malformed
+    # day or a grid mixing the two shapes fails closed HERE, with the day
+    # values named, instead of producing duplicated / unreadable keys that
+    # downstream (signal_date, l1) look-ups would resolve arbitrarily.
+    _check_day_values(panel["signal_date"], "panel signal_date")
+    _check_single_day_shape(panel["signal_date"], "panel signal_date")
     panel_days = sorted({str(d) for d in panel["signal_date"].unique()},
                         key=day_key)
-    q_days = normalise_days(query_days,
+    # DAV-2240: query days are rendered into the panel's own day shape. Their
+    # raw spelling is checked BEFORE that rendering — a non-standard day would
+    # be rewritten by it ('2026-9-1' -> '202691') and the error has to name
+    # what the caller actually passed (DAV-2271 ②).
+    raw_q_days = ([str(d) for d in query_days]
+                  if query_days is not None else [])
+    if raw_q_days:
+        _check_day_values(pd.Series(raw_q_days, dtype="object"), "query_days")
+    q_days = normalise_days(raw_q_days,
                             panel_days[0] if panel_days else None)
     sig_days = sorted(set(panel_days) | set(q_days), key=day_key)
     l1_codes = sorted(c for c in panel["l1"].unique() if c)
