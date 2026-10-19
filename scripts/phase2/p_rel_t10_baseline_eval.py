@@ -1035,6 +1035,42 @@ def _as_label_index(labels: Any) -> Mapping:
     return labels or {}
 
 
+def _iso_days_by_unique_value(series: pd.Series) -> np.ndarray:
+    """``YYYYMMDD``/``YYYY-MM-DD`` -> ``YYYY-MM-DD``, applied per distinct value.
+
+    DAV-2242 (resource): the panel's date columns hold ~2.5k distinct values
+    over ~9.2M rows. Running the three ``str`` operations against every row
+    materialises ~9.2M intermediate Python strings per column (each one a
+    fresh allocation) and that churn — not the retained panel — dominated the
+    entry's peak footprint. Factorising first and normalising only the
+    distinct values produces the same strings by construction.
+
+    Missing values keep the old row-wise representation exactly: ``NaN`` and
+    ``None`` render differently (``"nan--"`` vs ``"None--"``) under the
+    historical expression, so they are normalised per row rather than being
+    folded into one shared value. The frozen panel has none, so this costs
+    nothing in production and keeps the function value-identical even for a
+    malformed panel.
+    """
+    raw = series.to_numpy(dtype=object)
+    missing = pd.isna(raw)
+    out = np.empty(len(raw), dtype=object)
+    if not missing.all():
+        codes, uniques = pd.factorize(raw[~missing], sort=False)
+        out[~missing] = _iso_day_strings(uniques)[codes]
+    if missing.any():
+        out[missing] = _iso_day_strings(raw[missing])
+    return out
+
+
+def _iso_day_strings(values) -> np.ndarray:
+    """The frozen-pre-change day expression, applied to ``values`` as given."""
+    det = pd.Series(values, dtype=object).astype(str)
+    det = det.str.replace("-", "", regex=False)
+    return (det.str[:4] + "-" + det.str[4:6] + "-" + det.str[6:8]
+            ).to_numpy(dtype=object)
+
+
 def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
     """PIT base-rate panel from the P1 all-market T+10 partitions.
 
@@ -1050,11 +1086,8 @@ def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
     # load_panel keeps signal_date as the partition's YYYYMMDD string; the
     # label map / paired join keys are ISO YYYY-MM-DD — normalise once here.
     if not panel.empty:
-        sd = panel["signal_date"].astype(str).str.replace("-", "", regex=False)
-        panel["signal_date"] = (sd.str[:4] + "-" + sd.str[4:6]
-                                + "-" + sd.str[6:8])
-        md = panel["mat"].astype(str).str.replace("-", "", regex=False)
-        panel["mat"] = (md.str[:4] + "-" + md.str[4:6] + "-" + md.str[6:8])
+        panel["signal_date"] = _iso_days_by_unique_value(panel["signal_date"])
+        panel["mat"] = _iso_days_by_unique_value(panel["mat"])
     return panel
 
 
