@@ -24,6 +24,9 @@
 #   6. 符号链接双层口径（DAV-2250 🟡-1 返回）：目录级不进入（`find -P`）、文件级解引用
 #      （`-type f -o -type l` + `du -H`）；根目录本身是链接时先 `cd -P` 解析；名字匹配
 #      但按普通文件测不了（悬空/指向目录）→ 不可测判红。带真 `du` 一组（不经桩）验证解引用生效；
+#  10. ① 目录级链接解引用 + 悬空根链接（DAV-2252 🟡-1/🟡-2）：`du_kb` 带 `-H`（真 `du` 断言
+#      ① ≥4096 KiB）、`$REL/backups` / `$SNAP_DIR` 为悬空符号链接 ⇒ 不可测判红，
+#      不得写成「目录不存在」/「0 个文件」；
 #   7. 🟢-1：已测得部分和已超预算时优先出「红（超预算）」，并附「另有 N 项不可测」；
 #   8. 只读纪律静态门：剔除注释/`[[ ]]`/双引号字面量后，不得出现
 #      rm/rmdir/unlink/truncate/shred/mv/dd/install/cp、find -delete，
@@ -406,6 +409,51 @@ outreald="$(env PATH="${BASE_PATH}" STORAGE_PROJ="${REAL}/proj-dirlink" TA_SNAPS
 check_has "${outreald}" "发布期 \`.pre-slim\` 副本：0 个文件" "真 du：③不进入目录级链接（后方 2 MiB .pre-slim 不计）"
 check_not "${outreald}" "huge.db.pre-slim" "真 du：链接后方的 .pre-slim 实体不进报告"
 check_has "${outreald}" "**热备副本占用：绿**" "真 du：目录级链接不进入 → 不得误判「不可测」"
+
+# ---- 4g. ① 目录级链接 + 悬空根链接（DAV-2252 🟡-1/🟡-2 返修）-------------------
+# 🟡-1：① 的测量对象 `$REL/backups` 本身就是预算项——它是目录级符号链接时必须按目标实测
+#       （`du -sk -H`）；不加 `-H` 实测报 0 KiB 且 rc=0（真 du：链接 0 KiB / -H 51452 KiB）→ 假绿。
+# 🟡-2：根（`$REL/backups`、`$SNAP_DIR`）为**悬空**符号链接时，`[ -e ]` 为假，不得走 absent
+#       （「目录不存在」/「0 个文件」）静默判绿，必须走不可测判红。
+echo "[4g] ① 目录级链接解引用 + 悬空根链接判红（DAV-2252）"
+BKL="${TMP}/baklink"
+mkdir -p "${BKL}/outside/bak" "${BKL}/proj" "${BKL}/snap-empty" "${BKL}/TradingAgents-AShare-releases"
+: > "${BKL}/outside/bak/old.db.zst"
+dd if=/dev/zero of="${BKL}/outside/bak/big.db.zst" bs=1024 count=8192 2>/dev/null
+ln -s "${BKL}/outside/bak" "${BKL}/TradingAgents-AShare-releases/backups"   # ① 的根是目录级链接
+outbl="$(run_daily_mix 120 STORAGE_PROJ="${BKL}/proj" TA_SNAPSHOT_DIR="${BKL}/snap-empty" \
+                     FAKE_DU_KB_BACKUPS=1000)"; rc_bl=$?
+check_has "${outbl}" "计入预算①发布/回滚备份 \`backups/\`：0.0 GiB（1000 KiB）" "① 为目录级链接 → du -H 解引用计量（撤 -H 则退化为 0）"
+check_not "${outbl}" "计入预算①发布/回滚备份 \`backups/\`：目录不存在" "链接根不得写成「目录不存在」"
+if [ "${rc_bl}" -eq 0 ]; then ok "① 链接根可测 → 退出码 0（rc=${rc_bl}）"; else bad "退出码应为 0，实得 ${rc_bl}"; fi
+
+# 真 du（不经桩）：① 的链接后方是 8 MiB 实体 → ① 必须 ≥4096 KiB
+outbl2="$(env PATH="${BASE_PATH}" STORAGE_PROJ="${BKL}/proj" TA_SNAPSHOT_DIR="${BKL}/snap-empty" \
+               "${ZSH_BIN}" "${SCRIPT}" daily 2>&1)"
+bak_line="$(printf '%s\n' "${outbl2}" | grep '计入预算①' | head -1)"
+bak_kb="$(printf '%s\n' "${bak_line}" | sed -n 's/.*（\([0-9][0-9]*\) KiB）.*/\1/p')"
+case "${bak_kb}" in
+  ''|*[!0-9]*) bad "真 du：未能从报告解析出 ① 的 KiB（line=${bak_line}）" ;;
+  *) if [ "${bak_kb}" -ge 4096 ]; then ok "真 du：① 根为目录级链接 → 计量 ${bak_kb} KiB（≥4096，-H 解引用生效）"
+     else bad "真 du：① 只计 ${bak_kb} KiB（<4096，-H 解引用未生效）"; fi ;;
+esac
+
+# 悬空根链接：①（$REL/backups）与②（$SNAP_DIR）都必须走不可测判红，不得静默按 0
+DGL="${TMP}/danglingroot"
+mkdir -p "${DGL}/proj" "${DGL}/snap-empty" "${DGL}/TradingAgents-AShare-releases"
+ln -s "${DGL}/nowhere/backups" "${DGL}/TradingAgents-AShare-releases/backups"
+outdg="$(run_daily_mix 120 STORAGE_PROJ="${DGL}/proj" TA_SNAPSHOT_DIR="${DGL}/snap-empty")"; rc_dg=$?
+check_has "${outdg}" "**热备副本占用：红（不可测，fail-closed）**" "① 根为悬空符号链接 → 不可测判红"
+check_not "${outdg}" "计入预算①发布/回滚备份 \`backups/\`：目录不存在" "悬空根不得写成「目录不存在」（不得静默按 0 计）"
+check_has "${outdg}" "悬空符号链接" "报告写明确切原因（悬空符号链接）"
+if [ "${rc_dg}" -eq 2 ]; then ok "① 悬空根退出码 2（rc=${rc_dg}）"; else bad "退出码应为 2，实得 ${rc_dg}"; fi
+
+ln -s "${DGL}/nowhere-snap" "${DGL}/snap-dangling"
+outdg2="$(run_daily_mix 120 STORAGE_PROJ="${TMP}/proj-nopreslim" TA_SNAPSHOT_DIR="${DGL}/snap-dangling")"; rc_dg2=$?
+check_has "${outdg2}" "**热备副本占用：红（不可测，fail-closed）**" "② 根为悬空符号链接 → 不可测判红"
+check_not "${outdg2}" "共享快照基线 \`*.db.zst\`：0 个文件" "悬空快照根不得写成「0 个文件」（不得静默按 0 计）"
+check_has "${outdg2}" "⚠️ 不可测：${DGL}/snap-dangling/*.db.zst" "点名悬空快照根（②项）"
+if [ "${rc_dg2}" -eq 2 ]; then ok "② 悬空根退出码 2（rc=${rc_dg2}）"; else bad "退出码应为 2，实得 ${rc_dg2}"; fi
 
 # ---- 5. 只读纪律静态门 -----------------------------------------------------
 # 先剔行首注释，再剔 `[[ ... ]]` 比较与双引号字面量（它们不是重定向），

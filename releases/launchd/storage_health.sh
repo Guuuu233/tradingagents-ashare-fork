@@ -29,6 +29,13 @@
 #         符号链接**：实测 `du -sk link`（link→20 MiB 文件）打印 0 且 rc=0，必须显式 `-H`）；
 #       · 名字匹配但按普通文件测不了（悬空链接 / 指向目录的链接）⇒ 记「不可测」判红
 #         （宁可误红：该名字断言「这里有一份副本」，既不能确认、也不该按 0 计入）。
+#   DAV-2252 🟡-1/🟡-2（返修）：同一逃逸类别还剩两条通道，一并收口——
+#     · ① 的测量对象 `$REL/backups` 本身就是预算项（不是「遍历到的条目」），故 `du_kb`
+#       统一带 `-H`：它为目录级符号链接时按目标实测（实测 `du -sk <链接>` = 0 KiB、`rc=0`
+#       且报告写「① 0.0 GiB（0 KiB）」判绿；`du -sk -H <同一链接>` = 51452/51800 KiB）；
+#     · `path_state` 增「悬空符号链接 ⇒ unknown」：`[ -e ]` 会解引用，悬空链接返回假，
+#       原实现滑到 absent 分支 ⇒ ①写「目录不存在」、②③写「0 个文件」，整行绿、`rc=0`
+#       （外置卷未挂载 / 目标被移走 / 只留链接的形态）。现按 fail-closed 记「不可测」判红。
 #   DAV-2219：
 #     🟡-2 预算按 KiB 精确比较（≤15728640 KiB = 15 GiB），不再整数截断；
 #     🟢-2 工作树/活库单列、不计预算（否则含活库长期假红，DAV-2216 实测）。
@@ -57,10 +64,14 @@ fmt_gib() {
 
 # 单目录占用测量：成功打印 "OK <KiB>"，失败/无输出/非数值打印 "ERR <原因>" 并返回非零。
 # DAV-2219 🟡-1：du 失败绝不按 0 计入（测不到 ≠ 占用为 0），由调用方判「未知」。
+# DAV-2252 🟡-1（返修）：显式 `-H` 解引用命令行上的符号链接——`du` 默认**不**解引用，
+# 而①的测量对象 `$REL/backups` 本身就是预算项：若它被整成目录级符号链接（迁到另一卷/
+# 历史整理留下的链接），不加 `-H` 会报 0 KiB 且 rc=0 → 预算整行假绿。实测：
+# `du -sk <备份目录链接>` = 0、`du -sk -H <同一链接>` = 51452 KiB。
 # 注意 stderr 一并收进变量（2>&1）以便写进报告留证，而不是丢弃。
 du_kb() {
   local out rc first kb
-  out="$(du -sk "$1" 2>&1)"; rc=$?
+  out="$(du -sk -H "$1" 2>&1)"; rc=$?
   first="${out%%$'\n'*}"
   kb="${first%%[[:space:]]*}"
   if [ "$rc" -ne 0 ]; then
@@ -152,11 +163,17 @@ enumerate_files() {
 }
 
 # 路径三态（DAV-2239 🟡-1 收口）：present / absent / unknown。
-# `[ -e ]` 失败并不等于「不存在」：上级目录不可读/不可进入时 stat 返回 EACCES，
-# 此时必须按 unknown 处理（记不可测），否则整棵看不见的目录树会被静默按 0 计入并可能判绿。
+# `[ -e ]` 失败并不等于「不存在」，两种情形必须分开：
+#   · 上级目录不可读/不可进入（stat 返回 EACCES）→ unknown；
+#   · 路径本身是**悬空符号链接**（DAV-2252 🟡-2）→ unknown：`[ -e ]` 会解引用，悬空返回假，
+#     若按 absent 处理，则 `$REL/backups` / `$SNAP_DIR` / `$PROJ` 为悬空链接（外置卷未挂载、
+#     目标被移走）时①会写「目录不存在」、②③会写「0 个文件」并整行判绿——与「名字断言了这里
+#     有一份副本」同类，方向是假绿（故按 fail-closed 判红走不可测通道，宁可误红）。
+# 两种情形都必须按 unknown 处理（记不可测），否则看不见的目录树会被静默按 0 计入并可能判绿。
 path_state() {
   local p="$1" anc up
   [ -e "$p" ] && { echo present; return 0; }
+  [ -L "$p" ] && { echo unknown; return 0; }
   anc="$(dirname "$p")"
   while [ ! -e "$anc" ]; do
     up="$(dirname "$anc")"
@@ -193,7 +210,7 @@ daily_report() {
       fi ;;
     absent) bak_absent=1 ;;
     *)
-      unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$rel_bak（上级目录不可读/不可进入，路径存在性无法判断）"$'\n' ;;
+      unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$rel_bak（路径存在性无法判断：上级目录不可读/不可进入，或其本身是悬空符号链接）"$'\n' ;;
   esac
   # ② 共享快照基线 *.db.zst（current.db 是未压缩工作副本，不计入）
   #    三态：目录不存在 → 跳过（不算不可测）；可读 → 枚举（可为 0 个文件）；
@@ -217,7 +234,7 @@ daily_report() {
     fi
   elif [ "$snap_state" = "unknown" ]; then
     zst_ok=0
-    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/*.db.zst（上级目录不可读/不可进入，路径存在性无法判断）"$'\n'
+    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/*.db.zst（路径存在性无法判断：上级目录不可读/不可进入，或其本身是悬空符号链接）"$'\n'
   fi
   # ③ 发布期 .pre-slim 类副本（只扫 PROJ/REL/SNAP；ta-work 实验副本不在口径内）
   #    与②同一三态：不存在→跳过；可读→枚举；不可读/存在性未知→不可测
@@ -228,7 +245,7 @@ daily_report() {
     if [ "$root_state" = "absent" ]; then continue; fi
     if [ "$root_state" = "unknown" ]; then
       pre_ok=0
-      unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$root 下的 .pre-slim 副本（上级目录不可读/不可进入，路径存在性无法判断）"$'\n'
+      unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$root 下的 .pre-slim 副本（路径存在性无法判断：上级目录不可读/不可进入，或其本身是悬空符号链接）"$'\n'
       continue
     fi
     enumerate_files "$root" '*.pre-slim*' 0; rc=$?
@@ -254,7 +271,7 @@ daily_report() {
       unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$PROJ — ${res#ERR }"$'\n'
     fi
   elif [ "$proj_state" = "unknown" ]; then
-    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$PROJ（上级目录不可读/不可进入，路径存在性无法判断）"$'\n'
+    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$PROJ（路径存在性无法判断：上级目录不可读/不可进入，或其本身是悬空符号链接）"$'\n'
   fi
   cur_state="$(path_state "$SNAP_DIR/current.db")"
   if [ "$cur_state" = "present" ]; then
@@ -263,7 +280,7 @@ daily_report() {
       unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/current.db — ${res#ERR }"$'\n'
     fi
   elif [ "$cur_state" = "unknown" ]; then
-    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/current.db（所在目录不可读/不可进入，路径存在性无法判断）"$'\n'
+    unable=$((unable + 1)); unable_lines="${unable_lines}  - ⚠️ 不可测：$SNAP_DIR/current.db（路径存在性无法判断：所在目录不可读/不可进入，或其本身是悬空符号链接）"$'\n'
   fi
   budget_kb=$(( ${bak_kb:-0} + ${zst_kb:-0} + ${pre_kb:-0} ))
   # 🟡-2 精确 KiB 判预算（15 GiB = 15728640 KiB），(15,16) GiB 窗口必须判红
