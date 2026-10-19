@@ -107,7 +107,9 @@ grep -cE '\{\{[A-Z_]+\}\}' ~/Library/LaunchAgents/com.tradingagents.ashare.plist
 plutil -lint ~/Library/LaunchAgents/com.tradingagents.ashare.plist   # OK
 
 # 1b. 日志路径前置检查（DAV-2223；不通过即中止，不得 bootstrap）
-python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
+# LC_ALL=C：探测的「可放行」分支按 xattr(1) 的英文 stderr 文案匹配，非英文 locale
+# 会退化成 PROBE_UNAVAILABLE（安全方向但白拦一次本可放行的安装）。
+LC_ALL=C python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
 
 # 2. 装载并启动
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.ashare.plist
@@ -154,7 +156,10 @@ sleep 25; curl -s http://127.0.0.1:8000/healthz
 plutil -lint releases/launchd/com.tradingagents.ashare.plist   # OK
 
 # 日志路径前置检查（DAV-2223：fail-closed，防 EX_CONFIG 78 复发）
-python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
+# 必须带 LC_ALL=C：xattr(1) 的两条「可放行」分支靠英文 stderr 文案匹配（见
+# plist_log_preflight.py 的 _carries_provenance），非英文 locale 会退化成
+# LOGPATH_PROVENANCE_PROBE_UNAVAILABLE（fail-closed，不误放行，但白拦安装）。
+LC_ALL=C python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradingagents.ashare.plist
 # 退出码：0 通过（可能含 WARN）/ 2 前置不通过（原因码见下）/ 3 输入或用法错误。
 # 三档判定（总控 10-18 令），**只有 FAIL 阻断安装**：
 #   FAIL  带 com.apple.provenance 的既存日志（10-18 事故形态）→ 处置 = **改名留档**
@@ -180,8 +185,8 @@ python3 releases/launchd/plist_log_preflight.py ~/Library/LaunchAgents/com.tradi
 # launchctl bootout 再改名（改名后 launchd 仍写旧 inode）。
 # xattr(1) 本身不可用/执行失败（非 0 且非「无此属性」，如 EACCES、不支持 xattr 的
 # 文件系统）→ 原因码 LOGPATH_PROVENANCE_PROBE_UNAVAILABLE，同样 fail-closed，
-# 但**不代表文件带该属性**，文案带异常文本：请人工 `xattr -l` 复核或换用可用的
-# 解释器重跑，不要据此改名。
+# 但**不代表文件带该属性**，文案带异常文本：请人工 `xattr -p com.apple.provenance -- <path>` 复核
+# 或换用可用的解释器重跑，不要据此改名。
 # 注：符号链接目标一律判 LOGPATH_TARGET_NOT_REGULAR_FILE（比 launchd 严格），
 # 故不要用 uvicorn-current.log -> uvicorn-<sha>.log 的软链方案做轮转。
 # 注：以 root/sudo 运行会让属主比对与可写判定失真（os.access 对 root 恒真），

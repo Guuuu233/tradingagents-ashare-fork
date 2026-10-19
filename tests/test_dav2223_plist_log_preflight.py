@@ -16,6 +16,8 @@
 * 拒绝：目标已存在但属主非当前 uid（**非** 10-18 形态）；
 * 拒绝：目标已存在但不可写（mode 444）；目标不是普通文件（目录）；
 * 拒绝：xattr(1) 不可用/执行失败 → ``LOGPATH_PROVENANCE_PROBE_UNAVAILABLE``；
+* 拒绝：父路径存在但不是目录 → ``LOGPATH_PARENT_NOT_DIR``；lstat 竞态失败 →
+  ``LOGPATH_OPEN_PROBE_FAILED``（两条均为 fail-closed 兜底，DAV-2275 补覆盖）；
 * 拒绝：旧版包装脚本遗留 —— 按文件名（wrapper-diagnostic.log）与
   按目录（.launchd/、/tmp/ta-launchd-die-stamps-*）；
 * 拒绝：占位符未替换、相对路径、plist 无法解析；
@@ -195,6 +197,40 @@ def test_existing_file_without_attribute_warns_end_to_end(tmp_path):
     )
 
 
+def test_messages_never_suggest_illegal_xattr_invocation(tmp_path, monkeypatch):
+    """文案里的复核命令必须是**合法可跑**的 ``xattr`` 调用（DAV-2275 🟢-1）。
+
+    旧文案写的是 ``xattr -l <文件名>``，而 ``xattr -l`` 的第一个位置参数是**属性名**
+    不是路径：实测 ``xattr -l uvicorn.log`` 返回 **rc=0 且输出为空**，运维照抄会得到
+    「看起来没属性」的误导结果——而这一步恰恰是用来证实 WARN 档安全的。
+    合法形式：``xattr -p <attr> -- <path>``（无属性时 rc=1 + stderr 明写
+    ``No such xattr``）。
+
+    不真调 ``xattr -w``（在部分宿主/临时卷上写该属性会失败，且与本条要验的文案
+    无关）：WARN 档靠钉死探测为假进入，PROVENANCE 档靠钉死为真进入。
+    """
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("prev\n")
+
+    # 1) WARN 档：既存、无属性、可追加
+    monkeypatch.setattr(mod, "_carries_provenance", lambda _p: False)
+    warn_msg = mod.check_plist(
+        _write_plist(tmp_path / "warn.plist", str(log))
+    ).warnings[0].message
+
+    # 2) PROVENANCE 档：带属性 → FAIL 档文案
+    monkeypatch.setattr(mod, "_carries_provenance", lambda _p: True)
+    fail_msg = mod.check_plist(
+        _write_plist(tmp_path / "fail.plist", str(log))
+    ).failures[0].message
+
+    legal = f"xattr -p {mod.PROVENANCE_XATTR} -- {log}"
+    for msg in (warn_msg, fail_msg):
+        assert "xattr -l" not in msg, msg
+        assert legal in msg, msg
+
+
 # --------------------------------------------------------------------------- #
 # 拒绝：不可写                                                               #
 # --------------------------------------------------------------------------- #
@@ -243,6 +279,45 @@ def test_directory_target_rejected(tmp_path, no_provenance):
     report = mod.check_plist(plist)
     assert not report.ok
     assert report.failures[0].reason_code == mod.RC_TARGET_NOT_REGULAR
+
+
+def test_parent_is_a_regular_file_rejected(tmp_path, no_provenance):
+    """父路径存在但不是目录（DAV-2275 补覆盖，原先零引用）。
+
+    真实形态：``StandardOutPath`` 少写一层目录，使父路径落在某个普通文件上。
+    必须判 fail-closed 的 ``LOGPATH_PARENT_NOT_DIR`` 而不是继续往下 stat 目标。
+    """
+    not_a_dir = tmp_path / "logs"
+    not_a_dir.write_text("i am a file\n")
+    plist = _write_plist(tmp_path / "a.plist", str(not_a_dir / "uvicorn.log"))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert [f.reason_code for f in report.failures] == [mod.RC_PARENT_NOT_DIR]
+    assert "不是目录" in report.failures[0].message
+
+
+def test_lstat_failure_rejected_as_open_probe_failure(tmp_path, monkeypatch, no_provenance):
+    """目标已存在但 lstat 失败 → ``LOGPATH_OPEN_PROBE_FAILED``（DAV-2275 补覆盖）。
+
+    形态是 ``Path.exists()`` 与 ``os.lstat()`` 之间的竞态（删除/权限变化）。
+    fail-closed，且**不得**退化为「当作不存在而 PASS」——那会把检查不到的路径放行。
+    """
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+
+    def boom(path, *a, **kw):
+        if str(path).endswith("uvicorn.log"):
+            raise OSError(5, "Input/output error")
+        return real_lstat(path, *a, **kw)
+
+    real_lstat = mod.os.lstat
+    monkeypatch.setattr(mod.os, "lstat", boom)
+    plist = _write_plist(tmp_path / "a.plist", str(log))
+    report = mod.check_plist(plist)
+    assert not report.ok
+    assert [f.reason_code for f in report.failures] == [mod.RC_OPEN_PROBE]
+    assert "无法 stat" in report.failures[0].message
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="非 root 无法构造他人属主文件")
@@ -311,14 +386,23 @@ def _drop_provenance(path: Path) -> None:
     「rc=1 即属性不存在」当正常返回，是误读），于是真调用例的「无属性」前提实际靠
     「宿主恰好没打标记」支撑——这正是本链反复出现的偶发假失败根源。
 
-    macOS 可能在文件创建后**异步**补上 provenance 标记（DAV-2236 复审实测），
-    故此处「清理 → 探测验证」循环重试。
+    重试的触发条件**因宿主而异，两侧都记录在案**：
 
-    **DAV-2274**：部分宿主（实测新建文件即被系统自动附加 ``com.apple.provenance``
-    且 ``xattr -c`` 无法清除）上，重试耗尽仍清不掉。这是**环境问题**，不是被测代码
-    行为，故此处改 ``pytest.skip`` 并在原因里写明「环境自动附加 com.apple.provenance」，
-    不得让环境差异伪装成产品缺陷。**探测/重试逻辑本身不变**（重试轮数、sleep、
-    ``xattr -p`` 只读探测、清理命令均与 DAV-2236 一致），改的只是「耗尽后怎么办」。
+    * DAV-2274：部分宿主（实测新建文件即被系统自动附加 ``com.apple.provenance``
+      且 ``xattr -c`` 无法清除）上，重试耗尽仍清不掉。
+    * DAV-2245 复审：在沙箱 52 个文件、8 轮创建后探测与 36 次全文件压力跑中
+      **未观察到**任何自动打标（带属性的均为 ``_set_provenance`` 主动打的 0100）；
+      该侧更符合证据的解释是**上一次 ``_set_provenance`` 的残留**被旧的无操作
+      ``_drop_provenance`` 留下了。
+
+    故此处的重试是**防御性兜底**：保留是为了真的出现该形态时不至于静默返回一个
+    没清干净的文件，但**不应被理解为「macOS 必然会异步打标」**——那是一个未在
+    全部宿主上复现的推断，本 docstring 不再作此断言。
+
+    **DAV-2274**：重试耗尽属**环境问题**，不是被测代码行为，故改 ``pytest.skip``
+    并在原因里写明「环境自动附加 com.apple.provenance」，不得让环境差异伪装成产品
+    缺陷。**探测/重试逻辑本身不变**（重试轮数、sleep、``xattr -p`` 只读探测、清理
+    命令均与 DAV-2236 一致），改的只是「耗尽后怎么办」。
 
     夹具绝不静默返回一个没清干净的文件让断言去解释。
     """
@@ -448,9 +532,9 @@ def test_try_drop_provenance_reports_failure_without_skipping(tmp_path, monkeypa
 def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
     """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。
 
-    DAV-2236 🟡-1：「创建后立即探测」的旧写法踩在异步 provenance 标记的窗口上
-    （探测结果取决于宿主有没有恰好打过标记）。改为经 ``_drop_provenance`` **清理
-    并验证**后再探测，前提变得确定。
+    DAV-2236 🟡-1：「创建后立即探测」的旧写法踩在宿主恰好打过标记的窗口上
+    （探测结果取决于宿主运行时状态）。改为经 ``_drop_provenance`` **清理并验证**
+    后再探测，前提变得确定。
     """
     log = tmp_path / "logs" / "uvicorn.log"
     log.parent.mkdir()
