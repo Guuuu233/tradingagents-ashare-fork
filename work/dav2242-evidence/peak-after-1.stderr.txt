@@ -1,20 +1,20 @@
 /Users/davidliu/Documents/TradingAgents-AShare/.venv310/lib/python3.10/site-packages/langgraph/checkpoint/base/__init__.py:17: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
   from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-       72.80 real        60.67 user         5.26 sys
-          2266644480  maximum resident set size
+       62.39 real        52.66 user         4.99 sys
+          2279374848  maximum resident set size
                    0  average shared memory size
                    0  average unshared data size
                    0  average unshared stack size
-              722218  page reclaims
-                 196  page faults
+              932758  page reclaims
+                3984  page faults
                    0  swaps
                    0  block input operations
                    0  block output operations
                    0  messages sent
                    0  messages received
                    0  signals received
-                1657  voluntary context switches
-              304960  involuntary context switches
-        902522363039  instructions retired
-        225367076701  cycles elapsed
-          2944339088  peak memory footprint
+                5867  voluntary context switches
+              165067  involuntary context switches
+        904642227906  instructions retired
+        205705770764  cycles elapsed
+          3668118960  peak memory footprint
