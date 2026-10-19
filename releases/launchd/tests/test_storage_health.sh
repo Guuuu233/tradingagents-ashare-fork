@@ -21,11 +21,14 @@
 #      （用 `chmod 000` 等价模拟 TCC 拒读）与「上级目录不可读致 stat EACCES」均不得被静默按 0 计、
 #      不得出「0 个文件」、不得写成「目录不存在」、不得判绿；隐藏路径（`.` 开头的
 #      目录/文件）也须枚举到；PROJ 下有不可读子目录 → ③枚举失败判红，且大文件清单不得静默成空；
-#   6. 🟢-1：已测得部分和已超预算时优先出「红（超预算）」，并附「另有 N 项不可测」；
-#   5. 只读纪律静态门：剔除注释/`[[ ]]`/双引号字面量后，不得出现
+#   6. 符号链接双层口径（DAV-2250 🟡-1 返回）：目录级不进入（`find -P`）、文件级解引用
+#      （`-type f -o -type l` + `du -H`）；根目录本身是链接时先 `cd -P` 解析；名字匹配
+#      但按普通文件测不了（悬空/指向目录）→ 不可测判红。带真 `du` 一组（不经桩）验证解引用生效；
+#   7. 🟢-1：已测得部分和已超预算时优先出「红（超预算）」，并附「另有 N 项不可测」；
+#   8. 只读纪律静态门：剔除注释/`[[ ]]`/双引号字面量后，不得出现
 #      rm/rmdir/unlink/truncate/shred/mv/dd/install/cp、find -delete，
 #      也不得有写文件的重定向（只允许 2>/dev/null、>/dev/null、2>&1）；
-#   6. 每周基线选样：取日期最大的一份快照、SHA256/字节数与本地 shasum/stat 一致、
+#   9. 每周基线选样：取日期最大的一份快照、SHA256/字节数与本地 shasum/stat 一致、
 #      快照目录缺失或没有匹配文件时报「无可上传基线」且仍以 0 退出（不静默失败）。
 #
 # 不覆盖（诚实声明）：
@@ -102,6 +105,11 @@ cat > "${SHIM}/du" <<'SH'
 # FAKE_DU_FAIL=1 → 全部报 TCC 式失败（stderr + 空 stdout + 退出 1）；
 # FAKE_DU_FAIL_ITEM=<类别|other> → 只让该类别失败；FAKE_DU_FAIL_DIR=<basename> 同效（按名字）。
 # FAKE_DU_EMPTY=1 → 静默：输出为空但退出码 0（另一类「测不到」）。
+# **符号链接语义（DAV-2250，对齐真 du 实测）**：macOS/BSD 真 du 对命令行上的符号链接
+#   默认**不**解引用（打印 0），带 `-H` 才解引用到目标；桩照此实现——无 `-H` 时符号链接
+#   参数一律计 0 KiB，因此「撤掉 -H」的变异会被本门禁抓到。
+has_H=0
+for a in "$@"; do [ "${a}" = "-H" ] && has_H=1; done
 rc=0
 for arg in "$@"; do
   case "${arg}" in -*) continue ;; esac   # 跳过选项（-sk / -h），只对路径做归类
@@ -122,6 +130,8 @@ for arg in "$@"; do
     current) kb="${FAKE_DU_KB_CURRENT:-${FAKE_DU_KB:-0}}" ;;
     *) kb="${FAKE_DU_KB:-0}" ;;
   esac
+  # 真 du 默认不解引用命令行上的符号链接：无 -H 时只算链接自身（≈0 KiB）
+  if [ -L "${arg}" ] && [ "${has_H}" = "0" ]; then kb=0; fi
   fail=0
   [ "${FAKE_DU_FAIL:-0}" = "1" ] && fail=1
   if [ -n "${FAKE_DU_FAIL_ITEM:-}" ] && [ "${FAKE_DU_FAIL_ITEM}" = "${cat}" ]; then fail=1; fi
@@ -282,6 +292,9 @@ check_not "${outnr}" "共享快照基线 \`*.db.zst\`：0 个文件" "不可读�
 check_has "${outnr}" "⚠️ 不可测：${NOROOT}/*.db.zst" "点名不可读的快照目录（②项）"
 check_has "${outnr}" "⚠️ 不可测：${NOROOT} 下的 .pre-slim 副本" "点名不可读的快照目录（③项）"
 check_has "${outnr}" "Permission denied" "find 的失败原因入报告留证"
+# DAV-2250：find 报错必须走「枚举失败」通道（rc 闸门）；若闸门被撤，错误行会被循环当成
+# 「枚举到的条目」，报告会写成「条目无法按普通文件测量」——那是诊断通道被降级（M10 变异回归点）。
+check_not "${outnr}" "无法按普通文件测量" "find 报错不得被当成「枚举到的条目」（rc 闸门仍在生效）"
 if [ "${rc_nr}" -eq 2 ]; then ok "不可枚举时退出码为 2（rc=${rc_nr}）"; else bad "不可枚举时退出码应为 2，实得 ${rc_nr}"; fi
 
 # ---- 4c. 隐藏路径收口（DAV-2239 🟡-1 顺带）----------------------------------
@@ -306,6 +319,7 @@ chmod 700 "${SUB}/.locked"    # 复原，保证 trap 的 rm -rf 能清掉
 check_has "${outsub}" "**热备副本占用：红（不可测，fail-closed）**" "PROJ 下有不可读子目录 → ③枚举失败判红"
 check_has "${outsub}" "⚠️ 不可测：${SUB} 下的 .pre-slim 副本" "点名枚举失败的根（子目录不可读）"
 check_has "${outsub}" "大文件清单不完整" "大文件清单不静默成空（🟢-3 留证）"
+check_not "${outsub}" "无法按普通文件测量" "不可读子目录的 find 报错不得被当成「枚举到的条目」（rc 闸门）"
 if [ "${rc_sub}" -eq 2 ]; then ok "不可读子目录退出码为 2（rc=${rc_sub}）"; else bad "退出码应为 2，实得 ${rc_sub}"; fi
 
 # ---- 4e. 上级目录不可读：存在性无法判断 → 不可测（不得当作「不存在」跳过）-------------
@@ -322,6 +336,76 @@ check_not "${outpar}" "**热备副本占用：绿**" "存在性判断不了时�
 check_not "${outpar}" "目录不存在" "不得把「判断不了」写成「不存在」（不得静默按 0 计）"
 check_has "${outpar}" "路径存在性无法判断" "报告写明确切原因（path_state=unknown）"
 if [ "${rc_par}" -eq 2 ]; then ok "存在性未知退出码为 2（rc=${rc_par}）"; else bad "退出码应为 2，实得 ${rc_par}"; fi
+
+# ---- 4f. 符号链接双层口径（DAV-2250 🟡-1 返回）-------------------------------
+# 复审 DAV-2247 §4 的逃逸形态：`snap/link-*.db.zst → outside/*.db.zst`（文件级）与
+# `proj/link-rel → outside/rel/`（目录级，后方含 *.pre-slim 实体）在候选 72e434b0 上均报
+# 「0 个文件」绿灯。本组钉住：目录级不进入 / 文件级解引用 / 根为链接先解析 /
+# 名字匹配但测不了 → 不可测。
+echo "[4f] 符号链接：目录级不进入 / 文件级解引用（DAV-2250）"
+LNK="${TMP}/links"
+mkdir -p "${LNK}/outside/rel" "${LNK}/snap-link" "${LNK}/snap-empty" "${LNK}/snap-real" "${LNK}/proj-plain"
+: > "${LNK}/outside/other.db.zst"
+: > "${LNK}/outside/rel/huge.db.pre-slim"
+: > "${LNK}/snap-real/tradingagents-2026-10-18.db.zst"
+ln -s "${LNK}/outside/other.db.zst" "${LNK}/snap-link/link-snap.db.zst"   # 文件级链接（→ 快照根之外）
+ln -s "${LNK}/snap-real" "${LNK}/snap-rootlink"                          # 根目录本身是符号链接
+ln -s "${LNK}/outside/rel" "${LNK}/proj-plain/link-rel"                  # 目录级链接（后方有 .pre-slim）
+
+outfl="$(run_daily_mix 120 STORAGE_PROJ="${LNK}/proj-plain" TA_SNAPSHOT_DIR="${LNK}/snap-link" \
+                     FAKE_DU_KB_ZST=1000 FAKE_DU_KB_PRESLIM=2000)"; rc_fl=$?
+check_has "${outfl}" "共享快照基线 \`*.db.zst\`（1 个文件）" "②枚举到文件级符号链接（-type l 计入）"
+check_has "${outfl}" "（1000 KiB；预算 ≤15 GiB = 15728640 KiB）" "文件级链接经 du -H 解引用计量（撤 -H 则退化为 0）"
+if [ "${rc_fl}" -eq 0 ]; then ok "文件级链接全部测得 → 退出码 0（rc=${rc_fl}）"; else bad "退出码应为 0，实得 ${rc_fl}"; fi
+
+outrl="$(run_daily_mix 120 STORAGE_PROJ="${LNK}/proj-plain" TA_SNAPSHOT_DIR="${LNK}/snap-rootlink" \
+                      FAKE_DU_KB_ZST=1000)"
+check_has "${outrl}" "共享快照基线 \`*.db.zst\`（1 个文件）" "②根目录是符号链接 → 先 cd -P 解析再枚举"
+check_not "${outrl}" "共享快照基线 \`*.db.zst\`：0 个文件" "根为链接不得静默报「0 个文件」（find -P 不进入起始链接）"
+
+outdl="$(run_daily_mix 120 STORAGE_PROJ="${LNK}/proj-plain" TA_SNAPSHOT_DIR="${LNK}/snap-empty" \
+                      FAKE_DU_KB_PRESLIM=2000)"
+check_has "${outdl}" "发布期 \`.pre-slim\` 副本：0 个文件" "③不进入目录级符号链接（link-rel 后方的 .pre-slim 不计）"
+check_has "${outdl}" "（0 KiB；预算 ≤15 GiB = 15728640 KiB）" "目录级链接后方的副本不进合计"
+
+# 名字匹配但按普通文件测不了：悬空链接 / 指向目录的链接 → 不可测（宁可误红）
+BAD="${TMP}/linkbad"; mkdir -p "${BAD}/snap" "${BAD}/outside/rel"
+ln -s "${BAD}/outside/rel" "${BAD}/snap/weird.db.zst"
+outbad="$(run_daily_mix 120 STORAGE_PROJ="${TMP}/proj-nopreslim" TA_SNAPSHOT_DIR="${BAD}/snap")"; rc_bad=$?
+check_has "${outbad}" "**热备副本占用：红（不可测，fail-closed）**" "指向目录的链接（名字匹配）→ 不可测判红"
+check_not "${outbad}" "共享快照基线 \`*.db.zst\`：0 个文件" "不得把「无法测量」写成「0 个文件」"
+check_has "${outbad}" "无法按普通文件测量" "报告写明确切原因"
+if [ "${rc_bad}" -eq 2 ]; then ok "名字匹配但测不了 → 退出码 2（rc=${rc_bad}）"; else bad "退出码应为 2，实得 ${rc_bad}"; fi
+
+BADL="${TMP}/linkdangling"; mkdir -p "${BADL}/snap"
+ln -s "${BADL}/nowhere/gone.db.zst" "${BADL}/snap/dangling.db.zst"
+outdl2="$(run_daily_mix 120 STORAGE_PROJ="${TMP}/proj-nopreslim" TA_SNAPSHOT_DIR="${BADL}/snap")"; rc_dl2=$?
+check_has "${outdl2}" "**热备副本占用：红（不可测，fail-closed）**" "悬空链接（名字匹配）→ 不可测判红"
+check_has "${outdl2}" "dangling.db.zst" "报告点名悬空链接的具体路径"
+if [ "${rc_dl2}" -eq 2 ]; then ok "悬空链接 → 退出码 2（rc=${rc_dl2}）"; else bad "退出码应为 2，实得 ${rc_dl2}"; fi
+
+# 真 du / 真 df（不经桩）：用真实文件证明 -H 解引用真实生效、目录链接真实不被递归
+REAL="${TMP}/real"
+mkdir -p "${REAL}/outside/rel" "${REAL}/proj" "${REAL}/proj-dirlink" "${REAL}/snap-point" "${REAL}/snap-empty"
+dd if=/dev/zero of="${REAL}/outside/big.db.zst" bs=1024 count=8192 2>/dev/null
+dd if=/dev/zero of="${REAL}/outside/rel/huge.db.pre-slim" bs=1024 count=2048 2>/dev/null
+ln -s "${REAL}/outside/big.db.zst" "${REAL}/snap-point/link.db.zst"
+ln -s "${REAL}/snap-point" "${REAL}/snap-rootlink"
+ln -s "${REAL}/outside/rel" "${REAL}/proj-dirlink/link-rel"
+outreal="$(env PATH="${BASE_PATH}" STORAGE_PROJ="${REAL}/proj" TA_SNAPSHOT_DIR="${REAL}/snap-rootlink" \
+               "${ZSH_BIN}" "${SCRIPT}" daily 2>&1)"
+real_line="$(printf '%s\n' "${outreal}" | grep '共享快照基线' | head -1)"
+real_kb="$(printf '%s\n' "${real_line}" | sed -n 's/.*（\([0-9][0-9]*\) KiB）.*/\1/p')"
+case "${real_kb}" in
+  ''|*[!0-9]*) bad "真 du：未能从报告解析出 ② 的 KiB（line=${real_line}）" ;;
+  *) if [ "${real_kb}" -ge 4096 ]; then ok "真 du：根为链接 + 文件级链接 → ②计量 ${real_kb} KiB（≥4096，-H 解引用生效）"
+     else bad "真 du：②只计 ${real_kb} KiB（<4096，-H 解引用未生效）"; fi ;;
+esac
+outreald="$(env PATH="${BASE_PATH}" STORAGE_PROJ="${REAL}/proj-dirlink" TA_SNAPSHOT_DIR="${REAL}/snap-empty" \
+                 "${ZSH_BIN}" "${SCRIPT}" daily 2>&1)"
+check_has "${outreald}" "发布期 \`.pre-slim\` 副本：0 个文件" "真 du：③不进入目录级链接（后方 2 MiB .pre-slim 不计）"
+check_not "${outreald}" "huge.db.pre-slim" "真 du：链接后方的 .pre-slim 实体不进报告"
+check_has "${outreald}" "**热备副本占用：绿**" "真 du：目录级链接不进入 → 不得误判「不可测」"
 
 # ---- 5. 只读纪律静态门 -----------------------------------------------------
 # 先剔行首注释，再剔 `[[ ... ]]` 比较与双引号字面量（它们不是重定向），
