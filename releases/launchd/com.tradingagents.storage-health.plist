@@ -30,15 +30,16 @@
        getcwd、ls ~/Documents 均 Operation not permitted）。本模板沿用
        /bin/zsh -c，脚本体与报告目录默认都在 ~/Documents 下，必须先用临时
        探针确认 zsh 在 launchd 下**可读 {{REPO_DIR}}、可写 {{LOG_DIR}}**；
-       否则热备行会长期停在「未知 ⚠️」、脚本每次以退出码 2 结束（DAV-2219 后
+       否则热备行会长期判「红（不可测）」、脚本每次以退出码 2 结束（DAV-2238 后
        不再静默报绿），而 {{LOG_DIR}} 不可写时报告根本落不了盘。
     2. 每周基线上传依赖 PATH 里的 quark CLI：launchd 不读登录 shell 配置，
        默认 PATH 不含 /opt/homebrew/bin，故此处显式注入。launchd 同样没有
        登录环境的代理变量（本机 Clash 7897），quark 直连能否成功**未验证**；
        失败时脚本只在报告里提示人工上传，不中断巡检。
 
-  退出码（DAV-2219）：全量测得且热备副本未超预算 = 0；有目录不可测 = 2（说明
-  在报告里，不静默）；本模板不设 KeepAlive，非零退出不会被无界重拉。
+  退出码（DAV-2238）：全量测得且热备预算未超 = 0；有测量项不可测 = 2（热备行判
+  「红（不可测，fail-closed）」，说明在报告里，不静默）；本模板不设 KeepAlive，
+  非零退出不会被无界重拉。
 -->
 <plist version="1.0"><dict>
   <key>Label</key>
