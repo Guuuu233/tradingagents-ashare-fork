@@ -66,6 +66,7 @@ import os
 import plistlib
 import pwd
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -310,14 +311,14 @@ def _check_path(
                 plist, key, raw, False, RC_PROVENANCE_PROBE_UNAVAILABLE,
                 f"{key} 的目标 {p.name} 无法判定是否带 {PROVENANCE_XATTR}：{exc}"
                 "——本检查 fail-closed，但这**不等于**文件带该属性；"
-                f"请人工复核（`xattr -p {PROVENANCE_XATTR} -- {raw}`）"
+                f"请人工复核（`xattr -p {PROVENANCE_XATTR} -- {shlex.quote(raw)}`）"
                 "或换到 xattr(1) 可用的环境重跑本检查后再安装，勿据此改名留档",
             )
         if carries:
             return Finding(
                 plist, key, raw, False, RC_TARGET_PROVENANCE,
                 f"{key} 的目标已存在且带 {PROVENANCE_XATTR} 扩展属性（`xattr -p "
-                f"{PROVENANCE_XATTR} -- {raw}` 可复核）——该属性标记它是由 bash/>> 等终端侧进程写出的，"
+                f"{PROVENANCE_XATTR} -- {shlex.quote(raw)}` 可复核）——该属性标记它是由 bash/>> 等终端侧进程写出的，"
                 "launchd 的 xpcproxy 不带 ~/Documents 的 TCC 授权、打不开它，"
                 "bootstrap 必 EX_CONFIG 78（属主/权限正常也会踩）；"
                 "请改名留档后由 launchd 重建该文件，不要复用该路径；"
@@ -352,7 +353,7 @@ def _check_path(
             f"{key} 指向**既存**日志文件 {p.name}（不带 {PROVENANCE_XATTR}，"
             f"属主=当前 uid、可追加写）——launchd 可正常打开并追加，故 WARN 不拦；"
             "这是与 10-18 事故形态不同的可接受状态，列出供知情："
-            "确认它不是终端侧遗留（`xattr -p " + PROVENANCE_XATTR + " -- " + str(p) + "`）即可继续安装",
+            "确认它不是终端侧遗留（`xattr -p " + PROVENANCE_XATTR + " -- " + shlex.quote(str(p)) + "`）即可继续安装",
             severity="WARN",
         )
     # 目标不存在即放行：父目录可写时 launchd 可自行创建新文件。
