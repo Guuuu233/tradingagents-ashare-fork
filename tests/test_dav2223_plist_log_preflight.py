@@ -303,7 +303,7 @@ _DROP_RETRY_SLEEP = 0.05
 
 
 def _drop_provenance(path: Path) -> None:
-    """确保沙箱文件不带 provenance。
+    """确保沙箱文件不带 provenance；**清不掉则 skip，而非 fail**（DAV-2274）。
 
     **DAV-2236 🟡-1**：``xattr -c`` 的正确语法是 ``xattr -c <file>``（清空该文件
     **全部**属性），**不接受属性名参数**。旧写法 ``xattr -c <attr> -- <path>`` 把
@@ -312,15 +312,35 @@ def _drop_provenance(path: Path) -> None:
     「宿主恰好没打标记」支撑——这正是本链反复出现的偶发假失败根源。
 
     macOS 可能在文件创建后**异步**补上 provenance 标记（DAV-2236 复审实测），
-    故此处「清理 → 探测验证」循环重试；末轮仍未清干净即报错，绝不静默返回一个
-    没清干净的文件让断言去解释。
+    故此处「清理 → 探测验证」循环重试。
+
+    **DAV-2274**：部分宿主（实测新建文件即被系统自动附加 ``com.apple.provenance``
+    且 ``xattr -c`` 无法清除）上，重试耗尽仍清不掉。这是**环境问题**，不是被测代码
+    行为，故此处改 ``pytest.skip`` 并在原因里写明「环境自动附加 com.apple.provenance」，
+    不得让环境差异伪装成产品缺陷。**探测/重试逻辑本身不变**（重试轮数、sleep、
+    ``xattr -p`` 只读探测、清理命令均与 DAV-2236 一致），改的只是「耗尽后怎么办」。
+
+    夹具绝不静默返回一个没清干净的文件让断言去解释。
+    """
+    if not _try_drop_provenance(path):
+        pytest.skip(
+            f"环境自动附加 {mod.PROVENANCE_XATTR} 且 {mod.XATTR_BIN} -c 无法清除：{path}"
+            "（宿主环境问题，非被测代码缺陷；DAV-2274）"
+        )
+
+
+def _try_drop_provenance(path: Path) -> bool:
+    """「清理 → 探测验证」重试循环；返回是否确已清干净（不含 skip 语义）。
+
+    与 :func:`_drop_provenance` 拆开，是为了让 skip 路径本身可被用例覆盖
+    （DAV-2274 新增用例：清不掉时必须 skip 而不是 fail）。
     """
     for _ in range(_DROP_RETRIES):
         subprocess.run([mod.XATTR_BIN, "-c", str(path)], capture_output=True)
         if not _probe_provenance(path):
-            return
+            return True
         time.sleep(_DROP_RETRY_SLEEP)
-    raise AssertionError(f"无法清除 {mod.PROVENANCE_XATTR}：{path}")
+    return False
 
 
 def _set_provenance(path: Path) -> None:
@@ -370,6 +390,61 @@ def test_provenance_check_precedes_owner_check(tmp_path, monkeypatch):
 
 
 @needs_xattr
+def test_drop_provenance_skips_instead_of_failing_when_attribute_survives(
+    tmp_path, monkeypatch
+):
+    """清不掉时必须 skip，绝不 fail（DAV-2274）。
+
+    背景：部分宿主上新建文件会被系统自动附加 ``com.apple.provenance`` 且
+    ``xattr -c`` 清不掉。改判 fail 会把环境问题伪装成产品缺陷。此处把
+    「探测恒为真」注入掉，稳定复现该环境，再断言走的是 skip 分支。
+    """
+    calls = []
+
+    def always_still_there(path):
+        calls.append(str(path))
+        return True
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: calls.append("clean"))
+    monkeypatch.setattr(sys.modules[__name__], "_probe_provenance", always_still_there)
+
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+
+    with pytest.raises(pytest.skip.Exception) as exc:
+        _drop_provenance(log)
+
+    reason = str(exc.value)
+    assert mod.PROVENANCE_XATTR in reason  # 原因写明环境自动附加哪个属性
+    assert "环境自动附加" in reason
+    # 清理重试逻辑本身不变：仍跑满 _DROP_RETRIES 轮清理
+    assert calls.count("clean") == _DROP_RETRIES
+
+    # 反面：探测为假时不得 skip（夹具不能把正常路径也跳过）
+    monkeypatch.setattr(
+        sys.modules[__name__], "_probe_provenance", lambda _p: False
+    )
+    assert _drop_provenance(log) is None
+
+
+def test_try_drop_provenance_reports_failure_without_skipping(tmp_path, monkeypatch):
+    """底层清理函数只报告布尔结果，不抛 skip——skip 决策只在夹具层做。"""
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_probe_provenance", lambda _p: True
+    )
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    assert _try_drop_provenance(log) is False
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_probe_provenance", lambda _p: False
+    )
+    assert _try_drop_provenance(log) is True
+
+
 def test_provenance_probe_reads_real_xattr_without_writing(tmp_path):
     """判定走 /usr/bin/xattr -p（只读）；不带属性时 rc != 0 → 放行。
 
