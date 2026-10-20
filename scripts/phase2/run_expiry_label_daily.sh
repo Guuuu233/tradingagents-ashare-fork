@@ -175,14 +175,26 @@ alert() {
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
 
-# DAV-2292 🟢-5 (round 3): a MANUAL run (not via launchd) with the default
-# WORK_ROOT writes into the PRODUCTION label dir and reads the REAL
+# DAV-2292 🟢-5 / 🟡-3 (round 4): a MANUAL run (not via launchd) with the
+# default WORK_ROOT writes into the PRODUCTION label dir and reads the REAL
 # credentials — the guard above only stops `source`, not `bash <script>`.
 # The reviewer hit exactly this on 2026-10-20 17:58:53 (overwrote the
 # production ALERT.launchd and appended to label_pipeline.log).
-# So: when TA_WORK_ROOT was NOT given explicitly, shout before doing it.
+#
+# The criterion must not fire on the NORMAL launchd path: the plist sets
+# TA_WORK_ROOT explicitly (so a launchd run never hits the first test).
+# A hand-run normally sets neither -> the warning fires exactly when it
+# should.
+#
+# DAV-2292 🟡-3 (round 4, follow-up): the second test ("and XPC_SERVICE_NAME
+# is unset") is NOT a reliable "is this launchd?" probe — the agent runtime
+# also exports XPC_SERVICE_NAME (e.g. com.davidliu.multica-steer), so a
+# MANUAL run from an agent shell would stay silent, which is exactly the
+# case we want to warn about. The trustworthy signal is the plist's own
+# TA_WORK_ROOT: the launchd job ALWAYS sets it, a hand-run never does
+# unless the operator deliberately does.
 if [ -z "${TA_WORK_ROOT:-}" ]; then
-    log "WARN running outside launchd with the PRODUCTION work root ${WORK_ROOT} — a manual run WILL write ${OUT_DIR} and read the real credentials. For a manual run always set TA_WORK_ROOT (temporary dir) and TA_ENV_FILE (temporary file)."
+    log "WARN manual run with the PRODUCTION work root ${WORK_ROOT} — this WILL write ${OUT_DIR} and read the real credentials. For a manual run always set TA_WORK_ROOT (temporary dir) and TA_ENV_FILE (temporary file)."
 fi
 
 # The KEY=VALUE gate — ONE definition, used by this wrapper and (extracted at
@@ -289,36 +301,51 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # stderr output is treated as a failed source (exit 16d) — a clean
     # credential file sources silently.
     #
-    # The stderr goes to a TEMP FILE, not into a command substitution: a
-    # command substitution would also capture the shell's own trace output
-    # (`set -x` writes to stderr) and, worse, the file's stdout. A temp
-    # file captures exactly the sourced file's stderr and nothing else.
+    # The stderr goes to a PRIVATE temp file, not into a command substitution:
+    # a command substitution would also capture the shell's own trace output
+    # (`set -x` writes to stderr) and, worse, the file's stdout.
+    #
+    # DAV-2292 🟡-2 (round 4): the temp file must be PRIVATE:
+    #   * `mktemp` creates it 0600 and the name is unpredictable;
+    #   * `umask 077` is a second line of defence (set inside the subshell so
+    #     it does not change this script's own umask);
+    #   * the old fixed name `.cred_src_err.$$` was 0644 (the wrapper sets no
+    #     umask; the shell default is 0022) and PREDICTABLE — another local
+    #     process could pre-create a symlink with that name and the `: >`
+    #     would truncate the target;
+    #   * the old fallback (no temp file -> look only at `$?`) REPLAYED the
+    #     bug this whole mechanism exists to fix (a file that passes the gate
+    #     but cannot be parsed was then accepted silently). So a missing
+    #     private temp file is now FAIL-CLOSED, not a degraded path.
     #
     # DISK DISCIPLINE: bash's syntax-error message quotes the offending
     # line — which for a credential file may BE a secret value. So the raw
     # stderr is NEVER written to the alert, the log or anywhere else: only
     # the LINE NUMBERS are extracted, the text itself is discarded, and the
     # temp file is removed immediately.
-    _src_errfile="${TMPDIR:-/tmp}/.cred_src_err.$$"
-    : >"${_src_errfile}" 2>/dev/null || _src_errfile=""
-    if [ -n "${_src_errfile}" ]; then
-        # shellcheck disable=SC1090
-        . "${ENV_FILE}" 2>"${_src_errfile}"
-        _src_rc=$?
-        _src_err="$(cat "${_src_errfile}" 2>/dev/null)"
-        rm -f "${_src_errfile}"
-    else
-        # no temp file available -> fall back to the status only
-        # shellcheck disable=SC1090
-        . "${ENV_FILE}"
-        _src_rc=$?
-        _src_err=""
+    _src_errfile="$(umask 077; mktemp "${TMPDIR:-/tmp}/.cred_src_err.XXXXXX" 2>/dev/null)" || _src_errfile=""
+    if [ -z "${_src_errfile}" ]; then
+        # fail closed: without a private temp file we cannot see the source's
+        # stderr, and looking only at `$?` would miss an error on an earlier
+        # line (the exact silent-pass this guard exists to prevent).
+        alert "cannot create a private temp file for ${ENV_FILE}'s stderr — refusing to source it blindly (TMPDIR=${TMPDIR:-/tmp})" 16
     fi
+    # shellcheck disable=SC1090
+    . "${ENV_FILE}" 2>"${_src_errfile}"
+    _src_rc=$?
+    _src_err="$(cat "${_src_errfile}" 2>/dev/null)"
+    rm -f "${_src_errfile}"
     set +a
     SOURCE_RC=${_src_rc}
     unset _src_rc
     set -u
-    _src_lines="$(printf '%s' "${_src_err}" | sed -n 's/.*: line \([0-9][0-9]*\):.*/\1/p' | tr '\n' ',' | sed 's/,$//')"
+    # DAV-2292 🟢-1 (round 4): the temp file NAME must not survive into the
+    # pipeline subprocess env (it is a script-private variable like the
+    # others the 🟡-1 round-2 fix already excluded).
+    unset _src_errfile
+    # DAV-2292 🟢-3 (round 4): bash prints TWO messages for one syntax
+    # error, both naming the same line -> "line(s) 1,1". Deduplicate.
+    _src_lines="$(printf '%s' "${_src_err}" | sed -n 's/.*: line \([0-9][0-9]*\):.*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')"
     unset _src_err
     if [ -n "${_src_lines}" ]; then
         _src_msg="credential file ${ENV_FILE} failed to source (bash reported a syntax error at line(s) ${_src_lines}) — no values injected"

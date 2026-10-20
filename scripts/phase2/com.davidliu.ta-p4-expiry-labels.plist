@@ -103,6 +103,13 @@
              600 file in a 700 dir, outside ~/Documents (TCC). No secret. -->
         <key>TA_ENV_FILE</key>
         <string>/Users/davidliu/ta-secrets/ta.env</string>
+        <!-- DAV-2292 🟡-3 (round 4): the production work root, stated
+             EXPLICITLY. The wrapper warns when TA_WORK_ROOT is NOT set
+             (that means "someone ran this by hand"), and this plist is
+             the launchd job — so the job itself must set it, otherwise
+             every nightly run logs a bogus "outside launchd" warning. -->
+        <key>TA_WORK_ROOT</key>
+        <string>/Users/davidliu/ta-p4-2e1e199f/work</string>
         <key>NO_PROXY</key>
         <string>127.0.0.1,localhost,100.64.0.0/10</string>
         <key>no_proxy</key>
