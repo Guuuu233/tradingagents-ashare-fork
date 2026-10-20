@@ -45,7 +45,9 @@
 #             4 destination unsafe (symlink, wrong location, non-absolute);
 #             5 copy failed; 6 verification failed;
 #             7 the timer's KEY=VALUE gate could not be read from the wrapper
-#             (refuse to install rather than check less).
+#             (refuse to install rather than check less);
+#             64 REFUSED to be sourced (DAV-2292 guard: sourcing this script
+#             would read the real credentials and write the real destination).
 #
 # REMINDER (card item 5): rotating a key means updating BOTH the source
 # .env and this copy — see releases/launchd/TA_ENV_TCC.md.
@@ -87,11 +89,18 @@ while [ "$#" -gt 0 ]; do
             # positional parameters untouched -> the while loop never
             # advances -> silent 100% CPU spin. A missing value must fail
             # loudly instead (this script is the release card's first step).
-            # NOTE: the COUNT must be checked in a separate command before
-            # "$2" is ever expanded — under `set -u` the expansion of an
-            # unset positional parameter aborts the script by itself (and
-            # `a || b` does NOT help: bash expands every word of the whole
-            # list before running it).
+            # NOTE: the COUNT must be checked in a command that does NOT
+            # mention "$2" at all. Under `set -u`, expanding an unset
+            # positional parameter aborts the script by itself, so any
+            # command that mentions "$2" needs a preceding, separate
+            # count check. THE REAL RULE (DAV-2292 🟢-1): a command that
+            # expands "$2" must be preceded by an independent count check.
+            # (An earlier note here claimed that `a || b` cannot help
+            # because "bash expands every word of the whole list" — that
+            # was wrong and is retracted: `||`/`&&` DO short-circuit, so
+            # when the count test succeeds the "$2" test never runs and
+            # nothing aborts. The separate count check is what the code
+            # below does, and it is what makes the rule obvious.)
             if [ "$#" -lt 2 ]; then
                 RC=2 fail "--src needs a path"
             fi

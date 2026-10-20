@@ -71,7 +71,10 @@
 #               16d file failed to source (syntax error etc.),
 #             17 post-run all-gap SW-leg guard,
 #             18 credential file READ denied by the OS (TCC/EACCES) —
-#             fail-closed, no source attempt, alert names the denial.
+#             fail-closed, no source attempt, alert names the denial,
+#             64 REFUSED to be sourced (DAV-2292 guard: this script is an
+#             executable, not a sourceable library — sourcing it would
+#             write the production label dir and read the real credentials).
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
@@ -97,15 +100,34 @@ if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then
     exit 64
 fi
 
-# --- fixed paths (same layout as the installed 19:45 ledger timer) ---------
+# --- paths ------------------------------------------------------------------
+# DAV-2303 (总控 10-20 17:20 令): 三处写死值必须去掉，否则照候选装上去
+# 10-22 20:10 的标签任务会以 exit 11 失败：
+#   * CODE_DIR 写死 ta-p4-ef8aa9d9 → 该检出停在 10-14 的 f41b9cf5，**里面
+#     没有 expiry_label_pipeline.py**（15:56 那次手工执行正是这么 exit 11 的）；
+#   * PYTHON 写死主检出的 .venv310 → 既在 ~/Documents（TCC 墙后面），也是
+#     DAV-2087 认定的最大单点（总控 10-17 令已要求迁离）；
+#   * 交易日闸的 sys.path 写死同一批检出。
+# 口径：**env 优先 + 脚本自身所在目录兜底**（两个都拿不到才报错退出）：
+#   CODE_DIR  = $TA_CODE_DIR        → 脚本所在目录的上一级（scripts/ 的父目录）
+#   PYTHON    = $TA_PYTHON          → 独立 venv ~/ta-venv/py310（不写死主检出）
+#   WORK_ROOT = $TA_WORK_ROOT       → 标签工作树根（数据面，与检出无关）
+# 脚本自身目录推导：launchd 的 WorkingDirectory 不可信（可能被改），所以用
+# BASH_SOURCE 的绝对路径推导，而不是 $PWD。
+SCRIPT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
+# 脚本在 <checkout>/scripts/phase2/ 下 → 检出根 = 上两级
+SCRIPT_CHECKOUT="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
+
 PYTHON="${TA_PYTHON:-/Users/davidliu/ta-venv/py310/bin/python}"
 # DAV-2284: TA_ENV_FILE is what the plist sets. launchd does NOT expand `~`
 # or `$VARS` in EnvironmentVariables, so the plist value must be absolute;
 # a non-absolute value is rejected below rather than silently misread.
 ENV_FILE="${TA_ENV_FILE:-/Users/davidliu/Documents/TradingAgents-AShare/.env}"
-CODE_DIR="/Users/davidliu/ta-p4-ef8aa9d9"
+# DAV-2303: 检出目录不再写死。env 优先（plist 显式给出），否则用脚本自身所在
+# 检出（安装时把这个脚本放在哪个检出，管道脚本就在哪个检出里找）。
+CODE_DIR="${TA_CODE_DIR:-${SCRIPT_CHECKOUT}}"
 PIPELINE="${CODE_DIR}/scripts/phase2/expiry_label_pipeline.py"
-WORK_ROOT="/Users/davidliu/ta-p4-2e1e199f/work"
+WORK_ROOT="${TA_WORK_ROOT:-/Users/davidliu/ta-p4-2e1e199f/work}"
 LEDGER="${WORK_ROOT}/phase2-ledger/forward_ledger.jsonl"
 OUT_DIR="${WORK_ROOT}/phase2-labels"
 ALERT_FILE="${OUT_DIR}/ALERT.launchd"
@@ -232,6 +254,16 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     set +u
     # shellcheck disable=SC1090
     . "${ENV_FILE}"
+    # DAV-2292 🟡-1: allexport must be turned OFF again right after the
+    # source — and the capture of $? must happen AFTER that, otherwise
+    # SOURCE_RC itself becomes an exported variable. Leaving allexport on
+    # exports EVERY later assignment of this script — including its own
+    # bookkeeping variables (SOURCE_RC, TODAY, IS_TRADING, CHECK_RC, RUN_RC,
+    # GAP_CHECK, GAP_LEVEL, GAP_RC) — into the pipeline subprocess env
+    # (measured on the candidate: 16 items vs 8 on the parent side).
+    # The credential VALUES must still be exported (that is what `set -a` was
+    # for); the script's own variables must NOT leak.
+    set +a
     SOURCE_RC=$?
     set -u
     # A readable file that passes the gate can still fail to source (syntax

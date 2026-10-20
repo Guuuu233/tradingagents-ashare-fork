@@ -44,11 +44,56 @@
      see releases/launchd/TA_ENV_TCC.md and the RESTART.md block it ships.
 
      Path coupling (sync all of these on checkout relocation):
-       1) ProgramArguments below,
-       2) WorkingDirectory below,
-       3) CODE_DIR inside run_expiry_label_daily.sh (the trading-day gate
-          now takes it as argv, so it is declared once),
+       1) ProgramArguments below  — {{LABELS_DIR}},
+       2) WorkingDirectory below   — {{LABELS_DIR}},
+       3) TA_CODE_DIR below        — {{LABELS_DIR}} (the pipeline script
+          lives in the SAME checkout as this wrapper; if the two ever
+          differ, TA_CODE_DIR must point at the one holding
+          scripts/phase2/expiry_label_pipeline.py),
        4) TA_ENV_FILE below (independent of the checkout path).
+
+     Install (inside the release card):
+       # 1. the checkout that holds run_expiry_label_daily.sh AND
+       #    expiry_label_pipeline.py — ONE directory, no drift:
+       LABELS_DIR=/Users/davidliu/ta-p4-labels-<sha>
+       git clone <repo> "${LABELS_DIR}"
+       git -C "${LABELS_DIR}" checkout <sha>
+       #    sanity: the pipeline script MUST exist there, else the timer
+       #    exits 11 at 20:10 (this is exactly how 2026-10-20 15:56 failed)
+       test -f "${LABELS_DIR}/scripts/phase2/expiry_label_pipeline.py" || exit 1
+       # 2. credential copy OUTSIDE ~/Documents (launchd /bin/bash is
+       #    TCC-denied reads there): dir 700, file 600, never a bare `cp`.
+       scripts/phase2/ta_secrets_install.sh          # install
+       scripts/phase2/ta_secrets_install.sh check    # strict preflight
+       # 3. install the plist with the placeholders resolved:
+       sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+           scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
+           > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+       grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist  # must be 0
+       plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+       launchctl bootstrap gui/$UID \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+       launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels   # one manual run
+     Remove:
+       launchctl bootout gui/$UID/com.davidliu.ta-p4-expiry-labels
+       rm ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+
+     DAV-2284 — TA_ENV_FILE: launchd does NOT expand `~`, `$HOME` or any
+     variable in EnvironmentVariables, so the value below MUST stay a
+     literal absolute path. It points at a 600 copy in a 700 dir outside
+     ~/Documents because macOS refuses launchd-spawned /bin/bash ANY read
+     under ~/Documents (measured 2026-10-19: grep and `source` both
+     "Operation not permitted" -> a misleading "TUSHARE_TOKEN missing",
+     exit 13). Nothing secret lives in this file. Rotating a key means
+     updating BOTH ~/Documents/TradingAgents-AShare/.env and the copy —
+     see releases/launchd/TA_ENV_TCC.md and the RESTART.md block it ships.
+
+     DAV-2303 (总控 10-20 17:20 令) — no hard-coded checkout any more:
+     every path that used to be baked into the shell script now comes from
+     this plist (TA_CODE_DIR) or from the script's own location, so moving
+     the checkout is a plist-level change, never a code change. The
+     2026-10-20 15:56 failure (exit 11) was exactly this: the script still
+     pointed at ta-p4-ef8aa9d9, a checkout with no expiry_label_pipeline.py.
 -->
 <plist version="1.0">
 <dict>
@@ -57,12 +102,20 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/davidliu/ta-p4-ef8aa9d9/scripts/phase2/run_expiry_label_daily.sh</string>
+        <string>{{LABELS_DIR}}/scripts/phase2/run_expiry_label_daily.sh</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/davidliu/ta-p4-ef8aa9d9</string>
+    <string>{{LABELS_DIR}}</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- DAV-2303: the checkout that holds expiry_label_pipeline.py.
+             Must be the SAME checkout as ProgramArguments above. -->
+        <key>TA_CODE_DIR</key>
+        <string>{{LABELS_DIR}}</string>
+        <!-- DAV-2303: the interpreter (independent venv, NOT the in-checkout
+             .venv310 — 总控 10-17 令迁离 + ~/Documents 位于 TCC 墙后). -->
+        <key>TA_PYTHON</key>
+        <string>/Users/davidliu/ta-venv/py310/bin/python</string>
         <!-- DAV-2284: absolute literal path — launchd does not expand ~ here.
              600 file in a 700 dir, outside ~/Documents (TCC). No secret. -->
         <key>TA_ENV_FILE</key>
