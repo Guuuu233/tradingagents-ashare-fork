@@ -367,15 +367,17 @@ source **那个副本**。
 
 ### 10.5 残留
 
-- `ALERT.launchd` **现状更正（2026-10-20 17:58:53）**：该文件自 17:58:53 起是
-  **455 字节的 exit 16 假告警**（复审员那次手工执行留下的痕迹：
-  `reason=credential file missing or not readable: /nonexistent-review/.env`），
-  **不是** 0 字节空文件，也不是有效告警。15:56 那次的原始内容仍完整保存在
-  `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11）——**留证件未动**。
-  若发布卡要求目录干净，可删 `ALERT.launchd` 这个假告警（**不删留证件**）——
-  本卡未动生产目录。
-- `label_pipeline.log` 的 15:56 痕迹在第 41-43 行（三行），17:58:53 的复审误执
-  又追加了 2 行（末尾）；均未删（属取证材料）。
+- `ALERT.launchd` **现状（截至 2026-10-20 20:10:05）**：**378 字节、exit 13**，
+  内容是**现装作业的定时运行**留下的（`reason=TUSHARE_TOKEN missing after
+  sourcing /Users/davidliu/Documents/TradingAgents-AShare/.env`）—— 20:10 的
+  launchd 定时运行又失败了一次（**DAV-2284 要修的 TCC 问题此刻仍在生产上每夜
+  复现**；该检出跑的是 10-17 那份 wrapper，没有 `TA_ENV_FILE` 支持）。
+  此前它先后被 15:56（exit 11）与 17:58:53（复审误执，exit 16）覆盖过。
+  **唯一取证锚点**是 `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11，
+  15:56 的原文）—— **留证件未动，全程只读未删未改**。
+  若发布卡要求目录干净，可删 `ALERT.launchd`（**不删留证件**）——本卡未动生产目录。
+- `label_pipeline.log` 现为 **47 行**（2026-10-20 20:10:05）：15:56 的三行在
+  第 41-43 行，17:58:53 的两行与 20:10:05 的两行在末尾。均未删（属取证材料）。
 - 15:56 误执行**读到了真实凭据**（仅在进程内，未落盘、未外泄）；本卡未轮换密钥，
   是否轮换由总控定。
 
@@ -704,3 +706,87 @@ sys.path.insert(0, "/Users/davidliu/ta-p4-ef8aa9d9")
    `skip:`（非交易日）或 `timer done`（交易日）——**不是** `ALERT`；
 5. 旧检出 `~/ta-p4-labels-cb82987b` 的 3 行改动在装好之后**不再需要**
    （总工 10-20 17:20 令的第二项核对），但**本卡不代为清理**（需总工确认后再动）。
+
+## 15. 第五轮返修（DAV-2292 对 `5239b320` 的 1🟡 + 5🟢）
+
+### 15.1 🟡-1 「原文一律丢弃」在代码里不成立：`_src_err` 被 `set -a` 导出
+
+**复审诊断正确且已复现**：`set -a` 把窗口内**每一次赋值**标记为 exported，
+所以 `_src_err="$(cat …)"`（装的是 `.` 的原始 stderr，而 bash 的语法错消息
+**逐字引用出错行** → 对凭据文件那行**就是值**）会被导出，
+`:337` 的 `rm` 与 `:348` 的 `sed`/`sort`/`tr` 三个 helper 的 environ 里都带着原文。
+这与代码里「the raw stderr is NEVER written … anywhere else」的断言**直接矛盾**，
+也与第四轮把「0644 可预测名临时文件装同一段原文」判为 🟡 的口径不自洽
+（同一段原文，换了个容器）。
+
+**更深的根因（复审未点出、本轮自查发现）**：**`_src_errfile`（临时文件路径）
+也在窗口内赋值**，同样被导出 → helper 的 env 里还带着那个路径。
+
+**修法（顺序即修法）**：临时文件**在窗口外**创建，窗口只包住 `.` 本身：
+
+```bash
+_src_errfile="$(umask 077; mktemp …)" || _src_errfile=""   # 窗口外
+[ -z "${_src_errfile}" ] && alert … 16                      # 窗口外
+set -a            # ← 窗口现在只包住 source
+set +u
+. "${ENV_FILE}" 2>"${_src_errfile}"
+_src_rc=$?
+set -u
+set +a            # ← 立刻关
+_src_err="$(cat "${_src_errfile}" 2>/dev/null)"   # 普通变量，不导出
+rm -f "${_src_errfile}"
+unset _src_errfile   # ← 在任何后续 helper 之前
+SOURCE_RC=${_src_rc}; unset _src_rc
+set -u
+```
+
+（`SOURCE_RC` 的捕获位置**未动** —— 复审明确说它本来就对。）
+
+### 15.2 用例从「空检查」变成「真闸」
+
+**问题 2（原用例守不住）**：用例名宣称 `…_never_reaches_alert_log_or_child_env`，
+断言却只有三条，其中 `:959` 拿到的是**路径名字符串列表**、不是文件内容，
+且**没有任何一条 query 子进程 env**；桩解释器也不 dump env。
+复审的变异测试（把泄漏做大）→ **41 条仍全绿**。
+
+**本轮的三处补强**：
+1. 桩解释器在收到环境时 **dump 一次 `env`**（`STUB_ENV_DUMP`）；
+2. `:959` 改成**真的读文件内容**（`p.is_file()` → `p.read_text()`），
+   并排除「输入的凭据文件本身」；
+3. 新增 **helper env 记录器**：把 `cat`/`rm`/`sed`/`sort`/`tr` 换成记录自己
+   environ 的桩（装在 PATH 前面，wrapper 调的是**裸命令**，只能靠 PATH 拦截），
+   断言 `_src_err=`、`_src_errfile=` 与**假值**都不在其中。
+
+> 途中踩到的三个坑（都写进注释）：
+> - `cat`/`rm` 在 macOS 是 `/bin/`，`sed`/`sort`/`tr` 在 `/usr/bin/` ——
+>   桩里写死 `/usr/bin/$tool` 会让 `rm` 桩报 `No such file or directory`，
+>   文件**永远删不掉**，测试误报「有残留」；
+> - 桩目录要注入 wrapper **自己 export 的那行 PATH**（wrapper 会覆盖 PATH），
+>   塞进子进程 env 没用；
+> - 测试用的临时文件必须落在 `tmp_path` 内（改写 wrapper 里的 `mktemp` 模板），
+>   否则会污染共享 `/tmp`，并让「无残留」断言被**别的运行**的文件带崩。
+
+### 15.3 变异测试（证明用例是真闸）
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| A：把 `_src_err` 的导出做大（复审员第五轮的做法：`export _src_err`） | 至少 1 条红 | **1 failed**（`test_the_quoted_credential_line_never_reaches_alert_log_or_child_env`），40 passed |
+| B：退回上一轮的可预测 0644 临时文件（第四轮打回项） | 至少 1 条红 | **1 failed**（`test_stderr_temp_file_is_private_and_leaves_nothing_behind`），40 passed |
+
+（两次变异都在**副本**上做，跑完即还原；仓库文件零改动。）
+
+### 15.4 5 条 🟢
+
+| 编号 | 处理 |
+|---|---|
+| 🟢-1 | `test_stderr_temp_file_is_private_and_leaves_nothing_behind` 原来不断言 0600、不断言名字不可猜（复审变异测试：退回可预测 0644 仍 1 passed）→ 现在用**探针桩**（`cat` 桩 stat 它被要求读的文件）把 **mode 与 path** 记录下来，断言 mode ∈ {600,400}、名字不是 `.$$` 形式、后缀 ≥ 6 字符；并把 wrapper 的临时文件重定向到 `tmp_path` 内 |
+| 🟢-2 | plist 里 work root 有 3 处裸字面量 → 全部改用 **`{{WORK_ROOT}}`** 占位符（`TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`），「Path coupling」补第 5 项，安装段的 `sed` 补 `{{WORK_ROOT}}` 替换，检查段补 `StandardOutPath` 的占位符核对 |
+| 🟢-3 | 「手工执行」WARN 打在 `mkdir -p "${OUT_DIR}"` **之后** → 现在在**第一笔写之前**先往 **stderr** 打一行（`log()` 要写 `LOG_FILE`（在 OUT_DIR 内）无法整体前置，但 stderr 可以） |
+| 🟢-4 | 退出码表 16a–16e 漏了「拿不到私有临时文件」这条 → 补 **16f**（并把「五种原因」改成「六种」） |
+| 🟢-5 | 文档现场数字被今晚 20:10 的运行写旧 → 更正为「`ALERT.launchd` **378 字节、exit 13**（现装作业的定时运行）、`label_pipeline.log` **47 行**；15:56 的原文仍完整保存在 `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11），**留证件未动**」 |
+
+### 15.5 本轮新增用例（3 条）
+
+`test_stderr_temp_file_is_private_and_leaves_nothing_behind`（改为断言 mode/名字/残留）、
+`test_the_quoted_credential_line_never_reaches_alert_log_or_child_env`（补子进程 env 与
+文件内容断言）、`test_plist_work_root_appears_in_exactly_three_places_as_one_placeholder`。

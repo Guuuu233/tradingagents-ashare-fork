@@ -41,6 +41,15 @@ BASE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
 # detectable: no real vendor token ever appears in a test file.
 FAKE_TOKEN = "dav2284-fake-token-NOT-A-SECRET-0001"
 
+# Real tool paths on macOS (rm/cat are in /bin, sed/sort/tr in /usr/bin).
+REAL_TOOL_PATHS = {
+    "cat": "/bin/cat",
+    "rm": "/bin/rm",
+    "sed": "/usr/bin/sed",
+    "sort": "/usr/bin/sort",
+    "tr": "/usr/bin/tr",
+}
+
 
 def _stub_python(bin_dir: Path) -> Path:
     """Interpreter stub: the trading-day probe answers "non-trading day", so
@@ -51,6 +60,10 @@ def _stub_python(bin_dir: Path) -> Path:
     stub.write_text(
         "#!/usr/bin/env bash\n"
         'if [ -n "${STUB_PYTHON_CALLS:-}" ]; then echo call >> "${STUB_PYTHON_CALLS}"; fi\n'
+        # DAV-2292 round 5: dump the environment this child actually
+        # received — the ONLY way to prove that a script-private variable
+        # did not leak into the subprocess env.
+        'if [ -n "${STUB_ENV_DUMP:-}" ]; then env > "${STUB_ENV_DUMP}"; fi\n'
         'input="$(cat 2>/dev/null)"\n'
         'case "$input" in\n'
         '    *is_cn_trading_day*) echo "2026-10-14 False"; exit 0 ;;\n'
@@ -124,6 +137,41 @@ def _run_wrapper(tmp_path: Path,
     src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src, flags=re.MULTILINE)
     if grep_rc is not None:
         src = src.replace("/usr/bin/grep", str(_stub_grep(bin_dir, grep_rc)))
+    # DAV-2292 round 5: a helper stub that records the ENVIRONMENT it was
+    # given. The wrapper reads the source's stderr with `cat`, deletes the
+    # temp file with `rm` and post-processes the text with `sed`/`sort`/`tr`
+    # — if any of them inherits a script-private variable (e.g. `_src_err`,
+    # which holds bash's syntax-error text QUOTING the offending line), the
+    # credential value is in that helper's environ.
+    helper_dump = (extra_env or {}).get("STUB_HELPER_ENV_DUMP")
+    tempfile_probe = (extra_env or {}).get("STUB_TEMPFILE_PROBE")
+    if helper_dump or tempfile_probe:
+        # One recorder per tool, named after the tool, installed in a dir
+        # that is PREPENDED to PATH: the wrapper calls `cat`/`rm`/`sed`
+        # unqualified, so PATH is the only way to intercept them.
+        rec_dir = bin_dir / "rec"
+        rec_dir.mkdir(exist_ok=True)
+        for tool in ("cat", "rm", "sed", "sort", "tr"):
+            rec = rec_dir / tool
+            rec.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [ -n "${STUB_HELPER_ENV_DUMP:-}" ]; then\n'
+                '    { echo "--- helper: $0"; env; } >> "${STUB_HELPER_ENV_DUMP}"\n'
+                "fi\n"
+                # the tempfile probe: stat whatever `cat` is asked to read
+                'if [ -n "${STUB_TEMPFILE_PROBE:-}" ] && [ -f "${1:-}" ]; then\n'
+                '    case "${1}" in\n'
+                '        *.cred_src_err.*) { echo "path=${1} mode=$(/usr/bin/stat -f \'%Lp\' \"${1}\")"; '
+                '               } >> "${STUB_TEMPFILE_PROBE}" ;;\n'
+                "    esac\n"
+                "fi\n"
+                # NOTE: the real tool paths differ on macOS (rm/cat live in
+                # /bin, sed/sort/tr in /usr/bin) — hardcoding /usr/bin made
+                # the `rm` stub fail with "No such file or directory", so the
+                # temp file was never deleted and the test saw a leftover.
+                f"exec {REAL_TOOL_PATHS[tool]} \"$@\"\n",
+                "utf-8")
+            rec.chmod(0o755)
     shutil.copy(REPO / "scripts" / "phase2" / "expiry_label_pipeline.py",
                 code_dir / "scripts" / "phase2" / "expiry_label_pipeline.py")
     script = sandbox / "wrapper.sh"
@@ -131,6 +179,18 @@ def _run_wrapper(tmp_path: Path,
 
     env = dict(BASE_ENV)
     env.update(extra_env or {})
+    if helper_dump or tempfile_probe:
+        # the wrapper exports its own PATH, so the recorder dir has to be
+        # injected into THAT line, not just into the subprocess env
+        rec_dir = bin_dir / "rec"
+        src = src.replace('export PATH="/usr/bin:/bin:/usr/sbin:/sbin"',
+                          f'export PATH="{rec_dir}:/usr/bin:/bin:/usr/sbin:/sbin"')
+        # the wrapper's own temp file must land INSIDE tmp_path too, so a
+        # leftover can never be mistaken for another run's file (and never
+        # pollutes the shared /tmp)
+        src = src.replace('"${TMPDIR:-/tmp}/.cred_src_err.XXXXXX"',
+                          f'"{tmp_path}/.cred_src_err.XXXXXX"')
+        script.write_text(src, "utf-8")
     proc = subprocess.run(["/bin/bash", str(script)], capture_output=True,
                           text=True, timeout=60, env=env)
     out_dir = work_root / "phase2-labels"
@@ -687,7 +747,8 @@ def test_plist_carries_the_checkout_as_a_placeholder_and_env_var():
     assert "{{LABELS_DIR}}/scripts/phase2/run_expiry_label_daily.sh" in blob
     assert "<key>TA_CODE_DIR</key>\n        <string>{{LABELS_DIR}}</string>" in blob
     # after the documented sed, both must point at the same absolute dir
-    resolved = blob.replace("{{LABELS_DIR}}", "/Users/davidliu/ta-p4-labels-ab12")
+    resolved = blob.replace("{{LABELS_DIR}}", "/Users/davidliu/ta-p4-labels-ab12") \
+                   .replace("{{WORK_ROOT}}", "/Users/davidliu/ta-p4-2e1e199f/work")
     with tempfile.NamedTemporaryFile("wb", suffix=".plist", delete=False) as fh:
         fh.write(resolved.encode("utf-8"))
         tmp_plist = fh.name
@@ -915,15 +976,45 @@ def test_stderr_temp_file_is_private_and_leaves_nothing_behind(tmp_path):
     """DAV-2292 🟡-2 (round 4): the source's stderr used to be written to a
     FIXED, PREDICTABLE name (`.cred_src_err.$$`) with the shell's default
     umask (0022 -> 0644), i.e. the quoted secret line was copied into a
-    world-readable file. Now the file must be created by `mktemp` (0600,
-    unpredictable name) and must not survive the run."""
+    world-readable file.
+
+    DAV-2292 round 5: this test only asserted the exit code and "no
+    leftovers" — it never checked the MODE or the name, so reverting to the
+    predictable 0644 file still passed (the reviewer proved it with a
+    mutation test). Now the mode and the name are asserted directly: a
+    recorder stub captures the file's mode and path at the moment the
+    wrapper touches it."""
     cred = tmp_path / "bad.env"
     cred.write_text("A=((\n", "utf-8")
-    res = _run_wrapper(tmp_path, env_file=cred)
+    # The probe is a `cat` stub: the wrapper reads the temp file with
+    # `cat`, so the stub can stat the file it is asked to read and record
+    # the path and the mode — no test-only code in the wrapper itself.
+    seen = tmp_path / "seen-temp.txt"
+    res = _run_wrapper(tmp_path, env_file=cred,
+                       extra_env={"STUB_TEMPFILE_PROBE": str(seen)})
     assert res["rc"] == 16, (res["rc"], res["alert"])
-    # no leftover temp file with our prefix
-    leftovers = list(Path(tmp_path).glob(".cred_src_err*")) + \
-        list(Path("/tmp").glob(".cred_src_err*"))
+    # the probe must have captured something — otherwise the assertions
+    # below would be vacuous
+    assert seen.exists(), "the probe never ran — the test would be vacuous"
+    recorded = seen.read_text("utf-8")
+    assert "path=" in recorded, recorded
+    assert "mode=" in recorded, recorded
+    path = recorded.split("path=")[1].split()[0]
+    mode = recorded.split("mode=")[1].split()[0]
+    # 1) the file must NOT be group/other readable (mktemp creates 0600)
+    assert mode in ("600", "400"), f"temp file mode was {mode}, want 600"
+    # 2) the name must NOT be the predictable `.cred_src_err.$$` form
+    assert not path.endswith(str(os.getpid())), path
+    assert ".cred_src_err." in path, path
+    # ... and the random suffix must be more than one char (mktemp XXXXXX)
+    suffix = path.rsplit(".cred_src_err.", 1)[-1]
+    assert len(suffix) >= 6, path
+    # No leftover temp file. The check is scoped to the file THIS run
+    # created (the probe recorded its path): a glob over the shared /tmp
+    # would also catch files from other runs/sessions and make the test
+    # flaky for reasons that have nothing to do with the wrapper.
+    assert not Path(path).exists(), f"the temp file survived: {path}"
+    leftovers = list(Path(tmp_path).glob(".cred_src_err*"))
     assert not leftovers, leftovers
 
 
@@ -951,12 +1042,36 @@ def test_the_quoted_credential_line_never_reaches_alert_log_or_child_env(
     secret = "SUPERSECRETVALUE123"
     cred = tmp_path / "bad.env"
     cred.write_text(f"TUSHARE_TOKEN={secret}(\n", "utf-8")
-    res = _run_wrapper(tmp_path, env_file=cred)
+    env_dump = tmp_path / "child-env.txt"
+    res = _run_wrapper(tmp_path, env_file=cred,
+                       extra_env={"STUB_ENV_DUMP": str(env_dump)})
     assert res["rc"] == 16, (res["rc"], res["alert"])
     assert secret not in res["alert"], res["alert"]
     assert secret not in res["log"], res["log"]
-    # and not in the temp dir either
-    assert secret not in str(list(tmp_path.rglob("*")))
+    # DAV-2292 round 5: the file-content check used to read only the PATH
+    # NAMES ("str(list(rglob))"), never the contents — it could not fail.
+    for path in tmp_path.rglob("*"):
+        if not path.is_file() or path == cred:
+            continue          # the INPUT credential file legitimately holds it
+        body = path.read_text("utf-8", errors="replace")
+        assert secret not in body, f"{secret} leaked into {path}"
+    # ... and the CHILD PROCESS env must not carry it either. This is the
+    # assertion that was missing: `_src_err` was exported inside the
+    # `set -a` window, so every helper inherited the raw stderr — and bash's
+    # syntax-error message quotes the offending line, i.e. the value.
+    # The pipeline child does NOT run here (the source failed first, which
+    # is the point), so the child env is captured by a DIFFERENT mechanism:
+    # a stub `cat`/`sed`/`rm` that records the environ it was given. Any of
+    # them inheriting `_src_err` (i.e. the raw stderr) is the leak.
+    helper_env = tmp_path / "helper-env.txt"
+    res2 = _run_wrapper(tmp_path / "helpers", env_file=cred,
+                        extra_env={"STUB_HELPER_ENV_DUMP": str(helper_env)})
+    assert res2["rc"] == 16, (res2["rc"], res2["alert"])
+    assert helper_env.exists(), "no helper recorded its env — vacuous test"
+    recorded = helper_env.read_text("utf-8")
+    assert secret not in recorded, "the credential value reached a helper env"
+    assert "_src_err=" not in recorded, recorded
+    assert "_src_errfile=" not in recorded, recorded
 
 
 def test_launchd_run_does_not_log_the_manual_run_warning(tmp_path):
@@ -982,12 +1097,51 @@ def test_manual_run_without_ta_work_root_does_warn(tmp_path):
 
 def test_plist_declares_the_production_work_root(tmp_path):
     """DAV-2292 🟡-3 (round 4): the plist must set TA_WORK_ROOT, otherwise
-    every nightly launchd run would log the bogus "manual run" warning."""
+    every nightly launchd run would log the bogus "manual run" warning.
+    DAV-2292 🟢-2 (round 5): the value is now the {{WORK_ROOT}} placeholder
+    (three places share it), so the assertion is on the placeholder."""
     with PLIST.open("rb") as fh:
         plist = plistlib.load(fh)
     env = plist["EnvironmentVariables"]
-    assert env["TA_WORK_ROOT"] == "/Users/davidliu/ta-p4-2e1e199f/work"
-    assert env["TA_WORK_ROOT"].startswith("/")
+    assert env["TA_WORK_ROOT"] == "{{WORK_ROOT}}"
+    # ... and the wrapper's own default is the concrete production path
+    assert '/Users/davidliu/ta-p4-2e1e199f/work' in WRAPPER.read_text("utf-8")
+
+
+def test_plist_work_root_appears_in_exactly_three_places_as_one_placeholder():
+    """DAV-2292 🟢-2 (round 5): the work root used to be a bare literal in
+    three places (TA_WORK_ROOT, StandardOutPath, StandardErrorPath) that had
+    to be changed together by hand. Now all three carry the same
+    {{WORK_ROOT}} placeholder, so one sed moves them together."""
+    blob = PLIST.read_text("utf-8")
+    # count only the VALUES (the install comment also names the placeholder)
+    value_lines = [ln for ln in blob.splitlines() if "<string>" in ln]
+    assert sum(ln.count("{{WORK_ROOT}}") for ln in value_lines) == 3, \
+        [ln for ln in value_lines if "{{WORK_ROOT}}" in ln]
+    # no bare work-root literal may survive in a VALUE
+    for line in value_lines:
+        if "ta-p4-2e1e199f" in line:
+            raise AssertionError(f"bare work-root literal left in a value: {line}")
+    resolved = blob.replace("{{LABELS_DIR}}", "/tmp/labels-x") \
+                  .replace("{{WORK_ROOT}}", "/tmp/work-x")
+    with tempfile.NamedTemporaryFile("wb", suffix=".plist", delete=False) as fh:
+        fh.write(resolved.encode("utf-8"))
+        tmp_plist = fh.name
+    try:
+        with open(tmp_plist, "rb") as f:
+            parsed = plistlib.load(f)
+    finally:
+        os.unlink(tmp_plist)
+    env = parsed["EnvironmentVariables"]
+    assert env["TA_WORK_ROOT"] == "/tmp/work-x"
+    assert parsed["StandardOutPath"] == "/tmp/work-x/phase2-labels/launchd.out.log"
+    assert parsed["StandardErrorPath"] == "/tmp/work-x/phase2-labels/launchd.err.log"
+    # every value must be free of unresolved placeholders
+    for value in list(parsed["ProgramArguments"]) + \
+            list(parsed["EnvironmentVariables"].values()) + \
+            [parsed["WorkingDirectory"], parsed["StandardOutPath"],
+             parsed["StandardErrorPath"]]:
+        assert "{{" not in value and "}}" not in value, value
 
 
 def test_wrapper_documents_the_new_exit_code_and_env_override():

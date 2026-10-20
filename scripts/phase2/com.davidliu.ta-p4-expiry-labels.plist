@@ -22,7 +22,10 @@
           lives in the SAME checkout as this wrapper; if the two ever
           differ, TA_CODE_DIR must point at the one holding
           scripts/phase2/expiry_label_pipeline.py),
-       4) TA_ENV_FILE below (independent of the checkout path).
+       4) TA_ENV_FILE below (independent of the checkout path),
+       5) {{WORK_ROOT}} below — the work root appears in THREE places
+          (TA_WORK_ROOT, StandardOutPath, StandardErrorPath); they must be
+          changed together, so all three carry the same placeholder.
 
      Install (inside the release card):
        # 1. the checkout that holds run_expiry_label_daily.sh AND
@@ -38,7 +41,9 @@
        scripts/phase2/ta_secrets_install.sh          # install
        scripts/phase2/ta_secrets_install.sh check    # strict preflight
        # 3. install the plist with the placeholders resolved:
+       WORK_ROOT=/Users/davidliu/ta-p4-2e1e199f/work
        sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+           -e "s|{{WORK_ROOT}}|${WORK_ROOT}|g" \
            scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
            > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        # every placeholder must be resolved. The check looks at the VALUES
@@ -109,7 +114,7 @@
              the launchd job — so the job itself must set it, otherwise
              every nightly run logs a bogus "outside launchd" warning. -->
         <key>TA_WORK_ROOT</key>
-        <string>/Users/davidliu/ta-p4-2e1e199f/work</string>
+        <string>{{WORK_ROOT}}</string>
         <key>NO_PROXY</key>
         <string>127.0.0.1,localhost,100.64.0.0/10</string>
         <key>no_proxy</key>
@@ -124,9 +129,9 @@
         <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>10</integer></dict>
     </array>
     <key>StandardOutPath</key>
-    <string>/Users/davidliu/ta-p4-2e1e199f/work/phase2-labels/launchd.out.log</string>
+    <string>{{WORK_ROOT}}/phase2-labels/launchd.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/davidliu/ta-p4-2e1e199f/work/phase2-labels/launchd.err.log</string>
+    <string>{{WORK_ROOT}}/phase2-labels/launchd.err.log</string>
     <key>RunAtLoad</key>
     <false/>
 </dict>

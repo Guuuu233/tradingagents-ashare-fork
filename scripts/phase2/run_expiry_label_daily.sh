@@ -64,7 +64,7 @@
 #             12 ledger missing, 13 calendar unavailable OR required
 #             credential missing, 14 run failed (incl. the pipeline's own
 #             no-token fail-close, exit 2), 15 verify failed,
-#             16 credential file unusable — five distinct causes:
+#             16 credential file unusable — six distinct causes:
 #               16a path not absolute (launchd does not expand ~ / $VAR),
 #               16b file missing / not readable,
 #               16c file contains non KEY=VALUE lines,
@@ -73,6 +73,8 @@
 #                   its LAST command and would mask an earlier error),
 #               16e file has CRLF line endings (every value would carry a
 #                   trailing 0x0d and the SW leg would gap every row),
+#               16f no private temp file available to capture the source's
+#                   stderr (fail-closed rather than looking only at `$?`),
 #             17 post-run all-gap SW-leg guard,
 #             18 credential file READ denied by the OS (TCC/EACCES) —
 #             fail-closed, no source attempt, alert names the denial,
@@ -172,6 +174,17 @@ alert() {
     exit "${code}"
 }
 
+# DAV-2292 🟢-3 (round 5): the "manual run" warning must be visible BEFORE
+# the first write. `log()` writes into ${LOG_FILE}, which lives INSIDE
+# ${OUT_DIR} — so the log line cannot be moved earlier without the
+# directory existing. A plain stderr line can: it is emitted before
+# `mkdir -p "${OUT_DIR}"`, so a manual run shows the warning on the
+# terminal even if it goes on to overwrite the production alert file.
+if [ -z "${TA_WORK_ROOT:-}" ]; then
+    printf 'WARN manual run with the PRODUCTION work root %s — this WILL write %s and read the real credentials. For a manual run always set TA_WORK_ROOT (temporary dir) and TA_ENV_FILE (temporary file).\n' \
+        "${WORK_ROOT}" "${OUT_DIR}" >&2
+fi
+
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
 
@@ -196,6 +209,7 @@ log "timer start label=com.davidliu.ta-p4-expiry-labels"
 if [ -z "${TA_WORK_ROOT:-}" ]; then
     log "WARN manual run with the PRODUCTION work root ${WORK_ROOT} — this WILL write ${OUT_DIR} and read the real credentials. For a manual run always set TA_WORK_ROOT (temporary dir) and TA_ENV_FILE (temporary file)."
 fi
+
 
 # The KEY=VALUE gate — ONE definition, used by this wrapper and (extracted at
 # run time) by scripts/phase2/ta_secrets_install.sh, so the installer can
@@ -280,6 +294,23 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
         *) log "grep could not read ${ENV_FILE}: rc=${GREP_RC} ${GREP_ERR:-<no stderr>}"
            alert "凭据文件读取被拒（疑似系统授权）：launchd 下的 /bin/bash 无权读取 ${ENV_FILE}（grep rc=${GREP_RC}${GREP_ERR:+: ${GREP_ERR}}）—— 未 source 任何内容，fail-closed。请把凭据副本放到 ~/Documents 之外（如 /Users/davidliu/ta-secrets/ta.env，目录 700 / 文件 600，用 scripts/phase2/ta_secrets_install.sh 生成），并用 plist 的 TA_ENV_FILE 指过去" 18 ;;
     esac
+    # DAV-2292 🟡-1 (round 5): the temp file is created BEFORE the allexport
+    # window opens. `set -a` marks EVERY assignment inside the window as
+    # exported, so creating/reading the temp file inside it exported both
+    # the file NAME (`_src_errfile`) and — worse — the raw stderr text
+    # (`_src_err`), and bash's syntax-error message quotes the offending
+    # line, which for a credential file IS the value. Every helper spawned
+    # afterwards (cat, rm, sed, sort, tr) inherited it in its environ.
+    # Only the `.` source itself needs allexport (that is how the
+    # credential values get exported) — so the window opens AFTER the temp
+    # file exists and closes IMMEDIATELY after the source.
+    _src_errfile="$(umask 077; mktemp "${TMPDIR:-/tmp}/.cred_src_err.XXXXXX" 2>/dev/null)" || _src_errfile=""
+    if [ -z "${_src_errfile}" ]; then
+        # fail closed: without a private temp file we cannot see the source's
+        # stderr, and looking only at `$?` would miss an error on an earlier
+        # line (the exact silent-pass this guard exists to prevent).
+        alert "cannot create a private temp file for ${ENV_FILE}'s stderr — refusing to source it blindly (TMPDIR=${TMPDIR:-/tmp})" 16
+    fi
     set -a
     # DAV-2286 🟢-2: the KEY=VALUE gate already rejects every line that
     # could abort the script (a bare or double-quoted `$VAR` is outside the
@@ -323,26 +354,27 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # stderr is NEVER written to the alert, the log or anywhere else: only
     # the LINE NUMBERS are extracted, the text itself is discarded, and the
     # temp file is removed immediately.
-    _src_errfile="$(umask 077; mktemp "${TMPDIR:-/tmp}/.cred_src_err.XXXXXX" 2>/dev/null)" || _src_errfile=""
-    if [ -z "${_src_errfile}" ]; then
-        # fail closed: without a private temp file we cannot see the source's
-        # stderr, and looking only at `$?` would miss an error on an earlier
-        # line (the exact silent-pass this guard exists to prevent).
-        alert "cannot create a private temp file for ${ENV_FILE}'s stderr — refusing to source it blindly (TMPDIR=${TMPDIR:-/tmp})" 16
-    fi
     # shellcheck disable=SC1090
     . "${ENV_FILE}" 2>"${_src_errfile}"
     _src_rc=$?
+    # allexport off BEFORE anything else is read: the credential values are
+    # exported (that is what `set -a` was for), but the script's own
+    # bookkeeping — and above all the raw stderr text — must NOT be.
+    # DAV-2292 🟡-1 (round 5): `set -a` marks EVERY assignment inside the
+    # window as exported, so reading the stderr into a variable while it was
+    # still on exported the raw text (bash's syntax-error message quotes the
+    # offending line — for a credential file that IS the value) into the
+    # environ of every helper spawned afterwards.
+    set +a
     _src_err="$(cat "${_src_errfile}" 2>/dev/null)"
     rm -f "${_src_errfile}"
-    set +a
+    # DAV-2292 🟢-1 (round 4/5): the temp file NAME must not survive into
+    # any further helper's env — unset it HERE, right after `rm` and before
+    # the sed/sort/tr pipeline below is spawned.
+    unset _src_errfile
     SOURCE_RC=${_src_rc}
     unset _src_rc
     set -u
-    # DAV-2292 🟢-1 (round 4): the temp file NAME must not survive into the
-    # pipeline subprocess env (it is a script-private variable like the
-    # others the 🟡-1 round-2 fix already excluded).
-    unset _src_errfile
     # DAV-2292 🟢-3 (round 4): bash prints TWO messages for one syntax
     # error, both naming the same line -> "line(s) 1,1". Deduplicate.
     _src_lines="$(printf '%s' "${_src_err}" | sed -n 's/.*: line \([0-9][0-9]*\):.*/\1/p' | sort -u | tr '\n' ',' | sed 's/,$//')"
