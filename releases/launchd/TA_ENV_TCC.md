@@ -88,20 +88,31 @@ git -C "${LABELS_DIR}" status --porcelain | wc -l     # 期望 0
 scripts/phase2/ta_secrets_install.sh
 scripts/phase2/ta_secrets_install.sh --check     # 严格门禁，非 0 即停
 
-# 2. 装 plist：把 {{LABELS_DIR}} 替换成上面的检出（三处指向同一目录）
+# 2. 装 plist：把**两个**占位符都替换掉（三处 {{LABELS_DIR}} 指向同一检出；
+#    三处 {{WORK_ROOT}} 指向同一数据面）
+WORK_ROOT=/Users/davidliu/ta-p4-2e1e199f/work
 sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+    -e "s|{{WORK_ROOT}}|${WORK_ROOT}|g" \
     scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
     > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
-# 只查「值」是否还残留占位符（注释里提到占位符不算；raw 只输出数组首元素，
+# 只查「值」是否还残留**占位符本身**（`{{`）——不再查某个具体名字，
+# 以后再加占位符也不用改这段检查。
+# 只查「值」：注释里提到占位符不算（raw 只输出数组首元素，
 # 必须用 json 才能拿到全部元素）。
 # 注意：`grep -c` 在计数为 0（= 检查通过）时返回 1 —— 直接拿它进 `set -e`/`&&`
 # 链会把「通过」判成「失败」（DAV-2292 🟢-3）。用 `grep -q` 并把判断反过来：
 ! plutil -extract ProgramArguments json -o - \
-   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
    || { echo "unresolved placeholder in ProgramArguments"; exit 1; }
 ! plutil -extract EnvironmentVariables json -o - \
-   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
    || { echo "unresolved placeholder in EnvironmentVariables"; exit 1; }
+! plutil -extract StandardOutPath raw -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
+   || { echo "unresolved placeholder in StandardOutPath"; exit 1; }
+! plutil -extract StandardErrorPath raw -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
+   || { echo "unresolved placeholder in StandardErrorPath"; exit 1; }
 plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 
@@ -424,10 +435,27 @@ WORK_ROOT   = ${TA_WORK_ROOT:-/Users/davidliu/ta-p4-2e1e199f/work}
 | `EnvironmentVariables.TA_CODE_DIR` | `{{LABELS_DIR}}` |
 | `EnvironmentVariables.TA_PYTHON` | `/Users/davidliu/ta-venv/py310/bin/python` |
 | `EnvironmentVariables.TA_ENV_FILE` | `/Users/davidliu/ta-secrets/ta.env` |
+| `EnvironmentVariables.TA_WORK_ROOT` | `{{WORK_ROOT}}` |
+| `StandardOutPath` | `{{WORK_ROOT}}/phase2-labels/launchd.out.log` |
+| `StandardErrorPath` | `{{WORK_ROOT}}/phase2-labels/launchd.err.log` |
 
-**三处 `{{LABELS_DIR}}` 指向同一个目录** —— 这正是 15:56 违反的那条不变量。
-安装时 `sed` 替换（写法与 `releases/launchd/com.davidliu.ta-daily-reports.plist`
-一致），替换后 `grep -c '{{'` 必须为 0。
+**三处 `{{LABELS_DIR}}` 指向同一个检出** —— 这正是 15:56 违反的那条不变量；
+**三处 `{{WORK_ROOT}}` 指向同一个数据面**（DAV-2292 第六轮补登记：原先表里漏了
+`TA_WORK_ROOT`，而安装段的 `sed` 也只替换了 `{{LABELS_DIR}}` —— 照那版装出来的
+plist 残留 5 处 `{{WORK_ROOT}}`，其中 3 处是活值）。
+
+安装时 `sed` **两条都要替换**（写法与 `releases/launchd/com.davidliu.ta-daily-reports.plist`
+一致）：
+
+```bash
+sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+    -e "s|{{WORK_ROOT}}|${WORK_ROOT}|g" \
+    scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
+    > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+```
+
+替换后的检查**查残留占位符本身 `{{`**（不是查某个具体名字 —— 以后再加占位符
+也不用改检查段）：见 §3 的四条 `grep -q '{{'`。
 
 ### 11.4 回归用例（新增 6 个）
 
@@ -780,7 +808,7 @@ set -u
 | 编号 | 处理 |
 |---|---|
 | 🟢-1 | `test_stderr_temp_file_is_private_and_leaves_nothing_behind` 原来不断言 0600、不断言名字不可猜（复审变异测试：退回可预测 0644 仍 1 passed）→ 现在用**探针桩**（`cat` 桩 stat 它被要求读的文件）把 **mode 与 path** 记录下来，断言 mode ∈ {600,400}、名字不是 `.$$` 形式、后缀 ≥ 6 字符；并把 wrapper 的临时文件重定向到 `tmp_path` 内 |
-| 🟢-2 | plist 里 work root 有 3 处裸字面量 → 全部改用 **`{{WORK_ROOT}}`** 占位符（`TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`），「Path coupling」补第 5 项，安装段的 `sed` 补 `{{WORK_ROOT}}` 替换，检查段补 `StandardOutPath` 的占位符核对 |
+| 🟢-2 | plist 里 work root 有 3 处裸字面量 → 全部改用 **`{{WORK_ROOT}}`** 占位符（`TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`），「Path coupling」补第 5 项，安装段的 `sed` 补 `{{WORK_ROOT}}` 替换。**注**：当时自述「检查段补 `StandardOutPath` 的占位符核对」是**不成立**的 —— 那一轮并没有真的加上检查（全文没有任何一处查 `WORK_ROOT` 或查 `{{` 残留），复审员在第六轮指出后才真正补上（见 §17） |
 | 🟢-3 | 「手工执行」WARN 打在 `mkdir -p "${OUT_DIR}"` **之后** → 现在在**第一笔写之前**先往 **stderr** 打一行（`log()` 要写 `LOG_FILE`（在 OUT_DIR 内）无法整体前置，但 stderr 可以） |
 | 🟢-4 | 退出码表 16a–16e 漏了「拿不到私有临时文件」这条 → 补 **16f**（并把「五种原因」改成「六种」） |
 | 🟢-5 | 文档现场数字被今晚 20:10 的运行写旧 → 更正为「`ALERT.launchd` **378 字节、exit 13**（现装作业的定时运行）、`label_pipeline.log` **47 行**；15:56 的原文仍完整保存在 `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11），**留证件未动**」 |
@@ -805,7 +833,9 @@ set -u
 
 ```
 ed9c330dff600a764cd8c5ac990e75cfc66f7fd7
-  = scripts/phase2/expiry_label_pipeline.py @ 主干 tip e534a6f9
+  = scripts/phase2/expiry_label_pipeline.py @ 主干（当前 tip ec98d2bf；2026-10-20
+    实测该 tip 上仍是这个 blob —— 主干在此期间前进过，但 DAV-2271 的三个提交
+    未触及该文件）
   = 1444 行，DAV-1875 标签管道
 ```
 
@@ -867,3 +897,79 @@ git -C "${LABELS_DIR}" hash-object scripts/phase2/expiry_label_pipeline.py
 （`git diff e534a6f9 <候选> -- scripts/phase2/expiry_label_pipeline.py` 为空），
 所以本卡候选建出的检出，其该文件 blob **就是** `ed9c330d`。
 本节只是把令文登记进分支，供发布卡逐字照搬。
+
+## 17. 第六轮返修（DAV-2292 对 `233aeb96..c76d5913` 的 1🟡 + 2🟢）
+
+### 17.1 🟡-1 `{{WORK_ROOT}}` 只改了 plist，§3 的安装 `sed` 与检查都没跟上
+
+**复审诊断正确，已复现**（复审员给的最小复现，我逐字跑过）：
+
+```
+$ LABELS_DIR=/tmp/x
+$ sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+      scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist > /tmp/installed.plist
+$ grep -c '{{WORK_ROOT}}' /tmp/installed.plist            → 5   （3 处是活值）
+$ plutil -extract EnvironmentVariables.TA_WORK_ROOT raw -o - /tmp/installed.plist
+                                                            → {{WORK_ROOT}}
+$ plutil -extract StandardOutPath raw -o - /tmp/installed.plist
+                                                            → {{WORK_ROOT}}/phase2-labels/launchd.out.log
+```
+
+而 §3 紧跟的两条检查只 `grep -q 'LABELS_DIR'` → **全部通过**，`plutil -lint` 也是 OK。
+后果：照 §3 装，10-22 20:10 的标签任务会以 `TA_WORK_ROOT='{{WORK_ROOT}}'` 启动 →
+**exit 12**（forward ledger missing: `{{WORK_ROOT}}/phase2-ledger/forward_ledger.jsonl`），
+并在 `WorkingDirectory`（= release 检出）里建出一个名为 `{{WORK_ROOT}}` 的垃圾目录。
+
+**三处修法（纯文档 + plist 内嵌注释，不改脚本逻辑）**：
+
+1. **§3 的安装 `sed` 补第二条替换**（与 plist 自己的安装注释 `:44-46` 对齐）：
+   ```bash
+   WORK_ROOT=/Users/davidliu/ta-p4-2e1e199f/work
+   sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+       -e "s|{{WORK_ROOT}}|${WORK_ROOT}|g" \
+       scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
+       > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+   ```
+2. **检查段改成查「残留占位符本身 `{{`」**（不再查某个具体名字 → 以后再加占位符
+   也不用改检查段），并**补上 `StandardOutPath` / `StandardErrorPath` 两条**
+   （旧版漏了它们，而它们恰恰是活值）。§3 与 plist 内嵌注释**两处都改了**。
+3. **§15.4 🟢-2 的自述更正**：那一轮声称「检查段补 `StandardOutPath` 的占位符
+   核对」，**实际没补**（全文没有任何一处查 `WORK_ROOT` 或查 `{{` 残留）——
+   与本卡反复打回的「自述与实际不符」同型。已在 §15.4 标注为不成立。
+   **§11.3 的表格补了** `TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`
+   三行，并把「替换后 `grep -c '{{'` 必须为 0」这句与 §3 的实现对齐。
+
+**修后实测**（同一台机、逐字照抄 §3）：
+
+| 场景 | 旧检查 | 新检查 |
+|---|---|---|
+| 两个占位符都替换 | PASS | **PASS** ✓ |
+| 只替换 `{{LABELS_DIR}}`（旧 §3 的 sed） | **PASS ← 假绿** | **FAIL**（`EnvironmentVariables` / `StandardOutPath` / `StandardErrorPath` 三处都拦下） |
+| 模板原样（两个都没替换） | PASS | FAIL |
+
+### 17.2 2 条 🟢
+
+- **🟢-1 `_src_rc` 仍进 helper 的 environ** → 已修：`_src_rc` 是在 allexport 窗口内
+  赋值的（第五轮修 `_src_err` 时没顾上它），所以 `cat`/`rm` 的 env 里有 `_src_rc=0`。
+  修法用 `export -n _src_rc`（在窗口内、赋值之后去掉导出，**不改变值**），
+  随后立刻 `set +a`。**注意**：`set +a` 会把 `$?` 覆盖成 0，所以**不能**把捕获
+  放到 `set +a` 之后 —— 必须先捕获、再 `export -n`、再 `set +a`。
+  新增用例 `test_no_script_private_variable_reaches_a_helper_environ`
+  （断言 `_src_rc=` / `_src_err=` / `_src_errfile=` / `_src_lines=` 都不在
+  helper 的 environ 里）。**变异测试**：删掉那行 `export -n` → 该用例 FAILED ✓。
+- **🟢-2 §16.1 的「主干 tip e534a6f9」过期** → 改为「主干当前 tip `ec98d2bf`
+  上该 blob 仍为 `ed9c330d`（2026-10-20 实测）」。**结论不变**：
+  `git rev-parse ec98d2bf:scripts/phase2/expiry_label_pipeline.py` =
+  `ed9c330dff600a764cd8c5ac990e75cfc66f7fd7`（DAV-2271 的三个提交未触及该文件）。
+
+### 17.3 本轮新增/改强的用例（3 条）
+
+- `test_the_documented_placeholder_check_returns_zero_after_installation`
+  → 改为**替换两个占位符**，并用统一的 `_placeholder_check()` 助手跑**文档里那四条**
+  检查；模板原样必须 FAIL。
+- `test_the_documented_placeholder_check_catches_a_half_resolved_plist`
+  → **新增**：只替换 `{{LABELS_DIR}}` 时检查必须非 0（这正是复审员指出的假绿形态）。
+- `test_no_script_private_variable_reaches_a_helper_environ` → **新增**（🟢-1）。
+
+> 本轮**未改任何脚本的行为**（只加了 `export -n _src_rc` 一行去泄漏，
+> 不改判定逻辑），因此**无需重跑 RT-FULL**。
