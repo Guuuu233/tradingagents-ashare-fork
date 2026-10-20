@@ -438,6 +438,54 @@ def test_plist_declares_an_absolute_secret_free_ta_env_file():
         assert "\n" not in value and len(value) < 200, key
 
 
+def test_wrapper_refuses_to_be_sourced(tmp_path):
+    """DAV-2292 事故护栏：2026-10-20 15:56 有人用
+    `bash -c 'source run_expiry_label_daily.sh; echo "$VAR"'` 取常量，
+    而 `source` 会**执行**整个脚本 → 向**正式**标签目录写了 ALERT.launchd +
+    日志，并**读取了真实凭据**（默认 ENV_FILE 指向 ~/Documents/…/.env）。
+    标签数据没被写（exit 11 早退），但告警与日志被污染。
+    现在脚本被 source 时必须立刻拒绝：不写任何目录、不读任何凭据。"""
+    proc = subprocess.run(
+        ["/bin/bash", "-c",
+         f'source {WRAPPER}; echo "$CRED_KEY_VALUE_GATE"'],
+        capture_output=True, text=True, timeout=30,
+        env={**BASE_ENV, "HOME": str(tmp_path)})
+    assert proc.returncode == 64, (proc.returncode, proc.stdout, proc.stderr)
+    assert "REFUSED" in proc.stderr
+    assert "PRODUCTION label dir" in proc.stderr
+    # 什么都没被 source 出来（闸常量没被打印）
+    assert proc.stdout.strip() == "", proc.stdout
+
+
+def test_wrapper_refuses_to_be_sourced_writes_nothing_to_the_output_dir(
+        tmp_path):
+    """同一条护栏的写侧断言：被 source 时不得在输出目录留下任何文件。"""
+    out_dir = tmp_path / "out" / "phase2-labels"
+    out_dir.mkdir(parents=True)
+    src = WRAPPER.read_text("utf-8")
+    src = re.sub(r'^WORK_ROOT=.*$',
+                 f'WORK_ROOT="{tmp_path / "out"}"', src, flags=re.M)
+    copy = tmp_path / "w.sh"
+    copy.write_text(src, "utf-8")
+    proc = subprocess.run(
+        ["/bin/bash", "-c", f'source {copy} 2>/dev/null'],
+        capture_output=True, text=True, timeout=30,
+        env={**BASE_ENV, "HOME": str(tmp_path)})
+    assert proc.returncode == 64
+    assert list(out_dir.iterdir()) == [], "sourcing wrote into the output dir"
+
+
+def test_installer_also_refuses_to_be_sourced(tmp_path):
+    """DAV-2292 护栏的覆盖面：安装脚本同样不得被 source（否则会读真实凭据
+    并写真实目录）。"""
+    proc = subprocess.run(
+        ["/bin/bash", "-c", f'source {INSTALLER}'],
+        capture_output=True, text=True, timeout=30,
+        env={**BASE_ENV, "HOME": str(tmp_path)})
+    assert proc.returncode == 64, (proc.returncode, proc.stdout, proc.stderr)
+    assert "REFUSED" in proc.stderr
+
+
 def test_wrapper_documents_the_new_exit_code_and_env_override():
     """Cheap contract check: the header must keep advertising exit 18 and the
     TA_ENV_FILE indirection, so a future edit cannot silently drop either."""

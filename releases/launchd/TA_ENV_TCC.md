@@ -48,15 +48,15 @@ rc=1（文件干净）**，于是继续 `source`，`source` 同样 EPERM，最�
 
 ## 2. 改动清单（对照卡面 1–6）
 
-| #   | 卡面要求                                     | 落在哪                                                                                                                                                                                                                     |
-| --- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `ENV_FILE="${TA_ENV_FILE:-原路径}"`          | `run_expiry_label_daily.sh` 路径段；默认值仅为「终端手工跑」保留                                                                                                                                                           |
-| 2   | plist 增加 `TA_ENV_FILE=~/ta-secrets/ta.env` | `com.davidliu.ta-p4-expiry-labels.plist` → `EnvironmentVariables.TA_ENV_FILE`，写成**绝对路径** `/Users/davidliu/ta-secrets/ta.env`（launchd 不展开 `~`/`$VAR`，写成 `~` 会被逐字使用；非绝对路径由脚本 exit 16 拒绝）     |
-| 3   | 副本 600、目录 700                           | `ta_secrets_install.sh`：`umask 077` + `mkdir -p` 后 `chmod 700` + 临时文件 `chmod 600` + `rename(2)` 原子落位；`--check` 为**严格门禁**（非 600/700 直接非零退出）。运行时 wrapper 只 **WARN**（见 §6 权衡）              |
-| 4   | `grep` rc ≥ 2 → 单独告警 fail-closed         | wrapper 改为先取值 `GREP_RC` 再 `case`：`0`→exit 16（非法行），`1`→继续，`≥2`→**exit 18**「凭据文件读取被拒（疑似系统授权）」，不 `source`、不放行                                                                         |
-| 4b  | （DAV-2286 复审补充）                          | KEY=VALUE 闸的**唯一定义**提到 wrapper 的 `CRED_KEY_VALUE_GATE='…'`，安装脚本运行时从 wrapper 提取同一行（`eval` 同一份 shell 字面量），两侧逐字节一致（有对应用例）；安装件因此能拒绝「定时器会拒收」的副本，而不是 20:10 才 exit 16                                                                                                                                        |
-| 5   | `RESTART.md` 登记「更换密钥时两处都要改」    | 见 §4 的现成段落。`RESTART.md` 是**宿主机侧未入库文件**（`/Users/davidliu/Documents/TradingAgents-AShare-releases/RESTART.md`，见 `LAUNCHD_SWITCH.md` §「RESTART.md 基线说明」），本卡只推分支，故**未改动**，由发布卡粘贴 |
-| 6   | 排查 `reports` / `logsize-watch`             | 见 §5                                                                                                                                                                                                                      |
+| #   | 卡面要求                                     | 落在哪                                                                                                                                                                                                                                |
+| --- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `ENV_FILE="${TA_ENV_FILE:-原路径}"`          | `run_expiry_label_daily.sh` 路径段；默认值仅为「终端手工跑」保留                                                                                                                                                                      |
+| 2   | plist 增加 `TA_ENV_FILE=~/ta-secrets/ta.env` | `com.davidliu.ta-p4-expiry-labels.plist` → `EnvironmentVariables.TA_ENV_FILE`，写成**绝对路径** `/Users/davidliu/ta-secrets/ta.env`（launchd 不展开 `~`/`$VAR`，写成 `~` 会被逐字使用；非绝对路径由脚本 exit 16 拒绝）                |
+| 3   | 副本 600、目录 700                           | `ta_secrets_install.sh`：`umask 077` + `mkdir -p` 后 `chmod 700` + 临时文件 `chmod 600` + `rename(2)` 原子落位；`--check` 为**严格门禁**（非 600/700 直接非零退出）。运行时 wrapper 只 **WARN**（见 §6 权衡）                         |
+| 4   | `grep` rc ≥ 2 → 单独告警 fail-closed         | wrapper 改为先取值 `GREP_RC` 再 `case`：`0`→exit 16（非法行），`1`→继续，`≥2`→**exit 18**「凭据文件读取被拒（疑似系统授权）」，不 `source`、不放行                                                                                    |
+| 4b  | （DAV-2286 复审补充）                        | KEY=VALUE 闸的**唯一定义**提到 wrapper 的 `CRED_KEY_VALUE_GATE='…'`，安装脚本运行时从 wrapper 提取同一行（`eval` 同一份 shell 字面量），两侧逐字节一致（有对应用例）；安装件因此能拒绝「定时器会拒收」的副本，而不是 20:10 才 exit 16 |
+| 5   | `RESTART.md` 登记「更换密钥时两处都要改」    | 见 §4 的现成段落。`RESTART.md` 是**宿主机侧未入库文件**（`/Users/davidliu/Documents/TradingAgents-AShare-releases/RESTART.md`，见 `LAUNCHD_SWITCH.md` §「RESTART.md 基线说明」），本卡只推分支，故**未改动**，由发布卡粘贴            |
+| 6   | 排查 `reports` / `logsize-watch`             | 见 §5                                                                                                                                                                                                                                 |
 
 顺带（为使第 1 项真正生效，非卡面字面要求）：
 
@@ -184,3 +184,128 @@ readable」告警（不会静默），符合 fail-closed。
    跟踪卡；在那之前**禁止从模板重装日报**。
 
 ## 9. DAV-2286 复审返修记录（2026-10-20）
+
+复审结论：代码主体（`ENV_FILE` 间接化、`grep rc≥2 → exit 18` fail-closed、700/600
+安装件、plist 绝对路径）**无 🔴、实现正确**；打回原因是 2 个 🟡。本轮改动：
+
+| 编号 | 处理 | 落点 |
+|---|---|---|
+| 🟡-1 | `--src` / `--dest` 缺值时 `shift 2` 失败且不移动位置参数 → 参数循环永不前进（实测 >4s 仍在转，~70% CPU、零输出、只能 kill）。**本脚本是发布卡安装第 1 步**，运维漏一个值就表现为「命令卡住不说话」 | 改为先判 `$#` 再取 `$2`（两个独立 `if`：`set -u` 下 `a || b` 也会先展开 `$2`，`||` 救不了），缺值 → **rc 2** 立即报错（实测 0.004s）；同时把 `say`/`fail`/`mode_file` **上移到参数循环之前**（原先 `fail` 在循环后才定义，循环里调用会 `command not found` 然后继续往下跑） |
+| 🟡-2 | 卡面第 6 项「日报模板」排查结论**成因写错**：原文说「若将来某次安装漏配 `TA_PYTHON_BIN`」，但**模板 plist 自己就显式写入了 Documents 路径**（`releases/launchd/com.davidliu.ta-daily-reports.plist:60-61`），wrapper 缺省同样是它（`ta-daily-reports-wrapper.sh:33`）——**按模板原样重装就会复现，不是漏配**；且只改 wrapper 缺省修不好真正生效的那一处（plist 优先），`CALENDAR_JSON`（`:47`）又由它推导 | §5 表格该行改写为：修复面 = 模板 plist 的 `TA_PYTHON_BIN` + wrapper 缺省**两处**，按模板重装即复现；承接 = 需总控签白名单放宽后由本卡一并改，或另开跟踪卡；**未落地前禁止从模板重装日报**（现装作业用 `~/ta-venv`，本身无问题）。本卡未改该模板（白名单未放宽 + 属另一作业），已在 §8 列为承接项 |
+| 🟢-1 | 退出码表补齐新增的两种 16 | wrapper 头部：`16a` 路径非绝对 / `16b` 文件缺失或不可读 / `16c` 非法行 / `16d` source 失败 |
+| 🟢-2 | 注释称 source 守卫能接住「unbound var under `set -u`」——实测 bash 在 source 内遇未定义变量会**直接终止整个脚本**（rc 127、无 alert 文件），守卫只接得住 `.` 返回非 0 | source 两侧改为 `set +u` … `set -u` 窗口（失败变成正常 exit 16 告警，而不是静默 rc=127）；注释改为与实测一致，并说明「KEY=VALUE 白名单已先拦下裸 `$VAR`，`set +u` 是第二层保险」 |
+| 🟢-3 | 同一文件内两处注释仍写「sources ~/Documents/…/.env」，与新口径矛盾 | wrapper 头部与凭据段注释改为「TA_ENV_FILE 指向的副本；旧 .env 仅作终端手跑缺省」 |
+| 🟢-4 | 安装件未复用 wrapper 的 KEY=VALUE 严格闸（副本可装成功、到 20:10 才 exit 16） | 闸的**唯一定义**提到 wrapper 的 `CRED_KEY_VALUE_GATE='…'`；安装脚本运行时从 wrapper 提取同一行（`eval` 同一份 shell 字面量）→ 两侧逐字节一致（143 字符，有对应用例）；安装时对源与副本都过闸；提取不到 → **rc 7 拒绝安装**，不「少查一点照装」 |
+| 🟢-5 | 「10-19 15:50 采样 24 行」数字偏差 | 改为实测 **26 行，其中 `-1` 为 0 行** |
+| 🟢-6 | 覆盖缺口：目录模式漂移、`--dest` 符号链接拒绝、`SOURCE_RC` 分支、「rc≥2 时确实没有 source」只间接断言 | 新增用例：目录 755 → `--check` rc=6；目标目录是 symlink → rc=4；rc≥2 用例改用会执行命令的 canary 行并断言 marker 不存在；unbound 变量两形态（裸 `$VAR` 被闸拦 / 单引号字面量走到 token 探针）都断言「有 alert、不是静默 rc=127」；安装器与 wrapper 的闸逐字节一致 |
+| 🟢-7 | plist 注释里写裸 `check`、别处写 `--check`，不一致 | 保留 `check`（**XML 注释里出现双连字符是非法的**，会让 plistlib/libxml2 直接解析失败；`plutil` 容忍而已），并在 plist 注释里写明原因；安装脚本两种拼法都接受 |
+
+### 本轮新增/变更的退出码
+
+安装脚本：`2` 参数缺值（新增，原为死循环）、`7` 闸读取失败（新增）、`3` 源过不了闸（新增）。
+wrapper：退出码表补齐 16 的四个子情形（16a/16b/16c/16d），行为不变。
+
+
+## 10. DAV-2292 事故记录与新规矩（2026-10-20 15:56）
+
+### 10.1 事故：谁、做了什么、影响面
+
+**执行人是本卡的开发（资深开发1）**。返修过程中，为了对比 wrapper 与安装脚本的
+KEY=VALUE 正则是否一致，执行了：
+
+```
+bash -c 'source scripts/phase2/run_expiry_label_daily.sh 2>/dev/null; echo "$CRED_KEY_VALUE_GATE"'
+```
+
+`source` **不是**「读一个文件」——它会**执行**整个脚本。于是该脚本按自己的固定常量
+跑了下去：`OUT_DIR` 指向**正式**标签目录、默认 `ENV_FILE` 指向**真实凭据**。
+
+生产目录留下的痕迹（已逐项核对）：
+
+```
+label_pipeline.log  追加两行：
+  2026-10-20T07:56:00+00:00 timer start label=com.davidliu.ta-p4-expiry-labels
+  2026-10-20T07:56:00+00:00 WARN credential dir mode 755 (want 700) — chmod 700 '/Users/davidliu/Documents/TradingAgents-AShare'
+  2026-10-20T07:56:00+00:00 ALERT pipeline script missing: …/ta-p4-ef8aa9d9/…/expiry_label_pipeline.py (exit 11)
+ALERT.launchd      被覆盖（exit 11 的内容）—— 已由总工改名留证为
+                   ALERT.launchd.stray-20261020T1556（380 字节，内容完整）
+```
+
+**影响面（已逐项核对）**：
+
+| 项 | 结论 |
+|---|---|
+| 标签数据 | **未写**。`labels_t10.jsonl` mtime 仍为 10-20 14:25:01、`labels_t40.jsonl` 仍为 14:29:42（945 / 307 行未变）；exit 11 在 `[ -f PIPELINE ]` 早退，尚未到 run 阶段 |
+| `label_run_state.json` | 未变（14:29:42） |
+| 真实凭据 | **被读取**（`source` 执行了 `.env` 的赋值，进程内注入，未落盘）。已核：凭据值**未出现在**任何产物（alert / log / plist / 文档 / diff）中 |
+| 告警与日志 | **被污染**：生产 `ALERT.launchd` 被覆盖（现为 0 字节空文件，原内容已由总工留证）、`label_pipeline.log` 追加 2 行 |
+
+**复现验证**（隔离沙箱内，`OUT_DIR`/`ENV_FILE` 指向 `/tmp`）：`source` 那条命令
+产出的日志三行与生产 15:56 的三行**逐字相同**，退出码同为 11 —— 归因确认，不是推测。
+
+### 10.2 根因
+
+脚本本身**没有「可被 source 吗」的判据**：它既是一个可执行脚本，又被当成常量来源
+去 `source`。任何人（包括开发自己）想取一个常量，就可能触发一次指向生产的误执行。
+**这是脚本的缺陷，不是单纯的「谁手滑了」。**
+
+### 10.3 修复：脚本拒绝被 source（已在本分支）
+
+两个脚本（wrapper 与安装脚本）开头都加了护栏：检测到 `BASH_SOURCE[0] != $0`
+（即被 `source`/`.` 调用）就 **exit 64** 并打印 REFUSED 提示，**不写任何目录、
+不读任何凭据**：
+
+```
+$ bash -c 'source scripts/phase2/run_expiry_label_daily.sh; echo "$CRED_KEY_VALUE_GATE"'
+REFUSED: …/run_expiry_label_daily.sh is an executable script, not a sourceable library.
+REFUSED: sourcing it would write to the PRODUCTION label dir and read the REAL credentials.
+HINT: read a constant with: grep "^NAME=" …   (do not source the script)
+$ echo $?
+64
+```
+
+要取脚本里的常量，正确姿势是 `grep "^NAME=" 文件` 或
+`eval "$(grep '^NAME=' 文件)"`（本卡安装脚本自己就是这么取 wrapper 的闸的）。
+
+对应用例：`test_wrapper_refuses_to_be_sourced`（rc=64 + REFUSED 文案 + 闸常量
+没被打印）、`test_wrapper_refuses_to_be_sourced_writes_nothing_to_the_output_dir`
+（输出目录零文件）、`test_installer_also_refuses_to_be_sourced`。
+
+### 10.4 新规矩（总控 10-20 16:05 令第 2 节第 3 条）
+
+> 开发与复审在测试标签脚本时，必须指定「临时输出目录」和「临时凭据路径」；
+> 不得写入正式标签目录 `~/ta-p4-2e1e199f/work/phase2-labels/`；
+> 不得读取真实凭据。
+
+**本卡返修测试的合规自查（逐条）**：
+
+| 用例 | 临时输出目录 | 临时凭据路径 | 碰正式目录/真实凭据？ |
+|---|---|---|---|
+| `test_ta_env_file_override_wins_over_the_documents_default` | `tmp_path/wrapper_sandbox/work` | `tmp_path/outside/ta.env` | 否 |
+| `test_relative_ta_env_file_is_rejected_before_any_read` | 同上 | `tmp_path/ta.env` | 否 |
+| `test_read_denied_grep_rc2_alerts_exit_18_not_exit_13` | 同上 | sandbox 内 `ta.env` | 否 |
+| `test_read_denied_never_sources_the_file` | 同上 | sandbox 内 canary 行 | 否 |
+| `test_grep_rc2_short_circuits_before_the_ledger_or_pipeline` | 同上 | sandbox 内 | 否 |
+| `test_malformed_env_is_still_exit_16_after_the_rc_rewrite` | 同上 | sandbox 内 | 否 |
+| `test_unbound_variable_in_the_credential_file_never_aborts_silently` | 同上 | sandbox 内 | 否 |
+| `test_wrapper_warns_but_does_not_stop_on_a_loose_mode` | 同上 | sandbox 内 | 否 |
+| `test_installer_*`（8 个） | `tmp_path/ta-secrets` | `tmp_path/src.env`（假值） | 否 |
+| `test_plist_*` / `test_installer_gate_is_byte_identical_*` | 无写入 | 无 | 否 |
+
+实现机制：wrapper 的沙箱化是**改写被拷贝副本里的固定常量**（`PYTHON=`、
+`ENV_FILE=`、`CODE_DIR=`、`WORK_ROOT=` 四个），`OUT_DIR` 由 `WORK_ROOT` 推导，
+因此**测试永远落在 `tmp_path` 下**；测试文件里**不出现** `~/ta-p4-2e1e199f`
+与 `~/Documents/TradingAgents-AShare`（仅一处断言 plist 里的 `TA_ENV_FILE` 字面量，
+不读文件）。
+
+**既有 `tests/test_dav1875_expiry_label_pipeline.py` 的 wrapper 用例**同构
+（`_wrapper_harness` 改写同样四个常量），也全部落在 `tmp_path` 下。
+
+### 10.5 残留
+
+- `ALERT.launchd` 现为 **0 字节空文件**（总工改名留证后的残留），不是有效告警；
+  有效内容在 `ALERT.launchd.stray-20261020T1556`。若发布卡要求目录干净，
+  可删该空文件（**不删留证文件**）——本卡未动生产目录。
+- `label_pipeline.log` 尾部两行是 15:56 误执行的痕迹；未删（属取证材料）。
+- 15:56 误执行**读到了真实凭据**（仅在进程内，未落盘、未外泄）；本卡未轮换密钥，
+  是否轮换由总控定。
