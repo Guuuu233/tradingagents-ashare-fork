@@ -1,4 +1,4 @@
-"""DAV-2271 — 复核发现（低）：`signal_date` 日身份边界。
+r"""DAV-2271 — 复核发现（低）：`signal_date` 日身份边界。
 
 两条发现（均在 `scripts/phase2/m1_base_rate.py`）：
 
@@ -19,6 +19,14 @@
     只有进入面板的行被校验（已按成熟度/标签口径剔除的行与面板无关）。
   * 单形状面板（`YYYYMMDD` / `YYYY-MM-DD` 各自）取值不变；`mat` 的既有
     容忍度不变（不可读成熟日只是离开成熟集，不是日网格）。
+
+DAV-2280 复审后的加固（本文件追加的用例段）：
+
+  * 🟢-1 形状正则必须是 **ASCII** 字符类：Python 的 `\d` 匹配 Unicode 十进制
+    数字，全角日期 `'２０２４０１０２'` 能同时穿过两道守卫**并**被 `day_key`
+    接受（`int()` 收它），等于凭空造出一个没人写过的日键。
+  * 🟢-2 形状校验只扫**去重后的日值**（面板只有 ~2.5k 个不同信号日，却
+    重复在 920 万行上）；违规**行数**仍在报错里给出，但只在出错路径上算。
 """
 
 from __future__ import annotations
@@ -196,6 +204,68 @@ class TestLoadPanelDayGridGuard:
         df, _ = m1.build_pit_base_rates(panel, shrink_ms=(0,),
                                         window_days=(0,))
         assert int(_cell(df, "20240102", L1A)["n"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# DAV-2280 🟢-1：形状字符类必须是 ASCII（`\d` 会匹配 Unicode 十进制数字）
+# ---------------------------------------------------------------------------
+
+# 全角 / 阿拉伯-Indic 数字：Python `re` 的 `\d` 匹配它们，`int()` 也收
+FULLWIDTH = "２０２４０１０２"
+ARABIC_INDIC = "٢٠٢٤٠١٠٢"
+
+
+class TestAsciiOnlyDayShape:
+    def test_unicode_digits_are_rejected_by_the_value_guard(self):
+        for bad in (FULLWIDTH, ARABIC_INDIC):
+            with pytest.raises(ValueError) as exc:
+                m1._check_day_values(pd.Series([bad]), "probe")
+            assert repr(bad) in str(exc.value)
+            # 单形状守卫只管“两种形状混排”，不重复拦非标准值；
+            # 引擎入口两道守卫都跑，非标准值必被拦下（见下一条）
+            m1._check_single_day_shape(pd.Series([bad]), "probe")
+
+    def test_unicode_digit_panel_is_rejected_at_the_engine_entry(self):
+        """反证：改前（Unicode 数字类）这道门是空的 —— 全角日期能穿过去。"""
+        # `day_key` 本身也收它（`int()` 接受 Unicode 数字），所以只有守卫
+        # 能挡住；这里断言守卫确实挡住了。
+        assert m1.day_key(FULLWIDTH) == 20240102      # 旧行为：被接受
+        panel = _panel([(FULLWIDTH, "20240102", L1A, 1)])
+        with pytest.raises(ValueError) as exc:
+            m1.build_pit_base_rates(panel, shrink_ms=(0,), window_days=(0,))
+        assert "YYYYMMDD" in str(exc.value)
+
+    def test_unicode_digit_mat_leaves_the_matured_set(self):
+        """`mat` 的成熟集过滤同样只认 ASCII 八位数字。"""
+        panel = _panel([("20240102", "20240102", L1A, 1),
+                        ("20240102", FULLWIDTH, L1A, 0)])
+        df, _ = m1.build_pit_base_rates(panel, shrink_ms=(0,),
+                                        window_days=(0,))
+        assert int(_cell(df, "20240102", L1A)["n"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# DAV-2280 🟢-2：形状校验只扫去重后的日值，但报错仍给违规行数
+# ---------------------------------------------------------------------------
+
+class TestDistinctValueScan:
+    def test_bad_value_reports_row_count_and_distinct_count(self):
+        days = pd.Series(["20240102"] * 5 + ["2026-9-1"] * 3)
+        with pytest.raises(ValueError) as exc:
+            m1._check_day_values(days, "probe")
+        msg = str(exc.value)
+        assert "3 row(s)" in msg
+        assert "1 distinct day" in msg
+        assert "'2026-9-1'" in msg
+
+    def test_repeated_good_days_are_accepted(self):
+        """同一形状的重复日值不报错（去重扫描不改变判定）。"""
+        m1._check_day_values(pd.Series(["20240102"] * 1000), "probe")
+        m1._check_single_day_shape(pd.Series(["20240102"] * 1000), "probe")
+
+    def test_empty_day_grid_is_accepted(self):
+        m1._check_day_values(pd.Series([], dtype="object"), "probe")
+        m1._check_single_day_shape(pd.Series([], dtype="object"), "probe")
 
 
 # ---------------------------------------------------------------------------

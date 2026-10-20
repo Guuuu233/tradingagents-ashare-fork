@@ -214,9 +214,13 @@ def shift_day(day: str, days: int) -> str:
 # DAV-2271: the two day shapes the pipeline produces. Both are matched with
 # `fullmatch`, so a hybrid like '2024-0102' — which `day_key` would accept by
 # stripping the dash — is rejected: a day grid is one of the two documented
-# presentations, never a third.
-_DAY_DIGITS = r"\d{8}"
-_DAY_DASHED = r"\d{4}-\d{2}-\d{2}"
+# presentations, never a third. The classes are ASCII-only on purpose:
+# Python's `\d` matches Unicode decimal digits, so a full-width date
+# like '２０２４０１０２' would pass the check, be accepted by
+# `day_key` (`int()` takes it) and be emitted as a day key nobody
+# wrote (DAV-2280 🟢-1).
+_DAY_DIGITS = r"[0-9]{8}"
+_DAY_DASHED = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
 
 
 def _check_day_values(days: pd.Series, source: str) -> None:
@@ -230,6 +234,12 @@ def _check_day_values(days: pd.Series, source: str) -> None:
     ``query_days`` in :func:`build_pit_base_rates` — and the error names the
     source plus sample values.
 
+    The check runs on the DISTINCT day values, not on every row: a panel
+    repeats each of its ~2.5k signal days across millions of rows, and
+    the two regex passes over 9.2M rows cost seconds for an answer the
+    distinct values already give (DAV-2280 🟢-2). The offending ROW
+    count is still reported — it is computed on the error path only.
+
     Deliberately asymmetric with ``mat``: an unreadable maturation day only
     has to leave the matured set (it can never be date-ordered against a
     signal day, and dropping it cannot invent look-ahead), while a signal
@@ -237,12 +247,18 @@ def _check_day_values(days: pd.Series, source: str) -> None:
     whole cross-section from the emitted series, so the grid fails closed.
     """
     s = days.astype(str)
-    bad = ~(s.str.fullmatch(_DAY_DIGITS) | s.str.fullmatch(_DAY_DASHED))
-    if bad.any():
-        sample = ", ".join(repr(v) for v in sorted(set(s[bad]))[:3])
-        raise ValueError(
-            f"{source}: {int(bad.sum()):,} day value(s) are neither "
-            f"YYYYMMDD nor YYYY-MM-DD (e.g. {sample})")
+    uniq = pd.Series(s.unique())
+    if uniq.empty:
+        return
+    ok = uniq.str.fullmatch(_DAY_DIGITS) | uniq.str.fullmatch(_DAY_DASHED)
+    if bool(ok.all()):
+        return
+    bad_vals = uniq[~ok]
+    n_rows = int(s.isin(bad_vals).sum())
+    sample = ", ".join(repr(v) for v in sorted(set(bad_vals))[:3])
+    raise ValueError(
+        f"{source}: {n_rows:,} row(s) carry {len(bad_vals)} distinct day "
+        f"value(s) that are neither YYYYMMDD nor YYYY-MM-DD (e.g. {sample})")
 
 
 def _check_single_day_shape(days: pd.Series, source: str) -> None:
@@ -261,19 +277,23 @@ def _check_single_day_shape(days: pd.Series, source: str) -> None:
     consumer asks for), so the grid is rejected before any row is emitted.
     """
     s = days.astype(str)
-    dashed = s.str.fullmatch(_DAY_DASHED)
-    if not (dashed.any() and (~dashed).any()):
+    uniq = pd.Series(s.unique())   # distinct days only (DAV-2280 🟢-2)
+    if uniq.empty:
         return
-    both = sorted(set(s[dashed].str.replace("-", "", regex=False))
-                  & set(s[~dashed]))
+    dashed = uniq.str.fullmatch(_DAY_DASHED)
+    if not (bool(dashed.any()) and bool((~dashed).any())):
+        return
+    both = sorted(set(uniq[dashed].str.replace("-", "", regex=False))
+                  & set(uniq[~dashed]))
     detail = (f"{len(both)} calendar day(s) spelled both ways "
               f"(e.g. {', '.join(both[:3])})" if both else
               "no calendar day is spelled twice — the grid itself mixes "
               "the two shapes")
     raise ValueError(
         f"{source}: day values mix YYYYMMDD and YYYY-MM-DD "
-        f"({int((~dashed).sum()):,} digit-only, {int(dashed.sum()):,} "
-        f"dashed; {detail}); the panel's day grid must use ONE shape")
+        f"({int((~dashed).sum()):,} distinct digit-only, "
+        f"{int(dashed.sum()):,} distinct dashed; {detail}); "
+        f"the panel's day grid must use ONE shape")
 
 
 def build_pit_base_rates(panel: pd.DataFrame,
@@ -332,7 +352,8 @@ def build_pit_base_rates(panel: pd.DataFrame,
     # malformed) was already out of the matured set and stays out — it can
     # never be ordered against a signal day.
     mats = panel["mat"].astype(str).str.strip()
-    valid_mat = mats.str.replace("-", "", regex=False).str.fullmatch(r"\d{8}")
+    valid_mat = (mats.str.replace("-", "", regex=False)
+                 .str.fullmatch(r"[0-9]{8}"))
     matured = panel[valid_mat]
     by_mat = {str(d): g for d, g in matured.groupby("mat", sort=False)}
     mat_days = sorted(by_mat, key=day_key)
