@@ -25,13 +25,24 @@
 #
 # Usage:
 #   ta_secrets_install.sh                 # create/refresh copy, then verify
-#   ta_secrets_install.sh --check         # verify only, exit 1 on any drift
+#   ta_secrets_install.sh --check         # verify only, exit non-zero on drift
+#   ta_secrets_install.sh check           # same (the double-hyphen spelling
+#                                         # cannot be written inside an XML
+#                                         # comment; both forms work here)
 #   ta_secrets_install.sh --src P --dest Q
-#   Env overrides: TA_ENV_SRC, TA_ENV_FILE (same variable the wrapper reads).
+#   Env overrides: TA_ENV_SRC, TA_ENV_FILE (same variable the wrapper reads),
+#                  TA_ENV_WRAPPER (path to run_expiry_label_daily.sh; default
+#                  = the copy sitting next to this script).
 #
-# Exit codes: 0 ok; 2 usage; 3 source unusable / no TUSHARE_TOKEN;
+# Exit codes: 0 ok; 2 usage (incl. a flag used without its value — DAV-2286
+#             🟡-1: the old `shift 2` spun forever at ~70% CPU with no
+#             output when a value was missing);
+#             3 source unusable / no TUSHARE_TOKEN / would fail the timer's
+#             KEY=VALUE gate;
 #             4 destination unsafe (symlink, wrong location, non-absolute);
-#             5 copy failed; 6 verification failed.
+#             5 copy failed; 6 verification failed;
+#             7 the timer's KEY=VALUE gate could not be read from the wrapper
+#             (refuse to install rather than check less).
 #
 # REMINDER (card item 5): rotating a key means updating BOTH the source
 # .env and this copy — see releases/launchd/TA_ENV_TCC.md.
@@ -47,20 +58,81 @@ usage() {
     sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed 's/^# \{0,1\}//'
 }
 
+# NOTE: these helpers must be defined BEFORE the argument loop below — the
+# loop calls fail() on a malformed flag (DAV-2286 🟡-1), and a function that
+# is not defined yet fails with "command not found" and lets the script keep
+# running into the very error it was meant to report.
+say() { printf '%s\n' "$*"; }
+fail() { printf 'FAIL %s\n' "$*" >&2; exit "${RC:-6}"; }
+
+mode_file() { /usr/bin/stat -f '%Lp' "$1" 2>/dev/null || true; }
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --check|check) MODE="check"; shift ;;
-        --src)   SRC="${2:-}"; shift 2 ;;
-        --dest)  DEST="${2:-}"; shift 2 ;;
+        --src)
+            # DAV-2286 🟡-1: `shift 2` with $#==1 fails AND leaves the
+            # positional parameters untouched -> the while loop never
+            # advances -> silent 100% CPU spin. A missing value must fail
+            # loudly instead (this script is the release card's first step).
+            # NOTE: the COUNT must be checked in a separate command before
+            # "$2" is ever expanded — under `set -u` the expansion of an
+            # unset positional parameter aborts the script by itself (and
+            # `a || b` does NOT help: bash expands every word of the whole
+            # list before running it).
+            if [ "$#" -lt 2 ]; then
+                RC=2 fail "--src needs a path"
+            fi
+            if [ -z "$2" ]; then
+                RC=2 fail "--src needs a path"
+            fi
+            SRC="$2"; shift 2 ;;
+        --dest)
+            if [ "$#" -lt 2 ]; then
+                RC=2 fail "--dest needs a path"
+            fi
+            if [ -z "$2" ]; then
+                RC=2 fail "--dest needs a path"
+            fi
+            DEST="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
 
-say() { printf '%s\n' "$*"; }
-fail() { printf 'FAIL %s\n' "$*" >&2; exit "${RC:-6}"; }
-
-mode_file() { /usr/bin/stat -f '%Lp' "$1" 2>/dev/null || true; }
+# ---- the KEY=VALUE gate (DAV-2286 🟢-4) -----------------------------------
+# DAV-2286 🟢-4: the copy must be one the TIMER will accept, not merely one
+# that exists. The authoritative pattern lives in the wrapper as
+#   CRED_KEY_VALUE_GATE='<pattern>'
+# — one definition, used by the wrapper itself and extracted here at run
+# time, so the installer can never check less than the timer does.
+#
+# Extraction: the assignment line is read verbatim and handed to `eval`,
+# which performs the shell's own unquoting — the pattern contains single
+# quotes, spelled in the source as the four-character sequence '\'' , and
+# `eval` resolves them exactly the way the wrapper does. No hand-rolled
+# un-escaping, so no chance of the two sides disagreeing.
+#
+# The wrapper is looked up NEXT TO THIS SCRIPT (both live in scripts/phase2/
+# of the same checkout); override with TA_ENV_WRAPPER if the two ever live
+# apart.
+WRAPPER="${TA_ENV_WRAPPER:-$(cd "$(/usr/bin/dirname "$0")" && pwd -P)/run_expiry_label_daily.sh}"
+GATE_PATTERN=""
+if [ -r "${WRAPPER}" ]; then
+    GATE_LINE="$(grep -m1 '^CRED_KEY_VALUE_GATE=' "${WRAPPER}" || true)"
+    if [ -n "${GATE_LINE}" ]; then
+        # eval assigns the variable; print it (the assignment itself is silent)
+        GATE_PATTERN="$(eval "${GATE_LINE}"; printf '%s' "${CRED_KEY_VALUE_GATE}")"
+    fi
+fi
+if [ -z "${GATE_PATTERN}" ]; then
+    RC=7 fail "cannot read the KEY=VALUE gate from ${WRAPPER} — refusing to install a copy the timer might reject (set TA_ENV_WRAPPER to the wrapper path)"
+fi
+# gate <file> -> 0 illegal line found, 1 clean, >=2 unreadable (grep semantics)
+gate() {
+    /usr/bin/grep -vEq "${GATE_PATTERN}" "$1" 2>/dev/null
+    return $?
+}
 
 # ---- destination shape (both modes) ---------------------------------------
 case "${DEST}" in
@@ -110,6 +182,14 @@ verify() {
         # key names only — never the value
         say "ok   keys present: TUSHARE_TOKEN (values not printed)"
     fi
+    # DAV-2286 🟢-4: same gate the timer applies before sourcing.
+    gate "${DEST}" >/dev/null 2>&1
+    local gate_rc=$?
+    case "${gate_rc}" in
+        0) say "FAIL copy has non KEY=VALUE lines — the timer would refuse to source it: ${DEST}"; rc=1 ;;
+        1) say "ok   KEY=VALUE gate: clean (same gate the timer applies)" ;;
+        *) say "FAIL copy unreadable for the KEY=VALUE gate (rc=${gate_rc}): ${DEST}"; rc=1 ;;
+    esac
     size="$(/usr/bin/wc -c <"${DEST}" 2>/dev/null | tr -d ' ')"
     say "info copy size ${size:-?} bytes, $(/usr/bin/wc -l <"${DEST}" 2>/dev/null | tr -d ' ') lines"
     return "${rc}"
@@ -134,6 +214,15 @@ fi
 if ! /usr/bin/grep -q '^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}TUSHARE_TOKEN=..*' "${SRC}"; then
     RC=3 fail "source has no non-empty TUSHARE_TOKEN= line: ${SRC} — refusing to install a copy the timer would reject"
 fi
+# DAV-2286 🟢-4: reject a source the timer would refuse to source, at install
+# time — not at 20:10.
+gate "${SRC}" >/dev/null 2>&1
+SRC_GATE_RC=$?
+case "${SRC_GATE_RC}" in
+    0) RC=3 fail "source contains non KEY=VALUE lines: ${SRC} — the timer would refuse to source it (exit 16)" ;;
+    1) : ;;
+    *) RC=3 fail "source unreadable for the KEY=VALUE gate (rc=${SRC_GATE_RC}): ${SRC}" ;;
+esac
 
 mkdir -p "${DEST_DIR}" || RC=5 fail "cannot create ${DEST_DIR}"
 # Tighten even an existing dir: item 3 of the card is the dir being 700.

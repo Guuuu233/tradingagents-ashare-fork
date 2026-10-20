@@ -25,10 +25,12 @@
 # TUSHARE_TOKEN means the SW industry leg silently degrades to
 # membership_status="gap" on EVERY row while run/verify still exit 0, and
 # the appended (report_id,horizon) keys are skipped forever. So this wrapper
-# sources the single credential source ~/Documents/TradingAgents-AShare/.env
-# (export-all around source; KEY=VALUE lines only — no secrets are written
-# to the plist, the alert file, or the log) and then pre-probes the keys
-# the pipeline actually consumes:
+# sources THE credential file named by TA_ENV_FILE (DAV-2284: the plist points
+# it at ~/ta-secrets/ta.env, a 600 copy OUTSIDE ~/Documents; the old
+# ~/Documents/TradingAgents-AShare/.env survives only as the fallback for a
+# manual terminal run) — export-all around source; KEY=VALUE lines only — no
+# secrets are written to the plist, the alert file, or the log — and then
+# pre-probes the keys the pipeline actually consumes:
 #   TUSHARE_TOKEN      — SW2021 membership + sw_daily bars (industry leg)
 #   FUYAO_API_KEY      — trade-calendar fallback when akshare is down
 #   INVESTODAY_API_KEY — vendor route credential (kept consistent with .env)
@@ -62,7 +64,11 @@
 #             12 ledger missing, 13 calendar unavailable OR required
 #             credential missing, 14 run failed (incl. the pipeline's own
 #             no-token fail-close, exit 2), 15 verify failed,
-#             16 .env unreadable OR contains non KEY=VALUE lines,
+#             16 credential file unusable — four distinct causes:
+#               16a path not absolute (launchd does not expand ~ / $VAR),
+#               16b file missing / not readable,
+#               16c file contains non KEY=VALUE lines,
+#               16d file failed to source (syntax error etc.),
 #             17 post-run all-gap SW-leg guard,
 #             18 credential file READ denied by the OS (TCC/EACCES) —
 #             fail-closed, no source attempt, alert names the denial.
@@ -121,9 +127,16 @@ alert() {
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
 
+# The KEY=VALUE gate — ONE definition, used by this wrapper and (extracted at
+# run time) by scripts/phase2/ta_secrets_install.sh, so the installer can
+# never check less than the timer does (DAV-2286 🟢-4). Kept on its own line
+# in the exact `NAME='pattern'` form the installer parses; do not reformat.
+CRED_KEY_VALUE_GATE='^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\$`]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$'
+
 # --- credential injection (DAV-2041) ---------------------------------------
-# .env is the single credential source; values stay in the process env, they
-# are never echoed. `set -a` exports every assignment `source` evaluates.
+# The file named by TA_ENV_FILE (DAV-2284: ~/ta-secrets/ta.env in production)
+# is the single credential source; values stay in the process env, they are
+# never echoed. `set -a` exports every assignment `source` evaluates.
 # DAV-2043 🟡: `source` would execute ANY malformed line as a command (a
 # corrupted .env silently runs arbitrary code and still exits 0), so we
 # validate first — every non-empty non-comment line must be a bare
@@ -176,7 +189,7 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # fault, so it gets its own fail-closed alert (18) and must never be
     # downgraded to "TUSHARE_TOKEN missing" (which is what the 10-19 exit 13
     # actually was: grep+source both EPERM'd under ~/Documents).
-    GREP_ERR="$(/usr/bin/grep -vEq '^[[:space:]]*(#|$)|^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=("[^"\\$`]*"|'"'"'[^'"'"']*'"'"'|[]A-Za-z0-9_+,.:/@%^?=!~*()\[-]*)[[:space:]]*$' "${ENV_FILE}" 2>&1 >/dev/null)"
+    GREP_ERR="$(/usr/bin/grep -vEq "${CRED_KEY_VALUE_GATE}" "${ENV_FILE}" 2>&1 >/dev/null)"
     GREP_RC=$?
     case "${GREP_RC}" in
         0) alert "credential file ${ENV_FILE} contains non KEY=VALUE lines — refusing to source a possibly malformed file" 16 ;;
@@ -185,13 +198,23 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
            alert "凭据文件读取被拒（疑似系统授权）：launchd 下的 /bin/bash 无权读取 ${ENV_FILE}（grep rc=${GREP_RC}${GREP_ERR:+: ${GREP_ERR}}）—— 未 source 任何内容，fail-closed。请把凭据副本放到 ~/Documents 之外（如 /Users/davidliu/ta-secrets/ta.env，目录 700 / 文件 600，用 scripts/phase2/ta_secrets_install.sh 生成），并用 plist 的 TA_ENV_FILE 指过去" 18 ;;
     esac
     set -a
+    # DAV-2286 🟢-2: the KEY=VALUE gate already rejects every line that
+    # could abort the script (a bare or double-quoted `$VAR` is outside the
+    # value whitelist; a single-quoted one is literal text), so in practice
+    # the source below cannot hit bash's "unbound variable" abort. The
+    # `set +u` window is defence in depth against exactly that invisible
+    # shape: under `set -u` bash would abort the WHOLE script (rc 127) and
+    # write NO alert file; with the window the file is sourced leniently and
+    # any genuine failure surfaces as a normal fail-closed alert (16)
+    # below. `set -u` is restored immediately afterwards.
+    set +u
     # shellcheck disable=SC1090
     . "${ENV_FILE}"
     SOURCE_RC=$?
-    set +a
-    # A readable file that passes the gate can still fail to source (bad
-    # quoting, unbound var under `set -u`); say so instead of letting the
-    # "token missing" probe 20 lines below take the blame.
+    set -u
+    # A readable file that passes the gate can still fail to source (syntax
+    # error, or a value that is not expandable). Say so instead of letting
+    # the "token missing" probe 20 lines below take the blame.
     [ "${SOURCE_RC}" -eq 0 ] || alert "credential file ${ENV_FILE} specified but failed to source (rc=${SOURCE_RC}) — no values injected" 16
 else
     alert "credential file missing or not readable: ${ENV_FILE} — cannot inject TUSHARE_TOKEN/FUYAO_API_KEY/INVESTODAY_API_KEY (TA_ENV_FILE must be an absolute path outside ~/Documents, e.g. /Users/davidliu/ta-secrets/ta.env)" 16

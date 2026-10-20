@@ -21,6 +21,11 @@
        # TCC-denied reads there): dir 700, file 600, never a bare `cp`.
        scripts/phase2/ta_secrets_install.sh          # install
        scripts/phase2/ta_secrets_install.sh check    # strict preflight
+         (DAV-2286 🟢-7: the flag is spelled `check` here, not the
+          double-hyphen form, because a double hyphen is illegal inside
+          an XML comment and would make this plist un-parseable by strict
+          XML parsers (plistlib/libxml2 reject it; plutil tolerates it).
+          The script accepts BOTH spellings.)
        cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
        launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels   # one manual run

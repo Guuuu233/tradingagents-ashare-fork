@@ -20,12 +20,12 @@ into a sandbox (same technique as tests/test_dav1875_expiry_label_pipeline.py).
 
 from __future__ import annotations
 
-import os
 import plistlib
 import re
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -111,15 +111,15 @@ def _run_wrapper(tmp_path: Path,
 
     src = WRAPPER.read_text("utf-8")
     src = re.sub(r'^PYTHON=.*$', f'PYTHON="{_stub_python(bin_dir)}"', src,
-                 flags=re.M)
+                 flags=re.MULTILINE)
     if env_file is not None:
-        src = re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{env_file}"', src, flags=re.M)
+        src = re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{env_file}"', src, flags=re.MULTILINE)
     elif env_default is not None:
         src = re.sub(r'^ENV_FILE=.*$',
                      'ENV_FILE="${TA_ENV_FILE:-%s}"' % env_default, src,
-                     flags=re.M)
-    src = re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src, flags=re.M)
-    src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src, flags=re.M)
+                     flags=re.MULTILINE)
+    src = re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src, flags=re.MULTILINE)
+    src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src, flags=re.MULTILINE)
     if grep_rc is not None:
         src = src.replace("/usr/bin/grep", str(_stub_grep(bin_dir, grep_rc)))
     shutil.copy(REPO / "scripts" / "phase2" / "expiry_label_pipeline.py",
@@ -223,11 +223,50 @@ def test_grep_rc2_short_circuits_before_the_ledger_or_pipeline(tmp_path):
     assert "timer done" not in res["log"]
 
 
+def test_read_denied_never_sources_the_file(tmp_path):
+    """DAV-2286 🟢-6: the "rc>=2 -> do not source" claim needs a positive
+    proof, not just "the interpreter was not called". A file whose line would
+    execute a command if it were sourced is used as the canary: if the
+    wrapper sourced it, the marker file would exist."""
+    marker = tmp_path / "PWNED_dav2284"
+    res = _run_wrapper(tmp_path, [f"EVIL=$(touch {marker})"], grep_rc=2)
+    assert res["rc"] == 18, (res["rc"], res["alert"])
+    assert not marker.exists(), "the credential file was sourced despite a denied read"
+    assert "TUSHARE_TOKEN missing" not in res["alert"]
+
+
 def test_malformed_env_is_still_exit_16_after_the_rc_rewrite(tmp_path):
     """The rc>=2 branch must not swallow the pre-existing "bad line" verdict."""
     res = _run_wrapper(tmp_path, ["EVIL=harmless touch /tmp/PWNED_dav2284"])
     assert res["rc"] == 16, (res["rc"], res["alert"])
     assert "non KEY=VALUE lines" in res["alert"]
+
+
+def test_unbound_variable_in_the_credential_file_never_aborts_silently(
+        tmp_path):
+    """DAV-2286 🟢-2: under `set -u` an unbound variable inside the sourced
+    file makes bash abort the WHOLE script (rc 127, NO alert file) — the
+    failure becomes invisible. Two layers must hold:
+      * a bare `$VAR` value never reaches the source at all — the KEY=VALUE
+        whitelist rejects it first (exit 16, "non KEY=VALUE lines");
+      * even if it did, the source runs inside a `set +u` window, so a
+        lenient source cannot abort the script either.
+    Either way the outcome is a normal fail-closed alert, never a bare
+    rc=127 with no alert file."""
+    bare = _run_wrapper(tmp_path / "bare", ["TUSHARE_TOKEN=$UNDEF_DAV2284_XYZ"])
+    assert bare["rc"] == 16, (bare["rc"], bare["proc"].stderr, bare["alert"])
+    assert bare["alert"], "a silent abort (no alert file) is the failure mode"
+    assert "TUSHARE_TOKEN missing" not in bare["alert"]
+
+    # single-quoted -> legal literal, survives the gate, and the file has no
+    # TUSHARE_TOKEN at all -> the token probe must produce exit 13, NOT a
+    # silent rc=127
+    quoted = _run_wrapper(tmp_path / "quoted",
+                           ["OTHER_KEY='$UNDEF_DAV2284_XYZ'"])
+    assert quoted["rc"] == 13, (quoted["rc"], quoted["proc"].stderr,
+                                quoted["alert"])
+    assert quoted["alert"], "no alert file was written"
+    assert "TUSHARE_TOKEN missing" in quoted["alert"]
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +352,70 @@ def test_installer_refuses_a_source_without_a_real_token(tmp_path):
     assert not dest.exists()
 
 
+def test_installer_missing_argument_value_fails_instead_of_spinning(tmp_path):
+    """DAV-2286 🟡-1: `--src`/`--dest` without a value used to run `shift 2`
+    with $#==1, which fails WITHOUT moving the positional parameters -> the
+    arg loop never advances -> ~70% CPU, zero output, kill -9. This script
+    is the release card's FIRST install step, so a mistyped flag must fail
+    loudly and immediately. timeout=10 turns a regression back into a test
+    failure instead of a 60s hang."""
+    for flag in ("--src", "--dest"):
+        started = time.monotonic()
+        res = subprocess.run(["/bin/bash", str(INSTALLER), flag],
+                             capture_output=True, text=True, timeout=10,
+                             env={**BASE_ENV, "HOME": str(tmp_path)})
+        elapsed = time.monotonic() - started
+        assert res.returncode == 2, (flag, res.returncode, res.stdout, res.stderr)
+        assert "needs a path" in res.stderr, (flag, res.stderr)
+        assert elapsed < 5, (flag, elapsed)
+
+
+def test_installer_rejects_a_source_the_timer_would_refuse_to_source(tmp_path):
+    """DAV-2286 🟢-4: the copy must be one the TIMER accepts. The same
+    KEY=VALUE gate the wrapper applies is applied to the source at install
+    time, so a malformed .env is caught here instead of at 20:10."""
+    src = tmp_path / "src.env"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\nEVIL=$(touch /tmp/PWNED_gate)\n",
+                   "utf-8")
+    dest = tmp_path / "ta-secrets" / "ta.env"
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
+    assert res.returncode == 3, (res.returncode, res.stdout, res.stderr)
+    assert "non KEY=VALUE lines" in res.stderr
+    assert not dest.exists()
+
+
+def test_installer_refuses_a_symlinked_destination_dir(tmp_path):
+    """DAV-2286 🟢-6 (coverage gap): a symlinked dir would redirect the copy
+    and make the "700" claim describe the link target, not what we chmod'ed."""
+    real = tmp_path / "real-dir"
+    real.mkdir()
+    link = tmp_path / "link-dir"
+    link.symlink_to(real, target_is_directory=True)
+    src = tmp_path / "src.env"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    dest = link / "ta.env"
+
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
+    assert res.returncode == 4, (res.returncode, res.stdout, res.stderr)
+    assert "symlink" in res.stderr
+    assert not dest.exists()
+
+
+def test_installer_check_flags_a_loose_directory_mode(tmp_path):
+    """DAV-2286 🟢-6 (coverage gap): the dir mode was never drift-tested."""
+    src = tmp_path / "src.env"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    dest = tmp_path / "ta-secrets" / "ta.env"
+    inst = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
+    assert inst.returncode == 0, (inst.stdout, inst.stderr)
+
+    dest.parent.chmod(0o755)
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest),
+                         "--check")
+    assert res.returncode == 6, (res.returncode, res.stdout)
+    assert "want 700" in res.stdout
+
+
 # ---------------------------------------------------------------------------
 # item 2 — the shipped plist
 # ---------------------------------------------------------------------------
@@ -342,3 +445,29 @@ def test_wrapper_documents_the_new_exit_code_and_env_override():
     assert 'ENV_FILE="${TA_ENV_FILE:-' in src
     assert "18 credential file READ denied" in src
     assert "GREP_RC" in src
+
+
+def test_installer_gate_is_byte_identical_to_the_wrapper_gate():
+    """DAV-2286 🟢-4: the installer must check EXACTLY what the timer checks.
+    The pattern lives once, in the wrapper, as
+    ``CRED_KEY_VALUE_GATE='<pattern>'``; the installer extracts it by eval'ing
+    that line. This test resolves both sides the same way and compares them
+    byte for byte — a divergence means the installer would accept a copy the
+    timer rejects (or vice versa)."""
+    line = next(l for l in WRAPPER.read_text("utf-8").splitlines()
+                if l.startswith("CRED_KEY_VALUE_GATE="))
+    wrapper_gate = subprocess.run(
+        ["/bin/bash", "-c",
+         'eval "$1"; printf "%s" "$CRED_KEY_VALUE_GATE"', "_", line],
+        capture_output=True, text=True, timeout=30).stdout
+    assert wrapper_gate, "the wrapper no longer defines the gate"
+
+    # the installer must resolve the same value from the same file
+    installer_gate = subprocess.run(
+        ["/bin/bash", "-c",
+         'GATE_LINE="$(grep -m1 \'^CRED_KEY_VALUE_GATE=\' "$1")"; '
+         'eval "${GATE_LINE}"; printf "%s" "${CRED_KEY_VALUE_GATE}"',
+         "_", str(WRAPPER)],
+        capture_output=True, text=True, timeout=30).stdout
+    assert installer_gate == wrapper_gate, (
+        len(installer_gate), len(wrapper_gate))
