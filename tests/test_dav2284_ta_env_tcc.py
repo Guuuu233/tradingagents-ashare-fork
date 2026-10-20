@@ -20,11 +20,13 @@ into a sandbox (same technique as tests/test_dav1875_expiry_label_pipeline.py).
 
 from __future__ import annotations
 
+import os
 import plistlib
 import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -237,9 +239,11 @@ def test_read_denied_never_sources_the_file(tmp_path):
 
 def test_malformed_env_is_still_exit_16_after_the_rc_rewrite(tmp_path):
     """The rc>=2 branch must not swallow the pre-existing "bad line" verdict."""
-    res = _run_wrapper(tmp_path, ["EVIL=harmless touch /tmp/PWNED_dav2284"])
+    marker = tmp_path / "PWNED_dav2284"
+    res = _run_wrapper(tmp_path, [f"EVIL=harmless touch {marker}"])
     assert res["rc"] == 16, (res["rc"], res["alert"])
     assert "non KEY=VALUE lines" in res["alert"]
+    assert not marker.exists()
 
 
 def test_unbound_variable_in_the_credential_file_never_aborts_silently(
@@ -375,13 +379,15 @@ def test_installer_rejects_a_source_the_timer_would_refuse_to_source(tmp_path):
     KEY=VALUE gate the wrapper applies is applied to the source at install
     time, so a malformed .env is caught here instead of at 20:10."""
     src = tmp_path / "src.env"
-    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\nEVIL=$(touch /tmp/PWNED_gate)\n",
+    marker = tmp_path / "PWNED_gate"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\nEVIL=$(touch {marker})\n",
                    "utf-8")
     dest = tmp_path / "ta-secrets" / "ta.env"
     res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
     assert res.returncode == 3, (res.returncode, res.stdout, res.stderr)
     assert "non KEY=VALUE lines" in res.stderr
     assert not dest.exists()
+    assert not marker.exists(), "the rejected source was still executed"
 
 
 def test_installer_refuses_a_symlinked_destination_dir(tmp_path):
@@ -438,16 +444,65 @@ def test_plist_declares_an_absolute_secret_free_ta_env_file():
         assert "\n" not in value and len(value) < 200, key
 
 
+def _sandboxed_script_copy(tmp_path: Path, which: str) -> Path:
+    """A copy of the wrapper / installer with EVERY path constant rewritten
+    into tmp_path.
+
+    DAV-2292 🟡-2: the guard tests used to `source` the REAL repo file. If the
+    guard were ever removed or bypassed, those tests would REPLAY the
+    15:56 incident: the wrapper would write the PRODUCTION label dir and
+    read the REAL .env; the installer would even COPY the real credentials
+    into ~/ta-secrets/ta.env and mkdir 700 it. A test must never be able to
+    do that — so every constant is redirected into tmp_path first, and the
+    COPY is what gets sourced."""
+    src = (WRAPPER if which == "wrapper" else INSTALLER).read_text("utf-8")
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir(parents=True, exist_ok=True)
+    work_root = sandbox / "work"
+    (work_root / "phase2-labels").mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger").mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger" / "forward_ledger.jsonl").write_text("", "utf-8")
+    code_dir = sandbox / "code"
+    (code_dir / "scripts" / "phase2").mkdir(parents=True, exist_ok=True)
+    (code_dir / "scripts" / "phase2" / "expiry_label_pipeline.py").write_text(
+        "# stub\n", "utf-8")
+    cred = sandbox / "ta.env"
+    cred.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    cred.chmod(0o600)
+
+    src = re.sub(r'^PYTHON=.*$', 'PYTHON="/nonexistent/python"',
+                 src, flags=re.MULTILINE)
+    src = re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{cred}"', src,
+                 flags=re.MULTILINE)
+    src = re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src,
+                 flags=re.MULTILINE)
+    src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src,
+                 flags=re.MULTILINE)
+    # the installer keeps its paths in SRC/DEST, not in the four constants
+    src = re.sub(r'^SRC=.*$', f'SRC="{cred}"', src, flags=re.MULTILINE)
+    src = re.sub(r'^DEST=.*$', f'DEST="{sandbox / "ta-secrets" / "ta.env"}"',
+                 src, flags=re.MULTILINE)
+    copy = sandbox / (f"{which}.sh")
+    copy.write_text(src, "utf-8")
+    return copy
+
+
 def test_wrapper_refuses_to_be_sourced(tmp_path):
     """DAV-2292 事故护栏：2026-10-20 15:56 有人用
     `bash -c 'source run_expiry_label_daily.sh; echo "$VAR"'` 取常量，
     而 `source` 会**执行**整个脚本 → 向**正式**标签目录写了 ALERT.launchd +
     日志，并**读取了真实凭据**（默认 ENV_FILE 指向 ~/Documents/…/.env）。
     标签数据没被写（exit 11 早退），但告警与日志被污染。
-    现在脚本被 source 时必须立刻拒绝：不写任何目录、不读任何凭据。"""
+    现在脚本被 source 时必须立刻拒绝：不写任何目录、不读任何凭据。
+
+    DAV-2292 🟡-2: the file that gets sourced here is a SANDBOXED COPY
+    (every path constant rewritten into tmp_path) — never the repo file, so
+    that a future removal of the guard cannot make this test replay the
+    incident against the production directory / the real credentials."""
+    copy = _sandboxed_script_copy(tmp_path, "wrapper")
     proc = subprocess.run(
         ["/bin/bash", "-c",
-         f'source {WRAPPER}; echo "$CRED_KEY_VALUE_GATE"'],
+         f'source {copy}; echo "$CRED_KEY_VALUE_GATE"'],
         capture_output=True, text=True, timeout=30,
         env={**BASE_ENV, "HOME": str(tmp_path)})
     assert proc.returncode == 64, (proc.returncode, proc.stdout, proc.stderr)
@@ -459,14 +514,10 @@ def test_wrapper_refuses_to_be_sourced(tmp_path):
 
 def test_wrapper_refuses_to_be_sourced_writes_nothing_to_the_output_dir(
         tmp_path):
-    """同一条护栏的写侧断言：被 source 时不得在输出目录留下任何文件。"""
-    out_dir = tmp_path / "out" / "phase2-labels"
-    out_dir.mkdir(parents=True)
-    src = WRAPPER.read_text("utf-8")
-    src = re.sub(r'^WORK_ROOT=.*$',
-                 f'WORK_ROOT="{tmp_path / "out"}"', src, flags=re.M)
-    copy = tmp_path / "w.sh"
-    copy.write_text(src, "utf-8")
+    """同一条护栏的写侧断言：被 source 时不得在输出目录留下任何文件。
+    DAV-2292 🟡-2: 也是 source 沙箱副本（四个常量全部指向 tmp_path）。"""
+    copy = _sandboxed_script_copy(tmp_path, "wrapper")
+    out_dir = tmp_path / "sandbox" / "work" / "phase2-labels"
     proc = subprocess.run(
         ["/bin/bash", "-c", f'source {copy} 2>/dev/null'],
         capture_output=True, text=True, timeout=30,
@@ -477,13 +528,240 @@ def test_wrapper_refuses_to_be_sourced_writes_nothing_to_the_output_dir(
 
 def test_installer_also_refuses_to_be_sourced(tmp_path):
     """DAV-2292 护栏的覆盖面：安装脚本同样不得被 source（否则会读真实凭据
-    并写真实目录）。"""
+    并写真实目录）。
+    DAV-2292 🟡-2: source 的是沙箱副本（SRC/DEST 指向 tmp_path）——否则护栏
+    一旦失效，这条用例会真的把真实凭据复制成 ~/ta-secrets/ta.env 并 mkdir 700，
+    比 15:56 那次更重。"""
+    copy = _sandboxed_script_copy(tmp_path, "installer")
     proc = subprocess.run(
-        ["/bin/bash", "-c", f'source {INSTALLER}'],
+        ["/bin/bash", "-c", f'source {copy}'],
         capture_output=True, text=True, timeout=30,
-        env={**BASE_ENV, "HOME": str(tmp_path)})
+        env={**BASE_ENV, "HOME": str(tmp_path),
+             "TA_ENV_SRC": str(tmp_path / "sandbox" / "ta.env"),
+             "TA_ENV_FILE": str(tmp_path / "sandbox" / "ta-secrets" / "ta.env")})
     assert proc.returncode == 64, (proc.returncode, proc.stdout, proc.stderr)
     assert "REFUSED" in proc.stderr
+    # nothing was created in the sandbox either
+    assert not (tmp_path / "sandbox" / "ta-secrets").exists()
+
+
+# ---------------------------------------------------------------------------
+# DAV-2303 — no hard-coded checkout: env first, script's own dir as fallback
+# ---------------------------------------------------------------------------
+
+def _make_fake_checkout(root: Path, name: str, *, with_pipeline: bool) -> Path:
+    """Build a checkout-shaped tree: <root>/<name>/scripts/phase2/{wrapper,pipeline}."""
+    ck = root / name
+    (ck / "scripts" / "phase2").mkdir(parents=True, exist_ok=True)
+    shutil.copy(WRAPPER, ck / "scripts" / "phase2" / "run_expiry_label_daily.sh")
+    if with_pipeline:
+        shutil.copy(REPO / "scripts" / "phase2" / "expiry_label_pipeline.py",
+                    ck / "scripts" / "phase2" / "expiry_label_pipeline.py")
+    return ck
+
+
+def _run_checkout_wrapper(checkout: Path, tmp_path: Path, *,
+                          extra_env: dict[str, str] | None = None):
+    """Run a checkout-shaped copy of the wrapper with the interpreter stubbed
+    and the output/credential paths sandboxed. rc 0 == the pipeline was FOUND
+    (the trading-day gate answered "non-trading day" -> skip), rc 11 == the
+    pipeline was NOT found (the very failure the 2026-10-20 15:56 run hit)."""
+    script = checkout / "scripts" / "phase2" / "run_expiry_label_daily.sh"
+    src = script.read_text("utf-8")
+    bin_dir = tmp_path / "bin"
+    work_root = tmp_path / "work"
+    for d in (bin_dir, work_root / "phase2-labels",
+              work_root / "phase2-ledger"):
+        d.mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger" / "forward_ledger.jsonl").write_text("", "utf-8")
+    cred = tmp_path / "ta.env"
+    cred.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    cred.chmod(0o600)
+
+    src = re.sub(r'^PYTHON=.*$', f'PYTHON="{_stub_python(bin_dir)}"', src,
+                 flags=re.MULTILINE)
+    src = re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{cred}"', src, flags=re.MULTILINE)
+    src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src,
+                 flags=re.MULTILINE)
+    script.write_text(src, "utf-8")
+
+    env = dict(BASE_ENV)
+    env.update(extra_env or {})
+    proc = subprocess.run(["/bin/bash", str(script)], capture_output=True,
+                          text=True, timeout=60, env=env)
+    alert = work_root / "phase2-labels" / "ALERT.launchd"
+    return {
+        "rc": proc.returncode,
+        "alert": alert.read_text("utf-8") if alert.exists() else "",
+        "stderr": proc.stderr,
+    }
+
+
+def test_pipeline_is_found_in_the_scripts_own_checkout(tmp_path):
+    """DAV-2303: with NO TA_CODE_DIR in the environment, the wrapper must find
+    expiry_label_pipeline.py in the checkout it itself lives in. This is what
+    makes "move the checkout" a plist-only change instead of a code change."""
+    ck = _make_fake_checkout(tmp_path, "labels-a", with_pipeline=True)
+    res = _run_checkout_wrapper(ck, tmp_path)
+    assert res["rc"] == 0, (res["rc"], res["alert"], res["stderr"])
+
+
+def test_ta_code_dir_from_the_environment_wins_over_the_script_location(tmp_path):
+    """DAV-2303: the plist may point TA_CODE_DIR at a DIFFERENT checkout than
+    the wrapper's own location; the env value must win (and the pipeline must
+    be found THERE)."""
+    here = _make_fake_checkout(tmp_path, "labels-a", with_pipeline=False)
+    there = _make_fake_checkout(tmp_path, "labels-b", with_pipeline=True)
+    res = _run_checkout_wrapper(here, tmp_path,
+                                extra_env={"TA_CODE_DIR": str(there)})
+    assert res["rc"] == 0, (res["rc"], res["alert"], res["stderr"])
+
+
+def test_missing_pipeline_still_exits_11_naming_the_resolved_checkout(tmp_path):
+    """DAV-2303: when the pipeline really is missing, the alert must name the
+    checkout the wrapper actually resolved — so the operator sees WHICH
+    checkout is wrong instead of a hard-coded path from the source."""
+    ck = _make_fake_checkout(tmp_path, "labels-a", with_pipeline=False)
+    res = _run_checkout_wrapper(ck, tmp_path)
+    assert res["rc"] == 11, (res["rc"], res["alert"], res["stderr"])
+    assert str(ck) in res["alert"], res["alert"]
+
+
+def test_no_hard_coded_checkout_survives_in_the_shipped_script_and_plist():
+    """DAV-2303 regression: the 2026-10-20 15:56 exit 11 happened because the
+    shell script still pointed at ta-p4-ef8aa9d9. That literal must not come
+    back as a LIVE PATH — neither in the script nor in the plist.
+
+    Scope: the check is on live values only (assignments / plist <string>
+    elements). Prose that NAMES the old checkout to explain the incident is
+    allowed and desirable — it is the history, not a path."""
+    wrapper_src = WRAPPER.read_text("utf-8")
+    for literal in ("ta-p4-ef8aa9d9", "ta-p4-labels-cb82987b"):
+        # no assignment may carry it
+        for line in wrapper_src.splitlines():
+            if literal in line and not line.lstrip().startswith("#"):
+                raise AssertionError(f"{literal} is hard-coded again: {line}")
+        # no plist <string> element may carry it
+        for line in PLIST.read_text("utf-8").splitlines():
+            if literal in line and "<string>" in line:
+                raise AssertionError(f"{literal} is hard-coded in the plist: {line}")
+    # the three former hard-coded values must all be env-driven now
+    assert 'CODE_DIR="${TA_CODE_DIR:-' in wrapper_src
+    assert 'PYTHON="${TA_PYTHON:-' in wrapper_src
+    assert 'WORK_ROOT="${TA_WORK_ROOT:-' in wrapper_src
+    # ... and the trading-day gate must take CODE_DIR from the same variable
+    assert "sys.path.insert(0, sys.argv[1])" in wrapper_src
+
+
+def test_plist_carries_the_checkout_as_a_placeholder_and_env_var():
+    """DAV-2303: the plist template must carry the checkout as a {{LABELS_DIR}}
+    placeholder (the repo's existing convention, see
+    releases/launchd/com.davidliu.ta-daily-reports.plist) and must ALSO pass
+    it to the script as TA_CODE_DIR — the two must resolve to the same
+    directory, which is exactly what the 15:56 failure violated."""
+    blob = PLIST.read_text("utf-8")
+    assert "{{LABELS_DIR}}" in blob
+    # ProgramArguments and TA_CODE_DIR must use the SAME placeholder
+    assert "{{LABELS_DIR}}/scripts/phase2/run_expiry_label_daily.sh" in blob
+    assert "<key>TA_CODE_DIR</key>\n        <string>{{LABELS_DIR}}</string>" in blob
+    # after the documented sed, both must point at the same absolute dir
+    resolved = blob.replace("{{LABELS_DIR}}", "/Users/davidliu/ta-p4-labels-ab12")
+    with tempfile.NamedTemporaryFile("wb", suffix=".plist", delete=False) as fh:
+        fh.write(resolved.encode("utf-8"))
+        tmp_plist = fh.name
+    try:
+        with open(tmp_plist, "rb") as f:
+            parsed = plistlib.load(f)
+    finally:
+        os.unlink(tmp_plist)
+    program = parsed["ProgramArguments"][1]
+    code_dir = parsed["EnvironmentVariables"]["TA_CODE_DIR"]
+    assert program.startswith(code_dir), (program, code_dir)
+    assert parsed["WorkingDirectory"] == code_dir
+    # no UNRESOLVED placeholder may survive in the VALUES (the install
+    # comment legitimately mentions the {{...}} syntax itself)
+    for value in list(parsed["ProgramArguments"]) + \
+            list(parsed["EnvironmentVariables"].values()) + \
+            [parsed["WorkingDirectory"]]:
+        assert "{{" not in value and "}}" not in value, value
+
+
+# ---------------------------------------------------------------------------
+# DAV-2292 🟡-1 — `set -a` (allexport) must not leak the script's own
+# bookkeeping variables into the pipeline subprocess environment
+# ---------------------------------------------------------------------------
+
+def test_wrapper_does_not_leak_its_own_variables_into_the_subprocess_env(
+        tmp_path):
+    """DAV-2292 🟡-1: the DAV-2286 `set +u` edit removed the original
+    `set +a`, so allexport stayed ON for the rest of the script and EVERY
+    later assignment (TODAY, IS_TRADING, CHECK_RC, RUN_RC, GAP_CHECK,
+    GAP_LEVEL, GAP_RC …) was exported into the pipeline subprocess env —
+    measured 16 items on the candidate vs 8 on the parent side.
+
+    The credential VALUES must still be exported (that is what `set -a` is
+    for); the script's own bookkeeping must NOT be. This test uses a stub
+    interpreter that dumps its own environment to a file."""
+    dump = tmp_path / "child-env.txt"
+    script = tmp_path / "w.sh"
+    src = WRAPPER.read_text("utf-8")
+
+    # stub interpreter: answer the trading-day probe, and dump the env
+    # whenever it is invoked with the pipeline (run/verify) arguments
+    stub = tmp_path / "py_stub"
+    # invocation shapes:
+    #   "${PYTHON}" - "${CODE_DIR}" <<'PY'        -> the trading-day probe
+    #   "${PYTHON}" "${PIPELINE}" run   ...        -> the pipeline run
+    #   "${PYTHON}" "${PIPELINE}" verify ...       -> the pipeline verify
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "-" ]; then\n'
+        '    input="$(cat 2>/dev/null)"\n'
+        '    case "$input" in\n'
+        '        *is_cn_trading_day*) echo "2026-10-14 True"; exit 0 ;;\n'
+        "    esac\n"
+        '    echo "0 no-gap"; exit 0\n'   # the SW-leg gap probe
+        "fi\n"
+        f'if [ "${{2:-}}" = "run" ]; then env > "{dump}"; fi\n'
+        "exit 0\n",
+        "utf-8")
+    stub.chmod(0o755)
+
+    work_root = tmp_path / "work"
+    for d in (work_root / "phase2-labels", work_root / "phase2-ledger"):
+        d.mkdir(parents=True, exist_ok=True)
+    (work_root / "phase2-ledger" / "forward_ledger.jsonl").write_text("", "utf-8")
+    cred = tmp_path / "ta.env"
+    cred.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    cred.chmod(0o600)
+
+    # the pipeline must EXIST, else the wrapper exits 11 before the run
+    code_dir = tmp_path / "code"
+    (code_dir / "scripts" / "phase2").mkdir(parents=True, exist_ok=True)
+    (code_dir / "scripts" / "phase2" / "expiry_label_pipeline.py").write_text(
+        "# stub pipeline\n", "utf-8")
+
+    src = re.sub(r'^PYTHON=.*$', f'PYTHON="{stub}"', src, flags=re.MULTILINE)
+    src = re.sub(r'^ENV_FILE=.*$', f'ENV_FILE="{cred}"', src, flags=re.MULTILINE)
+    src = re.sub(r'^CODE_DIR=.*$', f'CODE_DIR="{code_dir}"', src,
+                 flags=re.MULTILINE)
+    src = re.sub(r'^WORK_ROOT=.*$', f'WORK_ROOT="{work_root}"', src,
+                 flags=re.MULTILINE)
+    script.write_text(src, "utf-8")
+
+    proc = subprocess.run(["/bin/bash", str(script)], capture_output=True,
+                          text=True, timeout=60, env=dict(BASE_ENV))
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+    assert dump.exists(), "the pipeline stub was never invoked"
+    child_env = dump.read_text("utf-8")
+
+    # the credential must still be exported (that is the point of `set -a`)
+    assert "TUSHARE_TOKEN=" in child_env
+    # but the script's own bookkeeping variables must NOT be
+    for name in ("TODAY=", "IS_TRADING=", "CHECK_RC=", "RUN_RC=",
+                 "GAP_CHECK=", "GAP_LEVEL=", "GAP_RC=", "TODAY_CHECK=",
+                 "SOURCE_RC=", "GREP_RC=", "GREP_ERR="):
+        assert name not in child_env, f"{name} leaked into the subprocess env"
 
 
 def test_wrapper_documents_the_new_exit_code_and_env_override():

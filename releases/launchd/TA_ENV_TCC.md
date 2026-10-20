@@ -75,25 +75,44 @@ rc=1（文件干净）**，于是继续 `source`，`source` 同样 EPERM，最�
 ## 3. 安装步骤（发布卡执行）
 
 ```bash
-# 0. 代码检出升到含本卡的 trunk（CODE_DIR 内必须有 expiry_label_pipeline.py）
+# 0. 准备检出：wrapper 与管道脚本必须在**同一个**检出里（DAV-2303）
+LABELS_DIR=/Users/davidliu/ta-p4-labels-<sha>
+git clone <repo> "${LABELS_DIR}"
+git -C "${LABELS_DIR}" checkout <sha>
+# 硬门禁：管道脚本不在这里 → 装上去必然 exit 11（15:56 就是这么失败的）
+test -f "${LABELS_DIR}/scripts/phase2/expiry_label_pipeline.py" || exit 1
+# 工作树必须干净（发布卡纪律：不得在检出里直接改代码）
+git -C "${LABELS_DIR}" status --porcelain | wc -l     # 期望 0
+
 # 1. 生成/刷新凭据副本：目录 700、文件 600、原子落位、不打印任何值
 scripts/phase2/ta_secrets_install.sh
 scripts/phase2/ta_secrets_install.sh --check     # 严格门禁，非 0 即停
 
-# 2. 装 plist（TA_ENV_FILE 已是绝对路径 /Users/davidliu/ta-secrets/ta.env）
-cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
+# 2. 装 plist：把 {{LABELS_DIR}} 替换成上面的检出（三处指向同一目录）
+sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
+    scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
+    > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist  # 必须为 0
+plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 
 # 3. 一次手工触发（非交易日会 exit 0 + 一行 skip 日志，也算通过）
 launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels
 ```
 
+> 装完再核一次：三处路径（`ProgramArguments` / `WorkingDirectory` / `TA_CODE_DIR`）
+> 必须解析到**同一个**检出：
+> ```bash
+> /usr/libexec/PlistBuddy -c "Print :ProgramArguments" ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+> /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:TA_CODE_DIR" ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
+> ```
+
 ## 4. RESTART.md 待粘贴段落（卡面第 5 项）
 
 把下面整段追加到宿主机 `/Users/davidliu/Documents/TradingAgents-AShare-releases/RESTART.md`
 （建议追加在文末「回退方法」之前；该文件不入 git，无法在本分支 diff 校验）：
 
-````markdown
+`````markdown
 ## 凭据两处（DAV-2284，2026-10-2x）
 
 定时任务 `com.davidliu.ta-p4-expiry-labels` 的凭据来自 `~/ta-secrets/ta.env`
@@ -111,12 +130,11 @@ macOS TCC 拒绝 launchd 唤起的 `/bin/bash` 读取 `~/Documents` 下任何文
 scripts/phase2/ta_secrets_install.sh --check   # 期望末行 OK
 launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels
 ```
-````
+`````
 
 只改一处会出现「服务正常但标签任务 nightly exit 13/18」或「标签任务用旧 key」，
 两种都不会自动报警到人。
 
-````
 
 （发布后 `ta_secrets_install.sh` 的末行也会打印同一句提醒。）
 
@@ -190,7 +208,7 @@ readable」告警（不会静默），符合 fail-closed。
 
 | 编号 | 处理 | 落点 |
 |---|---|---|
-| 🟡-1 | `--src` / `--dest` 缺值时 `shift 2` 失败且不移动位置参数 → 参数循环永不前进（实测 >4s 仍在转，~70% CPU、零输出、只能 kill）。**本脚本是发布卡安装第 1 步**，运维漏一个值就表现为「命令卡住不说话」 | 改为先判 `$#` 再取 `$2`（两个独立 `if`：`set -u` 下 `a || b` 也会先展开 `$2`，`||` 救不了），缺值 → **rc 2** 立即报错（实测 0.004s）；同时把 `say`/`fail`/`mode_file` **上移到参数循环之前**（原先 `fail` 在循环后才定义，循环里调用会 `command not found` 然后继续往下跑） |
+| 🟡-1 | `--src` / `--dest` 缺值时 `shift 2` 失败且不移动位置参数 → 参数循环永不前进（实测 >4s 仍在转，~70% CPU、零输出、只能 kill）。**本脚本是发布卡安装第 1 步**，运维漏一个值就表现为「命令卡住不说话」 | 改为先判 `$#` 再取 `$2`（两个独立 `if`；**任何会展开 `$2` 的命令前面必须先有独立的计数检查** —— 这是 DAV-2292 🟢-1 更正后的真规则），缺值 → **rc 2** 立即报错（实测 0.004s）；同时把 `say`/`fail`/`mode_file` **上移到参数循环之前**（原先 `fail` 在循环后才定义，循环里调用会 `command not found` 然后继续往下跑） |
 | 🟡-2 | 卡面第 6 项「日报模板」排查结论**成因写错**：原文说「若将来某次安装漏配 `TA_PYTHON_BIN`」，但**模板 plist 自己就显式写入了 Documents 路径**（`releases/launchd/com.davidliu.ta-daily-reports.plist:60-61`），wrapper 缺省同样是它（`ta-daily-reports-wrapper.sh:33`）——**按模板原样重装就会复现，不是漏配**；且只改 wrapper 缺省修不好真正生效的那一处（plist 优先），`CALENDAR_JSON`（`:47`）又由它推导 | §5 表格该行改写为：修复面 = 模板 plist 的 `TA_PYTHON_BIN` + wrapper 缺省**两处**，按模板重装即复现；承接 = 需总控签白名单放宽后由本卡一并改，或另开跟踪卡；**未落地前禁止从模板重装日报**（现装作业用 `~/ta-venv`，本身无问题）。本卡未改该模板（白名单未放宽 + 属另一作业），已在 §8 列为承接项 |
 | 🟢-1 | 退出码表补齐新增的两种 16 | wrapper 头部：`16a` 路径非绝对 / `16b` 文件缺失或不可读 / `16c` 非法行 / `16d` source 失败 |
 | 🟢-2 | 注释称 source 守卫能接住「unbound var under `set -u`」——实测 bash 在 source 内遇未定义变量会**直接终止整个脚本**（rc 127、无 alert 文件），守卫只接得住 `.` 返回非 0 | source 两侧改为 `set +u` … `set -u` 窗口（失败变成正常 exit 16 告警，而不是静默 rc=127）；注释改为与实测一致，并说明「KEY=VALUE 白名单已先拦下裸 `$VAR`，`set +u` 是第二层保险」 |
@@ -223,7 +241,7 @@ bash -c 'source scripts/phase2/run_expiry_label_daily.sh 2>/dev/null; echo "$CRE
 生产目录留下的痕迹（已逐项核对）：
 
 ```
-label_pipeline.log  追加两行：
+label_pipeline.log  追加三行（第 41-43 行，全部是 07:56:00）：
   2026-10-20T07:56:00+00:00 timer start label=com.davidliu.ta-p4-expiry-labels
   2026-10-20T07:56:00+00:00 WARN credential dir mode 755 (want 700) — chmod 700 '/Users/davidliu/Documents/TradingAgents-AShare'
   2026-10-20T07:56:00+00:00 ALERT pipeline script missing: …/ta-p4-ef8aa9d9/…/expiry_label_pipeline.py (exit 11)
@@ -238,7 +256,7 @@ ALERT.launchd      被覆盖（exit 11 的内容）—— 已由总工改名留�
 | 标签数据 | **未写**。`labels_t10.jsonl` mtime 仍为 10-20 14:25:01、`labels_t40.jsonl` 仍为 14:29:42（945 / 307 行未变）；exit 11 在 `[ -f PIPELINE ]` 早退，尚未到 run 阶段 |
 | `label_run_state.json` | 未变（14:29:42） |
 | 真实凭据 | **被读取**（`source` 执行了 `.env` 的赋值，进程内注入，未落盘）。已核：凭据值**未出现在**任何产物（alert / log / plist / 文档 / diff）中 |
-| 告警与日志 | **被污染**：生产 `ALERT.launchd` 被覆盖（现为 0 字节空文件，原内容已由总工留证）、`label_pipeline.log` 追加 2 行 |
+| 告警与日志 | **被污染**：生产 `ALERT.launchd` 被覆盖（现为 0 字节空文件，原内容已由总工留证）、`label_pipeline.log` 追加 3 行（log 第 41-43 行） |
 
 **复现验证**（隔离沙箱内，`OUT_DIR`/`ENV_FILE` 指向 `/tmp`）：`source` 那条命令
 产出的日志三行与生产 15:56 的三行**逐字相同**，退出码同为 11 —— 归因确认，不是推测。
@@ -290,13 +308,30 @@ $ echo $?
 | `test_unbound_variable_in_the_credential_file_never_aborts_silently` | 同上 | sandbox 内 | 否 |
 | `test_wrapper_warns_but_does_not_stop_on_a_loose_mode` | 同上 | sandbox 内 | 否 |
 | `test_installer_*`（8 个） | `tmp_path/ta-secrets` | `tmp_path/src.env`（假值） | 否 |
-| `test_plist_*` / `test_installer_gate_is_byte_identical_*` | 无写入 | 无 | 否 |
+| `test_wrapper_refuses_to_be_sourced` | `tmp_path/sandbox/work` | `tmp_path/sandbox/ta.env` | 否 |
+| `test_wrapper_refuses_to_be_sourced_writes_nothing_to_the_output_dir` | 同上 | 同上 | 否 |
+| `test_installer_also_refuses_to_be_sourced` | `tmp_path/sandbox/ta-secrets` | `tmp_path/sandbox/ta.env` | 否 |
+| `test_wrapper_does_not_leak_its_own_variables_into_the_subprocess_env` | `tmp_path/work` | `tmp_path/ta.env` | 否 |
+| `test_plist_*` / `test_installer_gate_is_byte_identical_*` / `test_no_hard_coded_checkout_*` / `test_plist_carries_the_checkout_*` / `test_pipeline_is_found_*` / `test_ta_code_dir_*` / `test_missing_pipeline_*` | 无写入 | 无 | 否 |
 
 实现机制：wrapper 的沙箱化是**改写被拷贝副本里的固定常量**（`PYTHON=`、
 `ENV_FILE=`、`CODE_DIR=`、`WORK_ROOT=` 四个），`OUT_DIR` 由 `WORK_ROOT` 推导，
 因此**测试永远落在 `tmp_path` 下**；测试文件里**不出现** `~/ta-p4-2e1e199f`
 与 `~/Documents/TradingAgents-AShare`（仅一处断言 plist 里的 `TA_ENV_FILE` 字面量，
 不读文件）。
+
+**DAV-2292 🟡-2 的加固**：三条护栏用例（`test_wrapper_refuses_to_be_sourced`、
+`…_writes_nothing_to_the_output_dir`、`test_installer_also_refuses_to_be_sourced`）
+原先**直接 source 仓库里的真文件**且不覆写任何常量 —— 一旦护栏被删/被绕过，
+它们就会**重放 15:56 事故**（wrapper 那条会写正式标签目录并读真实 `.env`；
+installer 那条会把真实凭据复制成 `~/ta-secrets/ta.env` 并 `mkdir 700`，比 15:56
+更重）。现改为：先 `read_text()` → 把 `PYTHON`/`ENV_FILE`/`CODE_DIR`/`WORK_ROOT`
+（安装脚本另加 `SRC`/`DEST`）**全部覆写到 `tmp_path`** → 写 `tmp_path` 副本 →
+source **那个副本**。
+
+**变异测试已做**：把 wrapper 的护栏整段删掉再跑这三条用例 → 2 条**失败**
+（`test_wrapper_refuses_to_be_sourced`、`…_writes_nothing_to_the_output_dir`），
+证明用例不是空转的；同时因为已沙箱化，变异期间**没有碰生产目录与真实凭据**。
 
 **既有 `tests/test_dav1875_expiry_label_pipeline.py` 的 wrapper 用例**同构
 （`_wrapper_harness` 改写同样四个常量），也全部落在 `tmp_path` 下。
@@ -306,6 +341,84 @@ $ echo $?
 - `ALERT.launchd` 现为 **0 字节空文件**（总工改名留证后的残留），不是有效告警；
   有效内容在 `ALERT.launchd.stray-20261020T1556`。若发布卡要求目录干净，
   可删该空文件（**不删留证文件**）——本卡未动生产目录。
-- `label_pipeline.log` 尾部两行是 15:56 误执行的痕迹；未删（属取证材料）。
+- `label_pipeline.log` 尾部三行（第 41-43 行）都是 15:56 误执行的痕迹；未删（属取证材料）。
 - 15:56 误执行**读到了真实凭据**（仅在进程内，未落盘、未外泄）；本卡未轮换密钥，
   是否轮换由总控定。
+
+## 11. DAV-2303 路径写死 → 环境变量 / 脚本目录推导（总控 10-20 17:20 令）
+
+### 11.1 问题（总控实查，已复核）
+
+候选是从主干版本改出来的，因此继承了主干的**写死路径**：
+
+| 写死项 | 旧值 | 后果 |
+|---|---|---|
+| `CODE_DIR` | `/Users/davidliu/ta-p4-ef8aa9d9` | 该检出停在 10-14 的 `f41b9cf5`，**里面没有 `expiry_label_pipeline.py`** → 照候选装上去，10-22 20:10 的标签任务**以 exit 11 失败**（15:56 那次手工执行正是这么 exit 11 的） |
+| `PYTHON` | `~/Documents/TradingAgents-AShare/.venv310/bin/python` | 位于 `~/Documents` 之下（TCC 墙后），且是 DAV-2087 认定的最大单点（总控 10-17 令已要求迁离） |
+| 交易日闸的 `sys.path` | 同一个旧检出 | 同上 |
+
+**已复核属实**：`git -C ~/ta-p4-ef8aa9d9 log --oneline -1` = `f41b9cf5`；
+`ls ~/ta-p4-ef8aa9d9/scripts/phase2/expiry_label_pipeline.py` → **No such file**。
+
+### 11.2 改法：env 优先 + 脚本自身目录兜底
+
+```
+SCRIPT_DIR     = 脚本自身所在目录（BASH_SOURCE 的绝对路径，不用 $PWD）
+SCRIPT_CHECKOUT = ${SCRIPT_DIR}/../..          （脚本在 <检出>/scripts/phase2/ 下）
+PYTHON      = ${TA_PYTHON:-/Users/davidliu/ta-venv/py310/bin/python}
+ENV_FILE    = ${TA_ENV_FILE:-…}                 （DAV-2284，不变）
+CODE_DIR    = ${TA_CODE_DIR:-${SCRIPT_CHECKOUT}}
+WORK_ROOT   = ${TA_WORK_ROOT:-/Users/davidliu/ta-p4-2e1e199f/work}
+```
+
+- **env 优先**（plist 显式给出 → 决定性的），**脚本自身目录兜底**（装到哪个检出
+  就在哪个检出里找管道脚本）。两条都不写死。
+- 交易日闸的 `sys.path` 早就取 `argv[1]`（DAV-2286 已改），而 `argv[1]` 就是
+  `${CODE_DIR}` —— 因此**自动跟随**，无第二处写死。
+- `WORK_ROOT` 也纳入 env（数据面与检出无关，但同样不该写死在代码里）。
+
+### 11.3 plist 模板（`{{LABELS_DIR}}` 占位符，沿用仓库既有约定）
+
+`scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist`：
+
+| 位置 | 值 |
+|---|---|
+| `ProgramArguments[1]` | `{{LABELS_DIR}}/scripts/phase2/run_expiry_label_daily.sh` |
+| `WorkingDirectory` | `{{LABELS_DIR}}` |
+| `EnvironmentVariables.TA_CODE_DIR` | `{{LABELS_DIR}}` |
+| `EnvironmentVariables.TA_PYTHON` | `/Users/davidliu/ta-venv/py310/bin/python` |
+| `EnvironmentVariables.TA_ENV_FILE` | `/Users/davidliu/ta-secrets/ta.env` |
+
+**三处 `{{LABELS_DIR}}` 指向同一个目录** —— 这正是 15:56 违反的那条不变量。
+安装时 `sed` 替换（写法与 `releases/launchd/com.davidliu.ta-daily-reports.plist`
+一致），替换后 `grep -c '{{'` 必须为 0。
+
+### 11.4 回归用例（新增 6 个）
+
+| 用例 | 断言 |
+|---|---|
+| `test_pipeline_is_found_in_the_scripts_own_checkout` | 无 `TA_CODE_DIR` 时，管道脚本在**脚本自身所在检出**里被找到（rc 0，不是 exit 11） |
+| `test_ta_code_dir_from_the_environment_wins_over_the_script_location` | `TA_CODE_DIR` 指向另一个检出时，**env 优先**，管道脚本在那里被找到 |
+| `test_missing_pipeline_still_exits_11_naming_the_resolved_checkout` | 真的缺管道时仍 exit 11，且告警里写的是**实际解析到的检出**（运维能一眼看出是哪个检出不对） |
+| `test_no_hard_coded_checkout_survives_in_the_shipped_script_and_plist` | 脚本与 plist 的**活路径**里不得再出现旧检出字面量（注释里叙述历史不算） |
+| `test_plist_carries_the_checkout_as_a_placeholder_and_env_var` | plist 用 `{{LABELS_DIR}}` 占位符；替换后 `ProgramArguments` / `WorkingDirectory` / `TA_CODE_DIR` **三者解析到同一目录**；所有值里不得残留未替换的 `{{` |
+| `test_wrapper_does_not_leak_its_own_variables_into_the_subprocess_env` | DAV-2292 🟡-1：`set +a` 补回后，桩解释器落盘的子进程 env 里**不得出现** `TODAY`/`IS_TRADING`/`CHECK_RC`/`RUN_RC`/`GAP_CHECK`/`GAP_LEVEL`/`GAP_RC`/`SOURCE_RC`/`GREP_RC`/`GREP_ERR`；**但 `TUSHARE_TOKEN` 必须仍在**（凭据值要导出） |
+
+### 11.5 顺带修掉的 DAV-2292 复审项
+
+| 编号 | 处理 |
+|---|---|
+| 🟡-1 | `set +a` 补回（且 `SOURCE_RC=$?` 的捕获**放在 `set +a` 之后**，否则 `SOURCE_RC` 自己也会被导出 —— 这是新用例第一次跑就抓到的）。凭据值仍导出，脚本自己的记账变量不再泄漏 |
+| 🟡-2 | 三条护栏用例改为 source **沙箱副本**（四个常量全部覆写到 `tmp_path`；安装脚本另加 `SRC`/`DEST`），护栏一旦失效也不会重放 15:56；并做了变异测试（删掉护栏 → 2 条用例失败） |
+| 🟢-1 | 两个脚本的退出码表补 **64**（refused to be sourced） |
+| 🟢-2 | 安装脚本里那条错误的 bash 语义论断（"`a || b` 救不了"）改正为「**会展开 `$2` 的命令前面必须先有一条独立的计数检查**」，并在注释里明确撤回旧说法（`\|\|`/`&&` 确实会短路，旧说法是错的） |
+| 🟢-3 | 事故取证文字「追加两行」→ **三行**（log 第 41-43 行，全为 07:56:00） |
+| 🟢-4 | `TA_ENV_TCC.md` 的孤立 4 反引号围栏（吞掉 §5/§6/§7 三个标题）已修：外层围栏改 5 反引号以正确嵌套内层 ```bash，孤立行删除；现全文围栏配对检查通过 |
+| 🟢-5 | 测试里的 canary 从全局 `/tmp/PWNED_gate` 改为 `tmp_path` 内 |
+
+### 11.6 发布卡纪律（总工 10-20 17:20 令，先记在卡上）
+
+1. **发布卡不得在检出里直接改代码**：需要改路径，**必须先在分支上改好、经复审再部署**。
+2. 2284 的发布卡要核对两件事：**新检出的工作树是干净的**；**装好之后旧检出里的本地改动已不再需要**
+   （`~/ta-p4-labels-cb82987b` 现有 10-17 的未提交本地改动；`~/ta-p4-ef8aa9d9` 停在
+   `f41b9cf5` 且缺管道脚本，两者都**不可**作为新装机的检出）。
