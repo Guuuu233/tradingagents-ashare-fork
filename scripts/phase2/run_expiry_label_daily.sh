@@ -365,6 +365,15 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # still on exported the raw text (bash's syntax-error message quotes the
     # offending line — for a credential file that IS the value) into the
     # environ of every helper spawned afterwards.
+    #
+    # DAV-2292 🟢-1 (round 6): the same applied to `_src_rc` — it was
+    # assigned INSIDE the window, so the `cat`/`rm` helpers inherited
+    # `_src_rc=0` in their environ. `export -n` removes a name from the
+    # export list WITHOUT changing its value, and it must run while
+    # allexport is still on (the assignment already happened) — the value
+    # itself is just the source's status, no secret in it, but the rule is
+    # "the script's own variables never reach a child's environ".
+    export -n _src_rc 2>/dev/null || true
     set +a
     _src_err="$(cat "${_src_errfile}" 2>/dev/null)"
     rm -f "${_src_errfile}"

@@ -52,12 +52,23 @@
        # returns FAILURE exactly when the check PASSES, so reusing it in a
        # `set -e` / `&&` chain would judge a good plist as broken. Use
        # `grep -q` (success = found = bad) and invert the test:
+       # DAV-2292 🟡-1 (round 6): the check must look for an UNRESOLVED
+       # PLACEHOLDER ('{{'), not for one specific name. The old form only
+       # grepped 'LABELS_DIR', so a half-resolved plist (WORK_ROOT still
+       # '{{WORK_ROOT}}') passed every check — and the 10-22 20:10 run would
+       # then exit 12 with a bogus relative work root.
        ! plutil -extract ProgramArguments json -o - \
-          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
           || { echo "unresolved placeholder in ProgramArguments"; exit 1; }
        ! plutil -extract EnvironmentVariables json -o - \
-          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
           || { echo "unresolved placeholder in EnvironmentVariables"; exit 1; }
+       ! plutil -extract StandardOutPath raw -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
+          || { echo "unresolved placeholder in StandardOutPath"; exit 1; }
+       ! plutil -extract StandardErrorPath raw -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q '{{' \
+          || { echo "unresolved placeholder in StandardErrorPath"; exit 1; }
        plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        launchctl bootstrap gui/$UID \
           ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist

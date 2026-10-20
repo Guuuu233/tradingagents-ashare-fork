@@ -687,26 +687,71 @@ def test_missing_pipeline_still_exits_11_naming_the_resolved_checkout(tmp_path):
     assert str(ck) in res["alert"], res["alert"]
 
 
+def _placeholder_check(plist_path: Path) -> int:
+    """Run EXACTLY the check the install step documents (§3 of
+    TA_ENV_TCC.md / the plist's own install comment): look for an unresolved
+    PLACEHOLDER ('{{') in the VALUES, not for a specific placeholder name.
+
+    Returns 0 = all resolved, 1 = at least one unresolved."""
+    cmds = [
+        ["plutil", "-extract", "ProgramArguments", "json", "-o", "-",
+         str(plist_path)],
+        ["plutil", "-extract", "EnvironmentVariables", "json", "-o", "-",
+         str(plist_path)],
+        ["plutil", "-extract", "StandardOutPath", "raw", "-o", "-",
+         str(plist_path)],
+        ["plutil", "-extract", "StandardErrorPath", "raw", "-o", "-",
+         str(plist_path)],
+    ]
+    for cmd in cmds:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if out.returncode != 0:
+            return 1
+        if "{{" in out.stdout:
+            return 1
+    return 0
+
+
 def test_the_documented_placeholder_check_returns_zero_after_installation(tmp_path):
-    """DAV-2303: the install step documents a check that the placeholder was
+    """DAV-2303: the install step documents a check that the placeholders were
     resolved. That check must actually WORK on the installed plist — i.e. it
-    must return 0 — while the template (unresolved) must not pass it.
-    (The check reads the VALUES via `plutil -extract ... json`; a plain
-    `grep '{{'` over the whole file would match the install comment that
-    names the placeholder, and `plutil -extract ... raw` only prints the
-    first array element.)"""
+    must return 0 — while a template with unresolved placeholders must not
+    pass it.
+
+    DAV-2292 round 6: the check must look for the residual PLACEHOLDER
+    ('{{'), not for one specific name — the old form only grepped
+    'LABELS_DIR', so a half-resolved plist (WORK_ROOT still
+    '{{WORK_ROOT}}') passed every check, and the 10-22 20:10 run would then
+    exit 12 on a bogus relative work root."""
+    blob = PLIST.read_text("utf-8")
     installed = tmp_path / "installed.plist"
     installed.write_text(
-        PLIST.read_text("utf-8").replace("{{LABELS_DIR}}", "/tmp/labels-x"),
+        blob.replace("{{LABELS_DIR}}", "/tmp/labels-x")
+            .replace("{{WORK_ROOT}}", "/Users/davidliu/ta-p4-2e1e199f/work"),
         "utf-8")
-    for key in ("ProgramArguments", "EnvironmentVariables"):
-        out = subprocess.run(
-            ["plutil", "-extract", key, "json", "-o", "-", str(installed)],
-            capture_output=True, text=True, timeout=30)
-        assert out.returncode == 0, (key, out.stderr)
-        assert "LABELS_DIR" not in out.stdout, (key, out.stdout)
-    # and the template itself (unresolved) still carries the placeholder
-    assert "LABELS_DIR" in PLIST.read_text("utf-8")
+    assert _placeholder_check(installed) == 0, "the documented check failed on a fully resolved plist"
+    # the template itself (unresolved) must NOT pass
+    template = tmp_path / "template.plist"
+    template.write_text(blob, "utf-8")
+    assert _placeholder_check(template) == 1, "the documented check passed an unresolved plist"
+
+
+def test_the_documented_placeholder_check_catches_a_half_resolved_plist(tmp_path):
+    """DAV-2292 round 6: replacing only {{LABELS_DIR}} (which is exactly what
+    the old §3 sed did) must make the documented check FAIL. The reviewer
+    showed that the old check passed in that case, so the 10-22 20:10 run
+    would have exited 12 on a relative '{{WORK_ROOT}}' work root."""
+    blob = PLIST.read_text("utf-8")
+    half = tmp_path / "half.plist"
+    half.write_text(blob.replace("{{LABELS_DIR}}", "/tmp/labels-x"), "utf-8")
+    assert _placeholder_check(half) == 1, \
+        "the documented check passed a half-resolved plist"
+    # and the value really is still a placeholder (the reason it matters)
+    out = subprocess.run(
+        ["plutil", "-extract", "EnvironmentVariables.TA_WORK_ROOT", "raw",
+         "-o", "-", str(half)],
+        capture_output=True, text=True, timeout=30)
+    assert "{{WORK_ROOT}}" in out.stdout, out.stdout
 
 
 def test_no_hard_coded_checkout_survives_in_the_shipped_script_and_plist():
@@ -1072,6 +1117,26 @@ def test_the_quoted_credential_line_never_reaches_alert_log_or_child_env(
     assert secret not in recorded, "the credential value reached a helper env"
     assert "_src_err=" not in recorded, recorded
     assert "_src_errfile=" not in recorded, recorded
+
+
+def test_no_script_private_variable_reaches_a_helper_environ(tmp_path):
+    """DAV-2292 🟢-1 (round 6): `_src_rc` was assigned inside the allexport
+    window, so the `cat`/`rm` helpers inherited `_src_rc=0` in their
+    environ. The value is only an exit status (no secret), but the rule is
+    "the script's own variables never reach a child's environ" — the same
+    rule the `_src_err` leak (round 5) violated.
+
+    The helper recorder captures the environ each helper was given."""
+    cred = tmp_path / "bad.env"
+    cred.write_text("A=((\n", "utf-8")
+    helper_env = tmp_path / "helper-env.txt"
+    res = _run_wrapper(tmp_path / "h", env_file=cred,
+                       extra_env={"STUB_HELPER_ENV_DUMP": str(helper_env)})
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert helper_env.exists(), "no helper recorded its env — vacuous test"
+    recorded = helper_env.read_text("utf-8")
+    for name in ("_src_rc=", "_src_err=", "_src_errfile=", "_src_lines="):
+        assert name not in recorded, f"{name} reached a helper environ"
 
 
 def test_launchd_run_does_not_log_the_manual_run_warning(tmp_path):
