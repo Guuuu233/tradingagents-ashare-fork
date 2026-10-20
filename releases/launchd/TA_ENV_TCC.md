@@ -808,7 +808,7 @@ set -u
 | 编号 | 处理 |
 |---|---|
 | 🟢-1 | `test_stderr_temp_file_is_private_and_leaves_nothing_behind` 原来不断言 0600、不断言名字不可猜（复审变异测试：退回可预测 0644 仍 1 passed）→ 现在用**探针桩**（`cat` 桩 stat 它被要求读的文件）把 **mode 与 path** 记录下来，断言 mode ∈ {600,400}、名字不是 `.$$` 形式、后缀 ≥ 6 字符；并把 wrapper 的临时文件重定向到 `tmp_path` 内 |
-| 🟢-2 | plist 里 work root 有 3 处裸字面量 → 全部改用 **`{{WORK_ROOT}}`** 占位符（`TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`），「Path coupling」补第 5 项，安装段的 `sed` 补 `{{WORK_ROOT}}` 替换。**注**：当时自述「检查段补 `StandardOutPath` 的占位符核对」是**不成立**的 —— 那一轮并没有真的加上检查（全文没有任何一处查 `WORK_ROOT` 或查 `{{` 残留），复审员在第六轮指出后才真正补上（见 §17） |
+| 🟢-2 | plist 里 work root 有 3 处裸字面量 → 全部改用 **`{{WORK_ROOT}}`** 占位符（`TA_WORK_ROOT` / `StandardOutPath` / `StandardErrorPath`），「Path coupling」补第 5 项，安装段的 `sed` 补 `{{WORK_ROOT}}` 替换。**注**：当时自述「检查段补 `StandardOutPath` 的占位符核对」是**不成立**的 —— 那一轮并没有真的加上检查（全文没有任何一处查 `WORK_ROOT` 或查 `{{` 残留），复审员在第六轮指出后才真正补上（见 §18） |
 | 🟢-3 | 「手工执行」WARN 打在 `mkdir -p "${OUT_DIR}"` **之后** → 现在在**第一笔写之前**先往 **stderr** 打一行（`log()` 要写 `LOG_FILE`（在 OUT_DIR 内）无法整体前置，但 stderr 可以） |
 | 🟢-4 | 退出码表 16a–16e 漏了「拿不到私有临时文件」这条 → 补 **16f**（并把「五种原因」改成「六种」） |
 | 🟢-5 | 文档现场数字被今晚 20:10 的运行写旧 → 更正为「`ALERT.launchd` **378 字节、exit 13**（现装作业的定时运行）、`label_pipeline.log` **47 行**；15:56 的原文仍完整保存在 `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11），**留证件未动**」 |
@@ -898,7 +898,43 @@ git -C "${LABELS_DIR}" hash-object scripts/phase2/expiry_label_pipeline.py
 所以本卡候选建出的检出，其该文件 blob **就是** `ed9c330d`。
 本节只是把令文登记进分支，供发布卡逐字照搬。
 
-## 17. 第六轮返修（DAV-2292 对 `233aeb96..c76d5913` 的 1🟡 + 2🟢）
+## 17. 复审 PASS 后的基线更正（2026-10-20 23:0x，DAV-2292 指出）
+
+**DAV-2292 已对最终候选 `18193767` 出 PASS**（无 🔴/🟡）。该结论同时指出**我此前
+卡面里的一条事实陈述是错的**，发布卡**不要照抄**：
+
+> 「主干 tip `ec98d2bf` 是候选的祖先」——**不成立**。
+
+实测：
+
+```
+$ git merge-base --is-ancestor ec98d2bf 18193767 ; echo $?
+1                                   # 假
+$ git merge-base ec98d2bf 18193767
+e534a6f9c0606fc9f2f50ec00ea4d8000ea9c118
+$ git log --oneline 18193767..ec98d2bf | wc -l
+3                                   # 候选落后主干 3 个提交（DAV-2271 链）
+```
+
+即候选**落后**主干 3 个提交（`ec98d2bf` / `c93495f1` / `4ae152a9`，DAV-2271 链）。
+连带后果：卡面写的「`git diff --numstat e534a6f9→ec98d2bf` 后仍是同样 5 个白名单
+文件」**不成立** —— 实跑 `git diff --numstat ec98d2bf 18193767` 是 **8 个文件**，
+多出 `scripts/phase2/m1_base_rate.py`（3/126）与
+`tests/test_dav2271_signal_date_shape_guard.py`（0/289），
+**方向是「候选里没有这些」，不是越界改动**。
+
+**发布卡必须用 `e534a6f9` 作比对/合入基线**（不是 `ec98d2bf`），
+否则现场核「与主干差 5 文件」会核不过。
+
+**对标签发布无影响**：本卡只依赖
+`scripts/phase2/{run_expiry_label_daily.sh, ta_secrets_install.sh, expiry_label_pipeline.py}`，
+且 `git rev-parse 18193767:scripts/phase2/expiry_label_pipeline.py` =
+`ed9c330dff600a764cd8c5ac990e75cfc66f7fd7` = 当前主干 tip 的同一路径
+→ §16 那条「blob 必须 = `ed9c330d`」的核对项**值不变** ✓。
+
+> 教训（复审员一并指出）：「候选相对主干非空」「主干 tip 是候选的祖先」这类断言，
+> 今后一律用 `merge-base --is-ancestor` **实测**，不要以「主干 tip 比候选新」推定。
+## 18. 第六轮返修（DAV-2292 对 `233aeb96..c76d5913` 的 1🟡 + 2🟢）
 
 ### 17.1 🟡-1 `{{WORK_ROOT}}` 只改了 plist，§3 的安装 `sed` 与检查都没跟上
 
@@ -945,7 +981,7 @@ $ plutil -extract StandardOutPath raw -o - /tmp/installed.plist
 |---|---|---|
 | 两个占位符都替换 | PASS | **PASS** ✓ |
 | 只替换 `{{LABELS_DIR}}`（旧 §3 的 sed） | **PASS ← 假绿** | **FAIL**（`EnvironmentVariables` / `StandardOutPath` / `StandardErrorPath` 三处都拦下） |
-| 模板原样（两个都没替换） | PASS | FAIL |
+| 模板原样（两个都没替换） | FAIL（旧检查在模板上也是 FAIL：`ProgramArguments` 含 `{{LABELS_DIR}}` → grep 命中 → 取反 → exit 1） | FAIL |
 
 ### 17.2 2 条 🟢
 
@@ -973,3 +1009,29 @@ $ plutil -extract StandardOutPath raw -o - /tmp/installed.plist
 
 > 本轮**未改任何脚本的行为**（只加了 `export -n _src_rc` 一行去泄漏，
 > 不改判定逻辑），因此**无需重跑 RT-FULL**。
+
+
+## 19. 复审 PASS 后的 3 条 🟢 收尾（2026-10-20 23:1x）
+
+DAV-2292 对最终候选 `18193767` **出了 PASS**（无 🔴/🟡），并附 3 条**不阻塞**的 🟢。
+三条都很便宜，本轮一并做掉，免得再留「自述与实际不符」的小账：
+
+| # | 处理 |
+|---|---|
+| 🟢-1 | §18.1 表格里「模板原样（两个都没替换）」那格的**旧检查**列原写 `PASS`，**实际是 FAIL**（`ProgramArguments` 含 `{{LABELS_DIR}}` → grep 命中 → 取反 → exit 1；复审实测 `old check FAIL (rc=1)`）→ 已改成 `FAIL`。旧检查唯一的假绿是「只替 `{{LABELS_DIR}}`」那一行（该行写得对） |
+| 🟢-2 | **安装指引的文本本身此前没有任何用例钉住** —— 复审的变异 D+E（删掉 §3 的 `-e "s\|{{WORK_ROOT}}|…"` 一行 + 把 plist 注释里 4 条 `grep -q '{{'` 全部退回 `grep -q 'LABELS_DIR'`）→ **44 passed, 0 failed**：因为那三条用例跑的是 `_placeholder_check()`（Python 复刻），不是操作员真正执行的那几行 shell。现补 `test_the_install_instructions_text_is_pinned`：**§3 与 plist 安装注释各必须含 2 条 `-e` 替换与 4 条 `grep -q '{{'`，且不得再有只查某个具体名字的 `grep -q 'LABELS_DIR'`**。**变异 D/E 实测各红 1 条** ✓ |
+| 🟢-3 | `_placeholder_check()`（Python 复刻）与文档 shell 在「key 缺失」时语义不同：helper 在 `plutil -extract` 返回非 0 时 fail-closed，而文档的 `! plutil … \| grep -q '{{'` 拿到空输入 → grep rc=1 → 取反 → **判通过**。当前模板四个 key 都在、后面还有 `plutil -lint`，**无实际影响**；已在 helper 的 docstring 里写明「helper 是复刻、不是文档，两者别当同一个东西」，并说明谁守文本、谁守行为 |
+
+### 复审 PASS 的实测数据（可引用）
+
+- 父侧 `c76d5913` / 候选侧 `18193767` **各跑一次 RT-FULL**（标准口径，含 DAV-979 deselect）：
+  `1 failed, 8227 passed` → `1 failed, 8229 passed, 29 skipped, 7 deselected, 3 subtests passed`
+  —— 差值 +2 = 本轮两条新用例，**无新增失败**；两侧那 1 failed 是同一条
+  `test_dav1392_price_gate.py::…readonly_corpus_available`（读生产语料，父侧同样 failed）。
+- 定向组（5 文件）：**153 passed, 1 skipped**（与开发自报一致）。
+- 复审的冻结核对：审前审后两次 `git ls-remote` 均为 `18193767…`，**分支头未变、冻结未被破坏**。
+- 复审抽查的既有不变量全部保持：闸唯一定义且与主干 inline 版**逐字节相同**
+  （143 字节，sha256 `bb573be14dc0312561890446e22f63cde7a54c8597d3969a118dfe068d2054ad`）；
+  路径写死三项仍为 env 优先 + 脚本目录推导（`ta-p4-ef8aa9d9` 只在注释里作为历史说明出现）；
+  护栏 `source` → rc 64 且**连工作目录都没建**；正常 `bash <脚本>` → rc 12（不是 64）；
+  退出码表 16a–16f + 18 + 64；手工 WARN 在 `mkdir -p "${OUT_DIR}"` 之前。

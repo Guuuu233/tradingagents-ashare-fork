@@ -688,11 +688,21 @@ def test_missing_pipeline_still_exits_11_naming_the_resolved_checkout(tmp_path):
 
 
 def _placeholder_check(plist_path: Path) -> int:
-    """Run EXACTLY the check the install step documents (§3 of
-    TA_ENV_TCC.md / the plist's own install comment): look for an unresolved
-    PLACEHOLDER ('{{') in the VALUES, not for a specific placeholder name.
+    """Run the check the install step documents (§3 of TA_ENV_TCC.md / the
+    plist's own install comment): look for an unresolved PLACEHOLDER ('{{')
+    in the VALUES, not for a specific placeholder name.
 
-    Returns 0 = all resolved, 1 = at least one unresolved."""
+    Returns 0 = all resolved, 1 = at least one unresolved.
+
+    DAV-2292 🟢-3 (round 7): this helper is a RE-IMPLEMENTATION, not the
+    document's shell. They differ in one corner: when `plutil -extract` cannot
+    find the key at all, this helper fails closed (rc != 0 -> return 1) while
+    the document's `! plutil … | grep -q '{{'` gets empty input from grep
+    (rc 1) and therefore judges it PASSED. The current template has all four
+    keys and is followed by `plutil -lint`, so there is no practical impact —
+    but the two must not be treated as the same thing.
+    `test_the_install_instructions_text_is_pinned` pins the DOCUMENT's text;
+    this helper pins the BEHAVIOUR of the values."""
     cmds = [
         ["plutil", "-extract", "ProgramArguments", "json", "-o", "-",
          str(plist_path)],
@@ -752,6 +762,41 @@ def test_the_documented_placeholder_check_catches_a_half_resolved_plist(tmp_path
          "-o", "-", str(half)],
         capture_output=True, text=True, timeout=30)
     assert "{{WORK_ROOT}}" in out.stdout, out.stdout
+
+
+def test_the_install_instructions_text_is_pinned():
+    """DAV-2292 🟢-2 (round 7): the install instructions are TEXT, and the
+    reviewer showed that deleting the `{{WORK_ROOT}}` sed line from §3 and
+    reverting the plist comment's four `grep -q '{{'` back to
+    `grep -q 'LABELS_DIR'` still left the whole file green (44 passed) —
+    the three placeholder tests exercise a PYTHON re-implementation
+    (`_placeholder_check()`), not the shell text an operator actually runs.
+
+    So pin the text itself: both places must carry TWO `-e` replacements
+    (LABELS_DIR + WORK_ROOT) and FOUR `grep -q '{{'` checks
+    (ProgramArguments / EnvironmentVariables / StandardOutPath /
+    StandardErrorPath)."""
+    doc = (REPO / "releases" / "launchd" / "TA_ENV_TCC.md").read_text("utf-8")
+    section3 = doc.split("## 3. 安装步骤")[1].split("\n## 4.")[0]
+    plist_text = PLIST.read_text("utf-8")
+
+    sed_marker = '-e "s|'
+    check_marker = "grep -q '{{'"
+    for name, text in (("TA_ENV_TCC.md §3", section3),
+                       ("the plist install comment", plist_text)):
+        # two sed replacements: {{LABELS_DIR}} and {{WORK_ROOT}}
+        n_sed = text.count(sed_marker)
+        assert n_sed == 2, f"{name}: expected 2 sed -e replacements, got {n_sed}"
+        assert "{{LABELS_DIR}}" in text, name
+        assert "{{WORK_ROOT}}" in text, name
+        # four placeholder checks, and they must look for the PLACEHOLDER
+        # itself, not for one specific name
+        n_checks = text.count(check_marker)
+        assert n_checks == 4, f"{name}: expected 4 placeholder checks, got {n_checks}"
+        assert "grep -q 'LABELS_DIR'" not in text, \
+            f"{name}: a check still greps for one specific placeholder name"
+        # the WORK_ROOT replacement must actually be there
+        assert "s|{{WORK_ROOT}}|${WORK_ROOT}|g" in text, name
 
 
 def test_no_hard_coded_checkout_survives_in_the_shipped_script_and_plist():
