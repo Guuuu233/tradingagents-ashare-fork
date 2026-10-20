@@ -69,7 +69,9 @@ DEST="${TA_ENV_FILE:-/Users/davidliu/ta-secrets/ta.env}"
 MODE="install"
 
 usage() {
-    sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed 's/^# \{0,1\}//'
+    # the range is closed, so the REMINDER line would be printed as a stray
+    # last line — drop it with head
+    sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
 }
 
 # NOTE: these helpers must be defined BEFORE the argument loop below — the
@@ -203,6 +205,16 @@ verify() {
         # key names only — never the value
         say "ok   keys present: TUSHARE_TOKEN (values not printed)"
     fi
+    # DAV-2292 🟡-2 (round 3): CRLF line endings are rejected BEFORE the
+    # KEY=VALUE gate. The gate's tail anchor accepts a trailing CR as
+    # whitespace, so a CRLF file PASSES the gate — but bash does not strip
+    # the CR on assignment, so every value ends up with a 0x0d byte and the
+    # SW industry leg silently degrades every row to membership_status="gap"
+    # (append-only, so it is permanent).
+    if /usr/bin/grep -q "$(printf '\r')" "${DEST}" 2>/dev/null; then
+        say "FAIL copy has CRLF line endings (every value would carry a trailing 0x0d): ${DEST} — convert to LF (dos2unix) and retry"
+        rc=1
+    fi
     # DAV-2286 🟢-4: same gate the timer applies before sourcing.
     gate "${DEST}" >/dev/null 2>&1
     local gate_rc=$?
@@ -235,6 +247,11 @@ fi
 if ! /usr/bin/grep -q '^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}TUSHARE_TOKEN=..*' "${SRC}"; then
     RC=3 fail "source has no non-empty TUSHARE_TOKEN= line: ${SRC} — refusing to install a copy the timer would reject"
 fi
+# DAV-2292 🟡-2 (round 3): CRLF must be rejected before the gate (the gate
+# accepts a trailing CR as whitespace, but bash keeps it in the value).
+if /usr/bin/grep -q "$(printf '\r')" "${SRC}" 2>/dev/null; then
+    RC=3 fail "source has CRLF line endings (every value would carry a trailing 0x0d and the SW leg would silently gap every row): ${SRC} — convert to LF (dos2unix) and retry"
+fi
 # DAV-2286 🟢-4: reject a source the timer would refuse to source, at install
 # time — not at 20:10.
 gate "${SRC}" >/dev/null 2>&1
@@ -245,9 +262,27 @@ case "${SRC_GATE_RC}" in
     *) RC=3 fail "source unreadable for the KEY=VALUE gate (rc=${SRC_GATE_RC}): ${SRC}" ;;
 esac
 
-mkdir -p "${DEST_DIR}" || RC=5 fail "cannot create ${DEST_DIR}"
-# Tighten even an existing dir: item 3 of the card is the dir being 700.
-chmod 700 "${DEST_DIR}" || RC=5 fail "cannot chmod 700 ${DEST_DIR}"
+# DAV-2292 🟡-3 (round 3): do NOT chmod a directory this installer did not
+# create. The old code ran `chmod 700` on DEST_DIR unconditionally, so
+# `--dest $HOME/ta.env` silently turned the user's HOME from 755 to 700
+# (and `--dest /private/tmp/x.env` turned /private/tmp to 700) and still
+# reported "OK". Now: an existing directory is accepted only if it is
+# already 700/500; anything else is refused (rc 4) and left untouched.
+case "${DEST_DIR}" in
+    "${HOME}"|/|/private/tmp|/tmp|/var|/usr|/Applications|/Users|/Library|/System)
+        RC=4 fail "destination dir ${DEST_DIR} is a system/home directory — refusing to install the credential copy there (use ~/ta-secrets/ta.env)" ;;
+esac
+if [ -d "${DEST_DIR}" ]; then
+    _existing_mode="$(mode_file "${DEST_DIR}")"
+    case "${_existing_mode}" in
+        700|500) : ;;
+        *) RC=4 fail "destination dir ${DEST_DIR} already exists with mode ${_existing_mode} — refusing to chmod a directory this installer did not create; point --dest at ~/ta-secrets/ta.env or chmod 700 it yourself" ;;
+    esac
+else
+    mkdir -p "${DEST_DIR}" || RC=5 fail "cannot create ${DEST_DIR}"
+    # only a directory WE just created gets tightened
+    chmod 700 "${DEST_DIR}" || RC=5 fail "cannot chmod 700 ${DEST_DIR}"
+fi
 
 TMP="${DEST}.tmp.$$"
 trap 'rm -f "${TMP}"' EXIT INT TERM
