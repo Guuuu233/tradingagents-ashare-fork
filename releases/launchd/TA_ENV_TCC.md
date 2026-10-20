@@ -637,3 +637,70 @@ fi
 `test_launchd_run_does_not_log_the_manual_run_warning`、
 `test_manual_run_without_ta_work_root_does_warn`、
 `test_plist_declares_the_production_work_root`。
+
+## 14. 发布卡前置条款（总控 10-20 19:40 令，源自 DAV-2297）
+
+> **安装前任何人不得往 `~/ta-p4-labels-cb82987b` 提交或修改。**
+> **安装时核对它的工作树状态与今天一致 —— 只有那 3 行未提交改动**
+> （解释器 → `~/ta-venv/py310`、`CODE_DIR` → 该检出、`sys.path.insert` → 该检出）。
+
+**本条款必须原样带入 2284 的发布卡**（复审通过后建卡时写入卡面前置项）。
+
+### 14.1 今日基线（2026-10-20 12:20 实测，作为发布卡核对基准）
+
+`~/ta-p4-labels-cb82987b` 的 HEAD = `cb82987b737be2cc3c40c939082b70c4135db7b8`（detached），
+工作树**只有 1 个文件被改、共 3 行**（`scripts/phase2/run_expiry_label_daily.sh`）：
+
+```
+PYTHON="/Users/davidliu/Documents/TradingAgents-AShare/.venv310/bin/python"
+   → PYTHON="/Users/davidliu/ta-venv/py310/bin/python"
+CODE_DIR="/Users/davidliu/ta-p4-ef8aa9d9"
+   → CODE_DIR="/Users/davidliu/ta-p4-labels-cb82987b"
+sys.path.insert(0, "/Users/davidliu/ta-p4-ef8aa9d9")
+   → sys.path.insert(0, "/Users/davidliu/ta-p4-labels-cb82987b")
+```
+
+发布卡可直接用下列指纹核对（**任一不符即停**）：
+
+| 核对项 | 今日基线值 |
+|---|---|
+| `git -C ~/ta-p4-labels-cb82987b status --porcelain` | ` M scripts/phase2/run_expiry_label_daily.sh`（**仅此 1 行**） |
+| `git -C ~/ta-p4-labels-cb82987b diff --numstat` | `3	3	scripts/phase2/run_expiry_label_daily.sh` |
+| 未跟踪文件数 | **0** |
+| `sha256`（该文件全文） | `5eddb170a8efd82ef08c269b4d6e191c2465114fda9f03ca62734f7c33df9945` |
+| `sha256`（`git diff` 输出） | `3675ba0dea4d4686b7cce1c5f90eb6f95e8222c6f4b04ed92d6012503c00738c` |
+| `expiry_label_pipeline.py` 是否存在 | **是**（旧 `CODE_DIR` 指向的 `~/ta-p4-ef8aa9d9` 里**没有**） |
+
+### 14.2 为什么必须冻结（DAV-2297 的因果链）
+
+那 3 行**只存在于工作树**，不在任何提交里；该检出是 detached HEAD。
+一旦有人执行 `git checkout -- .` / `git restore` / `git clean` / `git reset --hard`
+/ `git stash`，这 3 行就没了 → `CODE_DIR` 退回 `~/ta-p4-ef8aa9d9` → 那个检出里
+**没有 `expiry_label_pipeline.py`** → 20:10 的定时任务**立刻 exit 11**。
+2026-10-20 15:56 那次失败正是这个形态。
+
+### 14.3 与本卡候选的关系（本卡未动这个检出）
+
+- 本卡候选 `5239b320` **没有**改 `~/ta-p4-labels-cb82987b` 的任何文件
+  （实测 `git status` 仍只有那 1 个 `M`、3 行）。
+- 本卡候选**没有**动 `scripts/phase2/expiry_label_pipeline.py`
+  （`git diff e534a6f9 5239b320 -- scripts/phase2/expiry_label_pipeline.py` 为空）。
+- 本卡候选把 `CODE_DIR` 从写死改成 **`TA_CODE_DIR` env 优先 + 脚本自身目录兜底**，
+  因此**新装**的作业不再依赖「检出 + 本地改动」——这正是 DAV-2297 冻结解除条件之一。
+- **但已装作业此刻仍跑旧逻辑**：旧 wrapper 里 `grep -vEq` 的 rc=2（EPERM）被当成
+  「文件干净」→ 继续 `source` 同样 EPERM → 报成 exit 13「TUSHARE_TOKEN missing」
+  （与 10-19 同形）。旧 wrapper 也**完全没有** `TA_ENV_FILE` 支持（实测计数 = 0）。
+  → **合入+安装前，今晚 20:10 的作业仍会以 exit 13 失败**（这是已知风险，
+  DAV-2297 已登记；不是本卡引入）。
+
+### 14.4 发布卡建议核对顺序（不改代码）
+
+1. 装前：按 §14.1 的指纹核对 `~/ta-p4-labels-cb82987b`（**冻结期内不得有 git 写操作**）；
+2. 装：**新建**一个含本卡候选的固定 release 检出（`{{LABELS_DIR}}` 三处指向它），
+   `test -f "${LABELS_DIR}/scripts/phase2/expiry_label_pipeline.py"` 必须为真；
+3. 装后：核 `ProgramArguments` / `WorkingDirectory` / `TA_CODE_DIR` **三者解析到同一目录**，
+   且该目录**不是** `~/ta-p4-ef8aa9d9`；
+4. 跑一次 `launchctl kickstart -k`，看 `label_pipeline.log` 是否出现
+   `skip:`（非交易日）或 `timer done`（交易日）——**不是** `ALERT`；
+5. 旧检出 `~/ta-p4-labels-cb82987b` 的 3 行改动在装好之后**不再需要**
+   （总工 10-20 17:20 令的第二项核对），但**本卡不代为清理**（需总工确认后再动）。
