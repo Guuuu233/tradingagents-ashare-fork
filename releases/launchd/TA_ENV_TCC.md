@@ -265,7 +265,7 @@ ALERT.launchd      被覆盖（exit 11 的内容）—— 已由总工改名留�
 | 标签数据 | **未写**。`labels_t10.jsonl` mtime 仍为 10-20 14:25:01、`labels_t40.jsonl` 仍为 14:29:42（945 / 307 行未变）；exit 11 在 `[ -f PIPELINE ]` 早退，尚未到 run 阶段 |
 | `label_run_state.json` | 未变（14:29:42） |
 | 真实凭据 | **被读取**（`source` 执行了 `.env` 的赋值，进程内注入，未落盘）。已核：凭据值**未出现在**任何产物（alert / log / plist / 文档 / diff）中 |
-| 告警与日志 | **被污染**：生产 `ALERT.launchd` 被覆盖（现为 0 字节空文件，原内容已由总工留证）、`label_pipeline.log` 追加 3 行（log 第 41-43 行） |
+| 告警与日志 | **被污染**：生产 `ALERT.launchd` 被覆盖（15:56 那次的 exit 11 内容，原文已由总工留证为 `ALERT.launchd.stray-20261020T1556`）、`label_pipeline.log` 追加 3 行（log 第 41-43 行） |
 
 **复现验证**（隔离沙箱内，`OUT_DIR`/`ENV_FILE` 指向 `/tmp`）：`source` 那条命令
 产出的日志三行与生产 15:56 的三行**逐字相同**，退出码同为 11 —— 归因确认，不是推测。
@@ -299,6 +299,26 @@ $ echo $?
 （输出目录零文件）、`test_installer_also_refuses_to_be_sourced`。
 
 ### 10.4 新规矩（总控 10-20 16:05 令第 2 节第 3 条）
+
+#### 手工执行硬规矩（DAV-2292 第四轮补入）
+
+手工跑 `run_expiry_label_daily.sh` **必须同时**给：
+
+```bash
+TA_WORK_ROOT=<临时目录>      # 不给 → 写生产标签目录 ~/ta-p4-2e1e199f/work/phase2-labels
+TA_ENV_FILE=<临时凭据文件>   # 不给 → 读真实凭据 ~/Documents/TradingAgents-AShare/.env
+```
+
+**只给 `TA_ENV_FILE` 不给 `TA_WORK_ROOT` 仍会写生产标签目录**
+（2026-10-20 17:58:53 事故正是这个形态：只覆写了 `TA_ENV_FILE`，
+`TA_WORK_ROOT` 仍取缺省 → 覆盖了生产 `ALERT.launchd`、追加了 2 行日志）。
+脚本在 `TA_WORK_ROOT` 缺失时会打一条 `WARN manual run with the PRODUCTION
+work root …`（第四轮起判据只用 `TA_WORK_ROOT` 是否显式给出，
+**不用** `XPC_SERVICE_NAME` —— agent 运行时也导出那个变量，
+用它判断会把「agent shell 里的手工执行」误判成 launchd）。
+
+复审（2292）核对项：**从模板重装后，plist 里的 `TA_WORK_ROOT` 必须存在**
+（第四轮已加进模板）—— 否则 launchd 正常路径每夜都会打这条假 WARN。
 
 > 开发与复审在测试标签脚本时，必须指定「临时输出目录」和「临时凭据路径」；
 > 不得写入正式标签目录 `~/ta-p4-2e1e199f/work/phase2-labels/`；
@@ -347,10 +367,15 @@ source **那个副本**。
 
 ### 10.5 残留
 
-- `ALERT.launchd` 现为 **0 字节空文件**（总工改名留证后的残留），不是有效告警；
-  有效内容在 `ALERT.launchd.stray-20261020T1556`。若发布卡要求目录干净，
-  可删该空文件（**不删留证文件**）——本卡未动生产目录。
-- `label_pipeline.log` 尾部三行（第 41-43 行）都是 15:56 误执行的痕迹；未删（属取证材料）。
+- `ALERT.launchd` **现状更正（2026-10-20 17:58:53）**：该文件自 17:58:53 起是
+  **455 字节的 exit 16 假告警**（复审员那次手工执行留下的痕迹：
+  `reason=credential file missing or not readable: /nonexistent-review/.env`），
+  **不是** 0 字节空文件，也不是有效告警。15:56 那次的原始内容仍完整保存在
+  `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11）——**留证件未动**。
+  若发布卡要求目录干净，可删 `ALERT.launchd` 这个假告警（**不删留证件**）——
+  本卡未动生产目录。
+- `label_pipeline.log` 的 15:56 痕迹在第 41-43 行（三行），17:58:53 的复审误执
+  又追加了 2 行（末尾）；均未删（属取证材料）。
 - 15:56 误执行**读到了真实凭据**（仅在进程内，未落盘、未外泄）；本卡未轮换密钥，
   是否轮换由总控定。
 
@@ -514,7 +539,7 @@ GREP 闸**之前**加一条 CRLF 前置检查：
 | 🟢-2 | plist 里两段**重复且已漂移**的注释（旧的 Install 块、旧的 TA_ENV_FILE 段）已删，只留新版；`plutil -lint` 仍 OK |
 | 🟢-3 | 占位符检查的**退出码反了**：`grep -c` 在计数为 0（= 检查通过）时返回 1，直接进 `set -e`/`&&` 链会把「通过」判成「失败」。改为 `! … \| grep -q 'LABELS_DIR' \|\| { echo "unresolved placeholder …"; exit 1; }`（plist 注释与 §3 同步） |
 | 🟢-4 | `--help` 不再多打一行孤立的 REMINDER（`sed` 范围是闭区间 → 加 `head -n -1`） |
-| 🟢-5 | `TA_WORK_ROOT` **未显式给出**时打 `WARN running outside launchd with the PRODUCTION work root …`（复审员 17:58:53 手工执行覆盖了生产 `ALERT.launchd` 并追加了 2 行日志 —— 护栏只挡 `source`，挡不住 `bash <脚本>`）。**手工执行必须同时给 `TA_WORK_ROOT`（临时目录）与 `TA_ENV_FILE`（临时文件）**，已写进 §10.4 |
+| 🟢-5 | `TA_WORK_ROOT` **未显式给出**时打 `WARN …`（复审员 17:58:53 手工执行覆盖了生产 `ALERT.launchd` 并追加了 2 行日志 —— 护栏只挡 `source`，挡不住 `bash <脚本>`）。**手工执行必须同时给 `TA_WORK_ROOT`（临时目录）与 `TA_ENV_FILE`（临时文件）** —— 这条规矩在**第四轮**才真正写进 §10.4（此前只是口头承诺「已写进 §10.4」，实际 §10.4 里没有，属自述与实际不符） |
 
 ### 12.5 本轮新增用例
 
@@ -524,3 +549,91 @@ GREP 闸**之前**加一条 CRLF 前置检查：
 `test_installer_rejects_a_crlf_source`、
 `test_installer_refuses_to_chmod_a_preexisting_directory`、
 `test_installer_refuses_the_home_directory_as_destination`。
+
+## 13. 第四轮返修（DAV-2292 对 `66482fc7` 的 3🟡 + 5🟢）
+
+### 13.1 🟡-1 `--help` 一个字都不打（BSD `head` 不支持 `-n -1`）
+
+上一轮为「不再多打一行孤立 REMINDER」加的 `head -n -1` 是 **GNU 扩展**：
+macOS 的 BSD `head` 直接报 `head: illegal line count -- -1` → 管道后段失败、
+`sed` 被 SIGPIPE → **usage 块一行都不输出**，而脚本仍 `exit 0`。
+即「修复本身变成空检查」——与本卡反复核对的同一型问题。
+
+**修法（纯 POSIX，两步）**：
+
+```bash
+sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed '/^# REMINDER/d' | sed 's/^# \{0,1\}//'
+```
+
+两个坑都踩过并记录在注释里：
+- `head -n -1` → BSD 不支持（本次回归的根因）；
+- 在地址块里写 `p` → BSD sed 报 `extra characters at the end of p command`，
+  **且** `d` 会跳过隐式打印（`sed -n` 下地址块里只有 `d` 会输出 0 行）——
+  所以「删除」与「打印」必须是**两次独立的 sed**；
+- 再往前一步的坑：先 `sed '/^# REMINDER/d'` 全局删再取范围 → 范围的**结束
+  标记被删掉了**，范围永不结束 → **整份文件**被打印（287 行）。
+
+实测：`--help` 输出 **23 行**、stderr 空、rc 0、不含 REMINDER。
+
+**用例**：`test_help_prints_the_usage_block_without_the_reminder_line`
+（断言 rc 0 / stderr 空 / **行数 ≥ 10（防空检查）** / 三个 flag 与三个 env 覆盖都在 /
+不含 REMINDER）。此前**没有任何用例覆盖 `usage()`**，所以 143 passed 与它无关。
+
+### 13.2 🟡-2 source 的 stderr 以 0644 + 可预测文件名落地
+
+上一轮把 stderr 落到 `${TMPDIR:-/tmp}/.cred_src_err.$$`：
+wrapper 不设 `umask`（shell 默认 0022）→ 文件 **0644**；名字**可预测**，
+同机进程可预建同名符号链接让 `: >` 截断目标；`TMPDIR` 未设时兜底 `/tmp`（1777）；
+写入与 `rm` 之间若被 SIGKILL 打断则**永久残留**。
+（告警层确实只写行号，但**中间层把含原文的副本写进了盘**，保护等级比原文件低一档。）
+
+**修法**：
+
+```bash
+_src_errfile="$(umask 077; mktemp "${TMPDIR:-/tmp}/.cred_src_err.XXXXXX" 2>/dev/null)" || _src_errfile=""
+if [ -z "${_src_errfile}" ]; then
+    alert "cannot create a private temp file for ${ENV_FILE}'s stderr — refusing to source it blindly" 16
+fi
+. "${ENV_FILE}" 2>"${_src_errfile}"
+```
+
+- `mktemp` → **0600**（实测）+ 名字不可猜；
+- `umask 077` 写在**子 shell**里（`$(umask 077; mktemp …)`），不改变本脚本的 umask；
+- **拿不到私有临时文件 → fail-closed（exit 16）**，不再退回「只看 `$?`」——
+  那条退路会**重放本机制要防的 bug**（过闸但解析不了的文件被静默接受）。
+
+### 13.3 🟡-3 🟢-5 的两处落地偏差
+
+1. **生产日志每夜误报**：plist 原本**没有** `TA_WORK_ROOT` → launchd 正常路径也满足
+   「未显式给出」→ 每夜都写一条「outside launchd」WARN，而文案里的断言在 launchd
+   语境下恰好是**正常预期行为**。修法：**plist 显式给出 `TA_WORK_ROOT`**
+   （`/Users/davidliu/ta-p4-2e1e199f/work`），WARN 就只在真正的手工执行里出现。
+2. **文档自述与实际不符**：§12.4 声称「手工执行必须同时给 `TA_WORK_ROOT` 与
+   `TA_ENV_FILE`，已写进 §10.4」，而 §10.4 里**并没有**这条。修法：§10.4 补
+   「**手工执行硬规矩**」小节（含 17:58:53 事故的形态说明），§12.4 的空头承诺改掉。
+
+**判据的一处修正（自查发现）**：复审给的路线 B 建议把
+`[ -z "${XPC_SERVICE_NAME:-}" ]` 也纳入判据，但**agent 运行时同样导出
+`XPC_SERVICE_NAME`**（本机实测 `com.davidliu.multica-steer`）→ 「agent shell 里的
+手工执行」会被误判成 launchd 而**保持沉默** —— 恰恰是要警告的那种情况。
+故最终判据**只用 `TA_WORK_ROOT` 是否显式给出**（plist 一定给，手工跑不给）。
+
+### 13.4 5 条 🟢
+
+| 编号 | 处理 |
+|---|---|
+| 🟢-1 | `_src_errfile` 会漏进管道子进程 env（指向已删除文件）→ `unset _src_errfile`（已含在 🟡-2 的改动里） |
+| 🟢-2 | 临时文件建不出来时的 fallback 会**重放被修的 bug**（实测 `TMPDIR` 不可写 + 坏行 → rc 0、零告警）→ 改为 **fail-closed**（exit 16），见 §13.2 |
+| 🟢-3 | 告警行号重复（`line(s) 1,1`）→ `sort -u` 去重 |
+| 🟢-4 | 「stderr 原文一律丢弃」**没有回归用例** → 新增 `test_the_quoted_credential_line_never_reaches_alert_log_or_child_env`（用 `TUSHARE_TOKEN={{SECRET_…}}(` 这种**带密钥形态**的坏行，断言值在告警/日志/临时目录里都不出现） |
+| 🟢-5 | 文档 §10.1 / §10.5 仍写「`ALERT.launchd` 现为 0 字节空文件」→ 更正为「**自 2026-10-20 17:58:53 起是 455 字节的 exit 16 假告警**（复审员误执留下的痕迹），15:56 的原文仍在 `ALERT.launchd.stray-20261020T1556`（380 字节，exit 11），留证件未动」 |
+
+### 13.5 本轮新增用例（7 条）
+
+`test_help_prints_the_usage_block_without_the_reminder_line`、
+`test_stderr_temp_file_is_private_and_leaves_nothing_behind`、
+`test_unusable_tmpdir_fails_closed_instead_of_silently_accepting`、
+`test_the_quoted_credential_line_never_reaches_alert_log_or_child_env`、
+`test_launchd_run_does_not_log_the_manual_run_warning`、
+`test_manual_run_without_ta_work_root_does_warn`、
+`test_plist_declares_the_production_work_root`。

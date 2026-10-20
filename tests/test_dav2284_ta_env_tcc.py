@@ -883,6 +883,113 @@ def test_installer_refuses_the_home_directory_as_destination(tmp_path):
     assert stat.S_IMODE(home.stat().st_mode) == 0o755
 
 
+# ---------------------------------------------------------------------------
+# DAV-2292 round 4 — 3 x 🟡
+# ---------------------------------------------------------------------------
+
+def test_help_prints_the_usage_block_without_the_reminder_line():
+    """DAV-2292 🟡-1 (round 4): the previous `head -n -1` fix was a GNU
+    extension — BSD head (macOS) errors out with
+    "head: illegal line count -- -1", which SIGPIPEs the sed, so the whole
+    usage block printed NOTHING while the script still exited 0. The
+    "no stray REMINDER line" goal was met by printing nothing at all —
+    the same "the fix became an empty check" pattern this card keeps
+    catching.
+
+    Assert: rc 0, NO stderr, a NON-EMPTY usage block, the flags are
+    documented, and REMINDER is NOT printed."""
+    proc = subprocess.run(["/bin/bash", str(INSTALLER), "--help"],
+                          capture_output=True, text=True, timeout=30,
+                          env=dict(BASE_ENV))
+    assert proc.returncode == 0, (proc.returncode, proc.stderr)
+    assert proc.stderr == "", proc.stderr
+    lines = proc.stdout.splitlines()
+    assert len(lines) >= 10, f"usage block is empty/too short: {proc.stdout!r}"
+    assert "ta_secrets_install.sh --check" in proc.stdout, proc.stdout
+    assert "--src" in proc.stdout and "--dest" in proc.stdout
+    assert "TA_ENV_SRC" in proc.stdout and "TA_ENV_WRAPPER" in proc.stdout
+    assert "REMINDER" not in proc.stdout, proc.stdout
+
+
+def test_stderr_temp_file_is_private_and_leaves_nothing_behind(tmp_path):
+    """DAV-2292 🟡-2 (round 4): the source's stderr used to be written to a
+    FIXED, PREDICTABLE name (`.cred_src_err.$$`) with the shell's default
+    umask (0022 -> 0644), i.e. the quoted secret line was copied into a
+    world-readable file. Now the file must be created by `mktemp` (0600,
+    unpredictable name) and must not survive the run."""
+    cred = tmp_path / "bad.env"
+    cred.write_text("A=((\n", "utf-8")
+    res = _run_wrapper(tmp_path, env_file=cred)
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    # no leftover temp file with our prefix
+    leftovers = list(Path(tmp_path).glob(".cred_src_err*")) + \
+        list(Path("/tmp").glob(".cred_src_err*"))
+    assert not leftovers, leftovers
+
+
+def test_unusable_tmpdir_fails_closed_instead_of_silently_accepting(tmp_path):
+    """DAV-2292 🟢-2 (round 4): when the private temp file could not be
+    created, the old code fell back to "look only at $?" — which REPLAYED
+    the exact bug the mechanism exists to prevent (a file that passes the
+    gate but cannot be parsed was accepted silently, rc 0). It must now
+    fail closed."""
+    cred = tmp_path / "bad.env"
+    cred.write_text("A=((\nTUSHARE_TOKEN=plainvalue\n", "utf-8")
+    res = _run_wrapper(tmp_path, env_file=cred,
+                       extra_env={"TMPDIR": "/nonexistent-dir-xyz"})
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert res["alert"], "silent pass is the failure mode being fixed"
+    assert "TUSHARE_TOKEN missing" not in res["alert"]
+
+
+def test_the_quoted_credential_line_never_reaches_alert_log_or_child_env(
+        tmp_path):
+    """DAV-2292 🟢-4 (round 4): "the stderr text is discarded" had no
+    regression test — the bad lines used so far (`A=((`) contain no secret
+    shape, so only a manual check proved it. Use a bad line that DOES look
+    like a credential and assert the value appears nowhere."""
+    secret = "SUPERSECRETVALUE123"
+    cred = tmp_path / "bad.env"
+    cred.write_text(f"TUSHARE_TOKEN={secret}(\n", "utf-8")
+    res = _run_wrapper(tmp_path, env_file=cred)
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert secret not in res["alert"], res["alert"]
+    assert secret not in res["log"], res["log"]
+    # and not in the temp dir either
+    assert secret not in str(list(tmp_path.rglob("*")))
+
+
+def test_launchd_run_does_not_log_the_manual_run_warning(tmp_path):
+    """DAV-2292 🟡-3 (round 4): the "manual run with the PRODUCTION work
+    root" warning must NOT fire on the normal launchd path — the plist
+    sets TA_WORK_ROOT explicitly, and that is the only reliable signal
+    (XPC_SERVICE_NAME is ALSO exported by the agent runtime, so it cannot
+    be used to tell "launchd" from "a hand-run in an agent shell")."""
+    res = _run_wrapper(tmp_path, [f"TUSHARE_TOKEN={FAKE_TOKEN}"],
+                       extra_env={"TA_WORK_ROOT": str(tmp_path / "work")})
+    assert "manual run" not in res["log"], res["log"]
+
+
+def test_manual_run_without_ta_work_root_does_warn(tmp_path):
+    """The other side of the same criterion: a hand-run (no TA_WORK_ROOT) MUST
+    warn, even when the surrounding shell happens to export
+    XPC_SERVICE_NAME (the agent runtime does)."""
+    res = _run_wrapper(tmp_path, [f"TUSHARE_TOKEN={FAKE_TOKEN}"],
+                       extra_env={"XPC_SERVICE_NAME":
+                                  "com.davidliu.multica-steer"})
+    assert "manual run" in res["log"], res["log"]
+
+
+def test_plist_declares_the_production_work_root(tmp_path):
+    """DAV-2292 🟡-3 (round 4): the plist must set TA_WORK_ROOT, otherwise
+    every nightly launchd run would log the bogus "manual run" warning."""
+    with PLIST.open("rb") as fh:
+        plist = plistlib.load(fh)
+    env = plist["EnvironmentVariables"]
+    assert env["TA_WORK_ROOT"] == "/Users/davidliu/ta-p4-2e1e199f/work"
+    assert env["TA_WORK_ROOT"].startswith("/")
+
+
 def test_wrapper_documents_the_new_exit_code_and_env_override():
     """Cheap contract check: the header must keep advertising exit 18 and the
     TA_ENV_FILE indirection, so a future edit cannot silently drop either."""

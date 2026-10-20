@@ -69,9 +69,19 @@ DEST="${TA_ENV_FILE:-/Users/davidliu/ta-secrets/ta.env}"
 MODE="install"
 
 usage() {
-    # the range is closed, so the REMINDER line would be printed as a stray
-    # last line — drop it with head
-    sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed 's/^# \{0,1\}//' | head -n -1
+    # The sed range is closed, so the trailing REMINDER line would be
+    # printed too — filter it out INSIDE the range.
+    # Two portable steps on purpose (DAV-2292 🟡-1 round 4):
+    #   * `head -n -1` is a GNU extension — BSD head (macOS) errors out with
+    #     "head: illegal line count -- -1", which SIGPIPEs the sed and makes
+    #     the whole usage block print NOTHING;
+    #   * BSD sed rejects a `p` command inside an address block
+    #     ("extra characters at the end of p command"), so the delete and
+    #     the print are two separate sed invocations.
+    # The REMINDER line is matched by its TEXT, not by deleting the
+    # "# REMINDER" header first: deleting that header would make the range
+    # never end, and the whole file would be printed.
+    sed -n '/^# Usage:/,/^# REMINDER/p' "$0" | sed '/^# REMINDER/d' | sed 's/^# \{0,1\}//'
 }
 
 # NOTE: these helpers must be defined BEFORE the argument loop below — the
