@@ -790,3 +790,76 @@ set -u
 `test_stderr_temp_file_is_private_and_leaves_nothing_behind`（改为断言 mode/名字/残留）、
 `test_the_quoted_credential_line_never_reaches_alert_log_or_child_env`（补子进程 env 与
 文件内容断言）、`test_plist_work_root_appears_in_exactly_three_places_as_one_placeholder`。
+
+## 16. 发布卡追加核对（总控 10-20 21:50 令）
+
+> **新标签检出里的 `expiry_label_pipeline.py` blob 必须等于 `ed9c330d`；不等就停。**
+
+**理由**：2129 链改了**标签管道**与**账本脚本**；2129 一旦并入主干，2284 发布时
+新建的标签检出会**顺带带上改过的标签管道**，等于在 10-22 读数前一天换掉标签生成方式。
+**2129 已改为在 10-22 读数完成之后才合入**，故本核对项是发布卡上的兜底闸。
+
+### 16.1 令文里那个 blob 是什么（已核实）
+
+`ed9c330d` 是 **blob**（文件内容哈希），不是 commit：
+
+```
+ed9c330dff600a764cd8c5ac990e75cfc66f7fd7
+  = scripts/phase2/expiry_label_pipeline.py @ 主干 tip e534a6f9
+  = 1444 行，DAV-1875 标签管道
+```
+
+- **主干 tip 上该文件的 blob 正是 `ed9c330d`** → 令文要求的是「**当前主干版**」。
+- 2129 提交（`64664a96 feat(dav-2129)`）之后的 blob 是 **`9c14979d9dd671ecf403bd93a804c125e7f9b3a1`** ——
+  **不同** → 这正是本核对项要拦的东西。
+- 2129 目前**未并入主干**（`git merge-base --is-ancestor 64664a96 FETCH_HEAD` 为假；
+  它只在 `origin/agent/1/28d08e4bfd38` 上），与令文「10-22 读数后才合入」一致。
+  → **本卡交付时该核对项必然通过**；它是一条**兜底闸**，防的是「发布窗口内 2129
+  抢先合入」或「发布检出拉到了别的分支」。
+
+### 16.2 发布卡可直接执行的核对命令
+
+```bash
+# 在**新建的标签检出**里（不是主检出）：
+git -C "${LABELS_DIR}" rev-parse HEAD:scripts/phase2/expiry_label_pipeline.py
+#   必须输出 ed9c330dff600a764cd8c5ac990e75cfc66f7fd7
+#   不等 → 停（该检出带上了 2129 的标签管道）
+```
+
+等价的**内容**核对（不依赖 git 对象库，直接比对文件）：
+
+```bash
+git -C "${LABELS_DIR}" hash-object scripts/phase2/expiry_label_pipeline.py
+#   同样必须等于 ed9c330dff600a764cd8c5ac990e75cfc66f7fd7
+```
+
+> 注意：不要用 `git rev-parse <commit>:path` 去查**主干 tip**——那永远等于
+> `ed9c330d`，测不到「新建检出里到底是什么」。必须查**新建检出自己的 HEAD**。
+
+### 16.3 本会发布卡的其余前置（已并入本发布会话，令文原文）
+
+1. **安装前任何人不得往 `~/ta-p4-labels-cb82987b` 提交或修改**；安装时核对它的
+   工作树**只有那 3 行改动**（基线指纹见 §14.1）；
+2. **`bootstrap` 前先跑 `plist_log_preflight.py`，FAIL 就停**；
+3. 安装窗口 **10-21 晚上 或 10-22 白天**；卡面写「**总控签字后执行**」。
+
+### 16.4 preflight 的实测（本卡已代跑，供发布卡参考）
+
+`releases/launchd/plist_log_preflight.py <plist>` 是通用工具（接受任意 plist，
+「占位符须已替换」）。本卡用候选 plist 实测：
+
+| 场景 | 结果 |
+|---|---|
+| `{{WORK_ROOT}}` 指向**尚不存在**的目录 | **FAIL `[LOGPATH_PARENT_MISSING]`** → 正是它要防的 EX_CONFIG 78（launchd 不会自建日志父目录） |
+| `{{WORK_ROOT}}` 指向**真实** `/Users/davidliu/ta-p4-2e1e199f/work` | **PASS**（2 条 `LOGPATH_TARGET_EXISTING_APPENDABLE` WARN，**不阻断**；既存日志文件属主=当前 uid、可追加写） |
+
+→ 发布卡在 `bootstrap` 前跑它时，**预期结果是 WARN 而非 FAIL**；若出现 FAIL
+（多为 `LOGPATH_PARENT_MISSING`）说明 work root 下的 `phase2-labels/` 目录还没建，
+**先建目录再装**。
+
+### 16.5 与本卡交付的关系
+
+本卡**未改** `scripts/phase2/expiry_label_pipeline.py`
+（`git diff e534a6f9 <候选> -- scripts/phase2/expiry_label_pipeline.py` 为空），
+所以本卡候选建出的检出，其该文件 blob **就是** `ed9c330d`。
+本节只是把令文登记进分支，供发布卡逐字照搬。
