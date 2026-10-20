@@ -75,6 +75,28 @@
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
+# --- DAV-2292 护栏：本脚本是“可执行脚本”，不是可被 source 的库 -------------
+# 2026-10-20 15:56 事故：有人（就是本卡的开发）为了取一个常量，
+#   `bash -c 'source run_expiry_label_daily.sh; echo "$VAR"'`
+# —— `source` 会**执行**整个脚本，于是它对**正式**标签目录
+# (~/ta-p4-2e1e199f/work/phase2-labels) 写了 ALERT.launchd + 日志，
+# 并**读取了真实凭据**（默认 ENV_FILE 指向 ~/Documents/…/.env）。
+# 标签数据没被写（exit 11 早退，两个 jsonl 的 mtime 未变），但告警与日志被污染。
+#
+# 根因是脚本缺少“可被 source 吗”的判据。现在显式区分：
+#   * 被 `source`/`.` 时（BASH_SOURCE[0] != $0）→ 立刻拒绝执行并报错退出，
+#     绝不写任何目录、不读任何凭据；
+#   * 要取脚本里的常量，请用 `bash -c 'eval "$(grep ^NAME= file)"'` 或
+#     直接 grep 文件，不要 source 整个脚本。
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then
+    printf 'REFUSED: %s is an executable script, not a sourceable library.\n' \
+        "${BASH_SOURCE[0]}" >&2
+    printf 'REFUSED: sourcing it would write to the PRODUCTION label dir and read the REAL credentials.\n' >&2
+    printf 'HINT: read a constant with: grep "^NAME=" %s   (do not source the script)\n' \
+        "${BASH_SOURCE[0]}" >&2
+    exit 64
+fi
+
 # --- fixed paths (same layout as the installed 19:45 ledger timer) ---------
 PYTHON="${TA_PYTHON:-/Users/davidliu/ta-venv/py310/bin/python}"
 # DAV-2284: TA_ENV_FILE is what the plist sets. launchd does NOT expand `~`

@@ -22,6 +22,9 @@
 #   * never writes inside ~/Documents; never touches the source file;
 #   * the copy is written to a sibling temp file (umask 077), chmod 600,
 #     then renamed into place, so a partial copy can never be sourced.
+#   * DAV-2292: this script refuses to be `source`d (see the guard below) —
+#     sourcing it would execute the whole script against the REAL
+#     credentials and the PRODUCTION label dir.
 #
 # Usage:
 #   ta_secrets_install.sh                 # create/refresh copy, then verify
@@ -49,6 +52,15 @@
 
 set -u
 umask 077
+
+# --- DAV-2292 护栏：拒绝被 source -------------------------------------------
+# 同 run_expiry_label_daily.sh：source 本脚本会**执行**整个脚本 → 读真实凭据、
+# 写正式目录。被 source 时立刻拒绝。
+if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then
+    printf 'REFUSED: %s is an executable script, not a sourceable library.\n' \
+        "${BASH_SOURCE[0]}" >&2
+    exit 64
+fi
 
 SRC="${TA_ENV_SRC:-/Users/davidliu/Documents/TradingAgents-AShare/.env}"
 DEST="${TA_ENV_FILE:-/Users/davidliu/ta-secrets/ta.env}"
