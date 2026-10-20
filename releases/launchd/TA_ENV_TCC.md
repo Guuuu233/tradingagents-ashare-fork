@@ -833,6 +833,10 @@ git -C "${LABELS_DIR}" hash-object scripts/phase2/expiry_label_pipeline.py
 #   同样必须等于 ed9c330dff600a764cd8c5ac990e75cfc66f7fd7
 ```
 
+（两条命令均已在临时检出里**实跑验证**，输出确为
+`ed9c330dff600a764cd8c5ac990e75cfc66f7fd7`；路径必须是检出内的
+`scripts/phase2/expiry_label_pipeline.py`。）
+
 > 注意：不要用 `git rev-parse <commit>:path` 去查**主干 tip**——那永远等于
 > `ed9c330d`，测不到「新建检出里到底是什么」。必须查**新建检出自己的 HEAD**。
 
