@@ -1049,8 +1049,8 @@ def build_base_panel(chunks_dir: Path) -> pd.DataFrame:
     panel = load_panel(Path(chunks_dir))
     # load_panel keeps signal_date as the partition's YYYYMMDD string; the
     # label map / paired join keys are ISO YYYY-MM-DD — normalise once here.
-    # Its per-partition shape check (DAV-2271) runs first, so the fixed-width
-    # slicing below can only ever see one of the two standard day shapes.
+    # Its per-partition shape check (DAV-2271) runs first, so the ISO
+    # rendering below only ever sees one of the two standard day shapes.
     if not panel.empty:
         sd = panel["signal_date"].astype(str).str.replace("-", "", regex=False)
         panel["signal_date"] = (sd.str[:4] + "-" + sd.str[4:6]
