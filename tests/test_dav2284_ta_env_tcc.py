@@ -627,6 +627,28 @@ def test_missing_pipeline_still_exits_11_naming_the_resolved_checkout(tmp_path):
     assert str(ck) in res["alert"], res["alert"]
 
 
+def test_the_documented_placeholder_check_returns_zero_after_installation(tmp_path):
+    """DAV-2303: the install step documents a check that the placeholder was
+    resolved. That check must actually WORK on the installed plist — i.e. it
+    must return 0 — while the template (unresolved) must not pass it.
+    (The check reads the VALUES via `plutil -extract ... json`; a plain
+    `grep '{{'` over the whole file would match the install comment that
+    names the placeholder, and `plutil -extract ... raw` only prints the
+    first array element.)"""
+    installed = tmp_path / "installed.plist"
+    installed.write_text(
+        PLIST.read_text("utf-8").replace("{{LABELS_DIR}}", "/tmp/labels-x"),
+        "utf-8")
+    for key in ("ProgramArguments", "EnvironmentVariables"):
+        out = subprocess.run(
+            ["plutil", "-extract", key, "json", "-o", "-", str(installed)],
+            capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, (key, out.stderr)
+        assert "LABELS_DIR" not in out.stdout, (key, out.stdout)
+    # and the template itself (unresolved) still carries the placeholder
+    assert "LABELS_DIR" in PLIST.read_text("utf-8")
+
+
 def test_no_hard_coded_checkout_survives_in_the_shipped_script_and_plist():
     """DAV-2303 regression: the 2026-10-20 15:56 exit 11 happened because the
     shell script still pointed at ta-p4-ef8aa9d9. That literal must not come

@@ -69,7 +69,12 @@
        sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
            scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
            > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
-       grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist  # must be 0
+       # every placeholder must be resolved. The check looks at the VALUES
+       # only (the comment lines that NAME the placeholder are skipped):
+       plutil -extract ProgramArguments json -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # must be 0
+       plutil -extract EnvironmentVariables json -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # must be 0
        plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        launchctl bootstrap gui/$UID \
           ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist

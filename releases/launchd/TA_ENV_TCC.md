@@ -92,7 +92,12 @@ scripts/phase2/ta_secrets_install.sh --check     # 严格门禁，非 0 即停
 sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
     scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
     > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
-grep -c '{{' ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist  # 必须为 0
+# 只查「值」是否还残留占位符（注释里提到占位符不算；raw 只输出数组首元素，
+# 必须用 json 才能拿到全部元素）
+plutil -extract ProgramArguments json -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # 必须为 0
+plutil -extract EnvironmentVariables json -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # 必须为 0
 plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 
