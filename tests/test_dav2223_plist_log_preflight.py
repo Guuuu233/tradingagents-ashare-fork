@@ -458,7 +458,8 @@ def _drop_provenance(path: Path) -> _DropOutcome:
         pytest.skip(
             f"环境自动附加 {mod.PROVENANCE_XATTR} 且 {mod.XATTR_BIN} -c 无法清除：{path}"
             f"（已跑满 {outcome.attempts} 轮；末轮 `xattr -c <path>` 实测 "
-            f"rc={outcome.last_rc}、stderr={outcome.last_stderr or '<无 stderr>'}）"
+            f"rc={outcome.last_rc if outcome.last_rc is not None else '未执行'}、"
+            f"stderr={outcome.last_stderr or '<无 stderr>'}）"
             "（宿主环境问题，非被测代码缺陷；DAV-2274）"
         )
     return outcome
@@ -480,7 +481,7 @@ def _try_drop_provenance(path: Path) -> _DropOutcome:
         except OSError as exc:  # xattr(1) 缺失/不可执行：同样要进 skip 原因
             outcome = _DropOutcome(
                 False, outcome.attempts + 1, None,
-                f"{exc.__class__.__name__}: {exc}",
+                f"{mod.XATTR_BIN} 不可执行：{exc.__class__.__name__}: {exc}",
             )
         else:
             raw_err = getattr(proc, "stderr", b"") or b""
@@ -602,8 +603,11 @@ def test_drop_provenance_skips_instead_of_failing_when_attribute_survives(
 def test_drop_provenance_skip_reports_actual_cleanup_failure(monkeypatch):
     """清理命令真失败时，skip 原因里的 rc/stderr 必须**逐字来自**该次执行。
 
-    归因变异防线（DAV-2276 🟡-1）：把 ``xattr -c`` 换成**无操作只读探测**
-    （rc=0、无 stderr）时，“无法清除” 这条结论失去证据，本用例必须红。
+    本用例锁的是**透出通路**：把 rc/stderr 透出撤掉（或写死成别的值），本用例即
+    红。归因变异（把 ``xattr -c`` 换成无操作只读探测）**不由**本用例捕获——它把
+    整个 ``subprocess.run`` 替换成假实现，看不到真实 argv；那一变异由
+    ``test_drop_provenance_skips_instead_of_failing_when_attribute_survives`` 的
+    argv 断言锁住（DAV-2283 🟢-1 实测：变异下本用例仍绿、该用例红）。
     """
     log = Path("/tmp/dav2281/payload.log")
 
@@ -623,6 +627,39 @@ def test_drop_provenance_skip_reports_actual_cleanup_failure(monkeypatch):
     # 真实执行是 rc=0 / 无 stderr，skip 原因就不得声称「末轮失败」的具体证据
     assert "rc=0" in reason, reason
     assert "stderr=<无 stderr>" in reason, reason
+
+
+def test_drop_provenance_skip_reports_unexecutable_xattr(tmp_path, monkeypatch):
+    """xattr(1) 缺失/不可执行（``subprocess.run`` 抛 ``OSError``）也走 skip，且文案可读。
+
+    DAV-2283 🟢-2：该 ``except OSError`` 分支此前零覆盖——既有的假 ``run`` 只
+    返回对象，从不抛错。此处令 ``subprocess.run`` 恒抛 ``FileNotFoundError``，
+    断言：重试仍跑满 ``_DROP_RETRIES`` 轮、skip 原因带上异常类型，且 rc 位不得
+    渲染成字面 ``None``（「命令返回了 None」是误读）。
+    """
+    log = tmp_path / "logs" / "uvicorn.log"
+    log.parent.mkdir()
+    log.write_text("x")
+    clean_argvs: list[list[str]] = []
+
+    def raising_run(argv, *a, **k):
+        clean_argvs.append(list(argv))
+        raise FileNotFoundError(2, "No such file or directory", mod.XATTR_BIN)
+
+    monkeypatch.setattr(mod.subprocess, "run", raising_run)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_probe_provenance", lambda _p: True
+    )
+    with pytest.raises(pytest.skip.Exception) as exc:
+        _drop_provenance(log)
+
+    reason = str(exc.value)
+    assert len(clean_argvs) == _DROP_RETRIES
+    assert f"已跑满 {_DROP_RETRIES} 轮" in reason, reason
+    assert "FileNotFoundError" in reason, reason
+    assert f"{mod.XATTR_BIN} 不可执行" in reason, reason
+    assert "rc=None" not in reason, reason
+    assert "rc=未执行" in reason, reason
 
 
 def test_try_drop_provenance_reports_failure_without_skipping(tmp_path, monkeypatch):
