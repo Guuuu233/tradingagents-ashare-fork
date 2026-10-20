@@ -15,34 +15,6 @@
                 non-zero -> alert file + non-zero exit, no retry. A
                 non-trading weekday exits 0.
 
-     Install (inside the release card, together with the timer
-     checkout upgrade so CODE_DIR contains expiry_label_pipeline.py):
-       # DAV-2284 — credential copy OUTSIDE ~/Documents (launchd /bin/bash is
-       # TCC-denied reads there): dir 700, file 600, never a bare `cp`.
-       scripts/phase2/ta_secrets_install.sh          # install
-       scripts/phase2/ta_secrets_install.sh check    # strict preflight
-         (DAV-2286 🟢-7: the flag is spelled `check` here, not the
-          double-hyphen form, because a double hyphen is illegal inside
-          an XML comment and would make this plist un-parseable by strict
-          XML parsers (plistlib/libxml2 reject it; plutil tolerates it).
-          The script accepts BOTH spellings.)
-       cp scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist ~/Library/LaunchAgents/
-       launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
-       launchctl kickstart -k gui/$UID/com.davidliu.ta-p4-expiry-labels   # one manual run
-     Remove:
-       launchctl bootout gui/$UID/com.davidliu.ta-p4-expiry-labels
-       rm ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
-
-     DAV-2284 — TA_ENV_FILE: launchd does NOT expand `~`, `$HOME` or any
-     variable in EnvironmentVariables, so the value below MUST stay a
-     literal absolute path. It points at a 600 copy in a 700 dir outside
-     ~/Documents because macOS refuses launchd-spawned /bin/bash ANY read
-     under ~/Documents (measured 2026-10-19: grep and `source` both
-     "Operation not permitted" -> a misleading "TUSHARE_TOKEN missing",
-     exit 13). Nothing secret lives in this file. Rotating a key means
-     updating BOTH ~/Documents/TradingAgents-AShare/.env and the copy —
-     see releases/launchd/TA_ENV_TCC.md and the RESTART.md block it ships.
-
      Path coupling (sync all of these on checkout relocation):
        1) ProgramArguments below  — {{LABELS_DIR}},
        2) WorkingDirectory below   — {{LABELS_DIR}},
@@ -70,11 +42,17 @@
            scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
            > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        # every placeholder must be resolved. The check looks at the VALUES
-       # only (the comment lines that NAME the placeholder are skipped):
-       plutil -extract ProgramArguments json -o - \
-          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # must be 0
-       plutil -extract EnvironmentVariables json -o - \
-          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # must be 0
+       # only (the comment lines that NAME the placeholder are skipped).
+       # DAV-2292 🟢-3: `grep -c` returns 1 when the COUNT IS 0 — i.e. it
+       # returns FAILURE exactly when the check PASSES, so reusing it in a
+       # `set -e` / `&&` chain would judge a good plist as broken. Use
+       # `grep -q` (success = found = bad) and invert the test:
+       ! plutil -extract ProgramArguments json -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+          || { echo "unresolved placeholder in ProgramArguments"; exit 1; }
+       ! plutil -extract EnvironmentVariables json -o - \
+          ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+          || { echo "unresolved placeholder in EnvironmentVariables"; exit 1; }
        plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
        launchctl bootstrap gui/$UID \
           ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist

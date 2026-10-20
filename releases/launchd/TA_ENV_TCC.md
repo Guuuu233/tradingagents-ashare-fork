@@ -93,11 +93,15 @@ sed -e "s|{{LABELS_DIR}}|${LABELS_DIR}|g" \
     scripts/phase2/com.davidliu.ta-p4-expiry-labels.plist \
     > ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 # 只查「值」是否还残留占位符（注释里提到占位符不算；raw 只输出数组首元素，
-# 必须用 json 才能拿到全部元素）
-plutil -extract ProgramArguments json -o - \
-   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # 必须为 0
-plutil -extract EnvironmentVariables json -o - \
-   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -c 'LABELS_DIR'  # 必须为 0
+# 必须用 json 才能拿到全部元素）。
+# 注意：`grep -c` 在计数为 0（= 检查通过）时返回 1 —— 直接拿它进 `set -e`/`&&`
+# 链会把「通过」判成「失败」（DAV-2292 🟢-3）。用 `grep -q` 并把判断反过来：
+! plutil -extract ProgramArguments json -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+   || { echo "unresolved placeholder in ProgramArguments"; exit 1; }
+! plutil -extract EnvironmentVariables json -o - \
+   ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist | grep -q 'LABELS_DIR' \
+   || { echo "unresolved placeholder in EnvironmentVariables"; exit 1; }
 plutil -lint ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.davidliu.ta-p4-expiry-labels.plist
 
@@ -413,7 +417,7 @@ WORK_ROOT   = ${TA_WORK_ROOT:-/Users/davidliu/ta-p4-2e1e199f/work}
 
 | 编号 | 处理 |
 |---|---|
-| 🟡-1 | `set +a` 补回（且 `SOURCE_RC=$?` 的捕获**放在 `set +a` 之后**，否则 `SOURCE_RC` 自己也会被导出 —— 这是新用例第一次跑就抓到的）。凭据值仍导出，脚本自己的记账变量不再泄漏 |
+| 🟡-1 | `set +a` 补回（凭据值仍导出，脚本自己的记账变量不再泄漏）。**注**：当时写的「`SOURCE_RC=$?` 的捕获放在 `set +a` 之后」在第三轮被复审指出是错的 —— `set +a` 是返回 0 的内建命令，在它之后取 `$?` 永远读到 0，16d 成了死分支。**正确做法**（第三轮已改）：在 `set +a` **之前**用临时变量 `_src_rc=$?` 捕获，紧随其后 `set +a` → `SOURCE_RC=${_src_rc}` → `unset _src_rc` |
 | 🟡-2 | 三条护栏用例改为 source **沙箱副本**（四个常量全部覆写到 `tmp_path`；安装脚本另加 `SRC`/`DEST`），护栏一旦失效也不会重放 15:56；并做了变异测试（删掉护栏 → 2 条用例失败） |
 | 🟢-1 | 两个脚本的退出码表补 **64**（refused to be sourced） |
 | 🟢-2 | 安装脚本里那条错误的 bash 语义论断（"`a || b` 救不了"）改正为「**会展开 `$2` 的命令前面必须先有一条独立的计数检查**」，并在注释里明确撤回旧说法（`\|\|`/`&&` 确实会短路，旧说法是错的） |
@@ -427,3 +431,96 @@ WORK_ROOT   = ${TA_WORK_ROOT:-/Users/davidliu/ta-p4-2e1e199f/work}
 2. 2284 的发布卡要核对两件事：**新检出的工作树是干净的**；**装好之后旧检出里的本地改动已不再需要**
    （`~/ta-p4-labels-cb82987b` 现有 10-17 的未提交本地改动；`~/ta-p4-ef8aa9d9` 停在
    `f41b9cf5` 且缺管道脚本，两者都**不可**作为新装机的检出）。
+
+## 12. 第三轮返修（DAV-2292 对 `0cba793e` 的 3🟡 + 5🟢）
+
+### 12.1 🟡-1 `.` 的返回码被 `set +a` 吃掉 → 16d 是死分支
+
+**复审指出并已复现**：`set +a` 是返回 **0** 的内建命令，所以「在 `set +a` 之后取 `$?`」
+永远读到 0 —— 上一轮补 `set +a` 时把 `SOURCE_RC=$?` 放到了它**后面**，
+`failed to source`（16d）因此成了**死代码**：过闸但解析不了的内容被误报成
+exit 13「内容缺失」，最坏路径下静默通过。
+
+**但只改捕获位置还不够**：`.` 返回的是**最后一条命令**的状态，
+所以「第一行语法错 + 后面一行合法」时 rc 仍是 0（实测）：
+
+```
+$ printf 'A=((\nTUSHARE_TOKEN=plainvalue\n' > t.env
+$ . t.env; echo $?      →  0      # 语法错被后面成功的行掩盖
+$ bash -n t.env; echo $? →  0      # bash -n 也不报错（不适用）
+```
+
+唯一可靠信号是**源码的 stderr**（bash 打印语法错后**继续**解析后面的行）。
+改法：
+
+```bash
+_src_errfile="${TMPDIR:-/tmp}/.cred_src_err.$$"
+: >"${_src_errfile}" 2>/dev/null || _src_errfile=""
+if [ -n "${_src_errfile}" ]; then
+    . "${ENV_FILE}" 2>"${_src_errfile}"
+    _src_rc=$?
+    _src_err="$(cat "${_src_errfile}" 2>/dev/null)"; rm -f "${_src_errfile}"
+else
+    . "${ENV_FILE}"; _src_rc=$?; _src_err=""
+fi
+set +a
+SOURCE_RC=${_src_rc}; unset _src_rc
+set -u
+```
+
+三点说明：
+1. **stderr 落临时文件而不是命令替换** —— 命令替换会把 shell 自己的 `set -x`
+   trace（也走 stderr）一起吞进来；临时文件只装被 source 文件的 stderr。
+2. **告警里只写行号，绝不写 stderr 原文** —— bash 的语法错消息会**引用出错的那一行**，
+   对凭据文件来说那一行**可能就是密钥值**。实测：告警与日志里 `plainvalue` 出现 0 次。
+3. 临时文件用完即删（实测 `/tmp/.cred_src_err.*` 无残留）。
+
+**回归用例**：`test_source_failure_is_reported_as_16d_not_13_or_silence`、
+`test_source_failure_with_a_valid_token_line_is_not_silent`（后者正是复审指出的
+最坏路径：`A=((` + 合法 token 行 → 必须 exit 16 且有告警，绝不 exit 0）。
+
+### 12.2 🟡-2 CRLF 行尾 → 值带尾部 0x0d → 永久 gap 行
+
+闸的尾锚 `[[:space:]]*$` 把 `\r` 当尾随空白接受，CRLF 文件**过闸**（实测 rc=1），
+而 bash 赋值**不剥离** `\r` → 值尾带 0x0d（实测 `TUSHARE_TOKEN` 长度 7、末字节 0d）。
+token 预检只判「非空」，于是带 CR 的无效 token 被放行 → SW 行业腿**逐行**落
+`membership_status="gap"`，而标签行是 append-only，**已写入的 gap 无法重标**。
+
+**修法（不动 143 字符闸本体，避免文档数字全部失效）**：wrapper 与安装脚本各在
+GREP 闸**之前**加一条 CRLF 前置检查：
+- wrapper → **exit 16**，告警点名「CRLF 行尾」；
+- 安装脚本（install 走**源**、verify 走**副本**）→ **rc 3**（源）/ **rc 6**（副本）。
+
+**回归用例**：`test_crlf_credential_file_is_rejected_before_the_gate`、
+`test_installer_rejects_a_crlf_source`。
+
+### 12.3 🟡-3 安装脚本会把「已存在的任意目录」chmod 700
+
+旧代码无条件 `chmod 700 "${DEST_DIR}"`：`--dest $HOME/ta.env` 会把**用户主目录**
+从 755 改成 700（`--dest /private/tmp/x.env` 则把 /private/tmp 改成 700），且仍报 OK。
+
+**修法**：已存在的目录只接受 **700/500**，否则 **rc 4 拒绝且不动它**；
+只有**本脚本新建**的目录才 `chmod 700`。另对 `$HOME`、`/`、`/private/tmp`、`/tmp`、
+`/var`、`/usr`、`/Applications`、`/Users`、`/Library`、`/System` 直接 rc=4 拒绝。
+
+**回归用例**：`test_installer_refuses_to_chmod_a_preexisting_directory`（断言既有目录
+权限**未被改动**）、`test_installer_refuses_the_home_directory_as_destination`。
+
+### 12.4 5 条 🟢
+
+| 编号 | 处理 |
+|---|---|
+| 🟢-1 | exit 10 的告警文案点名 plist 键（`TA_PYTHON`），便于搬 venv 时定位；解释器缺省仍是 `~/ta-venv/py310`（本机实测存在且依赖齐全，**今天装上去不会出事**） |
+| 🟢-2 | plist 里两段**重复且已漂移**的注释（旧的 Install 块、旧的 TA_ENV_FILE 段）已删，只留新版；`plutil -lint` 仍 OK |
+| 🟢-3 | 占位符检查的**退出码反了**：`grep -c` 在计数为 0（= 检查通过）时返回 1，直接进 `set -e`/`&&` 链会把「通过」判成「失败」。改为 `! … \| grep -q 'LABELS_DIR' \|\| { echo "unresolved placeholder …"; exit 1; }`（plist 注释与 §3 同步） |
+| 🟢-4 | `--help` 不再多打一行孤立的 REMINDER（`sed` 范围是闭区间 → 加 `head -n -1`） |
+| 🟢-5 | `TA_WORK_ROOT` **未显式给出**时打 `WARN running outside launchd with the PRODUCTION work root …`（复审员 17:58:53 手工执行覆盖了生产 `ALERT.launchd` 并追加了 2 行日志 —— 护栏只挡 `source`，挡不住 `bash <脚本>`）。**手工执行必须同时给 `TA_WORK_ROOT`（临时目录）与 `TA_ENV_FILE`（临时文件）**，已写进 §10.4 |
+
+### 12.5 本轮新增用例
+
+`test_source_failure_is_reported_as_16d_not_13_or_silence`、
+`test_source_failure_with_a_valid_token_line_is_not_silent`、
+`test_crlf_credential_file_is_rejected_before_the_gate`、
+`test_installer_rejects_a_crlf_source`、
+`test_installer_refuses_to_chmod_a_preexisting_directory`、
+`test_installer_refuses_the_home_directory_as_destination`。

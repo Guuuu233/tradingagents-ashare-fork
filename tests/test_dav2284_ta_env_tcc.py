@@ -786,6 +786,103 @@ def test_wrapper_does_not_leak_its_own_variables_into_the_subprocess_env(
         assert name not in child_env, f"{name} leaked into the subprocess env"
 
 
+# ---------------------------------------------------------------------------
+# DAV-2292 round 3 — 3 x 🟡
+# ---------------------------------------------------------------------------
+
+def test_source_failure_is_reported_as_16d_not_13_or_silence(tmp_path):
+    """DAV-2292 🟡-1 (round 3): the status of `.` MUST be captured while it is
+    still the last command. The previous code captured `$?` AFTER `set +a`
+    — a builtin that returns 0 — so the "failed to source" branch (16d) was
+    DEAD CODE and a file that passes the gate but cannot be parsed was
+    misreported (exit 13) or, worse, silently accepted.
+
+    `A=((` passes the KEY=VALUE gate (it looks like an assignment) but is a
+    bash syntax error. Assert: exit 16 AND the alert says "failed to source"
+    (not "TUSHARE_TOKEN missing", not exit 0)."""
+    res = _run_wrapper(tmp_path, ["A=(("])
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert "failed to source" in res["alert"], res["alert"]
+    assert "TUSHARE_TOKEN missing" not in res["alert"]
+
+
+def test_source_failure_with_a_valid_token_line_is_not_silent(tmp_path):
+    """The worst path the reviewer described: `A=((` on line 1 followed by a
+    valid TUSHARE_TOKEN line. bash does not abort on a syntax error while
+    sourcing, so the file can half-apply — the wrapper must still alert
+    (exit 16), never exit 0 silently."""
+    res = _run_wrapper(tmp_path, ["A=((",
+                               f"TUSHARE_TOKEN={FAKE_TOKEN}"])
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert "failed to source" in res["alert"], res["alert"]
+    assert res["alert"], "a silent pass is the failure mode being fixed"
+
+
+def test_crlf_credential_file_is_rejected_before_the_gate(tmp_path):
+    """DAV-2292 🟡-2 (round 3): the KEY=VALUE gate's tail anchor
+    `[[:space:]]*$` accepts a trailing CR as whitespace, so a CRLF file
+    PASSES the gate — but bash does not strip the CR, so every value ends
+    up with a 0x0d byte (measured: TUSHARE_TOKEN length 7, last byte 0d).
+    The token probe then sees a non-empty value and lets it through, while
+    the SW industry leg degrades EVERY row to membership_status="gap" —
+    and those rows are append-only, so the damage is permanent.
+
+    Assert: the wrapper rejects a CRLF file with exit 16 (NOT exit 13, NOT
+    exit 0), and the alert says CRLF."""
+    crlf = tmp_path / "crlf.env"
+    crlf.write_bytes(f"TUSHARE_TOKEN={FAKE_TOKEN}\r\n".encode("utf-8"))
+    res = _run_wrapper(tmp_path, env_file=crlf)
+    assert res["rc"] == 16, (res["rc"], res["alert"])
+    assert "CRLF" in res["alert"], res["alert"]
+
+
+def test_installer_rejects_a_crlf_source(tmp_path):
+    """DAV-2292 🟡-2: the installer must refuse a CRLF source (rc 3) — the
+    copy it would produce is just as poisoned."""
+    src = tmp_path / "src.env"
+    src.write_bytes(f"TUSHARE_TOKEN={FAKE_TOKEN}\r\n".encode("utf-8"))
+    dest = tmp_path / "ta-secrets" / "ta.env"
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
+    assert res.returncode == 3, (res.returncode, res.stdout, res.stderr)
+    assert "CRLF" in res.stderr, res.stderr
+    assert not dest.exists()
+
+
+def test_installer_refuses_to_chmod_a_preexisting_directory(tmp_path):
+    """DAV-2292 🟡-3 (round 3): the old code ran `chmod 700` on DEST_DIR
+    unconditionally, so `--dest $HOME/ta.env` silently turned the user's
+    HOME from 755 to 700 (and /private/tmp from 777 to 700) and still
+    reported OK. Now an existing directory must be 700/500 already, and
+    must be left untouched otherwise (rc 4)."""
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    existing.chmod(0o755)
+    src = tmp_path / "src.env"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    dest = existing / "ta.env"
+
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest))
+    assert res.returncode == 4, (res.returncode, res.stdout, res.stderr)
+    assert "refusing to chmod" in res.stderr, res.stderr
+    # the pre-existing directory must be UNCHANGED
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o755
+
+
+def test_installer_refuses_the_home_directory_as_destination(tmp_path):
+    """DAV-2292 🟡-3: system/home directories are refused outright."""
+    home = tmp_path / "home"
+    home.mkdir()
+    home.chmod(0o755)
+    src = tmp_path / "src.env"
+    src.write_text(f"TUSHARE_TOKEN={FAKE_TOKEN}\n", "utf-8")
+    dest = home / "ta.env"
+
+    res = _run_installer(tmp_path, "--src", str(src), "--dest", str(dest),
+                        home=home)
+    assert res.returncode == 4, (res.returncode, res.stdout, res.stderr)
+    assert stat.S_IMODE(home.stat().st_mode) == 0o755
+
+
 def test_wrapper_documents_the_new_exit_code_and_env_override():
     """Cheap contract check: the header must keep advertising exit 18 and the
     TA_ENV_FILE indirection, so a future edit cannot silently drop either."""

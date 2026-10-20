@@ -64,11 +64,15 @@
 #             12 ledger missing, 13 calendar unavailable OR required
 #             credential missing, 14 run failed (incl. the pipeline's own
 #             no-token fail-close, exit 2), 15 verify failed,
-#             16 credential file unusable — four distinct causes:
+#             16 credential file unusable — five distinct causes:
 #               16a path not absolute (launchd does not expand ~ / $VAR),
 #               16b file missing / not readable,
 #               16c file contains non KEY=VALUE lines,
-#               16d file failed to source (syntax error etc.),
+#               16d file failed to source (syntax error etc. — detected via
+#                   the source's STDERR, because `.` returns the status of
+#                   its LAST command and would mask an earlier error),
+#               16e file has CRLF line endings (every value would carry a
+#                   trailing 0x0d and the SW leg would gap every row),
 #             17 post-run all-gap SW-leg guard,
 #             18 credential file READ denied by the OS (TCC/EACCES) —
 #             fail-closed, no source attempt, alert names the denial,
@@ -171,6 +175,16 @@ alert() {
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
 
+# DAV-2292 🟢-5 (round 3): a MANUAL run (not via launchd) with the default
+# WORK_ROOT writes into the PRODUCTION label dir and reads the REAL
+# credentials — the guard above only stops `source`, not `bash <script>`.
+# The reviewer hit exactly this on 2026-10-20 17:58:53 (overwrote the
+# production ALERT.launchd and appended to label_pipeline.log).
+# So: when TA_WORK_ROOT was NOT given explicitly, shout before doing it.
+if [ -z "${TA_WORK_ROOT:-}" ]; then
+    log "WARN running outside launchd with the PRODUCTION work root ${WORK_ROOT} — a manual run WILL write ${OUT_DIR} and read the real credentials. For a manual run always set TA_WORK_ROOT (temporary dir) and TA_ENV_FILE (temporary file)."
+fi
+
 # The KEY=VALUE gate — ONE definition, used by this wrapper and (extracted at
 # run time) by scripts/phase2/ta_secrets_install.sh, so the installer can
 # never check less than the timer does (DAV-2286 🟢-4). Kept on its own line
@@ -226,6 +240,19 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
         ""|700|500) ;;
         *) log "WARN credential dir mode ${_dir_mode} (want 700) — chmod 700 '$(/usr/bin/dirname "${ENV_FILE}")'" ;;
     esac
+    # DAV-2292 🟡-2 (round 3): CRLF line endings must be rejected BEFORE the
+    # KEY=VALUE gate. The gate's tail anchor `[[:space:]]*$` accepts a
+    # trailing CR as whitespace, so a CRLF file PASSES the gate (measured:
+    # gate rc=1) — but bash does NOT strip the CR on assignment, so every
+    # value ends up with a 0x0d byte (measured: TUSHARE_TOKEN length 7,
+    # last byte 0d). The token probe then sees a non-empty value and lets
+    # it through, while the SW industry leg silently degrades EVERY row to
+    # membership_status="gap" — and those rows are append-only, so a bad
+    # night is permanent. The 143-char gate itself is deliberately NOT
+    # touched (changing it would invalidate the documented pattern length).
+    if /usr/bin/grep -q "$(printf '\r')" "${ENV_FILE}" 2>/dev/null; then
+        alert "凭据文件是 CRLF 行尾（每个值会带上尾部 0x0d，token 会被污染、SW 行业腿逐行落 gap 且不可重标）：${ENV_FILE} —— 请用 dos2unix 或编辑器改成 LF 后重试" 16
+    fi
     # exit 0 = a bad line was FOUND (grep -vE prints lines that are NOT
     # KEY=VALUE/comment/blank); exit 1 = file is clean and safe to source;
     # exit >= 2 = grep could not READ the file at all (EPERM under macOS TCC,
@@ -253,19 +280,52 @@ if [ -f "${ENV_FILE}" ] && [ -r "${ENV_FILE}" ]; then
     # below. `set -u` is restored immediately afterwards.
     set +u
     # shellcheck disable=SC1090
-    . "${ENV_FILE}"
-    # DAV-2292 🟡-1: allexport must be turned OFF again right after the
-    # source — and the capture of $? must happen AFTER that, otherwise
-    # SOURCE_RC itself becomes an exported variable. Leaving allexport on
-    # exports EVERY later assignment of this script — including its own
-    # bookkeeping variables (SOURCE_RC, TODAY, IS_TRADING, CHECK_RC, RUN_RC,
-    # GAP_CHECK, GAP_LEVEL, GAP_RC) — into the pipeline subprocess env
-    # (measured on the candidate: 16 items vs 8 on the parent side).
-    # The credential VALUES must still be exported (that is what `set -a` was
-    # for); the script's own variables must NOT leak.
+    # DAV-2292 🟡-2 (round 3): the source's STDERR must be captured, not
+    # just its exit status. `.` returns the status of the LAST command it
+    # ran, so a syntax error on an EARLIER line is masked by a later
+    # successful line (`A=((` + `TUSHARE_TOKEN=…` -> rc 0, silent!). bash
+    # does print the syntax error to stderr and then CONTINUES, so the
+    # stderr is the only reliable signal. A source that produced ANY
+    # stderr output is treated as a failed source (exit 16d) — a clean
+    # credential file sources silently.
+    #
+    # The stderr goes to a TEMP FILE, not into a command substitution: a
+    # command substitution would also capture the shell's own trace output
+    # (`set -x` writes to stderr) and, worse, the file's stdout. A temp
+    # file captures exactly the sourced file's stderr and nothing else.
+    #
+    # DISK DISCIPLINE: bash's syntax-error message quotes the offending
+    # line — which for a credential file may BE a secret value. So the raw
+    # stderr is NEVER written to the alert, the log or anywhere else: only
+    # the LINE NUMBERS are extracted, the text itself is discarded, and the
+    # temp file is removed immediately.
+    _src_errfile="${TMPDIR:-/tmp}/.cred_src_err.$$"
+    : >"${_src_errfile}" 2>/dev/null || _src_errfile=""
+    if [ -n "${_src_errfile}" ]; then
+        # shellcheck disable=SC1090
+        . "${ENV_FILE}" 2>"${_src_errfile}"
+        _src_rc=$?
+        _src_err="$(cat "${_src_errfile}" 2>/dev/null)"
+        rm -f "${_src_errfile}"
+    else
+        # no temp file available -> fall back to the status only
+        # shellcheck disable=SC1090
+        . "${ENV_FILE}"
+        _src_rc=$?
+        _src_err=""
+    fi
     set +a
-    SOURCE_RC=$?
+    SOURCE_RC=${_src_rc}
+    unset _src_rc
     set -u
+    _src_lines="$(printf '%s' "${_src_err}" | sed -n 's/.*: line \([0-9][0-9]*\):.*/\1/p' | tr '\n' ',' | sed 's/,$//')"
+    unset _src_err
+    if [ -n "${_src_lines}" ]; then
+        _src_msg="credential file ${ENV_FILE} failed to source (bash reported a syntax error at line(s) ${_src_lines}) — no values injected"
+        unset _src_lines
+        alert "${_src_msg}" 16
+    fi
+    unset _src_lines
     # A readable file that passes the gate can still fail to source (syntax
     # error, or a value that is not expandable). Say so instead of letting
     # the "token missing" probe 20 lines below take the blame.
@@ -275,7 +335,7 @@ else
 fi
 
 # --- preconditions ---------------------------------------------------------
-[ -x "${PYTHON}" ]    || alert "python interpreter missing: ${PYTHON}" 10
+[ -x "${PYTHON}" ]    || alert "python interpreter missing or not executable: ${PYTHON} — set TA_PYTHON in the plist (EnvironmentVariables.TA_PYTHON), or point it at an existing interpreter" 10
 [ -f "${PIPELINE}" ]  || alert "pipeline script missing: ${PIPELINE} (code worktree not upgraded to a trunk with DAV-1875 yet?)" 11
 [ -f "${LEDGER}" ]    || alert "forward ledger missing: ${LEDGER} (19:45 seal timer has not produced it)" 12
 
