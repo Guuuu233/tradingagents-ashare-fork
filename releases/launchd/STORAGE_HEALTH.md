@@ -1,17 +1,24 @@
 # 存储健康巡检 I（storage_health.sh）— 脚本 + launchd 模板（只入库，未安装）
 
 本目录收纳宿主每日存储巡检脚本与其 launchd 模板。**本卡只推分支 + 开复审：脚本与模板
-都已入仓，但未安装、未启用**——`~/Library/LaunchAgents/` 下没有对应 plist，
-`launchctl list` 无该项，`crontab` 为空。安装另走发布卡，排在 **10-19 之后**。
+都已入仓，但未安装、未启用**——`~/Library/LaunchAgents/` 下的对应 plist 已于
+DAV-2237 安装后按总工 10-21 11:05 令**卸载**（plist 保留待重装），安装另走发布卡，
+排在 **10-22 读数之后**。
 
 ## 文件清单
 
 | 文件                                                      | 作用                                                                 |
 | --------------------------------------------------------- | -------------------------------------------------------------------- |
 | `releases/launchd/storage_health.sh`                      | 巡检脚本本体（zsh，`daily` / `weekly` / `auto` 三种模式）            |
-| `releases/launchd/com.tradingagents.storage-health.plist` | launchd 模板（含 `{{REPO_DIR}}` / `{{LOG_DIR}}` 占位符，**未安装**） |
+| `releases/launchd/storage_health_launcher.py`             | **DAV-2310** launchd 启动器（python → exec 巡检脚本；TCC responsible process） |
+| `releases/launchd/com.tradingagents.storage-health.plist` | launchd 模板（含 `{{PYTHON_BIN}}` / `{{REPO_DIR}}` / `{{LOG_DIR}}` 占位符，**未安装**） |
 | `releases/launchd/tests/test_storage_health.sh`           | 行为门禁：`bash releases/launchd/tests/test_storage_health.sh`       |
+| `releases/launchd/tests/test_storage_health_launcher.py` | **DAV-2310** 启动器 + plist 模板门禁（pytest，见下方「运行」）      |
 | `releases/launchd/STORAGE_HEALTH.md`                      | 本说明                                                               |
+
+DAV-2310 只动上表里的**启动器**与**plist 模板**两处；**巡检脚本 `storage_health.sh` 一字未改**
+（sha256 仍为 DAV-2237 总控 pin 的 `fc694aeac4e85ac600053dd8a9522f3ef8776a2e3c0fec752f6f7e321fd60089`，
+由 `tests/test_storage_health_launcher.py` 逐次断言）。
 
 DAV-2215 入库时脚本与 DAV-1508 交付件**逐字节一致**（旧 `sha256 d1936831b94d677bf79eefc826b9fb5186a84bba8ea8dc59dee9749ef5923037`）；
 **DAV-2219 按 DAV-2216 复审的 2🟡/2🟢 修正、DAV-2238 按 DAV-2237 §10 签字对齐热备口径、
@@ -236,37 +243,167 @@ DAV-2264 轮（本版树控制组 `pass=138 fail=0`，均在临时副本上做�
 其余变异复跑：M-A 2、M-B 10、M-C 3、M-D 8、M-E 2、M-F 6、M-G 7、M-H 2、M-I 10、
 M-J 2（双命中夹具下）、M-K 2、M-L 1；控制组/复原 → `138 pass / 0 fail`。
 
-## 安装（**本卡不执行**，另走发布卡，排在 10-19 之后）
+## TCC responsible process：DAV-2310 探针实测（launchd 上下文）
+
+### 为什么
+
+DAV-2237 首跑 `exit=2`（fail-closed 判红）的根因：**launchd 下 `/bin/zsh` 没有
+`~/Documents` 的 TCC 授权**。巡检对象（活库、发布备份 `backups/`、发布期 `.pre-slim`
+副本）全在 `~/Documents` 之下，launchd 唤起的 zsh 跑 `du` / `find` 一律
+`Operation not permitted` → 4 个测量项不可测 → 热备行判红（DAV-2238 后不再静默报绿）。
+
+macOS TCC 按 **responsible process** 判定授权：**由已获授权的进程启动的子进程继承
+该授权**。同机 `com.tradingagents.ashare` 以 `~/ta-venv/py310/bin/python` 作
+`ProgramArguments[0]` 就能持有 `~/Documents/…/tradingagents.db` —— 但这是旁证，
+**不是**对本问题的直接测量。DAV-2310 用临时探针在 launchd 上下文直接测量。
+
+### 探针设计（4 组对照，覆盖三层）
+
+探针 plist（临时）以 `~/ta-venv/py310/bin/python`（uv 管理的 cpython-3.10.20，
+ad-hoc 签名）作 responsible process，**只读**地测：`ls -d`（目录枚举）、`pwd`
+（getcwd）、`du -sk`（目录占用）、`find -P`（递归枚举）、`stat`（已知路径大小）、
+`head -c 1`（读内容，**只读 1 字节，不落盘、不复制**）。
+
+**必须覆盖三层**（只测第一层会得出假阳性）：① python 自己能读 `~/Documents`；
+② python 起的 zsh 能读；③ 该 zsh 跑的 `du` / `find` 能读。
+
+| 组别 | 形态                                                       | 结果                       |
+| ----- | ---------------------------------------------------------- | -------------------------- |
+| A     | `/bin/zsh` 直接当 responsible process（**对照组**）          | **FAIL**（复现 D2 原象）   |
+| B     | python **spawn** `/bin/zsh`（python 仍是父进程）             | PASS                       |
+| C     | python **exec** `/bin/zsh`（映像被替换，同一 PID）           | PASS ← **本卡采用**        |
+| D     | 同 C，但 `WorkingDirectory` 在 `~/Documents` 下              | PASS                       |
+
+对照组 A 的实测输出（逐字，与 DAV-2237 首跑的 D2 一致）：
+
+```
+L2 du -sk PROJ rc=1 out_first=du: …/TradingAgents-AShare: Operation not permitted
+L2 du -sk -H REL/backups rc=1 out_first=du: …/-releases/backups: Operation not permitted
+L3 find rc=1 out_first=find: …/TradingAgents-AShare: Operation not permitted
+L5 head -c 1 db rc=1 err=head: …/tradingagents.db: Operation not permitted
+```
+
+对照组 A 与 C 的**唯一差别**是 `ProgramArguments[0]` 与进程形态；A 失败、C 通过 →
+「授权随 responsible process 传递」这一前提**成立**。
+
+**为什么选 C（exec）而不是 B（spawn）**：exec 后进程映像被 zsh 取代，**脚本退出码天然
+就是本进程退出码**（无需中转、不需额外捕获），且与已实测通过的探针形态逐字一致。
+D 组另外确认了 `WorkingDirectory` 设在 `~/Documents` 下不会重现 DAV-2180 记录的
+getcwd 拒读。
+
+### 探针纪律与清理
+
+- 探针 plist 放在 `~/ta-work/`（**不在** `~/Library/LaunchAgents/`），测完**立即**
+  `bootout` + **删除 plist**；回读确认 `Could not find service …`；
+- 探针输出落 `~/ta-work/`（授权区之外），**不写 `~/Documents`**；
+- 探针**不碰生产库**：只读目录与 1 字节内容判定，不读、不写、不复制 `tradingagents.db`；
+- 4 组作业全部卸载（`bootout` rc=0），`launchctl list` / `print-disabled` 无残留，
+  `ps` 无残留进程。
+
+### 换解释器必须重跑探针
+
+探针结论**只对被测的那条解释器路径成立**。C 组测的是
+`~/ta-venv/py310/bin/python`（realpath =
+`~/.local/share/uv/python/cpython-3.10.20-macos-aarch64-none/bin/python3.10`）。
+**换一个解释器就必须重跑探针**，不得凭推测替换 plist 里的 `{{PYTHON_BIN}}`。
+
+## 启动器 `storage_health_launcher.py`（DAV-2310）
+
+职责刻意最小（卡面三条）：
+
+1. **路径解析**：巡检脚本取 `STORAGE_HEALTH_SCRIPT`（plist 注入）；**未设时取与启动器
+   同目录的 `storage_health.sh`**（由 `__file__` 推导，**不写死绝对路径**——DAV-2292
+   「路径写死 → 改 env/脚本目录推导」的同款教训）。报告目录取 `STORAGE_HEALTH_LOG_DIR`；
+   **不自动创建**（目录缺失即拒绝启动，避免 launchd 下留无主副作用）。
+2. **参数透传**：`argv[1:]` 逐字转交脚本（不解析、不重排、不补默认值）。
+3. **退出码透传**：脚本退出码即本进程退出码（exec 形态天然如此）。
+
+输出落盘替代旧 plist 的 shell 重定向，**语义逐字一致**：
+当日报告 `<log-dir>/storage-health-<YYYY-MM-DD>.md`（**覆盖**，旧行为是 `>`）；
+脚本 stderr `<log-dir>/storage-health-stderr.log`（**追加**，旧行为是 `2>>`）。
+
+启动器**自身**的失败（未设日志目录 / 目录不存在 / 脚本不存在 / 日志打不开 / `exec` 失败）
+一律 **exit 64**（fail-closed，拒绝启动）——**64 是「拒绝启动」，不是巡检结论**，
+与脚本自身的 0 / 2 不撞码。
+
+只读纪律：启动器只**打开两个输出文件**并 exec 巡检脚本，**不删、不改、不复制任何数据
+文件**，**不读数据库内容**。
+
+### 门禁与变异验证
+
+`releases/launchd/tests/test_storage_health_launcher.py`（26 条）：
+
+```bash
+env -u PYTHONPATH .venv310/bin/python -m pytest \
+    releases/launchd/tests/test_storage_health_launcher.py -q -p no:randomly
+```
+
+覆盖：路径解析（env 优先 / 同目录兜底 / 脚本缺失 → 64）、参数透传（逐字、不补默认）、
+退出码透传（0 / 2 / 3 / 42）、报告覆盖与 stderr 分离、plist 契约（占位符集合、
+`ProgramArguments` 指向启动器、占位符替换后 `plutil -lint` + `plistlib` 可解析、
+无 KeepAlive、`{{REPO_DIR}}` 三处同源、无硬编码宿主机路径）。
+
+**变异验证（真闸证明）**：
+
+| 变异                                              | 失败条数 |
+| ------------------------------------------------- | -------- |
+| 启动器丢掉参数（`args = []`）                    | 1        |
+| 退出码不透传（总是返回 0）                        | 3        |
+| 路径解析退回写死绝对路径（忽略 env 与目录推导）   | 11       |
+| fail-closed 失效（缺日志目录也照跑）              | 1        |
+| plist 退回 `/bin/zsh`（DAV-2237 旧形态）          | 1        |
+| plist 加 `KeepAlive`                             | 1        |
+| 复原                                               | 0（26 全绿） |
+
+## 安装（**本卡不执行**，另走发布卡，排在 **10-22 读数之后**）
 
 硬前置（任一不满足即中止）：
 
-1. **TCC 实测**：DAV-2180 已实测 launchd 对 `~/Documents` 全树拒读（`/bin/bash` 唤起时
-   `getcwd`、`ls ~/Documents` 均 `Operation not permitted`）。本模板沿用 `/bin/zsh -c`，
-   而脚本与报告目录默认都在 `~/Documents` 下——必须先用临时探针确认 **zsh 在 launchd 下
-   可读 `{{REPO_DIR}}`、可写 `{{LOG_DIR}}`**；否则热备行会长期判「红（不可测）」、脚本每次以
-   退出码 2 结束（DAV-2238 后不再静默报绿），而 `{{LOG_DIR}}` 不可写时报告根本落不了盘。
-2. 占位符全量替换并校验残留为 0：
+1. **TCC 实测（DAV-2310 已完成）**：DAV-2180 实测 launchd 对 `~/Documents` 全树拒读。
+   DAV-2310 用 4 组对照探针在 launchd 上下文实测：**由持权解释器当 responsible process
+   时，其 zsh 子进程可读 `~/Documents`**（C/D 组 PASS，对照组 A 复现 FAIL）——
+   详见上方「TCC responsible process：DAV-2310 探针实测」。
+   **硬要求：解释器必须是探针实测过的那条路径**（`~/ta-venv/py310/bin/python`）；
+   换解释器必须**重跑探针**。
+2. 占位符全量替换并校验残留为 0（**DAV-2310 起共 3 个**）：
    `grep -cE '\{\{[A-Z_]+\}\}' ~/Library/LaunchAgents/com.tradingagents.storage-health.plist`
    必须输出 `0`；`plutil -lint` 必须 OK。
 3. 报告目录存在且可写；首次手动跑一次 `storage_health.sh daily`，确认报告落盘且耗时远小于一天。
+4. （DAV-2223）`bootstrap` 之前先跑 `releases/launchd/plist_log_preflight.py`
+   （**用 python 运行，不是 bash**）：FAIL 即停，不得继续。
 
 ```bash
 # 安装（发布卡执行，勿未经授权照抄）
+# 注：DAV-2310 起 plist 有 3 个占位符（PYTHON_BIN / REPO_DIR / LOG_DIR）。
+#     PYTHON_BIN 必须是探针实测持权的那条解释器路径。
+#     LOG_DIR 用 DAV-2237 首跑实际装过的位置（不在 ~/Documents 下）。
 mkdir -p ~/Library/LaunchAgents
-sed -e "s|{{REPO_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare|g" \
-    -e "s|{{LOG_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare-releases/logs|g" \
+mkdir -p /Users/davidliu/ta-watch/storage-health
+sed -e "s|{{PYTHON_BIN}}|/Users/davidliu/ta-venv/py310/bin/python|g" \
+    -e "s|{{REPO_DIR}}|/Users/davidliu/Documents/TradingAgents-AShare|g" \
+    -e "s|{{LOG_DIR}}|/Users/davidliu/ta-watch/storage-health|g" \
     releases/launchd/com.tradingagents.storage-health.plist \
     > ~/Library/LaunchAgents/com.tradingagents.storage-health.plist
 grep -cE '\{\{[A-Z_]+\}\}' ~/Library/LaunchAgents/com.tradingagents.storage-health.plist   # 必须 0
 plutil -lint ~/Library/LaunchAgents/com.tradingagents.storage-health.plist                 # OK
+# DAV-2223 前置检查（FAIL 即停）
+python3 releases/launchd/plist_log_preflight.py \
+    ~/Library/LaunchAgents/com.tradingagents.storage-health.plist
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.tradingagents.storage-health.plist
 launchctl print gui/$UID/com.tradingagents.storage-health | head -20                       # 应注册成功
 launchctl kickstart -k gui/$UID/com.tradingagents.storage-health                           # 手动首跑
-ls -l /Users/davidliu/Documents/TradingAgents-AShare-releases/logs/storage-health-$(date +%F).md
+ls -l /Users/davidliu/ta-watch/storage-health/storage-health-$(date +%F).md
 ```
 
 回退：`launchctl bootout gui/$UID/com.tradingagents.storage-health`，
 再 `rm ~/Library/LaunchAgents/com.tradingagents.storage-health.plist`（仅安装后回退时才需要）。
+
+> **DAV-2237 首跑的坑位**（重装时注意）：
+> 1. `bootout` 只卸载当前会话，`plist` 留在 `~/Library/LaunchAgents/` 会在**下次登录时
+>    被 launchd 自动装载、作业复活** → 需 `launchctl disable gui/$UID/com.tradingagents.storage-health`
+>    写持久停用位（回退时 `enable` 即可）；
+> 2. 首跑当日是周三，`auto` 模式会**同时**跑「每周基线」小节（本机无 quark CLI →
+>    报告里提示人工上传，无云端副作用）——这是预期行为，不是故障。
 
 ## 已知缺口 / 未验证项（务必在发布卡里处理）
 
@@ -281,3 +418,17 @@ ls -l /Users/davidliu/Documents/TradingAgents-AShare-releases/logs/storage-healt
 4. 安装位置未定：本仓库路径（`releases/launchd/`）与 DAV-1508 原交付说明里的
    `~/Documents/TradingAgents-AShare/scripts/` 不同；若发布卡坚持拷到 `scripts/`，
    需自行改 plist 的 `{{REPO_DIR}}` 前缀并重跑本目录门禁。
+5. **DAV-2310 遗留缺口（发布卡需处理）**：
+   - **D6 持久停用未做**：DAV-2237 的 plist 仍在 `~/Library/LaunchAgents/`，
+     `bootout` 只卸载当前会话，`launchctl print-disabled` 里**无**该 label →
+     **下次登录/重启作业会自行复活**、继续每日 `exit=2` 判红。
+     重装前需 `launchctl disable gui/$UID/com.tradingagents.storage-health`
+     （或改名留档），否则「先卸载等修复」的意图失效。
+   - **`{{PYTHON_BIN}}` 是新占位符**：旧安装步骤只有 2 个占位符（REPO_DIR / LOG_DIR），
+     按旧步骤 `sed` 会漏替换它 → 装上去的 plist 会以 `{{PYTHON_BIN}}` 字面量当解释器，
+     **launchd 装不上**。安装步骤必须改成 3 个占位符，并核
+     `grep -cE '\{\{[A-Z_]+\}\}' …` 为 0。
+   - **首次重装的「真跑」验证未做**：DAV-2310 只做了 launchd 上下文**探针**
+     （证明 python → zsh 能读 `~/Documents`），**没有**跑真正的
+     `storage_health.sh auto` 在 launchd 下（该卡明确「不安装」）。重装卡必须
+     `kickstart` 一次并回读退出码应为 **0**（不再是 2）。

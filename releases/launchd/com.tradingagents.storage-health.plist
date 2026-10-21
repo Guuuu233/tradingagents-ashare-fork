@@ -1,45 +1,78 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  TradingAgents-AShare 存储健康巡检 launchd 模板（DAV-2215；总控 10-17 令：
-  只交模板，**不安装、不启用**；安装另走发布卡，排在 10-19 之后）
+  TradingAgents-AShare 存储健康巡检 launchd 模板
+  （DAV-2215 入库；DAV-2310 改为由 python 启动；总控 10-17 令：只交模板，不安装不启用）
 
-  职责（只读巡检，不删任何东西）：
-    每日 09:00 跑一次 `storage_health.sh auto`，报告写
+  ===== DAV-2310 变更：/bin/zsh 改为 python 启动器（TCC responsible process 修正）=====
+
+  旧版：ProgramArguments[0] = /bin/zsh。DAV-2237 首跑 exit=2 的根因就是它：
+  launchd 下 /bin/zsh 没有 ~/Documents 的 TCC 授权，于是 du / find 一律
+  "Operation not permitted"，4 个测量项不可测，热备行 fail-closed 判红。
+
+  本版：ProgramArguments[0] = {{PYTHON_BIN}}（安装期替换为已实测持权的解释器），
+  由它启动 releases/launchd/storage_health_launcher.py，启动器再 exec
+  storage_health.sh。依据是 macOS TCC 的 responsible process 语义：
+  由已获授权的 python 启动的子进程继承该授权。
+
+  DAV-2310 临时探针（launchd 上下文，4 组对照，实测；探针 plist 已测完即删）：
+
+    A  /bin/zsh 直接当 responsible process（对照组）  -> FAIL（复现 D2）
+    B  python spawn /bin/zsh（python 仍是父进程）      -> PASS
+    C  python exec  /bin/zsh（映像被替换，同一 PID）    -> PASS  ← 本模板采用
+    D  同 C，且 WorkingDirectory 在 ~/Documents 下       -> PASS
+
+  探针覆盖三层而非只测第一层：python 能读 ~/Documents、python 起的 zsh 能读、
+  该 zsh 跑的 du 与 find 能读。空档：只在 launchd 上下文实测过，
+  终端会话不构成证据。
+
+  {{PYTHON_BIN}} 必须是**实测持权**的解释器：DAV-2310 探针用的是
+  ~/ta-venv/py310/bin/python（realpath 为 uv 管理的 cpython-3.10.20）。
+  换解释器必须**重跑探针**再改这里，不得凭推测替换。
+
+  ===== 职责（只读巡检，不删任何东西）=====
+    每日 09:00 跑一次巡检（脚本模式 auto），报告写
     {{LOG_DIR}}/storage-health-<YYYY-MM-DD>.md；脚本内部逢周三自动追加
     「每周基线」小节（挑当周最后一份 DAV-1528 快照，记大小 + SHA256，
     有 quark CLI 时上传夸克，否则在报告里提示人工上传）。
 
-  水位口径（总控 10-17 令，脚本内为唯一实现）：
-    ≥100 GiB 绿 ／ 60–99 GiB 黄（只记录，不唤醒）／ <60 GiB 红（立即唤醒、
+  ===== 水位口径（总控 10-17 令，脚本内为唯一实现）=====
+    ≥100 GiB 绿／60–99 GiB 黄（只记录，不唤醒）／<60 GiB 红（立即唤醒、
     停止建整库副本）。
 
-  只读纪律（脚本与模板都遵守）：
-    脚本只调用 df / du / find / ls / shasum / stat 等统计类命令，**无任何
-    rm、删除、覆盖清理逻辑**；本 plist 也不做清理，除 {{LOG_DIR}} 下的报告
+  ===== 只读纪律（脚本与模板都遵守）=====
+    脚本只调用 df / du / find / ls / shasum / stat 等统计类命令，无任何
+    rm、删除、覆盖清理逻辑；本 plist 也不做清理，除 {{LOG_DIR}} 下的报告
     与两份 stderr 日志外不写任何位置，脚本本身不改云端（夸克超 2 份由人手工删）。
+    启动器只打开两个输出文件（当日报告与脚本 stderr 日志），不删不改任何数据。
 
-  安装位置（用户域）：~/Library/LaunchAgents/com.tradingagents.storage-health.plist
+  ===== 安装位置（用户域）=====
+    ~/Library/LaunchAgents/com.tradingagents.storage-health.plist
 
-  占位符共 2 个（安装时必须替换，替换后残留必须为 0）：
-    {{REPO_DIR}}  仓库检出目录（脚本路径以其为前缀）
-    {{LOG_DIR}}   报告目录（宿主机建议 ~/Documents/TradingAgents-AShare-releases/logs）
+  ===== 占位符共 3 个（安装时必须替换，替换后残留必须为 0）=====
+    {{PYTHON_BIN}}  responsible process 的解释器绝对路径（实测持权者）
+    {{REPO_DIR}}   仓库检出目录（启动器与脚本路径以其为前缀）
+    {{LOG_DIR}}    报告目录（DAV-2237 实测安装用的是 ~/ta-watch/storage-health，
+                   不在 ~/Documents 下：巡检对象在 ~/Documents（需授权才能读），
+                   报告落在授权区之外，两者刻意不同）
 
-  ⚠️ 安装前必须实测的两项（本卡不验证、不安装，见 releases/launchd/STORAGE_HEALTH.md）：
-    1. TCC：DAV-2180 实测 launchd 对 ~/Documents 全树拒读（/bin/bash 唤起时
-       getcwd、ls ~/Documents 均 Operation not permitted）。本模板沿用
-       /bin/zsh -c，脚本体与报告目录默认都在 ~/Documents 下，必须先用临时
-       探针确认 zsh 在 launchd 下**可读 {{REPO_DIR}}、可写 {{LOG_DIR}}**；
-       否则热备行会长期判「红（不可测）」、脚本每次以退出码 2 结束（DAV-2238 后
-       不再静默报绿），而 {{LOG_DIR}} 不可写时报告根本落不了盘。
+  安装前必须实测的两项（见 releases/launchd/STORAGE_HEALTH.md）：
+    1. TCC：DAV-2180 实测 launchd 对 ~/Documents 全树拒读。DAV-2310 已用
+       4 组对照探针实测：由持权 python 当 responsible process 启动时，
+       其 zsh 子进程可读 ~/Documents（对照组 /bin/zsh 仍被拒）。本模板采用
+       已实测通过的 C 形态。换解释器必须重跑探针。
     2. 每周基线上传依赖 PATH 里的 quark CLI：launchd 不读登录 shell 配置，
        默认 PATH 不含 /opt/homebrew/bin，故此处显式注入。launchd 同样没有
-       登录环境的代理变量（本机 Clash 7897），quark 直连能否成功**未验证**；
+       登录环境的代理变量（本机 Clash 7897），quark 直连能否成功未验证；
        失败时脚本只在报告里提示人工上传，不中断巡检。
 
-  退出码（DAV-2238）：全量测得且热备预算未超 = 0；有测量项不可测 = 2（热备行判
-  「红（不可测，fail-closed）」，说明在报告里，不静默）；本模板不设 KeepAlive，
-  非零退出不会被无界重拉。
+  ===== 退出码 =====
+    0   巡检脚本退出 0（全部可测且热备预算未超）
+    2   巡检脚本退出 2（有测量项不可测，热备行判「红（不可测，fail-closed）」）
+    64  启动器自身 fail-closed（未设日志目录／目录不存在／脚本不存在／
+        日志打不开／exec 失败）：这是启动器的拒绝启动，不是巡检结论
+
+  本模板不设 KeepAlive，非零退出不会被无界重拉。
 -->
 <plist version="1.0"><dict>
   <key>Label</key>
@@ -47,9 +80,12 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>-c</string>
-    <string>{{REPO_DIR}}/releases/launchd/storage_health.sh auto > {{LOG_DIR}}/storage-health-$(date +\%F).md 2>> {{LOG_DIR}}/storage-health-stderr.log</string>
+    <!-- DAV-2310：解释器是 responsible process，必须持有 ~/Documents 的
+         TCC 授权；由它启动的 zsh 子进程继承该授权（探针 B/C/D 组实测）。 -->
+    <string>{{PYTHON_BIN}}</string>
+    <string>{{REPO_DIR}}/releases/launchd/storage_health_launcher.py</string>
+    <!-- 巡检模式 auto（每日巡检，周三附带基线）。启动器把参数原样透传给脚本。 -->
+    <string>auto</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -61,6 +97,13 @@
          巡检对象不在此注入：脚本默认 STORAGE_PROJ=$HOME/Documents/TradingAgents-AShare
          （= 生产主检出）。要改对象用脚本环境变量覆盖，别改模板。 -->
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- DAV-2310：报告目录（启动器据此落当日报告与脚本 stderr 日志）。
+         launchd 不展开 ~ 与 $VAR，必须写绝对路径。 -->
+    <key>STORAGE_HEALTH_LOG_DIR</key><string>{{LOG_DIR}}</string>
+    <!-- DAV-2310：巡检脚本路径（启动器据此 exec 巡检脚本）。
+         与 ProgramArguments 里的 {{REPO_DIR}} 同源，两处解析到同一检出。
+         留空则启动器取「与自身同目录的 storage_health.sh」（脚本目录推导兜底）。 -->
+    <key>STORAGE_HEALTH_SCRIPT</key><string>{{REPO_DIR}}/releases/launchd/storage_health.sh</string>
   </dict>
 
   <key>StartCalendarInterval</key>
