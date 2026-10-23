@@ -81,6 +81,18 @@
 #             64 REFUSED to be sourced (DAV-2292 guard: this script is an
 #             executable, not a sourceable library — sourcing it would
 #             write the production label dir and read the real credentials).
+#
+# DAV-2298 run fingerprint: the "timer start" log line is immediately
+# followed by one fingerprint line — self sha256 + CODE_DIR / PYTHON /
+# ENV_FILE (PATHS ONLY — no credential values ever) + UTC start timestamp.
+# Motivation: the 2026-10-20 15:56 stray execution could not be traced to a
+# source because the script version it ran no longer existed on disk; the
+# sha256 recorded at START (before any check can alter or abort the run)
+# answers "which code ran" from the log alone. It intentionally captures the
+# checkout STATE (self sha256) rather than HEAD: these worktrees legitimately
+# carry uncommitted changes, which is exactly what the fingerprint must
+# expose (a hash that matches no committed blob = something was edited).
+# shasum is /usr/bin/shasum (macOS base system — no /usr/bin/git there).
 
 set -u  # NOT -e: we must route every failure through the alert path ourselves.
 
@@ -187,6 +199,11 @@ fi
 
 mkdir -p "${OUT_DIR}"
 log "timer start label=com.davidliu.ta-p4-expiry-labels"
+# DAV-2298: run fingerprint — WHICH code produced what follows. Paths and
+# the script's own sha256 only; no credential contents are ever logged.
+_fp_self="$(/usr/bin/shasum -a 256 "${BASH_SOURCE[0]:-$0}" 2>/dev/null | /usr/bin/awk '{print $1}')"
+log "run fingerprint self_sha256=${_fp_self:-unavailable} code_dir=${CODE_DIR} python=${PYTHON} env_file=${ENV_FILE} started_at=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+unset _fp_self
 
 # DAV-2292 🟢-5 / 🟡-3 (round 4): a MANUAL run (not via launchd) with the
 # default WORK_ROOT writes into the PRODUCTION label dir and reads the REAL
