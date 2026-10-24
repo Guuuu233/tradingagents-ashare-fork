@@ -153,6 +153,8 @@ class StubServer:
                 "symbol": (self._store_meta.get(job_id) or {}).get("symbol"),
                 "trade_date": (self._store_meta.get(job_id) or {}).get("trade_date"),
             }
+        if path.startswith("/v1/reports/"):
+            return 404, {"detail": "Report not found"}
         raise AssertionError(f"unexpected path {path}")
 
     _store = {}
@@ -1824,6 +1826,8 @@ def test_report_account_missing_fails_closed(tmp_path):
     assert report.pairs_failed == 1
     state = ex.ledger.pair_state("p1")
     assert PREFLIGHT_ACCOUNT_UNAVAILABLE in state.reason
+    for srv in servers.values():
+        assert any(path.startswith("/v1/reports/") for _, _, path in srv.calls)
 
 
 def test_account_check_can_be_disabled_but_token_still_required(tmp_path):

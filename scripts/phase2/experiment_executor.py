@@ -578,6 +578,7 @@ class Ledger:
         }
         self.stop_reason: Optional[str] = None
         self.stop_detail: Optional[str] = None
+        self.nontrading_day_override: Optional[Dict[str, str]] = None
         self.snapshot_whitelist_sha256: Optional[str] = None
         self._load()
 
@@ -598,6 +599,7 @@ class Ledger:
             raw_stop = None
         self.stop_reason = raw_stop
         self.stop_detail = payload.get("stop_detail") if raw_stop else None
+        self.nontrading_day_override = payload.get("nontrading_day_override")
         self.snapshot_whitelist_sha256 = payload.get("snapshot_whitelist_sha256")
         for item in payload.get("pairs") or []:
             self.pairs[item["pair_id"]] = PairState(
@@ -618,6 +620,7 @@ class Ledger:
             "totals": self.totals,
             "stop_reason": self.stop_reason if persistent else None,
             "stop_detail": self.stop_detail if persistent else None,
+            "nontrading_day_override": self.nontrading_day_override,
             "snapshot_whitelist_sha256": self.snapshot_whitelist_sha256,
             "updated_at": self.now().isoformat(timespec="seconds"),
             "pairs": [asdict(p) for p in self.pairs.values()],
@@ -1167,15 +1170,14 @@ class ExperimentExecutor:
         if daily_batch_gate_open(now):
             return False
         if not is_trading_day(now.astimezone(CN_TZ).date().isoformat()):
-            # 周末/非交易日不跑（总控 10-12 晚裁定）；
-            # DAV-2325 例外：总控 10-24 定案明示周六窗口执行（无每日批竞争、
-            # 休市缓存稳定），显式 allow_nontrading_day=True 时放行并在账本
-            # stop_detail 留痕为空跑标注（stop_reason 不动）。
+            # 显式授权放行单独落盘，不借用停批字段，避免丢失审计说明或阻断续跑。
             if self.allow_nontrading_day:
-                self.ledger.stop_detail = (
-                    f"{now.date().isoformat()} 非交易日；DAV-2325 总控 10-24 "
-                    "定案授权周六执行，allow_nontrading_day=True 放行"
-                )
+                self.ledger.nontrading_day_override = {
+                    "date": now.astimezone(CN_TZ).date().isoformat(),
+                    "flag": "--allow-nontrading-day",
+                    "reason": "DAV-2325 总控 10-24 定案授权周六执行",
+                }
+                self.ledger.flush()
                 return False
             # 周末/非交易日不跑（总控 10-12 晚裁定）
             self.ledger.stop_reason = STOP_WEEKEND
@@ -1291,6 +1293,12 @@ class ExperimentExecutor:
         DAV-2325 方案B：``run_pair`` 在并发口径下先调 ``submit_one`` 把所有
         臂的 job 提交出去，再对每个臂调本方法收尾；串行口径（默认）由
         ``run_one`` 顺序完成两段，行为与拆分前完全一致。
+
+        ``elapsed_seconds`` 是本臂客户端收尾轮询的墙钟（不含结果/归属补读），
+        不等于 job 运行时长。并发时第二臂须先等前臂收尾，该等待发生在本方法
+        计时开始前，不计入数值。服务端 ``created_at/started_at/finished_at``
+        原样留痕；两臂「同窗」须用 started_at 到 finished_at 的区间重叠核实，
+        仅提交相近不足以证明同时运行，缺时刻时不可认定。
         """
         if info.get("status") != "submitted":
             # 提交阶段已判失败（submit_failed / unknown_instance 等），直接返回
@@ -1341,6 +1349,8 @@ class ExperimentExecutor:
                 info["status"] = "status_failed"
                 return info
             job = polled
+            for key in ("created_at", "started_at", "finished_at"):
+                info[key] = job.get(key)
             status = job.get("status")
             if status in ("completed", "failed"):
                 break
@@ -1390,16 +1400,15 @@ class ExperimentExecutor:
         # DAV-2285-2：回读报告归属，确认它确实落在固定账户名下。
         # 无论核不核对都把观测值记下来（关核对时也有审计价值）。
         observed_account = extract_report_account(result)
-        account_source = "result_endpoint"
-        # DAV-2325：O/N 被测服务端（e82b2a82/9f0426ba，10-11 代代码）的
-        # /v1/jobs/{id}/result 与 /v1/jobs/{id} 都不回显 user_id；但
-        # GET /v1/reports/{job_id}（ReportResponse.user_id）有归属字段。
-        # result 端点取不到时退而查 reports 端点——仍是**服务端**落库行的
-        # 归属回读，不是客户端自证；取不到才按「不可核对」处理。
+        account_source = "result_endpoint" if observed_account else None
+        # DAV-2325：旧服务端 /result 不回显 user_id 时补读 reports 端点。
+        # 这是 owner-scoped 可读性回读：返回的 user_id 恒等于令牌账户；
+        # 串号（报告属于别的账户）表现为 404，取不到仍按不可核对处理。
         if not observed_account and job_id:
             code_r, report_resp = self._call(
                 transport, "GET", f"{base}/v1/reports/{job_id}", headers, None, record
             )
+            info["report_account_http_status"] = code_r
             if code_r == 200 and isinstance(report_resp, dict):
                 value = report_resp.get("user_id")
                 if isinstance(value, str) and value.strip():
@@ -1440,9 +1449,8 @@ class ExperimentExecutor:
         wall = time.monotonic()
         per_instance: Dict[str, Dict[str, Any]] = {}
         if self.concurrent_arms and len(pair.instances) > 1:
-            # DAV-2325 方案B：先同秒把所有臂的 job 提交出去（服务端各自后台
-            # 执行），再逐臂收尾。提交阶段不轮询，两臂的抓取时刻因此落在
-            # 同一时间窗内；收尾阶段的轮询顺序不影响两臂已并发起跑的事实。
+            # DAV-2325 方案B：先提交所有臂，再逐臂收尾。实际是否同时运行
+            # 须核对服务端起止时刻，提交顺序本身不能证明抓取发生在同窗。
             order = [n for n in pair.instances]
             for name in order:
                 if name not in self.instances:
