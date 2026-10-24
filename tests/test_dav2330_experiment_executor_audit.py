@@ -71,7 +71,12 @@ def audit_executor(tmp_path, **server_options):
 
 
 def read_record(ex):
-    return json.loads(ex.ledger.ledger_path.read_text(encoding="utf-8").splitlines()[0])
+    """取第一条**尝试**记录：``ledger.jsonl`` 里还有 ``type=event`` 的留痕行。"""
+    for line in ex.ledger.ledger_path.read_text(encoding="utf-8").splitlines():
+        payload = json.loads(line)
+        if payload.get("type") != "event":
+            return payload
+    raise AssertionError("ledger.jsonl 里没有尝试记录")
 
 
 def test_override_flush_is_immediate_without_run(tmp_path, monkeypatch):
@@ -129,6 +134,113 @@ def test_override_reason_follows_window_instead_of_being_hardcoded(tmp_path, mon
         "flag": "--allow-nontrading-day",
         "reason": None,
     }
+
+
+def test_two_authorized_windows_leave_two_findable_traces(tmp_path, monkeypatch):
+    """🟡#5：同一 state-dir 先后两个授权窗口，两条留痕都必须能查到。
+
+    对应实测缺陷：`state.json` 单槽被下一个窗口覆盖，第一条丢。现在单槽只留
+    最近一次，历史窗口靠 `ledger.jsonl` 的追加事件行保留，两条各自可查。
+    """
+    monkeypatch.setattr(mod, "is_trading_day", lambda _date: False)
+    windows = (
+        (datetime(2026, 10, 24, 10, 0, tzinfo=mod.CN_TZ), "总控 10-24 授权周六窗口"),
+        (datetime(2026, 10, 31, 10, 0, tzinfo=mod.CN_TZ), None),
+    )
+    for when, reason in windows:
+        ex = _executor(tmp_path, _two_servers(), now=lambda w=when: w)
+        ex.allow_nontrading_day = True
+        ex.nontrading_day_reason = reason
+        assert ex.wait_for_daily_gate() is False
+
+    records = [
+        json.loads(line) for line in
+        (tmp_path / "state" / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    events = [rec for rec in records if rec.get("type") == "event"]
+    assert [(e["date"], e["reason"]) for e in events] == [
+        ("2026-10-24", "总控 10-24 授权周六窗口"),
+        ("2026-10-31", None),
+    ]
+    assert all(e["event"] == "nontrading_day_override" for e in events)
+    assert all(e["flag"] == "--allow-nontrading-day" for e in events)
+    assert all(e["recorded_at"] for e in events)
+
+    # 单槽仍是最近一次（这是设计，历史已在事件行里）
+    slot = json.loads(
+        (tmp_path / "state" / "state.json").read_text(encoding="utf-8")
+    )["nontrading_day_override"]
+    assert slot == {"date": "2026-10-31", "flag": "--allow-nontrading-day", "reason": None}
+
+    # 残留单槽不得被当成本次授权：交易日不带开关的跑，RunReport 里必须是 None
+    monkeypatch.setattr(mod, "is_trading_day", lambda _date: True)
+    later = _executor(
+        tmp_path, _two_servers(),
+        now=lambda: datetime(2026, 11, 2, 20, 0, tzinfo=mod.CN_TZ),
+    )
+    report = later.run(_manifest([_pair("p1")]))
+    assert report.nontrading_day_override is None
+    assert report.pairs_ok == 1
+
+
+def test_main_writes_override_into_run_report_and_ledger(tmp_path, monkeypatch):
+    """🟡#5 端到端：真 main() 写出的 `run_report.json` 带授权留痕，ledger 有事件行。"""
+    from urllib.parse import urlparse
+
+    servers = _two_servers()
+    original = mod.HttpTransport
+
+    class _Dispatch(original):
+        def __init__(self, *args, **kwargs):
+            super().__init__(session=None)
+
+        def request(self, method, url, *, headers=None, json_body=None):
+            server = servers["O"] if ":8021" in url else servers["N"]
+            return server.handle(server.name, method, urlparse(url).path, json_body or {})
+
+    monkeypatch.setattr(mod, "HttpTransport", _Dispatch)
+    monkeypatch.setattr(mod, "is_trading_day", lambda _date: False)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "name": "stub",
+        "frozen_models": [EXPECTED_MODEL],
+        "pairs": [_pair("p1")],
+        "batches": [],
+    }), encoding="utf-8")
+    state_dir = tmp_path / "state"
+    code = mod.main([
+        "run", "--manifest", str(manifest_path), "--state-dir", str(state_dir),
+        "--expected-model", EXPECTED_MODEL,
+        "--instance", "O=http://stub:8021", "--instance", "N=http://stub:8022",
+        "--token", "O=stub-token", "--token", "N=stub-token",
+        "--allow-nontrading-day", "--nontrading-day-reason", "总控 10-31 授权",
+        "--poll-interval", "0",
+    ])
+    assert code == 0
+    today = datetime.now(mod.CN_TZ).date().isoformat()
+    payload = json.loads((state_dir / "run_report.json").read_text(encoding="utf-8"))
+    assert payload["nontrading_day_override"] == {
+        "date": today,
+        "flag": "--allow-nontrading-day",
+        "reason": "总控 10-31 授权",
+    }
+    assert payload["stop_reason"] is None and payload["stop_detail"] is None
+    assert payload["pairs_ok"] == 1
+
+    events = [
+        json.loads(line) for line in
+        (state_dir / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    events = [rec for rec in events if rec.get("type") == "event"]
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "nontrading_day_override"
+    assert {key: event[key] for key in ("date", "flag", "reason")} == {
+        "date": today,
+        "flag": "--allow-nontrading-day",
+        "reason": "总控 10-31 授权",
+    }
+    assert isinstance(event["recorded_at"], str) and event["recorded_at"]
 
 
 @pytest.mark.parametrize("raw", ["2026-10-24", 42, ["x"], {"hack": "y"}])
@@ -196,6 +308,7 @@ def test_nontrading_override_persists_without_becoming_stop(tmp_path, monkeypatc
     if not allowed:
         assert report.stop_reason == mod.STOP_WEEKEND
         assert report.pairs_run == 0
+        assert report.nontrading_day_override is None
         assert all(not srv.calls for srv in servers.values())
         assert state.get("nontrading_day_override") is None
         return
@@ -203,7 +316,13 @@ def test_nontrading_override_persists_without_becoming_stop(tmp_path, monkeypatc
     # 🟡#4：放行不得借用停批字段——run_report.json 是随批交付的主产物，
     # 被污染时不能只靠 state.json（窗口类原因本就不落盘）蒙过去。
     assert report.stop_detail is None
-    assert "nontrading_day_override" not in report.to_json()
+    # 🟡#5：授权留痕现在必须进主产物，且只记「本次运行」发生的那一条
+    assert report.nontrading_day_override == {
+        "date": "2026-10-24",
+        "flag": "--allow-nontrading-day",
+        "reason": None,
+    }
+    assert report.to_json()["nontrading_day_override"] == report.nontrading_day_override
     assert report.pairs_ok == 1
     override = state["nontrading_day_override"]
     assert override == {

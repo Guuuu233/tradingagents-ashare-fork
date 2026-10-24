@@ -279,6 +279,19 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 下一个授权窗口就会落成「新日期 + 旧理由」的自相矛盾证据。读回时只认 dict
 且只保留这三个已知键，外部手改成其它 JSON 一律当没有留痕。
 
+该字段是**单槽**：换授权窗口就被覆盖，只表达「最近一次放行」。因此同一事件还会
+向 `ledger.jsonl` **追加**一条独立事件行（只增不改，历史窗口靠它保留）：
+
+```json
+{"type": "event", "event": "nontrading_day_override", "recorded_at": "…",
+ "date": "2026-10-31", "flag": "--allow-nontrading-day", "reason": null}
+```
+
+解析 `ledger.jsonl` 时按 `type == "event"` 跳过事件行（其余行是尝试记录）。
+本次运行的授权同时写进交付产物 `run_report.json.nontrading_day_override`：
+取值来自**本次进程**的放行，未发生则为 `null`——`state.json` 里上一窗口的残留
+单槽不会被当成本次授权。
+
 每臂 `elapsed_seconds` 是**客户端收尾轮询墙钟**：从该臂开始轮询到拿到终态，
 不含提交、结果读取或账户补读，**不等于 job 运行时长**。并发口径下第二臂先
 等待前臂收尾，该等待发生在自身轮询计时前，**不计入该数值**；第二臂读到已

@@ -660,11 +660,42 @@ class Ledger:
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self.state_path)
 
-    def append_attempt(self, record: AttemptRecord) -> None:
+    def _append_line(self, payload: Dict[str, Any]) -> None:
+        """追加一行 JSONL 并 fsync：审计记录只追加，历史行永不改写。"""
         with self.ledger_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record.to_json(), ensure_ascii=False) + "\n")
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
+
+    def append_attempt(self, record: AttemptRecord) -> None:
+        self._append_line(record.to_json())
+
+    def append_event(self, event: Dict[str, Any]) -> None:
+        """追加一条**事件**行（与尝试记录区分：带 ``type=\"event\"``）。
+
+        事件行是只增不改的审计留痕。``state.json`` 的 ``nontrading_day_override``
+        是单槽，换授权窗口就被覆盖；历史窗口只能靠这里追加的行保留——
+        下游解析 ``ledger.jsonl`` 时按 ``type`` 跳过事件行。
+        """
+        self._append_line({"type": "event", **event})
+
+    def record_nontrading_day_override(
+        self, override: Dict[str, Optional[str]]
+    ) -> Dict[str, Any]:
+        """记一次非交易日放行：刷新单槽 + 追加一条不可被覆盖的事件 + 立即落盘。
+
+        单槽（``state.json``）只表达「最近一次放行」，供续跑读回；历史窗口的
+        留痕靠追加事件保留，两个窗口先后跑能各自查到自己的那一行。
+        """
+        self.nontrading_day_override = dict(override)
+        event = {
+            "event": "nontrading_day_override",
+            "recorded_at": self.now().isoformat(timespec="seconds"),
+            **override,
+        }
+        self.append_event(event)
+        self.flush()
+        return event
 
     # -- accessors ---------------------------------------------------------
     def pair_state(self, pair_id: str) -> PairState:
@@ -1115,6 +1146,9 @@ class RunReport:
     pairs_rerun: int = 0
     stop_reason: Optional[str] = None
     stop_detail: Optional[str] = None
+    # 本次运行实际发生的非交易日放行（未发生为 None）。历史窗口的留痕在
+    # ``ledger.jsonl`` 的 event 行，不在本字段——它是「本次跑」的授权凭证。
+    nontrading_day_override: Optional[Dict[str, Optional[str]]] = None
     totals: Dict[str, Any] = field(default_factory=dict)
     batches: List[Dict[str, Any]] = field(default_factory=list)
     # 两臂输入快照比对所用白名单的 sha256（总控 10-12 晚 §3-3）：事后据此判断
@@ -1216,6 +1250,8 @@ class ExperimentExecutor:
         self.nontrading_day_reason: Optional[str] = _clean_nontrading_reason(
             nontrading_day_reason
         )
+        # 本进程内实际发生的放行（给 RunReport / run_report.json 用）
+        self._nontrading_override_this_run: Optional[Dict[str, Optional[str]]] = None
         self._transports: Dict[str, HttpTransport] = {}
         self._last_batch_records: List[AttemptRecord] = []
         self._non_frozen_seen: List[Tuple[str, str]] = []
@@ -1243,14 +1279,16 @@ class ExperimentExecutor:
         if not is_trading_day(now.astimezone(CN_TZ).date().isoformat()):
             # 显式授权放行单独落盘，不借用停批字段，避免丢失审计说明或阻断续跑。
             if self.allow_nontrading_day:
-                self.ledger.nontrading_day_override = {
+                override = {
                     "date": now.astimezone(CN_TZ).date().isoformat(),
                     "flag": "--allow-nontrading-day",
                     # 理由由 --nontrading-day-reason 传入：固定文案会在下一个
                     # 授权窗口里与真实日期互相打脸；没有理由就记 null。
                     "reason": _clean_nontrading_reason(self.nontrading_day_reason),
                 }
-                self.ledger.flush()
+                # 单槽 + 只增事件 + 立即落盘（历史窗口不会被下一次放行抹掉）
+                self._nontrading_override_this_run = override
+                self.ledger.record_nontrading_day_override(override)
                 return False
             # 周末/非交易日不跑（总控 10-12 晚裁定）
             self.ledger.stop_reason = STOP_WEEKEND
@@ -1732,6 +1770,8 @@ class ExperimentExecutor:
             })
         report.stop_reason = self.ledger.stop_reason
         report.stop_detail = self.ledger.stop_detail
+        # 只报「本次运行」的放行：state.json 里的单槽可能是上一窗口的残留。
+        report.nontrading_day_override = self._nontrading_override_this_run
         report.snapshot_whitelist_sha256 = self.ledger.snapshot_whitelist_sha256
         report.totals = dict(self.ledger.totals)
         report.finished_at = self.now().isoformat(timespec="seconds")
