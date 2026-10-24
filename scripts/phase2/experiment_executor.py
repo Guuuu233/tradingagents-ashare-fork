@@ -1117,6 +1117,13 @@ class ExperimentExecutor:
         sleep: Callable[[float], None] = time.sleep,
         poll_interval: float = 5.0,
         job_timeout: float = 7200.0,
+        # DAV-2325 方案B：True 时 run_pair 先同秒提交全部臂再收尾（两臂并发
+        # 起跑）；默认 False 保持冻结口径（串行 O→N）。
+        concurrent_arms: bool = False,
+        # DAV-2325：总控 10-24 定案明示周六窗口执行；True 时非交易日不再
+        # STOP_WEEKEND（静默窗口/每日一批闸对周末本就不适用）。默认 False
+        # 保持冻结口径。
+        allow_nontrading_day: bool = False,
     ):
         self.instances = dict(instances)
         self.ledger = ledger
@@ -1133,6 +1140,8 @@ class ExperimentExecutor:
         self.sleep = sleep
         self.poll_interval = poll_interval
         self.job_timeout = job_timeout
+        self.concurrent_arms = bool(concurrent_arms)
+        self.allow_nontrading_day = bool(allow_nontrading_day)
         self._transports: Dict[str, HttpTransport] = {}
         self._last_batch_records: List[AttemptRecord] = []
         self._non_frozen_seen: List[Tuple[str, str]] = []
@@ -1158,6 +1167,16 @@ class ExperimentExecutor:
         if daily_batch_gate_open(now):
             return False
         if not is_trading_day(now.astimezone(CN_TZ).date().isoformat()):
+            # 周末/非交易日不跑（总控 10-12 晚裁定）；
+            # DAV-2325 例外：总控 10-24 定案明示周六窗口执行（无每日批竞争、
+            # 休市缓存稳定），显式 allow_nontrading_day=True 时放行并在账本
+            # stop_detail 留痕为空跑标注（stop_reason 不动）。
+            if self.allow_nontrading_day:
+                self.ledger.stop_detail = (
+                    f"{now.date().isoformat()} 非交易日；DAV-2325 总控 10-24 "
+                    "定案授权周六执行，allow_nontrading_day=True 放行"
+                )
+                return False
             # 周末/非交易日不跑（总控 10-12 晚裁定）
             self.ledger.stop_reason = STOP_WEEKEND
             self.ledger.stop_detail = f"{now.date().isoformat()} 非交易日，不跑"
@@ -1202,6 +1221,12 @@ class ExperimentExecutor:
 
     # -- 单实例一次分析 ----------------------------------------------------
     def run_one(self, name: str, pair: PairSpec, record: AttemptRecord) -> Dict[str, Any]:
+        # DAV-2325 方案B：拆成「提交」与「收尾」两段，run_pair 可先同秒提交
+        # 全部臂、再逐臂收尾，实现两臂并发起跑（服务端各自后台跑 job）。
+        info = self.submit_one(name, pair, record)
+        return self.collect_one(name, record, info)
+
+    def submit_one(self, name: str, pair: PairSpec, record: AttemptRecord) -> Dict[str, Any]:
         transport = self.transport(name)
         base = self.instances[name].rstrip("/")
         headers = self.headers(name)
@@ -1256,6 +1281,24 @@ class ExperimentExecutor:
 
         job_id = payload["job_id"]
         info["job_id"] = job_id
+        info["submitted_at"] = self.now().isoformat(timespec="milliseconds")
+        info["status"] = "submitted"
+        return info
+
+    def collect_one(self, name: str, record: AttemptRecord, info: Dict[str, Any]) -> Dict[str, Any]:
+        """收尾一段：轮询终态 + 取结果 + 身份/归属核对。
+
+        DAV-2325 方案B：``run_pair`` 在并发口径下先调 ``submit_one`` 把所有
+        臂的 job 提交出去，再对每个臂调本方法收尾；串行口径（默认）由
+        ``run_one`` 顺序完成两段，行为与拆分前完全一致。
+        """
+        if info.get("status") != "submitted":
+            # 提交阶段已判失败（submit_failed / unknown_instance 等），直接返回
+            return info
+        transport = self.transport(name)
+        base = self.instances[name].rstrip("/")
+        headers = self.headers(name)
+        job_id = info["job_id"]
         started = time.monotonic()
         deadline = started + self.job_timeout
         # DAV-2285-3：轮询遇连接中断不直接判失败——job 可能已在服务端跑完，
@@ -1333,6 +1376,7 @@ class ExperimentExecutor:
         # DAV-2285-1：回读核对服务端是否真的承接了本次身份。当前 O/N 服务端会
         # 静默丢弃未声明字段 → 这里判不通过。默认 require（fail-closed）：宁可
         # 跑不出数据，也不能让一份没身份的报告进可比集。
+        identity = info.get("run_identity") or {}
         if self.run_identity_policy == "require":
             ok, reason = verify_run_identity(
                 identity, payload_result, instance=name
@@ -1346,7 +1390,23 @@ class ExperimentExecutor:
         # DAV-2285-2：回读报告归属，确认它确实落在固定账户名下。
         # 无论核不核对都把观测值记下来（关核对时也有审计价值）。
         observed_account = extract_report_account(result)
+        account_source = "result_endpoint"
+        # DAV-2325：O/N 被测服务端（e82b2a82/9f0426ba，10-11 代代码）的
+        # /v1/jobs/{id}/result 与 /v1/jobs/{id} 都不回显 user_id；但
+        # GET /v1/reports/{job_id}（ReportResponse.user_id）有归属字段。
+        # result 端点取不到时退而查 reports 端点——仍是**服务端**落库行的
+        # 归属回读，不是客户端自证；取不到才按「不可核对」处理。
+        if not observed_account and job_id:
+            code_r, report_resp = self._call(
+                transport, "GET", f"{base}/v1/reports/{job_id}", headers, None, record
+            )
+            if code_r == 200 and isinstance(report_resp, dict):
+                value = report_resp.get("user_id")
+                if isinstance(value, str) and value.strip():
+                    observed_account = value.strip()
+                    account_source = "reports_endpoint"
         info["report_account"] = observed_account
+        info["report_account_source"] = account_source
         if self.expect_account:
             ok, reason = verify_report_account(
                 observed_account, self.expect_account,
@@ -1379,20 +1439,44 @@ class ExperimentExecutor:
         )
         wall = time.monotonic()
         per_instance: Dict[str, Dict[str, Any]] = {}
-        for name in pair.instances:
-            if name not in self.instances:
-                info = {
-                    "instance": name, "job_id": None, "status": "unknown_instance",
-                    "error_bucket": "client_error",
-                    "error": f"实例 {name} 未配置", "models": [], "model_missing": 0,
-                }
-            else:
-                info = self.run_one(name, pair, record)
-            per_instance[name] = info
-            record.runs.append(info)
-            record.prompt_tokens += info.get("prompt_tokens", 0)
-            record.completion_tokens += info.get("completion_tokens", 0)
-            record.total_tokens += info.get("total_tokens", 0)
+        if self.concurrent_arms and len(pair.instances) > 1:
+            # DAV-2325 方案B：先同秒把所有臂的 job 提交出去（服务端各自后台
+            # 执行），再逐臂收尾。提交阶段不轮询，两臂的抓取时刻因此落在
+            # 同一时间窗内；收尾阶段的轮询顺序不影响两臂已并发起跑的事实。
+            order = [n for n in pair.instances]
+            for name in order:
+                if name not in self.instances:
+                    info = {
+                        "instance": name, "job_id": None, "status": "unknown_instance",
+                        "error_bucket": "client_error",
+                        "error": f"实例 {name} 未配置", "models": [], "model_missing": 0,
+                    }
+                else:
+                    info = self.submit_one(name, pair, record)
+                per_instance[name] = info
+            for name in order:
+                info = per_instance[name]
+                if info.get("status") == "submitted":
+                    per_instance[name] = self.collect_one(name, record, info)
+                record.runs.append(info)
+                record.prompt_tokens += info.get("prompt_tokens", 0)
+                record.completion_tokens += info.get("completion_tokens", 0)
+                record.total_tokens += info.get("total_tokens", 0)
+        else:
+            for name in pair.instances:
+                if name not in self.instances:
+                    info = {
+                        "instance": name, "job_id": None, "status": "unknown_instance",
+                        "error_bucket": "client_error",
+                        "error": f"实例 {name} 未配置", "models": [], "model_missing": 0,
+                    }
+                else:
+                    info = self.run_one(name, pair, record)
+                per_instance[name] = info
+                record.runs.append(info)
+                record.prompt_tokens += info.get("prompt_tokens", 0)
+                record.completion_tokens += info.get("completion_tokens", 0)
+                record.total_tokens += info.get("total_tokens", 0)
 
         outcome, reason, observed, error_bucket = verify_pair(pair, per_instance)
         record.outcome = outcome
@@ -1668,6 +1752,10 @@ def build_parser() -> argparse.ArgumentParser:
                           "stop=原地停下、下次续跑接着走（默认 wait）")
     run.add_argument("--poll-interval", type=float, default=5.0)
     run.add_argument("--job-timeout", type=float, default=7200.0)
+    # DAV-2325 方案B：两臂同秒并发起跑（先提交全部臂再收尾）；默认关。
+    run.add_argument("--concurrent-arms", action="store_true", default=False)
+    # DAV-2325：总控 10-24 定案授权周六执行；非交易日放行开关，默认关。
+    run.add_argument("--allow-nontrading-day", action="store_true", default=False)
     run.add_argument("--snapshot-whitelist", default=None,
                      help="输入快照比对白名单文件（精确 JSON 路径，默认空=不剔除）")
 
@@ -1827,6 +1915,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                         POLL_RECONNECT_MAX_ATTEMPTS),
         poll_interval=args.poll_interval,
         job_timeout=args.job_timeout,
+        concurrent_arms=bool(getattr(args, "concurrent_arms", False)),
+        allow_nontrading_day=bool(getattr(args, "allow_nontrading_day", False)),
     )
     report = executor.run(manifest)
     (state_dir / "run_report.json").write_text(
