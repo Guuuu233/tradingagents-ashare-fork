@@ -188,6 +188,34 @@ PERSISTENT_STOP_REASONS = frozenset({
     STOP_RUN_GUARD,
 })
 
+# ``state.json`` 的 ``nontrading_day_override`` 只由非交易日放行分支写这三项。
+# 该文件是**外部可改**的中间产物（人会手改它解停批），读回时按白名单过滤，
+# 免得任意 JSON 混进审计字段被当成授权证据。
+NONTRADING_OVERRIDE_KEYS = ("date", "flag", "reason")
+
+
+def _clean_nontrading_reason(raw: Optional[str]) -> Optional[str]:
+    """放行理由去首尾空白；空串视为未记录（None），不留空字符串假理由。"""
+    return (raw or "").strip() or None
+
+
+def _clean_nontrading_override(raw: Any) -> Optional[Dict[str, Optional[str]]]:
+    """把读回的 ``nontrading_day_override`` 收敛成「已知键 + 字符串或 null」。
+
+    非 dict（旧版误写字符串/数字/列表）、未知键、非字符串值一律丢弃；过滤后
+    为空则视为没有放行留痕，返回 None。
+    """
+    if not isinstance(raw, dict):
+        return None
+    cleaned: Dict[str, Optional[str]] = {}
+    for key in NONTRADING_OVERRIDE_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if value is None or isinstance(value, str):
+            cleaned[key] = value
+    return cleaned or None
+
 
 # ---------------------------------------------------------------------------
 # 冻结清单
@@ -578,7 +606,8 @@ class Ledger:
         }
         self.stop_reason: Optional[str] = None
         self.stop_detail: Optional[str] = None
-        self.nontrading_day_override: Optional[Dict[str, str]] = None
+        # reason 由调用方经 --nontrading-day-reason 给出，未给时为 null
+        self.nontrading_day_override: Optional[Dict[str, Optional[str]]] = None
         self.snapshot_whitelist_sha256: Optional[str] = None
         self._load()
 
@@ -599,7 +628,9 @@ class Ledger:
             raw_stop = None
         self.stop_reason = raw_stop
         self.stop_detail = payload.get("stop_detail") if raw_stop else None
-        self.nontrading_day_override = payload.get("nontrading_day_override")
+        self.nontrading_day_override = _clean_nontrading_override(
+            payload.get("nontrading_day_override")
+        )
         self.snapshot_whitelist_sha256 = payload.get("snapshot_whitelist_sha256")
         for item in payload.get("pairs") or []:
             self.pairs[item["pair_id"]] = PairState(
@@ -1094,6 +1125,39 @@ class RunReport:
         return asdict(self)
 
 
+def blank_run_info(name: str) -> Dict[str, Any]:
+    """一次「实例 × 请求」明细的初始占位。
+
+    审计字段必须先占位再填：提交即失败（``submit_failed``）或轮询非 200
+    （``status_failed``）时不会走到赋值那一行，下游按 ``run["started_at"]``
+    取同窗时刻就会直接 KeyError。占位为 null 表示「本次没有这个观测值」，
+    与「键缺失」区分开；时刻一律照服务端原样，不补造客户端时刻。
+    """
+    return {
+        "instance": name,
+        "job_id": None,
+        "status": "pending",
+        "error_bucket": "none",
+        "error": None,
+        "models": [],
+        "model_missing": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "run_identity": None,
+        "run_identity_confirmed": False,
+        "poll_reconnects": 0,
+        "gate_reason": None,
+        # 服务端时刻 / 归属回读：失败路径上也要有键，值为 null
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "report_account": None,
+        "report_account_source": None,
+        "report_account_http_status": None,
+    }
+
+
 class ExperimentExecutor:
     """配对原子执行器。"""
 
@@ -1127,6 +1191,10 @@ class ExperimentExecutor:
         # STOP_WEEKEND（静默窗口/每日一批闸对周末本就不适用）。默认 False
         # 保持冻结口径。
         allow_nontrading_day: bool = False,
+        # DAV-2335：放行理由由调用方显式给出（``--nontrading-day-reason``），
+        # 写死工单号会在换窗口后留下与新日期打脸的假授权证据。None = 未记录
+        # 理由（state.json 里就是 null）。
+        nontrading_day_reason: Optional[str] = None,
     ):
         self.instances = dict(instances)
         self.ledger = ledger
@@ -1145,6 +1213,9 @@ class ExperimentExecutor:
         self.job_timeout = job_timeout
         self.concurrent_arms = bool(concurrent_arms)
         self.allow_nontrading_day = bool(allow_nontrading_day)
+        self.nontrading_day_reason: Optional[str] = _clean_nontrading_reason(
+            nontrading_day_reason
+        )
         self._transports: Dict[str, HttpTransport] = {}
         self._last_batch_records: List[AttemptRecord] = []
         self._non_frozen_seen: List[Tuple[str, str]] = []
@@ -1175,7 +1246,9 @@ class ExperimentExecutor:
                 self.ledger.nontrading_day_override = {
                     "date": now.astimezone(CN_TZ).date().isoformat(),
                     "flag": "--allow-nontrading-day",
-                    "reason": "DAV-2325 总控 10-24 定案授权周六执行",
+                    # 理由由 --nontrading-day-reason 传入：固定文案会在下一个
+                    # 授权窗口里与真实日期互相打脸；没有理由就记 null。
+                    "reason": _clean_nontrading_reason(self.nontrading_day_reason),
                 }
                 self.ledger.flush()
                 return False
@@ -1249,22 +1322,8 @@ class ExperimentExecutor:
         if pair.overrides():
             body["config_overrides"] = pair.overrides()
 
-        info: Dict[str, Any] = {
-            "instance": name,
-            "job_id": None,
-            "status": "pending",
-            "error_bucket": "none",
-            "error": None,
-            "models": [],
-            "model_missing": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-            "run_identity": identity,
-            "run_identity_confirmed": False,
-            "poll_reconnects": 0,
-            "gate_reason": None,
-        }
+        info: Dict[str, Any] = blank_run_info(name)
+        info["run_identity"] = identity
 
         code, payload = self._call(
             transport, "POST", f"{base}/v1/analyze", headers, body, record
@@ -1454,11 +1513,12 @@ class ExperimentExecutor:
             order = [n for n in pair.instances]
             for name in order:
                 if name not in self.instances:
-                    info = {
-                        "instance": name, "job_id": None, "status": "unknown_instance",
+                    info = blank_run_info(name)
+                    info.update({
+                        "status": "unknown_instance",
                         "error_bucket": "client_error",
-                        "error": f"实例 {name} 未配置", "models": [], "model_missing": 0,
-                    }
+                        "error": f"实例 {name} 未配置",
+                    })
                 else:
                     info = self.submit_one(name, pair, record)
                 per_instance[name] = info
@@ -1473,11 +1533,12 @@ class ExperimentExecutor:
         else:
             for name in pair.instances:
                 if name not in self.instances:
-                    info = {
-                        "instance": name, "job_id": None, "status": "unknown_instance",
+                    info = blank_run_info(name)
+                    info.update({
+                        "status": "unknown_instance",
                         "error_bucket": "client_error",
-                        "error": f"实例 {name} 未配置", "models": [], "model_missing": 0,
-                    }
+                        "error": f"实例 {name} 未配置",
+                    })
                 else:
                     info = self.run_one(name, pair, record)
                 per_instance[name] = info
@@ -1764,6 +1825,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--concurrent-arms", action="store_true", default=False)
     # DAV-2325：总控 10-24 定案授权周六执行；非交易日放行开关，默认关。
     run.add_argument("--allow-nontrading-day", action="store_true", default=False)
+    # DAV-2335：放行理由必须由命令给出（原样落 state.json 供审计）。
+    run.add_argument("--nontrading-day-reason", default=None,
+                     help="非交易日放行的授权理由，原样写入 "
+                          "state.json.nontrading_day_override.reason；不给则记 "
+                          "null（未记录理由）")
     run.add_argument("--snapshot-whitelist", default=None,
                      help="输入快照比对白名单文件（精确 JSON 路径，默认空=不剔除）")
 
@@ -1925,6 +1991,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         job_timeout=args.job_timeout,
         concurrent_arms=bool(getattr(args, "concurrent_arms", False)),
         allow_nontrading_day=bool(getattr(args, "allow_nontrading_day", False)),
+        nontrading_day_reason=getattr(args, "nontrading_day_reason", None),
     )
     report = executor.run(manifest)
     (state_dir / "run_report.json").write_text(

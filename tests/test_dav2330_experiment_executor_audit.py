@@ -23,12 +23,16 @@ from tests.test_dav1882_experiment_executor import (
 
 class AuditServer(StubServer):
     def __init__(self, name, trace, *, report_code=200, report_account=FIXED_ACCOUNT,
-                 result_account=None, plan=None):
+                 result_account=None, plan=None, poll_code=200,
+                 report_raises=False, report_body=None):
         super().__init__(f"http://stub-{name}:8021", plan or {}, name=name)
         self.trace = trace
         self.report_code = report_code
         self.fallback_account = report_account
         self.report_account = result_account
+        self.poll_code = poll_code
+        self.report_raises = report_raises
+        self.report_body = report_body
         self.timestamps = {
             "created_at": "2026-10-24T10:00:00+08:00",
             "started_at": "2026-10-24T10:00:01+08:00",
@@ -38,11 +42,17 @@ class AuditServer(StubServer):
     def handle(self, instance, method, path, body):
         if path.startswith("/v1/reports/"):
             self.trace.append(f"REPORT:{instance}")
+            if self.report_raises:
+                raise RuntimeError("stub /v1/reports 不可达")
+            if self.report_body is not None:
+                return self.report_code, self.report_body
             return self.report_code, {"user_id": self.fallback_account}
         action = "POST" if method == "POST" else (
             "RESULT" if path.endswith("/result") else "POLL"
         )
         self.trace.append(f"{action}:{instance}")
+        if action == "POLL" and self.poll_code != 200:
+            return self.poll_code, {"detail": "poll unavailable"}
         code, payload = super().handle(instance, method, path, body)
         if action == "POLL":
             payload.update(self.timestamps)
@@ -62,6 +72,93 @@ def audit_executor(tmp_path, **server_options):
 
 def read_record(ex):
     return json.loads(ex.ledger.ledger_path.read_text(encoding="utf-8").splitlines()[0])
+
+
+def test_override_flush_is_immediate_without_run(tmp_path, monkeypatch):
+    """🟡#3：放行必须「立即」落盘，不依赖 run() 收尾时那一次 flush。
+
+    变异「删掉 wait_for_daily_gate 里的 self.ledger.flush()」后本用例必须失败：
+    Ledger 初始化不写 state.json，该文件能出现只可能来自放行分支。
+    """
+    monkeypatch.setattr(mod, "is_trading_day", lambda _date: False)
+    ex = _executor(
+        tmp_path, _two_servers(),
+        now=lambda: datetime(2026, 10, 31, 10, 0, tzinfo=mod.CN_TZ),
+    )
+    ex.allow_nontrading_day = True
+    ex.nontrading_day_reason = "总控 10-31 书面授权"
+    state_path = tmp_path / "state" / "state.json"
+    assert not state_path.exists()
+    assert ex.wait_for_daily_gate() is False
+    override = json.loads(state_path.read_text(encoding="utf-8"))["nontrading_day_override"]
+    assert override == {
+        "date": "2026-10-31",
+        "flag": "--allow-nontrading-day",
+        "reason": "总控 10-31 书面授权",
+    }
+
+
+def test_override_reason_follows_window_instead_of_being_hardcoded(tmp_path, monkeypatch):
+    """🟡#1：理由随窗口传入，换窗口不能沿用上一次的文案。"""
+    monkeypatch.setattr(mod, "is_trading_day", lambda _date: False)
+    first = _executor(
+        tmp_path, _two_servers(),
+        now=lambda: datetime(2026, 10, 24, 10, 0, tzinfo=mod.CN_TZ),
+    )
+    first.allow_nontrading_day = True
+    first.nontrading_day_reason = "  总控 10-24 授权周六窗口  "
+    assert first.wait_for_daily_gate() is False
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["nontrading_day_override"] == {
+        "date": "2026-10-24",
+        "flag": "--allow-nontrading-day",
+        "reason": "总控 10-24 授权周六窗口",
+    }
+    assert "DAV-2325" not in json.dumps(state, ensure_ascii=False)
+
+    second = _executor(
+        tmp_path, _two_servers(),
+        now=lambda: datetime(2026, 10, 31, 10, 0, tzinfo=mod.CN_TZ),
+    )
+    second.allow_nontrading_day = True
+    second.nontrading_day_reason = "   "          # 空白 = 未记录理由
+    assert second.wait_for_daily_gate() is False
+    state = json.loads((tmp_path / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["nontrading_day_override"] == {
+        "date": "2026-10-31",
+        "flag": "--allow-nontrading-day",
+        "reason": None,
+    }
+
+
+@pytest.mark.parametrize("raw", ["2026-10-24", 42, ["x"], {"hack": "y"}])
+def test_override_readback_drops_non_dict_and_unknown_only_payloads(tmp_path, raw):
+    """🟢 state.json 可被外部改：读回只认 dict + 已知键。"""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text(
+        json.dumps({"nontrading_day_override": raw}), encoding="utf-8"
+    )
+    assert mod.Ledger(state_dir).nontrading_day_override is None
+
+
+def test_override_readback_filters_unknown_keys(tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text(json.dumps({
+        "nontrading_day_override": {
+            "date": "2026-10-24",
+            "flag": "--allow-nontrading-day",
+            "reason": None,
+            "hack": "injected",
+            "note": 1,
+        }
+    }, ensure_ascii=False), encoding="utf-8")
+    assert mod.Ledger(state_dir).nontrading_day_override == {
+        "date": "2026-10-24",
+        "flag": "--allow-nontrading-day",
+        "reason": None,
+    }
 
 
 @pytest.mark.parametrize("concurrent", [False, True])
@@ -103,12 +200,17 @@ def test_nontrading_override_persists_without_becoming_stop(tmp_path, monkeypatc
         assert state.get("nontrading_day_override") is None
         return
     assert report.stop_reason is None
+    # 🟡#4：放行不得借用停批字段——run_report.json 是随批交付的主产物，
+    # 被污染时不能只靠 state.json（窗口类原因本就不落盘）蒙过去。
+    assert report.stop_detail is None
+    assert "nontrading_day_override" not in report.to_json()
     assert report.pairs_ok == 1
     override = state["nontrading_day_override"]
     assert override == {
         "date": "2026-10-24",
         "flag": "--allow-nontrading-day",
-        "reason": "DAV-2325 总控 10-24 定案授权周六执行",
+        # 🟡#1：未传 --nontrading-day-reason → null，不再写死工单号
+        "reason": None,
     }
     assert state["stop_reason"] is None and state["stop_detail"] is None
     reloaded = mod.Ledger(ex.ledger.state_dir, now=now)
@@ -119,6 +221,38 @@ def test_nontrading_override_persists_without_becoming_stop(tmp_path, monkeypatc
     resumed = _executor(tmp_path, _two_servers(), now=now)
     resumed.allow_nontrading_day = True
     assert resumed.run(_manifest([_pair("p1")])).pairs_skipped_done == 1
+
+
+@pytest.mark.parametrize("plan,poll_code,status", [
+    ({"default": {"http_status": 500}}, 200, "submit_failed"),
+    ({}, 503, "status_failed"),
+])
+def test_failed_paths_keep_audit_keys_as_null(tmp_path, plan, poll_code, status):
+    """🟡#2：提交/轮询失败时时刻与归属字段必须是 null，而不是整个键缺失。"""
+    ex, _, _ = audit_executor(tmp_path, plan=plan, poll_code=poll_code)
+    ex.run(_manifest([_pair("p1")]))
+    for run in read_record(ex)["runs"]:
+        assert run["status"] == status
+        assert {key: run[key] for key in ("created_at", "started_at", "finished_at")} == {
+            "created_at": None, "started_at": None, "finished_at": None,
+        }
+        assert run["report_account"] is None
+        assert run["report_account_source"] is None
+        assert run["report_account_http_status"] is None
+
+
+def test_unknown_instance_run_info_keeps_audit_keys(tmp_path):
+    """🟡#2：run_pair 自造的 unknown_instance 明细同样不能缺键。"""
+    ex = _executor(tmp_path, _two_servers(), pair_retries=0)
+    ex.run(_manifest([_pair("p1", instances=("O", "ZZ"))]))
+    run = read_record(ex)["runs"][1]
+    assert run["status"] == "unknown_instance"
+    expected = {
+        "created_at": None, "started_at": None, "finished_at": None,
+        "report_account": None, "report_account_source": None,
+        "report_account_http_status": None,
+    }
+    assert {key: run[key] for key in expected} == expected
 
 
 @pytest.mark.parametrize("concurrent", [False, True])
@@ -150,6 +284,35 @@ def test_report_fallback_outcomes(tmp_path, concurrent, report_code, account, ou
         assert ex.ledger.pair_state("p2").status == "pending"
     else:
         assert report.pairs_ok == 2
+
+
+def test_reports_transport_error_records_zero_status_and_fails_closed(tmp_path):
+    """🟢 补测：补读抛传输异常 → 状态记 0、仍 fail-closed、不污染分析请求预算。"""
+    ex, _, trace = audit_executor(tmp_path, report_raises=True)
+    report = ex.run(_manifest([_pair("p1")]))
+    rec = read_record(ex)
+    assert (rec["analysis_requests"], rec["http_requests"]) == (2, 8)
+    assert report.stop_reason == mod.STOP_RUN_GUARD
+    assert trace.count("REPORT:O") == trace.count("REPORT:N") == 1
+    for run in rec["runs"]:
+        assert run["report_account_http_status"] == 0
+        assert run["report_account"] is None
+        assert run["status"] == "account_unverified"
+        assert run["gate_reason"].startswith(mod.PREFLIGHT_ACCOUNT_UNAVAILABLE)
+
+
+def test_reports_200_non_dict_body_stays_fail_closed(tmp_path):
+    """🟢 补测：补读 200 但响应体不是 dict → 仍 fail-closed。"""
+    ex, _, trace = audit_executor(tmp_path, report_body=["not-a-dict"])
+    report = ex.run(_manifest([_pair("p1")]))
+    rec = read_record(ex)
+    assert (rec["analysis_requests"], rec["http_requests"]) == (2, 8)
+    assert report.pairs_failed == 1
+    assert trace.count("REPORT:O") == trace.count("REPORT:N") == 1
+    for run in rec["runs"]:
+        assert run["report_account_http_status"] == 200
+        assert run["report_account"] is None
+        assert run["status"] == "account_unverified"
 
 
 def test_wrong_result_account_is_never_overridden_by_fallback(tmp_path):
@@ -232,5 +395,45 @@ def test_cli_override_switches_default_off_and_opt_in():
     argv = ["run", "--manifest", "stub.json", "--state-dir", "state", "--expected-model", EXPECTED_MODEL]
     args = mod.build_parser().parse_args(argv)
     assert args.concurrent_arms is False and args.allow_nontrading_day is False
+    assert args.nontrading_day_reason is None
     args = mod.build_parser().parse_args(argv + ["--concurrent-arms", "--allow-nontrading-day"])
     assert args.concurrent_arms is True and args.allow_nontrading_day is True
+    args = mod.build_parser().parse_args(argv + ["--nontrading-day-reason", "总控 10-24 授权"])
+    assert args.nontrading_day_reason == "总控 10-24 授权"
+
+
+def test_cli_passes_nontrading_reason_through_to_executor(tmp_path, monkeypatch):
+    """🟡#1 联动：`--nontrading-day-reason` 必须真的传到执行器，不能只解析不落地。"""
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "name": "stub",
+        "frozen_models": [EXPECTED_MODEL],
+        "pairs": [_pair("p1")],
+        "batches": [],
+    }), encoding="utf-8")
+    captured = {}
+
+    class FakeReport:
+        def to_json(self):
+            return {"stop_reason": None}
+
+    class FakeExecutor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self, manifest):
+            return FakeReport()
+
+    monkeypatch.setattr(mod, "ExperimentExecutor", FakeExecutor)
+    code = mod.main([
+        "run", "--manifest", str(manifest_path),
+        "--state-dir", str(tmp_path / "state"),
+        "--expected-model", EXPECTED_MODEL,
+        "--instance", "O=http://stub:8021",
+        "--token", "O=stub-token",
+        "--allow-nontrading-day",
+        "--nontrading-day-reason", "总控 10-24 授权",
+    ])
+    assert code == 0
+    assert captured["allow_nontrading_day"] is True
+    assert captured["nontrading_day_reason"] == "总控 10-24 授权"
