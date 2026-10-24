@@ -257,3 +257,39 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 - `run.json` — 耗时、峰值内存（`/usr/bin/time -l` 口径由外部采样）、行数
   （`input_rows`/`formal_rows`）+ 封存时点门四个计数（`seal_gate_applied` /
   `seal_unparseable` / `seal_t1_unresolved` / `excl_late_seal`）
+
+## 配对实验执行器（DAV-2325 / DAV-2330）
+
+`experiment_executor.py run` 的 `--concurrent-arms` 与
+`--allow-nontrading-day` 均默认 **False**，必须显式传入才启用。
+
+- 默认串行：`POST:O → POLL:O → RESULT:O → POST:N → …`。
+  `--concurrent-arms` 只用于已授权的并发实验窗口：先提交所有臂，再按臂顺序
+  收尾；服务端独立执行 job。提交相近不保证实际开跑重叠。
+- 默认非交易日不跑；`--allow-nontrading-day` 只用于总控明确授权的休市执行
+  窗口（DAV-2325 为 2026-10-24 周六窗口）。**一次开关 = 一次授权窗口**。
+  `daily_batch_gate_open()` 在非交易日恒为 False，`seen_base_days` 只在本次
+  进程内生效；同日另起进程并换 pair 名单仍能再跑一批，执行器不提供跨进程
+  的「每日一批」授权控制。落盘记录仅供审计，不自动授权后续窗口。
+
+非交易日放行立即写入 `state.json.nontrading_day_override`，包含 `date`
+（Asia/Shanghai）、`flag`（`--allow-nontrading-day`）和 `reason`。该独立字段
+续跑时保留，不借用 `stop_reason` / `stop_detail`，不触发停批。
+
+每臂 `elapsed_seconds` 是**客户端收尾轮询墙钟**：从该臂开始轮询到拿到终态，
+不含提交、结果读取或账户补读，**不等于 job 运行时长**。并发口径下第二臂先
+等待前臂收尾，该等待发生在自身轮询计时前，**不计入该数值**；第二臂读到已
+完成 job 时可为 0。每臂按每次成功状态回读原样记录服务端 `created_at` /
+`started_at` / `finished_at`；缺失值为 null，不用客户端时刻补造。两臂「同窗」
+以 `started_at` 到 `finished_at` 的运行区间重叠为判据（先统一时区再比较：
+`max(started_at) < min(finished_at)`），缺任一必要时刻不能认定同窗。
+`--job-timeout` 仍按每臂收尾分别计时，并发两臂可能累计等待约 2 倍 timeout；
+没有另设 pair 级 deadline。
+
+`/result` 未回显账户时，补读本臂实例 `GET /v1/reports/{job_id}`。这是
+**owner-scoped 可读性回读**：返回的 `user_id` 恒等于令牌账户，别人的报告行
+表现为 404。取不到或与 `--expect-account` 不符仍 fail-closed；`/result`
+已回显错账户时不补读覆盖。审计字段 `report_account_source` 只在取得有效账户
+时为 `result_endpoint` / `reports_endpoint`，否则为 null；补读的 HTTP 状态另记
+`report_account_http_status`（传输异常为 0）。补读计入 `http_requests`，不计入
+`analysis_requests` / 分析请求预算；即便未设置 `--expect-account`，仍补读留痕。
