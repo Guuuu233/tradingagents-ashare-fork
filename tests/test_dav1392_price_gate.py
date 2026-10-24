@@ -1,20 +1,29 @@
 """DAV-1392: frozen d17b0fe5 seven-horizon, 28-violation zero-model evidence."""
 import asyncio
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from tradingagents.agents.utils.price_ref_registry import (
-    build_price_ref_registry, extract_executable_levels,
+    REPORT_FIELDS, _split_sentences, build_price_ref_registry, extract_executable_levels,
 )
 from tradingagents.agents.utils.price_basis_gate import evaluate_price_basis_gate
 from tradingagents.agents.utils.price_ref_revision import (
     PRICE_REF_REVISION_ENV, maybe_revise_role_report,
 )
+from tradingagents.storage.result_data_compat import (
+    STORAGE_SCHEMA_KEY, STORAGE_SCHEMA_VERSION, canonicalize_for_single_write,
+    expand_compat_view,
+)
 
 CASES = json.loads((Path(__file__).parent / "fixtures/dav1392_price_gate.json").read_text())["cases"]
+REDTEAM_CASES = json.loads(
+    (Path(__file__).parent / "fixtures/dav1392_r2_redteam.json").read_text(encoding="utf-8")
+)["cases"]
 
 
 def _case(symbol, horizon):
@@ -147,29 +156,56 @@ def test_undated_disclosure_name_used_as_coordinate_is_not_typed_or_executable()
     assert "cross_basis_coordinate_mix" in {v["kind"] for v in gate["violations"]}
 
 
-def test_four_redteam_report_coordinates_when_readonly_corpus_available():
-    import sqlite3
-    from tradingagents.agents.utils.price_ref_registry import REPORT_FIELDS, _split_sentences
+def _assert_redteam_coordinate(case, horizon):
+    sentences = _split_sentences(horizon[case["field"]])
+    assert all(0 <= i < len(sentences) for i in case["sentence_indices"]), case
+    reports = {f: horizon[f] for f in REPORT_FIELDS if isinstance(horizon.get(f), str)}
+    _, gate = _gate(reports, horizon["trade_date"])
+    assert gate["status"] == "blocked" and any(
+        v["kind"] == "cross_basis_coordinate_mix" and v["source"] == case["field"]
+        for v in gate["violations"]), case
 
-    db = Path("/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db")
-    if not db.exists():
-        pytest.skip("production corpus unavailable; synthetic tests remain mandatory")
-    coordinates = json.loads((Path(__file__).parent / "fixtures/dav1392_r2_redteam.json").read_text())
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        for c in coordinates:
-            row = conn.execute("select result_data from reports where id=?", (c["report_id"],)).fetchone()
-            assert row, c
-            horizon = json.loads(row[0])["horizons"][c["horizon"]]
-            sentences = _split_sentences(horizon[c["field"]])
-            assert all(i < len(sentences) for i in c["sentence_indices"]), c
-            reports = {f: horizon[f] for f in REPORT_FIELDS if isinstance(horizon.get(f), str)}
-            _, gate = _gate(reports, horizon["trade_date"])
-            assert gate["status"] == "blocked" and any(
-                v["kind"] == "cross_basis_coordinate_mix" and v["source"] == c["field"]
-                for v in gate["violations"]), c
-    finally:
-        conn.close()
+
+def test_four_redteam_coordinate_patterns_from_synthetic_corpus():
+    """DAV-2321: synthetic reports retain the four patterns without a live DB.
+
+    Original report IDs/indices are provenance only; all report text is
+    synthetic (D-040), with separate sentence indices for these fixtures.
+    """
+    assert len(REDTEAM_CASES) == 4
+    for case in REDTEAM_CASES:
+        horizon = {"trade_date": case["trade_date"], **case["reports"]}
+        _assert_redteam_coordinate(case, horizon)
+
+
+def test_slimmed_redteam_corpus_is_readable_through_compat_view(tmp_path):
+    """Slimmed SQLite rows have no physical horizons; readers rebuild the view."""
+    db = tmp_path / "redteam_corpus.db"
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("CREATE TABLE reports (id TEXT PRIMARY KEY, result_data TEXT)")
+        for case in REDTEAM_CASES:
+            horizon = {"trade_date": case["trade_date"], **case["reports"]}
+            stored = canonicalize_for_single_write({
+                "trade_date": case["trade_date"],
+                f"{case['horizon']}_term": dict(horizon),
+                "horizons": {case["horizon"]: dict(horizon)},
+            })
+            conn.execute("INSERT INTO reports VALUES (?, ?)",
+                         (case["report_id"], json.dumps(stored, ensure_ascii=False)))
+        conn.commit()
+
+    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as conn:
+        for case in REDTEAM_CASES:
+            row = conn.execute("SELECT result_data FROM reports WHERE id=?",
+                               (case["report_id"],)).fetchone()
+            assert row, case
+            stored = json.loads(row[0])
+            assert stored[STORAGE_SCHEMA_KEY] == STORAGE_SCHEMA_VERSION
+            assert "horizons" not in stored
+            horizon = expand_compat_view(stored)["horizons"][case["horizon"]]
+            assert horizon == {"trade_date": case["trade_date"], **case["reports"]}
+            _assert_redteam_coordinate(case, horizon)
+            assert "horizons" not in stored  # The read view must not alter storage.
 
 
 def test_cross_triggers_single_revision_and_records_complete_post_gate(monkeypatch):

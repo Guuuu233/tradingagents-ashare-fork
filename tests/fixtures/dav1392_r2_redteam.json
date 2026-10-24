@@ -1,6 +1,53 @@
-[
-  {"report_id": "36fff9fc5aa041a6960c22925b5f0a9e", "horizon": "short", "field": "news_report", "sentence_indices": [31, 92]},
-  {"report_id": "9b70d0a1571b4d6196e29cf7bdaf8d78", "horizon": "medium", "field": "volume_price_report", "sentence_indices": [59]},
-  {"report_id": "af25901ec32e4a44ad2aef3db8a09487", "horizon": "short", "field": "volume_price_report", "sentence_indices": [80]},
-  {"report_id": "3fc1beba1ee74b53bf634d4a35eddbf6", "horizon": "short", "field": "news_report", "sentence_indices": [97]}
-]
+{
+  "source": "All report text is synthetic (DAV-2321, D-040). report_id and source_sentence_indices identify the original redteam findings only; sentence_indices refer to the synthetic reports.",
+  "cases": [
+    {
+      "report_id": "36fff9fc5aa041a6960c22925b5f0a9e",
+      "horizon": "short",
+      "field": "news_report",
+      "source_sentence_indices": [31, 92],
+      "sentence_indices": [1, 2],
+      "trade_date": "2026-09-29",
+      "reports": {
+        "market_report": "现价 21.40 元。",
+        "news_report": "2026-09-21 公司公告已成交回购价格下限 22.10 元。收盘价 21.40 元已跌破回购价格下限 22.10 元。现价 21.40 元一举击穿回购价格区间下沿 22.10 元。"
+      }
+    },
+    {
+      "report_id": "9b70d0a1571b4d6196e29cf7bdaf8d78",
+      "horizon": "medium",
+      "field": "volume_price_report",
+      "source_sentence_indices": [59],
+      "sentence_indices": [1],
+      "trade_date": "2026-09-29",
+      "reports": {
+        "market_report": "现价 52.80 元。",
+        "volume_price_report": "2026-09-18 公司公告已成交回购价格下限 53.20 元。回购下限 53.20 元与量价见底的 52.80 元形成价格支撑共振。"
+      }
+    },
+    {
+      "report_id": "af25901ec32e4a44ad2aef3db8a09487",
+      "horizon": "short",
+      "field": "volume_price_report",
+      "source_sentence_indices": [80],
+      "sentence_indices": [0],
+      "trade_date": "2026-09-29",
+      "reports": {
+        "market_report": "现价 81.20 元。",
+        "volume_price_report": "深层多头底线：81.20-82.40 元（50日均线与200日均线汇聚的技术防线，同时靠近大宗交易折价成交价 80.50 元）。"
+      }
+    },
+    {
+      "report_id": "3fc1beba1ee74b53bf634d4a35eddbf6",
+      "horizon": "short",
+      "field": "news_report",
+      "source_sentence_indices": [97],
+      "sentence_indices": [1],
+      "trade_date": "2026-09-29",
+      "reports": {
+        "market_report": "现价 34.20 元。",
+        "news_report": "2026-09-19 公司公告已成交回购底价 34.60 元。在现价 34.20 元区间依托回购底价分批低吸。"
+      }
+    }
+  ]
+}
