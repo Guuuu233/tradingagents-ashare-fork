@@ -274,13 +274,22 @@ python scripts/phase2/m1_eval.py --input signals.parquet \
 
 非交易日放行立即写入 `state.json.nontrading_day_override`，包含 `date`
 （Asia/Shanghai）、`flag`（`--allow-nontrading-day`）和 `reason`。该独立字段
-续跑时保留，不借用 `stop_reason` / `stop_detail`，不触发停批。
+续跑时保留，不借用 `stop_reason` / `stop_detail`，不触发停批。`reason` 只来自
+`--nontrading-day-reason`，不传则为 `null`（未记录理由）：把某次授权文案写死，
+下一个授权窗口就会落成「新日期 + 旧理由」的自相矛盾证据。读回时只认 dict
+且只保留这三个已知键，外部手改成其它 JSON 一律当没有留痕。
 
 每臂 `elapsed_seconds` 是**客户端收尾轮询墙钟**：从该臂开始轮询到拿到终态，
 不含提交、结果读取或账户补读，**不等于 job 运行时长**。并发口径下第二臂先
 等待前臂收尾，该等待发生在自身轮询计时前，**不计入该数值**；第二臂读到已
 完成 job 时可为 0。每臂按每次成功状态回读原样记录服务端 `created_at` /
-`started_at` / `finished_at`；缺失值为 null，不用客户端时刻补造。两臂「同窗」
+`started_at` / `finished_at`；缺失值为 null，不用客户端时刻补造。这三个键在
+**失败路径**（`submit_failed` / `status_failed` / `unknown_instance`）上也存在，
+值为 null 而不是整个键缺席，下游按 `run["started_at"]` 取时刻不会 KeyError。
+归属回读三字段 `report_account` / `report_account_source` /
+`report_account_http_status` 同样始终存在（未发生时分别为 null / null / null）。
+`ledger.totals["elapsed_seconds"]` 累加的是 `run_pair` 的 pair 级墙钟，因此并发
+口径下约等于两臂中的较大值，而不是两臂之和。两臂「同窗」
 以 `started_at` 到 `finished_at` 的运行区间重叠为判据（先统一时区再比较：
 `max(started_at) < min(finished_at)`），缺任一必要时刻不能认定同窗。
 `--job-timeout` 仍按每臂收尾分别计时，并发两臂可能累计等待约 2 倍 timeout；
