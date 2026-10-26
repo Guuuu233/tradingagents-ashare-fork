@@ -965,20 +965,34 @@ def test_cli_json_failure_carries_reason_code(tmp_path):
 
 
 def test_repo_templates_parse_after_placeholder_substitution(tmp_path):
-    """仓库内 4 个 plist 模板：占位符替换后都能被 plistlib 解析。
+    """仓库内 5 个 plist 模板：占位符替换后都能被 plistlib 解析。
 
     断言是真实断言（复审 DAV-2226 🟡-2：旧写法遇到占位符就 continue，等于把会炸的
     模板全跳过了——而 ta-daily-reports.plist 注释里的 ``--`` 确实让 plistlib 报
     ExpatError，plutil -lint 却一直判 OK）。
     """
     templates = sorted((ROOT / "releases" / "launchd").glob("*.plist"))
-    assert len(templates) == 4, [p.name for p in templates]
+    expected = {
+        "com.davidliu.ta-daily-reports.plist",
+        "com.tradingagents.ashare.plist",
+        "com.tradingagents.prod-health-sentinel.plist",
+        "com.tradingagents.storage-health.plist",
+        "com.tradingagents.ta-snapshot.plist",
+    }
+    assert {p.name for p in templates} == expected
     for src in templates:
         rendered = mod._PLACEHOLDER_RE.sub(
             "PLACEHOLDER", src.read_text(encoding="utf-8")
         ).encode()
         obj = plistlib.loads(rendered)  # 解析失败即用例失败
         assert isinstance(obj, dict), src.name
+        # Concrete deployment paths must never make this test inspect live logs.
+        logs = tmp_path / src.stem
+        logs.mkdir()
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            if key in obj:
+                obj[key] = str(logs / f"{key}.log")
         target = tmp_path / src.name
         target.write_bytes(plistlib.dumps(obj))
-        assert isinstance(mod.check_plist(target).ok, bool), src.name
+        report = mod.check_plist(target)
+        assert report.ok, (src.name, report.failures)
