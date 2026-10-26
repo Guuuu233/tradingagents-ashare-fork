@@ -19,11 +19,25 @@
 记账（账本确定性计算）：
   - Ledger 逐笔记 BUY/SELL 成交与费用（V-03a CostModel，复用 M2-A）。
   - 逐日收盘 mark-to-market：cash + Σ shares×close；无 bar 沿用 last_price。
+  - 净值按「成交日 ≤ 当日」重放账本事件（DAV-2323）：历史净值不得用末态
+    cash/positions 回算，未来信号不得改写历史净值；T+1 成交的持仓也不得
+    回填到信号日估值。
+  - 标准持仓出口 = 信号日起第 40 个交易日收盘（``exit_after_trading_days``，
+    0/None 关闭）；早于该日的 SELL 仍按 T+1 收盘退出，到期退出排在当日信号
+    之后（收盘成交，不用当日早盘的卖出回款）。
   - 输出净值序列、换手（成交额 / 期间平均权益）、最大回撤、胜率等。
 
 风控规则离线重放：
   ``RiskRules`` 为纯数据版本对象；``risk_rules_v1`` / ``risk_rules_v2``
   为已冻结的版本实例，同一份封存信号可用不同版本离线重放对比。
+
+策略与风控分层（DAV-2323，对齐 M2 方案 §3）：
+  - 信号层风控（risk_status / require_risk_clear / min_confidence）只作用于
+    显式声明不忽略它的策略（S2/S3）；S1 ``direction`` 按模块语义忽略风控
+    输出层，不再被默认 ``RiskRules`` 的 BLOCKED 等条件污染。
+  - 组合层约束（持仓数、每日新开、单仓权重、冷却）对所有策略一致生效。
+  - S2 只认最终动作（trade_action → decision），缺失时记不可用（不产生
+    意图），不再回退到原始 direction 变成伪 S1。
 
 本模块纯函数 + 注入式行情/日历，不触网、不写生产库。
 """
@@ -130,16 +144,17 @@ def ledger_risk_status(record: Mapping[str, Any], horizon: str = "medium") -> st
 
 
 def ledger_final_action(record: Mapping[str, Any], horizon: str = "medium") -> str | None:
-    """风控后的最终动作：trade_action → decision → direction 映射。"""
+    """风控后的最终动作：trade_action → decision；缺失返回 None。
+
+    DAV-2323（源自 DAV-1988 审查）：不再回退到原始 ``direction``。S2 的语义是
+    「按风控后动作下单」，缺最终动作时应记不可用，而不是静默退化成 S1，否则
+    两套策略的对比失去意义。
+    """
     hz = _record_hz(record, horizon)
     act = _norm_action(hz.get("trade_action")) or _norm_action(record.get("trade_action_top"))
     if act is not None:
         return act
-    dec = _norm_decision(hz.get("decision")) or _norm_decision(record.get("decision_top"))
-    if dec is not None:
-        return dec
-    d = ledger_direction(record, horizon)
-    return d  # BUY / SELL / None
+    return _norm_decision(hz.get("decision")) or _norm_decision(record.get("decision_top"))
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +244,9 @@ class SignalIntent:
     probability: float | None = None
     horizon: str = "medium"
     reason: str = ""
+    # True = 该策略按定义忽略风控输出层（S1）；组合层约束仍统一生效。
+    # DAV-2323：默认 RiskRules 的 BLOCKED/置信门槛不得污染 S1。
+    ignore_signal_risk: bool = False
 
 
 def _weight_from_probability(prob: float | None) -> float:
@@ -257,6 +275,8 @@ def strategy_direction_intent(record: Mapping[str, Any],
         probability=prob,
         horizon=horizon,
         reason=f"direction={d}",
+        # S1 语义：只按经理方向/概率下单，忽略风控输出层（DAV-2323/DAV-1988）。
+        ignore_signal_risk=True,
     )
 
 
@@ -341,6 +361,8 @@ class HoldingState:
     entry_date: str
     entry_price_eff: float   # 买入有效价
     last_price: float | None = None   # 最近一个有效收盘（用于 mark）
+    signal_date: str = ""             # 开仓信号日（到期退出的起算基准）
+    expiry_date: str | None = None    # 标准持仓出口日（信号日 + N 交易日收盘）
 
 
 @dataclass
@@ -365,6 +387,10 @@ class ShadowLedger:
     def market_value(self, get_bar, date: str) -> float:
         mv = 0.0
         for sym, h in self.positions.items():
+            if h.entry_date and h.entry_date > date:
+                # DAV-2323：T+1 才成交的持仓不得回填到更早日期估值（信号日
+                # 收盘读到的只能是当日真实持仓）。
+                continue
             bar = get_bar(sym, date)
             px = None
             if bar is not None and bar.close is not None and bar.close > 0 and \
@@ -382,14 +408,17 @@ class ShadowLedger:
 
     # -- 执行委托 -------------------------------------------------------------
 
-    def try_buy(self, si: SignalIntent, exec_cash: float) -> LedgerEntry | None:
+    def try_buy(self, si: SignalIntent, exec_cash: float,
+                expiry_date: str | None = None) -> LedgerEntry | None:
         r = self.engine.execute_buy(si.symbol, si.signal_date, cash=exec_cash)
         if r.status != OrderStatus.FILLED:
             return None
         self.cash -= r.effective_price * r.shares  # type: ignore[operator]
         h = HoldingState(symbol=si.symbol, shares=r.shares,
                          entry_date=r.executed_date or si.signal_date,
-                         entry_price_eff=r.effective_price or r.price or 0.0)
+                         entry_price_eff=r.effective_price or r.price or 0.0,
+                         signal_date=si.signal_date,
+                         expiry_date=expiry_date)
         self.positions[si.symbol] = h
         e = LedgerEntry(trade_date=r.executed_date or si.signal_date,
                         signal_date=si.signal_date, symbol=si.symbol,
@@ -455,6 +484,60 @@ def _sort_key_record(r: Mapping[str, Any]) -> tuple[str, str, str, str]:
             str(r.get("report_id") or ""))
 
 
+def _nav_series_from_entries(
+        initial_cash: float,
+        entries: Sequence[LedgerEntry],
+        get_bar: Callable[[str, str], Any],
+        calendar: Sequence[str],
+        start: str,
+        end: str,
+) -> list[tuple[str, float]]:
+    """按成交日重放账本事件，逐日收盘计算净值（DAV-2323）。
+
+    历史净值只由「成交日 ≤ 当日」的成交流水决定：不得用末态 cash/positions
+    回算（否则未来成交会把前视偏差带进历史），后加入的记录也不能改写已有
+    日期之前的净值（前缀稳定）；T+1 成交的持仓不计入信号日估值。
+
+    成交日相同的记录按账本写入顺序重放；估值优先用当日有效收盘，无 bar
+    （停牌/缺数据）沿用该标的最近一次有效收盘，与 ``market_value`` 口径一致。
+    """
+    ordered = sorted(entries, key=lambda e: e.trade_date)   # 稳定排序
+    cash = float(initial_cash)
+    shares: dict[str, int] = {}
+    last_price: dict[str, float] = {}
+    nav: list[tuple[str, float]] = []
+    p = 0
+    for day in calendar:
+        while p < len(ordered) and ordered[p].trade_date <= day:
+            e = ordered[p]
+            p += 1
+            if e.side == "BUY":
+                cash -= e.effective_price * e.shares
+                shares[e.symbol] = shares.get(e.symbol, 0) + e.shares
+            else:
+                cash += e.effective_price * e.shares
+                left = shares.get(e.symbol, 0) - e.shares
+                if left > 0:
+                    shares[e.symbol] = left
+                else:
+                    shares.pop(e.symbol, None)
+        if not (start <= day <= end):
+            continue
+        mv = 0.0
+        for sym, n_shares in shares.items():
+            bar = get_bar(sym, day)
+            if (bar is not None and bar.close is not None and bar.close > 0
+                    and bar.vol is not None and bar.vol > 0):
+                px = float(bar.close)
+                last_price[sym] = px
+            else:
+                px = last_price.get(sym)
+            if px is not None:
+                mv += n_shares * px
+        nav.append((day, cash + mv))
+    return nav
+
+
 def run_shadow_portfolio(
         records: Sequence[Mapping[str, Any]],
         strategy_fn: StrategyFn,
@@ -466,16 +549,22 @@ def run_shadow_portfolio(
         get_bar: Callable[[str, str], Any] | None = None,
         mark_start: str | None = None,
         mark_end: str | None = None,
+        exit_after_trading_days: int | None = 40,
 ) -> PortfolioResult:
     """在给定封存记录集合上运行一套策略，返回确定性账本结果。
 
-    - ``records`` 输入顺序无关：内部按 (signal_date, symbol, report_id) 排序。
-    - ``mark_start`` / ``mark_end`` 为净值区间（默认覆盖全部信号日±顺延窗口）。
+    - ``records`` 输入顺序无关：内部按 (signal_date, symbol, sealed_at,
+      report_id) 排序。
+    - ``mark_start`` / ``mark_end`` 为净值区间（默认覆盖整个日历）。
+    - ``exit_after_trading_days``：标准持仓出口 = 信号日起第 N 个交易日收盘，
+      默认 40（M2 方案 §4 的标准口径）；0/None 关闭。到期退出排在当日信号
+      之后（收盘成交，不用当日早盘卖出回款），早于该日的 SELL 仍走 T+1 收盘。
     """
     get_bar = get_bar or engine.get_bar
     ledger = ShadowLedger(initial_cash=initial_cash, engine=engine,
                           trading_calendar=engine.trading_calendar)
     cal = list(engine.trading_calendar)
+    cal_days = set(cal)
 
     # 1) 逐条生成意图（确定性顺序）
     intents: list[SignalIntent] = []
@@ -490,28 +579,40 @@ def run_shadow_portfolio(
     for si in intents:
         by_day.setdefault(si.signal_date, []).append(si)
 
+    def _expiry_date(signal_date: str) -> str | None:
+        n = exit_after_trading_days
+        if not n or n <= 0 or not cal:
+            return None
+        pos = calendar_position(cal, signal_date) + n
+        if pos >= len(cal):
+            return None
+        return cal[pos]
+
     blocked = 0
-    for day in sorted(by_day):
-        day_list = by_day[day]
+    # 信号日 ∪ 日历日：到期退出必须在真实日期触发，不能等到下一个信号日。
+    for day in sorted(cal_days | set(by_day)):
+        day_list = by_day.get(day, ())
         new_buys_today = 0
         for si in day_list:
             rec = si.record
             risk_status = ledger_risk_status(rec, horizon)
 
-            # --- 风控层（版本化规则） ---
+            # --- 信号层风控（版本化规则；仅对不忽略它的策略生效） ---
             if si.intent == Intent.BUY:
-                if rules.respect_blocked and risk_status == "BLOCKED":
-                    blocked += 1
-                    continue
-                if rules.require_risk_clear and risk_status not in (
-                        None, "OK", "UNKNOWN"):
-                    blocked += 1
-                    continue
-                if rules.min_confidence is not None and (
-                        si.confidence is None
-                        or si.confidence < rules.min_confidence):
-                    blocked += 1
-                    continue
+                if not si.ignore_signal_risk:
+                    if rules.respect_blocked and risk_status == "BLOCKED":
+                        blocked += 1
+                        continue
+                    if rules.require_risk_clear and risk_status not in (
+                            None, "OK", "UNKNOWN"):
+                        blocked += 1
+                        continue
+                    if rules.min_confidence is not None and (
+                            si.confidence is None
+                            or si.confidence < rules.min_confidence):
+                        blocked += 1
+                        continue
+                # --- 组合层约束（所有策略一致，DAV-2323） ---
                 if rules.max_positions and len(ledger.positions) >= rules.max_positions:
                     blocked += 1
                     continue
@@ -539,7 +640,8 @@ def run_shadow_portfolio(
                 eq = ledger.equity(get_bar, day)
                 budget = eq * rules.position_weight * max(si.weight, 0.0)
                 exec_cash = min(ledger.cash, budget)
-                e = ledger.try_buy(si, exec_cash)
+                e = ledger.try_buy(si, exec_cash,
+                                   expiry_date=_expiry_date(si.signal_date))
                 if e is not None:
                     new_buys_today += 1
                     # 冷却基准：实际成交日（买入发生日），而非信号日——同标的
@@ -556,14 +658,24 @@ def run_shadow_portfolio(
                     ledger.try_sell(si.symbol, si.signal_date, t1,
                                     reason=si.reason or "signal_sell")
 
-    # 3) 逐日净值（mark-to-market）
+        # 到期退出：目标日只尝试一次（成交层内部按 max_roll_days 顺延），排在
+        # 当日信号之后，避免用当日收盘回款给当日早盘买入供资。
+        if exit_after_trading_days and day in cal_days:
+            for sym in sorted(ledger.positions):
+                h = ledger.positions.get(sym)
+                if h is None or h.expiry_date != day:
+                    continue
+                ledger.try_sell(sym, h.signal_date or day, day,
+                                reason="holding_period_expiry")
+
+    # 3) 逐日净值（按成交日重放；不得用末态 cash/positions 回算）
     if not cal:
         nav: list[tuple[str, float]] = []
     else:
         start = mark_start or cal[0]
         end = mark_end or cal[-1]
-        nav = [(d, ledger.equity(get_bar, d))
-               for d in cal if start <= d <= end]
+        nav = _nav_series_from_entries(initial_cash, ledger.entries, get_bar,
+                                       cal, start, end)
 
     buys = [e for e in ledger.entries if e.side == "BUY"]
     sells = [e for e in ledger.entries if e.side == "SELL"]
