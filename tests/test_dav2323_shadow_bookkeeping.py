@@ -87,6 +87,35 @@ def rules_unlimited() -> RiskRules:
                      cooldown_per_symbol=0)
 
 
+def sym_engine(cal: list[str], suspend: set | None = None):
+    """按 (标的, 日期) 停牌的合成行情：停牌日 vol=0，其余一律 10 元可成交。"""
+    halted = suspend or set()
+
+    def get_bar(sym, d):
+        if (sym, d) in halted:
+            return mkbar(d, vol=0)
+        return mkbar(d, o=10.0, c=10.0)
+
+    return ExecutionEngine(trading_calendar=list(cal), get_bar=get_bar)
+
+
+def _run_sym(cal, records, suspend=None, rules=None, **kwargs):
+    return run_shadow_portfolio(
+        records, strategy_fn=strategy_direction_intent,
+        engine=sym_engine(cal, suspend), rules=rules or rules_unlimited(),
+        initial_cash=100_000, strategy_name="s", **kwargs)
+
+
+def _min_replayed_cash(entries, initial_cash=100_000.0) -> float:
+    """按真实成交日重放现金，返回过程中的最低现金（负数=隐含融资）。"""
+    cash = float(initial_cash)
+    low = cash
+    for e in sorted(entries, key=lambda x: x.trade_date):
+        cash += (-1 if e.side == "BUY" else 1) * e.effective_price * e.shares
+        low = min(low, cash)
+    return low
+
+
 def _run(cal, records, strategy_fn=strategy_direction_intent, rules=None,
          bars=None, **kwargs):
     return run_shadow_portfolio(
@@ -293,3 +322,151 @@ class TestS2NoDirectionFallback:
         r["horizons"]["medium"]["trade_action"] = None
         res = _run(cal, [r], strategy_fn=strategy_risk_adjusted_intent)
         assert res.summary["n_buys"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. 委托解析与成交入账分离（DAV-2344）
+#
+# 成交层可把成交日顺延到未来（停牌/锁板）。修复前：卖出一定价即加现金、删
+# 持仓，买入一定价即扣现金——回款早到、买入现金早扣。下面四类用例均在修复
+# 前源码上失败、在修复后通过。
+# ---------------------------------------------------------------------------
+
+
+def _expiry_roll_setup():
+    """A 于 cal[0] 买入，第 40 个交易日到期但停牌 5 日，卖出顺延到 cal[45]。"""
+    cal = business_days(52)
+    suspend = {(SYM, cal[d]) for d in range(40, 45)}
+    return cal, suspend
+
+
+class TestRolledSellDoesNotReleaseFutureProceeds:
+    """🟡1：到期卖出因停牌顺延时，回款与持仓额度不得提前释放。"""
+
+    def test_rolled_expiry_sell_does_not_fund_intermediate_buy(self):
+        """顺延期间不得用尚未发生的回款给新买单供资（禁止隐含融资）。"""
+        cal, suspend = _expiry_roll_setup()
+        rules = RiskRules(name="full", position_weight=1.0,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=1.0, rid="a"),
+            rec(symbol=SYM2, signal_date=cal[41], prob=1.0, rid="b"),
+        ], suspend=suspend, rules=rules)
+
+        buys = [e for e in res.entries if e.side == "BUY"]
+        sells = [e for e in res.entries if e.side == "SELL"]
+        # 现金已全仓占用，回款要到 cal[45] 才到账 → 新信号无钱可买
+        assert [e.symbol for e in buys] == [SYM]
+        assert len(sells) == 1
+        assert sells[0].reason == "holding_period_expiry"
+        assert sells[0].trade_date == cal[45]
+        # 按真实成交时间重放：现金始终非负
+        assert _min_replayed_cash(res.entries) >= 0.0
+
+    def test_rolled_expiry_sell_keeps_position_slot_until_fill(self):
+        """顺延期间持仓仍在账上：限仓额度不得提前释放。"""
+        cal, suspend = _expiry_roll_setup()
+        rules = RiskRules(name="cap", max_positions=1, position_weight=0.5,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], rid="a"),
+            rec(symbol=SYM2, signal_date=cal[41], rid="b"),
+        ], suspend=suspend, rules=rules)
+
+        assert [e.symbol for e in res.entries if e.side == "BUY"] == [SYM]
+        assert res.n_blocked == 1
+        assert res.summary["open_positions"] == {}
+
+    def test_entries_are_booked_in_chronological_fill_order(self):
+        """账本按真实成交时序追加：cash_after 不得靠写入顺序掩盖融资。"""
+        cal, suspend = _expiry_roll_setup()
+        rules = RiskRules(name="full", position_weight=1.0,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=1.0, rid="a"),
+            rec(symbol=SYM2, signal_date=cal[41], prob=1.0, rid="b"),
+        ], suspend=suspend, rules=rules)
+
+        dates = [e.trade_date for e in res.entries]
+        assert dates == sorted(dates)
+        # 每笔 cash_after 与按成交时序重放的余额一致
+        cash = 100_000.0
+        for e in res.entries:
+            cash += (-1 if e.side == "BUY" else 1) * e.effective_price * e.shares
+            assert e.cash_after == pytest.approx(cash, abs=1e-6)
+            assert e.cash_after >= 0.0
+
+    def test_preempt_proceeds_not_used_by_same_day_open_buy(self):
+        """同一根因：先平后开时，当日开盘买入不得用当日收盘卖出的回款。"""
+        cal = business_days(20)
+        rules = RiskRules(name="full", position_weight=1.0,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=0.5, rid="a"),
+            rec(symbol=SYM, signal_date=cal[5], prob=1.0, rid="b"),
+        ], rules=rules)
+
+        buys = [e for e in res.entries if e.side == "BUY"]
+        sells = [e for e in res.entries if e.side == "SELL"]
+        assert len(buys) == 2 and len(sells) == 1
+        # 新仓只可用已入账现金（≈47,960.52 元）：4,700 股；若用当日收盘回款
+        # 则可买 9,900 股（修复前的错误行为）。
+        assert [e.shares for e in buys] == [5_200, 4_700]
+        assert sells[0].trade_date == cal[6]
+        assert _min_replayed_cash(res.entries) >= 0.0
+
+
+class TestSameDayBuyBudgetUsesRealEquity:
+    """🟡2：同日多标的买入的预算用同一时点真实权益，预留现金另行维护。"""
+
+    def test_same_day_signals_get_identical_budget(self):
+        """同日、同概率、同价：第二笔预算不得因第一笔预扣现金而递减。"""
+        cal = business_days(10)
+        rules = RiskRules(name="half", position_weight=0.5,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=1.0, rid="a"),
+            rec(symbol=SYM2, signal_date=cal[0], prob=1.0, rid="b"),
+        ], rules=rules)
+
+        buys = [e for e in res.entries if e.side == "BUY"]
+        # 同日信号按 (signal_date, symbol) 排序：000001.SZ 先于 600519.SH
+        assert [e.symbol for e in buys] == [SYM2, SYM]
+        # 同日、同概率、同价：两笔预算相等，不得因先订先扣现金而递减
+        assert [e.shares for e in buys] == [4_900, 4_900]
+        # 两笔实际成交日为同一个 T+1
+        assert buys[0].trade_date == buys[1].trade_date == cal[1]
+        assert _min_replayed_cash(res.entries) >= 0.0
+
+    def test_same_day_budget_matches_standalone_budget(self):
+        """同日同标的的预算等于它单独运行时的预算（不受同日其他标的干扰）。"""
+        cal = business_days(10)
+        rules = RiskRules(name="half", position_weight=0.5,
+                          respect_blocked=False)
+        # 取同日排序里的后位标的（600519.SH）作对照组：它才是被前位预扣影响的那个
+        alone = _run_sym(cal, [rec(symbol=SYM, signal_date=cal[0], prob=1.0)],
+                         rules=rules)
+        pair = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=1.0, rid="a"),
+            rec(symbol=SYM2, signal_date=cal[0], prob=1.0, rid="b"),
+        ], rules=rules)
+
+        assert alone.summary["n_buys"] == 1
+        alone_shares = next(e for e in alone.entries if e.side == "BUY").shares
+        pair_b = next(e for e in pair.entries
+                      if e.side == "BUY" and e.symbol == SYM)
+        assert pair_b.shares == alone_shares
+
+    def test_reserved_buy_cash_still_prevents_overbuy(self):
+        """预留额度仍是硬约束：同日两笔全仓买入不得超支（第二笔无钱可买）。"""
+        cal = business_days(10)
+        rules = RiskRules(name="full", position_weight=1.0,
+                          respect_blocked=False)
+        res = _run_sym(cal, [
+            rec(symbol=SYM, signal_date=cal[0], prob=1.0, rid="a"),
+            rec(symbol=SYM2, signal_date=cal[0], prob=1.0, rid="b"),
+        ], rules=rules)
+
+        assert [e.symbol for e in res.entries if e.side == "BUY"] == [SYM2]
+        assert _min_replayed_cash(res.entries) >= 0.0
+
