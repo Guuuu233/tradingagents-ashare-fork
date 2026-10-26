@@ -129,11 +129,15 @@ class TestLedgerFields:
         r["horizons"]["medium"]["trade_action"] = None
         assert ledger_final_action(r) == "BUY"
 
-    def test_final_action_falls_back_to_direction(self):
+    def test_final_action_does_not_fall_back_to_direction(self):
+        """DAV-2323：缺 trade_action/decision 时记不可用，不回退 direction。"""
         r = rec(action=None, decision=None, direction="看空")
         r["horizons"]["medium"]["trade_action"] = None
         r["horizons"]["medium"]["decision"] = None
-        assert ledger_final_action(r) == "SELL"
+        assert ledger_final_action(r) is None
+        assert strategy_risk_adjusted_intent(r) is None
+        # S1 同一记录仍按方向产生意图（对照：S2 不是 S1 的别名）
+        assert strategy_direction_intent(r) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -374,11 +378,12 @@ class TestRiskRulesReplay:
         assert r2.summary["n_buys"] == 5
         assert r2.n_blocked >= 1
 
-    def test_blocked_risk_status_suppresses_buy(self):
+    def test_blocked_risk_status_suppresses_s2_buy(self):
+        """BLOCKED 抑制 S2 新开仓（DAV-2323：S1 不受此约束，见回归用例）。"""
         eng = flat_engine()
         res = run_shadow_portfolio(
             [rec(direction="看多", action="BUY", risk="BLOCKED", conf=90)],
-            strategy_fn=strategy_direction_intent,
+            strategy_fn=strategy_risk_adjusted_intent,
             engine=eng, rules=risk_rules_v2(), initial_cash=100_000,
             strategy_name="s",
         )
@@ -400,13 +405,14 @@ class TestRiskRulesReplay:
         assert res.summary["n_sells"] == 1
 
     def test_require_risk_clear_filters_unknown_but_allows_ok(self):
+        """信号层风控对 S2 生效（S1 忽略风控输出层，见 DAV-2323 回归用例）。"""
         eng = flat_engine()
         rules = RiskRules(name="t", require_risk_clear=True,
                           position_weight=0.5)
         res = run_shadow_portfolio(
             [rec(direction="看多", risk="ELEVATED", conf=90, rid="a"),
              rec(symbol=SYM2, direction="看多", risk="OK", conf=90, rid="b")],
-            strategy_fn=strategy_direction_intent,
+            strategy_fn=strategy_risk_adjusted_intent,
             engine=eng, rules=rules, initial_cash=100_000, strategy_name="s",
         )
         buys = [e.symbol for e in res.entries if e.side == "BUY"]
@@ -425,12 +431,13 @@ class TestRiskRulesReplay:
         assert res.n_blocked == 1
 
     def test_min_confidence_threshold(self):
+        """min_confidence 属信号层风控，对 S2 生效（S1 忽略，见回归用例）。"""
         eng = flat_engine()
         rules = RiskRules(name="t", min_confidence=70, position_weight=0.5)
         res = run_shadow_portfolio(
-            [rec(direction="看多", conf=60, rid="a"),
-             rec(symbol=SYM2, direction="看多", conf=90, rid="b")],
-            strategy_fn=strategy_direction_intent,
+            [rec(direction="看多", action="BUY", conf=60, rid="a"),
+             rec(symbol=SYM2, direction="看多", action="BUY", conf=90, rid="b")],
+            strategy_fn=strategy_risk_adjusted_intent,
             engine=eng, rules=rules, initial_cash=100_000, strategy_name="s",
         )
         buys = [e.symbol for e in res.entries if e.side == "BUY"]
