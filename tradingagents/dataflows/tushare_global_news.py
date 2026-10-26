@@ -1085,7 +1085,7 @@ def filter_global_news(
             continue
         tier, unknown = _row_tier(source, row)
         for lab in unknown:
-            logger.info("tushare_news unknown channel label: source=%s label=%r", source, lab)
+            logger.debug("tushare_news unknown channel label: source=%s label=%r", source, lab)
         if tier == "exclude":
             _drop("channel_excluded")
             continue

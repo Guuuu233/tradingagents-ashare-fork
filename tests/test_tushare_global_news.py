@@ -172,10 +172,28 @@ def test_channel_policy_unknown_label_kept_and_logged(caplog):
         _pool_row("news:cls", "datetime", "2025-06-10 10:00:00", "央行开展逆回购操作", "", channels="新频道X"),
         _pool_row("news:cls", "datetime", "2025-06-10 10:05:00", "美联储宣布降息25个基点", "", channels="加红"),
     ]
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG", logger=tgn.__name__):
         out = tgn.filter_global_news(pool, "2025-06-10", 7, 50, {})
     assert len(out) == 2
-    assert any("unknown channel" in r.message for r in caplog.records)
+    assert any(
+        r.levelname == "DEBUG" and "unknown channel" in r.message
+        for r in caplog.records
+    )
+
+
+def test_repeated_unknown_channel_label_not_logged_at_info(caplog):
+    pool = [
+        _pool_row("news:cls", "datetime", "2025-06-10 10:00:00", "央行开展逆回购操作", "", channels="新频道X"),
+        _pool_row("news:cls", "datetime", "2025-06-10 10:05:00", "美联储宣布降息25个基点", "", channels="新频道X"),
+    ]
+    with caplog.at_level("INFO", logger=tgn.__name__):
+        for _ in range(3):
+            out = tgn.filter_global_news(pool, "2025-06-10", 7, 50, {})
+            assert [c["_title"] for c in out] == [
+                "央行开展逆回购操作", "美联储宣布降息25个基点",
+            ]
+            assert all(c["_tier"] == "supplemental" for c in out)
+    assert not any("unknown channel label" in r.message for r in caplog.records)
 
 
 def test_major_news_src_whitelist():
