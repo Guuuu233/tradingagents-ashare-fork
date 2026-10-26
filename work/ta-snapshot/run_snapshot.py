@@ -17,13 +17,17 @@ write), then runs scripts/ta_snapshot.py once per date (done-<date>.ok).
 import json, os, re, resource, shutil, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta
 
-ROOT = "/Users/davidliu/Documents/TradingAgents-AShare"
-PY = os.path.join(ROOT, ".venv310/bin/python")
-SCRIPT = "/Users/davidliu/ta-work/dav-snap-8571/scripts/ta_snapshot.py"
-BATCH_DIR = os.path.join(ROOT, "work/daily-batch")
+# Code and interpreter follow this deployment, independently of the live data.
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+PY = sys.executable
+SCRIPT = os.path.join(ROOT, "scripts", "ta_snapshot.py")
+# Data stays in place until the release card migrates its producers/consumers.
+BATCH_DIR = os.environ.get(
+    "TA_SNAPSHOT_BATCH_DIR", "/Users/davidliu/Documents/TradingAgents-AShare/work/daily-batch")
+DB = os.environ.get(
+    "TA_SNAPSHOT_SOURCE_DB", "/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db")
 OUT = os.path.expanduser("~/ta-snapshot")
-HERE = "/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot"
-DB = os.path.join(ROOT, "data", "tradingagents.db")  # live DB stays in main checkout
 MIN_FREE_GB = 60  # DAV-2162: aligned with the 60 GiB disk floor (was 100)
 LEVELS = [19, 15, 12, 9]
 TIME_LIMIT = 1800

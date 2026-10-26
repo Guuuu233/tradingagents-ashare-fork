@@ -37,13 +37,13 @@ B1_MONITOR = REPO_ROOT / "work" / "b1-monitor" / "b1_daily_monitor.py"
 
 PRODUCTION_PORT = 8000
 
-# sha256 after the DAV-2111 rework (BASE/root configurable, non-zero exit on
-# health-check failure). Recorded here so a silent edit is caught in review.
+# Explicit script revisions, so a silent edit is caught in review. DAV-2322
+# updates the daily script to resolve its calendar from the running interpreter.
 EXPECTED_SHA256 = {
     "work/b1-monitor/b1_daily_monitor.py":
         "386f277ac2ddd112de71bf6173a62a101d85370664344c971c3eeef6e9db6625",
     "work/daily-batch/run_daily.py":
-        "1defd2c32258d4ba2218469ef78667c186acb1f3a45e6faf31053fdfc5a42556",
+        "0762ad2d9b0f60b190fba7d4f7eee4dc7b7d6157ae8b9a5385b1ba27d266eb73",
 }
 
 # b1_daily_monitor.py is the verbatim production copy and must stay so.
@@ -115,6 +115,9 @@ def guarded_env(tmp_path_factory):
                 "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
         env.pop(var, None)
     env["DAV2111_BLOCKED_PORT"] = str(PRODUCTION_PORT)
+    calendar = guard_dir / "calendar.json"
+    calendar.write_text(json.dumps(["20261015", "20261016"]))
+    env["TA_DAILY_CALENDAR"] = str(calendar)
     return env
 
 
@@ -288,12 +291,9 @@ def test_b1_self_test_is_offline(guarded_env):
 # ---------------------------------------------------------------------------
 
 def _fake_root(tmp_path: Path) -> Path:
-    """A self-contained ROOT: calendar, empty db, and the account file."""
+    """Self-contained data root; guarded_env supplies the calendar separately."""
     root = tmp_path / "root"
-    cal_dir = root / ".venv310/lib/python3.10/site-packages/akshare/file_fold"
-    cal_dir.mkdir(parents=True)
-    (cal_dir / "calendar.json").write_text(json.dumps(["20261015", "20261016"]))
-    (root / "data").mkdir()
+    (root / "data").mkdir(parents=True)
     (root / "data" / "tradingagents.db").touch()
     bench = root / "work/hist-bench-20260926"
     bench.mkdir(parents=True)
