@@ -25,6 +25,11 @@
   - 标准持仓出口 = 信号日起第 40 个交易日收盘（``exit_after_trading_days``，
     0/None 关闭）；早于该日的 SELL 仍按 T+1 收盘退出，到期退出排在当日信号
     之后（收盘成交，不用当日早盘的卖出回款）。
+  - 委托解析与成交入账分离（DAV-2344）：成交层给出 ``executed_date``（停牌/
+    锁板顺延到未来）时只登记待成交委托，到该交易日的对应时点才改动现金与
+    持仓——买入走开盘、卖出走收盘，同一日的开盘买入不得使用当日收盘卖出
+    的回款。未成交的卖出委托仍计入持仓与估值（不得提前释放持仓额度/净值），
+    未成交的买入只占用现金额度、不预扣现金也不计入净值。
   - 输出净值序列、换手（成交额 / 期间平均权益）、最大回撤、胜率等。
 
 风控规则离线重放：
@@ -363,35 +368,103 @@ class HoldingState:
     last_price: float | None = None   # 最近一个有效收盘（用于 mark）
     signal_date: str = ""             # 开仓信号日（到期退出的起算基准）
     expiry_date: str | None = None    # 标准持仓出口日（信号日 + N 交易日收盘）
+    # False = 委托已解析但尚未成交（成交日未到）：不预扣现金、不参与估值。
+    filled: bool = True
+    # True = 已登记卖出委托、等待成交日收盘入账；成交前仍计入持仓与估值。
+    exit_pending: bool = False
+
+
+@dataclass
+class PendingFill:
+    """已解析、待成交日入账的委托（DAV-2344）。
+
+    成交层解析（``executed_date`` 可能因停牌/锁板顺延到未来某日）与账本入账
+    分离：只有到 ``executed_date`` 的对应时点才改动现金与持仓，禁止提前释放
+    未来回款、提前释放持仓额度，或用未发生的成交给当日买单供资。
+    """
+
+    side: str                       # BUY / SELL
+    symbol: str
+    executed_date: str              # 实际成交日（买=开盘，卖=收盘）
+    shares: int
+    price: float                    # 原始成交价
+    effective_price: float          # 含成本价
+    gross_amount: float
+    fee: float
+    signal_date: str
+    reason: str = ""
+    lot: HoldingState | None = None                      # BUY：待开仓的持仓
+    lots: list[HoldingState] = field(default_factory=list)  # SELL：待平仓的持仓
+    reserved_cash: float = 0.0      # BUY：已占用额度、尚未从现金中扣除
+
+    @property
+    def cost(self) -> float:
+        return self.effective_price * self.shares
 
 
 @dataclass
 class ShadowLedger:
-    """单策略影子账本。初始资金、持仓、现金、逐笔成交、逐日净值。"""
+    """单策略影子账本。初始资金、持仓、现金、逐笔成交、逐日净值。
+
+    ``lots`` 为持仓明细（允许同一标的短暂重叠：先平后开时新仓在开盘成交、
+    旧仓在同一交易日收盘成交）；``positions`` 为按标的聚合的只读快照。
+    未成交委托记在 ``pending``，到成交日的开盘（买）/收盘（卖）才入账。
+    """
 
     initial_cash: float
     engine: ExecutionEngine
     trading_calendar: TradingCalendar
 
     cash: float = field(init=False)
-    positions: dict[str, HoldingState] = field(default_factory=dict, init=False)
+    lots: list[HoldingState] = field(default_factory=list, init=False)
     entries: list[LedgerEntry] = field(default_factory=list, init=False)
+    pending: list[PendingFill] = field(default_factory=list, init=False)
     # 每信号日同标的上一次开仓日（冷却判定用）
     _last_entry_pos: dict[str, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.cash = float(self.initial_cash)
 
+    # -- 持仓视图 ------------------------------------------------------------
+
+    @property
+    def positions(self) -> dict[str, HoldingState]:
+        """按标的聚合的持仓快照（只读；同标的多笔合并股数）。"""
+        out: dict[str, HoldingState] = {}
+        for h in self.lots:
+            cur = out.get(h.symbol)
+            if cur is None:
+                out[h.symbol] = HoldingState(
+                    symbol=h.symbol, shares=h.shares, entry_date=h.entry_date,
+                    entry_price_eff=h.entry_price_eff,
+                    last_price=h.last_price, signal_date=h.signal_date,
+                    expiry_date=h.expiry_date, filled=h.filled,
+                    exit_pending=h.exit_pending)
+            else:
+                cur.shares += h.shares
+        return out
+
+    def reserved_cash(self) -> float:
+        """已占用、尚未扣除的买入额度（未到成交日的买入委托）。"""
+        return sum(f.reserved_cash for f in self.pending if f.side == "BUY")
+
+    def available_cash(self) -> float:
+        """可用于新委托的现金 = 已入账现金 − 未成交买入占用额度。"""
+        return self.cash - self.reserved_cash()
+
     # -- 估值 ----------------------------------------------------------------
 
     def market_value(self, get_bar, date: str) -> float:
         mv = 0.0
-        for sym, h in self.positions.items():
+        for h in self.lots:
+            if not h.filled:
+                # DAV-2344：成交日未到的买入既未扣现金，也不得计入权益。
+                continue
             if h.entry_date and h.entry_date > date:
                 # DAV-2323：T+1 才成交的持仓不得回填到更早日期估值（信号日
                 # 收盘读到的只能是当日真实持仓）。
                 continue
-            bar = get_bar(sym, date)
+            bar = get_bar(h.symbol, date)
             px = None
             if bar is not None and bar.close is not None and bar.close > 0 and \
                     bar.vol is not None and bar.vol > 0:
@@ -408,48 +481,99 @@ class ShadowLedger:
 
     # -- 执行委托 -------------------------------------------------------------
 
-    def try_buy(self, si: SignalIntent, exec_cash: float,
-                expiry_date: str | None = None) -> LedgerEntry | None:
+    def submit_buy(self, si: SignalIntent, exec_cash: float,
+                   expiry_date: str | None = None) -> PendingFill | None:
+        """解析 T+1 开盘买入委托；现金与持仓到成交日开盘才入账（DAV-2344）。
+
+        返回已登记的待成交委托；成交层拒绝（现金不足一手/无后续交易日）
+        返回 None，此时不占用任何额度。
+        """
         r = self.engine.execute_buy(si.symbol, si.signal_date, cash=exec_cash)
         if r.status != OrderStatus.FILLED:
             return None
-        self.cash -= r.effective_price * r.shares  # type: ignore[operator]
+        eff = r.effective_price or 0.0
+        executed = r.executed_date or si.signal_date
         h = HoldingState(symbol=si.symbol, shares=r.shares,
-                         entry_date=r.executed_date or si.signal_date,
-                         entry_price_eff=r.effective_price or r.price or 0.0,
+                         entry_date=executed,
+                         entry_price_eff=eff,
                          signal_date=si.signal_date,
-                         expiry_date=expiry_date)
-        self.positions[si.symbol] = h
-        e = LedgerEntry(trade_date=r.executed_date or si.signal_date,
-                        signal_date=si.signal_date, symbol=si.symbol,
-                        side="BUY", shares=r.shares, price=r.price or 0.0,
-                        effective_price=r.effective_price or 0.0,
-                        gross_amount=r.gross_amount, fee=r.fee,
-                        cash_after=self.cash, status=r.status.value,
-                        reason=si.reason)
-        self.entries.append(e)
-        return e
+                         expiry_date=expiry_date,
+                         # 成交日之前不得计入估值，也不从现金里预扣。
+                         filled=False)
+        pf = PendingFill(side="BUY", symbol=si.symbol,
+                         executed_date=executed, shares=r.shares,
+                         price=r.price or 0.0, effective_price=eff,
+                         gross_amount=r.gross_amount, fee=r.fee,
+                         signal_date=si.signal_date, reason=si.reason,
+                         lot=h, reserved_cash=eff * r.shares)
+        self.lots.append(h)
+        self.pending.append(pf)
+        return pf
 
-    def try_sell(self, symbol: str, signal_date: str,
-                 earliest_date: str, reason: str = "") -> LedgerEntry | None:
-        h = self.positions.get(symbol)
-        if h is None or h.shares <= 0:
+    def submit_sell(self, symbol: str, signal_date: str,
+                    earliest_date: str, reason: str = "") -> PendingFill | None:
+        """解析卖出委托；回款与持仓释放到成交日收盘才入账（DAV-2344）。
+
+        成交日未到之前持仓仍在 ``lots`` 里：不得提前释放持仓额度、不得用
+        尚未发生的回款供资。已登记退出（``exit_pending``）的持仓不再重复
+        下单；无可卖持仓时返回 None。
+        """
+        sellable = [h for h in self.lots
+                    if h.symbol == symbol and not h.exit_pending]
+        if not sellable:
             return None
-        r = self.engine.execute_sell(symbol, earliest_date, h.shares)
+        shares = sum(h.shares for h in sellable)
+        # 未成交的买入（T+1 或停牌顺延）不得在其成交日之前卖出。
+        first = max([earliest_date] + [h.entry_date for h in sellable
+                                       if h.entry_date])
+        r = self.engine.execute_sell(symbol, first, shares)
         if r.status != OrderStatus.FILLED:
             return None
-        proceeds = (r.effective_price or 0.0) * r.shares
-        self.cash += proceeds
-        e = LedgerEntry(trade_date=r.executed_date or earliest_date,
-                        signal_date=signal_date, symbol=symbol, side="SELL",
-                        shares=r.shares, price=r.price or 0.0,
-                        effective_price=r.effective_price or 0.0,
-                        gross_amount=r.gross_amount, fee=r.fee,
-                        cash_after=self.cash, status=r.status.value,
-                        reason=reason)
-        self.entries.append(e)
-        del self.positions[symbol]
-        return e
+        for h in sellable:
+            h.exit_pending = True
+        pf = PendingFill(side="SELL", symbol=symbol,
+                         executed_date=r.executed_date or first,
+                         shares=r.shares, price=r.price or 0.0,
+                         effective_price=r.effective_price or 0.0,
+                         gross_amount=r.gross_amount, fee=r.fee,
+                         signal_date=signal_date, reason=reason, lots=sellable)
+        self.pending.append(pf)
+        return pf
+
+    def apply_due_fills(self, day: str, phase: str) -> list[LedgerEntry]:
+        """把 ``executed_date <= day`` 的到期委托入账。
+
+        ``phase="open"`` 只入账买入（开盘价成交），``phase="close"`` 只入账
+        卖出（收盘价成交）：同一交易日的开盘买入早于收盘卖出，不可互为资金
+        来源。账本按真实成交时序追加，故 ``cash_after`` 是时序真实的余额。
+        """
+        want = "BUY" if phase == "open" else "SELL"
+        due = [f for f in self.pending
+               if f.side == want and f.executed_date <= day]
+        if not due:
+            return []
+        self.pending = [f for f in self.pending
+                        if not any(f is done for done in due)]
+        out: list[LedgerEntry] = []
+        for f in due:
+            if f.side == "BUY":
+                self.cash -= f.cost
+                if f.lot is not None:
+                    f.lot.filled = True
+            else:
+                self.cash += f.cost
+                self.lots = [h for h in self.lots
+                             if not any(h is closed for closed in f.lots)]
+            e = LedgerEntry(trade_date=f.executed_date,
+                            signal_date=f.signal_date, symbol=f.symbol,
+                            side=f.side, shares=f.shares, price=f.price,
+                            effective_price=f.effective_price,
+                            gross_amount=f.gross_amount, fee=f.fee,
+                            cash_after=self.cash, status=OrderStatus.FILLED.value,
+                            reason=f.reason)
+            self.entries.append(e)
+            out.append(e)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +715,9 @@ def run_shadow_portfolio(
     blocked = 0
     # 信号日 ∪ 日历日：到期退出必须在真实日期触发，不能等到下一个信号日。
     for day in sorted(cal_days | set(by_day)):
+        # 开盘：成交日已到的买入先入账（扣现金、开仓）。同一交易日的开盘
+        # 买入早于收盘卖出，不能用当日收盘卖出的回款（DAV-2344）。
+        ledger.apply_due_fills(day, "open")
         day_list = by_day.get(day, ())
         new_buys_today = 0
         for si in day_list:
@@ -625,48 +752,57 @@ def run_shadow_portfolio(
                     if last is not None and cur_pos - last < rules.cooldown_per_symbol:
                         blocked += 1
                         continue
-                # 已有持仓 → 先平（新信号覆盖旧持仓）
-                if si.symbol in ledger.positions:
+                # 已有持仓 → 先平（新信号覆盖旧持仓）。卖出委托只登记，回款
+                # 与持仓释放到其成交日收盘才入账；已安排退出的持仓不再重复
+                # 下单（停牌顺延期间新仓可开，但不得用未到账的回款供资）。
+                live = [h for h in ledger.lots if h.symbol == si.symbol]
+                if any(not h.exit_pending for h in live):
                     t1 = next_trading_day(cal, si.signal_date, 1)
                     if t1 is None:
                         blocked += 1
                         continue
-                    ledger.try_sell(si.symbol, si.signal_date, t1,
-                                    reason="preempt_by_new_signal")
-                    if si.symbol in ledger.positions:
+                    ledger.submit_sell(si.symbol, si.signal_date, t1,
+                                       reason="preempt_by_new_signal")
+                    if any(not h.exit_pending for h in ledger.lots
+                           if h.symbol == si.symbol):
                         blocked += 1
                         continue
-                # 仓位额度：equity * position_weight * si.weight
+                # 仓位额度：同一时点的真实权益（已入账成交）× 权重；可动用
+                # 现金需先扣除未到成交日的买入占用额度（DAV-2344）。
                 eq = ledger.equity(get_bar, day)
                 budget = eq * rules.position_weight * max(si.weight, 0.0)
-                exec_cash = min(ledger.cash, budget)
-                e = ledger.try_buy(si, exec_cash,
-                                   expiry_date=_expiry_date(si.signal_date))
-                if e is not None:
+                exec_cash = min(ledger.available_cash(), budget)
+                pf = ledger.submit_buy(si, exec_cash,
+                                       expiry_date=_expiry_date(si.signal_date))
+                if pf is not None:
                     new_buys_today += 1
                     # 冷却基准：实际成交日（买入发生日），而非信号日——同标的
                     # 二次开仓间隔按「上一次成交日」起算更贴近业务语义。
                     ledger._last_entry_pos[si.symbol] = calendar_position(
-                        cal, e.trade_date)
+                        cal, pf.executed_date)
             else:  # SELL 意图：平仓信号，风控不拦截退出
-                if si.symbol in ledger.positions:
+                if any(h.symbol == si.symbol and not h.exit_pending
+                       for h in ledger.lots):
                     # T+1 收盘卖出（对齐 R1 T+1 与 M2-A execute_sell 收盘价语义，
                     # 避免同日收盘回填的前视偏差）
                     t1 = next_trading_day(cal, si.signal_date, 1)
                     if t1 is None:
                         continue
-                    ledger.try_sell(si.symbol, si.signal_date, t1,
-                                    reason=si.reason or "signal_sell")
+                    ledger.submit_sell(si.symbol, si.signal_date, t1,
+                                       reason=si.reason or "signal_sell")
 
         # 到期退出：目标日只尝试一次（成交层内部按 max_roll_days 顺延），排在
-        # 当日信号之后，避免用当日收盘回款给当日早盘买入供资。
+        # 当日信号之后，避免用当日收盘回款给当日早盘买入供资。顺延期间持仓
+        # 仍在账上（不提前释放持仓额度与净值）。
         if exit_after_trading_days and day in cal_days:
-            for sym in sorted(ledger.positions):
-                h = ledger.positions.get(sym)
-                if h is None or h.expiry_date != day:
+            for h in list(ledger.lots):
+                if h.exit_pending or h.expiry_date != day:
                     continue
-                ledger.try_sell(sym, h.signal_date or day, day,
-                                reason="holding_period_expiry")
+                ledger.submit_sell(h.symbol, h.signal_date or day, day,
+                                   reason="holding_period_expiry")
+
+        # 收盘：成交日已到的卖出入账（加现金、退持仓）。
+        ledger.apply_due_fills(day, "close")
 
     # 3) 逐日净值（按成交日重放；不得用末态 cash/positions 回算）
     if not cal:
