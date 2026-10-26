@@ -5,11 +5,11 @@ under the snapshot dir drops below ``MIN_FREE_GB`` (now **60 GiB**, aligned
 with the 总控 10-16 disk floor; previously 100 GiB, which silently skipped
 10-16's run at 80.8 GiB free).
 
-Everything runs against a **sandboxed copy** of the wrapper: the deployment
-constants (``ROOT`` / ``HERE`` / ``OUT`` / ``BATCH_DIR`` / ``PY`` / ``SCRIPT``)
-are rewritten to tmp paths, ``shutil.disk_usage`` is stubbed via monkeypatch,
-and ``PY`` points at a stub interpreter that prints canned JSON — nothing ever
-touches the real DB, snapshot dir, or launchd state.
+Everything runs against a **sandboxed copy** of the wrapper in the deployment
+layout. Data paths use explicit environment overrides, the output directory is
+rewritten to a tmp path, and ``shutil.disk_usage`` is stubbed via monkeypatch.
+The running interpreter executes a local script that prints canned JSON —
+nothing touches the real DB, snapshot dir, or launchd state.
 
 Covers the card's two required cases:
 
@@ -63,48 +63,32 @@ _STUB_PY = textwrap.dedent(
 
 
 def _load_sandboxed_wrapper(tmp_path, monkeypatch):
-    """Exec a path-rewritten copy of run_snapshot.py; return the module.
+    """Load a temporary deployment with a local snapshot-script stub.
 
-    The copy lives under tmp_path so ``os.makedirs``/``os.chdir`` side effects
-    land in the sandbox. A fake ``summary.json`` for today's batch is
-    pre-created so the wrapper proceeds past the batch-presence check.
+    Preserving work/ta-snapshot and scripts exercises code-path resolution.
+    A fake summary for today's batch lets the wrapper reach the disk guard.
     """
     from datetime import date
 
     sb = tmp_path / "sb"
     root = sb / "repo"
-    here = sb / "state"
+    here = root / "work" / "ta-snapshot"
     out = sb / "ta-snapshot"
-    batch_dir = root / "work" / "daily-batch" / date.today().isoformat()
-    for d in (root, here, out, batch_dir):
+    batch_dir = sb / "batch" / date.today().isoformat()
+    scripts = root / "scripts"
+    for d in (here, out, batch_dir, scripts):
         d.mkdir(parents=True, exist_ok=True)
     (batch_dir / "summary.json").write_text("{}")
-
-    stub = sb / "stub-ta_snapshot.py"
-    stub.write_text(_STUB_PY)
+    (scripts / "ta_snapshot.py").write_text(_STUB_PY)
+    monkeypatch.setenv("TA_SNAPSHOT_SOURCE_DB", str(sb / "data" / "db.sqlite"))
+    monkeypatch.setenv("TA_SNAPSHOT_BATCH_DIR", str(batch_dir.parent))
 
     text = WRAPPER.read_text()
-    replacements = {
-        'ROOT = "/Users/davidliu/Documents/TradingAgents-AShare"':
-            f'ROOT = {str(root)!r}',
-        'PY = os.path.join(ROOT, ".venv310/bin/python")':
-            f'PY = {sys.executable!r}',
-        'SCRIPT = "/Users/davidliu/ta-work/dav-snap-8571/scripts/ta_snapshot.py"':
-            f'SCRIPT = {str(stub)!r}',
-        'BATCH_DIR = os.path.join(ROOT, "work/daily-batch")':
-            f'BATCH_DIR = {str(batch_dir.parent)!r}',
-        'OUT = os.path.expanduser("~/ta-snapshot")':
-            f'OUT = {str(out)!r}',
-        'HERE = "/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot"':
-            f'HERE = {str(here)!r}',
-        'DB = os.path.join(ROOT, "data", "tradingagents.db")':
-            f'DB = {str(root / "data" / "db.sqlite")!r}',
-    }
-    for old, new in replacements.items():
-        assert old in text, f"constant not found to rewrite: {old}"
-        text = text.replace(old, new)
+    old = 'OUT = os.path.expanduser("~/ta-snapshot")'
+    assert old in text, "snapshot output path not found to rewrite"
+    text = text.replace(old, f'OUT = {str(out)!r}')
 
-    mod_path = sb / "run_snapshot_sandboxed.py"
+    mod_path = here / "run_snapshot.py"
     mod_path.write_text(text)
     spec = importlib.util.spec_from_file_location(
         "run_snapshot_sandboxed", str(mod_path))

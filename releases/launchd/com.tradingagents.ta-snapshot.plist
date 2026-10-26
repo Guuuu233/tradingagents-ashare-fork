@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- DAV-2322 candidate: install only with the reviewed wrapper in DAV-2269.
+     Code and interpreter are outside the main checkout; live data stays put. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tradingagents.ta-snapshot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/davidliu/ta-venv/py310/bin/python</string>
+        <string>/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot/run_snapshot.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/davidliu/ta-work/dav-snap-8571</string>
+    <key>StandardOutPath</key>
+    <string>/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/davidliu/ta-work/dav-snap-8571/work/ta-snapshot/launchd.err.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>1</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>2</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>3</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>4</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>30</integer><key>Weekday</key><integer>5</integer></dict>
+    </array>
+</dict>
+</plist>

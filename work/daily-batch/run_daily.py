@@ -7,8 +7,9 @@
 用法：run_daily.py [--date YYYY-MM-DD] [--dry-run] [--base URL] [--root DIR]
 
 --base / 环境变量 TA_DAILY_BASE 决定被调用的服务地址（默认仍为生产 127.0.0.1:8000）；
---root / TA_DAILY_ROOT 决定代码根目录（数据库、交易日历、账户文件均在其下）。
-两者都可在运行时覆盖，使本脚本可在指向桩服务时被测试，而不会触达生产。
+--root / TA_DAILY_ROOT 决定数据根目录（数据库、账户文件在其下）。
+交易日历从运行解释器 sys.prefix 下的 akshare 读取；TA_DAILY_CALENDAR 可显式覆盖。
+服务、数据根目录与日历均可独立配置，使本脚本可在指向桩服务时被测试。
 
 登录账户：优先 --account / 环境变量 TA_DAILY_ACCOUNT；未设置时才回退到旧路径
 $ROOT/work/hist-bench-20260926/run.py 里的 EMAIL 赋值——该文件未入版本库，
@@ -29,7 +30,10 @@ BASE = os.environ.get("TA_DAILY_BASE", "http://127.0.0.1:8000")
 ACCOUNT_EMAIL = os.environ.get("TA_DAILY_ACCOUNT")
 DB = f"{ROOT}/data/tradingagents.db"
 UID = "429163f7-50b6-4982-8bdf-96ae99506843"
-CAL = f"{ROOT}/.venv310/lib/python3.10/site-packages/akshare/file_fold/calendar.json"
+# The calendar belongs to the running interpreter, independently of the data root.
+CAL = os.environ.get("TA_DAILY_CALENDAR") or os.path.join(
+    sys.prefix, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}",
+    "site-packages", "akshare", "file_fold", "calendar.json")
 HERE = os.path.dirname(os.path.abspath(__file__))
 START = "2026-10-08"
 CLOSE_HOUR = 16
@@ -98,10 +102,9 @@ def resolve_account(explicit, root):
 
 def main():
     opts = parse_args(sys.argv[1:])
-    global BASE, ROOT, DB, CAL
+    global BASE, ROOT, DB
     BASE, ROOT = opts.base, opts.root
     DB = f"{ROOT}/data/tradingagents.db"
-    CAL = f"{ROOT}/.venv310/lib/python3.10/site-packages/akshare/file_fold/calendar.json"
     dry = opts.dry_run
     days = trading_days()
     date = opts.date or target_date(days, datetime.now())
