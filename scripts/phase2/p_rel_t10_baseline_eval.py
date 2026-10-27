@@ -1711,20 +1711,28 @@ def base_query_audit(panel: pd.DataFrame, query_days,
             keys_by_day[d] += 1
         else:
             missing += 1
-    # matured counts per query day under the engine's own absorption rule
-    # (mat is a real day and mat <= day; unassigned rows count to the market
-    # only). DAV-2255: the order comes from `day_key`, never from raw string
-    # ordering — '2023-09-27' < '20230927' in string order but both are the
-    # same day, so a mixed-shape panel would have been counted wrong here.
-    matured_rows = panel.loc[with_mat]
-    mat_keys = matured_rows["mat"].astype(str).map(day_key).to_numpy()
-    l1_vals = matured_rows["l1"].astype(str).to_numpy()
-    per_day: dict[str, dict] = {}
-    for d in days:
-        sel = mat_keys <= day_key(d)
-        by_l1 = pd.Series(l1_vals[sel & (l1_vals != "")]).value_counts()
-        per_day[d] = {"by_l1": {str(k): int(v) for k, v in by_l1.items()},
-                      "market": int(sel.sum())}
+    # DAV-2257: bucket each DISTINCT maturity day into its first query day,
+    # then prefix-sum one (query day, industry) histogram. Each label is
+    # counted once; query-day snapshots below are hash lookups, independent
+    # of panel size. Sorting uses DAV-2255 day keys, never raw day strings.
+    matured_rows = panel.loc[with_mat, ["mat", "l1"]]
+    ordered_days = sorted(days, key=day_key)
+    query_keys = [day_key(d) for d in ordered_days]
+    mat_values = matured_rows["mat"].astype(str)
+    slots = {mat: bisect.bisect_left(query_keys, day_key(mat))
+             for mat in mat_values.unique()}
+    counts = pd.DataFrame({
+        "day": mat_values.map(slots).to_numpy(),
+        "l1": matured_rows["l1"].astype(str).to_numpy(),
+    })
+    counts = (counts.groupby(["day", "l1"]).size().unstack(fill_value=0)
+              .reindex(range(len(ordered_days)), fill_value=0).cumsum())
+    # The slot after the last query is dropped by reindex: future labels
+    # never enter any snapshot. Empty industries still feed the market.
+    per_day = {
+        d: {"by_l1": {str(k): int(v) for k, v in row.items() if k != "" and v},
+            "market": int(row.sum())}
+        for d, (_idx, row) in zip(ordered_days, counts.iterrows())}
     last = days[-1]
     same = all(per_day[d] == per_day[last] for d in days)
     return {
