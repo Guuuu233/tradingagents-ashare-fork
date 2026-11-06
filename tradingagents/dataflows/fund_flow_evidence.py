@@ -2325,6 +2325,36 @@ _MODEL_OTHER_FIELDS = tuple(sorted({
     "中单", "小单", "总净额", "netamount", "非主力", "同花顺大单",
 }, key=len, reverse=True))
 
+# DAV-2373 #1: 金额被并列/命名的其他主体持有时，它不是本标的的读数。
+# 「白酒（+31.89亿元）、保险（+23.72亿元）」与「半导体、通信设备、汽车零部件
+# 主力净流入分别高达 88.56 亿、76.58 亿」都把金额分配给命名主体，主体不是
+# 目标个股；仅靠当前子句是否出现「板块/行业」二字会漏判（见 DAV-2372）。
+_MODEL_AMOUNT_OWNER_PAIR = re.compile(
+    r"([\u4e00-\u9fffA-Za-z]{2,20})\s*[（(][ \t]*([+-]?\d[^）)\n]{0,14}?亿)"
+)
+# 口径/指标/泛称片段不是主体名（「主力净流入（+1.2亿元）」不是板块金额）。
+_MODEL_OWNER_REJECT = (
+    "主力", "大单", "超大单", "中单", "小单", "净额", "净流入", "净流出",
+    "流入", "流出", "资金", "合计", "总计", "累计", "个股", "全市场",
+    "板块", "行业", "两市", "今日", "当日", "单日", "本日", "区间",
+)
+_MODEL_SUBJECT_ITEM = re.compile(r"[\u4e00-\u9fffA-Za-z]{1,10}")
+# DAV-2373 #3: 「连续4日净流出超1.43亿元后，11月2日转为流入」——后一并列句的
+# 日期是该阶段之后的日期，不是这个多日窗口的结束日。
+_MODEL_TRANSITION_END = re.compile(r"(?:元)?\s*(?:之?后|以后|以来)\s*[*_`\s]*$")
+# DAV-2373 #4: 「由 2.26 亿元缩减至 0.59 亿元」——前者是期初值，后者才是当期值。
+_MODEL_PREVIOUS_VALUE_PREFIX = re.compile(r"(?:由|从)\s*[*_`\s]*$")
+_MODEL_PREVIOUS_VALUE_SUFFIX = re.compile(
+    r"(?:元)?\s*[\u4e00-\u9fff]{0,4}?(?:至|到)\s*[+\-]?\d"
+)
+# DAV-2373 #6: 「5日累计主力净额」在金额前自带聚合窗口，句内趋势修饰语不得覆盖。
+_MODEL_EXPLICIT_WINDOW = re.compile(
+    rf"({_INTERVAL_NUM})\s*个?\s*(?:交易日|日)\s*(?:累计|合计|累加|共计)"
+)
+# DAV-2373 #2: 绝对值口径的上界（「绝对净额均在0.25亿元以内」）约束 |净额|，
+# 不附加正负方向要求；带方向的上界仍必须同向。
+_MODEL_MAGNITUDE_BOUND = re.compile(r"绝对|幅度|规模|绝对值")
+
 
 def _normalise_model_signs(text: str) -> str:
     # En dash remains a range separator; U+2212 is an arithmetic minus.
@@ -2647,9 +2677,12 @@ def _model_value_matches(
     model = mention["value"]
     bound = mention.get("comparison")
     if bound:
-        same_direction = (structured > 0) == (model > 0) and (structured < 0) == (model < 0)
-        if not same_direction:
-            return False
+        # DAV-2373 #2: 「绝对净额均在0.25亿元以内」约束的是 |净额|，负净额同样
+        # 满足，不能因为上界写成正数就要求同方向。带方向的上界保持同向要求。
+        if mention.get("bound_scope") != "magnitude":
+            same_direction = (structured > 0) == (model > 0) and (structured < 0) == (model < 0)
+            if not same_direction:
+                return False
         if bound == "lower":
             return abs(structured) >= abs(model) - tolerance
         return abs(structured) <= abs(model) + tolerance
@@ -2725,13 +2758,17 @@ def _date_context(
     clause_start: int,
     clause_end: int,
     number_start: int | None = None,
-) -> tuple[int | None, int, int] | None:
+) -> tuple[int | None, int, int, str] | None:
     """Find the explicit date bound to a value mention.
 
     The mention's own clause is authoritative (per DAV-1291 F1 同一子句). When
     the clause carries no date, fall back to the date in the adjacent prefix or
     suffix segment of the same sentence only when that segment contains no
     other 亿 value of its own (e.g. ``在9月24日，主力净流入1.09亿``).
+
+    The fourth element reports where the date came from (``clause`` /
+    ``header`` / ``prefix`` / ``suffix``); DAV-2373 #3/#5 need to tell a date
+    inside the claim from a date in the following clause.
     """
     clause = text[clause_start:clause_end]
     dates = _iter_model_dates(clause)
@@ -2742,7 +2779,7 @@ def _date_context(
             preceding = [d for d in dates if clause_start + d[0] < number_start]
             dates = preceding or dates[:1]
         _, _, year, month, day = dates[-1]
-        return year, month, day
+        return year, month, day, "clause"
     # Scope header: a sentence-initial clause ending in a colon (``5日累计：``
     # or ``9月24日：``) binds every value listed after it, even when later
     # clauses carry their own 亿 numbers.
@@ -2756,19 +2793,19 @@ def _date_context(
         dates = _iter_model_dates(header)
         if dates:
             _, _, year, month, day = dates[-1]
-            return year, month, day
+            return year, month, day, "header"
     prefix = text[sent_start:clause_start]
     if prefix.strip() and not _MODEL_YI_NUMBER.search(prefix):
         dates = _iter_model_dates(prefix)
         if dates:
             _, _, year, month, day = dates[-1]
-            return year, month, day
+            return year, month, day, "prefix"
     suffix = text[clause_end:sent_end]
     if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
         dates = _iter_model_dates(suffix)
         if dates:
             _, _, year, month, day = dates[0]
-            return year, month, day
+            return year, month, day, "suffix"
     return None
 
 
@@ -2778,12 +2815,16 @@ def _interval_context(
     sent_end: int,
     clause_start: int,
     clause_end: int,
-) -> tuple[str, int | None] | None:
+) -> tuple[str, int | None, str] | None:
     """Detect generalized interval windows; returns (kind, window_days|None).
 
     kind ``interval`` carries a concrete N-day window; ``interval_unverifiable``
     covers symbolic ranges (近一月/本周/区间/以来…) with no exact structured
     window, which must be reported as unverifiable rather than mismatch.
+
+    The third element records where the marker was found (``clause`` /
+    ``header`` / ``prefix`` / ``suffix``) so a trend stated in a *following*
+    clause is not mistaken for this amount's aggregation window (DAV-2373 #5).
     """
 
     def scan(segment: str) -> tuple[str, int | None] | None:
@@ -2811,7 +2852,7 @@ def _interval_context(
     clause = text[clause_start:clause_end]
     hit = scan(clause)
     if hit:
-        return hit
+        return hit[0], hit[1], "clause"
     # Scope header (``5日累计：``) binds every value listed after the colon.
     sentence = text[sent_start:sent_end]
     colon_pos = min(
@@ -2821,18 +2862,119 @@ def _interval_context(
     if 0 <= colon_pos < clause_start - sent_start:
         hit = scan(sentence[: colon_pos + 1])
         if hit:
-            return hit
+            return hit[0], hit[1], "header"
     prefix = text[sent_start:clause_start]
     if prefix.strip() and not _MODEL_YI_NUMBER.search(prefix):
         hit = scan(prefix)
         if hit:
-            return hit
+            return hit[0], hit[1], "prefix"
     suffix = text[clause_end:sent_end]
     if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
         hit = scan(suffix)
         if hit:
-            return hit
+            return hit[0], hit[1], "suffix"
     return None
+
+
+def _model_target_identity(
+    symbol: str | None, names: Mapping[str, str],
+) -> tuple[str, frozenset[str]]:
+    """Return (6-digit code, Chinese names bound to that code) for the symbol."""
+    code_match = re.search(r"\d{6}", symbol or "")
+    code = code_match.group() if code_match else (symbol or "")
+    return code, frozenset(
+        name for name, bound in names.items() if code and bound == code
+    )
+
+
+def _model_named_amount_owner(
+    owner: str, target_code: str, target_names: frozenset[str],
+) -> bool:
+    """True when ``owner`` names a subject other than the analysed symbol.
+
+    The captured run may still carry the predicate right before the bracket
+    (``主力资金大幅流入银行（…``), so the trailing subject token is taken
+    after the last water-mark/field word; anything still containing one is not
+    a subject name.
+    """
+    clean = re.sub(r"[*`\s]", "", owner)
+    if not clean:
+        return False
+    cut = -1
+    for key in _MODEL_OWNER_REJECT:
+        pos = clean.rfind(key)
+        if pos != -1:
+            cut = max(cut, pos + len(key))
+    if cut > 0:
+        clean = clean[cut:]
+    if not clean or any(key in clean for key in _MODEL_OWNER_REJECT):
+        return False
+    if clean in target_names or (target_code and target_code in clean):
+        return False
+    return bool(_MODEL_SUBJECT_ITEM.fullmatch(clean))
+
+
+def _model_amount_owner_is_other(
+    clause: str, offset: int, target_code: str, target_names: frozenset[str],
+) -> bool:
+    """DAV-2373 #1: 该金额是否由并列命名主体（板块/行业/并列个股）持有。
+
+    两种高精度形态：
+
+    * ``白酒（+31.89亿元）、保险（+23.72亿元）``——同一子句内多份
+      「主体（金额）」配对，当前金额由其中一个非本标的的主体持有；
+    * ``半导体、通信设备、汽车零部件主力净流入分别高达88.56亿、76.58亿``
+      ——「分别」把金额逐一分配给前面列出的多个主语。
+
+    主句还是本标的时（无命名主体/命名主体就是本标的/只有一个主体）不排除，
+    所以未点名的「主力净流入X亿」仍按本标的读数校。
+    """
+    pairs = list(_MODEL_AMOUNT_OWNER_PAIR.finditer(clause))
+    named = [
+        pair for pair in pairs
+        if _model_named_amount_owner(pair.group(1), target_code, target_names)
+    ]
+    if len(named) >= 2:
+        for pair in named:
+            if pair.start(2) <= offset < pair.end(2):
+                return True
+    if "分别" not in clause:
+        return False
+    head, _, tail = clause.partition("分别")
+    if not tail or not _MODEL_YI_NUMBER.search(tail):
+        return False
+    items = [item for item in re.split(r"[、,，]", head) if item.strip(" *_`")]
+    if len(items) < 2:
+        return False
+    # 末项可能带着被分配的谓语（「汽车零部件主力净流入」），只留主语。
+    items[-1] = re.sub(
+        r"(?:主力(?:资金)?|大单|超大单|总资金|资金)?\s*(?:净)?(?:流入|流出|净额|额|资金).*$",
+        "", items[-1],
+    ).strip(" *_`")
+    cleaned = [re.sub(r"[*`\s]", "", item) for item in items if item.strip(" *_`")]
+    if len(cleaned) < 2:
+        return False
+    if any(not _MODEL_SUBJECT_ITEM.fullmatch(item) for item in cleaned):
+        return False
+    if any(any(key in item for key in _MODEL_OWNER_REJECT) for item in cleaned):
+        return False
+    if target_code and any(target_code in item for item in cleaned):
+        return False
+    if any(item in target_names for item in cleaned):
+        return False
+    return True
+
+
+def _model_explicit_window_days(amount_prefix: str) -> int | None:
+    """DAV-2373 #6: 「5日累计主力净额」在金额前声明的聚合窗口天数。"""
+    masked = _mask_spans(
+        amount_prefix, [(d[0], d[1]) for d in _iter_model_dates(amount_prefix)]
+    )
+    match = _MODEL_EXPLICIT_WINDOW.search(masked)
+    if not match:
+        return None
+    window = _cn_int(match.group(1))
+    return window if window and window > 0 else None
 
 
 def _extract_model_mentions(
@@ -2844,10 +2986,16 @@ def _extract_model_mentions(
     """Extract model 亿 value mentions with date/interval attribution.
 
     Each mention dict: ``field``, ``value_text``, ``value`` (Decimal), ``kind``
-    (daily|dated|interval|interval_unverifiable|cumulative), ``date`` (resolved
-    ISO or ``MM-DD`` when the model gave no year and no as-of exists) and
-    ``window_days`` for interval mentions. Bounds and approximation labels
+    (daily|dated|interval|interval_unverifiable|cumulative|previous), ``date``
+    (resolved ISO or ``MM-DD`` when the model gave no year and no as-of exists)
+    and ``window_days`` for interval mentions. Bounds and approximation labels
     belong to the captured number; exclusions apply before first-match dedupe.
+
+    DAV-2373 additions: ``previous`` marks the opening value of
+    「由A缩减至B」; ``bound_scope='magnitude'`` marks an absolute-magnitude
+    bound; ``window_end_exclusive`` marks an N-day window that ends before the
+    date stated in the following clause. Amounts owned by named non-target
+    subjects (板块/行业/并列个股) are not extracted at all.
     """
     if not isinstance(text, str) or not text.strip():
         return []
@@ -2857,6 +3005,7 @@ def _extract_model_mentions(
     line_labels = _model_line_labels(text)
     table_scopes = _model_table_scopes(text)
     names = _model_security_names(text) if symbol else {}
+    target_code, target_names = _model_target_identity(symbol, names)
     ranges = [(m.start(), m.end()) for m in _MODEL_AMOUNT_RANGE.finditer(text)]
     for field, patterns in _FIELD_VALUE_PATTERNS.items():
         for pattern in patterns:
@@ -2916,6 +3065,10 @@ def _extract_model_mentions(
                     )
                 if other_subject:
                     continue
+                if symbol and _model_amount_owner_is_other(
+                    clause, number_start - clause_start, target_code, target_names,
+                ):
+                    continue
                 if field == "r0_net" and _model_other_field(text[clause_start:number_start]):
                     continue
                 matched_prefix = text[match.start():match.end()]
@@ -2936,6 +3089,7 @@ def _extract_model_mentions(
                 window_days: int | None = None
                 window_start: str | None = None
                 scope_clause = clause
+                date_origin: str | None = None
                 if table_scope:
                     scope_clause = " ".join(table_scope[key] for key in ("field_label", "time", "content"))
                     own_dates = _iter_model_dates(table_scope["content"])
@@ -2947,14 +3101,28 @@ def _extract_model_mentions(
                         date_ctx = bound_dates[-1][2:] if bound_dates else None
                     if date_ctx is None and asof and _MODEL_CURRENT.search(table_scope["time"]):
                         date_ctx = tuple(int(part) for part in asof.split("-"))
+                    date_origin = "table" if date_ctx is not None else None
                     interval = _interval_context(scope_clause, 0, len(scope_clause), 0, len(scope_clause))
                 else:
-                    date_ctx = _date_context(
+                    date_result = _date_context(
                         text, sent_start, sent_end, clause_start, clause_end, number_start
                     )
+                    if date_result is None:
+                        date_ctx = None
+                    else:
+                        date_ctx = date_result[:3]
+                        date_origin = date_result[3]
                     interval = _interval_context(
                         text, sent_start, sent_end, clause_start, clause_end
                     )
+                    # DAV-2373 #5: 后面另一句里的趋势天数（「，连续3日呈现净流入」）
+                    # 不是这个已带日期金额的聚合窗口。
+                    if (
+                        interval
+                        and interval[2] == "suffix"
+                        and date_origin in {"clause", "header", "prefix"}
+                    ):
+                        interval = None
                 window_scope = scope_clause if table_scope else text[sent_start:clause_end]
                 # A window elsewhere in the sentence (or the duration of a
                 # trend after the amount) is not the amount's aggregation
@@ -2987,6 +3155,11 @@ def _extract_model_mentions(
                     interval = _interval_context(direct_scope, 0, len(direct_scope), 0, len(direct_scope))
                     if interval:
                         scope_clause = window_scope = direct_scope
+                # DAV-2373 #6: 金额前自带「N日累计」标签时，这个 N 就是聚合窗口，
+                # 句内趋势修饰语（「近两个交易日」）不得覆盖它。
+                explicit_window = _model_explicit_window_days(amount_prefix)
+                if explicit_window:
+                    interval = ("interval", explicit_window, "explicit")
                 own_window = bool(
                     _MODEL_CUMULATIVE.search(scope_clause)
                     or _MODEL_INTERVAL_BARE_DAYS.search(_mask_spans(
@@ -2994,8 +3167,13 @@ def _extract_model_mentions(
                     ))
                     or _MODEL_DATE_RANGE.search(scope_clause)
                 )
-                if interval and (own_window or not _MODEL_DAILY_MARKER.search(scope_clause)):
-                    kind, window_days = interval
+                # 表格单元格的日度标签位于同行其他列时仍属于这个值，
+                # 但同一行的其他列不能用它们的趋势天数改写本格的窗口。
+                daily_scope = scope_clause
+                if table_scope:
+                    daily_scope = scope_clause + " " + str(table_scope.get("labels") or "")
+                if interval and (own_window or not _MODEL_DAILY_MARKER.search(daily_scope)):
+                    kind, window_days = interval[0], interval[1]
                     # A historical N-day claim is anchored to its own window
                     # end, not silently compared with the latest N records.
                     date_range = _MODEL_DATE_RANGE.search(window_scope)
@@ -3034,8 +3212,16 @@ def _extract_model_mentions(
                         kind = "daily"
                     else:
                         kind = "dated"
-                elif _MODEL_DAILY_MARKER.search(scope_clause):
+                elif _MODEL_DAILY_MARKER.search(daily_scope):
                     kind = "daily"
+                elif table_scope:
+                    # DAV-2373 #5: 表格已建立局部作用域后，不再回退到整行扫描——
+                    # 同行邻列的趋势描述（「连续2日主动卖单占优」）不是本格的窗口。
+                    interval = _interval_context(scope_clause, 0, len(scope_clause), 0, len(scope_clause))
+                    if interval is None:
+                        kind = "daily"
+                    else:
+                        kind, window_days = interval[0], interval[1]
                 else:
                     interval = _interval_context(
                         text, sent_start, sent_end, clause_start, clause_end
@@ -3043,8 +3229,24 @@ def _extract_model_mentions(
                     if interval is None:
                         kind = "daily"
                     else:
-                        kind, window_days = interval
+                        kind, window_days = interval[0], interval[1]
 
+                bound_prefix = text[match.start():number_start]
+                bound_suffix = text[match.end():clause_end].lstrip("元")
+                comparison = _model_bound(bound_prefix, bound_suffix)
+                bound_scope = None
+                if comparison and _MODEL_MAGNITUDE_BOUND.search(
+                    text[clause_start:number_start] + " " + bound_suffix
+                ):
+                    bound_scope = "magnitude"
+                # DAV-2373 #4: 「由 2.26 亿元缩减至 0.59 亿元」的开头值是期初值，
+                # 不是当期值；它应对齐上一交易日，而不是写着当期日期的值。
+                if (
+                    _MODEL_PREVIOUS_VALUE_PREFIX.search(amount_prefix)
+                    and _MODEL_PREVIOUS_VALUE_SUFFIX.match(amount_suffix)
+                ):
+                    kind = "previous"
+                    window_days = None
                 mentions.append(
                     {
                         "field": field,
@@ -3054,9 +3256,12 @@ def _extract_model_mentions(
                         "date": resolved_date,
                         "window_days": window_days,
                         "window_start": window_start,
-                        "comparison": _model_bound(
-                            text[match.start():number_start],
-                            text[match.end():clause_end].lstrip("元"),
+                        "comparison": comparison,
+                        "bound_scope": bound_scope,
+                        "window_end_exclusive": bool(
+                            kind == "interval"
+                            and date_origin == "suffix"
+                            and _MODEL_TRANSITION_END.search(amount_suffix)
                         ),
                         "approximate": any(
                             word in text[max(clause_start, number_start - 15):match.end() + 15]
@@ -3065,6 +3270,28 @@ def _extract_model_mentions(
                     }
                 )
     return mentions
+
+
+def _structured_previous_date(
+    records: Iterable[Mapping[str, Any]],
+    field: str,
+    source: str | None,
+    before_date: str,
+) -> str | None:
+    """Latest structured record date strictly before ``before_date``."""
+    dates: list[str] = []
+    for record in records:
+        if not isinstance(record, Mapping) or record.get("status") != "available":
+            continue
+        if source is not None and str(record.get("source") or "") != str(source):
+            continue
+        normalized, error = _normalise_summary_record(record, field=field)
+        if normalized is None or error:
+            continue
+        record_date = str(normalized.get("date") or "")
+        if len(record_date) == 10 and record_date < before_date:
+            dates.append(record_date)
+    return max(dates) if dates else None
 
 
 def _structured_value_on_date(
@@ -3231,7 +3458,7 @@ def validate_model_summary(
         dedupe_key = (
             model_field,
             kind,
-            mention.get("date") if kind in {"dated", "interval"} else None,
+            mention.get("date") if kind in {"dated", "interval", "previous"} else None,
             mention.get("window_days") if kind == "interval" else None,
         )
         if dedupe_key in seen_mentions:
@@ -3256,12 +3483,40 @@ def validate_model_summary(
                 {"kind": "dated", "date": target_date},
                 "model dated value differs from structured evidence of the same date",
             )
+        elif kind == "previous":
+            # DAV-2373 #4: 「由A缩减至B」的 A 是上一交易日读数，B 才是当期值。
+            # 仍然校 A，只是对齐到上一交易日，不把它当成当期值。
+            anchor = str(mention.get("date") or requested_as_of or "")
+            previous_date = _structured_previous_date(
+                records, model_field, selected_source, anchor
+            ) if anchor else None
+            if previous_date is None:
+                _note_unverifiable(model_field)
+                continue
+            previous_value, _why = _structured_value_on_date(
+                records, model_field, previous_date, selected_source
+            )
+            _compare_mention(
+                mention,
+                previous_value,
+                {"kind": "previous", "date": previous_date, "anchor": anchor},
+                "model previous-period value differs from structured evidence of the prior trading day",
+            )
         elif kind == "interval":
             window = int(mention.get("window_days") or 0)
             if window <= 0:
                 _note_unverifiable(model_field)
                 continue
-            window_end = mention.get("date") or requested_as_of
+            window_end = str(mention.get("date") or requested_as_of or "")
+            if mention.get("window_end_exclusive"):
+                # DAV-2373 #3: 「…连续4日净流出超1.43亿元后，11月2日转为流入」
+                # 的窗口在 11-02 之前结束，不能把 11-02 当作窗口末日。
+                window_end = _structured_previous_date(
+                    records, model_field, selected_source, window_end
+                ) or ""
+                if not window_end:
+                    _note_unverifiable(model_field)
+                    continue
             cache_key = (window, window_end)
             interval_summary = interval_summary_cache.get(cache_key)
             if interval_summary is None:
