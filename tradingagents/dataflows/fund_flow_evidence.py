@@ -2318,6 +2318,8 @@ _MODEL_CURRENT = re.compile(r"今日|当日|实测|当前|截至分析日")
 _MODEL_OTHER_SUBJECT = re.compile(r"板块|行业|全市场|两市|概念|可比公司|同行|龙头")
 _MODEL_LOWER_BOUND = re.compile(r"(?:不低于|突破|超过|超|逾)\s*$")
 _MODEL_UPPER_BOUND = re.compile(r"(?:不足|低于|不到)\s*$")
+# 「不超过/不高于」以「超过」结尾，必须先于下界判定，否则被误读成下界。
+_MODEL_UPPER_BOUND_NEGATED = re.compile(r"(?:不超过|不高于|不超)\s*$")
 _MODEL_OTHER_FIELDS = tuple(sorted({
     *(_COMPONENT_ALIASES.keys()),
     *(name for name, field in _FIELD_ALIASES.items()
@@ -2347,13 +2349,23 @@ _MODEL_PREVIOUS_VALUE_PREFIX = re.compile(r"(?:由|从)\s*[*_`\s]*$")
 _MODEL_PREVIOUS_VALUE_SUFFIX = re.compile(
     r"(?:元)?\s*[\u4e00-\u9fff]{0,4}?(?:至|到)\s*[+\-]?\d"
 )
+# DAV-2383 #2: 「由A缩减至B」的终点值 B 也必须成为一条当期 mention，否则把 B
+# 写错（9.99 / -9.99）不会产生任何比对，错误数字被静默放行。
+_MODEL_TRANSITION_ENDPOINT = re.compile(
+    r"(?:元)?\s*[\u4e00-\u9fff]{0,4}?(?:至|到)\s*"
+    r"([+\-]?(?:\d+(?:\.\d*)?|\.\d+))\s*亿"
+)
 # DAV-2373 #6: 「5日累计主力净额」在金额前自带聚合窗口，句内趋势修饰语不得覆盖。
 _MODEL_EXPLICIT_WINDOW = re.compile(
     rf"({_INTERVAL_NUM})\s*个?\s*(?:交易日|日)\s*(?:累计|合计|累加|共计)"
 )
-# DAV-2373 #2: 绝对值口径的上界（「绝对净额均在0.25亿元以内」）约束 |净额|，
-# 不附加正负方向要求；带方向的上界仍必须同向。
-_MODEL_MAGNITUDE_BOUND = re.compile(r"绝对|幅度|规模|绝对值")
+# DAV-2373 #2 / DAV-2383 #1: 只有「绝对量 + 上界措辞」才约束 |净额|、不附加方向。
+# 原词表（绝对|幅度|规模|绝对值）过宽：把「净流入规模/幅度超过1.2亿元」也当成
+# 绝对值口径，整段跳过了同向校验，失败方向被静默放行。
+_MODEL_ABSOLUTE_MAGNITUDE = re.compile(
+    r"绝对(?:净额|金额|值|净流入|净流出)[^\n。；;，,]{0,6}?"
+    r"(?:以内|以下|不超过|不高于|不超)"
+)
 
 
 def _normalise_model_signs(text: str) -> str:
@@ -2664,9 +2676,11 @@ def _model_subject_is_other(
 def _model_bound(prefix: str, suffix: str) -> str | None:
     prefix = re.sub(r"[*`\s]", "", prefix)
     suffix = re.sub(r"[*`\s]", "", suffix)
+    if _MODEL_UPPER_BOUND_NEGATED.search(prefix) or suffix.startswith(("以内", "以下")):
+        return "upper"
     if _MODEL_LOWER_BOUND.search(prefix) or suffix.startswith("以上"):
         return "lower"
-    if _MODEL_UPPER_BOUND.search(prefix) or suffix.startswith("以内"):
+    if _MODEL_UPPER_BOUND.search(prefix):
         return "upper"
     return None
 
@@ -2678,8 +2692,10 @@ def _model_value_matches(
     bound = mention.get("comparison")
     if bound:
         # DAV-2373 #2: 「绝对净额均在0.25亿元以内」约束的是 |净额|，负净额同样
-        # 满足，不能因为上界写成正数就要求同方向。带方向的上界保持同向要求。
-        if mention.get("bound_scope") != "magnitude":
+        # 满足，不能因为上界写成正数就要求同方向。
+        # DAV-2383 #1: 这个豁免只对上界且显式绝对量成立；下界（超过/超/大于）
+        # 无论 scope 为何都必须同向，否则「净流出幅度超过1.2亿元」会被放行。
+        if bound == "lower" or mention.get("bound_scope") != "magnitude":
             same_direction = (structured > 0) == (model > 0) and (structured < 0) == (model < 0)
             if not same_direction:
                 return False
@@ -2986,7 +3002,7 @@ def _extract_model_mentions(
     """Extract model 亿 value mentions with date/interval attribution.
 
     Each mention dict: ``field``, ``value_text``, ``value`` (Decimal), ``kind``
-    (daily|dated|interval|interval_unverifiable|cumulative|previous), ``date``
+    (daily|dated|interval|interval_unverifiable|cumulative|previous|transition), ``date``
     (resolved ISO or ``MM-DD`` when the model gave no year and no as-of exists)
     and ``window_days`` for interval mentions. Bounds and approximation labels
     belong to the captured number; exclusions apply before first-match dedupe.
@@ -2996,6 +3012,8 @@ def _extract_model_mentions(
     bound; ``window_end_exclusive`` marks an N-day window that ends before the
     date stated in the following clause. Amounts owned by named non-target
     subjects (板块/行业/并列个股) are not extracted at all.
+    DAV-2383 additions: ``transition`` marks the endpoint (current-period)
+    value of 「由A缩减至B」, which is compared independently of any daily row.
     """
     if not isinstance(text, str) or not text.strip():
         return []
@@ -3235,16 +3253,27 @@ def _extract_model_mentions(
                 bound_suffix = text[match.end():clause_end].lstrip("元")
                 comparison = _model_bound(bound_prefix, bound_suffix)
                 bound_scope = None
-                if comparison and _MODEL_MAGNITUDE_BOUND.search(
-                    text[clause_start:number_start] + " " + bound_suffix
+                if (
+                    comparison == "upper"
+                    and _MODEL_ABSOLUTE_MAGNITUDE.search(
+                        text[clause_start:number_start] + " " + bound_suffix
+                    )
                 ):
                     bound_scope = "magnitude"
                 # DAV-2373 #4: 「由 2.26 亿元缩减至 0.59 亿元」的开头值是期初值，
                 # 不是当期值；它应对齐上一交易日，而不是写着当期日期的值。
+                # DAV-2383 #2: 终点值 B 是当期读数，必须单独成为一条 mention 参与
+                # 比对（kind="transition"），否则把 B 写错不会有任何校验。
+                current_kind = kind
+                endpoint: dict[str, Any] | None = None
                 if (
                     _MODEL_PREVIOUS_VALUE_PREFIX.search(amount_prefix)
                     and _MODEL_PREVIOUS_VALUE_SUFFIX.match(amount_suffix)
                 ):
+                    endpoint = _model_transition_endpoint(
+                        text, amount_suffix, match.end(), clause_start,
+                        field=field, kind=current_kind, resolved_date=resolved_date,
+                    )
                     kind = "previous"
                     window_days = None
                 mentions.append(
@@ -3269,7 +3298,72 @@ def _extract_model_mentions(
                         ),
                     }
                 )
+                if endpoint is not None:
+                    mentions.append(endpoint)
     return mentions
+
+
+def _model_transition_endpoint(
+    text: str,
+    amount_suffix: str,
+    amount_end: int,
+    clause_start: int,
+    *,
+    field: str,
+    kind: str,
+    resolved_date: str | None,
+) -> dict[str, Any] | None:
+    """DAV-2383 #2: build the current-period mention for 「由A…至B」's endpoint B.
+
+    Only daily/dated transitions are bound: the endpoint of an interval or
+    cumulative transition is not necessarily the as-of day reading, so no
+    mention is invented there. Returns ``None`` when the endpoint number is
+    not a 亿 amount or cannot be parsed.
+    """
+    if kind not in {"daily", "dated"}:
+        return None
+    endpoint_match = _MODEL_TRANSITION_ENDPOINT.match(amount_suffix)
+    if endpoint_match is None:
+        return None
+    value = decimal_value(endpoint_match.group(1))
+    if value is None:
+        return None
+    endpoint_start = amount_end + endpoint_match.start(1)
+    endpoint_prefix = text[clause_start:endpoint_start]
+    # Same sign rule as the main loop: a 流出 clause with an unsigned number is
+    # a negative net amount.
+    if (
+        "流出" in endpoint_prefix
+        and value > 0
+        and not endpoint_match.group(1).startswith(("+", "-"))
+    ):
+        value = -value
+    endpoint_suffix = amount_suffix[endpoint_match.end():]
+    comparison = _model_bound(
+        amount_suffix[:endpoint_match.start(1)], endpoint_suffix
+    )
+    bound_scope = None
+    if (
+        comparison == "upper"
+        and _MODEL_ABSOLUTE_MAGNITUDE.search(endpoint_prefix + " " + endpoint_suffix)
+    ):
+        bound_scope = "magnitude"
+    return {
+        "field": field,
+        "value_text": _decimal_text(value) or "",
+        "value": value,
+        "kind": "transition",
+        "date": resolved_date,
+        "window_days": None,
+        "window_start": None,
+        "comparison": comparison,
+        "bound_scope": bound_scope,
+        "window_end_exclusive": False,
+        "approximate": any(
+            word in text[max(clause_start, endpoint_start - 15):min(len(text), endpoint_start + 15)]
+            for word in ("约", "大致", "大约", "左右", "接近", "达", "超")
+        ),
+    }
 
 
 def _structured_previous_date(
@@ -3448,6 +3542,10 @@ def validate_model_summary(
             matched_fields.append(model_field)
 
     seen_mentions: set[tuple[Any, ...]] = set()
+    # DAV-2383 #2: the 「由A至B」 endpoint is a same-day reading but must not be
+    # collapsed into the daily row's first-match-wins slot: both values are
+    # asserted by the report, so either one being wrong has to surface.
+    asof = _normalise_date_text(requested_as_of) if requested_as_of else None
     for mention in mentions:
         model_field = str(mention["field"])
         kind = str(mention["kind"])
@@ -3458,7 +3556,7 @@ def validate_model_summary(
         dedupe_key = (
             model_field,
             kind,
-            mention.get("date") if kind in {"dated", "interval", "previous"} else None,
+            mention.get("date") if kind in {"dated", "interval", "previous", "transition"} else None,
             mention.get("window_days") if kind == "interval" else None,
         )
         if dedupe_key in seen_mentions:
@@ -3502,6 +3600,27 @@ def validate_model_summary(
                 {"kind": "previous", "date": previous_date, "anchor": anchor},
                 "model previous-period value differs from structured evidence of the prior trading day",
             )
+        elif kind == "transition":
+            # DAV-2383 #2: 「由A缩减至B」的 B 是当期值。独立比对：过渡句写错数字
+            # （B=9.99 / -9.99）也必须拦截，不得靠日度行抵消。
+            target_date = str(mention.get("date") or "")
+            if target_date and asof and target_date != asof:
+                structured_value, _why = _structured_value_on_date(
+                    records, model_field, target_date, selected_source
+                )
+                _compare_mention(
+                    mention,
+                    structured_value,
+                    {"kind": "dated", "date": target_date},
+                    "model transition endpoint value differs from structured evidence of the same date",
+                )
+            else:
+                _compare_mention(
+                    mention,
+                    decimal_value(structured_daily.get(model_field)),
+                    {"kind": "daily", "as_of": structured_daily.get("as_of")},
+                    "model transition endpoint value differs from structured evidence",
+                )
         elif kind == "interval":
             window = int(mention.get("window_days") or 0)
             if window <= 0:

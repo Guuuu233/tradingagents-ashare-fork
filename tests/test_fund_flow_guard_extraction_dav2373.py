@@ -110,15 +110,31 @@ def test_de2_absolute_magnitude_upper_bound_accepts_negative_net():
     assert result["mismatches"] == []
 
 
-@pytest.mark.parametrize("text", [
-    "今日主力净流入超过1.2亿元。",
-    "今日主力净流出低于1亿元。",
-])
-def test_de2_directional_bounds_keep_requiring_same_sign(text):
-    # 去掉「绝对/幅度」语义后，带方向的上界仍必须同向，不得借修复放宽。
-    result = check(text, [("2026-10-29", "-1.25")], symbol="000651.SZ", as_of="2026-10-29")
+@pytest.mark.parametrize("magnitude_word", ["", "规模", "幅度", "绝对值"])
+@pytest.mark.parametrize("bound_word", ["超过", "低于"])
+@pytest.mark.parametrize("direction, structured", [("流入", "-1.25"), ("流出", "1.25")])
+def test_de2_directional_bounds_keep_requiring_same_sign(
+    magnitude_word, bound_word, direction, structured,
+):
+    # DAV-2383 #1：「规模/幅度/绝对值」等泛化词不得关掉同向校验。
+    # 模型写反方向（净流入 vs 实际流出，或净流出 vs 实际流入）时，
+    # 父 f0dc92a0 与返修候选都必须拦截，不得借修复放宽失败方向。
+    text = f"今日主力净{direction}{magnitude_word}{bound_word}1.2亿元。"
+    result = check(text, [("2026-10-29", structured)], symbol="000651.SZ", as_of="2026-10-29")
     assert result["status"] == "mismatch"
     assert result["hard_guard"]["blocked"] is True
+
+
+def test_de2_absolute_magnitude_upper_bound_accepts_wording_variants():
+    # 显式绝对量 + 上界措辞（不超过/以下）仍不得附加方向要求。
+    for text in (
+        "绝对净额不超过 0.25 亿元。",
+        "绝对净额在 0.25 亿元以下。",
+        "绝对净额均在 0.25 亿元以内。",
+    ):
+        result = check(text, [("2026-10-29", "-0.180515")], symbol="000651.SZ", as_of="2026-10-29")
+        assert result["hard_guard"]["blocked"] is False, text
+        assert result["mismatches"] == [], text
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +192,57 @@ def test_de4_transition_opening_value_binds_to_prior_trading_day():
     )
     assert result["hard_guard"]["blocked"] is False
     assert result["mismatches"] == []
-    # 过渡句的终点值由同一报告的日度行承担，不当作期初值重比。
+    # DAV-2383 #2: 过渡句终点值 B 单独作为当期 mention 参与核对，
+    # 不再靠「日度行会承担 B」的假设（B 写错必须能拦住）。
     assert "r0_net" not in result["model_daily"]
+    assert "r0_net" not in result["unverifiable_fields"]
+
+
+def test_de4_transition_endpoint_is_extracted_as_current_value():
+    text = (
+        "经过连续两日放量冲高，11 月 3 日主力净流入规模由 2.26 亿元缩减至 0.59 亿元，"
+        "表明买方主动推高意愿有所降温。"
+    )
+    mentions = _extract_model_mentions(
+        text, requested_as_of="2026-11-03", symbol="601888.SH",
+    )
+    assert {(m["value_text"], m["kind"]) for m in mentions} == {
+        ("2.26", "previous"), ("0.59", "transition"),
+    }
+    endpoint = next(m for m in mentions if m["kind"] == "transition")
+    assert endpoint["date"] == "2026-11-03"
+
+
+@pytest.mark.parametrize("endpoint", ["9.99", "-9.99"])
+def test_de4_wrong_transition_endpoint_is_blocked(endpoint):
+    # 错误方向/量级的 B 必须拦截（父 f0dc92a0 与返修前候选都静默放行）。
+    result = check(
+        f"11 月 3 日主力净流入规模由 2.26 亿元缩减至 {endpoint} 亿元，买盘意愿降温。",
+        [("2026-11-02", "2.26591028"), ("2026-11-03", "0.59565659")],
+        symbol="601888.SH", as_of="2026-11-03",
+    )
+    assert result["status"] == "mismatch"
+    assert result["hard_guard"]["blocked"] is True
+    assert [m["model"] for m in result["mismatches"]] == [endpoint]
+    assert result["mismatches"][0]["structured"] == "0.59565659"
+
+
+def test_de4_wrong_transition_endpoint_is_blocked_even_with_correct_daily_row():
+    # f5f9e4e0 形状：日度行 0.5957 正确、只有过渡句 B 被改成 9.99。
+    # 日度行不能抵消过渡句的错误数字（两条 mention 独立比对）。
+    text = (
+        "| **单日主力流向** | 2026-11-03 主力净流入 0.5957 亿元 | 连续净流入跟进候选 |\n\n"
+        "经过连续两日放量冲高，11 月 3 日主力净流入规模由 2.26 亿元缩减至 9.99 亿元。"
+    )
+    result = check(
+        text,
+        [("2026-11-02", "2.26591028"), ("2026-11-03", "0.59565659")],
+        symbol="601888.SH", as_of="2026-11-03",
+    )
+    assert result["model_daily"] == {"r0_net": "0.5957"}
+    assert result["status"] == "mismatch"
+    assert result["hard_guard"]["blocked"] is True
+    assert [m["model"] for m in result["mismatches"]] == ["9.99"]
 
 
 def test_de4_wrong_opening_value_is_not_silently_accepted():
