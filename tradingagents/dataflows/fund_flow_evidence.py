@@ -2350,9 +2350,13 @@ _MODEL_OWNER_REJECT = (
 _MODEL_SUBJECT_ITEM = re.compile(r"[\u4e00-\u9fffA-Za-z]{1,10}")
 # DAV-2373 #3: 「连续4日净流出超1.43亿元后，11月2日转为流入」——后一并列句的
 # 日期是该阶段之后的日期，不是这个多日窗口的结束日。
-_MODEL_TRANSITION_END = re.compile(r"(?:元)?\s*(?:之?后|以后|以来)\s*[*_`\s]*$")
+_MODEL_TRANSITION_END = re.compile(r"(?:元)?[）)]*\s*(?:之?后|以后|以来)\s*[*_`\s]*$")
 # DAV-2373 #4: 「由 2.26 亿元缩减至 0.59 亿元」——前者是期初值，后者才是当期值。
 _MODEL_PREVIOUS_VALUE_PREFIX = re.compile(r"(?:由|从)\s*[*_`\s]*$")
+# DAV-2388 #2: 「较前一日的 -2.84 亿元」——前一期读数，对齐上一交易日，不是当日值。
+_MODEL_PRIOR_PERIOD_PREFIX = re.compile(
+    r"(?:较|相较于|相比|对比|相较)\s*(?:之)?[前上]\s*(?:一|1)?\s*(?:个)?\s*(?:交易)?日\s*的?\s*[*_`\s]*$"
+)
 _MODEL_PREVIOUS_VALUE_SUFFIX = re.compile(
     r"(?:元)?\s*[\u4e00-\u9fff]{0,4}?(?:至|到)\s*[+\-]?\d"
 )
@@ -2395,6 +2399,24 @@ _MODEL_SEQUENCE_ROW = re.compile(
     r"^[ \t>|]*(?:[-*+][ \t]+)?"
     r"(?:\d{4}\s*[-/]\s*\d{1,2}\s*[-/]\s*\d{1,2}|\d{1,2}\s*[-/月]\s*\d{1,2}\s*日?)"
 )
+# DAV-2388 #1: 「连续第 3 个交易日净流出态势」是连续天数序数（今日是第 3 天），
+# 不是这个金额的 N 日聚合窗口。`_MODEL_INTERVAL_TRADE_DAYS` 的「第」否定断言会被
+# 「第」与数字之间的空格绕开，故在匹配前先遮掉这类序数词。
+_MODEL_STREAK_ORDINAL = re.compile(rf"第\s*{_INTERVAL_NUM}\s*个?\s*交易日")
+# 「万元」金额：括号里自带另一笔（万元）读数时同样是独立读数。
+_MODEL_WAN_NUMBER = re.compile(r"\d+(?:\.\d*)?\s*万")
+# DAV-2388 #2: 逐日枚举列表标记（「分别为 -2.22 亿、-1.09 亿」「分别录得 +8.03
+# 亿元、+0.43 亿元」），各项共用行首标签，本身没有归属日。
+_MODEL_ENUM_MARKER = re.compile(
+    r"分别(?:录得|录|为|达|是|流入|流出|增至|下降至)?|依次(?:录得|为)?"
+)
+# 枚举项分隔符：顿号/逗号，以及「及/以及/与/和」这类并列词。
+_MODEL_ENUM_DELIMITER = re.compile(r"[、，,]|以及|及|与|和")
+
+
+def _model_has_own_amount(segment: str) -> bool:
+    """DAV-2388 #1: 片段自带一笔金额（亿/万）——它是一个独立读数。"""
+    return bool(_MODEL_YI_NUMBER.search(segment) or _MODEL_WAN_NUMBER.search(segment))
 
 
 def _normalise_model_signs(text: str) -> str:
@@ -2851,7 +2873,7 @@ def _date_context(
             _, _, year, month, day = dates[-1]
             return year, month, day, "prefix"
     suffix = text[clause_end:sent_end]
-    if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
+    if suffix.strip() and not _model_has_own_amount(suffix):
         dates = _iter_model_dates(suffix)
         if dates:
             _, _, year, month, day = dates[0]
@@ -2881,7 +2903,9 @@ def _interval_context(
         masked = _mask_spans(
             segment,
             [(d[0], d[1]) for d in _iter_model_dates(segment)]
-            + [(m.start(), m.end()) for m in _MODEL_DATE_RANGE.finditer(segment)],
+            + [(m.start(), m.end()) for m in _MODEL_DATE_RANGE.finditer(segment)]
+            # DAV-2388 #1: 「连续第 3 个交易日」是连续天数序数，不是窗口。
+            + [(m.start(), m.end()) for m in _MODEL_STREAK_ORDINAL.finditer(segment)],
         )
         for pattern in (
             _MODEL_INTERVAL_TRADE_DAYS,
@@ -2919,7 +2943,7 @@ def _interval_context(
         if hit:
             return hit[0], hit[1], "prefix"
     suffix = text[clause_end:sent_end]
-    if suffix.strip() and not _MODEL_YI_NUMBER.search(suffix):
+    if suffix.strip() and not _model_has_own_amount(suffix):
         hit = scan(suffix)
         if hit:
             return hit[0], hit[1], "suffix"
@@ -3115,6 +3139,107 @@ def _model_own_net_line_starts(
     return starts
 
 
+def _model_following_claim_paren(
+    text: str, amount_end: int,
+) -> tuple[int, int] | None:
+    """DAV-2388 #1: 紧跟金额、且自带另一笔金额的括号区间 ``(start, end)``。
+
+    ``-2.927957 亿元（5日累计净流出达 -13.3565 亿元）`` 里括号内是一笔独立读数，
+    它的日期与窗口属于那笔读数，不得倒灌回前一个已闭合的单日金额。括号内没有
+    金额时（``1.09 亿元（9月24日）``）仍视为同一笔读数的注记，照常绑定。
+    """
+    index = amount_end
+    limit = min(len(text), amount_end + 8)
+    while index < limit and text[index] in " \t*_`元整":
+        index += 1
+    if index >= len(text) or text[index] not in "（(":
+        return None
+    depth = 0
+    for position in range(index, min(len(text), index + 400)):
+        char = text[position]
+        if char in "。\n":
+            return None
+        if char in "（(":
+            depth += 1
+        elif char in ")）":
+            depth -= 1
+            if depth == 0:
+                inner = text[index + 1:position]
+                if _MODEL_YI_NUMBER.search(inner) or _MODEL_WAN_NUMBER.search(inner):
+                    return index, position + 1
+                return None
+    return None
+
+
+def _model_mask_amount_parens(segment: str) -> str:
+    """DAV-2388 #1: 遮掉片段内「自带金额」的括号。
+
+    表格单元格 ``-2.927957 亿元 (5日累计 -13.36亿)`` 的括号是另一笔读数，它的
+    窗口/日期不得绑到本格金额上；没有金额的括号（``（今日）``）仍照常生效。
+    """
+
+    def blank(match: re.Match[str]) -> str:
+        if not _model_has_own_amount(match.group(0)):
+            return match.group(0)
+        return " " * len(match.group(0))
+
+    return re.sub(r"[（(][^（()）\n]*[)）]", blank, segment)
+
+
+def _model_enumerated_item_bounds(
+    text: str, sent_start: int, sent_end: int, number_start: int, number_end: int,
+) -> tuple[int, int, bool] | None:
+    """DAV-2388 #2: 逐日枚举列表的单项作用域 ``(start, end, has_own_date)``。
+
+    两种形态：
+
+    * ``10月19日（-1.44亿元）、10月20日（-1.29亿元）``——每项自带日期；
+    * ``（11-02 至 11-06）分别录得 +8.03 亿元、+0.43 亿元``——各项只共享行首
+      区间，本身没有日期。
+
+    枚举项不得继承行首的「N 日累计」标签，也不得把区间右端点当成自己的日期。
+    返回 ``None`` 表示不是枚举项；``has_own_date`` 为 ``False`` 的项没有归属日，
+    硬绑任何一个日期都会制造假拒，由调用方放弃这条读数。
+    """
+    # 形态 1：金额被括号裹住，且括号前紧贴一个日期（逐日清单项）。
+    index = number_start
+    while index > sent_start and text[index - 1] in " \t*_`$":
+        index -= 1
+    if index > sent_start and text[index - 1] in "（(":
+        open_pos = index - 1
+        back = open_pos
+        while back > sent_start and text[back - 1] in " \t：:":
+            back -= 1
+        window_start = max(sent_start, back - 24)
+        dates = _iter_model_dates(text[window_start:back])
+        if dates and window_start + dates[-1][1] == back:
+            close = min(
+                (pos for mark in "）)" if (pos := text.find(mark, number_end)) != -1),
+                default=-1,
+            )
+            item_end = close + 1 if close != -1 else min(sent_end, len(text))
+            return window_start + dates[-1][0], item_end, True
+    # 形态 2：「分别 / 分别录得 / 依次为」之后的并列项。
+    marker: re.Match[str] | None = None
+    for match in _MODEL_ENUM_MARKER.finditer(text[sent_start:number_start]):
+        marker = match
+    if marker is None:
+        return None
+    marker_end = sent_start + marker.end()
+    item_start = marker_end
+    for delimiter in _MODEL_ENUM_DELIMITER.finditer(text[marker_end:number_start]):
+        item_start = marker_end + delimiter.end()
+    if text[item_start:number_start].strip(" \t*_`+\u3000"):
+        # 这一项自带标签/窗口措辞（「5日累计净流入达」），是独立读数而非逐日
+        # 枚举项，交回常规绑定，不在此排除。
+        return None
+    item_end = min(sent_end, len(text))
+    for delimiter in _MODEL_ENUM_DELIMITER.finditer(text[number_end:item_end]):
+        item_end = number_end + delimiter.start()
+        break
+    return item_start, item_end, bool(_iter_model_dates(text[item_start:number_start]))
+
+
 def _iter_model_amount_matches(text: str, line_labels: Mapping[int, str]):
     """Yield ``(field, match)`` for field patterns plus own-net scoped amounts.
 
@@ -3272,9 +3397,39 @@ def _extract_model_mentions(
         window_days: int | None = None
         window_start: str | None = None
         scope_clause = clause
+        # DAV-2388 #1/#2: 这条读数的「归属作用域」。
+        # ① 金额后面紧跟的括号若自带另一笔金额，括号里的日期/窗口属于括号内
+        #    那笔读数，不得倒灌回前一个已闭合的单日金额；
+        # ② 「分别为 / 分别录得 / 依次为」与「日期（金额）、日期（金额）」这类
+        #    逐日枚举项只共享行首标签，项内没有日期就无法定位归属日。
+        bind_text = text
+        claim_paren = _model_following_claim_paren(text, match.end())
+        if claim_paren is not None:
+            bind_text = (
+                text[: claim_paren[0]]
+                + " " * (claim_paren[1] - claim_paren[0])
+                + text[claim_paren[1]:]
+            )
+        bind_sent_start, bind_sent_end = sent_start, sent_end
+        bind_start, bind_end = clause_start, clause_end
+        item_scope = None if table_scope else _model_enumerated_item_bounds(
+            text, sent_start, sent_end, number_start, match.end()
+        )
+        if item_scope is not None:
+            item_start, item_end, item_has_own_date = item_scope
+            if not item_has_own_date:
+                # 共用行首「N 日累计」/区间而没有归属日的枚举项：绑行首窗口或区间
+                # 右端点都会把它变成假拒，故不作为独立读数提取。
+                continue
+            bind_sent_start, bind_sent_end = item_start, item_end
+            bind_start, bind_end = item_start, item_end
+            scope_clause = bind_text[bind_start:bind_end]
         date_origin: str | None = None
         if table_scope:
             scope_clause = " ".join(table_scope[key] for key in ("field_label", "time", "content"))
+            # DAV-2388 #1: 表格单元格里自带金额的括号是另一笔读数
+            # （``-2.927957 亿元 (5日累计 -13.36亿)``），它的窗口不属于本格金额。
+            scope_clause = _model_mask_amount_parens(scope_clause)
             own_dates = _iter_model_dates(table_scope["content"])
             if own_dates:
                 preceding = [d for d in own_dates if table_scope["start"] + d[0] < number_start]
@@ -3288,7 +3443,8 @@ def _extract_model_mentions(
             interval = _interval_context(scope_clause, 0, len(scope_clause), 0, len(scope_clause))
         else:
             date_result = _date_context(
-                text, sent_start, sent_end, clause_start, clause_end, number_start
+                bind_text, bind_sent_start, bind_sent_end, bind_start, bind_end,
+                number_start,
             )
             if date_result is None:
                 date_ctx = None
@@ -3296,7 +3452,7 @@ def _extract_model_mentions(
                 date_ctx = date_result[:3]
                 date_origin = date_result[3]
             interval = _interval_context(
-                text, sent_start, sent_end, clause_start, clause_end
+                bind_text, bind_sent_start, bind_sent_end, bind_start, bind_end
             )
             # DAV-2373 #5: 后面另一句里的趋势天数（「，连续3日呈现净流入」）
             # 不是这个已带日期金额的聚合窗口。
@@ -3306,14 +3462,14 @@ def _extract_model_mentions(
                 and date_origin in {"clause", "header", "prefix"}
             ):
                 interval = None
-        window_scope = scope_clause if table_scope else text[sent_start:clause_end]
+        window_scope = scope_clause if table_scope else bind_text[bind_sent_start:bind_end]
         # A window elsewhere in the sentence (or the duration of a
         # trend after the amount) is not the amount's aggregation
         # period. A local date/daily label wins unless a window still
         # directly modifies this amount. Keep explicit cumulative
         # headers and postfix totals, even when they include a date.
-        amount_prefix = text[clause_start:number_start]
-        amount_suffix = text[match.end():clause_end]
+        amount_prefix = bind_text[bind_start:number_start]
+        amount_suffix = bind_text[match.end():bind_end]
         if table_scope:
             amount_prefix = " ".join((
                 table_scope["field_label"], table_scope["time"],
@@ -3355,6 +3511,9 @@ def _extract_model_mentions(
         daily_scope = scope_clause
         if table_scope:
             daily_scope = scope_clause + " " + str(table_scope.get("labels") or "")
+        # DAV-2388 #2: 金额本身已带显式日期/区间端点时，端点就是窗口末日，
+        # 后置的「…之后」不再是「窗口在下一事件前结束」的信号。
+        claim_date_anchor = bool(date_ranges) or bool(single_dates)
         if interval and (own_window or not _MODEL_DAILY_MARKER.search(daily_scope)):
             kind, window_days = interval[0], interval[1]
             # A historical N-day claim is anchored to its own window
@@ -3407,7 +3566,7 @@ def _extract_model_mentions(
                 kind, window_days = interval[0], interval[1]
         else:
             interval = _interval_context(
-                text, sent_start, sent_end, clause_start, clause_end
+                bind_text, bind_sent_start, bind_sent_end, bind_start, bind_end
             )
             if interval is None:
                 kind = "daily"
@@ -3433,13 +3592,13 @@ def _extract_model_mentions(
             window_start = None
 
         bound_prefix = text[match.start():number_start]
-        bound_suffix = text[match.end():clause_end].lstrip("元")
+        bound_suffix = bind_text[match.end():bind_end].lstrip("元")
         comparison = _model_bound(bound_prefix, bound_suffix)
         bound_scope = None
         if (
             comparison == "upper"
             and _MODEL_ABSOLUTE_MAGNITUDE.search(
-                text[clause_start:number_start] + " " + bound_suffix
+                bind_text[bind_start:number_start] + " " + bound_suffix
             )
         ):
             bound_scope = "magnitude"
@@ -3454,7 +3613,7 @@ def _extract_model_mentions(
             and _MODEL_PREVIOUS_VALUE_SUFFIX.match(amount_suffix)
         ):
             endpoint = _model_transition_endpoint(
-                text, amount_suffix, match.end(), clause_start,
+                bind_text, amount_suffix, match.end(), bind_start,
                 field=field, kind=current_kind, resolved_date=resolved_date,
                 window_days=window_days,
                 window_start=window_start,
@@ -3462,6 +3621,12 @@ def _extract_model_mentions(
             )
             kind = "previous"
             window_days = None
+        elif _MODEL_PRIOR_PERIOD_PREFIX.search(amount_prefix):
+            # DAV-2388 #2: 「较前一日的 -2.84 亿元」是上一交易日读数，不得按
+            # 当日粒度比对（否则与当日 -0.1658 亿相撞变成假拒）。
+            kind = "previous"
+            window_days = None
+            window_start = None
         mentions.append(
             {
                 "field": field,
@@ -3475,11 +3640,11 @@ def _extract_model_mentions(
                 "bound_scope": bound_scope,
                 "window_end_exclusive": bool(
                     kind == "interval"
-                    and date_origin == "suffix"
+                    and not claim_date_anchor
                     and _MODEL_TRANSITION_END.search(amount_suffix)
                 ),
                 "approximate": any(
-                    word in text[max(clause_start, number_start - 15):match.end() + 15]
+                    word in bind_text[max(bind_start, number_start - 15):match.end() + 15]
                     for word in ("约", "大致", "大约", "左右", "接近", "达", "超")
                 ),
             }
