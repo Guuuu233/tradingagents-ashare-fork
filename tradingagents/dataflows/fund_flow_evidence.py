@@ -2403,6 +2403,15 @@ _MODEL_SEQUENCE_ROW = re.compile(
 # 不是这个金额的 N 日聚合窗口。`_MODEL_INTERVAL_TRADE_DAYS` 的「第」否定断言会被
 # 「第」与数字之间的空格绕开，故在匹配前先遮掉这类序数词。
 _MODEL_STREAK_ORDINAL = re.compile(rf"第\s*{_INTERVAL_NUM}\s*个?\s*交易日")
+# DAV-2412: 「连续 N 个交易日 / 连续 N 日」（不带「第」）同样是连续天数趋势
+# 描述。金额与该措辞同处一个从句时（金额本身是这段连续趋势谓语的一部分，
+# 如 411c1ab1「连续 4 日主力资金分组大幅净流出超 1.43 亿元」）仍按原口径作为
+# 该段的聚合窗口；但 prefix/suffix 里与金额隔着从句边界的连续段措辞
+# （aba4b9cf 误拦原文：「+0.16 亿元），终结了此前连续4个交易日的净流出状态」）
+# 描述的是此前一段状态，不是本金额的求和窗口，window_days 不得由此推导。
+_MODEL_STREAK_PHRASE = re.compile(
+    rf"连续\s*{_INTERVAL_NUM}\s*个?\s*(?:交易日|日)"
+)
 # 「万元」金额：括号里自带另一笔（万元）读数时同样是独立读数。
 _MODEL_WAN_NUMBER = re.compile(r"\d+(?:\.\d*)?\s*万")
 # DAV-2388 #2: 逐日枚举列表标记（「分别为 -2.22 亿、-1.09 亿」「分别录得 +8.03
@@ -2897,9 +2906,15 @@ def _interval_context(
     The third element records where the marker was found (``clause`` /
     ``header`` / ``prefix`` / ``suffix``) so a trend stated in a *following*
     clause is not mistaken for this amount's aggregation window (DAV-2373 #5).
+
+    DAV-2412: ``allow_streak_window=False``（prefix/suffix 扫描）把「连续 N 个
+    交易日 / 连续 N 日」一并遮掉——与金额隔着从句边界的连续天数措辞不是该
+    金额的求和窗口；同从句（``clause``/``header``）扫描保持原口径。
     """
 
-    def scan(segment: str) -> tuple[str, int | None] | None:
+    def scan(
+        segment: str, *, allow_streak_window: bool = True
+    ) -> tuple[str, int | None] | None:
         masked = _mask_spans(
             segment,
             [(d[0], d[1]) for d in _iter_model_dates(segment)]
@@ -2907,6 +2922,13 @@ def _interval_context(
             # DAV-2388 #1: 「连续第 3 个交易日」是连续天数序数，不是窗口。
             + [(m.start(), m.end()) for m in _MODEL_STREAK_ORDINAL.finditer(segment)],
         )
+        if not allow_streak_window:
+            # DAV-2412: prefix/suffix 与金额隔着从句边界的「连续 N 个交易日/
+            # 连续 N 日」是趋势状态描述，不得当作本金额的求和窗口。
+            masked = _mask_spans(
+                masked,
+                [(m.start(), m.end()) for m in _MODEL_STREAK_PHRASE.finditer(masked)],
+            )
         for pattern in (
             _MODEL_INTERVAL_TRADE_DAYS,
             _MODEL_INTERVAL_NEAR_DAYS,
@@ -2939,12 +2961,12 @@ def _interval_context(
             return hit[0], hit[1], "header"
     prefix = text[sent_start:clause_start]
     if prefix.strip() and not _MODEL_YI_NUMBER.search(prefix):
-        hit = scan(prefix)
+        hit = scan(prefix, allow_streak_window=False)
         if hit:
             return hit[0], hit[1], "prefix"
     suffix = text[clause_end:sent_end]
     if suffix.strip() and not _model_has_own_amount(suffix):
-        hit = scan(suffix)
+        hit = scan(suffix, allow_streak_window=False)
         if hit:
             return hit[0], hit[1], "suffix"
     return None
