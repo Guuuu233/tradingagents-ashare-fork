@@ -241,6 +241,13 @@ def test_analysts_execution_under_contextvar_logs_report_id_zero_null():
     finally:
         current_report_id.reset(token)
 
+    # DAV-2443 🟡1: async dispatch offloads the ledger commit to a writer
+    # thread (the analysts ran inside asyncio.run), so drain the queue
+    # before reading rows back — same as the other three row readers
+    # (DAV-1362 ③).
+    from api.usage_logging import flush_usage_writes
+
+    flush_usage_writes()
     # Query newly generated logs for this job_id
     with get_db_ctx() as db:
         logs = db.query(LLMCallLogDB).filter(LLMCallLogDB.report_id == job_id).all()

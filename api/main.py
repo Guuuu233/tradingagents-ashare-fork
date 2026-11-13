@@ -4145,7 +4145,11 @@ async def _run_job_inner(
                 _attach_custom_prompt_snapshot(result, _prompt_snapshot)
                 # DAV-1430 (D-066 B3): traceability fields. Both horizon
                 # slices share the same collected pool → identical hash.
-                _attach_traceability_fields(
+                # DAV-2443 🟡2: the attach point drains the usage ledger
+                # (build_served_models_summary → flush_usage_writes), a
+                # blocking wait that must not run on the event loop.
+                await asyncio.to_thread(
+                    _attach_traceability_fields,
                     result,
                     pool=collected_pool,
                     graph=graph,
@@ -4345,7 +4349,9 @@ async def _run_job_inner(
             _attach_custom_prompt_snapshot(result, _prompt_snapshot)
             # DAV-1430 (D-066 B3): traceability fields; single-horizon
             # dual-mode shares the collected pool with the slice payloads.
-            _attach_traceability_fields(
+            # DAV-2443 🟡2: blocking ledger drain must stay off the loop.
+            await asyncio.to_thread(
+                _attach_traceability_fields,
                 result,
                 pool=collected_pool,
                 graph=graph,
@@ -4768,7 +4774,9 @@ async def _run_job_inner(
             result, final_state.get("price_ref_source") or _pool_for_snapshot,
         )
         _mount_or_refresh_protocol_metadata_and_metrics(result)
-        _attach_traceability_fields(
+        # DAV-2443 🟡2: blocking ledger drain must stay off the loop.
+        await asyncio.to_thread(
+            _attach_traceability_fields,
             result,
             pool=_pool_for_snapshot,
             graph=graph,

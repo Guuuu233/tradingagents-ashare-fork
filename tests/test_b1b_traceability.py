@@ -361,6 +361,23 @@ class TestServedModelsSummary:
         assert build_served_models_summary(uuid.uuid4().hex) is None
         assert build_served_models_summary(None) is None
 
+    def test_ledger_incomplete_flagged_when_drain_fails(self, monkeypatch):
+        """DAV-2443 🟡2: when the pre-read drain reports failure, the served
+        models summary must carry ``ledger_incomplete=True`` instead of
+        silently presenting possibly-missing aggregates as complete."""
+        import api.usage_logging as _ul
+
+        _ensure_tables()
+        report_id = uuid.uuid4().hex
+        log_llm_call(agent_name="Trader", report_id=report_id,
+                     served_model="served-9x")
+        monkeypatch.setattr(
+            _ul, "flush_usage_writes", lambda timeout=10.0: False)
+        out = build_served_models_summary(report_id)
+        assert out is not None
+        assert out["call_count"] == 1
+        assert out["ledger_incomplete"] is True
+
 
 class TestInputSnapshot:
     """Canonical-hash determinism for the collected input pool."""

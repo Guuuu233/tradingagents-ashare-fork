@@ -442,16 +442,32 @@ def _submit_ledger_row(row: Dict[str, Any]) -> None:
         _write_ledger_row_now(row)
 
 
-def flush_usage_writes(timeout: float = 10.0) -> None:
+def flush_usage_writes(timeout: float = 10.0) -> bool:
     """Block until every queued ledger row has been written.
 
     Called by ``build_llm_usage_summary`` so a per-report summary can
     never miss the report's last call, and by tests that read rows back.
+
+    Returns ``True`` when the queue drained within ``timeout``. ``False``
+    means the drain did not finish (or failed) in time — anything read
+    afterwards may be missing rows that were still queued, so summary
+    builders must surface the incompleteness instead of silently
+    presenting the aggregate as complete (DAV-2443 🟡2).
     """
     try:
         _USAGE_WRITE_EXECUTOR.submit(lambda: None).result(timeout=timeout)
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("flush_usage_writes timed out", exc_info=True)
+        return True
+    except Exception:
+        # DAV-2443 🟡2: a timeout here used to be swallowed at debug level,
+        # letting callers silently miss the report's last call. Surface it
+        # and report the failed drain to the caller.
+        logger.warning(
+            "flush_usage_writes did not drain within %ss; "
+            "usage summary may be incomplete",
+            timeout,
+            exc_info=True,
+        )
+        return False
 
 
 class LLMUsageLogger(BaseCallbackHandler):
@@ -713,7 +729,9 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
     # DAV-1362 ③: the last call's row may still be queued on the writer
     # thread (async dispatch offloads the commit). Drain before reading so
     # the summary cannot silently miss a report's final LLM call.
-    flush_usage_writes()
+    # DAV-2443 🟡2: when the drain itself times out, mark the summary
+    # ``ledger_incomplete`` instead of silently missing the last call.
+    flush_ok = flush_usage_writes()
     try:
         from api.database import LLMCallLogDB, get_db_ctx
 
@@ -793,7 +811,7 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
                 }
             )
 
-        return {
+        usage_summary = {
             "report_id": report_id,
             "call_count": len(rows),
             "usage_unreliable_count": unreliable_count,
@@ -807,6 +825,10 @@ def build_llm_usage_summary(report_id: Optional[str]) -> Optional[Dict[str, Any]
             "retried_calls": sum(1 for r in reliable_rows if r.retried),
             "by_role": roles,
         }
+        # DAV-2443 🟡2: never present a summary whose drain failed as complete.
+        if not flush_ok:
+            usage_summary["ledger_incomplete"] = True
+        return usage_summary
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("build_llm_usage_summary failed (non-fatal): %s", exc)
         return None
@@ -820,12 +842,16 @@ def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, 
     counter covers calls whose response body carried no ``model`` field (or
     errored before one could be read). Returns None when nothing was logged;
     swallows errors (summary must never break report persistence).
+
+    DAV-2443 🟡2: when the pre-read drain times out, the summary additionally
+    carries ``ledger_incomplete: True`` (rows may be missing from it).
     """
     if not report_id:
         return None
     # DAV-1362 ③: same drain as build_llm_usage_summary — a row still
     # queued on the writer thread must not be missing from the summary.
-    flush_usage_writes()
+    # DAV-2443 🟡2: a timed-out drain must not silently drop the last call.
+    flush_ok = flush_usage_writes()
     try:
         from api.database import LLMCallLogDB, get_db_ctx
 
@@ -845,7 +871,7 @@ def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, 
                 by_role.setdefault(role, set()).add(r.served_model)
             else:
                 missing += 1
-        return {
+        served_models_summary = {
             "report_id": report_id,
             "call_count": len(rows),
             "by_role": {
@@ -854,6 +880,10 @@ def build_served_models_summary(report_id: Optional[str]) -> Optional[Dict[str, 
             },
             "served_model_missing": missing,
         }
+        # DAV-2443 🟡2: never present a summary whose drain failed as complete.
+        if not flush_ok:
+            served_models_summary["ledger_incomplete"] = True
+        return served_models_summary
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("build_served_models_summary failed (non-fatal): %s", exc)
         return None

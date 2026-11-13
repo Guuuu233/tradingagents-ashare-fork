@@ -1110,8 +1110,61 @@ class TestReview1925Cleanup:
     def test_flush_usage_writes_is_public_and_idempotent(self):
         from api.usage_logging import flush_usage_writes
 
-        flush_usage_writes()
-        flush_usage_writes()  # empty queue must be a no-op, not an error
+        assert flush_usage_writes() is True
+        assert flush_usage_writes() is True  # empty queue must be a no-op, not an error
+
+    def test_flush_usage_writes_timeout_returns_false_and_warns(self, caplog):
+        """DAV-2443 🟡2: a timed-out drain returns False and logs a WARNING
+        (previously swallowed at debug level), so callers never mistake an
+        undrained ledger for a complete one."""
+        import logging
+        import time
+
+        import api.usage_logging as _ul
+
+        blocker = _ul._USAGE_WRITE_EXECUTOR.submit(time.sleep, 0.5)
+        try:
+            with caplog.at_level(logging.WARNING, logger="api.usage_logging"):
+                drained = _ul.flush_usage_writes(timeout=0.05)
+            assert drained is False
+            warnings = [
+                r for r in caplog.records
+                if r.levelno >= logging.WARNING
+                and "flush_usage_writes" in r.getMessage()
+            ]
+            assert warnings, "timeout must be surfaced at WARNING level"
+            assert warnings[0].exc_info is not None
+        finally:
+            blocker.result()  # writer thread must finish before later tests flush
+        # The sentinel queued behind the blocker still drains afterwards.
+        assert _ul.flush_usage_writes() is True
+
+    def test_summary_flags_ledger_incomplete_when_drain_fails(self, monkeypatch):
+        """DAV-2443 🟡2: when the pre-read drain reports failure, the usage
+        summary must carry ``ledger_incomplete=True`` instead of silently
+        presenting possibly-missing aggregates as complete."""
+        import api.usage_logging as _ul
+
+        report_id = uuid.uuid4().hex
+        handler = LLMUsageLogger()
+        run_id = uuid.uuid4()
+
+        async def _call():
+            # Inside a running loop ⇒ the row is queued on the writer thread.
+            handler.on_chat_model_start(
+                {}, [], run_id=run_id,
+                metadata={"report_id": report_id, "llm_role": "Trader"})
+            handler.on_llm_end(_llm_result(usage=_usage_metadata()),
+                               run_id=run_id)
+
+        asyncio.run(_call())
+        assert _ul.flush_usage_writes() is True  # real drain: row is persisted
+        monkeypatch.setattr(
+            _ul, "flush_usage_writes", lambda timeout=10.0: False)
+        summary = build_llm_usage_summary(report_id)
+        assert summary is not None
+        assert summary["call_count"] == 1
+        assert summary["ledger_incomplete"] is True
 
     def _devin_llm(self, requests_log):
         from tradingagents.llm_clients import concurrency_gate as cg
