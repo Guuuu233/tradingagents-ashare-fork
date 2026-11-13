@@ -384,3 +384,81 @@ def test_aclose_transport_awaits_injected_httpx_async_client():
 
     asyncio.run(aclose_llm_pool())
     assert httpx_client.is_closed is True
+
+
+# ---------------------------------------------------------------------------
+# DAV-2440: close-path WARNING must stay credential-free
+# ---------------------------------------------------------------------------
+
+_SYNTHETIC_API_KEY = "sk-dav2440-synthetic-must-not-leak"
+
+
+class _ExplodingCloseLLM:
+    """Teardown blows up before any transport is reached.
+
+    ``getattr(llm, "root_client", None)`` re-raises (only AttributeError is
+    suppressed by a getattr default), so ``_close_transport`` propagates out
+    of the pool-close loop and lands in the ``except`` branch that used to
+    format the *whole* pool key — api_key included — into WARNING output.
+    """
+
+    @property
+    def root_client(self):  # noqa: D401 - property raising is the point
+        raise RuntimeError("synthetic close failure")
+
+
+def _pool_key_for_exploding_llm(factory):
+    return get_or_create_llm(
+        factory,
+        provider="openai",
+        model="secret-model",
+        base_url="https://gw.example/v1",
+        api_key=_SYNTHETIC_API_KEY,
+        temperature=0,
+    )
+
+
+def test_safe_pool_key_drops_credentials_and_raw_key_positions():
+    from tradingagents.llm_clients.pool import _pool_key, _safe_pool_key
+
+    raw = _pool_key(lambda **kw: None, "openai", "m", "https://gw/v1", {"api_key": _SYNTHETIC_API_KEY})
+    summary = _safe_pool_key(raw)
+
+    assert set(summary) == {"provider", "model", "base_url", "factory"}
+    assert summary["provider"] == "openai" and summary["model"] == "m"
+    assert summary["base_url"] == "https://gw/v1"
+    assert _SYNTHETIC_API_KEY not in repr(summary)
+
+
+def test_close_warning_omits_api_key_sync(caplog):
+    """DAV-2440: close exception path must not log the full pool key."""
+    caplog.set_level(logging.WARNING, logger="tradingagents.llm_clients.pool")
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_ExplodingCloseLLM()))
+    _pool_key_for_exploding_llm(factory)
+
+    instances, transports = invalidate_llm_pool()
+
+    assert (instances, transports) == (1, 0)
+    warns = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("failed closing pooled llm" in m for m in warns), warns
+    msg = next(m for m in warns if "failed closing pooled llm" in m)
+    # Non-credential fields stay useful for debugging.
+    assert "'provider': 'openai'" in msg and "'model': 'secret-model'" in msg
+    assert "https://gw.example/v1" in msg
+    # The actual regression: the configured API key never reaches the record.
+    assert _SYNTHETIC_API_KEY not in msg
+    assert _SYNTHETIC_API_KEY not in caplog.text
+
+
+def test_close_warning_omits_api_key_async(caplog):
+    """Same contract for the awaited shutdown path."""
+    caplog.set_level(logging.WARNING, logger="tradingagents.llm_clients.pool")
+    factory = MagicMock(side_effect=lambda **kw: _FakeClient(_ExplodingCloseLLM()))
+    _pool_key_for_exploding_llm(factory)
+
+    instances, transports = asyncio.run(aclose_llm_pool())
+
+    assert (instances, transports) == (1, 0)
+    warns = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("failed closing pooled llm" in m for m in warns), warns
+    assert _SYNTHETIC_API_KEY not in caplog.text

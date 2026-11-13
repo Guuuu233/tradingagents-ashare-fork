@@ -425,6 +425,8 @@ def _safe_field(value: Any) -> Any:
 
     Credentials never reach here: only provider / model / base_url positions of
     the key are logged, and api_key (inside the kwargs tuple) is never read.
+    Any new caller must use :func:`_safe_pool_key` (or the positional readers
+    above) instead of interpolating the raw key — see DAV-2440.
     """
     if value is None:
         return None
@@ -439,6 +441,26 @@ def _key_field(key: Any, index: int) -> Any:
     if isinstance(key, tuple) and len(key) > index:
         return key[index]
     return "?"
+
+
+def _safe_pool_key(key: Any) -> dict[str, Any]:
+    """Credential-free summary of a pool key for logs (DAV-2440).
+
+    A pool key is ``("llm", factory, provider, model, base_url, params)``;
+    ``params`` is the kwargs item tuple and therefore holds ``api_key``. The
+    whole key must never be formatted into a log record — this helper keeps
+    only provider / model / base_url / factory, so a close-path exception can
+    no longer leak a user's configured API key into WARNING output.
+    """
+    if not isinstance(key, tuple) or len(key) < 5:
+        return {"provider": "?", "model": "?", "base_url": "?", "factory": "?"}
+    factory = _key_field(key, 1)
+    return {
+        "provider": _safe_field(_key_field(key, 2)),
+        "model": _safe_field(_key_field(key, 3)),
+        "base_url": _safe_field(_key_field(key, 4)),
+        "factory": _safe_field(getattr(factory, "__qualname__", factory)),
+    }
 
 
 def _pool_disabled() -> bool:
@@ -463,7 +485,11 @@ def invalidate_llm_pool() -> tuple[int, int]:
             transports += _close_llm_instance(llm, async_close=False)
             _COUNTS["closed"] += 1
         except Exception as exc:
-            _logger.warning("[LLMPool] failed closing pooled llm %r: %r", key, exc)
+            _logger.warning(
+                "[LLMPool] failed closing pooled llm %s: %r",
+                _safe_pool_key(key),
+                exc,
+            )
     return len(items), transports
 
 
@@ -478,7 +504,11 @@ async def aclose_llm_pool() -> tuple[int, int]:
             transports += await _aclose_transport(llm)
             _COUNTS["closed"] += 1
         except Exception as exc:
-            _logger.warning("[LLMPool] failed closing pooled llm %r: %r", key, exc)
+            _logger.warning(
+                "[LLMPool] failed closing pooled llm %s: %r",
+                _safe_pool_key(key),
+                exc,
+            )
     return len(items), transports
 
 
