@@ -431,7 +431,7 @@ class ApiService {
     }
 
 
-    async fetchAvailableModels(payload?: { base_url?: string; api_key?: string; provider_id?: string }): Promise<{ ok: boolean; models: string[]; count: number; error?: string; url?: string }> {
+    async fetchAvailableModels(payload?: { base_url?: string; api_key?: string; provider_id?: string }): Promise<{ ok: boolean; models: string[]; count: number; error?: string; url?: string; reasoning_levels?: Record<string, string[] | null> }> {
         return this.request('/v1/models/fetch', {
             method: 'POST',
             body: JSON.stringify(payload || {}),

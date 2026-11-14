@@ -306,6 +306,8 @@ def upsert_user_llm_config(
     clear_api_key: bool = False,
     clear_wecom_webhook: bool = False,
     default_analysts: Optional[list] = None,
+    quick_reasoning_effort: Optional[str] = None,
+    deep_reasoning_effort: Optional[str] = None,
 ) -> UserLLMConfigDB:
     row = get_user_llm_config(db, user_id)
     now = _utcnow()
@@ -335,6 +337,13 @@ def upsert_user_llm_config(
         row.wecom_webhook_encrypted = None
     elif wecom_webhook_url:
         row.wecom_webhook_encrypted = encrypt_secret(wecom_webhook_url)
+
+    # DAV-2453: caller passes an already-validated value; "" clears to NULL
+    # (follow the model), None leaves the column untouched.
+    if quick_reasoning_effort is not None:
+        row.quick_reasoning_effort = quick_reasoning_effort or None
+    if deep_reasoning_effort is not None:
+        row.deep_reasoning_effort = deep_reasoning_effort or None
 
     if default_analysts is not None:
         import json

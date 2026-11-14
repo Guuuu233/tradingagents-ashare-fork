@@ -994,6 +994,9 @@ export interface RuntimeConfig {
     email_report_enabled?: boolean
     wecom_report_enabled?: boolean
     default_analysts?: string[]
+    // DAV-2453: null/absent = follow the model
+    quick_reasoning_effort?: string | null
+    deep_reasoning_effort?: string | null
 }
 
 export interface RuntimeConfigUpdateResponse {
@@ -1018,6 +1021,9 @@ export interface RuntimeConfigUpdate {
     email_report_enabled?: boolean
     wecom_report_enabled?: boolean
     default_analysts?: string[]
+    // DAV-2453: 'low' | 'medium' | 'high' | 'follow' ('follow' clears to NULL)
+    quick_reasoning_effort?: string
+    deep_reasoning_effort?: string
     warmup?: boolean
     force_warmup?: boolean
 }

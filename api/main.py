@@ -1558,6 +1558,9 @@ class UserRuntimeConfigResponse(BaseModel):
     email_report_enabled: bool = True
     wecom_report_enabled: bool = True
     default_analysts: List[str] = Field(default_factory=lambda: ["market", "social", "news", "fundamentals", "macro", "smart_money", "volume_price"])
+    # DAV-2453: None = follow the model (no effort sent)
+    quick_reasoning_effort: Optional[str] = None
+    deep_reasoning_effort: Optional[str] = None
 
 
 class UserRuntimeConfigUpdateRequest(BaseModel):
@@ -1576,6 +1579,11 @@ class UserRuntimeConfigUpdateRequest(BaseModel):
     warmup: bool = True
     force_warmup: bool = False
     default_analysts: Optional[List[str]] = None
+    # DAV-2453: "low" | "medium" | "high" | "follow" (= NULL, follow the model).
+    # Typed Any so every invalid value (wrong type included) surfaces as 400,
+    # not pydantic 422; _validate_reasoning_effort_updates does the whitelist.
+    quick_reasoning_effort: Optional[Any] = None
+    deep_reasoning_effort: Optional[Any] = None
 
 
 class UserRuntimeWarmupRequest(UserRuntimeConfigUpdateRequest):
@@ -1836,6 +1844,8 @@ def _user_config_overrides(user_id: Optional[str], db: Optional[Session] = None)
             "deep_think_llm",
             "max_debate_rounds",
             "max_risk_discuss_rounds",
+            "quick_reasoning_effort",
+            "deep_reasoning_effort",
         ):
             value = getattr(user_cfg, key, None)
             if value is not None:
@@ -2850,6 +2860,11 @@ def _attach_traceability_fields(
         result["served_models"] = build_served_models_summary(report_id)
     except Exception:
         result["served_models"] = None
+    # DAV-2453: record the thinking level actually passed per role (null = none).
+    served = result.get("served_models")
+    if isinstance(served, dict):
+        efforts = getattr(graph, "role_reasoning_effort", None)
+        served["reasoning_effort_by_role"] = dict(efforts) if isinstance(efforts, dict) else {}
     return result
 
 
@@ -3914,6 +3929,8 @@ async def _run_job_inner(
                     "fallback_used": cfg.get("fallback_used"),
                     "profile_display_name": cfg.get("profile_display_name"),
                     "provider_display_name": cfg.get("provider_display_name"),
+                    # DAV-2453: thinking level actually passed out (null = not passed)
+                    "reasoning_effort": (getattr(graph, "role_reasoning_effort", None) or {}).get(role),
                 }
                 for role, cfg in getattr(graph, "role_resolved_configs", {}).items()
             }
@@ -4335,6 +4352,8 @@ async def _run_job_inner(
                     "fallback_used": cfg.get("fallback_used"),
                     "profile_display_name": cfg.get("profile_display_name"),
                     "provider_display_name": cfg.get("provider_display_name"),
+                    # DAV-2453: thinking level actually passed out (null = not passed)
+                    "reasoning_effort": (getattr(graph, "role_reasoning_effort", None) or {}).get(role),
                 }
                 for role, cfg in getattr(graph, "role_resolved_configs", {}).items()
             }
@@ -7047,6 +7066,8 @@ def _config_response_for_user(user: Optional[UserDB], db: Session) -> UserRuntim
         email_report_enabled=user.email_report_enabled if user and hasattr(user, 'email_report_enabled') else True,
         wecom_report_enabled=user.wecom_report_enabled if user and hasattr(user, "wecom_report_enabled") else True,
         default_analysts=json.loads(user_cfg.default_analysts) if user_cfg and user_cfg.default_analysts else ["market", "social", "news", "fundamentals", "macro", "smart_money", "volume_price"],
+        quick_reasoning_effort=getattr(user_cfg, "quick_reasoning_effort", None) if user_cfg else None,
+        deep_reasoning_effort=getattr(user_cfg, "deep_reasoning_effort", None) if user_cfg else None,
     )
 
 
@@ -7394,6 +7415,35 @@ def get_runtime_config(
     return _config_response_for_user(current_user, db)
 
 
+def _validate_reasoning_effort_updates(updates: UserRuntimeConfigUpdateRequest) -> Dict[str, str]:
+    """DAV-2453: map request fields to {tier: "low"|"medium"|"high"|""}.
+
+    ``""`` means "follow the model" (stored as NULL); tiers not present in the
+    request are omitted. Any non-whitelisted value raises HTTP 400.
+    """
+    from tradingagents.reasoning_effort import (
+        REASONING_EFFORT_FOLLOW,
+        normalize_reasoning_effort,
+    )
+
+    out: Dict[str, str] = {}
+    for tier in ("quick", "deep"):
+        raw = getattr(updates, f"{tier}_reasoning_effort", None)
+        if raw is None:
+            continue
+        if isinstance(raw, str) and raw.strip().lower() == REASONING_EFFORT_FOLLOW:
+            out[tier] = ""
+            continue
+        try:
+            out[tier] = normalize_reasoning_effort(raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{tier}_reasoning_effort 非法：只接受 low / medium / high / follow",
+            ) from exc
+    return out
+
+
 @app.patch("/v1/config")
 def update_runtime_config(
     updates: UserRuntimeConfigUpdateRequest,
@@ -7410,6 +7460,8 @@ def update_runtime_config(
             normalized_wecom_webhook = normalize_webhook_url(updates.wecom_webhook_url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # DAV-2453: whitelist-validate thinking levels before anything is written.
+    effort_updates = _validate_reasoning_effort_updates(updates)
     persistent_user = db.query(UserDB).filter(UserDB.id == current_user.id).first() or current_user
     before_cfg = _config_response_for_user(persistent_user, db)
     pending_cfg = _build_pending_runtime_config(updates, persistent_user.id, db)
@@ -7433,6 +7485,8 @@ def update_runtime_config(
         clear_api_key=updates.clear_api_key,
         clear_wecom_webhook=updates.clear_wecom_webhook,
         default_analysts=updates.default_analysts,
+        quick_reasoning_effort=effort_updates.get("quick"),
+        deep_reasoning_effort=effort_updates.get("deep"),
     )
     user_pref_updated = False
     if updates.email_report_enabled is not None:
@@ -7775,12 +7829,35 @@ def _extract_models_from_payload(body: str) -> list[str]:
     return models
 
 
+def _extract_reasoning_levels_from_payload(body: str) -> Dict[str, Optional[List[str]]]:
+    """DAV-2453: {model_id: [low/medium/high subset] | None} from /v1/models.
+
+    ``None`` = the catalog entry carries no readable ``supported_reasoning_levels``
+    (the UI must then treat the model as "not adjustable").
+    """
+    from tradingagents.reasoning_effort import parse_supported_levels
+
+    data = json.loads(body)
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        items = data["data"]
+    elif isinstance(data, list):
+        items = data
+    else:
+        return {}
+    levels: Dict[str, Optional[List[str]]] = {}
+    for item in items:
+        if isinstance(item, dict) and "id" in item:
+            levels[str(item["id"])] = parse_supported_levels(item)
+    return levels
+
+
 def _fetch_available_models(
     base_url: str,
     api_key: str,
     *,
     allow_user_url: bool = False,
-) -> tuple[list[str], str]:
+    with_reasoning_levels: bool = False,
+) -> tuple:
     parsed = _parse_models_fetch_url(base_url)
     host = (parsed.hostname or "").casefold().rstrip(".")
     port = _models_fetch_port(parsed)
@@ -7822,6 +7899,12 @@ def _fetch_available_models(
         if response.status < 200 or response.status >= 300:
             raise _ModelsFetchError(f"HTTP status {response.status}")
         models = _extract_models_from_payload(body)
+        if with_reasoning_levels:
+            return (
+                sorted(set(models)),
+                _models_fetch_url(parsed, path),
+                _extract_reasoning_levels_from_payload(body),
+            )
         return sorted(set(models)), _models_fetch_url(parsed, path)
     except (_ModelsFetchError, OSError, http.client.HTTPException, UnicodeDecodeError, ValueError) as exc:
         raise _ModelsFetchError("model fetch failed") from exc
@@ -7899,10 +7982,11 @@ def fetch_available_models(
     if not api_key and user_cfg and user_cfg.api_key_encrypted:
         api_key = auth_service.decrypt_secret(user_cfg.api_key_encrypted) or ""
     try:
-        models_sorted, target_url = _fetch_available_models(
+        models_sorted, target_url, reasoning_levels = _fetch_available_models(
             base_url,
             api_key,
             allow_user_url=allow_user_url,
+            with_reasoning_levels=True,
         )
     except Exception as exc:
         logger.warning("[fetch_available_models] rejected: %s", exc)
@@ -7917,6 +8001,8 @@ def fetch_available_models(
         "models": models_sorted,
         "count": len(models_sorted),
         "url": target_url,
+        # DAV-2453: per-model selectable thinking levels; null = not adjustable
+        "reasoning_levels": reasoning_levels,
     }
 
 

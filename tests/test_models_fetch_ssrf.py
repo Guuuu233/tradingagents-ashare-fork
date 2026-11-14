@@ -307,7 +307,7 @@ def test_endpoint_success_shape_is_preserved(monkeypatch):
     monkeypatch.setattr(
         api_main,
         "_fetch_available_models",
-        lambda base_url, api_key, **kwargs: (["a", "b"], "http://allowed.example.com/v1/models"),
+        lambda base_url, api_key, **kwargs: (["a", "b"], "http://allowed.example.com/v1/models", {"a": ["high"], "b": None}),
     )
     monkeypatch.setattr(
         api_main.role_routing_service,
@@ -327,6 +327,8 @@ def test_endpoint_success_shape_is_preserved(monkeypatch):
         "models": ["a", "b"],
         "count": 2,
         "url": "http://allowed.example.com/v1/models",
+        # DAV-2453: additive per-model thinking levels (null = not adjustable)
+        "reasoning_levels": {"a": ["high"], "b": None},
     }
     assert sync_calls == []
 
@@ -443,13 +445,13 @@ def test_anonymous_fetch_from_loopback_allowed(monkeypatch):
     """默认本地账号从回环调用时可继续，但不获得用户 URL 绕过权。"""
     captured = {}
 
-    def fake_fetch(base_url, api_key, *, allow_user_url=False):
+    def fake_fetch(base_url, api_key, *, allow_user_url=False, with_reasoning_levels=False):
         captured.update(
             base_url=base_url,
             api_key=api_key,
             allow_user_url=allow_user_url,
         )
-        return ["model-a"], "http://public.example.com/v1/models"
+        return ["model-a"], "http://public.example.com/v1/models", {}
 
     monkeypatch.setattr(api_main, "_fetch_available_models", fake_fetch)
     with _endpoint_client_with_user(
@@ -470,13 +472,13 @@ def test_authenticated_fetch_from_non_loopback_uses_user_url_policy(monkeypatch)
     """真实用户从非回环来源调用时，HTTP 路由启用用户 URL 政策。"""
     captured = {}
 
-    def fake_fetch(base_url, api_key, *, allow_user_url=False):
+    def fake_fetch(base_url, api_key, *, allow_user_url=False, with_reasoning_levels=False):
         captured.update(
             base_url=base_url,
             api_key=api_key,
             allow_user_url=allow_user_url,
         )
-        return ["model-a"], "http://public.example.com/v1/models"
+        return ["model-a"], "http://public.example.com/v1/models", {}
 
     monkeypatch.setattr(api_main, "_fetch_available_models", fake_fetch)
     user = MagicMock()
@@ -556,13 +558,13 @@ def _call_authenticated_fetch_endpoint(monkeypatch, *, payload, user_cfg=None, p
         lambda value: f"decrypted:{value}" if value else None,
     )
 
-    def fake_fetch(base_url, api_key, *, allow_user_url=False):
+    def fake_fetch(base_url, api_key, *, allow_user_url=False, with_reasoning_levels=False):
         captured.update(
             base_url=base_url,
             api_key=api_key,
             allow_user_url=allow_user_url,
         )
-        return ["model-a"], f"{base_url.rstrip('/')}/models"
+        return ["model-a"], f"{base_url.rstrip('/')}/models", {}
 
     monkeypatch.setattr(api_main, "_fetch_available_models", fake_fetch)
     monkeypatch.setattr(
@@ -661,13 +663,13 @@ def test_anonymous_fetch_loopback_with_env_key_regression(monkeypatch):
     monkeypatch.setenv("TA_API_KEY", "sk-test-leak")
     captured = {}
 
-    def fake_fetch(base_url, api_key, *, allow_user_url=False):
+    def fake_fetch(base_url, api_key, *, allow_user_url=False, with_reasoning_levels=False):
         captured.update(
             base_url=base_url,
             api_key=api_key,
             allow_user_url=allow_user_url,
         )
-        return ["model-a"], "http://public.example.com/v1/models"
+        return ["model-a"], "http://public.example.com/v1/models", {}
 
     monkeypatch.setattr(api_main, "_fetch_available_models", fake_fetch)
     with _endpoint_client_with_user(
@@ -689,13 +691,13 @@ def test_authenticated_fetch_non_loopback_with_env_key_regression(monkeypatch):
     monkeypatch.setenv("TA_API_KEY", "sk-test-leak")
     captured = {}
 
-    def fake_fetch(base_url, api_key, *, allow_user_url=False):
+    def fake_fetch(base_url, api_key, *, allow_user_url=False, with_reasoning_levels=False):
         captured.update(
             base_url=base_url,
             api_key=api_key,
             allow_user_url=allow_user_url,
         )
-        return ["model-a"], "http://public.example.com/v1/models"
+        return ["model-a"], "http://public.example.com/v1/models", {}
 
     monkeypatch.setattr(api_main, "_fetch_available_models", fake_fetch)
     user = MagicMock()

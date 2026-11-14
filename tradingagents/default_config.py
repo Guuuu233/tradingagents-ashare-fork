@@ -44,6 +44,10 @@ DEFAULT_CONFIG = {
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
+    # DAV-2453: user-selected thinking level per tier (low/medium/high). None =
+    # follow the model: nothing is sent, request body unchanged.
+    "quick_reasoning_effort": None,
+    "deep_reasoning_effort": None,
     
     # Debate and discussion settings
     "max_debate_rounds": int(os.getenv("TA_MAX_DEBATE") or "3"),

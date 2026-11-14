@@ -243,6 +243,22 @@ def _ensure_report_schema(target_engine=None) -> None:
         raise RuntimeError(f"reports industry index migration failed: {e}") from e
 
 
+REASONING_EFFORT_COLUMNS = ("quick_reasoning_effort", "deep_reasoning_effort")
+
+
+def rollback_reasoning_effort_columns() -> None:
+    """DAV-2453 rollback: drop the two thinking-level columns (SQLite >= 3.35).
+
+    Reverses the additive migration in ``_ensure_user_schema``; no other column
+    is touched. Not called automatically — run it explicitly on rollback.
+    """
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(user_llm_configs)"))}
+        for col in REASONING_EFFORT_COLUMNS:
+            if col in columns:
+                conn.execute(text(f"ALTER TABLE user_llm_configs DROP COLUMN {col}"))
+
+
 def _ensure_user_schema() -> None:
     """Add columns to users table for existing SQLite deployments without migrations."""
     try:
@@ -261,6 +277,10 @@ def _ensure_user_schema() -> None:
                 conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN wecom_webhook_encrypted TEXT"))
             if "default_analysts" not in llm_columns:
                 conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN default_analysts TEXT"))
+            # DAV-2453: nullable, no default, no backfill (NULL = follow model).
+            for col in REASONING_EFFORT_COLUMNS:
+                if col not in llm_columns:
+                    conn.execute(text(f"ALTER TABLE user_llm_configs ADD COLUMN {col} VARCHAR(16)"))
     except Exception as e:
         logger.error("Failed to ensure user schema: %s", e)
 
@@ -755,6 +775,10 @@ class UserLLMConfigDB(Base):
     api_key_encrypted = Column(Text, nullable=True)
     wecom_webhook_encrypted = Column(Text, nullable=True)
     default_analysts = Column(Text, nullable=True)  # JSON list, e.g. '["market","social",...]'
+    # DAV-2453: user-selected thinking level per tier. NULL = follow the model
+    # (no effort parameter is sent). Whitelist: low / medium / high.
+    quick_reasoning_effort = Column(String(16), nullable=True)
+    deep_reasoning_effort = Column(String(16), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

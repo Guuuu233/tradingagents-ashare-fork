@@ -274,10 +274,18 @@ class TradingAgentsGraph:
         # until evicted, or until invalidate_llm_pool()/aclose_llm_pool() at
         # process shutdown (api/main.py lifespan).
         llm_kwargs = self._get_provider_kwargs()
+        # DAV-2453: per-tier kwargs go through the same _get_provider_kwargs path.
+        # With no user-selected thinking level they equal ``llm_kwargs`` exactly.
+        tier_llm_kwargs = {
+            "quick": self._get_provider_kwargs("quick"),
+            "deep": self._get_provider_kwargs("deep"),
+        }
 
         # Add callbacks to kwargs if provided (passed to LLM constructor)
         if self.callbacks:
             llm_kwargs["callbacks"] = self.callbacks
+            for _tier_kwargs in tier_llm_kwargs.values():
+                _tier_kwargs["callbacks"] = self.callbacks
 
         # Resolve per-role model configurations
         db = self.config.get("db")
@@ -296,6 +304,9 @@ class TradingAgentsGraph:
 
         self.role_llms = {}
         self.role_resolved_configs = resolved_roles
+        # DAV-2453: thinking level actually passed to each role's client (None =
+        # nothing passed), recorded into model_config_snapshot / served_models.
+        self.role_reasoning_effort: Dict[str, Optional[str]] = {}
 
         from api.services.role_routing_service import ALL_ROLES, ROLE_DEFAULT_TIERS
         for role_key in ALL_ROLES:
@@ -311,7 +322,13 @@ class TradingAgentsGraph:
             )
             a_key = r_cfg.get("api_key") or self.config.get("api_key")
 
-            r_kwargs = dict(llm_kwargs)
+            # DAV-2453: the user's quick/deep thinking level applies to roles that
+            # follow the tier model. Roles with their own binding use a different
+            # model, so they keep the pre-existing (tier-agnostic) kwargs.
+            if r_cfg.get("resolved_via") in ("role_binding", "group_binding"):
+                r_kwargs = dict(llm_kwargs)
+            else:
+                r_kwargs = dict(tier_llm_kwargs[default_tier])
             if r_cfg.get("temperature") is not None:
                 r_kwargs["temperature"] = r_cfg["temperature"]
             if r_cfg.get("max_tokens") is not None:
@@ -319,6 +336,9 @@ class TradingAgentsGraph:
             if a_key:
                 r_kwargs["api_key"] = a_key
 
+            self.role_reasoning_effort[role_key] = (
+                r_kwargs.get("reasoning_effort") or r_kwargs.get("thinking_level") or None
+            )
             self.role_llms[role_key] = get_or_create_llm(
                 create_llm_client,
                 provider=p_type,
@@ -337,7 +357,7 @@ class TradingAgentsGraph:
                 provider=self.config.get("llm_provider", "openai"),
                 model=self.config.get("deep_think_llm", "gpt-4o"),
                 base_url=self.config.get("backend_url"),
-                **llm_kwargs,
+                **tier_llm_kwargs["deep"],
             )
         self.quick_thinking_llm = self.role_llms.get("market")
         if self.quick_thinking_llm is None:
@@ -346,7 +366,7 @@ class TradingAgentsGraph:
                 provider=self.config.get("llm_provider", "openai"),
                 model=self.config.get("quick_think_llm", "gpt-4o-mini"),
                 base_url=self.config.get("backend_url"),
-                **llm_kwargs,
+                **tier_llm_kwargs["quick"],
             )
         
         # Initialize memories
@@ -594,13 +614,28 @@ class TradingAgentsGraph:
             if not any(isinstance(t, dict) and t.get("agent") == AGENT_NAME for t in traces):
                 traces.append(fail_trace)
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
+    def _get_provider_kwargs(self, tier: Optional[str] = None) -> Dict[str, Any]:
+        """Get provider-specific kwargs for LLM client creation.
+
+        DAV-2453: ``tier`` ("quick" / "deep") selects the user-chosen thinking
+        level for that tier. With ``tier=None`` or no user choice (NULL, the
+        default) the result is identical to the pre-DAV-2453 behaviour — no
+        effort parameter is added.
+        """
         kwargs = {}
         provider = self.config.get("llm_provider", "").lower()
 
+        tier_effort = None
+        if tier is not None:
+            from tradingagents.reasoning_effort import config_key, REASONING_EFFORT_WHITELIST
+
+            candidate = self.config.get(config_key(tier))
+            # Defence in depth: only whitelisted values ever reach the client.
+            if candidate in REASONING_EFFORT_WHITELIST:
+                tier_effort = candidate
+
         if provider == "google":
-            thinking_level = self.config.get("google_thinking_level")
+            thinking_level = tier_effort or self.config.get("google_thinking_level")
             if thinking_level:
                 kwargs["thinking_level"] = thinking_level
             api_key = self.config.get("api_key")
@@ -608,7 +643,7 @@ class TradingAgentsGraph:
                 kwargs["api_key"] = api_key
 
         elif provider == "openai":
-            reasoning_effort = self.config.get("openai_reasoning_effort")
+            reasoning_effort = tier_effort or self.config.get("openai_reasoning_effort")
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
             api_key = self.config.get("api_key")

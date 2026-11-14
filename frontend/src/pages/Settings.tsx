@@ -2,6 +2,14 @@ import { useState, useEffect, useMemo } from 'react'
 import { Save, Key, Database, Loader2, Trash2, Link2, Copy, Plus, CheckCircle2, Mail, Flame, Webhook, Sparkles, RefreshCw, ListFilter } from 'lucide-react'
 import { api } from '@/services/api'
 import RoleModelConfigSection from '@/components/RoleModelConfigSection'
+import ReasoningEffortSelect from '@/components/ReasoningEffortSelect'
+import {
+    reconcileReasoningEffort,
+    sanitizeReasoningEffortChoice,
+    toReasoningEffortPayload,
+    type ReasoningEffortChoice,
+    type ReasoningLevelCatalog,
+} from '@/utils/reasoningEffort'
 import { useAuthStore } from '@/stores/authStore'
 import type { RuntimeWarmupResult, UserToken } from '@/types'
 import { RELAY_PROMO } from '@/config/promo'
@@ -71,6 +79,10 @@ export default function Settings() {
     const [fetchedModels, setFetchedModels] = useState<string[]>([])
     const [fetchModelsError, setFetchModelsError] = useState<string | null>(null)
     const [fetchModelsUrl, setFetchModelsUrl] = useState<string | null>(null)
+    // DAV-2453: thinking level per tier ('follow' = follow the model, stored as NULL)
+    const [quickEffort, setQuickEffort] = useState<ReasoningEffortChoice>('follow')
+    const [deepEffort, setDeepEffort] = useState<ReasoningEffortChoice>('follow')
+    const [reasoningCatalog, setReasoningCatalog] = useState<ReasoningLevelCatalog | null>(null)
 
     const [saving, setSaving] = useState(false)
     const [saveAllSaving, setSaveAllSaving] = useState(false)
@@ -135,6 +147,8 @@ export default function Settings() {
                 setCustomBaseUrl(cfg.backend_url || '')
                 setDeepThinkLlm(cfg.deep_think_llm)
                 setQuickThinkLlm(cfg.quick_think_llm)
+                setQuickEffort(sanitizeReasoningEffortChoice(cfg.quick_reasoning_effort))
+                setDeepEffort(sanitizeReasoningEffortChoice(cfg.deep_reasoning_effort))
                 setMaxDebateRounds(cfg.max_debate_rounds)
                 setMaxRiskRounds(cfg.max_risk_discuss_rounds)
                 setHasStoredApiKey(!!cfg.has_api_key)
@@ -152,9 +166,22 @@ export default function Settings() {
             })
             .finally(() => setConfigLoading(false))
 
+        // DAV-2453: silently read the model catalog's selectable thinking levels
+        // (saved URL/key, metadata only). Unreadable -> selectors stay disabled.
+        api.fetchAvailableModels({})
+            .then(res => {
+                if (res.ok && res.reasoning_levels) setReasoningCatalog(res.reasoning_levels)
+            })
+            .catch(() => {})
+
         // Fetch tokens
         fetchTokens()
     }, [])
+
+    // DAV-2453: derived (not an effect) — a model change or catalog refresh must not
+    // leave a level the model no longer offers selected -> "follow the model".
+    const effectiveQuickEffort = reconcileReasoningEffort(quickEffort, quickThinkLlm, reasoningCatalog)
+    const effectiveDeepEffort = reconcileReasoningEffort(deepEffort, deepThinkLlm, reasoningCatalog)
 
     // Custom analysis prompt: backend (/v1/custom-prompts) is now the source of truth.
     // localStorage stays as a display fallback / offline cache — see persistLocalSettings.
@@ -264,6 +291,8 @@ export default function Settings() {
         backend_url: effectiveBaseUrl || undefined,
         deep_think_llm: deepThinkLlm,
         quick_think_llm: quickThinkLlm,
+        quick_reasoning_effort: toReasoningEffortPayload(effectiveQuickEffort),
+        deep_reasoning_effort: toReasoningEffortPayload(effectiveDeepEffort),
         max_debate_rounds: maxDebateRounds,
         max_risk_discuss_rounds: maxRiskRounds,
         api_key: llmApiKey || undefined,
@@ -339,6 +368,7 @@ export default function Settings() {
                 api_key: llmApiKey,
             })
             if (res.ok) {
+                if (res.reasoning_levels) setReasoningCatalog(res.reasoning_levels)
                 setFetchedModels(res.models)
                 setFetchModelsUrl(res.url || null)
                 if (res.models.length > 0) {
@@ -683,6 +713,33 @@ export default function Settings() {
                             </div>
                         )}
                     </div>
+                </div>
+            </div>
+
+            <div className="card space-y-4">
+                <div>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">模型思考程度</h2>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        默认「跟随模型」：不向模型传任何思考程度参数，行为与未设置时完全一致。仅列出所选模型支持的档位；保存设置后下次分析生效。
+                    </p>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <ReasoningEffortSelect
+                        label="快速模型"
+                        model={quickThinkLlm}
+                        value={effectiveQuickEffort}
+                        catalog={reasoningCatalog}
+                        onChange={setQuickEffort}
+                        disabled={configLoading}
+                    />
+                    <ReasoningEffortSelect
+                        label="深度模型"
+                        model={deepThinkLlm}
+                        value={effectiveDeepEffort}
+                        catalog={reasoningCatalog}
+                        onChange={setDeepEffort}
+                        disabled={configLoading}
+                    />
                 </div>
             </div>
 
