@@ -437,3 +437,104 @@ def test_migration_is_additive_nullable_and_rollbackable(tmp_path, monkeypatch):
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(user_llm_configs)"))}
     assert "quick_reasoning_effort" not in cols and "deep_reasoning_effort" not in cols
     assert "quick_think_llm" in cols
+
+
+# ------------------------------------- 6: member-registered ∩ group levels (DAV-2457)
+
+
+def test_intersect_and_effective_effort_pure_rules():
+    from tradingagents.reasoning_effort import effective_effort, intersect_levels
+
+    assert intersect_levels(["low", "medium", "high"], ["high", "low"]) == ["low", "high"]
+    assert intersect_levels(["low"], ["high"]) == []
+    assert intersect_levels(["low"], None) == []
+    assert intersect_levels() == []
+
+    assert effective_effort("low", ["low", "medium", "high"]) == "low"
+    assert effective_effort(" HIGH ", ["high"]) == "high"
+    # empty intersection / unreadable group / invalid or missing member -> not adjustable
+    assert effective_effort("low", ["high"]) is None
+    assert effective_effort("low", []) is None
+    assert effective_effort("low", None) is None
+    assert effective_effort(None, ["low", "medium", "high"]) is None
+    assert effective_effort("none", ["low", "medium", "high"]) is None
+    assert effective_effort(5, ["low", "medium", "high"]) is None
+
+
+def _overrides_with(user_cfg, catalog=None, fetch_error=None):
+    from types import SimpleNamespace
+
+    from api import main as api_main
+
+    cfg = SimpleNamespace(
+        llm_provider="openai",
+        backend_url="http://127.0.0.1:3425/v1",
+        quick_think_llm="g",
+        deep_think_llm="g",
+        max_debate_rounds=None,
+        max_risk_discuss_rounds=None,
+        quick_reasoning_effort=None,
+        deep_reasoning_effort=None,
+        api_key_encrypted=None,
+    )
+    for key, value in user_cfg.items():
+        setattr(cfg, key, value)
+
+    fetch = MagicMock(side_effect=fetch_error) if fetch_error else MagicMock(
+        return_value=(sorted(catalog or {}), "u", dict(catalog or {}))
+    )
+    with patch.object(api_main.auth_service, "get_user_llm_config", return_value=cfg), \
+         patch.object(api_main.auth_service, "decrypt_secret", return_value=""), \
+         patch.object(api_main, "_fetch_available_models", fetch):
+        return api_main._user_config_overrides("user-1", db=MagicMock()), fetch
+
+
+def test_runtime_overrides_keep_effort_inside_group_levels():
+    out, _ = _overrides_with(
+        {"quick_reasoning_effort": "low", "deep_reasoning_effort": "high"},
+        catalog={"g": ["low", "medium", "high"]},
+    )
+    assert (out["quick_reasoning_effort"], out["deep_reasoning_effort"]) == ("low", "high")
+
+
+def test_runtime_overrides_drop_effort_outside_group_levels():
+    out, _ = _overrides_with(
+        {"quick_reasoning_effort": "low", "deep_reasoning_effort": "high"},
+        catalog={"g": ["high"]},
+    )
+    assert "quick_reasoning_effort" not in out  # empty intersection -> not passed
+    assert out["deep_reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("catalog", [{"g": None}, {"g": []}, {}, {"other": ["low", "medium", "high"]}])
+def test_runtime_overrides_drop_effort_when_group_levels_unreadable(catalog):
+    out, _ = _overrides_with({"quick_reasoning_effort": "medium"}, catalog=catalog)
+    assert "quick_reasoning_effort" not in out
+
+
+def test_runtime_overrides_drop_effort_when_catalog_fetch_fails():
+    out, _ = _overrides_with({"deep_reasoning_effort": "high"}, fetch_error=RuntimeError("down"))
+    assert "deep_reasoning_effort" not in out
+
+
+def test_runtime_overrides_null_effort_does_no_catalog_io():
+    out, fetch = _overrides_with({}, catalog={"g": ["high"]})
+    fetch.assert_not_called()
+    assert "quick_reasoning_effort" not in out and "deep_reasoning_effort" not in out
+
+
+def test_runtime_overrides_use_each_tiers_own_model():
+    out, _ = _overrides_with(
+        {"quick_think_llm": "q", "deep_think_llm": "d",
+         "quick_reasoning_effort": "low", "deep_reasoning_effort": "low"},
+        catalog={"q": ["low", "high"], "d": ["high"]},
+    )
+    assert out["quick_reasoning_effort"] == "low"
+    assert "deep_reasoning_effort" not in out
+
+
+def test_dropped_effort_reaches_client_and_snapshot_as_nothing():
+    out, _ = _overrides_with({"quick_reasoning_effort": "low"}, catalog={"g": ["high"]})
+    graph, recorder = _build_graph(_cfg(**out))
+    assert all("reasoning_effort" not in call["kwargs"] for call in recorder.calls)
+    assert set(graph.role_reasoning_effort.values()) == {None}

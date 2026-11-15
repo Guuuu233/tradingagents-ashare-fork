@@ -1853,12 +1853,59 @@ def _user_config_overrides(user_id: Optional[str], db: Optional[Session] = None)
         api_key = auth_service.decrypt_secret(user_cfg.api_key_encrypted)
         if api_key:
             result["api_key"] = api_key
+        _apply_effective_reasoning_efforts(user_id, user_cfg, result, api_key or "")
         return result
 
     if db is not None:
         return _query(db)
     with get_db_ctx() as own_db:
         return _query(own_db)
+
+
+def _apply_effective_reasoning_efforts(
+    user_id: str,
+    user_cfg: Any,
+    result: Dict[str, Any],
+    api_key: str,
+) -> None:
+    """DAV-2457: keep only the tier efforts the model catalog actually offers.
+
+    The effort a user registered for a tier (``user_llm_configs``) is intersected
+    with the levels the tier's model/group offers in the catalog. An empty
+    intersection, an unreadable catalog or a model missing from it drops the
+    effort from the runtime config, so no effort parameter is sent (and the
+    report records ``null``) — never a silent fall-back to the group default.
+    Tiers left at NULL (follow the model) do no network I/O at all.
+    """
+    from tradingagents.reasoning_effort import TIERS, config_key, effective_effort
+
+    requested = {tier: result.get(config_key(tier)) for tier in TIERS}
+    requested = {tier: value for tier, value in requested.items() if value}
+    if not requested:
+        return
+
+    catalog: Dict[str, Optional[List[str]]] = {}
+    saved_base_url = (getattr(user_cfg, "backend_url", None) or "").strip()
+    try:
+        _models, _url, catalog = _fetch_available_models(
+            saved_base_url or _MODELS_FETCH_DEFAULT_URL,
+            api_key,
+            allow_user_url=user_id != _DEFAULT_LOCAL_USER_ID and bool(saved_base_url),
+            with_reasoning_levels=True,
+        )
+    except Exception as exc:
+        logger.warning("[reasoning_effort] model catalog unreadable, efforts not applied: %s", exc)
+        catalog = {}
+
+    for tier, effort in requested.items():
+        other = "deep" if tier == "quick" else "quick"
+        model = (
+            getattr(user_cfg, f"{tier}_think_llm", None)
+            or getattr(user_cfg, f"{other}_think_llm", None)
+            or ""
+        )
+        if effective_effort(effort, catalog.get(model)) is None:
+            result.pop(config_key(tier), None)
 
 
 def _build_runtime_config(overrides: Dict[str, Any], user_id: Optional[str] = None, db: Optional[Session] = None) -> Dict[str, Any]:

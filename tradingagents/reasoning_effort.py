@@ -43,6 +43,41 @@ def config_key(tier: str) -> str:
     return f"{tier}_reasoning_effort"
 
 
+def intersect_levels(*level_sets: Optional[List[str]]) -> List[str]:
+    """Ordered (low/medium/high) intersection of level sets.
+
+    Any set that is ``None`` (unreadable) or empty makes the result empty, which
+    callers treat as "not adjustable".
+    """
+    if not level_sets:
+        return []
+    common = set(REASONING_EFFORT_WHITELIST)
+    for levels in level_sets:
+        if not isinstance(levels, (list, tuple, set, frozenset)):
+            return []
+        common &= {lv for lv in levels if isinstance(lv, str)}
+    return [lv for lv in REASONING_EFFORT_WHITELIST if lv in common]
+
+
+def effective_effort(member_effort: Any, group_levels: Optional[List[str]]) -> Optional[str]:
+    """Level that may actually be sent: member-registered effort ∩ group levels.
+
+    ``member_effort`` is the level registered for the member (``user_llm_configs``),
+    ``group_levels`` the levels the group/catalog entry offers (``None`` =
+    unreadable). Returns ``None`` — send no effort parameter, show "not
+    adjustable" — when the member registration is missing/invalid, the group
+    levels are unreadable, or the intersection is empty. It never falls back to a
+    group default and never reports a level the group does not offer.
+    """
+    if not isinstance(member_effort, str):
+        return None
+    member = member_effort.strip().lower()
+    if member not in REASONING_EFFORT_WHITELIST:
+        return None
+    common = intersect_levels([member], group_levels)
+    return common[0] if common else None
+
+
 def normalize_reasoning_effort(value: Any) -> Optional[str]:
     """Validate an effort value coming from an untrusted source.
 
