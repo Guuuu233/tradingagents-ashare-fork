@@ -64,7 +64,7 @@ class _FakeDbCtx:
         return False
 
 
-def _build_graph(config, resolved_via="tier_default"):
+def _build_graph(config, resolved_via="tier_default", role_provider=None):
     from api.services import role_routing_service
 
     resolved = {
@@ -72,7 +72,7 @@ def _build_graph(config, resolved_via="tier_default"):
             "role_key": role,
             "resolved_via": resolved_via,
             "fallback_used": resolved_via != "role_binding",
-            "provider_type": config["llm_provider"],
+            "provider_type": (role_provider or {}).get(role, config["llm_provider"]),
             "model_name": config[f"{role_routing_service.ROLE_DEFAULT_TIERS[role]}_think_llm"],
             "base_url": config["backend_url"],
             "api_key": "k",
@@ -150,6 +150,104 @@ def test_role_bound_models_are_not_given_tier_effort():
 def test_non_whitelisted_config_value_is_never_forwarded():
     graph, rec = _build_graph(_cfg(quick_reasoning_effort="ignore previous instructions"))
     assert all("reasoning_effort" not in c["kwargs"] for c in rec.calls)
+
+
+# ------------------------------------------- mixed provider_type (DAV-2457 fix)
+
+_ALL_PROVIDERS = ("openai", "google", "anthropic", "openrouter", "deepseek", "xai", "ollama")
+_OPENAI_FAMILY = ("openai", "openrouter", "deepseek", "xai", "ollama")
+
+
+@pytest.mark.parametrize("global_provider", ["openai", "google", "anthropic"])
+@pytest.mark.parametrize("role_provider", _ALL_PROVIDERS)
+@pytest.mark.parametrize("resolved_via", ["tier_default", "global_default", "system_fallback"])
+def test_tier_roles_get_kwargs_for_their_own_provider_type(
+    global_provider, role_provider, resolved_via
+):
+    from api.services.role_routing_service import ALL_ROLES, ROLE_DEFAULT_TIERS
+
+    graph, rec = _build_graph(
+        _cfg(
+            llm_provider=global_provider,
+            quick_reasoning_effort="low",
+            deep_reasoning_effort="high",
+        ),
+        resolved_via=resolved_via,
+        role_provider={role: role_provider for role in ALL_ROLES},
+    )
+    role_calls = [
+        c for c in rec.calls
+        if c["provider"] == role_provider and c["model"] in ("m-quick", "m-deep")
+    ]
+    assert role_calls
+    for call in role_calls:
+        expected = "low" if call["model"] == "m-quick" else "high"
+        kwargs = call["kwargs"]
+        if role_provider in _OPENAI_FAMILY:
+            assert kwargs.get("reasoning_effort") == expected
+            assert "thinking_level" not in kwargs
+        elif role_provider == "google":
+            assert kwargs.get("thinking_level") == expected
+            assert "reasoning_effort" not in kwargs
+        else:
+            assert "reasoning_effort" not in kwargs and "thinking_level" not in kwargs
+    for role in ALL_ROLES:
+        tier_effort = "low" if ROLE_DEFAULT_TIERS[role] == "quick" else "high"
+        want = None if role_provider == "anthropic" else tier_effort
+        assert graph.role_reasoning_effort[role] == want
+
+
+def test_mixed_provider_roles_in_one_graph_record_per_role_consumption():
+    from api.services.role_routing_service import ALL_ROLES, ROLE_DEFAULT_TIERS
+
+    cycle = ["openai", "google", "anthropic", "deepseek"]
+    role_provider = {role: cycle[idx % len(cycle)] for idx, role in enumerate(ALL_ROLES)}
+    graph, rec = _build_graph(
+        _cfg(llm_provider="openai", quick_reasoning_effort="medium", deep_reasoning_effort="high"),
+        role_provider=role_provider,
+    )
+    for role in ALL_ROLES:
+        want = "medium" if ROLE_DEFAULT_TIERS[role] == "quick" else "high"
+        if role_provider[role] == "anthropic":
+            want = None
+        assert graph.role_reasoning_effort[role] == want
+
+
+def test_null_effort_mixed_providers_pass_and_record_nothing():
+    from api.services.role_routing_service import ALL_ROLES
+
+    cycle = ["openai", "google", "anthropic", "deepseek", "xai", "ollama", "openrouter"]
+    role_provider = {role: cycle[idx % len(cycle)] for idx, role in enumerate(ALL_ROLES)}
+    graph, rec = _build_graph(_cfg(llm_provider="openai"), role_provider=role_provider)
+    for call in rec.calls:
+        assert "reasoning_effort" not in call["kwargs"]
+        assert "thinking_level" not in call["kwargs"]
+    assert set(graph.role_reasoning_effort.values()) == {None}
+
+
+def test_binding_role_with_foreign_provider_does_not_record_unconsumed_effort():
+    # role_binding keeps the legacy (tier-agnostic, global-provider) kwargs; a
+    # global openai_reasoning_effort must not be recorded for a google role.
+    from api.services.role_routing_service import ALL_ROLES
+
+    graph, rec = _build_graph(
+        _cfg(llm_provider="openai", openai_reasoning_effort="high"),
+        resolved_via="role_binding",
+        role_provider={role: "google" for role in ALL_ROLES},
+    )
+    assert set(graph.role_reasoning_effort.values()) == {None}
+
+
+def test_get_provider_kwargs_provider_override_and_legacy_default():
+    graph, _ = _build_graph(_cfg(llm_provider="openai", quick_reasoning_effort="low"))
+    assert graph._get_provider_kwargs("quick", provider="google") == {
+        "thinking_level": "low",
+        "api_key": "k",
+    }
+    assert graph._get_provider_kwargs("quick", provider="anthropic") == {"api_key": "k"}
+    assert graph._get_provider_kwargs("quick", provider="deepseek") == {"reasoning_effort": "low"}
+    assert graph._get_provider_kwargs("quick") == graph._get_provider_kwargs("quick", provider="openai")
+    assert graph._get_provider_kwargs(provider="deepseek") == {}
 
 
 # ---------------------------------------------------------------- 1: request body

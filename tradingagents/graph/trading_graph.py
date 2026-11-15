@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from tradingagents.llm_clients import create_llm_client, resolve_role_base_url
 from tradingagents.llm_clients.pool import get_or_create_llm
+from tradingagents.reasoning_effort import OPENAI_COMPATIBLE_PROVIDERS, consumed_effort
 
 from tradingagents.default_config import DEFAULT_CONFIG, _default_data_cache_dir
 from tradingagents.agents.utils.memory import FinancialSituationMemory
@@ -328,7 +329,12 @@ class TradingAgentsGraph:
             if r_cfg.get("resolved_via") in ("role_binding", "group_binding"):
                 r_kwargs = dict(llm_kwargs)
             else:
-                r_kwargs = dict(tier_llm_kwargs[default_tier])
+                # Built for the role's own provider: tier_default / global_default
+                # / system_fallback roles may resolve to a provider that differs
+                # from the global ``llm_provider``.
+                r_kwargs = dict(self._get_provider_kwargs(default_tier, provider=p_type))
+                if self.callbacks:
+                    r_kwargs["callbacks"] = self.callbacks
             if r_cfg.get("temperature") is not None:
                 r_kwargs["temperature"] = r_cfg["temperature"]
             if r_cfg.get("max_tokens") is not None:
@@ -336,9 +342,8 @@ class TradingAgentsGraph:
             if a_key:
                 r_kwargs["api_key"] = a_key
 
-            self.role_reasoning_effort[role_key] = (
-                r_kwargs.get("reasoning_effort") or r_kwargs.get("thinking_level") or None
-            )
+            # Record only what this role's client actually consumes.
+            self.role_reasoning_effort[role_key] = consumed_effort(p_type, r_kwargs)
             self.role_llms[role_key] = get_or_create_llm(
                 create_llm_client,
                 provider=p_type,
@@ -614,16 +619,19 @@ class TradingAgentsGraph:
             if not any(isinstance(t, dict) and t.get("agent") == AGENT_NAME for t in traces):
                 traces.append(fail_trace)
 
-    def _get_provider_kwargs(self, tier: Optional[str] = None) -> Dict[str, Any]:
+    def _get_provider_kwargs(
+        self, tier: Optional[str] = None, provider: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation.
 
         DAV-2453: ``tier`` ("quick" / "deep") selects the user-chosen thinking
         level for that tier. With ``tier=None`` or no user choice (NULL, the
         default) the result is identical to the pre-DAV-2453 behaviour — no
-        effort parameter is added.
+        effort parameter is added. ``provider`` overrides the global
+        ``llm_provider`` (used for roles resolved to a different provider).
         """
         kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+        provider = (provider or self.config.get("llm_provider") or "").lower()
 
         tier_effort = None
         if tier is not None:
@@ -654,6 +662,9 @@ class TradingAgentsGraph:
             api_key = self.config.get("api_key")
             if api_key:
                 kwargs["api_key"] = api_key
+
+        elif provider in OPENAI_COMPATIBLE_PROVIDERS and tier_effort:
+            kwargs["reasoning_effort"] = tier_effort
 
         return kwargs
 

@@ -16,6 +16,25 @@ REASONING_EFFORT_FOLLOW = "follow"
 
 TIERS = ("quick", "deep")
 
+# Providers that factory.create_llm_client maps to OpenAIClient, which forwards
+# ``reasoning_effort`` to the request. Keep in sync with llm_clients/factory.py.
+OPENAI_COMPATIBLE_PROVIDERS = ("openai", "ollama", "openrouter", "xai", "deepseek")
+
+
+def consumed_effort(provider: Optional[str], kwargs: Any) -> Optional[str]:
+    """Thinking level the client for ``provider`` actually sends, else ``None``.
+
+    OpenAI-compatible clients consume ``reasoning_effort``; Google consumes
+    ``thinking_level``; Anthropic (and anything unknown) consumes neither, so a
+    value that merely sits in ``kwargs`` is not recorded as "passed".
+    """
+    name = (provider or "").lower()
+    if name in OPENAI_COMPATIBLE_PROVIDERS:
+        return kwargs.get("reasoning_effort") or None
+    if name == "google":
+        return kwargs.get("thinking_level") or None
+    return None
+
 
 def config_key(tier: str) -> str:
     """Runtime-config key carrying the user's effort for ``tier``."""
