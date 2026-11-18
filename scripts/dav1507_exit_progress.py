@@ -50,6 +50,7 @@ EXECUTABLE_ACTIONS = {"BUY", "SELL"}
 B1_CONTRACT = "b1.v1"
 B1_PRICE_FAILURES = {"violation", "missing_required", "unverifiable"}
 T5_LAG_DAYS = 5
+T5_TRUE_STATUS = "due_and_evaluated"
 A3_WINDOW = 50
 
 # Lazy project imports (script must also work with only stdlib until the
@@ -77,6 +78,7 @@ def _project_imports():
         extract_sample_cohort,
         filter_v2_completed_reports,
         is_v2_protocol_report,
+        is_qualifying_v2_report,
         normalize_report_for_evaluation,
         split_report_into_units,
     )
@@ -86,6 +88,7 @@ def _project_imports():
         "split_report_into_units": split_report_into_units,
         "filter_v2_completed_reports": filter_v2_completed_reports,
         "is_v2_protocol_report": is_v2_protocol_report,
+        "is_qualifying_v2_report": is_qualifying_v2_report,
         "classify_v2_report_d009_exclusion": classify_v2_report_d009_exclusion,
         "collect_hold_semantic_reasons": collect_hold_semantic_reasons,
         "normalize_report_for_evaluation": normalize_report_for_evaluation,
@@ -550,32 +553,95 @@ def metric_a3(clean_unit_stats, lib):
     }
 
 
+def compute_mature_window(trade_dates, as_of, latest_backfill_date):
+    """D-080 §1.5 成熟档，cutoff 完全由 ``as_of`` 与库内回填证据自动推出。
+
+    一个单元算成熟，须同时满足：①它的 T+5 交易日已经收盘；②当天收盘后至少
+    跑过一次回填。
+
+    * ①：只有 ``< as_of`` 的交易日才算已收盘（``as_of`` 是日期，证明不了
+      当日已收盘；11-18 的 T+5=11-18 档当日未收盘即属此类）。
+    * ②：``latest_backfill_date`` 取自库内 ``t_plus_5_provenance.fetched_on``
+      （回填脚本写入的运行日，CN 时区）；T+5 日必须 ``< latest_backfill_date``，
+      即回填发生在该交易日之后的某个日历日，无需依赖当日时分。库内没有任何
+      回填证据时没有成熟档（宁缺勿滥）。
+    * T+5 交易日 = 单元 trade_date 之后第 5 个交易日，故成熟 trade_date 上限
+      cutoff = 已收盘且已回填的最后交易日向前数第 5 个交易日。
+    """
+    window = {"mature_close_day": None, "mature_cutoff": None,
+              "latest_backfill_date": latest_backfill_date, "mature_note": None}
+    if not trade_dates:
+        window["mature_note"] = "no_calendar"
+        return window
+    if not latest_backfill_date:
+        window["mature_note"] = "no_backfill_evidence"
+        return window
+    bound = min(as_of, latest_backfill_date)
+    closed = [d for d in trade_dates if d < bound]
+    if len(closed) <= T5_LAG_DAYS:
+        window["mature_note"] = "calendar_too_short"
+        return window
+    window["mature_close_day"] = closed[-1]
+    window["mature_cutoff"] = closed[-(T5_LAG_DAYS + 1)]
+    return window
+
+
 def metric_a4(reports_meta, t5_probe_rows, trade_dates, as_of):
+    """A4：completed ≥95%；T+5 真实完成率 ≥95%（D-080）。
+
+    判定只认 ``t_plus_5_status == due_and_evaluated``；``pending_due`` /
+    ``data_missing`` / 无状态一律算未完成。成熟档按 :func:`compute_mature_window`
+    自动划分。分母里「不合格」（失败报告 / 不满足 ``is_qualifying_v2_report``）
+    不进分母，「合格但无状态」进分母、算未完成，二者分列输出。过渡期同时给出
+    ``official_any_status``（原口径：任何非空状态都算已评估，分母为全部成熟行）。
+    """
     submitted = [r for r in reports_meta if r["status"] in ("completed", "failed")]
     completed = [r for r in reports_meta if r["status"] == "completed"]
     rate = (len(completed) / len(submitted) * 100) if submitted else None
-    mature_cutoff = None
-    if trade_dates:
-        before = [d for d in trade_dates if d <= as_of]
-        if len(before) > T5_LAG_DAYS:
-            mature_cutoff = before[-(T5_LAG_DAYS + 1)]
+    backfill_dates = [r["fetched_on"] for r in t5_probe_rows if r.get("fetched_on")]
+    window = compute_mature_window(
+        trade_dates, as_of, max(backfill_dates) if backfill_dates else None)
+    mature_cutoff = window["mature_cutoff"]
     mature = [r for r in t5_probe_rows if mature_cutoff and r["trade_date"] <= mature_cutoff]
-    t5_done = sum(1 for r in mature if r["t5_status"])
-    t5_rate = (t5_done / len(mature) * 100) if mature else None
-    mature_reps = {r["report_id"] for r in mature}
-    t5_reps_done = {r["report_id"] for r in mature if r["t5_status"]}
+    eligible = [r for r in mature if r.get("eligible", True)]
+    ineligible = [r for r in mature if not r.get("eligible", True)]
+    ineligible_reasons = Counter(r.get("ineligible_reason") or "unknown" for r in ineligible)
+    done = [r for r in eligible if r["t5_status"] == T5_TRUE_STATUS]
+    no_status = [r for r in eligible if not r["t5_status"]]
+    eligible_status = Counter(
+        str(r["t5_status"]) for r in eligible if r["t5_status"] and r["t5_status"] != T5_TRUE_STATUS)
+    t5_rate = (len(done) / len(eligible) * 100) if eligible else None
+    official_done = sum(1 for r in mature if r["t5_status"])
+    official_rate = (official_done / len(mature) * 100) if mature else None
+    strict_all_done = sum(1 for r in mature if r["t5_status"] == T5_TRUE_STATUS)
+    strict_all_rate = (strict_all_done / len(mature) * 100) if mature else None
     return {
-        "threshold": "completed ≥ 95%；T+5 完整率 ≥ 95%（成熟档 = trade_date 距 as_of ≥ 5 交易日）",
+        "threshold": "completed ≥ 95%；T+5 真实完成率 ≥ 95%（只认 due_and_evaluated；成熟档 = T+5 交易日已收盘且其后已回填，cutoff 由 --as-of 自动计算）",
         "as_of": as_of, "mature_cutoff": mature_cutoff,
+        "mature_close_day": window["mature_close_day"],
+        "latest_backfill_date": window["latest_backfill_date"],
+        "mature_note": window["mature_note"],
         "submitted": len(submitted), "completed": len(completed),
         "failed": len(submitted) - len(completed),
         "completion_rate_pct": round(rate, 3) if rate is not None else None,
         "completion_gap_to_95": round(rate - 95.0, 3) if rate is not None else None,
-        "mature_units": len(mature), "mature_reports": len(mature_reps),
-        "t5_present": t5_done, "t5_reports_present": len(t5_reps_done),
+        "mature_units": len(eligible),
+        "mature_rows_total": len(mature),
+        "mature_ineligible": {"total": len(ineligible), "by_reason": dict(ineligible_reasons)},
+        "eligible_no_status": len(no_status),
+        "eligible_no_status_report_ids": [r["report_id"] for r in no_status][:50],
+        "eligible_other_status": dict(eligible_status),
+        "true_due_and_evaluated": len(done),
+        "official_any_status": official_done,
+        "official_rate_pct": round(official_rate, 3) if official_rate is not None else None,
+        "strict_all_rows": {"done": strict_all_done, "denominator": len(mature),
+                            "rate_pct": round(strict_all_rate, 3) if strict_all_rate is not None else None},
+        "mature_reports": len(eligible),
+        "t5_present": len(done), "t5_reports_present": len(done),
         "t5_rate_pct": round(t5_rate, 3) if t5_rate is not None else None,
-        "t5_report_rate_pct": round(len(t5_reps_done) / len(mature_reps) * 100, 3) if mature_reps else None,
+        "t5_report_rate_pct": round(t5_rate, 3) if t5_rate is not None else None,
         "t5_gap_to_95": round(t5_rate - 95.0, 3) if t5_rate is not None else None,
+        "t5_meets_95": (t5_rate >= 95.0) if t5_rate is not None else None,
     }
 
 
@@ -676,6 +742,39 @@ def t5_status_of_report(report):
     return None
 
 
+def t5_fetched_on_of_report(report):
+    """Latest ``t_plus_5_provenance.fetched_on`` stamped by the backfill (run date)."""
+    rd = report.get("result_data") or {}
+    carriers = [rd] + [rd[k] for k in ("short_term", "medium_term") if isinstance(rd.get(k), dict)]
+    found = []
+    for carrier in carriers:
+        prov = carrier.get("t_plus_5_provenance")
+        if isinstance(prov, dict) and isinstance(prov.get("fetched_on"), str) and prov["fetched_on"]:
+            found.append(prov["fetched_on"])
+    return max(found) if found else None
+
+
+def t5_eligibility_of_report(report, lib):
+    """(eligible, reason) — 是否属于 T+5 评估范围（进分母）。
+
+    与回填脚本同一资格判据（``backfill_tplus5_shadow.backfill_report``）：
+    报告 ``status == completed``，且至少一个 horizon 单元满足
+    ``is_qualifying_v2_report``。不满足者不进分母，``reason`` 为
+    ``report_failed`` / ``report_not_completed`` / ``not_qualifying_v2``。
+    """
+    status = str(report.get("status") or "").strip().lower()
+    if status != "completed":
+        return False, ("report_failed" if status == "failed" else "report_not_completed")
+    rd = report.get("result_data")
+    rd = rd if isinstance(rd, dict) else {}
+    slots = [rd[k] for k in ("short_term", "medium_term") if isinstance(rd.get(k), dict)] or [rd]
+    identity = {k: report[k] for k in ("status", "symbol", "trade_date") if report.get(k) is not None}
+    for unit in slots:
+        if lib["is_qualifying_v2_report"]({**identity, **unit}):
+            return True, None
+    return False, "not_qualifying_v2"
+
+
 # --------------------------------------------------------------------------- #
 # Reporting                                                                    #
 # --------------------------------------------------------------------------- #
@@ -734,10 +833,17 @@ def render_markdown(summary, meta):
             "—", "参考")
     if a4["completion_rate_pct"] is not None:
         t5_rate_str = f"{a4['t5_rate_pct']}%" if a4.get("t5_rate_pct") is not None else "—"
+        t5_denominator = a4["mature_units"]
         a4_reading = (
             f"completed {a4['completion_rate_pct']}%（{a4['completed']}/{a4['submitted']}）；"
-            f"T+5 {t5_rate_str}（{a4['t5_present']}/{a4['mature_units']} 成熟档）"
+            f"T+5 真实 {t5_rate_str}（{a4['t5_present']}/{t5_denominator} 成熟档，仅 due_and_evaluated）"
         )
+        if a4.get("official_rate_pct") is not None or a4.get("official_any_status") is not None:
+            official_rate_str = f"{a4['official_rate_pct']}%" if a4.get("official_rate_pct") is not None else "—"
+            a4_reading += (
+                f"；官方口径 {official_rate_str}（{a4.get('official_any_status')}/{a4.get('mature_rows_total', a4['mature_units'])}，"
+                f"任意状态算已评估，仅过渡期对照）"
+            )
         comp_gap_str = f"{a4['completion_gap_to_95']:+.2f}pp" if a4.get("completion_gap_to_95") is not None else "—"
         t5_gap_str = f"{a4['t5_gap_to_95']:+.2f}pp" if a4.get("t5_gap_to_95") is not None else "—"
         a4_gap = f"完成率 {comp_gap_str}；T+5 {t5_gap_str}"
@@ -747,6 +853,19 @@ def render_markdown(summary, meta):
         a4_gap = "—"
         a4_status = "N/A"
     row("A4", "completed ≥95%；T+5 ≥95%", a4_reading, a4_gap, a4_status)
+    if a4.get("mature_ineligible") is not None:
+        inel = a4["mature_ineligible"]
+        reasons = "、".join(f"{k} {v}" for k, v in sorted(inel["by_reason"].items())) or "无"
+        other = "、".join(f"{k} {v}" for k, v in sorted(a4.get("eligible_other_status", {}).items())) or "无"
+        row("A4 · 成熟档拆分",
+            "不合格不进分母；合格但无状态进分母、算未完成",
+            f"成熟档 {a4['mature_rows_total']} = 不合格（不进分母）{inel['total']}（{reasons}）"
+            f" + 合格（进分母）{a4['mature_units']}；"
+            f"合格内：due_and_evaluated {a4['true_due_and_evaluated']}、"
+            f"合格但无状态（进分母、算未完成）{a4['eligible_no_status']}、其他状态 {other}",
+            f"严格口径（全部成熟行作分母）{a4['strict_all_rows']['done']}/{a4['strict_all_rows']['denominator']}"
+            f" = {a4['strict_all_rows']['rate_pct']}%",
+            "观察")
     row("B1", "b1.v1 契约上线",
         f"{b1['units_b1_v1']}/{b1['units_total']} 档带 b1.v1 forecast",
         "未上线" if not b1["live"] else "—",
@@ -771,7 +890,9 @@ def render_markdown(summary, meta):
         p.append("（范围内无 clean 可执行档）")
     p.append("")
     p.append("> A3 口径见 work/dav1507-exit-progress/spec_v4.md；`_ref_loose` 为 research_manager.py:2729 宽口径参考列，不判达标。"
-             f"A4 成熟截止 {a4['mature_cutoff']}。B1 契约 10-09 才部署，此前 N/A 属预期。")
+             f"A4 成熟截止 {a4['mature_cutoff']}（成熟 = T+5 交易日已收盘且其后已回填；"
+             f"T+5 收盘日 {a4.get('mature_close_day')}，最近回填日 {a4.get('latest_backfill_date')}，"
+             f"由 --as-of {a4.get('as_of')} 自动计算）。B1 契约 10-09 才部署，此前 N/A 属预期。")
     return "\n".join(p)
 
 
@@ -831,9 +952,12 @@ def main():
                     and slim["result_data"].get("served_models")
                 ),
             })
+            t5_eligible, t5_ineligible_reason = t5_eligibility_of_report(slim, lib)
             t5_rows.append({
                 "report_id": slim["id"], "trade_date": slim["trade_date"],
                 "status": slim["status"], "t5_status": t5_status_of_report(slim),
+                "fetched_on": t5_fetched_on_of_report(slim),
+                "eligible": t5_eligible, "ineligible_reason": t5_ineligible_reason,
             })
             if want_units:
                 clean, ledger, reasons = clean_units_of(slim, lib)

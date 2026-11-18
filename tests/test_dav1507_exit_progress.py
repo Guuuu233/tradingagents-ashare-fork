@@ -523,18 +523,19 @@ def test_metric_a4_and_render_markdown_no_mature_units():
     assert "| A4 |" in md
     assert "completed 100.0%" in md
     assert "完成率 +5.00pp；T+5 —" in md
-    assert "T+5 —（0/0 成熟档）" in md
+    assert "T+5 真实 —（0/0 成熟档，仅 due_and_evaluated）" in md
 
 
 def test_render_markdown_t5_with_mature_units():
     """Mature units present: formatted with both completion and T+5 gaps."""
     reports_meta = [{"id": "r1", "status": "completed"}]
-    t5_rows = [{"report_id": "r1", "trade_date": "2026-09-20", "t5_status": True}]
+    t5_rows = [{"report_id": "r1", "trade_date": "2026-09-20",
+                "t5_status": "due_and_evaluated", "fetched_on": "2026-10-08"}]
     trade_dates = [
         "2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23",
-        "2026-09-24", "2026-09-25", "2026-10-08",
+        "2026-09-24", "2026-09-25", "2026-10-08", "2026-10-09",
     ]
-    a4 = m.metric_a4(reports_meta, t5_rows, trade_dates, "2026-10-08")
+    a4 = m.metric_a4(reports_meta, t5_rows, trade_dates, "2026-10-09")
     assert a4["completion_rate_pct"] == 100.0
     assert a4["t5_rate_pct"] == 100.0
     assert a4["t5_gap_to_95"] == 5.0
@@ -554,7 +555,8 @@ def test_render_markdown_t5_with_mature_units():
     }
     md = m.render_markdown(summary, meta)
     assert "完成率 +5.00pp；T+5 +5.00pp" in md
-    assert "T+5 100.0%（1/1 成熟档）" in md
+    assert "T+5 真实 100.0%（1/1 成熟档，仅 due_and_evaluated）" in md
+    assert "官方口径 100.0%（1/1，" in md
 
 
 def test_render_markdown_a4_no_samples():
@@ -586,6 +588,180 @@ def test_render_markdown_a4_no_samples():
     }
     md = m.render_markdown(summary, meta)
     assert "| A4 | completed ≥95%；T+5 ≥95% | 无样本 | — | N/A |" in md
+
+
+# ── DAV-2460 / D-080: A4 T+5 只认 due_and_evaluated；成熟档自动计算 ────────── #
+
+def _calendar(first, last):
+    """Consecutive weekdays as ISO strings (stand-in exchange calendar)."""
+    from datetime import date, timedelta
+    day, end, out = date.fromisoformat(first), date.fromisoformat(last), []
+    while day <= end:
+        if day.weekday() < 5:
+            out.append(day.isoformat())
+        day += timedelta(days=1)
+    return out
+
+
+CAL = _calendar("2026-11-02", "2026-11-27")
+
+
+def _t5_row(rid, trade_date, status, *, eligible=True, reason=None, fetched_on=None):
+    return {"report_id": rid, "trade_date": trade_date, "t5_status": status,
+            "eligible": eligible, "ineligible_reason": reason, "fetched_on": fetched_on}
+
+
+def test_a4_only_due_and_evaluated_counts_in_numerator():
+    """pending_due / data_missing / 无状态 are unfinished; official field keeps old rule."""
+    rows = [
+        _t5_row("ok1", "2026-11-02", "due_and_evaluated", fetched_on="2026-11-18"),
+        _t5_row("ok2", "2026-11-03", "due_and_evaluated"),
+        _t5_row("pend", "2026-11-04", "pending_due"),
+        _t5_row("miss", "2026-11-05", "data_missing"),
+        _t5_row("none", "2026-11-06", None),
+    ]
+    reports_meta = [{"id": r["report_id"], "status": "completed"} for r in rows]
+    a4 = m.metric_a4(reports_meta, rows, CAL, "2026-11-18")
+    assert a4["mature_cutoff"] == "2026-11-10"
+    assert a4["mature_units"] == 5
+    assert a4["true_due_and_evaluated"] == 2
+    assert a4["official_any_status"] == 4
+    assert a4["official_rate_pct"] == 80.0
+    assert a4["t5_rate_pct"] == 40.0
+    assert a4["t5_present"] == 2
+    assert a4["t5_gap_to_95"] == -55.0
+    assert a4["t5_meets_95"] is False
+    assert a4["eligible_no_status"] == 1
+    assert a4["eligible_no_status_report_ids"] == ["none"]
+    assert a4["eligible_other_status"] == {"pending_due": 1, "data_missing": 1}
+
+
+def test_a4_truthy_non_status_value_is_not_evaluated():
+    """The old truthiness test must not leak back in: True is not due_and_evaluated."""
+    rows = [_t5_row("r1", "2026-11-02", True, fetched_on="2026-11-18")]
+    a4 = m.metric_a4([{"id": "r1", "status": "completed"}], rows, CAL, "2026-11-18")
+    assert a4["true_due_and_evaluated"] == 0
+    assert a4["official_any_status"] == 1
+
+
+def test_a4_ineligible_not_in_denominator_but_eligible_no_status_is():
+    rows = [
+        _t5_row("ok", "2026-11-02", "due_and_evaluated", fetched_on="2026-11-18"),
+        _t5_row("failed", "2026-11-03", None, eligible=False, reason="report_failed"),
+        _t5_row("nonq", "2026-11-04", None, eligible=False, reason="not_qualifying_v2"),
+        _t5_row("nonq2", "2026-11-05", None, eligible=False, reason="not_qualifying_v2"),
+        _t5_row("missed", "2026-11-06", None, eligible=True),
+    ]
+    reports_meta = [{"id": r["report_id"], "status": "completed"} for r in rows]
+    a4 = m.metric_a4(reports_meta, rows, CAL, "2026-11-18")
+    assert a4["mature_rows_total"] == 5
+    assert a4["mature_ineligible"] == {
+        "total": 3, "by_reason": {"report_failed": 1, "not_qualifying_v2": 2}}
+    assert a4["mature_units"] == 2
+    assert a4["eligible_no_status"] == 1
+    assert a4["t5_rate_pct"] == 50.0
+    assert a4["strict_all_rows"] == {"done": 1, "denominator": 5, "rate_pct": 20.0}
+    md = m.render_markdown(
+        {"A1": {"executable_units": 0, "audit_manifest": []},
+         "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+         "A3": {"per_cohort": {}}, "A4": a4,
+         "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+         "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None,
+                "sample_gap_to_100": 100, "meets": None},
+         "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0}},
+        {"as_of": "2026-11-18", "start": "2026-11-02", "db": "d.db",
+         "reports": 5, "units": 5, "peak_mb": 1.0})
+    assert "不合格（不进分母）3（not_qualifying_v2 2、report_failed 1）" in md
+    assert "合格但无状态（进分母、算未完成）1" in md
+
+
+def test_mature_window_needs_closed_t5_day_and_a_backfill_after_it():
+    # T+5 day must be strictly before as_of and strictly before the backfill date.
+    w = m.compute_mature_window(CAL, "2026-11-18", "2026-11-18")
+    assert (w["mature_close_day"], w["mature_cutoff"]) == ("2026-11-17", "2026-11-10")
+    # 11-11 reports have T+5 = 11-18, still open on 11-18: not mature.
+    assert w["mature_cutoff"] < "2026-11-11"
+    # Backfill ran a day earlier: the as-of day's predecessor is not yet backfilled.
+    w = m.compute_mature_window(CAL, "2026-11-18", "2026-11-17")
+    assert (w["mature_close_day"], w["mature_cutoff"]) == ("2026-11-16", "2026-11-09")
+    # A later as_of never outruns the latest backfill evidence.
+    w = m.compute_mature_window(CAL, "2026-11-25", "2026-11-18")
+    assert (w["mature_close_day"], w["mature_cutoff"]) == ("2026-11-17", "2026-11-10")
+    # A backfill after as_of does not pull the window past as_of.
+    w = m.compute_mature_window(CAL, "2026-11-12", "2026-11-18")
+    assert w["mature_close_day"] == "2026-11-11"
+
+
+def test_mature_window_without_backfill_evidence_is_empty():
+    w = m.compute_mature_window(CAL, "2026-11-18", None)
+    assert w["mature_cutoff"] is None and w["mature_note"] == "no_backfill_evidence"
+    rows = [_t5_row("r1", "2026-11-02", "due_and_evaluated")]
+    a4 = m.metric_a4([{"id": "r1", "status": "completed"}], rows, CAL, "2026-11-18")
+    assert a4["mature_units"] == 0 and a4["t5_rate_pct"] is None
+
+
+def test_a4_cutoff_follows_as_of_automatically():
+    rows = [_t5_row("r1", "2026-11-02", "due_and_evaluated", fetched_on="2026-11-30"),
+            _t5_row("r2", "2026-11-17", "pending_due")]
+    meta = [{"id": r["report_id"], "status": "completed"} for r in rows]
+    assert m.metric_a4(meta, rows, CAL, "2026-11-18")["mature_cutoff"] == "2026-11-10"
+    a4 = m.metric_a4(meta, rows, CAL, "2026-11-27")
+    assert a4["mature_cutoff"] == "2026-11-19"
+    assert a4["mature_units"] == 2
+    assert a4["true_due_and_evaluated"] == 1
+    assert a4["eligible_other_status"] == {"pending_due": 1}
+    assert m.metric_a4(meta, rows, CAL, "2026-11-18")["mature_units"] == 1
+
+
+def _completed_report(**overrides):
+    unit = _unit([{"claim_id": "c1"}], [], {})
+    rd = {"short_term": unit, "medium_term": dict(unit, horizon="medium")}
+    rep = {"id": "r1", "symbol": "X", "trade_date": "2026-11-02",
+           "status": "completed", "result_data": rd}
+    rep.update(overrides)
+    return rep
+
+
+def test_eligibility_failed_unqualified_and_qualified_reports():
+    lib = _lib()
+    assert m.t5_eligibility_of_report(_completed_report(), lib) == (True, None)
+    failed = {"id": "f", "symbol": "X", "trade_date": "2026-11-11", "status": "failed",
+              "result_data": {"short_term": {}, "medium_term": {}}}
+    assert m.t5_eligibility_of_report(failed, lib) == (False, "report_failed")
+    no_winner = _completed_report()
+    for blk in no_winner["result_data"].values():
+        blk["investment_debate_state"]["manager_verdict"] = {}
+    assert m.t5_eligibility_of_report(no_winner, lib) == (False, "not_qualifying_v2")
+    running = _completed_report(status="running")
+    assert m.t5_eligibility_of_report(running, lib) == (False, "report_not_completed")
+
+
+def test_fetched_on_is_latest_provenance_run_date():
+    rep = {"result_data": {
+        "short_term": {"t_plus_5_provenance": {"fetched_on": "2026-11-17"}},
+        "medium_term": {"t_plus_5_provenance": {"fetched_on": "2026-11-18"}}}}
+    assert m.t5_fetched_on_of_report(rep) == "2026-11-18"
+    assert m.t5_fetched_on_of_report({"result_data": {"short_term": {}}}) is None
+
+
+def test_render_a4_row_shows_official_and_true_side_by_side():
+    rows = [_t5_row("ok", "2026-11-02", "due_and_evaluated", fetched_on="2026-11-18"),
+            _t5_row("pend", "2026-11-03", "pending_due")]
+    a4 = m.metric_a4([{"id": r["report_id"], "status": "completed"} for r in rows],
+                     rows, CAL, "2026-11-18")
+    md = m.render_markdown(
+        {"A1": {"executable_units": 0, "audit_manifest": []},
+         "A2": {"rolling_window": {"rate_pct": None, "gap_to_4.2": None, "meets": None}},
+         "A3": {"per_cohort": {}}, "A4": a4,
+         "B1": {"units_b1_v1": 0, "units_total": 0, "live": False},
+         "B2": {"b1_v1_units_completed": 0, "invalid": 0, "invalid_pct": None,
+                "sample_gap_to_100": 100, "meets": None},
+         "B3": {"traceable": 0, "reports_total": 0, "coverage_pct": None, "gap": 0}},
+        {"as_of": "2026-11-18", "start": "2026-11-02", "db": "d.db",
+         "reports": 2, "units": 2, "peak_mb": 1.0})
+    assert "T+5 真实 50.0%（1/2 成熟档，仅 due_and_evaluated）" in md
+    assert "官方口径 100.0%（2/2，" in md
+    assert "A4 成熟截止 2026-11-10" in md
 
 
 if __name__ == "__main__":
