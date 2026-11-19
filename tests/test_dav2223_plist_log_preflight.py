@@ -965,7 +965,7 @@ def test_cli_json_failure_carries_reason_code(tmp_path):
 
 
 def test_repo_templates_parse_after_placeholder_substitution(tmp_path):
-    """仓库内 5 个 plist 模板：占位符替换后都能被 plistlib 解析。
+    """仓库内 6 个 plist 模板：占位符替换后都能被 plistlib 解析。
 
     断言是真实断言（复审 DAV-2226 🟡-2：旧写法遇到占位符就 continue，等于把会炸的
     模板全跳过了——而 ta-daily-reports.plist 注释里的 ``--`` 确实让 plistlib 报
@@ -978,6 +978,7 @@ def test_repo_templates_parse_after_placeholder_substitution(tmp_path):
         "com.tradingagents.prod-health-sentinel.plist",
         "com.tradingagents.storage-health.plist",
         "com.tradingagents.ta-snapshot.plist",
+        "com.tradingagents.t5-auto.plist",
     }
     assert {p.name for p in templates} == expected
     for src in templates:

@@ -253,6 +253,7 @@ class PriceSeriesFetcher:
     def __init__(self, min_interval=0.5):
         self.cache = {}
         self.request_count = 0
+        self.rejected_count = 0
         self.last_request = 0.0
         self.min_interval = min_interval
 
@@ -281,6 +282,7 @@ class PriceSeriesFetcher:
             session.close()
         # Never log provider message/payload: private gateway may echo credentials.
         if not isinstance(body, dict) or body.get("code") != 0:
+            self.rejected_count += 1
             raise ValueError("provider_rejected")
         data = body.get("data") or {}
         keys, rows = data.get("fields"), data.get("items")
@@ -399,6 +401,23 @@ def _measurement(unit, symbol, trade_date, as_of, calendar, fetch_series):
     return fields
 
 
+def _same_apart_from_fetched_on(old_prov, new_prov):
+    if not isinstance(old_prov, dict) or not isinstance(new_prov, dict):
+        return False
+    strip = lambda prov: {k: v for k, v in prov.items() if k != "fetched_on"}
+    return strip(old_prov) == strip(new_prov)
+
+
+def _fields_for(container, fields):
+    """DAV-2463: a run that only moves ``t_plus_5_provenance.fetched_on`` must
+    not rewrite the row. When the stored provenance equals the freshly computed
+    one apart from ``fetched_on``, keep the stored provenance (and its date)."""
+    old_prov = container.get("t_plus_5_provenance")
+    if _same_apart_from_fetched_on(old_prov, fields.get("t_plus_5_provenance")):
+        fields = {**fields, "t_plus_5_provenance": old_prov}
+    return copy.deepcopy(fields)
+
+
 def _stamp_measurement(target, fields):
     """Stamp T+5 leaves into the four authoritative slots of ONE slice.
 
@@ -406,18 +425,18 @@ def _stamp_measurement(target, fields):
     ``horizons.<h>`` physical mirror. ``target`` here is always the
     authoritative slice itself.
     """
-    target.update(copy.deepcopy(fields))
+    target.update(_fields_for(target, fields))
     metrics = target.setdefault("shadow_credit_metrics", {})
     if not isinstance(metrics, dict):
         raise ValueError("invalid shadow_credit_metrics container")
-    metrics.update(copy.deepcopy(fields))
+    metrics.update(_fields_for(metrics, fields))
     state = target.get("investment_debate_state")
     if isinstance(state, dict):
-        state.update(copy.deepcopy(fields))
+        state.update(_fields_for(state, fields))
         sm = state.setdefault("shadow_credit_metrics", {})
         if not isinstance(sm, dict):
             raise ValueError("invalid state metrics container")
-        sm.update(copy.deepcopy(fields))
+        sm.update(_fields_for(sm, fields))
 
 
 def _count(stats, fields):
@@ -430,12 +449,26 @@ def _count(stats, fields):
         stats["hit_count" if fields["t_plus_5_direction_hit"] else "miss_count"] += 1
 
 
-def backfill_report(report, *, as_of, calendar, fetch_series=None):
-    """Only T+5 leaves are changed; per-horizon qualification precedes fetch."""
+def _unit_slots(report):
+    """(horizon, unit) pairs of one report; same slot choice for read and stamp."""
+    target = report.get("result_data")
+    target = target if isinstance(target, dict) else report
+    slots = [(h, target[h + "_term"]) for h in ("short", "medium") if isinstance(target.get(h + "_term"), dict)]
+    if not slots:
+        slots = [(target.get("horizon") or report.get("horizon") or "unspecified", target)]
+    return slots
+
+
+def backfill_report(report, *, as_of, calendar, fetch_series=None, policy=None):
+    """Only T+5 leaves are changed; per-horizon qualification precedes fetch.
+
+    ``policy`` (DAV-2463, automation only) may veto work per unit:
+    ``policy.skip_fetch(report, horizon, unit)`` leaves the unit untouched and
+    makes no request; ``policy.skip_stamp(report, horizon, unit, fields)``
+    drops the computed fields after the (non-fetching) computation.
+    """
     fetch_series = fetch_series or fetch_price_series
     result = copy.deepcopy(report)
-    target = result.get("result_data")
-    target = target if isinstance(target, dict) else result
     # DAV-1572 (存储 B-3): T+5 fields are stamped ONLY into the
     # authoritative ``result_data.<h>_term`` slots. The physical
     # ``horizons.<h>`` mirror is never written — read-side reconstruction is
@@ -443,9 +476,7 @@ def backfill_report(report, *, as_of, calendar, fetch_series=None):
     # second persisted copy. Legacy physical aliases already on disk are
     # left byte-exact (不删除、不改写存量物理别名); on canonical rows the
     # ``*_term`` slots are simply the only stamp target.
-    slots = [(h, target[h + "_term"]) for h in ("short", "medium") if isinstance(target.get(h + "_term"), dict)]
-    if not slots:
-        slots = [(target.get("horizon") or report.get("horizon") or "unspecified", target)]
+    slots = _unit_slots(result)
     all_stats = {}
     for horizon, unit in slots:
         stats = dict.fromkeys(COUNTERS, 0)
@@ -457,12 +488,114 @@ def backfill_report(report, *, as_of, calendar, fetch_series=None):
             stats["skipped_non_qualifying"] = 1
             continue
         stats["qualifying_v2_count"] = 1
+        if policy is not None and policy.skip_fetch(report, horizon, unit):
+            continue
         symbol = candidate.get("symbol") or candidate.get("ticker") or candidate.get("company_of_interest")
         td = candidate.get("analysis_baseline_date") or candidate.get("trade_date") or candidate.get("date")
         fields = _measurement(unit, symbol, td, as_of, calendar, fetch_series)
+        if policy is not None and policy.skip_stamp(report, horizon, unit, fields):
+            continue
         _stamp_measurement(unit, fields)
         _count(stats, fields)
     return result, all_stats
+
+
+# ---------------------------------------------------------------------------
+# DAV-2463 automation gates
+# ---------------------------------------------------------------------------
+
+class RunAbort(Exception):
+    """A safety gate fired: the whole run stops and the runner raises an alarm."""
+
+    def __init__(self, reason, detail=None, partial=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail or {}
+        self.partial = partial or {}
+
+
+T5_EVALUATED = "due_and_evaluated"
+_MATURED_STATUSES = frozenset({"due_and_evaluated", "suspension", "data_missing"})
+
+
+def _unit_status(unit):
+    status = unit.get("t_plus_5_status")
+    if status is None and isinstance(unit.get("shadow_credit_metrics"), dict):
+        status = unit["shadow_credit_metrics"].get("t_plus_5_status")
+    return status
+
+
+def _named_containers(unit):
+    state = unit.get("investment_debate_state")
+    state = state if isinstance(state, dict) else {}
+    pick = lambda parent: parent.get("shadow_credit_metrics") if isinstance(parent.get("shadow_credit_metrics"), dict) else None
+    return {"unit": unit, "metrics": pick(unit),
+            "state": state or None, "state_metrics": pick(state)}
+
+
+def _evaluation_view(container):
+    view = {}
+    for key in MEASUREMENT_KEYS:
+        if key not in container:
+            continue
+        value = container[key]
+        if key == "t_plus_5_provenance" and isinstance(value, dict):
+            value = {k: v for k, v in value.items() if k != "fetched_on"}
+        view[key] = value
+    return view
+
+
+def classify_units(report, updated):
+    """Per-unit gate facts comparing the stored report with the computed one."""
+    units = []
+    for (horizon, before), (_, after) in zip(_unit_slots(report), _unit_slots(updated)):
+        old_status, new_status = _unit_status(before), _unit_status(after)
+        changed = []
+        if old_status == T5_EVALUATED:
+            old_named, new_named = _named_containers(before), _named_containers(after)
+            for name, old_box in old_named.items():
+                new_box = new_named[name]
+                if old_box is None or new_box is None:
+                    continue
+                old_view, new_view = _evaluation_view(old_box), _evaluation_view(new_box)
+                changed.extend(name + "." + key for key in old_view
+                               if key in new_view and old_view[key] != new_view[key])
+        units.append({"report_id": report.get("id"), "horizon": horizon,
+                      "old_status": old_status, "new_status": new_status,
+                      "became_due": bool(after.get("is_t_plus_5_due")),
+                      "evaluated_rewrite_keys": changed})
+    return units
+
+
+def _gate_counts(facts):
+    """new_mature: first time a unit leaves pending/unmeasured for a due status."""
+    new_mature = retry = 0
+    for fact in facts:
+        if fact["old_status"] in (None, "pending_due") and fact["became_due"] \
+                and fact["new_status"] in _MATURED_STATUSES:
+            new_mature += 1
+        if fact["old_status"] == "data_missing":
+            retry += 1
+    return new_mature, retry
+
+
+def _provider_counters(provider):
+    return (getattr(provider, "request_count", 0) or 0,
+            getattr(provider, "rejected_count", 0) or 0)
+
+
+def _check_reject_gate(provider, baseline, gates, *, final):
+    ratio = (gates or {}).get("max_reject_ratio")
+    if ratio is None:
+        return
+    requests_now, rejected_now = _provider_counters(provider)
+    requests_made, rejected = requests_now - baseline[0], rejected_now - baseline[1]
+    if requests_made <= 0 or (not final and requests_made < gates.get("min_reject_sample", 20)):
+        return
+    if rejected / requests_made > ratio:
+        raise RunAbort("provider_reject_ratio_exceeded", {
+            "provider_requests": requests_made, "provider_rejected": rejected,
+            "ratio": round(rejected / requests_made, 4), "limit": ratio})
 
 
 def _open_db(path, writable=False):
@@ -951,7 +1084,17 @@ def restore_from_export(db_path, export_file, *, sha256=None,
 def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=None,
                  as_of=None, dry_run=False, verify_gates=False, audit_log=None,
                  health_url="http://127.0.0.1:8000", production_authorized=False,
-                 copy_rehearsal=False, pre_export_dir=None):
+                 copy_rehearsal=False, pre_export_dir=None,
+                 fetch_series=None, policy=None, gates=None, progress_hook=None):
+    """``fetch_series``/``policy``/``gates``/``progress_hook`` are the DAV-2463
+    automation seams; all default to the legacy behaviour.
+
+    ``gates`` keys: ``max_reject_ratio`` (+``min_reject_sample``),
+    ``abort_on_evaluated_rewrite``, ``enforce_write_cap``, ``abort_on_lock``.
+    A fired gate raises :class:`RunAbort` before any write, except
+    ``abort_on_lock`` which stops the per-row write loop at the first lock.
+    """
+    gates = gates or {}
     if verify_gates and db_path:
         raise RuntimeError('DB gate verification requires scripts/verify_h1b_gates.py with an explicit cohort')
     as_of = as_of or now_cn().date().isoformat()
@@ -992,6 +1135,12 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
     result = {"dry_run": dry_run, "sample_count": 0, "qualifying_count": 0,
               "changed_rows": 0, "guard_mismatches": 0, "write_conflicts": 0,
               "by_horizon": {}, "missing_units": []}
+    provider = fetch_series or fetch_price_series
+    provider_baseline = _provider_counters(provider)
+    new_mature = retry_attempted = 0
+    evaluated_rewrites = []
+    retry_attempted_units = []
+    trade_dates = [None, None]
     stats = dict.fromkeys(COUNTERS, 0)
     saved = []
 
@@ -1004,7 +1153,29 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         source = iter(load_raw_reports(input_file=input_file, input_dir=input_dir)[0])
     for report in source:
         result["sample_count"] += 1
-        updated, per_horizon = backfill_report(report, as_of=as_of, calendar=calendar)
+        updated, per_horizon = backfill_report(report, as_of=as_of, calendar=calendar,
+                                               fetch_series=fetch_series, policy=policy)
+        report_trade_date = report.get("trade_date")
+        if report_trade_date:
+            trade_dates[0] = min(filter(None, (trade_dates[0], report_trade_date)))
+            trade_dates[1] = max(filter(None, (trade_dates[1], report_trade_date)))
+        if db_path and not dry_run and gates:
+            facts = classify_units(report, updated)
+            skipped = getattr(policy, "was_skipped", None)
+            if skipped:
+                facts = [f for f in facts if not skipped(f["report_id"], f["horizon"])]
+            mature, retried = _gate_counts(facts)
+            new_mature += mature
+            retry_attempted += retried
+            retry_attempted_units.extend(
+                [f["report_id"], f["horizon"]] for f in facts if f["old_status"] == "data_missing")
+            evaluated_rewrites.extend(
+                {"report_id": f["report_id"], "horizon": f["horizon"],
+                 "changed": f["evaluated_rewrite_keys"]}
+                for f in facts if f["evaluated_rewrite_keys"])
+            _check_reject_gate(provider, provider_baseline, gates, final=False)
+        if progress_hook is not None:
+            progress_hook("scan", result["sample_count"])
         for h, counts in per_horizon.items():
             bucket = result["by_horizon"].setdefault(h, dict.fromkeys(COUNTERS, 0))
             for key in COUNTERS:
@@ -1034,6 +1205,25 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         elif not db_path:
             saved.append(updated)
 
+    result["scan_range"] = {"trade_date_min": trade_dates[0], "trade_date_max": trade_dates[1]}
+    if db_path and not dry_run and gates:
+        requests_made, rejected = (a - b for a, b in zip(_provider_counters(provider), provider_baseline))
+        result["gate_facts"] = {
+            "new_mature_units": new_mature, "retry_attempted_units": retry_attempted,
+            "planned_rows": len(planned), "write_cap": new_mature + retry_attempted,
+            "evaluated_rewrites": len(evaluated_rewrites),
+            "provider_requests": requests_made, "provider_rejected": rejected}
+        result["retry_attempted_units"] = retry_attempted_units
+        _check_reject_gate(provider, provider_baseline, gates, final=True)
+        if gates.get("abort_on_evaluated_rewrite") and evaluated_rewrites:
+            raise RunAbort("evaluated_result_rewrite", {
+                "count": len(evaluated_rewrites), "rows": evaluated_rewrites[:200]}, partial=result)
+        if gates.get("enforce_write_cap") and len(planned) > new_mature + retry_attempted:
+            raise RunAbort("write_cap_exceeded", {
+                "planned_rows": len(planned), "cap": new_mature + retry_attempted,
+                "new_mature_units": new_mature, "retry_attempted_units": retry_attempted},
+                partial=result)
+
     pre_export = None
     journal_path = Path(audit_log or ROOT / "work/tplus5-rollback" / (datetime.now().strftime("%Y%m%dT%H%M%S-%f") + ".jsonl"))
     if db_path and not dry_run:
@@ -1062,8 +1252,12 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
                         result["changed_rows"] += int(outcome)
                 except ValueError:
                     result["guard_mismatches"] += 1
-                except sqlite3.OperationalError:
+                except sqlite3.OperationalError as exc:
                     result["write_conflicts"] += 1
+                    if gates.get("abort_on_lock") and "locked" in str(exc).lower():
+                        raise RunAbort("database_locked", {"report_id": item["id"]}, partial=result)
+                if progress_hook is not None:
+                    progress_hook("write", result["changed_rows"])
         finally:
             audit.close()
             writer.close()
@@ -1072,7 +1266,8 @@ def run_backfill(*, db_path=None, input_file=None, input_dir=None, output_file=N
         bucket["completeness_rate"] = bucket["evaluated_count"] / bucket["due_count"] if bucket["due_count"] else 0.0
         bucket["hit_rate"] = bucket["hit_count"] / bucket["evaluated_count"] if bucket["evaluated_count"] else None
     result.update(stats=stats, qualifying_count=stats["qualifying_v2_count"],
-                  provider_request_count=getattr(fetch_price_series, "request_count", None))
+                  provider_request_count=getattr(provider, "request_count", None),
+                  provider_rejected_count=getattr(provider, "rejected_count", None))
     if db_path and not dry_run:
         result["audit_log"] = str(journal_path)
     if verify_gates:
