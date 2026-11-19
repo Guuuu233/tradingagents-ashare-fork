@@ -1308,6 +1308,16 @@
 - **实现提交**：`3f74896dee1acde3019da18399bc8631d0671cb0`（`dav1507_exit_progress.py` 与测试；父提交 `1781f44b3fcd0ac1bf4a208c6a88beed4cd0c229`）。
 - 回填完成后如真实口径仍低于 95%，按出口指标继续跟踪，**不调整阈值**。
 
+### D-081：T+5 生产回填（一次性补齐，2026-11-18）
+
+- **授权依据**：总控 2026-11-18 03:03 签字（编号 D-081），以演练产物为前置：1,608 行、`provider_rejected=0`、`zst` 1,608/1,608 逐字节一致。
+- **执行**：2026-11-18 10:05:02 CST 启动，**12:16:45 CST 完成**；`--production-authorized`；窗口内 `active_analysis_count=0` 时开始。
+- **结果**：改动 **1,608 行**；`provider_rejected=0`、**`database is locked`=0**；`guard_mismatches=0`、`write_conflicts=0`、`pre_export_mismatch=0`；`zst` 1,608/1,608 逐字节一致、`zst_len` 全部一致；旧行由 `zst=NULL` 转为写入 `zst` 共 1,560 行（事前已获总控裁定接受）。
+- **回滚件**：pre-export 1,608 行，sha256 `cb8c030f29cd966496f148a9a6210833756b38b13c6f307c0fe9395dcdd3990d`，路径 `…/t5-stall-20261117/prod-pre-export/`；审计日志 sha256 `91776b088ea31e6c450a04dfd888248e77aa4418a5fb579ce709bacbc37fe00e`。
+- **证据路径**：`/Volumes/waizhiyingpan/ta-work-ext/t5-stall-20261117/prod-out/` 与 `…/prod-pre-export/`。
+- **定性**：这是一次性补齐；常态化补评估由 **DAV-2463**（自动补评估卡）负责，本决定不授权自动运行。
+- **账本影响**：`result_data_sha256_at_seal` 仅为参考哈希、不参与篡改检测（DAV-1458/D-071），链未受影响。
+
 ### D-013 附注（2026-09-23）
 
 D-013 的证据清单不变，签字人由「总工」改为「总控」（见 D-033）。
