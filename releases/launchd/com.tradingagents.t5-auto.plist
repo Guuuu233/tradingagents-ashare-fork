@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DAV-2463 草案（TEMPLATE ONLY）：T+5 每日自动补评估。
+  不安装、不加载；上线须总控另行书面签字。合入只合本文件，不等于授权安装。
+
+  占位符（安装时必须替换并校验残留为 0）：
+    {{RELEASE_DIR}}  = 固定 40 位 SHA 的独立检出，形如
+                       /Users/davidliu/ta-releases/t5-auto/<40位SHA>
+                       （不得指向主检出 ~/Documents/TradingAgents-AShare，
+                         不得指向会变的分支；升级版本另行签字）
+
+  整次运行时长上限 2825 秒（开发实测最大 941.55s 的 3 倍，总控已通过）；超过即中止并报警。
+  不得带 recheck-evaluated 开关（仅限人工审计使用；自动化只走 t5_auto_runner.py）。
+
+  时段：周一至周五 22:30（本地时区）。避开：日批 16:37 起、快照 19:30、
+        账本 19:45 / 21:45 / 08:30。非交易日（含节假日）由脚本自行跳过
+        并写 status=skipped 记录，不报警。
+
+  外置盘依赖：运行记录 / 审计日志 / pre-export 回滚件 / 重试状态 / 本 plist 的
+        stdout、stderr 全部在 /Volumes/waizhiyingpan/ta-t5-auto/ 下。
+        外置盘未挂载 → 脚本直接失败（退出码 2，守望目录写
+        ALERT-t5auto-*-external_volume_not_mounted），不回退内置盘；
+        launchd 打不开日志路径会直接拒绝装载/启动（EX_CONFIG），属预期的 fail-closed。
+        安装前用 releases/launchd/plist_log_preflight.py 检查。
+
+  凭据：仅由脚本从 env-file 参数指向的文件读取，不进入 plist，不进入任何日志。
+  代码解释器：与 com.tradingagents.ta-snapshot 同一个主检出之外的 py310 环境。
+-->
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>com.tradingagents.t5-auto</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>-u</string>
+    <string>PYTHONPATH</string>
+    <string>/Users/davidliu/ta-venv/py310/bin/python</string>
+    <string>{{RELEASE_DIR}}/scripts/t5_auto_runner.py</string>
+    <string>--db-path</string>
+    <string>/Users/davidliu/Documents/TradingAgents-AShare/data/tradingagents.db</string>
+    <string>--health-url</string>
+    <string>http://127.0.0.1:8000</string>
+    <string>--run-dir</string>
+    <string>/Volumes/waizhiyingpan/ta-t5-auto</string>
+    <string>--max-seconds</string>
+    <string>2825</string>
+    <string>--production-authorized</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>{{RELEASE_DIR}}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NO_PROXY</key><string>127.0.0.1,localhost</string>
+    <key>no_proxy</key><string>127.0.0.1,localhost</string>
+    <key>TA_WATCH_DIR</key><string>/Users/davidliu/ta-watch</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>22</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Volumes/waizhiyingpan/ta-t5-auto/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/waizhiyingpan/ta-t5-auto/launchd.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict></plist>
