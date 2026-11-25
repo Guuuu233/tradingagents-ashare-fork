@@ -39,6 +39,10 @@ START = "2026-10-08"
 CLOSE_HOUR = 16
 MAXC = int(os.environ.get("MAXC", "4"))
 STAGGER = int(os.environ.get("STAGGER", "60"))
+ANALYZE_MAX_RETRIES = 2
+ANALYZE_RETRY_DELAY_SECONDS = 30
+PROGRESS_RETRY_DELAYS_SECONDS = (5, 15, 30)
+SQLITE_BUSY_TIMEOUT_MS = 30000
 GROUP_A = ["600036.SH", "600519.SH", "300750.SZ", "601899.SH", "002594.SZ", "601318.SH", "000858.SZ", "600900.SH",
            "688981.SH", "600276.SH", "000333.SZ", "601012.SH", "600941.SH", "601857.SH", "600030.SH", "002475.SZ",
            "601088.SH", "600887.SH", "600309.SH", "600031.SH", "002415.SZ", "601888.SH", "603259.SH", "000725.SZ"]
@@ -49,6 +53,50 @@ GROUP_B = ["601398.SH", "601628.SH", "600809.SH", "000651.SZ", "300274.SZ", "601
 
 def trading_days():
     return sorted(f"{s[:4]}-{s[4:6]}-{s[6:8]}" for s in (str(x).replace("-", "") for x in json.load(open(CAL))))
+
+
+def post_analyze_with_retries(symbol, trade_date, headers, log):
+    for retry_count in range(1 + ANALYZE_MAX_RETRIES):
+        response = requests.post(
+            f"{BASE}/v1/analyze",
+            headers=headers,
+            json={"symbol": symbol, "trade_date": trade_date, "horizons": ["short", "medium"]},
+            timeout=180,
+            proxies={"http": None, "https": None},
+        )
+        if response.status_code < 500:
+            return response
+        if retry_count < ANALYZE_MAX_RETRIES:
+            log(
+                f"RETRY {symbol} analyze retry={retry_count + 1} "
+                f"status={response.status_code} delay={ANALYZE_RETRY_DELAY_SECONDS}s"
+            )
+            time.sleep(ANALYZE_RETRY_DELAY_SECONDS)
+    return response
+
+
+def read_report_status_with_retries(symbol, job_id, log):
+    progress_retries = 0
+    while True:
+        try:
+            con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+            con.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+            row = con.execute("select status from reports where id=?", (job_id,)).fetchone()
+            con.close()
+            return row[0] if row else None
+        except sqlite3.OperationalError as exc:
+            if (
+                progress_retries >= len(PROGRESS_RETRY_DELAYS_SECONDS)
+                or "database is locked" not in str(exc).lower()
+            ):
+                raise
+            retry_delay = PROGRESS_RETRY_DELAYS_SECONDS[progress_retries]
+            progress_retries += 1
+            log(
+                f"RETRY {symbol} progress retry={progress_retries} "
+                f"delay={retry_delay}s: {type(exc).__name__} {exc}"
+            )
+            time.sleep(retry_delay)
 
 
 def target_date(days, now):
@@ -186,9 +234,7 @@ def main():
                 while busy() >= MAXC or time.time() - last[0] < STAGGER:
                     time.sleep(10)
                 last[0] = time.time()
-            r = requests.post(f"{BASE}/v1/analyze", headers=headers,
-                              json={"symbol": sym, "trade_date": date, "horizons": ["short", "medium"]},
-                              timeout=180, proxies={"http": None, "https": None})
+            r = post_analyze_with_retries(sym, date, headers, log)
             r.raise_for_status()
             jid = r.json()["job_id"]
             t0 = time.time()
@@ -196,10 +242,7 @@ def main():
             st = None
             while time.time() - t0 < 7200:
                 time.sleep(30)
-                con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-                row = con.execute("select status from reports where id=?", (jid,)).fetchone()
-                con.close()
-                st = row[0] if row else None
+                st = read_report_status_with_retries(sym, jid)
                 if st in ("completed", "failed"):
                     break
             results[sym] = {"job_id": jid, "status": st, "seconds": int(time.time() - t0)}

@@ -20,6 +20,7 @@ from tradingagents.storage.compressed_json import (
 
 # Database URL - default to SQLite for simplicity
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tradingagents.db")
+SQLITE_BUSY_TIMEOUT_SECONDS = int(os.getenv("TA_SQLITE_BUSY_TIMEOUT_SECONDS", "30"))
 
 # Create engine
 if DATABASE_URL.startswith("sqlite"):
@@ -38,6 +39,7 @@ if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_SECONDS * 1000}")
         if _use_wal:
             cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()

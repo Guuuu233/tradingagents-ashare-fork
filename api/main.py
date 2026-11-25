@@ -50,6 +50,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
+from api.db_retry import retry_sqlite_lock
 from api.usage_logging import current_llm_horizon, current_llm_role
 from api.services import stock_map_service
 from api.job_store import get_job_store as _new_job_store
@@ -711,6 +712,7 @@ def _utcnow_iso() -> str:
 # genuinely wedged.  Set either value to 0 to disable that deadline.
 _JOB_TIMEOUT = int(os.getenv("TA_JOB_TIMEOUT", "1800"))
 _JOB_HARD_TIMEOUT = int(os.getenv("TA_JOB_HARD_TIMEOUT", "7200"))
+_DB_FAILURE_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
 
 
 def _create_tracked_task(coro, *, label: str = "Background task") -> asyncio.Task:
@@ -2723,9 +2725,14 @@ async def _run_job(
                         report_service.update_report_partial(db, job_id, result_data=failed_result)
                         _set_job(job_id, result=failed_result)
                 try:
-                    await asyncio.to_thread(_record_hard_timeout_failure)
-                except Exception:
-                    pass
+                    await asyncio.to_thread(
+                        retry_sqlite_lock,
+                        _record_hard_timeout_failure,
+                        delays_seconds=_DB_FAILURE_RETRY_DELAYS_SECONDS,
+                        operation_name=f"record hard timeout failure for job {job_id}",
+                    )
+                except Exception as db_exc:
+                    _log(f"Failed to record hard timeout failure in DB: {db_exc}")
                 _emit_job_event(
                     job_id,
                     "job.failed",
@@ -2770,12 +2777,17 @@ async def _run_job(
                     failed_result["error_diagnostics"] = err_diagnostics
                 report_service.update_report_partial(db, job_id, result_data=failed_result)
                 _set_job(job_id, result=failed_result)
+        # DAV-1463: off-loop, matching the hard-timeout branch above and
+        # _run_job_inner's failure recorder.
         try:
-            # DAV-1463: off-loop, matching the hard-timeout branch above and
-            # _run_job_inner's failure recorder.
-            await asyncio.to_thread(_record_task_failure)
-        except Exception:
-            pass
+            await asyncio.to_thread(
+                retry_sqlite_lock,
+                _record_task_failure,
+                delays_seconds=_DB_FAILURE_RETRY_DELAYS_SECONDS,
+                operation_name=f"record task failure for job {job_id}",
+            )
+        except Exception as db_exc:
+            _log(f"Failed to record task failure in DB: {db_exc}")
         _emit_job_event(
             job_id,
             "job.failed",
