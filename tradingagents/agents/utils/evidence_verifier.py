@@ -359,6 +359,7 @@ _METRIC_KEYWORDS = [
     "水库", "来水", "发电量", "偏枯", "偏丰", "蓄能", "电量", "纳斯达克", "生物科技", "指数",
     # Pharma & Sector specific
     "管线", "临床", "获批", "授权", "license-out", "医保", "集采", "原料药", "仿制药", "创新药", "adc", "fda",
+    "除外支付", "免计定额",
     # Sentiment & General
     "风险偏好", "进攻", "防守", "避险", "虹吸", "抽水", "情绪", "舆情", "预期差", "公告", "中报", "年报", "季报",
     # Entities frequently referenced
@@ -375,6 +376,438 @@ _METRIC_KEYWORDS = [
     "燃油车", "电动车", "新能源车",
     "每股净资产", "bps"
 ]
+
+_HYPOTHESIS_MARKERS = frozenset(
+    {"假设", "测算", "压力", "情景", "若", "预计", "推算", "敏感性"}
+)
+_REPORT_HYPOTHESIS_RE = re.compile(
+    r"测算|推算|预计|假设|情景|敏感性|(?<!若)若(?!干)"
+)
+_REPORT_PREFIX_FRAME_RE = re.compile(
+    r"测算|推算|假设|情景|敏感性"
+)
+_NEGATED_ESTIMATE_RE = re.compile(
+    r"(?:无法|难以|未能|不能|不可|难于)[^，。；;]{0,6}(?:测算|推算)"
+)
+_BULLET_LINE_RE = re.compile(r"^(\s*)(?:[-*•]|\d+\.)\s+")
+_BN_DIGIT_PREFIX_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
+_LINE_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _locate_bound_num_pos(line_text: str, bn: BoundNumber) -> int:
+    raw = str(bn.raw or "")
+    if raw:
+        pos = line_text.find(raw)
+        if pos >= 0:
+            return pos
+        m = _BN_DIGIT_PREFIX_RE.search(raw.replace(",", ""))
+        if m:
+            target = m.group(0).lstrip("+-")
+            for line_match in _LINE_NUMBER_RE.finditer(line_text):
+                if line_match.group(0).replace(",", "") == target:
+                    return line_match.start()
+            pos = line_text.find(m.group(0))
+            if pos >= 0:
+                return pos
+    return -1
+_CLAUSE_PROJECTION_MARKERS = (
+    "假设", "测算", "情景", "若", "预计", "推算", "敏感性",
+    "压力测试", "压力情景", "极端压力",
+)
+_CODERIVED_SIBLING_MARKERS = (
+    "息差", "利差", "对应", "折合", "估值底线", "折价", "安全垫",
+    "下行空间", "上行空间", "增厚", "冲减", "吞噬", "损利", "减值",
+    "目标价", "从而", "进而", "由此", "据此", "届时", "将",
+    "净利底线", "利润底线", "底线支撑", "信用节约",
+)
+_INDEPENDENT_FACT_ANCHORS = (
+    "货币资金", "资产负债率", "期间费用率", "营业收入", "营收",
+    "经营现金流", "经营性现金流", "自由现金流", "成交量", "成交额",
+    "换手率", "50日", "200日", "vwma", "ema", "sma", "rsi",
+    "pe(ttm)", "市净率", "pb", "毛利率", "净利率", "归母净利", "扣非",
+)
+_REPORT_HYPOTHESIS_DETAIL_PREFIX = "报告原文命中句含假设/推算词"
+_SIBLING_HYPOTHESIS_DETAIL = "同句前置假设/推算子句的同源兄弟子句，随前置子句一并降级"
+
+
+def _contains_projection_clause_marker(text: str) -> bool:
+    return any(marker in text for marker in _CLAUSE_PROJECTION_MARKERS)
+
+
+def _is_coderived_projection_sibling(clause: str) -> bool:
+    text = str(clause or "").strip()
+    if not text:
+        return False
+    text_lower = text.lower()
+    if any(anchor in text_lower for anchor in _INDEPENDENT_FACT_ANCHORS):
+        return False
+    return any(marker in text for marker in _CODERIVED_SIBLING_MARKERS)
+
+
+_JUDGMENT_MARKERS = ("对倒",)
+_FUND_FLOW_IN_MARKERS_EXACT = ("净流入", "流入")
+_FUND_FLOW_OUT_MARKERS_EXACT = ("净流出", "流出")
+_FINANCIAL_CASHFLOW_MARKERS = (
+    "现金流", "经营现金", "投资现金", "筹资", "资本开支", "capex",
+    "投资流出", "投资流入", "自由现金流", "fcf", "经营性现金",
+    "现金净流入", "现金净流出", "货币资金", "融资现金",
+    "投资净流", "筹资净流", "经营净流", "投资活动", "筹资活动", "经营活动",
+)
+_STOCK_FUND_FLOW_CONTEXT_MARKERS = (
+    "主力", "大单", "超大单", "中单", "小单", "北向", "外资", "融资融券",
+    "资金流", "资金面", "资金净流入", "资金净流出", "个股资金", "盘口",
+    "尾盘", "r0_net", "elg_net", "lg_net", "netamount",
+)
+_CROSS_SECTOR_SIPHON_MARKERS = (
+    "抽血", "分流", "虹吸", "撤离", "轮动", "掩护出逃", "出逃", "暴卖",
+    "逆势流出", "逆势暴卖",
+)
+_OTHER_SECTOR_INFLOW_RE = re.compile(
+    r"(?:板块|行业|银行|半导体|消费|金融|科技|医药|煤炭|电力|有色|军工|红利|地产|tmt)"
+    r"[^，。；;]{0,6}(?:净流入|流入)"
+    r"|(?:净流入|流入)[^，。；;]{0,6}"
+    r"(?:板块|行业|银行|半导体|消费|金融|科技|医药|煤炭|电力|有色|军工|红利|地产|tmt)",
+    re.I,
+)
+_OUTFLOW_REVERSAL_RE = re.compile(
+    r"(?:终结|结束|逆转|扭转)[^，。；;]{0,8}(?:净流出|流出)|转(?:为)?净流入|净额(?:逆势)?翻正"
+)
+_DATE_TEXT_RE = re.compile(
+    r"\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2}日?)?"
+    r"|\d{4}\.\d{1,2}\.\d{1,2}"
+    r"|\d{4}年?[QqHh][1-4]"
+    r"|(?<!\d)(?:0?[1-9]|1[0-2])[-/月](?:0?[1-9]|[12]\d|3[01])日?(?!\d)"
+)
+_BARE_UNIT_PART = (
+    r"(?:%|％|个百分点|百分点|pct|bps|bp|元/股|元/吨|美元/桶|美元/吨|"
+    r"万亿元|万亿|千亿元|千亿|亿元|亿|千万元|千万|万元|万|"
+    r"亿股|万股|股|亿手|万手|手|港元|美元|元|点|倍|次|家|日|天|月|年|x)"
+)
+_BARE_NUMBER_AND_UNIT_RE = re.compile(
+    rf"^[+-]?\d+(?:\.\d+)?\s*{_BARE_UNIT_PART}?(?:\s*[-~～至]\s*[+-]?\d+(?:\.\d+)?\s*{_BARE_UNIT_PART}?)?$",
+    re.I,
+)
+
+
+def _contains_hypothesis_marker(text: str) -> bool:
+    return any(marker in text for marker in _HYPOTHESIS_MARKERS)
+
+
+def _contains_judgment_marker(text: str) -> bool:
+    return any(marker in text for marker in _JUDGMENT_MARKERS)
+
+
+def _search_report_hypothesis_in_segment(
+    seg: str,
+    rel_pos: int | None = None,
+) -> str | None:
+    if not seg:
+        return None
+    cleaned = _NEGATED_ESTIMATE_RE.sub(lambda m: " " * len(m.group(0)), seg)
+    if rel_pos is None:
+        m_all = _REPORT_HYPOTHESIS_RE.search(cleaned)
+        return m_all.group(0) if m_all else None
+    clamped = max(0, min(rel_pos, len(cleaned) - 1))
+    clause_end = len(cleaned)
+    depth = 0
+    for ci, ch in enumerate(cleaned[:clamped]):
+        if ch in "（(":
+            depth += 1
+        elif ch in "）)" and depth > 0:
+            depth -= 1
+    for ci in range(clamped, len(cleaned)):
+        ch = cleaned[ci]
+        if ch in "（(":
+            depth += 1
+        elif ch in "）)":
+            depth = max(depth - 1, 0)
+        elif depth == 0 and ch in ",，" and ci > clamped:
+            clause_end = ci
+            break
+    for m in _REPORT_HYPOTHESIS_RE.finditer(cleaned):
+        if m.start() >= clause_end:
+            continue
+        return m.group(0)
+    return None
+
+
+def _iter_report_lines_with_parent_frame(report_body: str) -> list[tuple[str, str | None]]:
+    """Yield (stripped_line, parent_bullet_frame_marker) for indented sub-bullets under a colon-terminated projection/assumption bullet."""
+    out: list[tuple[str, str | None]] = []
+    # Stack of (indent_width, frame_marker)
+    frame_stack: list[tuple[int, str | None]] = []
+    for raw_line in report_body.splitlines():
+        line_text = raw_line.strip()
+        if not line_text:
+            frame_stack.clear()
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" \t"))
+        while frame_stack and frame_stack[-1][0] >= indent:
+            frame_stack.pop()
+        inherited = next((m for _, m in reversed(frame_stack) if m), None)
+        out.append((line_text, inherited))
+        if _BULLET_LINE_RE.match(raw_line) and line_text.endswith(("：", ":")):
+            cleaned = _NEGATED_ESTIMATE_RE.sub(lambda m: " " * len(m.group(0)), line_text)
+            m_frame = _REPORT_PREFIX_FRAME_RE.search(cleaned)
+            frame_stack.append((indent, m_frame.group(0) if m_frame else None))
+    return out
+
+
+def _report_line_hypothesis_marker(
+    line_text: str,
+    match_positions: Sequence[int] | None = None,
+    parent_frame_marker: str | None = None,
+) -> str | None:
+    if parent_frame_marker:
+        return parent_frame_marker
+    if not line_text:
+        return None
+    if not match_positions:
+        return _search_report_hypothesis_in_segment(line_text, None)
+    spans: list[tuple[int, int, str]] = []
+    start = 0
+    for sep in re.finditer(r"[。！？；;]", line_text):
+        spans.append((start, sep.end(), sep.group(0)))
+        start = sep.end()
+    if start < len(line_text):
+        spans.append((start, len(line_text), ""))
+    is_table_row = line_text.lstrip().startswith("|")
+    for pos in match_positions:
+        clamped = max(0, min(pos, len(line_text) - 1))
+        for idx, (s_start, s_end, _sep) in enumerate(spans):
+            if s_start <= clamped < s_end:
+                m_sent = _search_report_hypothesis_in_segment(
+                    line_text[s_start:s_end], clamped - s_start
+                )
+                if m_sent:
+                    return m_sent
+                if s_start > 0:
+                    prev_sep = spans[idx - 1][2] if idx > 0 else ""
+                    if is_table_row or prev_sep in ("。", "！", "？"):
+                        cleaned_prev = _NEGATED_ESTIMATE_RE.sub(
+                            lambda m: " " * len(m.group(0)), line_text[:s_start]
+                        )
+                        m_prev = _REPORT_PREFIX_FRAME_RE.search(cleaned_prev)
+                        if m_prev:
+                            return m_prev.group(0)
+                break
+    return None
+
+
+def _find_non_hypothetical_substring(
+    needle: str,
+    report_body: str,
+    normalize_ws: bool = False,
+) -> tuple[bool, str | None]:
+    if not needle or not report_body:
+        return False, None
+    target = _WHITESPACE_RE.sub("", needle) if normalize_ws else needle
+    if not target:
+        return False, None
+    first_hyp: str | None = None
+    for line_text, parent_frame in _iter_report_lines_with_parent_frame(report_body):
+        hay = _WHITESPACE_RE.sub("", line_text) if normalize_ws else line_text
+        idx = hay.find(target)
+        if idx == -1:
+            continue
+        while idx != -1:
+            pos = idx
+            if normalize_ws:
+                pos = 0
+                seen = 0
+                for ci, ch in enumerate(line_text):
+                    if not ch.isspace():
+                        if seen == idx:
+                            pos = ci
+                            break
+                        seen += 1
+            marker = _report_line_hypothesis_marker(line_text, [pos], parent_frame)
+            if marker is None:
+                return True, None
+            if first_hyp is None:
+                first_hyp = marker
+            idx = hay.find(target, idx + len(target))
+    if first_hyp is not None:
+        return False, first_hyp
+    if not normalize_ws and needle in report_body:
+        return True, None
+    return False, None
+
+
+def _is_bare_numeric_token(text: str) -> bool:
+    candidate = str(text or "").strip("，。；,.;:：、()（）[]【】\"'“” \t\n\r")
+    if not candidate or _DATE_TEXT_RE.search(candidate):
+        return False
+    return bool(_BARE_NUMBER_AND_UNIT_RE.fullmatch(candidate))
+
+
+_QUALITATIVE_MAGNITUDE_ALIASES = frozenset({"天量", "巨量", "地量", "大量", "高量"})
+
+
+def _single_fact_clause_scored(fc: Mapping[str, Any], clause: str) -> bool:
+    """单数字子句整句计分：子句仅含一个带指标绑定的数字且自身有实义锚点时，
+    该数字不是「裸 token」——计分单元为子句本身，而非剥离语境后的数字原子。
+    多数字复合句拆出的原子不适用，仍按裸 token 拦截。"""
+    bindings = fc.get("bindings") or []
+    if fc.get("total") != 1 or len(bindings) != 1:
+        return False
+    number = bindings[0].get("number") or {}
+    if not number.get("metric"):
+        return False
+    if _is_bare_numeric_evidence(clause):
+        return False
+    metric = str(number["metric"])
+    lowered = clause.lower()
+    if _metric_literal_present(metric, lowered):
+        return True
+    return any(
+        len(alias) >= 2
+        and alias not in _QUALITATIVE_MAGNITUDE_ALIASES
+        and _metric_literal_present(alias, lowered)
+        for alias, canonical in _METRIC_CANONICAL_MAP.items()
+        if canonical == metric
+    )
+
+
+def _fact_provenance(
+    res: Mapping[str, Any], fc: Mapping[str, Any], index: int
+) -> tuple[str | None, str | None]:
+    roles = fc.get("verified_roles") or []
+    role = roles[index] if index < len(roles) and roles[index] else res.get("matched_role")
+    if role:
+        source = ",".join(r.replace("_report", "") for r in str(role).split(","))
+        return role, source
+    return None, res.get("matched_source")
+
+
+def _unverified_fact_details(fc: Mapping[str, Any], fact: str) -> str:
+    hyp = (fc.get("hypothesis_facts") or {}).get(fact)
+    if hyp:
+        return (
+            f"{_REPORT_HYPOTHESIS_DETAIL_PREFIX}（{hyp['marker']}），"
+            f"不得标为已核实事实（来源：{hyp['role']}） (atomic_fact): {fact}"
+        )
+    return f"复合句原子事实未在报告中找到支撑 (atomic_fact): {fact}"
+
+
+def _contains_supported_terms(raw_text: str, report_body: str) -> bool:
+    terms = [
+        term
+        for part in re.split(r"[，。；;]", raw_text)
+        for term in _extract_metric_keywords(part)
+        if len(term) >= 2
+    ]
+    return bool(terms) and all(_metric_literal_present(term, report_body) for term in terms)
+
+
+def _contains_fund_flow_direction(text: str, markers: Sequence[str]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _matches_report_text(raw_text: str, report_body: str) -> bool:
+    if not report_body:
+        return False
+    return raw_text in report_body or any(
+        len(part) >= 8 and part in report_body for part in re.split(r"[，。；;]", raw_text)
+    )
+
+
+def _all_report_texts(seven_reports: Mapping[str, str]) -> str:
+    return "\n".join(str(seven_reports.get(key, "") or "") for key in SEVEN_REPORT_KEYS)
+
+
+_STANCE_FLOW_STRONG_SUBJECT_RE = re.compile(
+    r"(?P<retail>中小单|小单|中单|散户|个人投资者|个人资金)"
+    r"|(?P<sector>板块|行业|赛道|细分|全市场|大盘|etf)"
+    r"|(?P<main>超大单|大单|主力|r0_net|elg_net|lg_net|北向|外资)",
+    re.I,
+)
+_STANCE_FLOW_WEAK_SUBJECT_RE = re.compile(r"资金|机构|融资融券")
+_STANCE_FLOW_DIRECTION_RE = re.compile(r"净?流入|净?流出")
+_STANCE_FLOW_SEGMENT_SPLIT_RE = re.compile(r"[，,。；;]|而|但是|但|且|并且|同时|然而")
+
+
+def _main_force_flow_directions(text: str) -> list[str]:
+    """返回文本中归属「主力/超大单/大单/北向/外资」口径的资金流方向（in/out）序列。
+
+    每个流向词归属其所在子句内最近的前置主体词（强主体优先于「资金」等弱主体）；
+    小单/中单/中小单/散户口径的流向不计入——它们与主力的对举是同句常态，
+    不构成主力方向。子句内无主体词时继承前一子句的主体口径，仍无则默认主力。"""
+    directions: list[str] = []
+    inherited = "main"
+    for segment in _STANCE_FLOW_SEGMENT_SPLIT_RE.split(text):
+        if not segment:
+            continue
+        strong = [
+            (
+                m.start(),
+                "retail" if m.group("retail") else "sector" if m.group("sector") else "main",
+            )
+            for m in _STANCE_FLOW_STRONG_SUBJECT_RE.finditer(segment)
+        ]
+        weak = [m.start() for m in _STANCE_FLOW_WEAK_SUBJECT_RE.finditer(segment)]
+        for dm in _STANCE_FLOW_DIRECTION_RE.finditer(segment):
+            group = None
+            for pos, grp in reversed(strong):
+                if pos < dm.start():
+                    group = grp
+                    break
+            if group is None and any(pos < dm.start() for pos in weak):
+                group = "main"
+            if group is None:
+                group = strong[0][1] if strong else inherited
+            inherited = group
+            if group == "main":
+                directions.append("in" if dm.group(0).endswith("流入") else "out")
+        if strong:
+            inherited = strong[-1][1]
+    return directions
+
+
+def _is_fund_flow_stance_conflict(raw_text: str, stance: str) -> bool:
+    if not stance or not raw_text:
+        return False
+    text_lower = raw_text.lower()
+    if any(marker in text_lower for marker in _FINANCIAL_CASHFLOW_MARKERS):
+        return False
+    has_stock_flow_ctx = any(
+        marker in text_lower for marker in _STOCK_FUND_FLOW_CONTEXT_MARKERS
+    ) or ("净流入" in raw_text or "净流出" in raw_text)
+    if not has_stock_flow_ctx:
+        return False
+    if stance in ("bull", "bullish", "看多", "多头"):
+        directions = _main_force_flow_directions(raw_text)
+        if "out" not in directions or "in" in directions:
+            return False
+        if _OUTFLOW_REVERSAL_RE.search(raw_text):
+            return False
+        return True
+    if stance in ("bear", "bearish", "看空", "空头"):
+        directions = _main_force_flow_directions(raw_text)
+        if "in" not in directions or "out" in directions:
+            return False
+        if any(marker in raw_text for marker in _CROSS_SECTOR_SIPHON_MARKERS):
+            return False
+        if _OTHER_SECTOR_INFLOW_RE.search(raw_text):
+            return False
+        return True
+    return False
+
+
+def _has_source_support(raw_text: str, seven_reports: Mapping[str, str]) -> bool:
+    if _matches_report_text(raw_text, _all_report_texts(seven_reports)):
+        return True
+    if _is_bare_numeric_token(raw_text):
+        return False
+    evidence_keywords = set(_extract_metric_keywords(raw_text))
+    if not evidence_keywords:
+        return False
+    report_keywords = {
+        keyword
+        for body in seven_reports.values()
+        for keyword in _extract_metric_keywords(str(body or ""))
+    }
+    return bool(evidence_keywords.intersection(report_keywords))
 
 
 def _metric_literal_present(keyword: str, text: str) -> bool:
@@ -2765,7 +3198,7 @@ def extract_bound_numbers(text: str, default_period: str | None = None) -> list[
 
 
 _COMPOUND_SPLIT_RE = re.compile(
-    r"[;；]|(?<!\d)[,，](?!\d)|\s*(?:并且|且|但是|但|同时|严重背离|背离)\s*"
+    r"[;；]|，|(?<!\d),|,(?!\d)|\s*(?:并且|且|但是|但|同时|严重背离|背离)\s*"
 )
 
 # DAV-1163: 出处引导语（「根据市场分析师报告，」「宏观报告显示」「基本面
@@ -4060,6 +4493,60 @@ class EvidenceFactualTruthEvaluator:
         social_data_context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Evaluate a single evidence string for truthfulness, lookahead, and fatal hallucination."""
+        res = self._evaluate_single_evidence_core(
+            raw_evidence=raw_evidence,
+            seven_reports=seven_reports,
+            market_data_context=market_data_context,
+            analysis_baseline_date=analysis_baseline_date,
+            claim_id=claim_id,
+            social_data_context=social_data_context,
+        )
+        return self._apply_non_factual_verified_guards(res, str(raw_evidence or "").strip())
+
+    @staticmethod
+    def _apply_non_factual_verified_guards(
+        res: dict[str, Any], raw_text: str
+    ) -> dict[str, Any]:
+        if res.get("status") != STATUS_VERIFIED:
+            return res
+        if _contains_hypothesis_marker(raw_text):
+            return {
+                **res,
+                "matched_role": None,
+                "matched_source": None,
+                "status": STATUS_UNSUPPORTED,
+                "is_fatal": False,
+                "details": "命中固定假设/测算/压力/情景/若/预计/推算/敏感性词表，不作为已核实事实",
+            }
+        if _contains_judgment_marker(raw_text):
+            return {
+                **res,
+                "matched_role": None,
+                "matched_source": None,
+                "status": STATUS_UNSUPPORTED,
+                "is_fatal": False,
+                "details": "包含判断性措辞（对倒），不作为事实依据",
+            }
+        if _is_bare_numeric_token(raw_text):
+            return {
+                **res,
+                "matched_role": None,
+                "matched_source": None,
+                "status": STATUS_UNSUPPORTED,
+                "is_fatal": False,
+                "details": "裸数字/单位 token 缺少指标名或日期，不作为已核实事实",
+            }
+        return res
+
+    def _evaluate_single_evidence_core(
+        self,
+        raw_evidence: str,
+        seven_reports: Mapping[str, str],
+        market_data_context: Mapping[str, Any] | None = None,
+        analysis_baseline_date: str | None = None,
+        claim_id: str | None = None,
+        social_data_context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         raw_text = str(raw_evidence or "").strip()
         if not raw_text:
             return {
@@ -4146,28 +4633,64 @@ class EvidenceFactualTruthEvaluator:
         bare_numeric = _is_bare_numeric_evidence(raw_text, ev_keywords)
 
         # 3.1 Exact substring match in any report
+        report_hyp_hit: tuple[str, str] | None = None
+        report_hyp_full_match: tuple[str, str] | None = None
+        ev_core_31 = _EVIDENCE_LEADIN_RE.sub("", raw_text, count=1).strip()
+        comma_parts_31 = [p.strip() for p in ev_core_31.split("，") if p.strip()]
         for role_key in SEVEN_REPORT_KEYS:
             if self._is_report_unavailable(role_key, unavailable_sources):
                 continue
             report_body = str(seven_reports.get(role_key, "") or "")
             if not report_body.strip():
                 continue
-            if not bare_numeric and (
-                raw_text in report_body
-                or any(
-                    len(p) >= 4 and p in report_body
-                    for p in raw_text.split("，")
-                )
-            ):
-                return {
-                    "raw": raw_text,
-                    "claim_id": claim_id,
-                    "matched_role": role_key,
-                    "matched_source": role_key.replace("_report", ""),
-                    "status": STATUS_VERIFIED,
-                    "is_fatal": False,
-                    "details": f"在 {role_key} 中找到精确匹配事实",
-                }
+            if not bare_numeric:
+                matched_31 = False
+                ok_raw, hyp_raw = _find_non_hypothetical_substring(raw_text, report_body)
+                if ok_raw:
+                    matched_31 = True
+                elif hyp_raw:
+                    if report_hyp_hit is None:
+                        report_hyp_hit = (role_key, hyp_raw)
+                    if report_hyp_full_match is None:
+                        report_hyp_full_match = (role_key, hyp_raw)
+                if not matched_31 and len(ev_core_31) >= 4:
+                    ok_core, hyp_core = _find_non_hypothetical_substring(ev_core_31, report_body)
+                    if ok_core:
+                        matched_31 = True
+                    elif hyp_core:
+                        if report_hyp_hit is None:
+                            report_hyp_hit = (role_key, hyp_core)
+                        if report_hyp_full_match is None:
+                            report_hyp_full_match = (role_key, hyp_core)
+                if not matched_31 and len(comma_parts_31) >= 2 and all(len(p) >= 4 for p in comma_parts_31):
+                    parts_ok = True
+                    parts_hyp: str | None = None
+                    for p in comma_parts_31:
+                        ok_p, hyp_p = _find_non_hypothetical_substring(p, report_body)
+                        if not ok_p:
+                            parts_ok = False
+                            if hyp_p and parts_hyp is None:
+                                parts_hyp = hyp_p
+                            if hyp_p is None:
+                                parts_hyp = None
+                                break
+                    if parts_ok:
+                        matched_31 = True
+                    elif parts_hyp:
+                        if report_hyp_hit is None:
+                            report_hyp_hit = (role_key, parts_hyp)
+                        if report_hyp_full_match is None:
+                            report_hyp_full_match = (role_key, parts_hyp)
+                if matched_31:
+                    return {
+                        "raw": raw_text,
+                        "claim_id": claim_id,
+                        "matched_role": role_key,
+                        "matched_source": role_key.replace("_report", ""),
+                        "status": STATUS_VERIFIED,
+                        "is_fatal": False,
+                        "details": f"在 {role_key} 中找到精确匹配事实",
+                    }
 
         parent_period = normalize_period(raw_text)
         atomic_clauses = split_compound_evidence(
@@ -4184,18 +4707,25 @@ class EvidenceFactualTruthEvaluator:
             clause_hit_roles: dict[str, set[str]] = {}
             all_clauses_hit = True
             for clause in substantive_clauses:
-                clause_norm = _WHITESPACE_RE.sub("", clause)
                 for role_key in SEVEN_REPORT_KEYS:
                     if self._is_report_unavailable(role_key, unavailable_sources):
                         continue
                     report_body = str(seven_reports.get(role_key, "") or "")
                     if not report_body.strip():
                         continue
-                    if clause in report_body or (
-                        clause_norm
-                        and clause_norm in _WHITESPACE_RE.sub("", report_body)
-                    ):
+                    ok_cl, hyp_cl = _find_non_hypothetical_substring(clause, report_body)
+                    if ok_cl:
                         clause_hit_roles.setdefault(clause, set()).add(role_key)
+                        continue
+                    if hyp_cl and report_hyp_hit is None:
+                        report_hyp_hit = (role_key, hyp_cl)
+                    ok_cl_ws, hyp_cl_ws = _find_non_hypothetical_substring(
+                        clause, report_body, normalize_ws=True
+                    )
+                    if ok_cl_ws:
+                        clause_hit_roles.setdefault(clause, set()).add(role_key)
+                    elif hyp_cl_ws and report_hyp_hit is None:
+                        report_hyp_hit = (role_key, hyp_cl_ws)
                 if clause not in clause_hit_roles:
                     all_clauses_hit = False
                     break
@@ -4230,10 +4760,7 @@ class EvidenceFactualTruthEvaluator:
             if not report_body.strip():
                 continue
 
-            for line in report_body.splitlines():
-                line_text = line.strip()
-                if not line_text:
-                    continue
+            for line_text, parent_frame in _iter_report_lines_with_parent_frame(report_body):
 
                 line_keywords = _extract_metric_keywords(line_text)
                 ev_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in ev_keywords}
@@ -4242,6 +4769,13 @@ class EvidenceFactualTruthEvaluator:
                 line_bns = _report_bound_numbers(line_text, report_body)
 
                 if not all_ev_bns and _qualitative_record_match(raw_text, line_text):
+                    hyp_m = _report_line_hypothesis_marker(line_text, None, parent_frame)
+                    if hyp_m:
+                        if report_hyp_hit is None:
+                            report_hyp_hit = (role_key, hyp_m)
+                        if report_hyp_full_match is None:
+                            report_hyp_full_match = (role_key, hyp_m)
+                        continue
                     return {"raw": raw_text, "claim_id": claim_id, "matched_role": role_key,
                             "matched_source": role_key.replace("_report", ""),
                             "status": STATUS_VERIFIED, "is_fatal": False,
@@ -4252,6 +4786,13 @@ class EvidenceFactualTruthEvaluator:
                     and re.fullmatch(r"均线(?:系统|结构|形态)?(?:呈现|呈|为|保持|维持)?[“\"]?长多短敛[”\"]?(?:结构|形态|格局)?(?:稳固)?", _EVIDENCE_LEADIN_RE.sub("", raw_text, count=1))
                     and "均线" in line_text and "长多短敛" in line_text
                 ):
+                    hyp_m = _report_line_hypothesis_marker(line_text, None, parent_frame)
+                    if hyp_m:
+                        if report_hyp_hit is None:
+                            report_hyp_hit = (role_key, hyp_m)
+                        if report_hyp_full_match is None:
+                            report_hyp_full_match = (role_key, hyp_m)
+                        continue
                     return {"raw": raw_text, "claim_id": claim_id, "matched_role": role_key,
                             "matched_source": role_key.replace("_report", ""),
                             "status": STATUS_VERIFIED, "is_fatal": False,
@@ -4262,7 +4803,15 @@ class EvidenceFactualTruthEvaluator:
                     if (
                         len(common_kw) >= 2 and any(kw in line_text for kw in ev_keywords)
                         and not _unrecorded_qualitative_judgment(raw_text)
+                        and _contains_supported_terms(raw_text, report_body)
                     ):
+                        hyp_m = _report_line_hypothesis_marker(line_text, None, parent_frame)
+                        if hyp_m:
+                            if report_hyp_hit is None:
+                                report_hyp_hit = (role_key, hyp_m)
+                            if report_hyp_full_match is None:
+                                report_hyp_full_match = (role_key, hyp_m)
+                            continue
                         return {
                             "raw": raw_text,
                             "claim_id": claim_id,
@@ -4302,6 +4851,13 @@ class EvidenceFactualTruthEvaluator:
                     and not re.search(r"持续|连续|多日|连日|逐日|每日", raw_text)
                     and any(kw in line_text for kw in ev_keywords)
                 ):
+                    hyp_m = _report_line_hypothesis_marker(line_text, None, parent_frame)
+                    if hyp_m:
+                        if report_hyp_hit is None:
+                            report_hyp_hit = (role_key, hyp_m)
+                        if report_hyp_full_match is None:
+                            report_hyp_full_match = (role_key, hyp_m)
+                        continue
                     return {
                         "raw": raw_text,
                         "claim_id": claim_id,
@@ -4316,6 +4872,8 @@ class EvidenceFactualTruthEvaluator:
                 if all_ev_bns:
                     matched_all_numbers = True
                     found_match = False
+                    matched_positions_32: list[int] = []
+                    unlocated_32 = False
                     for ev_bn in all_ev_bns:
                         num_found_in_line = False
                         for l_bn in line_bns:
@@ -4326,6 +4884,11 @@ class EvidenceFactualTruthEvaluator:
                             ):
                                 num_found_in_line = True
                                 found_match = True
+                                pos = _locate_bound_num_pos(line_text, l_bn)
+                                if pos >= 0:
+                                    matched_positions_32.append(pos)
+                                else:
+                                    unlocated_32 = True
                                 break
                         if not num_found_in_line:
                             matched_all_numbers = False
@@ -4343,6 +4906,17 @@ class EvidenceFactualTruthEvaluator:
                             not ev_keywords or len(common_kw) >= 1
                             or _all_anchored
                         ):
+                            hyp_m = _report_line_hypothesis_marker(
+                                line_text,
+                                None if (unlocated_32 or not matched_positions_32) else matched_positions_32,
+                                parent_frame,
+                            )
+                            if hyp_m:
+                                if report_hyp_hit is None:
+                                    report_hyp_hit = (role_key, hyp_m)
+                                if report_hyp_full_match is None:
+                                    report_hyp_full_match = (role_key, hyp_m)
+                                continue
                             return {
                                 "raw": raw_text,
                                 "claim_id": claim_id,
@@ -4357,9 +4931,11 @@ class EvidenceFactualTruthEvaluator:
         if all_ev_bns:
             num_hits_by_report: dict[str, set[int]] = {}
             all_hit_num_indices: set[int] = set()
+            hyp_hit_markers: dict[int, tuple[str, str]] = {}
             # DAV-1147: 主体一致的命中（供跨报告拼合，防止跨主体同值强拼）
             cross_hits_by_report: dict[str, set[int]] = {}
             all_cross_hit_num_indices: set[int] = set()
+            source_supported: bool | None = None
 
             for num_idx, ev_bn in enumerate(all_ev_bns):
                 for role_key in SEVEN_REPORT_KEYS:
@@ -4369,10 +4945,7 @@ class EvidenceFactualTruthEvaluator:
                     if not report_body.strip():
                         continue
                     matched_in_report = False
-                    for line in report_body.splitlines():
-                        line_text = line.strip()
-                        if not line_text:
-                            continue
+                    for line_text, parent_frame in _iter_report_lines_with_parent_frame(report_body):
                         line_keywords = _extract_metric_keywords(line_text)
                         ev_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in ev_keywords}
                         line_canon = {_METRIC_CANONICAL_MAP.get(k, k) for k in line_keywords}
@@ -4405,6 +4978,19 @@ class EvidenceFactualTruthEvaluator:
                                 ev_text=raw_text, l_text=line_text,
                                 l_bns=line_bns,
                             ):
+                                if source_supported is None:
+                                    source_supported = _has_source_support(raw_text, seven_reports)
+                                if not source_supported:
+                                    continue
+                                pos = _locate_bound_num_pos(line_text, l_bn)
+                                hyp_m = _report_line_hypothesis_marker(
+                                    line_text, [pos] if pos >= 0 else None, parent_frame
+                                )
+                                if hyp_m:
+                                    if report_hyp_hit is None:
+                                        report_hyp_hit = (role_key, hyp_m)
+                                    hyp_hit_markers.setdefault(num_idx, (role_key, hyp_m))
+                                    continue
                                 num_hits_by_report.setdefault(role_key, set()).add(num_idx)
                                 all_hit_num_indices.add(num_idx)
                                 if _entities_consistent_for_join(ev_bn.entity, l_bn.entity):
@@ -4416,6 +5002,12 @@ class EvidenceFactualTruthEvaluator:
                             break
 
             total_nums = len(all_ev_bns)
+            if (
+                report_hyp_hit is not None
+                and report_hyp_full_match is None
+                and len(all_hit_num_indices | set(hyp_hit_markers)) == total_nums
+            ):
+                report_hyp_full_match = report_hyp_hit
             # Check single-report multi-line aggregation first
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
@@ -4462,7 +5054,7 @@ class EvidenceFactualTruthEvaluator:
         provider_scope_gaps: list[str] = []
         # DAV-1169: 数值层面构成冲突、仅因时点/价格基准不同或单侧未标注而被跳过的比较 → 记 gap
         timepoint_scope_gaps: list[str] = []
-        if all_ev_bns:
+        if all_ev_bns and report_hyp_full_match is None:
             for role_key in SEVEN_REPORT_KEYS:
                 if self._is_report_unavailable(role_key, unavailable_sources):
                     continue
@@ -4585,7 +5177,11 @@ class EvidenceFactualTruthEvaluator:
             "matched_source": None,
             "status": STATUS_UNSUPPORTED,
             "is_fatal": False,
-            "details": "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑",
+            "details": (
+                f"{_REPORT_HYPOTHESIS_DETAIL_PREFIX}（{report_hyp_hit[1]}），不得标为已核实事实（来源：{report_hyp_hit[0]}）"
+                if report_hyp_hit is not None
+                else "未在七份分析师报告或市场数据上下文中找到该事实或数据支撑"
+            ),
         }
         # DAV-1163: 数字级事实覆盖清单——复合句中已命中的数字事实与未命中
         # 事实分列，供 _verify_evidence_or_decompose 做逐事实独立计分（单点
@@ -4601,6 +5197,21 @@ class EvidenceFactualTruthEvaluator:
                     for i in range(len(all_ev_bns))
                     if i not in all_hit_num_indices
                 ],
+                "verified_roles": [
+                    ",".join(
+                        r for r in SEVEN_REPORT_KEYS
+                        if i in num_hits_by_report.get(r, ())
+                    )
+                    for i in sorted(all_hit_num_indices)
+                ],
+                "hypothesis_facts": {
+                    all_ev_bns[i].raw: {
+                        "marker": hyp_hit_markers[i][1],
+                        "role": hyp_hit_markers[i][0],
+                    }
+                    for i in sorted(hyp_hit_markers)
+                    if i not in all_hit_num_indices
+                },
                 "bindings": [
                     {"clause": all_ev_contexts[i], "number": {k: getattr(bn, k) for k in BoundNumber.__slots__}}
                     for i, bn in enumerate(all_ev_bns)
@@ -4677,6 +5288,24 @@ class EvidenceFactualTruthEvaluator:
                 )
                 for clause in substantive
             ]
+            seen_projection_clause = False
+            for idx, sub in enumerate(sub_results):
+                clause = substantive[idx]
+                sub_details = str(sub.get("details") or "")
+                if (
+                    _contains_projection_clause_marker(clause)
+                    or _REPORT_HYPOTHESIS_DETAIL_PREFIX in sub_details
+                ):
+                    seen_projection_clause = True
+                    continue
+                if seen_projection_clause and sub.get("status") == STATUS_VERIFIED and _is_coderived_projection_sibling(clause):
+                    sub_results[idx] = {
+                        **sub,
+                        "matched_role": None,
+                        "matched_source": None,
+                        "status": STATUS_UNSUPPORTED,
+                        "details": _SIBLING_HYPOTHESIS_DETAIL,
+                    }
             if res.get("status") == STATUS_VERIFIED and all(s.get("status") == STATUS_VERIFIED for s in sub_results):
                 return [res]
             if any(
@@ -4698,6 +5327,12 @@ class EvidenceFactualTruthEvaluator:
                 return items
             return [res]
         # 单子句多数字：整句未获验但部分数字事实已命中 → 逐事实独立计分
+        if _REPORT_HYPOTHESIS_DETAIL_PREFIX in str(res.get("details") or "") and not (
+            (res.get("fact_coverage") or {}).get("verified_facts")
+        ):
+            res.setdefault("clause", ev_str)
+            res.setdefault("parent_evidence", ev_str)
+            return [res]
         items = self._facts_or_self(res, ev_str, ev_str)
         # DAV-1365: 零命中子句同样进原子级补检——整句关键词门可能把「数值在行
         # 级真实命中但行内无整句指标词交集」的原子全部拦下（如「综合负债成本
@@ -4709,22 +5344,37 @@ class EvidenceFactualTruthEvaluator:
             vf = fc.get("verified_facts") or []
             if uf:
                 cand: list[dict[str, Any]] = []
-                for fact in vf:
-                    cand.append({
-                        "raw": fact, "claim_id": res.get("claim_id"),
-                        "matched_role": res.get("matched_role"),
-                        "matched_source": res.get("matched_source"),
-                        "status": STATUS_VERIFIED, "is_fatal": False,
-                        "details": f"复合句原子事实已在报告中命中 (atomic_fact): {fact}",
-                        "parent_evidence": ev_str, "clause": ev_str,
-                        "claim_text": _ctx_text,
-                    })
+                for vf_index, fact in enumerate(vf):
+                    if (
+                        _is_bare_numeric_token(fact)
+                        or _contains_hypothesis_marker(ev_str)
+                        or _contains_judgment_marker(ev_str)
+                    ):
+                        cand.append({
+                            "raw": fact, "claim_id": res.get("claim_id"),
+                            "matched_role": None, "matched_source": None,
+                            "status": STATUS_UNSUPPORTED, "is_fatal": False,
+                            "details": f"裸数字/单位或非事实子句原子禁止标为 verified (atomic_fact): {fact}",
+                            "parent_evidence": ev_str, "clause": ev_str,
+                            "claim_text": _ctx_text,
+                        })
+                    else:
+                        vf_role, vf_source = _fact_provenance(res, fc, vf_index)
+                        cand.append({
+                            "raw": fact, "claim_id": res.get("claim_id"),
+                            "matched_role": vf_role,
+                            "matched_source": vf_source,
+                            "status": STATUS_VERIFIED, "is_fatal": False,
+                            "details": f"复合句原子事实已在报告中命中 (atomic_fact): {fact}",
+                            "parent_evidence": ev_str, "clause": ev_str,
+                            "claim_text": _ctx_text,
+                        })
                 for fact in uf:
                     cand.append({
                         "raw": fact, "claim_id": res.get("claim_id"),
                         "matched_role": None, "matched_source": None,
                         "status": STATUS_UNSUPPORTED, "is_fatal": False,
-                        "details": f"复合句原子事实未在报告中找到支撑 (atomic_fact): {fact}",
+                        "details": _unverified_fact_details(fc, fact),
                         "parent_evidence": ev_str, "clause": ev_str,
                         "claim_text": _ctx_text,
                     })
@@ -4767,10 +5417,17 @@ class EvidenceFactualTruthEvaluator:
                 continue
             if "atomic_fact" not in str(it.get("details") or ""):
                 continue
+            if _REPORT_HYPOTHESIS_DETAIL_PREFIX in str(it.get("details") or ""):
+                continue
             fact_raw = str(it.get("raw") or "")
+            if _is_bare_numeric_token(fact_raw) and not it.get("clause_scored"):
+                it["details"] = f"裸数字/单位 token 缺少指标名或日期，禁止补检为 verified (atomic_fact): {fact_raw}"
+                continue
             clause = _EVIDENCE_LEADIN_RE.sub(
                 "", str(it.get("clause") or it.get("parent_evidence") or fact_raw), count=1
             )
+            if _contains_hypothesis_marker(clause) or _contains_judgment_marker(clause):
+                continue
             # DAV-1389: 桥接/谓词语境扩展到「子句 + 原始证据 + 论点文本」——
             # 裸数字原子在原子文本中丢失指标锚点，仅作语义桥接语境，不放宽
             # 数值/期间门。
@@ -4805,7 +5462,7 @@ class EvidenceFactualTruthEvaluator:
                         break
                 if it.get("status") == STATUS_VERIFIED:
                     continue
-            lit = _NUMBER_WITH_UNIT_RE.search(fact_raw)
+            lit = _NUMBER_WITH_UNIT_RE.search(fact_bn.raw or fact_raw)
             digit = lit.group(1) if lit else None
             if not digit:
                 continue
@@ -4817,10 +5474,8 @@ class EvidenceFactualTruthEvaluator:
                 if not report_body.strip():
                     continue
                 hit = False
-                for line in report_body.splitlines():
-                    line_text = line.strip()
-                    if not line_text:
-                        continue
+                recheck_hyp: str | None = None
+                for line_text, parent_frame in _iter_report_lines_with_parent_frame(report_body):
                     # 不能用字面子串预筛掉舍入/单位等价（6.925%→6.93%）。
                     key = (role_key, line_text)
                     if key not in line_numbers:
@@ -4831,6 +5486,14 @@ class EvidenceFactualTruthEvaluator:
                             fact_bn, l_bn, self.rel_tol, self.abs_tol,
                             ev_text=ctx, l_text=line_text, l_bns=line_bns,
                         ):
+                            pos = _locate_bound_num_pos(line_text, l_bn)
+                            hyp_m = _report_line_hypothesis_marker(
+                                line_text, [pos] if pos >= 0 else None, parent_frame
+                            )
+                            if hyp_m:
+                                if recheck_hyp is None:
+                                    recheck_hyp = hyp_m
+                                continue
                             it["status"] = STATUS_VERIFIED
                             it["matched_role"] = role_key
                             it["matched_source"] = role_key.replace("_report", "")
@@ -4838,12 +5501,18 @@ class EvidenceFactualTruthEvaluator:
                                 f"复合句原子事实在 {role_key} 中经原子级补检命中 "
                                 f"(atomic_fact_recheck): {fact_raw}"
                             )
+                            if it.get("clause_scored"):
+                                it["details"] += f"（单数字子句整句计分：{clause}）"
                             hit = True
                             break
                     if hit:
                         break
                 if hit:
                     break
+                if recheck_hyp and _REPORT_HYPOTHESIS_DETAIL_PREFIX not in str(it.get("details") or ""):
+                    it["details"] = (
+                        f"{_REPORT_HYPOTHESIS_DETAIL_PREFIX}（{recheck_hyp}），禁止补检为 verified (atomic_fact): {fact_raw}"
+                    )
 
     @staticmethod
     def _facts_or_self(
@@ -4856,6 +5525,15 @@ class EvidenceFactualTruthEvaluator:
         unsupported——不放宽 verified 标准，只是不让单点失配拖垮整句。
         全部命中（应已 verified）或全部未命中时保持原子句单点结论。
         """
+        if _REPORT_HYPOTHESIS_DETAIL_PREFIX in str(res.get("details") or "") and not (
+            (res.get("fact_coverage") or {}).get("verified_facts")
+        ):
+            res["parent_evidence"] = parent
+            return [res]
+        if res.get("status") == STATUS_UNSUPPORTED and _contains_hypothesis_marker(clause):
+            res["parent_evidence"] = parent
+            res["details"] = "命中固定假设/测算/压力/情景/若/预计/推算/敏感性词表，不作为已核实事实"
+            return [res]
         fc = res.get("fact_coverage") or {}
         verified_facts = fc.get("verified_facts") or []
         unverified_facts = fc.get("unverified_facts") or []
@@ -4873,13 +5551,38 @@ class EvidenceFactualTruthEvaluator:
             res["parent_evidence"] = parent
             return [res]
         items = []
-        for fact in verified_facts:
+        clause_scored = _single_fact_clause_scored(fc, clause)
+        for fact_index, fact in enumerate(verified_facts):
+            if (
+                (_is_bare_numeric_token(fact) and not clause_scored)
+                or _contains_hypothesis_marker(clause)
+                or _contains_judgment_marker(clause)
+            ):
+                items.append(
+                    {
+                        "raw": fact,
+                        "claim_id": res.get("claim_id"),
+                        "matched_role": None,
+                        "matched_source": None,
+                        "status": STATUS_UNSUPPORTED,
+                        "is_fatal": False,
+                        "details": (
+                            f"裸数字/单位 token 缺少指标名或日期，不作为已核实事实 (atomic_fact): {fact}"
+                            if _is_bare_numeric_token(fact)
+                            else f"非事实子句原子不作为已核实事实 (atomic_fact): {fact}"
+                        ),
+                        "parent_evidence": parent,
+                        "clause": clause,
+                    }
+                )
+                continue
+            fact_role, fact_source = _fact_provenance(res, fc, fact_index)
             items.append(
                 {
                     "raw": fact,
                     "claim_id": res.get("claim_id"),
-                    "matched_role": res.get("matched_role"),
-                    "matched_source": res.get("matched_source"),
+                    "matched_role": fact_role,
+                    "matched_source": fact_source,
                     "status": STATUS_VERIFIED,
                     "is_fatal": False,
                     "details": f"复合句原子事实已在报告中命中 (atomic_fact): {fact}",
@@ -4896,7 +5599,7 @@ class EvidenceFactualTruthEvaluator:
                     "matched_source": None,
                     "status": STATUS_UNSUPPORTED,
                     "is_fatal": False,
-                    "details": f"复合句原子事实未在报告中找到支撑 (atomic_fact): {fact}",
+                    "details": _unverified_fact_details(fc, fact),
                     "parent_evidence": parent,
                     "clause": clause,
                 }
@@ -4907,6 +5610,17 @@ class EvidenceFactualTruthEvaluator:
             if binding:
                 it["fact_binding"] = binding["number"]
                 it["clause"] = binding["clause"]
+                if clause_scored:
+                    it["clause_scored"] = True
+                if (
+                    it.get("status") == STATUS_VERIFIED
+                    and binding["number"].get("role") == ROLE_AGGREGATE
+                ):
+                    label = binding["number"].get("metric") or "派生"
+                    it["details"] = (
+                        f"复合句派生合计原子已在报告中命中 (atomic_fact): "
+                        f"{label}合计({it['raw']})"
+                    )
         return items
 
     def evaluate_claims(
@@ -4934,17 +5648,85 @@ class EvidenceFactualTruthEvaluator:
                 ev_str = str(ev).strip()
                 if not ev_str:
                     continue
-                results.extend(
-                    self._verify_evidence_or_decompose(
-                        ev_str,
-                        seven_reports,
-                        market_data_context,
-                        analysis_baseline_date,
-                        cid,
-                        social_data_context,
-                        claim_text=claim_txt,
-                    )
+                items = self._verify_evidence_or_decompose(
+                    ev_str,
+                    seven_reports,
+                    market_data_context,
+                    analysis_baseline_date,
+                    cid,
+                    social_data_context,
+                    claim_text=claim_txt,
                 )
+                stance = str(claim.get("stance", "") or "").strip().lower()
+                if len(items) == 1 and items[0].get("status") == STATUS_VERIFIED:
+                    ev_core = _EVIDENCE_LEADIN_RE.sub("", ev_str, count=1)
+                    substantive = [
+                        c for c in split_compound_evidence(ev_core)
+                        if len(c.strip()) >= 4 and not _nonfact_label_only(c)
+                    ]
+                    if len(substantive) >= 2:
+                        conflicts = [
+                            _is_fund_flow_stance_conflict(c, stance)
+                            for c in substantive
+                        ]
+                        if any(conflicts) and not all(conflicts):
+                            decomposed_items: list[dict[str, Any]] = []
+                            for idx, clause in enumerate(substantive):
+                                sub = self.evaluate_single_evidence(
+                                    raw_evidence=clause,
+                                    seven_reports=seven_reports,
+                                    market_data_context=market_data_context,
+                                    analysis_baseline_date=analysis_baseline_date,
+                                    claim_id=cid,
+                                    social_data_context=social_data_context,
+                                )
+                                sub["parent_evidence"] = ev_str
+                                sub["clause"] = clause
+                                sub["atomic_index"] = idx
+                                if claim_txt:
+                                    sub.setdefault("claim_text", claim_txt)
+                                decomposed_items.append(sub)
+                            items = decomposed_items
+                ev_core_flow = _EVIDENCE_LEADIN_RE.sub("", ev_str, count=1)
+                substantive_flow = [
+                    c for c in split_compound_evidence(ev_core_flow)
+                    if len(c.strip()) >= 4 and not _nonfact_label_only(c)
+                ]
+                if (
+                    len(substantive_flow) <= 1
+                    and _is_fund_flow_stance_conflict(ev_core_flow, stance)
+                    and all(
+                        item.get("status") in (STATUS_VERIFIED, STATUS_UNSUPPORTED)
+                        for item in items
+                    )
+                    and not _contains_hypothesis_marker(ev_core_flow)
+                    and not _contains_judgment_marker(ev_core_flow)
+                ):
+                    items = [
+                        {
+                            "raw": ev_str,
+                            "claim_id": cid,
+                            "matched_role": None,
+                            "matched_source": None,
+                            "status": STATUS_UNSUPPORTED,
+                            "is_fatal": False,
+                            "details": "资金流方向与论点 stance 相反，不作为已核实事实",
+                            "clause": ev_str,
+                        }
+                    ]
+                for idx, item in enumerate(items):
+                    if item.get("status") != STATUS_VERIFIED:
+                        continue
+                    target_text = str(item.get("clause") or item.get("raw") or "")
+                    if _is_fund_flow_stance_conflict(target_text, stance):
+                        items[idx] = {
+                            **item,
+                            "status": STATUS_UNSUPPORTED,
+                            "matched_role": None,
+                            "matched_source": None,
+                            "details": "资金流方向与论点 stance 相反，不作为已核实事实",
+                        }
+                results.extend(items)
 
         return results
 

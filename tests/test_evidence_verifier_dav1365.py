@@ -52,9 +52,13 @@ def test_bound_min_same_metric_still_matches(evaluator):
 
 
 def test_bare_number_correct_source_still_matches(evaluator):
-    """361万 的正确来源是同单位未绑定同值行（-0.0361亿），不受下界修复影响。"""
+    """DAV-2479 §二.1.c：裸数字 token（361万）缺少指标名或日期不得标 verified，带指标名仍可核实。"""
     assert _status(
         evaluator, "361万",
+        {"smart_money_report": "- 总资金净流入（netamount）：-0.0361 亿元（小额净流出）"},
+    ) == STATUS_UNSUPPORTED
+    assert _status(
+        evaluator, "总资金净流出361万",
         {"smart_money_report": "- 总资金净流入（netamount）：-0.0361 亿元（小额净流出）"},
     ) == STATUS_VERIFIED
 
@@ -167,14 +171,18 @@ def test_cn_half_period_and_compare_base(evaluator):
 
 
 def test_ge_baidianfen_normalized(evaluator):
-    """「上行10个基点」与证据「10BP」同值。"""
+    """DAV-2479 §二.1.c：原子拆分出的裸 token「10BP」不得标 verified，带指标子句核验通过。"""
     items = _decompose(
         evaluator, "综合负债成本下行10BP增厚利润5.74%",
         {"fundamentals_report":
          "若全行综合计息负债成本率上行10个基点（BP），对应年化利息支出增加115亿元"},
     )
     by_raw = {i["raw"]: i["status"] for i in items}
-    assert by_raw.get("10BP") == STATUS_VERIFIED
+    assert by_raw.get("10BP") == STATUS_UNSUPPORTED
+    assert _status(
+        evaluator, "综合计息负债成本率上行10BP",
+        {"fundamentals_report": "全行综合计息负债成本率上行10个基点（BP）。"},
+    ) == STATUS_VERIFIED
 
 
 def test_ge_baidianfen_point(evaluator):
@@ -226,14 +234,15 @@ def test_level_suffix_not_growth(evaluator):
 
 
 def test_atomic_fact_recheck_restores_line_hit(evaluator):
-    """子句级关键词门拦下的原子事实，按原子自身语境补检命中。"""
+    """DAV-2479 §二.1.c：原子补检不得放行裸数字 token（-1.82亿/0.022%）。"""
     items = _decompose(
         evaluator, "东财-1.82亿仅占流通市值0.022%为噪声级",
         {"smart_money_report":
          "- 东财 r0_net = -1.82 亿，方向 outflow\n- 该值占流通市值比例0.022%"},
     )
     by_raw = {i["raw"]: i["status"] for i in items}
-    assert by_raw.get("-1.82亿") == STATUS_VERIFIED
+    assert by_raw.get("-1.82亿") == STATUS_UNSUPPORTED
+    assert by_raw.get("0.022%") == STATUS_UNSUPPORTED
 
 
 # ── 对照：数字巧合/语义不同仍判 unsupported ─────────────────────────────

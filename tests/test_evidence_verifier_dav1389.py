@@ -52,17 +52,14 @@ def _pipeline(ev, raw, report, claim=""):
      "- 公司带息负债总额超2000亿元。\n"
      "- 综合融资成本每下行25个基点（BP），增厚归母净利润约3.75亿-4.12亿元。",
      ["2000亿", "25bp"]),
-    ("宏观报告显示铜季涨9.98%侵蚀毛利0.8%-1.1%折合16-22亿",
-     "- 铜价季度上涨9.98%。\n- 成本侵蚀毛利率约0.8%~1.1%，潜在毛利压制规模约16亿~22亿元。",
-     ["22亿"]),
     ("新闻报告显示新增研发支出3-5亿压低利润率0.8-1.2pct",
-     "- 预计新增临床带来年化约3~5亿元研发支出增量，压制营业利润率约0.8~1.2个百分点。",
+     "- 新增临床带来年化约3~5亿元研发支出增量，压制营业利润率约0.8~1.2个百分点。",
      ["1.2pct"]),
     ("新闻报告显示二季度超360家机构减仓",
      "- 中报持股数据显示二季度持股减少机构超过360家。", ["360家"]),
     ("成本上升5%即削减营业利润20.85%估值承载力脆弱",
      "- 成本上涨10%会损害利润。\n"
-     "- 若综合采购成本上涨5%，营业利润下行20.85%。", ["5%", "20.85%"]),
+     "- 综合采购成本上涨5%，营业利润下行20.85%。", ["5%", "20.85%"]),
     ("宏观报告美债破5.18%致海外公用龙头单月暴跌8%-9%",
      "- 美债收益率5.180%。\n- 海外公用事业巨头单月跌幅达8%-9%。", ["8%"]),
     ("09-24温和放量32%收光头阳线(28.36元)",
@@ -80,7 +77,7 @@ def _pipeline(ev, raw, report, claim=""):
     ("10年美债升至5.18%摩根大通汇丰跌3%-5%且极端压力位0.82倍PB对应37.20元",
      "- 10年期美债收益率升至5.180%。\n- 摩根大通、汇丰单月跌幅超3%-5%。\n"
      "- 极端压力测试下PB约0.80-0.82倍，对应股价支撑36.30-37.20元。", ["5.18%", "3%", "-5%"]),
-], ids=["R4_S07", "R4_S08", "R4_S09", "R4_S11", "R4_S16", "R4_S21",
+], ids=["R4_S07", "R4_S09", "R4_S11", "R4_S16", "R4_S21",
         "R4_S22", "R4_S24", "R4_S26", "R4_S27", "R4_S28", "R4_S29"])
 def test_r4_misrejects_through_aggregate(evaluator, raw, report, targets):
     items, summary = _pipeline(evaluator, raw, report)
@@ -89,6 +86,33 @@ def test_r4_misrejects_through_aggregate(evaluator, raw, report, targets):
         assert any(target in fact for fact in verified), (target, items, summary)
     assert summary["contradicted_evidence"] == [], (items, summary)
     assert not any(i["status"] == STATUS_CONTRADICTED for i in items)
+
+
+def test_r4_s08_bare_atomic_tokens_blocked_by_dav2479(evaluator):
+    items, summary = _pipeline(
+        evaluator,
+        "宏观报告显示铜季涨9.98%侵蚀毛利0.8%-1.1%折合16-22亿",
+        "- 铜价季度上涨9.98%。\n- 成本侵蚀毛利率约0.8%~1.1%，潜在毛利压制规模约16亿~22亿元。",
+    )
+    assert "22亿" not in summary["verified_evidence"]
+    assert summary["contradicted_evidence"] == []
+
+
+def test_r4_s09_s16_report_estimate_and_conditional_blocked_by_dav2479_r3(evaluator):
+    items9, summary9 = _pipeline(
+        evaluator,
+        "新闻报告显示新增研发支出3-5亿压低利润率0.8-1.2pct",
+        "- 预计新增临床带来年化约3~5亿元研发支出增量，压制营业利润率约0.8~1.2个百分点。",
+    )
+    assert not summary9["verified_evidence"], items9
+    assert not summary9["contradicted_evidence"], items9
+    items16, summary16 = _pipeline(
+        evaluator,
+        "成本上升5%即削减营业利润20.85%估值承载力脆弱",
+        "- 成本上涨10%会损害利润。\n- 若综合采购成本上涨5%，营业利润下行20.85%。",
+    )
+    assert not summary16["verified_evidence"], items16
+    assert not summary16["contradicted_evidence"], items16
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -138,8 +162,10 @@ def test_r5_atomic_odds_not_borrowed_from_unrelated_ratios(evaluator):
 
 def test_r5_report_stated_odds_with_same_metric(evaluator):
     raw = "风险收益比1:0.3"
-    items, summary = _pipeline(evaluator, raw, "- 风险收益比测算约1:0.3。")
+    items, summary = _pipeline(evaluator, raw, "- 风险收益比约1:0.3。")
     assert any("0.3" in s for s in summary["verified_evidence"]), items
+    blocked_items, blocked_summary = _pipeline(evaluator, raw, "- 风险收益比测算约1:0.3。")
+    assert not blocked_summary["verified_evidence"], blocked_items
 
 
 def test_r5_decimal_pe_is_not_a_rounded_range_endpoint(evaluator):
@@ -164,9 +190,7 @@ def test_r5_cash_adjusted_pe_not_plain_pe(evaluator):
     ("筹资净流入81.2亿元", "样例筹资活动现金流净流入81.2亿元。", ["81.2"]),
     ("现金流净额-17.3亿", "样例现金流净额-17.3亿元，较2024年同期改善。", ["17.3"]),
     ("亏损18亿且ASP提振4%-6%", "样例净亏损18亿元。\n样例ASP预期提升4%-6%。", ["4%", "6%"]),
-    ("成本升4%将削减13.4%利润", "样例成本增加4%，营业利润下行13.4%。", ["13.4"]),
     ("超大单流出-2亿小单接盘+1.6亿", "样例超大单流出-2亿元，小单净流入+1.6亿元。", ["+1.6"]),
-    ("极端支撑0.42-0.48xPB", "样例PB支撑测算0.42x~0.48x。", ["0.42", "0.48"]),
     ("72.5反弹目标", "样例第二目标价72.5元。", ["72.5"]),
     ("69.5止损", "样例止损位为69.5元。", ["69.5"]),
     ("成交800万股仅为前日40%", "样例成交量800万股，仅为前日巨量的40%。", ["40%"]),
@@ -175,6 +199,20 @@ def test_r6_local_context_and_stated_values(evaluator, raw, report, targets):
     items, summary = _pipeline(evaluator, raw, report)
     for target in targets:
         assert any(target in f for f in summary["verified_evidence"]), (target, items, summary)
+
+
+def test_r6_bare_atomic_profit_drop_blocked_by_dav2479(evaluator):
+    items, summary = _pipeline(
+        evaluator,
+        "成本升4%将削减13.4%利润",
+        "样例成本增加4%，营业利润下行13.4%。",
+    )
+    assert "13.4%" not in summary["verified_evidence"]
+    assert not summary["contradicted_evidence"]
+    pb_items, pb_summary = _pipeline(
+        evaluator, "极端支撑0.42-0.48xPB", "样例PB支撑测算0.42x~0.48x。"
+    )
+    assert not pb_summary["verified_evidence"], pb_items
 
 
 def test_r6_delta_to_level_not_a_range():
@@ -326,10 +364,8 @@ def test_r7_repricing_lag_not_numeric_facts():
     ("开支占OCF比重13.4%", "样例资本开支占经营现金流比重13.4%。", ["13.4"]),
     ("回购锁定11.8倍PE估值底", "样例动态PE约11.8倍。", ["11.8"]),
     ("70.6反弹目标", "样例中期强阻70.6元。", ["70.6"]),
-    ("下探25.3至21.2元", "样例关键防守位25.3-25.4元。", ["25.3"]),
-    ("极端估值底980-1020元支撑", "样例估值测算支撑位980-1020元。", ["980", "1020"]),
+    ("极端估值底980-1020元支撑", "样例估值支撑位980-1020元。", ["980", "1020"]),
     ("跌幅达3.4%", "样例价格下挫-3.4%。", ["3.4"]),
-    ("潜在下行-8.6%至-18.2%", "样例测算潜在最大回撤空间为-18.2%。", ["18.2"]),
 ])
 def test_r7_reviewed_numeric_families(evaluator, raw, report, targets):
     items, summary = _pipeline(evaluator, raw, report)
@@ -339,8 +375,10 @@ def test_r7_reviewed_numeric_families(evaluator, raw, report, targets):
 
 def test_r7_price_endpoints_do_not_borrow_the_supported_other_end(evaluator):
     items, summary = _pipeline(evaluator, "下探25.3至21.2元", "样例关键防守位25.3-25.4元。")
-    assert any("25.3" in f for f in summary["verified_evidence"]), items
+    assert "25.3" not in summary["verified_evidence"], items
     assert any("21.2" in f for f in summary["unsupported_evidence"]), items
+    items2, summary2 = _pipeline(evaluator, "潜在下行-8.6%至-18.2%", "样例测算潜在最大回撤空间为-18.2%。")
+    assert "-18.2%" not in summary2["verified_evidence"], items2
 
 
 def test_r7_ratio_kind_not_cash_amount_or_growth(evaluator):
@@ -484,23 +522,23 @@ def test_r8_no_metric_or_predicate_borrowing(evaluator):
 
 
 def test_range_endpoint_same_metric_verified(evaluator):
-    """证据原子是报告区间端点 + 同指标锚点可桥接（毛利→毛利率）→ verified。"""
+    """DAV-2479 §二.1.c：拆出的裸数字原子 0.8% 不得标为 verified。"""
     assert _status(
         evaluator,
         "宏观报告显示布油破百与铜季涨9.98%将滞后侵蚀毛利0.8%-1.1%折合16-22亿",
         {"news_report": "- **财务指标映射**：未完全转嫁的成本将侵蚀毛利率约 **0.8% ~ 1.1%**。"},
         claim_text="3816亿占款加剧脆弱且大宗侵蚀毛利",
-    )["0.8%"] == STATUS_VERIFIED
+    )["0.8%"] == STATUS_UNSUPPORTED
 
 
 def test_sign_predicate_normalizes_negative(evaluator):
-    """口径②：方向谓词「侵蚀…1.1%」显式表降方向，-1.1% 原子获验。"""
+    """DAV-2479 §二.1.c：拆出的裸数字原子 -1.1% 不得标为 verified。"""
     assert _status(
         evaluator,
         "宏观报告显示布油破百与铜季涨9.98%将滞后侵蚀毛利0.8%-1.1%折合16-22亿",
         {"news_report": "- **财务指标映射**：未完全转嫁的成本将侵蚀毛利率约 **0.8% ~ 1.1%**。"},
         claim_text="3816亿占款加剧脆弱且大宗侵蚀毛利",
-    )["-1.1%"] == STATUS_VERIFIED
+    )["-1.1%"] == STATUS_UNSUPPORTED
 
 
 def test_period_base_reference_yoy(evaluator):
@@ -528,15 +566,21 @@ def test_period_base_reference_from_to(evaluator):
 
 
 def test_report_stated_scenario_estimate(evaluator):
-    """口径①：报告原文写出的测算值「约为6.90亿元」算有据，scenario→actual
-    门不拦。"""
+    """DAV-2479 §二.1.b：含固定词「测算」不得标 verified；去掉「测算」后报告实值仍可核实。"""
     res = _status(
         evaluator,
         "基本面报告测算2026Q2归母净利骤降至6.90亿元(Q1为80.63亿)",
         {"fundamentals_report": "- 2026H1 归母净利润为 87.53 亿元（2026Q1 为 80.63 亿元），2026Q2 单季归母净利润约为 6.90 亿元。"},
         claim_text="Q2净利仅6.9亿且费用率升至24.6%击穿估值底",
     )
-    assert STATUS_VERIFIED in res.values()
+    assert STATUS_VERIFIED not in res.values()
+    res_fact = _status(
+        evaluator,
+        "基本面报告2026Q2归母净利骤降至6.90亿元(Q1为80.63亿)",
+        {"fundamentals_report": "- 2026H1 归母净利润为 87.53 亿元（2026Q1 为 80.63 亿元），2026Q2 单季归母净利润约为 6.90 亿元。"},
+        claim_text="Q2净利仅6.9亿且费用率升至24.6%击穿估值底",
+    )
+    assert STATUS_VERIFIED in res_fact.values()
 
 
 def test_derived_sum_flow_components(evaluator):
@@ -584,9 +628,6 @@ def test_full_coverage_atoms_not_dropped(evaluator):
         ("2026H1存货达1308.19亿同比增81.01%远超营收增速54.80%",
          "- 2026H1营业总收入同比增长 54.80%，存货 1308.19 亿元同比增 81.01%。",
          "存货增速超营收揭示被动累库"),
-        ("中线上行目标138-145元对回撤底线113.6元赔率超3:1",
-         "- 于 9 月 15 日探至低点 113.60 元后展开超跌反弹。",
-         "地量探底后中线赔率达3:1"),
         ("基本面报告显示2026H1自由现金流实质为-44.57亿元",
          "- 2026H1 自由现金流为 -44.57 亿元。",
          "现金转化能力恶化"),
@@ -599,7 +640,7 @@ def test_full_coverage_atoms_not_dropped(evaluator):
     ],
     ids=[
         "S16_-58.18亿", "S18_373.35亿", "S21_ROE6.71", "S24_925.85亿",
-        "S04_54.80", "S02_113.6元", "S14_-44.57亿", "S13_-5.04亿", "S25_推演注资",
+        "S04_54.80", "S14_-44.57亿", "S13_-5.04亿", "S25_推演注资",
     ],
 )
 def test_dav1397_misrejects_now_verified(evaluator, raw, report, claim):
@@ -614,9 +655,18 @@ def test_dav1397_misrejects_now_verified(evaluator, raw, report, claim):
     assert STATUS_VERIFIED in res.values(), res
 
 
+def test_dav1397_s02_bare_atomic_price_blocked_by_dav2479(evaluator):
+    res = _status(
+        evaluator,
+        "中线上行目标138-145元对回撤底线113.6元赔率超3:1",
+        {"market_report": "- 于 9 月 15 日探至低点 113.60 元后展开超跌反弹。"},
+        claim_text="地量探底后中线赔率达3:1",
+    )
+    assert res.get("113.6元") == STATUS_UNSUPPORTED
+
+
 def test_dav1397_bare_15_unsupported(evaluator):
-    """总控裁决：无单位无指标的裸「15」维持 unsupported；带指标且绑定
-    一致（15倍PE）才可核实。"""
+    """DAV-2479 §二.1.b/c：裸「15」与含固定词「情景」均须 unsupported；无情景词的「PE中枢下探15倍」可核实。"""
     res = _status(
         evaluator, "估值下修空间约15",
         {"macro_report": "- 悲观情景下 PE 中枢或测试 15 倍。"},
@@ -626,7 +676,12 @@ def test_dav1397_bare_15_unsupported(evaluator):
         evaluator, "悲观情景PE中枢或下探15倍",
         {"macro_report": "- 悲观情景下 PE 中枢或测试 15 倍。"},
     )
-    assert STATUS_VERIFIED in res2.values()
+    assert STATUS_VERIFIED not in res2.values()
+    res3 = _status(
+        evaluator, "PE中枢下探15倍",
+        {"macro_report": "- PE 中枢或测试 15 倍。"},
+    )
+    assert STATUS_VERIFIED in res3.values()
 
 
 # ── DAV-1397 总控判定的正确击落（修复后须仍 unsupported）──────────────
@@ -783,9 +838,14 @@ def test_identical_range_no_anchor_verified(evaluator):
     指标/实体锚点也视为绑定一致（「月跌9%-11%」撞表格逐字同区间）。"""
     res = _status(
         evaluator, "海外烈酒巨头月跌9%-11%",
-        {"macro_report": "| 悲观情景 | 海外烈酒巨头月跌9%-11%，估值中枢下移 |"},
+        {"macro_report": "| 海外对标 | 海外烈酒巨头月跌9%-11%，估值中枢下移 |"},
     )
     assert STATUS_VERIFIED in res.values()
+    blocked = _status(
+        evaluator, "海外烈酒巨头月跌9%-11%",
+        {"macro_report": "| 悲观情景 | 海外烈酒巨头月跌9%-11%，估值中枢下移 |"},
+    )
+    assert STATUS_VERIFIED not in blocked.values()
 
 
 def test_entity_mismatch_different_value_still_blocked(evaluator):
@@ -844,18 +904,19 @@ def test_r9_energy_units_are_not_bare_integer_anchors(evaluator):
 
 
 def test_r9_project_profit_upper_endpoint(evaluator):
-    items, summary = _pipeline(evaluator, "海外2GWh订单对应利润不足8.2亿",
-        "样例2GWh合同预计增厚公司毛利6.1亿至8.2亿元。")
-    assert any("8.2" in f for f in summary["verified_evidence"]), items
     items, summary = _pipeline(evaluator, "净利润不足8.2亿", "样例预计公司毛利6.1亿至8.2亿元。")
     assert summary["unsupported_evidence"], items
+    est_items, est_summary = _pipeline(
+        evaluator, "海外2GWh订单对应利润不足8.2亿", "样例2GWh合同预计增厚公司毛利6.1亿至8.2亿元。"
+    )
+    assert not est_summary["verified_evidence"], est_items
 
 
 def test_r9_symmetric_rate_cut_requires_both_reported_sides(evaluator):
     raw = "12BP对称降息净利润影响小于1%"
     report = "样例资产端生息收益率下行12BP。\n样例存款利率和资金成本跟随调降12BP，对净利润影响小于1%。"
     items, summary = _pipeline(evaluator, raw, report)
-    assert any("12BP" in f for f in summary["verified_evidence"]), items
+    assert "12BP" not in summary["verified_evidence"], items
     items, summary = _pipeline(evaluator, raw, report.replace("跟随调降12BP", "跟随调降6BP"))
     assert any("12BP" in f for f in summary["unsupported_evidence"]), items
 
@@ -898,7 +959,8 @@ def test_r10_contrast_turn_blocks_forward_metric():
 def test_r10_contrast_turn_atom_verified(evaluator):
     items, summary = _pipeline(evaluator, "锂价降10%带来1.2-1.8pct毛利改善而某龙头月涨6.25%",
         "样例某龙头股价月环比上涨+6.25%。")
-    assert "6.25%" in summary["verified_evidence"], items
+    assert "6.25%" not in summary["verified_evidence"], items
+    assert not summary["contradicted_evidence"], items
 
 
 def test_r10_metric_with_own_predicate_value_not_a_suffix(evaluator):
@@ -906,7 +968,8 @@ def test_r10_metric_with_own_predicate_value_not_a_suffix(evaluator):
     assert [b.metric for b in bns] == ["营收", "毛利率"]
     items, summary = _pipeline(evaluator, "2026Q2营收环比增33.1%毛利率转正至2.2%",
         "样例派生2026Q2单季营业收入为100.5亿元，环比有所回升（+33.1%）。")
-    assert "33.1%" in summary["verified_evidence"], items
+    assert "33.1%" not in summary["verified_evidence"], items
+    assert not summary["contradicted_evidence"], items
 
 
 def test_r10_proportion_pair_numerator_vs_denominator(evaluator):
@@ -919,8 +982,12 @@ def test_r10_proportion_pair_numerator_vs_denominator(evaluator):
 
 def test_r10_duration_metric_range_is_value_domain(evaluator):
     items, summary = _pipeline(evaluator, "渠道库存周转拉长至100-130天",
-        "样例库存周转天数预计从50-80天拉长至100-130天。")
+        "样例库存周转天数从50-80天拉长至100-130天。")
     assert summary["verified_evidence"] and not summary["unsupported_evidence"], items
+    est_items, est_summary = _pipeline(
+        evaluator, "渠道库存周转拉长至100-130天", "样例库存周转天数预计从50-80天拉长至100-130天。"
+    )
+    assert not est_summary["verified_evidence"], est_items
     # 普通时间窗口仍不是事实原子
     assert extract_bound_numbers("预计未来3-5天内完成交割") == []
 
@@ -967,7 +1034,7 @@ def test_r10_profit_share_not_contradicted_by_profit_growth(evaluator):
     items, summary = _pipeline(evaluator, "存货激增21.5%，5%跌价即抹平半年度38%利润",
         "样例存货较年初激增21.5%。\n样例归母净利润同比下降38%。")
     assert not summary["contradicted_evidence"], items
-    assert "21.5%" in summary["verified_evidence"], items
+    assert "21.5%" not in summary["verified_evidence"], items
 
 
 # ── DAV-1405 (R10)：击落池自查发现的同类机制（合成样例） ──
@@ -995,14 +1062,14 @@ def test_r10_same_metric_same_value_stype_noise(evaluator, raw, report):
 
 def test_r10_high_precision_exact_value_bridge(evaluator):
     items, summary = _pipeline(evaluator, "9月7日1.234亿股天量阴线", "样例9 月 7 日单日出现 1.234 亿股的高量长阴。")
-    assert summary["verified_evidence"] and not summary["unsupported_evidence"], items
+    assert "1.234亿股" not in summary["verified_evidence"], items
+    assert not summary["contradicted_evidence"], items
     # 价位不借均线同值
     items, summary = _pipeline(evaluator, "下探至26.51元", "样例200 SMA 位于 26.51 元。")
     assert not summary["verified_evidence"], items
 
 
 @pytest.mark.parametrize("raw, report", [
-    ("测算股价底线在210-220元", "样例给予底部 PE 估值，折合股价支撑位在 210~220 元。"),
     ("悲观估值下探至0.55-0.60倍PB对应30.10-32.40元",
      "样例按历史极端悲观PB估值0.55-0.60倍推演，极限估值底线位于 30.10 - 32.40 元。"),
     ("1YLPR降至3.10%", "样例1年期LPR降至3.10%。"),
@@ -1010,13 +1077,23 @@ def test_r10_high_precision_exact_value_bridge(evaluator):
     ("行业产能超900GW", "样例全行业产能均突破900GW。"),
     ("中证白酒指数累计下跌10.12%", "样例中证白酒指数8月以来下跌10.12%。"),
     ("存货占流动资产41.2%", "样例存货在总流动资产中占比升至 41.2%。"),
-    ("税前利润减少210-260亿", "样例收益率下行 50BP → 年化税前投资收益减少约 210-260 亿元。"),
     ("成交9502万股未达1.3亿突破量级", "样例日成交量放大至 1.3 亿股以上，突破箱体。\n样例成交 9502 万股。"),
     ("RSI钝化考验260下轨", "样例跌穿 260 元布林下轨。"),
 ])
 def test_r10_stated_fact_forms_verified(evaluator, raw, report):
     items, summary = _pipeline(evaluator, raw, report)
     assert summary["verified_evidence"] and not summary["unsupported_evidence"], items
+
+
+def test_r10_estimate_and_bare_atom_blocked_by_dav2479(evaluator):
+    items1, summary1 = _pipeline(
+        evaluator, "测算股价底线在210-220元", "样例给予底部 PE 估值，折合股价支撑位在 210~220 元。"
+    )
+    assert not summary1["verified_evidence"], items1
+    items2, summary2 = _pipeline(
+        evaluator, "税前利润减少210-260亿", "样例收益率下行 50BP → 年化税前投资收益减少约 210-260 亿元。"
+    )
+    assert "210" not in summary2["verified_evidence"] and "260亿" not in summary2["verified_evidence"], items2
 
 
 def test_r10_extraction_forms():
@@ -1029,7 +1106,8 @@ def test_r10_extraction_forms():
 def test_r10_deviation_pct_not_bound_to_resistance_level(evaluator):
     items, summary = _pipeline(evaluator, "20日VWMA强阻50.50元偏离-2.37%",
         "样例收盘价运行于 20 日 VWMA（50.50 元）下方，偏离度为 -2.37%。")
-    assert "-2.37%" in summary["verified_evidence"], items
+    assert "-2.37%" not in summary["verified_evidence"], items
+    assert not summary["contradicted_evidence"], items
 
 
 def test_r10_flow_bound_kept_after_sign(evaluator):
@@ -1099,10 +1177,14 @@ def test_r11_actual_pe_range_endpoints_not_proven_by_scenario(evaluator, raw):
 
 @pytest.mark.parametrize("raw, report", [
     ("负债率47.35%", "样例资产负债率47.35%。"),
-    ("历史悲观情景估值10倍PE", "样例历史悲观情景估值10倍PE。"),
     ("成交占总股本0.248%", "样例成交占总股本0.248%。"),
     ("抗跌指数达1.13pct", "样例抗跌指数达1.13pct。"),
 ])
 def test_r11_semantically_same_stated_values_still_verify(evaluator, raw, report):
     items, summary = _pipeline(evaluator, raw, report)
     assert summary["verified_evidence"] and not summary["unsupported_evidence"], items
+
+
+def test_r11_scenario_word_blocked_by_dav2479(evaluator):
+    items, summary = _pipeline(evaluator, "历史悲观情景估值10倍PE", "样例历史悲观情景估值10倍PE。")
+    assert not summary["verified_evidence"], items
