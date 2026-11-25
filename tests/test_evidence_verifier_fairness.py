@@ -1346,13 +1346,18 @@ def test_dav1163_bound_not_value_conflict(evaluator):
 def test_dav1163_evidence_range_covered_by_point_inside(evaluator):
     """证据区间「67-77元」被区间内报告值覆盖（市值底线族）。"""
     seven_reports = {
-        "fundamentals_report": "极端压力测试下公司市值底线为77元。\n",
+        "fundamentals_report": "报告给出公司市值底线为77元。\n",
     }
     res = evaluator.evaluate_single_evidence(
-        raw_evidence="极端压力测试对应市值底线67-77元",
+        raw_evidence="公司市值底线67-77元",
         seven_reports=seven_reports,
     )
     assert res["status"] == STATUS_VERIFIED
+    stress_res = evaluator.evaluate_single_evidence(
+        raw_evidence="极端压力测试对应市值底线67-77元",
+        seven_reports={"fundamentals_report": "极端压力测试下公司市值底线为77元。\n"},
+    )
+    assert stress_res["status"] == STATUS_UNSUPPORTED
 
 
 def test_dav1163_point_not_covered_by_report_range(evaluator):

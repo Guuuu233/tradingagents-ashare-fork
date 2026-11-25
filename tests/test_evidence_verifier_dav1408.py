@@ -145,7 +145,7 @@ def test_semantic_extractor_preserves_real_decimal_price(text):
 
 @pytest.mark.parametrize("raw, report", [
     ("主力净额占流通市值-0.0237%", "净额占流通市值比（net_to_circ_mv）：以东财主力净额计算，为-0.0237%。"),
-    ("主力净额占流通市值比0.0249%", "净额占流通市值比约0.0249%（基于东财主力净额与流通市值测算）。"),
+    ("主力净额占流通市值比0.0249%", "净额占流通市值比约0.0249%（基于东财主力净额与流通市值计算）。"),
     ("主力净流出占流通市值比-0.0613%", "东方财富主力净额占流通市值比（net_to_circ_mv）：约为-0.0613%。"),
     ("主力净流出5.48亿元仅占流通市值-0.0361%", "主力净流出5.48亿元。\n净额占流通市值比（net_to_circ_mv）为-0.0361%。"),
     ("东财主力净流出0.81亿占流通市值-0.0146%", "东财主力净流出0.81亿元。\n净额占流通市值比为-0.0146%。"),
@@ -163,6 +163,14 @@ def test_semantic_extractor_preserves_real_decimal_price(text):
 def test_r2_reported_main_and_ordinary_ratios_restore(raw, report):
     items, summary = pipeline(raw, report)
     assert summary["verified_evidence"] and not summary["unsupported_evidence"], items
+
+
+def test_r2_report_sentence_with_cesuan_blocked_by_dav2479_r3():
+    items, summary = pipeline(
+        "主力净额占流通市值比0.0249%",
+        "净额占流通市值比约0.0249%（基于东财主力净额与流通市值测算）。",
+    )
+    assert not summary["verified_evidence"], items
 
 
 @pytest.mark.parametrize("raw, report", [
