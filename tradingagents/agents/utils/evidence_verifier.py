@@ -359,8 +359,10 @@ _METRIC_KEYWORDS = [
     "水库", "来水", "发电量", "偏枯", "偏丰", "蓄能", "电量", "纳斯达克", "生物科技", "指数",
     # Pharma & Sector specific
     "管线", "临床", "获批", "授权", "license-out", "医保", "集采", "原料药", "仿制药", "创新药", "adc", "fda",
+    "除外支付", "免计定额",
     # Sentiment & General
     "风险偏好", "进攻", "防守", "避险", "虹吸", "抽水", "情绪", "舆情", "预期差", "公告", "中报", "年报", "季报",
+    "公用事业", "题材",
     # Entities frequently referenced
     "大金", "惠而浦", "乌东德", "三峡", "美的", "恒瑞", "礼来",
     # DAV-1088: per-share fundamentals needed for metric binding (缺陷 B' 词表缺项)
@@ -375,6 +377,86 @@ _METRIC_KEYWORDS = [
     "燃油车", "电动车", "新能源车",
     "每股净资产", "bps"
 ]
+
+_HYPOTHESIS_MARKERS = frozenset(
+    {"假设", "测算", "压力", "情景", "若", "预计", "推算", "敏感性"}
+)
+_JUDGMENT_MARKERS = ("对倒",)
+_FUND_FLOW_IN_MARKERS_EXACT = ("净流入", "流入")
+_FUND_FLOW_OUT_MARKERS_EXACT = ("净流出", "流出")
+_BARE_NUMBER_AND_UNIT_RE = re.compile(
+    r"[+-]?[\d.]+\s*(?:%|％|万股|亿股|股|亿元|万元|万|亿|pct|bp|点|元|港元|美元|倍|次|手)?",
+    re.I,
+)
+_DATE_TEXT_RE = re.compile(r"\d{4}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?")
+
+
+def _contains_hypothesis_marker(text: str) -> bool:
+    return any(marker in text for marker in _HYPOTHESIS_MARKERS)
+
+
+def _contains_judgment_marker(text: str) -> bool:
+    return any(marker in text for marker in _JUDGMENT_MARKERS)
+
+
+def _is_bare_numeric_token(text: str) -> bool:
+    candidate = text.strip()
+    if not _BARE_NUMBER_AND_UNIT_RE.fullmatch(candidate):
+        return False
+    stripped = _BARE_NUMBER_AND_UNIT_RE.sub("", candidate).strip("，。；,.;:：、 \t\n\r")
+    return not stripped and not _DATE_TEXT_RE.search(candidate)
+
+
+def _contains_supported_terms(raw_text: str, report_body: str) -> bool:
+    terms = [
+        term
+        for part in re.split(r"[，。；;]", raw_text)
+        for term in _extract_metric_keywords(part)
+        if len(term) >= 2
+    ]
+    return bool(terms) and all(term in report_body for term in terms)
+
+
+def _contains_fund_flow_direction(text: str, markers: Sequence[str]) -> bool:
+    return any(marker in text for marker in markers)
+
+
+def _matches_report_text(raw_text: str, report_body: str) -> bool:
+    if not report_body:
+        return False
+    return raw_text in report_body or any(
+        len(part) >= 8 and part in report_body for part in re.split(r"[，。；;]", raw_text)
+    )
+
+
+def _all_report_texts(seven_reports: Mapping[str, str]) -> str:
+    return "\n".join(str(seven_reports.get(key, "") or "") for key in SEVEN_REPORT_KEYS)
+
+
+def _is_fund_flow_stance_conflict(raw_text: str, stance: str) -> bool:
+    if not stance:
+        return False
+    if stance in ("bull", "bullish", "看多", "多头"):
+        return _contains_fund_flow_direction(raw_text, _FUND_FLOW_OUT_MARKERS_EXACT)
+    if stance in ("bear", "bearish", "看空", "空头"):
+        return _contains_fund_flow_direction(raw_text, _FUND_FLOW_IN_MARKERS_EXACT)
+    return False
+
+
+def _has_source_support(raw_text: str, seven_reports: Mapping[str, str]) -> bool:
+    if _matches_report_text(raw_text, _all_report_texts(seven_reports)):
+        return True
+    if _is_bare_numeric_token(raw_text):
+        return False
+    evidence_keywords = set(_extract_metric_keywords(raw_text))
+    if not evidence_keywords:
+        return False
+    report_keywords = {
+        keyword
+        for body in seven_reports.values()
+        for keyword in _extract_metric_keywords(str(body or ""))
+    }
+    return bool(evidence_keywords.intersection(report_keywords))
 
 
 def _metric_literal_present(keyword: str, text: str) -> bool:
@@ -3507,12 +3589,90 @@ def _period_base_reference_ok(
 # 报告原文写出的测算/情景值：按「报告有据」可核实（总控口径①第一款）。
 # 识别：命中行自身带约数/测算标记，或报告侧数字本身为约数。
 _REPORT_ESTIMATE_RE = re.compile(r"约|测算|预计|估算|情景|假设|推演|模拟|压力测试|目标|止损|止盈|支撑位")
+_EVIDENCE_ESTIMATE_RE = re.compile(
+    r"假设|测算|压力|情景|若|预计|推算|敏感性"
+)
+
+
+def _report_number_close(raw_text: str, line_text: str) -> bool:
+    raw_numbers = extract_bound_numbers(raw_text)
+    if not raw_numbers:
+        return False
+    line_numbers = extract_bound_numbers(line_text)
+    return any(
+        math.isclose(abs(raw_number.val), abs(line_number.val), rel_tol=0.02, abs_tol=0.05)
+        for raw_number in raw_numbers
+        for line_number in line_numbers
+    )
+
+
+def _report_text_matches_estimate(raw_text: str, report_body: str) -> bool:
+    core_text = _EVIDENCE_LEADIN_RE.sub("", raw_text, count=1)
+    for clause in split_compound_evidence(core_text):
+        normalized_clause = re.sub(r"\s+", "", clause)
+        normalized_report = re.sub(r"\s+", "", str(report_body or ""))
+        if normalized_clause and normalized_clause in normalized_report:
+            return True
+        if len(extract_bound_numbers(clause)) == 1:
+            bound_number = extract_bound_numbers(clause)[0]
+            for line_text in str(report_body or "").splitlines():
+                for report_number in extract_bound_numbers(line_text):
+                    if (
+                        math.isclose(
+                            abs(bound_number.val),
+                            abs(report_number.val),
+                            rel_tol=0.02,
+                            abs_tol=0.05,
+                        )
+                        and (
+                            bound_number.metric == report_number.metric
+                            or (
+                                bound_number.range_span is not None
+                                and bound_number.range_span == report_number.range_span
+                            )
+                            or (
+                                report_number.bound == BOUND_APPROX
+                                and bound_number.role == ROLE_SCENARIO
+                                and bound_number.unit == report_number.unit
+                            )
+                        )
+                    ):
+                        return True
+        if extract_bound_numbers(clause):
+            clause_numbers = extract_bound_numbers(clause)
+            report_numbers = extract_bound_numbers(str(report_body or ""))
+            if all(
+                any(
+                    math.isclose(abs(bound_number.val), abs(report_number.val), rel_tol=0.02, abs_tol=0.05)
+                    and (
+                        bound_number.range_span == report_number.range_span
+                        or bound_number.metric == report_number.metric
+                        or report_number.bound == BOUND_APPROX
+                    )
+                    for report_number in report_numbers
+                )
+                for bound_number in clause_numbers
+            ):
+                return True
+    return False
 
 
 def _report_stated_estimate(l_bn: "BoundNumber", l_text: str | None) -> bool:
     return bool(
         l_bn.bound == BOUND_APPROX
         or (l_text and _REPORT_ESTIMATE_RE.search(l_text))
+    )
+
+
+def _evidence_estimates_same_record(ev_bn: "BoundNumber", l_text: str | None) -> bool:
+    return bool(
+        ev_bn.role in (ROLE_SCENARIO, ROLE_THRESHOLD)
+        and not ev_bn.entity
+        and not re.search(r"净利润|利润", l_text)
+        and not ev_bn.entity
+        and l_text
+        and _REPORT_ESTIMATE_RE.search(l_text)
+        and not re.search(r"实际|目标", l_text)
     )
 
 
@@ -4135,6 +4295,50 @@ class EvidenceFactualTruthEvaluator:
                 "details": date_reason,
             }
 
+        all_reports_text = _all_report_texts(seven_reports)
+        if _contains_hypothesis_marker(raw_text) and not any(
+            _report_text_matches_estimate(raw_text, report_body)
+            and _REPORT_ESTIMATE_RE.search(str(report_body or ""))
+            and not re.search(r"假设", raw_text + str(report_body or ""))
+            for report_body in seven_reports.values()
+            if str(report_body or "").strip()
+        ):
+            return {
+                "raw": raw_text,
+                "claim_id": claim_id,
+                "matched_role": None,
+                "matched_source": None,
+                "status": STATUS_UNSUPPORTED,
+                "is_fatal": False,
+                "details": "命中固定假设/测算/压力/情景/若/预计/推算/敏感性词表，不作为已核实事实",
+            }
+        if _contains_judgment_marker(raw_text):
+            return {
+                "raw": raw_text,
+                "claim_id": claim_id,
+                "matched_role": None,
+                "matched_source": None,
+                "status": STATUS_UNSUPPORTED,
+                "is_fatal": False,
+                "details": "包含判断性措辞（对倒），不作为事实依据",
+            }
+        if _is_bare_numeric_token(raw_text):
+            report_has_bare_number_source = any(
+                _report_number_close(raw_text, line_text)
+                for report_body in seven_reports.values()
+                for line_text in str(report_body or "").splitlines()
+                if "净额" in line_text or "净流入" in line_text or "净流出" in line_text
+            )
+            if not report_has_bare_number_source:
+                return {
+                    "raw": raw_text,
+                    "claim_id": claim_id,
+                    "matched_role": None,
+                    "matched_source": None,
+                    "status": STATUS_UNSUPPORTED,
+                    "is_fatal": False,
+                    "details": "裸数字/单位 token 缺少指标名或日期，不作为已核实事实",
+                }
         # 3. Deterministic Matching against 7 Reports
         ev_keywords = _extract_metric_keywords(raw_text)
 
@@ -4146,6 +4350,7 @@ class EvidenceFactualTruthEvaluator:
         bare_numeric = _is_bare_numeric_evidence(raw_text, ev_keywords)
 
         # 3.1 Exact substring match in any report
+        all_reports_text = _all_report_texts(seven_reports)
         for role_key in SEVEN_REPORT_KEYS:
             if self._is_report_unavailable(role_key, unavailable_sources):
                 continue
@@ -4166,7 +4371,7 @@ class EvidenceFactualTruthEvaluator:
                     "matched_source": role_key.replace("_report", ""),
                     "status": STATUS_VERIFIED,
                     "is_fatal": False,
-                    "details": f"在 {role_key} 中找到精确匹配事实",
+                    "details": f"在 {role_key} 中找到原文支撑",
                 }
 
         parent_period = normalize_period(raw_text)
@@ -4262,6 +4467,7 @@ class EvidenceFactualTruthEvaluator:
                     if (
                         len(common_kw) >= 2 and any(kw in line_text for kw in ev_keywords)
                         and not _unrecorded_qualitative_judgment(raw_text)
+                        and _contains_supported_terms(raw_text, report_body)
                     ):
                         return {
                             "raw": raw_text,
@@ -4405,6 +4611,8 @@ class EvidenceFactualTruthEvaluator:
                                 ev_text=raw_text, l_text=line_text,
                                 l_bns=line_bns,
                             ):
+                                if not _has_source_support(raw_text, seven_reports):
+                                    continue
                                 num_hits_by_report.setdefault(role_key, set()).add(num_idx)
                                 all_hit_num_indices.add(num_idx)
                                 if _entities_consistent_for_join(ev_bn.entity, l_bn.entity):
@@ -4934,17 +5142,27 @@ class EvidenceFactualTruthEvaluator:
                 ev_str = str(ev).strip()
                 if not ev_str:
                     continue
-                results.extend(
-                    self._verify_evidence_or_decompose(
-                        ev_str,
-                        seven_reports,
-                        market_data_context,
-                        analysis_baseline_date,
-                        cid,
-                        social_data_context,
-                        claim_text=claim_txt,
-                    )
+                items = self._verify_evidence_or_decompose(
+                    ev_str,
+                    seven_reports,
+                    market_data_context,
+                    analysis_baseline_date,
+                    cid,
+                    social_data_context,
+                    claim_text=claim_txt,
                 )
+                stance = str(claim.get("stance", "") or "").strip().lower()
+                if _is_fund_flow_stance_conflict(ev_str, stance):
+                    for idx, item in enumerate(items):
+                        if item.get("status") == STATUS_VERIFIED:
+                            items[idx] = {
+                                **item,
+                                "status": STATUS_UNSUPPORTED,
+                                "matched_role": None,
+                                "matched_source": None,
+                                "details": "资金流方向与论点 stance 相反，不作为已核实事实",
+                            }
+                results.extend(items)
 
         return results
 
