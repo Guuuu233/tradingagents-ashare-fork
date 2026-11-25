@@ -183,7 +183,9 @@ def test_cumulative_window_precedes_dates_and_compares_same_window(text):
 
 
 def test_date_range_without_explicit_day_count_is_not_single_day():
-    result = validate("9月23日至24日主力累计净流入3亿元。")
+    records = [record("1", "2026-09-23"), record("2")]
+    result = validate("9月23日至24日主力累计净流入3亿元。", records=records)
+    assert result["status"] == "matched"
     assert result["hard_guard"]["blocked"] is False
     assert result["model_daily"] == {}
 
@@ -278,11 +280,15 @@ def test_cumulative_extractors_share_sign_and_condition_attribution():
     assert extract_model_totals("若两日主力累计净流入3亿元，则确认。") == {}
 
 
-def test_explicit_window_with_missing_start_record_is_unverifiable():
+def test_explicit_window_with_missing_start_record_is_blocked():
+    # DAV-2478：显式区间缺交易日记录时不得降级为 unverifiable 放行；
+    # 「9月23日至24日两日」只剩 09-24 一条记录，区间无法完整求和 → 继续拦截。
     records = [record("1", "2026-09-20"), record("2")]
     result = validate("9月23日至24日两日主力累计净流入8亿元。", records=records)
-    assert result["hard_guard"]["blocked"] is False
-    assert "r0_net" in result["unverifiable_fields"]
+    assert result["status"] == "mismatch"
+    assert result["hard_guard"]["blocked"] is True
+    assert result["mismatches"][0]["window_start"] == "2026-09-23"
+    assert result["mismatches"][0]["window_end"] == "2026-09-24"
 
 
 def test_named_unknown_security_can_use_prose_code_pair_without_lookup():

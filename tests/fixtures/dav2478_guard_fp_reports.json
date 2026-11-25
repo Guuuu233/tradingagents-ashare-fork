@@ -1,0 +1,1063 @@
+{
+ "schema": "dav2478_guard_window_binding.v1",
+ "source": "固定快照 /Users/davidliu/ta-snapshot/current.db（mtime 2026-11-24 17:57 CST）2026-11-23 四份被 fund_flow_consensus_guard 拦截报告的比对相关字段等价投影（symbol/trade_date/selection/records/original_text）。short_term 与 medium_term 原文及 selection 相同，8 个单元 = 4 份 × 2 档。",
+ "cases": [
+  {
+   "report_id": "e6024cd5edcf48ba806b3020514189ed",
+   "symbol": "600030.SH",
+   "trade_date": "2026-11-23",
+   "selection": {
+    "selected_field": "r0_net",
+    "selected_source": "eastmoney_direct",
+    "selected_window_days": 1,
+    "records": [
+     {
+      "date": "2026-11-17",
+      "measurement_date": "2026-11-17",
+      "as_of": "2026-11-17",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600030.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:12:14.833183+00:00",
+      "status": "available",
+      "r0_net": "-0.61765424",
+      "r0_net_raw": "-61765424.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-26449696.0",
+       "f54": "88215136.0",
+       "f55": "19419008.0",
+       "f56": "-81184432.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-18",
+      "measurement_date": "2026-11-18",
+      "as_of": "2026-11-18",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600030.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:12:14.833183+00:00",
+      "status": "available",
+      "r0_net": "-1.28184614",
+      "r0_net_raw": "-128184614.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "28984685.0",
+       "f54": "99199920.0",
+       "f55": "-28267616.0",
+       "f56": "-99916998.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-19",
+      "measurement_date": "2026-11-19",
+      "as_of": "2026-11-19",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600030.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:12:14.833183+00:00",
+      "status": "available",
+      "r0_net": "-1.50988672",
+      "r0_net_raw": "-150988672.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "12635568.0",
+       "f54": "138353088.0",
+       "f55": "-140009776.0",
+       "f56": "-10978896.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-20",
+      "measurement_date": "2026-11-20",
+      "as_of": "2026-11-20",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600030.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:12:14.833183+00:00",
+      "status": "available",
+      "r0_net": "-0.40593392",
+      "r0_net_raw": "-40593392.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-163391376.0",
+       "f54": "203984752.0",
+       "f55": "45329504.0",
+       "f56": "-85922896.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-23",
+      "measurement_date": "2026-11-23",
+      "as_of": "2026-11-23",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600030.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:12:14.833183+00:00",
+      "status": "available",
+      "r0_net": "1.63561632",
+      "r0_net_raw": "163561632.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-207870016.0",
+       "f54": "44308384.0",
+       "f55": "149023424.0",
+       "f56": "14538208.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     }
+    ]
+   },
+   "smart_money_text": "# 600030.SH（中信证券）资金行为与量化微观结构深度报告\n\n**分析基准日**：2026-11-23  \n**研究周期**：短线（1-2周技术与资金面）+ 中线（1-3月基本面与资本沉淀）  \n**标的资产**：中信证券（600030.SH） / 证券行业龙头  \n**参考指标**：20日成交量加权平均价（VWMA）= 25.39 元，当日收盘价 = 25.26 元  \n\n---\n\n## 资金流向与龙虎榜微观数据全景透视\n\n### 1. 资金流向多周期数据\n基于东方财富直连（eastmoney_direct）统计口径，标的近5个交易日的主力净额（`r0_net`）分布如下：\n- **2026-11-17**：主力净额 -0.6177 亿元（-61,765,424 元）\n- **2026-11-18**：主力净额 -1.2818 亿元（-128,184,614 元）\n- **2026-11-19**：主力净额 -1.5099 亿元（-150,988,672 元）\n- **2026-11-20**：主力净额 -0.4059 亿元（-40,593,392 元）\n- **2026-11-23（基准日）**：主力净额 +1.6356 亿元（+163,561,632 元）\n- **近5日累计主力净额**：-2.1797 亿元\n\n### 2. 分单结构与相对规模特征\n- **原始订单分组发现项（discovery_only）**：\n  基准日（2026-11-23）东财底层原始分组数值呈现：f53=-2.0787 亿元、f54=+0.4431 亿元、f55=+1.4902 亿元、f56=+0.1454 亿元。各分组间方向存在显著分歧与交叉，表明大中小单口径统计内部博弈复杂。\n- **相对规模参考**：\n  主力净额占流通市值比（`net_to_circ_mv`）约为 0.0532%（5.32‱），占比较低，显示单日流入对总市值的扰动规模较为有限；成交额占比因底层成交额数据缺失不予计算。\n- **数据源与信度审计**：\n  本次资金流数据源自单一数据提供商（eastmoney_direct），缺乏同花顺或其他新算法组来源交叉比对，大单/主力统计口径的置信度定为**中等偏低**，相关流入数据仅作为统计代理变量参考。\n\n### 3. 龙虎榜席位明细\n- 标的在 2026-11-23 未触发交易所公开信息披露标准，**无当日龙虎榜席位数据**（对于大盘蓝筹股，无龙虎榜属常态）。无公开可查的机构专用席位或游资席位日内买卖明细。\n\n---\n\n## What-Why-SoWhat-WhatNext 资金行为深度剖析\n\n### 1. What（资金数据透视与微观全景）\n- **客观数据还原**：连续 4 个交易日呈现主力资金净流出（11-17至11-20累计流出 3.8153 亿元）后，基准日（11-23）主力资金出现单日转正，净流入 1.6356 亿元；但 5 日维度累计仍处于净流出状态（-2.1797 亿元）。\n- **量价匹配状态**：当日收盘价（25.26 元）微涨 +0.15%（跟随上证指数平收），位于 20 日 VWMA（25.39 元）下方；近两周日均成交量萎缩至 6,000 万至 9,000 万股区间，呈现缩量窄幅反弹特征。\n\n### 2. Why（供求动机与资金博弈假设）\n- **供求对比分析（假设）**：\n  - 卖方力量：前 4 日持续的订单分组净卖出压力在 25.00 元平台附近出现边际放缓（11-20 流出降至 0.4059 亿元），空方主动压价抛售的意愿阶段性衰减。\n  - 买方力量：基准日 1.6356 亿元的大单/超大单主动净流入，可能反映出部分场内资金在跌至 25.00 元整数关口附近时进行了试探性回补；但鉴于原始分单字段出现负值（如 f53 呈负向），买盘内部存在分化，不构成一致性追高买盘。\n\n### 3. So What（资金阶段定性与预期差识别）\n\n#### 【短线视角】\n- **微观结构定性**：单日主力资金转正 + 低换手缩量，符合**缩量弱势反弹企稳候选（event_candidate，待验证）**。\n- **预期差与情绪背离**：当日市场全盘涨停家数达 146 家，情绪高度聚焦于科技与中小市值题材；中信证券主力净额虽达 1.63 亿元，但股价仅微涨 +0.15%，呈现“大额资金微弱流入 vs 股价几乎滞涨”的弱相关特征。这表明市场投机资金仍在虹吸流动性，该笔净流入更多属于板块轮动中的被动防守型微量配置，短期无法催化突破行情。\n\n#### 【中线视角】\n- **微观结构定性**：5 日累计净额仍为 -2.18 亿元，且现价承压于 50 SMA（25.88 元）与 200 SMA（26.51 元），当前资金状态定性为**中期均线压制下的震荡磨底候选（event_candidate，待验证）**。\n- **配置预期差识别**：宏观与政策面具备一流投行集约化、SFISF 优化扩表及 200 亿科创债补充低成本负债等长线利好，但近 5 日资金整体流出说明中线大体量资金尚未发起趋势性建仓，短期资金行为与中长期基本面政策红利之间存在明显的**时滞差**。\n\n### 4. What Next（资金演化推演与板块协同）\n\n#### 【短线视角】\n- **路径演化**：单日 1.6356 亿元的净流入若不能在接下来的 1-2 个交易日维持正向流入（如日均保持 1 亿元以上且带动成交量放大至 1.5 亿股），则该笔流入大概率演化为超跌脉冲后的脉冲式中断，价格将再次回踩 24.80 - 25.00 元支撑区间。\n- **价格验证点**：向上测试 25.39 元（VWMA）及 25.45 元短线阻力带的带量突破有效性。\n\n#### 【中线视角】\n- **路径演化**：中线资金转向的前提在于全市场总成交金额的系统性扩张。若宏观流动性未能刺激券商板块成交占比实质性回升，中信证券资金流将在 24.00 - 26.50 元箱体内反复呈现“数日流出、单日微幅流入”的存量拉锯循环。\n- **价格验证点**：需等待 50 SMA（25.88 元）走平以及向上收复 200 SMA（26.51 元）时的大单持续净流入确认。\n\n---\n\n## VWMA 成交量加权价格带与价格支撑压力测试\n\n- **20日 VWMA 核心基准**：25.39 元。\n  - **性质界定**：VWMA 为市场过去 20 个交易日的成交量加权平均价格参考带，非主力持仓成本，仅代表近期市场交投筹码的加权重心。\n- **量价相对位置**：\n  - 收盘价（25.26 元）位于 20日 VWMA（25.39 元）下方 0.13 元（幅度约 -0.51%）。\n  - 这表明近期大部分参与交易的筹码处于微幅浮亏或保本边缘，VWMA 在 25.39 - 25.40 元区间形成动态反压。\n- **关键价格带测试矩阵**：\n  - **短线强压力带**：25.39 - 25.45 元（20日 VWMA 与布林中轨 25.29 元构成的多空分水密集带）。若主力资金流入无法推动价格带量站稳该区域，微观结构仍受压制。\n  - **中线均线阻力带**：25.88 - 26.05 元（50 SMA 与前高反弹阻力）。\n  - **动态支撑带**：24.80 - 25.00 元（近期日线密集平台及整数心理关口）。\n  - **深层防守带**：24.30 - 24.37 元（布林下轨与阶段低点）。\n\n---\n\n## 板块资金协同与跨标的联动效应\n\n### 1. 行业板块资金挤出效应\n- 基准日主力资金高度集中在硬科技与泛 TMT 赛道（通信设备净流入 +83.76 亿元、半导体净流入 +30.88 亿元、元件净流入 +27.66 亿元），全市场呈现出极强的成长投机弹性。\n- 非银金融与证券板块未进入行业主力净流入前十名。非银板块前期连续多日遭遇净流出，资金存量博弈特征显著，科技赛道对金融权重产生了实质性的**流动性虹吸效应**。\n\n### 2. 标的在行业中的资金协同表现\n- 中信证券当日主力净买入 1.6356 亿元，虽在证券板块内部属于体量较大的个股回流，但在缺乏板块级资金协同上攻（板块指数无放量异动）的背景下，个股的单日净买入呈现孤岛效应，难以单骑救主拉动非银板块整体反弹。\n\n---\n\n## 资金动向推演与跟踪信号\n\n### 1. 下一步观察路径\n- **持续性检验**：观察 2026-11-24 至 2026-11-25 主力资金能否维持正向流入，重点确认单日净额是否跌破 0 轴。\n- **VWMA 攻防**：观察价格能否在 2 个交易日内收复 25.39 元，并伴随成交量由 7,000 万股级别放大至 1.2 亿股以上。\n\n### 2. 异动触发条件与风控预警\n- **向上右侧放量信号**：主力净额连续 2 日超过 +2 亿元，且价格放量站上 25.45 元，确认短线反弹候选成立，向上测试 25.88 元。\n- **向下破位预警信号**：主力净额再度转为大幅流出（单日流出 > 1.5 亿元），若放量跌穿 24.80 元支撑平台，将引发筹码止损盘涌出，向下考验 24.37 元（布林下轨）。\n\n---\n\n## 资金维度综合评估汇总表\n\n| 资金与量价维度 | 客观数据表现 | 可观察信号定性 (candidate) | 置信度 | 交易启示 |\n| :--- | :--- | :--- | :--- | :--- |\n| **单日主力净额** | +1.6356 亿元（东财口径） | 潜在止跌企稳候选 (event_candidate) | 中等偏低（单源无交叉） | 短线抛压减轻，但不宜视为单边反转信号 |\n| **5日主力累计** | -2.1797 亿元（前4日持续流出） | 存量流出主导候选 (event_candidate) | 中等 | 过去一周整体筹码偏离心，单日流入属反弹性质 |\n| **订单分组结构** | 底层字段 f53/f54 等分歧并存 | 分单博弈分歧候选 | 低（原始口径待验证） | 买卖双向撮合复杂，缺乏一致性机构买盘证据 |\n| **相对流通盘规模**| 净额占流通市值 0.0532% | 微量资金扰动 | 高（市值口径明确） | 资金体量未达到推动大盘权重趋势改变的阈值 |\n| **龙虎榜明细** | 无上榜数据 | 席位不可观测 | 极高（客观事实） | 缺乏公开席位增量证据，遵循去所有权推断纪律 |\n| **VWMA 价格带** | 现价 25.26 元 vs VWMA 25.39 元 | 价格带下方承压候选 | 高（量化计算确定） | 25.39-25.45 元为短线关键阻力，突破前以防守为主 |\n| **板块协同效应** | 资金流向科技（通信+83亿），非银落后 | 资金虹吸承压候选 | 高（板块数据清晰） | 券商缺乏板块级增量，呈现低弹性震荡特征 |\n\n<!-- VERDICT: {\"directions\": {\"short\": \"中性\", \"medium\": \"偏空\"}, \"reasons\": {\"short\": \"单日资金弱流入受制VWMA，短线震荡\", \"medium\": \"5日累计净流出且承压均线，筑底偏弱\"}} -->"
+  },
+  {
+   "report_id": "f2fd19ab16e644448bb6b869ac5be87c",
+   "symbol": "600887.SH",
+   "trade_date": "2026-11-23",
+   "selection": {
+    "selected_field": "r0_net",
+    "selected_source": "eastmoney_direct",
+    "selected_window_days": 1,
+    "records": [
+     {
+      "date": "2026-11-17",
+      "measurement_date": "2026-11-17",
+      "as_of": "2026-11-17",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600887.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:20:55.804141+00:00",
+      "status": "available",
+      "r0_net": "-0.44435202",
+      "r0_net_raw": "-44435202.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "18092688.0",
+       "f54": "26342528.0",
+       "f55": "-94997216.0",
+       "f56": "50562014.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-18",
+      "measurement_date": "2026-11-18",
+      "as_of": "2026-11-18",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600887.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:20:55.804141+00:00",
+      "status": "available",
+      "r0_net": "-1.97169424",
+      "r0_net_raw": "-197169424.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "165994672.0",
+       "f54": "31174736.0",
+       "f55": "-126774768.0",
+       "f56": "-70394656.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-19",
+      "measurement_date": "2026-11-19",
+      "as_of": "2026-11-19",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600887.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:20:55.804141+00:00",
+      "status": "available",
+      "r0_net": "-2.05396976",
+      "r0_net_raw": "-205396976.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "166339152.0",
+       "f54": "39057840.0",
+       "f55": "-175030048.0",
+       "f56": "-30366928.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-20",
+      "measurement_date": "2026-11-20",
+      "as_of": "2026-11-20",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600887.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:20:55.804141+00:00",
+      "status": "available",
+      "r0_net": "-2.87251792",
+      "r0_net_raw": "-287251792.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "123367136.0",
+       "f54": "163884656.0",
+       "f55": "-274085424.0",
+       "f56": "-13166368.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-23",
+      "measurement_date": "2026-11-23",
+      "as_of": "2026-11-23",
+      "requested_as_of": "2026-11-23",
+      "symbol": "600887.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:20:55.804141+00:00",
+      "status": "available",
+      "r0_net": "1.31667424",
+      "r0_net_raw": "131667424.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-152625904.0",
+       "f54": "20958496.0",
+       "f55": "73972400.0",
+       "f56": "57695024.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     }
+    ]
+   },
+   "smart_money_text": "### 资金流向与龙虎榜微观数据全景透视\n\n#### 1. 资金流向微观结构与统计口径\n根据东方财富直连（`eastmoney_direct`，新算法组口径）资金流监控数据，伊利股份（600887.SH）近 5 个交易日主力净额（`r0_net`）统计如下：\n\n- **2026-11-17**：主力净额 -4,443.52 万元（-0.44 亿元）\n- **2026-11-18**：主力净额 -19,716.94 万元（-1.97 亿元）\n- **2026-11-19**：主力净额 -20,539.70 万元（-2.05 亿元）\n- **2026-11-20**：主力净额 -28,725.18 万元（-2.87 亿元）\n- **2026-11-23（基准日）**：主力净额 +13,166.74 万元（+1.32 亿元）\n- **近 5 日累计主力净额**：-60,258.60 万元（-6.03 亿元）\n\n**相对规模统计**：\n- 2026-11-23 单日主力净流入占流通市值比（`net_to_circ_mv`）约为 0.0637%（0.000637）。\n- 单日主力净额占成交额比（`net_to_amount`）因底层成交额指标缺失，状态为部分可用（partial），不进行横向规模外推。\n- **数据源与可信度提示**：本次数据来源于单一直连数据源（`eastmoney_direct`），缺乏同花顺等第三方独立口径交叉印证，参考可信度定性为**中等偏低**（置信度评分 0.5）。平台主力资金统计仅为大单/超大单阈值切分代理变量，不代表账户级真实持仓变动。\n\n#### 2. 龙虎榜席位与订单特征\n- 2026-11-23 当日标的无龙虎榜公开交易信息披露（未触及日涨跌幅偏离值达 ±7%、振幅达 15% 或换手率达 20% 的异动门槛，属于非异动交易日正常现象）。\n- 席位级交易结构与活跃游资/机构专用席位明细不可见。\n\n---\n\n### What-Why-SoWhat-WhatNext 资金行为深度剖析\n\n#### 1. What（资金数据透视与微观全景）\n2026-11-23 当日，伊利股份全天股价收报 32.85 元，单日下跌 1.50%，全天成交量为 8,395.76 万股，呈现“缩量收阴”形态。但在单日主力资金统计维度，`r0_net` 录得净买入 1.32 亿元，终结了此前连续 4 个交易日主力净流出（累计流出 7.34 亿元）的态势。价格下跌与主力分单统计净额出现单日背离。\n\n#### 2. Why（供求动机与资金博弈假设）\n从订单流微观供求角度推演（仅作为待验证分析假设，严禁归因为特定机构所有权行为）：\n- **逆势承接动力假设**：股价日内回踩布林带上轨并向 10 日均线（32.20 元）寻求支撑，大单买入力量在 32.26 元日内低点上方展现出被动挂单与回踩吸纳特征，使得大单统计由净卖出翻转为净买入。\n- **阶段性获利兑现与对冲博弈**：前 4 日标的自箱体破位连续上攻过程中，大单资金持续呈大额净流出（日均流出超 1.8 亿元），反映前期底仓在加速上冲阶段存在技术性套现动作。11-23 日的大单回流，初步构成大单资金从主动减持转入被动承接的结构分水岭候选。\n\n#### 3. So What（资金阶段定性与预期差识别）\n- **微观结构定性**：当前盘面呈现「股价缩量阴线回踩 + 主力大单逆势净流入 + 换手率温和（1.33%）」的组合，定性为**潜在回踩承接候选（retest_absorption_candidate，待验证事件假设）**，严禁定性为已证实的机构锁仓洗盘。\n- **预期差与情绪背离**：阶段一舆情及盘面显示短线市场高度聚焦于低位题材首板（146 家涨停），泛科技板块（通信、半导体）出现强吸血效应，大消费板块整体关注度偏低。散户情绪因股价缩量回调趋于观望，但大单资金逆势买入 1.32 亿元，展现出资金逆势构建防御护城河的预期差。\n\n【短线视角】\n单日大单翻红虽打破连阴流出，但单日净流入规模占流通市值比例仅 0.0637%，且前 4 日累积流出逾 7.34 亿元，单日流入尚不足以扭转 5 日累计流出 6.03 亿元的存量失血格局。短线仍需经历 1-3 个交易日的二次回踩确认，消化获利盘兑现压力。\n\n【中线视角】\n在股价经历 10 月底突破后的主升波段中，高位缩量回调且伴随大额分单在重要均线上方重新翻多，反映中线筹码锁定度良好，未见大单失控抛售的恐慌性出逃信号，中线筹码供求格局依旧稳固（时滞 1-2 个月）。\n\n#### 4. What Next（资金演化推演与板块协同）\n- **路径演化推演**：若后续 2-3 个交易日主力净额能够持续维持正向（单日净流入维持在 1 亿元以上）且成交量稳定在 8,000-9,000 万股区间，将确认回踩承接有效，并向 33.50-33.80 元阻力带发起再冲击；若大单净额再度转为大幅流出并击穿 10 日 EMA（32.20 元），则回踩承接假设证伪，资金将下探布林中轨寻求第二承接带。\n\n---\n\n### VWMA 成交量加权价格带与价格支撑压力测试\n\n- **VWMA 价格参考带基准**：当前标的 20 日 VWMA（成交量加权均价）为 **31.76 元**。\n  - *纪律严正声明*：VWMA 仅作为全市场 20 个交易日以成交量为权重的价格中枢与技术参考带，严禁将其推断为主力底仓或机构建仓成本线。\n- **价格与量价中枢关系**：\n  - 现价 32.85 元稳居 20 日 VWMA（31.76 元）上方约 3.43%，价格重心与量能分布保持同步上移态势，处于多头价格控制区。\n- **关键技术位置与资金防御测试**：\n  - **第一动态支撑带（32.20 - 32.26 元）**：10 日 EMA（32.20 元）与 11-23 日内大单承接低点（32.26 元）重合区，为短线多头资金的第一道防御防线。\n  - **第二中枢支撑带（31.20 - 31.76 元）**：布林中轨（31.21 元）与 20 日 VWMA（31.76 元）重叠形成的成交密集支撑平台，为中线量价格局的关键分界岭。\n  - **上方阻力带（33.50 - 33.78 元）**：前期高点 33.50 元与布林上轨 33.78 元构成的短线获利盘压制带。\n\n---\n\n### 板块资金协同与跨标的联动效应\n\n#### 1. 行业资金微观分流与虹吸效应\n- **科技制造虹吸**：2026-11-23 全市场增量资金高度集中在通信设备（+83.76 亿）、半导体（+30.88 亿）等成长方向，日内呈现典型的“硬科技加速进攻、大众消费存量失血”的风格博弈格局。\n- **食品饮料板块内部结构**：食品饮料行业整体净流入仅 3.86 亿元，呈现出极高的高度集中特征，主要由贵州茅台（净流入 4.57 亿元）与伊利股份（净流入 1.32 亿元）两大行业权重承接，板块内绝大多数二三线标的仍处于存量资金净流出状态。\n\n【短线视角】\n大盘短线投机资金沉淀于成长与科技小票，食品饮料板块缺乏增量抱团共振，伊利股份单日大单流入更多表现为龙头防御性被动配置，短线向上发动板块级主升行情的资金协同度不足（时滞 1-2 周）。\n\n【中线视角】\n贵州茅台与伊利股份作为消费板块流动性核心，率先获得主力资金企稳翻红，表明在宏观流动性托底（SFISF 操作、再贷款常态化）背景下，中线配置型资金对低估值、高股息的大众消费白马存在稳定的底仓配置意愿。一旦科技板块冲高分歧，两标的有望率先承接高低切换的轮动溢出资金（时滞 1-3 个月）。\n\n---\n\n### 资金动向推演与跟踪信号\n\n#### 1. 下一步观察路径与演化情景\n- **情景 A：缩量承接后放量突破（中性偏多情景，概率 60%）**\n  - 主力大单连续 2 日以上维持净流入，日成交量维持在 8,000 万股以上，价格依托 32.20 元（10 EMA）震荡企稳并放量反包，再次挑战 33.50-33.80 元。\n- **情景 B：资金二次流出深踩中轨（震荡整固情景，概率 40%）**\n  - 主力大单重新转为净流出，科技板块持续加速抽血，标的失守 32.20 元支撑，向下回踩 20 日 VWMA（31.76 元）及布林中轨（31.21 元）构筑整理平台。\n\n#### 2. 异动触发条件与风控预警\n- **短线走弱预警**：单日主力资金流出再度超 2 亿元，且盘中收盘跌破 32.20 元，需对短线承接假设进行降级处理并执行防守。\n- **中线走弱预警**：连续 3 个交易日大单失控流出，价格跌破 20 日 VWMA（31.76 元）并在 31.20 元下方运行，视为中线量价格局转入调整期。\n\n---\n\n### 资金行为与微观结构汇总表\n\n| 资金维度 | 数据表现 (2026-11-23) | 可观察信号定性 (candidate) | 置信度 | 交易启示 |\n| :--- | :--- | :--- | :--- | :--- |\n| **单日主力净额** | +13,166.74 万元（+1.32 亿元） | 逆势大单回流候选（待验证） | 中等偏低（单一来源） | 短线流出节奏放缓，关注持续性 |\n| **5日累计主力净额** | -60,258.60 万元（-6.03 亿元） | 阶段性套现流出偏向 | 中等偏低 | 中期筹码仍处消化期，防盲目追高 |\n| **量价与均线配合** | 缩量收跌1.50%，依托10 EMA | 回踩缩量承接候选（待验证） | 中等 | 均线多头形态未破，具备低吸防守价值 |\n| **VWMA 价格带** | 20日 VWMA 为 31.76 元，现价 32.85 元 | 量价重心多头控制带 | 高（量价计算确定） | 31.76 元为中线多头重要分水岭 |\n| **龙虎榜席位特征** | 无龙虎榜披露 | 常态化连续竞价撮合 | 高（无异动事实） | 缺乏机构/游资专用席位对手盘数据 |\n| **板块资金协同** | 科技加速虹吸，消费双雄微幅回流 | 存量分化与防御对冲候选 | 中等 | 缺乏板块进攻协同，短线多防守蓄势 |\n\n---\n\n<!-- VERDICT: {\"directions\": {\"short\": \"中性\", \"medium\": \"偏多\"}, \"reasons\": {\"short\": \"单日大单翻红但5日仍失血，短线蓄势整固\", \"medium\": \"价格居VWMA上方，回踩缩量大单承接良好\"}} -->"
+  },
+  {
+   "report_id": "5239545dbb8049ce8b2ceb2069c615a5",
+   "symbol": "601899.SH",
+   "trade_date": "2026-11-23",
+   "selection": {
+    "selected_field": "r0_net",
+    "selected_source": "eastmoney_direct",
+    "selected_window_days": 1,
+    "records": [
+     {
+      "date": "2026-11-17",
+      "measurement_date": "2026-11-17",
+      "as_of": "2026-11-17",
+      "requested_as_of": "2026-11-23",
+      "symbol": "601899.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T08:40:11.871737+00:00",
+      "status": "available",
+      "r0_net": "-1.37868864",
+      "r0_net_raw": "-137868864.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "43110480.0",
+       "f54": "94758384.0",
+       "f55": "159745984.0",
+       "f56": "-297614848.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-18",
+      "measurement_date": "2026-11-18",
+      "as_of": "2026-11-18",
+      "requested_as_of": "2026-11-23",
+      "symbol": "601899.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T08:40:11.871737+00:00",
+      "status": "available",
+      "r0_net": "-9.42081936",
+      "r0_net_raw": "-942081936.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "720939856.0",
+       "f54": "221142080.0",
+       "f55": "-516908720.0",
+       "f56": "-425173216.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-19",
+      "measurement_date": "2026-11-19",
+      "as_of": "2026-11-19",
+      "requested_as_of": "2026-11-23",
+      "symbol": "601899.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T08:40:11.871737+00:00",
+      "status": "available",
+      "r0_net": "-0.46867024",
+      "r0_net_raw": "-46867024.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "412886336.0",
+       "f54": "-366019312.0",
+       "f55": "-214124576.0",
+       "f56": "167257552.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-20",
+      "measurement_date": "2026-11-20",
+      "as_of": "2026-11-20",
+      "requested_as_of": "2026-11-23",
+      "symbol": "601899.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T08:40:11.871737+00:00",
+      "status": "available",
+      "r0_net": "8.1983248",
+      "r0_net_raw": "819832480.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-282698464.0",
+       "f54": "-537134016.0",
+       "f55": "173689728.0",
+       "f56": "646142752.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-23",
+      "measurement_date": "2026-11-23",
+      "as_of": "2026-11-23",
+      "requested_as_of": "2026-11-23",
+      "symbol": "601899.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T08:40:11.871737+00:00",
+      "status": "available",
+      "r0_net": "3.17789584",
+      "r0_net_raw": "317789584.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-192237088.0",
+       "f54": "-125552480.0",
+       "f55": "-509077936.0",
+       "f56": "826867520.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     }
+    ]
+   },
+   "smart_money_text": "### 资金流向与龙虎榜微观数据全景透视\n\n#### 1. 主力资金与分单分组流向全景\n根据东方财富直连口径（新算法组，单数据源提供，缺乏多源交叉印证，参考可信度核定为中等偏低），紫金矿业（601899.SH）近5个交易日的主力净额（`r0_net`）分布如下：\n- **2026-11-17**：主力净额 -1.38 亿元（流出）\n- **2026-11-18**：主力净额 -9.42 亿元（流出）\n- **2026-11-19**：主力净额 -0.47 亿元（流出）\n- **2026-11-20**：主力净额 +8.20 亿元（流入）\n- **2026-11-23**（当日）：主力净额 +3.18 亿元（流入）\n- **5日累计主力净额**：+0.11 亿元（呈现“前三日连续净流出、后两日回补反弹”的微幅弱正向格局）\n\n在相对规模方面，2026-11-23 主力净额占流通市值比约为 0.0636%（即 0.000636，分母来源于流通市值）。成交额占比数据缺失，根据纪律约束，不得退回绝对净额断言规模等级，仅作为标的同日相对参考。\n\n#### 2. 龙虎榜席位特征\n当日该股无龙虎榜数据披露（非异动交易日无公开席位明细，属正常现象），无公开席位级买卖事实证据。\n\n---\n\n### What-Why-SoWhat-WhatNext 资金行为深度剖析\n\n#### 1. What（资金数据透视与微观全景）\n- **数据事实**：股价收盘上涨 +2.23% 至 24.26 元，全天成交量 2.83 亿股（较 11-20 的 4.4 亿股显著萎缩）；主力订单分组统计显示单日净买入 3.18 亿元，连续两个交易日呈现统计口径上的主力净流入（11-20 至 11-23 合计净流入约 11.38 亿元）。\n- **【短线视角】**：订单分组数据显示大单/超大单维度出现连续两日的净回补，配合股价自 22.56 元低位反弹至 24.26 元，属于缩量超跌反抽阶段的被动回补特征。\n- **【中线视角】**：5日主力净额仅累计微幅净流入 0.11 亿元，此前 11-17 至 11-19 的连续大额净流出（合计超 11.2 亿元）尚未被充分对冲，资金结构仍处于大级别流出后的低位修复阶段。\n\n#### 2. Why（供求动机与资金博弈假设）\n- **微观供求博弈假设（仅作分析假设，严禁归因具体机构主体）**：\n  1. 11月20日公司公告拟实施20亿-30亿元股份回购并出资1亿元完成首笔回购，为盘面注入了交易托底信号。主力订单统计转正，反映出部分左侧资金与量化套利策略在下影线低点出现后进场接筹。\n  2. 11月23日缩量上涨伴随主力净额 +3.18 亿元，其供求动力更偏向于“空头抛压暂时衰竭后的低阻力反弹”，而非场外增量大单的主动逼空进攻。\n- **【短线视角】**：回购托底预期的心理防线抑制了日内激进融券与做空抛盘，短线买盘力量在 23.50 元上方占据相对主动。\n- **【中线视角】**：海外金属价格（LME铜20日跌幅超15%）弱势未改，且全市场存量流动性集中流向科技制造类成长股，顺周期传统资源板块的中线配置买盘依然较为谨慎。\n\n#### 3. So What（资金阶段定性与预期差识别）\n- **候选特征定性**：当前呈现“大单净流入 + 缩量反弹”组合，定性为**超跌企稳弱反弹候选（event_candidate，待验证）**，严禁定性为主力建仓或反转确立。\n- **预期差与情绪博弈**：\n  - **【短线视角】**：市场注意力多数聚焦于算力、科技等连板小票生态，紫金矿业作为超大盘蓝筹并未形成游资与散户的情绪合力。大单连续流入与盘面冷清形成弱预期差，短期抛压相对较轻，具备向阻力位反抽的技术基础。\n  - **【中线视角】**：中长线投资者对大宗商品下行周期的担忧与公司前三季度高盈利（575亿元）及回购落地之间存在认知分歧。大单资金尚未形成周度级别的主动增仓趋势，中线筹码仍受前期高位套牢盘压制。\n\n#### 4. What Next（演化推演与板块协同）\n- **路径演化推演**：\n  - **【短线视角】**：若后续大单资金持续维持每日 2-5 亿元净流入，股价有望在 1-2 周内向 10日 EMA（25.45 元）发起回抽测试；若大单资金在 24.50 元阻力带再次转为净流出，则反弹大概率受阻并退守 23.50 元下轨支撑。\n  - **【中线视角】**：中期能否摆脱下降通道，取决于工业金属大宗价格止跌信号及日均大单净流入的可持续性，中线窗口（1-3个月）需关注成交量是否有效放大至 3.5 亿股以上。\n\n---\n\n### VWMA 成交量加权价格带与价格支撑压力测试\n\n- **VWMA 价格参考带**：当前 VWMA 位于 **26.11 元**（严格作为成交量加权平均价格参考带，严禁视为任何账户的底仓或持仓成本）。\n- **量价相对位置**：当前收盘价 24.26 元处于 VWMA（26.11 元）下方，处于成交密集区的贴水位置，表明过去一段时间内的交易筹码整体处于浮亏承压状态。\n- **阻力与支撑结构测试**：\n  - **上方第一阻力区**：24.50 - 25.45 元（前期颈线平台破位反压带与 10日 EMA 均线压制）。\n  - **上方核心技术压制带**：26.11 元（VWMA）至 26.93 元（布林中轨）。若股价反弹至此，预计将遭遇前期套牢盘的平保解套抛压与量化平仓盘博弈。\n  - **下方第一支撑位**：23.48 元（布林通道下轨）。\n  - **波段极限防线**：22.56 元（11月20日长下影线低点及公司首笔回购区间下沿）。\n\n---\n\n### 板块资金协同与跨标的联动效应\n\n- **市场资金风格分化与抽血效应**：\n  - 2026-11-23 市场资金呈现极端风格分化，净流入榜单被通信设备（+83.76亿）、半导体（+30.88亿）等 TMT 科技赛道全盘占据。\n  - 有色金属与贵金属板块未进入净流入前列，全市场流动性向成长与中小市值题材倾斜，对顺周期大盘蓝筹形成了较明显的资金分流与存量抽血效应。\n- **跨市场标的映射**：\n  - 国际矿业对标自由港（FCX，月环比-33.25%）与美铝（AA）持续破位，外盘跨市场估值溢价收缩；虽然 COMEX 黄金单日反弹 +1.92%，但在存量博弈环境下，有色板块内部未能形成由点及面的板块级资金协同进攻，更多表现为大市值龙头的个股弱平衡震荡。\n\n---\n\n### 资金动向推演与跟踪信号\n\n#### 1. 下一步观察路径\n- 跟踪主力资金净额能否在 24.50 元上方保持连续 3 日净流入，确认大单回补的真实持续性。\n- 观察成交量能否温和放大至 3.5 亿股以上以突破 10日 EMA 压制。\n\n#### 2. 异动触发条件与风控预警\n- **向上企稳确认条件**：日 K 线放量站上 25.45 元（10日 EMA），且主力大单单日净流入超 5 亿元。\n- **破位风险预警**：若主力大单再度转为日内净流出超 3 亿元，且跌破 23.48 元（布林下轨），反弹假设失效，大概率下探考验 22.56 元前低。\n\n---\n\n### 资金维度指标与定性汇总表\n\n| 资金维度 | 数据表现 | 可观察信号定性 (candidate) | 置信度 | 交易启示 |\n| :--- | :--- | :--- | :--- | :--- |\n| **单日主力净额 (11-23)** | +3.18 亿元 | 缩量弱反抽大单回补候选 | 中等偏低 (单源) | 短线多头占优，但不宜追高 |\n| **5日累计主力净额** | +0.11 亿元 | 多空相持平水候选 | 中等 | 中线资金尚未形成趋势性进攻合力 |\n| **成交量与换手特征** | 2.83 亿股 (较前日显著缩量) | 缩量超跌反弹候选 | 高 | 上方抛压暂缓但场外增量买盘谨慎 |\n| **VWMA 参考带相对位置** | 收盘价 24.26 vs VWMA 26.11 | VWMA 贴水压制候选 | 高 | 26.11 附近为中线反弹重要阻力带 |\n| **板块协同与跨标的联动** | 科技吸血，有色板块无增量 | 存量博弈被动防御候选 | 中等 | 缺乏板块资金协同，行情偏独立防御 |\n| **龙虎榜席位明细** | 当日无披露 | 席位不可观察 | 不适用 | 无公开机构或游资对倒异动线索 |\n\n<!-- VERDICT: {\"directions\": {\"short\": \"偏多\", \"medium\": \"中性\"}, \"reasons\": {\"short\": \"大单连续回补，超卖技术修复延续\", \"medium\": \"5日主力近持平，VWMA压制且缺乏增量\"}} -->"
+  },
+  {
+   "report_id": "16b3e69bee63468d8ca3f5ada75db600",
+   "symbol": "603259.SH",
+   "trade_date": "2026-11-23",
+   "selection": {
+    "selected_field": "r0_net",
+    "selected_source": "eastmoney_direct",
+    "selected_window_days": 1,
+    "records": [
+     {
+      "date": "2026-11-17",
+      "measurement_date": "2026-11-17",
+      "as_of": "2026-11-17",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:22.100219+00:00",
+      "status": "available",
+      "r0_net": "1.31855248",
+      "r0_net_raw": "131855248.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-130428160.0",
+       "f54": "-1427104.0",
+       "f55": "41936400.0",
+       "f56": "89918848.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-18",
+      "measurement_date": "2026-11-18",
+      "as_of": "2026-11-18",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:22.100219+00:00",
+      "status": "available",
+      "r0_net": "-0.60494544",
+      "r0_net_raw": "-60494544.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-6649072.0",
+       "f54": "67143600.0",
+       "f55": "11464960.0",
+       "f56": "-71959504.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-19",
+      "measurement_date": "2026-11-19",
+      "as_of": "2026-11-19",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:22.100219+00:00",
+      "status": "available",
+      "r0_net": "-0.04951504",
+      "r0_net_raw": "-4951504.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "18375344.0",
+       "f54": "-13423840.0",
+       "f55": "-116583744.0",
+       "f56": "111632240.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-20",
+      "measurement_date": "2026-11-20",
+      "as_of": "2026-11-20",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:22.100219+00:00",
+      "status": "available",
+      "r0_net": "-1.67539104",
+      "r0_net_raw": "-167539104.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-128788240.0",
+       "f54": "296327344.0",
+       "f55": "-213719328.0",
+       "f56": "46180224.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-23",
+      "measurement_date": "2026-11-23",
+      "as_of": "2026-11-23",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_direct",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:22.100219+00:00",
+      "status": "available",
+      "r0_net": "0.9968504",
+      "r0_net_raw": "99685040.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      },
+      "vendor_raw_fields": {
+       "f53": "-92215360.0",
+       "f54": "-7469696.0",
+       "f55": "6866496.0",
+       "f56": "92818544.0"
+      },
+      "vendor_raw_field_status": "discovery_only",
+      "vendor_raw_fields_missing": [],
+      "vendor_raw_field_units": {
+       "f53": null,
+       "f54": null,
+       "f55": null,
+       "f56": null
+      }
+     },
+     {
+      "date": "2026-11-17",
+      "measurement_date": "2026-11-17",
+      "as_of": "2026-11-17",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_individual_fund_flow",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:21.962599+00:00",
+      "status": "available",
+      "r0_net": "1.31855248",
+      "r0_net_raw": "131855248.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      }
+     },
+     {
+      "date": "2026-11-18",
+      "measurement_date": "2026-11-18",
+      "as_of": "2026-11-18",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_individual_fund_flow",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:21.962599+00:00",
+      "status": "available",
+      "r0_net": "-0.60494544",
+      "r0_net_raw": "-60494544.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      }
+     },
+     {
+      "date": "2026-11-19",
+      "measurement_date": "2026-11-19",
+      "as_of": "2026-11-19",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_individual_fund_flow",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:21.962599+00:00",
+      "status": "available",
+      "r0_net": "-0.04951504",
+      "r0_net_raw": "-4951504.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      }
+     },
+     {
+      "date": "2026-11-20",
+      "measurement_date": "2026-11-20",
+      "as_of": "2026-11-20",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_individual_fund_flow",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:21.962599+00:00",
+      "status": "available",
+      "r0_net": "-1.67539104",
+      "r0_net_raw": "-167539104.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      }
+     },
+     {
+      "date": "2026-11-23",
+      "measurement_date": "2026-11-23",
+      "as_of": "2026-11-23",
+      "requested_as_of": "2026-11-23",
+      "symbol": "603259.SH",
+      "source": "eastmoney_individual_fund_flow",
+      "source_family": "eastmoney",
+      "algorithm_group": "new_algorithm_group",
+      "source_group": "new_algorithm_group",
+      "algorithm_generation": "new",
+      "legacy_web_algorithm": false,
+      "period_kind": "historical_daily",
+      "time_window": "1d",
+      "window": "1d",
+      "raw_unit": "元",
+      "unit": "亿元",
+      "retrieved_at": "2026-11-23T09:33:21.962599+00:00",
+      "status": "available",
+      "r0_net": "0.9968504",
+      "r0_net_raw": "99685040.0",
+      "r0_net_raw_unit": "元",
+      "field_semantics": {
+       "r0_net": "主力净额（负值表示净流出）"
+      },
+      "field_categories": {
+       "r0_net": "main_force"
+      }
+     }
+    ]
+   },
+   "smart_money_text": "# 药明康德 (603259.SH) 机构资金行为与筹码供求微观结构报告\n**分析基准日**：2026-11-23  \n**分析视角**：短线视角（1-2周，技术面与微观资金主导） + 中线视角（1-3月，基本面与宏观信用主导）  \n**专业观察窗**：短线（1-2周，技术面主导）\n\n---\n\n## 一、资金流向与龙虎榜微观数据全景透视\n\n### 1. 资金流微观口径全景（基准日：2026-11-23）\n- **主力净额统计（主力资金代理口径）**：\n  - 数据源：东方财富直连（`eastmoney_direct`，算法组：`new_algorithm_group`，口径字段：`r0_net`）。\n  - 单日主力净额：**+0.9969 亿元**（+99,685,040.00 元），方向判定为**净流入**。\n  - 旁证核验：东方财富个股资金流（`eastmoney_individual_fund_flow`）记录一致为 **+0.9969 亿元**，多源同向流入，规则评定参考可信度为【偏高】。\n  - 口径说明与纪律约定：本统计口径仅代表订单分组聚合代理指标（超大单/大单轧差），严禁等同于账户级机构投资者事实；本数据不可与新浪历史 `netamount` 口径或同花顺即时快照直接做无缝混同。\n- **近 5 日主力资金连续轨迹（2026-11-17 至 2026-11-23）**：\n  - 2026-11-17：+1.3186 亿元\n  - 2026-11-18：-0.6049 亿元\n  - 2026-11-19：-0.0495 亿元\n  - 2026-11-20：-1.6754 亿元\n  - 2026-11-23：+0.9969 亿元\n  - **5 日累计主力净额**：**-0.0144 亿元**（-1,444,864.00 元），呈现 5 日级别基本平衡、略微偏出的胶着格局。\n- **相对规模参考证据**：\n  - 净额占流通市值比（`net_to_circ_mv`）：约 **0.0275%**（0.00027502），表明该单日流入对于流通市值逾 3600 亿元的超大盘核心标的而言，属于**低强度流动性回补**。\n  - 成交额占比（`net_to_amount`）：分母成交额数据缺失不可用，不作放大推断。\n\n### 2. 龙虎榜席位与订单特征\n- 2026-11-23 当日无龙虎榜数据（当日涨幅 +4.08%，未触发换手率或振幅偏离值等异常波动上榜门槛，符合大市值白马常态）。\n- 席位事实不可用，严禁无证据归因机构专用席位或游资行为。\n\n---\n\n## 二、What-Why-SoWhat-WhatNext 资金行为深度剖析\n\n### 1. What：客观资金流动与量价还原\n药明康德在经历 11-18 至 11-20 连续 3 个交易日累计净流出 2.33 亿元后，于 11-23 迎来单日 +0.9969 亿元的主力订单分组净流入。伴随价格端从日内低点 138.21 元反弹至 146.55 元（全天收涨 +4.08%），分单特征呈现低位的主动性挂单回补。近 5 日累计主力净额从 -1.01 亿元回升至 -0.0144 亿元的零轴平衡区。\n\n### 2. Why：供求博弈假设（仅作 event_candidate 假设分析）\n- **供求力量对比**：当日股价大幅低开后迅速拉起，主力订单分组出现近亿元净流入，推测在 138~142 元前期箱体次低点附近，市场存在较强的主动承接买盘（候选：`low_position_absorption_candidate`，待验证）。前期连续 3 日抛压至 11-20 达到峰值（-1.68 亿元）后，空头动能出现短周期衰竭。\n- **博弈动因推测**：阶段一报告揭示公司在手订单达 767.4 亿元且地缘 1260H 撤诉落地，基本面具备抗跌底线；结合 138 元处于阶段性双底颈线支撑区域，资金分组偏向在关键技术折价位进行回补。\n\n### 3. So What：资金结构定性与预期差识别\n- **定性评估**：定义为「**缩量下跌后关键支撑位的技术性大单回补候选（event_candidate）**」，严禁直接定性为主力实质性反转建仓。\n- **预期差与情绪背离**：\n  - 阶段一情绪监控显示全市场连板短线投机聚焦于硬科技及重组题材（连板梯队达 146 家涨停），医药生物板块全天主力资金大幅失血（11-20 板块净流出 32.43 亿元）。\n  - 药明康德在行业整体失血且无散户题材共振的环境下，逆势录得近亿元主力订单净流入，并收复 10 日均线，形成了典型的「**行业 Beta 边缘化与个股大单回补护盘**」的阶段性背离。\n\n#### 【短线视角】\n资金面出现单日 +0.9969 亿元的止跌企稳信号，阻断了连续 3 日的净流出趋势。由于净流入占流通市值比仅为 0.0275%，表明属于存量资金的技术性反抽回补，而非增量资金的抢筹建仓。短线预计在 1-2 周内带来震荡偏强的修复脉冲，但缺乏板块级增量合力，脉冲持续性需观察大单净流入的连贯性。\n\n#### 【中线视角】\n5 日累计净额仍微幅净流出（-0.0144 亿元），近一个月筹码结构在 140~150 元窄幅拉锯。中线视角下，单日净流入不足以逆转中期均线（50-SMA 报 151.73 元）的压制。中线资金博弈仍处于等待全球投融资拐点与海外高利率降温（时滞 1-3 月）的蓄势阶段，资金行为偏向区间防守而非进攻。\n\n---\n\n## 三、VWMA 成交量加权价格带与价格支撑压力测试\n\n- **基准日 20 日 VWMA 指标**：**147.06 元**。\n- **收盘价位置**：**146.55 元**（紧贴 VWMA 下沿，仅差 0.51 元，偏离度 -0.35%）。\n\n### 价格带微观博弈与测试推演：\n1. **VWMA 价格参考带属性**：\n   - 20 日 VWMA 147.06 元代表过去 20 个交易日市场交易者的成交量加权平均成本参考带。\n   - 股价自 138.21 元强劲反弹至收盘 146.55 元，直接叩击 147.06 元关键量价中枢，此处堆积了过去 1 个月的密集换手筹码。\n2. **压力位测试**：\n   - 第一阻力位即为 **147.06 ~ 147.60 元**（20 日 VWMA 与当日最高点 147.58 元共振）。若大单资金无法持续净流入放大成交，解套盘与短线获利盘将在此处形成双重抛压。\n   - 第二阻力位为 **151.73 ~ 154.40 元**（50-SMA 与布林线上轨交汇区）。\n3. **支撑位测试**：\n   - 回踩支撑位于 **145.26 ~ 145.36 元**（布林中轨与 10-EMA 汇聚带）。\n   - 强防守位锚定在 **138.00 ~ 140.00 元**（日内低点与近期双底支撑带）。\n\n#### 【短线视角】\n短线价格紧逼 147.06 元 VWMA，1-2 天内将迎来直接的压力测试。若主力资金不能在 147 元上方连续提供日均 0.8~1.0 亿元以上的净流入，股价承压于 VWMA 展开二次回踩 145 元中轨的概率极高。\n\n#### 【中线视角】\n在中线 1-3 个月维度，VWMA（147.06 元）是区分弱势震荡与中级反弹的分水岭。有效放量站上 147 元并向 50-SMA（151.73 元）挺进，是中期资金供求格局由防御转入右侧进攻的技术门槛。\n\n---\n\n## 四、板块资金协同与跨标的联动效应\n\n### 1. 行业资金协同：显著的「存量抽血」效应\n- **板块资金流向**：通信设备（+83.76 亿）、半导体（+30.88 亿）等 TMT 科技方向单日大规模吸金，全市场呈现投机资金与硬科技抱团。\n- **医药板块失血**：医药生物行业连续多日录得 20~30 亿元级别的大额净流出，今日申万一级涨幅榜前列无医药。药明康德在全行业失血状态下录得 0.9969 亿元主力净流入，属于板块内部核心标的的「**存量抱团取暖与防御性避险**」，并未带动 CXO 板块形成协同上攻。\n\n### 2. 跨市场与产业链传导\n- 海外龙头礼来（Eli Lilly）月涨 +6.14%，GLP-1 产能外包链景气度处于高位；但美股纳斯达克生物科技指数（NBI）单月跌 -4.82%，海外一级投融资流动性依然受到美债收益率 4.92% 的压制。\n- 资金对于 CXO 的分歧核心在于：大单资金认同头部公司商业化订单韧性（在手 767.4 亿），但顾虑全球医药研发支出收紧对长远订单的压制。\n\n#### 【短线视角】\n科技 TMT 虹吸效应处于极值区，医药板块短期缺乏外部增量增援。药明康德短线资金处于“孤岛反弹”候选状态，向上突破需承担行业逆风阻力，反弹空间受限。\n\n#### 【中线视角】\n随着科技板块高位分化，资金在中线（1-2个月）存在高低切换配置需求。药明康德具备低估值与确定性订单支撑，中线有望承接由成长向价值切换的防御型配置资金。\n\n---\n\n## 五、资金动向推演与跟踪信号\n\n### 1. 后续资金演化推演\n- **偏多演化路径（概率 40%）**：主力资金维持连贯净流入（连续 2 日净流入 > 0.8 亿元），放量突破 147.06 元 VWMA，回踩不破后直奔 151.73~154.40 元阻力带。\n- **震荡拉锯路径（基准假设，概率 50%）**：主力资金在 147 元附近转为小额净流出或小幅拉锯（±0.3 亿元以内），价格在 143~147 元之间消化 20 日均线套牢盘，延续缩量筑底。\n- **破位转弱路径（概率 10%）**：主力资金再度出现单日 > 1.5 亿元的大额净流出（类似 11-20），跌破 143.00 元中轨支撑，回测 138.00 元箱体底部。\n\n### 2. 跟踪信号与风控预警\n- **做多增补信号**：日 K 线实体突破并收盘在 147.06 元（VWMA）上方，且当日主力订单分组净流入 > 1.0 亿元。\n- **防守离场信号**：价格跌破 143.00 元中轨防线，或主力资金再度出现持续单日净流出 > 1.0 亿元。\n- **风控阈值**：短线硬止损位设为 **139.50 元**（破坏日内探底回升支撑结构）；中线止损位设为 **131.00 元**（前低强支撑）。\n\n#### 【短线视角】\n1-2 周内主要观察主力资金是否能在 147.06 元 VWMA 处形成放量承接。操作上宜采取依托 143.50~145.50 元中轨支撑低吸的防御策略，严禁在 147 元以上追涨。\n\n#### 【中线视角】\n1-3 个月重点观察 5 日及 20 日累计主力净额能否形成持续的斜率抬升。在宽幅震荡区间（135~155 元）未被实质性突破前，维持分批逢低吸纳、耐受时间换空间的波段策略。\n\n---\n\n## 六、微观资金信号与交易启示汇总\n\n| 资金维度 | 数据表现 | 可观察信号定性 (candidate) | 置信度 | 交易启示 |\n| :--- | :--- | :--- | :--- | :--- |\n| **单日主力净额** | +0.9969 亿元 (东财直连，r0_net) | 止跌技术性回补候选 (rebound_candidate) | 偏高 (多源同向) | 短线空头衰竭，激进者可依托中轨低吸博弈反弹 |\n| **5 日主力累计** | -0.0144 亿元 (5日净额胶着) | 筹码多空拉锯平衡态 (equilibrium_candidate) | 高 | 中期尚未形成趋势性进攻，切忌单边追涨 |\n| **相对规模占比** | 净额/流通市值 = 0.0275% | 低强度流动性托底 (low_intensity_support) | 高 | 流动性回补强度有限，反弹空间高度依赖量能后续配合 |\n| **VWMA 价格带** | 20日 VWMA = 147.06 元，现价 146.55 元 | 临界阻力带测试 (resistance_testing_candidate) | 高 | 147.06 元为短线获利了结与解套分歧位，注意冲高压制 |\n| **板块资金协同** | 科技吸金超百亿，医药持续失血 | 存量博弈边缘化 (sector_depletion_candidate) | 极高 | 缺乏板块 Beta 助力，个股反弹呈现独立抵抗特征 |\n| **龙虎榜席位** | 无上榜数据 (非异动常态) | 机构/游资席位事实缺失 | 无法定性 | 不外推主体所有权身份，严格依据盘口量价跟踪 |\n\n<!-- VERDICT: {\"directions\": {\"short\": \"偏多\", \"medium\": \"中性\"}, \"reasons\": {\"short\": \"单日主力净流入近亿，探底回升测试VWMA\", \"medium\": \"5日主力胶着平衡，承压50日均线箱体拉锯\"}} -->"
+  }
+ ]
+}
