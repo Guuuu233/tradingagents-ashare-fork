@@ -19,6 +19,7 @@ $ROOT/work/hist-bench-20260926/run.py 里的 EMAIL 赋值——该文件未入�
 """
 import argparse
 import fcntl, json, os, re, sqlite3, sys, threading, time
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -79,15 +80,19 @@ def read_report_status_with_retries(symbol, job_id, log):
     progress_retries = 0
     while True:
         try:
-            con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-            con.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
-            row = con.execute("select status from reports where id=?", (job_id,)).fetchone()
-            con.close()
-            return row[0] if row else None
+            with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as con:
+                con.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+                row = con.execute(
+                    "select status from reports where id=?", (job_id,)
+                ).fetchone()
+                return row[0] if row else None
         except sqlite3.OperationalError as exc:
             if (
                 progress_retries >= len(PROGRESS_RETRY_DELAYS_SECONDS)
-                or "database is locked" not in str(exc).lower()
+                or not (
+                    "database is locked" in str(exc).lower()
+                    or "database table is busy" in str(exc).lower()
+                )
             ):
                 raise
             retry_delay = PROGRESS_RETRY_DELAYS_SECONDS[progress_retries]
@@ -223,10 +228,30 @@ def main():
     results = {}
 
     def busy():
-        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-        n = con.execute("select count(*) from reports where status in ('running','pending','queued')").fetchone()[0]
-        con.close()
-        return n
+        busy_retries = 0
+        while True:
+            try:
+                with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as con:
+                    con.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+                    return con.execute(
+                        "select count(*) from reports where status in ('running','pending','queued')"
+                    ).fetchone()[0]
+            except sqlite3.OperationalError as exc:
+                if (
+                    busy_retries >= len(PROGRESS_RETRY_DELAYS_SECONDS)
+                    or not (
+                        "database is locked" in str(exc).lower()
+                        or "database table is busy" in str(exc).lower()
+                    )
+                ):
+                    raise
+                retry_delay = PROGRESS_RETRY_DELAYS_SECONDS[busy_retries]
+                busy_retries += 1
+                log(
+                    f"RETRY busy read retry={busy_retries} "
+                    f"delay={retry_delay}s: {type(exc).__name__} {exc}"
+                )
+                time.sleep(retry_delay)
 
     def one(sym):
         try:
@@ -242,7 +267,7 @@ def main():
             st = None
             while time.time() - t0 < 7200:
                 time.sleep(30)
-                st = read_report_status_with_retries(sym, jid)
+                st = read_report_status_with_retries(sym, jid, log)
                 if st in ("completed", "failed"):
                     break
             results[sym] = {"job_id": jid, "status": st, "seconds": int(time.time() - t0)}

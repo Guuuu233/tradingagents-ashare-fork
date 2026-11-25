@@ -43,7 +43,7 @@ EXPECTED_SHA256 = {
     "work/b1-monitor/b1_daily_monitor.py":
         "386f277ac2ddd112de71bf6173a62a101d85370664344c971c3eeef6e9db6625",
     "work/daily-batch/run_daily.py":
-        "9a6375108663338a3e706eafaddf2e6106b6ea27e74be7612c80fadd965fd072",
+        "a24a2bdfbdc26e87e0f9406aff2dcdbcad1c05de25ed8cac15124813ec37c69b",
 }
 
 # b1_daily_monitor.py is the verbatim production copy and must stay so.

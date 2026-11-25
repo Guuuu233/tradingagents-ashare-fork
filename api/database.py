@@ -20,7 +20,9 @@ from tradingagents.storage.compressed_json import (
 
 # Database URL - default to SQLite for simplicity
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tradingagents.db")
-SQLITE_BUSY_TIMEOUT_SECONDS = int(os.getenv("TA_SQLITE_BUSY_TIMEOUT_SECONDS", "30"))
+SQLITE_BUSY_TIMEOUT_SECONDS = max(
+    0, int(os.getenv("TA_SQLITE_BUSY_TIMEOUT_SECONDS", "30"))
+)
 
 # Create engine
 if DATABASE_URL.startswith("sqlite"):

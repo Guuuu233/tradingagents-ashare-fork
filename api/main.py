@@ -46,15 +46,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session
 import pandas as pd
 
 from api.database import UserDB, VersionStatsDB, FeedbackDB, SponsorDB, ProviderDB, init_db, get_db, get_db_ctx, current_report_id
-from api.db_retry import retry_sqlite_lock
 from api.usage_logging import current_llm_horizon, current_llm_role
 from api.services import stock_map_service
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service, role_routing_service, custom_prompt_service, social_data_service
+from api.db_retry import is_transient_sqlite_lock, retry_sqlite_lock
 import jwt
 
 def _get_real_ip(request: Request) -> Optional[str]:
@@ -2803,7 +2804,12 @@ async def _save_report_or_raise(
 ) -> None:
     """Run a report DB finalizer without turning persistence errors into success."""
     try:
-        await asyncio.to_thread(save_callable)
+        await asyncio.to_thread(
+            retry_sqlite_lock,
+            save_callable,
+            delays_seconds=_DB_FAILURE_RETRY_DELAYS_SECONDS,
+            operation_name=f"{stage} report for job {job_id}",
+        )
     except Exception as exc:
         message = f"Failed to {stage} report for job {job_id}: {exc}"
         _log(message)
@@ -5050,7 +5056,12 @@ async def _run_job_inner(
                         err_db, job_id, f"{err_msg}\n\n{err_diagnostics['traceback']}"
                     )
                     report_service.update_report_partial(err_db, job_id, result_data=failed_result)
-            await asyncio.to_thread(_record_failure)
+            await asyncio.to_thread(
+                retry_sqlite_lock,
+                _record_failure,
+                delays_seconds=_DB_FAILURE_RETRY_DELAYS_SECONDS,
+                operation_name=f"record inner failure for job {job_id}",
+            )
         except Exception as db_exc:
             _log(f"Failed to record failure in DB: {db_exc}")
 
@@ -6345,9 +6356,14 @@ async def chat_completions(
                 # DAV-1463 / DAV-1957 🟡3: sibling of the _run_job failure
                 # paths — a synchronous SQLite write on the loop thread.
                 try:
-                    await asyncio.to_thread(_mark_chat_job_failed)
-                except Exception:
-                    pass
+                    await asyncio.to_thread(
+                        retry_sqlite_lock,
+                        _mark_chat_job_failed,
+                        delays_seconds=_DB_FAILURE_RETRY_DELAYS_SECONDS,
+                        operation_name=f"mark chat job {job_id} failed",
+                    )
+                except Exception as db_exc:
+                    _log(f"Failed to mark chat job {job_id} failed in DB: {db_exc}")
                 _emit_job_event(
                     job_id,
                     "job.failed",
@@ -7360,7 +7376,16 @@ def update_user_role_bindings(
     current_user: UserDB = Depends(_require_web_user),
 ):
     raw_items = [item.model_dump() for item in body.bindings]
-    return role_routing_service.update_role_bindings(db, current_user.id, raw_items)
+    try:
+        return role_routing_service.update_role_bindings(db, current_user.id, raw_items)
+    except SQLAlchemyOperationalError as exc:
+        if not is_transient_sqlite_lock(exc):
+            raise
+        logger.warning("Role binding update for user %s still locked: %s", current_user.id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="数据库暂时被占用，请稍后重试角色绑定保存",
+        ) from exc
 
 
 @app.post("/v1/role-bindings/presets")
@@ -7425,6 +7450,14 @@ def update_user_custom_prompts(
         return custom_prompt_service.replace_custom_prompts(db, current_user.id, raw_items)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SQLAlchemyOperationalError as exc:
+        if not is_transient_sqlite_lock(exc):
+            raise
+        logger.warning("Custom prompt update for user %s still locked: %s", current_user.id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="数据库暂时被占用，请稍后重试自定义提示词保存",
+        ) from exc
 
 
 @app.get("/v1/custom-prompts/resolved", response_model=List[ResolvedCustomPromptResponse])
