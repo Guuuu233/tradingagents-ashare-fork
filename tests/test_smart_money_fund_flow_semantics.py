@@ -215,3 +215,48 @@ def test_smart_money_dc_r0_net_allows_main_force_direction_when_model_matches():
     assert guard["direction_allowed"] is True
     assert guard["selected_field"] == "r0_net"
     assert guard["selected_value"] == "2.211971"
+
+
+def _run_ths_netamount_node(text):
+    llm = _YieldingLLM(text)
+    module = __import__(
+        "tradingagents.agents.analysts.smart_money_analyst",
+        fromlist=["smart_money_analyst"],
+    )
+    state = {
+        "trade_date": "2026-08-10",
+        "company_of_interest": "600519",
+        "user_intent": {"focus_areas": [], "specific_questions": []},
+    }
+    with (
+        patch.object(module, "get_cn_stock_name", return_value="测试股票"),
+        patch.object(module, "get_config", return_value={}),
+        patch.object(module, "get_prompt", return_value="固定系统提示"),
+        patch.object(module, "build_horizon_context", return_value="固定上下文"),
+        patch("api.database.log_llm_call"),
+    ):
+        return asyncio.run(
+            create_smart_money_analyst(llm, _StructuredTHSCollector())(state)
+        )
+
+
+def test_smart_money_netamount_only_negated_forbidden_term_is_not_blocked():
+    """DAV-2484：仅 netamount 时，「严禁定义为主力建仓」是否定句，不得拦截。"""
+    result = _run_ths_netamount_node(
+        "当日总资金净额为 5.60 亿元，属于待验证假设，"
+        "严禁定义为主力建仓或洗盘已成事实。"
+    )
+    guard = result["fund_flow_consensus_guard"]
+    assert guard["blocked"] is False
+    assert guard["direction_allowed"] is True
+    assert "属于待验证假设" in result["smart_money_report"]
+
+
+def test_smart_money_netamount_only_asserted_forbidden_term_is_still_blocked():
+    """DAV-2484：同一句去掉否定词后是断言，必须继续拦截。"""
+    result = _run_ths_netamount_node(
+        "当日总资金净额为 5.60 亿元，主力建仓已成事实。"
+    )
+    guard = result["fund_flow_consensus_guard"]
+    assert guard["blocked"] is True
+    assert guard["direction_allowed"] is False

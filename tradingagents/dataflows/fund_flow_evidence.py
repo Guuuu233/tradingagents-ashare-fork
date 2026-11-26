@@ -2201,6 +2201,51 @@ def consensus_prompt_instruction(consensus: Mapping[str, Any] | None) -> str:
     )
 
 
+# DAV-2484: 仅 netamount 可用时，正文不得把统计口径写成主力吸筹/建仓/增减持。
+# 词表与否定规则写死（不做语义猜测）：否定词必须出现在禁词之前、且在同一个
+# 分句内才放行；禁词之后的否定词不算；单字「非」不算否定（「非常明显」）。
+_MAIN_FORCE_FORBIDDEN_TERMS = (
+    "主力吸筹", "主力建仓", "主力增持", "主力减持", "主力派发",
+    "主力悄然吸筹", "主力大幅增持", "主力大幅减持",
+    "主力资金吸筹", "主力资金建仓", "主力资金增持", "主力资金减持", "主力资金派发",
+)
+
+_NEGATION_TOKENS = (
+    "严禁", "禁止", "不得", "不应", "不能", "不构成", "并非", "不宜", "切勿",
+)
+
+_CLAUSE_DELIMITER = re.compile(r"[，。；！？\n]")
+
+
+def find_non_main_force_violations(text: str | None) -> list[str]:
+    """返回未被否定的主力吸筹/建仓/增减持措辞（按固定词表顺序，去重）。
+
+    判定规则（DAV-2484 §二.1，写死、不做语义猜测）：
+
+    * 分句按 ``，。；！？`` 与换行切分；
+    * 只有否定词出现在禁词**之前**、且两者在**同一分句**内，该次命中才放行；
+    * 禁词之后才出现的否定词不算（``主力建仓，并非洗盘`` 仍拦截）；
+    * 单字「非」不在否定词表内（``主力建仓非常明显`` 仍拦截）。
+
+    同一分句里同一禁词既有被否定的出现、又有未被否定的出现时，仍按违规
+    返回——只要有一处是断言就必须拦截。
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    violations: list[str] = []
+    for clause in _CLAUSE_DELIMITER.split(text):
+        for term in _MAIN_FORCE_FORBIDDEN_TERMS:
+            if term in violations:
+                continue
+            index = clause.find(term)
+            while index != -1:
+                if not any(token in clause[:index] for token in _NEGATION_TOKENS):
+                    violations.append(term)
+                    break
+                index = clause.find(term, index + len(term))
+    return violations
+
+
 # DAV-2386 #2: 任一「亿元」金额。仅当所在行/标签被判定为「个股自身当日主力净额」
 # 作用域时才作为 r0_net 提取——用于汇总表行、带日期的 5 日序列行与 `r0_net`
 # 小标题行，避免把个股自己的数字整份弃权（not_checked）。
@@ -2220,6 +2265,54 @@ _FIELD_VALUE_PATTERNS = {
         ),
     ),
 }
+
+# DAV-2484: netamount 只接受明确的净额语义。总流入/总流出是毛流（gross
+# flow），与净额（net）不是同一字段；把「总流入资金 17.55 亿元，总流出
+# 资金 17.58 亿元，总资金净额为 -0.03519 亿元」中的毛流当净额，会把数值
+# 全部正确的报告误判为写错。
+_NETAMOUNT_NET_LABELS = ("净额", "净流入", "净流出")
+
+
+def _model_netamount_has_net_semantics(
+    text: str, number_start: int, number_end: int,
+) -> bool:
+    """该 netamount 候选值的标签是否明确声明了「净额/净流入/净流出」。
+
+    只认同一分句内紧邻数值之前（即真正绑定该数值）的标签：
+
+    * ``总资金净额 17.55 亿`` / ``净额 17.55 亿`` / ``主力净流入 17.55 亿``
+      有净额语义，可作 netamount；
+    * ``总流入资金 17.55 亿元`` / ``总流出 17.55 亿元`` / ``17.55 亿元的总流入``
+      只有毛流语义，不得当 netamount 抽取。
+
+    分句按 ``，。；;\\n`` 切分（复用 ``_model_clause_bounds``），因此同一句里
+    「总流入 …，总资金净额 …」的两笔读数各自按自己的标签判定，互不借用。
+    数值后面的标签不参与判定：宁可少抽一条毛流，也不让它冒充净额。
+    """
+    clause_start, _clause_end = _model_clause_bounds(text, number_start, number_end)
+    prefix = _model_mask_parentheticals(text[clause_start:number_start])
+    prefix = re.sub(r"[*`\s]", "", prefix)
+    net_spans = [
+        (match.start(), match.end())
+        for label in _NETAMOUNT_NET_LABELS
+        for match in re.finditer(label, prefix)
+    ]
+    # 「流入/流出」前面紧贴「净」时是净额短语（净流入/净流出/净流入资金），
+    # 不再算毛流；否则就是总流入/总流出/流入资金/流出资金一类的毛流标签。
+    gross_spans = [
+        (match.start(), match.end())
+        for label in ("流入", "流出")
+        for match in re.finditer(label, prefix)
+        if match.start() == 0 or prefix[match.start() - 1] != "净"
+    ]
+    labels = net_spans + gross_spans
+    if not labels:
+        return False
+    # 离数值最近（结束位置最靠后）的标签决定口径；「净额 -351.90 万元
+    # （流入 17.55 亿」里的 17.55 属于括号内的毛流分量，不得冒领前面的净额。
+    nearest = max(labels, key=lambda span: (span[1], span[0]))
+    return nearest in net_spans
+
 
 # ---------------------------------------------------------------------------
 # DAV-1291 F1/F2: date binding and generalized interval attribution for model
@@ -3691,6 +3784,13 @@ def _iter_model_amount_matches(text: str, line_labels: Mapping[int, str]):
         for pattern in patterns:
             for match in pattern.finditer(text):
                 covered.add((match.start(1), match.end(1)))
+                if field == "netamount" and not _model_netamount_has_net_semantics(
+                    text, match.start(1), match.end(1),
+                ):
+                    # DAV-2484: 毛流（总流入/总流出/流入资金/流出资金）不是净额。
+                    # 该数字已归 netamount 模式认领，但语义不合格，整条弃权：
+                    # 既不得与结构化 netamount 比对，也不得改判成 r0_net。
+                    continue
                 yield field, match
     own_net_lines = _model_own_net_line_starts(text, line_labels)
     for match in _MODEL_ANY_YI_AMOUNT.finditer(text):

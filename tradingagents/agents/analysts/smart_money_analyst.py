@@ -9,6 +9,7 @@ import json
 
 from tradingagents.dataflows.fund_flow_evidence import (
     consensus_prompt_instruction,
+    find_non_main_force_violations,
     select_fund_flow_source,
     validate_model_summary,
 )
@@ -724,14 +725,8 @@ def create_smart_money_analyst(llm, data_collector=None):
                 and not selection.get("hard_guard", {}).get("blocked")
             )
             if selection_allowed and selected_field == "netamount":
-                non_main_force_violations = [
-                    kw for kw in (
-                        "主力吸筹", "主力建仓", "主力增持", "主力减持", "主力派发",
-                        "主力悄然吸筹", "主力大幅增持", "主力大幅减持",
-                        "主力资金吸筹", "主力资金建仓", "主力资金增持", "主力资金减持", "主力资金派发",
-                    )
-                    if kw in full_content
-                ]
+                # DAV-2484: 否定语境（「严禁定义为主力建仓」）不再当断言拦截。
+                non_main_force_violations = find_non_main_force_violations(full_content)
                 if non_main_force_violations:
                     if isinstance(validation, dict):
                         validation["hard_guard"] = {
