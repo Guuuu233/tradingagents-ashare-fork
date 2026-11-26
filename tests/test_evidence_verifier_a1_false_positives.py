@@ -300,7 +300,9 @@ def test_e_class_compound_clause_preserves_non_flow_fact(evaluator):
         ],
         seven_reports={
             "market_report": "当前股价位于200日SMA 5.37元及50日SMA 5.20元上方。",
-            "smart_money_report": "大单净流出仅占流通市值0.0327%。",
+            # DAV-2479 r8：报告同句带弱化词时按 §二.1 豁免（见 r8 用例）；本用例
+            # 保留「报告无弱化词」的 e 类拆句覆盖。
+            "smart_money_report": "大单净流出占流通市值0.0327%。",
         },
     )
     by_raw = {item["raw"]: item["status"] for item in items}
@@ -360,7 +362,9 @@ def test_bullish_stance_cannot_use_matching_net_outflow_as_verified_evidence(eva
     )[0]
 
     assert result["status"] == STATUS_UNSUPPORTED
-    assert result["details"] == "资金流方向与论点 stance 相反，不作为已核实事实"
+    # DAV-2479 r8：报告为「单日」口径、证据为「5日累计」，同值同弱化但窗口错配；
+    # 按总控 11-27 判定（行 17）撤回理由改记口径错配，不再记 e 类 stance 冲突。
+    assert result["details"] == "资金流数值与报告同值同弱化，但统计窗口不一致（口径错配），不作为已核实事实"
 
 
 from tradingagents.agents.utils.evidence_verifier import (  # noqa: E402
@@ -433,9 +437,15 @@ def test_dav2479_r4_main_vs_retail_pair_verified_but_main_wash_blocked(evaluator
     )
     by_raw = {it["raw"]: it for it in items}
     assert by_raw["大盘大跌下大单逆市净流入1.337亿元散户小单流出1.71亿元"]["status"] == STATUS_VERIFIED
-    wash = by_raw["主力净流出占流通市值比仅-0.0362%"]
-    assert wash["status"] == STATUS_UNSUPPORTED
-    assert "资金流方向与论点 stance 相反" in wash["details"]
+    # DAV-2479 r8 §二.1：报告同句以「仅」弱化同一数值 -0.0362%，按写死豁免不判 e；
+    # 报告无弱化词时仍判 e（下方对照）。
+    assert by_raw["主力净流出占流通市值比仅-0.0362%"]["status"] == STATUS_VERIFIED
+    blocked = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-6", "stance": "bullish", "evidence": ["主力净流出占流通市值比仅-0.0362%"]}],
+        seven_reports={"smart_money_report": "- 主力净流出占流通市值比为-0.0362%，抛压延续。"},
+    )
+    assert blocked and all(it["status"] == STATUS_UNSUPPORTED for it in blocked), blocked
+    assert all("资金流方向与论点 stance 相反" in it["details"] for it in blocked), blocked
 
 
 _A810_LINE = (
@@ -746,3 +756,175 @@ def test_dav2479_r7_thousands_separator_volume_verified(evaluator):
     )
     assert all("裸数字/单位 token" not in str(it.get("details") or "") for it in items), items
     assert any(it["status"] == STATUS_VERIFIED for it in items), items
+
+
+# ── DAV-2479 r8（总控 2026-11-27 05:57 令）：e 类弱化词豁免 + 同实体取整匹配 ──
+
+from tradingagents.agents.utils.evidence_verifier import (  # noqa: E402
+    _is_unexempted_fund_flow_stance_conflict,
+    _rounding_supported_roles,
+)
+
+_R8_FBA21DA2_SMART_MONEY = (
+    "  - 【中线视角】：大单净流出占流通市值比仅为 -0.0327%，相对规模极小，未出现恐慌性清仓痕迹。"
+    "中线维度上，高油价带来的资源勘探盈利与 0.78 倍 PB 估值底线，使得本次大单流出更偏向短线高贝塔资金的阶段性套现，"
+    "并未颠覆中线价值底仓资金的持股结构，预期时滞需 1-3 个月逐步消化。"
+)
+_R8_F8BAB114_SMART_MONEY = (
+    "  - 【中线视角】：近 5 日主力净流出累计 1.70 亿元，占神华庞大流通市值的比重不足万分之零点七（-0.007%），"
+    "表明此类流出属于次级反弹中的交易性仓位微调，绝非战略性中线底仓撤离。"
+)
+_R8_8E7B8F88_SMART_MONEY = (
+    "  - 【中线视角】：尽管大单口径流出，但净额占流通市值比仅为 -0.0328%，属于震荡市常态化换手，并未见恐慌性规模出逃。"
+    "结合中单与小单的被动吸纳，筹码向中线均衡带收敛。"
+)
+_R8_AEA465D0_FUNDAMENTALS = (
+    "- **指标与现状**：美股光伏标杆 First Solar（FSLR）报 150.98 美元（月环比 -12.12%，季度环比 -29.47%），"
+    "微型逆变器龙头 Enphase Energy（ENPH）报 22.66 美元（月环比 -26.02%，季度环比 -40.93%）。"
+)
+
+
+@pytest.mark.parametrize("evidence, report", [
+    ("大单净流出仅占流通市值0.0327%", _R8_FBA21DA2_SMART_MONEY),
+    ("5日主力流出仅占流通市值0.007%", _R8_F8BAB114_SMART_MONEY),
+    ("个股大单净流出占流通市值比仅-0.0328%属常态换手非恐慌撤离", _R8_8E7B8F88_SMART_MONEY),
+])
+def test_dav2479_r8_weakened_flow_restated_is_exempt(evidence, report):
+    assert not _is_unexempted_fund_flow_stance_conflict(evidence, "bullish", {"smart_money_report": report})
+
+
+@pytest.mark.parametrize("evidence, report", [
+    ("大单净流出占流通市值0.0327%", _R8_FBA21DA2_SMART_MONEY),
+    ("大单净流出仅占流通市值0.05%", _R8_FBA21DA2_SMART_MONEY),
+    ("大单净流出仅占流通市值0.0327%", "- 大单净流出占流通市值比为 -0.0327%，抛压明显。"),
+    ("5日主力累计净流出4.67亿占流通市值比仅0.03%", "- 主力资金单日流出仅占流通市值 0.03%，抛压有限。"),
+])
+def test_dav2479_r8_weakening_exemption_requires_same_value_and_wording(evidence, report):
+    assert _is_unexempted_fund_flow_stance_conflict(evidence, "bullish", {"smart_money_report": report})
+
+
+@pytest.mark.parametrize("cid, evidence", [
+    ("INV-2", "大单净流出仅占流通市值0.0327%，未出现恐慌性清仓"),
+    ("INV-6", "5日主力流出仅占流通市值0.007%"),
+    ("INV-2", "个股大单净流出占流通市值比仅-0.0328%属常态换手非恐慌撤离"),
+])
+def test_dav2479_r8_weakened_flow_named_rows_verified(evaluator, cid, evidence):
+    reports = {"smart_money_report": "\n".join(
+        (_R8_FBA21DA2_SMART_MONEY, _R8_F8BAB114_SMART_MONEY, _R8_8E7B8F88_SMART_MONEY)
+    )}
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": cid, "stance": "bullish", "evidence": [evidence]}],
+        seven_reports=reports,
+    )
+    assert all("stance 相反" not in str(it.get("details") or "") for it in items), items
+
+
+def test_dav2479_r8_rounding_match_same_entity_same_metric(evaluator):
+    reports = {"fundamentals_report": _R8_AEA465D0_FUNDAMENTALS}
+    assert _rounding_supported_roles("海外龙头FSLR与ENPH月跌12%至26%压制估值", reports) == ["fundamentals_report"]
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-12", "stance": "bearish", "evidence": ["海外龙头FSLR与ENPH月跌12%至26%压制估值"]}],
+        seven_reports=reports,
+    )
+    assert items and all(it["status"] == STATUS_VERIFIED for it in items), items
+
+
+@pytest.mark.parametrize("segment, expected", [
+    ("海外龙头FSLR与ENPH月跌13%至26%压制估值", None),
+    ("海外龙头FSLR与ENPH季跌12%至26%压制估值", None),
+    ("海外龙头ENPH与FSLR月跌12%至26%压制估值", None),
+    ("海外龙头FSLR与ENPH月涨12%至26%", None),
+    ("FSLR月跌12%", ["fundamentals_report"]),
+])
+def test_dav2479_r8_rounding_match_rejects_other_entity_metric_or_value(segment, expected):
+    reports = {"fundamentals_report": _R8_AEA465D0_FUNDAMENTALS}
+    assert _rounding_supported_roles(segment, reports) == expected
+
+
+def test_dav2479_r8_rounding_match_skips_hypothesis_line():
+    reports = {"macro_report": "- 情景测算：若 FSLR 月环比 -12.12%，ENPH 月环比 -26.02%。"}
+    assert _rounding_supported_roles("FSLR与ENPH月跌12%至26%", reports) is None
+
+
+_R8_DETERMINISM_SCRIPT = """
+import json
+from tradingagents.agents.utils.evidence_verifier import EvidenceFactualTruthEvaluator
+cases = [
+    ("均线死叉压制", {"market_report": "短期均线形成死叉，空头压制明显。"}),
+    ("冲高回落且成交量放大", {"volume_price_report": "盘中冲高回落，成交量明显放大。"}),
+    ("现金流承压", {"macro_report": "企业现金流与现金储备承压。"}),
+]
+out = []
+for raw, reports in cases:
+    r = EvidenceFactualTruthEvaluator().evaluate_single_evidence(raw_evidence=raw, seven_reports=reports)
+    out.append([r["status"], r.get("details")])
+print("DAV2479_DET" + json.dumps(out, ensure_ascii=False))
+"""
+
+
+def test_dav2479_r8_qualitative_match_details_independent_of_hash_seed():
+    import os
+    import subprocess
+    import sys
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    outputs = []
+    for seed in ("0", "1", "2", "20261127"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(
+            [sys.executable, "-c", _R8_DETERMINISM_SCRIPT],
+            cwd=repo_root, env=env, capture_output=True, text=True, timeout=300,
+        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        line = [ln for ln in proc.stdout.splitlines() if ln.startswith("DAV2479_DET")]
+        assert line, proc.stdout[-2000:]
+        outputs.append(line[-1])
+    assert len(set(outputs)) == 1, outputs
+    assert "均线, 死叉" in outputs[0] and "冲高, 回落, 成交量" in outputs[0] and "现金, 现金流" in outputs[0]
+
+
+_R8_E185_REPORTS = {
+    "market_report": "10月21日成交量仅2618万股，量能显著萎缩。",
+    "smart_money_report": "当日大单流出占流通市值比仅约 0.027%，相对规模极小，并未出现恐慌性出逃。",
+}
+
+
+def test_dav2479_r8_exempted_flow_clause_does_not_block_compound_decomposition(evaluator):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-6", "stance": "bullish", "evidence": ["10月21日成交仅2618万股且主力净流出占市值比仅0.027%"]}],
+        seven_reports=_R8_E185_REPORTS,
+    )
+    by_raw = {str(it.get("raw")): it["status"] for it in items}
+    assert by_raw.get("10月21日成交仅2618万股") == STATUS_VERIFIED, items
+    assert all("且" not in str(it.get("raw")) for it in items), items
+
+
+def test_dav2479_r8_flow_window_ignores_calendar_dates_and_moving_averages():
+    from tradingagents.agents.utils.evidence_verifier import _flow_windows
+
+    assert _flow_windows("10月21日主力净流出仅0.027%") == []
+    assert _flow_windows("站稳10日线且5日净流出仅0.85亿") == ["5日"]
+    assert _flow_windows("20日均量0.78倍") == []
+    assert _flow_windows("2026-11-04主力流出") == []
+    assert _flow_windows("单日流出仅占流通市值0.03%") == ["1日"]
+    assert _flow_windows("近 5 日主力累计净流出仅 0.85 亿元") == ["5日"]
+
+
+def test_dav2479_r8_calendar_date_does_not_create_window_mismatch():
+    from tradingagents.agents.utils.evidence_verifier import (
+        _is_unexempted_fund_flow_stance_conflict,
+        _report_restates_weakened_value,
+    )
+
+    evidence = "10月21日大单流出占流通市值比仅0.027%"
+    assert _report_restates_weakened_value(evidence, _R8_E185_REPORTS) == "match"
+    assert _is_unexempted_fund_flow_stance_conflict(evidence, "bullish", _R8_E185_REPORTS) is False
+
+
+def test_dav2479_r8_real_window_mismatch_still_rejected(evaluator):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-6", "stance": "bullish", "evidence": ["5日主力累计净流出4.67亿占流通市值比仅0.03%"]}],
+        seven_reports={"smart_money_report": "单日流出仅占流通市值 0.03%，5日主力累计净流出 4.67 亿元。"},
+    )
+    assert items and all(it["status"] != STATUS_VERIFIED for it in items), items

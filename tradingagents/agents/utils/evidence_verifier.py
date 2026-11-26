@@ -1057,6 +1057,270 @@ def _is_fund_flow_stance_conflict(raw_text: str, stance: str) -> bool:
     return False
 
 
+# DAV-2479 r8 §二.1（总控 11-27 令，写死）：报告原文同一分句内对同一数值给出
+# 相对规模弱化词，且结论复述该数值与弱化语义的，不判资金流 stance 冲突。
+_FLOW_WEAKENING_TERMS = ("仅", "极小", "并未", "未见", "不足", "绝非", "常态")
+_FLOW_CLAUSE_SPLIT_RE = re.compile(r"[，,。；;！？!?\n]")
+_FLOW_VALUE_RE = re.compile(r"(?<![\d.])[+-]?(\d+(?:\.\d+)?)(?![\d.])\s*([%％])?")
+_FLOW_WINDOW_RE = re.compile(
+    r"(?<![月\d./\-])(\d+)\s*日(?!\s*(?:线|均|EMA|SMA|VWMA|MA|移动))|(单日|当日|今日|一日)"
+)
+
+
+def _flow_windows(text: str) -> list[str]:
+    out: list[str] = []
+    for m in _FLOW_WINDOW_RE.finditer(text):
+        key = f"{int(m.group(1))}日" if m.group(1) else "1日"
+        if key not in out:
+            out.append(key)
+    return out
+
+
+def _weakened_values(clause: str) -> list[tuple[str, bool]]:
+    """弱化词之后、同一分句内出现的数值（绝对值文本, 是否带 %）。
+
+    只取带 % 或带小数的数值：裸整数（「5」「10」）不足以认定是同一数值。"""
+    positions = [clause.find(t) for t in _FLOW_WEAKENING_TERMS if t in clause]
+    if not positions:
+        return []
+    start = min(positions)
+    return [
+        (m.group(1), bool(m.group(2)))
+        for m in _FLOW_VALUE_RE.finditer(clause)
+        if m.start() > start and (m.group(2) or "." in m.group(1))
+    ]
+
+
+def _same_decimal(a: str, b: str) -> bool:
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        return Decimal(a) == Decimal(b)
+    except InvalidOperation:
+        return False
+
+
+def _report_restates_weakened_value(part: str, seven_reports: Mapping[str, str]) -> str | None:
+    """"match"：报告同一分句以弱化词给出同一数值且统计窗口不冲突；
+    "window_mismatch"：同值同弱化但窗口冲突（「5日累计」对「单日」）；否则 None。"""
+    values = _weakened_values(part)
+    if not values:
+        return None
+    part_windows = _flow_windows(part)
+    mismatch = False
+    for key in SEVEN_REPORT_KEYS:
+        body = str(seven_reports.get(key, "") or "")
+        if not body:
+            continue
+        for clause in _FLOW_CLAUSE_SPLIT_RE.split(body):
+            report_values = _weakened_values(clause)
+            if not report_values:
+                continue
+            same_value = any(
+                pct == r_pct and _same_decimal(digits, r_digits)
+                for digits, pct in values
+                for r_digits, r_pct in report_values
+            )
+            if not same_value:
+                continue
+            clause_windows = _flow_windows(clause)
+            if part_windows and clause_windows and part_windows != clause_windows:
+                mismatch = True
+                continue
+            return "match"
+    return "window_mismatch" if mismatch else None
+
+
+def _flow_parts(raw_text: str) -> list[str]:
+    return [p for p in _FLOW_CLAUSE_SPLIT_RE.split(raw_text) if _STANCE_FLOW_DIRECTION_RE.search(p)]
+
+
+def _is_unexempted_fund_flow_stance_conflict(
+    raw_text: str, stance: str, seven_reports: Mapping[str, str]
+) -> bool:
+    """stance 冲突判定 + r8 弱化词豁免：含流向词的每个分句都复述了报告同一分句内
+    带弱化词的同一数值（统计窗口不冲突）时才豁免，其余分句的真冲突照判。"""
+    if not _is_fund_flow_stance_conflict(raw_text, stance):
+        return False
+    flow_parts = _flow_parts(raw_text)
+    if not flow_parts:
+        return True
+    return not all(_report_restates_weakened_value(p, seven_reports) == "match" for p in flow_parts)
+
+
+_FUND_FLOW_STANCE_DETAIL = "资金流方向与论点 stance 相反，不作为已核实事实"
+_FUND_FLOW_WINDOW_DETAIL = "资金流数值与报告同值同弱化，但统计窗口不一致（口径错配），不作为已核实事实"
+
+
+def _fund_flow_conflict_detail(raw_text: str, seven_reports: Mapping[str, str]) -> str:
+    if any(
+        _report_restates_weakened_value(p, seven_reports) == "window_mismatch"
+        for p in _flow_parts(raw_text)
+    ):
+        return _FUND_FLOW_WINDOW_DETAIL
+    return _FUND_FLOW_STANCE_DETAIL
+
+
+# DAV-2479 r8 §二.2（写死）：结论数值等于报告同一分句内同一实体、同一指标数值
+# 四舍五入到结论所写位数的，视为命中。实体限 ASCII 代码/简称（FSLR、ENPH），
+# 指标限期间涨跌幅族（月/季/周/年/日 + 跌/涨/环比，或 MoM/QoQ/YoY/WoW）。
+_ROUNDING_ENTITY_RE = re.compile(r"(?<![A-Za-z])[A-Z][A-Za-z]{1,9}(?![A-Za-z])")
+_ROUNDING_NUMBER_RE = re.compile(r"(?<![\d.])([+-]?)(\d+(?:\.\d+)?)(?![\d.])\s*([%％])?")
+_ROUNDING_PERIOD_RE = re.compile(
+    r"(月|季|周|年|日)度?(环比|跌幅|涨幅|下跌|上涨|跌|涨)"
+    r"|(?<![A-Za-z])(MoM|QoQ|YoY|WoW)(?![A-Za-z])",
+    re.I,
+)
+_ROUNDING_PERIOD_ALIASES = {"mom": "月", "qoq": "季", "yoy": "年", "wow": "周"}
+_ROUNDING_CLAUSE_RE = re.compile(r"[^，,。！？；;!?]+")
+_ROUNDING_DETAIL = "结论数值为报告同一分句同一实体同一指标数值四舍五入到结论位数 (rounding_match)"
+
+
+def _rounding_period_key(window: str) -> tuple[str, int] | None:
+    found = list(_ROUNDING_PERIOD_RE.finditer(window))
+    if not found:
+        return None
+    m = found[-1]
+    if m.group(3):
+        return _ROUNDING_PERIOD_ALIASES[m.group(3).lower()], 0
+    word = m.group(2)
+    return m.group(1), (-1 if "跌" in word else 1 if "涨" in word else 0)
+
+
+def _rounding_direction(sign: str, word_dir: int) -> int:
+    return -1 if sign == "-" or word_dir < 0 else 1
+
+
+def _rounding_entities(text: str) -> list[tuple[str, int]]:
+    metric_words = {k.lower() for k in _METRIC_KEYWORDS} | set(_ROUNDING_PERIOD_ALIASES)
+    out: list[tuple[str, int]] = []
+    for m in _ROUNDING_ENTITY_RE.finditer(text):
+        tok = m.group(0)
+        if tok.lower() in metric_words or any(tok == e for e, _ in out):
+            continue
+        out.append((tok, m.end()))
+    return out
+
+
+def _rounding_report_role(
+    entity: str,
+    entities: Sequence[str],
+    sign: str,
+    digits: str,
+    pct: bool,
+    period: tuple[str, int],
+    seven_reports: Mapping[str, str],
+) -> str | None:
+    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+    places = len(digits.split(".")[1]) if "." in digits else 0
+    quantum = Decimal(1).scaleb(-places)
+    target = Decimal(digits)
+    ev_dir = _rounding_direction(sign, period[1])
+    for role_key in SEVEN_REPORT_KEYS:
+        body = str(seven_reports.get(role_key, "") or "")
+        if entity not in body:
+            continue
+        for line_text, parent_frame in _iter_report_lines_with_parent_frame(body):
+            if entity not in line_text:
+                continue
+            for sent in _ROUNDING_CLAUSE_RE.finditer(line_text):
+                s = sent.group(0)
+                if entity not in s:
+                    continue
+                ent_pos = sorted(
+                    (m.start(), m.end(), e)
+                    for e in entities
+                    for m in re.finditer(r"(?<![A-Za-z])" + re.escape(e) + r"(?![A-Za-z])", s)
+                )
+                prev_end = 0
+                for nm in _ROUNDING_NUMBER_RE.finditer(s):
+                    owner = [p for p in ent_pos if p[1] <= nm.start()]
+                    boundary = max([prev_end] + [p[1] for p in owner[-1:]])
+                    prev_end = nm.end()
+                    if not owner or owner[-1][2] != entity or bool(nm.group(3)) != pct:
+                        continue
+                    key = _rounding_period_key(s[boundary:nm.start()]) or _rounding_period_key(
+                        s[nm.end():nm.end() + 6]
+                    )
+                    if key is None or key[0] != period[0]:
+                        continue
+                    if _rounding_direction(nm.group(1), key[1]) != ev_dir:
+                        continue
+                    try:
+                        rounded = Decimal(nm.group(2)).quantize(quantum, rounding=ROUND_HALF_UP)
+                    except InvalidOperation:
+                        continue
+                    if rounded != target:
+                        continue
+                    pos = sent.start() + nm.start()
+                    if _report_line_hypothesis_marker(line_text, [pos], parent_frame):
+                        continue
+                    return role_key
+    return None
+
+
+def _rounding_supported_roles(segment: str, seven_reports: Mapping[str, str]) -> list[str] | None:
+    """分句内每个数值都能按取整规则锚到报告同一实体同一指标时，返回命中报告。"""
+    entities = _rounding_entities(segment)
+    if not entities:
+        return None
+    nums = [m for m in _ROUNDING_NUMBER_RE.finditer(segment) if m.start() >= entities[-1][1]]
+    if not nums or any(m.start() < entities[0][1] for m in nums):
+        return None
+    if any(m.start() < entities[-1][1] for m in _ROUNDING_NUMBER_RE.finditer(segment)):
+        return None
+    period = _rounding_period_key(segment[entities[-1][1]:nums[0].start()])
+    if period is None:
+        return None
+    names = [e for e, _ in entities]
+    if len(names) == len(nums):
+        pairs = list(zip(names, nums))
+    elif len(names) == 1:
+        pairs = [(names[0], m) for m in nums]
+    else:
+        return None
+    roles: list[str] = []
+    for name, m in pairs:
+        role = _rounding_report_role(
+            name, names, m.group(1), m.group(2), bool(m.group(3)), period, seven_reports
+        )
+        if role is None:
+            return None
+        if role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _apply_rounding_matches(items: list[dict[str, Any]], seven_reports: Mapping[str, str]) -> None:
+    """r8 §二.2：unsupported 子事实所在分句满足取整同值规则时改判 verified。
+
+    只处理 unsupported（不触碰 contradicted 等真矛盾），资金流 stance 冲突、
+    假设/判断性措辞子句不适用。"""
+    for idx, item in enumerate(items):
+        if item.get("status") != STATUS_UNSUPPORTED:
+            continue
+        if str(item.get("details") or "") in (_FUND_FLOW_STANCE_DETAIL, _FUND_FLOW_WINDOW_DETAIL):
+            continue
+        raw = str(item.get("raw") or "").strip()
+        clause = _EVIDENCE_LEADIN_RE.sub("", str(item.get("clause") or raw), count=1)
+        if not raw or _contains_hypothesis_marker(clause) or _contains_judgment_marker(clause):
+            continue
+        segment = next((seg for seg in _FLOW_CLAUSE_SPLIT_RE.split(clause) if raw in seg), None)
+        if segment is None:
+            continue
+        roles = _rounding_supported_roles(segment, seven_reports)
+        if not roles:
+            continue
+        items[idx] = {
+            **item,
+            "status": STATUS_VERIFIED,
+            "matched_role": ",".join(roles),
+            "matched_source": ",".join(r.replace("_report", "") for r in roles),
+            "details": f"{_ROUNDING_DETAIL}: {raw}",
+        }
+
+
 def _has_source_support(raw_text: str, seven_reports: Mapping[str, str]) -> bool:
     if _matches_report_text(raw_text, _all_report_texts(seven_reports)):
         return True
@@ -5093,7 +5357,7 @@ class EvidenceFactualTruthEvaluator:
                             "matched_source": role_key.replace("_report", ""),
                             "status": STATUS_VERIFIED,
                             "is_fatal": False,
-                            "details": f"在 {role_key} 中找到定性指标匹配: {', '.join(common_kw)}",
+                            "details": f"在 {role_key} 中找到定性指标匹配: {', '.join(sorted(common_kw))}",
                         }
                     continue
                 # DAV-1177: 纯定性证据（无任何数值原子）——展期/兑付/任职等事件
@@ -5930,7 +6194,7 @@ class EvidenceFactualTruthEvaluator:
                 ]
                 if (
                     len(substantive_flow) <= 1
-                    and _is_fund_flow_stance_conflict(ev_core_flow, stance)
+                    and _is_unexempted_fund_flow_stance_conflict(ev_core_flow, stance, seven_reports)
                     and all(
                         item.get("status") in (STATUS_VERIFIED, STATUS_UNSUPPORTED)
                         for item in items
@@ -5946,21 +6210,22 @@ class EvidenceFactualTruthEvaluator:
                             "matched_source": None,
                             "status": STATUS_UNSUPPORTED,
                             "is_fatal": False,
-                            "details": "资金流方向与论点 stance 相反，不作为已核实事实",
+                            "details": _fund_flow_conflict_detail(ev_core_flow, seven_reports),
                             "clause": ev_str,
                         }
                     ]
+                _apply_rounding_matches(items, seven_reports)
                 for idx, item in enumerate(items):
                     if item.get("status") != STATUS_VERIFIED:
                         continue
                     target_text = str(item.get("clause") or item.get("raw") or "")
-                    if _is_fund_flow_stance_conflict(target_text, stance):
+                    if _is_unexempted_fund_flow_stance_conflict(target_text, stance, seven_reports):
                         items[idx] = {
                             **item,
                             "status": STATUS_UNSUPPORTED,
                             "matched_role": None,
                             "matched_source": None,
-                            "details": "资金流方向与论点 stance 相反，不作为已核实事实",
+                            "details": _fund_flow_conflict_detail(target_text, seven_reports),
                         }
                 results.extend(items)
 
