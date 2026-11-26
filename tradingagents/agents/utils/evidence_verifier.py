@@ -674,7 +674,7 @@ def _single_fact_clause_scored(fc: Mapping[str, Any], clause: str) -> bool:
 # 锚点：未进 _METRIC_KEYWORDS 的业务指标名词，以及「月跌/季跌」类期间变动词。
 _FACT_ANCHOR_EXTRA_TERMS = (
     "营运资本", "吸金", "启动量", "新签", "销量", "完成率", "市占率", "占比",
-    "同比", "环比", "现货", "期货", "报价", "单价",
+    "同比", "环比", "现货", "期货", "报价", "单价", "票息",
 )
 # 计价单位（元/吨、美元/桶）本身即价格指标，写死表。
 _FACT_PRICE_UNIT_RE = re.compile(r"\d\s*(?:元|美元|港元|美分)/(?:吨|桶|盎司|千克|公斤|克|平方米|平米|kg|t|oz|MWh|kWh|W)", re.I)
@@ -768,21 +768,26 @@ def _locate_fact_pos(fc: Mapping[str, Any], fact_raw: str, clause: str) -> int:
         raw = str((b.get("number") or {}).get("raw") or "")
         if not raw:
             continue
-        pos = clause.find(raw, cursor)
-        length = len(raw)
-        if pos == -1:
-            lit = _NUMBER_WITH_UNIT_RE.search(raw)
-            digits = lit.group(1) if lit else None
-            pos = clause.find(digits, cursor) if digits else -1
-            length = len(digits) if digits else 0
+        pos, length = _find_number_text(clause, raw, cursor)
         if pos == -1:
             continue
         if raw == fact_raw:
             return pos
         cursor = pos + length
-    lit = _NUMBER_WITH_UNIT_RE.search(fact_raw)
-    digits = lit.group(1).lstrip("+-") if lit else fact_raw
-    return clause.find(digits) if digits else -1
+    return _find_number_text(clause, fact_raw, 0)[0]
+
+
+def _find_number_text(clause: str, raw: str, start: int) -> tuple[int, int]:
+    """在子句中定位原子数字；兼容千分位逗号（原子「8900万股」↔ 原文「8,900万股」）。"""
+    pos = clause.find(raw, start)
+    if pos != -1:
+        return pos, len(raw)
+    lit = _NUMBER_WITH_UNIT_RE.search(raw)
+    digits = lit.group(1).lstrip("+-") if lit else raw
+    if not digits:
+        return -1, 0
+    m = re.compile(r"[,，]?".join(re.escape(ch) for ch in digits)).search(clause, start)
+    return (m.start(), m.end() - m.start()) if m else (-1, 0)
 
 
 def _is_name_number(clause: str, pos: int, fact_raw: str) -> bool:
@@ -1662,6 +1667,21 @@ _ENTITY_BARE_BAD_SUBSTR = frozenset({
     "今日", "本周", "上周", "下周", "强力", "路径", "角度", "层面",
     "指标", "核心", "关键", "节点", "时点", "落点", "触点", "活动", "较大",
 })
+
+
+def _cut_bare_entity_token(token: str) -> str:
+    """修饰子串出现时截断取头部（「大金单月跌」→「大金」）。
+
+    DAV-2479 r7：按子串在 token 中的最早出现位置截断（同位置取最长子串），
+    不得依赖 frozenset 迭代顺序——后者随 PYTHONHASHSEED 变化，同一证据在
+    不同进程抽出不同主体，导致核验结论不可复现。"""
+    best: tuple[int, int] | None = None
+    for sub in _ENTITY_BARE_BAD_SUBSTR:
+        cut = token.find(sub)
+        if cut >= 0 and (best is None or (cut, -len(sub)) < best):
+            best = (cut, -len(sub))
+    return token if best is None else token[:best[0]]
+
 _ENTITY_STOPWORDS = frozenset({
     "公司", "本公司", "上市", "子公司", "集团", "报告期内", "报告期", "期内",
     "该股", "标的", "个股", "我们", "预计", "实现", "录得", "达到", "约为",
@@ -1756,11 +1776,7 @@ def _extract_entity_spans(
         lead = len(token) - len(token.lstrip("与和及或跟"))
         token = token[lead:]
         # 修饰子串出现时截断取头部（「大金单月跌」→「大金」）；截后不足 2 字则弃
-        for s in _ENTITY_BARE_BAD_SUBSTR:
-            cut = token.find(s)
-            if cut >= 0:
-                token = token[:cut]
-                break
+        token = _cut_bare_entity_token(token)
         if (
             len(token) < 2
             # DAV-1177: 裸主体必须含中文字符——「Sto」(Stopping) 类英文残片

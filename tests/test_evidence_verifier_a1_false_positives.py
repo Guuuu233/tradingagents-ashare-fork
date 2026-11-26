@@ -699,3 +699,50 @@ def test_dav2479_r6_year_period_anchor_restores_a1_fact(evaluator):
     )
     assert all("裸数字/单位 token" not in str(it.get("details") or "") for it in items), items
     assert any(it["status"] == STATUS_VERIFIED for it in items), items
+
+
+# ── DAV-2479 r7（总控 2026-11-27 01:16 令）：确定性截断 + 两条点名误杀 ──
+
+from tradingagents.agents.utils.evidence_verifier import _cut_bare_entity_token  # noqa: E402
+
+
+def test_dav2479_r7_bare_entity_cut_uses_earliest_position():
+    assert _cut_bare_entity_token("大金增长同比") == "大金"
+    assert _cut_bare_entity_token("大金同比增长") == "大金"
+    assert _cut_bare_entity_token("大金单月跌") == "大金"
+    assert _cut_bare_entity_token("大金") == "大金"
+
+
+@pytest.mark.parametrize("clause, expected", [
+    ("点心债票息仅2.46%低于负债存量成本致利差倒挂", {"2.46%": True}),
+    ("当前20日均量约8,900万股（量价报告）", {"8900万股": True}),
+])
+def test_dav2479_r7_named_false_rejects_anchor(clause, expected):
+    fc = _clause_coverage(clause)
+    got = {b["number"]["raw"]: _fact_has_clause_anchor(fc, b["number"]["raw"], clause) for b in fc["bindings"]}
+    assert got == expected
+
+
+def test_dav2479_r7_coupon_rate_fact_verified(evaluator):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-3", "stance": "bearish", "evidence": ["点心债票息仅2.46%低于负债存量成本致利差倒挂"]}],
+        seven_reports={"news_report": (
+            "- **2026-08-18**【跨市场流动性/险资出海】：国家电网海外投资在香港完成149亿元离岸人民币债券（点心债）发行，"
+            "票息2.46%，创央企单笔离岸人民币债发行新高；险资通过“南向通”首次认购该批离岸人民币资产。"
+        )},
+    )
+    assert all("裸数字/单位 token" not in str(it.get("details") or "") for it in items), items
+    assert any(it["status"] == STATUS_VERIFIED for it in items), items
+
+
+def test_dav2479_r7_thousands_separator_volume_verified(evaluator):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-13", "stance": "bearish", "evidence": ["当前20日均量约8,900万股（量价报告）"]}],
+        seven_reports={"volume_price_report": (
+            "以输入数据自算：近20个交易日（2026-08-07至09-04）日均成交量约 **8,900万股**；"
+            "近5个交易日（08-31至09-04）均量约 **9,790万股（1.10倍）**，OBV（10日）趋势为**上升**。"
+            "以下\"量比\"均以20日均量为基准，属相对量能口径，非绝对值判断。"
+        )},
+    )
+    assert all("裸数字/单位 token" not in str(it.get("details") or "") for it in items), items
+    assert any(it["status"] == STATUS_VERIFIED for it in items), items
