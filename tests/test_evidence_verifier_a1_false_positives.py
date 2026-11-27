@@ -1003,3 +1003,40 @@ def test_dav2479_r9_ma_position_multi_average_missing_one_rejected(evaluator):
     assert _ma_position_supported_roles("稳居50SMA/VWMA上方", reports) is None
     statuses = _r9_statuses(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", reports)
     assert statuses.get("稳居50SMA/VWMA上方") != STATUS_VERIFIED, statuses
+
+
+# ── DAV-2479 r10（r9b 复审 🔴/🟡）：否定/条件辖域整句匹配 + 来源可用性门禁 ──
+
+
+@pytest.mark.parametrize("source_line", [
+    "并非现价 > 50 SMA（48.40）",
+    "收盘价并非位于50 SMA上方",
+    "仅在放量突破时才有现价 > 50 SMA（48.40）",
+    "只有站稳后才能确认现价 > 50 SMA（48.40）",
+    "收盘价不位于50 SMA上方",
+])
+def test_dav2479_r10_ma_negated_or_conditional_source_rejected(evaluator, source_line):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": source_line}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
+
+
+def test_dav2479_r10_ma_unavailable_source_not_used(evaluator):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-6", "stance": "bullish", "evidence": ["稳居50SMA上方"]}],
+        seven_reports={"market_report": "现价 > 50 SMA（48.40）"},
+        market_data_context={"data_gaps": ["stock_data"]},
+    )
+    assert items and all(it["status"] != STATUS_VERIFIED for it in items), items
+
+
+@pytest.mark.parametrize("source_line", [
+    "现价 > 50 SMA（48.40）",
+    "- **What**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
+    "收盘价位于50 SMA上方",
+])
+def test_dav2479_r10_ma_affirmative_source_still_verified(evaluator, source_line):
+    reports = {"market_report": source_line}
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED

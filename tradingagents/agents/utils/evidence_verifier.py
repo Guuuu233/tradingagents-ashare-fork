@@ -1329,13 +1329,27 @@ _MA_POSITION_EVIDENCE_RE = re.compile(
     r"(" + _MA_TOKEN_PAT + r"(?:" + _MA_LIST_SEP + _MA_TOKEN_PAT + r")*)\s*(上方|之上|下方|之下)",
     re.I,
 )
-_MA_PRICE_SUBJECT_RE = re.compile(r"现价|收盘价|收盘")
-_MA_CHAIN_HEAD_RE = re.compile(r"^(?:现价|收盘价|收盘)[\s\d.元（）()*]*$")
-_MA_CHAIN_OP_RE = re.compile(r"\s*([>＞<＜])\s*")
-_MA_STATEMENT_RE = re.compile(
-    r"(?:现价|收盘价|收盘)([^。；;，,！？!?\n]{0,30}?)(?:位于|运行于)([^。；;，,！？!?\n]{0,40}?)(上方|之上|下方|之下)"
+# r10：报告侧支撑只认整句（fullmatch）的受限肯定句式；主语前后不得夹任何修饰。
+_MA_NUM_PAT = r"(?:[（(]\s*\d+(?:\.\d+)?\s*元?\s*[）)]|\d+(?:\.\d+)?\s*元?)"
+_MA_ITEM_PAT = _MA_TOKEN_PAT + r"\s*" + _MA_NUM_PAT + r"?"
+_MA_SUBJECT_PAT = r"(?:现价|收盘价|收盘)\s*" + _MA_NUM_PAT + r"?\s*"
+_MA_AFFIRMATIVE_CHAIN_RE = re.compile(
+    _MA_SUBJECT_PAT
+    + r"(?:(?:[>＞]\s*" + _MA_ITEM_PAT + r"\s*)+|(?:[<＜]\s*" + _MA_ITEM_PAT + r"\s*)+)",
+    re.I,
 )
-_MA_STATEMENT_NEGATION_RE = re.compile(r"[未不没无]|失守|跌破|跌回|跌落")
+_MA_AFFIRMATIVE_STATEMENT_RE = re.compile(
+    _MA_SUBJECT_PAT
+    + r"(?:仍|依然|持续|继续|始终)?\s*(?:位于|运行于)\s*("
+    + _MA_ITEM_PAT + r"(?:" + _MA_LIST_SEP + _MA_ITEM_PAT + r")*)\s*(上方|之上|下方|之下)\s*(?:[+\-−]?\d+(?:\.\d+)?\s*%)?",
+    re.I,
+)
+_MA_CLAUSE_SPLIT_RE = re.compile(r"[。；;，,！？!?\n|｜]")
+_MA_CLAUSE_LABEL_RE = re.compile(r"^[-•·>\s]*(?:[^：:（()）]{1,20}[：:])?\s*")
+_MA_CLAUSE_FRAME_RE = re.compile(r"^([^（(]*)[（(]\s*(.+?)\s*[）)]?$")
+_MA_CLAUSE_MODIFIER_RE = re.compile(
+    r"并非|非|不|未|没|无|仅|只有|只在|才|时|若|如果|假设|一旦|将|可能|预计|倘若|假如|只要"
+)
 _MA_REPORT_CONDITION_RE = re.compile(
     r"若|如果|假设|预计|测算|情景|一旦|将|只要|倘若|假如|如能|预期|估算|推算|有望|可能"
 )
@@ -1348,30 +1362,41 @@ def _ma_key(m: re.Match[str]) -> tuple[str, int | None]:
     return (m.group(2).upper(), int(m.group(1)))
 
 
+def _ma_affirmative_clause(segment: str) -> str | None:
+    """分句（去 Markdown 加粗与无修饰的「标签：」前缀）整句匹配受限肯定比较链/陈述句时返回该句；
+    整句不匹配时仅允许「无修饰的框架语（比较链/陈述句）」括注形式。「并非…」「仅在…时才有…」等一律不支撑。"""
+    text = segment.replace("*", "").replace("\u3000", " ").strip()
+    label = _MA_CLAUSE_LABEL_RE.match(text)
+    if label and label.group(0).strip():
+        if _MA_CLAUSE_MODIFIER_RE.search(label.group(0)):
+            return None
+        text = text[label.end():].strip()
+    if _MA_AFFIRMATIVE_CHAIN_RE.fullmatch(text) or _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(text):
+        return text
+    frame = _MA_CLAUSE_FRAME_RE.match(text)
+    if frame and not _MA_CLAUSE_MODIFIER_RE.search(frame.group(1)):
+        inner = frame.group(2).strip()
+        if _MA_AFFIRMATIVE_CHAIN_RE.fullmatch(inner) or _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(inner):
+            return inner
+    return None
+
+
 def _ma_positions_in_line(line_text: str) -> list[tuple[tuple[str, int | None], int]]:
-    """报告单行内由「现价/收盘 X > 均线 Y」比较链或「现价…位于/运行于 均线 上方/之上」
+    """报告单行内由整句匹配的「现价/收盘 X > 均线 Y」比较链或「现价…位于/运行于 均线 上方/之上」
     陈述句确定的 (均线, 方向)；方向 1 = 价格在上方，-1 = 价格在下方。"""
     found: list[tuple[tuple[str, int | None], int]] = []
-    for anchor in _MA_PRICE_SUBJECT_RE.finditer(line_text):
-        tail = re.split(r"[。；;，,！？!?\n]", line_text[anchor.start():], maxsplit=1)[0]
-        parts = _MA_CHAIN_OP_RE.split(tail)
-        if len(parts) < 3 or not _MA_CHAIN_HEAD_RE.match(parts[0]):
+    for segment in _MA_CLAUSE_SPLIT_RE.split(line_text):
+        clause = _ma_affirmative_clause(segment)
+        if clause is None:
             continue
-        chain_op = None
-        for i in range(1, len(parts) - 1, 2):
-            op = ">" if parts[i] in (">", "＞") else "<"
-            if chain_op is None:
-                chain_op = op
-            elif op != chain_op:
-                break
-            token = _MA_TOKEN_RE.match(parts[i + 1].lstrip(" *（("))
-            if token:
-                found.append((_ma_key(token), 1 if chain_op == ">" else -1))
-    for stmt in _MA_STATEMENT_RE.finditer(line_text):
-        if _MA_STATEMENT_NEGATION_RE.search(stmt.group(1)):
-            continue
-        direction = -1 if stmt.group(3) in ("下方", "之下") else 1
-        for token in _MA_TOKEN_RE.finditer(stmt.group(2)):
+        stmt = _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(clause)
+        if stmt:
+            direction = -1 if stmt.group(2) in ("下方", "之下") else 1
+            tokens = _MA_TOKEN_RE.finditer(stmt.group(1))
+        else:
+            direction = 1 if re.search(r"[>＞]", clause) else -1
+            tokens = _MA_TOKEN_RE.finditer(clause)
+        for token in tokens:
             found.append((_ma_key(token), direction))
     return found
 
@@ -6341,7 +6366,13 @@ class EvidenceFactualTruthEvaluator:
                         }
                     ]
                 _apply_rounding_matches(items, seven_reports)
-                _apply_ma_position_matches(items, seven_reports)
+                ma_unavailable = self._extract_unavailable_sources(market_data_context, social_data_context)
+                available_reports = {
+                    role: body
+                    for role, body in seven_reports.items()
+                    if not self._is_report_unavailable(role, ma_unavailable)
+                }
+                _apply_ma_position_matches(items, available_reports)
                 for idx, item in enumerate(items):
                     if item.get("status") != STATUS_VERIFIED:
                         continue
