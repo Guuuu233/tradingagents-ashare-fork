@@ -1344,12 +1344,26 @@ _MA_AFFIRMATIVE_STATEMENT_RE = re.compile(
     + _MA_ITEM_PAT + r"(?:" + _MA_LIST_SEP + _MA_ITEM_PAT + r")*)\s*(上方|之上|下方|之下)\s*(?:[+\-−]?\d+(?:\.\d+)?\s*%)?",
     re.I,
 )
-_MA_CLAUSE_SPLIT_RE = re.compile(r"[。；;，,！？!?\n|｜]")
+_MA_SENTENCE_SPLIT_RE = re.compile(r"[。；;！？!?\n]")
+_MA_CLAUSE_SPLIT_RE = re.compile(r"[，,|｜]")
 _MA_CLAUSE_LABEL_RE = re.compile(r"^[-•·>\s]*(?:[^：:（()）]{1,20}[：:])?\s*")
 _MA_CLAUSE_FRAME_RE = re.compile(r"^([^（(]*)[（(]\s*(.+?)\s*[）)]?$")
 _MA_CLAUSE_MODIFIER_RE = re.compile(
     r"并非|非|不|未|没|无|仅|只有|只在|才|时|若|如果|假设|一旦|将|可能|预计|倘若|假如|只要"
 )
+# r11：否定/条件/判断的辖域以句号、分号等句末标点为界；整句出现任一词即整句不作支撑，
+# 前置（「仅在…时，」「并非…，」）与后置修饰都不能靠逗号切分逃逸。
+_MA_SENTENCE_BLOCKING_RE = re.compile(
+    _MA_CLAUSE_MODIFIER_RE.pattern + r"|假定|判断|对倒|推测|猜测|疑似|或许|也许"
+)
+# r11：只剥离明确允许的描述性结构标签（规范化后：去空白、加粗、括号、冒号，小写）。
+_MA_SAFE_REPORT_LABELS = frozenset({
+    "what", "趋势维度", "趋势", "均线系统", "均线与趋势", "均线排列",
+    "现价位置", "现价相对位置", "价格相对位置", "空间位置关系", "当前价格关系",
+    "现价与vwma关系", "价格与vwma关系", "当前价格与vwma关系",
+    "量价相对位置", "价格与均线带空间关系", "当日收盘价", "当前收盘价", "数据事实",
+})
+_MA_LABEL_NOISE_RE = re.compile(r"[\s*【】\[\]：:\-•·>]")
 _MA_REPORT_CONDITION_RE = re.compile(
     r"若|如果|假设|预计|测算|情景|一旦|将|只要|倘若|假如|如能|预期|估算|推算|有望|可能"
 )
@@ -1362,13 +1376,18 @@ def _ma_key(m: re.Match[str]) -> tuple[str, int | None]:
     return (m.group(2).upper(), int(m.group(1)))
 
 
+def _ma_sentence_has_blocking_scope(sentence: str) -> bool:
+    return bool(_MA_SENTENCE_BLOCKING_RE.search(sentence.replace("*", "")))
+
+
 def _ma_affirmative_clause(segment: str) -> str | None:
-    """分句（去 Markdown 加粗与无修饰的「标签：」前缀）整句匹配受限肯定比较链/陈述句时返回该句；
+    """分句（去 Markdown 加粗与白名单内的「结构标签：」前缀）整句匹配受限肯定比较链/陈述句时返回该句；
     整句不匹配时仅允许「无修饰的框架语（比较链/陈述句）」括注形式。「并非…」「仅在…时才有…」等一律不支撑。"""
     text = segment.replace("*", "").replace("\u3000", " ").strip()
     label = _MA_CLAUSE_LABEL_RE.match(text)
     if label and label.group(0).strip():
-        if _MA_CLAUSE_MODIFIER_RE.search(label.group(0)):
+        label_text = _MA_LABEL_NOISE_RE.sub("", label.group(0)).casefold()
+        if label_text and label_text not in _MA_SAFE_REPORT_LABELS:
             return None
         text = text[label.end():].strip()
     if _MA_AFFIRMATIVE_CHAIN_RE.fullmatch(text) or _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(text):
@@ -1385,19 +1404,22 @@ def _ma_positions_in_line(line_text: str) -> list[tuple[tuple[str, int | None], 
     """报告单行内由整句匹配的「现价/收盘 X > 均线 Y」比较链或「现价…位于/运行于 均线 上方/之上」
     陈述句确定的 (均线, 方向)；方向 1 = 价格在上方，-1 = 价格在下方。"""
     found: list[tuple[tuple[str, int | None], int]] = []
-    for segment in _MA_CLAUSE_SPLIT_RE.split(line_text):
-        clause = _ma_affirmative_clause(segment)
-        if clause is None:
+    for sentence in _MA_SENTENCE_SPLIT_RE.split(line_text):
+        if not _MA_TOKEN_RE.search(sentence) or _ma_sentence_has_blocking_scope(sentence):
             continue
-        stmt = _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(clause)
-        if stmt:
-            direction = -1 if stmt.group(2) in ("下方", "之下") else 1
-            tokens = _MA_TOKEN_RE.finditer(stmt.group(1))
-        else:
-            direction = 1 if re.search(r"[>＞]", clause) else -1
-            tokens = _MA_TOKEN_RE.finditer(clause)
-        for token in tokens:
-            found.append((_ma_key(token), direction))
+        for segment in _MA_CLAUSE_SPLIT_RE.split(sentence):
+            clause = _ma_affirmative_clause(segment)
+            if clause is None:
+                continue
+            stmt = _MA_AFFIRMATIVE_STATEMENT_RE.fullmatch(clause)
+            if stmt:
+                direction = -1 if stmt.group(2) in ("下方", "之下") else 1
+                tokens = _MA_TOKEN_RE.finditer(stmt.group(1))
+            else:
+                direction = 1 if re.search(r"[>＞]", clause) else -1
+                tokens = _MA_TOKEN_RE.finditer(clause)
+            for token in tokens:
+                found.append((_ma_key(token), direction))
     return found
 
 

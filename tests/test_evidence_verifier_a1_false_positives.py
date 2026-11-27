@@ -1040,3 +1040,67 @@ def test_dav2479_r10_ma_unavailable_source_not_used(evaluator):
 def test_dav2479_r10_ma_affirmative_source_still_verified(evaluator, source_line):
     reports = {"market_report": source_line}
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
+
+
+# ── DAV-2479 r11（r10 复审 🔴/🟡）：句级辖域先于逗号切分 + 结构标签白名单 ──
+
+
+_R11_REVIEW_COUNTEREXAMPLES = [
+    "仅在放量突破时，现价 > 50 SMA（48.40）。",
+    "并非如下结论，现价 > 50 SMA（48.40）。",
+    "假定结论：现价 > 50 SMA（48.40）。",
+    "对倒判断：现价 > 50 SMA（48.40）。",
+]
+
+
+@pytest.mark.parametrize("source_line", _R11_REVIEW_COUNTEREXAMPLES)
+def test_dav2479_r11_review_counterexample_unsupported(evaluator, source_line):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": source_line}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_UNSUPPORTED
+
+
+@pytest.mark.parametrize("source_line", [
+    "- **趋势维度**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
+    "现价 > 50 SMA（48.40）。",
+])
+def test_dav2479_r11_review_positive_still_verified(evaluator, source_line):
+    reports = {"market_report": source_line}
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
+
+
+@pytest.mark.parametrize("source_line", [
+    "只有站稳后，收盘价位于50 SMA上方。",
+    "- **What**：若放量突破，现价 > 50 SMA（48.40）。",
+])
+def test_dav2479_r11_ma_scope_prefix_with_comma_rejected(evaluator, source_line):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": source_line}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
+
+
+@pytest.mark.parametrize("source_line", [
+    "市场传闻：现价 > 50 SMA（48.40）。",
+])
+def test_dav2479_r11_ma_unlisted_label_rejected(evaluator, source_line):
+    from tradingagents.agents.utils.evidence_verifier import _ma_affirmative_clause, _ma_position_supported_roles
+
+    assert _ma_affirmative_clause(source_line.rstrip("。")) is None
+    reports = {"market_report": source_line}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
+
+
+@pytest.mark.parametrize("source_line", [
+    "- **What**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
+    "- **趋势维度**：收盘价 79.92元 > 50日SMA（48.40元）。",
+    "- **均线系统**：现价位于50 SMA上方。",
+    "现价 > 50 SMA（48.40），短期均线低位勾头向上。",
+])
+def test_dav2479_r11_ma_safe_label_and_plain_affirmative_still_verified(evaluator, source_line):
+    reports = {"market_report": source_line}
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
