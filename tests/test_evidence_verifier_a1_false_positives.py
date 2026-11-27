@@ -930,6 +930,10 @@ def test_dav2479_r8_real_window_mismatch_still_rejected(evaluator):
     assert items and all(it["status"] != STATUS_VERIFIED for it in items), items
 
 
+# ── DAV-2479 r12（总控 2026-11-28 02:44 裁定）：保守方案，均线补验（ma_position_match）已整条移除 ──
+# 均线方位类 evidence 回到 r9 之前的判定；以下用例只校验「不再被均线补验放行」，不再调用已删除的内部函数。
+
+
 _R9_F8BAB114_REPORTS = {
     "market_report": (
         "- **What**：现价 50.82 元 > 10 EMA（50.18）> 50 SMA（48.40）> 200 SMA（44.59）。短期均线低位勾头向上，中长期均线维持标准的多头排列态势。\n"
@@ -941,49 +945,56 @@ _R9_F8BAB114_REPORTS = {
 }
 
 
-def _r9_statuses(evaluator, evidence, reports, stance="bullish"):
-    items = evaluator.evaluate_claims(
+def _r9_items(evaluator, evidence, reports, stance="bullish"):
+    return evaluator.evaluate_claims(
         claims=[{"claim_id": "INV-6", "stance": stance, "evidence": [evidence]}],
         seven_reports=reports,
     )
-    return {str(it.get("raw")): it["status"] for it in items}
 
 
-def test_dav2479_r9_f8bab114_ma_position_verified(evaluator):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
-    assert _ma_position_supported_roles("稳居50SMA/VWMA上方", _R9_F8BAB114_REPORTS)
-    statuses = _r9_statuses(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", _R9_F8BAB114_REPORTS)
-    assert statuses.get("稳居50SMA/VWMA上方") == STATUS_VERIFIED, statuses
+def _r9_statuses(evaluator, evidence, reports, stance="bullish"):
+    return {str(it.get("raw")): it["status"] for it in _r9_items(evaluator, evidence, reports, stance)}
 
 
-@pytest.mark.parametrize("evidence", ["站稳50日SMA上方", "位于VWMA之上", "运行于200 SMA上方", "稳居10 EMA上方"])
-def test_dav2479_r9_ma_position_positive_variants(evidence):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+def test_dav2479_r12_ma_position_path_removed():
+    from tradingagents.agents.utils import evidence_verifier as ev
 
-    assert _ma_position_supported_roles(evidence, _R9_F8BAB114_REPORTS)
+    for name in (
+        "_apply_ma_position_matches", "_ma_position_supported_roles", "_ma_position_report_support",
+        "_ma_positions_in_line", "_ma_affirmative_clause", "_ma_sentence_has_blocking_scope", "_ma_key",
+        "_MA_POSITION_EVIDENCE_RE", "_MA_SAFE_REPORT_LABELS", "_MA_SENTENCE_BLOCKING_RE",
+        "_MA_POSITION_DETAIL", "_MA_REPORT_CONDITION_RE",
+    ):
+        assert not hasattr(ev, name), name
+
+
+def test_dav2479_r12_f8bab114_ma_position_now_unsupported(evaluator):
+    # 保守方案，均线补验已移除：r9 唯一放行的真实档（f8bab114 中线 INV-6）不再 verified。
+    items = _r9_items(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", _R9_F8BAB114_REPORTS)
+    statuses = {str(it.get("raw")): it["status"] for it in items}
+    assert statuses.get("稳居50SMA/VWMA上方") == STATUS_UNSUPPORTED, statuses
+    assert not any("ma_position_match" in str(it.get("details")) for it in items), items
+
+
+@pytest.mark.parametrize("evidence", ["稳居50SMA上方", "站稳50日SMA上方", "位于VWMA之上", "运行于200 SMA上方", "稳居10 EMA上方"])
+def test_dav2479_r12_ma_position_variants_unsupported(evaluator, evidence):
+    # 保守方案，均线补验已移除：原 r9 正向变体回到 unsupported。
+    items = _r9_items(evaluator, evidence, _R9_F8BAB114_REPORTS)
+    assert {str(it.get("raw")): it["status"] for it in items}.get(evidence) == STATUS_UNSUPPORTED, items
+    assert not any("ma_position_match" in str(it.get("details")) for it in items), items
 
 
 def test_dav2479_r9_ma_position_opposite_direction_rejected(evaluator):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": "- **What**：现价 46.20 元 < 50 SMA（48.40）< 200 SMA（49.10）。"}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
-    assert _ma_position_supported_roles("位于50SMA下方", reports)
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
 
 
 def test_dav2479_r9_ma_position_period_mismatch_rejected(evaluator):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": "- **What**：现价 50.82 元 > 20 SMA（49.10）。"}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
 
 
 def test_dav2479_r9_ma_position_conditional_only_rejected(evaluator):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {
         "market_report": (
             "- **What Next**：若能持续守在 10 EMA 上方运行，将逐步带动短期均线向上发散；若失守 10 EMA，则将再次回踩 50 SMA。\n"
@@ -991,21 +1002,13 @@ def test_dav2479_r9_ma_position_conditional_only_rejected(evaluator):
             "- 一旦现价 > 10 EMA（50.18），将确认反弹。"
         )
     }
-    assert _ma_position_supported_roles("稳居10 EMA上方", reports) is None
     assert _r9_statuses(evaluator, "稳居10 EMA上方", reports).get("稳居10 EMA上方") != STATUS_VERIFIED
 
 
 def test_dav2479_r9_ma_position_multi_average_missing_one_rejected(evaluator):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": "- **What**：现价 50.82 元 > 10 EMA（50.18）> 50 SMA（48.40）> 200 SMA（44.59）。"}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports)
-    assert _ma_position_supported_roles("稳居50SMA/VWMA上方", reports) is None
     statuses = _r9_statuses(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", reports)
     assert statuses.get("稳居50SMA/VWMA上方") != STATUS_VERIFIED, statuses
-
-
-# ── DAV-2479 r10（r9b 复审 🔴/🟡）：否定/条件辖域整句匹配 + 来源可用性门禁 ──
 
 
 @pytest.mark.parametrize("source_line", [
@@ -1016,10 +1019,7 @@ def test_dav2479_r9_ma_position_multi_average_missing_one_rejected(evaluator):
     "收盘价不位于50 SMA上方",
 ])
 def test_dav2479_r10_ma_negated_or_conditional_source_rejected(evaluator, source_line):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": source_line}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
 
 
@@ -1032,19 +1032,6 @@ def test_dav2479_r10_ma_unavailable_source_not_used(evaluator):
     assert items and all(it["status"] != STATUS_VERIFIED for it in items), items
 
 
-@pytest.mark.parametrize("source_line", [
-    "现价 > 50 SMA（48.40）",
-    "- **What**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
-    "收盘价位于50 SMA上方",
-])
-def test_dav2479_r10_ma_affirmative_source_still_verified(evaluator, source_line):
-    reports = {"market_report": source_line}
-    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
-
-
-# ── DAV-2479 r11（r10 复审 🔴/🟡）：句级辖域先于逗号切分 + 结构标签白名单 ──
-
-
 _R11_REVIEW_COUNTEREXAMPLES = [
     "仅在放量突破时，现价 > 50 SMA（48.40）。",
     "并非如下结论，现价 > 50 SMA（48.40）。",
@@ -1055,10 +1042,20 @@ _R11_REVIEW_COUNTEREXAMPLES = [
 
 @pytest.mark.parametrize("source_line", _R11_REVIEW_COUNTEREXAMPLES)
 def test_dav2479_r11_review_counterexample_unsupported(evaluator, source_line):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": source_line}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_UNSUPPORTED
+
+
+_R12_PARENT_HEADING_COUNTEREXAMPLES = [
+    "- **仅在放量突破时**：\n  - 现价 > 50 SMA（48.40）。",
+    "- **并非如下结论**：\n  - 现价 > 50 SMA（48.40）。",
+    "- **假定结论**：\n  - 现价 > 50 SMA（48.40）。",
+]
+
+
+@pytest.mark.parametrize("source_text", _R12_PARENT_HEADING_COUNTEREXAMPLES)
+def test_dav2479_r12_parent_heading_counterexample_unsupported(evaluator, source_text):
+    reports = {"market_report": source_text}
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_UNSUPPORTED
 
 
@@ -1066,9 +1063,10 @@ def test_dav2479_r11_review_counterexample_unsupported(evaluator, source_line):
     "- **趋势维度**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
     "现价 > 50 SMA（48.40）。",
 ])
-def test_dav2479_r11_review_positive_still_verified(evaluator, source_line):
+def test_dav2479_r11_review_positive_now_unsupported(evaluator, source_line):
+    # 保守方案，均线补验已移除：原 r11 两个正例改为断言 unsupported。
     reports = {"market_report": source_line}
-    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_UNSUPPORTED
 
 
 @pytest.mark.parametrize("source_line", [
@@ -1076,10 +1074,7 @@ def test_dav2479_r11_review_positive_still_verified(evaluator, source_line):
     "- **What**：若放量突破，现价 > 50 SMA（48.40）。",
 ])
 def test_dav2479_r11_ma_scope_prefix_with_comma_rejected(evaluator, source_line):
-    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
-
     reports = {"market_report": source_line}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
 
 
@@ -1087,20 +1082,19 @@ def test_dav2479_r11_ma_scope_prefix_with_comma_rejected(evaluator, source_line)
     "市场传闻：现价 > 50 SMA（48.40）。",
 ])
 def test_dav2479_r11_ma_unlisted_label_rejected(evaluator, source_line):
-    from tradingagents.agents.utils.evidence_verifier import _ma_affirmative_clause, _ma_position_supported_roles
-
-    assert _ma_affirmative_clause(source_line.rstrip("。")) is None
     reports = {"market_report": source_line}
-    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
     assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
 
 
 @pytest.mark.parametrize("source_line", [
+    "现价 > 50 SMA（48.40）",
     "- **What**：现价 50.82 元 > 50 SMA（48.40）> 200 SMA（44.59）。",
+    "收盘价位于50 SMA上方",
     "- **趋势维度**：收盘价 79.92元 > 50日SMA（48.40元）。",
     "- **均线系统**：现价位于50 SMA上方。",
     "现价 > 50 SMA（48.40），短期均线低位勾头向上。",
 ])
-def test_dav2479_r11_ma_safe_label_and_plain_affirmative_still_verified(evaluator, source_line):
+def test_dav2479_r12_former_ma_affirmative_sources_unsupported(evaluator, source_line):
+    # 保守方案，均线补验已移除：原 r10/r11 正向来源句不再支撑均线方位 evidence。
     reports = {"market_report": source_line}
-    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_VERIFIED
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") == STATUS_UNSUPPORTED
