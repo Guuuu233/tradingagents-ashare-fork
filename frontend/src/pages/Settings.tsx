@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Save, Key, Database, Loader2, Trash2, Link2, Copy, Plus, CheckCircle2, Mail, Flame, Webhook, Sparkles, RefreshCw, ListFilter } from 'lucide-react'
+import { Save, Key, Database, Loader2, Trash2, Link2, Copy, Plus, CheckCircle2, Mail, Flame, Webhook, Sparkles, RefreshCw, ListFilter, X } from 'lucide-react'
 import { api } from '@/services/api'
 import RoleModelConfigSection from '@/components/RoleModelConfigSection'
 import ReasoningEffortSelect from '@/components/ReasoningEffortSelect'
@@ -54,6 +54,90 @@ function inferPreset(llmProvider: string, backendUrl: string): string {
     return normalizedProvider || 'openai'
 }
 
+function filterModelsByQuery(models: string[], query: string): string[] {
+    const keywords = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (keywords.length === 0) return models
+    return models.filter((model) => {
+        const name = model.toLowerCase()
+        return keywords.every((keyword) => name.includes(keyword))
+    })
+}
+
+type FetchedModelListProps = {
+    models: string[]
+    sourceUrl: string | null
+    query: string
+    onQueryChange: (query: string) => void
+    onSetQuick: (model: string) => void
+    onSetDeep: (model: string) => void
+}
+
+export function FetchedModelList({ models, sourceUrl, query, onQueryChange, onSetQuick, onSetDeep }: FetchedModelListProps) {
+    const visibleModels = filterModelsByQuery(models, query)
+    const isFiltering = query.trim().length > 0
+    return (
+        <div className="space-y-2 pt-1">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-medium">
+                <span>
+                    从 {sourceUrl || 'API'} 成功获取到 {models.length} 个模型{isFiltering ? `，显示 ${visibleModels.length} / ${models.length} 个` : ''}（点击填入）：
+                </span>
+            </div>
+            <div className="relative">
+                <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => onQueryChange(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                            e.preventDefault()
+                            onQueryChange('')
+                        }
+                    }}
+                    placeholder="搜索模型，如 hydrogen xhigh"
+                    aria-label="搜索模型"
+                    className="input w-full pr-8 text-xs font-mono"
+                />
+                {query && (
+                    <button
+                        type="button"
+                        onClick={() => onQueryChange('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        title="清除搜索"
+                        aria-label="清除搜索"
+                    >
+                        <X className="w-3.5 h-3.5" />
+                    </button>
+                )}
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-white/80 dark:bg-slate-900/80 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                {visibleModels.length === 0 ? (
+                    <span className="px-1 py-0.5 text-xs text-slate-400 dark:text-slate-500">没有匹配的模型</span>
+                ) : visibleModels.map((m) => (
+                    <div key={m} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800 px-2.5 py-1 text-xs text-indigo-700 dark:text-indigo-300 font-mono">
+                        <span>{m}</span>
+                        <button
+                            type="button"
+                            onClick={() => onSetQuick(m)}
+                            className="ml-1 px-1.5 py-0.5 rounded bg-indigo-200/70 hover:bg-indigo-300 dark:bg-indigo-800 dark:hover:bg-indigo-700 text-[10px] font-sans text-indigo-900 dark:text-indigo-100"
+                            title="设为常规模型"
+                        >
+                            设为常规
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onSetDeep(m)}
+                            className="px-1.5 py-0.5 rounded bg-purple-200/70 hover:bg-purple-300 dark:bg-purple-800 dark:hover:bg-purple-700 text-[10px] font-sans text-purple-900 dark:text-purple-100"
+                            title="设为推理模型"
+                        >
+                            设为推理
+                        </button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 export default function Settings() {
     const { user } = useAuthStore()
     const [defaultAnalysts, setDefaultAnalysts] = useState(['market', 'social', 'news', 'fundamentals', 'macro', 'smart_money', 'volume_price'])
@@ -79,6 +163,7 @@ export default function Settings() {
     const [fetchedModels, setFetchedModels] = useState<string[]>([])
     const [fetchModelsError, setFetchModelsError] = useState<string | null>(null)
     const [fetchModelsUrl, setFetchModelsUrl] = useState<string | null>(null)
+    const [modelSearch, setModelSearch] = useState('')
     // DAV-2453: thinking level per tier ('follow' = follow the model, stored as NULL)
     const [quickEffort, setQuickEffort] = useState<ReasoningEffortChoice>('follow')
     const [deepEffort, setDeepEffort] = useState<ReasoningEffortChoice>('follow')
@@ -638,34 +723,14 @@ export default function Settings() {
                         )}
 
                         {fetchedModels.length > 0 && (
-                            <div className="space-y-2 pt-1">
-                                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-medium">
-                                    <span>从 {fetchModelsUrl || 'API'} 成功获取到 {fetchedModels.length} 个模型（点击填入）：</span>
-                                </div>
-                                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-white/80 dark:bg-slate-900/80 rounded-xl border border-slate-200/80 dark:border-slate-800">
-                                    {fetchedModels.map((m) => (
-                                        <div key={m} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/80 dark:border-indigo-800 px-2.5 py-1 text-xs text-indigo-700 dark:text-indigo-300 font-mono">
-                                            <span>{m}</span>
-                                            <button
-                                                type="button"
-                                                onClick={() => setQuickThinkLlm(m)}
-                                                className="ml-1 px-1.5 py-0.5 rounded bg-indigo-200/70 hover:bg-indigo-300 dark:bg-indigo-800 dark:hover:bg-indigo-700 text-[10px] font-sans text-indigo-900 dark:text-indigo-100"
-                                                title="设为常规模型"
-                                            >
-                                                设为常规
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setDeepThinkLlm(m)}
-                                                className="px-1.5 py-0.5 rounded bg-purple-200/70 hover:bg-purple-300 dark:bg-purple-800 dark:hover:bg-purple-700 text-[10px] font-sans text-purple-900 dark:text-purple-100"
-                                                title="设为推理模型"
-                                            >
-                                                设为推理
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                            <FetchedModelList
+                                models={fetchedModels}
+                                sourceUrl={fetchModelsUrl}
+                                query={modelSearch}
+                                onQueryChange={setModelSearch}
+                                onSetQuick={setQuickThinkLlm}
+                                onSetDeep={setDeepThinkLlm}
+                            />
                         )}
                     </div>
 
