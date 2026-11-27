@@ -1321,6 +1321,132 @@ def _apply_rounding_matches(items: list[dict[str, Any]], seven_reports: Mapping[
         }
 
 
+_MA_TOKEN_PAT = r"(?:\d+\s*日?\s*(?:SMA|EMA|均线)|VWMA)"
+_MA_TOKEN_RE = re.compile(r"(?<![\d.])(?:(\d+)\s*日?\s*(SMA|EMA|均线)|(VWMA))", re.I)
+_MA_LIST_SEP = r"\s*(?:/|、|与|及|和)\s*"
+_MA_POSITION_EVIDENCE_RE = re.compile(
+    r"(?:现价|股价|收盘价?)?\s*(?:仍|依然|持续|继续|始终)?\s*(?:稳居|位于|站上|站稳|运行于)\s*"
+    r"(" + _MA_TOKEN_PAT + r"(?:" + _MA_LIST_SEP + _MA_TOKEN_PAT + r")*)\s*(上方|之上|下方|之下)",
+    re.I,
+)
+_MA_PRICE_SUBJECT_RE = re.compile(r"现价|收盘价|收盘")
+_MA_CHAIN_HEAD_RE = re.compile(r"^(?:现价|收盘价|收盘)[\s\d.元（）()*]*$")
+_MA_CHAIN_OP_RE = re.compile(r"\s*([>＞<＜])\s*")
+_MA_STATEMENT_RE = re.compile(
+    r"(?:现价|收盘价|收盘)([^。；;，,！？!?\n]{0,30}?)(?:位于|运行于)([^。；;，,！？!?\n]{0,40}?)(上方|之上|下方|之下)"
+)
+_MA_STATEMENT_NEGATION_RE = re.compile(r"[未不没无]|失守|跌破|跌回|跌落")
+_MA_REPORT_CONDITION_RE = re.compile(
+    r"若|如果|假设|预计|测算|情景|一旦|将|只要|倘若|假如|如能|预期|估算|推算|有望|可能"
+)
+_MA_POSITION_DETAIL = "价格与同名同周期均线的方位由报告显式比较链或陈述句确定性支撑 (ma_position_match)"
+
+
+def _ma_key(m: re.Match[str]) -> tuple[str, int | None]:
+    if m.group(3):
+        return ("VWMA", None)
+    return (m.group(2).upper(), int(m.group(1)))
+
+
+def _ma_positions_in_line(line_text: str) -> list[tuple[tuple[str, int | None], int]]:
+    """报告单行内由「现价/收盘 X > 均线 Y」比较链或「现价…位于/运行于 均线 上方/之上」
+    陈述句确定的 (均线, 方向)；方向 1 = 价格在上方，-1 = 价格在下方。"""
+    found: list[tuple[tuple[str, int | None], int]] = []
+    for anchor in _MA_PRICE_SUBJECT_RE.finditer(line_text):
+        tail = re.split(r"[。；;，,！？!?\n]", line_text[anchor.start():], maxsplit=1)[0]
+        parts = _MA_CHAIN_OP_RE.split(tail)
+        if len(parts) < 3 or not _MA_CHAIN_HEAD_RE.match(parts[0]):
+            continue
+        chain_op = None
+        for i in range(1, len(parts) - 1, 2):
+            op = ">" if parts[i] in (">", "＞") else "<"
+            if chain_op is None:
+                chain_op = op
+            elif op != chain_op:
+                break
+            token = _MA_TOKEN_RE.match(parts[i + 1].lstrip(" *（("))
+            if token:
+                found.append((_ma_key(token), 1 if chain_op == ">" else -1))
+    for stmt in _MA_STATEMENT_RE.finditer(line_text):
+        if _MA_STATEMENT_NEGATION_RE.search(stmt.group(1)):
+            continue
+        direction = -1 if stmt.group(3) in ("下方", "之下") else 1
+        for token in _MA_TOKEN_RE.finditer(stmt.group(2)):
+            found.append((_ma_key(token), direction))
+    return found
+
+
+def _ma_position_report_support(
+    seven_reports: Mapping[str, str],
+) -> dict[tuple[tuple[str, int | None], int], str]:
+    support: dict[tuple[tuple[str, int | None], int], str] = {}
+    for role_key in SEVEN_REPORT_KEYS:
+        body = str(seven_reports.get(role_key, "") or "")
+        if not body or not _MA_TOKEN_RE.search(body):
+            continue
+        for line_text, parent_frame in _iter_report_lines_with_parent_frame(body):
+            if not _MA_TOKEN_RE.search(line_text):
+                continue
+            if _MA_REPORT_CONDITION_RE.search(line_text) or _report_line_hypothesis_marker(
+                line_text, None, parent_frame
+            ):
+                continue
+            for key in _ma_positions_in_line(line_text):
+                support.setdefault(key, role_key)
+    return support
+
+
+def _ma_position_supported_roles(segment: str, seven_reports: Mapping[str, str]) -> list[str] | None:
+    """r9：分句为「(稳居|位于|站上|站稳|运行于)…均线…(上方|之上|下方|之下)」时，
+    分句内每条均线都须在报告无条件词的行内有同名同周期、同方向的确定性支撑。"""
+    match = _MA_POSITION_EVIDENCE_RE.fullmatch(segment.strip())
+    if not match:
+        return None
+    direction = -1 if match.group(2) in ("下方", "之下") else 1
+    wanted: list[tuple[str, int | None]] = []
+    for token in _MA_TOKEN_RE.finditer(match.group(1)):
+        key = _ma_key(token)
+        if key not in wanted:
+            wanted.append(key)
+    if not wanted:
+        return None
+    support = _ma_position_report_support(seven_reports)
+    roles: list[str] = []
+    for key in wanted:
+        role = support.get((key, direction))
+        if role is None:
+            return None
+        if role not in roles:
+            roles.append(role)
+    return roles
+
+
+def _apply_ma_position_matches(items: list[dict[str, Any]], seven_reports: Mapping[str, str]) -> None:
+    """r9 §三.1：unsupported 的均线方位子事实满足确定性方位规则时改判 verified。"""
+    for idx, item in enumerate(items):
+        if item.get("status") != STATUS_UNSUPPORTED:
+            continue
+        if str(item.get("details") or "") in (_FUND_FLOW_STANCE_DETAIL, _FUND_FLOW_WINDOW_DETAIL):
+            continue
+        raw = _EVIDENCE_LEADIN_RE.sub("", str(item.get("raw") or ""), count=1).strip()
+        clause = _EVIDENCE_LEADIN_RE.sub("", str(item.get("clause") or raw), count=1)
+        if not raw or _contains_hypothesis_marker(clause) or _contains_judgment_marker(clause):
+            continue
+        segment = next((seg for seg in _FLOW_CLAUSE_SPLIT_RE.split(clause) if raw in seg), None)
+        if segment is None:
+            continue
+        roles = _ma_position_supported_roles(segment, seven_reports)
+        if not roles:
+            continue
+        items[idx] = {
+            **item,
+            "status": STATUS_VERIFIED,
+            "matched_role": ",".join(roles),
+            "matched_source": ",".join(r.replace("_report", "") for r in roles),
+            "details": f"{_MA_POSITION_DETAIL}: {raw}",
+        }
+
+
 def _has_source_support(raw_text: str, seven_reports: Mapping[str, str]) -> bool:
     if _matches_report_text(raw_text, _all_report_texts(seven_reports)):
         return True
@@ -6215,6 +6341,7 @@ class EvidenceFactualTruthEvaluator:
                         }
                     ]
                 _apply_rounding_matches(items, seven_reports)
+                _apply_ma_position_matches(items, seven_reports)
                 for idx, item in enumerate(items):
                     if item.get("status") != STATUS_VERIFIED:
                         continue

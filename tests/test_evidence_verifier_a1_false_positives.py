@@ -928,3 +928,78 @@ def test_dav2479_r8_real_window_mismatch_still_rejected(evaluator):
         seven_reports={"smart_money_report": "单日流出仅占流通市值 0.03%，5日主力累计净流出 4.67 亿元。"},
     )
     assert items and all(it["status"] != STATUS_VERIFIED for it in items), items
+
+
+_R9_F8BAB114_REPORTS = {
+    "market_report": (
+        "- **What**：现价 50.82 元 > 10 EMA（50.18）> 50 SMA（48.40）> 200 SMA（44.59）。短期均线低位勾头向上，中长期均线维持标准的多头排列态势。\n"
+        "- **What Next**：若能持续守在 10 EMA 上方运行，将逐步带动短期均线向上发散；若失守 10 EMA，则将再次回踩 50 SMA。\n"
+        "| **VWMA** | 49.80 元 | 现价运行于 VWMA 之上 | 短期持仓成本上移，下方存在密集承接 |"
+    ),
+    "smart_money_report": "- **空间位置关系**：现价（50.82 元）位于 VWMA（49.80 元）上方 **+2.05%**，表明近期成交筹码的重心处于现价下方，VWMA 构成多方动态技术防守参考带。",
+    "fundamentals_report": "- **中国神华（601088.SH）**：收盘价 50.82 元，TTM PE 约 18.2 倍，PB（LF）约 2.48 倍，近1年股价处于多头趋势慢牛上行通道（现价 > 50日SMA 48.40元 > 200日SMA 44.59元）。",
+}
+
+
+def _r9_statuses(evaluator, evidence, reports, stance="bullish"):
+    items = evaluator.evaluate_claims(
+        claims=[{"claim_id": "INV-6", "stance": stance, "evidence": [evidence]}],
+        seven_reports=reports,
+    )
+    return {str(it.get("raw")): it["status"] for it in items}
+
+
+def test_dav2479_r9_f8bab114_ma_position_verified(evaluator):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    assert _ma_position_supported_roles("稳居50SMA/VWMA上方", _R9_F8BAB114_REPORTS)
+    statuses = _r9_statuses(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", _R9_F8BAB114_REPORTS)
+    assert statuses.get("稳居50SMA/VWMA上方") == STATUS_VERIFIED, statuses
+
+
+@pytest.mark.parametrize("evidence", ["站稳50日SMA上方", "位于VWMA之上", "运行于200 SMA上方", "稳居10 EMA上方"])
+def test_dav2479_r9_ma_position_positive_variants(evidence):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    assert _ma_position_supported_roles(evidence, _R9_F8BAB114_REPORTS)
+
+
+def test_dav2479_r9_ma_position_opposite_direction_rejected(evaluator):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": "- **What**：现价 46.20 元 < 50 SMA（48.40）< 200 SMA（49.10）。"}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _ma_position_supported_roles("位于50SMA下方", reports)
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
+
+
+def test_dav2479_r9_ma_position_period_mismatch_rejected(evaluator):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": "- **What**：现价 50.82 元 > 20 SMA（49.10）。"}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居50SMA上方", reports).get("稳居50SMA上方") != STATUS_VERIFIED
+
+
+def test_dav2479_r9_ma_position_conditional_only_rejected(evaluator):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {
+        "market_report": (
+            "- **What Next**：若能持续守在 10 EMA 上方运行，将逐步带动短期均线向上发散；若失守 10 EMA，则将再次回踩 50 SMA。\n"
+            "- 若现价运行于 10 EMA 上方，则短线结构修复。\n"
+            "- 一旦现价 > 10 EMA（50.18），将确认反弹。"
+        )
+    }
+    assert _ma_position_supported_roles("稳居10 EMA上方", reports) is None
+    assert _r9_statuses(evaluator, "稳居10 EMA上方", reports).get("稳居10 EMA上方") != STATUS_VERIFIED
+
+
+def test_dav2479_r9_ma_position_multi_average_missing_one_rejected(evaluator):
+    from tradingagents.agents.utils.evidence_verifier import _ma_position_supported_roles
+
+    reports = {"market_report": "- **What**：现价 50.82 元 > 10 EMA（50.18）> 50 SMA（48.40）> 200 SMA（44.59）。"}
+    assert _ma_position_supported_roles("稳居50SMA上方", reports)
+    assert _ma_position_supported_roles("稳居50SMA/VWMA上方", reports) is None
+    statuses = _r9_statuses(evaluator, "5日主力流出仅占流通市值0.007%且稳居50SMA/VWMA上方", reports)
+    assert statuses.get("稳居50SMA/VWMA上方") != STATUS_VERIFIED, statuses
